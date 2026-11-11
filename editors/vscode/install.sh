@@ -13,7 +13,7 @@
 # install.bat installs it on the Windows side.
 
 set -e
-here=$(cd "$(dirname "$0")" && pwd)
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 if ! command -v code >/dev/null 2>&1; then
     echo "install.sh: 'code' isn't on the PATH; in VS Code, run \"Shell Command: Install 'code' command in PATH\"" >&2
@@ -26,9 +26,12 @@ fi
 
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
+# dash, Ubuntu's sh, runs the EXIT trap on a signal only if the shell exits
+# through it: Ctrl+C would otherwise leave the directory behind.
+trap 'exit 1' INT TERM HUP
 mkdir -p "$stage/extension/syntaxes"
 cp "$here/vsix/[Content_Types].xml" "$here/vsix/extension.vsixmanifest" "$stage/"
-cp "$here/package.json" "$here/language-configuration.json" "$stage/extension/"
+cp "$here/package.json" "$here/language-configuration.json" "$here/README.md" "$stage/extension/"
 cp "$here/syntaxes/rig.tmLanguage.json" "$stage/extension/syntaxes/"
 
 python3 - "$stage" <<'EOF'

@@ -2,21 +2,52 @@
     "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
     "name": "Rig",
     "scopeName": "source.rig",
-    "fileTypes": ["rig"],
+    "fileTypes": [
+        "rig"
+    ],
     "patterns": [
-        { "include": "#comments" },
-        { "include": "#strings" },
-        { "include": "#directives" },
-        { "include": "#declarations" },
-        { "include": "#cast" },
-        { "include": "#keywords" },
-        { "include": "#constants" },
-        { "include": "#iterators" },
-        { "include": "#types" },
-        { "include": "#numbers" },
-        { "include": "#calls" },
-        { "include": "#operators" },
-        { "include": "#punctuation" }
+        {
+            "include": "#comments"
+        },
+        {
+            "include": "#strings"
+        },
+        {
+            "include": "#directives"
+        },
+        {
+            "include": "#declarations"
+        },
+        {
+            "include": "#cast"
+        },
+        {
+            "include": "#keywords"
+        },
+        {
+            "include": "#constants"
+        },
+        {
+            "include": "#iterators"
+        },
+        {
+            "include": "#types"
+        },
+        {
+            "include": "#numbers"
+        },
+        {
+            "include": "#calls"
+        },
+        {
+            "include": "#operators"
+        },
+        {
+            "include": "#punctuation"
+        },
+        {
+            "include": "#invalid"
+        }
     ],
     "repository": {
         "comments": {
@@ -25,7 +56,9 @@
                     "name": "comment.line.double-slash.rig",
                     "match": "//.*$"
                 },
-                { "include": "#block-comment" }
+                {
+                    "include": "#block-comment"
+                }
             ]
         },
         "block-comment": {
@@ -33,21 +66,44 @@
             "name": "comment.block.rig",
             "begin": "/\\*",
             "end": "\\*/",
-            "patterns": [{ "include": "#block-comment" }]
-        },
-        "strings": {
-            "comment": "A string is on one line; only \\n \\t \\r \\0 \\\\ and \\\" are escapes, anything else after a backslash is an error.",
-            "name": "string.quoted.double.rig",
-            "begin": "\"",
-            "end": "\"|$",
             "patterns": [
                 {
-                    "name": "constant.character.escape.rig",
-                    "match": "\\\\[ntr0\\\\\"]"
+                    "include": "#block-comment"
+                }
+            ]
+        },
+        "strings": {
+            "patterns": [
+                {
+                    "comment": "A string with no closing quote on its line is an error.",
+                    "name": "invalid.illegal.unterminated-string.rig",
+                    "match": "\"(?:[^\"\\\\]|\\\\.)*\\\\?$"
                 },
                 {
-                    "name": "invalid.illegal.unknown-escape.rig",
-                    "match": "\\\\."
+                    "comment": "A string is on one line; only \\n \\t \\r \\0 \\\\ and \\\" are escapes, anything else after a backslash is an error.",
+                    "name": "string.quoted.double.rig",
+                    "begin": "\"",
+                    "beginCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.string.begin.rig"
+                        }
+                    },
+                    "end": "\"|$",
+                    "endCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.string.end.rig"
+                        }
+                    },
+                    "patterns": [
+                        {
+                            "name": "constant.character.escape.rig",
+                            "match": "\\\\[ntr0\\\\\"]"
+                        },
+                        {
+                            "name": "invalid.illegal.unknown-escape.rig",
+                            "match": "\\\\."
+                        }
+                    ]
                 }
             ]
         },
@@ -57,38 +113,59 @@
                     "comment": "#foreign names the library after it: #foreign libc.",
                     "match": "(#foreign)\\s+([A-Za-z_][A-Za-z0-9_]*)",
                     "captures": {
-                        "1": { "name": "keyword.other.directive.rig" },
-                        "2": { "name": "entity.name.namespace.rig" }
+                        "1": {
+                            "name": "keyword.other.directive.rig"
+                        },
+                        "2": {
+                            "name": "entity.name.namespace.rig"
+                        }
                     }
                 },
                 {
                     "name": "keyword.other.directive.rig",
                     "match": "#[A-Za-z_][A-Za-z0-9_]*"
+                },
+                {
+                    "comment": "'#' without a name right after it is an error.",
+                    "name": "invalid.illegal.directive.rig",
+                    "match": "#(?![A-Za-z_])"
                 }
             ]
         },
         "declarations": {
             "patterns": [
                 {
-                    "comment": "name :: ( ... a procedure, when the parenthesis holds nothing, a parameter (IDENT ':'), or ends the line, as the parser decides; otherwise a parenthesised constant.",
+                    "comment": "name :: ( ... is a procedure when the parenthesis holds nothing, starts with a parameter (IDENT ':'), or ends the line: a one-line approximation of the parser's parameters_follow, which looks past the ')'. Otherwise a parenthesised constant.",
                     "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*(?=\\(\\s*(?:\\)|$|[A-Za-z_][A-Za-z0-9_]*\\s*:(?![:=])))",
                     "captures": {
-                        "1": { "name": "entity.name.function.rig" },
-                        "2": { "name": "keyword.operator.declaration.rig" }
+                        "1": {
+                            "name": "entity.name.function.rig"
+                        },
+                        "2": {
+                            "name": "keyword.operator.declaration.rig"
+                        }
                     }
                 },
                 {
                     "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*(?=(?:struct|enum|union)\\b)",
                     "captures": {
-                        "1": { "name": "entity.name.type.rig" },
-                        "2": { "name": "keyword.operator.declaration.rig" }
+                        "1": {
+                            "name": "entity.name.type.rig"
+                        },
+                        "2": {
+                            "name": "keyword.operator.declaration.rig"
+                        }
                     }
                 },
                 {
                     "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)",
                     "captures": {
-                        "1": { "name": "variable.other.constant.rig" },
-                        "2": { "name": "keyword.operator.declaration.rig" }
+                        "1": {
+                            "name": "variable.other.constant.rig"
+                        },
+                        "2": {
+                            "name": "keyword.operator.declaration.rig"
+                        }
                     }
                 }
             ]
@@ -97,9 +174,15 @@
             "comment": "cast,trunc(T): the modifier after the comma.",
             "match": "\\b(cast)\\s*(,)\\s*([A-Za-z_][A-Za-z0-9_]*)",
             "captures": {
-                "1": { "name": "keyword.other.cast.rig" },
-                "2": { "name": "punctuation.separator.comma.rig" },
-                "3": { "name": "keyword.other.cast-modifier.rig" }
+                "1": {
+                    "name": "keyword.other.cast.rig"
+                },
+                "2": {
+                    "name": "punctuation.separator.comma.rig"
+                },
+                "3": {
+                    "name": "keyword.other.cast-modifier.rig"
+                }
             }
         },
         "keywords": {
@@ -113,8 +196,12 @@
                     "match": "\\b(?:struct|enum|union)\\b"
                 },
                 {
+                    "name": "keyword.other.cast.rig",
+                    "match": "\\bcast\\b"
+                },
+                {
                     "name": "keyword.other.rig",
-                    "match": "\\b(?:cast|using)\\b"
+                    "match": "\\busing\\b"
                 }
             ]
         },
@@ -141,15 +228,15 @@
             "match": "\\b(?:s8|s16|s32|s64|u8|u16|u32|u64|int|bool|float|float32|float64|string)\\b"
         },
         "numbers": {
-            "comment": "As the lexer reads them: decimal, 0x and 0b with lowercase prefixes, '_' anywhere after the first digit, floats with a digit after the '.' or an exponent. A number running into letters (123abc, 0b12, 0X10) is one bad literal.",
+            "comment": "As the lexer reads them: decimal, 0x and 0b with lowercase prefixes and at least one digit, '_' anywhere after the first digit, floats with a digit after the '.' or an exponent. A number running into letters (123abc, 0b12, 0X10, 1.5f, 1e+, 0x_) is one bad literal.",
             "patterns": [
                 {
                     "name": "constant.numeric.hex.rig",
-                    "match": "\\b0x[0-9A-Fa-f_]+\\b"
+                    "match": "\\b0x_*[0-9A-Fa-f][0-9A-Fa-f_]*\\b"
                 },
                 {
                     "name": "constant.numeric.binary.rig",
-                    "match": "\\b0b[01_]+\\b"
+                    "match": "\\b0b_*[01][01_]*\\b"
                 },
                 {
                     "name": "constant.numeric.float.rig",
@@ -161,18 +248,20 @@
                 },
                 {
                     "name": "constant.numeric.integer.rig",
-                    "match": "\\b[0-9][0-9_]*\\b"
+                    "match": "\\b[0-9][0-9_]*\\b(?!\\.[0-9])"
                 },
                 {
                     "name": "invalid.illegal.number.rig",
-                    "match": "\\b[0-9][A-Za-z0-9_]*"
+                    "match": "\\b[0-9][0-9_]*(?:\\.[0-9][0-9_]*)?(?:[eE][+-]?)?[A-Za-z0-9_]*"
                 }
             ]
         },
         "calls": {
             "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
             "captures": {
-                "1": { "name": "entity.name.function.call.rig" }
+                "1": {
+                    "name": "entity.name.function.call.rig"
+                }
             }
         },
         "operators": {
@@ -234,6 +323,11 @@
                     "match": "\\."
                 }
             ]
+        },
+        "invalid": {
+            "comment": "Characters the lexer rejects: punctuation Rig doesn't use, and non-ASCII outside strings and comments.",
+            "name": "invalid.illegal.character.rig",
+            "match": "[@$?'`\\\\]|[^\\x00-\\x7F]+"
         }
     }
 }
