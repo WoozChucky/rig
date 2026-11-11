@@ -66,7 +66,9 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     // own mistakes are reported too, after the callee's: in source order.
     Array<Type *> arg_types = {};
     for (s64 i = 0; i < call->args.count; i++) array_add(&arg_types, check_expression(c, call->args[i]));
-    if (!found) {
+    // A broken callee's parameters and return type are unknown: any
+    // arguments may be right, and the call's type is unknown too.
+    if (!found || (*found)->is_broken) {
         array_free(&arg_types);
         return nullptr;
     }
@@ -107,8 +109,11 @@ static Type *check_expression(Checker *c, Ast *e) {
     case AST_INT: t = &type_int; break;
     case AST_NAME: {
         Ast_Name *name = (Ast_Name *)e;
-        if (table_get(&c->procs, name->name)) {
-            diag_error(c->diag, e->pos, "procedures can only be called, for now");
+        Ast_Proc **found = table_get(&c->procs, name->name);
+        if (found) {
+            // A broken declaration may not even be a procedure (x :: 5):
+            // its type is unknown, so there's nothing to say.
+            if (!(*found)->is_broken) diag_error(c->diag, e->pos, "procedures can only be called, for now");
         } else {
             diag_error(c->diag, e->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
         }
@@ -147,8 +152,11 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
     Checker c = {a, d, {}};
 
     // First every name, so procedures can be used before they're declared.
+    // The whole declarations first: a name declared twice is reported
+    // there.
     for (s64 i = 0; i < file->procs.count; i++) {
         Ast_Proc *proc = file->procs[i];
+        if (proc->is_broken) continue;
         Ast_Proc **earlier = table_get(&c.procs, proc->name);
         if (earlier) {
             Position at = (*earlier)->pos;
@@ -158,9 +166,28 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
         }
         table_put(&c.procs, proc->name, proc);
     }
-    for (s64 i = 0; i < file->procs.count; i++) check_signature(&c, file->procs[i]);
+    // Then the broken ones (parser.h), the names of declarations the parser
+    // gave up on. Each is declared, with an unknown type, so its uses are
+    // nothing to report; the syntax error already was. Nothing is said
+    // about them either: a name that's also declared whole may only look
+    // twice declared because of the syntax error, and calls are better
+    // checked against the whole declaration, wherever it is. One with no
+    // name could have declared anything, main included.
+    bool lost_a_name = false;
+    for (s64 i = 0; i < file->procs.count; i++) {
+        Ast_Proc *proc = file->procs[i];
+        if (!proc->is_broken) continue;
+        if (!proc->name.count) {
+            lost_a_name = true;
+        } else if (!table_get(&c.procs, proc->name)) {
+            table_put(&c.procs, proc->name, proc);
+        }
+    }
+    for (s64 i = 0; i < file->procs.count; i++) {
+        if (!file->procs[i]->is_broken) check_signature(&c, file->procs[i]);
+    }
 
-    // Then the bodies.
+    // Then the bodies. A broken entry has none: the parser gave up on it.
     for (s64 i = 0; i < file->procs.count; i++) {
         Ast_Proc *proc = file->procs[i];
         if (!proc->body) continue;
@@ -174,10 +201,12 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
         }
     }
 
+    // A broken main, or a broken declaration whose name was lost, has
+    // nothing to say about main: what it declares is unknown.
     Ast_Proc **main_proc = table_get(&c.procs, str("main"));
     if (!main_proc) {
-        diag_error(d, {0, 1, 1}, "a procedure called 'main' is needed");
-    } else {
+        if (!lost_a_name) diag_error(d, {0, 1, 1}, "a procedure called 'main' is needed");
+    } else if (!(*main_proc)->is_broken) {
         Ast_Proc *m = *main_proc;
         if (m->params.count > 0 || m->return_type) {
             diag_error(d, m->pos, "'main' must take no arguments and return nothing");

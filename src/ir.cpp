@@ -108,7 +108,10 @@ Ir_Module *ir_lower(Ast_File *f, Arena *a) {
     // Every procedure first, so a call can name one declared later.
     for (s64 i = 0; i < f->procs.count; i++) {
         Ast_Proc *source = f->procs[i];
-        bool is_main = !source->is_foreign && string_eq(source->name, str("main"));
+        // A broken entry comes with a syntax error, and rig build stops
+        // before lowering a file with errors.
+        RIG_ASSERT(!source->is_broken);
+        bool is_main =!source->is_foreign && string_eq(source->name, str("main"));
         Ir_Proc *p = new_proc(&l, is_main ? str("__rig_main") : source->name);
         p->is_foreign = source->is_foreign;
         for (s64 k = 0; k < source->params.count; k++) {
