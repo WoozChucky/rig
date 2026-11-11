@@ -261,6 +261,62 @@ check('node --check extension.js', () => {
     assert.strictEqual(result.status, 0, result.stderr);
 });
 
+// --- Packaging -------------------------------------------------------------
+
+// The extension's files each install script packs, from its one list:
+// install.sh's `files="..."` and install.bat's `set "FILES=..."`.
+function packedFiles(script, re) {
+    const m = read(script).match(re);
+    assert.ok(m, `${script} has no list of files`);
+    return m[1].trim().split(/\s+/).map((f) => f.replace(/\\/g, '/'));
+}
+
+check('both install scripts pack the same files, every one package.json needs', () => {
+    const sh = packedFiles('install.sh', /^files="([^"]*)"/m);
+    const bat = packedFiles('install.bat', /^set "FILES=([^"]*)"/m);
+    assert.deepStrictEqual(bat, sh, 'install.bat and install.sh list different files');
+    for (const f of sh) assert.ok(fs.existsSync(path.join(extension, f)), `${f} is packed but missing`);
+
+    // Every file package.json points VS Code at, and the README the
+    // manifest shows as the extension's page.
+    const p = readJson('package.json');
+    const needed = [
+        p.main,
+        ...p.contributes.languages.map((l) => l.configuration),
+        ...p.contributes.grammars.map((g) => g.path),
+        ...p.contributes.snippets.map((s) => s.path),
+        'README.md',
+    ].map((f) => path.posix.normalize(f));
+    for (const f of needed) assert.ok(sh.includes(f), `the install scripts don't pack ${f}`);
+});
+
+// A .vsix is an Open Packaging Conventions zip: [Content_Types].xml must
+// give a content type for every file extension in it.
+check('[Content_Types].xml covers every packed file', () => {
+    const types = read('vsix/[Content_Types].xml');
+    const extensions = new Set(['.vsixmanifest']);
+    for (const f of packedFiles('install.sh', /^files="([^"]*)"/m)) extensions.add(path.extname(f));
+    for (const ext of extensions) {
+        assert.ok(types.includes(`Extension="${ext}"`), `[Content_Types].xml has no type for ${ext} files`);
+    }
+});
+
+// The extension starts the compiler, so it runs where the files and rig are:
+// on the WSL side in a WSL window ("workspace"), falling back to the local
+// side ("ui") when there's no remote.
+check('extensionKind is workspace first, in package.json and the manifest alike', () => {
+    const p = readJson('package.json');
+    assert.deepStrictEqual(p.extensionKind, ['workspace', 'ui']);
+    const manifest = read('vsix/extension.vsixmanifest');
+    const kind = manifest.match(/Id="Microsoft\.VisualStudio\.Code\.ExtensionKind" Value="([^"]*)"/);
+    assert.ok(kind, 'the manifest has no ExtensionKind property');
+    assert.strictEqual(kind[1], p.extensionKind.join(','));
+    // The installer reads these from the manifest, VS Code from package.json.
+    const identity = manifest.match(/<Identity [^>]*Id="([^"]*)" Version="([^"]*)" Publisher="([^"]*)"/);
+    assert.ok(identity, 'the manifest has no Identity');
+    assert.deepStrictEqual(identity.slice(1), [p.name, p.version, p.publisher]);
+});
+
 // --- Running them ----------------------------------------------------------
 
 let failed = 0;

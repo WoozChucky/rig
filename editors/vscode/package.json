@@ -1,7 +1,7 @@
 {
     "name": "rig-language",
     "displayName": "Rig",
-    "description": "Syntax highlighting for the Rig programming language",
+    "description": "The Rig programming language: syntax highlighting, snippets, build errors in the Problems panel, build and run commands",
     "version": "0.1.0",
     "publisher": "woozchucky",
     "license": "MIT",
@@ -13,8 +13,8 @@
         "vscode": "^1.75.0"
     },
     "extensionKind": [
-        "ui",
-        "workspace"
+        "workspace",
+        "ui"
     ],
     "categories": [
         "Programming Languages"
