@@ -1,0 +1,3 @@
+tests/errors/bom_error.rig:1:15: error: unknown identifier 'putz'
+    	main :: () { putz("x"); }
+    	             ^

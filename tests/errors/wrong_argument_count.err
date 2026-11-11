@@ -1,0 +1,3 @@
+tests/errors/wrong_argument_count.rig:2:14: error: 'puts' takes 1 argument, but 2 were given
+    main :: () { puts("a", "b"); }
+                 ^

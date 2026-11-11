@@ -1,0 +1,3 @@
+tests/errors/unknown_identifier.rig:2:14: error: unknown identifier 'putz'
+    main :: () { putz("Hello"); }
+                 ^

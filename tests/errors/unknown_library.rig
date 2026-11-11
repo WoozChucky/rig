@@ -1,0 +1,2 @@
+puts :: (s: *u8) -> s32 #foreign kernel;
+main :: () { puts("Hello"); }

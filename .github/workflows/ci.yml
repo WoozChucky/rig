@@ -42,3 +42,6 @@ jobs:
 
       - name: Unit tests
         run: bin/unit-tests --self-test && bin/unit-tests
+
+      - name: End-to-end tests
+        run: bin/run-tests
