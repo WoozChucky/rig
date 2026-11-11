@@ -12,7 +12,10 @@
 //
 // The signatures are zlib's and zstd's own (zlib's uLong is unsigned long:
 // 32 bits on Windows, 64 on Linux); only the names matter to the linker, but
-// the types keep the calls well-defined.
+// the types keep the calls well-defined. A stub either fails or has nothing
+// to act on, so it ignores what it's given and its parameters are
+// [[maybe_unused]]: they're there to match the library's declaration, not to
+// be read.
 
 extern "C" {
 
@@ -35,12 +38,14 @@ unsigned long crc32(unsigned long crc, const unsigned char *buf, unsigned int le
 
 unsigned long compressBound(unsigned long source_len) { return source_len; }
 
-int compress2(unsigned char *dest, unsigned long *dest_len, const unsigned char *source, unsigned long source_len,
-              int level) {
+int compress2([[maybe_unused]] unsigned char *dest, [[maybe_unused]] unsigned long *dest_len,
+              [[maybe_unused]] const unsigned char *source, [[maybe_unused]] unsigned long source_len,
+              [[maybe_unused]] int level) {
     return Z_STREAM_ERROR;
 }
 
-int uncompress(unsigned char *dest, unsigned long *dest_len, const unsigned char *source, unsigned long source_len) {
+int uncompress([[maybe_unused]] unsigned char *dest, [[maybe_unused]] unsigned long *dest_len,
+               [[maybe_unused]] const unsigned char *source, [[maybe_unused]] unsigned long source_len) {
     return Z_DATA_ERROR;
 }
 
@@ -54,20 +59,29 @@ size_t ZSTD_compressBound(size_t source_size) { return source_size; }
 
 ZSTD_CCtx *ZSTD_createCCtx(void) { return nullptr; }
 
-size_t ZSTD_freeCCtx(ZSTD_CCtx *cctx) { return 0; }
+// ZSTD_createCCtx never makes a context, so there is none to free: freeing
+// one (null) succeeds, as zstd's does.
+size_t ZSTD_freeCCtx([[maybe_unused]] ZSTD_CCtx *cctx) { return 0; }
 
-size_t ZSTD_CCtx_setParameter(ZSTD_CCtx *cctx, int param, int value) { return ZSTD_GENERIC_ERROR; }
-
-size_t ZSTD_compress2(ZSTD_CCtx *cctx, void *dst, size_t dst_capacity, const void *src, size_t src_size) {
+size_t ZSTD_CCtx_setParameter([[maybe_unused]] ZSTD_CCtx *cctx, [[maybe_unused]] int param,
+                              [[maybe_unused]] int value) {
     return ZSTD_GENERIC_ERROR;
 }
 
-size_t ZSTD_decompress(void *dst, size_t dst_capacity, const void *src, size_t compressed_size) {
+size_t ZSTD_compress2([[maybe_unused]] ZSTD_CCtx *cctx, [[maybe_unused]] void *dst,
+                      [[maybe_unused]] size_t dst_capacity, [[maybe_unused]] const void *src,
+                      [[maybe_unused]] size_t src_size) {
+    return ZSTD_GENERIC_ERROR;
+}
+
+size_t ZSTD_decompress([[maybe_unused]] void *dst, [[maybe_unused]] size_t dst_capacity,
+                       [[maybe_unused]] const void *src, [[maybe_unused]] size_t compressed_size) {
     return ZSTD_GENERIC_ERROR;
 }
 
 unsigned ZSTD_isError(size_t code) { return code > (size_t)-120; }
 
-const char *ZSTD_getErrorName(size_t code) { return "zstd isn't part of this Rig build"; }
+// Every error is the stubs' own, so whichever code it is, the name is the same.
+const char *ZSTD_getErrorName([[maybe_unused]] size_t code) { return "zstd isn't part of this Rig build"; }
 
 }  // extern "C"
