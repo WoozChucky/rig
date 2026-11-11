@@ -5,5 +5,8 @@
 *.pdb
 *.ilk
 *.exe
+# hello world built in the repository's root, as the README shows (Linux
+# programs have no extension to ignore them by)
+/hello
 /deps/
 /.build/

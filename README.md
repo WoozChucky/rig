@@ -13,7 +13,8 @@ puts :: (s: *u8) -> s32 #foreign libc;
 main :: () { puts("Hello, World!"); }
 ```
 
-`bin/rig build hello.rig` writes `hello.exe` on Windows and `hello` on Linux, in the current directory (`-o` names it otherwise). So far Rig has procedures, calls, string and integer literals, and C functions declared `#foreign libc`.
+`bin/rig build hello.rig` (`bin
+ig build hello.rig` in Windows' command prompt) writes `hello.exe` on Windows and `hello` on Linux, in the current directory. `-o OUTPUT` names it otherwise; on Windows a name with no extension gets `.exe`. The object file goes into a `.build` directory, made in the current directory. So far Rig has procedures, calls, string and integer literals, and C functions declared `#foreign libc`.
 
 ## Building
 
@@ -35,7 +36,7 @@ scripts/get_llvm.sh
 bin/rig version
 ```
 
-**Tests:** `bin/unit-tests` (the compiler's parts; give it a name to run only the tests whose name or file contains it) and `bin/run-tests` (Rig programs in `tests/run` built and run, and programs in `tests/errors` that must fail with their diagnostics), both from the repository's root.
+**Tests:** `bin/unit-tests` (the compiler's parts; give it a name to run only the tests whose name or file contains it) and `bin/run-tests` (Rig programs in `tests/run` built and run, programs in `tests/errors` that must fail with their diagnostics, and rig's command line, right and wrong), both from the repository's root.
 
 **VS Code:** open the folder (on Windows, or in WSL through the WSL extension). `Ctrl+Shift+B` builds, *Run Test Task* runs the unit tests, and `F5` debugs `rig` or the unit tests (Visual Studio's debugger on Windows, gdb on Linux). The extensions it needs are recommended when the folder opens.
 
