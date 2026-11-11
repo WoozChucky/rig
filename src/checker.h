@@ -19,7 +19,9 @@
 //   are in its body's block.
 // - A procedure's name used as a value: "procedures can only be called,
 //   for now". A call of one that returns nothing, used as a value: "'greet'
-//   returns nothing, so it has no value".
+//   returns nothing, so it has no value". A call of anything else (a local
+//   hiding the procedure, say): "'x' isn't a procedure, so it can't be
+//   called".
 //
 // Constants and types.
 // - An integer literal up to int's largest value is an untyped constant

@@ -152,12 +152,12 @@ static int binary_precedence(Token_Kind kind) {
 // it does.
 //
 // a + b * c, called with min_precedence 1:
-// - reads a; sees + (4, at least 1): takes it, and parses its right operand
-//   with min_precedence 5;
-//   - that call reads b; sees * (5, at least 5): takes it, and parses its
-//     right operand with min_precedence 6, which reads c and stops at the
-//     end; so it has b * c, and the end stops it too;
-// - so + gets b * c: a + (b * c).
+// - it reads a, and sees + (4, at least 1): it takes the +, and parses the
+//   right operand with min_precedence 5;
+//   - that call reads b, and sees * (5, at least 5): it takes the *, and
+//     parses c with min_precedence 6; then the expression ends, so this
+//     call returns b * c;
+// - so the + gets b * c as its right operand: a + (b * c).
 // a - b - c: the first - parses its right operand with min_precedence 5,
 // which reads b and stops at the second - (4, less than 5); the loop then
 // takes that - itself, with a - b as its left operand: (a - b) - c. That's
