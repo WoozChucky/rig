@@ -11,23 +11,39 @@
 // The checker only runs when the source parsed: a declaration the parser
 // gave up on would make it report names as unknown, or main as missing,
 // that the program does have.
+//
+// The object file is named after the source file alone, so two builds in
+// one directory of files with the same name in different directories
+// (a/hello.rig, b/hello.rig) share .build/hello.o: one at a time, they're
+// fine; at the same time, one could link the other's object.
 
 #include "link.h"
 
-// "src/hello.rig" -> "hello"; either slash.
+// Whether the path ends in .rig, in any case: on Windows HELLO.RIG and
+// hello.rig are the same file, and on Linux .RIG is still plainly meant.
+bool is_rig_file(String path) {
+    if (path.count < 4) return false;
+    const u8 *end = path.data + path.count - 4;
+    return end[0] == '.' && (end[1] | 0x20) == 'r' && (end[2] | 0x20) == 'i' && (end[3] | 0x20) == 'g';
+}
+
+// "src/hello.rig" -> "hello"; either slash. A name that is only ".rig" stays
+// as it is, rather than becoming nothing.
 String program_name(String path) {
     s64 start = 0;
     for (s64 i = 0; i < path.count; i++) {
         if (path.data[i] == '/' || path.data[i] == '\\') start = i + 1;
     }
     String name = string_slice(path, start, path.count - start);
-    if (name.count > 4 && memcmp(name.data + name.count - 4, ".rig", 4) == 0) name.count -= 4;
+    if (name.count > 4 && is_rig_file(name)) name.count -= 4;
     return name;
 }
 
 // The executable's path: `output` (from -o), or by default NAME.exe or NAME
 // in the current directory. On Windows an output whose file name has no
-// extension gets .exe, the only kind of file Windows runs.
+// extension gets .exe. Windows would run the file whatever its name, but the
+// command line and Explorer only find and run programs by their extension
+// (the PATHEXT variable lists them), so without .exe typing its name fails.
 String executable_path(Arena *a, String output, String name, Target t) {
     bool windows = t == TARGET_WINDOWS_X64;
     if (!output.count) return string_printf(a, STR_FMT "%s", STR_ARG(name), windows ? ".exe" : "");
@@ -53,7 +69,10 @@ static int build(Arena *a, String path, String output) {
     Ast_File *tree = parse(tokens, a, &d);
     if (d.error_count == 0) check(tree, a, &d);
     if (d.error_count > 0) {
-        diag_sort(&d);  // the lexer reported the whole file before the parser began
+        // Into source order: the lexer reported the whole file before the
+        // parser began, and the checker reports every signature before any
+        // body.
+        diag_sort(&d);
         diag_print(&d);
         diag_free(&d);
         array_free(&tokens);
@@ -64,13 +83,18 @@ static int build(Arena *a, String path, String output) {
 
     Target target = target_host();
     String name = program_name(path);
-    os_make_directory(str(".build"));
+    if (!os_make_directory(str(".build"))) {
+        fprintf(stderr, "rig: error: cannot create '.build': " STR_FMT "\n", STR_ARG(os_error_message(a)));
+        return 1;
+    }
     String object = string_printf(a, ".build/" STR_FMT "%s", STR_ARG(name), target == TARGET_WINDOWS_X64 ? ".obj" : ".o");
     output = executable_path(a, output, name, target);
 
     String error = {};
     if (!llvm_emit_object(ir_lower(tree, a), target, object, a, &error)) {
-        fprintf(stderr, "rig: error: " STR_FMT "\n", STR_ARG(error));
+        // LLVM's message is the system's alone ("permission denied"); the
+        // path says which file.
+        fprintf(stderr, "rig: error: cannot write '" STR_FMT "': " STR_FMT "\n", STR_ARG(object), STR_ARG(error));
         return 1;
     }
     Array<String> objects = {};
@@ -89,26 +113,35 @@ static int build(Arena *a, String path, String output) {
 
 // rig build's command line: the words after "build", FILE.rig [-o OUTPUT],
 // in either order. Returns the exit code; 2 with the usage for a malformed
-// line.
+// line (no file, two files, -o with no name or an empty one, -o twice).
+// An output ending in .rig is refused: it's a mistake for the source's name,
+// and the linker would overwrite the source with the program.
 int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
     String path = {}, output = {};
+    bool have_path = false, have_output = false;
     for (s64 i = 0; i < words.count; i++) {
         if (string_eq(words[i], str("-o"))) {
-            if (i + 1 >= words.count || output.count) {
+            if (i + 1 >= words.count || have_output || words[i + 1].count == 0) {
                 print_usage();
                 return 2;
             }
             output = words[++i];
-        } else if (!path.count) {
+            have_output = true;
+        } else if (!have_path) {
             path = words[i];
+            have_path = true;
         } else {
             print_usage();
             return 2;
         }
     }
-    if (!path.count) {
+    if (!have_path) {
         print_usage();
         return 2;
+    }
+    if (is_rig_file(output)) {
+        fprintf(stderr, "rig: error: the output '" STR_FMT "' ends in .rig; is it the source file?\n", STR_ARG(output));
+        return 1;
     }
     return build(a, path, output);
 }
