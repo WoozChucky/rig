@@ -50,7 +50,8 @@ struct Ast {
     Type *type;        // filled in by the checker; null until then, or after an error
     bool is_constant;  // the checker knows the value while compiling (spec 6.4)
     u64 constant;      // that value's bits: an integer's sign-extended to 64 bits when its
-                       // type is signed or untyped, zero-extended when unsigned
+                       // type is signed or untyped, zero-extended when unsigned; a bool's
+                       // 1 or 0
 };
 
 struct Ast_Type : Ast {

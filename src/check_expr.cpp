@@ -6,7 +6,7 @@
 // signed one sign-extended, an unsigned one zero-extended. So the 64 bits,
 // read as s64 or u64 by the type's sign, are always the constant's value as
 // a number, whatever its width: an s8 holding -1 is all ones, a u8 holding
-// 255 is 0xff.
+// 255 is 0xff. A bool constant is 1 for true, 0 for false.
 
 #include "check.h"
 
@@ -175,12 +175,24 @@ static Type *overflows(Checker *c, Ast *e) {
     return nullptr;
 }
 
-// - and ~. On an untyped constant, - is exact (so only int's most negative
-// value overflows) and ~ flips every bit, as on an int; on a typed constant
-// both wrap as at run time.
+// - and ~ on an integer, ! on a bool. On an untyped constant, - is exact (so
+// only int's most negative value overflows) and ~ flips every bit, as on an
+// int; on a typed constant both wrap as at run time. ! on a constant flips
+// it.
 static Type *check_unary(Checker *c, Ast_Unary *u) {
     Type *t = check_value(c, u->operand);
     if (!t) return nullptr;
+    if (u->op == TOKEN_BANG) {
+        if (t != &type_bool) {
+            diag_error(c->diag, u->pos, "'!' needs a bool, not '" STR_FMT "'", STR_ARG(type_name(c->arena, t)));
+            return nullptr;
+        }
+        if (u->operand->is_constant) {
+            u->is_constant = true;
+            u->constant = u->operand->constant ^ 1;
+        }
+        return t;
+    }
     if (t->kind != TYPE_INTEGER) {
         diag_error(c->diag, u->pos, "%s needs an integer, not '" STR_FMT "'", token_kind_name(u->op),
                    STR_ARG(type_name(c->arena, t)));
@@ -303,42 +315,135 @@ static Type *check_shift(Checker *c, Ast_Binary *b, Type *left) {
     return t;
 }
 
-// + - * & | ^ << >> (spec 6.4). Both operands integers. Untyped with
-// untyped gives untyped; untyped with typed, the typed one's type, the
-// untyped one taking it (it must fit); typed with typed, the same type, or
-// the type the other operand widens to (int with s64: the left one's).
-// Anything else needs a cast, which says which type is meant. No integer
-// promotion: u8 + u8 is a u8, wrapping at 8 bits.
+bool check_both_integers(Checker *c, Type *left, Type *right, Position at, const char *op_name) {
+    Type *not_integer = left->kind != TYPE_INTEGER ? left : right->kind != TYPE_INTEGER ? right : nullptr;
+    if (!not_integer) return true;
+    diag_error(c->diag, at, "%s needs integers, not '" STR_FMT "'", op_name,
+               STR_ARG(type_name(c->arena, not_integer)));
+    return false;
+}
+
+Type *check_unify_integers(Checker *c, Ast *left, Ast *right, Position at, const char *op_name) {
+    Type *l = left->type, *r = right->type;
+    if (type_is_untyped(l) && type_is_untyped(r)) return l;
+    if (type_is_untyped(l)) {
+        check_convert(c, left, r);
+        return r;
+    }
+    if (type_is_untyped(r)) {
+        check_convert(c, right, l);
+        return l;
+    }
+    if (widens(r, l)) return l;
+    if (widens(l, r)) return r;
+    diag_error(c->diag, at, "mismatched types '" STR_FMT "' and '" STR_FMT "' for %s; cast one of them",
+               STR_ARG(type_name(c->arena, l)), STR_ARG(type_name(c->arena, r)), op_name);
+    return nullptr;
+}
+
+static bool is_comparison(Token_Kind op) {
+    switch (op) {
+    case TOKEN_EQUAL_EQUAL:
+    case TOKEN_BANG_EQUAL:
+    case TOKEN_LESS:
+    case TOKEN_LESS_EQUAL:
+    case TOKEN_GREATER:
+    case TOKEN_GREATER_EQUAL: return true;
+    default: return false;
+    }
+}
+
+// && and ||: both operands bools, and so is the result. Two constants fold;
+// a constant with a value known only at run time doesn't (true || f()
+// isn't a constant, as in Go, though f() is never called: lowering's
+// short-circuit sees to that).
+static Type *check_logical(Checker *c, Ast_Binary *b, Type *left, Type *right) {
+    Type *not_bool = left != &type_bool ? left : right != &type_bool ? right : nullptr;
+    if (not_bool) {
+        diag_error(c->diag, b->pos, "%s needs bools, not '" STR_FMT "'", token_kind_name(b->op),
+                   STR_ARG(type_name(c->arena, not_bool)));
+        return nullptr;
+    }
+    b->operand_type = &type_bool;
+    if (b->left->is_constant && b->right->is_constant) {
+        b->is_constant = true;
+        u64 l = b->left->constant, r = b->right->constant;
+        b->constant = b->op == TOKEN_AMP_AMP ? l & r : l | r;
+    }
+    return &type_bool;
+}
+
+// Whether `left op right` holds, for two constants compared as numbers of a
+// type of this sign (Ast.constant keeps each one's value extended to 64
+// bits by its own sign, so that's its number either way); bools are 0 and
+// 1, and only equal or not.
+static bool compare(Token_Kind op, u64 left, u64 right, bool is_signed) {
+    bool less = is_signed ? (s64)left < (s64)right : left < right;
+    switch (op) {
+    case TOKEN_EQUAL_EQUAL: return left == right;
+    case TOKEN_BANG_EQUAL: return left != right;
+    case TOKEN_LESS: return less;
+    case TOKEN_LESS_EQUAL: return less || left == right;
+    case TOKEN_GREATER: return !less && left != right;
+    case TOKEN_GREATER_EQUAL: return !less;
+    default: RIG_ASSERT(!"not a comparison"); return false;
+    }
+}
+
+// == != < <= > >=: the result is a bool. Two integers meet at a type as an
+// arithmetic operator's operands do (check_unify_integers), and are compared
+// as numbers of that type: signed or unsigned by its sign. == and != also
+// compare two bools; a bool has no order, and isn't equal or unequal to an
+// integer, which is never one (spec 6.1).
+static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right) {
+    const char *op = token_kind_name(b->op);
+    bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
+    Type *t;
+    if (equality && (left == &type_bool || right == &type_bool)) {
+        if (left != right) {
+            // No cast makes an integer a bool, so the message suggests none.
+            diag_error(c->diag, b->pos, "mismatched types '" STR_FMT "' and '" STR_FMT "' for %s",
+                       STR_ARG(type_name(c->arena, left)), STR_ARG(type_name(c->arena, right)), op);
+            return nullptr;
+        }
+        t = &type_bool;
+    } else {
+        if (!check_both_integers(c, left, right, b->pos, op)) return nullptr;
+        t = check_unify_integers(c, b->left, b->right, b->pos, op);
+        if (!t) return nullptr;
+    }
+    b->operand_type = t;
+    if (b->left->is_constant && b->right->is_constant) {
+        b->is_constant = true;
+        b->constant = compare(b->op, b->left->constant, b->right->constant, t->is_signed);
+    }
+    return &type_bool;
+}
+
+// + - * & | ^ << >> (spec 6.4), and the comparisons and && || (above).
+// Arithmetic takes two integers, which meet at a type (check_unify_integers)
+// that is also the result's. Untyped with untyped gives untyped; untyped
+// with typed, the typed one's type, the untyped one taking it (it must
+// fit); typed with typed, the same type, or the type the other operand
+// widens to (int with s64: the left one's). Anything else needs a cast,
+// which says which type is meant. No integer promotion: u8 + u8 is a u8,
+// wrapping at 8 bits.
 static Type *check_binary(Checker *c, Ast_Binary *b) {
     Type *left = check_value(c, b->left);
     Type *right = check_value(c, b->right);
     if (!left || !right) return nullptr;
-    const char *op = token_kind_name(b->op);
-    Type *not_integer = left->kind != TYPE_INTEGER ? left : right->kind != TYPE_INTEGER ? right : nullptr;
-    if (not_integer) {
-        diag_error(c->diag, b->pos, "%s needs integers, not '" STR_FMT "'", op, STR_ARG(type_name(c->arena, not_integer)));
-        return nullptr;
-    }
-    if (is_shift(b->op)) return check_shift(c, b, left);
+    if (b->op == TOKEN_AMP_AMP || b->op == TOKEN_PIPE_PIPE) return check_logical(c, b, left, right);
+    if (is_comparison(b->op)) return check_comparison(c, b, left, right);
 
-    Type *t;
-    if (type_is_untyped(left) && type_is_untyped(right)) {
-        t = left;
-    } else if (type_is_untyped(left)) {
-        check_convert(c, b->left, right);
-        t = right;
-    } else if (type_is_untyped(right)) {
-        check_convert(c, b->right, left);
-        t = left;
-    } else if (widens(right, left)) {
-        t = left;
-    } else if (widens(left, right)) {
-        t = right;
-    } else {
-        diag_error(c->diag, b->pos, "mismatched types '" STR_FMT "' and '" STR_FMT "' for %s; cast one of them",
-                   STR_ARG(type_name(c->arena, left)), STR_ARG(type_name(c->arena, right)), op);
-        return nullptr;
+    const char *op = token_kind_name(b->op);
+    if (!check_both_integers(c, left, right, b->pos, op)) return nullptr;
+    if (is_shift(b->op)) {
+        b->operand_type = check_shift(c, b, left);
+        return b->operand_type;
     }
+    Type *t = check_unify_integers(c, b->left, b->right, b->pos, op);
+    if (!t) return nullptr;
+    b->operand_type = t;
 
     if (!b->left->is_constant || !b->right->is_constant) return t;
     b->is_constant = true;
@@ -352,6 +457,11 @@ Type *check_expression(Checker *c, Ast *e) {
     switch (e->kind) {
     case AST_INT: t = check_int((Ast_Int *)e); break;
     case AST_STRING: t = &type_string; break;
+    case AST_BOOL:
+        e->is_constant = true;
+        e->constant = ((Ast_Bool *)e)->value;
+        t = &type_bool;
+        break;
     case AST_NAME: t = check_name(c, (Ast_Name *)e); break;
     case AST_CALL: t = check_call(c, (Ast_Call *)e); break;
     case AST_UNARY: t = check_unary(c, (Ast_Unary *)e); break;
