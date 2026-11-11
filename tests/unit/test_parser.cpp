@@ -1,5 +1,6 @@
-// test_parser.cpp: the parser (issue #8). Tokens are built by hand with
-// toks() (helpers.cpp), so these tests don't need the lexer.
+// test_parser.cpp: the parser. Milestone 1's tests (issue #8) build tokens
+// by hand with toks() (helpers.cpp), so they don't need the lexer;
+// milestone 2a's (issue #33) lex real source with src().
 
 #include "test.h"
 
@@ -285,5 +286,192 @@ TEST(a_name_is_kept_only_where_a_declaration_could_be) {
     CHECK_EQ(list->diag.error_count, 0);
     CHECK_STR(ast_dump(&a, file), "(broken greet)\n");
     token_list_free(list);
+    arena_free(&a);
+}
+
+// Milestone 2a (issue #33): expressions with operators, local declarations,
+// assignments and return. These lex real source with src() (helpers.cpp).
+
+// Parses `text`; returns the dump, and the errors through `errors`.
+static String parse_src(Arena *a, const char *text, String *errors) {
+    Token_List *list = src(text);
+    Ast_File *file = parse(list->tokens, a, &list->diag);
+    String dump = ast_dump(a, file);
+    *errors = messages(a, &list->diag);
+    token_list_free(list);
+    return dump;
+}
+
+// The statements `body` parses to, as the dump of the block holding them:
+// body is the inside of f :: () { ... }, starting on line 2, column 5 (so an
+// error at the body's first token is at 2:5). When f doesn't parse, the
+// whole dump.
+static String body_dump(Arena *a, const char *body, String *errors) {
+    String text = string_printf(a, "f :: () {\n    %s\n}\n", body);
+    String dump = parse_src(a, string_cstr(a, text), errors);
+    // "(proc f (params) (block ...))\n" -> "(block ...)"
+    const char *prefix = "(proc f (params) ";
+    s64 n = (s64)strlen(prefix);
+    if (dump.count < n + 2 || memcmp(dump.data, prefix, (size_t)n) != 0) return dump;
+    return string_slice(dump, n, dump.count - n - 2);
+}
+
+TEST(pratt_precedence) {
+    // * and << bind tighter than + and |, and operators of one level group
+    // from the left: ((a + ((b * c) << 2)) | d).
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "a + b * c << 2 | d;", &errors),
+              "(block (binary | (binary + (name a) (binary << (binary * (name b) (name c)) (int 2))) (name d)))");
+    CHECK_STR(errors, "");
+    // & is a multiplication (level 5), ^ an addition (level 4), as in Go.
+    CHECK_STR(body_dump(&a, "a ^ b & c >> 1;", &errors),
+              "(block (binary ^ (name a) (binary >> (binary & (name b) (name c)) (int 1))))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(binary_operators_associate_left) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "a - b - c;", &errors), "(block (binary - (binary - (name a) (name b)) (name c)))");
+    CHECK_STR(body_dump(&a, "a << b << c;", &errors), "(block (binary << (binary << (name a) (name b)) (name c)))");
+    // Parentheses group otherwise, and add no node.
+    CHECK_STR(body_dump(&a, "a - (b - c);", &errors), "(block (binary - (name a) (binary - (name b) (name c))))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(unary_binds_tighter_than_binary) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "-a * ~b;", &errors), "(block (binary * (unary - (name a)) (unary ~ (name b))))");
+    CHECK_STR(body_dump(&a, "- -a;", &errors), "(block (unary - (unary - (name a))))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(calls_bind_tightest) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "-f(x) + 1;", &errors), "(block (binary + (unary - (call f (name x))) (int 1)))");
+    CHECK_STR(body_dump(&a, "g(a + b, -c);", &errors),
+              "(block (call g (binary + (name a) (name b)) (unary - (name c))))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(parses_local_declarations) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "x : int = 5; y := x; w : int = ---; z : u8; N :: 10;", &errors),
+              "(block (var x int (int 5)) (var y _ (name x)) (var w int ---) (var z u8) (const N (int 10)))");
+    CHECK_STR(errors, "");
+    // A constant's value in parentheses is an expression, not a procedure's
+    // parameters: no '{', '->' or directive follows its ')'.
+    CHECK_STR(body_dump(&a, "N :: (2 + 3) * 4;", &errors),
+              "(block (const N (binary * (binary + (int 2) (int 3)) (int 4))))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(parses_assignments) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "x = 1; x += 2; x <<= 1;", &errors),
+              "(block (assign = (name x) (int 1)) (assign += (name x) (int 2)) (assign <<= (name x) (int 1)))");
+    CHECK_STR(body_dump(&a, "x -= 1; x *= 2; x &= 3; x |= 4; x ^= 5; x >>= 6;", &errors),
+              "(block (assign -= (name x) (int 1)) (assign *= (name x) (int 2)) (assign &= (name x) (int 3)) "
+              "(assign |= (name x) (int 4)) (assign ^= (name x) (int 5)) (assign >>= (name x) (int 6)))");
+    // Anything can be on the left as far as the parser is concerned; the
+    // checker says what can be assigned to.
+    CHECK_STR(body_dump(&a, "f() = 1;", &errors), "(block (assign = (call f) (int 1)))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(parses_return_and_nested_blocks) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "f :: () -> s32 {\n"
+                        "    { x := 1; { return x + 1; } }\n"
+                        "    return;\n"
+                        "}\n",
+                        &errors),
+              "(proc f (params) (returns s32) (block (block (var x _ (int 1)) (block (return (binary + (name x) "
+              "(int 1))))) (return)))\n");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(a_block_knows_where_it_ends) {
+    // Its '}': where the checker says a procedure reaches its end.
+    Arena a = arena_make();
+    Token_List *list = src("f :: () {\n    x := 1;\n  }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    Ast_Block *body = file->procs[0]->body;
+    CHECK(body != nullptr);
+    if (body) {
+        CHECK_EQ(body->end.line, 3);
+        CHECK_EQ(body->end.col, 3);
+    }
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(uninitialised_without_a_type) {
+    // --- leaves a variable as it is, so there's no value to infer its type
+    // from.
+    Arena a = arena_make();
+    String errors;
+    body_dump(&a, "x := ---;", &errors);
+    CHECK_STR(errors, "2:10: '---' needs a type, as in x : int = ---;\n");
+    arena_free(&a);
+}
+
+TEST(local_procedure_is_reported) {
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_src(&a,
+                            "main :: () {\n"
+                            "    helper :: () { }\n"
+                            "}\n"
+                            "g :: () { }\n",
+                            &errors);
+    CHECK_STR(errors, "2:5: procedures can only be declared at the top level, for now\n");
+    // main is given up on, and parsing goes on after its '}'.
+    CHECK_STR(dump, "(broken main)\n(proc g (params) (block))\n");
+    arena_free(&a);
+}
+
+TEST(recovery_skips_the_rest_of_a_body) {
+    // After an error in a body, an indented 'N ::' further down is a local
+    // constant inside it, not the next declaration: the parser goes on at g,
+    // after the body's '}', with one message.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_src(&a,
+                            "f :: () {\n"
+                            "    x := ;\n"
+                            "    N :: 5;\n"
+                            "    y := N;\n"
+                            "}\n"
+                            "g :: () { }\n",
+                            &errors);
+    CHECK_STR(errors, "2:10: expected an expression, found ';'\n");
+    CHECK_STR(dump, "(broken f)\n(proc g (params) (block))\n");
+    arena_free(&a);
+}
+
+TEST(missing_operand_is_reported) {
+    Arena a = arena_make();
+    String errors;
+    body_dump(&a, "x := a + ;", &errors);
+    CHECK_STR(errors, "2:14: expected an expression, found ';'\n");
+    body_dump(&a, "x = ;", &errors);
+    CHECK_STR(errors, "2:9: expected an expression, found ';'\n");
+    body_dump(&a, "return 1 2;", &errors);
+    CHECK_STR(errors, "2:14: expected ';', found integer literal\n");
     arena_free(&a);
 }

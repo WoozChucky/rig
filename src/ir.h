@@ -71,7 +71,7 @@ enum Ir_Type : u8 {
 // Each operation as it prints. The fields it uses are Ir_Instr's: %n is
 // `result`, %a %b %c are `a` `b` `c`, T is `type`.
 enum Ir_Op : u8 {
-    IR_CONST,                        // %n = const T bits
+    IR_CONST,                        // %n = const T bits     (const ptr 0: the null pointer, the only ptr constant)
     IR_ADDR,                         // %n = addr @global
     IR_CALL,                         // [%n[, %n+1...] =] call @proc(%a, ...): one value per result
     IR_SEXT, IR_ZEXT, IR_TRUNC,      // %n = sext T %a to U   (`from` is T, `type` U)

@@ -48,7 +48,9 @@ static Token *expect(Parser *p, Token_Kind kind) {
     return nullptr;
 }
 
-static Ast *parse_expression(Parser *p);
+static Ast *parse_expression(Parser *p, int min_precedence);
+static Ast_Type *parse_type(Parser *p);
+static bool parameters_follow(Parser *p, s64 open);
 
 // primary = IDENT | INT | STRING | '(' expression ')'
 static Ast *parse_primary(Parser *p) {
@@ -73,9 +75,12 @@ static Ast *parse_primary(Parser *p) {
         return string;
     }
     case TOKEN_LPAREN: {
+        // Parentheses only group, so they add no node; the value inside
+        // starts at the '(' though, for messages about the whole value.
         advance(p);
-        Ast *inner = parse_expression(p);
+        Ast *inner = parse_expression(p, 1);
         if (!inner || !expect(p, TOKEN_RPAREN)) return nullptr;
+        inner->start = t->pos;
         return inner;
     }
     default:
@@ -84,16 +89,17 @@ static Ast *parse_primary(Parser *p) {
     }
 }
 
-// expression = primary { '(' [expression {',' expression}] ')' }
-static Ast *parse_expression(Parser *p) {
+// postfix = primary { '(' [expression {',' expression}] ')' }
+static Ast *parse_postfix(Parser *p) {
     Ast *e = parse_primary(p);
     while (e && peek(p)->kind == TOKEN_LPAREN) {
         Ast_Call *call = ast_new<Ast_Call>(p->arena, AST_CALL, peek(p)->pos);
         advance(p);
+        call->start = e->start;
         call->callee = e;
         if (peek(p)->kind != TOKEN_RPAREN) {
             for (;;) {
-                Ast *arg = parse_expression(p);
+                Ast *arg = parse_expression(p, 1);
                 if (!arg) return nullptr;
                 array_add(&call->args, arg);
                 if (peek(p)->kind != TOKEN_COMMA) break;
@@ -106,6 +112,80 @@ static Ast *parse_expression(Parser *p) {
     return e;
 }
 
+// unary = ('-' | '~') unary | postfix
+//
+// A prefix operator applies to everything after it that binds tighter than
+// any binary operator: -f(x) + 1 is (-(f(x))) + 1.
+static Ast *parse_unary(Parser *p) {
+    Token *op = peek(p);
+    if (op->kind != TOKEN_MINUS && op->kind != TOKEN_TILDE) return parse_postfix(p);
+    advance(p);
+    Ast *operand = parse_unary(p);
+    if (!operand) return nullptr;
+    Ast_Unary *unary = ast_new<Ast_Unary>(p->arena, AST_UNARY, op->pos);
+    unary->op = op->kind;
+    unary->operand = operand;
+    return unary;
+}
+
+// How tightly a binary operator holds its operands, Go's levels (spec 6.1):
+// the higher, the tighter. 0 for a token that isn't a binary operator, so
+// an expression ends there. Task 3 adds 1: ||  2: &&  3: comparisons;
+// Task 4 adds / and % at 5.
+static int binary_precedence(Token_Kind kind) {
+    switch (kind) {
+    case TOKEN_PLUS:
+    case TOKEN_MINUS:
+    case TOKEN_PIPE:
+    case TOKEN_CARET: return 4;
+    case TOKEN_STAR:
+    case TOKEN_SHIFT_LEFT:
+    case TOKEN_SHIFT_RIGHT:
+    case TOKEN_AMP: return 5;
+    default: return 0;
+    }
+}
+
+// expression = unary { BINARY_OPERATOR unary }, grouped by precedence.
+//
+// A Pratt parser (precedence climbing): one loop handles every level of
+// binary operator, instead of one grammar rule per level. It reads an
+// operand, then takes the binary operators that follow as long as they bind
+// at least as tightly as min_precedence; each operator's right operand is
+// parsed by a recursive call that only takes operators binding tighter than
+// it does.
+//
+// a + b * c, called with min_precedence 1:
+// - it reads a, and sees + (4, at least 1): it takes the +, and parses the
+//   right operand with min_precedence 5;
+//   - that call reads b, and sees * (5, at least 5): it takes the *, and
+//     parses c with min_precedence 6; then the expression ends, so this
+//     call returns b * c;
+// - so the + gets b * c as its right operand: a + (b * c).
+// a - b - c: the first - parses its right operand with min_precedence 5,
+// which reads b and stops at the second - (4, less than 5); the loop then
+// takes that - itself, with a - b as its left operand: (a - b) - c. That's
+// left associativity: an operator never takes another of its own level as
+// its right operand.
+static Ast *parse_expression(Parser *p, int min_precedence) {
+    Ast *left = parse_unary(p);
+    while (left) {
+        Token *op = peek(p);
+        int precedence = binary_precedence(op->kind);
+        if (precedence == 0 || precedence < min_precedence) break;
+        advance(p);
+        Ast *right = parse_expression(p, precedence + 1);
+        if (!right) return nullptr;
+        Ast_Binary *binary = ast_new<Ast_Binary>(p->arena, AST_BINARY, op->pos);
+        binary->start = left->start;
+        binary->op = op->kind;
+        binary->left = left;
+        binary->right = right;
+        left = binary;
+    }
+    return left;
+}
+
 // Whether the next tokens are IDENT '::' with the name in column 1, the way
 // a top-level declaration starts.
 static bool starts_declaration(Parser *p) {
@@ -113,7 +193,121 @@ static bool starts_declaration(Parser *p) {
     return t->kind == TOKEN_IDENT && t->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON;
 }
 
-// block = '{' statement* '}', statement = expression ';'
+// declaration = IDENT ':' type ['=' (expression | '---')] ';'
+//             | IDENT ':=' expression ';'
+//             | IDENT '::' expression ';'
+// inside a body: a local variable or constant. The caller saw IDENT and
+// one of ':', ':=', '::'.
+static Ast *parse_local_declaration(Parser *p) {
+    Token *name = advance(p);
+    Token *colons = advance(p);
+    if (colons->kind == TOKEN_COLON_COLON) {
+        // `helper :: () {`: parentheses that are a signature's, not a
+        // constant's value in parentheses (N :: (2 + 3) * 4;).
+        if (peek(p)->kind == TOKEN_LPAREN && parameters_follow(p, p->next)) {
+            diag_error(p->diag, name->pos, "procedures can only be declared at the top level, for now");
+            return nullptr;
+        }
+        Ast_Const *constant = ast_new<Ast_Const>(p->arena, AST_CONST, name->pos);
+        constant->name = name->text;
+        constant->value = parse_expression(p, 1);
+        if (!constant->value || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+        return constant;
+    }
+
+    Ast_Var *var = ast_new<Ast_Var>(p->arena, AST_VAR, name->pos);
+    var->name = name->text;
+    if (colons->kind == TOKEN_COLON) {
+        var->type_expr = parse_type(p);
+        if (!var->type_expr) return nullptr;
+        if (peek(p)->kind == TOKEN_EQUAL) {
+            advance(p);
+            if (peek(p)->kind == TOKEN_TRIPLE_DASH) {
+                advance(p);
+                var->is_uninitialized = true;
+            } else {
+                var->value = parse_expression(p, 1);
+                if (!var->value) return nullptr;
+            }
+        }
+    } else {
+        // ':=' takes the type of its value, and --- has none.
+        if (peek(p)->kind == TOKEN_TRIPLE_DASH) {
+            diag_error(p->diag, peek(p)->pos, "'---' needs a type, as in x : int = ---;");
+            return nullptr;
+        }
+        var->value = parse_expression(p, 1);
+        if (!var->value) return nullptr;
+    }
+    if (!expect(p, TOKEN_SEMICOLON)) return nullptr;
+    return var;
+}
+
+// 'return' [expression] ';'
+static Ast *parse_return(Parser *p) {
+    Token *keyword = advance(p);
+    Ast_Return *ret = ast_new<Ast_Return>(p->arena, AST_RETURN, keyword->pos);
+    if (peek(p)->kind != TOKEN_SEMICOLON) {
+        Ast *value = parse_expression(p, 1);
+        if (!value) return nullptr;
+        array_add(&ret->values, value);
+    }
+    if (!expect(p, TOKEN_SEMICOLON)) return nullptr;
+    return ret;
+}
+
+// The operators an assignment is written with: '=' and the compound ones.
+static bool is_assignment_operator(Token_Kind kind) {
+    switch (kind) {
+    case TOKEN_EQUAL:
+    case TOKEN_PLUS_EQUAL:
+    case TOKEN_MINUS_EQUAL:
+    case TOKEN_STAR_EQUAL:
+    case TOKEN_AMP_EQUAL:
+    case TOKEN_PIPE_EQUAL:
+    case TOKEN_CARET_EQUAL:
+    case TOKEN_SHIFT_LEFT_EQUAL:
+    case TOKEN_SHIFT_RIGHT_EQUAL: return true;
+    default: return false;
+    }
+}
+
+static Ast_Block *parse_block(Parser *p);
+
+// statement = declaration | assignment | 'return' [expression] ';' | block | expression ';'
+//
+// A declaration starts with IDENT and then ':', ':=' or '::', which no
+// expression can; anything else is an expression, and then an assignment
+// if '=' or a compound operator follows it:
+// assignment = expression ('=' | '+=' | ...) expression ';'
+static Ast *parse_statement(Parser *p) {
+    Token *t = peek(p);
+    if (t->kind == TOKEN_LBRACE) return parse_block(p);
+    if (t->kind == TOKEN_RETURN) return parse_return(p);
+    if (t->kind == TOKEN_IDENT) {
+        Token_Kind after = peek(p, 1)->kind;
+        if (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL || after == TOKEN_COLON_COLON) {
+            return parse_local_declaration(p);
+        }
+    }
+
+    Ast *e = parse_expression(p, 1);
+    if (!e) return nullptr;
+    Token *op = peek(p);
+    if (is_assignment_operator(op->kind)) {
+        advance(p);
+        Ast_Assign *assign = ast_new<Ast_Assign>(p->arena, AST_ASSIGN, op->pos);
+        assign->op = op->kind;
+        array_add(&assign->targets, e);
+        assign->value = parse_expression(p, 1);
+        if (!assign->value || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+        return assign;
+    }
+    if (!expect(p, TOKEN_SEMICOLON)) return nullptr;
+    return e;
+}
+
+// block = '{' statement* '}'
 static Ast_Block *parse_block(Parser *p) {
     Token *open = expect(p, TOKEN_LBRACE);
     if (!open) return nullptr;
@@ -126,11 +320,11 @@ static Ast_Block *parse_block(Parser *p) {
             error_expected(p, token_kind_name(TOKEN_RBRACE));
             return nullptr;
         }
-        Ast *statement = parse_expression(p);
-        if (!statement || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+        Ast *statement = parse_statement(p);
+        if (!statement) return nullptr;
         array_add(&block->statements, statement);
     }
-    advance(p);
+    block->end = advance(p)->pos;
     return block;
 }
 
@@ -180,8 +374,9 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     if (!expect(p, TOKEN_RPAREN)) return nullptr;
     if (peek(p)->kind == TOKEN_ARROW) {
         advance(p);
-        proc->return_type = parse_type(p);
-        if (!proc->return_type) return nullptr;
+        Ast_Type *result = parse_type(p);
+        if (!result) return nullptr;
+        array_add(&proc->results, result);
     }
 
     Token *t = peek(p);
@@ -202,7 +397,7 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     return proc->body ? proc : nullptr;
 }
 
-// declaration = IDENT '::' procedure
+// top_level = IDENT '::' procedure
 static Ast_Proc *parse_declaration(Parser *p) {
     Token *name = expect(p, TOKEN_IDENT);
     if (!name || !expect(p, TOKEN_COLON_COLON)) return nullptr;
@@ -220,13 +415,29 @@ static Ast_Proc *parse_declaration(Parser *p) {
 // to the end. A declaration the failed one stopped right at (an unclosed
 // block) is kept; otherwise at least one token is skipped, so parse() always
 // moves on.
+//
+// Inside a body, `N :: 5;` starting a line is a local constant, not the next
+// declaration, so the skipping counts braces from `start` on: an IDENT '::'
+// inside braces still open is passed over, unless it's in column 1, where
+// parse_block takes it for a top-level declaration after a body never
+// closed.
 static void skip_to_next_declaration(Parser *p, s64 start) {
     if (p->next > start && starts_declaration(p)) return;
     if (peek(p)->kind != TOKEN_EOF) advance(p);
+    s64 depth = 0;  // braces opened and not yet closed since `start`
+    for (s64 i = start; i < p->next; i++) {
+        if (p->tokens[i].kind == TOKEN_LBRACE) depth++;
+        if (p->tokens[i].kind == TOKEN_RBRACE) depth--;
+    }
     while (peek(p)->kind != TOKEN_EOF) {
         Token *t = peek(p);
         bool starts_line = p->next == 0 || p->tokens[p->next - 1].pos.line != t->pos.line;
-        if (starts_line && t->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON_COLON) return;
+        if (starts_line && t->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON_COLON &&
+            (depth <= 0 || t->pos.col == 1)) {
+            return;
+        }
+        if (t->kind == TOKEN_LBRACE) depth++;
+        if (t->kind == TOKEN_RBRACE) depth--;
         advance(p);
     }
 }

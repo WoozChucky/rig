@@ -1,8 +1,9 @@
 // types.h: Rig's types, as the checker sees them.
 //
-// Milestone 1 has the integer types, pointers, string and void. Each type
-// exists once, so two types are the same exactly when their pointers are
-// equal (type_pointer_to keeps one *T per T).
+// The integer types, pointers, string and void, and the type of an untyped
+// integer constant. Each type exists once, so two types are the same
+// exactly when their pointers are equal (type_pointer_to keeps one *T per
+// T).
 
 #pragma once
 
@@ -37,4 +38,15 @@ String type_name(Arena *a, Type *t);
 
 extern Type type_void;
 extern Type type_string;
-extern Type type_int;  // an integer literal's type
+extern Type type_int;
+
+// The type of an untyped integer constant (spec 6.4): a literal, or
+// arithmetic on literals and on constants that are themselves untyped. It
+// looks like int (kind TYPE_INTEGER, 8 bytes, signed, and messages call it
+// 'int'), since its values are int's, but it's a type of its own: the
+// checker gives such a constant the type it meets (x : u8 = 200;), and int
+// only when it meets none (x := 5;).
+extern Type type_untyped_int;
+
+// Whether t is the type of an untyped constant.
+bool type_is_untyped(Type *t);

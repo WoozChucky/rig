@@ -7,6 +7,7 @@
 Type type_void = {TYPE_VOID, 0, false, nullptr, {(const u8 *)"void", 4}, nullptr};
 Type type_string = {TYPE_STRING, 16, false, nullptr, {(const u8 *)"string", 6}, nullptr};
 Type type_int = INTEGER("int", 8, true);
+Type type_untyped_int = INTEGER("int", 8, true);
 
 static Type integer_types[] = {
     INTEGER("s8", 1, true),  INTEGER("s16", 2, true),  INTEGER("s32", 4, true),  INTEGER("s64", 8, true),
@@ -19,6 +20,10 @@ Type *type_from_name(String name) {
         if (string_eq(name, t.name)) return &t;
     }
     return nullptr;
+}
+
+bool type_is_untyped(Type *t) {
+    return t == &type_untyped_int;
 }
 
 // Pointer types live as long as the built-in types that cache them, so they
