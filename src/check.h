@@ -14,6 +14,8 @@ struct Checker {
     Array<Table<Ast *>> scopes;  // the blocks being checked, innermost last: the names
                                  // declared in each so far (Ast_Var, Ast_Const, Ast_Param)
     Ast_Proc *proc;              // the procedure whose body is being checked
+    Array<Ast *> loops;          // the loops around the statement being checked, innermost
+                                 // last (Ast_While, Ast_For): what break and continue act on
 };
 
 // checker.cpp
@@ -48,3 +50,15 @@ bool check_convert(Checker *c, Ast *e, Type *to);
 
 // An untyped constant that meets no type becomes an int (x := 5;).
 void check_default_type(Ast *e);
+
+// True when both operand types, of an operator or a range's '..' (`op_name`
+// names it in the message: "'+'", "'..'"), are integers; otherwise false,
+// after "'OP' needs integers, not 'T'" about the first that isn't, at `at`.
+bool check_both_integers(Checker *c, Type *left, Type *right, Position at, const char *op_name);
+
+// The type two checked integer operands meet at, for an arithmetic operator,
+// a comparison or a range's '..' (`op_name` names it in the message: "'+'",
+// "'..'"): an untyped one takes the other's type, a typed one widens to the
+// other's (checker.h). Null after "mismatched types 'A' and 'B' for 'OP';
+// cast one of them", at `at`. Both untyped: the untyped type.
+Type *check_unify_integers(Checker *c, Ast *left, Ast *right, Position at, const char *op_name);

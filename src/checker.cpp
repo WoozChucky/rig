@@ -82,14 +82,14 @@ static void check_var(Checker *c, Ast_Var *var) {
     declare(c, var->name, var);
 }
 
-// N :: e; the value must be an integer known while compiling, and the
-// constant keeps it, with its type: untyped when e is, so N meets types as a
-// literal does. Only integers fold so far, so a string literal, though known
-// while compiling, can't be a constant yet.
+// N :: e; the value must be an integer or a bool known while compiling, and
+// the constant keeps it, with its type: untyped when e is, so N meets types
+// as a literal does. Only integers and bools fold so far, so a string
+// literal, though known while compiling, can't be a constant yet.
 static void check_const(Checker *c, Ast_Const *constant) {
     Type *t = check_value(c, constant->value);
-    if (t && t->kind != TYPE_INTEGER) {
-        diag_error(c->diag, constant->value->start, "a constant can only be an integer, for now");
+    if (t && t->kind != TYPE_INTEGER && t != &type_bool) {
+        diag_error(c->diag, constant->value->start, "a constant can only be an integer or a bool, for now");
         t = nullptr;
     } else if (t && !constant->value->is_constant) {
         diag_error(c->diag, constant->value->start, "the value of constant '" STR_FMT "' isn't known while compiling",
@@ -120,7 +120,19 @@ static Type *check_target(Checker *c, Ast *target) {
         return nullptr;
     }
     switch (decl->kind) {
-    case AST_VAR: name->type = decl->type; return decl->type;
+    case AST_VAR: {
+        // A for loop's iterator and it_index are read-only (spec 6.1): the
+        // loop sets them, each iteration.
+        Ast_Var *var = (Ast_Var *)decl;
+        if (!var->is_iterator) {
+            name->type = decl->type;
+            return decl->type;
+        }
+        // it_index is the only one by that name: an iterator named
+        // it_index too would be declared twice.
+        what = string_eq(var->name, str("it_index")) ? "the loop's index" : "the loop's iterator";
+        break;
+    }
     case AST_CONST: what = "a constant"; break;
     case AST_PARAM: what = "a parameter"; break;  // read-only (spec 6.1): copy it into a variable to change it
     case AST_PROC:
@@ -183,17 +195,99 @@ static void check_return(Checker *c, Ast_Return *ret) {
 
 static void check_block(Checker *c, Ast_Block *block);
 
+// A block that is a statement, or a body of if, else or while: its own
+// scope, so what it declares ends with it.
+static void check_scoped_block(Checker *c, Ast_Block *block) {
+    push_scope(c);
+    check_block(c, block);
+    pop_scope(c);
+}
+
+// The condition of an if or a while (`keyword` says which): a bool, since an
+// integer isn't a condition (spec 6.1).
+static void check_condition(Checker *c, Ast *condition, const char *keyword) {
+    Type *t = check_value(c, condition);
+    if (t && t != &type_bool) {
+        diag_error(c->diag, condition->start, "the condition of '%s' must be a bool, not '" STR_FMT "'", keyword,
+                   STR_ARG(type_name(c->arena, t)));
+    }
+}
+
+static void check_if(Checker *c, Ast_If *branch) {
+    check_condition(c, branch->condition, "if");
+    check_scoped_block(c, branch->then_block);
+    if (!branch->else_part) return;
+    if (branch->else_part->kind == AST_IF) {
+        check_if(c, (Ast_If *)branch->else_part);
+    } else {
+        check_scoped_block(c, (Ast_Block *)branch->else_part);
+    }
+}
+
+// A loop's body, with the loop the innermost one, for break and continue.
+static void check_loop_body(Checker *c, Ast *loop, Ast_Block *body) {
+    array_add(&c->loops, loop);
+    check_block(c, body);
+    c->loops.count--;
+}
+
+static void check_while(Checker *c, Ast_While *loop) {
+    check_condition(c, loop->condition, "while");
+    push_scope(c);
+    check_loop_body(c, loop, loop->body);
+    pop_scope(c);
+}
+
+// for a..b: the ends are integers that meet at a type as an arithmetic
+// operator's operands do; untyped ends (for 0..9) make an int. That's the
+// iterator's type, and it_index is an int. Both are declared in the body's
+// own block, as parameters are in a procedure's, so the body can't declare
+// them again, and they end with the loop. A named iterator is declared
+// instead of it, so inside `for i: ...` an outer loop's it is still it.
+static void check_for(Checker *c, Ast_For *loop) {
+    Type *first = check_value(c, loop->first);
+    Type *last = check_value(c, loop->last);
+    Type *t = nullptr;
+    if (first && last && check_both_integers(c, first, last, loop->dots, "'..'")) {
+        t = check_unify_integers(c, loop->first, loop->last, loop->dots, "'..'");
+        if (t && type_is_untyped(t)) {
+            check_default_type(loop->first);
+            check_default_type(loop->last);
+            t = &type_int;
+        }
+    }
+    // Unknown after an error: the iterator's uses then say nothing more.
+    loop->iterator->type = t;
+    loop->index->type = &type_int;
+    push_scope(c);
+    declare(c, loop->iterator->name, loop->iterator);
+    declare(c, loop->index->name, loop->index);
+    check_loop_body(c, loop, loop->body);
+    pop_scope(c);
+}
+
+// break and continue act on the innermost loop around them.
+static void check_jump(Checker *c, Ast_Jump *jump) {
+    if (c->loops.count == 0) {
+        diag_error(c->diag, jump->pos, "'%s' is only allowed inside a loop",
+                   jump->kind == AST_BREAK ? "break" : "continue");
+        return;
+    }
+    jump->loop = c->loops[c->loops.count - 1];
+}
+
 static void check_statement(Checker *c, Ast *statement) {
     switch (statement->kind) {
     case AST_VAR: check_var(c, (Ast_Var *)statement); break;
     case AST_CONST: check_const(c, (Ast_Const *)statement); break;
     case AST_ASSIGN: check_assign(c, (Ast_Assign *)statement); break;
     case AST_RETURN: check_return(c, (Ast_Return *)statement); break;
-    case AST_BLOCK:
-        push_scope(c);
-        check_block(c, (Ast_Block *)statement);
-        pop_scope(c);
-        break;
+    case AST_BLOCK: check_scoped_block(c, (Ast_Block *)statement); break;
+    case AST_IF: check_if(c, (Ast_If *)statement); break;
+    case AST_WHILE: check_while(c, (Ast_While *)statement); break;
+    case AST_FOR: check_for(c, (Ast_For *)statement); break;
+    case AST_BREAK:
+    case AST_CONTINUE: check_jump(c, (Ast_Jump *)statement); break;
     default:
         // An expression, whose value is ignored (spec 6.7): only a call does
         // anything, so anything else is reported, unless it was already.
@@ -209,15 +303,70 @@ static void check_block(Checker *c, Ast_Block *block) {
     for (s64 i = 0; i < block->statements.count; i++) check_statement(c, block->statements[i]);
 }
 
+// Whether statement s, or a statement inside it, is a break of `loop`. A
+// break inside a nested loop is that loop's, so it doesn't count (the
+// Ast_Jump says which loop it's for).
+static bool breaks_out_of(Ast *s, Ast *loop) {
+    switch (s->kind) {
+    case AST_BREAK: return ((Ast_Jump *)s)->loop == loop;
+    case AST_BLOCK: {
+        Ast_Block *block = (Ast_Block *)s;
+        for (s64 i = 0; i < block->statements.count; i++) {
+            if (breaks_out_of(block->statements[i], loop)) return true;
+        }
+        return false;
+    }
+    case AST_IF: {
+        Ast_If *branch = (Ast_If *)s;
+        if (breaks_out_of(branch->then_block, loop)) return true;
+        return branch->else_part && breaks_out_of(branch->else_part, loop);
+    }
+    case AST_WHILE: return breaks_out_of(((Ast_While *)s)->body, loop);
+    case AST_FOR: return breaks_out_of(((Ast_For *)s)->body, loop);
+    default: return false;
+    }
+}
+
+static bool reaches_end(Ast_Block *block);
+
+// Whether control can go on past statement s, to what follows it. Not past
+// a return; nor past a block, an if with an else, or a loop, that can't
+// reach its own end:
+// - an if with an else, when neither branch reaches its end (else if: the
+//   if that's the else part can't be got past either). Without an else,
+//   the condition may be false, so it always may.
+// - a while whose condition is the constant true, which only ends by a
+//   break of its own (or never). Any other while, and every for, may run
+//   zero times.
+// A break or continue leaves the block too, but goes on elsewhere in its
+// loop; the rule is only asked about statements outside any loop body
+// (a procedure's body, and the blocks and ifs that end it) or about
+// whole loops, so it never sees one.
+static bool goes_past(Ast *s) {
+    switch (s->kind) {
+    case AST_RETURN: return false;
+    case AST_BLOCK: return reaches_end((Ast_Block *)s);
+    case AST_IF: {
+        Ast_If *branch = (Ast_If *)s;
+        return !branch->else_part || reaches_end(branch->then_block) || goes_past(branch->else_part);
+    }
+    case AST_WHILE: {
+        Ast_While *loop = (Ast_While *)s;
+        Ast *condition = loop->condition;
+        bool forever = condition->is_constant && condition->type == &type_bool && condition->constant == 1;
+        return !forever || breaks_out_of(loop->body, loop);
+    }
+    default: return true;
+    }
+}
+
 // Whether control can run off the end of the block, past its last
-// statement to its '}': unless that statement is a return, or a block whose
-// own end can't be reached. (Task 3 adds if/else and `while true`.)
+// statement to its '}' (goes_past). Only the last statement is looked at: a
+// statement after a return or a `while true` is never run, but isn't an
+// error either.
 static bool reaches_end(Ast_Block *block) {
     if (block->statements.count == 0) return true;
-    Ast *last = block->statements[block->statements.count - 1];
-    if (last->kind == AST_RETURN) return false;
-    if (last->kind == AST_BLOCK) return reaches_end((Ast_Block *)last);
-    return true;
+    return goes_past(block->statements[block->statements.count - 1]);
 }
 
 // A procedure's body. Its parameters are in the body's own scope, so a
@@ -313,5 +462,6 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
 
     table_free(&c.procs);
     array_free(&c.scopes);
+    array_free(&c.loops);
     return d->error_count == errors_before;
 }

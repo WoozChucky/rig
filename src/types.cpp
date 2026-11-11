@@ -7,6 +7,7 @@
 Type type_void = {TYPE_VOID, 0, false, nullptr, {(const u8 *)"void", 4}, nullptr};
 Type type_string = {TYPE_STRING, 16, false, nullptr, {(const u8 *)"string", 6}, nullptr};
 Type type_int = INTEGER("int", 8, true);
+Type type_bool = {TYPE_BOOL, 1, false, nullptr, {(const u8 *)"bool", 4}, nullptr};
 Type type_untyped_int = INTEGER("int", 8, true);
 
 static Type integer_types[] = {
@@ -16,6 +17,7 @@ static Type integer_types[] = {
 
 Type *type_from_name(String name) {
     if (string_eq(name, type_int.name)) return &type_int;
+    if (string_eq(name, type_bool.name)) return &type_bool;
     for (Type &t : integer_types) {
         if (string_eq(name, t.name)) return &t;
     }
