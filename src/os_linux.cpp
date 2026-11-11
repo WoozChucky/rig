@@ -9,6 +9,8 @@
 #include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <signal.h>  // kill
+#include <time.h>    // clock_gettime
 #include <unistd.h>
 
 extern char **environ;
@@ -132,10 +134,23 @@ static bool read_some(int fd, Array<u8> *buffer) {
     return true;
 }
 
-bool os_run(Arena *a, Array<String> argv, Process_Result *result) { return os_run_in(a, argv, {}, result); }
+// Milliseconds on a clock that only goes forward, for timeouts: the time of
+// day can jump when it's set.
+static s64 milliseconds_now() {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (s64)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+bool os_run(Arena *a, Array<String> argv, Process_Result *result) { return os_run_for(a, argv, {}, 0, result); }
 
 bool os_run_in(Arena *a, Array<String> argv, String directory, Process_Result *result) {
-    RIG_ASSERT(argv.count > 0);
+    return os_run_for(a, argv, directory, 0, result);
+}
+
+bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result) {
+    RIG_ASSERT(argv.count > 0 && seconds >= 0);
+    result->timed_out = false;
     char **cargv = arena_new_array<char *>(a, argv.count + 1);
     for (s64 i = 0; i < argv.count; i++) cargv[i] = (char *)string_cstr(a, argv[i]);
     // The child changes directory before it starts the program, so a
@@ -169,8 +184,19 @@ bool os_run_in(Arena *a, Array<String> argv, String directory, Process_Result *r
     posix_spawn_file_actions_adddup2(&actions, out_pipe[1], 1);
     posix_spawn_file_actions_adddup2(&actions, err_pipe[1], 2);
     if (directory.count) posix_spawn_file_actions_addchdir_np(&actions, string_cstr(a, directory));
+    // With a timeout the program gets a process group of its own, whose
+    // number is its pid, so kill(-pid) ends it and whatever it started (a
+    // child it gave its stdout to would keep the pipe open). Without one it
+    // stays in ours, so Ctrl-C in the terminal reaches it too.
+    posix_spawnattr_t attributes;
+    posix_spawnattr_init(&attributes);
+    if (seconds) {
+        posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP);
+        posix_spawnattr_setpgroup(&attributes, 0);
+    }
     pid_t pid;
-    int spawn_error = posix_spawnp(&pid, cargv[0], &actions, nullptr, cargv, environ);
+    int spawn_error = posix_spawnp(&pid, cargv[0], &actions, &attributes, cargv, environ);
+    posix_spawnattr_destroy(&attributes);
     posix_spawn_file_actions_destroy(&actions);
     close(out_pipe[1]);
     close(err_pipe[1]);
@@ -182,13 +208,27 @@ bool os_run_in(Arena *a, Array<String> argv, String directory, Process_Result *r
     }
 
     // Read both pipes as data arrives: reading one to its end first would
-    // deadlock with a child that fills the other.
+    // deadlock with a child that fills the other. The pipes end when every
+    // program holding them has ended, so with a timeout poll waits no longer
+    // than what's left of it, and then kills the group; the pipes then end
+    // too.
     Array<u8> out = {}, err = {};
     struct pollfd fds[2] = {{out_pipe[0], POLLIN, 0}, {err_pipe[0], POLLIN, 0}};
     Array<u8> *buffers[2] = {&out, &err};
     int open_count = 2;
+    s64 deadline = seconds ? milliseconds_now() + (s64)seconds * 1000 : 0;
     while (open_count > 0) {
-        if (poll(fds, 2, -1) < 0) {
+        int wait = -1;  // for ever
+        if (deadline && !result->timed_out) {
+            s64 left = deadline - milliseconds_now();
+            if (left <= 0) {
+                kill(-pid, SIGKILL);
+                result->timed_out = true;
+            } else {
+                wait = (int)left;
+            }
+        }
+        if (poll(fds, 2, wait) < 0) {
             if (errno == EINTR) continue;
             break;
         }

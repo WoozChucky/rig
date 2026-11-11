@@ -31,8 +31,9 @@ String os_executable_directory(Arena *a);
 
 struct Process_Result {
     s32 exit_code;
-    String out;  // everything the program wrote to stdout
-    String err;  // and to stderr
+    String out;      // everything the program wrote to stdout
+    String err;      // and to stderr
+    bool timed_out;  // os_run_for gave up on it and killed it
 };
 
 // Runs argv[0] with the other arguments exactly as given. argv[0] is a path
@@ -55,6 +56,13 @@ String os_current_directory(Arena *a);
 // os_run, with the program started in `directory`. A relative path in
 // argv[0] is still relative to the caller's directory.
 bool os_run_in(Arena *a, Array<String> argv, String directory, Process_Result *result);
+
+// os_run_in, giving up after `seconds` (0: never): if by then the program
+// hasn't ended, or something it started still holds its stdout or stderr,
+// the program and everything it started are killed and timed_out is set.
+// What it wrote until then is in out and err. directory may be {}: the
+// caller's.
+bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result);
 
 // Why the last failing os_ function failed, as a sentence from the system.
 String os_error_message(Arena *a);
