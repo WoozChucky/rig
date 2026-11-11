@@ -20,11 +20,12 @@
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;
 // the name only where the tokens still look like a declaration of it, as
 // in `greet () {` or `greet := () {`), skips to the next declaration (an
-// identifier at the start of a line, followed by '::') and goes on. Stray tokens in front of a declaration's
-// name (`*greet :: () {}`) are reported and skipped, and the declaration
-// after them is parsed whole. So one mistake gives one error, and the
-// checker can still check the rest of the file: the broken declaration's
-// name is known to be declared, so its uses aren't reported as unknown.
+// identifier at the start of a line, followed by '::') and goes on. Stray
+// tokens in front of a declaration's name (`*greet :: () {}`) are reported
+// and skipped, and the declaration after them is parsed whole. So one
+// mistake gives one error, and the checker can still check the rest of the
+// file: the broken declaration's name is known to be declared, so its uses
+// aren't reported as unknown.
 
 #pragma once
 
