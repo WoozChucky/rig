@@ -13,3 +13,5 @@
 #include "tokens.cpp"
 #include "ast.cpp"
 #include "parser.cpp"
+#include "types.cpp"
+#include "checker.cpp"
