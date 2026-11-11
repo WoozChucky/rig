@@ -50,8 +50,8 @@ inline u64 array_bytes(u64 element_size, s64 count) {
     return element_size * (u64)count;
 }
 
-// An empty arena. Its first block is allocated on the first arena_alloc,
-// block_size bytes, or more for a bigger request. A zero-initialised arena
+// An empty arena. Its first block, block_size bytes, is allocated on the
+// first arena_alloc that fits in one. A zero-initialised arena
 // (Arena a = {};) must work too, as an empty arena with the default block
 // size: other structs hold arenas, and {} is how they're made.
 Arena arena_make(u64 block_size = 64 * 1024);
@@ -195,13 +195,20 @@ u64 hash_string(String s);
 // until it finds the key or an empty slot. Keeping at least a quarter of
 // the slots empty keeps those runs short.
 //
-// The slot count is a power of two, 2^k, and the first slot is the hash's
-// top k bits. Not its bottom k bits, the usual hash % capacity: FNV-1a
-// multiplies, and in a product the low bits depend only on the low bits,
-// so its low k bits come from the low k bits of each byte alone. "x" and
-// "X", or "foo" and "Foo", differ only higher up (by 32 = 2^5), and would
-// share a slot in any table of 32 slots or fewer. The top bits depend on
-// every bit of every byte.
+// The slot count is a power of two, 2^k, so a slot is k bits of the hash.
+// Which k bits matters, because FNV-1a spreads its input unevenly:
+// - Not the bottom k (the usual hash % capacity). FNV-1a multiplies, and in
+//   a product the low bits depend only on the low bits, so its low k bits
+//   come from each byte's low k bits alone: "x" and "X", or "foo" and
+//   "Foo", differ by 32 = 2^5 and share a slot in tables of 32 or fewer.
+// - Not the top k either. The last byte is xored into the low 8 bits just
+//   before the last multiplication, by 2^40 + 0x1b3, which moves it up to
+//   about bit 48 and only rarely further: "a" to "z" all have the same top
+//   4 bits, and t0 to t9 the same top 5.
+// So the hash is mixed first: multiplied by 2^64 divided by the golden
+// ratio, an odd number whose bits look random. The top bits of that
+// product depend on every bit of the hash, and they're the slot. This is
+// Fibonacci hashing (Knuth, The Art of Computer Programming, volume 3).
 template<typename V>
 struct Table_Slot {
     String key;
@@ -215,14 +222,14 @@ template<typename V>
 struct Table {
     s64 count;     // how many keys it holds
     s64 capacity;  // slots, 0 or a power of two
-    s32 shift;     // 64 - k when capacity is 2^k: hash >> shift is the top k bits
+    s32 shift;     // 64 - k when capacity is 2^k: x >> shift is x's top k bits
     Table_Slot<V> *slots;
 };
 
 // The first slot a hash tries, then the next one, wrapping around.
 template<typename V>
 u64 table_first_slot(Table<V> *t, u64 hash) {
-    return hash >> t->shift;
+    return (hash * 0x9E3779B97F4A7C15ull) >> t->shift;  // 2^64 / 1.6180339887...
 }
 
 template<typename V>
@@ -284,7 +291,7 @@ void table_put(Table<V> *t, String key, typename No_Deduce<V>::Type value) {
 }
 
 // The key's value, or null when the key isn't there. The pointer stays
-// valid until the next table_put, which may move every value.
+// valid until a table_put of a new key, which may move every value.
 template<typename V>
 V *table_get(Table<V> *t, String key) {
     if (t->capacity == 0) return nullptr;  // never used: no slots to look in
