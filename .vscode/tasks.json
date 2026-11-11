@@ -1,0 +1,51 @@
+{
+    // Build and test Rig from VS Code. Ctrl+Shift+B builds; "Run Test Task"
+    // runs the unit tests. On Windows these run build.bat, in WSL (VS Code's
+    // WSL extension) build.sh.
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "windows": { "command": ".\\build.bat" },
+            "linux": { "command": "./build.sh" },
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "build release",
+            "type": "shell",
+            "windows": { "command": ".\\build.bat release" },
+            "linux": { "command": "./build.sh release" },
+            "group": "build",
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "unit tests",
+            "type": "shell",
+            "dependsOn": "build",
+            "windows": { "command": "bin\\unit-tests.exe" },
+            "linux": { "command": "bin/unit-tests" },
+            "group": { "kind": "test", "isDefault": true },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "unit tests: some",
+            "detail": "Only the tests whose names, or files' names, contain what you type (lex, base, ...)",
+            "type": "shell",
+            "dependsOn": "build",
+            "windows": { "command": "bin\\unit-tests.exe ${input:testFilter}" },
+            "linux": { "command": "bin/unit-tests ${input:testFilter}" },
+            "group": "test",
+            "problemMatcher": "$gcc"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "testFilter",
+            "type": "promptString",
+            "description": "Run the tests whose names, or files' names, contain:",
+            "default": "base"
+        }
+    ]
+}
