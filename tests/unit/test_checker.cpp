@@ -26,6 +26,18 @@ static String check_errors(Arena *a, const char *description) {
     return result;
 }
 
+// The messages for tokens that needn't parse: the parser's, then the
+// checker's, put in source order as rig build prints them.
+static String errors_after_parse(Arena *a, const char *description) {
+    Token_List *list = toks(description);
+    Ast_File *file = parse(list->tokens, a, &list->diag);
+    check(file, a, &list->diag);
+    diag_sort(&list->diag);
+    String result = messages(a, &list->diag);
+    token_list_free(list);
+    return result;
+}
+
 #define PUTS "IDENT:puts :: ( IDENT:s : * IDENT:u8 ) -> IDENT:s32 #foreign IDENT:libc ; | "
 
 TEST(hello_world_checks) {
@@ -166,5 +178,117 @@ TEST(checker_reports_every_unknown_name) {
               "1:19: unknown identifier 'b'\n"
               "1:23: unknown identifier 'c'\n"
               "1:29: unknown identifier 'd'\n");
+    arena_free(&a);
+}
+
+// After a syntax error (issue #15): the checker still checks the rest.
+
+TEST(syntax_and_type_errors_are_reported_together) {
+    // greet's missing ';' and main's wrong argument, in source order, though
+    // the parser reported its error first.
+    Arena a = arena_make();
+    CHECK_STR(errors_after_parse(&a, PUTS "IDENT:main :: ( ) { IDENT:greet ( ) ; IDENT:puts ( INT:5 ) ; } | "
+                                          "IDENT:greet :: ( ) { IDENT:puts ( STRING:hi ) }"),
+              "2:23: argument 1 of 'puts' has type 'int', which can't be converted to '*u8'\n"
+              "3:19: expected ';', found '}'\n");
+    arena_free(&a);
+}
+
+TEST(calls_to_a_broken_procedure_are_not_reported) {
+    // g's signature is unknown, so no call to it is wrong, whatever it
+    // passes. An argument's own mistake ('nope') is still one.
+    Arena a = arena_make();
+    CHECK_STR(errors_after_parse(&a, "IDENT:main :: ( ) { IDENT:g ( ) ; IDENT:g ( INT:1 , STRING:x ) ; IDENT:g ; "
+                                     "IDENT:g ( IDENT:nope ) ; } | "
+                                     "IDENT:g :: ( ) {"),
+              "1:41: unknown identifier 'nope'\n"
+              "2:11: expected '}', found end of file\n");
+    arena_free(&a);
+}
+
+TEST(a_broken_declaration_of_anything_is_declared) {
+    // x isn't a procedure, but the program says it exists: using it is
+    // nothing more to report.
+    Arena a = arena_make();
+    CHECK_STR(errors_after_parse(&a, "IDENT:x :: INT:5 ; | IDENT:main :: ( ) { IDENT:x ; IDENT:x ( ) ; }"),
+              "1:5: only procedures can be declared at the top level for now\n");
+    arena_free(&a);
+}
+
+TEST(a_broken_main_is_still_main) {
+    Arena a = arena_make();
+    CHECK_STR(errors_after_parse(&a, PUTS "IDENT:main :: ( ) { IDENT:puts ( STRING:x ) }"),
+              "2:19: expected ';', found '}'\n");
+    // Nor is its signature checked: main's (x: s32) is lost with the rest.
+    CHECK_STR(errors_after_parse(&a, "IDENT:main :: ( IDENT:x : IDENT:s32 ) { IDENT:x ( }"),
+              "1:21: expected an expression, found '}'\n");
+    arena_free(&a);
+}
+
+TEST(a_broken_declaration_without_a_name_might_be_main) {
+    // Whatever the stray '}' was part of, main may have been declared there:
+    // a missing main isn't reported. Unknown names still are.
+    Arena a = arena_make();
+    CHECK_STR(errors_after_parse(&a, "} | IDENT:f :: ( ) { IDENT:putz ( ) ; }"),
+              "1:1: expected identifier, found '}'\n"
+              "2:11: unknown identifier 'putz'\n");
+    arena_free(&a);
+}
+
+TEST(a_whole_declaration_wins_over_a_broken_one) {
+    // The broken puts says nothing about the whole one declared after it
+    // (no "already declared"), and calls are checked against the whole one.
+    Arena a = arena_make();
+    CHECK_STR(errors_after_parse(&a, "IDENT:puts : ( ) | " PUTS "IDENT:main :: ( ) { IDENT:puts ( INT:5 ) ; }"),
+              "1:3: expected '::', found ':'\n"
+              "3:15: argument 1 of 'puts' has type 'int', which can't be converted to '*u8'\n");
+    arena_free(&a);
+}
+
+TEST(a_declaration_after_stray_tokens_is_checked) {
+    // greet is parsed whole despite the '*' before it: calls to it are fine,
+    // and its body is checked ('putz').
+    Arena a = arena_make();
+    CHECK_STR(errors_after_parse(&a, "IDENT:main :: ( ) { IDENT:greet ( ) ; } | "
+                                     "* IDENT:greet :: ( ) { IDENT:putz ( ) ; }"),
+              "2:1: expected identifier, found '*'\n"
+              "2:13: unknown identifier 'putz'\n");
+    // With no main anywhere, that is still reported: the '*' left no entry
+    // that could have been main.
+    CHECK_STR(errors_after_parse(&a, "* IDENT:greet :: ( ) { }"),
+              "1:1: expected identifier, found '*'\n"
+              "1:1: a procedure called 'main' is needed\n");
+    arena_free(&a);
+}
+
+TEST(a_directive_where_the_name_goes_declares_the_name) {
+    Arena a = arena_make();
+    CHECK_STR(errors_after_parse(&a, "#greet :: ( ) { } | IDENT:main :: ( ) { IDENT:greet ( ) ; }"),
+              "1:1: expected identifier, found directive\n");
+    arena_free(&a);
+}
+
+TEST(a_mistyped_declaration_declares_its_name) {
+    // greet's declaration written wrong is one mistake, one message: main's
+    // call to greet isn't reported as unknown too.
+    Arena a = arena_make();
+    CHECK_STR(errors_after_parse(&a, "IDENT:main :: ( ) { IDENT:greet ( ) ; } | IDENT:greet ( ) { }"),
+              "2:3: expected '::', found '('\n");
+    CHECK_STR(errors_after_parse(&a, "IDENT:main :: ( ) { IDENT:greet ( ) ; } | IDENT:greet := ( ) { }"),
+              "2:3: expected '::', found ':='\n");
+    CHECK_STR(errors_after_parse(&a, "IDENT:main :: ( ) { IDENT:greet ( ) ; } | IDENT:greet = ( ) { }"),
+              "2:3: expected '::', found '='\n");
+    CHECK_STR(errors_after_parse(&a, "IDENT:main :: ( ) { IDENT:greet ( ) ; } | IDENT:greet * :: ( ) { }"),
+              "2:3: expected '::', found '*'\n");
+    arena_free(&a);
+}
+
+TEST(a_stray_call_outside_a_body_declares_nothing) {
+    // main's call to the undeclared foo is reported now, not only once the
+    // stray line is deleted.
+    Arena a = arena_make();
+    CHECK_STR(errors_after_parse(&a, PUTS "IDENT:main :: ( ) { IDENT:foo ( ) ; } | IDENT:foo ( STRING:x ) ;"),
+              "2:11: unknown identifier 'foo'\n"
+              "3:3: expected '::', found '('\n");
     arena_free(&a);
 }

@@ -2,7 +2,10 @@
 //
 // Each parse_ function reads one rule and returns its node, or null after
 // reporting an error. A null travels up to parse_declaration, which gives up
-// on that declaration; parse() then skips to the next one.
+// on that declaration; parse() keeps a broken entry for it (its name alone)
+// and skips to the next one. When only stray tokens came before a
+// declaration on the same line (`*greet :: () {}`), it resumes at that
+// declaration instead, without an entry.
 
 #include "parser.h"
 
@@ -228,6 +231,111 @@ static void skip_to_next_declaration(Parser *p, s64 start) {
     }
 }
 
+// After a declaration that began at token `start` failed: the declaration
+// later on the same line that stray tokens in front of it hid, as in
+// `*greet :: () {}` or `@greet :: ...` (a character the lexer refused), or
+// -1. That is the first IDENT '::' on the line, if it comes after `start`
+// and before any '(' or '{': once a signature or a body has begun, a '::'
+// is inside it (`greet : () { x :: 5; }`), not a fresh start. Resuming
+// there parses greet whole, so its body is checked and its uses are known;
+// skip_to_next_declaration would pass over it, since it doesn't start the
+// line.
+static s64 declaration_after_stray_tokens(Parser *p, s64 start) {
+    s32 line = p->tokens[start].pos.line;
+    // The token after i always exists: the loop stops at TOKEN_EOF, the last.
+    for (s64 i = start; p->tokens[i].kind != TOKEN_EOF && p->tokens[i].pos.line == line; i++) {
+        Token_Kind kind = p->tokens[i].kind;
+        if (kind == TOKEN_LPAREN || kind == TOKEN_LBRACE) return -1;
+        if (kind == TOKEN_IDENT && p->tokens[i + 1].kind == TOKEN_COLON_COLON) return i > start ? i : -1;
+    }
+    return -1;
+}
+
+// The first token from index `from` on, still on the line of token `start`,
+// whose kind is one of `kinds` (`count` of them); TOKEN_EOF when the line
+// ends without one.
+static Token_Kind first_on_line(Parser *p, s64 start, s64 from, const Token_Kind *kinds, s64 count) {
+    s32 line = p->tokens[start].pos.line;
+    for (s64 i = from; p->tokens[i].kind != TOKEN_EOF && p->tokens[i].pos.line == line; i++) {
+        for (s64 k = 0; k < count; k++) {
+            if (p->tokens[i].kind == kinds[k]) return kinds[k];
+        }
+    }
+    return TOKEN_EOF;
+}
+
+// Whether the '(' at token `open` and its ')' are a signature's parameter
+// list, not a call's arguments: the ')' that closes it, on whatever line,
+// is followed by what only follows parameters, a body's '{', a return
+// type's '->' or a directive (`#foreign`). A call is followed by its ';'
+// (`foo("x");`, `foo(#run);`), or by the next line's code if the ';' is
+// missing. A '(' never closed before the next declaration (an identifier
+// starting a line, then '::') or the end shows no signature.
+static bool parameters_follow(Parser *p, s64 open) {
+    s64 depth = 0;
+    for (s64 i = open; p->tokens[i].kind != TOKEN_EOF; i++) {
+        Token *t = &p->tokens[i];
+        bool starts_line = p->tokens[i - 1].pos.line != t->pos.line;  // open >= 1: a name came before
+        if (i > open && starts_line && t->kind == TOKEN_IDENT && p->tokens[i + 1].kind == TOKEN_COLON_COLON) {
+            return false;
+        }
+        if (t->kind == TOKEN_LPAREN) depth++;
+        if (t->kind == TOKEN_RPAREN && --depth == 0) {
+            Token_Kind next = p->tokens[i + 1].kind;  // a token follows: the last is TOKEN_EOF
+            return next == TOKEN_LBRACE || next == TOKEN_ARROW || next == TOKEN_DIRECTIVE;
+        }
+    }
+    return false;
+}
+
+// Whether the declaration that failed at token `start`, an identifier,
+// looks like a declaration of that name, mistyped. That is the name
+// followed by:
+// - '::' (the mistake came later), or ':' for it (`greet : () {`);
+// - ':=' or '=' for it (`greet := () {`, the way a variable is declared);
+// - a character the lexer refused (perhaps a mistyped '::' too);
+// - '(' with no '::' (`greet () {`, a C habit), when the parentheses are
+//   a signature's, as parameters_follow says, not a call's;
+// - stray tokens and then '::' on the same line (`greet * :: () {`),
+//   before any '(' or '{', which would begin a signature or a body.
+static bool looks_declared(Parser *p, s64 start) {
+    // start isn't TOKEN_EOF (parse() stops there), so a token follows it.
+    Token_Kind after = p->tokens[start + 1].kind;
+    switch (after) {
+    case TOKEN_COLON_COLON:
+    case TOKEN_COLON:
+    case TOKEN_COLON_EQUAL:
+    case TOKEN_EQUAL:
+    case TOKEN_ERROR: return true;
+    case TOKEN_LPAREN: return parameters_follow(p, start + 1);
+    default: {
+        // A '::' later, before anything that begins a signature or a body.
+        static const Token_Kind ENDS[] = {TOKEN_COLON_COLON, TOKEN_LPAREN, TOKEN_LBRACE};
+        return first_on_line(p, start, start + 1, ENDS, 3) == TOKEN_COLON_COLON;
+    }
+    }
+}
+
+// The entry kept for a declaration the parser gave up on, which began at
+// token `start`. It keeps a name only where the tokens look like a
+// declaration of it: an identifier, as looks_declared says, or a directive
+// followed by '::' (`#greet ::`, a stray '#' the lexer read as part of the
+// name). Taking a name means less is reported (calls to greet), so it is
+// taken only there: anything else after an identifier (a stray `foo("x");`
+// outside any body) would hide every unknown use of foo in the file.
+// Otherwise, and when the declaration starts with anything else (a stray
+// '}'), the entry has no name.
+static Ast_Proc *broken_entry(Parser *p, s64 start) {
+    Token *first = &p->tokens[start];
+    Ast_Proc *broken = ast_new<Ast_Proc>(p->arena, AST_PROC, first->pos);
+    broken->is_broken = true;
+    bool named = first->kind == TOKEN_IDENT
+                     ? looks_declared(p, start)
+                     : first->kind == TOKEN_DIRECTIVE && p->tokens[start + 1].kind == TOKEN_COLON_COLON;
+    if (named) broken->name = first->text;
+    return broken;
+}
+
 Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
     Parser p = {tokens, 0, a, d};
@@ -235,11 +343,20 @@ Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;
         Ast_Proc *proc = parse_declaration(&p);
-        if (proc) {
-            array_add(&file->procs, proc);
-        } else {
+        if (!proc) {
+            s64 resume = declaration_after_stray_tokens(&p, start);
+            if (resume >= 0) {
+                // The tokens before it were stray, not a declaration, so
+                // they leave no entry. The failed attempt stopped at them,
+                // before resume (> start, so the loop moves on).
+                RIG_ASSERT(p.next <= resume);
+                p.next = resume;
+                continue;
+            }
+            proc = broken_entry(&p, start);
             skip_to_next_declaration(&p, start);
         }
+        array_add(&file->procs, proc);
     }
     return file;
 }
