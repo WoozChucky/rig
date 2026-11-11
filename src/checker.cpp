@@ -127,7 +127,15 @@ static void check_signature(Checker *c, Ast_Proc *proc) {
         Ast_Param *param = proc->params[i];
         param->type = resolve_type(c, param->type_expr);
     }
-    if (proc->return_type) proc->return_type->type = resolve_type(c, proc->return_type);
+    if (proc->return_type) {
+        proc->return_type->type = resolve_type(c, proc->return_type);
+        // main says so itself (check()). Elsewhere: a body that can't return
+        // anything mustn't promise a value.
+        if (proc->body && !string_eq(proc->name, str("main"))) {
+            diag_error(c->diag, proc->return_type->pos,
+                       "'" STR_FMT "' can't return a value: Rig has no return statement yet", STR_ARG(proc->name));
+        }
+    }
     if (proc->is_foreign && !string_eq(proc->foreign_library, str("libc"))) {
         diag_error(c->diag, proc->library_pos, "unknown library '" STR_FMT "'; the only one so far is 'libc'",
                    STR_ARG(proc->foreign_library));

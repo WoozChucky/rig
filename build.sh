@@ -26,9 +26,10 @@ FLAGS="-std=c++23 -fno-exceptions -fno-rtti -g $OPT -Wall -Wextra -Wno-unused-pa
 # The LLVM components Rig uses: the IR (core), and the x86 target that turns
 # it into object files.
 LLVM_LIBS="$("$LLVM/bin/llvm-config" --link-static --libfiles core target x86codegen x86asmparser x86desc x86info)"
-# The system libraries LLVM uses. (llvm-config --system-libs also names
+# The system libraries LLVM uses. llvm-config --system-libs also names
 # zlib, zstd and libxml2, which would make their development packages a
-# requirement; the parts of LLVM Rig links don't need them.)
+# requirement: the parts of LLVM Rig links don't need libxml2, and
+# src/llvm_compression_stubs.cpp stands in for zlib and zstd.
 SYSTEM_LIBS="-lpthread -lrt -ldl -lm"
 
 mkdir -p bin
