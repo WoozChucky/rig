@@ -1,12 +1,11 @@
-// lexer.h: turning source text into tokens (issue #6, Nuno's).
+// lexer.h: turning source text into tokens (issue #6).
 //
 // The lexer reads the characters of a file and groups them into tokens:
 // `puts :: (s: *u8)` is IDENT COLON_COLON LPAREN IDENT COLON STAR IDENT
 // RPAREN. Every later stage works on tokens, never on characters. Each token
 // keeps its position, so any error, however late, can point at the source.
 //
-// The token kinds, Token and token_kind_name are given. lex() is yours, in
-// lexer.cpp.
+// The token kinds and their names are in tokens.cpp; lex() is in lexer.cpp.
 
 #pragma once
 
