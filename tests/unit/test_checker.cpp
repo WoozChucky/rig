@@ -128,6 +128,14 @@ TEST(main_takes_nothing_and_returns_nothing) {
     arena_free(&a);
 }
 
+TEST(bodies_return_nothing_for_now) {
+    // There's no return statement yet, so a body can't give back a value.
+    Arena a = arena_make();
+    CHECK_STR(check_errors(&a, "IDENT:f :: ( ) -> IDENT:s32 { } | IDENT:main :: ( ) { IDENT:f ( ) ; }"),
+              "1:11: 'f' can't return a value: Rig has no return statement yet\n");
+    arena_free(&a);
+}
+
 TEST(statements_are_calls_for_now) {
     Arena a = arena_make();
     CHECK_STR(check_errors(&a, PUTS "IDENT:main :: ( ) { INT:42 ; STRING:x ; IDENT:puts ( STRING:y ) ; }"),

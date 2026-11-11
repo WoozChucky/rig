@@ -163,3 +163,5 @@ int main(int argc, char **argv) {
 #include "helpers.cpp"
 #include "test_parser.cpp"
 #include "test_checker.cpp"
+#include "test_ir.cpp"
+#include "test_llvm.cpp"
