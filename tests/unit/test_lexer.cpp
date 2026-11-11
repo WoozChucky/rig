@@ -529,6 +529,30 @@ TEST(directive_names_are_identifiers) {
     lexed_free(l);
 }
 
+TEST(a_directive_name_with_non_ascii_bytes_is_one_error) {
+    // As for any name: #função is one bad token with its '#', not the
+    // directive #fun then a bad name; so is # right before a non-ASCII byte.
+    Lexed *l = lex_text("#fun\xC3\xA7\xC3\xA3o #\xC3\xA7 x");
+    CHECK_KINDS(l, TOKEN_ERROR, TOKEN_ERROR, TOKEN_IDENT, TOKEN_EOF);
+    CHECK_EQ(l->diag.error_count, 2);
+    CHECK_ERROR(l, 0, 1, 5, "non-ASCII characters can only be in strings and comments, for now");
+    CHECK_ERROR(l, 1, 1, 12, "non-ASCII characters can only be in strings and comments, for now");
+    if (l->tokens.count == 4) {
+        CHECK_STR(l->tokens[0].text, "#fun\xC3\xA7\xC3\xA3o");
+        CHECK_STR(l->tokens[1].text, "#\xC3\xA7");
+    }
+    lexed_free(l);
+}
+
+TEST(a_number_ends_before_a_non_ascii_byte) {
+    // 1ção: the number 1, then the bad name ção, one error in all.
+    Lexed *l = lex_text("1\xC3\xA7\xC3\xA3o");
+    CHECK_KINDS(l, TOKEN_INT, TOKEN_ERROR, TOKEN_EOF);
+    CHECK_EQ(l->diag.error_count, 1);
+    CHECK_ERROR(l, 0, 1, 2, "non-ASCII characters can only be in strings and comments, for now");
+    lexed_free(l);
+}
+
 TEST(prefixes_are_lowercase_and_may_take_an_underscore) {
     Lexed *l = lex_text("0x_ff 0b_1 0X10");
     CHECK_KINDS(l, TOKEN_INT, TOKEN_INT, TOKEN_ERROR, TOKEN_EOF);
@@ -562,6 +586,18 @@ TEST(floats_take_underscores_like_integers) {
         CHECK(l->tokens[4].float_value == 1e5);
         CHECK(l->tokens[5].float_value == 1e5);
     }
+    lexed_free(l);
+}
+
+TEST(a_digit_comes_first_after_the_dot_the_e_and_its_sign) {
+    // '_' is ignored only after a digit: right after the '.' there is no
+    // fraction (1._5 is 1, '.', the name _5), and right after the e or its
+    // sign it is a bad number.
+    Lexed *l = lex_text("1e_5 1e+_5 1._5");
+    CHECK_KINDS(l, TOKEN_ERROR, TOKEN_ERROR, TOKEN_INT, TOKEN_DOT, TOKEN_IDENT, TOKEN_EOF);
+    CHECK_EQ(l->diag.error_count, 2);
+    CHECK_ERROR(l, 0, 1, 3, "invalid character '_' in number literal");
+    CHECK_ERROR(l, 1, 1, 9, "invalid character '_' in number literal");
     lexed_free(l);
 }
 
