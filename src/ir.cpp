@@ -1,163 +1,80 @@
-// ir.cpp: lowering the checked tree to the IR, and printing it (see ir.h).
+// ir.cpp: building Rig's IR, and printing it (see ir.h). Lowering the tree
+// to it is lower.cpp.
 
 #include "ir.h"
 
-#include "types.h"
-
-struct Lowering {
-    Arena *arena;
-    Ir_Module *module;
-    Table<s32> proc_index;  // a Rig or foreign procedure's index in module->procs, by name
-    Ir_Proc *proc;          // the procedure whose body is being lowered
-};
-
-// The IR type of a checked type. Strings aren't values yet: a literal is
-// only ever passed as *u8.
-static Ir_Type ir_type_of(Type *t) {
-    if (!t || t->kind == TYPE_VOID) return IR_VOID;
-    if (t->kind == TYPE_POINTER) return IR_PTR;
-    RIG_ASSERT(t->kind == TYPE_INTEGER);
-    switch (t->size) {
-    case 1: return IR_I8;
-    case 2: return IR_I16;
-    case 4: return IR_I32;
-    default: return IR_I64;
-    }
-}
-
-// How a parameter or return value of type t widens (Ir_Ext): only s8, s16,
-// u8 and u16 are narrower than the 32 bits the calling convention widens to.
-static Ir_Ext ir_ext_of(Type *t) {
-    if (!t || t->kind != TYPE_INTEGER || t->size > 2) return IR_EXT_NONE;
-    return t->is_signed ? IR_EXT_SIGN : IR_EXT_ZERO;
-}
-
-static Ir_Instr *emit(Lowering *l, Ir_Op op, Ir_Type type) {
-    Ir_Instr instr = {};
-    instr.op = op;
-    instr.type = type;
-    instr.result = type == IR_VOID || op == IR_RET ? -1 : l->proc->value_count++;
-    instr.operand = -1;
-    array_add(&l->proc->body, instr);
-    return &l->proc->body[l->proc->body.count - 1];
-}
-
-static s32 lower_call(Lowering *l, Ast_Call *call);
-
-// The value of `e`, converted to `to`, the type its use expects (the checker
-// said it converts). Returns the value's number.
-static s32 lower_value(Lowering *l, Ast *e, Type *to) {
-    switch (e->kind) {
-    case AST_INT: {
-        // An integer constant takes the type it's used as.
-        Ir_Instr *c = emit(l, IR_CONST, ir_type_of(to));
-        c->constant = ((Ast_Int *)e)->value;
-        return c->result;
-    }
-    case AST_STRING: {
-        Ast_String *s = (Ast_String *)e;
-        Ir_Global g = {};
-        g.name = string_printf(l->arena, "str.%lld", (long long)l->module->globals.count);
-        u8 *bytes = (u8 *)arena_alloc(l->arena, s->value.count + 1, 1);
-        memcpy(bytes, s->value.data, (size_t)s->value.count);  // arena memory is zeroed: the last byte is 0
-        g.bytes = {bytes, s->value.count + 1};
-        array_add(&l->module->globals, g);
-        Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
-        addr->target = (s32)(l->module->globals.count - 1);
-        return addr->result;
-    }
-    case AST_CALL: {
-        s32 value = lower_call(l, (Ast_Call *)e);
-        Ir_Type from = ir_type_of(e->type), wanted = ir_type_of(to);
-        if (from == wanted) return value;
-        // A narrower integer widens by its own sign (spec 6.4).
-        Ir_Instr *widen = emit(l, e->type->is_signed ? IR_SEXT : IR_ZEXT, wanted);
-        widen->from = from;
-        widen->operand = value;
-        return widen->result;
-    }
-    default: RIG_ASSERT(!"not a value"); return -1;
-    }
-}
-
-// A call's instruction; its value's number, or -1 when the callee returns
-// nothing.
-static s32 lower_call(Lowering *l, Ast_Call *call) {
-    Ast_Proc *callee = call->proc;
-    s32 *index = table_get(&l->proc_index, callee->name);
-    RIG_ASSERT(index);
-    Array<s32> args = {};
-    for (s64 i = 0; i < call->args.count; i++) array_add(&args, lower_value(l, call->args[i], callee->params[i]->type));
-    Ir_Instr *instr = emit(l, IR_CALL, l->module->procs[*index]->return_type);
-    instr->target = *index;
-    instr->args = args;
-    return instr->result;
-}
-
-static Ir_Proc *new_proc(Lowering *l, String name) {
-    Ir_Proc *p = arena_new<Ir_Proc>(l->arena);
+Ir_Proc *ir_new_proc(Ir_Module *m, Arena *a, String name) {
+    Ir_Proc *p = arena_new<Ir_Proc>(a);  // arena memory is zeroed: no parameters, results or blocks
     p->name = name;
-    array_add(&l->module->procs, p);
+    array_add(&m->procs, p);
     return p;
 }
 
-Ir_Module *ir_lower(Ast_File *f, Arena *a) {
-    Ir_Module *m = arena_new<Ir_Module>(a);
-    Lowering l = {a, m, {}, nullptr};
-
-    // Every procedure first, so a call can name one declared later.
-    for (s64 i = 0; i < f->procs.count; i++) {
-        Ast_Proc *source = f->procs[i];
-        // A broken entry comes with an error (the parser's, or the lexer's
-        // for a TOKEN_ERROR the parser stopped at), and rig build stops
-        // before lowering a file with errors.
-        RIG_ASSERT(!source->is_broken);
-        bool is_main = !source->is_foreign && string_eq(source->name, str("main"));
-        Ir_Proc *p = new_proc(&l, is_main ? str("__rig_main") : source->name);
-        p->is_foreign = source->is_foreign;
-        for (s64 k = 0; k < source->params.count; k++) {
-            Type *t = source->params[k]->type;
-            array_add(&p->params, {ir_type_of(t), ir_ext_of(t)});
-        }
-        Type *returns = source->return_type ? source->return_type->type : nullptr;
-        p->return_type = ir_type_of(returns);
-        p->return_ext = ir_ext_of(returns);
-        table_put(&l.proc_index, source->name, (s32)i);
-    }
-
-    // Then the bodies. Milestone 1 has no return statement, so every body
-    // ends with a plain ret (the checker made sure it returns nothing).
-    for (s64 i = 0; i < f->procs.count; i++) {
-        Ast_Proc *source = f->procs[i];
-        if (source->is_foreign) continue;
-        l.proc = m->procs[i];
-        for (s64 k = 0; k < source->body->statements.count; k++) {
-            Ast *statement = source->body->statements[k];
-            RIG_ASSERT(statement->kind == AST_CALL);  // the only statement so far
-            lower_call(&l, (Ast_Call *)statement);
-        }
-        emit(&l, IR_RET, IR_VOID);
-    }
-
-    // The C entry point: main() -> i32 { __rig_main(); return 0; }
-    s32 *rig_main = table_get(&l.proc_index, str("main"));
-    RIG_ASSERT(rig_main);
-    Ir_Proc *entry = new_proc(&l, str("main"));
-    entry->is_export = true;
-    entry->return_type = IR_I32;
-    l.proc = entry;
-    emit(&l, IR_CALL, IR_VOID)->target = *rig_main;
-    Ir_Instr *zero = emit(&l, IR_CONST, IR_I32);
-    s32 zero_value = zero->result;
-    emit(&l, IR_RET, IR_I32)->operand = zero_value;
-
-    table_free(&l.proc_index);
-    return m;
+s32 ir_add_param(Ir_Proc *p, Ir_Type type, Ir_Ext ext) {
+    // The parameters' numbers come first, so none can be added once an
+    // instruction has taken the next number.
+    RIG_ASSERT(p->value_count == p->params.count);
+    array_add(&p->params, {type, ext});
+    return p->value_count++;
 }
+
+s32 ir_new_block(Arena *a, Ir_Proc *p) {
+    array_add(&p->blocks, arena_new<Ir_Block>(a));
+    return (s32)(p->blocks.count - 1);
+}
+
+static bool is_terminator(Ir_Op op) {
+    switch (op) {
+    case IR_JUMP:
+    case IR_BRANCH:
+    case IR_RET:
+    case IR_PANIC:
+    case IR_UNREACHABLE: return true;
+    default: return false;
+    }
+}
+
+bool ir_block_has_ended(Ir_Proc *p, s32 block) {
+    Ir_Block *b = p->blocks[block];
+    return b->instrs.count > 0 && is_terminator(b->instrs[b->instrs.count - 1].op);
+}
+
+Ir_Instr *ir_emit(Ir_Proc *p, s32 block, Ir_Op op, Ir_Type type) {
+    RIG_ASSERT(block >= 0 && block < p->blocks.count);
+    // Nothing follows a terminator: a block has one way out, at its end.
+    RIG_ASSERT(!ir_block_has_ended(p, block));
+    Ir_Instr instr = {};
+    instr.op = op;
+    instr.type = type;
+    bool gives_value = type != IR_VOID && op != IR_STORE && !is_terminator(op);
+    instr.result = gives_value ? p->value_count++ : -1;
+    instr.a = instr.b = instr.c = -1;
+    instr.target = instr.target2 = -1;
+    Ir_Block *b = p->blocks[block];
+    array_add(&b->instrs, instr);
+    return &b->instrs[b->instrs.count - 1];
+}
+
+Ir_Instr *ir_emit_call(Ir_Module *m, Ir_Proc *p, s32 block, s32 callee, Array<s32> args) {
+    Ir_Proc *c = m->procs[callee];
+    // Emitted as giving nothing, then numbered here: one value per result.
+    Ir_Instr *call = ir_emit(p, block, IR_CALL, IR_VOID);
+    call->target = callee;
+    call->args = args;
+    if (c->results.count > 0) {
+        call->type = c->results[0].type;
+        call->result = p->value_count;
+        p->value_count += (s32)c->results.count;
+    }
+    return call;
+}
+
+// Printing.
 
 static const char *ir_type_name(Ir_Type t) {
     switch (t) {
     case IR_VOID: return "void";
+    case IR_I1: return "i1";
     case IR_I8: return "i8";
     case IR_I16: return "i16";
     case IR_I32: return "i32";
@@ -173,6 +90,58 @@ static const char *ir_ext_name(Ir_Ext e) {
     case IR_EXT_NONE: return "";
     case IR_EXT_SIGN: return " signext";
     case IR_EXT_ZERO: return " zeroext";
+    }
+    return "?";
+}
+
+// An operation's name as it prints, the same as LLVM's for the same thing.
+static const char *ir_op_name(Ir_Op op) {
+    switch (op) {
+    case IR_CONST: return "const";
+    case IR_ADDR: return "addr";
+    case IR_CALL: return "call";
+    case IR_SEXT: return "sext";
+    case IR_ZEXT: return "zext";
+    case IR_TRUNC: return "trunc";
+    case IR_LOCAL: return "local";
+    case IR_LOAD: return "load";
+    case IR_STORE: return "store";
+    case IR_ADD: return "add";
+    case IR_SUB: return "sub";
+    case IR_MUL: return "mul";
+    case IR_SDIV: return "sdiv";
+    case IR_UDIV: return "udiv";
+    case IR_SREM: return "srem";
+    case IR_UREM: return "urem";
+    case IR_AND: return "and";
+    case IR_OR: return "or";
+    case IR_XOR: return "xor";
+    case IR_SHL: return "shl";
+    case IR_LSHR: return "lshr";
+    case IR_ASHR: return "ashr";
+    case IR_CMP: return "cmp";
+    case IR_SELECT: return "select";
+    case IR_JUMP: return "jump";
+    case IR_BRANCH: return "branch";
+    case IR_RET: return "ret";
+    case IR_PANIC: return "panic";
+    case IR_UNREACHABLE: return "unreachable";
+    }
+    return "?";
+}
+
+static const char *ir_pred_name(Ir_Pred p) {
+    switch (p) {
+    case IR_EQ: return "eq";
+    case IR_NE: return "ne";
+    case IR_SLT: return "slt";
+    case IR_SLE: return "sle";
+    case IR_SGT: return "sgt";
+    case IR_SGE: return "sge";
+    case IR_ULT: return "ult";
+    case IR_ULE: return "ule";
+    case IR_UGT: return "ugt";
+    case IR_UGE: return "uge";
     }
     return "?";
 }
@@ -213,54 +182,104 @@ static void out_bytes(Printer *p, String bytes) {
     }
 }
 
+// A list of values, "%a, %b, ...".
+static void out_values(Printer *p, Array<s32> values) {
+    for (s64 i = 0; i < values.count; i++) out(p, "%s%%%d", i ? ", " : "", values[i]);
+}
+
+// One instruction, indented, on its own line.
+static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr) {
+    out(p, "  ");
+    if (instr->result >= 0) {
+        // A call defines one value per result, numbered from `result` on.
+        s64 count = instr->op == IR_CALL ? m->procs[instr->target]->results.count : 1;
+        for (s64 i = 0; i < count; i++) out(p, "%s%%%d", i ? ", " : "", instr->result + (s32)i);
+        out(p, " = ");
+    }
+    const char *op = ir_op_name(instr->op);
+    const char *type = ir_type_name(instr->type);
+    switch (instr->op) {
+    case IR_CONST: out(p, "%s %s %llu", op, type, (unsigned long long)instr->constant); break;
+    case IR_ADDR:
+    case IR_PANIC: out(p, "%s @" STR_FMT, op, STR_ARG(m->globals[instr->target].name)); break;
+    case IR_CALL:
+        out(p, "%s @" STR_FMT "(", op, STR_ARG(m->procs[instr->target]->name));
+        out_values(p, instr->args);
+        out(p, ")");
+        break;
+    case IR_SEXT:
+    case IR_ZEXT:
+    case IR_TRUNC: out(p, "%s %s %%%d to %s", op, ir_type_name(instr->from), instr->a, type); break;
+    case IR_LOCAL: out(p, "%s %s", op, type); break;
+    case IR_LOAD: out(p, "%s %s %%%d", op, type, instr->a); break;
+    case IR_STORE:
+    case IR_ADD:
+    case IR_SUB:
+    case IR_MUL:
+    case IR_SDIV:
+    case IR_UDIV:
+    case IR_SREM:
+    case IR_UREM:
+    case IR_AND:
+    case IR_OR:
+    case IR_XOR:
+    case IR_SHL:
+    case IR_LSHR:
+    case IR_ASHR: out(p, "%s %s %%%d, %%%d", op, type, instr->a, instr->b); break;
+    case IR_CMP: out(p, "%s %s %s %%%d, %%%d", op, ir_pred_name(instr->pred), type, instr->a, instr->b); break;
+    case IR_SELECT: out(p, "%s %s %%%d, %%%d, %%%d", op, type, instr->c, instr->a, instr->b); break;
+    case IR_JUMP: out(p, "%s b%d", op, instr->target); break;
+    case IR_BRANCH: out(p, "%s %%%d, b%d, b%d", op, instr->c, instr->target, instr->target2); break;
+    case IR_RET:
+        out(p, "%s", op);
+        if (instr->args.count) out(p, " ");
+        out_values(p, instr->args);
+        break;
+    case IR_UNREACHABLE: out(p, "%s", op); break;
+    }
+    out(p, "\n");
+}
+
+// A parameter's or result's type, with its extension if it has one.
+static void out_param(Printer *p, Ir_Param param) {
+    out(p, "%s%s", ir_type_name(param.type), ir_ext_name(param.ext));
+}
+
 String ir_print(Arena *a, Ir_Module *m) {
     Printer p = {};
     for (s64 i = 0; i < m->globals.count; i++) {
-        out(&p, "global @" STR_FMT " = \"", STR_ARG(m->globals[i].name));
-        out_bytes(&p, m->globals[i].bytes);
-        out(&p, "\"\n");
+        Ir_Global *g = &m->globals[i];
+        if (g->type == IR_VOID) {
+            out(&p, "global @" STR_FMT " = \"", STR_ARG(g->name));
+            out_bytes(&p, g->bytes);
+            out(&p, "\"\n");
+        } else {
+            out(&p, "global @" STR_FMT ": %s = %llu\n", STR_ARG(g->name), ir_type_name(g->type),
+                (unsigned long long)g->initial);
+        }
     }
     for (s64 i = 0; i < m->procs.count; i++) {
         Ir_Proc *proc = m->procs[i];
         const char *kind = proc->is_foreign ? "foreign proc" : proc->is_export ? "export proc" : "proc";
         out(&p, "%s @" STR_FMT "(", kind, STR_ARG(proc->name));
         for (s64 k = 0; k < proc->params.count; k++) {
-            out(&p, "%s%s%s", k ? ", " : "", ir_type_name(proc->params[k].type), ir_ext_name(proc->params[k].ext));
+            if (k) out(&p, ", ");
+            out_param(&p, proc->params[k]);
         }
         out(&p, ")");
-        if (proc->return_type != IR_VOID) {
-            out(&p, " -> %s%s", ir_type_name(proc->return_type), ir_ext_name(proc->return_ext));
+        for (s64 k = 0; k < proc->results.count; k++) {
+            out(&p, k ? ", " : " -> ");
+            out_param(&p, proc->results[k]);
         }
         if (proc->is_foreign) {
             out(&p, "\n");
             continue;
         }
         out(&p, " {\n");
-        for (s64 k = 0; k < proc->body.count; k++) {
-            Ir_Instr *instr = &proc->body[k];
-            out(&p, "  ");
-            if (instr->result >= 0) out(&p, "%%%d = ", instr->result);
-            switch (instr->op) {
-            case IR_CONST:
-                out(&p, "const %s %llu", ir_type_name(instr->type), (unsigned long long)instr->constant);
-                break;
-            case IR_ADDR: out(&p, "addr @" STR_FMT, STR_ARG(m->globals[instr->target].name)); break;
-            case IR_CALL:
-                out(&p, "call @" STR_FMT "(", STR_ARG(m->procs[instr->target]->name));
-                for (s64 n = 0; n < instr->args.count; n++) out(&p, "%s%%%d", n ? ", " : "", instr->args[n]);
-                out(&p, ")");
-                break;
-            case IR_SEXT:
-            case IR_ZEXT:
-                out(&p, "%s %s %%%d to %s", instr->op == IR_SEXT ? "sext" : "zext", ir_type_name(instr->from),
-                    instr->operand, ir_type_name(instr->type));
-                break;
-            case IR_RET:
-                out(&p, "ret");
-                if (instr->operand >= 0) out(&p, " %%%d", instr->operand);
-                break;
-            }
-            out(&p, "\n");
+        for (s64 k = 0; k < proc->blocks.count; k++) {
+            out(&p, "b%lld:\n", (long long)k);
+            Ir_Block *block = proc->blocks[k];
+            for (s64 n = 0; n < block->instrs.count; n++) out_instr(&p, m, &block->instrs[n]);
         }
         out(&p, "}\n");
     }

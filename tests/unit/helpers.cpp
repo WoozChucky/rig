@@ -1,5 +1,5 @@
-// helpers.cpp: test helpers shared by the parser's, checker's, IR's and
-// LLVM backend's tests.
+// helpers.cpp: test helpers shared by the parser's, checker's, IR's, LLVM
+// backend's and linker's tests.
 //
 // toks() builds tokens by hand from a compact description, so those tests
 // don't depend on the lexer. Each word is one token:
@@ -118,11 +118,79 @@ static Ir_Module *lower_tokens(Arena *a, const char *description) {
     return m;
 }
 
-// Whether `needle` occurs in `haystack`.
-static bool contains(String haystack, const char *needle) {
+// Where `needle` first occurs in `haystack`, or -1.
+static s64 index_of(String haystack, const char *needle) {
     s64 n = (s64)strlen(needle);
     for (s64 i = 0; i + n <= haystack.count; i++) {
-        if (memcmp(haystack.data + i, needle, (size_t)n) == 0) return true;
+        if (memcmp(haystack.data + i, needle, (size_t)n) == 0) return i;
     }
-    return false;
+    return -1;
+}
+
+// Whether `needle` occurs in `haystack`.
+static bool contains(String haystack, const char *needle) {
+    return index_of(haystack, needle) >= 0;
+}
+
+// How many times `needle` occurs in `haystack`, no two occurrences
+// overlapping.
+static s64 count_of(String haystack, const char *needle) {
+    s64 n = (s64)strlen(needle), count = 0;
+    RIG_ASSERT(n > 0);
+    for (s64 at = 0;;) {
+        s64 i = index_of(string_slice(haystack, at, haystack.count - at), needle);
+        if (i < 0) return count;
+        count++;
+        at += i + n;
+    }
+}
+
+// Hand-built IR, for the tests of the IR's printing, the backend and the
+// runtime that come before lowering can make what they need. Each returns
+// the value's number.
+
+static s32 emit_const(Ir_Proc *p, s32 block, Ir_Type type, u64 bits) {
+    Ir_Instr *c = ir_emit(p, block, IR_CONST, type);
+    c->constant = bits;
+    return c->result;
+}
+
+// An instruction taking %a and %b: an arithmetic or bitwise operation, or a
+// store (the value %a into the slot %b; it gives no value, -1).
+static s32 emit_binary(Ir_Proc *p, s32 block, Ir_Op op, Ir_Type type, s32 a, s32 b) {
+    Ir_Instr *instr = ir_emit(p, block, op, type);
+    instr->a = a;
+    instr->b = b;
+    return instr->result;
+}
+
+static s32 emit_cmp(Ir_Proc *p, s32 block, Ir_Pred pred, Ir_Type type, s32 a, s32 b) {
+    Ir_Instr *instr = ir_emit(p, block, IR_CMP, type);
+    instr->pred = pred;
+    instr->a = a;
+    instr->b = b;
+    return instr->result;
+}
+
+// ret with no value (value -1) or one.
+static void emit_ret(Ir_Proc *p, s32 block, s32 value) {
+    Ir_Instr *ret = ir_emit(p, block, IR_RET, IR_VOID);
+    if (value >= 0) array_add(&ret->args, value);
+}
+
+// A constant global of text's bytes and a terminating zero; its index.
+static s32 add_string(Ir_Module *m, const char *name, const char *text) {
+    Ir_Global g = {};
+    g.name = str(name);
+    g.type = IR_VOID;
+    g.bytes = {(const u8 *)text, (s64)strlen(text) + 1};
+    array_add(&m->globals, g);
+    return (s32)(m->globals.count - 1);
+}
+
+// A procedure returning one value of type `result`, or nothing (IR_VOID).
+static Ir_Proc *new_proc_returning(Ir_Module *m, Arena *a, const char *name, Ir_Type result) {
+    Ir_Proc *p = ir_new_proc(m, a, str(name));
+    if (result != IR_VOID) array_add(&p->results, {result, IR_EXT_NONE});
+    return p;
 }
