@@ -170,7 +170,7 @@ TEST(ir_call_with_two_results_defines_two_values) {
     array_add(&divmod->results, {IR_I64, IR_EXT_NONE});
     array_add(&divmod->results, {IR_I64, IR_EXT_NONE});
     s32 b = ir_new_block(&a, divmod);
-    emit_const(divmod, b, IR_I64, 1);                         // %2, %3, %4: values before the call
+    emit_const(divmod, b, IR_I64, 1);  // %2, %3, %4: values before the call
     emit_const(divmod, b, IR_I64, 2);
     emit_const(divmod, b, IR_I64, 3);
     Array<s32> args = {};

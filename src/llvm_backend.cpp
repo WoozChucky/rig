@@ -103,8 +103,9 @@ static LLVMTypeRef function_type(LLVMContextRef c, Ir_Proc *p, Arena *a) {
 // x86_64-pc-windows-msvc but a bool, and neither does Rig.
 //
 // A bool (C's _Bool, Rig's bool, an i1) is marked zeroext on both: clang
-// does so on every target, since a bool travels as a byte that must be 0 or
-// 1, and the receiving side may rely on the upper bits being zero.
+// does so on every target. A bool is passed as a whole byte or more, 0 or
+// 1 with every other bit zero, and C code on the receiving side may rely
+// on those bits.
 //
 // Both checked against the pinned clang 23.1.4's -S -emit-llvm on
 // x86_64-pc-linux-gnu, x86_64-pc-windows-msvc and x86_64-w64-windows-gnu,
@@ -254,14 +255,15 @@ static LLVMIntPredicate llvm_predicate(Ir_Pred p) {
 struct Body {
     LLVMBuilderRef builder;
     LLVMBasicBlockRef *blocks;
-    LLVMValueRef *values;
+    LLVMValueRef *values;  // value_count of them, null until defined
+    s32 value_count;
 };
 
 // The LLVM value of %n. Blocks are translated in order, so a value used
 // before it's defined (a block using one from a later block) is a bug in
 // whatever made the IR.
 static LLVMValueRef value(Body *body, s32 n) {
-    RIG_ASSERT(n >= 0 && body->values[n]);
+    RIG_ASSERT(n >= 0 && n < body->value_count && body->values[n]);
     return body->values[n];
 }
 
@@ -370,6 +372,7 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
         body.blocks[k] = LLVMAppendBasicBlockInContext(c, function, name);
     }
     body.values = arena_new_array<LLVMValueRef>(a, p->value_count ? p->value_count : 1);
+    body.value_count = p->value_count;
     for (s64 i = 0; i < p->params.count; i++) body.values[i] = LLVMGetParam(function, (unsigned)i);
 
     // Every stack slot's alloca at the top of the entry block, whichever
@@ -384,6 +387,7 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
         for (s64 n = 0; n < block->instrs.count; n++) {
             Ir_Instr *instr = &block->instrs[n];
             if (instr->op != IR_LOCAL) continue;
+            RIG_ASSERT(instr->result >= 0);  // a slot for a type: never IR_VOID
             body.values[instr->result] = LLVMBuildAlloca(body.builder, llvm_type(c, instr->type), "");
         }
     }
