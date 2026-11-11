@@ -85,8 +85,9 @@ TEST(ir_of_integer_arguments) {
 }
 
 TEST(ir_keeps_the_sign_of_narrow_parameters) {
-    // The C calling conventions widen an i8 or i16 by its sign at a call
-    // (llvm_backend.cpp), so a signature keeps it, on parameters and on the
+    // Linux's C calling convention widens an i8 or i16 at a call, by sign or
+    // by zero as its type says (llvm_backend.cpp decides per target), so a
+    // signature keeps which for every target, on parameters and on the
     // return; wider integers and pointers need no mark.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_tokens(&a, "IDENT:f :: ( IDENT:a : IDENT:s8 , IDENT:b : IDENT:u8 , IDENT:c : IDENT:s16 , "
