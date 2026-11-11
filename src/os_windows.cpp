@@ -302,7 +302,16 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
         else TerminateProcess(process.hProcess, 1);
         result->timed_out = true;
         WaitForSingleObject(process.hProcess, INFINITE);
-        WaitForMultipleObjects(2, readers, TRUE, INFINITE);
+        // Killed, the program's pipes end, unless something it started
+        // outside the job still holds them (when the program couldn't join
+        // it). Then the readers' ReadFile calls are cancelled, which ends
+        // them; again every 100 ms, in case a reader was between two calls.
+        DWORD wait = 1000;
+        while (WaitForMultipleObjects(2, readers, TRUE, wait) == WAIT_TIMEOUT) {
+            CancelSynchronousIo(readers[0]);
+            CancelSynchronousIo(readers[1]);
+            wait = 100;
+        }
     }
     CloseHandle(readers[0]);
     CloseHandle(readers[1]);
