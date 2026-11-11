@@ -2,7 +2,8 @@
 //
 // Each parse_ function reads one rule and returns its node, or null after
 // reporting an error. A null travels up to parse_declaration, which gives up
-// on that declaration; parse() then skips to the next one.
+// on that declaration; parse() keeps a broken entry for it (its name alone)
+// and skips to the next one.
 
 #include "parser.h"
 
@@ -228,6 +229,20 @@ static void skip_to_next_declaration(Parser *p, s64 start) {
     }
 }
 
+// The entry kept for a declaration the parser gave up on, which began at
+// token `start`. Its name is the identifier the declaration starts with,
+// even when no '::' follows: `greet : () {` is still plainly greet's
+// declaration, and taking the name only means less is reported (calls to
+// greet), never more. A declaration that starts with anything else (a stray
+// '}') has no name to keep.
+static Ast_Proc *broken_entry(Parser *p, s64 start) {
+    Token *first = &p->tokens[start];
+    Ast_Proc *broken = ast_new<Ast_Proc>(p->arena, AST_PROC, first->pos);
+    broken->is_broken = true;
+    if (first->kind == TOKEN_IDENT) broken->name = first->text;
+    return broken;
+}
+
 Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
     Parser p = {tokens, 0, a, d};
@@ -235,11 +250,11 @@ Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;
         Ast_Proc *proc = parse_declaration(&p);
-        if (proc) {
-            array_add(&file->procs, proc);
-        } else {
+        if (!proc) {
+            proc = broken_entry(&p, start);
             skip_to_next_declaration(&p, start);
         }
+        array_add(&file->procs, proc);
     }
     return file;
 }

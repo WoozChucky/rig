@@ -46,12 +46,18 @@ struct Ast_Block : Ast {
     Array<Ast *> statements;  // expressions, in milestone 1
 };
 
+// A declaration. When the parser gave up on one (a syntax error), it is
+// still kept, as a broken entry: is_broken is set and only name and pos
+// mean anything, so the checker knows the name is declared. Its name is the
+// identifier the declaration started with, or empty when it didn't start
+// with one.
 struct Ast_Proc : Ast {
     String name;
     Array<Ast_Param *> params;
     Ast_Type *return_type;   // null: returns nothing
     Ast_Block *body;         // null for a foreign procedure
     bool is_foreign;
+    bool is_broken;          // the parser gave up on it
     String foreign_library;  // #foreign's library name
     Position library_pos;    // where that name is written
 };
@@ -74,7 +80,7 @@ struct Ast_Int : Ast {
     u64 value;
 };
 
-// A parsed file: its declarations, in source order.
+// A parsed file: its declarations, in source order, broken ones included.
 struct Ast_File {
     Array<Ast_Proc *> procs;
 };
@@ -93,6 +99,7 @@ T *ast_new(Arena *a, Ast_Kind kind, Position pos) {
 //   (proc puts (params (s (ptr u8))) (returns s32) (foreign libc))
 //   (proc main (params) (block (call puts (string "Hello, World!"))))
 // A call's callee prints bare when it's a name; a name anywhere else prints
-// as (name x).
+// as (name x). A broken entry prints as (broken greet), or (broken) without
+// a name.
 String ast_dump(Arena *a, Ast_File *file);
 String ast_dump_node(Arena *a, Ast *node);
