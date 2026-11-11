@@ -1,0 +1,15 @@
+// Recursion, an if that returns, and a comparison's result tested.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+fib :: (n: int) -> int {
+    if n < 2 { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+main :: () {
+    if fib(20) == 6765 {
+        puts("yes");
+    } else {
+        puts("no");
+    }
+}
