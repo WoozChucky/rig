@@ -44,7 +44,7 @@ set SYSTEM_LIBS=-lpsapi -lshell32 -lole32 -luuid -ladvapi32 -lws2_32 -lntdll -lo
 
 rem LLVM's release libraries are built against the static C runtime (/MT),
 rem so Rig's compiler is too: mixing the two fails to link (LNK2038).
-set FLAGS=-std=c++23 -fno-exceptions -fno-rtti -g %OPT% -Wall -Wextra -Wno-unused-parameter -fms-runtime-lib=static -D_CRT_SECURE_NO_WARNINGS -I"%LLVM%\include"
+set FLAGS=-std=c++23 -fno-exceptions -fno-rtti -g %OPT% -Wall -Wextra -fms-runtime-lib=static -D_CRT_SECURE_NO_WARNINGS -I"%LLVM%\include"
 
 if not exist bin mkdir bin
 clang++ %FLAGS% src\rig.cpp -L"%LLVM%\lib" %LLVM_LIBS% %SYSTEM_LIBS% -o bin\rig.exe || exit /b 1

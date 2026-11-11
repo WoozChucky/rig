@@ -22,7 +22,7 @@ if [ ! -x "$LLVM/bin/llvm-config" ]; then
     exit 1
 fi
 
-FLAGS="-std=c++23 -fno-exceptions -fno-rtti -g $OPT -Wall -Wextra -Wno-unused-parameter -I$LLVM/include"
+FLAGS="-std=c++23 -fno-exceptions -fno-rtti -g $OPT -Wall -Wextra -I$LLVM/include"
 # The LLVM components Rig uses: the IR (core), and the x86 target that turns
 # it into object files.
 LLVM_LIBS="$("$LLVM/bin/llvm-config" --link-static --libfiles core target x86codegen x86asmparser x86desc x86info)"

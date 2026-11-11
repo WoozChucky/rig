@@ -272,7 +272,9 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
     return true;
 }
 
-Array<String> os_arguments(Arena *a, int argc, char **argv) {
+// The arena is os.h's: Windows converts the arguments into it, but Linux's
+// argv is UTF-8 already, so the strings point into argv and need no copy.
+Array<String> os_arguments([[maybe_unused]] Arena *a, int argc, char **argv) {
     Array<String> args = {};
     for (int i = 0; i < argc; i++) array_add(&args, str(argv[i]));
     return args;
