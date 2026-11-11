@@ -17,6 +17,14 @@ static Lexed *lex_text(const char *text) {
     return l;
 }
 
+// The same for exactly count bytes, zero bytes included.
+static Lexed *lex_bytes(const char *bytes, s64 count) {
+    Lexed *l = (Lexed *)calloc(1, sizeof(Lexed));
+    s32 file = diag_add_file(&l->diag, str("test.rig"), String{(const u8 *)bytes, count});
+    l->tokens = lex(&l->diag, file, &l->arena);
+    return l;
+}
+
 static void lexed_free(Lexed *l) {
     array_free(&l->tokens);
     diag_free(&l->diag);
@@ -228,11 +236,26 @@ TEST(unexpected_byte_is_shown_in_hex) {
 }
 
 TEST(non_ascii_outside_strings_is_one_error) {
-    // função: f u n, then the bytes of "çã" (C3 A7 C3 A3), then o.
-    Lexed *l = lex_text("fun\xC3\xA7\xC3\xA3o x");
-    CHECK_KINDS(l, TOKEN_IDENT, TOKEN_ERROR, TOKEN_IDENT, TOKEN_IDENT, TOKEN_EOF);
-    CHECK_EQ(l->diag.error_count, 1);
+    // função: f u n, then the bytes of "çã" (C3 A7 C3 A3), then o. The whole
+    // name is one bad token, reported at its first non-ASCII byte.
+    Lexed *l = lex_text("fun\xC3\xA7\xC3\xA3o x \xC3\xA7" "a1 y");
+    CHECK_KINDS(l, TOKEN_ERROR, TOKEN_IDENT, TOKEN_ERROR, TOKEN_IDENT, TOKEN_EOF);
+    CHECK_EQ(l->diag.error_count, 2);
     CHECK_ERROR(l, 0, 1, 4, "non-ASCII characters can only be in strings and comments, for now");
+    CHECK_ERROR(l, 1, 1, 12, "non-ASCII characters can only be in strings and comments, for now");
+    if (l->tokens.count == 5) {
+        CHECK_STR(l->tokens[0].text, "fun\xC3\xA7\xC3\xA3o");
+        CHECK_STR(l->tokens[2].text, "\xC3\xA7" "a1");
+    }
+    lexed_free(l);
+}
+
+TEST(a_non_ascii_name_is_one_error_for_the_parser_too) {
+    Lexed *l = lex_text("fun\xC3\xA7\xC3\xA3o :: () { }\nmain :: () { }");
+    Arena a = arena_make();
+    parse(l->tokens, &a, &l->diag);
+    CHECK_EQ(l->diag.error_count, 1);
+    arena_free(&a);
     lexed_free(l);
 }
 
@@ -363,45 +386,80 @@ TEST(unterminated_comment_is_an_error) {
     lexed_free(l);
 }
 
+// Where in bytes the position (line, col) is: the inverse of the lexer's
+// counting, for the random test below.
+static s64 offset_of(const u8 *bytes, s64 count, Position pos) {
+    s64 at = count >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF ? 3 : 0;
+    for (s32 line = 1; line < pos.line && at < count; at++) {
+        if (bytes[at] == '\n') line++;
+    }
+    return at + pos.col - 1;
+}
+
 TEST(any_bytes_lex_without_crashing) {
     // Thousands of short files of random bytes, drawn mostly from the ones
-    // that start or end tokens, zero bytes and UTF-8 included. Whatever the
-    // input: exactly one TOKEN_EOF, last; every token's text inside the
-    // file; positions that never go backwards; and an error token exactly
-    // when an error was reported.
-    const char alphabet[] = "\"\\/*#0xbe._1a9 \t\r\n;:<>=-+'@\x01\x80\xC3\xA7\xEF\xBB\xBF";
+    // that start or end tokens, zero bytes and UTF-8 included, some starting
+    // with a byte-order mark. Each file is a heap block of exactly its size,
+    // so a sanitizer sees any read past its end. Whatever the input:
+    // - exactly one TOKEN_EOF, last;
+    // - every token's text inside the file, at the line and column its
+    //   position says;
+    // - every error reported inside an error token, and every error token
+    //   holding at least one error.
+    const char alphabet[] = "\"\\/*#0xbe._1a9 \t\r\n;:<>=-+'@\x01\x80\xC3\xA7\xEF\xBB\xBF\0";
+    const s64 letters = sizeof alphabet - 1;  // the explicit \0 is in, the terminator isn't
     u64 seed = 12345;
     for (int round = 0; round < 3000; round++) {
-        u8 bytes[64];
         s64 count = (s64)(seed % 65);
+        u8 *bytes = (u8 *)malloc(count > 0 ? (size_t)count : 1);
         for (s64 i = 0; i < count; i++) {
             seed = seed * 6364136223846793005ull + 1442695040888963407ull;  // Knuth's MMIX generator
-            u64 pick = (seed >> 33) % (sizeof alphabet + 1);
-            bytes[i] = pick < sizeof alphabet - 1 ? (u8)alphabet[pick] : (u8)(seed >> 56);
+            u64 pick = (seed >> 33) % (u64)(letters + 1);
+            bytes[i] = pick < (u64)letters ? (u8)alphabet[pick] : (u8)(seed >> 56);
+        }
+        if (round % 10 == 0 && count >= 3) {  // a byte-order mark, which random bytes almost never make
+            bytes[0] = 0xEF;
+            bytes[1] = 0xBB;
+            bytes[2] = 0xBF;
         }
         seed = seed * 6364136223846793005ull + 1442695040888963407ull;
 
         Arena arena = {};
         Diagnostics diag = {};
-        String text = {bytes, count};
-        s32 file = diag_add_file(&diag, str("random.rig"), text);
+        s32 file = diag_add_file(&diag, str("random.rig"), String{bytes, count});
         Array<Token> tokens = lex(&diag, file, &arena);
 
-        s64 errors = 0;
-        bool ok = tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF;
-        for (s64 i = 0; ok && i < tokens.count; i++) {
+        const char *why = nullptr;
+        if (tokens.count == 0 || tokens[tokens.count - 1].kind != TOKEN_EOF) why = "the last token isn't EOF";
+        for (s64 i = 0; !why && i < tokens.count; i++) {
             Token *t = &tokens[i];
-            if (t->kind == TOKEN_EOF && i != tokens.count - 1) ok = false;
-            if (t->kind == TOKEN_ERROR) errors++;
-            if (t->text.count > 0 && (t->text.data < bytes || t->text.data + t->text.count > bytes + count)) ok = false;
-            if (i > 0) {
-                Position p = tokens[i - 1].pos, q = t->pos;
-                if (q.line < p.line || (q.line == p.line && q.col < p.col)) ok = false;
-            }
+            s64 start = t->text.count > 0 || t->text.data ? t->text.data - bytes : 0;
+            if (t->kind == TOKEN_DIRECTIVE) start--;  // its text leaves out the '#'
+            if (t->kind == TOKEN_EOF && i != tokens.count - 1) why = "an EOF before the end";
+            else if (start < 0 || start + t->text.count > count) why = "a token outside the file";
+            else if (offset_of(bytes, count, t->pos) != start) why = "a token's position isn't where its text is";
         }
-        if ((errors > 0) != (diag.error_count > 0)) ok = false;
-        if (!ok) {
-            CHECK(ok);
+        for (s64 i = 0; !why && i < tokens.count; i++) {
+            if (tokens[i].kind != TOKEN_ERROR) continue;
+            s64 start = tokens[i].text.data - bytes, end = start + tokens[i].text.count;
+            bool has_error = false;
+            for (s64 k = 0; k < diag.messages.count; k++) {
+                s64 at = offset_of(bytes, count, diag.messages[k].pos);
+                if (at >= start && at < end) has_error = true;
+            }
+            if (!has_error) why = "an error token with no error in it";
+        }
+        for (s64 k = 0; !why && k < diag.messages.count; k++) {
+            s64 at = offset_of(bytes, count, diag.messages[k].pos);
+            bool inside = false;
+            for (s64 i = 0; i < tokens.count; i++) {
+                s64 start = tokens[i].text.data - bytes;
+                if (tokens[i].kind == TOKEN_ERROR && at >= start && at < start + tokens[i].text.count) inside = true;
+            }
+            if (!inside) why = "an error outside every error token";
+        }
+        if (why) {
+            test_fail(__FILE__, __LINE__, why);
             fprintf(stderr, "  round %d, %lld bytes:", round, (long long)count);
             for (s64 i = 0; i < count; i++) fprintf(stderr, " %02x", bytes[i]);
             fprintf(stderr, "\n");
@@ -409,6 +467,135 @@ TEST(any_bytes_lex_without_crashing) {
         array_free(&tokens);
         diag_free(&diag);
         arena_free(&arena);
-        if (!ok) break;
+        free(bytes);
+        if (why) break;
     }
+}
+
+TEST(unknown_escapes_of_unprintable_bytes_show_their_value) {
+    // The byte after the backslash goes into the message only when it's
+    // printable; otherwise its value, so no control byte reaches the terminal.
+    Lexed *l = lex_text("\"\\\x1b[31m\" \"\\\xC3\xA7\"");
+    CHECK_KINDS(l, TOKEN_ERROR, TOKEN_ERROR, TOKEN_EOF);
+    CHECK_EQ(l->diag.error_count, 2);
+    CHECK_ERROR(l, 0, 1, 2, "unknown escape sequence: '\\' then byte 0x1b");
+    CHECK_ERROR(l, 1, 1, 11, "unknown escape sequence: '\\' then byte 0xc3");
+    lexed_free(l);
+}
+
+TEST(a_bad_escape_in_an_unterminated_string) {
+    Lexed *l = lex_text("\"\\q");
+    CHECK_KINDS(l, TOKEN_ERROR, TOKEN_EOF);
+    CHECK_EQ(l->diag.error_count, 2);
+    CHECK_ERROR(l, 0, 1, 2, "unknown escape sequence '\\q'");
+    CHECK_ERROR(l, 1, 1, 1, "unterminated string literal");
+    lexed_free(l);
+}
+
+TEST(a_backslash_at_the_end_of_a_line_or_file) {
+    Lexed *l = lex_text("\"ab\\\nx \"cd\\");
+    CHECK_KINDS(l, TOKEN_ERROR, TOKEN_IDENT, TOKEN_ERROR, TOKEN_EOF);
+    CHECK_EQ(l->diag.error_count, 2);
+    CHECK_ERROR(l, 0, 1, 1, "unterminated string literal");
+    CHECK_ERROR(l, 1, 2, 3, "unterminated string literal");
+    lexed_free(l);
+}
+
+TEST(a_lone_carriage_return_in_a_string_is_kept) {
+    Lexed *l = lex_text("\"a\rb\"");
+    CHECK_KINDS(l, TOKEN_STRING, TOKEN_EOF);
+    if (l->tokens.count == 2) CHECK_STR(l->tokens[0].string_value, "a\rb");
+    lexed_free(l);
+}
+
+TEST(zero_and_delete_bytes_are_unexpected) {
+    Lexed *l = lex_bytes("x \x7f \x00 y", 7);
+    CHECK_KINDS(l, TOKEN_IDENT, TOKEN_ERROR, TOKEN_ERROR, TOKEN_IDENT, TOKEN_EOF);
+    CHECK_ERROR(l, 0, 1, 3, "unexpected byte 0x7f");
+    CHECK_ERROR(l, 1, 1, 5, "unexpected byte 0x00");
+    lexed_free(l);
+}
+
+TEST(directive_names_are_identifiers) {
+    // Keywords too: #if will be a directive of its own one day.
+    Lexed *l = lex_text("#1 #_x #run2 #if");
+    CHECK_KINDS(l, TOKEN_ERROR, TOKEN_INT, TOKEN_DIRECTIVE, TOKEN_DIRECTIVE, TOKEN_DIRECTIVE, TOKEN_EOF);
+    CHECK_EQ(l->diag.error_count, 1);
+    CHECK_ERROR(l, 0, 1, 1, "a directive needs a name right after '#', as in #foreign");
+    if (l->tokens.count == 6) {
+        CHECK_STR(l->tokens[2].text, "_x");
+        CHECK_STR(l->tokens[4].text, "if");
+    }
+    lexed_free(l);
+}
+
+TEST(prefixes_are_lowercase_and_may_take_an_underscore) {
+    Lexed *l = lex_text("0x_ff 0b_1 0X10");
+    CHECK_KINDS(l, TOKEN_INT, TOKEN_INT, TOKEN_ERROR, TOKEN_EOF);
+    CHECK_EQ(l->diag.error_count, 1);
+    CHECK_ERROR(l, 0, 1, 13, "invalid character 'X' in number literal");
+    if (l->tokens.count == 4) {
+        CHECK_EQ(l->tokens[0].int_value, 255);
+        CHECK_EQ(l->tokens[1].int_value, 1);
+    }
+    lexed_free(l);
+}
+
+TEST(binary_at_the_edge_of_64_bits) {
+    Lexed *l = lex_text("0b1111111111111111111111111111111111111111111111111111111111111111 "
+                        "0b10000000000000000000000000000000000000000000000000000000000000000");
+    CHECK_KINDS(l, TOKEN_INT, TOKEN_ERROR, TOKEN_EOF);
+    if (l->tokens.count == 3) CHECK_EQ(l->tokens[0].int_value, UINT64_MAX);
+    CHECK_ERROR(l, 0, 1, 68, "integer literal too large for 64 bits");
+    lexed_free(l);
+}
+
+TEST(floats_take_underscores_like_integers) {
+    Lexed *l = lex_text("1_000.000_5 1e1_0 2.5e-1_0 1_e5 1E5 1e+5");
+    CHECK_KINDS(l, TOKEN_FLOAT, TOKEN_FLOAT, TOKEN_FLOAT, TOKEN_FLOAT, TOKEN_FLOAT, TOKEN_FLOAT, TOKEN_EOF);
+    CHECK_EQ(l->diag.error_count, 0);
+    if (l->tokens.count == 7) {
+        CHECK(l->tokens[0].float_value == 1000.0005);
+        CHECK(l->tokens[1].float_value == 1e10);
+        CHECK(l->tokens[2].float_value == 2.5e-10);
+        CHECK(l->tokens[3].float_value == 1e5);
+        CHECK(l->tokens[4].float_value == 1e5);
+        CHECK(l->tokens[5].float_value == 1e5);
+    }
+    lexed_free(l);
+}
+
+TEST(a_float_too_large_is_an_error) {
+    // Too small is fine: it's 0, or as close to it as a double gets.
+    Lexed *l = lex_text("1e999 1e-999");
+    CHECK_KINDS(l, TOKEN_ERROR, TOKEN_FLOAT, TOKEN_EOF);
+    CHECK_EQ(l->diag.error_count, 1);
+    CHECK_ERROR(l, 0, 1, 1, "float literal too large for 64 bits");
+    lexed_free(l);
+}
+
+TEST(dots_after_numbers) {
+    // A float's '.' needs a digit after it; anything else is the '.' of
+    // something else (one day, a member: 1.e5 would be 1 then .e5).
+    Lexed *l = lex_text("1.e5 1e5.5 1.5.5");
+    CHECK_KINDS(l, TOKEN_INT, TOKEN_DOT, TOKEN_IDENT, TOKEN_FLOAT, TOKEN_DOT, TOKEN_INT, TOKEN_FLOAT, TOKEN_DOT,
+                TOKEN_INT, TOKEN_EOF);
+    CHECK_EQ(l->diag.error_count, 0);
+    lexed_free(l);
+}
+
+TEST(byte_order_marks_anywhere_else_are_errors) {
+    Lexed *l = lex_text("\xEF\xBB\xBF");
+    CHECK_KINDS(l, TOKEN_EOF);
+    if (l->tokens.count == 1) CHECK_EQ(l->tokens[0].pos.col, 1);
+    lexed_free(l);
+    l = lex_text("a \xEF\xBB\xBF");
+    CHECK_KINDS(l, TOKEN_IDENT, TOKEN_ERROR, TOKEN_EOF);
+    lexed_free(l);
+}
+
+TEST(punctuation_at_the_end_of_the_file) {
+    Lexed *l = lex_text("... ---- /");
+    CHECK_KINDS(l, TOKEN_DOT_DOT, TOKEN_DOT, TOKEN_TRIPLE_DASH, TOKEN_MINUS, TOKEN_SLASH, TOKEN_EOF);
+    lexed_free(l);
 }
