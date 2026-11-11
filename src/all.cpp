@@ -12,3 +12,4 @@
 #include "diag.cpp"
 #include "tokens.cpp"
 #include "ast.cpp"
+#include "parser.cpp"

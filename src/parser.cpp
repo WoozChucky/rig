@@ -1,0 +1,244 @@
+// parser.cpp: the recursive-descent parser (see parser.h for the grammar).
+//
+// Each parse_ function reads one rule and returns its node, or null after
+// reporting an error. A null travels up to parse_declaration, which gives up
+// on that declaration; parse() then skips to the next one.
+
+#include "parser.h"
+
+struct Parser {
+    Array<Token> tokens;
+    s64 next;  // index of the next token to read
+    Arena *arena;
+    Diagnostics *diag;
+};
+
+static Token *peek(Parser *p, s64 ahead = 0) {
+    s64 i = p->next + ahead;
+    if (i >= p->tokens.count) i = p->tokens.count - 1;  // the EOF token
+    return &p->tokens[i];
+}
+
+static Token *advance(Parser *p) {
+    Token *t = peek(p);
+    if (t->kind != TOKEN_EOF) p->next++;
+    return t;
+}
+
+// "expected X, found Y" at the found token. A TOKEN_ERROR was reported by the
+// lexer already: saying more about it would only repeat the same mistake.
+static void error_expected(Parser *p, const char *expected) {
+    Token *found = peek(p);
+    if (found->kind == TOKEN_ERROR) return;
+    if (found->kind == TOKEN_IDENT) {
+        diag_error(p->diag, found->pos, "expected %s, found identifier '" STR_FMT "'", expected,
+                   STR_ARG(found->text));
+    } else {
+        diag_error(p->diag, found->pos, "expected %s, found %s", expected, token_kind_name(found->kind));
+    }
+}
+
+// Reads a token of this kind, or reports an error and returns null.
+static Token *expect(Parser *p, Token_Kind kind) {
+    if (peek(p)->kind == kind) return advance(p);
+    error_expected(p, token_kind_name(kind));
+    return nullptr;
+}
+
+static Ast *parse_expression(Parser *p);
+
+// primary = IDENT | INT | STRING | '(' expression ')'
+static Ast *parse_primary(Parser *p) {
+    Token *t = peek(p);
+    switch (t->kind) {
+    case TOKEN_IDENT: {
+        advance(p);
+        Ast_Name *name = ast_new<Ast_Name>(p->arena, AST_NAME, t->pos);
+        name->name = t->text;
+        return name;
+    }
+    case TOKEN_INT: {
+        advance(p);
+        Ast_Int *number = ast_new<Ast_Int>(p->arena, AST_INT, t->pos);
+        number->value = t->int_value;
+        return number;
+    }
+    case TOKEN_STRING: {
+        advance(p);
+        Ast_String *string = ast_new<Ast_String>(p->arena, AST_STRING, t->pos);
+        string->value = t->string_value;
+        return string;
+    }
+    case TOKEN_LPAREN: {
+        advance(p);
+        Ast *inner = parse_expression(p);
+        if (!inner || !expect(p, TOKEN_RPAREN)) return nullptr;
+        return inner;
+    }
+    default:
+        error_expected(p, "an expression");
+        return nullptr;
+    }
+}
+
+// expression = primary { '(' [expression {',' expression}] ')' }
+static Ast *parse_expression(Parser *p) {
+    Ast *e = parse_primary(p);
+    while (e && peek(p)->kind == TOKEN_LPAREN) {
+        Ast_Call *call = ast_new<Ast_Call>(p->arena, AST_CALL, peek(p)->pos);
+        advance(p);
+        call->callee = e;
+        if (peek(p)->kind != TOKEN_RPAREN) {
+            for (;;) {
+                Ast *arg = parse_expression(p);
+                if (!arg) return nullptr;
+                array_add(&call->args, arg);
+                if (peek(p)->kind != TOKEN_COMMA) break;
+                advance(p);
+            }
+        }
+        if (!expect(p, TOKEN_RPAREN)) return nullptr;
+        e = call;
+    }
+    return e;
+}
+
+// Whether the next tokens are IDENT '::' with the name in column 1, the way
+// a top-level declaration starts.
+static bool starts_declaration(Parser *p) {
+    Token *t = peek(p);
+    return t->kind == TOKEN_IDENT && t->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON;
+}
+
+// block = '{' statement* '}', statement = expression ';'
+static Ast_Block *parse_block(Parser *p) {
+    Token *open = expect(p, TOKEN_LBRACE);
+    if (!open) return nullptr;
+    Ast_Block *block = ast_new<Ast_Block>(p->arena, AST_BLOCK, open->pos);
+    while (peek(p)->kind != TOKEN_RBRACE) {
+        // The end of the file, or a declaration at the start of a line
+        // (`name ::` in column 1): the block was never closed. The
+        // declaration stays for parse() to read.
+        if (peek(p)->kind == TOKEN_EOF || starts_declaration(p)) {
+            error_expected(p, token_kind_name(TOKEN_RBRACE));
+            return nullptr;
+        }
+        Ast *statement = parse_expression(p);
+        if (!statement || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+        array_add(&block->statements, statement);
+    }
+    advance(p);
+    return block;
+}
+
+// type = '*' type | IDENT
+static Ast_Type *parse_type(Parser *p) {
+    Token *t = peek(p);
+    if (t->kind == TOKEN_STAR) {
+        advance(p);
+        Ast_Type *pointer = ast_new<Ast_Type>(p->arena, AST_TYPE_POINTER, t->pos);
+        pointer->pointee = parse_type(p);
+        return pointer->pointee ? pointer : nullptr;
+    }
+    if (t->kind == TOKEN_IDENT) {
+        advance(p);
+        Ast_Type *named = ast_new<Ast_Type>(p->arena, AST_TYPE_NAME, t->pos);
+        named->name = t->text;
+        return named;
+    }
+    error_expected(p, "a type");
+    return nullptr;
+}
+
+// param = IDENT ':' type
+static Ast_Param *parse_param(Parser *p) {
+    Token *name = expect(p, TOKEN_IDENT);
+    if (!name || !expect(p, TOKEN_COLON)) return nullptr;
+    Ast_Param *param = ast_new<Ast_Param>(p->arena, AST_PARAM, name->pos);
+    param->name = name->text;
+    param->type_expr = parse_type(p);
+    return param->type_expr ? param : nullptr;
+}
+
+// procedure = '(' [param {',' param}] ')' ['->' type] (block | '#foreign' IDENT ';')
+static Ast_Proc *parse_procedure(Parser *p, Token *name) {
+    Ast_Proc *proc = ast_new<Ast_Proc>(p->arena, AST_PROC, name->pos);
+    proc->name = name->text;
+    if (!expect(p, TOKEN_LPAREN)) return nullptr;
+    if (peek(p)->kind != TOKEN_RPAREN) {
+        for (;;) {
+            Ast_Param *param = parse_param(p);
+            if (!param) return nullptr;
+            array_add(&proc->params, param);
+            if (peek(p)->kind != TOKEN_COMMA) break;
+            advance(p);
+        }
+    }
+    if (!expect(p, TOKEN_RPAREN)) return nullptr;
+    if (peek(p)->kind == TOKEN_ARROW) {
+        advance(p);
+        proc->return_type = parse_type(p);
+        if (!proc->return_type) return nullptr;
+    }
+
+    Token *t = peek(p);
+    if (t->kind == TOKEN_DIRECTIVE) {
+        if (!string_eq(t->text, str("foreign"))) {
+            diag_error(p->diag, t->pos, "unknown directive '#" STR_FMT "'", STR_ARG(t->text));
+            return nullptr;
+        }
+        advance(p);
+        Token *library = expect(p, TOKEN_IDENT);
+        if (!library || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+        proc->is_foreign = true;
+        proc->foreign_library = library->text;
+        return proc;
+    }
+    proc->body = parse_block(p);
+    return proc->body ? proc : nullptr;
+}
+
+// declaration = IDENT '::' procedure
+static Ast_Proc *parse_declaration(Parser *p) {
+    Token *name = expect(p, TOKEN_IDENT);
+    if (!name || !expect(p, TOKEN_COLON_COLON)) return nullptr;
+    if (peek(p)->kind != TOKEN_LPAREN) {
+        if (peek(p)->kind != TOKEN_ERROR) {
+            diag_error(p->diag, peek(p)->pos, "only procedures can be declared at the top level for now");
+        }
+        return nullptr;
+    }
+    return parse_procedure(p, name);
+}
+
+// After an error in a declaration that began at token `start`: skips to the
+// next token that starts a line and begins a declaration (IDENT '::'), or
+// to the end. A declaration the failed one stopped right at (an unclosed
+// block) is kept; otherwise at least one token is skipped, so parse() always
+// moves on.
+static void skip_to_next_declaration(Parser *p, s64 start) {
+    if (p->next > start && starts_declaration(p)) return;
+    if (peek(p)->kind != TOKEN_EOF) advance(p);
+    while (peek(p)->kind != TOKEN_EOF) {
+        Token *t = peek(p);
+        bool starts_line = p->next == 0 || p->tokens[p->next - 1].pos.line != t->pos.line;
+        if (starts_line && t->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON_COLON) return;
+        advance(p);
+    }
+}
+
+Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
+    RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
+    Parser p = {tokens, 0, a, d};
+    Ast_File *file = arena_new<Ast_File>(a);
+    while (peek(&p)->kind != TOKEN_EOF) {
+        s64 start = p.next;
+        Ast_Proc *proc = parse_declaration(&p);
+        if (proc) {
+            array_add(&file->procs, proc);
+        } else {
+            skip_to_next_declaration(&p, start);
+        }
+    }
+    return file;
+}
