@@ -1035,6 +1035,18 @@ TEST(named_iterator_hides_it) {
     arena_free(&a);
 }
 
+TEST(an_iterator_cant_be_called_it_index) {
+    // Every loop declares it_index, so an iterator by that name is reported
+    // at the name, once; it_index in the body is then the loop's index.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    for it_index: 0..9 { x := it_index; }\n"
+                           "}\n"),
+              "2:9: a loop's iterator can't be called 'it_index'\n");
+    arena_free(&a);
+}
+
 TEST(range_ends_unify) {
     // The ends meet as an arithmetic operator's operands do, and the
     // iterator has the type they meet at: untyped ends make an int.

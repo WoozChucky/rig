@@ -3,8 +3,9 @@
 // Procedures (with a body, or #foreign), their parameters and types; in a
 // body, blocks of statements: local variables and constants, assignments,
 // returns, if, while, for, break, continue and expressions; expressions
-// made of calls, names, strings, integers, bools and operators. Each node kind is a struct that starts with Ast,
-// so a pointer to any node is also an Ast *, and `kind` says which it is.
+// made of calls, names, strings, integers, bools and operators. Each node
+// kind is a struct that starts with Ast, so a pointer to any node is also
+// an Ast *, and `kind` says which it is.
 //
 // Nodes live in the compiler's arena and start zeroed (ast_new). Their
 // Arrays are on the heap and live as long as the compilation.
