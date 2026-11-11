@@ -272,6 +272,10 @@ TEST(a_name_is_kept_only_where_a_declaration_could_be) {
     // Parentheses never closed: no signature to see, so no name.
     dump = parse_dump(&a, "IDENT:foo ( STRING:x | IDENT:main :: ( ) { }", &errors);
     CHECK_STR(dump, "(broken)\n(proc main (params) (block))\n");
+    // The search for the ')' stops at the next declaration: a stray ')'
+    // and '{' after main don't close foo's '(' and make it a signature.
+    dump = parse_dump(&a, "IDENT:foo ( STRING:x | IDENT:main :: ( ) { } | ) { }", &errors);
+    CHECK_STR(dump, "(broken)\n(proc main (params) (block))\n(broken)\n");
 
     // A token the lexer refused right after the name ('greet @:: ...') may
     // be a mistyped '::': the name is kept.
