@@ -106,7 +106,7 @@ Ir_Module *ir_lower(Ast_File *f, Arena *a) {
             Type *t = source->params[k]->type;
             ir_add_param(p, ir_type_of(t), ir_ext_of(t));
         }
-        Type *returns = source->return_type ? source->return_type->type : nullptr;
+        Type *returns = source->results.count ? source->results[0]->type : nullptr;
         if (ir_type_of(returns) != IR_VOID) array_add(&p->results, {ir_type_of(returns), ir_ext_of(returns)});
         table_put(&l.proc_index, source->name, (s32)i);
     }
