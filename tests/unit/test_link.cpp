@@ -194,6 +194,74 @@ TEST(links_and_runs_hello_world) {
     arena_free(&a);
 }
 
+// s without its carriage returns: Windows' C runtime writes \n as \r\n to
+// stdout and stderr (text mode), Linux's doesn't.
+static String without_cr(Arena *a, String s) {
+    u8 *bytes = (u8 *)arena_alloc(a, s.count ? (u64)s.count : 1, 1);
+    s64 count = 0;
+    for (s64 i = 0; i < s.count; i++) {
+        if (s.data[i] != '\r') bytes[count++] = s.data[i];
+    }
+    return {bytes, count};
+}
+
+TEST(panic_program_exits_101_with_its_message) {
+    // A program that prints a line, then panics, run as the test runner
+    // runs programs: stdout a pipe, so C buffers it and only exit's flush
+    // writes it out. The line must come out all the same, the message on
+    // stderr, and the status must be 101 on both systems.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    s32 before = add_string(m, "str.0", "before");
+    s32 message = add_string(m, "str.1", "x.rig:1:1: runtime error: test\n");
+    Ir_Proc *puts_proc = new_proc_returning(m, &a, "puts", IR_I32);
+    puts_proc->is_foreign = true;
+    ir_add_param(puts_proc, IR_PTR, IR_EXT_NONE);
+    // __rig_main :: () { puts("before"); panic }
+    Ir_Proc *rig_main = new_proc_returning(m, &a, "__rig_main", IR_VOID);
+    s32 b = ir_new_block(&a, rig_main);
+    Ir_Instr *address = ir_emit(rig_main, b, IR_ADDR, IR_PTR);
+    address->target = before;
+    Array<s32> args = {};
+    array_add(&args, address->result);
+    ir_emit_call(m, rig_main, b, 0, args);
+    ir_emit(rig_main, b, IR_PANIC, IR_VOID)->target = message;
+    // main() -> i32 { __rig_main(); return 0; }, which never gets to return.
+    Ir_Proc *entry = new_proc_returning(m, &a, "main", IR_I32);
+    entry->is_export = true;
+    s32 e = ir_new_block(&a, entry);
+    ir_emit_call(m, entry, e, 1, {});
+    emit_ret(entry, e, emit_const(entry, e, IR_I32, 0));
+
+    os_make_directory(str(".build"));
+#ifdef _WIN32
+    String object = str(".build/panic-test.obj"), program = str(".build/panic-test.exe");
+#else
+    String object = str(".build/panic-test.o"), program = str(".build/panic-test");
+#endif
+    String error = {};
+    bool emitted = llvm_emit_object(m, target_host(), object, &a, &error);
+    CHECK(emitted);
+    if (!emitted) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+    Array<String> objects = {};
+    array_add(&objects, object);
+    bool linked = emitted && link_executable(&a, target_host(), objects, program, &error);
+    CHECK(linked);
+    if (emitted && !linked) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+    Array<String> argv = {};
+    array_add(&argv, program);
+    Process_Result result = {};
+    bool ran = linked && os_run_for(&a, argv, {}, 60, &result);
+    CHECK(ran);
+    CHECK(!result.timed_out);
+    CHECK_STR(without_cr(&a, result.out), "before\n");
+    CHECK_STR(without_cr(&a, result.err), "x.rig:1:1: runtime error: test\n");
+    CHECK_EQ(result.exit_code, 101);
+    array_free(&objects);
+    array_free(&argv);
+    arena_free(&a);
+}
+
 TEST(windows_linker_falls_back_to_lld_link) {
     // link.exe when Visual Studio has it; otherwise the lld-link.exe
     // build.bat copied beside rig; otherwise a sentence.
