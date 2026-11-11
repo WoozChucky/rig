@@ -115,25 +115,31 @@ TEST(llvm_reports_a_module_that_doesnt_verify) {
     arena_free(&a);
 }
 
+TEST(llvm_reports_several_values_returned_from_a_one_result_procedure) {
+    // A ret of two values from a procedure with one result (or none) is
+    // another mistake only a lowering could make. The struct is built from
+    // the values' own types, so LLVM's verifier reports the mismatched
+    // return, as it reports any other; a struct of the procedure's return
+    // type would be no struct at all, and inserting into it malformed IR
+    // that an LLVM built with assertions stops on.
+    Arena a = arena_make();
+    for (int results = 0; results < 2; results++) {
+        Ir_Module *m = arena_new<Ir_Module>(&a);
+        Ir_Proc *p = new_proc_returning(m, &a, "f", results ? IR_I64 : IR_VOID);
+        s32 b = ir_new_block(&a, p);
+        s32 one = emit_const(p, b, IR_I64, 1), two = emit_const(p, b, IR_I32, 2);
+        Ir_Instr *ret = ir_emit(p, b, IR_RET, IR_VOID);
+        array_add(&ret->args, one);
+        array_add(&ret->args, two);
+        String text = {}, error = {};
+        CHECK(!llvm_ir_text(&a, m, target_host(), &text, &error));
+        CHECK(contains(error, "return"));
+        CHECK(!contains(error, "InsertValue"));  // the struct itself is well formed
+    }
+    arena_free(&a);
+}
+
 // Milestone 2a's backend, on IR built by hand (helpers.cpp, test_ir.cpp).
-
-// Where `needle` first occurs in `haystack`, or -1.
-static s64 index_of(String haystack, const char *needle) {
-    s64 n = (s64)strlen(needle);
-    for (s64 i = 0; i + n <= haystack.count; i++) {
-        if (memcmp(haystack.data + i, needle, (size_t)n) == 0) return i;
-    }
-    return -1;
-}
-
-// How many times `needle` occurs in `haystack`.
-static s64 count_of(String haystack, const char *needle) {
-    s64 n = (s64)strlen(needle), count = 0;
-    for (s64 i = 0; i + n <= haystack.count; i++) {
-        if (memcmp(haystack.data + i, needle, (size_t)n) == 0) count++;
-    }
-    return count;
-}
 
 // The module's LLVM text for target t; an empty string, and a failed check,
 // when it doesn't verify.
@@ -295,11 +301,15 @@ TEST(llvm_runtime_names_win_over_the_programs) {
     ir_emit_call(m, p, b, 1, args);
     ir_emit(p, b, IR_PANIC, IR_VOID)->target = message;
 
+    // A second declaration of exit would be renamed (exit.1, or another
+    // number: LLVM numbers its renamings across the module), and the call of
+    // the program's own would go to a function the linker can't find.
     String text = llvm_text(&a, m, TARGET_LINUX_X64);
     CHECK(contains(text, "declare i64 @write("));
     CHECK(contains(text, "define internal void @write.1()"));
     CHECK(contains(text, "call void @write.1()"));
     CHECK_EQ(count_of(text, "declare void @exit("), 1);
+    CHECK(!contains(text, "@exit."));
     CHECK(contains(text, "call void @exit(i32 3)"));
     CHECK(contains(text, "call void @exit(i32 101)"));
     // On Windows the runtime's is _write: no clash, the program's write
@@ -307,6 +317,34 @@ TEST(llvm_runtime_names_win_over_the_programs) {
     text = llvm_text(&a, m, TARGET_WINDOWS_X64);
     CHECK(contains(text, "define internal void @write()"));
     CHECK_EQ(count_of(text, "declare void @exit("), 1);
+    CHECK(!contains(text, "@exit."));
+    CHECK(contains(text, "call void @exit(i32 3)"));
+    CHECK(contains(text, "call void @exit(i32 101)"));
+
+    // A program's own global variable called write: the runtime's C write
+    // is declared before the globals too, so on Linux the global is the one
+    // renamed, and the program's load reads it under its new name.
+    m = arena_new<Ir_Module>(&a);
+    message = add_string(m, "str.0", "oops");
+    Ir_Global own_global = {};
+    own_global.name = str("write");
+    own_global.type = IR_I64;
+    array_add(&m->globals, own_global);
+    p = new_proc_returning(m, &a, "__rig_main", IR_VOID);
+    b = ir_new_block(&a, p);
+    Ir_Instr *address = ir_emit(p, b, IR_ADDR, IR_PTR);
+    address->target = 1;
+    Ir_Instr *load = ir_emit(p, b, IR_LOAD, IR_I64);
+    load->a = address->result;
+    ir_emit(p, b, IR_PANIC, IR_VOID)->target = message;
+    text = llvm_text(&a, m, TARGET_LINUX_X64);
+    CHECK(contains(text, "declare i64 @write("));
+    CHECK(contains(text, "@write.1 = internal global i64 0"));
+    CHECK(contains(text, "load i64, ptr @write.1"));
+    CHECK(contains(text, "call i64 @write(i32 2,"));
+    text = llvm_text(&a, m, TARGET_WINDOWS_X64);
+    CHECK(contains(text, "@write = internal global i64 0"));
+    CHECK(contains(text, "load i64, ptr @write"));
     arena_free(&a);
 }
 

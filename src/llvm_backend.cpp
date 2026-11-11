@@ -100,7 +100,7 @@ static LLVMTypeRef function_type(LLVMContextRef c, Ir_Proc *p, Arena *a) {
 //
 // The Windows x64 convention leaves the upper bits undefined, so the side
 // that receives a narrow value widens it itself. clang marks nothing on
-// x86_64-pc-windows-msvc but a bool, and neither does Rig.
+// x86_64-pc-windows-msvc but a bool, and Rig does the same.
 //
 // A bool (C's _Bool, Rig's bool, an i1) is marked zeroext on both: clang
 // does so on every target. A bool is passed as a whole byte or more, 0 or
@@ -132,7 +132,8 @@ static void mark_extensions(Backend *b, Ir_Proc *p, LLVMValueRef function_or_cal
         if (i == 0 && p->results.count != 1) continue;
         const char *name = extension_attribute(b->target, i == 0 ? p->results[0] : p->params[i - 1]);
         if (!name) continue;
-        LLVMAttributeRef attribute = LLVMCreateEnumAttribute(c, LLVMGetEnumAttributeKindForName(name, 7), 0);
+        unsigned kind = LLVMGetEnumAttributeKindForName(name, strlen(name));
+        LLVMAttributeRef attribute = LLVMCreateEnumAttribute(c, kind, 0);
         if (is_call) {
             LLVMAddCallSiteAttribute(function_or_call, (LLVMAttributeIndex)i, attribute);
         } else {
@@ -251,12 +252,17 @@ static LLVMIntPredicate llvm_predicate(Ir_Pred p) {
 }
 
 // One procedure's translation: its LLVM blocks, and each IR value's LLVM
-// value, by number.
+// value, by number; and the module's functions and globals, by IR index.
 struct Body {
     LLVMBuilderRef builder;
-    LLVMBasicBlockRef *blocks;
+    LLVMBasicBlockRef *blocks;  // block_count of them
+    s64 block_count;
     LLVMValueRef *values;  // value_count of them, null until defined
     s32 value_count;
+    LLVMValueRef *functions;  // one per Ir_Module.procs
+    s64 function_count;
+    LLVMValueRef *globals;  // one per Ir_Module.globals
+    s64 global_count;
 };
 
 // The LLVM value of %n. Blocks are translated in order, so a value used
@@ -267,26 +273,45 @@ static LLVMValueRef value(Body *body, s32 n) {
     return body->values[n];
 }
 
+// Block n's, procedure n's and global n's LLVM counterparts. An index out of
+// range (a jump whose target was never set, still ir_emit's -1) is a bug in
+// whatever made the IR: it stops here, where the mistake shows, instead of
+// reading past the array.
+static LLVMBasicBlockRef llvm_block(Body *body, s32 n) {
+    RIG_ASSERT(n >= 0 && n < body->block_count);
+    return body->blocks[n];
+}
+
+static LLVMValueRef llvm_function(Body *body, s32 n) {
+    RIG_ASSERT(n >= 0 && n < body->function_count);
+    return body->functions[n];
+}
+
+static LLVMValueRef llvm_global(Body *body, s32 n) {
+    RIG_ASSERT(n >= 0 && n < body->global_count);
+    return body->globals[n];
+}
+
 // One instruction, appended where the builder is.
-static void build_instr(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, Body *body, Ir_Instr *instr,
-                        LLVMValueRef *functions, LLVMValueRef *globals) {
+static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr *instr) {
     LLVMContextRef c = b->context;
     LLVMBuilderRef builder = body->builder;
     LLVMValueRef v = nullptr;
     switch (instr->op) {
     case IR_CONST: v = LLVMConstInt(llvm_type(c, instr->type), instr->constant, 0); break;
-    case IR_ADDR: v = globals[instr->target]; break;
+    case IR_ADDR: v = llvm_global(body, instr->target); break;
     case IR_CALL: {
         Ir_Proc *callee = m->procs[instr->target];
         LLVMValueRef *args = arena_new_array<LLVMValueRef>(a, instr->args.count ? instr->args.count : 1);
         for (s64 k = 0; k < instr->args.count; k++) args[k] = value(body, instr->args[k]);
-        LLVMValueRef call = LLVMBuildCall2(builder, function_type(c, callee, a), functions[instr->target], args,
-                                           (unsigned)instr->args.count, "");
+        LLVMValueRef call = LLVMBuildCall2(builder, function_type(c, callee, a), llvm_function(body, instr->target),
+                                           args, (unsigned)instr->args.count, "");
         mark_extensions(b, callee, call, true);
         if (callee->results.count == 1) {
             v = call;
         } else if (callee->results.count > 1) {
             // The struct taken apart: one value per result, consecutive.
+            RIG_ASSERT(instr->result >= 0 && instr->result + callee->results.count <= body->value_count);
             for (s64 k = 0; k < callee->results.count; k++) {
                 body->values[instr->result + k] = LLVMBuildExtractValue(builder, call, (unsigned)k, "");
             }
@@ -322,9 +347,10 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, Body *bo
     case IR_SELECT:
         v = LLVMBuildSelect(builder, value(body, instr->c), value(body, instr->a), value(body, instr->b), "");
         break;
-    case IR_JUMP: LLVMBuildBr(builder, body->blocks[instr->target]); break;
+    case IR_JUMP: LLVMBuildBr(builder, llvm_block(body, instr->target)); break;
     case IR_BRANCH:
-        LLVMBuildCondBr(builder, value(body, instr->c), body->blocks[instr->target], body->blocks[instr->target2]);
+        LLVMBuildCondBr(builder, value(body, instr->c), llvm_block(body, instr->target),
+                        llvm_block(body, instr->target2));
         break;
     case IR_RET:
         if (instr->args.count == 0) {
@@ -333,10 +359,20 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, Body *bo
             LLVMBuildRet(builder, value(body, instr->args[0]));
         } else {
             // Several results: the struct, built one field at a time from
-            // poison (a value with nothing in it yet), returned whole.
-            LLVMValueRef all = LLVMGetPoison(return_type(c, p, a));
+            // poison (a value with nothing in it yet), returned whole. Its
+            // type is the values' own, not taken from the procedure: when the
+            // two disagree (a ret of two values from a procedure with one
+            // result), the struct is still well formed and LLVM's verifier
+            // reports the mismatched return, as for 0 or 1 values.
+            LLVMValueRef *values = arena_new_array<LLVMValueRef>(a, instr->args.count);
+            LLVMTypeRef *fields = arena_new_array<LLVMTypeRef>(a, instr->args.count);
             for (s64 k = 0; k < instr->args.count; k++) {
-                all = LLVMBuildInsertValue(builder, all, value(body, instr->args[k]), (unsigned)k, "");
+                values[k] = value(body, instr->args[k]);
+                fields[k] = LLVMTypeOf(values[k]);
+            }
+            LLVMValueRef all = LLVMGetPoison(LLVMStructTypeInContext(c, fields, (unsigned)instr->args.count, 0));
+            for (s64 k = 0; k < instr->args.count; k++) {
+                all = LLVMBuildInsertValue(builder, all, values[k], (unsigned)k, "");
             }
             LLVMBuildRet(builder, all);
         }
@@ -345,7 +381,7 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, Body *bo
         // The message's bytes but the zero that ends them.
         Ir_Global *g = &m->globals[instr->target];
         RIG_ASSERT(g->type == IR_VOID && g->bytes.count > 0);
-        LLVMValueRef args[] = {globals[instr->target],
+        LLVMValueRef args[] = {llvm_global(body, instr->target),
                                LLVMConstInt(LLVMInt64TypeInContext(c), (u64)(g->bytes.count - 1), 0)};
         LLVMBuildCall2(builder, b->panic_type, b->panic, args, 2, "");
         LLVMBuildUnreachable(builder);
@@ -353,7 +389,10 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, Body *bo
     }
     case IR_UNREACHABLE: LLVMBuildUnreachable(builder); break;
     }
-    if (instr->result >= 0) body->values[instr->result] = v;
+    if (instr->result >= 0) {
+        RIG_ASSERT(instr->result < body->value_count);
+        body->values[instr->result] = v;
+    }
 }
 
 // One procedure's body. `functions` holds every procedure's LLVM function,
@@ -367,6 +406,7 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
     // Every LLVM block up front, named as the IR's, so a jump or a branch
     // can name a block that isn't built yet. The first is the entry.
     body.blocks = arena_new_array<LLVMBasicBlockRef>(a, p->blocks.count);
+    body.block_count = p->blocks.count;
     for (s64 k = 0; k < p->blocks.count; k++) {
         const char *name = string_cstr(a, string_printf(a, "b%lld", (long long)k));
         body.blocks[k] = LLVMAppendBasicBlockInContext(c, function, name);
@@ -374,6 +414,10 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
     body.values = arena_new_array<LLVMValueRef>(a, p->value_count ? p->value_count : 1);
     body.value_count = p->value_count;
     for (s64 i = 0; i < p->params.count; i++) body.values[i] = LLVMGetParam(function, (unsigned)i);
+    body.functions = functions;
+    body.function_count = m->procs.count;
+    body.globals = globals;
+    body.global_count = m->globals.count;
 
     // Every stack slot's alloca at the top of the entry block, whichever
     // block its IR_LOCAL is in. An alloca takes stack space each time it
@@ -396,7 +440,7 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
         LLVMPositionBuilderAtEnd(body.builder, body.blocks[k]);
         Ir_Block *block = p->blocks[k];
         for (s64 n = 0; n < block->instrs.count; n++) {
-            build_instr(b, a, m, p, &body, &block->instrs[n], functions, globals);
+            build_instr(b, a, m, &body, &block->instrs[n]);
         }
     }
     LLVMDisposeBuilder(body.builder);
