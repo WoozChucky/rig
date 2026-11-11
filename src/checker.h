@@ -19,6 +19,9 @@
 //   are in its body's block.
 // - A for loop declares its iterator (it, or the name in `for i: 0..9`,
 //   which is then declared instead of it) and it_index in its body's block.
+//   The iterator can't take it_index's name: `for it_index: 0..9` is "a
+//   loop's iterator can't be called 'it_index'", said at the name, and
+//   it_index is then the loop's index.
 // - A procedure's name used as a value: "procedures can only be called,
 //   for now". A call of one that returns nothing, used as a value: "'greet'
 //   returns nothing, so it has no value". A call of anything else (a local
