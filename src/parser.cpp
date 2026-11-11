@@ -264,15 +264,38 @@ static Token_Kind first_on_line(Parser *p, s64 start, s64 from, const Token_Kind
     return TOKEN_EOF;
 }
 
+// Whether the '(' at token `open` and its ')' are a signature's parameter
+// list, not a call's arguments: the ')' that closes it, on whatever line,
+// is followed by what only follows parameters, a body's '{', a return
+// type's '->' or a directive (`#foreign`). A call is followed by its ';'
+// (`foo("x");`, `foo(#run);`), or by the next line's code if the ';' is
+// missing. A '(' never closed before the next declaration (an identifier
+// starting a line, then '::') or the end shows no signature.
+static bool parameters_follow(Parser *p, s64 open) {
+    s64 depth = 0;
+    for (s64 i = open; p->tokens[i].kind != TOKEN_EOF; i++) {
+        Token *t = &p->tokens[i];
+        bool starts_line = p->tokens[i - 1].pos.line != t->pos.line;  // open >= 1: a name came before
+        if (i > open && starts_line && t->kind == TOKEN_IDENT && p->tokens[i + 1].kind == TOKEN_COLON_COLON) {
+            return false;
+        }
+        if (t->kind == TOKEN_LPAREN) depth++;
+        if (t->kind == TOKEN_RPAREN && --depth == 0) {
+            Token_Kind next = p->tokens[i + 1].kind;  // a token follows: the last is TOKEN_EOF
+            return next == TOKEN_LBRACE || next == TOKEN_ARROW || next == TOKEN_DIRECTIVE;
+        }
+    }
+    return false;
+}
+
 // Whether the declaration that failed at token `start`, an identifier,
 // looks like a declaration of that name, mistyped. That is the name
 // followed by:
 // - '::' (the mistake came later), or ':' for it (`greet : () {`);
 // - ':=' or '=' for it (`greet := () {`, the way a variable is declared);
 // - a character the lexer refused (perhaps a mistyped '::' too);
-// - '(' with no '::' (`greet () {`, a C habit), where the line has the
-//   shape of a signature: a '{', a '->' or a directive (`#foreign`) before
-//   any ';'. A call statement (`foo("x");`) reaches its ';' first;
+// - '(' with no '::' (`greet () {`, a C habit), when the parentheses are
+//   a signature's, as parameters_follow says, not a call's;
 // - stray tokens and then '::' on the same line (`greet * :: () {`),
 //   before any '(' or '{', which would begin a signature or a body.
 static bool looks_declared(Parser *p, s64 start) {
@@ -284,12 +307,7 @@ static bool looks_declared(Parser *p, s64 start) {
     case TOKEN_COLON_EQUAL:
     case TOKEN_EQUAL:
     case TOKEN_ERROR: return true;
-    case TOKEN_LPAREN: {
-        // After the '(': which comes first, a ';' or a signature's mark.
-        static const Token_Kind ENDS[] = {TOKEN_SEMICOLON, TOKEN_LBRACE, TOKEN_ARROW, TOKEN_DIRECTIVE};
-        Token_Kind first = first_on_line(p, start, start + 2, ENDS, 4);
-        return first != TOKEN_SEMICOLON && first != TOKEN_EOF;
-    }
+    case TOKEN_LPAREN: return parameters_follow(p, start + 1);
     default: {
         // A '::' later, before anything that begins a signature or a body.
         static const Token_Kind ENDS[] = {TOKEN_COLON_COLON, TOKEN_LPAREN, TOKEN_LBRACE};

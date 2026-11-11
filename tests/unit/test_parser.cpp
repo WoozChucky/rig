@@ -233,6 +233,13 @@ TEST(a_mistyped_declaration_keeps_its_name) {
     check_named_broken_greet(&a, "IDENT:greet ( IDENT:s : * IDENT:u8 ) -> IDENT:s32 #foreign IDENT:libc ;",
                              "1:3: expected '::', found '('\n");
     check_named_broken_greet(&a, "IDENT:greet ( ) #foreign IDENT:libc ;", "1:3: expected '::', found '('\n");
+    // What follows the ')' decides, wherever the lines break: the return
+    // type's '->', or the body's '{' on the next line, or parameters over
+    // two lines.
+    check_named_broken_greet(&a, "IDENT:greet ( ) -> IDENT:s32 | { }", "1:3: expected '::', found '('\n");
+    check_named_broken_greet(&a, "IDENT:greet ( ) | { }", "1:3: expected '::', found '('\n");
+    check_named_broken_greet(&a, "IDENT:greet ( IDENT:s : * IDENT:u8 , | IDENT:n : IDENT:s32 ) { }",
+                             "1:3: expected '::', found '('\n");
     arena_free(&a);
 }
 
@@ -249,6 +256,22 @@ TEST(a_name_is_kept_only_where_a_declaration_could_be) {
     dump = parse_dump(&a, "IDENT:main :: ( ) { } | IDENT:foo ( ) ; { }", &errors);
     CHECK_STR(errors, "2:3: expected '::', found '('\n");
     CHECK_STR(dump, "(proc main (params) (block))\n(broken)\n");
+    // A directive inside the parentheses is an argument, not a signature's
+    // #foreign: what follows the ')' is a ';'.
+    dump = parse_dump(&a, "IDENT:main :: ( ) { } | IDENT:foo ( #run ) ;", &errors);
+    CHECK_STR(errors, "2:3: expected '::', found '('\n");
+    CHECK_STR(dump, "(proc main (params) (block))\n(broken)\n");
+    // A call with its ';' left out, at the end of the file or before the
+    // next declaration, is still a call.
+    dump = parse_dump(&a, "IDENT:main :: ( ) { } | IDENT:foo ( STRING:x )", &errors);
+    CHECK_STR(errors, "2:3: expected '::', found '('\n");
+    CHECK_STR(dump, "(proc main (params) (block))\n(broken)\n");
+    dump = parse_dump(&a, "IDENT:foo ( STRING:x ) | IDENT:main :: ( ) { }", &errors);
+    CHECK_STR(errors, "1:3: expected '::', found '('\n");
+    CHECK_STR(dump, "(broken)\n(proc main (params) (block))\n");
+    // Parentheses never closed: no signature to see, so no name.
+    dump = parse_dump(&a, "IDENT:foo ( STRING:x | IDENT:main :: ( ) { }", &errors);
+    CHECK_STR(dump, "(broken)\n(proc main (params) (block))\n");
 
     // A token the lexer refused right after the name ('greet @:: ...') may
     // be a mistyped '::': the name is kept.
