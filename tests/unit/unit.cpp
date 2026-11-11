@@ -3,7 +3,7 @@
 // new test file is added to the list at the end.
 //
 //   bin/unit-tests              every test
-//   bin/unit-tests lex          the tests whose names contain "lex"
+//   bin/unit-tests lex          the tests whose names, or files' names, contain "lex"
 //   bin/unit-tests --self-test  checks that the harness can fail
 
 #include "../../src/all.cpp"
@@ -13,6 +13,7 @@ static const int MAX_TESTS = 4096;
 
 struct Test_Case {
     const char *name;
+    const char *file;
     Test_Function function;
 };
 
@@ -20,9 +21,9 @@ static Test_Case test_cases[MAX_TESTS];
 static int test_case_count;
 static bool current_test_failed;
 
-void test_register(const char *name, Test_Function function) {
+void test_register(const char *name, const char *file, Test_Function function) {
     RIG_ASSERT(test_case_count < MAX_TESTS);
-    test_cases[test_case_count++] = {name, function};
+    test_cases[test_case_count++] = {name, file, function};
 }
 
 void test_fail(const char *file, int line, const char *message) {
@@ -33,6 +34,21 @@ void test_fail(const char *file, int line, const char *message) {
 void test_fail_values(const char *file, int line, const char *check, s64 a, s64 b) {
     fprintf(stderr, "%s:%d: %s failed: %lld != %lld\n", file, line, check, (long long)a, (long long)b);
     current_test_failed = true;
+}
+
+// Doesn't use the String functions of base.h: the harness must work while
+// they're still being written.
+void test_check_str(const char *file, int line, const char *check, String actual, const char *expected) {
+    s64 n = (s64)strlen(expected);
+    if (actual.count == n && (n == 0 || memcmp(actual.data, expected, (size_t)n) == 0)) return;
+    fprintf(stderr, "%s:%d: %s failed:\n  got      \"%.*s\"\n  expected \"%s\"\n", file, line, check,
+            (int)actual.count, (const char *)actual.data, expected);
+    current_test_failed = true;
+}
+
+void test_check_str(const char *file, int line, const char *check, const char *actual, const char *expected) {
+    String s = {(const u8 *)actual, actual ? (s64)strlen(actual) : 0};
+    test_check_str(file, line, check, s, expected);
 }
 
 static bool ends_with(const char *s, const char *suffix) {
@@ -75,7 +91,7 @@ int main(int argc, char **argv) {
     int passed = 0, failed = 0;
     for (int i = 0; i < test_case_count; i++) {
         Test_Case *test = &test_cases[i];
-        if (ends_with(test->name, "_deliberately") || !strstr(test->name, filter)) continue;
+        if (ends_with(test->name, "_deliberately") || !(strstr(test->name, filter) || strstr(test->file, filter))) continue;
         if (run_test(test)) {
             passed++;
         } else {
@@ -89,3 +105,4 @@ int main(int argc, char **argv) {
 
 // The test files.
 #include "test_harness.cpp"
+#include "test_base.cpp"
