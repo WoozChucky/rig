@@ -40,6 +40,12 @@
                 "path": "./syntaxes/rig.tmLanguage.json"
             }
         ],
+        "snippets": [
+            {
+                "language": "rig",
+                "path": "./snippets/rig.json"
+            }
+        ],
         "problemMatchers": [
             {
                 "name": "rig",
