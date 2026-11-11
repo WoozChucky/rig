@@ -95,7 +95,7 @@ struct Ast_Var : Ast {
     Ast *value;             // null: zeroed, or left uninitialised (---)
     bool is_uninitialized;  // = ---
     bool is_global;         // declared at the top level (Task 5)
-    bool is_iterator;       // a for loop's it, it_index or named iterator: read-only (Task 3)
+    bool is_iterator;       // a for loop's it, it_index or named iterator: read-only
 };
 
 // A constant: `N :: e;`. The checker folds e, so the constant's value is in

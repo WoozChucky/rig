@@ -392,3 +392,24 @@ TEST(llvm_variable_global) {
     CHECK(contains(text, "load i64, ptr @counter"));
     arena_free(&a);
 }
+
+TEST(llvm_bool_parameter_from_rig_is_zeroext) {
+    // A Rig bool is C's _Bool: an i1, marked zeroext on both targets, on Rig
+    // procedures and foreign ones alike, and on the calls to them.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "isok :: (b: bool) -> bool #foreign libc;\n"
+                                "flip :: (b: bool) -> bool { return !b; }\n"
+                                "main :: () {\n"
+                                "    x := flip(true);\n"
+                                "    y := isok(x);\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "declare zeroext i1 @isok(i1 zeroext)"));
+        CHECK(contains(text, "define internal zeroext i1 @flip(i1 zeroext %0)"));
+        CHECK(contains(text, "call zeroext i1 @flip(i1 zeroext true)"));
+        CHECK(contains(text, "call zeroext i1 @isok(i1 zeroext %"));
+    }
+    arena_free(&a);
+}

@@ -1,0 +1,25 @@
+// if, else if, else and while (spec 6.1). The chain picks one letter for
+// each of 1 to 4, ABCD; the while counts down from 3 to 0, 3210.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+main :: () {
+    for 1..4 {
+        if it == 1 {
+            putchar(65);
+        } else if it == 2 {
+            putchar(66);
+        } else if it == 3 {
+            putchar(67);
+        } else {
+            putchar(68);
+        }
+    }
+    putchar(10);
+
+    n : s32 = 3;
+    while n >= 0 {
+        putchar(48 + n);
+        n -= 1;
+    }
+    putchar(10);
+}
