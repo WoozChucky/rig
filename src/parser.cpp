@@ -3,7 +3,9 @@
 // Each parse_ function reads one rule and returns its node, or null after
 // reporting an error. A null travels up to parse_declaration, which gives up
 // on that declaration; parse() keeps a broken entry for it (its name alone)
-// and skips to the next one.
+// and skips to the next one. When only stray tokens came before a
+// declaration on the same line (`*greet :: () {}`), it resumes at that
+// declaration instead, without an entry.
 
 #include "parser.h"
 
