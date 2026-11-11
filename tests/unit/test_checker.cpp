@@ -268,6 +268,21 @@ TEST(a_directive_where_the_name_goes_declares_the_name) {
     arena_free(&a);
 }
 
+TEST(a_mistyped_declaration_declares_its_name) {
+    // greet's declaration written wrong is one mistake, one message: main's
+    // call to greet isn't reported as unknown too.
+    Arena a = arena_make();
+    CHECK_STR(errors_after_parse(&a, "IDENT:main :: ( ) { IDENT:greet ( ) ; } | IDENT:greet ( ) { }"),
+              "2:3: expected '::', found '('\n");
+    CHECK_STR(errors_after_parse(&a, "IDENT:main :: ( ) { IDENT:greet ( ) ; } | IDENT:greet := ( ) { }"),
+              "2:3: expected '::', found ':='\n");
+    CHECK_STR(errors_after_parse(&a, "IDENT:main :: ( ) { IDENT:greet ( ) ; } | IDENT:greet = ( ) { }"),
+              "2:3: expected '::', found '='\n");
+    CHECK_STR(errors_after_parse(&a, "IDENT:main :: ( ) { IDENT:greet ( ) ; } | IDENT:greet * :: ( ) { }"),
+              "2:3: expected '::', found '*'\n");
+    arena_free(&a);
+}
+
 TEST(a_stray_call_outside_a_body_declares_nothing) {
     // main's call to the undeclared foo is reported now, not only once the
     // stray line is deleted.
