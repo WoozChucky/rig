@@ -1,8 +1,11 @@
 // helpers.cpp: test helpers shared by the parser's, checker's, IR's, LLVM
 // backend's and linker's tests.
 //
-// toks() builds tokens by hand from a compact description, so those tests
-// don't depend on the lexer. Each word is one token:
+// Two ways to get tokens. src() lexes real source text, the way rig build
+// does; milestone 2's tests use it, since the lexer is complete and source
+// is much easier to read than a token description. toks(), from milestone
+// 1, builds tokens by hand from a compact description, so those tests don't
+// depend on the lexer. Each word is one token:
 //   IDENT:puts  INT:3  STRING:Hello,~World!  #foreign  ::  (  if  |
 // STRING's text uses ~ for a space. | starts a new line and isn't a token.
 // Any other word is punctuation or a keyword, found by its name in
@@ -84,6 +87,18 @@ static Token_List *toks(const char *description) {
     eof.kind = TOKEN_EOF;
     eof.pos = {0, line, col};
     array_add(&list->tokens, eof);
+    return list;
+}
+
+// The tokens of `text`, lexed as the file test.rig, in a Token_List the
+// caller frees with token_list_free. The text must lex without errors: the
+// tests that use this are about the stages after the lexer. Positions are
+// the real ones, so "2:5" is line 2, column 5 of `text`.
+static Token_List *src(const char *text) {
+    Token_List *list = (Token_List *)calloc(1, sizeof(Token_List));
+    s32 file = diag_add_file(&list->diag, str("test.rig"), str(text));
+    list->tokens = lex(&list->diag, file, &list->arena);
+    RIG_ASSERT(list->diag.error_count == 0);
     return list;
 }
 

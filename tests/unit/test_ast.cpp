@@ -16,8 +16,9 @@ TEST(dump_of_hand_built_hello) {
     s->type_expr = ast_new<Ast_Type>(&a, AST_TYPE_POINTER, at);
     s->type_expr->pointee = u8_type;
     array_add(&puts->params, s);
-    puts->return_type = ast_new<Ast_Type>(&a, AST_TYPE_NAME, at);
-    puts->return_type->name = str("s32");
+    Ast_Type *s32_type = ast_new<Ast_Type>(&a, AST_TYPE_NAME, at);
+    s32_type->name = str("s32");
+    array_add(&puts->results, s32_type);
     puts->is_foreign = true;
     puts->foreign_library = str("libc");
 
@@ -71,7 +72,7 @@ TEST(nodes_start_zeroed) {
     CHECK_EQ(p->pos.line, 3);
     CHECK_EQ(p->pos.col, 7);
     CHECK(p->body == nullptr);
-    CHECK(p->return_type == nullptr);
+    CHECK_EQ(p->results.count, 0);
     CHECK(p->type == nullptr);
     CHECK_EQ(p->params.count, 0);
     arena_free(&a);

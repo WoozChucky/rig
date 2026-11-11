@@ -96,7 +96,7 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     array_free(&arg_types);
     // A procedure whose return type is unknown gives an unknown type, so
     // nothing is said about it again.
-    if (proc->return_type) return proc->return_type->type;
+    if (proc->results.count) return proc->results[0]->type;
     return &type_void;
 }
 
@@ -132,12 +132,12 @@ static void check_signature(Checker *c, Ast_Proc *proc) {
         Ast_Param *param = proc->params[i];
         param->type = resolve_type(c, param->type_expr);
     }
-    if (proc->return_type) {
-        proc->return_type->type = resolve_type(c, proc->return_type);
+    if (proc->results.count) {
+        proc->results[0]->type = resolve_type(c, proc->results[0]);
         // main says so itself (check()). Elsewhere: a body that can't return
         // anything mustn't promise a value.
         if (proc->body && !string_eq(proc->name, str("main"))) {
-            diag_error(c->diag, proc->return_type->pos,
+            diag_error(c->diag, proc->results[0]->pos,
                        "'" STR_FMT "' can't return a value: Rig has no return statement yet", STR_ARG(proc->name));
         }
     }
@@ -208,7 +208,7 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
         if (!lost_a_name) diag_error(d, {0, 1, 1}, "a procedure called 'main' is needed");
     } else if (!(*main_proc)->is_broken) {
         Ast_Proc *m = *main_proc;
-        if (m->params.count > 0 || m->return_type) {
+        if (m->params.count > 0 || m->results.count) {
             diag_error(d, m->pos, "'main' must take no arguments and return nothing");
         }
         if (!m->body) diag_error(d, m->pos, "'main' must have a body: it's where the program starts");
