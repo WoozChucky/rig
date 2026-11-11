@@ -82,6 +82,7 @@ All of section 6 is **Jai's way** by Nuno's decision unless marked.
 ### 6.1 Syntax
 - `name : type = value;`, `name := value;` (inferred), `name :: value;` (constant). Procedures, structs and constants are declared the same way: `square :: (x: int) -> int { return x * x; }`, `Vec2 :: struct { x: float; y: float; }`.
 - `for 0..9 { ... }` (both ends included: ten iterations) with `it` (and `it_index`), or a named iterator `for i: 0..9`; `if` and `while` without parentheses (optional, as in Jai); semicolons. The grammar can be parsed without knowing which names are types.
+- Milestone 2a's details (Claude's calls, from its plan): binary operators bind as in Go, loosest first `||`, `&&`, comparisons, `+ - | ^`, `* / % << >> &`, all left-associative (so `x & 1 == 0` means `(x & 1) == 0`, unlike C); then the prefix operators `- ! ~ cast`, then calls. The bodies of `if`, `else`, `while` and `for` are always blocks in braces. Conditions are `bool`; an integer isn't one. Parameters are read-only: copy one into a variable to change it. `for a..b` evaluates both ends once and runs for every value from `a` to `b`, none when `a > b`, correctly at a type's limits; `it` and `it_index` (an `int` from 0) are read-only, and a named iterator (`for i: 0..9`) hides `it`. Procedures are declared only at the top level, for now.
 
 ### 6.2 Code organisation
 - Structs and free procedures. Composition through `using`. No methods inside structs, no classes, inheritance or virtual functions. Interfaces, where wanted, are structs of procedure pointers or generic procedures.
@@ -92,6 +93,13 @@ All of section 6 is **Jai's way** by Nuno's decision unless marked.
 ### 6.4 Types, integers and undefined behaviour
 - `s8 s16 s32 s64`, `u8 u16 u32 u64`, `int` = `s64`, `bool`, `float32`, `float64` (`float` = `float32`).
 - Widening conversions are implicit; narrowing needs `cast`. Narrowing casts that lose information are checked at run time in debug builds.
+- Milestone 2a's details (Claude's calls, from its plan):
+  - Integer constants are untyped until they meet a type, and must fit it (`x : u8 = 300;` is an error); alone they're `int`. Arithmetic on untyped constants is exact within `int`'s range. A literal above `int`'s range is a `u64`.
+  - No integer promotion: `u8 + u8` is a `u8` and wraps at 8 bits. Mixed types widen when one converts implicitly to the other (same sign and wider, or unsigned into a wider signed); otherwise, as for `u32 + s32`, a `cast` decides. A shift has its left operand's type.
+  - `cast(T) x` is checked (the value must be the same number in `T`); `cast,trunc(T) x` is C's conversion, keeping the low bits, unchecked: the way to wrap on purpose. A float cast to an integer truncates and saturates (the rule below), unchecked.
+  - `%` truncates toward zero, its sign the dividend's, as in C; the most negative value divided by -1 wraps to itself, remainder 0. A constant divisor of 0 is a compile error.
+  - A runtime error prints `PATH:LINE:COL: runtime error: MESSAGE` to stderr and exits with status 101 (after C's `exit` flushes the output), on every system.
+  - A float literal alone is a `float32` (`float`); `float32` widens to `float64` implicitly; integers and floats convert only by `cast`.
 - **How far "no undefined behaviour" reaches: Jai's realistic approach** (Nuno chose option B over a strict guarantee that would slow release builds and deny LLVM most optimisations):
   - **Always defined, in every build, optimised or not** (Claude's rules, accepted by Nuno):
     - integer overflow wraps (two's complement): the compiler never gives LLVM `nsw`/`nuw`;
@@ -118,7 +126,7 @@ All of section 6 is **Jai's way** by Nuno's decision unless marked.
 - **The memory debugger** in debug builds (how "the language tells the programmer"): every allocation recorded with a stack trace; leaks reported at exit; double frees reported with both stack traces; freed memory poisoned; optionally freed pages made inaccessible so a use-after-free crashes at the bad line. Off in release builds.
 
 ### 6.7 Errors
-- Plain **multiple return values**; nothing special for errors. No exceptions.
+- Plain **multiple return values**; nothing special for errors. No exceptions. Written (Claude's call, as Jai shows it) `divmod :: (a: int, b: int) -> int, int { return a / b, a % b; }`, received by `q, r := divmod(7, 2);` or `q, r = divmod(7, 2);`; a call used as one value gives its first result.
 - Ignoring a returned value is allowed. Any warning about it can be switched off; warnings never block a build unless asked to.
 
 ### 6.8 Generics
@@ -187,6 +195,8 @@ All of section 6 is **Jai's way** by Nuno's decision unless marked.
   5. **Generating LLVM for `if`, `while` and `for`** (milestone 2): basic blocks and branches through the LLVM C API.
   6. **Encoding a set of x86-64 instructions** (milestone 8): the first piece of the own backend, against Intel's manual.
 
+  **Milestone 2 (Nuno, 2026-11-11): Claude writes all of it**, pieces 3 to 5 included, as `mine` issues. They stay in this list as the places to study: the Pratt parser (`src/parser.cpp`), integer type-checking (`src/check_expr.cpp`) and the lowering of `if`, `while` and `for` (`src/lower.cpp`), each commented to be read. Nuno reviews the pull requests.
+
   Pieces 1 and 2 are on milestone 1's critical path on purpose: hello world waits for them, and that's the point. Claude builds the rest of milestone 1 (driver, parser for the subset, checker, IR, LLVM backend, linking, test runner) alongside, against the interfaces given in the issues, so nothing else waits. More pieces may be added as Nuno goes.
 
 ## 11. Milestones (Claude's proposed order)
@@ -197,7 +207,10 @@ All of section 6 is **Jai's way** by Nuno's decision unless marked.
    main :: () { puts("Hello, World!"); }
    ```
    Needs: the `rig` command; lexer; parser and checker for this subset (with positions in errors from day one); the IR; the LLVM backend writing an object file; linking (`link.exe` on Windows, the bundled `lld` on Linux) with the C runtime; an end-to-end test on both platforms.
-2. **The core language**: integers and the UB rules; variables, `if`/`while`/`for`, procedures, multiple return values; structs, pointers, arrays, views, strings; bounds checks; debug info (PDB, DWARF).
+2. **The core language**, in three parts (Nuno, 2026-11-11):
+   - **2a**: integers, bools and floats with the UB rules; variables, constants and globals; `if`/`while`/`for`; procedures with parameters and several return values. FizzBuzz runs. (Plan: `docs/superpowers/plans/2026-11-11-milestone-2a-core-language.md`.)
+   - **2b**: structs, pointers, arrays, views, strings; bounds checks.
+   - **2c**: debug info (PDB on Windows, DWARF on Linux), so a debugger steps through Rig source.
 3. **Compile-time execution**: the IR interpreter, `#run`, the build file (`build.rig`).
 4. **The `Basic` module**: `print` (`Any`, type info), the context and allocators, temporary storage, `defer`, growable arrays, the memory debugger.
 5. **The rest of the type system**: generics (`$T`, `#modify`), enums, `enum_flags`, unions, tagged unions, operator overloading.
