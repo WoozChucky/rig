@@ -54,14 +54,14 @@ TEST(arena_reset_keeps_its_blocks) {
     // arena holds no more than before, round after round, even when a big
     // request comes first and grows every round.
     Arena a = arena_make(1024);
-    u8 *first_small = nullptr;
+    u8 *first_seen = nullptr;
     u64 held = 0;
     for (int round = 0; round < 5; round++) {
         arena_alloc(&a, 5000 + 100 * (u64)round);  // bigger than a block
-        u8 *small = (u8 *)arena_alloc(&a, 16);
+        u8 *mine = (u8 *)arena_alloc(&a, 16);
         for (int i = 0; i < 200; i++) arena_alloc(&a, 16);
-        if (round == 0) first_small = small;
-        CHECK(small == first_small);
+        if (round == 0) first_seen = mine;
+        CHECK(mine == first_seen);
         arena_reset(&a);
         if (round == 0) held = arena_reserved(&a);
         CHECK_EQ(arena_reserved(&a), held);

@@ -12,3 +12,16 @@
 #include "diag.cpp"
 #include "tokens.cpp"
 #include "lexer.cpp"
+#include "ast.cpp"
+#include "parser.cpp"
+#include "types.cpp"
+#include "checker.cpp"
+#include "ir.cpp"
+#include "llvm_backend.cpp"
+#include "llvm_compression_stubs.cpp"
+#include "link.cpp"
+#ifdef _WIN32
+#include "link_windows.cpp"
+#else
+#include "link_linux.cpp"
+#endif
