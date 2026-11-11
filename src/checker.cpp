@@ -128,8 +128,8 @@ static Type *check_target(Checker *c, Ast *target) {
             name->type = decl->type;
             return decl->type;
         }
-        // it_index is the only one by that name: an iterator named
-        // it_index too would be declared twice.
+        // it_index is the only one by that name: check_for reports an
+        // iterator called it_index and doesn't declare it.
         what = string_eq(var->name, str("it_index")) ? "the loop's index" : "the loop's iterator";
         break;
     }
@@ -260,7 +260,15 @@ static void check_for(Checker *c, Ast_For *loop) {
     loop->iterator->type = t;
     loop->index->type = &type_int;
     push_scope(c);
-    declare(c, loop->iterator->name, loop->iterator);
+    // Every loop has an it_index, so an iterator can't take that name; said
+    // at the name, which is the user's mistake (declaring both would point
+    // the "already declared" message at the 'for' instead). The body's
+    // it_index is then the loop's index.
+    if (string_eq(loop->iterator->name, loop->index->name)) {
+        diag_error(c->diag, loop->iterator->pos, "a loop's iterator can't be called 'it_index'");
+    } else {
+        declare(c, loop->iterator->name, loop->iterator);
+    }
     declare(c, loop->index->name, loop->index);
     check_loop_body(c, loop, loop->body);
     pop_scope(c);

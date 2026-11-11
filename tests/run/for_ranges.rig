@@ -1,8 +1,9 @@
 // for a..b runs for every value from a to b, both included, and stops
 // there, even at the end of its type: a u8 iterator over 0..255 runs 256
-// times (it must not go on to 256, which a u8 can't hold), and a range
-// ending at the largest s64 ends. Each line is printed only when its loop
-// ran the right number of times.
+// times (it must not go on to 256, which a u8 can't hold), a range ending
+// at the largest s64 ends, and signed ranges below zero run (-2..2, and an
+// s8's -128..127). Each line is printed only when its loop ran the right
+// number of times.
 puts :: (s: *u8) -> s32 #foreign libc;
 
 main :: () {
@@ -29,6 +30,29 @@ main :: () {
     count = 0;
     for 9223372036854775806..9223372036854775807 { count += 1; }
     if count == 2 { puts("two"); }
+
+    // A signed range across zero: -2..2 runs 5 times. The test for an
+    // empty range must compare signed: unsigned, -2 is a huge number, and
+    // the loop would run none.
+    count = 0;
+    last_index = 0;
+    for -2..2 {
+        count += 1;
+        last_index = it_index;
+    }
+    if count == 5 && last_index == 4 { puts("across zero"); }
+
+    // An s8 iterator over its whole type, -128..127: 256 times, and it
+    // stops at 127, which an s8 can't go past.
+    lo8 : s8 = -128;
+    hi8 : s8 = 127;
+    count = 0;
+    last8 : s8;
+    for lo8..hi8 {
+        count += 1;
+        last8 = it;
+    }
+    if count == 256 && last8 == 127 { puts("s8"); }
 
     // break leaves the loop at 3: 1 and 2 were counted.
     count = 0;
