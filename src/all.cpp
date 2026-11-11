@@ -11,6 +11,7 @@
 #endif
 #include "diag.cpp"
 #include "tokens.cpp"
+#include "lexer.cpp"
 #include "ast.cpp"
 #include "parser.cpp"
 #include "types.cpp"

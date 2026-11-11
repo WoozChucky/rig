@@ -1,5 +1,5 @@
-// test_base.cpp: the containers' tests (issue #3). Written before the
-// containers, so they fail until the work is done.
+// test_base.cpp: the containers' tests (issue #3), most written before the
+// containers from the contract in base.h.
 
 #include "test.h"
 
