@@ -1,6 +1,6 @@
 // test_ir.cpp: lowering checked trees to Rig's IR (issue #10, with tokens
-// by hand; issue #33, from real source), and the IR's builders and printing
-// (issue #32), with IR by hand (helpers.cpp).
+// by hand; issues #33 and #34, from real source), and the IR's builders and
+// printing (issue #32), with IR by hand (helpers.cpp).
 
 #include "test.h"
 
@@ -320,7 +320,8 @@ TEST(nothing_is_lowered_after_a_return) {
 // lowering makes it.
 
 // max :: (a: int, b: int) -> int { if a > b { return a; } return b; }, as
-// lowering will make it: three blocks, a comparison and a branch.
+// lowering makes it (lowering_makes_the_hand_built_max): three blocks, a
+// comparison and a branch.
 static Ir_Module *max_module(Arena *a) {
     Ir_Module *m = arena_new<Ir_Module>(a);
     Ir_Proc *p = new_proc_returning(m, a, "max", IR_I64);
@@ -758,5 +759,16 @@ TEST(a_body_that_never_ends_has_no_ret) {
               "b3:\n"
               "  unreachable\n"
               "}\n");
+    arena_free(&a);
+}
+
+TEST(lowering_makes_the_hand_built_max) {
+    // max_module was built by hand, before lowering could make it, as
+    // lowering would: an if without an else that returns, then a return.
+    Arena a = arena_make();
+    String lowered = ir_print(&a, lower_source(&a,
+                                               "max :: (a: int, b: int) -> int { if a > b { return a; } return b; }\n"
+                                               "main :: () { }\n"));
+    CHECK_STR(proc_ir(lowered, "max"), string_cstr(&a, proc_ir(ir_print(&a, max_module(&a)), "max")));
     arena_free(&a);
 }

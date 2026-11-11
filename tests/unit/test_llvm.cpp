@@ -1,4 +1,5 @@
-// test_llvm.cpp: Rig's IR to LLVM IR and object files (issues #10 and #32).
+// test_llvm.cpp: Rig's IR to LLVM IR and object files (issues #10, #32 and
+// #34).
 // Uses test_ir.cpp's HELLO and max_module.
 
 #include "test.h"
