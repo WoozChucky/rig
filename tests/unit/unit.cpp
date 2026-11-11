@@ -162,3 +162,4 @@ int main(int argc, char **argv) {
 #include "test_ast.cpp"
 #include "helpers.cpp"
 #include "test_parser.cpp"
+#include "test_checker.cpp"
