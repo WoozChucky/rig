@@ -362,3 +362,53 @@ TEST(unterminated_comment_is_an_error) {
     if (l->tokens.count > 0) CHECK_EQ(l->tokens[l->tokens.count - 1].kind, TOKEN_EOF);
     lexed_free(l);
 }
+
+TEST(any_bytes_lex_without_crashing) {
+    // Thousands of short files of random bytes, drawn mostly from the ones
+    // that start or end tokens, zero bytes and UTF-8 included. Whatever the
+    // input: exactly one TOKEN_EOF, last; every token's text inside the
+    // file; positions that never go backwards; and an error token exactly
+    // when an error was reported.
+    const char alphabet[] = "\"\\/*#0xbe._1a9 \t\r\n;:<>=-+'@\x01\x80\xC3\xA7\xEF\xBB\xBF";
+    u64 seed = 12345;
+    for (int round = 0; round < 3000; round++) {
+        u8 bytes[64];
+        s64 count = (s64)(seed % 65);
+        for (s64 i = 0; i < count; i++) {
+            seed = seed * 6364136223846793005ull + 1442695040888963407ull;  // Knuth's MMIX generator
+            u64 pick = (seed >> 33) % (sizeof alphabet + 1);
+            bytes[i] = pick < sizeof alphabet - 1 ? (u8)alphabet[pick] : (u8)(seed >> 56);
+        }
+        seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+
+        Arena arena = {};
+        Diagnostics diag = {};
+        String text = {bytes, count};
+        s32 file = diag_add_file(&diag, str("random.rig"), text);
+        Array<Token> tokens = lex(&diag, file, &arena);
+
+        s64 errors = 0;
+        bool ok = tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF;
+        for (s64 i = 0; ok && i < tokens.count; i++) {
+            Token *t = &tokens[i];
+            if (t->kind == TOKEN_EOF && i != tokens.count - 1) ok = false;
+            if (t->kind == TOKEN_ERROR) errors++;
+            if (t->text.count > 0 && (t->text.data < bytes || t->text.data + t->text.count > bytes + count)) ok = false;
+            if (i > 0) {
+                Position p = tokens[i - 1].pos, q = t->pos;
+                if (q.line < p.line || (q.line == p.line && q.col < p.col)) ok = false;
+            }
+        }
+        if ((errors > 0) != (diag.error_count > 0)) ok = false;
+        if (!ok) {
+            CHECK(ok);
+            fprintf(stderr, "  round %d, %lld bytes:", round, (long long)count);
+            for (s64 i = 0; i < count; i++) fprintf(stderr, " %02x", bytes[i]);
+            fprintf(stderr, "\n");
+        }
+        array_free(&tokens);
+        diag_free(&diag);
+        arena_free(&arena);
+        if (!ok) break;
+    }
+}
