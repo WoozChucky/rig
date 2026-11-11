@@ -45,6 +45,7 @@ static String take_message(Arena *a, char *message) {
 
 // What one translation needs, freed together by backend_free.
 struct Backend {
+    Target target;
     LLVMContextRef context;
     LLVMModuleRef module;
     LLVMTargetMachineRef machine;
@@ -69,6 +70,45 @@ static LLVMTypeRef function_type(LLVMContextRef c, Ir_Proc *p, Arena *a) {
     return LLVMFunctionType(llvm_type(c, p->return_type), params, (unsigned)p->params.count, 0);
 }
 
+// Widening an i8 or i16 parameter or return value (Ir_Ext).
+//
+// On Linux, gcc and clang widen an i8 or i16 argument to 32 bits at the
+// call, by its sign. The System V document doesn't say so, but clang-built
+// code relies on it: a callee taking a short may use its 32-bit register as
+// it is, without widening it again. LLVM widens only what's marked signext
+// or zeroext, on the function and on each call, so clang marks every such
+// parameter on x86_64-pc-linux-gnu, and every such return value too (the
+// callee then widens what it returns).
+//
+// The Windows x64 convention leaves the upper bits undefined, so the side
+// that receives a narrow value widens it itself. clang marks nothing on
+// x86_64-pc-windows-msvc (only a bool, which Rig doesn't have yet), and
+// neither does Rig.
+//
+// Both checked against clang 20's -S -emit-llvm for `signed char f(signed
+// char, unsigned char, short, unsigned short)` on the two triples.
+//
+// Rig's own procedures are marked like foreign ones, as clang marks a static
+// C function: one rule for every function and every call to it, so a call
+// and its callee always agree on who widens.
+static void mark_extensions(Backend *b, Ir_Proc *p, LLVMValueRef function_or_call, bool is_call) {
+    if (b->target != TARGET_LINUX_X64) return;
+    LLVMContextRef c = b->context;
+    // LLVM's attribute index: 0 is the return value, i the i-th parameter
+    // counting from 1.
+    for (s64 i = 0; i <= p->params.count; i++) {
+        Ir_Ext e = i == 0 ? p->return_ext : p->params[i - 1].ext;
+        if (e == IR_EXT_NONE) continue;
+        const char *name = e == IR_EXT_SIGN ? "signext" : "zeroext";
+        LLVMAttributeRef attribute = LLVMCreateEnumAttribute(c, LLVMGetEnumAttributeKindForName(name, 7), 0);
+        if (is_call) {
+            LLVMAddCallSiteAttribute(function_or_call, (LLVMAttributeIndex)i, attribute);
+        } else {
+            LLVMAddAttributeAtIndex(function_or_call, (LLVMAttributeIndex)i, attribute);
+        }
+    }
+}
+
 // One procedure's body. `functions` holds every procedure's LLVM function,
 // by IR index, `globals` every global's.
 static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValueRef function,
@@ -89,6 +129,7 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
             for (s64 k = 0; k < instr->args.count; k++) args[k] = values[instr->args[k]];
             v = LLVMBuildCall2(builder, function_type(c, callee, a), functions[instr->target], args,
                                (unsigned)instr->args.count, "");
+            mark_extensions(b, callee, v, true);
             break;
         }
         case IR_SEXT: v = LLVMBuildSExt(builder, values[instr->operand], llvm_type(c, instr->type), ""); break;
@@ -112,6 +153,7 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
 static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *error) {
     initialise_x86();
     const char *triple = target_triple(t);
+    b->target = t;
     b->context = LLVMContextCreate();
     b->module = LLVMModuleCreateWithNameInContext("rig", b->context);
     LLVMSetTarget(b->module, triple);
@@ -147,19 +189,12 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     }
 
     // Every function first, so a body can call one defined after it.
-    //
-    // Not yet: the C calling convention on Linux (System V) has the caller
-    // widen an i8 or i16 argument to 32 bits, and clang-built C code relies
-    // on it, which LLVM does only for parameters marked signext or zeroext.
-    // The IR keeps sizes, not signs, so foreign procedures taking s8, u8, s16
-    // or u16 don't get the marks yet (libc's functions take int; glibc's
-    // gcc-built code doesn't rely on it). It matters once C libraries come in
-    // as modules (spec section 5): the IR's parameters then carry their sign.
     LLVMValueRef *functions = arena_new_array<LLVMValueRef>(a, m->procs.count ? m->procs.count : 1);
     for (s64 i = 0; i < m->procs.count; i++) {
         Ir_Proc *p = m->procs[i];
         functions[i] = LLVMAddFunction(b->module, string_cstr(a, p->name), function_type(c, p, a));
         if (!p->is_foreign && !p->is_export) LLVMSetLinkage(functions[i], LLVMInternalLinkage);
+        mark_extensions(b, p, functions[i], false);
     }
     for (s64 i = 0; i < m->procs.count; i++) {
         if (!m->procs[i]->is_foreign) build_body(b, a, m, m->procs[i], functions[i], functions, globals);
