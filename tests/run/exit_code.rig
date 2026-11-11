@@ -1,0 +1,4 @@
+// exit() ends the program with a status, as C's does.
+exit :: (status: s32) #foreign libc;
+
+main :: () { exit(3); }

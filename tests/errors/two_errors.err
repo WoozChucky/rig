@@ -1,0 +1,6 @@
+tests/errors/two_errors.rig:5:5: error: 'puts' takes 1 argument, but 2 were given
+        puts("a", "b");
+        ^
+tests/errors/two_errors.rig:9:5: error: unknown identifier 'putz'
+        putz("hi");
+        ^

@@ -1,0 +1,3 @@
+tests/errors/non_call_statement.rig:2:5: error: only a call can be a statement, for now
+        42;
+        ^

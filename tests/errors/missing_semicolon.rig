@@ -1,0 +1,4 @@
+puts :: (s: *u8) -> s32 #foreign libc;
+main :: () {
+    puts("Hello")
+}

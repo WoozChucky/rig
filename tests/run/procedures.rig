@@ -1,0 +1,11 @@
+// Procedures can be used before they're declared.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    greet();
+    greet();
+}
+
+greet :: () {
+    puts("hi");
+}
