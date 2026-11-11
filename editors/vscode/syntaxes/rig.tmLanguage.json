@@ -327,7 +327,7 @@
         "invalid": {
             "comment": "Characters the lexer rejects: punctuation Rig doesn't use, and non-ASCII outside strings and comments.",
             "name": "invalid.illegal.character.rig",
-            "match": "[@$?'`\\\\]|[^\\x00-\\x7F]+"
+            "match": "[@$?'`\\\\]|\\w*[^\\x00-\\x7F]\\w*"
         }
     }
 }
