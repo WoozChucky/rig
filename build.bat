@@ -35,10 +35,12 @@ set LLVM_LIBS=
 for /f "delims=" %%i in ('"%LLVM%\bin\llvm-config.exe" --link-static --libnames core target x86codegen x86asmparser x86desc x86info') do set LIBNAMES=%%i
 for %%l in (%LIBNAMES%) do call set LLVM_LIBS=%%LLVM_LIBS%% -l%%~nl
 
-rem The Windows libraries LLVM uses. (llvm-config --system-libs also names
-rem zlib, zstd and libxml2, which the release was built with but doesn't
-rem ship; the parts of LLVM Rig links don't need them.)
-set SYSTEM_LIBS=-lpsapi -lshell32 -lole32 -luuid -ladvapi32 -lws2_32 -lntdll
+rem The Windows libraries LLVM uses, and COM's strings (finding Visual
+rem Studio). llvm-config --system-libs also names zlib, zstd and libxml2,
+rem which the release was built with but doesn't ship: the parts of LLVM Rig
+rem links don't need libxml2, and src\llvm_compression_stubs.cpp stands in
+rem for zlib and zstd.
+set SYSTEM_LIBS=-lpsapi -lshell32 -lole32 -luuid -ladvapi32 -lws2_32 -lntdll -loleaut32
 
 rem LLVM's release libraries are built against the static C runtime (/MT),
 rem so Rig's compiler is too: mixing the two fails to link (LNK2038).
