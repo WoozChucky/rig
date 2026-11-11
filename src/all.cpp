@@ -10,3 +10,5 @@
 #include "os_linux.cpp"
 #endif
 #include "diag.cpp"
+#include "tokens.cpp"
+#include "ast.cpp"
