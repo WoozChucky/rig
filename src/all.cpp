@@ -9,3 +9,4 @@
 #else
 #include "os_linux.cpp"
 #endif
+#include "diag.cpp"

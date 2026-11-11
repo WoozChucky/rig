@@ -157,3 +157,4 @@ int main(int argc, char **argv) {
 #include "test_harness.cpp"
 #include "test_base.cpp"
 #include "test_os.cpp"
+#include "test_diag.cpp"
