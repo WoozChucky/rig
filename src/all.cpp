@@ -11,3 +11,4 @@
 #endif
 #include "diag.cpp"
 #include "tokens.cpp"
+#include "lexer.cpp"
