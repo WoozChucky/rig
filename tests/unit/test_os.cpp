@@ -1,8 +1,10 @@
 // test_os.cpp: the operating system layer (issue #4). The process tests run
 // this same program, bin/unit-tests, with the helper flags of unit.cpp
-// (--echo-args, --fail-with, --spam).
+// (--echo-args, --cwd, --fail-with, --spam, --sleep).
 
 #include "test.h"
+
+#include <time.h>  // time(), for the timeouts
 
 #ifdef _WIN32
 #define SEPARATOR '\\'
@@ -131,6 +133,39 @@ TEST(os_run_in_starts_the_program_in_a_directory) {
 #endif
     CHECK(os_run_in(&a, argv, str(".build/run-in"), &result));
     CHECK_STR(result.out, string_cstr(&a, expected));
+    array_free(&argv);
+    arena_free(&a);
+}
+
+TEST(os_run_for_ends_a_program_that_runs_too_long) {
+    // The program would sleep for a minute; after one second it's killed,
+    // and os_run_for says so, well before the minute is up.
+    Arena a = arena_make();
+    Array<String> argv = {};
+    array_add(&argv, unit_tests_path(&a));
+    array_add(&argv, str("--sleep"));
+    array_add(&argv, str("60"));
+    Process_Result result = {};
+    time_t start = time(nullptr);
+    CHECK(os_run_for(&a, argv, {}, 1, &result));
+    CHECK(result.timed_out);
+    CHECK(time(nullptr) - start < 30);
+    array_free(&argv);
+    arena_free(&a);
+}
+
+TEST(os_run_for_lets_a_quick_program_finish) {
+    Arena a = arena_make();
+    Array<String> argv = {};
+    array_add(&argv, unit_tests_path(&a));
+    array_add(&argv, str("--fail-with"));
+    array_add(&argv, str("3"));
+    Process_Result result = {};
+    result.timed_out = true;  // os_run_for must clear it
+    CHECK(os_run_for(&a, argv, {}, 30, &result));
+    CHECK(!result.timed_out);
+    CHECK_EQ(result.exit_code, 3);
+    CHECK_STR(result.err, "oops\n");
     array_free(&argv);
     arena_free(&a);
 }

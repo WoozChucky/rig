@@ -186,9 +186,9 @@ struct Pipe_Reader {
     Array<u8> buffer;
 };
 
-// Reads a pipe to its end. Runs on its own thread for stderr while the
-// calling thread reads stdout: reading one to its end first would deadlock
-// with a child that fills the other.
+// Reads a pipe to its end. Each pipe gets a thread of its own: reading one
+// to its end first would deadlock with a child that fills the other, and the
+// calling thread is free to wait for the program with a timeout.
 static DWORD WINAPI read_pipe(void *argument) {
     Pipe_Reader *reader = (Pipe_Reader *)argument;
     u8 chunk[65536];
@@ -199,10 +199,24 @@ static DWORD WINAPI read_pipe(void *argument) {
     return 0;
 }
 
-bool os_run(Arena *a, Array<String> argv, Process_Result *result) { return os_run_in(a, argv, {}, result); }
+// The milliseconds until `deadline` (on GetTickCount64's clock, which only
+// goes forward), for the Wait functions: 0 once it's past, and INFINITE when
+// there is no deadline (0).
+static DWORD time_left(ULONGLONG deadline) {
+    if (!deadline) return INFINITE;
+    ULONGLONG now = GetTickCount64();
+    return now >= deadline ? 0 : (DWORD)(deadline - now);
+}
+
+bool os_run(Arena *a, Array<String> argv, Process_Result *result) { return os_run_for(a, argv, {}, 0, result); }
 
 bool os_run_in(Arena *a, Array<String> argv, String directory, Process_Result *result) {
-    RIG_ASSERT(argv.count > 0);
+    return os_run_for(a, argv, directory, 0, result);
+}
+
+bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result) {
+    RIG_ASSERT(argv.count > 0 && seconds >= 0);
+    result->timed_out = false;
     Array<u8> line = {};
     for (s64 i = 0; i < argv.count; i++) {
         if (i) array_add(&line, (u8)' ');
@@ -246,9 +260,22 @@ bool os_run_in(Arena *a, Array<String> argv, String directory, Process_Result *r
     // A relative application name is completed from this process's
     // directory, whatever the child's will be.
     wchar_t *child_directory = directory.count ? to_wide(a, directory) : nullptr;
-    BOOL started = CreateProcessW(application, command_line, nullptr, nullptr, TRUE, 0, nullptr, child_directory,
-                                  &startup, &process);
+    // With a timeout the program goes into a job, so TerminateJobObject ends
+    // it and whatever it started (a child it gave its stdout to would keep
+    // the pipe open). It starts suspended and joins the job before it runs,
+    // so nothing it starts escapes. If it can't join (Windows before 8 has
+    // no jobs within jobs), the timeout still ends the program itself.
+    HANDLE job = seconds ? CreateJobObjectW(nullptr, nullptr) : nullptr;
+    BOOL started = CreateProcessW(application, command_line, nullptr, nullptr, TRUE, job ? CREATE_SUSPENDED : 0,
+                                  nullptr, child_directory, &startup, &process);
     if (!started) os_fail();
+    if (started && job) {
+        if (!AssignProcessToJobObject(job, process.hProcess)) {
+            CloseHandle(job);
+            job = nullptr;
+        }
+        ResumeThread(process.hThread);
+    }
     // The parent's copies of the write ends must close, or the read ends
     // never see the end of the stream.
     CloseHandle(out_write);
@@ -257,19 +284,32 @@ bool os_run_in(Arena *a, Array<String> argv, String directory, Process_Result *r
     if (!started) {
         CloseHandle(out_read);
         CloseHandle(err_read);
+        if (job) CloseHandle(job);
         return false;
     }
 
     Pipe_Reader out = {out_read, {}}, err = {err_read, {}};
-    HANDLE err_thread = CreateThread(nullptr, 0, read_pipe, &err, 0, nullptr);
-    RIG_ASSERT(err_thread);
-    read_pipe(&out);
-    WaitForSingleObject(err_thread, INFINITE);
-    CloseHandle(err_thread);
+    HANDLE readers[2] = {CreateThread(nullptr, 0, read_pipe, &out, 0, nullptr),
+                         CreateThread(nullptr, 0, read_pipe, &err, 0, nullptr)};
+    RIG_ASSERT(readers[0] && readers[1]);
+    // First the program, then the pipes' ends (a program it started may
+    // still hold them), all within the time given.
+    ULONGLONG deadline = seconds ? GetTickCount64() + (ULONGLONG)seconds * 1000 : 0;
+    bool late = WaitForSingleObject(process.hProcess, time_left(deadline)) == WAIT_TIMEOUT;
+    if (!late) late = WaitForMultipleObjects(2, readers, TRUE, time_left(deadline)) == WAIT_TIMEOUT;
+    if (late) {
+        if (job) TerminateJobObject(job, 1);
+        else TerminateProcess(process.hProcess, 1);
+        result->timed_out = true;
+        WaitForSingleObject(process.hProcess, INFINITE);
+        WaitForMultipleObjects(2, readers, TRUE, INFINITE);
+    }
+    CloseHandle(readers[0]);
+    CloseHandle(readers[1]);
     CloseHandle(out_read);
     CloseHandle(err_read);
+    if (job) CloseHandle(job);
 
-    WaitForSingleObject(process.hProcess, INFINITE);
     DWORD exit_code = 0;
     GetExitCodeProcess(process.hProcess, &exit_code);
     CloseHandle(process.hProcess);

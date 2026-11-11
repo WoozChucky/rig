@@ -127,6 +127,15 @@ static int helper_mode(int argc, char **argv) {
         }
         return 0;
     }
+    if (strcmp(argv[1], "--sleep") == 0) {
+        // A program that runs too long, for os_run_for's timeout.
+#ifdef _WIN32
+        Sleep((DWORD)atoi(argv[2]) * 1000);
+#else
+        sleep((unsigned)atoi(argv[2]));
+#endif
+        return 0;
+    }
     return -1;
 }
 
