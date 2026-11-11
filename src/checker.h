@@ -13,6 +13,8 @@
 //   fits in.
 // - #foreign's only library is libc, the C runtime every program links.
 // - main must exist, have a body, take nothing and return nothing.
+// - A procedure with a body returns nothing: there's no return statement
+//   yet, so it couldn't give back a value.
 // - Every statement is a call, whose value may be ignored (spec 6.7).
 // After an error, an expression whose type is unknown reports nothing more,
 // so one mistake gives one message.

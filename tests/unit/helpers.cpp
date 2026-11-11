@@ -1,5 +1,5 @@
-// helpers.cpp: test helpers shared by the parser's, checker's and IR's
-// tests.
+// helpers.cpp: test helpers shared by the parser's, checker's, IR's and
+// LLVM backend's tests.
 //
 // toks() builds tokens by hand from a compact description, so those tests
 // don't depend on the lexer. Each word is one token:
@@ -104,4 +104,25 @@ static String messages(Arena *a, Diagnostics *d) {
                             STR_ARG(m->message));
     }
     return all;
+}
+
+// Parses, checks and lowers the tokens, which must check cleanly; the module
+// lives in the arena.
+static Ir_Module *lower_tokens(Arena *a, const char *description) {
+    Token_List *list = toks(description);
+    Ast_File *file = parse(list->tokens, a, &list->diag);
+    bool ok = check(file, a, &list->diag);
+    RIG_ASSERT(ok);
+    Ir_Module *m = ir_lower(file, a);
+    token_list_free(list);
+    return m;
+}
+
+// Whether `needle` occurs in `haystack`.
+static bool contains(String haystack, const char *needle) {
+    s64 n = (s64)strlen(needle);
+    for (s64 i = 0; i + n <= haystack.count; i++) {
+        if (memcmp(haystack.data + i, needle, (size_t)n) == 0) return true;
+    }
+    return false;
 }

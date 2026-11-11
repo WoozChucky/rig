@@ -15,3 +15,6 @@
 #include "parser.cpp"
 #include "types.cpp"
 #include "checker.cpp"
+#include "ir.cpp"
+#include "llvm_backend.cpp"
+#include "llvm_compression_stubs.cpp"
