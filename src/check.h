@@ -20,7 +20,7 @@ struct Checker {
 
 // The declaration `name` means where the checker is: the innermost block's
 // that declares it, else a procedure's; null when there's none.
-Ast *lookup(Checker *c, String name);
+Ast *check_lookup(Checker *c, String name);
 
 // The type a written type means, or null after reporting an unknown name.
 Type *resolve_type(Checker *c, Ast_Type *written);
@@ -44,12 +44,7 @@ Type *check_value(Checker *c, Ast *e);
 // doesn't fit is reported here, then counted as converting, so the caller
 // doesn't report it again. True also when either type is unknown (null):
 // the error was reported already.
-bool convert(Checker *c, Ast *e, Type *to);
+bool check_convert(Checker *c, Ast *e, Type *to);
 
 // An untyped constant that meets no type becomes an int (x := 5;).
-void default_type(Ast *e);
-
-// Where e starts in the source: its leftmost token. An operator's node is
-// positioned at the operator, a call's at its '('; a message about the
-// whole expression points here instead.
-Position start_of(Ast *e);
+void check_default_type(Ast *e);

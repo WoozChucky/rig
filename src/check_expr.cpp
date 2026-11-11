@@ -10,14 +10,6 @@
 
 #include "check.h"
 
-Position start_of(Ast *e) {
-    switch (e->kind) {
-    case AST_BINARY: return start_of(((Ast_Binary *)e)->left);
-    case AST_CALL: return start_of(((Ast_Call *)e)->callee);
-    default: return e->pos;
-    }
-}
-
 // Whether the number `value` is one of integer type t's values.
 static bool fits(s64 value, Type *t) {
     s32 bits = t->size * 8;
@@ -50,7 +42,7 @@ static bool widens(Type *from, Type *to) {
     return !from->is_signed && to->size > from->size;
 }
 
-bool convert(Checker *c, Ast *e, Type *to) {
+bool check_convert(Checker *c, Ast *e, Type *to) {
     Type *from = e->type;
     if (!from || !to) return true;
     if (type_is_untyped(from)) {
@@ -58,7 +50,7 @@ bool convert(Checker *c, Ast *e, Type *to) {
         // is one of the type's.
         if (to->kind != TYPE_INTEGER) return false;
         if (!fits((s64)e->constant, to)) {
-            diag_error(c->diag, start_of(e), "%lld doesn't fit in '" STR_FMT "'", (long long)e->constant,
+            diag_error(c->diag, e->start, "%lld doesn't fit in '" STR_FMT "'", (long long)e->constant,
                        STR_ARG(type_name(c->arena, to)));
         }
         e->type = to;
@@ -74,7 +66,7 @@ bool convert(Checker *c, Ast *e, Type *to) {
     return false;
 }
 
-void default_type(Ast *e) {
+void check_default_type(Ast *e) {
     if (e->type && type_is_untyped(e->type)) e->type = &type_int;
 }
 
@@ -83,7 +75,7 @@ Type *check_value(Checker *c, Ast *e) {
     if (t == &type_void) {
         // Only a call has type void.
         Ast_Call *call = (Ast_Call *)e;
-        diag_error(c->diag, start_of(e), "'" STR_FMT "' returns nothing, so it has no value", STR_ARG(call->proc->name));
+        diag_error(c->diag, e->start, "'" STR_FMT "' returns nothing, so it has no value", STR_ARG(call->proc->name));
         e->type = nullptr;
         return nullptr;
     }
@@ -102,7 +94,7 @@ static Type *check_int(Ast_Int *number) {
 // A name used as a value: a variable's or parameter's value, or a
 // constant's, which is known while compiling.
 static Type *check_name(Checker *c, Ast_Name *name) {
-    Ast *decl = lookup(c, name->name);
+    Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
     if (!decl) {
         diag_error(c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
@@ -128,10 +120,12 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     if (call->callee->kind != AST_NAME) {
         check_expression(c, call->callee);
         diag_error(c->diag, call->pos, "only a procedure's name can be called, for now");
+        // The arguments' own mistakes are reported too, as below.
+        for (s64 i = 0; i < call->args.count; i++) check_value(c, call->args[i]);
         return nullptr;
     }
     Ast_Name *name = (Ast_Name *)call->callee;
-    Ast *decl = lookup(c, name->name);
+    Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
     if (!decl) {
         diag_error(c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
@@ -158,8 +152,8 @@ static Type *check_call(Checker *c, Ast_Call *call) {
         for (s64 i = 0; i < call->args.count; i++) {
             Ast *arg = call->args[i];
             Type *from = arg->type, *to = proc->params[i]->type;
-            if (!convert(c, arg, to)) {
-                diag_error(c->diag, start_of(arg),
+            if (!check_convert(c, arg, to)) {
+                diag_error(c->diag, arg->start,
                            "argument %lld of '" STR_FMT "' has type '" STR_FMT "', which can't be converted to '" STR_FMT
                            "'",
                            (long long)(i + 1), STR_ARG(proc->name), STR_ARG(type_name(c->arena, from)),
@@ -195,10 +189,15 @@ static Type *check_unary(Checker *c, Ast_Unary *u) {
     Ast *x = u->operand;
     if (!x->is_constant) return t;
     u->is_constant = true;
-    // int's most negative value can only be written as - and a literal one
-    // past int's largest value, which on its own is a u64: together they're
-    // the untyped constant -9223372036854775808.
-    if (u->op == TOKEN_MINUS && x->kind == AST_INT && ((Ast_Int *)x)->value == (u64)1 << 63) {
+    // - applied directly to a literal above int's range, which on its own is
+    // a u64, writes a negative number: the literal one past int's largest
+    // value gives int's most negative value, the untyped constant
+    // -9223372036854775808 (it can't be written any other way); any larger
+    // one is below int's range, an overflow (as in Go), not the u64 wrapped,
+    // which would quietly make it positive. A u64 constant by its name
+    // (N :: 18446744073709551615; -N) wraps as a u64's - does, below.
+    if (u->op == TOKEN_MINUS && x->kind == AST_INT && ((Ast_Int *)x)->value > (u64)INT64_MAX) {
+        if (((Ast_Int *)x)->value != (u64)1 << 63) return overflows(c, u);
         u->constant = (u64)INT64_MIN;
         return &type_untyped_int;
     }
@@ -272,10 +271,10 @@ static u64 fold_typed(Token_Kind op, u64 left, u64 right, Type *t) {
 static Type *check_shift(Checker *c, Ast_Binary *b, Type *left) {
     Type *t = left;
     if (type_is_untyped(left) && !b->right->is_constant) {
-        convert(c, b->left, &type_int);
+        check_convert(c, b->left, &type_int);
         t = &type_int;
     }
-    default_type(b->right);
+    check_default_type(b->right);
     if (!b->left->is_constant || !b->right->is_constant) return t;
 
     b->is_constant = true;
@@ -326,10 +325,10 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
     if (type_is_untyped(left) && type_is_untyped(right)) {
         t = left;
     } else if (type_is_untyped(left)) {
-        convert(c, b->left, right);
+        check_convert(c, b->left, right);
         t = right;
     } else if (type_is_untyped(right)) {
-        convert(c, b->right, left);
+        check_convert(c, b->right, left);
         t = left;
     } else if (widens(right, left)) {
         t = left;
