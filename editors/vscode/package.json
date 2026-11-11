@@ -1,0 +1,44 @@
+{
+    "name": "rig-language",
+    "displayName": "Rig",
+    "description": "Syntax highlighting for the Rig programming language",
+    "version": "0.1.0",
+    "publisher": "woozchucky",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/WoozChucky/rig"
+    },
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "extensionKind": [
+        "ui",
+        "workspace"
+    ],
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "rig",
+                "aliases": [
+                    "Rig",
+                    "rig"
+                ],
+                "extensions": [
+                    ".rig"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "rig",
+                "scopeName": "source.rig",
+                "path": "./syntaxes/rig.tmLanguage.json"
+            }
+        ]
+    }
+}
