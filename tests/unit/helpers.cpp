@@ -133,6 +133,19 @@ static String check_source(Arena *a, const char *text) {
     return result;
 }
 
+// Parses, checks and lowers `text` (lexed with src()), which must check
+// cleanly; the module lives in the arena.
+static Ir_Module *lower_source(Arena *a, const char *text) {
+    Token_List *list = src(text);
+    Ast_File *file = parse(list->tokens, a, &list->diag);
+    bool ok = check(file, a, &list->diag);
+    if (!ok) fprintf(stderr, "lower_source: doesn't check:\n%.*s", STR_ARG(messages(a, &list->diag)));
+    RIG_ASSERT(ok);
+    Ir_Module *m = ir_lower(file, a);
+    token_list_free(list);
+    return m;
+}
+
 // Parses, checks and lowers the tokens, which must check cleanly; the module
 // lives in the arena.
 static Ir_Module *lower_tokens(Arena *a, const char *description) {

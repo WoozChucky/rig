@@ -1,0 +1,3 @@
+tests/errors/missing_return.rig:5:1: error: 'letter' must return a value on every path, and this one reaches its end
+    }
+    ^

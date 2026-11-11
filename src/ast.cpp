@@ -1,6 +1,21 @@
-// ast.cpp: dumping the syntax tree as S-expressions (see ast.h).
+// ast.cpp: dumping the syntax tree as S-expressions, and what the tree's
+// operators mean (see ast.h).
 
 #include "ast.h"
+
+Token_Kind compound_operator(Token_Kind op) {
+    switch (op) {
+    case TOKEN_PLUS_EQUAL: return TOKEN_PLUS;
+    case TOKEN_MINUS_EQUAL: return TOKEN_MINUS;
+    case TOKEN_STAR_EQUAL: return TOKEN_STAR;
+    case TOKEN_AMP_EQUAL: return TOKEN_AMP;
+    case TOKEN_PIPE_EQUAL: return TOKEN_PIPE;
+    case TOKEN_CARET_EQUAL: return TOKEN_CARET;
+    case TOKEN_SHIFT_LEFT_EQUAL: return TOKEN_SHIFT_LEFT;
+    case TOKEN_SHIFT_RIGHT_EQUAL: return TOKEN_SHIFT_RIGHT;
+    default: RIG_ASSERT(!"not a compound assignment"); return TOKEN_ERROR;
+    }
+}
 
 static void out(Array<u8> *buffer, String s) {
     for (s64 i = 0; i < s.count; i++) array_add(buffer, s.data[i]);

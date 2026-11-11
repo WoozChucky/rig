@@ -1,5 +1,7 @@
-// test_checker.cpp: names, types and calls (issue #9). Tokens by hand
-// (helpers.cpp), parsed, then checked.
+// test_checker.cpp: names, types and calls (issue #9), then scopes,
+// constants, operators, conversions and returns (issue #33). Milestone 1's
+// tests build tokens by hand (toks(), helpers.cpp), milestone 2a's lex real
+// source (src()); either way, parsed, then checked.
 
 #include "test.h"
 

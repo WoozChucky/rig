@@ -99,21 +99,6 @@ static void check_const(Checker *c, Ast_Const *constant) {
     declare(c, constant->name, constant);
 }
 
-// The binary operator a compound assignment applies: += is +.
-static Token_Kind compound_operator(Token_Kind op) {
-    switch (op) {
-    case TOKEN_PLUS_EQUAL: return TOKEN_PLUS;
-    case TOKEN_MINUS_EQUAL: return TOKEN_MINUS;
-    case TOKEN_STAR_EQUAL: return TOKEN_STAR;
-    case TOKEN_AMP_EQUAL: return TOKEN_AMP;
-    case TOKEN_PIPE_EQUAL: return TOKEN_PIPE;
-    case TOKEN_CARET_EQUAL: return TOKEN_CARET;
-    case TOKEN_SHIFT_LEFT_EQUAL: return TOKEN_SHIFT_LEFT;
-    case TOKEN_SHIFT_RIGHT_EQUAL: return TOKEN_SHIFT_RIGHT;
-    default: RIG_ASSERT(!"not a compound assignment"); return TOKEN_ERROR;
-    }
-}
-
 // The type of an assignment's target, a variable, or null after reporting
 // what else it is.
 static Type *check_target(Checker *c, Ast *target) {

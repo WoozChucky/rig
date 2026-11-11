@@ -150,6 +150,10 @@ T *ast_new(Arena *a, Ast_Kind kind, Position pos) {
     return node;
 }
 
+// The binary operator a compound assignment applies: TOKEN_PLUS for
+// TOKEN_PLUS_EQUAL (x += e is x = x + e), and so on.
+Token_Kind compound_operator(Token_Kind op);
+
 // The tree as S-expressions, one declaration per line, for tests and
 // debugging:
 //   (proc puts (params (s (ptr u8))) (returns s32) (foreign libc))
