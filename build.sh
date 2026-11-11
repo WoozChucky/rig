@@ -36,6 +36,8 @@ mkdir -p bin
 $CXX $FLAGS src/rig.cpp $LLVM_LIBS $SYSTEM_LIBS -o bin/rig
 # The unit tests: the whole compiler again, with the tests and their own main.
 $CXX $FLAGS tests/unit/unit.cpp $LLVM_LIBS $SYSTEM_LIBS -o bin/unit-tests
+# The end-to-end tests' runner: no LLVM, it only runs rig and its programs.
+$CXX $FLAGS tests/runner.cpp -o bin/run-tests
 
 # Rig links programs with LLVM's lld, shipped beside rig (spec section 3).
 cp "$LLVM/bin/lld" bin/ld.lld

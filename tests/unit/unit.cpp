@@ -127,6 +127,54 @@ static int helper_mode(int argc, char **argv) {
         }
         return 0;
     }
+    if (strcmp(argv[1], "--sleep") == 0) {
+        // A program that runs too long, for os_run_for's timeout.
+#ifdef _WIN32
+        Sleep((DWORD)atoi(argv[2]) * 1000);
+#else
+        sleep((unsigned)atoi(argv[2]));
+#endif
+        return 0;
+    }
+    if (strcmp(argv[1], "--close-and-sleep") == 0) {
+        // Ends its stdout and stderr, then runs on: a parent that only
+        // watches the pipes thinks it's done.
+#ifdef _WIN32
+        CloseHandle(GetStdHandle(STD_OUTPUT_HANDLE));
+        CloseHandle(GetStdHandle(STD_ERROR_HANDLE));
+        Sleep((DWORD)atoi(argv[2]) * 1000);
+#else
+        close(1);
+        close(2);
+        sleep((unsigned)atoi(argv[2]));
+#endif
+        return 0;
+    }
+    if (strcmp(argv[1], "--spawn-sleeper") == 0) {
+        // Starts this program again with --sleep N, giving it this one's
+        // stdout and stderr, and ends at once: the sleeper holds the pipes.
+#ifdef _WIN32
+        wchar_t path[MAX_PATH];
+        GetModuleFileNameW(nullptr, path, MAX_PATH);
+        wchar_t command[MAX_PATH + 64];
+        swprintf(command, MAX_PATH + 64, L"\"%ls\" --sleep %hs", path, argv[2]);
+        STARTUPINFOW startup = {};
+        startup.cb = sizeof startup;
+        startup.dwFlags = STARTF_USESTDHANDLES;
+        startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        PROCESS_INFORMATION process = {};
+        if (!CreateProcessW(path, command, nullptr, nullptr, TRUE, 0, nullptr, nullptr, &startup, &process)) return 1;
+        CloseHandle(process.hProcess);
+        CloseHandle(process.hThread);
+#else
+        char *child[] = {argv[0], (char *)"--sleep", argv[2], nullptr};
+        pid_t pid;
+        if (posix_spawn(&pid, "/proc/self/exe", nullptr, nullptr, child, environ) != 0) return 1;
+#endif
+        return 0;
+    }
     return -1;
 }
 
@@ -167,3 +215,4 @@ int main(int argc, char **argv) {
 #include "test_ir.cpp"
 #include "test_llvm.cpp"
 #include "test_link.cpp"
+#include "test_driver.cpp"

@@ -1,0 +1,6 @@
+tests/errors/errors_in_source_order.rig:2:24: error: expected ';', found '}'
+    main :: () { puts("a") }
+                           ^
+tests/errors/errors_in_source_order.rig:3:11: error: unexpected character '@'
+    f :: () { @ }
+              ^
