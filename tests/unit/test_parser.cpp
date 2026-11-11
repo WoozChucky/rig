@@ -101,7 +101,9 @@ TEST(parser_recovers_at_next_declaration) {
     CHECK_STR(errors,
               "1:15: expected an expression, found '}'\n"
               "2:5: only procedures can be declared at the top level for now\n");
-    CHECK_STR(dump, "(proc c (params) (block (call g)))\n");
+    // a and b are kept as broken entries, their names alone, so the checker
+    // knows they're declared.
+    CHECK_STR(dump, "(broken a)\n(broken b)\n(proc c (params) (block (call g)))\n");
     arena_free(&a);
 }
 
@@ -115,7 +117,7 @@ TEST(missing_brace_before_next_declaration) {
                              "IDENT:f :: ( ) { IDENT:g ( ) ; }",
                              &errors);
     CHECK_STR(errors, "2:1: expected '}', found identifier 'f'\n");
-    CHECK_STR(dump, "(proc f (params) (block (call g)))\n");
+    CHECK_STR(dump, "(broken main)\n(proc f (params) (block (call g)))\n");
     arena_free(&a);
 }
 
@@ -135,7 +137,153 @@ TEST(lexer_errors_are_not_reported_twice) {
     list->tokens[7].kind = TOKEN_ERROR;  // the INT
     Ast_File *file = parse(list->tokens, &a, &list->diag);
     CHECK_EQ(list->diag.error_count, 0);
-    CHECK_STR(ast_dump(&a, file), "(proc ok (params) (block))\n");
+    CHECK_STR(ast_dump(&a, file), "(broken main)\n(proc ok (params) (block))\n");
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(broken_declaration_keeps_the_name_it_starts_with) {
+    // A ':' for '::' still looks like a declaration of greet: the entry keeps
+    // the name, so the call to greet isn't reported as unknown too.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_dump(&a, "IDENT:greet : ( ) { } | IDENT:main :: ( ) { IDENT:greet ( ) ; }", &errors);
+    CHECK_STR(errors, "1:3: expected '::', found ':'\n");
+    CHECK_STR(dump, "(broken greet)\n(proc main (params) (block (call greet)))\n");
+    arena_free(&a);
+}
+
+TEST(broken_declaration_without_a_name) {
+    // A stray '}' starts no name: the entry has none, and says so.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_dump(&a, "} | IDENT:main :: ( ) { }", &errors);
+    CHECK_STR(errors, "1:1: expected identifier, found '}'\n");
+    CHECK_STR(dump, "(broken)\n(proc main (params) (block))\n");
+    arena_free(&a);
+}
+
+TEST(stray_tokens_before_a_name_are_skipped) {
+    // '*greet ::' is greet's declaration with something stray in front: the
+    // parser reports the stray token and parses greet whole, so its body is
+    // checked and calls to it aren't unknown. The stray token was no
+    // declaration, so it leaves no entry.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_dump(&a, "IDENT:main :: ( ) { IDENT:greet ( ) ; } | * IDENT:greet :: ( ) { IDENT:g ( ) ; }",
+                             &errors);
+    CHECK_STR(errors, "2:1: expected identifier, found '*'\n");
+    CHECK_STR(dump, "(proc main (params) (block (call greet)))\n(proc greet (params) (block (call g)))\n");
+
+    // A character the lexer refused ('@greet') is skipped the same way,
+    // and the lexer's message is the only one.
+    Token_List *list = toks("* IDENT:greet :: ( ) { }");
+    list->tokens[0].kind = TOKEN_ERROR;
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(list->diag.error_count, 0);
+    CHECK_STR(ast_dump(&a, file), "(proc greet (params) (block))\n");
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(a_declaration_inside_a_broken_one_is_not_a_fresh_start) {
+    // Once a signature or a body has begun, a 'x ::' on the same line is
+    // inside it, not a declaration after stray tokens: one message, and
+    // greet's entry.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_dump(&a, "IDENT:greet : ( ) { IDENT:x :: INT:5 ; } | IDENT:main :: ( ) { }", &errors);
+    CHECK_STR(errors, "1:3: expected '::', found ':'\n");
+    CHECK_STR(dump, "(broken greet)\n(proc main (params) (block))\n");
+    arena_free(&a);
+}
+
+TEST(a_directive_where_the_name_goes_keeps_the_name) {
+    // '#greet ::' is greet's declaration with a stray '#', which the lexer
+    // made a directive of: the entry is named greet.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_dump(&a, "#greet :: ( ) { } | IDENT:main :: ( ) { IDENT:greet ( ) ; }", &errors);
+    CHECK_STR(errors, "1:1: expected identifier, found directive\n");
+    CHECK_STR(dump, "(broken greet)\n(proc main (params) (block (call greet)))\n");
+    arena_free(&a);
+}
+
+// Parses a broken declaration of greet followed by main calling it, and
+// checks greet's entry kept its name and the parse error is `error`.
+static void check_named_broken_greet(Arena *a, const char *greet, const char *error) {
+    String errors;
+    String dump = parse_dump(a, string_cstr(a, string_printf(a, "%s | IDENT:main :: ( ) { IDENT:greet ( ) ; }", greet)),
+                             &errors);
+    CHECK_STR(errors, error);
+    CHECK_STR(dump, "(broken greet)\n(proc main (params) (block (call greet)))\n");
+}
+
+TEST(a_mistyped_declaration_keeps_its_name) {
+    // What can only be greet's declaration, written wrong, keeps the name:
+    // the '::' left out (a C habit), a variable's ':=' or '=' for it, or a
+    // stray token between the name and the '::'.
+    Arena a = arena_make();
+    check_named_broken_greet(&a, "IDENT:greet ( ) { }", "1:3: expected '::', found '('\n");
+    check_named_broken_greet(&a, "IDENT:greet := ( ) { }", "1:3: expected '::', found ':='\n");
+    check_named_broken_greet(&a, "IDENT:greet = ( ) { }", "1:3: expected '::', found '='\n");
+    check_named_broken_greet(&a, "IDENT:greet * :: ( ) { }", "1:3: expected '::', found '*'\n");
+    // Without its '::', a signature is still told from a call by what comes
+    // before any ';': a return type, or a directive.
+    check_named_broken_greet(&a, "IDENT:greet ( IDENT:s : * IDENT:u8 ) -> IDENT:s32 #foreign IDENT:libc ;",
+                             "1:3: expected '::', found '('\n");
+    check_named_broken_greet(&a, "IDENT:greet ( ) #foreign IDENT:libc ;", "1:3: expected '::', found '('\n");
+    // What follows the ')' decides, wherever the lines break: the return
+    // type's '->', or the body's '{' on the next line, or parameters over
+    // two lines.
+    check_named_broken_greet(&a, "IDENT:greet ( ) -> IDENT:s32 | { }", "1:3: expected '::', found '('\n");
+    check_named_broken_greet(&a, "IDENT:greet ( ) | { }", "1:3: expected '::', found '('\n");
+    check_named_broken_greet(&a, "IDENT:greet ( IDENT:s : * IDENT:u8 , | IDENT:n : IDENT:s32 ) { }",
+                             "1:3: expected '::', found '('\n");
+    arena_free(&a);
+}
+
+TEST(a_name_is_kept_only_where_a_declaration_could_be) {
+    // A stray call outside any body names nothing: 'foo(' can't begin foo's
+    // declaration, and naming it would hide the unknown foo everywhere else.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_dump(&a, "IDENT:main :: ( ) { } | IDENT:foo ( STRING:x ) ;", &errors);
+    CHECK_STR(errors, "2:3: expected '::', found '('\n");
+    CHECK_STR(dump, "(proc main (params) (block))\n(broken)\n");
+    // Its ';' comes first, so a block after it on the line doesn't make it
+    // a signature.
+    dump = parse_dump(&a, "IDENT:main :: ( ) { } | IDENT:foo ( ) ; { }", &errors);
+    CHECK_STR(errors, "2:3: expected '::', found '('\n");
+    CHECK_STR(dump, "(proc main (params) (block))\n(broken)\n");
+    // A directive inside the parentheses is an argument, not a signature's
+    // #foreign: what follows the ')' is a ';'.
+    dump = parse_dump(&a, "IDENT:main :: ( ) { } | IDENT:foo ( #run ) ;", &errors);
+    CHECK_STR(errors, "2:3: expected '::', found '('\n");
+    CHECK_STR(dump, "(proc main (params) (block))\n(broken)\n");
+    // A call with its ';' left out, at the end of the file or before the
+    // next declaration, is still a call.
+    dump = parse_dump(&a, "IDENT:main :: ( ) { } | IDENT:foo ( STRING:x )", &errors);
+    CHECK_STR(errors, "2:3: expected '::', found '('\n");
+    CHECK_STR(dump, "(proc main (params) (block))\n(broken)\n");
+    dump = parse_dump(&a, "IDENT:foo ( STRING:x ) | IDENT:main :: ( ) { }", &errors);
+    CHECK_STR(errors, "1:3: expected '::', found '('\n");
+    CHECK_STR(dump, "(broken)\n(proc main (params) (block))\n");
+    // Parentheses never closed: no signature to see, so no name.
+    dump = parse_dump(&a, "IDENT:foo ( STRING:x | IDENT:main :: ( ) { }", &errors);
+    CHECK_STR(dump, "(broken)\n(proc main (params) (block))\n");
+    // The search for the ')' stops at the next declaration: a stray ')'
+    // and '{' after main don't close foo's '(' and make it a signature.
+    dump = parse_dump(&a, "IDENT:foo ( STRING:x | IDENT:main :: ( ) { } | ) { }", &errors);
+    CHECK_STR(dump, "(broken)\n(proc main (params) (block))\n(broken)\n");
+
+    // A token the lexer refused right after the name ('greet @:: ...') may
+    // be a mistyped '::': the name is kept.
+    Token_List *list = toks("IDENT:greet :: ( ) { }");
+    list->tokens[1].kind = TOKEN_ERROR;
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(list->diag.error_count, 0);
+    CHECK_STR(ast_dump(&a, file), "(broken greet)\n");
     token_list_free(list);
     arena_free(&a);
 }

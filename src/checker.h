@@ -18,6 +18,12 @@
 // - Every statement is a call, whose value may be ignored (spec 6.7).
 // After an error, an expression whose type is unknown reports nothing more,
 // so one mistake gives one message.
+//
+// The checker also runs after syntax errors, so they and the type errors in
+// the rest of the file are reported together. A declaration the parser gave
+// up on is a broken entry (parser.h): its name is declared, with an unknown
+// type, and nothing is reported about it or about its uses (a call to it
+// may pass anything). Its body isn't checked: there is none.
 
 #pragma once
 
@@ -25,5 +31,5 @@
 #include "types.h"
 
 // Checks the file, filling in types and the procedures calls refer to.
-// True when there were no errors.
+// True when the checker reported no errors (the parser may have).
 bool check(Ast_File *file, Arena *a, Diagnostics *d);

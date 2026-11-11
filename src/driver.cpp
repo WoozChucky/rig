@@ -8,9 +8,12 @@
 // current directory, NAME being the file's name without its directory and
 // .rig (exit 0).
 //
-// The checker only runs when the source parsed: a declaration the parser
-// gave up on would make it report names as unknown, or main as missing,
-// that the program does have.
+// The checker runs even when the parser found errors, so a syntax error in
+// one procedure and a type error in another are reported in one build. A
+// declaration the parser gave up on stays in the tree as a broken entry, its
+// name alone, which the checker takes as declared and says nothing about
+// (checker.h): so it doesn't report the name as unknown, or main as
+// missing, because of the syntax error.
 //
 // The object file is named after the source file alone, so two builds in
 // one directory of files with the same name in different directories
@@ -67,11 +70,11 @@ static int build(Arena *a, String path, String output) {
     s32 file = diag_add_file(&d, path, text);
     Array<Token> tokens = lex(&d, file, a);
     Ast_File *tree = parse(tokens, a, &d);
-    if (d.error_count == 0) check(tree, a, &d);
+    check(tree, a, &d);
     if (d.error_count > 0) {
         // Into source order: the lexer reported the whole file before the
-        // parser began, and the checker reports every signature before any
-        // body.
+        // parser began, the parser the whole file before the checker, and
+        // the checker reports every signature before any body.
         diag_sort(&d);
         diag_print(&d);
         diag_free(&d);

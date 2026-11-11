@@ -1,0 +1,6 @@
+tests/errors/signature_over_lines.rig:5:5: error: unknown identifier 'nope'
+        nope();
+        ^
+tests/errors/signature_over_lines.rig:8:7: error: expected '::', found '('
+    greet (s: *u8,
+          ^

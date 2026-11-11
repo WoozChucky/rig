@@ -1,0 +1,12 @@
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    greet("hi", 2);
+    nope();
+}
+
+greet (s: *u8,
+       n: s32)
+{
+    puts(s);
+}
