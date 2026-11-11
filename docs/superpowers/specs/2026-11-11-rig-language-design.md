@@ -68,7 +68,7 @@ Rig is a new compiled programming language, built as a learning project that fol
 ## 5. C interop (first-class) (Nuno)
 
 - Calling C functions: `#foreign` declarations, the platform's C calling convention exactly (Windows x64 convention on Windows, System V AMD64 on Linux).
-  - "Exactly" means as clang does it, including what the ABI documents leave unsaid: on Linux an `s8`, `u8`, `s16` or `u16` argument or return value is widened to 32 bits by its sign (LLVM's `signext`/`zeroext`), which clang-built C code relies on; on Windows it isn't, the receiving side widens it. Rig's own procedures follow the same rule, so a call and its callee always agree. (Claude's call)
+  - "Exactly" means as clang does it, including what the ABI documents leave unsaid: on Linux an `s8`, `u8`, `s16` or `u16` argument or return value is widened to 32 bits, sign-extended if its type is signed and zero-extended if unsigned (LLVM's `signext`/`zeroext`), which clang-built C code relies on; on Windows it isn't, the receiving side widens it. Rig's own procedures follow the same rule, so a call and its callee always agree. (Claude's call)
 - Being called by C: procedures marked C-callable (callbacks), which set up a context before calling ordinary Rig code (section 6.6).
 - C-compatible layout of structs, unions, enums and pointers that C sees.
 - Linking C libraries: static (`.lib`/`.a`) and dynamic (`.dll`/`.so`).

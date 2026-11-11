@@ -73,20 +73,26 @@ static LLVMTypeRef function_type(LLVMContextRef c, Ir_Proc *p, Arena *a) {
 // Widening an i8 or i16 parameter or return value (Ir_Ext).
 //
 // On Linux, gcc and clang widen an i8 or i16 argument to 32 bits at the
-// call, by its sign. The System V document doesn't say so, but clang-built
-// code relies on it: a callee taking a short may use its 32-bit register as
-// it is, without widening it again. LLVM widens only what's marked signext
-// or zeroext, on the function and on each call, so clang marks every such
-// parameter on x86_64-pc-linux-gnu, and every such return value too (the
-// callee then widens what it returns).
+// call: sign-extended if its type is signed, zero-extended if unsigned. The
+// System V document doesn't say so, but clang-built code relies on it: a
+// callee taking a short may use its 32-bit register as it is, without
+// widening it again. LLVM widens only what's marked signext or zeroext, on
+// the function and on each call, so clang marks every such parameter on
+// x86_64-pc-linux-gnu, and every such return value too (the callee then
+// widens what it returns).
 //
 // The Windows x64 convention leaves the upper bits undefined, so the side
 // that receives a narrow value widens it itself. clang marks nothing on
 // x86_64-pc-windows-msvc (only a bool, which Rig doesn't have yet), and
 // neither does Rig.
 //
-// Both checked against clang 20's -S -emit-llvm for `signed char f(signed
-// char, unsigned char, short, unsigned short)` on the two triples.
+// Both checked against the pinned clang 23.1.4's -S -emit-llvm on
+// x86_64-pc-linux-gnu, x86_64-pc-windows-msvc and x86_64-w64-windows-gnu,
+// for a call to `signed char f(signed char, unsigned char, short, unsigned
+// short, int, long long, _Bool)` and to `static short g(short, unsigned
+// char)`: on Linux every i8 and i16 parameter and return is marked, on the
+// declaration, the static definition and both calls; on both Windows
+// triples only the _Bool, zeroext.
 //
 // Rig's own procedures are marked like foreign ones, as clang marks a static
 // C function: one rule for every function and every call to it, so a call
