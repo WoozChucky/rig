@@ -6,6 +6,28 @@ The compiler is written in C-style C++23 and built with clang as a unity build (
 
 Status: design. The design is [docs/superpowers/specs/2026-11-11-rig-language-design.md](docs/superpowers/specs/2026-11-11-rig-language-design.md).
 
+## Building
+
+Rig's compiler is built by one script per platform, with clang and the pinned LLVM release (23.1.4) linked statically.
+
+**Windows** (clang on the `PATH`, and Visual Studio or its Build Tools with the "Desktop development with C++" workload):
+
+```
+scripts\get_llvm.bat
+build.bat
+bin\rig.exe version
+```
+
+**Linux** (clang, and the C library's development files: on Debian and Ubuntu, `sudo apt install clang`):
+
+```
+scripts/get_llvm.sh
+./build.sh
+bin/rig version
+```
+
+`get_llvm` downloads LLVM's official release archive, checks its SHA-256, and keeps only what the build needs in `deps/llvm-windows` or `deps/llvm-linux` (set `RIG_LLVM_DIR` to put it elsewhere). `build.bat release` and `./build.sh release` build with optimisations.
+
 ## Licence
 
 MIT, see [LICENSE](LICENSE).
