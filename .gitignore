@@ -5,3 +5,5 @@
 *.pdb
 *.ilk
 *.exe
+/deps/
+/.build/
