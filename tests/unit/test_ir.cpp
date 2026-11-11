@@ -1,6 +1,6 @@
-// test_ir.cpp: lowering checked trees to Rig's IR (issue #10), with tokens
-// by hand, and the IR's builders and printing (issue #32), with IR by hand
-// (helpers.cpp).
+// test_ir.cpp: lowering checked trees to Rig's IR (issue #10, with tokens
+// by hand; issue #33, from real source), and the IR's builders and printing
+// (issue #32), with IR by hand (helpers.cpp).
 
 #include "test.h"
 
@@ -105,6 +105,214 @@ TEST(ir_keeps_the_sign_of_narrow_parameters) {
                                               "IDENT:main :: ( ) { IDENT:take ( INT:7 ) ; }"));
     CHECK(contains(ir, "foreign proc @f(i8 signext, i8 zeroext, i16 signext, i16 zeroext, i32, i64, ptr) -> i8 signext\n"));
     CHECK(contains(ir, "proc @take(i16 zeroext) {\n"));
+    arena_free(&a);
+}
+
+// Lowering milestone 2a's expressions, variables and returns (issue #33),
+// from real source (src(), helpers.cpp).
+
+// The IR of the procedure called `name`: its lines from "proc @name(" to
+// its closing "}\n", or "" when there's none.
+static String proc_ir(String ir, const char *name) {
+    char header[64];
+    snprintf(header, sizeof header, "proc @%s(", name);
+    s64 start = index_of(ir, header);
+    if (start < 0) return {};
+    String rest = string_slice(ir, start, ir.count - start);
+    s64 end = index_of(rest, "\n}\n");
+    return end < 0 ? rest : string_slice(rest, 0, end + 3);
+}
+
+TEST(ir_of_locals_and_arithmetic) {
+    // Each variable is a stack slot, zeroed where it's declared unless it's
+    // ---; parameters are the values %0 and %1, read directly; a narrower
+    // operand widens by its sign; constants are typed by their use.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: (a: s32, n: u8) -> s32 {\n"
+                                          "    b : s32 = 6;\n"
+                                          "    c := a * b + 29;\n"
+                                          "    c -= n;\n"
+                                          "    d : u8;\n"
+                                          "    w : s32 = ---;\n"
+                                          "    return c;\n"
+                                          "}\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(i32, i8 zeroext) -> i32 {\n"
+              "b0:\n"
+              "  %2 = local i32\n"
+              "  %3 = const i32 6\n"
+              "  store i32 %3, %2\n"
+              "  %4 = local i32\n"
+              "  %5 = load i32 %2\n"
+              "  %6 = mul i32 %0, %5\n"
+              "  %7 = const i32 29\n"
+              "  %8 = add i32 %6, %7\n"
+              "  store i32 %8, %4\n"
+              "  %9 = load i32 %4\n"
+              "  %10 = zext i8 %1 to i32\n"
+              "  %11 = sub i32 %9, %10\n"
+              "  store i32 %11, %4\n"
+              "  %12 = local i8\n"
+              "  %13 = const i8 0\n"
+              "  store i8 %13, %12\n"
+              "  %14 = local i32\n"
+              "  %15 = load i32 %4\n"
+              "  ret %15\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "__rig_main"), "proc @__rig_main() {\nb0:\n  ret\n}\n");
+    arena_free(&a);
+}
+
+TEST(ir_of_calls_with_values) {
+    // A call's value feeds an expression; a procedure's return gives one.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "putchar :: (c: s32) -> s32 #foreign libc;\n"
+                                          "square :: (x: s32) -> s32 { return x * x; }\n"
+                                          "main :: () {\n"
+                                          "    putchar(square(8) + 1);\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "square"),
+              "proc @square(i32) -> i32 {\n"
+              "b0:\n"
+              "  %1 = mul i32 %0, %0\n"
+              "  ret %1\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = const i32 8\n"
+              "  %1 = call @square(%0)\n"
+              "  %2 = const i32 1\n"
+              "  %3 = add i32 %1, %2\n"
+              "  %4 = call @putchar(%3)\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(shift_amount_is_masked) {
+    // The amount is converted to the left operand's type by its own sign,
+    // then masked to the width less one (spec 6.4): LLVM's shifts are
+    // undefined for an amount of the width or more.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: (a: u8, b: int) -> u8 { return a << b; }\n"
+                                          "g :: (a: s64, b: s8) -> s64 { return a >> b; }\n"
+                                          "h :: (a: u32, b: u8) -> u32 { return a >> b; }\n"
+                                          "k :: (a: s32) -> s32 { return a << 33; }\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(i8 zeroext, i64) -> i8 zeroext {\n"
+              "b0:\n"
+              "  %2 = trunc i64 %1 to i8\n"
+              "  %3 = const i8 7\n"
+              "  %4 = and i8 %2, %3\n"
+              "  %5 = shl i8 %0, %4\n"
+              "  ret %5\n"
+              "}\n");
+    // Signed: the amount sign-extends, the shift is arithmetic.
+    CHECK(contains(proc_ir(ir, "g"), "  %2 = sext i8 %1 to i64\n  %3 = const i64 63\n  %4 = and i64 %2, %3\n"
+                                     "  %5 = ashr i64 %0, %4\n"));
+    // Unsigned: zero-extends, logical.
+    CHECK(contains(proc_ir(ir, "h"), "  %2 = zext i8 %1 to i32\n  %3 = const i32 31\n  %4 = and i32 %2, %3\n"
+                                     "  %5 = lshr i32 %0, %4\n"));
+    // A constant amount is masked while compiling: 33 is 1 on an s32.
+    CHECK(contains(proc_ir(ir, "k"), "  %1 = const i32 1\n  %2 = shl i32 %0, %1\n"));
+    arena_free(&a);
+}
+
+TEST(narrow_arithmetic_stays_narrow) {
+    // No integer promotion: u8 + u8 is an i8 addition, wrapping at 8 bits.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: (a: u8, b: u8) -> u8 { return a + b; }\n"
+                                          "g :: (a: s16) -> s16 { return -a ^ ~a; }\n"
+                                          "main :: () { }\n"));
+    CHECK(contains(proc_ir(ir, "f"), "  %2 = add i8 %0, %1\n  ret %2\n"));
+    // - is 0 - a, ~ is a xor all ones, at the operand's width.
+    CHECK(contains(proc_ir(ir, "g"), "  %1 = const i16 0\n  %2 = sub i16 %1, %0\n"
+                                     "  %3 = const i16 65535\n  %4 = xor i16 %0, %3\n  %5 = xor i16 %2, %4\n"));
+    arena_free(&a);
+}
+
+TEST(untyped_expressions_fold) {
+    // An expression the checker knows the value of is one constant, at the
+    // width of the type it met; its bits are the type's, so -1 as an s8 is
+    // 255.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "main :: () {\n"
+                                          "    x := 2 + 3 * 4;\n"
+                                          "    y : s8 = -1;\n"
+                                          "    K :: 1 << 10;\n"
+                                          "    z : u16 = K - 1;\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local i64\n"
+              "  %1 = const i64 14\n"
+              "  store i64 %1, %0\n"
+              "  %2 = local i8\n"
+              "  %3 = const i8 255\n"
+              "  store i8 %3, %2\n"
+              "  %4 = local i16\n"
+              "  %5 = const i16 1023\n"
+              "  store i16 %5, %4\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(a_zeroed_pointer_is_null) {
+    // A pointer variable starts zeroed too: the null pointer, a const ptr 0.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                "main :: () {\n"
+                                "    p : *u8;\n"
+                                "    p = \"hi\";\n"
+                                "    puts(p);\n"
+                                "}\n");
+    CHECK_STR(proc_ir(ir_print(&a, m), "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local ptr\n"
+              "  %1 = const ptr 0\n"
+              "  store ptr %1, %0\n"
+              "  %2 = addr @str.0\n"
+              "  store ptr %2, %0\n"
+              "  %3 = load ptr %0\n"
+              "  %4 = call @puts(%3)\n"
+              "  ret\n"
+              "}\n");
+    // LLVM has no integer constant of a pointer type: the backend makes it
+    // LLVM's null.
+    String text = {}, error = {};
+    CHECK(llvm_ir_text(&a, m, target_host(), &text, &error));
+    CHECK(contains(text, "store ptr null, ptr %"));
+    arena_free(&a);
+}
+
+TEST(nothing_is_lowered_after_a_return) {
+    // A statement after a return can't run, and its block has ended, so it
+    // isn't lowered; a body that doesn't reach its end gets no ret of its
+    // own.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: () -> s32 {\n"
+                                          "    { return 1; }\n"
+                                          "}\n"
+                                          "g :: () {\n"
+                                          "    return;\n"
+                                          "    x := 2;\n"
+                                          "}\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "f"), "proc @f() -> i32 {\nb0:\n  %0 = const i32 1\n  ret %0\n}\n");
+    CHECK_STR(proc_ir(ir, "g"), "proc @g() {\nb0:\n  ret\n}\n");
     arena_free(&a);
 }
 
