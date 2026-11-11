@@ -1,23 +1,78 @@
 // checker.h: making sure a parsed program means something.
 //
 // The checker resolves every name to its declaration, works out the type of
-// every expression, and checks each call against the procedure called. It
-// fills in the tree as it goes (Ast.type, Ast_Call.proc), so the stages
-// after it never look anything up again.
+// every expression, folds the constants, and checks each call, declaration,
+// assignment and return against the types involved. It fills in the tree as
+// it goes (Ast.type, Ast.is_constant and Ast.constant, Ast_Name.decl,
+// Ast_Call.proc), so the stages after it never look anything up again.
+// checker.cpp checks declarations and statements, check_expr.cpp
+// expressions; check.h is what they share.
 //
-// Milestone 1's rules:
+// The rules (spec 6.1 and 6.4, which record the calls made here):
+//
+// Names.
 // - The program's procedures are visible everywhere, in any order.
+// - A name declared in a block (a variable or a constant) is visible from
+//   after its declaration to the end of the block. An inner block may
+//   declare the same name again, hiding the outer one; the same block may
+//   not ("'x' is already declared at PATH:L:C"). A procedure's parameters
+//   are in its body's block.
+// - A procedure's name used as a value: "procedures can only be called,
+//   for now". A call of one that returns nothing, used as a value: "'greet'
+//   returns nothing, so it has no value".
+//
+// Constants and types.
+// - An integer literal up to int's largest value is an untyped constant
+//   (type_untyped_int); a larger one has type u64. - applied directly to
+//   the literal 9223372036854775808 is the untyped constant int's most
+//   negative value.
+// - Arithmetic on untyped constants is exact, and must stay within int's
+//   range: otherwise "constant overflows 'int'". A constant N :: e; is
+//   untyped when e is. Typed constants fold as their type wraps at run time.
+// - Where an untyped constant meets an integer type (an operand, a declared
+//   type, an assignment, an argument, a return), it takes that type if its
+//   value fits, else "V doesn't fit in 'T'" (V signed, in decimal). Meeting
+//   none (x := 5;), it becomes an int.
+// - + - * & | ^: both operands untyped, the result is untyped; one untyped,
+//   it takes the other's type; both typed, the same type, or the type the
+//   other widens to implicitly (same sign and wider, or unsigned into a
+//   wider signed type; int with s64 gives the left one's). Otherwise
+//   "mismatched types 'A' and 'B' for 'OP'; cast one of them". No
+//   promotion: u8 + u8 is a u8, and wraps at 8 bits.
+// - << >>: the result has the left operand's type (int when that's untyped
+//   and the amount isn't a constant); the amount is any integer, masked to
+//   the left's width, in constants too.
+// - Operands that aren't integers: "'OP' needs integers, not 'T'" ("'-'
+//   needs an integer, not 'T'" for - and ~).
 // - A string literal has type string, and converts to *u8 implicitly (its
 //   bytes are stored with a zero after them, Jai's rule, so C can read it).
-// - An integer literal has type int, and converts to any integer type it
-//   fits in.
+//   A variable can't hold a string yet.
+//
+// Statements.
+// - Declarations, assignments, arguments and returns convert their value
+//   by the rules above: an untyped constant takes the type, an integer
+//   widens; otherwise "a value of type 'A' doesn't convert to 'B'
+//   implicitly" (an argument: "argument N of 'f' has type 'A', which can't
+//   be converted to 'B'"). A compound assignment x op= e converts e to x's
+//   type (a shift's amount: any integer).
+// - Only a variable can be assigned to: not a constant, a parameter
+//   (read-only, spec 6.1) or a procedure ("can't assign to 'N': it's a
+//   constant"), nor anything but a name.
+// - N :: e; needs e known while compiling: "the value of constant 'N'
+//   isn't known while compiling".
+// - A return gives a value exactly when its procedure returns one. A
+//   procedure that returns a value mustn't reach the '}' of its body: a
+//   block reaches its end unless its last statement is a return, or a
+//   block that doesn't reach its own end.
+// - An expression statement must be a call, whose value may be ignored
+//   (spec 6.7).
+//
+// The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - main must exist, have a body, take nothing and return nothing.
-// - A procedure with a body returns nothing: there's no return statement
-//   yet, so it couldn't give back a value.
-// - Every statement is a call, whose value may be ignored (spec 6.7).
-// After an error, an expression whose type is unknown reports nothing more,
-// so one mistake gives one message.
+//
+// After an error, an expression whose type is unknown (null) reports
+// nothing more, so one mistake gives one message.
 //
 // The checker also runs after syntax errors, so they and the type errors in
 // the rest of the file are reported together. A declaration the parser gave

@@ -121,6 +121,18 @@ static String messages(Arena *a, Diagnostics *d) {
     return all;
 }
 
+// The messages for `text` (lexed with src()), parsed and checked, in source
+// order as rig build prints them; "" when it checks.
+static String check_source(Arena *a, const char *text) {
+    Token_List *list = src(text);
+    Ast_File *file = parse(list->tokens, a, &list->diag);
+    check(file, a, &list->diag);
+    diag_sort(&list->diag);
+    String result = messages(a, &list->diag);
+    token_list_free(list);
+    return result;
+}
+
 // Parses, checks and lowers the tokens, which must check cleanly; the module
 // lives in the arena.
 static Ir_Module *lower_tokens(Arena *a, const char *description) {
