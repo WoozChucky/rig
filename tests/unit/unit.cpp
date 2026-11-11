@@ -159,3 +159,4 @@ int main(int argc, char **argv) {
 #include "test_os.cpp"
 #include "test_diag.cpp"
 #include "test_tokens.cpp"
+#include "test_ast.cpp"
