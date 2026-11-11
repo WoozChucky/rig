@@ -451,7 +451,7 @@ static String generate_grammar(Arena *a, String tmpl, const Grammar_Tables *t, A
             if (!string_eq(name, str(KEYWORD_GROUP_NAMES[g]))) continue;
             known = keywords_used[g] = true;
             if (grammar_out_keywords(&out, t, (Keyword_Group)g) == 0) {
-                // \b(?:)\b would match nothing, at every word boundary.
+                // \b(?:)\b would match an empty string at every word boundary.
                 array_add(problems, string_printf(a, "no keyword is in %s: remove its rule from the template",
                                                   KEYWORD_GROUP_NAMES[g]));
             }
@@ -551,8 +551,10 @@ TEST(vscode_grammar_is_current) {
     }
 
     String committed = {};
-    if (!os_read_file(&a, str(GRAMMAR_PATH), &committed)) committed = {};
-    if (!string_eq(committed, generated)) {
+    if (!os_read_file(&a, str(GRAMMAR_PATH), &committed)) {
+        fprintf(stderr, "  run RIG_BLESS=1 bin/unit-tests vscode_grammar to write it\n");
+        test_fail(__FILE__, __LINE__, "reading " GRAMMAR_PATH);
+    } else if (!string_eq(committed, generated)) {
         s64 at = 0;
         while (at < committed.count && at < generated.count && committed.data[at] == generated.data[at]) at++;
         String committed_line = {}, generated_line = {};
@@ -566,6 +568,183 @@ TEST(vscode_grammar_is_current) {
                 (long long)line, STR_ARG(committed_line), STR_ARG(generated_line));
         test_fail(__FILE__, __LINE__, "comparing " GRAMMAR_PATH);
     }
+    array_free(&problems);
+    arena_free(&a);
+}
+
+// ---------------------------------------------------------------------------
+// The generator on small templates and altered tables: what it fills in, and
+// each check failing on purpose.
+
+static bool grammar_has_problem(Array<String> problems, const char *expected) {
+    for (s64 i = 0; i < problems.count; i++) {
+        if (string_eq(problems[i], str(expected))) return true;
+    }
+    for (s64 i = 0; i < problems.count; i++) fprintf(stderr, "  problem: " STR_FMT "\n", STR_ARG(problems[i]));
+    fprintf(stderr, "  expected: %s\n", expected);
+    return false;
+}
+
+TEST(vscode_grammar_fills_in_the_placeholders) {
+    // A lexer with three keywords and four punctuation tokens, listed
+    // shortest first, to see the generator put the longest first itself.
+    static const Keyword keywords[] = {{"if", TOKEN_IF}, {"true", TOKEN_TRUE}, {"while", TOKEN_WHILE}};
+    static const Keyword_Scope keyword_scopes[] = {
+        {"if", KEYWORDS_CONTROL}, {"true", KEYWORDS_CONSTANT}, {"while", KEYWORDS_CONTROL}};
+    static const Punctuation punctuation[] = {
+        {"<", TOKEN_LESS}, {"..", TOKEN_DOT_DOT}, {"(", TOKEN_LPAREN}, {"<<", TOKEN_SHIFT_LEFT}};
+    static const Operator_Scope operator_scopes[] = {
+        {"<", OPERATORS_COMPARISON}, {"..", OPERATORS_RANGE}, {"(", OPERATORS_NONE}, {"<<", OPERATORS_BITWISE}};
+    static Type *const named_types[] = {&type_int};
+    static const char *const reserved_types[] = {"bool"};
+    Grammar_Tables tables = {
+        keywords,    GRAMMAR_COUNT(keywords),    keyword_scopes,  GRAMMAR_COUNT(keyword_scopes),
+        punctuation, GRAMMAR_COUNT(punctuation), operator_scopes, GRAMMAR_COUNT(operator_scopes),
+        named_types, GRAMMAR_COUNT(named_types), reserved_types,  GRAMMAR_COUNT(reserved_types),
+    };
+    const char *tmpl =
+        "{\n"
+        "    \"keywords\": \"@KEYWORDS_CONTROL@ @KEYWORDS_CONSTANT@\",\n"
+        "    \"types\": \"@TYPES@\",\n"
+        "    \"operators\": {\n"
+        "        \"match\": \"@OPERATORS@\",\n"
+        "        \"captures\": \"@OPERATOR_CAPTURES@\"\n"
+        "    }\n"
+        "}\n";
+
+    Arena a = arena_make();
+    Array<String> problems = {};
+    String grammar = generate_grammar(&a, str(tmpl), &tables, &problems);
+    CHECK_EQ(problems.count, 0);
+    // The bracket gets no group; '.' gets a backslash, doubled in JSON.
+    CHECK_STR(grammar,
+              "{\n"
+              "    \"keywords\": \"if|while true\",\n"
+              "    \"types\": \"int|bool\",\n"
+              "    \"operators\": {\n"
+              "        \"match\": \"(\\\\.\\\\.)|(<<)|(<)\",\n"
+              "        \"captures\": {\n"
+              "            \"1\": {\n"
+              "                \"name\": \"keyword.operator.range.rig\"\n"
+              "            },\n"
+              "            \"2\": {\n"
+              "                \"name\": \"keyword.operator.bitwise.rig\"\n"
+              "            },\n"
+              "            \"3\": {\n"
+              "                \"name\": \"keyword.operator.comparison.rig\"\n"
+              "            }\n"
+              "        }\n"
+              "    }\n"
+              "}\n");
+    array_free(&problems);
+    arena_free(&a);
+}
+
+TEST(vscode_grammar_needs_a_scope_for_every_keyword) {
+    Keyword_Scope scopes[GRAMMAR_COUNT(KEYWORD_SCOPES)];
+    s64 n = 0;
+    for (const Keyword_Scope &s : KEYWORD_SCOPES) {
+        if (strcmp(s.text, "defer") != 0) scopes[n++] = s;
+    }
+    Grammar_Tables tables = grammar_tables();
+    tables.keyword_scopes = scopes;
+    tables.keyword_scope_count = n;
+
+    Arena a = arena_make();
+    Array<String> problems = {};
+    generate_grammar(&a, str(""), &tables, &problems);
+    CHECK(grammar_has_problem(problems,
+                              "keyword 'defer' has no scope in tests/unit/test_grammar.cpp's KEYWORD_SCOPES: add it"));
+    array_free(&problems);
+    arena_free(&a);
+}
+
+TEST(vscode_grammar_has_no_scope_for_a_keyword_the_lexer_lacks) {
+    Keyword_Scope scopes[GRAMMAR_COUNT(KEYWORD_SCOPES) + 1];
+    s64 n = 0;
+    for (const Keyword_Scope &s : KEYWORD_SCOPES) scopes[n++] = s;
+    scopes[n++] = {"goto", KEYWORDS_CONTROL};
+    Grammar_Tables tables = grammar_tables();
+    tables.keyword_scopes = scopes;
+    tables.keyword_scope_count = n;
+
+    Arena a = arena_make();
+    Array<String> problems = {};
+    generate_grammar(&a, str(""), &tables, &problems);
+    CHECK(grammar_has_problem(
+        problems, "tests/unit/test_grammar.cpp's KEYWORD_SCOPES has 'goto', which isn't a keyword in src/lexer.cpp: remove it"));
+    array_free(&problems);
+    arena_free(&a);
+}
+
+TEST(vscode_grammar_needs_a_scope_for_every_operator) {
+    Operator_Scope scopes[GRAMMAR_COUNT(OPERATOR_SCOPES) + 1];
+    s64 n = 0;
+    for (const Operator_Scope &s : OPERATOR_SCOPES) {
+        if (strcmp(s.text, "<<=") != 0) scopes[n++] = s;
+    }
+    scopes[n++] = {"<=>", OPERATORS_COMPARISON};
+    Grammar_Tables tables = grammar_tables();
+    tables.operator_scopes = scopes;
+    tables.operator_scope_count = n;
+
+    Arena a = arena_make();
+    Array<String> problems = {};
+    generate_grammar(&a, str(""), &tables, &problems);
+    CHECK(grammar_has_problem(problems,
+                              "operator '<<=' has no scope in tests/unit/test_grammar.cpp's OPERATOR_SCOPES: add it"));
+    CHECK(grammar_has_problem(
+        problems,
+        "tests/unit/test_grammar.cpp's OPERATOR_SCOPES has '<=>', which isn't punctuation in src/lexer.cpp: remove it"));
+    array_free(&problems);
+    arena_free(&a);
+}
+
+TEST(vscode_grammar_drops_a_reserved_type_once_built_in) {
+    static const char *const reserved[] = {"int", "bool"};
+    Grammar_Tables tables = grammar_tables();
+    tables.reserved_types = reserved;
+    tables.reserved_type_count = GRAMMAR_COUNT(reserved);
+
+    Arena a = arena_make();
+    Array<String> problems = {};
+    generate_grammar(&a, str(""), &tables, &problems);
+    CHECK(grammar_has_problem(problems, "'int' is built in now: remove it from RESERVED_TYPES"));
+
+    // A name the checker knows some other way than through NAMED_TYPES: the
+    // grammar couldn't list it, so it must go there first.
+    tables.named_type_count = 0;
+    problems.count = 0;
+    generate_grammar(&a, str(""), &tables, &problems);
+    CHECK(grammar_has_problem(problems,
+                              "'int' is built in now, but type_from_name doesn't find it in src/types.cpp's "
+                              "NAMED_TYPES: add it there, and remove it from RESERVED_TYPES"));
+    array_free(&problems);
+    arena_free(&a);
+}
+
+TEST(vscode_grammar_knows_every_placeholder) {
+    Grammar_Tables tables = grammar_tables();
+    Arena a = arena_make();
+    Array<String> problems = {};
+    generate_grammar(&a, str("\"@NOPE@\" @OPERATOR_CAPTURES@"), &tables, &problems);
+    CHECK(grammar_has_problem(problems, "the template has @NOPE@, which tests/unit/test_grammar.cpp doesn't fill"));
+    CHECK(grammar_has_problem(problems,
+                              "@OPERATOR_CAPTURES@ must be a whole JSON string: \"@OPERATOR_CAPTURES@\""));
+    CHECK(grammar_has_problem(problems, "the template has no @KEYWORDS_CONTROL@: add a rule for those keywords"));
+    CHECK(grammar_has_problem(problems, "the template has no @TYPES@: add a rule for the type names"));
+
+    // A group with no keywords in it would be \b(?:)\b, which matches at
+    // every word boundary.
+    static const Keyword_Scope scopes[] = {{"if", KEYWORDS_CONTROL}};
+    static const Keyword keywords[] = {{"if", TOKEN_IF}};
+    tables.keywords = keywords;
+    tables.keyword_count = 1;
+    tables.keyword_scopes = scopes;
+    tables.keyword_scope_count = 1;
+    problems.count = 0;
+    generate_grammar(&a, str("@KEYWORDS_CAST@"), &tables, &problems);
+    CHECK(grammar_has_problem(problems, "no keyword is in KEYWORDS_CAST: remove its rule from the template"));
     array_free(&problems);
     arena_free(&a);
 }
