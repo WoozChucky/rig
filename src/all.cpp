@@ -3,3 +3,4 @@
 // their own main. A new source file is added here, nowhere else.
 
 #include "common.cpp"
+#include "base.cpp"
