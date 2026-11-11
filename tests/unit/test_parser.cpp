@@ -209,12 +209,44 @@ TEST(a_directive_where_the_name_goes_keeps_the_name) {
     arena_free(&a);
 }
 
+// Parses a broken declaration of greet followed by main calling it, and
+// checks greet's entry kept its name and the parse error is `error`.
+static void check_named_broken_greet(Arena *a, const char *greet, const char *error) {
+    String errors;
+    String dump = parse_dump(a, string_cstr(a, string_printf(a, "%s | IDENT:main :: ( ) { IDENT:greet ( ) ; }", greet)),
+                             &errors);
+    CHECK_STR(errors, error);
+    CHECK_STR(dump, "(broken greet)\n(proc main (params) (block (call greet)))\n");
+}
+
+TEST(a_mistyped_declaration_keeps_its_name) {
+    // What can only be greet's declaration, written wrong, keeps the name:
+    // the '::' left out (a C habit), a variable's ':=' or '=' for it, or a
+    // stray token between the name and the '::'.
+    Arena a = arena_make();
+    check_named_broken_greet(&a, "IDENT:greet ( ) { }", "1:3: expected '::', found '('\n");
+    check_named_broken_greet(&a, "IDENT:greet := ( ) { }", "1:3: expected '::', found ':='\n");
+    check_named_broken_greet(&a, "IDENT:greet = ( ) { }", "1:3: expected '::', found '='\n");
+    check_named_broken_greet(&a, "IDENT:greet * :: ( ) { }", "1:3: expected '::', found '*'\n");
+    // Without its '::', a signature is still told from a call by what comes
+    // before any ';': a return type, or a directive.
+    check_named_broken_greet(&a, "IDENT:greet ( IDENT:s : * IDENT:u8 ) -> IDENT:s32 #foreign IDENT:libc ;",
+                             "1:3: expected '::', found '('\n");
+    check_named_broken_greet(&a, "IDENT:greet ( ) #foreign IDENT:libc ;", "1:3: expected '::', found '('\n");
+    arena_free(&a);
+}
+
 TEST(a_name_is_kept_only_where_a_declaration_could_be) {
     // A stray call outside any body names nothing: 'foo(' can't begin foo's
     // declaration, and naming it would hide the unknown foo everywhere else.
     Arena a = arena_make();
     String errors;
     String dump = parse_dump(&a, "IDENT:main :: ( ) { } | IDENT:foo ( STRING:x ) ;", &errors);
+    CHECK_STR(errors, "2:3: expected '::', found '('\n");
+    CHECK_STR(dump, "(proc main (params) (block))\n(broken)\n");
+    // Its ';' comes first, so a block after it on the line doesn't make it
+    // a signature.
+    dump = parse_dump(&a, "IDENT:main :: ( ) { } | IDENT:foo ( ) ; { }", &errors);
     CHECK_STR(errors, "2:3: expected '::', found '('\n");
     CHECK_STR(dump, "(proc main (params) (block))\n(broken)\n");
 

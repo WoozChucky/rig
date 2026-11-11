@@ -249,27 +249,70 @@ static s64 declaration_after_stray_tokens(Parser *p, s64 start) {
     return -1;
 }
 
+// The first token from index `from` on, still on the line of token `start`,
+// whose kind is one of `kinds` (`count` of them); TOKEN_EOF when the line
+// ends without one.
+static Token_Kind first_on_line(Parser *p, s64 start, s64 from, const Token_Kind *kinds, s64 count) {
+    s32 line = p->tokens[start].pos.line;
+    for (s64 i = from; p->tokens[i].kind != TOKEN_EOF && p->tokens[i].pos.line == line; i++) {
+        for (s64 k = 0; k < count; k++) {
+            if (p->tokens[i].kind == kinds[k]) return kinds[k];
+        }
+    }
+    return TOKEN_EOF;
+}
+
+// Whether the declaration that failed at token `start`, an identifier,
+// looks like a declaration of that name, mistyped. That is the name
+// followed by:
+// - '::' (the mistake came later), or ':' for it (`greet : () {`);
+// - ':=' or '=' for it (`greet := () {`, the way a variable is declared);
+// - a character the lexer refused (perhaps a mistyped '::' too);
+// - '(' with no '::' (`greet () {`, a C habit), where the line has the
+//   shape of a signature: a '{', a '->' or a directive (`#foreign`) before
+//   any ';'. A call statement (`foo("x");`) reaches its ';' first;
+// - stray tokens and then '::' on the same line (`greet * :: () {`),
+//   before any '(' or '{', which would begin a signature or a body.
+static bool looks_declared(Parser *p, s64 start) {
+    // start isn't TOKEN_EOF (parse() stops there), so a token follows it.
+    Token_Kind after = p->tokens[start + 1].kind;
+    switch (after) {
+    case TOKEN_COLON_COLON:
+    case TOKEN_COLON:
+    case TOKEN_COLON_EQUAL:
+    case TOKEN_EQUAL:
+    case TOKEN_ERROR: return true;
+    case TOKEN_LPAREN: {
+        // After the '(': which comes first, a ';' or a signature's mark.
+        static const Token_Kind ENDS[] = {TOKEN_SEMICOLON, TOKEN_LBRACE, TOKEN_ARROW, TOKEN_DIRECTIVE};
+        Token_Kind first = first_on_line(p, start, start + 2, ENDS, 4);
+        return first != TOKEN_SEMICOLON && first != TOKEN_EOF;
+    }
+    default: {
+        // A '::' later, before anything that begins a signature or a body.
+        static const Token_Kind ENDS[] = {TOKEN_COLON_COLON, TOKEN_LPAREN, TOKEN_LBRACE};
+        return first_on_line(p, start, start + 1, ENDS, 3) == TOKEN_COLON_COLON;
+    }
+    }
+}
+
 // The entry kept for a declaration the parser gave up on, which began at
 // token `start`. It keeps a name only where the tokens look like a
-// declaration of it: an identifier followed by '::', by ':' (`greet : () {`
-// is still plainly greet's declaration, with a mistyped '::') or by a
-// character the lexer refused (perhaps a mistyped '::' too), or a directive
+// declaration of it: an identifier, as looks_declared says, or a directive
 // followed by '::' (`#greet ::`, a stray '#' the lexer read as part of the
 // name). Taking a name means less is reported (calls to greet), so it is
-// taken only there: an identifier followed by anything else (a stray
-// `foo("x");` outside any body) would hide every unknown use of foo in the
-// file. Otherwise, and when the declaration starts with anything else (a
-// stray '}'), the entry has no name.
+// taken only there: anything else after an identifier (a stray `foo("x");`
+// outside any body) would hide every unknown use of foo in the file.
+// Otherwise, and when the declaration starts with anything else (a stray
+// '}'), the entry has no name.
 static Ast_Proc *broken_entry(Parser *p, s64 start) {
     Token *first = &p->tokens[start];
-    // first isn't TOKEN_EOF (parse() stops there), so a token follows it.
-    Token_Kind after = p->tokens[start + 1].kind;
     Ast_Proc *broken = ast_new<Ast_Proc>(p->arena, AST_PROC, first->pos);
     broken->is_broken = true;
-    bool looks_declared = first->kind == TOKEN_IDENT
-                              ? after == TOKEN_COLON_COLON || after == TOKEN_COLON || after == TOKEN_ERROR
-                              : first->kind == TOKEN_DIRECTIVE && after == TOKEN_COLON_COLON;
-    if (looks_declared) broken->name = first->text;
+    bool named = first->kind == TOKEN_IDENT
+                     ? looks_declared(p, start)
+                     : first->kind == TOKEN_DIRECTIVE && p->tokens[start + 1].kind == TOKEN_COLON_COLON;
+    if (named) broken->name = first->text;
     return broken;
 }
 
