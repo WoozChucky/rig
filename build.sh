@@ -22,7 +22,7 @@ if [ ! -x "$LLVM/bin/llvm-config" ]; then
     exit 1
 fi
 
-FLAGS="-std=c++23 -fno-exceptions -fno-rtti -g $OPT -Wall -Wextra -I$LLVM/include"
+FLAGS="-std=c++23 -fno-exceptions -fno-rtti -g $OPT -Wall -Wextra -Wno-unused-parameter -I$LLVM/include"
 # The LLVM components Rig uses: the IR (core), and the x86 target that turns
 # it into object files.
 LLVM_LIBS="$("$LLVM/bin/llvm-config" --link-static --libfiles core target x86codegen x86asmparser x86desc x86info)"
@@ -33,6 +33,8 @@ SYSTEM_LIBS="-lpthread -lrt -ldl -lm"
 
 mkdir -p bin
 $CXX $FLAGS src/rig.cpp $LLVM_LIBS $SYSTEM_LIBS -o bin/rig
+# The unit tests: the whole compiler again, with the tests and their own main.
+$CXX $FLAGS tests/unit/unit.cpp $LLVM_LIBS $SYSTEM_LIBS -o bin/unit-tests
 
 # Rig links programs with LLVM's lld, shipped beside rig (spec section 3).
 cp "$LLVM/bin/lld" bin/ld.lld
