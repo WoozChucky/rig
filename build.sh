@@ -33,6 +33,8 @@ SYSTEM_LIBS="-lpthread -lrt -ldl -lm"
 
 mkdir -p bin
 $CXX $FLAGS src/rig.cpp $LLVM_LIBS $SYSTEM_LIBS -o bin/rig
+# The unit tests: the whole compiler again, with the tests and their own main.
+$CXX $FLAGS tests/unit/unit.cpp $LLVM_LIBS $SYSTEM_LIBS -o bin/unit-tests
 
 # Rig links programs with LLVM's lld, shipped beside rig (spec section 3).
 cp "$LLVM/bin/lld" bin/ld.lld

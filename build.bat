@@ -46,6 +46,8 @@ set FLAGS=-std=c++23 -fno-exceptions -fno-rtti -g %OPT% -Wall -Wextra -fms-runti
 
 if not exist bin mkdir bin
 clang++ %FLAGS% src\rig.cpp -L"%LLVM%\lib" %LLVM_LIBS% %SYSTEM_LIBS% -o bin\rig.exe || exit /b 1
+rem The unit tests: the whole compiler again, with the tests and their own main.
+clang++ %FLAGS% tests\unit\unit.cpp -L"%LLVM%\lib" %LLVM_LIBS% %SYSTEM_LIBS% -o bin\unit-tests.exe || exit /b 1
 
 rem Rig falls back to LLVM's lld-link when Visual Studio has no link.exe.
 copy /y "%LLVM%\bin\lld-link.exe" bin\lld-link.exe >nul || exit /b 1
