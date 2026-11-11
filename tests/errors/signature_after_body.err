@@ -1,0 +1,6 @@
+tests/errors/signature_after_body.rig:1:14: error: unknown identifier 'putz'
+    main :: () { putz("x"); }
+                 ^
+tests/errors/signature_after_body.rig:2:18: error: unknown library 'kernel'; the only one so far is 'libc'
+    f :: () #foreign kernel;
+                     ^

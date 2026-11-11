@@ -10,6 +10,9 @@ on:
 jobs:
   linux:
     runs-on: ubuntu-24.04
+    # A whole run takes minutes (less with LLVM cached); a hang stops here
+    # rather than at GitHub's six hours.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
