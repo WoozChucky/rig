@@ -8,21 +8,23 @@
 
 #pragma once
 
-#include "../../src/common.h"
+#include "../../src/base.h"
 
 typedef void (*Test_Function)();
 
-void test_register(const char *name, Test_Function function);
+void test_register(const char *name, const char *file, Test_Function function);
 void test_fail(const char *file, int line, const char *message);
 void test_fail_values(const char *file, int line, const char *check, s64 a, s64 b);
+void test_check_str(const char *file, int line, const char *check, String actual, const char *expected);
+void test_check_str(const char *file, int line, const char *check, const char *actual, const char *expected);
 
 struct Test_Registrar {
-    Test_Registrar(const char *name, Test_Function function) { test_register(name, function); }
+    Test_Registrar(const char *name, const char *file, Test_Function function) { test_register(name, file, function); }
 };
 
 #define TEST(name)                                                    \
     static void test_##name();                                        \
-    static Test_Registrar test_registrar_##name(#name, test_##name); \
+    static Test_Registrar test_registrar_##name(#name, __FILE__, test_##name); \
     static void test_##name()
 
 #define CHECK(cond)                                                       \
@@ -38,3 +40,8 @@ struct Test_Registrar {
         if (check_a_ != check_b_)                                                          \
             test_fail_values(__FILE__, __LINE__, "CHECK_EQ(" #a ", " #b ")", check_a_, check_b_); \
     } while (0)
+
+// Compares a String or a C string with an expected C string, byte for byte,
+// and prints both when they differ.
+#define CHECK_STR(actual, expected) \
+    test_check_str(__FILE__, __LINE__, "CHECK_STR(" #actual ", " #expected ")", (actual), (expected))
