@@ -35,7 +35,12 @@ enum Ast_Kind : u8 {
 
 struct Ast {
     Ast_Kind kind;
-    Position pos;      // where the node starts; an operator's node: the operator
+    Position pos;      // where messages about the node point: its first token, but an
+                       // operator's node is at the operator, and a call's at its '('
+    Position start;    // where the node's source starts: its leftmost token, the
+                       // outermost '(' around it included; a message about a whole
+                       // value points here (ast_new sets it to pos, the parser
+                       // moves it left for operators, calls and parentheses)
     Type *type;        // filled in by the checker; null until then, or after an error
     bool is_constant;  // the checker knows the value while compiling (spec 6.4)
     u64 constant;      // that value's bits: an integer's sign-extended to 64 bits when its
@@ -147,6 +152,7 @@ T *ast_new(Arena *a, Ast_Kind kind, Position pos) {
     T *node = arena_new<T>(a);
     node->kind = kind;
     node->pos = pos;
+    node->start = pos;
     return node;
 }
 

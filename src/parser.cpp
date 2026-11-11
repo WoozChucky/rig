@@ -75,9 +75,12 @@ static Ast *parse_primary(Parser *p) {
         return string;
     }
     case TOKEN_LPAREN: {
+        // Parentheses only group, so they add no node; the value inside
+        // starts at the '(' though, for messages about the whole value.
         advance(p);
         Ast *inner = parse_expression(p, 1);
         if (!inner || !expect(p, TOKEN_RPAREN)) return nullptr;
+        inner->start = t->pos;
         return inner;
     }
     default:
@@ -92,6 +95,7 @@ static Ast *parse_postfix(Parser *p) {
     while (e && peek(p)->kind == TOKEN_LPAREN) {
         Ast_Call *call = ast_new<Ast_Call>(p->arena, AST_CALL, peek(p)->pos);
         advance(p);
+        call->start = e->start;
         call->callee = e;
         if (peek(p)->kind != TOKEN_RPAREN) {
             for (;;) {
@@ -173,6 +177,7 @@ static Ast *parse_expression(Parser *p, int min_precedence) {
         Ast *right = parse_expression(p, precedence + 1);
         if (!right) return nullptr;
         Ast_Binary *binary = ast_new<Ast_Binary>(p->arena, AST_BINARY, op->pos);
+        binary->start = left->start;
         binary->op = op->kind;
         binary->left = left;
         binary->right = right;

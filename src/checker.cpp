@@ -28,7 +28,7 @@ static void pop_scope(Checker *c) {
     c->scopes.count--;
 }
 
-Ast *lookup(Checker *c, String name) {
+Ast *check_lookup(Checker *c, String name) {
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {
         Ast **found = table_get(&c->scopes[i], name);
         if (found) return *found;
@@ -54,7 +54,7 @@ static void declare(Checker *c, String name, Ast *decl) {
 
 // "a value of type 'A' doesn't convert to 'B' implicitly", at the value.
 static void report_no_conversion(Checker *c, Ast *value, Type *to) {
-    diag_error(c->diag, start_of(value), "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly",
+    diag_error(c->diag, value->start, "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly",
                STR_ARG(type_name(c->arena, value->type)), STR_ARG(type_name(c->arena, to)));
 }
 
@@ -66,14 +66,14 @@ static void check_var(Checker *c, Ast_Var *var) {
     if (var->value) {
         Type *value = check_value(c, var->value);
         if (var->type_expr) {
-            if (!convert(c, var->value, t)) report_no_conversion(c, var->value, t);
+            if (!check_convert(c, var->value, t)) report_no_conversion(c, var->value, t);
         } else if (value) {
-            default_type(var->value);
+            check_default_type(var->value);
             t = var->value->type;
             // A string is a pointer and a length (spec 6.5), which the IR
             // can't hold yet.
             if (t == &type_string) {
-                diag_error(c->diag, start_of(var->value), "variables can't hold a 'string' yet; give it the type '*u8'");
+                diag_error(c->diag, var->value->start, "variables can't hold a 'string' yet; give it the type '*u8'");
                 t = nullptr;
             }
         }
@@ -82,12 +82,17 @@ static void check_var(Checker *c, Ast_Var *var) {
     declare(c, var->name, var);
 }
 
-// N :: e; the value must be known while compiling, and the constant keeps
-// it, with its type: untyped when e is, so N meets types as a literal does.
+// N :: e; the value must be an integer known while compiling, and the
+// constant keeps it, with its type: untyped when e is, so N meets types as a
+// literal does. Only integers fold so far, so a string literal, though known
+// while compiling, can't be a constant yet.
 static void check_const(Checker *c, Ast_Const *constant) {
     Type *t = check_value(c, constant->value);
-    if (t && !constant->value->is_constant) {
-        diag_error(c->diag, start_of(constant->value), "the value of constant '" STR_FMT "' isn't known while compiling",
+    if (t && t->kind != TYPE_INTEGER) {
+        diag_error(c->diag, constant->value->start, "a constant can only be an integer, for now");
+        t = nullptr;
+    } else if (t && !constant->value->is_constant) {
+        diag_error(c->diag, constant->value->start, "the value of constant '" STR_FMT "' isn't known while compiling",
                    STR_ARG(constant->name));
         t = nullptr;
     }
@@ -103,11 +108,11 @@ static void check_const(Checker *c, Ast_Const *constant) {
 // what else it is.
 static Type *check_target(Checker *c, Ast *target) {
     if (target->kind != AST_NAME) {
-        diag_error(c->diag, start_of(target), "only a variable can be assigned to");
+        diag_error(c->diag, target->start, "only a variable can be assigned to");
         return nullptr;
     }
     Ast_Name *name = (Ast_Name *)target;
-    Ast *decl = lookup(c, name->name);
+    Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
     const char *what = nullptr;
     if (!decl) {
@@ -137,7 +142,7 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
     Type *value = check_value(c, assign->value);
     if (!to || !value) return;
     if (assign->op == TOKEN_EQUAL) {
-        if (!convert(c, assign->value, to)) report_no_conversion(c, assign->value, to);
+        if (!check_convert(c, assign->value, to)) report_no_conversion(c, assign->value, to);
         return;
     }
     Type *not_integer = to->kind != TYPE_INTEGER ? to : value->kind != TYPE_INTEGER ? value : nullptr;
@@ -148,8 +153,8 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
     }
     Token_Kind op = compound_operator(assign->op);
     if (op == TOKEN_SHIFT_LEFT || op == TOKEN_SHIFT_RIGHT) {
-        default_type(assign->value);
-    } else if (!convert(c, assign->value, to)) {
+        check_default_type(assign->value);
+    } else if (!check_convert(c, assign->value, to)) {
         report_no_conversion(c, assign->value, to);
     }
 }
@@ -173,7 +178,7 @@ static void check_return(Checker *c, Ast_Return *ret) {
                    STR_ARG(proc->name));
         return;
     }
-    if (check_value(c, value) && !convert(c, value, result)) report_no_conversion(c, value, result);
+    if (check_value(c, value) && !check_convert(c, value, result)) report_no_conversion(c, value, result);
 }
 
 static void check_block(Checker *c, Ast_Block *block);
@@ -193,7 +198,7 @@ static void check_statement(Checker *c, Ast *statement) {
         // An expression, whose value is ignored (spec 6.7): only a call does
         // anything, so anything else is reported, unless it was already.
         if (check_expression(c, statement) && statement->kind != AST_CALL) {
-            diag_error(c->diag, start_of(statement), "only a call can be a statement, for now");
+            diag_error(c->diag, statement->start, "only a call can be a statement, for now");
         }
         break;
     }

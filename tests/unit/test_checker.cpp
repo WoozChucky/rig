@@ -446,6 +446,21 @@ TEST(extreme_literals) {
                            "    w : int = 9223372036854775808;\n"
                            "}\n"),
               "2:15: a value of type 'u64' doesn't convert to 'int' implicitly\n");
+
+    // - applied directly to a larger literal is a number below int's range,
+    // not the u64 wrapped (which would make it positive): reported, as Go
+    // does. Through a u64 constant, it wraps as a u64's - does.
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    a := -9223372036854775809;\n"
+                           "    b := -18446744073709551615;\n"
+                           "    c := -(9223372036854775809);\n"
+                           "    N :: 18446744073709551615;\n"
+                           "    d := -N;\n"
+                           "}\n"),
+              "2:10: constant overflows 'int'\n"
+              "3:10: constant overflows 'int'\n"
+              "4:10: constant overflows 'int'\n");
     arena_free(&a);
 }
 
@@ -581,6 +596,18 @@ TEST(only_procedures_are_called) {
                            "}\n"),
               "4:5: 'puts' isn't a procedure, so it can't be called\n"
               "4:10: unknown identifier 'nope'\n");
+
+    // Calling anything but a name: the arguments are checked all the same.
+    CHECK_STR(check_source(&a,
+                           "f :: () -> s32 { return 1; }\n"
+                           "main :: () {\n"
+                           "    5(nope);\n"
+                           "    f()(other);\n"
+                           "}\n"),
+              "3:6: only a procedure's name can be called, for now\n"
+              "3:7: unknown identifier 'nope'\n"
+              "4:8: only a procedure's name can be called, for now\n"
+              "4:9: unknown identifier 'other'\n");
     arena_free(&a);
 }
 
@@ -655,9 +682,14 @@ TEST(local_constant_must_be_constant) {
                            "    N :: x + 1;\n"
                            "    M :: N;\n"
                            "    K :: f();\n"
+                           "    S :: \"hi\";\n"
+                           "    p : *u8 = \"a\";\n"
+                           "    P :: p;\n"
                            "}\n"),
               "4:10: the value of constant 'N' isn't known while compiling\n"
-              "6:10: the value of constant 'K' isn't known while compiling\n");
+              "6:10: the value of constant 'K' isn't known while compiling\n"
+              "7:10: a constant can only be an integer, for now\n"
+              "9:10: a constant can only be an integer, for now\n");
     arena_free(&a);
 }
 
@@ -671,11 +703,16 @@ TEST(bool_and_string_arent_integers) {
                            "    p : *u8 = \"a\";\n"
                            "    q := p + 1;\n"
                            "    r := ~p;\n"
+                           "    p += 1;\n"
+                           "    x := 1;\n"
+                           "    x <<= p;\n"
                            "}\n"),
               "2:14: '+' needs integers, not 'string'\n"
               "3:10: '-' needs an integer, not 'string'\n"
               "5:12: '+' needs integers, not '*u8'\n"
-              "6:10: '~' needs an integer, not '*u8'\n");
+              "6:10: '~' needs an integer, not '*u8'\n"
+              "7:7: '+=' needs integers, not '*u8'\n"
+              "9:7: '<<=' needs integers, not '*u8'\n");
     arena_free(&a);
 }
 
@@ -731,5 +768,32 @@ TEST(expressions_other_than_calls_still_arent_statements) {
                            "}\n"),
               "3:5: only a call can be a statement, for now\n"
               "4:5: unknown identifier 'nope'\n");
+    arena_free(&a);
+}
+
+TEST(a_value_in_parentheses_starts_at_the_parenthesis) {
+    // Parentheses add no node, but a message about the whole value points
+    // at the '(' that starts it, the outermost one; an operator's message
+    // still points at the operator.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                           "main :: () {\n"
+                           "    a : s32; b : s32;\n"
+                           "    x : u8 = (a + b);\n"
+                           "    y : u8 = ((a) * 2);\n"
+                           "    (a + 1);\n"
+                           "    puts((a));\n"
+                           "    z : u8 = (300);\n"
+                           "    w : u32 = (a) + (b + 1) * 2 - (a & b);\n"
+                           "    (a)(1);\n"
+                           "}\n"),
+              "4:14: a value of type 's32' doesn't convert to 'u8' implicitly\n"
+              "5:14: a value of type 's32' doesn't convert to 'u8' implicitly\n"
+              "6:5: only a call can be a statement, for now\n"
+              "7:10: argument 1 of 'puts' has type 's32', which can't be converted to '*u8'\n"
+              "8:14: 300 doesn't fit in 'u8'\n"
+              "9:15: a value of type 's32' doesn't convert to 'u32' implicitly\n"
+              "10:6: 'a' isn't a procedure, so it can't be called\n");
     arena_free(&a);
 }

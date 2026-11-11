@@ -27,7 +27,8 @@
 // - An integer literal up to int's largest value is an untyped constant
 //   (type_untyped_int); a larger one has type u64. - applied directly to
 //   the literal 9223372036854775808 is the untyped constant int's most
-//   negative value.
+//   negative value; applied directly to a larger literal, it's "constant
+//   overflows 'int'" (a number below int's range, not a u64 wrapped).
 // - Arithmetic on untyped constants is exact, and must stay within int's
 //   range: otherwise "constant overflows 'int'". A constant N :: e; is
 //   untyped when e is. Typed constants fold as their type wraps at run time.
@@ -45,7 +46,8 @@
 //   and the amount isn't a constant); the amount is any integer, masked to
 //   the left's width, in constants too.
 // - Operands that aren't integers: "'OP' needs integers, not 'T'" ("'-'
-//   needs an integer, not 'T'" for - and ~).
+//   needs an integer, not 'T'" for - and ~), and the same for a compound
+//   assignment's target or value ("'+=' needs integers, not '*u8'").
 // - A string literal has type string, and converts to *u8 implicitly (its
 //   bytes are stored with a zero after them, Jai's rule, so C can read it).
 //   A variable can't hold a string yet.
@@ -60,8 +62,9 @@
 // - Only a variable can be assigned to: not a constant, a parameter
 //   (read-only, spec 6.1) or a procedure ("can't assign to 'N': it's a
 //   constant"), nor anything but a name.
-// - N :: e; needs e known while compiling: "the value of constant 'N'
-//   isn't known while compiling".
+// - N :: e; needs e an integer ("a constant can only be an integer, for
+//   now": only integers fold yet) known while compiling ("the value of
+//   constant 'N' isn't known while compiling").
 // - A return gives a value exactly when its procedure returns one. A
 //   procedure that returns a value mustn't reach the '}' of its body: a
 //   block reaches its end unless its last statement is a return, or a
