@@ -114,7 +114,7 @@ struct Ir_Block {
 };
 
 struct Ir_Global {
-    String name;      // "str.0", or a Rig global's name (Task 5)
+    String name;      // "str.0", or a Rig global's name
     Ir_Type type;     // IR_VOID: constant bytes; otherwise a variable of this type
     String bytes;     // IR_VOID: the bytes, with a terminating zero
     u64 initial;      // a variable's first value, its bits

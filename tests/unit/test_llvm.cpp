@@ -230,7 +230,8 @@ TEST(llvm_operations_have_no_wrap_flags) {
     for (Ir_Op op : ops) last = emit_binary(p, b, op, IR_I64, x, y);
     emit_ret(p, b, last);
     String text = llvm_text(&a, m, target_host());
-    const char *names[] = {"add", "sub", "mul", "sdiv", "udiv", "srem", "urem", "and", "or", "xor", "shl", "lshr", "ashr"};
+    const char *names[] = {"add", "sub", "mul", "sdiv", "udiv", "srem", "urem",
+                           "and", "or",  "xor", "shl",  "lshr", "ashr"};
     for (const char *name : names) {
         CHECK(contains(text, string_cstr(&a, string_printf(&a, "= %s i64 %%0, %%1", name))));
     }
