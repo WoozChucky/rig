@@ -475,3 +475,128 @@ TEST(missing_operand_is_reported) {
     CHECK_STR(errors, "2:14: expected ';', found integer literal\n");
     arena_free(&a);
 }
+
+// Milestone 2a (issue #34): bools, comparisons and logic, if, while, for,
+// break and continue.
+
+TEST(parses_if_else_chain) {
+    // else if is an if as the else part: the chain nests to the right.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "if c { f(); } else if d { g(); } else { h(); }", &errors),
+              "(block (if (name c) (block (call f)) (if (name d) (block (call g)) (block (call h)))))");
+    CHECK_STR(errors, "");
+    // No else; parentheses around a condition are only a parenthesised
+    // expression.
+    CHECK_STR(body_dump(&a, "if (a) { } if b { x = 1; }", &errors),
+              "(block (if (name a) (block)) (if (name b) (block (assign = (name x) (int 1)))))");
+    CHECK_STR(errors, "");
+    // The bodies are always blocks in braces (spec 6.1).
+    body_dump(&a, "if a f();", &errors);
+    CHECK_STR(errors, "2:10: expected '{', found identifier 'f'\n");
+    body_dump(&a, "if a { } else f();", &errors);
+    CHECK_STR(errors, "2:19: expected '{', found identifier 'f'\n");
+    arena_free(&a);
+}
+
+TEST(parses_while_and_for) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "while i < 10 { i += 1; break; }", &errors),
+              "(block (while (binary < (name i) (int 10)) (block (assign += (name i) (int 1)) (break))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "for 0..9 { continue; } while true { }", &errors),
+              "(block (for it (int 0) (int 9) (block (continue))) (while (bool true) (block)))");
+    CHECK_STR(errors, "");
+    // The ends are whole expressions: '..' binds looser than any operator.
+    CHECK_STR(body_dump(&a, "for a + 1..f(b) * 2 { }", &errors),
+              "(block (for it (binary + (name a) (int 1)) (binary * (call f (name b)) (int 2)) (block)))");
+    CHECK_STR(errors, "");
+    body_dump(&a, "break", &errors);
+    CHECK_STR(errors, "3:1: expected ';', found '}'\n");
+    arena_free(&a);
+}
+
+// The for loop that is the first statement of f's body in `text`, or null
+// (after a failed check) when there's none.
+static Ast_For *first_loop(Arena *a, const char *text, Token_List **list) {
+    *list = src(text);
+    Ast_File *file = parse((*list)->tokens, a, &(*list)->diag);
+    CHECK_STR(messages(a, &(*list)->diag), "");
+    Ast_Block *body = file->procs[0]->body;
+    bool found = body && body->statements.count && body->statements[0]->kind == AST_FOR;
+    CHECK(found);
+    return found ? (Ast_For *)body->statements[0] : nullptr;
+}
+
+TEST(for_with_named_iterator) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "for i: a..b { g(i, it_index); }", &errors),
+              "(block (for i (name a) (name b) (block (call g (name i) (name it_index)))))");
+    CHECK_STR(errors, "");
+    // The iterator is at its name; it and it_index are read-only variables
+    // the loop declares.
+    Token_List *list;
+    Ast_For *loop = first_loop(&a, "f :: () {\n    for i: a..b { }\n}\n", &list);
+    if (loop) {
+        CHECK_STR(loop->iterator->name, "i");
+        CHECK_EQ(loop->iterator->pos.col, 9);
+        CHECK(loop->iterator->is_iterator);
+        CHECK_STR(loop->index->name, "it_index");
+        CHECK(loop->index->is_iterator);
+        CHECK_EQ(loop->dots.col, 13);
+    }
+    token_list_free(list);
+    // Without a name, the iterator is it, at the 'for'.
+    loop = first_loop(&a, "f :: () {\n    for 1..2 { }\n}\n", &list);
+    if (loop) {
+        CHECK_STR(loop->iterator->name, "it");
+        CHECK_EQ(loop->iterator->pos.col, 5);
+        CHECK(loop->iterator->is_iterator);
+    }
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(for_needs_a_range) {
+    // Only ranges, for now: a for over anything else (an array, milestone
+    // 2b) is reported at what it was given.
+    Arena a = arena_make();
+    String errors;
+    body_dump(&a, "for 10 { }", &errors);
+    CHECK_STR(errors, "2:9: 'for' needs a range, as in for 0..9, for now\n");
+    body_dump(&a, "for i: n + 1 { }", &errors);
+    CHECK_STR(errors, "2:12: 'for' needs a range, as in for 0..9, for now\n");
+    body_dump(&a, "for 0.. { }", &errors);
+    CHECK_STR(errors, "2:13: expected an expression, found '{'\n");
+    arena_free(&a);
+}
+
+TEST(comparison_precedence) {
+    // Go's levels (spec 6.1): || loosest, then &&, then the comparisons,
+    // then + and *; all left-associative.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "a + 1 < b && c == d || e;", &errors),
+              "(block (binary || (binary && (binary < (binary + (name a) (int 1)) (name b)) (binary == (name c) "
+              "(name d))) (name e)))");
+    CHECK_STR(errors, "");
+    // Unlike C, x & 1 == 0 is (x & 1) == 0: & is a multiplication.
+    CHECK_STR(body_dump(&a, "x & 1 == 0;", &errors), "(block (binary == (binary & (name x) (int 1)) (int 0)))");
+    // The comparisons are one level, grouping from the left like the rest
+    // (the checker then finds that a bool doesn't order).
+    CHECK_STR(body_dump(&a, "a <= b != c >= d;", &errors),
+              "(block (binary >= (binary != (binary <= (name a) (name b)) (name c)) (name d)))");
+    CHECK_STR(body_dump(&a, "a || b || c && d;", &errors),
+              "(block (binary || (binary || (name a) (name b)) (binary && (name c) (name d))))");
+    CHECK_STR(body_dump(&a, "a > b; a >= b; a != b;", &errors),
+              "(block (binary > (name a) (name b)) (binary >= (name a) (name b)) (binary != (name a) (name b)))");
+    // ! is a prefix operator, binding tighter than any binary one.
+    CHECK_STR(body_dump(&a, "!a && !!b;", &errors),
+              "(block (binary && (unary ! (name a)) (unary ! (unary ! (name b)))))");
+    CHECK_STR(body_dump(&a, "x := true; y : bool = false;", &errors),
+              "(block (var x _ (bool true)) (var y bool (bool false)))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}

@@ -230,6 +230,44 @@ static void dump(Array<u8> *buffer, Ast *node) {
         out(buffer, digits);
         break;
     }
+    case AST_BOOL: out(buffer, ((Ast_Bool *)node)->value ? "(bool true)" : "(bool false)"); break;
+    case AST_IF: {
+        Ast_If *branch = (Ast_If *)node;
+        out(buffer, "(if ");
+        dump(buffer, branch->condition);
+        out(buffer, " ");
+        dump(buffer, branch->then_block);
+        if (branch->else_part) {
+            out(buffer, " ");
+            dump(buffer, branch->else_part);
+        }
+        out(buffer, ")");
+        break;
+    }
+    case AST_WHILE: {
+        Ast_While *loop = (Ast_While *)node;
+        out(buffer, "(while ");
+        dump(buffer, loop->condition);
+        out(buffer, " ");
+        dump(buffer, loop->body);
+        out(buffer, ")");
+        break;
+    }
+    case AST_FOR: {
+        Ast_For *loop = (Ast_For *)node;
+        out(buffer, "(for ");
+        out(buffer, loop->iterator->name);
+        out(buffer, " ");
+        dump(buffer, loop->first);
+        out(buffer, " ");
+        dump(buffer, loop->last);
+        out(buffer, " ");
+        dump(buffer, loop->body);
+        out(buffer, ")");
+        break;
+    }
+    case AST_BREAK: out(buffer, "(break)"); break;
+    case AST_CONTINUE: out(buffer, "(continue)"); break;
     }
 }
 
