@@ -31,5 +31,5 @@
             "end": "^\\s*//\\s*#endregion\\b"
         }
     },
-    "wordPattern": "[A-Za-z_][A-Za-z0-9_]*|\\d[\\w.]*"
+    "wordPattern": "[A-Za-z_][A-Za-z0-9_]*|\\d\\w*(?:\\.\\d\\w*)?"
 }

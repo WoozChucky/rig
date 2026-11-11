@@ -20,7 +20,7 @@ editors\vscode\install.bat
 ./editors/vscode/install.sh
 ```
 
-Then reload VS Code's windows (command palette: "Developer: Reload Window"). With VS Code's WSL extension, `install.bat` covers Windows windows and `install.sh`, run inside WSL, covers WSL windows; the extension runs on either side.
+Then reload VS Code's windows (command palette: "Developer: Reload Window"). With VS Code's WSL extension, `install.bat` alone should also cover WSL windows: the extension prefers to run on the Windows side (`extensionKind` in `package.json`). `install.sh` inside WSL installs it on the WSL side instead; it's for a Linux machine, or a setup with no Windows-side copy.
 
 Arguments to either script go to `code`, so `install.bat --profile Rig` installs into a profile. Run the script again after changing the grammar: it replaces the installed copy. To remove it: `code --uninstall-extension woozchucky.rig-language`.
 
