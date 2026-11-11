@@ -192,6 +192,7 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
         if (!library || !expect(p, TOKEN_SEMICOLON)) return nullptr;
         proc->is_foreign = true;
         proc->foreign_library = library->text;
+        proc->library_pos = library->pos;
         return proc;
     }
     proc->body = parse_block(p);
