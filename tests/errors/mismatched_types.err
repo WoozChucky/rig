@@ -1,0 +1,3 @@
+tests/errors/mismatched_types.rig:6:15: error: mismatched types 'u32' and 's32' for '+'; cast one of them
+        putchar(a + b);
+                  ^

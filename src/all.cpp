@@ -16,6 +16,7 @@
 #include "parser.cpp"
 #include "types.cpp"
 #include "checker.cpp"
+#include "check_expr.cpp"
 #include "ir.cpp"
 #include "lower.cpp"
 #include "llvm_backend.cpp"

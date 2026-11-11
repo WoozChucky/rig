@@ -298,7 +298,16 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
     LLVMBuilderRef builder = body->builder;
     LLVMValueRef v = nullptr;
     switch (instr->op) {
-    case IR_CONST: v = LLVMConstInt(llvm_type(c, instr->type), instr->constant, 0); break;
+    case IR_CONST:
+        // LLVM's integer constants are integers only: a ptr constant, which
+        // is always 0, is LLVM's null.
+        if (instr->type == IR_PTR) {
+            RIG_ASSERT(instr->constant == 0);
+            v = LLVMConstNull(llvm_type(c, IR_PTR));
+        } else {
+            v = LLVMConstInt(llvm_type(c, instr->type), instr->constant, 0);
+        }
+        break;
     case IR_ADDR: v = llvm_global(body, instr->target); break;
     case IR_CALL: {
         Ir_Proc *callee = m->procs[instr->target];

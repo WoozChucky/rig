@@ -1,6 +1,21 @@
-// ast.cpp: dumping the syntax tree as S-expressions (see ast.h).
+// ast.cpp: dumping the syntax tree as S-expressions, and what the tree's
+// operators mean (see ast.h).
 
 #include "ast.h"
+
+Token_Kind compound_operator(Token_Kind op) {
+    switch (op) {
+    case TOKEN_PLUS_EQUAL: return TOKEN_PLUS;
+    case TOKEN_MINUS_EQUAL: return TOKEN_MINUS;
+    case TOKEN_STAR_EQUAL: return TOKEN_STAR;
+    case TOKEN_AMP_EQUAL: return TOKEN_AMP;
+    case TOKEN_PIPE_EQUAL: return TOKEN_PIPE;
+    case TOKEN_CARET_EQUAL: return TOKEN_CARET;
+    case TOKEN_SHIFT_LEFT_EQUAL: return TOKEN_SHIFT_LEFT;
+    case TOKEN_SHIFT_RIGHT_EQUAL: return TOKEN_SHIFT_RIGHT;
+    default: RIG_ASSERT(!"not a compound assignment"); return TOKEN_ERROR;
+    }
+}
 
 static void out(Array<u8> *buffer, String s) {
     for (s64 i = 0; i < s.count; i++) array_add(buffer, s.data[i]);
@@ -30,6 +45,14 @@ static void out_quoted(Array<u8> *buffer, String s) {
 }
 
 static void dump(Array<u8> *buffer, Ast *node);
+
+// An operator as written, without the quotes token_kind_name puts around it:
+// +, <<=.
+static void out_operator(Array<u8> *buffer, Token_Kind op) {
+    String quoted = str(token_kind_name(op));
+    RIG_ASSERT(quoted.count >= 3 && quoted.data[0] == '\'');
+    out(buffer, string_slice(quoted, 1, quoted.count - 2));
+}
 
 static void dump_type(Array<u8> *buffer, Ast_Type *type) {
     if (type->kind == AST_TYPE_POINTER) {
@@ -62,9 +85,12 @@ static void dump(Array<u8> *buffer, Ast *node) {
             dump(buffer, proc->params[i]);
         }
         out(buffer, ")");
-        if (proc->return_type) {
-            out(buffer, " (returns ");
-            dump_type(buffer, proc->return_type);
+        if (proc->results.count) {
+            out(buffer, " (returns");
+            for (s64 i = 0; i < proc->results.count; i++) {
+                out(buffer, " ");
+                dump_type(buffer, proc->results[i]);
+            }
             out(buffer, ")");
         }
         if (proc->is_foreign) {
@@ -127,6 +153,77 @@ static void dump(Array<u8> *buffer, Ast *node) {
         out_quoted(buffer, ((Ast_String *)node)->value);
         out(buffer, ")");
         break;
+    case AST_VAR: {
+        Ast_Var *var = (Ast_Var *)node;
+        out(buffer, "(var ");
+        out(buffer, var->name);
+        out(buffer, " ");
+        if (var->type_expr) {
+            dump_type(buffer, var->type_expr);
+        } else {
+            out(buffer, "_");  // inferred from the value
+        }
+        if (var->is_uninitialized) {
+            out(buffer, " ---");
+        } else if (var->value) {
+            out(buffer, " ");
+            dump(buffer, var->value);
+        }
+        out(buffer, ")");
+        break;
+    }
+    case AST_CONST: {
+        Ast_Const *constant = (Ast_Const *)node;
+        out(buffer, "(const ");
+        out(buffer, constant->name);
+        out(buffer, " ");
+        dump(buffer, constant->value);
+        out(buffer, ")");
+        break;
+    }
+    case AST_ASSIGN: {
+        Ast_Assign *assign = (Ast_Assign *)node;
+        out(buffer, "(assign ");
+        out_operator(buffer, assign->op);
+        for (s64 i = 0; i < assign->targets.count; i++) {
+            out(buffer, " ");
+            dump(buffer, assign->targets[i]);
+        }
+        out(buffer, " ");
+        dump(buffer, assign->value);
+        out(buffer, ")");
+        break;
+    }
+    case AST_RETURN: {
+        Ast_Return *ret = (Ast_Return *)node;
+        out(buffer, "(return");
+        for (s64 i = 0; i < ret->values.count; i++) {
+            out(buffer, " ");
+            dump(buffer, ret->values[i]);
+        }
+        out(buffer, ")");
+        break;
+    }
+    case AST_UNARY: {
+        Ast_Unary *unary = (Ast_Unary *)node;
+        out(buffer, "(unary ");
+        out_operator(buffer, unary->op);
+        out(buffer, " ");
+        dump(buffer, unary->operand);
+        out(buffer, ")");
+        break;
+    }
+    case AST_BINARY: {
+        Ast_Binary *binary = (Ast_Binary *)node;
+        out(buffer, "(binary ");
+        out_operator(buffer, binary->op);
+        out(buffer, " ");
+        dump(buffer, binary->left);
+        out(buffer, " ");
+        dump(buffer, binary->right);
+        out(buffer, ")");
+        break;
+    }
     case AST_INT: {
         char digits[32];
         snprintf(digits, sizeof digits, "(int %llu)", (unsigned long long)((Ast_Int *)node)->value);
