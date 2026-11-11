@@ -1,0 +1,6 @@
+tests/errors/syntax_and_type_errors.rig:5:10: error: argument 1 of 'puts' has type 'int', which can't be converted to '*u8'
+        puts(42);
+             ^
+tests/errors/syntax_and_type_errors.rig:10:1: error: expected ';', found '}'
+    }
+    ^
