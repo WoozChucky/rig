@@ -48,3 +48,8 @@ jobs:
 
       - name: End-to-end tests
         run: bin/run-tests
+
+      # The VS Code extension's checks (editors/vscode/test/check.js): not
+      # the compiler's, and needing nothing but the Node the runner has.
+      - name: VS Code extension
+        run: node --version && node editors/vscode/test/check.js
