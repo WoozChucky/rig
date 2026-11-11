@@ -41,7 +41,7 @@ function readJson(file) {
 // trailing commas, but a file that plain JSON.parse rejects is still a
 // mistake here: none of them uses either.
 check('every JSON file parses', () => {
-    for (const file of ['package.json', 'language-configuration.json']) {
+    for (const file of ['package.json', 'language-configuration.json', 'snippets/rig.json']) {
         assert.doesNotThrow(() => readJson(file), `${file} isn't valid JSON`);
     }
 });
@@ -149,6 +149,48 @@ check('the problem matcher reads a warning, and not rig\'s own errors', () => {
     assert.strictEqual(match('a.rig:1:2: warning: unused').severity, 'warning');
     // No line or column: nothing to put in the Problems panel.
     assert.strictEqual(match("rig: error: cannot read 'a.rig': no such file"), null);
+});
+
+// --- Snippets --------------------------------------------------------------
+
+// A snippet's body is a string or an array of lines; either way, its text.
+function snippetText(snippet) {
+    return Array.isArray(snippet.body) ? snippet.body.join('\n') : snippet.body;
+}
+
+check('package.json contributes the snippets for Rig', () => {
+    const snippets = readJson('package.json').contributes.snippets || [];
+    assert.deepStrictEqual(snippets, [{ language: 'rig', path: './snippets/rig.json' }]);
+});
+
+// The prefixes are what's typed; the bodies follow the language's syntax
+// (spec 6.1 and 6.7), with the placeholders in the order Tab visits them
+// and the defaults it offers. A change to a snippet changes this table too.
+check('the snippets are the expected ones, written in Rig\'s syntax', () => {
+    const expected = {
+        proc: '${1:name} :: (${2}) -> ${3:int} {\n\t$0\n}',
+        main: 'main :: () {\n\t$0\n}',
+        foreign: '${1:name} :: (${2}) -> ${3:s32} #foreign libc;',
+        if: 'if ${1:condition} {\n\t$0\n}',
+        ife: 'if ${1:condition} {\n\t$2\n} else {\n\t$0\n}',
+        while: 'while ${1:condition} {\n\t$0\n}',
+        for: 'for ${1:0}..${2:9} {\n\t$0\n}',
+        fori: 'for ${1:i}: ${2:0}..${3:9} {\n\t$0\n}',
+        var: '${1:name} : ${2:int} = ${3:0};',
+        let: '${1:name} := $0;',
+        const: '${1:NAME} :: $0;',
+    };
+    const byPrefix = {};
+    for (const s of Object.values(readJson('snippets/rig.json'))) {
+        assert.strictEqual(typeof s.prefix, 'string', `a snippet's prefix: ${JSON.stringify(s.prefix)}`);
+        assert.ok(s.description, `the snippet ${s.prefix} has no description`);
+        assert.ok(!(s.prefix in byPrefix), `two snippets have the prefix ${s.prefix}`);
+        byPrefix[s.prefix] = snippetText(s);
+    }
+    assert.deepStrictEqual(Object.keys(byPrefix).sort(), Object.keys(expected).sort());
+    for (const prefix of Object.keys(expected)) {
+        assert.strictEqual(byPrefix[prefix], expected[prefix], `the snippet ${prefix}`);
+    }
 });
 
 // --- Running them ----------------------------------------------------------
