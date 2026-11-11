@@ -13,8 +13,7 @@ puts :: (s: *u8) -> s32 #foreign libc;
 main :: () { puts("Hello, World!"); }
 ```
 
-`bin/rig build hello.rig` (`bin
-ig build hello.rig` in Windows' command prompt) writes `hello.exe` on Windows and `hello` on Linux, in the current directory. `-o OUTPUT` names it otherwise; on Windows a name with no extension gets `.exe`. The object file goes into a `.build` directory, made in the current directory. So far Rig has procedures, calls, string and integer literals, and C functions declared `#foreign libc`.
+`bin/rig build hello.rig` (`bin\rig build hello.rig` in Windows' command prompt) writes `hello.exe` on Windows and `hello` on Linux, in the current directory. `-o OUTPUT` names it otherwise; on Windows a name with no extension gets `.exe`. The object file goes into a `.build` directory, made in the current directory. So far Rig has procedures, calls, string and integer literals, and C functions declared `#foreign libc`.
 
 ## Building
 

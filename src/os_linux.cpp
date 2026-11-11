@@ -242,8 +242,26 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
         }
     }
 
+    // The pipes can end before the program does: it may close its stdout
+    // and stderr and run on. Within the time left, check every 10 ms
+    // whether it has ended (WNOHANG: don't wait), and kill it when time is
+    // up; then wait for it.
     int status = 0;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+    while (deadline && !result->timed_out) {
+        pid_t ended = waitpid(pid, &status, WNOHANG);
+        if (ended == pid) break;
+        if (ended < 0 && errno != EINTR) break;
+        if (milliseconds_now() >= deadline) {
+            kill(-pid, SIGKILL);
+            result->timed_out = true;
+            break;
+        }
+        struct timespec pause = {0, 10 * 1000000};
+        nanosleep(&pause, nullptr);
+    }
+    if (!deadline || result->timed_out) {
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+        }
     }
     // A program killed by a signal reports 128 + the signal, as shells do.
     result->exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);

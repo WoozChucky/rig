@@ -13,7 +13,10 @@
 // command line's mistakes, and a .build/ or an object file rig can't write.
 //
 // Every program, rig included, gets TIMEOUT seconds; one that takes longer
-// is killed and its test fails, so a hang can't stall the run.
+// is killed and its test fails, so a hang can't stall the run. (On Linux
+// that puts each program in a process group of its own, which Ctrl-C in
+// the terminal doesn't reach: stopping the runner leaves the program it was
+// running to end by itself.)
 //
 // On Windows the C runtime writes "\r\n" for "\n" on text-mode stdout and
 // stderr, rig's own and the programs', so the runner reads "\r\n" as "\n"

@@ -1,6 +1,7 @@
 // test_os.cpp: the operating system layer (issue #4). The process tests run
 // this same program, bin/unit-tests, with the helper flags of unit.cpp
-// (--echo-args, --cwd, --fail-with, --spam, --sleep).
+// (--echo-args, --cwd, --fail-with, --spam, --sleep, --close-and-sleep,
+// --spawn-sleeper).
 
 #include "test.h"
 
@@ -137,13 +138,13 @@ TEST(os_run_in_starts_the_program_in_a_directory) {
     arena_free(&a);
 }
 
-TEST(os_run_for_ends_a_program_that_runs_too_long) {
-    // The program would sleep for a minute; after one second it's killed,
-    // and os_run_for says so, well before the minute is up.
+// os_run_for on unit-tests with a helper flag and a minute to sleep, given
+// one second: it must give up and say so well before the minute is up.
+static void check_times_out(const char *flag) {
     Arena a = arena_make();
     Array<String> argv = {};
     array_add(&argv, unit_tests_path(&a));
-    array_add(&argv, str("--sleep"));
+    array_add(&argv, str(flag));
     array_add(&argv, str("60"));
     Process_Result result = {};
     time_t start = time(nullptr);
@@ -152,6 +153,21 @@ TEST(os_run_for_ends_a_program_that_runs_too_long) {
     CHECK(time(nullptr) - start < 30);
     array_free(&argv);
     arena_free(&a);
+}
+
+TEST(os_run_for_ends_a_program_that_runs_too_long) {
+    check_times_out("--sleep");
+}
+
+TEST(os_run_for_ends_a_program_that_closed_its_output) {
+    // The pipes end at once, but the program runs on.
+    check_times_out("--close-and-sleep");
+}
+
+TEST(os_run_for_ends_what_the_program_started) {
+    // The program ends at once, but a program it started holds the pipes.
+    // If that one weren't killed too, the pipes wouldn't end for a minute.
+    check_times_out("--spawn-sleeper");
 }
 
 TEST(os_run_for_lets_a_quick_program_finish) {
