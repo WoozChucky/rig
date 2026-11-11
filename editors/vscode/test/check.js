@@ -193,6 +193,74 @@ check('the snippets are the expected ones, written in Rig\'s syntax', () => {
     }
 });
 
+// --- extension.js: commands, tasks, settings --------------------------------
+
+// The names extension.js passes, as string literals, to one of VS Code's
+// register functions: registerCommand('rig.buildFile', ...) gives
+// 'rig.buildFile'. A name kept in a variable wouldn't be seen, so the
+// extension writes them out in the calls.
+function registered(fn) {
+    const re = new RegExp(`\\b${fn}\\(\\s*['"]([^'"]+)['"]`, 'g');
+    return [...read('extension.js').matchAll(re)].map((m) => m[1]);
+}
+
+check('package.json runs extension.js', () => {
+    assert.strictEqual(readJson('package.json').main, './extension.js');
+    assert.ok(fs.existsSync(path.join(extension, 'extension.js')), 'extension.js is missing');
+});
+
+check('every command in package.json is registered by extension.js', () => {
+    const contributes = readJson('package.json').contributes;
+    const commands = (contributes.commands || []).map((c) => c.command);
+    assert.deepStrictEqual(commands.sort(), ['rig.buildFile', 'rig.runFile']);
+    assert.deepStrictEqual(registered('registerCommand').sort(), commands);
+    // Menus may only name declared commands; each shows on .rig files only.
+    for (const [menu, items] of Object.entries(contributes.menus || {})) {
+        for (const item of items) {
+            assert.ok(commands.includes(item.command), `menu ${menu} names an unknown ${item.command}`);
+            assert.match(item.when || '', /\b(editorLangId|resourceLangId) == rig\b/, `menu ${menu}: ${item.command}`);
+        }
+    }
+});
+
+check('every task type in package.json has a provider in extension.js', () => {
+    const definitions = readJson('package.json').contributes.taskDefinitions || [];
+    assert.deepStrictEqual(definitions.map((d) => d.type), ['rig']);
+    assert.deepStrictEqual(registered('registerTaskProvider'), ['rig']);
+    // The values tasks.json may give `command`; extension.js handles each.
+    const source = read('extension.js');
+    assert.deepStrictEqual(definitions[0].properties.command.enum, ['build', 'run']);
+    for (const command of definitions[0].properties.command.enum) {
+        assert.ok(source.includes(`'${command}'`), `extension.js never mentions the task command '${command}'`);
+    }
+    // Its tasks report through the problem matcher package.json declares.
+    assert.ok(source.includes("'$rig'"), "extension.js doesn't use the problem matcher '$rig'");
+});
+
+check('the setting rig.compilerPath is declared and read', () => {
+    const properties = readJson('package.json').contributes.configuration.properties;
+    assert.strictEqual(properties['rig.compilerPath'].type, 'string');
+    assert.strictEqual(properties['rig.compilerPath'].default, '');
+    assert.ok(read('extension.js').includes("'compilerPath'"), "extension.js never reads 'compilerPath'");
+});
+
+// No npm packages: VS Code's API and Node's own modules only.
+check('extension.js requires only vscode and Node\'s built-in modules', () => {
+    const allowed = ['vscode', 'child_process', 'path', 'fs', 'os'];
+    const required = [...read('extension.js').matchAll(/\brequire\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
+    assert.ok(required.includes('vscode'), 'extension.js never requires vscode');
+    for (const name of required) assert.ok(allowed.includes(name), `extension.js requires '${name}'`);
+});
+
+// Node parses the file without running it: a syntax error shows here rather
+// than when VS Code loads the extension.
+check('node --check extension.js', () => {
+    const result = require('child_process').spawnSync(process.execPath, ['--check', path.join(extension, 'extension.js')], {
+        encoding: 'utf8',
+    });
+    assert.strictEqual(result.status, 0, result.stderr);
+});
+
 // --- Running them ----------------------------------------------------------
 
 let failed = 0;
