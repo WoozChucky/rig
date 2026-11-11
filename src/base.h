@@ -6,9 +6,9 @@
 //   Array   a growable array
 //   Table   a hash table from String keys to values
 //
-// Arena's and Table's fields are private: nothing outside this file and
-// base.cpp looks inside them. Array's and String's fields are public,
-// because the rest of the compiler reads them directly.
+// Arena's fields, and Table's but count, are private: nothing outside this
+// file and base.cpp looks inside them. Array's and String's fields are
+// public, because the rest of the compiler reads them directly.
 
 #pragma once
 
@@ -24,12 +24,13 @@
 struct Arena_Block {
     Arena_Block *next;
     u64 size;  // bytes after the header
-    u64 used;  // of those, how many are handed out
+    u64 used;  // of those, how many are taken, alignment padding included
 };
 
 struct Arena {
-    Arena_Block *first;    // the chain, in order; null until the first allocation
-    Arena_Block *current;  // the block being filled; the ones after it are free
+    Arena_Block *first;    // the chain of blocks of block_size bytes, in order
+    Arena_Block *current;  // the one being filled; the ones after it are free
+    Arena_Block *big;      // blocks of their own, for requests bigger than a block
     u64 block_size;        // 0 means the default, so {} works
 };
 
@@ -38,6 +39,16 @@ struct Arena {
 // that never returns null, for the containers that live on the heap.
 [[noreturn]] void out_of_memory();
 void *heap_realloc(void *p, u64 size);
+
+// The bytes count elements of element_size take. A negative count is a bug
+// in the compiler. One too big for memory is out of memory: unchecked, the
+// product would wrap around to a small size, and the writes that follow
+// would run past the end.
+inline u64 array_bytes(u64 element_size, s64 count) {
+    RIG_ASSERT(count >= 0);
+    if ((u64)count > UINT64_MAX / element_size) out_of_memory();
+    return element_size * (u64)count;
+}
 
 // An empty arena. Its first block is allocated on the first arena_alloc,
 // block_size bytes, or more for a bigger request. A zero-initialised arena
@@ -50,8 +61,13 @@ Arena arena_make(u64 block_size = 64 * 1024);
 // out of memory stops the compiler.
 void *arena_alloc(Arena *a, u64 size, u64 align = 8);
 
-// Frees everything allocated at once, keeping the memory to reuse.
+// Frees everything allocated at once, keeping the blocks to reuse. The
+// blocks of requests bigger than a block go back to the system.
 void arena_reset(Arena *a);
+
+// How many bytes the arena's blocks hold, handed out or not: what it
+// costs, for tests and statistics.
+u64 arena_reserved(Arena *a);
 
 // Gives the memory back to the system. The arena can be used again after,
 // as if new. Fine on an arena never used.
@@ -64,7 +80,7 @@ T *arena_new(Arena *a) {
 
 template<typename T>
 T *arena_new_array(Arena *a, s64 count) {
-    return (T *)arena_alloc(a, sizeof(T) * (u64)count, alignof(T));
+    return (T *)arena_alloc(a, array_bytes(sizeof(T), count), alignof(T));
 }
 
 // ---------------------------------------------------------------------------
@@ -92,8 +108,10 @@ String string_copy(Arena *a, String s);
 const char *string_cstr(Arena *a, String s);
 
 // printf into the arena. The result is also zero-terminated (the zero is
-// past count, not counted). No length limit: a fixed buffer won't do.
-String string_printf(Arena *a, const char *fmt, ...);
+// past count, not counted). No fixed limit on its length: a fixed buffer
+// won't do (the C library's own limit is INT_MAX bytes). The attribute has
+// clang check each call's arguments against its format, as for printf.
+String string_printf(Arena *a, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
 // count bytes from start; asserts they're inside s.
 String string_slice(String s, s64 start, s64 count);
@@ -131,14 +149,14 @@ void array_reserve(Array<T> *a, s64 capacity) {
     if (capacity <= a->capacity) return;
     // realloc keeps the elements and moves them if it has to, so pointers
     // into the old data are invalid after this (as after any array_add).
-    a->data = (T *)heap_realloc(a->data, sizeof(T) * (u64)capacity);
+    a->data = (T *)heap_realloc(a->data, array_bytes(sizeof(T), capacity));
     a->capacity = capacity;
 }
 
 template<typename T>
 void array_add(Array<T> *a, typename No_Deduce<T>::Type value) {
-    // Doubling makes adding n elements cost O(n) copies in all: each
-    // element is copied once on average, however big the array gets.
+    // Doubling makes adding n elements cost O(n) copies in all: on average
+    // each element is copied at most once more, however big the array gets.
     if (a->count == a->capacity) array_reserve(a, a->capacity == 0 ? 8 : a->capacity * 2);
     // value is a copy, so this is safe even when it came from the array
     // itself and the reserve above moved the data.
@@ -175,29 +193,48 @@ u64 hash_string(String s);
 // lists hanging off it. A key's hash picks its first slot; if that slot
 // holds another key, it tries the next one, and so on (linear probing),
 // until it finds the key or an empty slot. Keeping at least a quarter of
-// the slots empty keeps those runs short. The slot count is a power of
-// two, so `hash & (capacity - 1)` is the hash modulo the capacity.
+// the slots empty keeps those runs short.
+//
+// The slot count is a power of two, 2^k, and the first slot is the hash's
+// top k bits. Not its bottom k bits, the usual hash % capacity: FNV-1a
+// multiplies, and in a product the low bits depend only on the low bits,
+// so its low k bits come from the low k bits of each byte alone. "x" and
+// "X", or "foo" and "Foo", differ only higher up (by 32 = 2^5), and would
+// share a slot in any table of 32 slots or fewer. The top bits depend on
+// every bit of every byte.
 template<typename V>
 struct Table_Slot {
     String key;
     V value;
-    u64 hash;   // the key's, kept so growing doesn't hash every key again
+    u64 hash;   // the key's: most mismatches are told apart without comparing
+                // the strings, and growing doesn't hash every key again
     bool used;  // an empty slot has used == false (the empty string is a valid key)
 };
 
 template<typename V>
 struct Table {
-    s64 count;  // how many keys it holds
+    s64 count;     // how many keys it holds
     s64 capacity;  // slots, 0 or a power of two
+    s32 shift;     // 64 - k when capacity is 2^k: hash >> shift is the top k bits
     Table_Slot<V> *slots;
 };
+
+// The first slot a hash tries, then the next one, wrapping around.
+template<typename V>
+u64 table_first_slot(Table<V> *t, u64 hash) {
+    return hash >> t->shift;
+}
+
+template<typename V>
+u64 table_next_slot(Table<V> *t, u64 i) {
+    return (i + 1) & ((u64)t->capacity - 1);
+}
 
 // The slot holding key, or the empty slot where it would go. The table
 // must have at least one empty slot, which the load limit guarantees.
 template<typename V>
 Table_Slot<V> *table_find_slot(Table<V> *t, String key, u64 hash) {
-    u64 mask = (u64)t->capacity - 1;
-    for (u64 i = hash & mask;; i = (i + 1) & mask) {
+    for (u64 i = table_first_slot(t, hash);; i = table_next_slot(t, i)) {
         Table_Slot<V> *slot = &t->slots[i];
         if (!slot->used) return slot;
         if (slot->hash == hash && string_eq(slot->key, key)) return slot;
@@ -205,15 +242,22 @@ Table_Slot<V> *table_find_slot(Table<V> *t, String key, u64 hash) {
 }
 
 // Moves every key into a slots array twice as big (16 to start). Each key
-// goes to a new place, because its slot depends on the capacity.
+// goes to a new place, because its slot depends on the capacity. The keys
+// are all different, so each one goes to the first empty slot on its way,
+// with no need to compare it with the others.
 template<typename V>
 void table_grow(Table<V> *t) {
     Table<V> old = *t;
     t->capacity = old.capacity == 0 ? 16 : old.capacity * 2;
-    t->slots = (Table_Slot<V> *)heap_realloc(nullptr, sizeof(Table_Slot<V>) * (u64)t->capacity);
-    memset(t->slots, 0, sizeof(Table_Slot<V>) * (u64)t->capacity);
+    t->shift = old.capacity == 0 ? 64 - 4 : old.shift - 1;  // 16 = 2^4; doubling adds a bit
+    u64 bytes = array_bytes(sizeof(Table_Slot<V>), t->capacity);
+    t->slots = (Table_Slot<V> *)heap_realloc(nullptr, bytes);
+    memset(t->slots, 0, bytes);  // every slot empty: used == false
     for (s64 i = 0; i < old.capacity; i++) {
-        if (old.slots[i].used) *table_find_slot(t, old.slots[i].key, old.slots[i].hash) = old.slots[i];
+        if (!old.slots[i].used) continue;
+        u64 j = table_first_slot(t, old.slots[i].hash);
+        while (t->slots[j].used) j = table_next_slot(t, j);
+        t->slots[j] = old.slots[i];
     }
     free(old.slots);
 }
@@ -221,11 +265,16 @@ void table_grow(Table<V> *t) {
 // Adds key, or replaces its value if it's already there.
 template<typename V>
 void table_put(Table<V> *t, String key, typename No_Deduce<V>::Type value) {
-    // Grow before the table would be more than three quarters full.
-    if ((t->count + 1) * 4 > t->capacity * 3) table_grow(t);
     u64 hash = hash_string(key);
-    Table_Slot<V> *slot = table_find_slot(t, key, hash);
-    if (!slot->used) {
+    Table_Slot<V> *slot = t->capacity > 0 ? table_find_slot(t, key, hash) : nullptr;
+    if (!slot || !slot->used) {
+        // A new key. If it would make the table more than three quarters
+        // full, grow first; growing moves every key, so look for its place
+        // again. (Replacing a value never grows the table.)
+        if ((t->count + 1) * 4 > t->capacity * 3) {
+            table_grow(t);
+            slot = table_find_slot(t, key, hash);
+        }
         slot->used = true;
         slot->key = key;
         slot->hash = hash;

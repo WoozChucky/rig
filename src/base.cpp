@@ -37,68 +37,100 @@ static u8 *block_data(Arena_Block *b) {
 // null if it doesn't fit. Alignment is of the address itself, so it works
 // for any power of two, even one larger than malloc's own alignment.
 static u8 *fit_in_block(Arena_Block *b, u64 size, u64 align) {
-    u64 start = (u64)(block_data(b) + b->used);
-    start = (start + align - 1) & ~(align - 1);  // round up to a multiple of align
-    u64 end = (u64)block_data(b) + b->size;
+    uintptr_t start = (uintptr_t)(block_data(b) + b->used);
+    start = (start + (align - 1)) & ~(uintptr_t)(align - 1);  // round up to a multiple of align
+    uintptr_t end = (uintptr_t)(block_data(b) + b->size);
     if (start > end || end - start < size) return nullptr;
     return (u8 *)start;
 }
 
+static Arena_Block *new_block(u64 size) {
+    Arena_Block *b = (Arena_Block *)heap_realloc(nullptr, sizeof(Arena_Block) + size);
+    b->next = nullptr;
+    b->size = size;
+    b->used = 0;
+    return b;
+}
+
 void *arena_alloc(Arena *a, u64 size, u64 align) {
     RIG_ASSERT(align != 0 && (align & (align - 1)) == 0);  // a power of two
-    u8 *p = a->current ? fit_in_block(a->current, size, align) : nullptr;
+    // No machine has this much memory, and the sums below would wrap.
+    if (size > UINT64_MAX - align - sizeof(Arena_Block)) out_of_memory();
+    u64 block_size = a->block_size ? a->block_size : DEFAULT_BLOCK_SIZE;
+    // Room for size bytes wherever the block's free space starts: at most
+    // align - 1 bytes of padding come before them.
+    u64 needed = size + align - 1;
 
-    // The current block is full: move on to the blocks after it, which
-    // arena_reset left free, until one has room.
-    while (!p && a->current && a->current->next) {
-        a->current = a->current->next;
-        p = fit_in_block(a->current, size, align);
-    }
-
-    // None has room: make a new block. A request bigger than the block size
-    // gets a block of its own, big enough for it at any alignment. The new
-    // block goes right after the current one, ahead of any free ones.
-    if (!p) {
-        u64 block_size = a->block_size ? a->block_size : DEFAULT_BLOCK_SIZE;
-        u64 needed = size + align - 1;
-        if (needed > block_size) block_size = needed;
-        Arena_Block *b = (Arena_Block *)heap_realloc(nullptr, sizeof(Arena_Block) + block_size);
-        b->size = block_size;
-        b->used = 0;
-        if (a->current) {
-            b->next = a->current->next;
-            a->current->next = b;
-        } else {
-            // No current block means no blocks at all: this is the first.
-            b->next = nullptr;
-            a->first = b;
+    Arena_Block *b;
+    if (needed > block_size) {
+        // Too big for a block: it gets a block of its own, on a separate
+        // chain, so the current block's free space is still there for the
+        // next small request.
+        b = new_block(needed);
+        b->next = a->big;
+        a->big = b;
+    } else {
+        b = a->current;
+        if (!b || !fit_in_block(b, size, align)) {
+            if (b && b->next) {
+                // The current block is full, and arena_reset left the next
+                // one empty. Every block holds block_size bytes, so it fits.
+                b = b->next;
+            } else {
+                // No block left: make one, after the current one (or as the
+                // first). Its leftover space is lost only now, when a request
+                // doesn't fit, and it's less than one request.
+                Arena_Block *fresh = new_block(block_size);
+                if (b) {
+                    b->next = fresh;
+                } else {
+                    a->first = fresh;
+                }
+                b = fresh;
+            }
+            a->current = b;
         }
-        a->current = b;
-        p = fit_in_block(b, size, align);
-        RIG_ASSERT(p != nullptr);
     }
 
-    a->current->used = (u64)(p + size - block_data(a->current));
+    u8 *p = fit_in_block(b, size, align);
+    RIG_ASSERT(p != nullptr);
+    b->used = (u64)(p + size - block_data(b));
     // Zeroed every time, not when the block is made: after arena_reset the
     // memory holds whatever was there before.
     memset(p, 0, (size_t)size);
     return p;
 }
 
-void arena_reset(Arena *a) {
-    for (Arena_Block *b = a->first; b; b = b->next) b->used = 0;
-    a->current = a->first;
-}
-
-void arena_free(Arena *a) {
-    Arena_Block *b = a->first;
+static void free_chain(Arena_Block *b) {
     while (b) {
         Arena_Block *next = b->next;
         free(b);
         b = next;
     }
+}
+
+void arena_reset(Arena *a) {
+    for (Arena_Block *b = a->first; b; b = b->next) b->used = 0;
+    a->current = a->first;
+    // The big requests' blocks go back to the system: their sizes vary, so
+    // keeping them for later could only add up.
+    free_chain(a->big);
+    a->big = nullptr;
+}
+
+u64 arena_reserved(Arena *a) {
+    u64 total = 0;
+    for (Arena_Block *b = a->first; b; b = b->next) total += b->size;
+    for (Arena_Block *b = a->big; b; b = b->next) total += b->size;
+    return total;
+}
+
+void arena_free(Arena *a) {
+    free_chain(a->first);
+    free_chain(a->big);
     a->first = nullptr;
-    a->current = nullptr;  // block_size stays: it's as if new
+    a->current = nullptr;
+    a->big = nullptr;  // block_size stays: it's as if new
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +169,9 @@ String string_printf(Arena *a, const char *fmt, ...) {
     va_copy(args2, args);
     int n = vsnprintf(nullptr, 0, fmt, args);
     va_end(args);
-    RIG_ASSERT(n >= 0);  // only a format string the compiler got wrong fails
+    // vsnprintf fails on a bad format, a bug in the compiler, or on a
+    // result over INT_MAX bytes, which nothing Rig prints comes near.
+    RIG_ASSERT(n >= 0);
     char *buffer = (char *)arena_alloc(a, (u64)n + 1, 1);
     vsnprintf(buffer, (size_t)n + 1, fmt, args2);
     va_end(args2);
