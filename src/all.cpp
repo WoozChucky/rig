@@ -17,6 +17,7 @@
 #include "types.cpp"
 #include "checker.cpp"
 #include "ir.cpp"
+#include "lower.cpp"
 #include "llvm_backend.cpp"
 #include "llvm_compression_stubs.cpp"
 #include "link.cpp"
