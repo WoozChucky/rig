@@ -323,7 +323,10 @@ TEST(table_spreads_short_and_numbered_keys) {
     CHECK_EQ(letters.capacity, 64);
     for (char c = 'a'; c <= 'z'; c++) {
         u64 slot = table_first_slot(&letters, hash_string(String{(const u8 *)&c, 1}));
-        if (slot < 64 && !seen[slot]) seen[slot] = true, distinct++;
+        if (slot < 64 && !seen[slot]) {
+            seen[slot] = true;
+            distinct++;
+        }
     }
     CHECK(distinct >= 20);
 
