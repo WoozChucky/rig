@@ -4,9 +4,11 @@
 // body is one straight line of instructions (milestone 1 has no branches);
 // each instruction that gives a value numbers it %0, %1, ... in order, per
 // procedure. Values are typed i8 i16 i32 i64 or ptr, sizes only: signedness
-// lives in the instructions that need it (sext, zext). Integer arithmetic,
-// when it comes, wraps: no instruction assumes overflow can't happen (spec
-// 6.4).
+// lives in the instructions that need it (sext, zext), and in a procedure's
+// signature, whose i8 and i16 parameters and return value say how they widen
+// (Ir_Ext: Linux's C calling convention widens them at a call). Integer
+// arithmetic, when it comes, wraps: no instruction assumes overflow can't
+// happen (spec 6.4).
 //
 // Rig's procedures keep their names and are internal, except Rig's main,
 // which becomes __rig_main; lowering adds the C entry point, an exported
@@ -63,10 +65,29 @@ struct Ir_Global {
     String bytes;  // with the terminating zero
 };
 
+// How a parameter or return value narrower than 32 bits widens, by its Rig
+// type's sign: printed, as in LLVM, signext or zeroext. On Linux the caller
+// widens an argument to 32 bits (and a procedure its return value), and code
+// clang builds relies on it; on Windows the upper bits are undefined and the
+// receiving side widens the value itself. The IR keeps the sign
+// for every target and llvm_backend.cpp decides whether LLVM sees it. Wider
+// integers, and pointers, have none.
+enum Ir_Ext : u8 {
+    IR_EXT_NONE,  // not an i8 or i16
+    IR_EXT_SIGN,  // s8, s16
+    IR_EXT_ZERO,  // u8, u16
+};
+
+struct Ir_Param {
+    Ir_Type type;
+    Ir_Ext ext;
+};
+
 struct Ir_Proc {
     String name;
-    Array<Ir_Type> params;
+    Array<Ir_Param> params;
     Ir_Type return_type;
+    Ir_Ext return_ext;
     bool is_foreign;  // declared, defined elsewhere (libc)
     bool is_export;   // visible to the linker; otherwise internal
     Array<Ir_Instr> body;
