@@ -118,13 +118,31 @@ static Ir_Module *lower_tokens(Arena *a, const char *description) {
     return m;
 }
 
-// Whether `needle` occurs in `haystack`.
-static bool contains(String haystack, const char *needle) {
+// Where `needle` first occurs in `haystack`, or -1.
+static s64 index_of(String haystack, const char *needle) {
     s64 n = (s64)strlen(needle);
     for (s64 i = 0; i + n <= haystack.count; i++) {
-        if (memcmp(haystack.data + i, needle, (size_t)n) == 0) return true;
+        if (memcmp(haystack.data + i, needle, (size_t)n) == 0) return i;
     }
-    return false;
+    return -1;
+}
+
+// Whether `needle` occurs in `haystack`.
+static bool contains(String haystack, const char *needle) {
+    return index_of(haystack, needle) >= 0;
+}
+
+// How many times `needle` occurs in `haystack`, no two occurrences
+// overlapping.
+static s64 count_of(String haystack, const char *needle) {
+    s64 n = (s64)strlen(needle), count = 0;
+    RIG_ASSERT(n > 0);
+    for (s64 at = 0;;) {
+        s64 i = index_of(string_slice(haystack, at, haystack.count - at), needle);
+        if (i < 0) return count;
+        count++;
+        at += i + n;
+    }
 }
 
 // Hand-built IR, for the tests of the IR's printing, the backend and the
