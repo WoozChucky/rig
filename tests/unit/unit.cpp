@@ -165,3 +165,4 @@ int main(int argc, char **argv) {
 #include "test_checker.cpp"
 #include "test_ir.cpp"
 #include "test_llvm.cpp"
+#include "test_link.cpp"
