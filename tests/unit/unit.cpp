@@ -9,6 +9,11 @@
 #include "../../src/all.cpp"
 #include "test.h"
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
+
 static const int MAX_TESTS = 4096;
 
 struct Test_Case {
@@ -84,8 +89,53 @@ static int self_test() {
     return wrong ? 1 : 0;
 }
 
+// Helper modes for test_os.cpp, which runs this program as a child process.
+static int helper_mode(int argc, char **argv) {
+#ifdef _WIN32
+    // Bytes out exactly as written: no \n turned into \r\n.
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+#endif
+    if (strcmp(argv[1], "--echo-args") == 0) {
+        // As UTF-8, the way rig reads its own arguments.
+        Arena a = arena_make();
+        Array<String> args = os_arguments(&a, argc, argv);
+        for (s64 i = 2; i < args.count; i++) printf("[" STR_FMT "]\n", STR_ARG(args[i]));
+        array_free(&args);
+        arena_free(&a);
+        return 0;
+    }
+    if (strcmp(argv[1], "--cwd") == 0) {
+        Arena a = arena_make();
+        printf(STR_FMT "\n", STR_ARG(os_current_directory(&a)));
+        arena_free(&a);
+        return 0;
+    }
+    if (strcmp(argv[1], "--fail-with") == 0) {
+        fprintf(stderr, "oops\n");
+        return atoi(argv[2]);
+    }
+    if (strcmp(argv[1], "--spam") == 0) {
+        // Alternates between the two streams, so a parent that reads one
+        // pipe to the end before the other deadlocks.
+        long total = atol(argv[2]);
+        static char chunk[1000];
+        memset(chunk, 'x', sizeof chunk);
+        for (long done = 0; done < total; done += (long)sizeof chunk) {
+            fwrite(chunk, 1, sizeof chunk, stdout);
+            fwrite(chunk, 1, sizeof chunk, stderr);
+        }
+        return 0;
+    }
+    return -1;
+}
+
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "--self-test") == 0) return self_test();
+    if (argc >= 2 && strncmp(argv[1], "--", 2) == 0) {
+        int status = helper_mode(argc, argv);
+        if (status >= 0) return status;
+    }
     const char *filter = argc >= 2 ? argv[1] : "";
 
     int passed = 0, failed = 0;
@@ -106,3 +156,4 @@ int main(int argc, char **argv) {
 // The test files.
 #include "test_harness.cpp"
 #include "test_base.cpp"
+#include "test_os.cpp"

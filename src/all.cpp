@@ -4,3 +4,8 @@
 
 #include "common.cpp"
 #include "base.cpp"
+#ifdef _WIN32
+#include "os_windows.cpp"
+#else
+#include "os_linux.cpp"
+#endif
