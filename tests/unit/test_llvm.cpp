@@ -36,6 +36,44 @@ TEST(llvm_widens_by_sign) {
     arena_free(&a);
 }
 
+// The signature of test_ir.cpp's ir_keeps_the_sign_of_narrow_parameters,
+// with calls to both procedures.
+static const char *NARROW =
+    "IDENT:f :: ( IDENT:a : IDENT:s8 , IDENT:b : IDENT:u8 , IDENT:c : IDENT:s16 , IDENT:d : IDENT:u16 , "
+    "IDENT:e : IDENT:s32 , IDENT:g : IDENT:u64 ) -> IDENT:s8 #foreign IDENT:libc ; | "
+    "IDENT:take :: ( IDENT:x : IDENT:s16 ) { } | "
+    "IDENT:main :: ( ) { IDENT:f ( INT:1 , INT:2 , INT:3 , INT:4 , INT:5 , INT:6 ) ; IDENT:take ( INT:7 ) ; }";
+
+TEST(llvm_extends_narrow_integers_on_linux) {
+    // What clang writes for `signed char f(signed char, unsigned char, short,
+    // unsigned short, int, unsigned long long)` on x86_64-pc-linux-gnu, on
+    // the declaration and the call alike, and on Rig's own procedures, as
+    // clang does on a static C function.
+    Arena a = arena_make();
+    Ir_Module *m = lower_tokens(&a, NARROW);
+    String text = {}, error = {};
+    CHECK(llvm_ir_text(&a, m, TARGET_LINUX_X64, &text, &error));
+    CHECK(contains(text, "declare signext i8 @f(i8 signext, i8 zeroext, i16 signext, i16 zeroext, i32, i64)"));
+    CHECK(contains(text, "call signext i8 @f(i8 signext 1, i8 zeroext 2, i16 signext 3, i16 zeroext 4, i32 5, i64 6)"));
+    CHECK(contains(text, "define internal void @take(i16 signext %0)"));
+    CHECK(contains(text, "call void @take(i16 signext 7)"));
+    arena_free(&a);
+}
+
+TEST(llvm_doesnt_extend_narrow_integers_on_windows) {
+    // The Windows x64 convention leaves an argument's upper bits undefined,
+    // and clang marks nothing for x86_64-pc-windows-msvc: the callee widens.
+    Arena a = arena_make();
+    Ir_Module *m = lower_tokens(&a, NARROW);
+    String text = {}, error = {};
+    CHECK(llvm_ir_text(&a, m, TARGET_WINDOWS_X64, &text, &error));
+    CHECK(contains(text, "declare i8 @f(i8, i8, i16, i16, i32, i64)"));
+    CHECK(contains(text, "call i8 @f(i8 1, i8 2, i16 3, i16 4, i32 5, i64 6)"));
+    CHECK(contains(text, "define internal void @take(i16 %0)"));
+    CHECK(!contains(text, "signext") && !contains(text, "zeroext"));
+    arena_free(&a);
+}
+
 TEST(objects_for_both_targets) {
     Arena a = arena_make();
     Ir_Module *m = lower_tokens(&a, HELLO);

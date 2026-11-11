@@ -4,7 +4,9 @@
 // prints it or writes an object file. Rig's procedures are internal, the
 // entry point and foreign procedures external; globals are private constant
 // byte arrays. No instruction carries nsw or nuw: Rig's integers wrap (spec
-// 6.4). Milestone 1 doesn't optimise.
+// 6.4). On Linux, i8 and i16 parameters and return values are marked signext
+// or zeroext, on every function and call, as clang marks them; on Windows
+// they aren't. Milestone 1 doesn't optimise.
 
 #pragma once
 
