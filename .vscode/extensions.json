@@ -1,0 +1,4 @@
+{
+    // C/C++ for IntelliSense and debugging; WSL to build and debug on Linux.
+    "recommendations": ["ms-vscode.cpptools", "ms-vscode-remote.remote-wsl"]
+}

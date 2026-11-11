@@ -1,0 +1,91 @@
+// unit.cpp: the unit test program, bin/unit-tests. A unity build like rig:
+// the whole compiler (src/all.cpp), the harness, then every test file. A
+// new test file is added to the list at the end.
+//
+//   bin/unit-tests              every test
+//   bin/unit-tests lex          the tests whose names contain "lex"
+//   bin/unit-tests --self-test  checks that the harness can fail
+
+#include "../../src/all.cpp"
+#include "test.h"
+
+static const int MAX_TESTS = 4096;
+
+struct Test_Case {
+    const char *name;
+    Test_Function function;
+};
+
+static Test_Case test_cases[MAX_TESTS];
+static int test_case_count;
+static bool current_test_failed;
+
+void test_register(const char *name, Test_Function function) {
+    RIG_ASSERT(test_case_count < MAX_TESTS);
+    test_cases[test_case_count++] = {name, function};
+}
+
+void test_fail(const char *file, int line, const char *message) {
+    fprintf(stderr, "%s:%d: %s failed\n", file, line, message);
+    current_test_failed = true;
+}
+
+void test_fail_values(const char *file, int line, const char *check, s64 a, s64 b) {
+    fprintf(stderr, "%s:%d: %s failed: %lld != %lld\n", file, line, check, (long long)a, (long long)b);
+    current_test_failed = true;
+}
+
+static bool ends_with(const char *s, const char *suffix) {
+    size_t n = strlen(s), m = strlen(suffix);
+    return n >= m && strcmp(s + n - m, suffix) == 0;
+}
+
+static bool starts_with(const char *s, const char *prefix) {
+    return strncmp(s, prefix, strlen(prefix)) == 0;
+}
+
+// Runs one test and says whether it passed.
+static bool run_test(Test_Case *test) {
+    current_test_failed = false;
+    test->function();
+    return !current_test_failed;
+}
+
+// --self-test: the harness's own tests, where a test named *_deliberately
+// must fail and every other must pass.
+static int self_test() {
+    int wrong = 0;
+    for (int i = 0; i < test_case_count; i++) {
+        Test_Case *test = &test_cases[i];
+        if (!starts_with(test->name, "harness_")) continue;
+        bool should_fail = ends_with(test->name, "_deliberately");
+        if (run_test(test) == should_fail) {
+            printf("WRONG %s: it %s\n", test->name, should_fail ? "passed" : "failed");
+            wrong++;
+        }
+    }
+    printf(wrong ? "the harness is broken\n" : "the harness works\n");
+    return wrong ? 1 : 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "--self-test") == 0) return self_test();
+    const char *filter = argc >= 2 ? argv[1] : "";
+
+    int passed = 0, failed = 0;
+    for (int i = 0; i < test_case_count; i++) {
+        Test_Case *test = &test_cases[i];
+        if (ends_with(test->name, "_deliberately") || !strstr(test->name, filter)) continue;
+        if (run_test(test)) {
+            passed++;
+        } else {
+            printf("FAIL %s\n", test->name);
+            failed++;
+        }
+    }
+    printf("%d passed, %d failed\n", passed, failed);
+    return failed ? 1 : 0;
+}
+
+// The test files.
+#include "test_harness.cpp"

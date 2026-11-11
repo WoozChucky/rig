@@ -1,0 +1,26 @@
+{
+    // IntelliSense for the C/C++ extension. The compiler is one unity build
+    // (src/rig.cpp includes everything), so every file sees the same flags.
+    // On Windows no compilerPath is given on purpose: the extension then finds
+    // Visual Studio's headers itself, which clang can fail to do when another
+    // Visual Studio installer product is newer (see build.bat).
+    "configurations": [
+        {
+            "name": "Windows",
+            "includePath": ["${workspaceFolder}/src", "${workspaceFolder}/deps/llvm-windows/include"],
+            "defines": ["_CRT_SECURE_NO_WARNINGS"],
+            "cppStandard": "c++23",
+            "cStandard": "c17",
+            "intelliSenseMode": "windows-clang-x64"
+        },
+        {
+            "name": "Linux",
+            "includePath": ["${workspaceFolder}/src", "${workspaceFolder}/deps/llvm-linux/include"],
+            "compilerPath": "/usr/bin/clang++",
+            "cppStandard": "c++23",
+            "cStandard": "c17",
+            "intelliSenseMode": "linux-clang-x64"
+        }
+    ],
+    "version": 4
+}

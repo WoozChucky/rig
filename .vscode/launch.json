@@ -1,0 +1,79 @@
+{
+    // Debug Rig's compiler and its unit tests (F5). Each builds first.
+    // Windows uses Visual Studio's debugger with the .pdb files clang writes;
+    // Linux (VS Code's WSL extension) uses gdb (sudo apt install gdb).
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "unit tests (Windows)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/unit-tests.exe",
+            "args": ["${input:testFilter}"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "build"
+        },
+        {
+            "name": "rig version (Windows)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/rig.exe",
+            "args": ["version"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "build"
+        },
+        {
+            "name": "rig build the open .rig file (Windows)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/rig.exe",
+            "args": ["build", "${file}"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "build"
+        },
+        {
+            "name": "unit tests (Linux)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/unit-tests",
+            "args": ["${input:testFilter}"],
+            "cwd": "${workspaceFolder}",
+            "MIMode": "gdb",
+            "setupCommands": [{ "text": "-enable-pretty-printing", "ignoreFailures": true }],
+            "preLaunchTask": "build"
+        },
+        {
+            "name": "rig version (Linux)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/rig",
+            "args": ["version"],
+            "cwd": "${workspaceFolder}",
+            "MIMode": "gdb",
+            "setupCommands": [{ "text": "-enable-pretty-printing", "ignoreFailures": true }],
+            "preLaunchTask": "build"
+        },
+        {
+            "name": "rig build the open .rig file (Linux)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/rig",
+            "args": ["build", "${file}"],
+            "cwd": "${workspaceFolder}",
+            "MIMode": "gdb",
+            "setupCommands": [{ "text": "-enable-pretty-printing", "ignoreFailures": true }],
+            "preLaunchTask": "build"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "testFilter",
+            "type": "promptString",
+            "description": "Run the tests whose names, or files' names, contain (empty: all):",
+            "default": "base"
+        }
+    ]
+}
