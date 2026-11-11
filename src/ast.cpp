@@ -45,6 +45,15 @@ static void dump(Array<u8> *buffer, Ast *node) {
     switch (node->kind) {
     case AST_PROC: {
         Ast_Proc *proc = (Ast_Proc *)node;
+        if (proc->is_broken) {
+            out(buffer, "(broken");
+            if (proc->name.count) {
+                out(buffer, " ");
+                out(buffer, proc->name);
+            }
+            out(buffer, ")");
+            break;
+        }
         out(buffer, "(proc ");
         out(buffer, proc->name);
         out(buffer, " (params");

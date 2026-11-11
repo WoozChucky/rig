@@ -101,7 +101,9 @@ TEST(parser_recovers_at_next_declaration) {
     CHECK_STR(errors,
               "1:15: expected an expression, found '}'\n"
               "2:5: only procedures can be declared at the top level for now\n");
-    CHECK_STR(dump, "(proc c (params) (block (call g)))\n");
+    // a and b are kept as broken entries, their names alone, so the checker
+    // knows they're declared.
+    CHECK_STR(dump, "(broken a)\n(broken b)\n(proc c (params) (block (call g)))\n");
     arena_free(&a);
 }
 
@@ -115,7 +117,7 @@ TEST(missing_brace_before_next_declaration) {
                              "IDENT:f :: ( ) { IDENT:g ( ) ; }",
                              &errors);
     CHECK_STR(errors, "2:1: expected '}', found identifier 'f'\n");
-    CHECK_STR(dump, "(proc f (params) (block (call g)))\n");
+    CHECK_STR(dump, "(broken main)\n(proc f (params) (block (call g)))\n");
     arena_free(&a);
 }
 
@@ -135,7 +137,28 @@ TEST(lexer_errors_are_not_reported_twice) {
     list->tokens[7].kind = TOKEN_ERROR;  // the INT
     Ast_File *file = parse(list->tokens, &a, &list->diag);
     CHECK_EQ(list->diag.error_count, 0);
-    CHECK_STR(ast_dump(&a, file), "(proc ok (params) (block))\n");
+    CHECK_STR(ast_dump(&a, file), "(broken main)\n(proc ok (params) (block))\n");
     token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(broken_declaration_keeps_the_name_it_starts_with) {
+    // A ':' for '::' still looks like a declaration of greet: the entry keeps
+    // the name, so the call to greet isn't reported as unknown too.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_dump(&a, "IDENT:greet : ( ) { } | IDENT:main :: ( ) { IDENT:greet ( ) ; }", &errors);
+    CHECK_STR(errors, "1:3: expected '::', found ':'\n");
+    CHECK_STR(dump, "(broken greet)\n(proc main (params) (block (call greet)))\n");
+    arena_free(&a);
+}
+
+TEST(broken_declaration_without_a_name) {
+    // A stray '}' starts no name: the entry has none, and says so.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_dump(&a, "} | IDENT:main :: ( ) { }", &errors);
+    CHECK_STR(errors, "1:1: expected identifier, found '}'\n");
+    CHECK_STR(dump, "(broken)\n(proc main (params) (block))\n");
     arena_free(&a);
 }
