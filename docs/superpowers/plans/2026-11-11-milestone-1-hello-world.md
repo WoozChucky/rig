@@ -34,10 +34,10 @@ main :: () { puts("Hello, World!"); }
 ## Review Focus
 
 1. **Paths with spaces.** Visual Studio lives under `C:\Program Files\...`; Nuno's projects may too. Every command line Rig runs (linker, tests) must quote arguments the way the C runtime parses them. Pinned by `os_run_passes_arguments_unchanged` (Task 4).
-2. **Source text from real editors:** CRLF line endings, a UTF-8 byte-order mark, no newline at the end, an empty file, tabs before an error. Positions and lexing must be right for all of them. Pinned by the lexer tests `crlf_lines_count_once`, `bom_is_skipped`, `empty_file_is_just_eof` (Task 6), the diagnostics test `caret_follows_tabs` (Task 5) and the end-to-end tests `crlf.rig` and `bom.rig` (Task 12).
+2. **Source text from real editors:** CRLF line endings, a UTF-8 byte-order mark, no newline at the end, an empty file, tabs before an error. Positions and lexing must be right for all of them. Pinned by the lexer tests `crlf_lines_count_once`, `bom_is_skipped`, `empty_file_is_just_eof` (Task 6), the diagnostics tests `caret_follows_tabs` and `bom_is_not_part_of_line_one` (Task 5) and the end-to-end tests `crlf.rig`, `bom.rig` and `errors/bom_error.rig` (Task 12).
 3. **A missing toolchain piece** (no Visual Studio or Windows SDK, no glibc development files, no `bin/ld.lld`): a sentence saying what to install, never a crash. Pinned by `missing_crt_files_say_what_to_install` and `missing_linker_says_where_it_looked` (Task 11).
-4. **Several mistakes in one file:** every one reported, in source order, with its position, and no crash or cascade of follow-on errors. Pinned by `parser_recovers_at_next_declaration` (Task 8), `checker_reports_every_unknown_name` (Task 9) and `errors/two_errors.rig` (Task 12).
-5. **Building from another directory:** `rig build tests/run/hello.rig` run from the repository root puts `hello`/`hello.exe` in the current directory and its object in `.build/`, creating `.build/` if needed. Pinned by the runner building every test by its relative path from the repository root (Task 12), and by CI starting from a clean checkout, so its first `rig build` creates `.build/`.
+4. **Several mistakes in one file:** every one reported, in source order, with its position, and no crash or cascade of follow-on errors. Each stage reports in the order it finds things (the lexer before the parser, the checker's signatures before its bodies), so the driver sorts the errors by position (`diag_sort`, Task 5) before printing them; `diag_render` itself keeps the order it's given. Pinned by `parser_recovers_at_next_declaration` (Task 8), `checker_reports_every_unknown_name` and `statements_are_calls_for_now` (Task 9), `sorting_puts_errors_in_source_order` (Task 5) and `errors/two_errors.rig`, `errors/errors_in_source_order.rig` and `errors/non_call_statement.rig` (Task 12).
+5. **Building from another directory:** `rig build tests/run/hello.rig` run from the repository root puts `hello`/`hello.exe` in the current directory and its object in `.build/`, creating `.build/` if needed. Pinned by the runner's default-output test (Task 12): it runs `rig build` without `-o`, in an empty directory, on a relative path, and checks the program and `.build/`'s object appear there and the program runs. (The other runner tests pass `-o`, and the runner makes `.build/` itself, so they cover neither.)
 
 ## Order and gates
 
@@ -300,7 +300,7 @@ TEST(keywords_are_not_identifiers) // "if iffy for_each null": IF IDENT IDENT NU
 TEST(integer_literals)             // "0 42 0xFF 0b101 1_000_000" -> int_value 0, 42, 255, 5, 1000000
 TEST(range_is_not_a_float)         // "0..9": INT DOT_DOT INT
 TEST(float_literals)               // "1.5 1e9 2.5e-3" -> FLOAT 1.5, 1e9, 0.0025
-TEST(string_escapes_decode)        // "\"a\\tb\\n\\\"q\\\"\\\\\"": string_value == "a\tb\n\"q\"\\", text is the raw 14 bytes
+TEST(string_escapes_decode)        // "\"a\\tb\\n\\\"q\\\"\\\\\"": string_value == "a\tb\n\"q\"\\", text is the raw 15 bytes
 TEST(comments_nest)                // "a /* x /* y */ z */ b // c\nd": IDENT IDENT IDENT EOF (a, b, d)
 TEST(errors_are_reported_and_lexing_goes_on)  // "a @ \"open\nb": "unexpected character '@'" at 1:3, "unterminated string literal" at 1:5,
                                               // kinds IDENT ERROR ERROR IDENT EOF, error_count 2
