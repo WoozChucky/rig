@@ -45,7 +45,9 @@ static const char *OBJ = ".o";
 // Seconds any one program may take. Each takes well under one.
 static const s32 TIMEOUT = 60;
 
-static String normalise_newlines(Arena *a, String s) {
+// Only Windows has \r\n to remove; elsewhere s comes back as it is, and the
+// arena goes unused.
+static String normalise_newlines([[maybe_unused]] Arena *a, String s) {
 #ifdef _WIN32
     u8 *out = (u8 *)arena_alloc(a, s.count ? s.count : 1, 1);
     s64 n = 0;
