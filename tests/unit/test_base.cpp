@@ -302,6 +302,42 @@ TEST(table_tells_apart_keys_that_differ_in_case) {
     table_free(&t);
 }
 
+// How many slots a lookup of key looks at: its first slot, then each one
+// after it, up to the key's own.
+static s64 probes(Table<s64> *t, String key) {
+    s64 n = 1;
+    for (u64 i = table_first_slot(t, hash_string(key)); !string_eq(t->slots[i].key, key); i = table_next_slot(t, i)) n++;
+    return n;
+}
+
+TEST(table_spreads_short_and_numbered_keys) {
+    // A look inside: the keys a compiler's tables hold most, one-letter
+    // names and numbered temporaries, must start in different slots, or
+    // every lookup walks a long run of them. Linear probing at most three
+    // quarters full averages under 2.5 probes for well-spread keys.
+    Arena keys = arena_make();
+    Table<s64> letters = {};
+    for (char c = 'a'; c <= 'z'; c++) table_put(&letters, string_copy(&keys, String{(const u8 *)&c, 1}), c);
+    bool seen[64] = {};
+    s64 distinct = 0;
+    CHECK_EQ(letters.capacity, 64);
+    for (char c = 'a'; c <= 'z'; c++) {
+        u64 slot = table_first_slot(&letters, hash_string(String{(const u8 *)&c, 1}));
+        if (slot < 64 && !seen[slot]) seen[slot] = true, distinct++;
+    }
+    CHECK(distinct >= 20);
+
+    Table<s64> numbered = {};
+    for (s64 i = 0; i < 1000; i++) table_put(&numbered, string_printf(&keys, "k%lld", (long long)i), i);
+    s64 total = 0;
+    for (s64 i = 0; i < 1000; i++) total += probes(&numbered, string_printf(&keys, "k%lld", (long long)i));
+    CHECK(total < 2500);
+
+    table_free(&letters);
+    table_free(&numbered);
+    arena_free(&keys);
+}
+
 TEST(replacing_a_value_never_grows_the_table) {
     // A look inside: capacity is private, but growing on a replacement
     // would be wasted work, and would move every value for nothing.
