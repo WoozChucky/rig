@@ -25,6 +25,13 @@ static Ir_Type ir_type_of(Type *t) {
     }
 }
 
+// How a parameter or return value of type t widens (Ir_Ext): only s8, s16,
+// u8 and u16 are narrower than the 32 bits the calling convention widens to.
+static Ir_Ext ir_ext_of(Type *t) {
+    if (!t || t->kind != TYPE_INTEGER || t->size > 2) return IR_EXT_NONE;
+    return t->is_signed ? IR_EXT_SIGN : IR_EXT_ZERO;
+}
+
 static Ir_Instr *emit(Lowering *l, Ir_Op op, Ir_Type type) {
     Ir_Instr instr = {};
     instr.op = op;
@@ -104,8 +111,13 @@ Ir_Module *ir_lower(Ast_File *f, Arena *a) {
         bool is_main = !source->is_foreign && string_eq(source->name, str("main"));
         Ir_Proc *p = new_proc(&l, is_main ? str("__rig_main") : source->name);
         p->is_foreign = source->is_foreign;
-        for (s64 k = 0; k < source->params.count; k++) array_add(&p->params, ir_type_of(source->params[k]->type));
-        p->return_type = source->return_type ? ir_type_of(source->return_type->type) : IR_VOID;
+        for (s64 k = 0; k < source->params.count; k++) {
+            Type *t = source->params[k]->type;
+            array_add(&p->params, {ir_type_of(t), ir_ext_of(t)});
+        }
+        Type *returns = source->return_type ? source->return_type->type : nullptr;
+        p->return_type = ir_type_of(returns);
+        p->return_ext = ir_ext_of(returns);
         table_put(&l.proc_index, source->name, (s32)i);
     }
 
@@ -147,6 +159,16 @@ static const char *ir_type_name(Ir_Type t) {
     case IR_I32: return "i32";
     case IR_I64: return "i64";
     case IR_PTR: return "ptr";
+    }
+    return "?";
+}
+
+// What follows a signature's type: " signext", " zeroext" or nothing.
+static const char *ir_ext_name(Ir_Ext e) {
+    switch (e) {
+    case IR_EXT_NONE: return "";
+    case IR_EXT_SIGN: return " signext";
+    case IR_EXT_ZERO: return " zeroext";
     }
     return "?";
 }
@@ -198,9 +220,13 @@ String ir_print(Arena *a, Ir_Module *m) {
         Ir_Proc *proc = m->procs[i];
         const char *kind = proc->is_foreign ? "foreign proc" : proc->is_export ? "export proc" : "proc";
         out(&p, "%s @" STR_FMT "(", kind, STR_ARG(proc->name));
-        for (s64 k = 0; k < proc->params.count; k++) out(&p, "%s%s", k ? ", " : "", ir_type_name(proc->params[k]));
+        for (s64 k = 0; k < proc->params.count; k++) {
+            out(&p, "%s%s%s", k ? ", " : "", ir_type_name(proc->params[k].type), ir_ext_name(proc->params[k].ext));
+        }
         out(&p, ")");
-        if (proc->return_type != IR_VOID) out(&p, " -> %s", ir_type_name(proc->return_type));
+        if (proc->return_type != IR_VOID) {
+            out(&p, " -> %s%s", ir_type_name(proc->return_type), ir_ext_name(proc->return_ext));
+        }
         if (proc->is_foreign) {
             out(&p, "\n");
             continue;
