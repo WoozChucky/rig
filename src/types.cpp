@@ -14,10 +14,20 @@ static Type integer_types[] = {
     INTEGER("u8", 1, false), INTEGER("u16", 2, false), INTEGER("u32", 4, false), INTEGER("u64", 8, false),
 };
 
+// Every type a program can name, by its built-in name: the one list
+// type_from_name searches. A new built-in type goes here. The VS Code
+// grammar's type names are generated from it too (tests/unit/test_grammar.cpp),
+// so the editor highlights exactly the names the checker knows.
+static Type *const NAMED_TYPES[] = {
+    &integer_types[0], &integer_types[1], &integer_types[2], &integer_types[3],  // s8 s16 s32 s64
+    &integer_types[4], &integer_types[5], &integer_types[6], &integer_types[7],  // u8 u16 u32 u64
+    &type_int,
+};
+static_assert(sizeof integer_types / sizeof integer_types[0] == 8, "NAMED_TYPES lists integer_types one by one");
+
 Type *type_from_name(String name) {
-    if (string_eq(name, type_int.name)) return &type_int;
-    for (Type &t : integer_types) {
-        if (string_eq(name, t.name)) return &t;
+    for (Type *t : NAMED_TYPES) {
+        if (string_eq(name, t->name)) return t;
     }
     return nullptr;
 }
