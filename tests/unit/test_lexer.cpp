@@ -1,5 +1,5 @@
-// test_lexer.cpp: the lexer's tests (issue #6). Written before the lexer, so
-// they fail until the work is done.
+// test_lexer.cpp: the lexer's tests (issue #6), written before the lexer
+// from the rules in lexer.h.
 
 #include "test.h"
 
