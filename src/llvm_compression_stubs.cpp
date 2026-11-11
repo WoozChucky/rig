@@ -12,9 +12,10 @@
 //
 // The signatures are zlib's and zstd's own (zlib's uLong is unsigned long:
 // 32 bits on Windows, 64 on Linux); only the names matter to the linker, but
-// the types keep the calls well-defined. A stub that fails ignores what it's
-// given, so its parameters are [[maybe_unused]]: they're there to match the
-// library's declaration, not to be read.
+// the types keep the calls well-defined. A stub either fails or has nothing
+// to act on, so it ignores what it's given and its parameters are
+// [[maybe_unused]]: they're there to match the library's declaration, not to
+// be read.
 
 extern "C" {
 
@@ -58,6 +59,8 @@ size_t ZSTD_compressBound(size_t source_size) { return source_size; }
 
 ZSTD_CCtx *ZSTD_createCCtx(void) { return nullptr; }
 
+// ZSTD_createCCtx never makes a context, so there is none to free: freeing
+// one (null) succeeds, as zstd's does.
 size_t ZSTD_freeCCtx([[maybe_unused]] ZSTD_CCtx *cctx) { return 0; }
 
 size_t ZSTD_CCtx_setParameter([[maybe_unused]] ZSTD_CCtx *cctx, [[maybe_unused]] int param,
