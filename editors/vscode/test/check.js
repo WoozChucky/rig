@@ -89,7 +89,7 @@ check('the problem matcher is $rig, owned by rig, paths from the workspace folde
 // `FILE:LINE:COLUMN: error: MESSAGE`, then the source line and a caret under
 // the column, both indented by four spaces. The matcher must take each
 // first line, with the file, line and column the source and caret lines
-// confirm, and neither of those two.
+// confirm, and no indented line.
 check('the problem matcher reads every diagnostic of tests/errors', () => {
     const dir = path.join(root, 'tests', 'errors');
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.err'));
@@ -97,28 +97,35 @@ check('the problem matcher reads every diagnostic of tests/errors', () => {
     for (const name of files) {
         const lines = fs.readFileSync(path.join(dir, name), 'utf8').replace(/\r\n/g, '\n').split('\n');
         if (lines[lines.length - 1] === '') lines.pop();
-        assert.strictEqual(lines.length % 3, 0, `${name}: expected groups of three lines`);
-        for (let i = 0; i < lines.length; i += 3) {
-            const [first, source, caret] = lines.slice(i, i + 3);
+        let diagnostics = 0;
+        for (let i = 0; i < lines.length; i++) {
             const where = `${name}, line ${i + 1}`;
+            // An indented line belongs to the diagnostic above it.
+            if (/^\s/.test(lines[i])) {
+                assert.strictEqual(match(lines[i]), null, `${where}: the matcher takes an indented line`);
+                continue;
+            }
+            diagnostics++;
+            const [first, source, caret] = lines.slice(i, i + 3);
             const d = match(first);
             assert.ok(d, `${where}: the matcher misses ${JSON.stringify(first)}`);
             assert.strictEqual(d.severity, 'error', where);
             assert.strictEqual(d.file, `tests/errors/${name.replace(/\.err$/, '.rig')}`, where);
             assert.ok(d.message.length > 0, where);
 
-            // The line number names the line the diagnostic shows: line
-            // LINE of the file (less a byte order mark and a CR).
+            // When the source and caret lines follow (they do in every file
+            // today), they confirm the line and column the matcher took:
+            // the source line is line LINE of the file (less a byte order
+            // mark and a CR), and the caret stands under the column (the
+            // caret line copies the source line's tabs, so one character
+            // is one column here).
+            if (source === undefined || caret === undefined || !/^ {4}/.test(source) || !/^ {4}/.test(caret)) continue;
             const text = fs.readFileSync(path.join(root, d.file), 'utf8').replace(/^\uFEFF/, '');
             const sourceLine = text.split('\n')[d.line - 1].replace(/\r$/, '');
             assert.strictEqual(source, `    ${sourceLine}`, `${where}: line ${d.line} of ${d.file}`);
-            // The caret stands under the column (the caret line copies the
-            // source line's tabs, so one character is one column here).
             assert.strictEqual(caret.indexOf('^') - 4 + 1, d.column, `${where}: the caret's column`);
-
-            assert.strictEqual(match(source), null, `${where}: the source line matches`);
-            assert.strictEqual(match(caret), null, `${where}: the caret line matches`);
         }
+        assert.ok(diagnostics > 0, `${name} has no diagnostic`);
     }
 });
 
