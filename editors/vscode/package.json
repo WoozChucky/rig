@@ -19,7 +19,82 @@
     "categories": [
         "Programming Languages"
     ],
+    "main": "./extension.js",
+    "activationEvents": [
+        "onLanguage:rig",
+        "onTaskType:rig"
+    ],
     "contributes": {
+        "commands": [
+            {
+                "command": "rig.buildFile",
+                "category": "Rig",
+                "title": "Build Current File",
+                "icon": "$(tools)"
+            },
+            {
+                "command": "rig.runFile",
+                "category": "Rig",
+                "title": "Run Current File",
+                "icon": "$(play)"
+            }
+        ],
+        "menus": {
+            "commandPalette": [
+                {
+                    "command": "rig.buildFile",
+                    "when": "editorLangId == rig"
+                },
+                {
+                    "command": "rig.runFile",
+                    "when": "editorLangId == rig"
+                }
+            ],
+            "editor/title": [
+                {
+                    "command": "rig.runFile",
+                    "when": "resourceLangId == rig",
+                    "group": "navigation"
+                }
+            ]
+        },
+        "taskDefinitions": [
+            {
+                "type": "rig",
+                "required": [
+                    "command"
+                ],
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "enum": [
+                            "build",
+                            "run"
+                        ],
+                        "enumDescriptions": [
+                            "rig build FILE",
+                            "rig build FILE, then run the program if the build worked"
+                        ],
+                        "description": "What the task does with the file."
+                    },
+                    "file": {
+                        "type": "string",
+                        "description": "The .rig file, relative to the workspace folder (variables like ${file} work). By default, the active editor's file."
+                    }
+                }
+            }
+        ],
+        "configuration": {
+            "title": "Rig",
+            "properties": {
+                "rig.compilerPath": {
+                    "type": "string",
+                    "default": "",
+                    "scope": "machine-overridable",
+                    "markdownDescription": "The Rig compiler to build with: a path (`~` and `${workspaceFolder}` work; a relative one is from the workspace folder) or a name on the `PATH`. Empty: `bin/rig.exe` (Windows) or `bin/rig` in a workspace folder, as this repository builds it, then `rig` on the `PATH`."
+                }
+            }
+        },
         "languages": [
             {
                 "id": "rig",
