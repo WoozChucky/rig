@@ -53,6 +53,7 @@ struct Ast_Proc : Ast {
     Ast_Block *body;         // null for a foreign procedure
     bool is_foreign;
     String foreign_library;  // #foreign's library name
+    Position library_pos;    // where that name is written
 };
 
 struct Ast_Call : Ast {
