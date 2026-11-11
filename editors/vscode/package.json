@@ -39,6 +39,26 @@
                 "scopeName": "source.rig",
                 "path": "./syntaxes/rig.tmLanguage.json"
             }
+        ],
+        "problemMatchers": [
+            {
+                "name": "rig",
+                "label": "Rig compiler diagnostics",
+                "owner": "rig",
+                "source": "rig",
+                "fileLocation": [
+                    "autoDetect",
+                    "${workspaceFolder}"
+                ],
+                "pattern": {
+                    "regexp": "^(.+?):(\\d+):(\\d+): (?:runtime )?(error|warning): (.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            }
         ]
     }
 }
