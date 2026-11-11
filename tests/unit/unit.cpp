@@ -167,3 +167,4 @@ int main(int argc, char **argv) {
 #include "test_ir.cpp"
 #include "test_llvm.cpp"
 #include "test_link.cpp"
+#include "test_driver.cpp"

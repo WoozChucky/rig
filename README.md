@@ -4,7 +4,16 @@ Rig is a compiled systems programming language for 64-bit Windows and Linux, in 
 
 The compiler is written in C-style C++23 and built with clang as a unity build (`build.bat`, `build.sh`). It compiles through LLVM first; its own x86-64 backend for fast debug builds comes later.
 
-Status: design. The design is [docs/superpowers/specs/2026-11-11-rig-language-design.md](docs/superpowers/specs/2026-11-11-rig-language-design.md).
+Status: milestone 1, hello world. The design is [docs/superpowers/specs/2026-11-11-rig-language-design.md](docs/superpowers/specs/2026-11-11-rig-language-design.md).
+
+## Hello world
+
+```
+puts :: (s: *u8) -> s32 #foreign libc;
+main :: () { puts("Hello, World!"); }
+```
+
+`bin/rig build hello.rig` writes `hello.exe` on Windows and `hello` on Linux, in the current directory (`-o` names it otherwise). So far Rig has procedures, calls, string and integer literals, and C functions declared `#foreign libc`.
 
 ## Building
 
@@ -25,6 +34,8 @@ scripts/get_llvm.sh
 ./build.sh
 bin/rig version
 ```
+
+**Tests:** `bin/unit-tests` (the compiler's parts; give it a name to run only the tests whose name or file contains it) and `bin/run-tests` (Rig programs in `tests/run` built and run, and programs in `tests/errors` that must fail with their diagnostics), both from the repository's root.
 
 **VS Code:** open the folder (on Windows, or in WSL through the WSL extension). `Ctrl+Shift+B` builds, *Run Test Task* runs the unit tests, and `F5` debugs `rig` or the unit tests (Visual Studio's debugger on Windows, gdb on Linux). The extensions it needs are recommended when the folder opens.
 

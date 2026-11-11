@@ -18,7 +18,23 @@ static int command_version() {
 }
 
 int main(int argc, char **argv) {
-    if (argc >= 2 && strcmp(argv[1], "version") == 0) return command_version();
-    print_usage();
-    return 2;
+#ifdef _WIN32
+    // Rig writes UTF-8 (source lines in diagnostics, paths); the console
+    // shows it as such instead of in its own code page.
+    SetConsoleOutputCP(CP_UTF8);
+#endif
+    Arena a = arena_make();
+    Array<String> args = os_arguments(&a, argc, argv);
+    int status = 2;
+    if (args.count >= 2 && string_eq(args[1], str("version"))) {
+        status = command_version();
+    } else if (args.count >= 2 && string_eq(args[1], str("build"))) {
+        Array<String> words = {args.data + 2, args.count - 2, args.count - 2};
+        status = command_build(&a, words, print_usage);
+    } else {
+        print_usage();
+    }
+    array_free(&args);
+    arena_free(&a);
+    return status;
 }

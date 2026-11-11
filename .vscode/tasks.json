@@ -38,6 +38,16 @@
             "linux": { "command": "bin/unit-tests ${input:testFilter}" },
             "group": "test",
             "problemMatcher": "$gcc"
+        },
+        {
+            "label": "end-to-end tests",
+            "detail": "Rig programs built and run (tests/run), and programs that must fail (tests/errors)",
+            "type": "shell",
+            "dependsOn": "build",
+            "windows": { "command": "bin\\run-tests.exe" },
+            "linux": { "command": "bin/run-tests" },
+            "group": "test",
+            "problemMatcher": []
         }
     ],
     "inputs": [

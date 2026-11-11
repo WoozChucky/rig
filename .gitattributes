@@ -1,2 +1,4 @@
 * text=auto eol=lf
 *.bat text eol=crlf
+# Kept byte for byte: the lexer test of CRLF line endings.
+tests/run/crlf.rig -text
