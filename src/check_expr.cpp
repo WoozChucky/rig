@@ -136,18 +136,17 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     if (!decl) {
         diag_error(c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
     } else if (decl->kind != AST_PROC) {
-        // A variable, constant or parameter of that name hides the
-        // procedure, if there is one.
+        // A variable, constant or parameter of that name, which hides the
+        // procedure if there is one.
         diag_error(c->diag, name->pos, "'" STR_FMT "' isn't a procedure, so it can't be called", STR_ARG(name->name));
-        return nullptr;
     }
-    // The arguments are checked even when the callee is unknown, so their
-    // own mistakes are reported too, after the callee's: in source order.
+    // The arguments are checked even when the callee is wrong, so their own
+    // mistakes are reported too, after the callee's: in source order.
     for (s64 i = 0; i < call->args.count; i++) check_value(c, call->args[i]);
     // A broken callee's parameters and return type are unknown: any
     // arguments may be right, and the call's type is unknown too.
+    if (!decl || decl->kind != AST_PROC || ((Ast_Proc *)decl)->is_broken) return nullptr;
     Ast_Proc *proc = (Ast_Proc *)decl;
-    if (!proc || proc->is_broken) return nullptr;
 
     call->proc = proc;
     if (call->args.count != proc->params.count) {

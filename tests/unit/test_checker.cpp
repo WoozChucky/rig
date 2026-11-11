@@ -569,6 +569,21 @@ TEST(names_refer_to_their_declarations) {
     arena_free(&a);
 }
 
+TEST(only_procedures_are_called) {
+    // A local hides the procedure of its name, and isn't one itself; the
+    // arguments are still checked.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                           "main :: () {\n"
+                           "    puts := 1;\n"
+                           "    puts(nope);\n"
+                           "}\n"),
+              "4:5: 'puts' isn't a procedure, so it can't be called\n"
+              "4:10: unknown identifier 'nope'\n");
+    arena_free(&a);
+}
+
 TEST(returns_are_checked) {
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
