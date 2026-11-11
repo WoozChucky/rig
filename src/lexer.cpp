@@ -1,5 +1,6 @@
 // lexer.cpp: the lexer (issue #6), source text to tokens. lexer.h gives the
-// rules and the exact error messages; this file follows them in order.
+// rules and the exact error messages; each rule is in the function for its
+// kind of token.
 //
 // The lexer is one loop over the bytes of the file. Each turn skips spaces
 // and comments, notes where the next token starts, and looks at its first
@@ -7,7 +8,7 @@
 // keyword, a digit a number, '"' a string, '#' a directive, anything else
 // punctuation. A function per kind reads the token to its end and adds it.
 // Mistakes are reported and become TOKEN_ERROR tokens, and the loop goes on,
-// so one run finds every mistake in the file.
+// so one run finds every lexical mistake in the file.
 
 #include "lexer.h"
 
@@ -31,6 +32,7 @@ static int peek(Lexer *l, s64 offset = 0) {
 // Moves on one byte, keeping line and column right. Columns count bytes,
 // so a tab, a '\r' or one byte of a UTF-8 character is one column.
 static void advance(Lexer *l) {
+    RIG_ASSERT(l->at < l->text.count);  // callers peek first
     if (l->text.data[l->at] == '\n') {
         l->line++;
         l->col = 1;
@@ -52,6 +54,11 @@ static bool is_digit(int c) {
     return c >= '0' && c <= '9';
 }
 
+// A byte of a UTF-8 character that isn't ASCII: every byte from 0x80 up.
+static bool is_non_ascii(int c) {
+    return c >= 0x80;
+}
+
 // "\r\n" or "\n" starts here: the end of a line.
 static bool at_line_break(Lexer *l) {
     return peek(l) == '\n' || (peek(l) == '\r' && peek(l, 1) == '\n');
@@ -71,10 +78,10 @@ static Token *add_token(Lexer *l, Token_Kind kind, Position pos, s64 start) {
 // ---------------------------------------------------------------------------
 // Spaces and comments
 
-// Skips spaces, tabs, line breaks and comments. Returns false if it met a
-// block comment with no end, which it reports; the rest of the file is
-// then that comment.
-static bool skip_space_and_comments(Lexer *l) {
+// Skips spaces, tabs, line breaks and comments. A block comment with no end
+// is reported and added as a TOKEN_ERROR here; it runs to the end of the
+// file, so the next thing lex() sees is the end.
+static void skip_space_and_comments(Lexer *l) {
     for (;;) {
         int c = peek(l);
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
@@ -91,7 +98,7 @@ static bool skip_space_and_comments(Lexer *l) {
                 if (peek(l) == -1) {
                     diag_error(l->diag, pos, "unterminated block comment");
                     add_token(l, TOKEN_ERROR, pos, start);
-                    return false;
+                    return;
                 }
                 if (peek(l) == '/' && peek(l, 1) == '*') {
                     advance(l);
@@ -106,7 +113,7 @@ static bool skip_space_and_comments(Lexer *l) {
                 }
             } while (depth > 0);
         } else {
-            return true;
+            return;
         }
     }
 }
@@ -128,15 +135,33 @@ static const Keyword KEYWORDS[] = {
     {"null", TOKEN_NULL},
 };
 
+// A name with UTF-8 letters in it, as in função, which identifiers can't
+// have yet. The rest of the name, ASCII or not, goes into the same token, so
+// one bad name is one error, reported at its first non-ASCII byte, and the
+// parser sees one bad token rather than a name, an error and another name.
+static void lex_non_ascii_name(Lexer *l, Position pos, s64 start) {
+    Position bad = here(l);
+    while (is_letter(peek(l)) || is_digit(peek(l)) || is_non_ascii(peek(l))) advance(l);
+    diag_error(l->diag, bad, "non-ASCII characters can only be in strings and comments, for now");
+    add_token(l, TOKEN_ERROR, pos, start);
+}
+
 // A word is read whole first and only then compared with the keywords, so
 // "iffy" is one identifier, not the keyword "if" followed by "fy". Sixteen
 // short comparisons cost less than hashing; a Table would pay off only with
 // many more keywords.
 static void lex_word(Lexer *l, Position pos, s64 start) {
     while (is_letter(peek(l)) || is_digit(peek(l))) advance(l);
+    if (is_non_ascii(peek(l))) {
+        lex_non_ascii_name(l, pos, start);  // função: one bad name, not three tokens
+        return;
+    }
     Token *t = add_token(l, TOKEN_IDENT, pos, start);
     for (const Keyword &k : KEYWORDS) {
-        if (string_eq(t->text, str(k.text))) t->kind = k.kind;
+        if (string_eq(t->text, str(k.text))) {
+            t->kind = k.kind;
+            break;
+        }
     }
 }
 
@@ -198,20 +223,25 @@ static void lex_number(Lexer *l, Position pos, s64 start) {
         advance(l);
     }
 
-    // A fraction needs a digit after the '.', so 0..9 stays 0, '..', 9.
+    // A fraction needs a digit right after the '.', so 0..9 stays 0, '..', 9,
+    // and 1.e5 is 1 then '.' (one day, a member). An exponent needs a digit
+    // right after the e and its sign. After those first digits, '_' is
+    // ignored as in the integer part: 1_000.000_5, 1e1_0.
     bool is_float = false;
     bool exponent_has_digits = true;
     if (base == 10 && peek(l) == '.' && is_digit(peek(l, 1))) {
         is_float = true;
         advance(l);
-        while (is_digit(peek(l))) advance(l);
+        while (is_digit(peek(l)) || peek(l) == '_') advance(l);
     }
     if (base == 10 && (peek(l) == 'e' || peek(l) == 'E')) {
         is_float = true;
         advance(l);
         if (peek(l) == '+' || peek(l) == '-') advance(l);
         exponent_has_digits = is_digit(peek(l));
-        while (is_digit(peek(l))) advance(l);
+        if (exponent_has_digits) {
+            while (is_digit(peek(l)) || peek(l) == '_') advance(l);
+        }
     }
 
     // Whatever letters or digits are left: 'a' in 123abc, '2' in 0b12.
@@ -249,14 +279,24 @@ static void lex_number(Lexer *l, Position pos, s64 start) {
     }
     // The C library reads floats exactly right, which is harder than it looks
     // (rounding to the nearest double). It needs a zero-terminated copy
-    // without the '_'s.
-    Token *t = add_token(l, TOKEN_FLOAT, pos, start);
-    char *copy = (char *)arena_alloc(l->arena, (u64)t->text.count + 1, 1);
+    // without the '_'s; the arena's memory is zeroed, so the zero after the
+    // copy is already there. strtod takes '.' as the decimal point because
+    // Rig never changes the C locale (in a Portuguese one it would be ',').
+    String text = string_slice(l->text, start, l->at - start);
+    char *copy = (char *)arena_alloc(l->arena, (u64)text.count + 1, 1);
     s64 n = 0;
-    for (s64 i = 0; i < t->text.count; i++) {
-        if (t->text.data[i] != '_') copy[n++] = (char)t->text.data[i];
+    for (s64 i = 0; i < text.count; i++) {
+        if (text.data[i] != '_') copy[n++] = (char)text.data[i];
     }
-    t->float_value = strtod(copy, nullptr);
+    f64 float_value = strtod(copy, nullptr);
+    // Too large becomes infinity: an error, as for integers. Too small just
+    // becomes 0, or the nearest double to it, as in C.
+    if (__builtin_isinf(float_value)) {
+        diag_error(l->diag, pos, "float literal too large for 64 bits");
+        add_token(l, TOKEN_ERROR, pos, start);
+        return;
+    }
+    add_token(l, TOKEN_FLOAT, pos, start)->float_value = float_value;
 }
 
 // ---------------------------------------------------------------------------
@@ -297,7 +337,14 @@ static void lex_string(Lexer *l, Position pos, s64 start) {
             // Reported, and the string is read on to its closing quote, so
             // every bad escape in it is found and the quote isn't mistaken
             // for the start of a new string.
-            diag_error(l->diag, escape_pos, "unknown escape sequence '\\%c'", e);
+            // The byte goes into the message only if it's printable: a
+            // control byte would reach the terminal, and one byte of a
+            // UTF-8 character alone is not valid text.
+            if (e >= 0x20 && e < 0x7f) {
+                diag_error(l->diag, escape_pos, "unknown escape sequence '\\%c'", e);
+            } else {
+                diag_error(l->diag, escape_pos, "unknown escape sequence: '\\' then byte 0x%02x", e);
+            }
             bad_escape = true;
         }
         advance(l);
@@ -352,11 +399,11 @@ static void lex_other(Lexer *l, Position pos, s64 start) {
     }
 
     int c = peek(l);
-    if (c >= 0x80) {
-        // UTF-8 outside a string or comment, as in a name like função: the
-        // whole run of such bytes is one mistake, not one per byte.
-        while (peek(l) >= 0x80) advance(l);
-        diag_error(l->diag, pos, "non-ASCII characters can only be in strings and comments, for now");
+    if (is_non_ascii(c)) {
+        // UTF-8 outside a string or comment, as in a name like ção: one bad
+        // name, however many bytes.
+        lex_non_ascii_name(l, pos, start);
+        return;
     } else if (c >= 0x20 && c < 0x7f) {
         diag_error(l->diag, pos, "unexpected character '%c'", c);  // printable: show it
         advance(l);
@@ -386,7 +433,7 @@ Array<Token> lex(Diagnostics *d, s32 file, Arena *a) {
     }
 
     for (;;) {
-        if (!skip_space_and_comments(l)) continue;  // only the end of the file is left
+        skip_space_and_comments(l);
         Position pos = here(l);
         s64 start = l->at;
         int c = peek(l);

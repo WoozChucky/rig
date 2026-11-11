@@ -118,14 +118,20 @@ const char *token_kind_name(Token_Kind kind);
 //   line 1's columns start after it.
 // - An identifier is an ASCII letter or '_', then letters, digits and '_'.
 //   The keywords above are not identifiers.
-// - A directive is '#' with a name right after it: #foreign. '#' alone, or
-//   followed by a space, is an error.
-// - An integer is decimal, 0x hexadecimal (either case: 0xff, 0xFF) or 0b
-//   binary. '_' anywhere after the first digit is ignored: 1_000, 1_. One
-//   that doesn't fit in 64 bits is an error.
-// - A float has a '.' followed by a digit, or an exponent: 1.5, 1e9, 2.5e-3.
-//   So 0..9 is INT DOT_DOT INT, not a float. 1e and 1e+ have an exponent
-//   with no digits, an error.
+// - A directive is '#' with a name right after it, made as an identifier
+//   is, keywords included: #foreign, #run2, #if. '#' alone, or followed by
+//   a space or a digit, is an error (#1 is the error, then INT 1).
+// - An integer is decimal, 0x hexadecimal or 0b binary. The prefixes are
+//   lowercase (0X10 is a bad literal); hex digits are either case: 0xff,
+//   0xFF. One that doesn't fit in 64 bits is an error.
+// - A float has a '.' followed by a digit, or an exponent (e or E, an
+//   optional sign, then a digit): 1.5, 1e9, 2.5e-3. So 0..9 is INT DOT_DOT
+//   INT, 1.e5 is INT DOT IDENT, and 1.5.5 is FLOAT DOT INT. 1e and 1e+ have
+//   an exponent with no digits, an error. One too large for a double (1e999)
+//   is an error; one too small for it is 0, or as near as a double gets.
+// - '_' anywhere after a number's first digit is ignored, in integers and
+//   floats alike: 1_000, 1_, 1_000.000_5, 1e1_0. The 0 of a prefix counts as
+//   that first digit, so 0x_ff is 255.
 // - A number takes every letter, digit and '_' that follows it, so 123abc,
 //   0b12 and 0xfg are each one bad literal (one TOKEN_ERROR), reported at
 //   the first character that doesn't belong, not three tokens.
@@ -135,21 +141,25 @@ const char *token_kind_name(Token_Kind kind);
 //   reported, and is one TOKEN_ERROR. An unterminated string is one
 //   TOKEN_ERROR ending before the line break ("\r\n" or "\n") or the end of
 //   the file; lexing goes on from there.
-// - Comments may hold any bytes, UTF-8 included. Elsewhere, a run of bytes
-//   from 0x80 up (UTF-8 outside a string or comment, as in a name like
-//   função) is one TOKEN_ERROR, reported once.
+// - Comments may hold any bytes, UTF-8 included. Elsewhere, bytes from 0x80
+//   up (UTF-8 outside a string or comment) make a bad name: the whole name,
+//   with its ASCII letters and digits around them, as in função, is one
+//   TOKEN_ERROR, reported once, at its first byte from 0x80 up.
 // - Punctuation takes the longest match: <<= is one token, not < and <=.
 // Error messages, exactly (the position in brackets):
 //   unterminated string literal         [the opening quote]
 //   unterminated block comment          [its /*]
-//   unknown escape sequence '\q'        [the backslash]
+//   unknown escape sequence '\q'        [the backslash]   (q printable ASCII)
+//   unknown escape sequence: '\' then byte 0x1b
+//                                       [the backslash]   (any other byte)
 //   unexpected character '@'            [it]   (printable ASCII)
 //   unexpected byte 0x01                [it]   (a control byte; two lowercase hex digits)
 //   non-ASCII characters can only be in strings and comments, for now
-//                                       [the run's first byte]
+//                                       [the name's first byte from 0x80 up]
 //   a directive needs a name right after '#', as in #foreign  [the '#']
 //   integer literal too large for 64 bits  [the literal]
 //   invalid character 'a' in number literal  [that character]
 //   number literal '0x' has no digits   [the literal]   (also '0b')
 //   float literal has no digits in its exponent  [the literal]
+//   float literal too large for 64 bits [the literal]
 Array<Token> lex(Diagnostics *d, s32 file, Arena *a);
