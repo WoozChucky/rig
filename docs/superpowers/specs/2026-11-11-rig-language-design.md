@@ -1,6 +1,6 @@
 # Rig: language and toolchain design
 
-Status: draft for Nuno's approval (2026-11-11). Nothing is built until he approves it.
+Status: approved by Nuno, 2026-11-11.
 
 Rig is a new compiled programming language, built as a learning project that follows the path a real language takes, modelled on Jonathan Blow's Jai. This document records what was decided in the design conversation. Each decision is marked: **(Nuno)** is the owner's own decision; **(Claude's call)** is a default proposed during the conversation and not objected to, which the owner may still change while reading.
 
