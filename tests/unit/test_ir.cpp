@@ -62,9 +62,9 @@ TEST(ir_of_integer_arguments) {
                                               "IDENT:main :: ( ) { IDENT:f ( IDENT:g ( ) , INT:255 ) ; "
                                               "IDENT:k ( IDENT:h ( ) ) ; }"));
     CHECK_STR(ir,
-              "foreign proc @f(i64, i8)\n"
+              "foreign proc @f(i64, i8 zeroext)\n"
               "foreign proc @g() -> i32\n"
-              "foreign proc @h() -> i16\n"
+              "foreign proc @h() -> i16 zeroext\n"
               "foreign proc @k(i64)\n"
               "proc @__rig_main() {\n"
               "  %0 = call @g()\n"
@@ -81,5 +81,20 @@ TEST(ir_of_integer_arguments) {
               "  %0 = const i32 0\n"
               "  ret %0\n"
               "}\n");
+    arena_free(&a);
+}
+
+TEST(ir_keeps_the_sign_of_narrow_parameters) {
+    // The C calling conventions widen an i8 or i16 by its sign at a call
+    // (llvm_backend.cpp), so a signature keeps it, on parameters and on the
+    // return; wider integers and pointers need no mark.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_tokens(&a, "IDENT:f :: ( IDENT:a : IDENT:s8 , IDENT:b : IDENT:u8 , IDENT:c : IDENT:s16 , "
+                                              "IDENT:d : IDENT:u16 , IDENT:e : IDENT:s32 , IDENT:g : IDENT:u64 , "
+                                              "IDENT:p : * IDENT:u8 ) -> IDENT:s8 #foreign IDENT:libc ; | "
+                                              "IDENT:take :: ( IDENT:x : IDENT:u16 ) { } | "
+                                              "IDENT:main :: ( ) { IDENT:take ( INT:7 ) ; }"));
+    CHECK(contains(ir, "foreign proc @f(i8 signext, i8 zeroext, i16 signext, i16 zeroext, i32, i64, ptr) -> i8 signext\n"));
+    CHECK(contains(ir, "proc @take(i16 zeroext) {\n"));
     arena_free(&a);
 }

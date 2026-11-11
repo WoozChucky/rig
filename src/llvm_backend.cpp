@@ -65,7 +65,7 @@ static LLVMTypeRef llvm_type(LLVMContextRef c, Ir_Type t) {
 
 static LLVMTypeRef function_type(LLVMContextRef c, Ir_Proc *p, Arena *a) {
     LLVMTypeRef *params = arena_new_array<LLVMTypeRef>(a, p->params.count ? p->params.count : 1);
-    for (s64 i = 0; i < p->params.count; i++) params[i] = llvm_type(c, p->params[i]);
+    for (s64 i = 0; i < p->params.count; i++) params[i] = llvm_type(c, p->params[i].type);
     return LLVMFunctionType(llvm_type(c, p->return_type), params, (unsigned)p->params.count, 0);
 }
 
