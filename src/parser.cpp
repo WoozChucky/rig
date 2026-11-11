@@ -229,17 +229,47 @@ static void skip_to_next_declaration(Parser *p, s64 start) {
     }
 }
 
+// After a declaration that began at token `start` failed: the declaration
+// later on the same line that stray tokens in front of it hid, as in
+// `*greet :: () {}` or `@greet :: ...` (a character the lexer refused), or
+// -1. That is the first IDENT '::' on the line, if it comes after `start`
+// and before any '(' or '{': once a signature or a body has begun, a '::'
+// is inside it (`greet : () { x :: 5; }`), not a fresh start. Resuming
+// there parses greet whole, so its body is checked and its uses are known;
+// skip_to_next_declaration would pass over it, since it doesn't start the
+// line.
+static s64 declaration_after_stray_tokens(Parser *p, s64 start) {
+    s32 line = p->tokens[start].pos.line;
+    // The token after i always exists: the loop stops at TOKEN_EOF, the last.
+    for (s64 i = start; p->tokens[i].kind != TOKEN_EOF && p->tokens[i].pos.line == line; i++) {
+        Token_Kind kind = p->tokens[i].kind;
+        if (kind == TOKEN_LPAREN || kind == TOKEN_LBRACE) return -1;
+        if (kind == TOKEN_IDENT && p->tokens[i + 1].kind == TOKEN_COLON_COLON) return i > start ? i : -1;
+    }
+    return -1;
+}
+
 // The entry kept for a declaration the parser gave up on, which began at
-// token `start`. Its name is the identifier the declaration starts with,
-// even when no '::' follows: `greet : () {` is still plainly greet's
-// declaration, and taking the name only means less is reported (calls to
-// greet), never more. A declaration that starts with anything else (a stray
-// '}') has no name to keep.
+// token `start`. It keeps a name only where the tokens look like a
+// declaration of it: an identifier followed by '::', by ':' (`greet : () {`
+// is still plainly greet's declaration, with a mistyped '::') or by a
+// character the lexer refused (perhaps a mistyped '::' too), or a directive
+// followed by '::' (`#greet ::`, a stray '#' the lexer read as part of the
+// name). Taking a name means less is reported (calls to greet), so it is
+// taken only there: an identifier followed by anything else (a stray
+// `foo("x");` outside any body) would hide every unknown use of foo in the
+// file. Otherwise, and when the declaration starts with anything else (a
+// stray '}'), the entry has no name.
 static Ast_Proc *broken_entry(Parser *p, s64 start) {
     Token *first = &p->tokens[start];
+    // first isn't TOKEN_EOF (parse() stops there), so a token follows it.
+    Token_Kind after = p->tokens[start + 1].kind;
     Ast_Proc *broken = ast_new<Ast_Proc>(p->arena, AST_PROC, first->pos);
     broken->is_broken = true;
-    if (first->kind == TOKEN_IDENT) broken->name = first->text;
+    bool looks_declared = first->kind == TOKEN_IDENT
+                              ? after == TOKEN_COLON_COLON || after == TOKEN_COLON || after == TOKEN_ERROR
+                              : first->kind == TOKEN_DIRECTIVE && after == TOKEN_COLON_COLON;
+    if (looks_declared) broken->name = first->text;
     return broken;
 }
 
@@ -251,6 +281,15 @@ Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
         s64 start = p.next;
         Ast_Proc *proc = parse_declaration(&p);
         if (!proc) {
+            s64 resume = declaration_after_stray_tokens(&p, start);
+            if (resume >= 0) {
+                // The tokens before it were stray, not a declaration, so
+                // they leave no entry. The failed attempt stopped at them,
+                // before resume (> start, so the loop moves on).
+                RIG_ASSERT(p.next <= resume);
+                p.next = resume;
+                continue;
+            }
             proc = broken_entry(&p, start);
             skip_to_next_declaration(&p, start);
         }

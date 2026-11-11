@@ -162,3 +162,69 @@ TEST(broken_declaration_without_a_name) {
     CHECK_STR(dump, "(broken)\n(proc main (params) (block))\n");
     arena_free(&a);
 }
+
+TEST(stray_tokens_before_a_name_are_skipped) {
+    // '*greet ::' is greet's declaration with something stray in front: the
+    // parser reports the stray token and parses greet whole, so its body is
+    // checked and calls to it aren't unknown. The stray token was no
+    // declaration, so it leaves no entry.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_dump(&a, "IDENT:main :: ( ) { IDENT:greet ( ) ; } | * IDENT:greet :: ( ) { IDENT:g ( ) ; }",
+                             &errors);
+    CHECK_STR(errors, "2:1: expected identifier, found '*'\n");
+    CHECK_STR(dump, "(proc main (params) (block (call greet)))\n(proc greet (params) (block (call g)))\n");
+
+    // A character the lexer refused ('@greet') is skipped the same way,
+    // and the lexer's message is the only one.
+    Token_List *list = toks("* IDENT:greet :: ( ) { }");
+    list->tokens[0].kind = TOKEN_ERROR;
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(list->diag.error_count, 0);
+    CHECK_STR(ast_dump(&a, file), "(proc greet (params) (block))\n");
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(a_declaration_inside_a_broken_one_is_not_a_fresh_start) {
+    // Once a signature or a body has begun, a 'x ::' on the same line is
+    // inside it, not a declaration after stray tokens: one message, and
+    // greet's entry.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_dump(&a, "IDENT:greet : ( ) { IDENT:x :: INT:5 ; } | IDENT:main :: ( ) { }", &errors);
+    CHECK_STR(errors, "1:3: expected '::', found ':'\n");
+    CHECK_STR(dump, "(broken greet)\n(proc main (params) (block))\n");
+    arena_free(&a);
+}
+
+TEST(a_directive_where_the_name_goes_keeps_the_name) {
+    // '#greet ::' is greet's declaration with a stray '#', which the lexer
+    // made a directive of: the entry is named greet.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_dump(&a, "#greet :: ( ) { } | IDENT:main :: ( ) { IDENT:greet ( ) ; }", &errors);
+    CHECK_STR(errors, "1:1: expected identifier, found directive\n");
+    CHECK_STR(dump, "(broken greet)\n(proc main (params) (block (call greet)))\n");
+    arena_free(&a);
+}
+
+TEST(a_name_is_kept_only_where_a_declaration_could_be) {
+    // A stray call outside any body names nothing: 'foo(' can't begin foo's
+    // declaration, and naming it would hide the unknown foo everywhere else.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_dump(&a, "IDENT:main :: ( ) { } | IDENT:foo ( STRING:x ) ;", &errors);
+    CHECK_STR(errors, "2:3: expected '::', found '('\n");
+    CHECK_STR(dump, "(proc main (params) (block))\n(broken)\n");
+
+    // A token the lexer refused right after the name ('greet @:: ...') may
+    // be a mistyped '::': the name is kept.
+    Token_List *list = toks("IDENT:greet :: ( ) { }");
+    list->tokens[1].kind = TOKEN_ERROR;
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(list->diag.error_count, 0);
+    CHECK_STR(ast_dump(&a, file), "(broken greet)\n");
+    token_list_free(list);
+    arena_free(&a);
+}

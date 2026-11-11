@@ -244,3 +244,36 @@ TEST(a_whole_declaration_wins_over_a_broken_one) {
               "3:15: argument 1 of 'puts' has type 'int', which can't be converted to '*u8'\n");
     arena_free(&a);
 }
+
+TEST(a_declaration_after_stray_tokens_is_checked) {
+    // greet is parsed whole despite the '*' before it: calls to it are fine,
+    // and its body is checked ('putz').
+    Arena a = arena_make();
+    CHECK_STR(errors_after_parse(&a, "IDENT:main :: ( ) { IDENT:greet ( ) ; } | "
+                                     "* IDENT:greet :: ( ) { IDENT:putz ( ) ; }"),
+              "2:1: expected identifier, found '*'\n"
+              "2:13: unknown identifier 'putz'\n");
+    // With no main anywhere, that is still reported: the '*' left no entry
+    // that could have been main.
+    CHECK_STR(errors_after_parse(&a, "* IDENT:greet :: ( ) { }"),
+              "1:1: expected identifier, found '*'\n"
+              "1:1: a procedure called 'main' is needed\n");
+    arena_free(&a);
+}
+
+TEST(a_directive_where_the_name_goes_declares_the_name) {
+    Arena a = arena_make();
+    CHECK_STR(errors_after_parse(&a, "#greet :: ( ) { } | IDENT:main :: ( ) { IDENT:greet ( ) ; }"),
+              "1:1: expected identifier, found directive\n");
+    arena_free(&a);
+}
+
+TEST(a_stray_call_outside_a_body_declares_nothing) {
+    // main's call to the undeclared foo is reported now, not only once the
+    // stray line is deleted.
+    Arena a = arena_make();
+    CHECK_STR(errors_after_parse(&a, PUTS "IDENT:main :: ( ) { IDENT:foo ( ) ; } | IDENT:foo ( STRING:x ) ;"),
+              "2:11: unknown identifier 'foo'\n"
+              "3:3: expected '::', found '('\n");
+    arena_free(&a);
+}

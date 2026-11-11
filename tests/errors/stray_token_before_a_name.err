@@ -1,0 +1,6 @@
+tests/errors/stray_token_before_a_name.rig:7:1: error: unexpected character '@'
+    @greet :: () {
+    ^
+tests/errors/stray_token_before_a_name.rig:8:5: error: unknown identifier 'putz'
+        putz("Hello");
+        ^

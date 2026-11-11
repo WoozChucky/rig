@@ -49,8 +49,9 @@ struct Ast_Block : Ast {
 // A declaration. When the parser gave up on one (a syntax error), it is
 // still kept, as a broken entry: is_broken is set and only name and pos
 // mean anything, so the checker knows the name is declared. Its name is the
-// identifier the declaration started with, or empty when it didn't start
-// with one.
+// one the declaration started with, where the tokens look like a declaration
+// of it (`greet :`, `#greet ::`: parser.cpp's broken_entry), and empty
+// otherwise.
 struct Ast_Proc : Ast {
     String name;
     Array<Ast_Param *> params;
