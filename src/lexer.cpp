@@ -135,10 +135,13 @@ static const Keyword KEYWORDS[] = {
     {"null", TOKEN_NULL},
 };
 
-// A name with UTF-8 letters in it, as in função, which identifiers can't
-// have yet. The rest of the name, ASCII or not, goes into the same token, so
-// one bad name is one error, reported at its first non-ASCII byte, and the
-// parser sees one bad token rather than a name, an error and another name.
+// A name with bytes from 0x80 up in it: UTF-8 letters, as in função, which
+// identifiers can't have yet, but also any other non-ASCII character, such
+// as a non-breaking space or a curly quote. The rest of the name, ASCII or
+// not, goes into the same token, so one bad name is one error, reported at
+// its first byte from 0x80 up, and the parser sees one bad token rather than
+// a name, an error and another name. Directives call it too, the '#' then
+// being part of the bad token.
 static void lex_non_ascii_name(Lexer *l, Position pos, s64 start) {
     Position bad = here(l);
     while (is_letter(peek(l)) || is_digit(peek(l)) || is_non_ascii(peek(l))) advance(l);
@@ -167,12 +170,20 @@ static void lex_word(Lexer *l, Position pos, s64 start) {
 
 static void lex_directive(Lexer *l, Position pos, s64 start) {
     advance(l);  // the '#'
+    if (is_non_ascii(peek(l))) {
+        lex_non_ascii_name(l, pos, start);  // #ç: a bad name, one error with its '#'
+        return;
+    }
     if (!is_letter(peek(l))) {
         diag_error(l->diag, pos, "a directive needs a name right after '#', as in #foreign");
         add_token(l, TOKEN_ERROR, pos, start);
         return;
     }
     while (is_letter(peek(l)) || is_digit(peek(l))) advance(l);
+    if (is_non_ascii(peek(l))) {
+        lex_non_ascii_name(l, pos, start);  // #função, not #fun then a bad name
+        return;
+    }
     Token *t = add_token(l, TOKEN_DIRECTIVE, pos, start);
     t->text = string_slice(t->text, 1, t->text.count - 1);  // the name, without '#'
 }
