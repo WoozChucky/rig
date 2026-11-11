@@ -241,9 +241,10 @@ static void check_grammar_tables(Arena *a, const Grammar_Tables *t, Array<String
     for (s64 i = 0; i < t->keyword_count; i++) {
         const char *text = t->keywords[i].text;
         if (!find_keyword_scope(t, text)) {
-            array_add(problems,
-                      string_printf(a, "keyword '%s' has no scope in tests/unit/test_grammar.cpp's KEYWORD_SCOPES: add it",
-                                    text));
+            array_add(problems, string_printf(a,
+                                              "keyword '%s' has no scope in tests/unit/test_grammar.cpp's "
+                                              "KEYWORD_SCOPES: add it",
+                                              text));
         }
     }
     for (s64 i = 0; i < t->keyword_scope_count; i++) {
@@ -261,9 +262,10 @@ static void check_grammar_tables(Arena *a, const Grammar_Tables *t, Array<String
     for (s64 i = 0; i < t->punctuation_count; i++) {
         const char *text = t->punctuation[i].text;
         if (!find_operator_scope(t, text)) {
-            array_add(problems,
-                      string_printf(a, "operator '%s' has no scope in tests/unit/test_grammar.cpp's OPERATOR_SCOPES: add it",
-                                    text));
+            array_add(problems, string_printf(a,
+                                              "operator '%s' has no scope in tests/unit/test_grammar.cpp's "
+                                              "OPERATOR_SCOPES: add it",
+                                              text));
         }
     }
     for (s64 i = 0; i < t->operator_scope_count; i++) {
@@ -422,11 +424,12 @@ static bool is_placeholder_char(u8 c) {
 }
 
 // The grammar: the template with each @NAME@ filled in. A list placeholder
-// sits inside a JSON string (a regex) and becomes words there; "@OPERATOR_
-// CAPTURES@" is a whole JSON string, so the template stays valid JSON, and
-// becomes an object, its quotes included. Anything wrong (a word without a
-// scope, a placeholder the template lacks or this file doesn't know) is
-// added to problems, and the result is then not to be written.
+// sits inside a JSON string (a regex) and becomes words there. The captures
+// placeholder is a whole JSON string, "@OPERATOR_CAPTURES@", so that the
+// template stays valid JSON; it becomes an object, its quotes included.
+// Anything wrong (a word without a scope, a placeholder the template lacks
+// or this file doesn't know) is added to problems, and the result is then
+// not to be written.
 static String generate_grammar(Arena *a, String tmpl, const Grammar_Tables *t, Array<String> *problems) {
     check_grammar_tables(a, t, problems);
 
@@ -478,8 +481,9 @@ static String generate_grammar(Arena *a, String tmpl, const Grammar_Tables *t, A
             grammar_out_operator_captures(a, &out, t, indent);
         }
         if (!known) {
-            array_add(problems, string_printf(a, "the template has @" STR_FMT "@, which tests/unit/test_grammar.cpp doesn't fill",
-                                              STR_ARG(name)));
+            array_add(problems,
+                      string_printf(a, "the template has @" STR_FMT "@, which tests/unit/test_grammar.cpp doesn't fill",
+                                    STR_ARG(name)));
         }
     }
 
@@ -671,8 +675,9 @@ TEST(vscode_grammar_has_no_scope_for_a_keyword_the_lexer_lacks) {
     Arena a = arena_make();
     Array<String> problems = {};
     generate_grammar(&a, str(""), &tables, &problems);
-    CHECK(grammar_has_problem(
-        problems, "tests/unit/test_grammar.cpp's KEYWORD_SCOPES has 'goto', which isn't a keyword in src/lexer.cpp: remove it"));
+    CHECK(grammar_has_problem(problems,
+                              "tests/unit/test_grammar.cpp's KEYWORD_SCOPES has 'goto', which isn't a keyword in "
+                              "src/lexer.cpp: remove it"));
     array_free(&problems);
     arena_free(&a);
 }
@@ -693,9 +698,9 @@ TEST(vscode_grammar_needs_a_scope_for_every_operator) {
     generate_grammar(&a, str(""), &tables, &problems);
     CHECK(grammar_has_problem(problems,
                               "operator '<<=' has no scope in tests/unit/test_grammar.cpp's OPERATOR_SCOPES: add it"));
-    CHECK(grammar_has_problem(
-        problems,
-        "tests/unit/test_grammar.cpp's OPERATOR_SCOPES has '<=>', which isn't punctuation in src/lexer.cpp: remove it"));
+    CHECK(grammar_has_problem(problems,
+                              "tests/unit/test_grammar.cpp's OPERATOR_SCOPES has '<=>', which isn't punctuation in "
+                              "src/lexer.cpp: remove it"));
     array_free(&problems);
     arena_free(&a);
 }
