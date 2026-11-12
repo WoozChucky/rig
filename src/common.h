@@ -26,6 +26,22 @@ typedef uint64_t u64;
 typedef float f32;
 typedef double f64;
 
+// A double's 64 bits, and back: how the compiler keeps a float constant in
+// a u64 (Ast.constant, an IR_CONST), so integers and floats share one field.
+// memcpy is C's way to read one type's bytes as another's; compilers turn it
+// into a plain register move.
+inline u64 f64_bits(f64 value) {
+    u64 bits;
+    memcpy(&bits, &value, sizeof bits);
+    return bits;
+}
+
+inline f64 f64_from_bits(u64 bits) {
+    f64 value;
+    memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
 // A check that stays on in every build of the compiler: a failed one is a
 // bug in the compiler, never in the user's program, so it stops at once and
 // says where.

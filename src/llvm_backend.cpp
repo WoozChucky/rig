@@ -62,6 +62,8 @@ static LLVMTypeRef llvm_type(LLVMContextRef c, Ir_Type t) {
     case IR_I32: return LLVMInt32TypeInContext(c);
     case IR_I64: return LLVMInt64TypeInContext(c);
     case IR_PTR: return LLVMPointerTypeInContext(c, 0);
+    case IR_F32: return LLVMFloatTypeInContext(c);
+    case IR_F64: return LLVMDoubleTypeInContext(c);
     }
     RIG_ASSERT(!"unknown IR type");
     return nullptr;
@@ -230,6 +232,10 @@ static LLVMOpcode llvm_opcode(Ir_Op op) {
     case IR_SHL: return LLVMShl;
     case IR_LSHR: return LLVMLShr;
     case IR_ASHR: return LLVMAShr;
+    case IR_FADD: return LLVMFAdd;
+    case IR_FSUB: return LLVMFSub;
+    case IR_FMUL: return LLVMFMul;
+    case IR_FDIV: return LLVMFDiv;
     default: RIG_ASSERT(!"not a binary operation"); return LLVMAdd;
     }
 }
@@ -246,9 +252,52 @@ static LLVMIntPredicate llvm_predicate(Ir_Pred p) {
     case IR_ULE: return LLVMIntULE;
     case IR_UGT: return LLVMIntUGT;
     case IR_UGE: return LLVMIntUGE;
+    default: RIG_ASSERT(!"not an integer predicate"); return LLVMIntEQ;
     }
-    RIG_ASSERT(!"unknown predicate");
-    return LLVMIntEQ;
+}
+
+// fcmp's predicates (Ir_Pred): ordered ones are false when either operand is
+// NaN, une ("unordered or not equal") is true then.
+static LLVMRealPredicate llvm_real_predicate(Ir_Pred p) {
+    switch (p) {
+    case IR_FOEQ: return LLVMRealOEQ;
+    case IR_FUNE: return LLVMRealUNE;
+    case IR_FOLT: return LLVMRealOLT;
+    case IR_FOLE: return LLVMRealOLE;
+    case IR_FOGT: return LLVMRealOGT;
+    case IR_FOGE: return LLVMRealOGE;
+    default: RIG_ASSERT(!"not a float predicate"); return LLVMRealOEQ;
+    }
+}
+
+// A float constant of IR type t (f32 or f64), from the double whose bits
+// IR_CONST keeps. LLVMConstReal takes a double and converts it to the
+// constant's type, rounding to the nearest value (ties to even), as fptrunc
+// does at run time: 0.1 as an f32 is 0.100000001490116..., which LLVM writes
+// as the double holding exactly that, 0x3FB99999A0000000. (LLVM rounds,
+// rather than a C++ (float) cast here, because C++ leaves the cast of a
+// double beyond float's range undefined; LLVM gives infinity.)
+static LLVMValueRef float_constant(LLVMContextRef c, Ir_Type t, u64 bits) {
+    return LLVMConstReal(llvm_type(c, t), f64_from_bits(bits));
+}
+
+// A float converted to an integer type, toward zero, saturating: LLVM's
+// llvm.fptosi.sat.iN.fM (signed) or llvm.fptoui.sat.iN.fM (unsigned). Plain
+// fptosi gives poison when the value doesn't fit (1e30 in an i32, or NaN),
+// and anything may follow from poison; these give the type's largest or
+// smallest value instead, and 0 for NaN (spec 6.4). An intrinsic is a
+// function LLVM knows, declared in the module the first time it's used and
+// called like any other; its name is made from the types it's used with,
+// the result's first.
+static LLVMValueRef build_saturating(Backend *b, LLVMBuilderRef builder, bool is_signed, LLVMValueRef value,
+                                     LLVMTypeRef to) {
+    const char *name = is_signed ? "llvm.fptosi.sat" : "llvm.fptoui.sat";
+    unsigned id = LLVMLookupIntrinsicID(name, strlen(name));
+    RIG_ASSERT(id != 0);
+    LLVMTypeRef types[] = {to, LLVMTypeOf(value)};
+    LLVMValueRef function = LLVMGetIntrinsicDeclaration(b->module, id, types, 2);
+    LLVMTypeRef type = LLVMIntrinsicGetType(b->context, id, types, 2);
+    return LLVMBuildCall2(builder, type, function, &value, 1, "");
 }
 
 // One procedure's translation: its LLVM blocks, and each IR value's LLVM
@@ -300,8 +349,10 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
     switch (instr->op) {
     case IR_CONST:
         // LLVM's integer constants are integers only: a ptr constant, which
-        // is always 0, is LLVM's null.
-        if (instr->type == IR_PTR) {
+        // is always 0, is LLVM's null, and a float one is a real constant.
+        if (ir_is_float(instr->type)) {
+            v = float_constant(c, instr->type, instr->constant);
+        } else if (instr->type == IR_PTR) {
             RIG_ASSERT(instr->constant == 0);
             v = LLVMConstNull(llvm_type(c, IR_PTR));
         } else {
@@ -331,6 +382,15 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
     case IR_SEXT: v = LLVMBuildSExt(builder, value(body, instr->a), llvm_type(c, instr->type), ""); break;
     case IR_ZEXT: v = LLVMBuildZExt(builder, value(body, instr->a), llvm_type(c, instr->type), ""); break;
     case IR_TRUNC: v = LLVMBuildTrunc(builder, value(body, instr->a), llvm_type(c, instr->type), ""); break;
+    case IR_FPEXT: v = LLVMBuildFPExt(builder, value(body, instr->a), llvm_type(c, instr->type), ""); break;
+    case IR_FPTRUNC: v = LLVMBuildFPTrunc(builder, value(body, instr->a), llvm_type(c, instr->type), ""); break;
+    case IR_SITOFP: v = LLVMBuildSIToFP(builder, value(body, instr->a), llvm_type(c, instr->type), ""); break;
+    case IR_UITOFP: v = LLVMBuildUIToFP(builder, value(body, instr->a), llvm_type(c, instr->type), ""); break;
+    case IR_FPTOSI_SAT:
+    case IR_FPTOUI_SAT:
+        v = build_saturating(b, builder, instr->op == IR_FPTOSI_SAT, value(body, instr->a),
+                             llvm_type(c, instr->type));
+        break;
     case IR_LOCAL: return;  // its alloca is already in the entry block (build_body)
     case IR_LOAD: v = LLVMBuildLoad2(builder, llvm_type(c, instr->type), value(body, instr->a), ""); break;
     case IR_STORE: LLVMBuildStore(builder, value(body, instr->a), value(body, instr->b)); break;
@@ -347,11 +407,21 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
     case IR_SHL:
     case IR_LSHR:
     case IR_ASHR:
-        // LLVMBuildBinOp sets no flag: no nsw, nuw or exact (spec 6.4).
+    case IR_FADD:
+    case IR_FSUB:
+    case IR_FMUL:
+    case IR_FDIV:
+        // LLVMBuildBinOp sets no flag: no nsw, nuw or exact on integers, and
+        // no fast-math flag on floats (spec 6.4).
         v = LLVMBuildBinOp(builder, llvm_opcode(instr->op), value(body, instr->a), value(body, instr->b), "");
         break;
+    case IR_FNEG: v = LLVMBuildFNeg(builder, value(body, instr->a), ""); break;
     case IR_CMP:
         v = LLVMBuildICmp(builder, llvm_predicate(instr->pred), value(body, instr->a), value(body, instr->b), "");
+        break;
+    case IR_FCMP:
+        v = LLVMBuildFCmp(builder, llvm_real_predicate(instr->pred), value(body, instr->a), value(body, instr->b),
+                          "");
         break;
     case IR_SELECT:
         v = LLVMBuildSelect(builder, value(body, instr->c), value(body, instr->a), value(body, instr->b), "");
@@ -506,6 +576,8 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
             if (g->type == IR_PTR) {
                 RIG_ASSERT(g->initial == 0);
                 LLVMSetInitializer(global, LLVMConstNull(type));
+            } else if (ir_is_float(g->type)) {
+                LLVMSetInitializer(global, float_constant(c, g->type, g->initial));
             } else {
                 LLVMSetInitializer(global, LLVMConstInt(type, g->initial, 0));
             }

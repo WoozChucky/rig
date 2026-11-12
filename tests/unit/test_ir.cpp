@@ -508,6 +508,64 @@ TEST(ir_prints_every_operation) {
     arena_free(&a);
 }
 
+TEST(ir_prints_float_operations) {
+    // Milestone 2a's floats (issue #37): the f32 and f64 types, a float
+    // constant printed as its value, the arithmetic, every fcmp predicate and
+    // the conversions, each in the form later tests compare against.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(m, &a, "floats", IR_F64);
+    s32 x = ir_add_param(p, IR_F64, IR_EXT_NONE);  // %0
+    s32 y = ir_add_param(p, IR_F32, IR_EXT_NONE);  // %1
+    s32 n = ir_add_param(p, IR_I64, IR_EXT_NONE);  // %2
+    s32 b = ir_new_block(&a, p);
+    s32 half = emit_const(p, b, IR_F64, f64_bits(2.5));  // %3
+    emit_const(p, b, IR_F32, f64_bits(0.1));             // %4
+    const Ir_Op binary[] = {IR_FADD, IR_FSUB, IR_FMUL, IR_FDIV};
+    for (Ir_Op op : binary) emit_binary(p, b, op, IR_F64, x, half);  // %5 ... %8
+    ir_emit(p, b, IR_FNEG, IR_F64)->a = x;                          // %9
+    const Ir_Pred preds[] = {IR_FOEQ, IR_FUNE, IR_FOLT, IR_FOLE, IR_FOGT, IR_FOGE};
+    for (Ir_Pred pred : preds) {  // %10 ... %15
+        Ir_Instr *cmp = ir_emit(p, b, IR_FCMP, IR_F64);
+        cmp->pred = pred;
+        cmp->a = x;
+        cmp->b = half;
+    }
+    emit_convert(p, b, IR_FPEXT, IR_F32, y, IR_F64);       // %16
+    emit_convert(p, b, IR_FPTRUNC, IR_F64, x, IR_F32);     // %17
+    emit_convert(p, b, IR_SITOFP, IR_I64, n, IR_F64);      // %18
+    emit_convert(p, b, IR_UITOFP, IR_I64, n, IR_F32);      // %19
+    emit_convert(p, b, IR_FPTOSI_SAT, IR_F64, x, IR_I32);  // %20
+    emit_convert(p, b, IR_FPTOUI_SAT, IR_F32, y, IR_I8);   // %21
+    emit_ret(p, b, 5);
+
+    CHECK_STR(ir_print(&a, m),
+              "proc @floats(f64, f32, i64) -> f64 {\n"
+              "b0:\n"
+              "  %3 = const f64 2.5\n"
+              "  %4 = const f32 0.1\n"
+              "  %5 = fadd f64 %0, %3\n"
+              "  %6 = fsub f64 %0, %3\n"
+              "  %7 = fmul f64 %0, %3\n"
+              "  %8 = fdiv f64 %0, %3\n"
+              "  %9 = fneg f64 %0\n"
+              "  %10 = fcmp oeq f64 %0, %3\n"
+              "  %11 = fcmp une f64 %0, %3\n"
+              "  %12 = fcmp olt f64 %0, %3\n"
+              "  %13 = fcmp ole f64 %0, %3\n"
+              "  %14 = fcmp ogt f64 %0, %3\n"
+              "  %15 = fcmp oge f64 %0, %3\n"
+              "  %16 = fpext f32 %1 to f64\n"
+              "  %17 = fptrunc f64 %0 to f32\n"
+              "  %18 = sitofp i64 %2 to f64\n"
+              "  %19 = uitofp i64 %2 to f32\n"
+              "  %20 = fptosi.sat f64 %0 to i32\n"
+              "  %21 = fptoui.sat f32 %1 to i8\n"
+              "  ret %5\n"
+              "}\n");
+    arena_free(&a);
+}
+
 TEST(ir_knows_when_a_block_has_ended) {
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
