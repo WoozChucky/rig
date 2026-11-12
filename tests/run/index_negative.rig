@@ -1,0 +1,12 @@
+// A negative index of a signed type is out of bounds: compared with the
+// count as unsigned, it's huge; the message gives it as the number it is.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    a := int.[1, 2, 3];
+    v : []int = a;
+    i : s8 = -1;
+    puts("before");
+    x := v[i];
+    puts("after");
+}

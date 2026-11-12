@@ -1,0 +1,1 @@
+tests/run/index_equal_to_count.rig:9:6: runtime error: index 3 is out of bounds (count 3)
