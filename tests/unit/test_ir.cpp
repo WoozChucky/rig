@@ -1245,3 +1245,131 @@ TEST(several_targets_can_be_globals) {
               "}\n");
     arena_free(&a);
 }
+
+// Lowering milestone 2a's floats (issue #37).
+
+TEST(ir_of_float_arithmetic) {
+    // Float arithmetic is fadd, fsub, fmul, fdiv and fneg, at the type the
+    // operands meet at: x * 2 is a float32's (the 2 a float32 constant),
+    // then widened to a float64 to meet y. No division is checked: a float
+    // divided by zero is infinity or NaN.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: (x: float32, y: float64) -> float64 {\n"
+                                          "    a := x * 2 + y;\n"
+                                          "    a -= 0.5;\n"
+                                          "    return -a / y;\n"
+                                          "}\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(f32, f64) -> f64 {\n"
+              "b0:\n"
+              "  %2 = local f64\n"
+              "  %3 = const f32 2\n"
+              "  %4 = fmul f32 %0, %3\n"
+              "  %5 = fpext f32 %4 to f64\n"
+              "  %6 = fadd f64 %5, %1\n"
+              "  store f64 %6, %2\n"
+              "  %7 = load f64 %2\n"
+              "  %8 = const f64 0.5\n"
+              "  %9 = fsub f64 %7, %8\n"
+              "  store f64 %9, %2\n"
+              "  %10 = load f64 %2\n"
+              "  %11 = fneg f64 %10\n"
+              "  %12 = fdiv f64 %11, %1\n"
+              "  ret %12\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(ir_of_float_comparisons) {
+    // Ordered comparisons, but != unordered, so NaN != NaN.
+    Arena a = arena_make();
+    const char *ops[] = {"==", "!=", "<", "<=", ">", ">="};
+    const char *preds[] = {"oeq", "une", "olt", "ole", "ogt", "oge"};
+    for (int i = 0; i < 6; i++) {
+        String source = string_printf(&a,
+                                      "f :: (x: float64, y: float64) -> bool { return x %s y; }\n"
+                                      "main :: () { }\n",
+                                      ops[i]);
+        String ir = ir_print(&a, lower_source(&a, string_cstr(&a, source)));
+        String want = string_printf(&a, "  %%2 = fcmp %s f64 %%0, %%1\n", preds[i]);
+        CHECK(contains(proc_ir(ir, "f"), string_cstr(&a, want)));
+    }
+    // A float32 meeting a float64 is widened; an integer constant meeting a
+    // float32 is a float32 constant.
+    String ir = ir_print(&a, lower_source(&a,
+                                          "ne :: (x: float32, y: float64) -> bool { return x != y; }\n"
+                                          "lt :: (x: float32) -> bool { return x < 1; }\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "ne"),
+              "proc @ne(f32, f64) -> i1 {\n"
+              "b0:\n"
+              "  %2 = fpext f32 %0 to f64\n"
+              "  %3 = fcmp une f64 %2, %1\n"
+              "  ret %3\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "lt"),
+              "proc @lt(f32) -> i1 {\n"
+              "b0:\n"
+              "  %1 = const f32 1\n"
+              "  %2 = fcmp olt f32 %0, %1\n"
+              "  ret %2\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(ir_of_float_casts) {
+    // Float to integer saturates (fptosi.sat, fptoui.sat by the integer's
+    // sign), integer to float rounds (sitofp, uitofp by the integer's
+    // sign), float to float extends or rounds. None is checked at run time.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "to_int :: (x: float32) -> s32 { return cast(s32) x; }\n"
+                                          "to_byte :: (x: float64) -> u8 { return cast(u8) x; }\n"
+                                          "from_int :: (n: int) -> float32 { return cast(float32) n; }\n"
+                                          "from_byte :: (u: u8) -> float64 { return cast(float64) u; }\n"
+                                          "narrow :: (y: float64) -> float32 { return cast(float32) y; }\n"
+                                          "widen :: (x: float32) -> float64 { return cast(float64) x; }\n"
+                                          "main :: () { }\n"));
+    CHECK(contains(proc_ir(ir, "to_int"), "  %1 = fptosi.sat f32 %0 to i32\n  ret %1\n"));
+    CHECK(contains(proc_ir(ir, "to_byte"), "  %1 = fptoui.sat f64 %0 to i8\n  ret %1\n"));
+    CHECK(contains(proc_ir(ir, "from_int"), "  %1 = sitofp i64 %0 to f32\n  ret %1\n"));
+    CHECK(contains(proc_ir(ir, "from_byte"), "  %1 = uitofp i8 %0 to f64\n  ret %1\n"));
+    CHECK(contains(proc_ir(ir, "narrow"), "  %1 = fptrunc f64 %0 to f32\n  ret %1\n"));
+    CHECK(contains(proc_ir(ir, "widen"), "  %1 = fpext f32 %0 to f64\n  ret %1\n"));
+    CHECK(!contains(ir, "panic"));
+    arena_free(&a);
+}
+
+TEST(ir_of_float_variables_and_globals) {
+    // A float variable starts zeroed (0.0, its bits all zero), a float
+    // global holds its first value, and a float constant is made at the
+    // type its use wants.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "scale : float64 = 2.5;\n"
+                                          "half : float32 = 0.5;\n"
+                                          "main :: () {\n"
+                                          "    v : float32;\n"
+                                          "    scale = scale * v;\n"
+                                          "}\n"));
+    CHECK(contains(ir, "global @scale: f64 = 2.5\n"));
+    CHECK(contains(ir, "global @half: f32 = 0.5\n"));
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local f32\n"
+              "  %1 = const f32 0\n"
+              "  store f32 %1, %0\n"
+              "  %2 = addr @scale\n"
+              "  %3 = addr @scale\n"
+              "  %4 = load f64 %3\n"
+              "  %5 = load f32 %0\n"
+              "  %6 = fpext f32 %5 to f64\n"
+              "  %7 = fmul f64 %4, %6\n"
+              "  store f64 %7, %2\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
