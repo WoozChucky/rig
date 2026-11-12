@@ -21,6 +21,10 @@ struct Checker {
     Array<Ast *> resolving;      // the globals, constants, structs' layouts and late fields' types
                                  // under way, each needed by the one before it (resolve_global,
                                  // resolve_struct, make_late_field): a circle is the end of this list
+    s32 levels;                  // where a declaration worked out now starts (MAX_DEPTH): a level
+                                 // below the levels of the type or value that needs it, 0 in a
+                                 // declaration's own turn (checker.cpp's open_declaration)
+    Array<Ast *> too_deep;       // the declarations found nested too deeply so far, each said once
 };
 
 // checker.cpp
@@ -43,10 +47,25 @@ Type *resolve_type_or_void(Checker *c, Ast_Type *written);
 
 // Makes sure the type of field `index` of struct t is known: a late field's
 // (one holding a pointer or a view, checker.cpp's lay_out) is made here if
-// it isn't yet, as a literal or a field access checked during the structs'
-// layouts (in a global an array's count names) needs it before every layout
-// is done. Anything else's already is.
+// it isn't yet, as a literal or a field access in a global's value or an
+// array's count, checked in the pass before every layout is done, needs it
+// before resolve_late_fields gets to it. Anything else's already is.
 void check_late_field(Checker *c, Type *t, s32 index);
+
+// Makes sure struct t's layout is worked out before its fields are looked
+// at: a global's value may reach a struct through a pointer before its turn
+// in source order (checker.cpp's lay_out). False when t has no fields to
+// look at, its layout found wrong (a circle, too big: reported) or not
+// worked out yet (nested too deeply: reported).
+bool check_layout(Checker *c, Type *t);
+
+// Makes sure procedure proc's signature is checked, its parameters' and
+// results' types known, before a call is checked against it: a call in a
+// global's value may come before its turn in source order (checker.cpp's
+// resolve_signature). True when it's known; false when it's in a circle
+// with the call (reported) or nested too deeply to check there (reported),
+// the call then having no type. A broken entry's is never checked: true.
+bool check_proc_signature(Checker *c, Ast_Proc *proc);
 
 // [count]element (type_array_of), or null after "'[N]T' is too big", at
 // `at`: larger than any type may be (TYPE_MAX_SIZE), its count read as

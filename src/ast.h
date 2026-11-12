@@ -20,6 +20,14 @@
 
 struct Type;  // types.h: what the checker finds each node's type to be
 
+// A limit of the compiler (spec 6.1): what the parser reads nests at most
+// this many levels deep, expressions and types together (parser.cpp says
+// what a level is), and so do the declarations the checker works out one
+// inside another, with their own levels (checker.cpp's open_declaration).
+// Each stage recurses a level at a time on the main thread's stack (1 MB on
+// Windows): deeper would overflow it, with no message.
+const s32 MAX_DEPTH = 1000;
+
 enum Ast_Kind : u8 {
     AST_PROC,          // Ast_Proc: name :: (params) -> type { body }, or #foreign
     AST_PARAM,         // Ast_Param: name: type
@@ -84,6 +92,8 @@ struct Ast_Type : Ast {
                         // it before the field's type is made: checker.cpp's array_count)
     bool count_fine;    // ... and is a count, count_value
     u64 count_value;
+    s32 levels;         // a parameter's, a result's or a field's whole type: the deepest levels
+                        // in it (MAX_DEPTH), where a declaration it needs starts a level below
 };
 
 struct Ast_Param : Ast {
@@ -94,6 +104,18 @@ struct Ast_Param : Ast {
 struct Ast_Block : Ast {
     Array<Ast *> statements;
     Position end;  // its '}': where a procedure that runs off its end is reported
+};
+
+// How far the checker has got with a global variable, a top-level
+// constant, a struct's layout, a late field's type or a procedure's
+// signature. Those are worked out where they're first needed, so they can
+// be used in any order (checker.cpp's resolve_global): a use that finds one
+// under way means it needs itself.
+enum Ast_Resolve : u8 {
+    RESOLVE_NOT_YET,
+    RESOLVE_UNDER_WAY,
+    RESOLVE_CYCLE,      // under way, and found to be in a circle (reported once)
+    RESOLVE_DONE,
 };
 
 // A declaration. When the parser gave up on one (a syntax error), it is
@@ -112,17 +134,8 @@ struct Ast_Proc : Ast {
     bool is_broken;             // the parser gave up on it
     String foreign_library;     // #foreign's library name
     Position library_pos;       // where that name is written
-};
-
-// How far the checker has got with a global variable or a top-level
-// constant. Those are checked where they're first needed, so they can be
-// used in any order (checker.cpp's resolve_global): a use that finds one
-// under way means its value needs itself.
-enum Ast_Resolve : u8 {
-    RESOLVE_NOT_YET,
-    RESOLVE_UNDER_WAY,
-    RESOLVE_CYCLE,      // under way, and found to be in a circle (reported once)
-    RESOLVE_DONE,
+    Ast_Resolve resolve;        // its signature's: checked in source order, or earlier by a call
+                                // in a global's value (checker.cpp's resolve_signature)
 };
 
 // A variable: `x : T = e;`, `x := e;` (its type is e's), `x : T;` (zeroed)
@@ -136,6 +149,8 @@ struct Ast_Var : Ast {
     bool is_global;         // declared at the top level: lives for the whole run, not on the stack
     bool is_iterator;       // a for loop's it, it_index or named iterator: read-only
     Ast_Resolve resolve;    // a global's: how far the checker has got with it
+    s32 levels;             // the deepest levels of its type and value (MAX_DEPTH): a global
+                            // or a constant they need starts a level below
 };
 
 // A constant: `N :: e;`. The checker folds e, so the constant's value is in
@@ -144,6 +159,7 @@ struct Ast_Const : Ast {
     String name;
     Ast *value;
     Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it
+    s32 levels;           // the deepest levels of its value (MAX_DEPTH), as Ast_Var's
 };
 
 // A field of a struct: `x: float;`, at its name. Its type is in Ast.type
