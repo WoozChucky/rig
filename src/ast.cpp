@@ -311,6 +311,58 @@ static void dump(Array<u8> *buffer, Ast *node) {
         dump_type(buffer, ((Ast_Size_Of *)node)->type_expr);
         out(buffer, ")");
         break;
+    case AST_STRUCT: {
+        Ast_Struct *s = (Ast_Struct *)node;
+        out(buffer, "(struct ");
+        out(buffer, s->name);
+        for (s64 i = 0; i < s->fields.count; i++) {
+            out(buffer, " ");
+            dump(buffer, s->fields[i]);
+        }
+        out(buffer, ")");
+        break;
+    }
+    case AST_FIELD: {
+        Ast_Field *field = (Ast_Field *)node;
+        out(buffer, "(");
+        out(buffer, field->name);
+        out(buffer, " ");
+        dump_type(buffer, field->type_expr);
+        out(buffer, ")");
+        break;
+    }
+    case AST_MEMBER: {
+        Ast_Member *member = (Ast_Member *)node;
+        out(buffer, "(member ");
+        dump(buffer, member->operand);
+        out(buffer, " ");
+        out(buffer, member->name);
+        out(buffer, ")");
+        break;
+    }
+    case AST_LITERAL: {
+        // (literal Vec2 (int 1) (int 2)), or with names (literal _ (x (int 1))):
+        // _ when the type comes from where it's used.
+        Ast_Literal *literal = (Ast_Literal *)node;
+        out(buffer, "(literal ");
+        if (literal->type_expr) {
+            dump_type(buffer, literal->type_expr);
+        } else {
+            out(buffer, "_");
+        }
+        for (s64 i = 0; i < literal->values.count; i++) {
+            out(buffer, " ");
+            if (literal->names.count) {
+                out(buffer, "(");
+                out(buffer, literal->names[i]);
+                out(buffer, " ");
+            }
+            dump(buffer, literal->values[i]);
+            if (literal->names.count) out(buffer, ")");
+        }
+        out(buffer, ")");
+        break;
+    }
     case AST_BREAK: out(buffer, "(break)"); break;
     case AST_CONTINUE: out(buffer, "(continue)"); break;
     }

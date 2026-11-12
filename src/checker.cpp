@@ -3,6 +3,15 @@
 
 #include "check.h"
 
+static Ast *find_name(Checker *c, String name);
+static Type *resolve_struct(Checker *c, Ast_Struct *s);
+
+// A type by its name: a built-in one, or a struct's, whose layout is worked
+// out here if it isn't yet (resolve_struct). Any other name declared where
+// the type is written isn't a type ("'foo' is not a type"), and a name
+// declared nowhere is "unknown type 'foo'". A broken entry's name may have
+// been anything, so nothing is said about it. A struct found to contain
+// itself has no type: its uses say nothing more.
 Type *resolve_type_or_void(Checker *c, Ast_Type *written) {
     if (written->kind == AST_TYPE_POINTER) {
         // *void is a pointer to anything, so void is fine here.
@@ -10,8 +19,16 @@ Type *resolve_type_or_void(Checker *c, Ast_Type *written) {
         return pointee ? type_pointer_to(pointee) : nullptr;
     }
     Type *t = type_from_name(written->name);
-    if (!t) diag_error(c->diag, written->pos, "unknown type '" STR_FMT "'", STR_ARG(written->name));
-    return t;
+    if (t) return t;
+    Ast *decl = find_name(c, written->name);
+    if (!decl) {
+        diag_error(c->diag, written->pos, "unknown type '" STR_FMT "'", STR_ARG(written->name));
+    } else if (decl->kind == AST_STRUCT) {
+        return resolve_struct(c, (Ast_Struct *)decl);
+    } else if (decl->kind != AST_PROC || !((Ast_Proc *)decl)->is_broken) {
+        diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
+    }
+    return nullptr;
 }
 
 // void names no value at all, so a variable, a parameter, a result or a
@@ -43,6 +60,18 @@ static void pop_scope(Checker *c) {
 
 static void resolve_global(Checker *c, Ast *decl);
 
+// The declaration `name` means where the checker is, the innermost block's
+// first, else the top level's; null when there's none. Only looked up:
+// nothing is checked.
+static Ast *find_name(Checker *c, String name) {
+    for (s64 i = c->scopes.count - 1; i >= 0; i--) {
+        Ast **found = table_get(&c->scopes[i], name);
+        if (found) return *found;
+    }
+    Ast **found = table_get(&c->top_level, name);
+    return found ? *found : nullptr;
+}
+
 Ast *check_lookup(Checker *c, String name) {
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {
         Ast **found = table_get(&c->scopes[i], name);
@@ -67,12 +96,6 @@ static void declare(Checker *c, String name, Ast *decl) {
         return;
     }
     table_put(scope, name, decl);
-}
-
-// "a value of type 'A' doesn't convert to 'B' implicitly", at the value.
-static void report_no_conversion(Checker *c, Ast *value, Type *to) {
-    diag_error(c->diag, value->start, "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly",
-               STR_ARG(type_name(c->arena, value->type)), STR_ARG(type_name(c->arena, to)));
 }
 
 // x : T = e;  x := e;  x : T;  x : T = ---;  a local or a global: works out
@@ -130,24 +153,47 @@ static void check_var(Checker *c, Ast_Var *var) {
 // hold one yet, which is what it's told, rather than that its value isn't
 // known: "global variables can't hold a string literal yet; assign it in
 // a procedure" (a *u8 global, set in main, can).
-static void check_global_var(Checker *c, Ast_Var *var) {
-    if (!check_var_value(c, var) || var->value->is_constant) return;
-    Ast *value = var->value;
-    while (value->kind == AST_CAST) value = ((Ast_Cast *)value)->value;  // cast(*u8) "hi" too
-    if (value->kind == AST_STRING) {
-        diag_error(c->diag, var->value->start,
+//
+// A struct's value is a literal whose values are all known while compiling
+// (nested literals' too): the bytes lowering writes into the file. Not a
+// constant itself (Ast.constant is one number), so it's looked into here;
+// the first value that isn't known is the one reported.
+static bool check_global_value(Checker *c, Ast *value) {
+    if (value->is_constant) return true;
+    if (!value->type) return false;  // a value inside a literal whose own error was reported
+    if (value->kind == AST_LITERAL && type_is_aggregate(value->type)) {
+        Ast_Literal *literal = (Ast_Literal *)value;
+        for (s64 i = 0; i < literal->values.count; i++) {
+            if (!check_global_value(c, literal->values[i])) return false;
+        }
+        return true;
+    }
+    Ast *inner = value;
+    while (inner->kind == AST_CAST) inner = ((Ast_Cast *)inner)->value;  // cast(*u8) "hi" too
+    if (inner->kind == AST_STRING) {
+        diag_error(c->diag, value->start,
                    "global variables can't hold a string literal yet; assign it in a procedure");
     } else {
-        diag_error(c->diag, var->value->start, "a global's value must be known while compiling, for now");
+        diag_error(c->diag, value->start, "a global's value must be known while compiling, for now");
     }
+    return false;
+}
+
+static void check_global_var(Checker *c, Ast_Var *var) {
+    if (check_var_value(c, var)) check_global_value(c, var->value);
 }
 
 // N :: e; the value must be a number or a bool known while compiling, and
 // the constant keeps it, with its type: untyped when e is, so N meets types
 // as a literal does. Only numbers and bools fold so far, so a string
-// literal, though known while compiling, can't be a constant yet.
+// literal, though known while compiling, can't be a constant yet, nor a
+// struct literal (whose type must be written: .{1, 2} meets none here).
 static void check_const_value(Checker *c, Ast_Const *constant) {
     Type *t = check_value(c, constant->value);
+    if (t == &type_untyped_literal) {
+        check_default_type(c, constant->value);
+        t = nullptr;
+    }
     if (t && !type_is_number(t) && t != &type_bool) {
         diag_error(c->diag, constant->value->start, "a constant can only be a number or a bool, for now");
         t = nullptr;
@@ -169,9 +215,23 @@ static void check_const(Checker *c, Ast_Const *constant) {
     declare(c, constant->name, constant);
 }
 
-// How far a global variable's or a top-level constant's checking has got.
+// How far a global variable's, a top-level constant's or a struct's
+// checking has got.
 static Ast_Resolve *resolve_state(Ast *decl) {
-    return decl->kind == AST_VAR ? &((Ast_Var *)decl)->resolve : &((Ast_Const *)decl)->resolve;
+    switch (decl->kind) {
+    case AST_VAR: return &((Ast_Var *)decl)->resolve;
+    case AST_CONST: return &((Ast_Const *)decl)->resolve;
+    case AST_STRUCT: return &((Ast_Struct *)decl)->resolve;
+    default: RIG_ASSERT(!"not resolved where first needed"); return nullptr;
+    }
+}
+
+// decl, found under way, closes a circle: it and every declaration needed
+// since (the end of c->resolving) are in it, and are marked RESOLVE_CYCLE.
+static void mark_circle(Checker *c, Ast *decl) {
+    s64 i = c->resolving.count - 1;
+    while (c->resolving[i] != decl) i--;
+    for (; i < c->resolving.count; i++) *resolve_state(c->resolving[i]) = RESOLVE_CYCLE;
 }
 
 // A global variable or a top-level constant, checked the first time it's
@@ -219,10 +279,7 @@ static void resolve_global(Checker *c, Ast *decl) {
             String name = decl->kind == AST_VAR ? ((Ast_Var *)decl)->name : ((Ast_Const *)decl)->name;
             diag_error(c->diag, decl->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(name));
         }
-        // decl, and every declaration needed since, is in the circle.
-        s64 i = c->resolving.count - 1;
-        while (c->resolving[i] != decl) i--;
-        for (; i < c->resolving.count; i++) *resolve_state(c->resolving[i]) = RESOLVE_CYCLE;
+        mark_circle(c, decl);
         return;
     }
     RIG_ASSERT(c->scopes.count == 0);
@@ -240,6 +297,110 @@ static void resolve_global(Checker *c, Ast *decl) {
         decl->is_constant = false;
     }
     *state = RESOLVE_DONE;
+}
+
+// Structs. Each has its Type from the start (check() makes it with the
+// top level's names), so a pointer can name it whatever the order; its
+// layout, C's (types.h), is worked out where first needed, by its own turn
+// in source order or earlier, by a struct that holds it by value. Holding
+// it needs its size, which needs its fields' sizes, and so on: a struct
+// that holds itself, directly or through others, would never end, and is
+// found as a global's circle is (resolve_global), by finding a struct under
+// way. A pointer is 8 bytes whatever it points at, so a field that is a
+// pointer is laid out without looking at what it points at, and its type is
+// filled in only once every struct is laid out (resolve_pointer_fields):
+// Node can hold a *Node, and A a *B while B holds an A.
+
+// The field of struct s before its i-th with the same name, or null.
+static Ast_Field *earlier_field(Ast_Struct *s, s64 i) {
+    for (s64 j = 0; j < i; j++) {
+        if (string_eq(s->fields[j]->name, s->fields[i]->name)) return s->fields[j];
+    }
+    return nullptr;
+}
+
+// The offset `offset` rounded up to a multiple of `align` (a power of 2).
+static s64 align_up(s64 offset, s32 align) {
+    return (offset + align - 1) & ~(s64)(align - 1);
+}
+
+// Struct s's fields, offsets, size and alignment, into its Type: each field
+// at the next offset that is a multiple of its alignment, the struct's
+// alignment its largest field's (1 when it has none), its size rounded up to
+// that, so in an array (or another struct) every copy stays aligned. A
+// field whose type was an error is kept, so its uses say nothing more, but
+// takes no room. Two fields of one name: "'x' is already declared at
+// PATH:L:C", the second not kept.
+static void lay_out(Checker *c, Ast_Struct *s) {
+    Type *t = s->declared;
+    s64 offset = 0;
+    s32 align = 1;
+    for (s64 i = 0; i < s->fields.count; i++) {
+        Ast_Field *field = s->fields[i];
+        Ast_Field *earlier = earlier_field(s, i);
+        if (earlier) {
+            Position at = earlier->pos;
+            diag_error(c->diag, field->pos, "'" STR_FMT "' is already declared at " STR_FMT ":%d:%d",
+                       STR_ARG(field->name), STR_ARG(c->diag->files[at.file].path), at.line, at.col);
+            continue;
+        }
+        Type *type = nullptr;  // a pointer's comes later
+        s64 size = 8;
+        s32 field_align = 8;
+        if (field->type_expr->kind != AST_TYPE_POINTER) {
+            type = resolve_type(c, field->type_expr);
+            size = type ? type->size : 0;
+            field_align = type ? type_align(type) : 1;
+        }
+        offset = align_up(offset, field_align);
+        array_add(&t->fields, Type_Field{field->name, type, offset});
+        field->type = type;
+        offset += size;
+        if (field_align > align) align = field_align;
+    }
+    t->align = align;
+    t->size = align_up(offset, align);
+}
+
+// A struct's layout, worked out the first time it's needed; its type, or
+// null when it contains itself: "'Node' contains itself; it can hold a
+// pointer to itself, *Node", once per circle, at the struct whose layout
+// was under way when the circle closed. Every struct in the circle then has
+// no type (Ast_Struct.declared is null), so nothing more is said about it
+// or its uses; a struct that only holds one in a circle isn't in it, and
+// keeps its type, the field that holds it having none.
+static Type *resolve_struct(Checker *c, Ast_Struct *s) {
+    if (s->resolve == RESOLVE_DONE) return s->declared;
+    if (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE) {
+        if (s->resolve == RESOLVE_UNDER_WAY) {
+            diag_error(c->diag, s->pos,
+                       "'" STR_FMT "' contains itself; it can hold a pointer to itself, *" STR_FMT, STR_ARG(s->name),
+                       STR_ARG(s->name));
+        }
+        mark_circle(c, s);
+        return nullptr;
+    }
+    s->resolve = RESOLVE_UNDER_WAY;
+    array_add(&c->resolving, (Ast *)s);
+    lay_out(c, s);
+    c->resolving.count--;
+    if (s->resolve == RESOLVE_CYCLE) s->declared = nullptr;
+    s->resolve = RESOLVE_DONE;
+    return s->declared;
+}
+
+// The types of struct s's pointer fields, once every struct is laid out
+// (lay_out left them for now). A struct in a circle has no type, but its
+// pointer fields' types are still looked at, for their own mistakes.
+static void resolve_pointer_fields(Checker *c, Ast_Struct *s) {
+    Type *t = s->declared;
+    for (s64 i = 0; i < s->fields.count; i++) {
+        Ast_Field *field = s->fields[i];
+        if (field->type_expr->kind != AST_TYPE_POINTER) continue;
+        field->type = resolve_type(c, field->type_expr);
+        // A second field of the name isn't in the type (lay_out).
+        if (t && !earlier_field(s, i)) t->fields[type_field_index(t, field->name)].type = field->type;
+    }
 }
 
 // The type of an assignment's target, a place in memory (a variable or
@@ -331,6 +492,10 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
         if (!check_convert(c, assign->value, to)) report_no_conversion(c, assign->value, to);
         return;
     }
+    if (value == &type_untyped_literal) {
+        check_default_type(c, assign->value);  // no operator takes a struct
+        return;
+    }
     Token_Kind op = compound_operator(assign->op);
     if (type_is_pointer(to) && (op == TOKEN_PLUS || op == TOKEN_MINUS)) {
         if (op == TOKEN_PLUS && type_is_pointer(value)) {
@@ -407,7 +572,7 @@ static void check_scoped_block(Checker *c, Ast_Block *block) {
 // The condition of an if or a while (`keyword` says which): a bool, since an
 // integer isn't a condition (spec 6.1).
 static void check_condition(Checker *c, Ast *condition, const char *keyword) {
-    Type *t = check_value(c, condition);
+    Type *t = check_operand(c, condition);
     if (t && t != &type_bool) {
         diag_error(c->diag, condition->start, "the condition of '%s' must be a bool, not '" STR_FMT "'", keyword,
                    STR_ARG(type_name(c->arena, t)));
@@ -446,8 +611,8 @@ static void check_while(Checker *c, Ast_While *loop) {
 // them again, and they end with the loop. A named iterator is declared
 // instead of it, so inside `for i: ...` an outer loop's it is still it.
 static void check_for(Checker *c, Ast_For *loop) {
-    Type *first = check_value(c, loop->first);
-    Type *last = check_value(c, loop->last);
+    Type *first = check_operand(c, loop->first);
+    Type *last = check_operand(c, loop->last);
     Type *t = nullptr;
     if (first && last && check_both_integers(c, first, last, loop->dots, "'..'")) {
         t = check_unify_numbers(c, loop->first, loop->last, loop->dots, "'..'");
@@ -609,12 +774,29 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 
 // A procedure's signature: its parameters' types and its results' types,
 // each stored on its node (Ast_Param.type, Ast_Type.type), and its library.
+// A foreign procedure takes and returns no aggregate: C passes a struct by
+// value by rules of its own on each platform, which come with milestone 6's
+// bindings ("a foreign procedure can't take a 'Vec2' yet; pass a pointer to
+// it", "... can't return a 'Vec2' yet"). A pointer to one is a C pointer to
+// a C struct of the same layout, which passes.
 static void check_signature(Checker *c, Ast_Proc *proc) {
     for (s64 i = 0; i < proc->params.count; i++) {
         Ast_Param *param = proc->params[i];
         param->type = resolve_type(c, param->type_expr);
+        if (proc->is_foreign && param->type && type_is_aggregate(param->type)) {
+            diag_error(c->diag, param->type_expr->pos,
+                       "a foreign procedure can't take a '" STR_FMT "' yet; pass a pointer to it",
+                       STR_ARG(type_name(c->arena, param->type)));
+        }
     }
-    for (s64 i = 0; i < proc->results.count; i++) proc->results[i]->type = resolve_type(c, proc->results[i]);
+    for (s64 i = 0; i < proc->results.count; i++) {
+        Type *t = resolve_type(c, proc->results[i]);
+        proc->results[i]->type = t;
+        if (proc->is_foreign && t && type_is_aggregate(t)) {
+            diag_error(c->diag, proc->results[i]->pos, "a foreign procedure can't return a '" STR_FMT "' yet",
+                       STR_ARG(type_name(c->arena, t)));
+        }
+    }
     // C returns one value; several are Rig's own (spec 6.7), made in a way
     // only Rig's procedures agree on.
     if (proc->is_foreign && proc->results.count > 1) {
@@ -632,6 +814,7 @@ static String declared_name(Ast *decl) {
     case AST_PROC: return ((Ast_Proc *)decl)->name;
     case AST_VAR: return ((Ast_Var *)decl)->name;
     case AST_CONST: return ((Ast_Const *)decl)->name;
+    case AST_STRUCT: return ((Ast_Struct *)decl)->name;
     default: RIG_ASSERT(!"not a top-level declaration"); return {};
     }
 }
@@ -642,14 +825,35 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
     c.arena = a;
     c.diag = d;
 
-    // First every name, so procedures, globals and constants can be used
-    // before they're declared. They share one table: a global can't have a
-    // procedure's name. The whole declarations first, in source order: a
-    // name declared twice is reported at the later one.
+    // First every name, so procedures, globals, constants and structs can
+    // be used before they're declared. They share one table: a global can't
+    // have a procedure's name. The whole declarations first, in source
+    // order: a name declared twice is reported at the later one. Each
+    // struct gets its Type here, still without its layout, so a pointer
+    // can name it from anywhere.
     Array<Ast *> declarations = ast_declarations(file);
     for (s64 i = 0; i < declarations.count; i++) {
         Ast *decl = declarations[i];
         if (decl->kind == AST_PROC && ((Ast_Proc *)decl)->is_broken) continue;
+        if (decl->kind == AST_STRUCT) {
+            Ast_Struct *s = (Ast_Struct *)decl;
+            Type *t = arena_new<Type>(a);
+            t->kind = TYPE_STRUCT;
+            t->name = s->name;
+            t->align = 1;
+            t->decl = s;
+            t->arena = a;  // so its pointer types are freed with it (type_pointer_to)
+            s->declared = t;
+            // A built-in type's name always means the built-in type
+            // (resolve_type_or_void looks there first), so a struct of that
+            // name could never be named: "'u8' is a built-in type", and it
+            // isn't declared. Its fields are still checked, for their own
+            // mistakes.
+            if (type_from_name(s->name)) {
+                diag_error(d, s->pos, "'" STR_FMT "' is a built-in type", STR_ARG(s->name));
+                continue;
+            }
+        }
         String name = declared_name(decl);
         Ast **earlier = table_get(&c.top_level, name);
         if (earlier) {
@@ -678,6 +882,16 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
             table_put(&c.top_level, proc->name, proc);
         }
     }
+    // The structs' layouts, in source order (one held by another is laid
+    // out where it's first needed), then their pointer fields' types: a
+    // signature, a global or a body may need a struct's size and fields.
+    for (s64 i = 0; i < file->globals.count; i++) {
+        if (file->globals[i]->kind == AST_STRUCT) resolve_struct(&c, (Ast_Struct *)file->globals[i]);
+    }
+    for (s64 i = 0; i < file->globals.count; i++) {
+        if (file->globals[i]->kind == AST_STRUCT) resolve_pointer_fields(&c, (Ast_Struct *)file->globals[i]);
+    }
+
     // The signatures, before any value or body is checked: a call anywhere
     // needs its procedure's parameters and results.
     for (s64 i = 0; i < file->procs.count; i++) {
@@ -688,7 +902,9 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
     // yet: one used by an earlier one's value was checked there
     // (resolve_global). All are done before the bodies, which only find
     // them finished.
-    for (s64 i = 0; i < file->globals.count; i++) resolve_global(&c, file->globals[i]);
+    for (s64 i = 0; i < file->globals.count; i++) {
+        if (file->globals[i]->kind != AST_STRUCT) resolve_global(&c, file->globals[i]);
+    }
 
     // Then the bodies. A broken entry has none: the parser gave up on it.
     for (s64 i = 0; i < file->procs.count; i++) {

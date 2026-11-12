@@ -1,0 +1,3 @@
+tests/errors/unknown_field.rig:6:20: error: 'Vec2' has no field 'z'
+        return v.x + v.z;
+                       ^

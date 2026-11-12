@@ -3,9 +3,11 @@
 #include "types.h"
 
 // A built-in type of this kind, size and alignment, named `name` (a string
-// literal); an integer's sign is is_signed.
-#define BUILT_IN(kind, name, size, align, is_signed) \
-    {kind, size, align, is_signed, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr, nullptr}
+// literal); an integer's sign is is_signed. It has no arena (Type.arena):
+// it lasts the whole run, as its pointers do.
+#define BUILT_IN(kind, name, size, align, is_signed)                                       \
+    {kind, size, align, is_signed, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr, \
+     nullptr, {}, nullptr, nullptr}
 // The numbers' alignment is their size, as in C on x86-64.
 #define INTEGER(name, size, is_signed) BUILT_IN(TYPE_INTEGER, name, size, size, is_signed)
 #define FLOAT(name, size) BUILT_IN(TYPE_FLOAT, name, size, size, false)
@@ -24,11 +26,17 @@ Type type_float64 = FLOAT("float64", 8);
 Type type_untyped_float = FLOAT("float32", 8);
 // A pointer's size: what it becomes once it meets a pointer type.
 Type type_null = BUILT_IN(TYPE_NULL, "null", 8, 8, false);
+// No size of its own: the struct it meets gives it one. Its name is only a
+// fallback; the checker reports such a literal before any message would
+// name its type.
+Type type_untyped_literal = BUILT_IN(TYPE_UNTYPED_LITERAL, ".{...}", 0, 1, false);
 
 // float, a name only: type_from_name gives float32 for it. It's an entry of
 // its own so NAMED_TYPES, and the editor's grammar made from it, list the
 // name.
-static Type float_name = {TYPE_FLOAT, 4, 4, false, nullptr, {(const u8 *)"float", 5}, nullptr, &type_float32};
+static Type float_name = {
+    TYPE_FLOAT, 4, 4, false, nullptr, {(const u8 *)"float", 5}, nullptr, &type_float32, {}, nullptr, nullptr,
+};
 
 static Type integer_types[] = {
     INTEGER("s8", 1, true),  INTEGER("s16", 2, true),  INTEGER("s32", 4, true),  INTEGER("s64", 8, true),
@@ -65,21 +73,37 @@ bool type_is_pointer(Type *t) {
     return t->kind == TYPE_POINTER;
 }
 
+bool type_is_aggregate(Type *t) {
+    return t->kind == TYPE_STRUCT;
+}
+
+s32 type_field_index(Type *t, String name) {
+    for (s64 i = 0; i < t->fields.count; i++) {
+        if (string_eq(t->fields[i].name, name)) return (s32)i;
+    }
+    return -1;
+}
+
 s32 type_align(Type *t) {
     return t->align;
 }
 
-// Pointer types live as long as the built-in types that cache them, so they
-// can't come from an arena a caller frees.
+// A pointer type is cached in the type it points at (Type.pointer), so it
+// must last as long as that type does, and no longer: a pointer to a
+// struct, which lives in its compilation's arena, comes from that arena
+// too, and is freed with the struct (and so is a pointer to that pointer).
+// A built-in type lasts the whole run, so its pointers come from this
+// arena, never freed.
 static Arena pointer_types;
 
 Type *type_pointer_to(Type *t) {
     if (!t->pointer) {
-        Type *p = arena_new<Type>(&pointer_types);
+        Type *p = arena_new<Type>(t->arena ? t->arena : &pointer_types);
         p->kind = TYPE_POINTER;
         p->size = 8;
         p->align = 8;
         p->pointee = t;
+        p->arena = t->arena;
         t->pointer = p;
     }
     return t->pointer;

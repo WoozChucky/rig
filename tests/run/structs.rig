@@ -1,0 +1,109 @@
+// Structs (issue #58, spec 6.5): fields read and written, structs inside
+// structs, a struct passed and returned, two results, a zeroed global and
+// one with a literal, and size_of, which is C's layout.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+print_int :: (n: int) {
+    if n < 0 {
+        putchar(45);
+        print_int(-n);
+        return;
+    }
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+println :: (n: int) {
+    print_int(n);
+    putchar(10);
+}
+
+Vec2 :: struct { x: float; y: float; }
+
+// A struct can hold others by value, and be used before it's declared.
+Rect :: struct {
+    min: Vec2;
+    max: Vec2;
+    layer: u8;
+    visible: bool;
+}
+
+Mixed :: struct {
+    a: u8;
+    b: s64;
+    c: s16;
+    d: bool;
+    e: s32;
+}
+
+origin : Vec2;
+unit := Vec2.{1, 1};
+corner := Rect.{max = .{3, 4}, visible = true};
+
+add :: (a: Vec2, b: Vec2) -> Vec2 {
+    return Vec2.{a.x + b.x, a.y + b.y};
+}
+
+// v is the caller's copy: what scaled does to its own copy, v2, stays here.
+scaled :: (v: Vec2, k: float) -> Vec2 {
+    v2 := v;
+    v2.x *= k;
+    v2.y *= k;
+    return v2;
+}
+
+// The slope of v, y over x, and whether it has one.
+slope :: (v: Vec2) -> Vec2, bool {
+    if v.x == 0 { return v, false; }
+    return .{1, v.y / v.x}, true;
+}
+
+area :: (r: *Rect) -> float {
+    return (r.max.x - r.min.x) * (r.max.y - r.min.y);
+}
+
+main :: () {
+    v : Vec2;
+    println(cast(int) v.x);
+    v.x = 3;
+    v.y = 4;
+    println(cast(int) (v.x * v.y));
+
+    w := add(v, unit);
+    println(cast(int) w.x);
+    println(cast(int) w.y);
+    s := scaled(w, 2);
+    println(cast(int) s.x);
+    println(cast(int) s.y);
+    println(cast(int) w.x);
+    println(cast(int) add(w, .{10, 20}).y);
+
+    n, ok := slope(Vec2.{2, 6});
+    println(cast(int) n.y);
+    if ok { println(1); }
+    n, ok = slope(origin);
+    if !ok { println(cast(int) n.x); }
+
+    r : Rect;
+    r.max = Vec2.{2, 5};
+    r.min.x = 1;
+    println(cast(int) area(*r));
+    println(cast(int) area(*corner));
+    if corner.visible { println(cast(int) corner.max.y); }
+    println(cast(int) r.visible);
+    p := *r.max;
+    p.y = 7;
+    println(cast(int) r.max.y);
+    r.layer = 255;
+    r.layer += 2;
+    println(cast(int) r.layer);
+
+    println(size_of(Vec2));
+    println(size_of(Rect));
+    println(size_of(Mixed));
+    m := Mixed.{e = -5, a = 200, d = true};
+    println(cast(int) m.e);
+    println(cast(int) m.a);
+    println(cast(int) m.d);
+    println(cast(int) m.b);
+}

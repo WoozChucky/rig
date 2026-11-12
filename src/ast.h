@@ -5,8 +5,9 @@
 // variables and constants (several variables at once, from a call's
 // results), assignments, returns, if, while, for, break, continue and
 // expressions; expressions made of calls, names, strings, integers,
-// floats, bools, null, operators, casts, addresses and dereferences, and
-// size_of.
+// floats, bools, null, operators, casts, addresses and dereferences,
+// size_of, fields (e.x) and struct literals (Vec2.{1, 2}). And structs,
+// declared at the top level.
 // Each node kind is a struct that starts with Ast, so a pointer to any node
 // is also an Ast *, and `kind` says which it is.
 //
@@ -47,6 +48,10 @@ enum Ast_Kind : u8 {
     AST_NULL,          // a plain Ast: null
     AST_DEREF,         // Ast_Deref: e.*
     AST_SIZE_OF,       // Ast_Size_Of: size_of(T)
+    AST_STRUCT,        // Ast_Struct: Vec2 :: struct { x: float; y: float; }
+    AST_FIELD,         // Ast_Field: x: float;  in a struct
+    AST_MEMBER,        // Ast_Member: e.x
+    AST_LITERAL,       // Ast_Literal: Vec2.{1, 2}  Vec2.{y = 2}  .{1, 2}
 };
 
 struct Ast {
@@ -129,6 +134,26 @@ struct Ast_Const : Ast {
     Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it
 };
 
+// A field of a struct: `x: float;`, at its name. Its type is in Ast.type
+// once the checker has worked it out.
+struct Ast_Field : Ast {
+    String name;
+    Ast_Type *type_expr;
+};
+
+// A struct's declaration, `Vec2 :: struct { x: float; y: float; }`, at the
+// top level only (for now), at its name. A struct's name is a type, usable
+// anywhere, before its declaration too.
+struct Ast_Struct : Ast {
+    String name;
+    Array<Ast_Field *> fields;  // in order, which is their order in memory
+    Ast_Resolve resolve;        // its layout is worked out where first needed (checker.cpp's
+                                // resolve_struct); a struct that holds itself is a cycle
+    Type *declared;             // its type: made when the checker collects the top level's names,
+                                // so a pointer can name it before its layout is known; null once
+                                // it's found to contain itself
+};
+
 // An assignment: `x = e;`, or a compound one, `x += e;` meaning x = x + e,
 // or one with several targets, `a, b = f();`, which receive the call's
 // results in order (op is then TOKEN_EQUAL). pos is the operator's.
@@ -161,6 +186,28 @@ struct Ast_Deref : Ast {
 // name size_of.
 struct Ast_Size_Of : Ast {
     Ast_Type *type_expr;
+};
+
+// e.x: the field x of the struct e, or of the struct e points at (one
+// pointer: p.x is p.*.x). A postfix operator, as .* is. pos is the field's
+// name, where a null pointer's runtime error points; start is e's.
+struct Ast_Member : Ast {
+    Ast *operand;  // e
+    String name;   // x
+    s32 index;     // the field's index in its struct's type, set by the checker
+};
+
+// A literal of a struct (Jai's): `T.{a, b}` gives T's fields in order,
+// `T.{x = a}` by name; the fields not given are zeroed. `.{a, b}` has no T
+// written: its type comes from where it's used (a declaration's type, an
+// assignment's target, an argument, a return, a field of an outer literal).
+// pos is the '.'; start is T's name when there is one.
+struct Ast_Literal : Ast {
+    Ast_Type *type_expr;            // the T before the '.', or null: the type comes from where it's used
+    Array<String> names;            // the field each value is for (x = a), or empty: in order
+    Array<Position> name_positions; // where each of those names is written
+    Array<Ast *> values;
+    bool is_array;                  // T.[a, b] (milestone 2b's arrays, not yet)
 };
 
 // An operator between two operands; pos is the operator's.
@@ -263,9 +310,9 @@ struct Ast_Multi_Var : Ast {
 
 // A parsed file: its declarations, in source order, broken ones included.
 // Procedures (and broken entries, which are Ast_Procs) are in procs; the
-// globals, top-level variables (Ast_Var, is_global set) and constants
-// (Ast_Const), in globals. Each list is in source order on its own;
-// ast_declarations merges them back by position.
+// globals, top-level variables (Ast_Var, is_global set), constants
+// (Ast_Const) and structs (Ast_Struct), in globals. Each list is in source
+// order on its own; ast_declarations merges them back by position.
 struct Ast_File {
     Array<Ast_Proc *> procs;
     Array<Ast *> globals;
@@ -311,6 +358,10 @@ Token_Kind compound_operator(Token_Kind op);
 //   (return (name q) (name r))                                  return q, r;
 //   (multi-var (q r) (call divmod (int 7) (int 2)))            q, r := divmod(7, 2);
 //   (assign = ((name a) (name b)) (call swap (name a) (name b)))   a, b = swap(a, b);
+//   (member (name p) x)   p.x;    (literal Vec2 (int 1) (int 2))   Vec2.{1, 2}
+//   (literal _ (x (int 1)) (y (int 2)))   .{x = 1, y = 2}
+// A struct prints as (struct Vec2 (x float32) (y float32)), each field's
+// type as written ((x float) for x: float).
 // Globals print as locals do, (var counter int) and (const LIMIT (int 100)),
 // among the procedures in source order.
 String ast_dump(Arena *a, Ast_File *file);
