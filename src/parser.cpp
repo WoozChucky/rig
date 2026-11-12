@@ -34,8 +34,9 @@ struct Parser {
 // stack with room to spare, even inside 1000 nested blocks.
 //
 // An expression's levels are its tree's height: each parenthesis, prefix
-// operator, cast, call, dereference (.*) and binary operator is one level
-// above what it holds, and a name, a literal, null or size_of(T) is none.
+// operator, cast, call, dereference (.*), field (.x), struct literal and
+// binary operator is one level above what it holds, and a name, a number,
+// a string, null or size_of(T) is none.
 // So ((x)) is 2, - - x is 2, f(g(x)) is 2, and x + x + x is 2 too: the
 // Pratt loop builds it as (x + x) + x, a left-leaning tree whose height
 // grows with each operator, though the parser itself doesn't recurse to
@@ -77,6 +78,7 @@ static Token *expect(Parser *p, Token_Kind kind) {
 static Ast *parse_expression(Parser *p, int min_precedence);
 static Ast *parse_unary(Parser *p);
 static Ast_Type *parse_type(Parser *p);
+static Ast *parse_literal(Parser *p, Ast_Type *type_expr, Token *dot, Position start);
 static bool parameters_follow(Parser *p, s64 open);
 static bool starts_global(Parser *p);
 
@@ -132,7 +134,10 @@ static Ast *parse_size_of(Parser *p) {
 }
 
 // primary = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null'
-//         | 'size_of' '(' type ')' | '(' expression ')'
+//         | 'size_of' '(' type ')' | '(' expression ')' | '.' '{' fields '}'
+//
+// A '.' starting an expression is a struct literal without its type,
+// .{1, 2}, which takes the type it meets (parse_literal).
 //
 // size_of isn't a keyword: it's the name size_of followed by '(', whose
 // argument is a type, not a value, so it can't be parsed as a call (a type
@@ -178,6 +183,13 @@ static Ast *parse_primary(Parser *p) {
     case TOKEN_NULL:
         advance(p);
         return ast_new<Ast>(p->arena, AST_NULL, t->pos);
+    case TOKEN_DOT:
+        if (peek(p, 1)->kind == TOKEN_LBRACE) {
+            Token *dot = advance(p);
+            return parse_literal(p, nullptr, dot, dot->pos);
+        }
+        error_expected(p, "an expression");
+        return nullptr;
     case TOKEN_LPAREN: {
         // Parentheses only group, so they add no node (though they are a
         // level, MAX_DEPTH); the value inside starts at the '(' though, for
@@ -196,24 +208,99 @@ static Ast *parse_primary(Parser *p) {
     }
 }
 
-// postfix = primary { '(' [expression {',' expression}] ')' | '.' '*' }
+// fields = [field {',' field} [',']]
+// field  = [IDENT '='] expression
+//
+// The inside of a struct literal, after its '.': T.{1, 2} or .{x = 1}. The
+// values are either all named or all in order: "a struct literal's fields
+// are all named or all in order, not both", at the first that breaks the
+// pattern. A name is a field's only when '=' follows it (x == 1 is a value
+// in order). The literal is at its '.' and starts at `start` (its type's
+// name, or the '.'); it's a level above its values, as a call is above its
+// arguments. Which fields there are, and what each value converts to, is
+// the checker's business.
+static Ast *parse_literal(Parser *p, Ast_Type *type_expr, Token *dot, Position start) {
+    advance(p);  // the '{'
+    Ast_Literal *literal = ast_new<Ast_Literal>(p->arena, AST_LITERAL, dot->pos);
+    literal->start = start;
+    literal->type_expr = type_expr;
+    s32 height = 0;  // the highest value's
+    while (peek(p)->kind != TOKEN_RBRACE) {
+        Token *first = peek(p);
+        bool named = first->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_EQUAL;
+        bool named_before = literal->names.count > 0;
+        if (literal->values.count > 0 && named != named_before) {
+            diag_error(p->diag, first->pos, "a struct literal's fields are all named or all in order, not both");
+            return nullptr;
+        }
+        if (named) {
+            array_add(&literal->names, first->text);
+            array_add(&literal->name_positions, first->pos);
+            advance(p);  // the name
+            advance(p);  // the '='
+        }
+        if (!open_level(p)) return nullptr;
+        Ast *value = parse_expression(p, 1);
+        p->levels--;
+        if (!value) return nullptr;
+        if (p->height > height) height = p->height;
+        array_add(&literal->values, value);
+        if (peek(p)->kind != TOKEN_COMMA) break;
+        advance(p);
+    }
+    if (!expect(p, TOKEN_RBRACE) || !set_height(p, height + 1)) return nullptr;
+    return literal;
+}
+
+// Whether the name e was written in parentheses, (e): they leave no node,
+// but move its start to the outermost '(' (parse_primary).
+static bool in_parentheses(Ast *e) {
+    return e->start.line != e->pos.line || e->start.col != e->pos.col;
+}
+
+// postfix = primary { '(' [expression {',' expression}] ')' | '.' '*' | '.' IDENT
+//                   | '.' '{' fields '}' }
 //
 // The postfix operators apply left to right, each to everything before it:
-// f(x).* dereferences the call's result, p.*.* dereferences twice. A '.'
-// followed by anything but '*' isn't one (fields come with structs), so the
-// expression ends before it. The lexer reads a '*' after a '.' alone (lexer.h),
-// so p.*=5 is p.* = 5.
+// f(x).* dereferences the call's result, p.*.* dereferences twice, a.b.c is
+// (a.b).c, and p.*.x is the field x of what p points at. A '.' after a name
+// and followed by '{' makes the name a type, of the struct literal that
+// follows (Vec2.{1, 2}); after anything else, a name in parentheses
+// included, it's "expected a field's name". The lexer reads a '*' after a
+// '.' alone (lexer.h), so p.*=5 is p.* = 5.
 static Ast *parse_postfix(Parser *p) {
     Ast *e = parse_primary(p);
     for (;;) {
         if (!e) return nullptr;
-        if (peek(p)->kind == TOKEN_DOT && peek(p, 1)->kind == TOKEN_STAR) {
-            Ast_Deref *deref = ast_new<Ast_Deref>(p->arena, AST_DEREF, advance(p)->pos);
-            advance(p);  // the '*'
-            deref->start = e->start;
-            deref->operand = e;
-            if (!set_height(p, p->height + 1)) return nullptr;
-            e = deref;
+        if (peek(p)->kind == TOKEN_DOT) {
+            Token *dot = advance(p);
+            Token *after = peek(p);
+            if (after->kind == TOKEN_STAR) {
+                advance(p);
+                Ast_Deref *deref = ast_new<Ast_Deref>(p->arena, AST_DEREF, dot->pos);
+                deref->start = e->start;
+                deref->operand = e;
+                if (!set_height(p, p->height + 1)) return nullptr;
+                e = deref;
+            } else if (after->kind == TOKEN_IDENT) {
+                advance(p);
+                Ast_Member *member = ast_new<Ast_Member>(p->arena, AST_MEMBER, after->pos);
+                member->start = e->start;
+                member->operand = e;
+                member->name = after->text;
+                member->index = -1;
+                if (!set_height(p, p->height + 1)) return nullptr;
+                e = member;
+            } else if (after->kind == TOKEN_LBRACE && e->kind == AST_NAME && !in_parentheses(e)) {
+                // The name was a type's: T.{...}. A type is never in
+                // parentheses, so (Vec2).{1} is no literal.
+                Ast_Type *type = ast_new<Ast_Type>(p->arena, AST_TYPE_NAME, e->pos);
+                type->name = ((Ast_Name *)e)->name;
+                e = parse_literal(p, type, dot, e->start);
+            } else {
+                error_expected(p, "a field's name");
+                return nullptr;
+            }
             continue;
         }
         if (peek(p)->kind != TOKEN_LPAREN) return e;
@@ -383,16 +470,17 @@ static bool procedure_follows(Parser *p, s64 ahead) {
             (peek(p, ahead + 1)->kind == TOKEN_IDENT && peek(p, ahead + 2)->kind == TOKEN_COLON));
 }
 
-// Whether the next tokens are a procedure's declaration with the name in
-// column 1, IDENT '::' '(' ..., the way a top-level procedure starts: inside
-// a body, a body that was never closed. A constant (`N :: 5;`) isn't, in
-// column 1 or not: it's a local constant, a statement of the body, and
-// indentation means nothing to the language. Procedures are declared only
-// at the top level, so one can't be a statement.
+// Whether the next tokens are a procedure's or a struct's declaration with
+// the name in column 1, IDENT '::' '(' ... or IDENT '::' 'struct', the way
+// a top-level one starts: inside a body (or a struct's braces), a body
+// that was never closed. A constant (`N :: 5;`) isn't, in column 1 or not:
+// it's a local constant, a statement of the body, and indentation means
+// nothing to the language. Procedures and structs are declared only at
+// the top level, so neither can be a statement.
 static bool starts_declaration(Parser *p) {
     Token *t = peek(p);
     return t->kind == TOKEN_IDENT && t->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON &&
-           procedure_follows(p, 2);
+           (procedure_follows(p, 2) || peek(p, 2)->kind == TOKEN_STRUCT);
 }
 
 // The value of the constant `name` after its '::': expression ';'. The
@@ -455,6 +543,10 @@ static Ast *parse_local_declaration(Parser *p) {
     // constant's value in parentheses (N :: (2 + 3) * 4;).
     if (peek(p)->kind == TOKEN_LPAREN && parameters_follow(p, p->next)) {
         diag_error(p->diag, name->pos, "procedures can only be declared at the top level, for now");
+        return nullptr;
+    }
+    if (peek(p)->kind == TOKEN_STRUCT) {
+        diag_error(p->diag, name->pos, "structs can only be declared at the top level, for now");
         return nullptr;
     }
     return parse_constant(p, name);
@@ -843,7 +935,42 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     return proc->body ? proc : nullptr;
 }
 
+// struct = 'struct' '{' {IDENT ':' type ';'} '}'
+//
+// A struct's fields, after IDENT '::' (the caller read them, and saw
+// 'struct'). Every field ends with its ';', the last too. A column-1
+// declaration of a procedure or a struct (starts_declaration) before the
+// '}' means the braces were never closed: "expected '}'" there, where the
+// recovery resumes.
+static Ast *parse_struct(Parser *p, Token *name) {
+    advance(p);  // 'struct'
+    Ast_Struct *s = ast_new<Ast_Struct>(p->arena, AST_STRUCT, name->pos);
+    s->name = name->text;
+    if (!expect(p, TOKEN_LBRACE)) return nullptr;
+    while (peek(p)->kind != TOKEN_RBRACE) {
+        if (peek(p)->kind == TOKEN_EOF || starts_declaration(p)) {
+            error_expected(p, token_kind_name(TOKEN_RBRACE));
+            return nullptr;
+        }
+        Token *field_name = peek(p);
+        if (field_name->kind != TOKEN_IDENT) {
+            error_expected(p, "a field's name");
+            return nullptr;
+        }
+        advance(p);
+        if (!expect(p, TOKEN_COLON)) return nullptr;
+        Ast_Field *field = ast_new<Ast_Field>(p->arena, AST_FIELD, field_name->pos);
+        field->name = field_name->text;
+        field->type_expr = parse_type(p);
+        if (!field->type_expr || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+        array_add(&s->fields, field);
+    }
+    advance(p);  // the '}'
+    return s;
+}
+
 // top_level = IDENT '::' procedure
+//           | IDENT '::' struct
 //           | IDENT '::' expression ';'                       a constant
 //           | IDENT ':' type ['=' (expression | '---')] ';'   a global variable
 //           | IDENT ':=' expression ';'                       a global variable
@@ -876,6 +1003,7 @@ static Ast *parse_declaration(Parser *p) {
     }
     if (!expect(p, TOKEN_COLON_COLON)) return nullptr;
     if (procedure_follows(p, 0)) return parse_procedure(p, name);
+    if (peek(p)->kind == TOKEN_STRUCT) return parse_struct(p, name);
     return parse_constant(p, name);
 }
 

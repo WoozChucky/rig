@@ -1780,3 +1780,222 @@ TEST(pointers_compare_as_unsigned_addresses) {
     CHECK(contains(ir, "  %4 = const ptr 0\n  %5 = cmp eq ptr %0, %4\n"));
     arena_free(&a);
 }
+
+// Lowering milestone 2b's structs (issue #58). An aggregate value is the
+// address of memory holding it: a variable's slot of bytes, a temporary, a
+// parameter's pointer to the caller's copy.
+
+TEST(struct_argument_is_copied_by_the_caller) {
+    // The caller copies the value into a temporary of its own and passes its
+    // address, so the callee sees the value as it was at the call whatever
+    // happens to the variable it came from; the callee only reads it. A
+    // field of the parameter is a ptradd from that address (none for the
+    // first field, at offset 0).
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Vec2 :: struct { x: float; y: float; }\n"
+                                "take :: (v: Vec2) -> float {\n"
+                                "    return v.y + v.x;\n"
+                                "}\n"
+                                "main :: () {\n"
+                                "    v : Vec2;\n"
+                                "    take(v);\n"
+                                "}\n");
+    String ir = ir_print(&a, m);
+    CHECK_STR(proc_ir(ir, "take"),
+              "proc @take(ptr) -> f32 {\n"
+              "b0:\n"
+              "  %1 = const i64 4\n"
+              "  %2 = ptradd %0, %1\n"
+              "  %3 = load f32 %2\n"
+              "  %4 = load f32 %0\n"
+              "  %5 = fadd f32 %3, %4\n"
+              "  ret %5\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local 8 align 4\n"
+              "  zero %0, 8\n"
+              "  %1 = local 8 align 4\n"
+              "  copy %1, %0, 8\n"
+              "  %2 = call @take(%1)\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(uninitialised_struct_isnt_zeroed) {
+    // x : Vec2 = ---; gets its slot and nothing else: its bytes are whatever
+    // was there. x : Vec2; is zeroed.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Vec2 :: struct { x: float; y: float; }\n"
+                                "main :: () {\n"
+                                "    u : Vec2 = ---;\n"
+                                "    v : Vec2;\n"
+                                "    u.y = 1;\n"
+                                "}\n");
+    String ir = ir_print(&a, m);
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local 8 align 4\n"
+              "  %1 = local 8 align 4\n"
+              "  zero %1, 8\n"
+              "  %2 = const i64 4\n"
+              "  %3 = ptradd %0, %2\n"
+              "  %4 = const f32 1\n"
+              "  store f32 %4, %3\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(struct_result_goes_through_a_hidden_pointer) {
+    // Each aggregate result is a ptr parameter before the visible ones, into
+    // which return copies the value; the IR's results are the scalar ones.
+    // The caller passes a fresh temporary and copies it into the target
+    // after the call. A literal is built in a temporary, zeroed first, then
+    // copied.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Vec2 :: struct { x: float; y: float; }\n"
+                                "make :: (x: int) -> Vec2 {\n"
+                                "    return Vec2.{cast(float) x, 2};\n"
+                                "}\n"
+                                "split :: (v: Vec2) -> bool, Vec2 {\n"
+                                "    return true, v;\n"
+                                "}\n"
+                                "main :: () {\n"
+                                "    v := make(3);\n"
+                                "    ok, w := split(v);\n"
+                                "}\n");
+    String ir = ir_print(&a, m);
+    CHECK_STR(proc_ir(ir, "make"),
+              "proc @make(ptr, i64) {\n"
+              "b0:\n"
+              "  %2 = local 8 align 4\n"
+              "  zero %2, 8\n"
+              "  %3 = sitofp i64 %1 to f32\n"
+              "  store f32 %3, %2\n"
+              "  %4 = const i64 4\n"
+              "  %5 = ptradd %2, %4\n"
+              "  %6 = const f32 2\n"
+              "  store f32 %6, %5\n"
+              "  copy %0, %2, 8\n"
+              "  ret\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "split"),
+              "proc @split(ptr, ptr) -> i1 {\n"
+              "b0:\n"
+              "  %2 = const i1 1\n"
+              "  copy %0, %1, 8\n"
+              "  ret %2\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local 8 align 4\n"
+              "  %1 = local 8 align 4\n"
+              "  %2 = const i64 3\n"
+              "  call @make(%1, %2)\n"
+              "  copy %0, %1, 8\n"
+              "  %3 = local i1\n"
+              "  %4 = local 8 align 4\n"
+              "  %5 = local 8 align 4\n"
+              "  %6 = local 8 align 4\n"
+              "  copy %6, %0, 8\n"
+              "  %7 = call @split(%5, %6)\n"
+              "  store i1 %7, %3\n"
+              "  copy %4, %5, 8\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(struct_results_are_copied_after_the_call) {
+    // g1, g2 = f(); with f returning g2, g1: the results land in the
+    // caller's temporaries, never in the targets, and are copied into them
+    // only after the call, so the swap reads both before writing either.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Vec2 :: struct { x: float; y: float; }\n"
+                                "g1 : Vec2;\n"
+                                "g2 := Vec2.{1, 2};\n"
+                                "f :: () -> Vec2, Vec2 { return g2, g1; }\n"
+                                "main :: () { g1, g2 = f(); }\n");
+    String ir = ir_print(&a, m);
+    // A global struct is bytes: zero, or its literal's constants (the
+    // float32s 1 and 2, little-endian: 00 00 80 3F and 00 00 00 40).
+    CHECK(contains(ir, "global @g1: 8 align 4 = zero\n"));
+    CHECK(contains(ir, "global @g2: 8 align 4 = \"\\00\\00\\80?\\00\\00\\00@\"\n"));
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(ptr, ptr) {\n"
+              "b0:\n"
+              "  %2 = addr @g2\n"
+              "  copy %0, %2, 8\n"
+              "  %3 = addr @g1\n"
+              "  copy %1, %3, 8\n"
+              "  ret\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local 8 align 4\n"
+              "  %1 = local 8 align 4\n"
+              "  call @f(%0, %1)\n"
+              "  %2 = addr @g1\n"
+              "  copy %2, %0, 8\n"
+              "  %3 = addr @g2\n"
+              "  copy %3, %1, 8\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(member_through_a_pointer_is_null_checked) {
+    // p.x is p.*.x: p is checked not to be null where the place is worked
+    // out, at the field's name, before anything is read or written.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Vec2 :: struct { x: float; y: float; }\n"
+                                "f :: (p: *Vec2) -> float {\n"
+                                "    return p.y;\n"
+                                "}\n"
+                                "g :: (p: *Vec2) {\n"
+                                "    p.x = 1;\n"
+                                "}\n"
+                                "main :: () { }\n");
+    String ir = ir_print(&a, m);
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(ptr) -> f32 {\n"
+              "b0:\n"
+              "  %1 = const ptr 0\n"
+              "  %2 = cmp eq ptr %0, %1\n"
+              "  branch %2, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  %3 = const i64 4\n"
+              "  %4 = ptradd %0, %3\n"
+              "  %5 = load f32 %4\n"
+              "  ret %5\n"
+              "}\n");
+    CHECK_STR(message_of(m, 0), "test.rig:3:14: runtime error: null pointer dereference\n");
+    CHECK_STR(proc_ir(ir, "g"),
+              "proc @g(ptr) {\n"
+              "b0:\n"
+              "  %1 = const ptr 0\n"
+              "  %2 = cmp eq ptr %0, %1\n"
+              "  branch %2, b1, b2\n"
+              "b1:\n"
+              "  panic @str.1\n"
+              "b2:\n"
+              "  %3 = const f32 1\n"
+              "  store f32 %3, %0\n"
+              "  ret\n"
+              "}\n");
+    CHECK_STR(message_of(m, 1), "test.rig:6:7: runtime error: null pointer dereference\n");
+    arena_free(&a);
+}

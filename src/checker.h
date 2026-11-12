@@ -4,17 +4,24 @@
 // every expression, folds the constants, and checks each call, declaration,
 // assignment and return against the types involved. It fills in the tree as
 // it goes (Ast.type, Ast.is_constant and Ast.constant, Ast_Name.decl,
-// Ast_Call.proc), so the stages after it never look anything up again.
+// Ast_Call.proc, Ast_Member.index, and each struct's type and layout,
+// Ast_Struct.declared), so the stages after it never look anything up
+// again.
 // checker.cpp checks declarations and statements, check_expr.cpp
 // expressions; check.h is what they share.
 //
-// The rules (spec 6.1 and 6.4, which record the calls made here):
+// The rules (spec 6.1, 6.4 and 6.5, which record the calls made here):
 //
 // Names.
-// - The program's procedures, global variables and top-level constants
-//   are visible everywhere, in any order. They share one set of names: a
-//   global can't take a procedure's ("'x' is already declared at
+// - The program's procedures, global variables, top-level constants and
+//   structs are visible everywhere, in any order. They share one set of
+//   names: a global can't take a procedure's ("'x' is already declared at
 //   PATH:L:C").
+// - A struct's name is a type: used as a value, it's "'Vec2' is a type, not
+//   a value". A name declared as anything else, written where a type goes,
+//   is "'foo' is not a type"; a name declared nowhere, "unknown type
+//   'foo'". A built-in type's name always means the built-in type, so a
+//   struct can't take one: "'u8' is a built-in type", at its name.
 // - A name declared in a block (a variable or a constant) is visible from
 //   after its declaration to the end of the block. An inner block may
 //   declare the same name again, hiding the outer one; the same block may
@@ -122,7 +129,9 @@
 //   type: integers signed or unsigned, floats as IEEE 754 does. == and !=
 //   also compare two bools; ordering a bool is "'<' needs numbers, not
 //   'bool'", and a bool with anything else is "mismatched types 'bool' and
-//   'int' for '=='".
+//   'int' for '=='". == and != take nothing but numbers, bools, pointers
+//   and strings: "'==' needs numbers, bools, pointers or strings, not
+//   'Vec2'".
 // - && || ! take bools and give one: "'&&' needs bools, not 'int'", "'!'
 //   needs a bool, not 'int'". && and || don't evaluate their right operand
 //   when the left one decides.
@@ -135,9 +144,9 @@
 //   implicitly" (an argument: "argument N of 'f' has type 'A', which can't
 //   be converted to 'B'"). A compound assignment x op= e converts e to x's
 //   type (a shift's amount: any integer).
-// - Only a place in memory can be assigned to: a variable, by its name, or
-//   what a pointer points at, p.* (check_addressable, the rule *x follows
-//   too). Not:
+// - Only a place in memory can be assigned to: a variable, by its name,
+//   what a pointer points at, p.*, or a field of either (check_addressable,
+//   the rule *x follows too). Not:
 //   - a constant: "can't assign to 'N': it's a constant";
 //   - a parameter, read-only (spec 6.1): "can't assign to 'N': it's a
 //     parameter";
@@ -225,6 +234,46 @@
 // - size_of(T) is T's size in bytes, an untyped integer constant;
 //   size_of(void) is "'void' has no size".
 //
+// Structs (spec 6.5, Jai's).
+// - `Vec2 :: struct { x: float; y: float; }` declares a type, at the top
+//   level, usable anywhere, before its declaration too. Its layout is C's
+//   (types.h): fields in order, each at the next multiple of its alignment.
+//   A field's type is any type; two fields of one name are "'x' is already
+//   declared at PATH:L:C". A struct can't hold itself by value, directly or
+//   through others: "'Node' contains itself; it can hold a pointer to
+//   itself, *Node", at the struct whose layout was being worked out when
+//   the circle closed, once per circle; a pointer to itself is fine.
+// - e.x is the field x of e, a struct or a pointer to one (one pointer:
+//   **Node needs .* first): "'Vec2' has no field 'z'", or on anything else
+//   "'.x' needs a struct or a pointer to one, not 'int'", at the field's
+//   name. It's a place (can be assigned to, has an address) when e is one,
+//   or always through a pointer; so v.x for a parameter v is "can't assign
+//   to 'v': it's a parameter", and f().x "only a variable, a field or an
+//   element can be assigned to".
+// - Vec2.{1, 2} gives the fields in order, Vec2.{y = 2} by name; the fields
+//   not given are zeroed. Each value converts to its field's type as an
+//   assignment's would. "'Vec2' has 2 fields, but this literal gives 3",
+//   "field 'x' is given twice", "'Vec2' has no field 'z'" (named and in
+//   order mixed is the parser's). T must be a struct: "a '.{' literal needs
+//   a struct type, not 'int'".
+// - .{1, 2} takes its type from where it's used, as an untyped constant
+//   does (type_untyped_literal): a declaration's type, an assignment's
+//   target, an argument, a return, a field of an outer literal. Its values
+//   are checked once it has one. With none (x := .{1, 2};, an operand, a
+//   condition): "this literal's type isn't known; write it before the '.',
+//   as in Vec2.{1, 2}". Given to something that isn't a struct: "a '.{'
+//   literal needs a struct type, not 'int'".
+// - A struct value converts only to its own type: it's copied whole by an
+//   assignment, as an argument and as a result (several results too);
+//   `x : Vec2;` is zeroed, `x : Vec2 = ---;` left as it is. A cast takes a
+//   struct only to its own type. No operator takes a struct ("'+' needs
+//   numbers, not 'Vec2'", the == rule above), nor does a condition.
+// - size_of(Vec2) is its size.
+// - A foreign procedure takes and returns no struct, for now: "a foreign
+//   procedure can't take a 'Vec2' yet; pass a pointer to it", "a foreign
+//   procedure can't return a 'Vec2' yet", at the type. A pointer to a
+//   struct passes, as a C pointer to a C struct of the same layout.
+//
 // Globals and top-level constants.
 // - A global variable is declared as a local one is. Its value must be
 //   known while compiling ("a global's value must be known while
@@ -232,8 +281,12 @@
 //   one, or with ---, it starts at zero. A string literal is known while
 //   compiling, but its address needs the linker to fill it in, which
 //   lowering doesn't ask for yet: "global variables can't hold a string
-//   literal yet; assign it in a procedure".
-// - A top-level constant follows a local one's rules.
+//   literal yet; assign it in a procedure". A struct's value is a literal
+//   whose values are all known while compiling (nested literals' too); the
+//   first that isn't is the one reported.
+// - A top-level constant follows a local one's rules: a number or a bool,
+//   so not a struct (`N :: Vec2.{1, 2};` is "a constant can only be a
+//   number or a bool, for now").
 // - Both are checked where they're first needed (in another's value, or in
 //   source order), so their order doesn't matter: in `A :: B + 1; B :: 2;`
 //   A is 3. A value that needs itself, directly or through others, is "'A'
