@@ -1650,3 +1650,96 @@ TEST(types_nest_at_most_max_depth) {
               types_too_deep(&a, 2, 8 + 500 + 9 + 500));
     arena_free(&a);
 }
+
+// Writes an else-if chain of `arms` arms at `at`, one a line, arm i taken
+// when x == i and doing `body` (a printf format, its %lld the arm's
+// number): `if x == 0 { ... }`, then `else if x == 1 { ... }` and so on.
+// Returns the end of what it wrote.
+static char *else_if_arms(char *at, s64 arms, const char *indent, const char *body) {
+    for (s64 i = 0; i < arms; i++) {
+        at += sprintf(at, "%s%sif x == %lld { ", indent, i ? "else " : "", (long long)i);
+        at += sprintf(at, body, (long long)i);
+        at += sprintf(at, " }\n");
+    }
+    return at;
+}
+
+// Builds `text` as rig build does (lowered with bounds checks, an object
+// for the host, its linker) into .build/NAME, runs it, and returns what it
+// printed; "" and a failed check when any step fails.
+static String run_source(Arena *a, const char *text, const char *name) {
+    Ir_Module *m = lower_source(a, text);
+    os_make_directory(str(".build"));
+#ifdef _WIN32
+    String object = string_printf(a, ".build/%s.obj", name), program = string_printf(a, ".build/%s.exe", name);
+#else
+    String object = string_printf(a, ".build/%s.o", name), program = string_printf(a, ".build/%s", name);
+#endif
+    String error = {};
+    Array<String> objects = {};
+    array_add(&objects, object);
+    Array<String> argv = {};
+    array_add(&argv, program);
+    Process_Result result = {};
+    bool ran = llvm_emit_object(m, target_host(), object, a, &error) &&
+               link_executable(a, target_host(), objects, program, &error) && os_run_for(a, argv, {}, 60, &result);
+    CHECK(ran);
+    if (!ran) fprintf(stderr, "  run_source: " STR_FMT "\n", STR_ARG(error));
+    CHECK(!result.timed_out);
+    CHECK_EQ(result.exit_code, 0);
+    array_free(&objects);
+    array_free(&argv);
+    return ran ? result.out : String{};
+}
+
+TEST(else_if_chains_of_10000_arms) {
+    // An else-if chain is an if whose else part is the next if, so the
+    // tree nests one level per arm; every stage walks the chain in a loop,
+    // with no limit to its length. Three procedures of 10000 arms each, for
+    // the three walks that follow the chain: pick's arms all return, so the
+    // checker's goes_past (does pick reach its end?) follows it to the last
+    // else; set's arms assign and join after the chain, as lowering builds
+    // them; find's only break is in the last else, so breaks_out_of (does
+    // the while true end?) follows the chain to it. main checks each picks
+    // the right arm, the first, last, one in between, and none.
+    const s64 ARMS = 10000;
+    Arena a = arena_make();
+    char *text = (char *)arena_alloc(&a, (u64)(3 * ARMS * 64 + 4096), 1);
+    char *at = text;
+    at += sprintf(at, "putchar :: (c: s32) -> s32 #foreign libc;\n"
+                      "pick :: (x: int) -> int {\n");
+    at = else_if_arms(at, ARMS, "    ", "return %lld;");
+    at += sprintf(at, "    else { return -1; }\n"
+                      "}\n"
+                      "set :: (x: int) -> int {\n"
+                      "    r := -1;\n");
+    at = else_if_arms(at, ARMS, "    ", "r = %lld;");
+    at += sprintf(at, "    return r;\n"
+                      "}\n"
+                      "find :: (x: int) -> int {\n"
+                      "    while true {\n");
+    at = else_if_arms(at, ARMS, "        ", "return %lld;");
+    at += sprintf(at, "        else { break; }\n"
+                      "    }\n"
+                      "    return -1;\n"
+                      "}\n"
+                      "picks :: (x: int, arm: int) -> bool {\n"
+                      "    return pick(x) == arm && set(x) == arm && find(x) == arm;\n"
+                      "}\n"
+                      "main :: () {\n"
+                      "    if picks(0, 0) && picks(1, 1) && picks(5000, 5000) && picks(9999, 9999) &&\n"
+                      "       picks(10000, -1) && picks(-3, -1) {\n"
+                      "        putchar(111);\n"
+                      "        putchar(107);\n"
+                      "    }\n"
+                      "}\n");
+    CHECK(builds(&a, text));
+    CHECK_STR(run_source(&a, text, "else-if-test"), "ok");
+    // The tree's dump nests one parenthesis per arm too: every arm is
+    // there, and main's if.
+    String errors;
+    String dump = parse_src(&a, text, &errors);
+    CHECK_STR(errors, "");
+    CHECK_EQ(count_of(dump, "(if "), 3 * ARMS + 1);
+    arena_free(&a);
+}
