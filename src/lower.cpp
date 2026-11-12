@@ -2074,7 +2074,8 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         // An aggregate result is a hidden ptr parameter, before the visible
         // ones; an aggregate parameter a ptr to the caller's copy. The IR's
         // results are the scalar results only. (A foreign procedure has
-        // neither: the checker allows no struct across C's boundary yet.)
+        // neither: the checker allows no aggregate, a struct, an array, a
+        // view or a string, across C's boundary yet.)
         for (s64 k = 0; k < source->results.count; k++) {
             if (type_is_aggregate(source->results[k]->type)) ir_add_param(p, IR_PTR, IR_EXT_NONE);
         }

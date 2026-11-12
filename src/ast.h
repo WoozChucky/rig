@@ -230,10 +230,10 @@ struct Ast_Literal : Ast {
     bool is_array;                  // T.[a, b] or .[a, b]: an array's elements, in order
 };
 
-// a[i]: element i of the array or view a, or what the pointer a points at
-// i elements on (C's a[i], unchecked). A postfix operator, as a call is.
-// pos is the '[', where a bounds check's runtime error points; start is
-// a's.
+// a[i]: element i of the array, view or string a, or what the pointer a
+// points at i elements on (C's a[i], unchecked). A postfix operator, as a
+// call is. pos is the '[', where a bounds check's runtime error points;
+// start is a's.
 struct Ast_Index : Ast {
     Ast *operand;  // a
     Ast *index;    // i
@@ -259,7 +259,8 @@ struct Ast_Call : Ast {
 
 struct Ast_Name : Ast {
     String name;
-    Ast *decl;  // what it means, found by the checker: an Ast_Var, Ast_Const, Ast_Param or Ast_Proc
+    Ast *decl;  // what it means, found by the checker: an Ast_Var, Ast_Const, Ast_Param or Ast_Proc,
+                // or an Ast_Struct, whose name is a type, not a value (reported)
 };
 
 struct Ast_String : Ast {
@@ -299,13 +300,13 @@ struct Ast_While : Ast {
 };
 
 // for first..last { ... } or for name: first..last { ... }, a range; or
-// for a { ... }, for name: a { ... }, over the elements of an array or a
-// view a (its sequence); pos is the 'for'. The loop declares two read-only
-// variables (spec 6.1), visible in its body: the iterator, which takes each
-// value from first to last, both included, or each element of a in order
-// (a copy), and it_index, an int counting the iterations from 0. `for * a`
-// makes the iterator a pointer to each element instead, through which the
-// body can change it.
+// for a { ... }, for name: a { ... }, over the elements of an array, a
+// view or a string a (its sequence); pos is the 'for'. The loop declares
+// two read-only variables (spec 6.1), visible in its body: the iterator,
+// which takes each value from first to last, both included, or each
+// element of a in order (a copy), and it_index, an int counting the
+// iterations from 0. `for * a` makes the iterator a pointer to each element
+// instead, through which the body can change it.
 struct Ast_For : Ast {
     Ast_Var *iterator;  // `it`, at the 'for', or the name in `for i: 0..9`, at the name; is_iterator set
     Ast_Var *index;     // `it_index`, at the 'for'; is_iterator set

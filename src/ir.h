@@ -269,8 +269,9 @@ bool ir_block_has_ended(Ir_Proc *p, s32 block);
 // the paths of the files the tree's positions refer to: a runtime error's
 // message names its place in the source as PATH:LINE:COL, PATH as given to
 // rig build (spec 6.4). With bounds_checks, as rig build has it unless told
-// --no-bounds-checks, every a[i] of an array or a view is checked at run
-// time, but in a procedure marked #no_abc (spec 6.5).
+// --no-bounds-checks, every a[i] of a view or a string, and of an array
+// but where i is a constant (which the checker made sure is inside), is
+// checked at run time, but in a procedure marked #no_abc (spec 6.5).
 Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks);
 
 // The module as text, in the format above.
