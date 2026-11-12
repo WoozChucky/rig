@@ -1,0 +1,7 @@
+// A u32's 4294934528 (0xFFFF8000) isn't an s16: its low 16 bits are the
+// s16's -32768, which extends back to 4294934528, so only the sign check
+// catches it (spec 6.4). The program stops at the cast with status 101.
+main :: () {
+    x : u32 = 4294934528;
+    y := cast(s16) x;
+}

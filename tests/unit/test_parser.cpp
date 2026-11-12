@@ -1,6 +1,7 @@
 // test_parser.cpp: the parser. Milestone 1's tests (issue #8) build tokens
 // by hand with toks() (helpers.cpp), so they don't need the lexer;
-// milestone 2a's (issues #33 to #36) lex real source with src().
+// milestone 2a's (issues #33 to #37, floats the last, and the fixes from
+// its review, issue #52) lex real source with src().
 
 #include "test.h"
 
@@ -577,6 +578,26 @@ TEST(for_needs_a_range) {
     arena_free(&a);
 }
 
+TEST(for_with_a_mistyped_iterator) {
+    // A name, then neither '..' nor the body's '{': the ':' of a named
+    // iterator is missing, or another language's `in` took its place. The
+    // message shows the form, at what came instead of the ':' (issue #52).
+    // Anything else that isn't '..' is "expected '..'".
+    Arena a = arena_make();
+    String errors;
+    body_dump(&a, "for i 0..9 { }", &errors);
+    CHECK_STR(errors, "2:11: expected ':' after the iterator's name, as in for i: 0..9\n");
+    body_dump(&a, "for x in 0..9 { }", &errors);
+    CHECK_STR(errors, "2:11: expected ':' after the iterator's name, as in for i: 0..9\n");
+    body_dump(&a, "for x := 0..9 { }", &errors);
+    CHECK_STR(errors, "2:11: expected ':' after the iterator's name, as in for i: 0..9\n");
+    body_dump(&a, "for 0 9 { }", &errors);
+    CHECK_STR(errors, "2:11: expected '..', found integer literal\n");
+    body_dump(&a, "for i: x y { }", &errors);
+    CHECK_STR(errors, "2:14: expected '..', found identifier 'y'\n");
+    arena_free(&a);
+}
+
 TEST(comparison_precedence) {
     // Go's levels (spec 6.1): || loosest, then &&, then the comparisons,
     // then + and *; all left-associative.
@@ -741,6 +762,13 @@ TEST(parses_multi_var_and_multi_assign) {
     // assignment, which ':=' isn't.
     body_dump(&a, "a, f() := g();", &errors);
     CHECK_STR(errors, "2:12: expected '=', found ':='\n");
+    // Several values come only from a call (spec 6.7): a Go-style swap, or
+    // a list of values, gets the checker's message for `a, b = b;`, at the
+    // first value, not "expected ';'" at its comma (issue #52).
+    body_dump(&a, "a, b = b, a;", &errors);
+    CHECK_STR(errors, "2:12: only a call can give several values, as in q, r := divmod(7, 2);\n");
+    body_dump(&a, "c, d := 1, 2;", &errors);
+    CHECK_STR(errors, "2:13: only a call can give several values, as in q, r := divmod(7, 2);\n");
     arena_free(&a);
 }
 
@@ -864,6 +892,86 @@ TEST(recovery_stops_at_a_global) {
     arena_free(&a);
 }
 
+TEST(recovery_keeps_the_globals_after_a_body_never_closed) {
+    // A body left open (an if's '}' forgotten) reads the column-1 globals
+    // after it as its own statements, until a procedure in column 1 ends
+    // it. The body ends before them instead: the column-1 declarations
+    // (IDENT ':', ':=' or '::') right before the end, at the body's own
+    // level, are read again as globals. So one mistake is one message, at
+    // the first of them, and their uses aren't unknown (issue #52).
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    x := 1;\n"
+                           "    if x == 1 {\n"
+                           "        x = 2;\n"
+                           "}\n"
+                           "\n"
+                           "counter : int;\n"
+                           "start := 1;\n"
+                           "f :: () { counter = start; }\n"),
+              "7:1: expected '}', found identifier 'counter'\n");
+    CHECK_STR(check_source(&a,
+                           "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                           "main :: () {\n"
+                           "    puts(\"x\");\n"
+                           "\n"
+                           "counter : int = 1;\n"
+                           "other :: () {\n"
+                           "    counter = 2;\n"
+                           "}\n"),
+              "5:1: expected '}', found identifier 'counter'\n");
+    String errors;
+    String dump = parse_src(&a, "main :: () {\n    x := 1;\ncounter : int;\nN :: 2;\nf :: () { }\n", &errors);
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'counter'\n");
+    CHECK_STR(dump, "(broken main)\n(var counter int)\n(const N (int 2))\n(proc f (params) (block))\n");
+    // An inner block left open too: the globals are the inner block's last
+    // statements, and the top level resumes at them all the same.
+    dump = parse_src(&a, "main :: () {\n    if true {\n        x := 1;\ncounter : int;\nf :: () { }\n", &errors);
+    CHECK_STR(errors, "4:1: expected '}', found identifier 'counter'\n");
+    CHECK_STR(dump, "(broken main)\n(var counter int)\n(proc f (params) (block))\n");
+    // Only the run right before the end: a column-1 local followed by an
+    // indented statement, or inside a closed block, stays the body's.
+    dump = parse_src(&a, "main :: () {\nx := 1;\n    x = 2;\n    {\ny := 3;\n    }\ncounter : int;\nf :: () { }\n",
+                     &errors);
+    CHECK_STR(errors, "7:1: expected '}', found identifier 'counter'\n");
+    CHECK_STR(dump, "(broken main)\n(var counter int)\n(proc f (params) (block))\n");
+    // The end of the file ends a body the same way.
+    dump = parse_src(&a, "main :: () {\n    x := 1;\ncounter : int;\n", &errors);
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'counter'\n");
+    CHECK_STR(dump, "(broken main)\n(var counter int)\n");
+    // With no such run, the message is where the body's end was found, as
+    // in milestone 1.
+    dump = parse_src(&a, "main :: () {\n    x := 1;\nf :: () { }\n", &errors);
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'f'\n");
+    CHECK_STR(dump, "(broken main)\n(proc f (params) (block))\n");
+    arena_free(&a);
+}
+
+TEST(a_broken_global_keeps_its_name) {
+    // A global whose declaration fails keeps its name (a broken entry), so
+    // its uses aren't unknown (issue #52): written C's way, a name and
+    // then a type, two names in a row, which never begin an expression;
+    // and with another declaration after it on the same line, which is
+    // still parsed whole.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "counter int = 0;\nmain :: () { counter = 1; }\n"),
+              "1:9: expected '::', found identifier 'int'\n");
+    CHECK_STR(check_source(&a,
+                           "counter : int = 1 2; f :: () { counter = 3; }\n"
+                           "main :: () { counter = 1; f(); }\n"),
+              "1:19: expected ';', found integer literal\n");
+    String errors;
+    String dump = parse_src(&a, "start := 1 2; f :: () { }\n", &errors);
+    CHECK_STR(errors, "1:12: expected ';', found integer literal\n");
+    CHECK_STR(dump, "(broken start)\n(proc f (params) (block))\n");
+    // Stray tokens before a declaration still leave no entry.
+    dump = parse_src(&a, "*greet :: () { }\n", &errors);
+    CHECK_STR(errors, "1:1: expected identifier, found '*'\n");
+    CHECK_STR(dump, "(proc greet (params) (block))\n");
+    arena_free(&a);
+}
+
 // Milestone 2a (issue #37): floats.
 
 TEST(parses_float_literals) {
@@ -878,5 +986,140 @@ TEST(parses_float_literals) {
     CHECK_STR(body_dump(&a, "f : float = cast(float32) 1_000.25;", &errors),
               "(block (var f float (cast float32 (float 1000.25))))");
     CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+// Milestone 2a's final review (issue #52).
+
+// before, then `open` n times, middle, `close` n times, and after: a nested
+// program, as a C string in the arena.
+static const char *nested_source(Arena *a, const char *before, const char *open, s64 n, const char *middle,
+                                 const char *close, const char *after) {
+    s64 open_count = (s64)strlen(open), close_count = (s64)strlen(close);
+    s64 count = (s64)strlen(before) + n * (open_count + close_count) + (s64)strlen(middle) + (s64)strlen(after);
+    char *text = (char *)arena_alloc(a, count + 1, 1);
+    char *at = text;
+    at += sprintf(at, "%s", before);
+    for (s64 i = 0; i < n; i++) at += sprintf(at, "%s", open);
+    at += sprintf(at, "%s", middle);
+    for (s64 i = 0; i < n; i++) at += sprintf(at, "%s", close);
+    sprintf(at, "%s", after);
+    return text;
+}
+
+// Whether `text` goes through every stage that walks the tree recursively
+// without a message: the parser, the checker, lowering, and LLVM's module
+// (built and verified, for the host). At MAX_DEPTH levels none of them may
+// run out of stack, on either system.
+static bool builds(Arena *a, const char *text) {
+    String errors = check_source(a, text);
+    if (errors.count) {
+        fprintf(stderr, "builds: " STR_FMT, STR_ARG(errors));
+        return false;
+    }
+    Ir_Module *m = lower_source(a, text);
+    String ir = {}, error = {};
+    return llvm_ir_text(a, m, target_host(), &ir, &error);
+}
+
+// The program `x := ` + open * n + middle + close * n + `;` in main, after
+// `y := 1;`, so the expression starts at 3:10. id is a procedure to call.
+static const char *nested_expression(Arena *a, const char *open, s64 n, const char *middle, const char *close) {
+    return nested_source(a, "main :: () {\n    y := 1;\n    x := ", open, n, middle, close,
+                         ";\n}\nid :: (n: int) -> int { return n; }\n");
+}
+
+static const char *TOO_DEEP = "3:10: this expression is nested too deeply (more than 1000 levels)\n";
+
+TEST(expressions_nest_up_to_a_thousand_levels) {
+    // Each parenthesis, prefix operator, cast, call and binary operator is
+    // a level above what it holds. 1000 levels build, through every stage;
+    // 1001 are one message, at the expression's start, and nothing more for
+    // the rest of it. Values are variables, so lowering walks every level
+    // (a constant would be one folded value).
+    Arena a = arena_make();
+    CHECK(builds(&a, nested_expression(&a, "(", 1000, "y", ")")));
+    CHECK_STR(check_source(&a, nested_expression(&a, "(", 1001, "y", ")")), TOO_DEEP);
+    CHECK(builds(&a, nested_expression(&a, "- ", 1000, "y", "")));
+    CHECK_STR(check_source(&a, nested_expression(&a, "- ", 1001, "y", "")), TOO_DEEP);
+    CHECK(builds(&a, nested_expression(&a, "cast(int) ", 1000, "y", "")));
+    CHECK_STR(check_source(&a, nested_expression(&a, "cast(int) ", 1001, "y", "")), TOO_DEEP);
+    CHECK(builds(&a, nested_expression(&a, "id(", 1000, "y", ")")));
+    CHECK_STR(check_source(&a, nested_expression(&a, "id(", 1001, "y", ")")), TOO_DEEP);
+    // A chain of 1000 + is 1000 levels: (y + y) + y ... leans left, one
+    // level per operator, though the parser builds it in a loop.
+    CHECK(builds(&a, nested_source(&a, "main :: () {\n    y := 1;\n    x := y", " + y", 1000, "", "", ";\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n    x := y", " + y", 1001, "", "", ";\n}\n")),
+              TOO_DEEP);
+    // && too, which lowering turns into branches.
+    CHECK(builds(&a, nested_source(&a, "main :: () {\n    y := 1;\n    x := y == 1", " && y == 1", 999, "", "", ";\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n    x := y == 1", " && y == 1", 1000, "", "",
+                                             ";\n}\n")),
+              TOO_DEEP);
+    // Mixed: 500 parentheses around a chain of 500 operators is 1000, one
+    // more of either is 1001.
+    const char *chain = nested_source(&a, "y", " + y", 500, "", "", "");
+    CHECK(builds(&a, nested_expression(&a, "(", 500, chain, ")")));
+    CHECK_STR(check_source(&a, nested_expression(&a, "(", 501, chain, ")")), TOO_DEEP);
+    // After the message the declaration is given up as after any syntax
+    // error, and the rest of the file is still read and checked.
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n    x := ", "(", 1001, "y", ")",
+                                             ";\n}\nf :: () { z := w; }\n")),
+              "3:10: this expression is nested too deeply (more than 1000 levels)\n"
+              "5:16: unknown identifier 'w'\n");
+    arena_free(&a);
+}
+
+TEST(blocks_nest_up_to_a_thousand_levels) {
+    // A procedure's body is the first level: with 999 ifs inside it,
+    // blocks nest 1000 deep, and build; one more is one message, at the
+    // '{' of the 1001st.
+    Arena a = arena_make();
+    CHECK(builds(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "if y == 1 {", 999, "y = 2;", "}", "\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "if y == 1 {", 1000, "y = 2;", "}",
+                                             "\n}\n")),
+              "3:11000: blocks are nested too deeply (more than 1000 levels)\n");
+    // Plain blocks and loops count the same.
+    CHECK(builds(&a, nested_source(&a, "main :: () {\n", "{", 999, "", "}", "\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n", "{", 1000, "", "}", "\n}\n")),
+              "2:1000: blocks are nested too deeply (more than 1000 levels)\n");
+    CHECK(builds(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "while y == 1 {", 999, "y = 2;", "}", "\n}\n")));
+    arena_free(&a);
+}
+
+TEST(a_local_constant_in_column_1_is_a_statement) {
+    // Indentation means nothing to the language: `N :: 5;` in column 1 of
+    // a body is a local constant. Only a procedure's signature after a
+    // column-1 IDENT '::' ends a body never closed, since procedures are
+    // declared only at the top level.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "putchar :: (c: s32) -> s32 #foreign libc;\n"
+                           "main :: () {\n"
+                           "N :: 5;\n"
+                           "x : int = N;\n"
+                           "y := 2;\n"
+                           "    putchar(cast(s32) (x + y + 48));\n"
+                           "}\n"),
+              "");
+    String errors;
+    String dump = parse_src(&a, "main :: () {\nN :: 5;\nM :: (N + 1);\n}\n", &errors);
+    CHECK_STR(errors, "");
+    CHECK_STR(dump, "(proc main (params) (block (const N (int 5)) (const M (binary + (name N) (int 1)))))\n");
+    // A procedure there still ends the body, as in milestone 1, ...
+    dump = parse_src(&a, "main :: () {\n    x := 1;\nf :: () { }\ng :: (n: int) { }\n", &errors);
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'f'\n");
+    CHECK_STR(dump, "(broken main)\n(proc f (params) (block))\n(proc g (params (n int)) (block))\n");
+    // ... and the skipping after an error inside a body passes over a
+    // column-1 constant, as over an indented one, to resume at the next
+    // procedure.
+    dump = parse_src(&a, "main :: () {\n    x := ;\nN :: 5;\n    y := N;\n}\nf :: () { }\n", &errors);
+    CHECK_STR(errors, "2:10: expected an expression, found ';'\n");
+    CHECK_STR(dump, "(broken main)\n(proc f (params) (block))\n");
+    // Outside every brace, a column-1 constant is still the next
+    // declaration, kept where a failed one stopped.
+    dump = parse_src(&a, "x := 1\nN :: 5;\n", &errors);
+    CHECK_STR(errors, "2:1: expected ';', found identifier 'N'\n");
+    CHECK_STR(dump, "(broken x)\n(const N (int 5))\n");
     arena_free(&a);
 }

@@ -13,8 +13,10 @@
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, and it writes neither an object file nor a program.
 //
-// Then a few fixed cases: rig build without -o from another directory, the
-// command line's mistakes, and a .build/ or an object file rig can't write.
+// Then a few fixed cases: rig build without -o from another directory, a
+// runtime error's order after the program's output when stdout and stderr
+// are one pipe, the command line's mistakes, and a .build/ or an object
+// file rig can't write.
 //
 // Last, rig check on every program of both directories, from a file and
 // from stdin, and its own command line (check_tests).
@@ -308,6 +310,45 @@ static String default_output_test(Arena *a, String rig) {
     array_free(&hello);
     if (!started) return why;
     if (!string_eq(ran.out, str("Hello, World!\n"))) return first_difference(a, "stdout", str("Hello, World!\n"), ran.out);
+    return {};
+}
+
+// tests/run/division_by_zero, run with its stdout and stderr in one pipe, as
+// `prog 2>&1 | less` or a CI log has them: the line it printed before the
+// runtime error must come out first, then the error. stdout is a pipe, so
+// C buffers it, and the runtime flushes it before writing the message. Its
+// .out and then its .err, in one stream.
+static String merged_output_test(Arena *a, String rig) {
+    String name = str("division_by_zero");
+    String program = string_printf(a, ".build/tests/merged-output%s", EXE);
+    remove(string_cstr(a, program));
+    Array<String> argv = build_command(a, rig, "tests/run", name, program);
+    Process_Result built = {};
+    String why = {};
+    bool started = run(a, argv, {}, &built, &why);
+    array_free(&argv);
+    if (!started) return why;
+    if (built.exit_code != 0) {
+        return with_stderr(a, string_printf(a, "rig build exited with " STR_FMT, STR_ARG(exit_code_text(a, built.exit_code))),
+                           built.err);
+    }
+    String out = {}, err = {};
+    if (!os_read_file(a, str("tests/run/division_by_zero.out"), &out) ||
+        !os_read_file(a, str("tests/run/division_by_zero.err"), &err)) {
+        return str("can't read division_by_zero's .out or .err");
+    }
+    String expected = string_printf(a, STR_FMT STR_FMT, STR_ARG(out), STR_ARG(err));
+
+    Array<String> command = {};
+    array_add(&command, program);
+    Process_Result ran = {};
+    started = os_run_merged(a, command, {}, TIMEOUT, &ran);
+    array_free(&command);
+    if (!started) return string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(program), STR_ARG(os_error_message(a)));
+    if (ran.timed_out) return string_printf(a, STR_FMT " took longer than %d seconds", STR_ARG(program), TIMEOUT);
+    ran.out = normalise_newlines(a, ran.out);
+    if (!string_eq(ran.out, expected)) return first_difference(a, "stdout and stderr", expected, ran.out);
+    if (ran.exit_code != 101) return string_printf(a, "exit code " STR_FMT ", expected 101", STR_ARG(exit_code_text(a, ran.exit_code)));
     return {};
 }
 
@@ -643,6 +684,8 @@ int main(int argc, char **argv) {
     s64 passed = 0, failed = 0;
     run_directory(&a, rig, "tests/run", run_test, &passed, &failed);
     report("rig build without -o, from another directory", default_output_test(&a, rig), &passed, &failed);
+    report("a runtime error after the program's output, both in one pipe", merged_output_test(&a, rig), &passed,
+           &failed);
     run_directory(&a, rig, "tests/errors", error_test, &passed, &failed);
     report("rig build where .build is a file", unwritable_test(&a, rig, false), &passed, &failed);
     report("rig build where the object file's name is a directory", unwritable_test(&a, rig, true), &passed, &failed);

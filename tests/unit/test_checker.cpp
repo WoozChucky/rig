@@ -1,7 +1,8 @@
 // test_checker.cpp: names, types and calls (issue #9), then scopes,
 // constants, operators, conversions and returns (issue #33), then bools,
 // conditions and loops (issue #34), then division and casts (issue #35),
-// then several results, globals and top-level constants (issue #36).
+// then several results, globals and top-level constants (issue #36), then
+// floats (issue #37), and the fixes from milestone 2a's review (issue #52).
 // Milestone 1's tests build tokens by hand (toks(), helpers.cpp), milestone
 // 2a's lex real source (src()); either way, parsed, then checked.
 
@@ -1588,14 +1589,16 @@ TEST(global_value_must_be_constant) {
                            "d : u8 = 300;\n"
                            "p : *u8 = \"hi\";\n"
                            "s := \"hi\";\n"
+                           "q : *u8 = cast(*u8) \"hi\";\n"
                            "e : u8 = LIMIT;\n"
                            "LIMIT :: 255;\n"
                            "main :: () { }\n"),
               "2:6: a global's value must be known while compiling, for now\n"
               "3:11: a global's value must be known while compiling, for now\n"
               "5:10: 300 doesn't fit in 'u8'\n"
-              "6:11: a global's value must be known while compiling, for now\n"
-              "7:6: variables can't hold a 'string' yet; give it the type '*u8'\n");
+              "6:11: global variables can't hold a string literal yet; assign it in a procedure\n"
+              "7:6: variables can't hold a 'string' yet; give it the type '*u8'\n"
+              "8:11: global variables can't hold a string literal yet; assign it in a procedure\n");
     Checked c = check_src(&a, "c := 1 + LIMIT;\nLIMIT :: 255;\nmain :: () { }\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     Ast_Var *var = (Ast_Var *)global_named(&c, "c");
@@ -1645,6 +1648,59 @@ TEST(constant_cycle) {
               "3:1: 'C' is defined in terms of itself\n"
               "4:1: 'x' is defined in terms of itself\n"
               "6:1: 'D' is defined in terms of itself\n");
+    arena_free(&a);
+}
+
+TEST(cycle_through_typed_globals) {
+    // A global with a written type has a type before its value is known,
+    // but in a circle its value isn't one: every declaration in the circle
+    // gives no type, so the circle is one message, whatever the types and
+    // however many go round it (issue #52). A global that only uses the
+    // circle, outside it, says nothing more either.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "a : int = b;\n"
+                           "b : int = a;\n"
+                           "main :: () {}\n"),
+              "1:1: 'a' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a,
+                           "ga : int = gb + 1;\n"
+                           "gb : int = gc * 2;\n"
+                           "gc : int = ga - 3;\n"
+                           "outside : int = gb;\n"
+                           "main :: () { x := ga + gb + gc + outside; }\n"),
+              "1:1: 'ga' is defined in terms of itself\n");
+    // Constants and globals in one circle: written either way round.
+    CHECK_STR(check_source(&a,
+                           "A :: g;\n"
+                           "g : int = A;\n"
+                           "main :: () {}\n"),
+              "1:1: 'A' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a,
+                           "N :: 2 * g;\n"
+                           "g : int = M;\n"
+                           "M :: N + 1;\n"
+                           "main :: () {}\n"),
+              "1:1: 'N' is defined in terms of itself\n");
+    // Only the declarations in the circle lose their type: one that leads
+    // into it, and is checked first, isn't in it.
+    CHECK_STR(check_source(&a,
+                           "first : int = a;\n"
+                           "a : int = b;\n"
+                           "b : int = a;\n"
+                           "main :: () {}\n"),
+              "2:1: 'a' is defined in terms of itself\n");
+    // Two circles through a: a -> c -> a closes first, while a's value is
+    // still under way; then a -> b -> a finds a already in a circle. b is
+    // in that one, so it loses its type too, and d, which only uses b, says
+    // nothing (it used to say b's value isn't known while compiling).
+    CHECK_STR(check_source(&a,
+                           "a : int = c + b;\n"
+                           "b : int = a;\n"
+                           "c : int = a;\n"
+                           "d : int = b;\n"
+                           "main :: () { x := d; }\n"),
+              "1:1: 'a' is defined in terms of itself\n");
     arena_free(&a);
 }
 
@@ -1932,6 +1988,89 @@ TEST(float_casts) {
               "5:10: cast,trunc only takes integers\n"
               "6:10: can't cast 'bool' to 'float32'\n"
               "8:10: can't cast '*u8' to 'float64'\n");
+    arena_free(&a);
+}
+
+TEST(float32_values_are_rounded_once) {
+    // A float literal that becomes a float32, alone or meeting one, is
+    // rounded once, from its decimal text, as C's strtof reads it (issue
+    // #52). 1.0000000596046448 is a little above 1 + 2^-24, halfway between
+    // the float32s 1 and 1 + 2^-23, so it's 1 + 2^-23; but the double
+    // nearest to it is that halfway point exactly, which a second rounding
+    // would take to even, 1. The same through parentheses, a -, and a
+    // constant's name. Arithmetic on untyped constants is a double's, though,
+    // rounded once at the end (spec 6.4): 0.5 + 0.5000000596046448 is the
+    // halfway point as a double, so 1. And a cast of a literal makes it a
+    // float64 first, as C's (float) of a double literal: 1 too.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    a : float32 = 1.0000000596046448;\n"
+                          "    b : float32 = 1.000000059604644775390625001;\n"
+                          "    c := 1.0000000596046448;\n"
+                          "    d : float32 = -(1.0000000596046448);\n"
+                          "    N :: 1.0000000596046448;\n"
+                          "    e : float32 = N;\n"
+                          "    one : float32 = 1.0;\n"
+                          "    f := one * 1.0000000596046448;\n"
+                          "    g : float64 = 1.0000000596046448;\n"
+                          "    h : float32 = 0.5 + 0.5000000596046448;\n"
+                          "    k := cast(float32) 1.0000000596046448;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    f64 above = 1.0 + __builtin_ldexp(1.0, -23);
+    CHECK(float_value(value_of(&c, "a")) == above);
+    CHECK(float_value(value_of(&c, "b")) == above);
+    CHECK(float_value(value_of(&c, "c")) == above);
+    CHECK_STR(type_of(&a, &c, "c"), "float32");
+    CHECK(float_value(value_of(&c, "d")) == -above);
+    CHECK(float_value(value_of(&c, "e")) == above);
+    CHECK(float_value(((Ast_Binary *)value_of(&c, "f"))->right) == above);
+    CHECK(float_value(value_of(&c, "g")) == 1.0000000596046448);
+    CHECK(float_value(value_of(&c, "h")) == 1.0);
+    CHECK(float_value(value_of(&c, "k")) == 1.0);
+    token_list_free(c.list);
+
+    // An integer constant becomes a float32 in one rounding too, never by
+    // way of a double: 2^60 + 2^36 + 1 is nearer 2^60 + 2^37 than 2^60
+    // (float32's 24 bits step by 2^37 there), but as a double it's 2^60 +
+    // 2^36, the halfway point, which would then round to even, 2^60. (16777217
+    // in float_casts can't tell: a double holds it exactly.)
+    c = check_src(&a,
+                  "main :: () {\n"
+                  "    A :: cast(float32) 1152921573326323713;\n"
+                  "    x : float32 = 1152921573326323713;\n"
+                  "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(float_value(local_named(&c, "A")) == 1152921642045800448.0);
+    CHECK(float_value(value_of(&c, "x")) == 1152921642045800448.0);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(float32_literal_at_the_top_of_its_range) {
+    // Whether a literal fits in a float32 is decided by the float32 it
+    // rounds to, once, from its text: the largest float32 or infinity. A
+    // literal a tenth below the overflow point 0x1.ffffffp+127 (halfway from
+    // the largest float32 to 2^128) is the largest float32, as strtof reads
+    // it; its nearest double is the overflow point itself, which a fit test
+    // on the double would take for infinity. From the overflow point on, a
+    // literal doesn't fit.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    x : float32 = 340282356779733661637539395458142568447.9;\n"
+                          "    y : float32 = -340282356779733661637539395458142568447.9;\n"
+                          "    z := 340282356779733661637539395458142568447.9;\n"
+                          "    w : float32 = 340282356779733661637539395458142568448.0;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "5:19: 3.40282e+38 doesn't fit in 'float32'\n");
+    f64 largest = 0x1.fffffep+127;
+    CHECK(float_value(value_of(&c, "x")) == largest);
+    CHECK(float_value(value_of(&c, "y")) == -largest);
+    CHECK(float_value(value_of(&c, "z")) == largest);
+    CHECK_STR(type_of(&a, &c, "z"), "float32");
+    token_list_free(c.list);
     arena_free(&a);
 }
 

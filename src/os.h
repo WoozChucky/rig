@@ -76,5 +76,11 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
 bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 seconds, String input,
                        Process_Result *result);
 
+// os_run_for, with the program's stdout and stderr both the one pipe, as a
+// shell's `2>&1` makes them: everything it wrote is in out, in the order it
+// reached the pipe, and err is empty. For a test of the order a program's
+// output and its error messages come out in.
+bool os_run_merged(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result);
+
 // Why the last failing os_ function failed, as a sentence from the system.
 String os_error_message(Arena *a);

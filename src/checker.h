@@ -134,11 +134,13 @@
 //   implicitly" (an argument: "argument N of 'f' has type 'A', which can't
 //   be converted to 'B'"). A compound assignment x op= e converts e to x's
 //   type (a shift's amount: any integer).
-// - Only a variable can be assigned to: not a constant, a parameter
-//   (read-only, spec 6.1), a loop's iterator or index ("can't assign to
-//   'it': it's the loop's iterator", "... 'it_index': it's the loop's
-//   index") or a procedure ("can't assign to 'N': it's a constant"), nor
-//   anything but a name.
+// - Only a variable can be assigned to, and only by its name. Not:
+//   - a constant: "can't assign to 'N': it's a constant";
+//   - a parameter, read-only (spec 6.1): "can't assign to 'N': it's a
+//     parameter";
+//   - a loop's iterator or index: "can't assign to 'it': it's the loop's
+//     iterator", "can't assign to 'it_index': it's the loop's index";
+//   - a procedure: "can't assign to 'N': it's a procedure".
 // - N :: e; needs e a number or a bool ("a constant can only be a number
 //   or a bool, for now": only they fold yet) known while compiling
 //   ("the value of constant 'N' isn't known while compiling").
@@ -182,13 +184,21 @@
 // - A global variable is declared as a local one is. Its value must be
 //   known while compiling ("a global's value must be known while
 //   compiling, for now"): it's written into the program's file. Without
-//   one, or with ---, it starts at zero.
+//   one, or with ---, it starts at zero. A string literal is known while
+//   compiling, but its address needs the linker to fill it in, which
+//   lowering doesn't ask for yet: "global variables can't hold a string
+//   literal yet; assign it in a procedure".
 // - A top-level constant follows a local one's rules.
 // - Both are checked where they're first needed (in another's value, or in
 //   source order), so their order doesn't matter: in `A :: B + 1; B :: 2;`
 //   A is 3. A value that needs itself, directly or through others, is "'A'
 //   is defined in terms of itself", at the name whose value was being
-//   worked out when the circle closed.
+//   worked out when the circle closed: one message per circle, since every
+//   declaration in it then has no type, written or not (`a : int = b;
+//   b : int = a;` is one message), and its uses say nothing more. A circle
+//   through a declaration already found in one is the same tangle: its
+//   declarations lose their types too, without a message (`a : int = c + b;
+//   b : int = a; c : int = a;` is one message, at a).
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

@@ -1,5 +1,7 @@
-// test_llvm.cpp: Rig's IR to LLVM IR and object files (issues #10, #32 and
-// #34).
+// test_llvm.cpp: Rig's IR to LLVM IR and object files: hello world from
+// tokens (issue #10), then IR built by hand for issues #32 to #37 (integer
+// widths, blocks and branches, the runtime's panic, several results,
+// globals and floats) and #52 (the panic flushing first).
 // Uses test_ir.cpp's HELLO and max_module.
 
 #include "test.h"
@@ -260,7 +262,8 @@ static Ir_Module *panic_module(Arena *a) {
 TEST(llvm_panic_writes_then_exits) {
     // A panic calls the runtime's __rig_panic with its message, all but the
     // final zero; __rig_panic writes it to stderr (file descriptor 2) and
-    // exits with 101, through C's exit so stdout's buffer is flushed.
+    // exits with 101, through C's exit (llvm_panic_flushes_before_it_writes:
+    // stdout's buffer is flushed first).
     Arena a = arena_make();
     String linux_text = llvm_text(&a, panic_module(&a), TARGET_LINUX_X64);
     CHECK(contains(linux_text, "define internal void @__rig_panic(ptr %0, i64 %1)"));
@@ -277,6 +280,22 @@ TEST(llvm_panic_writes_then_exits) {
         String text = llvm_text(&a, max_module(&a), (Target)t);
         CHECK(!contains(text, "__rig_panic"));
         CHECK(!contains(text, "@exit"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_panic_flushes_before_it_writes) {
+    // stdout's buffer is flushed (C's fflush(NULL): every stream) before the
+    // message is written, so when stdout and stderr go to one place (2>&1)
+    // the program's earlier output comes first, then the error.
+    Arena a = arena_make();
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, panic_module(&a), (Target)t);
+        s64 flush = index_of(text, "call i32 @fflush(ptr null)");
+        s64 write = index_of(text, t == TARGET_WINDOWS_X64 ? "call i32 @_write(i32 2," : "call i64 @write(i32 2,");
+        CHECK(flush >= 0);
+        CHECK(write >= 0);
+        CHECK(flush < write);
     }
     arena_free(&a);
 }
@@ -346,6 +365,44 @@ TEST(llvm_runtime_names_win_over_the_programs) {
     text = llvm_text(&a, m, TARGET_WINDOWS_X64);
     CHECK(contains(text, "@write = internal global i64 0"));
     CHECK(contains(text, "load i64, ptr @write"));
+
+    // fflush, which the runtime calls first, the same way on both targets:
+    // a program's own internal procedure called fflush is renamed, and the
+    // runtime's call still goes to C's...
+    for (int t = 0; t < 2; t++) {
+        m = arena_new<Ir_Module>(&a);
+        message = add_string(m, "str.0", "oops");
+        Ir_Proc *own_flush = new_proc_returning(m, &a, "fflush", IR_VOID);
+        emit_ret(own_flush, ir_new_block(&a, own_flush), -1);
+        p = new_proc_returning(m, &a, "__rig_main", IR_VOID);
+        b = ir_new_block(&a, p);
+        ir_emit_call(m, p, b, 0, {});
+        ir_emit(p, b, IR_PANIC, IR_VOID)->target = message;
+        text = llvm_text(&a, m, (Target)t);
+        CHECK_EQ(count_of(text, "declare i32 @fflush(ptr)"), 1);
+        CHECK(contains(text, "define internal void @fflush.1()"));
+        CHECK(contains(text, "call void @fflush.1()"));
+        CHECK(contains(text, "call i32 @fflush(ptr null)"));
+    }
+    // ...and a program's own foreign declaration of fflush is the runtime's,
+    // shared: one declaration, both calls to it.
+    for (int t = 0; t < 2; t++) {
+        m = arena_new<Ir_Module>(&a);
+        message = add_string(m, "str.0", "oops");
+        Ir_Proc *own_flush = new_proc_returning(m, &a, "fflush", IR_I32);
+        own_flush->is_foreign = true;
+        ir_add_param(own_flush, IR_PTR, IR_EXT_NONE);
+        p = new_proc_returning(m, &a, "__rig_main", IR_VOID);
+        b = ir_new_block(&a, p);
+        Array<s32> null_args = {};
+        array_add(&null_args, emit_const(p, b, IR_PTR, 0));
+        ir_emit_call(m, p, b, 0, null_args);
+        ir_emit(p, b, IR_PANIC, IR_VOID)->target = message;
+        text = llvm_text(&a, m, (Target)t);
+        CHECK_EQ(count_of(text, "declare i32 @fflush(ptr)"), 1);
+        CHECK(!contains(text, "@fflush."));
+        CHECK_EQ(count_of(text, "call i32 @fflush(ptr null)"), 2);
+    }
     arena_free(&a);
 }
 

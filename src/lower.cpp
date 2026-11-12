@@ -435,6 +435,13 @@ static s32 lower_float_cast(Lowering *l, s32 v, Type *from, Type *to) {
 //   runtime error at the cast (spec 6.4: "the value doesn't fit in 'T'"):
 //   - narrowing: truncated, then extended back by T's sign, the value must
 //     come back unchanged (300 as a u8 is 44, which comes back as 44);
+//     and, from an unsigned type to a signed one, the narrowed value must
+//     not be negative: a u16's 65535 truncates to an s8's -1, which
+//     extends back to 0xFFFF, 65535 again, so the round trip alone would
+//     pass it. (From a signed type, the round trip is enough: to a signed
+//     T, the sign extension back gives the same number exactly when it
+//     fits; to an unsigned one, the zero extension back is never negative,
+//     so a negative value can't come back.)
 //   - the same width, the other sign: the sign bit must be clear (a u8's
 //     200 isn't an s8, an s8's -1 isn't a u8);
 //   - widening from signed to unsigned: the value mustn't be negative;
@@ -451,7 +458,12 @@ static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
     if (ir_bits(want) < ir_bits(have)) {
         s32 narrow = resize(l, v, from, want);
         s32 back = resize(l, narrow, to, have);
-        emit_cast_check(l, emit_compare(l, IR_NE, have, back, v), cast);
+        s32 fails = emit_compare(l, IR_NE, have, back, v);
+        if (!from->is_signed && to->is_signed) {
+            s32 negative = emit_compare(l, IR_SLT, want, narrow, emit_constant(l, want, 0));
+            fails = emit_binary(l, IR_OR, IR_I1, fails, negative);
+        }
+        emit_cast_check(l, fails, cast);
         return narrow;
     }
     if (from->is_signed != to->is_signed && (ir_bits(want) == ir_bits(have) || from->is_signed)) {

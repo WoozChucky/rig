@@ -1,6 +1,8 @@
 // A division by a zero that isn't known while compiling stops the program
 // with a runtime error, at the operator, and status 101. What it printed
-// before still comes out: C's exit flushes stdout, a pipe here.
+// before still comes out, and first: the runtime flushes stdout, a pipe
+// here, before it writes the message (the runner also runs this program
+// with both streams in one pipe, merged_output_test).
 puts :: (s: *u8) -> s32 #foreign libc;
 
 main :: () {

@@ -1,7 +1,7 @@
 // test_os.cpp: the operating system layer (issue #4). The process tests run
 // this same program, bin/unit-tests, with the helper flags of unit.cpp
-// (--echo-args, --echo-stdin, --cwd, --fail-with, --spam, --sleep,
-// --close-and-sleep, --spawn-sleeper).
+// (--echo-args, --echo-stdin, --cwd, --fail-with, --interleave, --spam,
+// --sleep, --close-and-sleep, --spawn-sleeper).
 
 #include "test.h"
 
@@ -54,6 +54,27 @@ TEST(os_run_captures_exit_code_and_stderr) {
     CHECK_EQ(result.exit_code, 7);
     CHECK_STR(result.err, "oops\n");
     CHECK_STR(result.out, "");
+    array_free(&argv);
+    arena_free(&a);
+}
+
+TEST(os_run_merged_puts_both_streams_in_one_pipe) {
+    // As `2>&1`: stdout and stderr are one pipe, so what the program wrote
+    // to either is in out, in the order it wrote it, and err is empty.
+    Arena a = arena_make();
+    Array<String> argv = {};
+    array_add(&argv, unit_tests_path(&a));
+    array_add(&argv, str("--interleave"));
+    Process_Result result = {};
+    CHECK(os_run_merged(&a, argv, {}, 30, &result));
+    CHECK_EQ(result.exit_code, 0);
+    CHECK(!result.timed_out);
+    CHECK_STR(result.out, "out 1\nerr\nout 2\n");
+    CHECK_STR(result.err, "");
+    // os_run keeps them apart.
+    CHECK(os_run(&a, argv, &result));
+    CHECK_STR(result.out, "out 1\nout 2\n");
+    CHECK_STR(result.err, "err\n");
     array_free(&argv);
     arena_free(&a);
 }

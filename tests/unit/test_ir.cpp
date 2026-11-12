@@ -1,6 +1,7 @@
 // test_ir.cpp: lowering checked trees to Rig's IR (issue #10, with tokens
-// by hand; issues #33 to #36, from real source), and the IR's
-// builders and printing (issue #32), with IR by hand (helpers.cpp).
+// by hand; issues #33 to #37, floats the last, and #52, from real source),
+// and the IR's builders and printing (issue #32), with IR by hand
+// (helpers.cpp).
 
 #include "test.h"
 
@@ -1050,6 +1051,37 @@ TEST(narrowing_cast_is_checked) {
               "  %5 = add i64 %3, %4\n"
               "  ret %5\n"
               "}\n");
+    arena_free(&a);
+}
+
+TEST(narrowing_unsigned_to_signed_checks_the_sign) {
+    // From an unsigned type to a narrower signed one, the round trip isn't
+    // enough: a u16's 65535 truncates to an s8's -1, which sign-extends back
+    // to 0xFFFF, 65535 again. So the narrowed value mustn't be negative
+    // either: the check fails when either test does. Narrowing from signed
+    // to unsigned (f in narrowing_cast_is_checked) needs only the round
+    // trip, since the zero-extension back can't give a negative value.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "f :: (x: u16) -> s8 { return cast(s8) x; }\n"
+                                "main :: () { }\n");
+    String ir = ir_print(&a, m);
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(i16 zeroext) -> i8 signext {\n"
+              "b0:\n"
+              "  %1 = trunc i16 %0 to i8\n"
+              "  %2 = sext i8 %1 to i16\n"
+              "  %3 = cmp ne i16 %2, %0\n"
+              "  %4 = const i8 0\n"
+              "  %5 = cmp slt i8 %1, %4\n"
+              "  %6 = or i1 %3, %5\n"
+              "  branch %6, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  ret %1\n"
+              "}\n");
+    CHECK_STR(message_of(m, 0), "test.rig:1:30: runtime error: the value doesn't fit in 's8'\n");
     arena_free(&a);
 }
 

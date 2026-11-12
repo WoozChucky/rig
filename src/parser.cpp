@@ -14,7 +14,33 @@ struct Parser {
     s64 next;  // index of the next token to read
     Arena *arena;
     Diagnostics *diag;
+    // How deeply the code being read nests (see MAX_DEPTH):
+    s32 levels;                 // the expression levels open around the next token
+    s32 height;                 // the levels of the expression the last parse_ function returned
+    Position expression_start;  // where the outermost expression being read starts
+    s32 blocks;                 // the blocks open around the next token
+    // After a body found never closed: the token where the top level
+    // resumes (parse_block_rest), or -1.
+    s64 resume;
 };
+
+// A limit of the compiler (spec 6.1): an expression nests at most MAX_DEPTH
+// levels deep, and blocks too. The parser, the checker and lowering all walk
+// the tree recursively, a call or a few per level, on the main thread's
+// stack (1 MB on Windows, 8 MB on Linux): without a limit, a file with a few
+// thousand nested parentheses, or a generated sum of a few thousand terms,
+// crashes rig with a stack overflow and no message. The parser enforces it,
+// so no later stage ever sees a deeper tree. 1000 levels fit on Windows'
+// stack with room to spare, even inside 1000 nested blocks.
+//
+// An expression's levels are its tree's height: each parenthesis, prefix
+// operator, cast, call and binary operator is one level above what it
+// holds, and a name or a literal is none. So ((x)) is 2, - - x is 2,
+// f(g(x)) is 2, and x + x + x is 2 too: the Pratt loop builds it as
+// (x + x) + x, a left-leaning tree whose height grows with each operator,
+// though the parser itself doesn't recurse to build it (the checker does,
+// to check it).
+static const s32 MAX_DEPTH = 1000;
 
 static Token *peek(Parser *p, s64 ahead = 0) {
     s64 i = p->next + ahead;
@@ -52,10 +78,52 @@ static Ast *parse_expression(Parser *p, int min_precedence);
 static Ast *parse_unary(Parser *p);
 static Ast_Type *parse_type(Parser *p);
 static bool parameters_follow(Parser *p, s64 open);
+static bool starts_global(Parser *p);
+
+// "this expression is nested too deeply (more than 1000 levels)", at the
+// start of the outermost expression being read. Every parse_ function then
+// returns null, so the rest of the expression reports nothing more, and the
+// declaration is given up as after any syntax error (parser.h says why not
+// only the statement).
+static void report_too_deep(Parser *p) {
+    diag_error(p->diag, p->expression_start, "this expression is nested too deeply (more than %d levels)",
+               MAX_DEPTH);
+}
+
+// Opens one level of the expression being read, before reading what's
+// inside it (a parenthesis's value, an operator's operand, a call's
+// arguments): false, after reporting, when that's one level more than
+// MAX_DEPTH allows. Checking on the way down stops the parser before its
+// own recursion gets too deep; the caller closes the level (p->levels--)
+// once what's inside is read, whether or not it could be. A level open
+// means the tree will be at least that high, so this never rejects an
+// expression that fits.
+static bool open_level(Parser *p) {
+    if (p->levels == MAX_DEPTH) {
+        report_too_deep(p);
+        return false;
+    }
+    p->levels++;
+    return true;
+}
+
+// The expression just built is `height` levels high (p->height, for its
+// parent): false, after reporting, when that's more than MAX_DEPTH. Checking
+// on the way up catches what doesn't nest on the way down: a chain of
+// binary operators, built in a loop.
+static bool set_height(Parser *p, s32 height) {
+    if (height > MAX_DEPTH) {
+        report_too_deep(p);
+        return false;
+    }
+    p->height = height;
+    return true;
+}
 
 // primary = IDENT | INT | FLOAT | STRING | 'true' | 'false' | '(' expression ')'
 static Ast *parse_primary(Parser *p) {
     Token *t = peek(p);
+    p->height = 0;  // a name or a literal; parentheses say otherwise below
     switch (t->kind) {
     case TOKEN_IDENT: {
         advance(p);
@@ -73,6 +141,7 @@ static Ast *parse_primary(Parser *p) {
         advance(p);
         Ast_Float *number = ast_new<Ast_Float>(p->arena, AST_FLOAT, t->pos);
         number->value = t->float_value;
+        number->float32_value = t->float32_value;
         return number;
     }
     case TOKEN_STRING: {
@@ -89,11 +158,14 @@ static Ast *parse_primary(Parser *p) {
         return value;
     }
     case TOKEN_LPAREN: {
-        // Parentheses only group, so they add no node; the value inside
-        // starts at the '(' though, for messages about the whole value.
+        // Parentheses only group, so they add no node (though they are a
+        // level, MAX_DEPTH); the value inside starts at the '(' though, for
+        // messages about the whole value.
         advance(p);
+        if (!open_level(p)) return nullptr;
         Ast *inner = parse_expression(p, 1);
-        if (!inner || !expect(p, TOKEN_RPAREN)) return nullptr;
+        p->levels--;
+        if (!inner || !set_height(p, p->height + 1) || !expect(p, TOKEN_RPAREN)) return nullptr;
         inner->start = t->pos;
         return inner;
     }
@@ -111,16 +183,20 @@ static Ast *parse_postfix(Parser *p) {
         advance(p);
         call->start = e->start;
         call->callee = e;
+        s32 height = p->height;  // the callee's; the call is a level above it and its arguments
         if (peek(p)->kind != TOKEN_RPAREN) {
             for (;;) {
+                if (!open_level(p)) return nullptr;
                 Ast *arg = parse_expression(p, 1);
+                p->levels--;
                 if (!arg) return nullptr;
+                if (p->height > height) height = p->height;
                 array_add(&call->args, arg);
                 if (peek(p)->kind != TOKEN_COMMA) break;
                 advance(p);
             }
         }
-        if (!expect(p, TOKEN_RPAREN)) return nullptr;
+        if (!set_height(p, height + 1) || !expect(p, TOKEN_RPAREN)) return nullptr;
         e = call;
     }
     return e;
@@ -150,8 +226,10 @@ static Ast *parse_cast(Parser *p) {
     if (!expect(p, TOKEN_LPAREN)) return nullptr;
     cast->type_expr = parse_type(p);
     if (!cast->type_expr || !expect(p, TOKEN_RPAREN)) return nullptr;
+    if (!open_level(p)) return nullptr;
     cast->value = parse_unary(p);
-    return cast->value ? cast : nullptr;
+    p->levels--;
+    return cast->value && set_height(p, p->height + 1) ? cast : nullptr;
 }
 
 // unary = ('-' | '~' | '!') unary | cast | postfix
@@ -164,8 +242,10 @@ static Ast *parse_unary(Parser *p) {
     if (op->kind == TOKEN_CAST) return parse_cast(p);
     if (op->kind != TOKEN_MINUS && op->kind != TOKEN_TILDE && op->kind != TOKEN_BANG) return parse_postfix(p);
     advance(p);
+    if (!open_level(p)) return nullptr;
     Ast *operand = parse_unary(p);
-    if (!operand) return nullptr;
+    p->levels--;
+    if (!operand || !set_height(p, p->height + 1)) return nullptr;
     Ast_Unary *unary = ast_new<Ast_Unary>(p->arena, AST_UNARY, op->pos);
     unary->op = op->kind;
     unary->operand = operand;
@@ -225,15 +305,24 @@ static int binary_precedence(Token_Kind kind) {
 // takes that - itself, with a - b as its left operand: (a - b) - c. That's
 // left associativity: an operator never takes another of its own level as
 // its right operand.
+//
+// Each binary node is a level above both its operands (MAX_DEPTH): the
+// right operand is read a level down, and the node's height is one more
+// than the higher of the two.
 static Ast *parse_expression(Parser *p, int min_precedence) {
+    if (p->levels == 0) p->expression_start = peek(p)->pos;  // the outermost expression
     Ast *left = parse_unary(p);
     while (left) {
+        s32 left_height = p->height;
         Token *op = peek(p);
         int precedence = binary_precedence(op->kind);
         if (precedence == 0 || precedence < min_precedence) break;
         advance(p);
+        if (!open_level(p)) return nullptr;
         Ast *right = parse_expression(p, precedence + 1);
+        p->levels--;
         if (!right) return nullptr;
+        if (!set_height(p, (left_height > p->height ? left_height : p->height) + 1)) return nullptr;
         Ast_Binary *binary = ast_new<Ast_Binary>(p->arena, AST_BINARY, op->pos);
         binary->start = left->start;
         binary->op = op->kind;
@@ -244,11 +333,25 @@ static Ast *parse_expression(Parser *p, int min_precedence) {
     return left;
 }
 
-// Whether the next tokens are IDENT '::' with the name in column 1, the way
-// a top-level declaration starts.
+// Whether a procedure's parameter list starts `ahead` tokens on: '(' ')' or
+// '(' IDENT ':'. Any other '(' after '::' begins a constant's value in
+// parentheses (N :: (1 + 2);).
+static bool procedure_follows(Parser *p, s64 ahead) {
+    return peek(p, ahead)->kind == TOKEN_LPAREN &&
+           (peek(p, ahead + 1)->kind == TOKEN_RPAREN ||
+            (peek(p, ahead + 1)->kind == TOKEN_IDENT && peek(p, ahead + 2)->kind == TOKEN_COLON));
+}
+
+// Whether the next tokens are a procedure's declaration with the name in
+// column 1, IDENT '::' '(' ..., the way a top-level procedure starts: inside
+// a body, a body that was never closed. A constant (`N :: 5;`) isn't, in
+// column 1 or not: it's a local constant, a statement of the body, and
+// indentation means nothing to the language. Procedures are declared only
+// at the top level, so one can't be a statement.
 static bool starts_declaration(Parser *p) {
     Token *t = peek(p);
-    return t->kind == TOKEN_IDENT && t->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON;
+    return t->kind == TOKEN_IDENT && t->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON &&
+           procedure_follows(p, 2);
 }
 
 // The value of the constant `name` after its '::': expression ';'. The
@@ -330,6 +433,17 @@ static bool multi_var_follows(Parser *p) {
 // (multi_var_follows said so): the variables receive the results of the
 // call that is the value, in order (spec 6.7). Each name gets its own
 // Ast_Var, with no value of its own; the checker gives each its type.
+// After the value given to several names or targets: a ',' would begin a
+// second value, as in Go's swap `a, b = b, a;` or `c, d := 1, 2;`. Several
+// values come only from a call (spec 6.7), so that's the checker's message
+// for `a, b = b;`, at the first value, rather than "expected ';'" at the
+// comma. False after reporting it.
+static bool one_value_given(Parser *p, Ast *value) {
+    if (peek(p)->kind != TOKEN_COMMA) return true;
+    diag_error(p->diag, value->start, "only a call can give several values, as in q, r := divmod(7, 2);");
+    return false;
+}
+
 static Ast *parse_multi_var(Parser *p) {
     Ast_Multi_Var *multi = ast_new<Ast_Multi_Var>(p->arena, AST_MULTI_VAR, peek(p)->pos);
     for (;;) {
@@ -344,7 +458,7 @@ static Ast *parse_multi_var(Parser *p) {
         return nullptr;
     }
     multi->value = parse_expression(p, 1);
-    if (!multi->value || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+    if (!multi->value || !one_value_given(p, multi->value) || !expect(p, TOKEN_SEMICOLON)) return nullptr;
     return multi;
 }
 
@@ -430,12 +544,21 @@ static Ast_Var *loop_variable(Parser *p, String name, Position pos) {
 // for = 'for' [IDENT ':'] expression '..' expression block
 //
 // The first end is a whole expression, which stops at the '..' since that
-// isn't a binary operator: `for a + 1..n` starts at a + 1. A for over
-// anything but a range (an array's elements, milestone 2b) isn't there yet.
+// isn't a binary operator: `for a + 1..n` starts at a + 1. When no '..'
+// follows it:
+// - the body's '{': a for over something that isn't a range (an array's
+//   elements, milestone 2b), which isn't there yet: "'for' needs a range,
+//   as in for 0..9, for now", at that something;
+// - with no iterator named, a name and then anything else (`for i 0..9`,
+//   `for x in 0..9`): the name was meant as the iterator's, and its ':' is
+//   missing: "expected ':' after the iterator's name, as in for i: 0..9",
+//   at what came instead;
+// - otherwise, "expected '..'".
 static Ast *parse_for(Parser *p) {
     Token *keyword = advance(p);
     Ast_For *loop = ast_new<Ast_For>(p->arena, AST_FOR, keyword->pos);
-    if (peek(p)->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON) {
+    bool named_iterator = peek(p)->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON;
+    if (named_iterator) {
         Token *name = advance(p);
         advance(p);
         loop->iterator = loop_variable(p, name->text, name->pos);
@@ -445,9 +568,15 @@ static Ast *parse_for(Parser *p) {
     loop->index = loop_variable(p, str("it_index"), keyword->pos);
     loop->first = parse_expression(p, 1);
     if (!loop->first) return nullptr;
-    if (peek(p)->kind != TOKEN_DOT_DOT) {
-        if (peek(p)->kind != TOKEN_ERROR) {
+    Token *after = peek(p);
+    if (after->kind != TOKEN_DOT_DOT) {
+        if (after->kind == TOKEN_ERROR) return nullptr;  // the lexer said what's wrong
+        if (after->kind == TOKEN_LBRACE) {
             diag_error(p->diag, loop->first->start, "'for' needs a range, as in for 0..9, for now");
+        } else if (!named_iterator && loop->first->kind == AST_NAME) {
+            diag_error(p->diag, after->pos, "expected ':' after the iterator's name, as in for i: 0..9");
+        } else {
+            error_expected(p, "'..'");
         }
         return nullptr;
     }
@@ -517,7 +646,7 @@ static Ast *parse_statement(Parser *p) {
         assign->op = TOKEN_EQUAL;
         assign->targets = targets;
         assign->value = parse_expression(p, 1);
-        if (!assign->value || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+        if (!assign->value || !one_value_given(p, assign->value) || !expect(p, TOKEN_SEMICOLON)) return nullptr;
         return assign;
     }
     Token *op = peek(p);
@@ -534,24 +663,64 @@ static Ast *parse_statement(Parser *p) {
     return e;
 }
 
-// block = '{' statement* '}'
-static Ast_Block *parse_block(Parser *p) {
-    Token *open = expect(p, TOKEN_LBRACE);
-    if (!open) return nullptr;
+// Whether the next tokens declare something in column 1 that the top level
+// could also declare: a global (IDENT ':' or ':='), or a constant (IDENT
+// '::'). Inside a body that's a local, unindented.
+static bool declares_in_column_1(Parser *p) {
+    Token_Kind after = peek(p, 1)->kind;
+    return starts_global(p) || (peek(p)->kind == TOKEN_IDENT && peek(p)->pos.col == 1 && after == TOKEN_COLON_COLON);
+}
+
+// The statements of the block that `open` began, and its '}'.
+//
+// The end of the file, or a procedure's declaration at the start of a line
+// (`name :: (` in column 1, starts_declaration), before the '}' means the
+// block was never closed: an if's '}' forgotten, say. Everything up to
+// there has been read as the block's statements, globals in column 1
+// included, which belong after the body; read as its locals, they'd be
+// lost with it, and every use of them unknown. So the block is taken to
+// end before the run of statements in column 1 that declare something
+// (declares_in_column_1) right before the end, at this block's own level:
+// "expected '}'" is reported at the first of them, and the top level
+// resumes there (p->resume), reading them again as globals and constants.
+// Without such a run, it's reported at the end itself, where the top level
+// resumes. A local that wasn't indented, followed by any other statement,
+// starts no run, so only the declarations next to the end are taken.
+static Ast_Block *parse_block_rest(Parser *p, Token *open) {
     Ast_Block *block = ast_new<Ast_Block>(p->arena, AST_BLOCK, open->pos);
+    s64 run = -1;  // where the run of column-1 declarations up to here starts, or -1
     while (peek(p)->kind != TOKEN_RBRACE) {
-        // The end of the file, or a declaration at the start of a line
-        // (`name ::` in column 1): the block was never closed. The
-        // declaration stays for parse() to read.
         if (peek(p)->kind == TOKEN_EOF || starts_declaration(p)) {
+            if (run >= 0) p->next = run;
             error_expected(p, token_kind_name(TOKEN_RBRACE));
+            p->resume = p->next;
             return nullptr;
         }
+        if (!declares_in_column_1(p)) run = -1;
+        else if (run < 0) run = p->next;
         Ast *statement = parse_statement(p);
         if (!statement) return nullptr;
         array_add(&block->statements, statement);
     }
     block->end = advance(p)->pos;
+    return block;
+}
+
+// block = '{' statement* '}'
+//
+// Blocks nest at most MAX_DEPTH deep, a procedure's body the first:
+// "blocks are nested too deeply (more than 1000 levels)" at the '{' of the
+// one too many. The parser, the checker and lowering recurse into each.
+static Ast_Block *parse_block(Parser *p) {
+    Token *open = expect(p, TOKEN_LBRACE);
+    if (!open) return nullptr;
+    if (p->blocks == MAX_DEPTH) {
+        diag_error(p->diag, open->pos, "blocks are nested too deeply (more than %d levels)", MAX_DEPTH);
+        return nullptr;
+    }
+    p->blocks++;
+    Ast_Block *block = parse_block_rest(p, open);
+    p->blocks--;
     return block;
 }
 
@@ -665,10 +834,7 @@ static Ast *parse_declaration(Parser *p) {
         return var;
     }
     if (!expect(p, TOKEN_COLON_COLON)) return nullptr;
-    bool procedure = peek(p)->kind == TOKEN_LPAREN &&
-                     (peek(p, 1)->kind == TOKEN_RPAREN ||
-                      (peek(p, 1)->kind == TOKEN_IDENT && peek(p, 2)->kind == TOKEN_COLON));
-    if (procedure) return parse_procedure(p, name);
+    if (procedure_follows(p, 0)) return parse_procedure(p, name);
     return parse_constant(p, name);
 }
 
@@ -719,26 +885,38 @@ static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
 //
 // Inside a body, `N :: 5;` starting a line is a local constant, not the next
 // declaration, so the skipping counts braces from `start` on: an IDENT '::'
-// inside braces still open is passed over, unless it's in column 1, where
-// parse_block takes it for a top-level declaration after a body never
-// closed. A global variable is taken only outside every brace and
-// parameter list still open, even right where the failed declaration
-// stopped: an unindented local (`y : int;` in column 1 of a body) and a
-// parameter list over two lines (`n: s32` starting the second) look like
-// one too. A call's or a value's parentheses left open don't count (see
-// count_open): `counter : int = f(1` or `puts("a"` in a body, then a
+// inside braces still open is passed over, unless it's a procedure's in
+// column 1 (starts_declaration), which parse_block takes for a top-level
+// declaration after a body never closed. A constant in column 1 is passed
+// over there, as an indented one is. A global variable is taken only outside
+// every brace and parameter list still open, even right where the failed
+// declaration stopped: an unindented local (`y : int;` in column 1 of a
+// body) and a parameter list over two lines (`n: s32` starting the second)
+// look like one too. A call's or a value's parentheses left open don't count
+// (see count_open): `counter : int = f(1` or `puts("a"` in a body, then a
 // global, keeps the global.
 static void skip_to_next_declaration(Parser *p, s64 start) {
     s64 depth = 0;   // braces opened and not yet closed since `start`
     s64 parens = 0;  // the same for a parameter list's parentheses
     for (s64 i = start; i < p->next; i++) count_open(p, i, &depth, &parens);
-    if (p->next > start && (starts_declaration(p) || (depth <= 0 && parens <= 0 && starts_global(p)))) return;
+    // Where the failed declaration stopped, the declaration there is kept:
+    // a procedure's in column 1 (inside braces too: a body never closed);
+    // outside every brace, any IDENT '::' in column 1, a constant's too;
+    // and a global's outside every brace and parameter list.
+    Token *stop = peek(p);
+    bool in_column_1 = stop->kind == TOKEN_IDENT && stop->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON;
+    bool outside = depth <= 0;
+    if (p->next > start &&
+        (starts_declaration(p) || (outside && in_column_1) || (outside && parens <= 0 && starts_global(p)))) {
+        return;
+    }
     // At least one token is skipped, whatever it is.
     for (bool first = true; peek(p)->kind != TOKEN_EOF; first = false) {
         Token *t = peek(p);
         bool starts_line = p->next == 0 || p->tokens[p->next - 1].pos.line != t->pos.line;
-        if (!first && starts_line && t->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON_COLON &&
-            (depth <= 0 || t->pos.col == 1)) {
+        if (!first && starts_line &&
+            ((depth <= 0 && t->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON_COLON) ||
+             starts_declaration(p))) {
             return;
         }
         if (!first && starts_line && depth <= 0 && parens <= 0 && starts_global(p)) return;
@@ -812,6 +990,9 @@ static bool parameters_follow(Parser *p, s64 open) {
 //   At the top level ':' and ':=' also declare a global variable, so a
 //   global that fails (`counter : int = 1 2;`) keeps its name this way
 //   too, on purpose: its uses aren't then reported as unknown;
+// - another name: a global declared C's way, its type after its name
+//   (`counter int = 0;`). Two names in a row never begin an expression, so
+//   a stray call outside any body can't look like this;
 // - a character the lexer refused (perhaps a mistyped '::' too);
 // - '(' with no '::' (`greet () {`, a C habit), when the parentheses are
 //   a signature's, as parameters_follow says, not a call's;
@@ -825,6 +1006,7 @@ static bool looks_declared(Parser *p, s64 start) {
     case TOKEN_COLON:
     case TOKEN_COLON_EQUAL:
     case TOKEN_EQUAL:
+    case TOKEN_IDENT:
     case TOKEN_ERROR: return true;
     case TOKEN_LPAREN: return parameters_follow(p, start + 1);
     default: {
@@ -857,18 +1039,33 @@ static Ast_Proc *broken_entry(Parser *p, s64 start) {
 
 Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
-    Parser p = {tokens, 0, a, d};
+    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, -1};
     Ast_File *file = arena_new<Ast_File>(a);
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;
         Ast *decl = parse_declaration(&p);
-        if (!decl) {
+        if (!decl && p.resume >= 0) {
+            // A body never closed said where the top level goes on
+            // (parse_block_rest), inside the body, so after start; the
+            // declaration it was in is broken.
+            RIG_ASSERT(p.resume > start);
+            decl = broken_entry(&p, start);
+            p.next = p.resume;
+            p.resume = -1;
+        } else if (!decl) {
             s64 resume = declaration_after_stray_tokens(&p, start);
             if (resume >= 0) {
                 // The tokens before it were stray, not a declaration, so
-                // they leave no entry. The failed attempt stopped at them,
+                // they leave no entry; unless they began a global's
+                // declaration, which failed before the next one on the line
+                // (`counter : int = 1 2; f :: () {}`): that keeps its name,
+                // as any failed global does. The failed attempt stopped
                 // before resume (> start, so the loop moves on).
                 RIG_ASSERT(p.next <= resume);
+                Token_Kind after = p.tokens[start + 1].kind;
+                if (p.tokens[start].kind == TOKEN_IDENT && (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL)) {
+                    array_add(&file->procs, broken_entry(&p, start));
+                }
                 p.next = resume;
                 continue;
             }

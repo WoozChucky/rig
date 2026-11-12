@@ -12,6 +12,10 @@ main :: () {
     if cast(s8) minus_five == -5 { puts("int to s8"); }
     three_hundred : u64 = 300;
     if cast(s16) three_hundred == 300 { puts("u64 to s16"); }
+    // Unsigned to a narrower signed type, at the signed type's largest:
+    // the narrowed value's sign bit is clear, so the sign check passes.
+    s8_largest : u16 = 127;
+    if cast(s8) s8_largest == 127 { puts("u16 to s8, its largest"); }
     low : s32 = -128;
     if cast(s8) low == -128 { puts("s32 to s8, its smallest"); }
     high : u32 = 65535;
