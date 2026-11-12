@@ -867,6 +867,23 @@ TEST(llvm_memory_functions_win_over_the_programs) {
     arena_free(&a);
 }
 
+TEST(llvm_stack_probe_wins_over_the_programs) {
+    // On Windows LLVM calls __chkstk by name for a frame bigger than a page,
+    // so the name is declared first: a program's own __chkstk is renamed.
+    // Linux probes inline and declares nothing.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *own = new_proc_returning(m, &a, "__chkstk", IR_VOID);
+    emit_ret(own, ir_new_block(&a, own), -1);
+    String text = llvm_text(&a, m, TARGET_WINDOWS_X64);
+    CHECK(contains(text, "declare void @__chkstk()"));
+    CHECK(contains(text, "define internal void @__chkstk.1()"));
+    text = llvm_text(&a, m, TARGET_LINUX_X64);
+    CHECK(!contains(text, "declare void @__chkstk()"));
+    CHECK(contains(text, "define internal void @__chkstk()"));
+    arena_free(&a);
+}
+
 TEST(llvm_linux_functions_probe_the_stack) {
     // On Linux every function Rig defines probes its stack frame page by
     // page (clang's -fstack-clash-protection), so a frame bigger than a page

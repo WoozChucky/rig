@@ -176,7 +176,9 @@ static void add_function_attribute(LLVMContextRef c, LLVMValueRef function, cons
 // LLVM touches each page of a big frame in order, from the top, so the
 // guard page is always hit first. Windows' code does this already: LLVM
 // calls __chkstk for a frame bigger than a page on any Windows target,
-// which touches every page the same way.
+// which touches every page the same way. It calls it by name, so the
+// name is taken before the program's procedures are made, as C's memset
+// is (declare_stack_probe).
 static void mark_definition(Backend *b, LLVMValueRef function) {
     if (b->target != TARGET_LINUX_X64) return;
     const char *key = "probe-stack", *value = "inline-asm";
@@ -224,6 +226,23 @@ static void declare_memory_functions(Backend *b) {
     LLVMTypeRef set_params[] = {ptr, i32, i64};
     LLVMAddFunction(b->module, "memset", LLVMFunctionType(ptr, set_params, 3, 0));
     LLVMAddFunction(b->module, "memcpy", move_type);
+}
+
+// Windows' stack probe, declared before the program's own functions on
+// that target:
+//
+//   declare void @__chkstk()
+//
+// LLVM calls __chkstk, by name, at the start of every function whose frame
+// is bigger than a page (mark_definition), with its own convention: the
+// frame's size in rax, nothing else touched. Taking the name here, as
+// declare_memory_functions takes memset's, makes a program's own __chkstk
+// the one LLVM renames (__chkstk.1), so the probe still reaches the C
+// runtime's. Nothing calls the declaration, so an object that has no big
+// frame doesn't name it. (Linux's probes are inline: the name is free there.)
+static void declare_stack_probe(Backend *b) {
+    if (b->target != TARGET_WINDOWS_X64) return;
+    LLVMAddFunction(b->module, "__chkstk", LLVMFunctionType(LLVMVoidTypeInContext(b->context), nullptr, 0, 0));
 }
 
 // The runtime: the code a program needs that it didn't write. So far one
@@ -788,6 +807,7 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     // The runtime first, so its C names are taken before the program's.
     if (module_has(m, IR_PANIC)) build_runtime(b);
     if (module_has(m, IR_COPY) || module_has(m, IR_ZERO)) declare_memory_functions(b);
+    declare_stack_probe(b);
 
     // The globals in two passes: every one made first, with its type, then
     // each given its first value. A variable of bytes may hold the address
