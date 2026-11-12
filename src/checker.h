@@ -98,7 +98,8 @@
 //   block reaches its end unless its last statement is a return, a block
 //   that doesn't reach its own end, an if with an else whose branches both
 //   don't, or a `while` whose condition is the constant true and that has
-//   no break of its own.
+//   no break of its own. An if or while whose condition was an error
+//   doesn't reach its end either, so the condition's is the one message.
 // - An expression statement must be a call, whose value may be ignored
 //   (spec 6.7).
 //

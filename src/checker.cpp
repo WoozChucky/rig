@@ -350,18 +350,24 @@ static bool reaches_end(Ast_Block *block);
 // loop; the rule is only asked about statements outside any loop body
 // (a procedure's body, and the blocks and ifs that end it) or about
 // whole loops, so it never sees one.
+// An if or while whose condition was an error (its type unknown, or not
+// bool: check_condition reported it) is taken not to go past. What it would
+// do isn't known (`while 1` was likely meant as `while true`), and saying
+// the procedure reaches its end would be a second message for one mistake.
 static bool goes_past(Ast *s) {
     switch (s->kind) {
     case AST_RETURN: return false;
     case AST_BLOCK: return reaches_end((Ast_Block *)s);
     case AST_IF: {
         Ast_If *branch = (Ast_If *)s;
+        if (branch->condition->type != &type_bool) return false;
         return !branch->else_part || reaches_end(branch->then_block) || goes_past(branch->else_part);
     }
     case AST_WHILE: {
         Ast_While *loop = (Ast_While *)s;
         Ast *condition = loop->condition;
-        bool forever = condition->is_constant && condition->type == &type_bool && condition->constant == 1;
+        if (condition->type != &type_bool) return false;
+        bool forever = condition->is_constant && condition->constant == 1;
         return !forever || breaks_out_of(loop->body, loop);
     }
     default: return true;
