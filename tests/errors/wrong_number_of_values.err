@@ -1,0 +1,6 @@
+tests/errors/wrong_number_of_values.rig:3:5: error: 'divmod' returns 2 values, but this return gives 1
+        return a / b;
+        ^
+tests/errors/wrong_number_of_values.rig:7:16: error: 'divmod' returns 2 values, but 3 names receive them
+        q, r, s := divmod(7, 2);
+                   ^
