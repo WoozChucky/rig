@@ -40,13 +40,14 @@
 // An expectation file holds one piece of text a line, which must appear,
 // in the order given, inside lines of the output: each piece after the one
 // before it, later in the same line or in a line after. A piece never
-// spans lines. Empty lines are ignored, and @ROOT@ stands for the
-// repository's root, absolute, with the host's separators (C:\dev\rig,
-// /home/me/rig). The first piece missing fails the test, which prints it
-// and the whole output. Expectations name procedures, the file's name with
-// line numbers, and source text, never addresses or offsets, which change
-// with the code; nor breakpoint numbers (gdb says "Breakpoint 2.1," for
-// the first place of a breakpoint that has two).
+// spans lines. Empty lines are ignored (a file of nothing else, which
+// would pass whatever the debugger printed, is an error), and @ROOT@
+// stands for the repository's root, absolute, with the host's separators
+// (C:\dev\rig, /home/me/rig). The first piece missing fails the test,
+// which prints it and the whole output. Expectations name procedures, the
+// file's name with line numbers, and source text, never addresses or
+// offsets, which change with the code; nor breakpoint numbers (gdb says
+// "Breakpoint 2.1," for the first place of a breakpoint that has two).
 //
 // A test needs a script for the host's debugger; one without is an error.
 // A debugger that can't be started (not installed) skips each test, SKIP
@@ -752,16 +753,19 @@ static const char *DEFAULT_CDB = "C:\\Program Files (x86)\\Windows Kits\\10\\Deb
 static const char SEPARATOR = '\\';
 #else
 static const char *DEBUGGER = "gdb";
-static const char SEPARATOR = '/';
 #endif
 
 // The repository's root, absolute, with the host's separators: what @ROOT@
-// stands for. The runner runs there.
+// stands for. The runner runs there. Windows takes either slash, so a '/'
+// becomes the '\' its debuggers print; on Linux the directory is already
+// right, and a backslash there is a character of a name, kept as it is.
 static String repository_root(Arena *a) {
     String root = string_copy(a, os_current_directory(a));
+#ifdef _WIN32
     for (s64 i = 0; i < root.count; i++) {
-        if (root.data[i] == '/' || root.data[i] == '\\') ((u8 *)root.data)[i] = (u8)SEPARATOR;
+        if (root.data[i] == '/') ((u8 *)root.data)[i] = (u8)SEPARATOR;
     }
+#endif
     return root;
 }
 
@@ -810,6 +814,16 @@ static String first_missing(String expected, String output) {
     return {};
 }
 
+// Whether `expected` holds a piece at all: a line with something besides
+// blanks. Expectations without one would pass whatever the debugger did.
+static bool has_a_piece(String expected) {
+    for (s64 i = 0; i < expected.count; i++) {
+        u8 c = expected.data[i];
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') return true;
+    }
+    return false;
+}
+
 // The debugger's command line for the program built from tests/debug/NAME.
 static Array<String> debugger_command(Arena *a, String root, String name) {
     Array<String> argv = {};
@@ -852,6 +866,10 @@ static String debug_test(Arena *a, String rig, String root, String name, bool *s
     String expected = {};
     if (!os_read_file(a, string_printf(a, STR_FMT ".expect", STR_ARG(script)), &expected)) {
         return string_printf(a, "no " STR_FMT ".expect", STR_ARG(script));
+    }
+    if (!has_a_piece(expected)) {
+        return string_printf(a, STR_FMT ".expect expects nothing: a debugger test needs a piece of text to find",
+                             STR_ARG(script));
     }
     expected = replace_all(a, expected, "@ROOT@", root);
 
