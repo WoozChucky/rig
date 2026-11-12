@@ -1233,6 +1233,24 @@ TEST(llvm_debug_types_of_every_kind) {
     arena_free(&a);
 }
 
+TEST(llvm_debug_types_nest_without_limit) {
+    // Types nest without a limit in two ways: structs held by value, each
+    // declared after the one it holds (the checker lays each out before the
+    // next needs it, so the chain has no limit), and pointers a program
+    // infers, each variable a pointer to the one before. Their debug types
+    // are chains of metadata as long, which the backend and LLVM walk a call
+    // per level: 10000 levels of each build without running out of the
+    // compiler's stack (RIG_STACK_SIZE; Windows' 1 MB main thread ran out at
+    // 3000).
+    Arena a = arena_make();
+    const char *structs = "S%lld :: struct { s: S%lld; }\n";
+    CHECK(builds(&a, joined(&a, "S0 :: struct { x: int; }\n", chain_of(&a, structs, 1, 10000, -1),
+                            "main :: () { v : S10000; }\n")));
+    const char *pointers = "    p%lld := *p%lld;\n";
+    CHECK(builds(&a, joined(&a, "main :: () {\n    p0 := 1;\n", chain_of(&a, pointers, 1, 10000, -1), "}\n")));
+    arena_free(&a);
+}
+
 TEST(llvm_variables_are_declared) {
     // Each variable is declared on its stack slot (#dbg_declare), in its
     // scope: a local; a scalar parameter, stored into a slot of its own; an
