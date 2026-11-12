@@ -1155,3 +1155,176 @@ TEST(llvm_hand_built_modules_have_no_debug_info) {
     }
     arena_free(&a);
 }
+
+// Milestone 2c (issue #72): types and variables. Each Rig type a variable
+// has is a debug type (DIBasicType for a number or a bool, DIDerivedType
+// for a pointer or a struct's member, DICompositeType for a struct or an
+// array), each variable a DILocalVariable declared on its stack slot
+// (#dbg_declare), each global a DIGlobalVariable attached to it.
+
+// The metadata node a line defines: "!25" from "!25 = !DILocalVariable(...".
+static String defined_node(String line) {
+    s64 at = index_of(line, " = ");
+    return at < 0 ? String{} : string_slice(line, 0, at);
+}
+
+TEST(llvm_debug_types_of_every_kind) {
+    // Every kind of type, the ones that refer to themselves and the ones
+    // with no size included: the module verifies (llvm_text checks it), and
+    // a struct is in the debug information once.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Node :: struct { value: int; next: *Node; }\n"
+                                "Tree :: struct { children: []Tree; }\n"
+                                "Empty :: struct {}\n"
+                                "main :: () {\n"
+                                "    n: Node;\n"
+                                "    t: Tree;\n"
+                                "    e: Empty;\n"
+                                "    three: [3]int;\n"
+                                "    none: [0]int;\n"
+                                "    big: [65536]u8;\n"
+                                "    p: *void;\n"
+                                "    yes := true;\n"
+                                "    f: float64;\n"
+                                "    g: float32;\n"
+                                "    small: s8;\n"
+                                "    wide: u32;\n"
+                                "    v: []int;\n"
+                                "    s := \"hi\";\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "!DIBasicType(name: \"int\", size: 64, encoding: DW_ATE_signed)"));
+        CHECK(contains(text, "!DIBasicType(name: \"s8\", size: 8, encoding: DW_ATE_signed)"));
+        CHECK(contains(text, "!DIBasicType(name: \"u32\", size: 32, encoding: DW_ATE_unsigned)"));
+        CHECK(contains(text, "!DIBasicType(name: \"u8\", size: 8, encoding: DW_ATE_unsigned_char)"));
+        CHECK(contains(text, "!DIBasicType(name: \"bool\", size: 8, encoding: DW_ATE_boolean)"));
+        CHECK(contains(text, "!DIBasicType(name: \"float64\", size: 64, encoding: DW_ATE_float)"));
+        CHECK(contains(text, "!DIBasicType(name: \"float32\", size: 32, encoding: DW_ATE_float)"));
+        // A struct that points at itself is made once, its pointer member
+        // pointing back at the same node.
+        CHECK(count_of(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Node\"") == 1);
+        String node = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Node\""));
+        CHECK(node.count > 0);
+        String next = line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"next\"");
+        CHECK(contains(next, "offset: 64)"));
+        String pointer = node_line(&a, text, attached(&a, next, "baseType:"));
+        CHECK(contains(pointer, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: "));
+        CHECK(string_eq(attached(&a, pointer, "baseType:"), node));
+        // A struct holding a view of itself, and views and strings, structs
+        // of their own named as Rig names them.
+        CHECK(count_of(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Tree\"") == 1);
+        CHECK(contains(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"[]Tree\""));
+        CHECK(contains(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"[]int\""));
+        CHECK(contains(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"string\""));
+        CHECK(contains(text, "!DIDerivedType(tag: DW_TAG_member, name: \"count\""));
+        CHECK(contains(line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"data\""), "offset: 64)"));
+        // A struct with no fields: no size.
+        CHECK(contains(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Empty\""));
+        // Arrays, of 3, none and many.
+        CHECK(contains(text, "!DICompositeType(tag: DW_TAG_array_type"));
+        CHECK(contains(text, "!DISubrange(count: 3, lowerBound: 0)"));
+        CHECK(contains(text, "!DISubrange(count: 0, lowerBound: 0)"));
+        CHECK(contains(text, "!DISubrange(count: 65536, lowerBound: 0)"));
+        // *void points at no type, as C's void * does.
+        CHECK(contains(text, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: null, size: 64, "));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_variables_are_declared) {
+    // Each variable is declared on its stack slot (#dbg_declare), in its
+    // scope: a local; a scalar parameter, stored into a slot of its own; an
+    // aggregate parameter, whose slot holds the pointer to the caller's copy,
+    // read through it (DW_OP_deref); a loop's it and it_index, in the loop's
+    // lexical block.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "sum :: (a: []int, k: int) -> int {\n"
+                                "    x := 0;\n"
+                                "    for a {\n"
+                                "        x += it * k;\n"
+                                "    }\n"
+                                "    return x;\n"
+                                "}\n"
+                                "main :: () {\n"
+                                "    numbers := int.[1, 2];\n"
+                                "    n := sum(numbers, 3);\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        String sum = attached(&a, line_with(text, "define internal i64 @sum("), "!dbg");
+        String main = attached(&a, line_with(text, "define i32 @main("), "!dbg");
+        CHECK(sum.count > 0 && main.count > 0);
+        enum Where { IN_SUM, IN_LOOP, IN_MAIN };
+        struct Expected {
+            const char *variable;    // how its DILocalVariable starts
+            const char *expression;  // its declare's
+            Where scope;
+        };
+        Expected expected[] = {
+            {"!DILocalVariable(name: \"a\", arg: 1, ", "!DIExpression(DW_OP_deref)", IN_SUM},
+            {"!DILocalVariable(name: \"k\", arg: 2, ", "!DIExpression()", IN_SUM},
+            {"!DILocalVariable(name: \"x\", scope: ", "!DIExpression()", IN_SUM},
+            {"!DILocalVariable(name: \"it\", scope: ", "!DIExpression()", IN_LOOP},
+            {"!DILocalVariable(name: \"it_index\", scope: ", "!DIExpression()", IN_LOOP},
+            {"!DILocalVariable(name: \"numbers\", scope: ", "!DIExpression()", IN_MAIN},
+            {"!DILocalVariable(name: \"n\", scope: ", "!DIExpression()", IN_MAIN},
+        };
+        for (Expected &e : expected) {
+            String variable = line_with(text, e.variable);
+            if (variable.count == 0) printf("    no %s\n", e.variable);
+            CHECK(variable.count > 0);
+            if (variable.count == 0) continue;
+            String declare = string_printf(&a, ", " STR_FMT ", %s, !", STR_ARG(defined_node(variable)), e.expression);
+            CHECK(contains(line_with(text, string_cstr(&a, declare)), "#dbg_declare(ptr %"));
+            String scope = attached(&a, variable, "scope:");
+            if (e.scope == IN_LOOP) {
+                String block = node_line(&a, text, scope);
+                CHECK(contains(block, string_cstr(&a, string_printf(&a, "!DILexicalBlock(scope: " STR_FMT ", ",
+                                                                    STR_ARG(sum)))));
+                CHECK(contains(block, "line: 3, "));
+            } else {
+                CHECK(string_eq(scope, e.scope == IN_SUM ? sum : main));
+            }
+        }
+        // sum's type: its result's, then its parameters', int, []int, int.
+        String type = node_line(&a, text, attached(&a, line_with(text, "!DISubprogram(name: \"sum\""), "type:"));
+        String types = node_line(&a, text, attached(&a, type, "types:"));
+        String integer = defined_node(line_with(text, "!DIBasicType(name: \"int\""));
+        String view = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"[]int\""));
+        String list = string_printf(&a, " = !{" STR_FMT ", " STR_FMT ", " STR_FMT "}", STR_ARG(integer), STR_ARG(view),
+                                    STR_ARG(integer));
+        CHECK(contains(types, string_cstr(&a, list)));
+        // main returns nothing in Rig, so its type's first is null.
+        type = node_line(&a, text, attached(&a, line_with(text, "!DISubprogram(name: \"main\""), "type:"));
+        CHECK(contains(node_line(&a, text, attached(&a, type, "types:")), "!{null}"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_globals_have_debug_info) {
+    // A Rig global is a DIGlobalVariable of its type, local to the unit,
+    // attached to the LLVM global (!dbg); a string literal's bytes are none.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                "counter := 3;\n"
+                                "main :: () {\n"
+                                "    puts(\"hi\");\n"
+                                "    counter += 1;\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        String variable = line_with(text, "!DIGlobalVariable(name: \"counter\"");
+        CHECK(contains(variable, "line: 2, "));
+        CHECK(contains(variable, "isLocal: true, isDefinition: true"));
+        CHECK(contains(line_with(text, "@counter = internal global i64 3"), "!dbg !"));
+        String literal = line_with(text, "@str.0 = ");
+        CHECK(literal.count > 0);
+        CHECK(!contains(literal, "!dbg"));
+        CHECK(count_of(text, "!DIGlobalVariable(") == 1);
+    }
+    arena_free(&a);
+}

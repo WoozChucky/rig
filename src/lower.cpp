@@ -2311,6 +2311,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
             p->source_name = source->name;
             p->pos = source->pos;
             p->body = source->body->pos;
+            if (source->results.count == 1) p->source_result = source->results[0]->type;
         }
         table_put(&l.proc_index, source->name, (s32)i);
     }

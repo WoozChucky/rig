@@ -2,6 +2,8 @@
 
 #include "llvm_backend.h"
 
+#include "ast.h"  // a struct type's declaration (Type.decl): where it and its fields are
+
 #include <llvm-c/Analysis.h>
 #include <llvm-c/Core.h>
 #include <llvm-c/DebugInfo.h>
@@ -57,6 +59,12 @@ struct Backend {
     LLVMDIBuilderRef debug;   // makes the metadata nodes, until finalised
     LLVMMetadataRef unit;     // the compile unit, DICompileUnit
     LLVMMetadataRef file;     // the source file, DIFile
+    // Each Rig type's debug type, made the first time a variable, a
+    // procedure or another type needs it (debug_type). The key is the
+    // Type's address, as bytes: each Rig type exists once (types.h), so its
+    // address names it.
+    Table<LLVMMetadataRef> debug_types;
+    Arena *arena;             // where the build allocates: the table's keys, types' names
 };
 
 static LLVMTypeRef llvm_type(LLVMContextRef c, Ir_Type t) {
@@ -487,11 +495,19 @@ static LLVMValueRef llvm_global(Body *body, s32 n) {
 //   block. LLVM turns the locations into a table from machine addresses to
 //   lines, which is what a debugger reads to set a breakpoint on a line, to
 //   show where the program stopped, and to step a line at a time.
+// - Types (DIType): how to read a variable's bytes, a number of some size
+//   and encoding (DIBasicType), a pointer or a struct's member
+//   (DIDerivedType), a struct or an array (DICompositeType).
+// - Variables: a local or a parameter (DILocalVariable) in its scope, with
+//   its name, line and type, and where it lives, said by a declare record
+//   (#dbg_declare) naming its stack slot; a global (DIGlobalVariable)
+//   attached to the LLVM global that holds it.
 //
 // The IR knows all of it (ir.h's "Debug information"): each instruction's
-// position and scope, each procedure's source name, position and scopes,
-// the module's source file. Only modules with a source file get any; the
-// procedures the compiler makes have no source name and get none.
+// position and scope, each procedure's source name, position, scopes and
+// variables, each global's Rig type, the module's source file. Only
+// modules with a source file get any; the procedures the compiler makes
+// have no source name and get none.
 
 // Starts the module's debug information: the builder, the file, the compile
 // unit, and the module flags that say which format LLVM writes.
@@ -545,14 +561,231 @@ static void begin_debug_info(Backend *b, Ir_Module *m, Arena *a) {
     }
 }
 
+// DWARF's numbers for what the DIBuilder takes as a plain unsigned (DWARF 5,
+// section 7; llvm-c's headers name none of them). A base type's encoding
+// says how a debugger reads its bits: as a signed or unsigned integer, an
+// unsigned char (shown as a character too, and a pointer to them as the
+// text it points at), a boolean (false or true), or an IEEE float.
+static const unsigned DW_ATE_boolean = 0x02;
+static const unsigned DW_ATE_float = 0x04;
+static const unsigned DW_ATE_signed = 0x05;
+static const unsigned DW_ATE_unsigned = 0x07;
+static const unsigned DW_ATE_unsigned_char = 0x08;
+// The tag of a struct type, which a replaceable composite is made with.
+static const unsigned DW_TAG_structure_type = 0x13;
+// An operation of a location's expression: the value there is an address,
+// and the variable is at that address (see declare_variables).
+static const u64 DW_OP_deref = 0x06;
+
+// The debug type made for t, or null; a Type's address as a table's key
+// (Backend.debug_types). The key's bytes must outlive the table, so
+// remember_debug_type copies them into the arena; a lookup's needn't.
+static LLVMMetadataRef *cached_debug_type(Backend *b, Type *t) {
+    return table_get(&b->debug_types, String{(const u8 *)&t, sizeof t});
+}
+
+static LLVMMetadataRef remember_debug_type(Backend *b, Type *t, LLVMMetadataRef made) {
+    Type **key = arena_new<Type *>(b->arena);
+    *key = t;
+    table_put(&b->debug_types, String{(const u8 *)key, sizeof *key}, made);
+    return made;
+}
+
+// A member of the struct type `in`: a field's name, line, size and offset
+// (in bytes here; in bits, as DWARF has them, in the node) and debug type.
+static LLVMMetadataRef debug_member(Backend *b, LLVMMetadataRef in, String name, unsigned line, s64 size,
+                                    s64 offset, LLVMMetadataRef type) {
+    return LLVMDIBuilderCreateMemberType(b->debug, in, (const char *)name.data, (size_t)name.count, b->file, line,
+                                         (u64)size * 8, 0, (u64)offset * 8, LLVMDIFlagZero, type);
+}
+
+static LLVMMetadataRef debug_type(Backend *b, Type *t);
+
+// A struct type, t, named `name`, declared at `line` (0: the compiler's,
+// a view's or a string's), its members made by `members`. A struct can
+// hold a pointer to itself (Node's next: *Node), or a view of itself, so
+// making a member's type can lead back to t before t is made. So it's made
+// in three steps:
+//   1. a temporary node, a replaceable composite, stands for t: remembered
+//      as t's debug type, it's what a pointer back to t finds and points at;
+//   2. the members are made, each scoped in the temporary;
+//   3. the real struct type is made with them, and LLVMMetadataReplaceAll-
+//      UsesWith makes every node that names the temporary (the members, the
+//      pointer back) name the real one instead, and frees the temporary.
+// LLVM's metadata nodes are uniqued, made once for each set of contents, so
+// nothing the real struct's contents name may change after it's made: the
+// temporary is how a node can name what doesn't exist yet.
+struct Debug_Struct {
+    LLVMMetadataRef temporary;
+    LLVMMetadataRef *members;
+    s64 count;
+};
+
+static Debug_Struct begin_debug_struct(Backend *b, Type *t, String name, unsigned line, s64 members) {
+    Debug_Struct s = {};
+    s.temporary = LLVMDIBuilderCreateReplaceableCompositeType(
+        b->debug, DW_TAG_structure_type, (const char *)name.data, (size_t)name.count, b->file, b->file, line, 0,
+        (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, "", 0);
+    s.members = arena_new_array<LLVMMetadataRef>(b->arena, members ? members : 1);
+    remember_debug_type(b, t, s.temporary);
+    return s;
+}
+
+static LLVMMetadataRef end_debug_struct(Backend *b, Type *t, String name, unsigned line, Debug_Struct *s) {
+    LLVMMetadataRef real = LLVMDIBuilderCreateStructType(
+        b->debug, b->file, (const char *)name.data, (size_t)name.count, b->file, line, (u64)t->size * 8,
+        (u32)t->align * 8, LLVMDIFlagZero, nullptr, s->members, (unsigned)s->count, 0, nullptr, "", 0);
+    LLVMMetadataReplaceAllUsesWith(s->temporary, real);
+    return remember_debug_type(b, t, real);
+}
+
+// A struct a program declares: its fields, in order, each at its offset.
+// A field's line is its declaration's (the first of that name: a second
+// was an error, which stops the build before this).
+static LLVMMetadataRef debug_struct_type(Backend *b, Type *t) {
+    unsigned line = (unsigned)t->decl->pos.line;
+    Debug_Struct s = begin_debug_struct(b, t, t->name, line, t->fields.count);
+    for (s64 i = 0; i < t->fields.count; i++) {
+        Type_Field *field = &t->fields[i];
+        RIG_ASSERT(field->type);  // a field's type is null only after an error
+        unsigned field_line = line;
+        for (s64 k = 0; k < t->decl->fields.count; k++) {
+            if (!string_eq(t->decl->fields[k]->name, field->name)) continue;
+            field_line = (unsigned)t->decl->fields[k]->pos.line;
+            break;
+        }
+        s.members[s.count++] = debug_member(b, s.temporary, field->name, field_line, field->type->size,
+                                            field->offset, debug_type(b, field->type));
+    }
+    return end_debug_struct(b, t, t->name, line, &s);
+}
+
+// A view, []T, or a string: the struct they're laid out as (types.h),
+// { count: int; data: *T; }, named as Rig names it ("[]int", "string"):
+// a debugger shows its fields (a.count, a.data[i]), and a string's data,
+// a pointer to u8's (unsigned chars), as text. `element` is T's debug type.
+static LLVMMetadataRef debug_view_type(Backend *b, Type *t, LLVMMetadataRef element) {
+    String name = type_name(b->arena, t);
+    Debug_Struct s = begin_debug_struct(b, t, name, 0, 2);
+    LLVMMetadataRef data = LLVMDIBuilderCreatePointerType(b->debug, element, 64, 0, 0, nullptr, 0);
+    s.members[s.count++] = debug_member(b, s.temporary, str("count"), 0, 8, VIEW_COUNT_OFFSET, debug_type(b, &type_int));
+    s.members[s.count++] = debug_member(b, s.temporary, str("data"), 0, 8, VIEW_DATA_OFFSET, data);
+    return end_debug_struct(b, t, name, 0, &s);
+}
+
+// The type t is made from, its "inner" one, T in a pointer (*T), an array
+// ([N]T) or a view ([]T), and u8 in a string (a view of u8's); null when t
+// is made from no other type.
+static Type *inner_type(Type *t) {
+    switch (t->kind) {
+    case TYPE_POINTER: return t->pointee;
+    case TYPE_ARRAY:
+    case TYPE_VIEW:
+    case TYPE_STRING: return t->element;
+    default: return nullptr;
+    }
+}
+
+// The debug type of t, one made from its inner type's debug type, `inner`.
+static LLVMMetadataRef debug_type_around(Backend *b, Type *t, LLVMMetadataRef inner) {
+    switch (t->kind) {
+    case TYPE_POINTER:
+        // 64 bits, pointing at the inner type, or at none for a *void (C's
+        // void *, which a debugger shows as an address only).
+        return remember_debug_type(b, t, LLVMDIBuilderCreatePointerType(b->debug, inner, 64, 0, 0, nullptr, 0));
+    case TYPE_ARRAY: {
+        // N of the element, indexed from 0: a subrange of N (none for [0]T).
+        LLVMMetadataRef range = LLVMDIBuilderGetOrCreateSubrange(b->debug, 0, t->count);
+        LLVMMetadataRef array =
+            LLVMDIBuilderCreateArrayType(b->debug, (u64)t->size * 8, (u32)t->align * 8, inner, &range, 1);
+        return remember_debug_type(b, t, array);
+    }
+    case TYPE_VIEW:
+    case TYPE_STRING: return debug_view_type(b, t, inner);
+    default: RIG_ASSERT(!"not a type made from another"); return nullptr;
+    }
+}
+
+// The debug type of a Rig type (see "Debug information"): made the first
+// time it's asked for, then the same node every time.
+//
+// - Integers, bool and floats are base types, named as in Rig, of their
+//   size, with their encoding: s8 ... s64 and int signed, u16 ... u64
+//   unsigned, u8 an unsigned char (so a debugger shows a *u8, and a
+//   string's data, as text), bool a boolean, float32 and float64 floats.
+// - *T is a pointer to T's debug type; *void to none.
+// - A struct is a struct type of its fields (debug_struct_type).
+// - [N]T is an array of N T's.
+// - []T and string are the structs they're laid out as (debug_view_type).
+//
+// Pointers, arrays and views can wrap each other any number of levels deep
+// (a *[]**int; types.h: the levels a program infers have no limit), so
+// rather than a call per level, the levels are walked down in a loop to the
+// first type that's made already or made from no other, and their debug
+// types made on the way back up. Only a struct's fields call debug_type
+// again, as many levels deep as structs hold structs.
+static LLVMMetadataRef debug_type(Backend *b, Type *t) {
+    if (LLVMMetadataRef *made = cached_debug_type(b, t)) return *made;
+    Array<Type *> levels = {};
+    Type *inner = t;
+    while (inner_type(inner) && !cached_debug_type(b, inner)) {
+        array_add(&levels, inner);
+        inner = inner_type(inner);
+    }
+    LLVMMetadataRef made = nullptr;
+    if (LLVMMetadataRef *cached = cached_debug_type(b, inner)) {
+        made = *cached;
+    } else {
+        switch (inner->kind) {
+        case TYPE_VOID: made = nullptr; break;  // only behind a pointer: *void
+        case TYPE_INTEGER:
+        case TYPE_BOOL:
+        case TYPE_FLOAT: {
+            unsigned encoding = inner->kind == TYPE_BOOL    ? DW_ATE_boolean
+                                : inner->kind == TYPE_FLOAT ? DW_ATE_float
+                                : inner->is_signed          ? DW_ATE_signed
+                                : inner->size == 1          ? DW_ATE_unsigned_char
+                                                            : DW_ATE_unsigned;
+            made = remember_debug_type(b, inner,
+                                       LLVMDIBuilderCreateBasicType(b->debug, (const char *)inner->name.data,
+                                                                    (size_t)inner->name.count,
+                                                                    (u64)inner->size * 8, encoding, LLVMDIFlagZero));
+            break;
+        }
+        case TYPE_STRUCT: made = debug_struct_type(b, inner); break;
+        default: RIG_ASSERT(!"a type no variable has"); break;
+        }
+    }
+    // Back up, from the innermost level. (A level may have been made while
+    // its inner type was: a struct's field can be a pointer to the struct.)
+    for (s64 i = levels.count - 1; i >= 0; i--) {
+        LLVMMetadataRef *cached = cached_debug_type(b, levels[i]);
+        made = cached ? *cached : debug_type_around(b, levels[i], made);
+    }
+    array_free(&levels);
+    return made;
+}
+
 // The subprogram of procedure p, given to its LLVM function, and its
 // lexical blocks, in body->scopes. Nothing for a procedure without a source
 // name (one the compiler made) or in a module without debug information.
 static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMValueRef function, Body *body) {
     if (!b->debug || p->source_name.count == 0) return;
     RIG_ASSERT(p->scopes.count > 0);
-    // The procedure's type, its parameters' and results', with none in it yet.
-    LLVMMetadataRef type = LLVMDIBuilderCreateSubroutineType(b->debug, b->file, nullptr, 0, LLVMDIFlagZero);
+    // The procedure's type: a list of types, its result's first (null when
+    // it returns none; a debug type has one result, so with several it's
+    // null too), then its parameters', the ones the source has (not the
+    // hidden result pointers), which are its first variables.
+    s64 params = 0;
+    while (params < p->vars.count && p->vars[params].arg > 0) params++;
+    LLVMMetadataRef *types = arena_new_array<LLVMMetadataRef>(a, 1 + params);
+    types[0] = p->source_result ? debug_type(b, p->source_result) : nullptr;
+    for (s64 i = 0; i < params; i++) {
+        RIG_ASSERT(p->vars[i].arg == i + 1);
+        types[1 + i] = debug_type(b, p->vars[i].type);
+    }
+    LLVMMetadataRef type =
+        LLVMDIBuilderCreateSubroutineType(b->debug, b->file, types, (unsigned)(1 + params), LLVMDIFlagZero);
     // Its Rig name, and no linkage name (the symbol's): given one, gdb
     // names the procedure by it, so a Rig `write` that LLVM renamed write.1
     // (C's write was taken first) would be write.1 to `break` and `bt`.
@@ -774,6 +1007,86 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
     }
 }
 
+// Procedure p's variables (Ir_Var), each a DILocalVariable in its scope,
+// at its line, of its type, and declared where it lives: a declare record
+// (#dbg_declare) says the variable is the memory a stack slot (an alloca)
+// holds, for the whole of its scope. At -O0 every variable stays in its
+// slot, at a fixed offset from the frame pointer, so that one fact is true
+// wherever the program stops, and the debugger reads and writes it there.
+// The records go at the end of the entry block, before any of its code:
+// the builder is there, after the hoisted allocas (build_body).
+//
+// - A local, an iterator or it_index (IR_VAR_SLOT) lives in its own slot.
+// - A scalar parameter (IR_VAR_VALUE) is a value, which arrives in a
+//   register, and a register is soon used for something else (gdb would
+//   say <optimized out>). So, as clang does at -O0, it's stored into a slot
+//   of its own (a bool as its byte, memory_type), and declared there, a
+//   parameter variable with its place among the parameters (ArgNo).
+// - An aggregate parameter (IR_VAR_ADDRESS) is the address of the caller's
+//   copy, which arrives in a register too, so the address is stored into a
+//   slot the same way; the variable is then at the address the slot holds:
+//   the declare's expression is DW_OP_deref, "read the slot, and the
+//   variable is where that points", as clang declares an argument passed
+//   by its address. (Declared on the register's value itself, the location
+//   would last only while the register held it.)
+//
+// The stores run before the body, with no location (the builder has none
+// yet): the prologue ends at the first instruction with a location, and a
+// breakpoint on the procedure stops there, so with the stores before it the
+// parameters are in their slots when it does.
+static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
+    if (!body->scopes) return;
+    LLVMContextRef c = b->context;
+    LLVMBuilderRef builder = body->builder;
+    // The parameters' slots first, every alloca together at the top, then
+    // the stores into them.
+    LLVMValueRef *storage = arena_new_array<LLVMValueRef>(a, p->vars.count ? p->vars.count : 1);
+    for (s64 i = 0; i < p->vars.count; i++) {
+        Ir_Var *v = &p->vars[i];
+        if (v->kind == IR_VAR_SLOT) {
+            storage[i] = value(body, v->value);
+        } else {
+            RIG_ASSERT(v->value >= 0 && v->value < p->params.count);
+            storage[i] = LLVMBuildAlloca(builder, memory_type(c, p->params[v->value].type), "");
+        }
+    }
+    for (s64 i = 0; i < p->vars.count; i++) {
+        Ir_Var *v = &p->vars[i];
+        if (v->kind == IR_VAR_SLOT) continue;
+        LLVMValueRef param = value(body, v->value);
+        if (p->params[v->value].type == IR_I1) param = LLVMBuildZExt(builder, param, memory_type(c, IR_I1), "");
+        LLVMBuildStore(builder, param, storage[i]);
+    }
+
+    LLVMMetadataRef plain = LLVMDIBuilderCreateExpression(b->debug, nullptr, 0);
+    u64 deref = DW_OP_deref;
+    LLVMMetadataRef through = LLVMDIBuilderCreateExpression(b->debug, &deref, 1);
+    for (s64 i = 0; i < p->vars.count; i++) {
+        Ir_Var *v = &p->vars[i];
+        RIG_ASSERT(v->scope >= 0 && v->scope < body->scope_count);
+        LLVMMetadataRef scope = body->scopes[v->scope];
+        LLVMMetadataRef type = debug_type(b, v->type);
+        const char *name = (const char *)v->name.data;
+        unsigned line = (unsigned)v->pos.line;
+        // AlwaysPreserve: kept even if LLVM finds no use of it (an optimiser
+        // could drop a variable that's never read; a debugger still shows
+        // it).
+        LLVMMetadataRef variable =
+            v->arg > 0 ? LLVMDIBuilderCreateParameterVariable(b->debug, scope, name, (size_t)v->name.count,
+                                                              (unsigned)v->arg, b->file, line, type, 1,
+                                                              LLVMDIFlagZero)
+                       : LLVMDIBuilderCreateAutoVariable(b->debug, scope, name, (size_t)v->name.count, b->file,
+                                                         line, type, 1, LLVMDIFlagZero, 0);
+        // The record's own location: the declaration's line, in its scope
+        // (column 0 on Windows, as every location there: set_location).
+        unsigned column = b->target == TARGET_WINDOWS_X64 ? 0 : (unsigned)v->pos.col;
+        LLVMMetadataRef location = LLVMDIBuilderCreateDebugLocation(c, line, column, scope, nullptr);
+        LLVMDIBuilderInsertDeclareRecordAtEnd(b->debug, storage[i], variable,
+                                              v->kind == IR_VAR_ADDRESS ? through : plain, location,
+                                              body->blocks[0]);
+    }
+}
+
 // One procedure's body. `functions` holds every procedure's LLVM function,
 // by IR index, `globals` every global's.
 static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValueRef function,
@@ -836,6 +1149,7 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
             body.values[instr->result] = slot;
         }
     }
+    declare_variables(b, a, p, &body);
 
     for (s64 k = 0; k < p->blocks.count; k++) {
         LLVMPositionBuilderAtEnd(body.builder, body.blocks[k]);
@@ -961,6 +1275,7 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     initialise_x86();
     const char *triple = target_triple(t);
     b->target = t;
+    b->arena = a;
     b->context = LLVMContextCreate();
     b->module = LLVMModuleCreateWithNameInContext("rig", b->context);
     LLVMSetTarget(b->module, triple);
@@ -1035,6 +1350,21 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
         }
         LLVMSetInitializer(globals[i], init);
     }
+    // Each Rig global a debugger can show: a DIGlobalVariable of its type,
+    // named as in the source (LLVM may have renamed the symbol, as it does a
+    // procedure's), local to the unit as the symbol is, in a global variable
+    // expression whose expression is empty (the variable is the global's
+    // memory itself), attached to the LLVM global (!dbg). What the compiler
+    // makes (str.N, array.N) has no Rig type, and none.
+    for (s64 i = 0; b->debug && i < m->globals.count; i++) {
+        Ir_Global *g = &m->globals[i];
+        if (!g->rig_type) continue;
+        LLVMMetadataRef expression = LLVMDIBuilderCreateExpression(b->debug, nullptr, 0);
+        LLVMMetadataRef variable = LLVMDIBuilderCreateGlobalVariableExpression(
+            b->debug, b->unit, (const char *)g->name.data, (size_t)g->name.count, "", 0, b->file,
+            (unsigned)g->pos.line, debug_type(b, g->rig_type), 1, expression, nullptr, 0);
+        LLVMGlobalAddDebugInfo(globals[i], variable);
+    }
 
     // Every function first, so a body can call one defined after it.
     LLVMValueRef *functions = arena_new_array<LLVMValueRef>(a, m->procs.count ? m->procs.count : 1);
@@ -1071,6 +1401,7 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
 }
 
 static void backend_free(Backend *b) {
+    table_free(&b->debug_types);
     if (b->debug) LLVMDisposeDIBuilder(b->debug);
     if (b->machine) LLVMDisposeTargetMachine(b->machine);
     if (b->module) LLVMDisposeModule(b->module);
