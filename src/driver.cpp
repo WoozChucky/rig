@@ -61,10 +61,12 @@ String executable_path(Arena *a, String output, String name, Target t) {
 // The front half of the compiler, all of rig check and the start of rig
 // build: reads the source (the file at `path`, or with from_stdin standard
 // input, named `path` all the same), lexes, parses and checks it, and
-// prints every diagnostic to stderr. Returns the checked tree, ready to be
-// lowered, or nullptr when the source couldn't be read or had errors, which
-// it has then reported.
-static Ast_File *read_and_check(Arena *a, String path, bool from_stdin) {
+// prints every diagnostic to stderr. Returns the checked tree, or nullptr
+// when the source couldn't be read or had errors, which it has then
+// reported. With `lowered`, as rig build asks, a program without errors is
+// also lowered into *lowered; rig check passes nullptr and stops at the
+// checker.
+static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Module **lowered) {
     String text = {};
     bool read = from_stdin ? os_read_stdin(a, &text) : os_read_file(a, path, &text);
     if (!read) {
@@ -77,8 +79,8 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin) {
         return nullptr;
     }
 
-    // The tokens and the diagnostics are freed here, the tree kept: it lives
-    // in the arena, and lowering needs nothing else.
+    // The tokens and the diagnostics are freed here, the tree and the module
+    // kept: they live in the arena.
     Diagnostics d = {};
     s32 file = diag_add_file(&d, path, text);
     Array<Token> tokens = lex(&d, file, a);
@@ -94,7 +96,7 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin) {
     }
     // Lowered while d still holds the file's path, which a runtime error's
     // message names; the module keeps its own copy.
-    Ir_Module *module = ir_lower(tree, &d, a);
+    if (ok && lowered) *lowered = ir_lower(tree, &d, a);
     diag_free(&d);
     array_free(&tokens);
     return ok ? tree : nullptr;
@@ -102,8 +104,8 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin) {
 
 // rig build's work; returns the exit code. `output` may be {}: the default.
 static int build(Arena *a, String path, String output) {
-    Ast_File *tree = read_and_check(a, path, false);
-    if (!tree) return 1;
+    Ir_Module *module = nullptr;
+    if (!read_and_check(a, path, false, &module)) return 1;
 
     Target target = target_host();
     String name = program_name(path);
@@ -216,5 +218,5 @@ int command_check(Arena *a, Array<String> words, void (*print_usage)()) {
         return 2;
     }
     if (!source_named_rig(path)) return 1;
-    return read_and_check(a, path, from_stdin) ? 0 : 1;
+    return read_and_check(a, path, from_stdin, nullptr) ? 0 : 1;
 }
