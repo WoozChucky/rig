@@ -188,7 +188,9 @@
 //   source order), so their order doesn't matter: in `A :: B + 1; B :: 2;`
 //   A is 3. A value that needs itself, directly or through others, is "'A'
 //   is defined in terms of itself", at the name whose value was being
-//   worked out when the circle closed.
+//   worked out when the circle closed: one message per circle, since every
+//   declaration in it then has no type, written or not (`a : int = b;
+//   b : int = a;` is one message), and its uses say nothing more.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

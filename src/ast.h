@@ -100,7 +100,7 @@ struct Ast_Proc : Ast {
 enum Ast_Resolve : u8 {
     RESOLVE_NOT_YET,
     RESOLVE_UNDER_WAY,
-    RESOLVE_CYCLE,      // under way, and found to need itself (reported once)
+    RESOLVE_CYCLE,      // under way, and found to be in a circle (reported once)
     RESOLVE_DONE,
 };
 

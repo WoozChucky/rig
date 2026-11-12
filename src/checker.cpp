@@ -137,6 +137,11 @@ static void check_const(Checker *c, Ast_Const *constant) {
     declare(c, constant->name, constant);
 }
 
+// How far a global variable's or a top-level constant's checking has got.
+static Ast_Resolve *resolve_state(Ast *decl) {
+    return decl->kind == AST_VAR ? &((Ast_Var *)decl)->resolve : &((Ast_Const *)decl)->resolve;
+}
+
 // A global variable or a top-level constant, checked the first time it's
 // needed: by the loop in check() that goes through them all in source
 // order, or earlier, by a use in the value of one before it (check_lookup
@@ -147,28 +152,40 @@ static void check_const(Checker *c, Ast_Const *constant) {
 // A value that needs itself, directly (`C :: C;`) or through others
 // (`A :: B; B :: A;`), would make that endless. The resolve state breaks
 // the circle: a use that finds the declaration still under way reports
-// "'A' is defined in terms of itself", at its name, once, and gives no
-// type, so nothing more is said about the rest of the circle.
+// "'A' is defined in terms of itself", at its name, once. Every
+// declaration in the circle, from A to the one whose value used it (the
+// end of c->resolving), then gives no type, so nothing more is said about
+// any of them: not that a value isn't known while compiling (a global with
+// a written type, `a : int = b; b : int = a;`, would otherwise keep it, and
+// the value using it would be a typed value that isn't a constant), and not
+// by the globals that use one, in the circle or out of it. A declaration
+// that only leads into the circle (`first := a;` checked first) isn't in
+// it, and keeps its own messages, though the circle's uses say nothing.
 //
 // Every global is resolved before any procedure body is checked, so the
 // scopes are always empty here: a local's name can never leak into a
 // global's value.
 static void resolve_global(Checker *c, Ast *decl) {
-    Ast_Resolve *state = decl->kind == AST_VAR ? &((Ast_Var *)decl)->resolve : &((Ast_Const *)decl)->resolve;
+    Ast_Resolve *state = resolve_state(decl);
     if (*state == RESOLVE_DONE || *state == RESOLVE_CYCLE) return;
     String name = decl->kind == AST_VAR ? ((Ast_Var *)decl)->name : ((Ast_Const *)decl)->name;
     if (*state == RESOLVE_UNDER_WAY) {
         diag_error(c->diag, decl->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(name));
-        *state = RESOLVE_CYCLE;
+        // decl, and every declaration needed since, is in the circle.
+        s64 i = c->resolving.count - 1;
+        while (c->resolving[i] != decl) i--;
+        for (; i < c->resolving.count; i++) *resolve_state(c->resolving[i]) = RESOLVE_CYCLE;
         return;
     }
     RIG_ASSERT(c->scopes.count == 0);
     *state = RESOLVE_UNDER_WAY;
+    array_add(&c->resolving, decl);
     if (decl->kind == AST_VAR) {
         check_global_var(c, (Ast_Var *)decl);
     } else {
         check_const_value(c, (Ast_Const *)decl);
     }
+    c->resolving.count--;
     // In a circle, what was worked out came from a value that isn't one.
     if (*state == RESOLVE_CYCLE) {
         decl->type = nullptr;
@@ -673,5 +690,6 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
     table_free(&c.top_level);
     array_free(&c.scopes);
     array_free(&c.loops);
+    array_free(&c.resolving);
     return d->error_count == errors_before;
 }
