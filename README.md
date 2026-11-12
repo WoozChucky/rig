@@ -15,6 +15,8 @@ main :: () { puts("Hello, World!"); }
 
 `bin/rig build hello.rig` (`bin\rig build hello.rig` in Windows' command prompt) writes `hello.exe` on Windows and `hello` on Linux, in the current directory. `-o OUTPUT` names it otherwise; on Windows a name with no extension gets `.exe`. The object file goes into a `.build` directory, made in the current directory. So far Rig has integers of every size (`s8` to `s64`, `u8` to `u64`, and `int`) with `+`, `-`, `*`, `/`, `%`, bitwise operators and shifts, casts between them (`cast(u8) x`, checked, and `cast,trunc(u8) x`, which keeps the low bits), bools with comparisons and `&&`, `||` and `!`, variables and constants, inside procedures or at the top level (globals, and constants in any order), `if`/`else`, `while`, and `for` over a range with `break` and `continue`, procedures that take parameters and return a value or several (`q, r := divmod(7, 2);`), string literals, and C functions declared `#foreign libc`. A division by zero or a cast that would change the number stops the program with a runtime error, `PATH:LINE:COL: runtime error: MESSAGE` on stderr and exit status 101.
 
+`bin/rig check hello.rig` stops at the errors: it reads and checks the program as `build` does and prints the same diagnostics, but writes nothing, and with `--stdin` it checks the text on its standard input under that file name, which is how an editor checks what you are typing before it is saved. Both commands take only a source file whose name ends in `.rig`.
+
 ## Building
 
 Rig's compiler is built by one script per platform, with clang and the pinned LLVM release (23.1.4) linked statically.
