@@ -55,6 +55,19 @@ bool check_linux_linker(Arena *a, String path, String *error) {
     return false;
 }
 
+// The PDB beside a program: its name with .pdb for its .exe (in any case),
+// hello.exe's hello.pdb, or .pdb added to a name with another extension.
+static String pdb_path(Arena *a, String output) {
+    String stem = output;
+    if (output.count >= 4) {
+        String tail = string_slice(output, output.count - 4, 4);
+        bool exe = tail.data[0] == '.';
+        for (s64 i = 1; i < 4 && exe; i++) exe = (tail.data[i] | 0x20) == (u8)".exe"[i];
+        if (exe) stem = string_slice(output, 0, output.count - 4);
+    }
+    return string_printf(a, STR_FMT ".pdb", STR_ARG(stem));
+}
+
 Array<String> link_command_windows(Arena *a, Windows_Toolchain *tc, Array<String> objects, String output) {
     Array<String> argv = {};
     array_add(&argv, tc->link_exe);
@@ -63,6 +76,14 @@ Array<String> link_command_windows(Arena *a, Windows_Toolchain *tc, Array<String
     array_add(&argv, str("/SUBSYSTEM:CONSOLE"));
     array_add(&argv, str("/MACHINE:X64"));
     array_add(&argv, string_printf(a, "/OUT:" STR_FMT, STR_ARG(output)));
+    // The debug information: the objects' CodeView records (.debug$S and
+    // .debug$T sections), which the linker gathers into a PDB, a program
+    // database beside the program, where debuggers look for it (the program
+    // names it, with the PDB's own GUID, so a stale one is refused). FULL
+    // copies every record into the PDB, so it's complete without the
+    // objects. Both linkers take both options.
+    array_add(&argv, str("/DEBUG:FULL"));
+    array_add(&argv, string_printf(a, "/PDB:" STR_FMT, STR_ARG(pdb_path(a, output))));
     array_add(&argv, string_printf(a, "/LIBPATH:" STR_FMT, STR_ARG(tc->msvc_lib)));
     array_add(&argv, string_printf(a, "/LIBPATH:" STR_FMT, STR_ARG(tc->ucrt_lib)));
     array_add(&argv, string_printf(a, "/LIBPATH:" STR_FMT, STR_ARG(tc->um_lib)));
