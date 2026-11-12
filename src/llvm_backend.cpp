@@ -167,23 +167,28 @@ static bool module_panics(Ir_Module *m) {
 // routine, defined in each module that panics, internal to it:
 //
 //   define internal void @__rig_panic(ptr %message, i64 %count) noreturn {
+//     call i32 @fflush(ptr null)
 //     call i64 @write(i32 2, ptr %message, i64 %count)   ; Windows: i32 @_write(i32 2, ptr, i32)
 //     call void @exit(i32 101)
 //     unreachable
 //   }
 //
-// It writes the message to stderr (file descriptor 2) with the C library's
-// unbuffered write, in one call (messages are a line, and a pipe takes that
-// much at once), then exits through C's exit, which flushes stdout's buffer
-// first: what the program printed before the error still comes out. 101 is
-// Rust's status for a panic, on both systems. Windows' C library names its
-// write _write, with an int count.
+// First it flushes every C stream (fflush(NULL)): stdout is buffered when
+// it's a pipe or a file, so what the program printed before the error is
+// still in its buffer, and written after the message it would come out
+// after it wherever the two streams meet (`prog 2>&1 | less`, a CI log).
+// Then it writes the message to stderr (file descriptor 2) with the C
+// library's unbuffered write, in one call (messages are a line, and a pipe
+// takes that much at once), and exits through C's exit. 101 is Rust's
+// status for a panic, on both systems. Windows' C library names its write
+// _write, with an int count.
 //
 // It's built before the program's own functions and globals, so the C names
 // are taken first: a program's procedure or global that's also called write
-// (or exit) is the one LLVM renames (write.1), and as an internal symbol it
-// works the same under any name. A program's own foreign declaration of exit
-// is then the same function as the runtime's (see backend_build).
+// (or fflush, or exit) is the one LLVM renames (write.1), and as an
+// internal symbol it works the same under any name. A program's own foreign
+// declaration of exit (or fflush) is then the same function as the
+// runtime's (see backend_build).
 static void build_runtime(Backend *b) {
     LLVMContextRef c = b->context;
     LLVMTypeRef ptr = LLVMPointerTypeInContext(c, 0), i32 = LLVMInt32TypeInContext(c),
@@ -194,6 +199,9 @@ static void build_runtime(Backend *b) {
     LLVMTypeRef write_params[] = {i32, ptr, count_type};
     LLVMTypeRef write_type = LLVMFunctionType(count_type, write_params, 3, 0);
     LLVMValueRef write_function = LLVMAddFunction(b->module, windows ? "_write" : "write", write_type);
+    LLVMTypeRef flush_params[] = {ptr};
+    LLVMTypeRef flush_type = LLVMFunctionType(i32, flush_params, 1, 0);
+    LLVMValueRef flush_function = LLVMAddFunction(b->module, "fflush", flush_type);
     LLVMTypeRef exit_params[] = {i32};
     LLVMTypeRef exit_type = LLVMFunctionType(LLVMVoidTypeInContext(c), exit_params, 1, 0);
     LLVMValueRef exit_function = LLVMAddFunction(b->module, "exit", exit_type);
@@ -207,6 +215,8 @@ static void build_runtime(Backend *b) {
 
     LLVMBuilderRef builder = LLVMCreateBuilderInContext(c);
     LLVMPositionBuilderAtEnd(builder, LLVMAppendBasicBlockInContext(c, b->panic, "entry"));
+    LLVMValueRef flush_args[] = {LLVMConstPointerNull(ptr)};
+    LLVMBuildCall2(builder, flush_type, flush_function, flush_args, 1, "");
     LLVMValueRef count = LLVMGetParam(b->panic, 1);
     if (windows) count = LLVMBuildTrunc(builder, count, i32, "");
     LLVMValueRef write_args[] = {LLVMConstInt(i32, 2, 0), LLVMGetParam(b->panic, 0), count};

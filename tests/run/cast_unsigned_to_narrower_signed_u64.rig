@@ -1,0 +1,7 @@
+// The largest u64 isn't an s32: its low 32 bits are the s32's -1, which
+// extends back to the largest u64, so only the sign check catches it (spec
+// 6.4). The program stops at the cast with status 101.
+main :: () {
+    x : u64 = 18446744073709551615;
+    y := cast(s32) x;
+}

@@ -1,0 +1,9 @@
+// A u16's 65535 isn't an s8. Truncated to 8 bits it's -1, which extends
+// back by the s8's sign to 65535 again, so the round trip alone would let
+// it through as -1; the narrowed value must also not be negative, when an
+// unsigned type narrows to a signed one (spec 6.4). The program stops at
+// the cast with status 101.
+main :: () {
+    x : u16 = 65535;
+    y := cast(s8) x;
+}

@@ -1,1 +1,1 @@
-tests/run/division_by_zero.rig:9:13: runtime error: division by zero
+tests/run/division_by_zero.rig:11:13: runtime error: division by zero

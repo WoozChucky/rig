@@ -272,8 +272,10 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
     return os_run_with_input(a, argv, directory, seconds, {}, result);
 }
 
-bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 seconds, String input,
-                       Process_Result *result) {
+// os_run_with_input, and with `merge` os_run_merged: the program's stderr
+// is then its stdout's pipe too.
+static bool run_process(Arena *a, Array<String> argv, String directory, s32 seconds, String input, bool merge,
+                        Process_Result *result) {
     RIG_ASSERT(argv.count > 0 && seconds >= 0);
     result->timed_out = false;
     Array<u8> line = {};
@@ -320,7 +322,14 @@ bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 secon
     startup.dwFlags = STARTF_USESTDHANDLES;
     startup.hStdInput = child_input;
     startup.hStdOutput = out_write;
-    startup.hStdError = err_write;
+    // Merged, both are the stdout pipe's write end. The stderr pipe's write
+    // end must then not be inherited either: CreateProcessW, told to inherit
+    // handles, gives the child every inheritable one, not only those named
+    // here, so the child would hold it until it exits. Not inheritable, the
+    // stderr pipe has no writer once the parent's copy closes (below), and
+    // its reader ends at once, with nothing.
+    startup.hStdError = merge ? out_write : err_write;
+    if (merge) SetHandleInformation(err_write, HANDLE_FLAG_INHERIT, 0);
     PROCESS_INFORMATION process = {};
     // A bare name has no application name: Windows takes the program from
     // the command line and searches the PATH for it, adding .exe, as a shell
@@ -411,6 +420,15 @@ bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 secon
     array_free(&out.buffer);
     array_free(&err.buffer);
     return true;
+}
+
+bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 seconds, String input,
+                       Process_Result *result) {
+    return run_process(a, argv, directory, seconds, input, false, result);
+}
+
+bool os_run_merged(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result) {
+    return run_process(a, argv, directory, seconds, {}, true, result);
 }
 
 Array<String> os_arguments(Arena *a, int argc, char **argv) {

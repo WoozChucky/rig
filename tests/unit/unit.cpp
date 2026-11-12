@@ -124,6 +124,16 @@ static int helper_mode(int argc, char **argv) {
         arena_free(&a);
         return 0;
     }
+    if (strcmp(argv[1], "--interleave") == 0) {
+        // A line to stdout, flushed, then one to stderr, then another to
+        // stdout: merged into one pipe, they come out in this order.
+        printf("out 1\n");
+        fflush(stdout);
+        fprintf(stderr, "err\n");
+        fflush(stderr);
+        printf("out 2\n");
+        return 0;
+    }
     if (strcmp(argv[1], "--fail-with") == 0) {
         fprintf(stderr, "oops\n");
         return atoi(argv[2]);

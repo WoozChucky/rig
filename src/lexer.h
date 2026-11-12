@@ -94,7 +94,8 @@ struct Token {
     Position pos;          // where the token starts
     String text;           // its bytes in the source (a directive's: the name, without '#')
     u64 int_value;         // TOKEN_INT
-    f64 float_value;       // TOKEN_FLOAT
+    f64 float_value;       // TOKEN_FLOAT: the nearest double to the literal
+    f32 float32_value;     // TOKEN_FLOAT: the nearest float32 to it, rounded once (not from the double)
     String string_value;   // TOKEN_STRING: the bytes the literal means, escapes decoded, in the arena
 };
 

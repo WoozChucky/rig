@@ -31,8 +31,8 @@ enum Ast_Kind : u8 {
     AST_VAR,           // Ast_Var: x : T = e;  x := e;  x : T;  x : T = ---;
     AST_CONST,         // Ast_Const: N :: e;
     AST_ASSIGN,        // Ast_Assign: x = e;  x += e; ...
-    AST_RETURN,        // Ast_Return: return;  return e;
-    AST_UNARY,         // Ast_Unary: -e  ~e
+    AST_RETURN,        // Ast_Return: return;  return e;  return a, b;
+    AST_UNARY,         // Ast_Unary: -e  ~e  !e
     AST_BINARY,        // Ast_Binary: a + b, a << b, a < b, a && b, ...
     AST_BOOL,          // Ast_Bool: true, false
     AST_IF,            // Ast_If: if c { ... } else ...
@@ -100,7 +100,7 @@ struct Ast_Proc : Ast {
 enum Ast_Resolve : u8 {
     RESOLVE_NOT_YET,
     RESOLVE_UNDER_WAY,
-    RESOLVE_CYCLE,      // under way, and found to need itself (reported once)
+    RESOLVE_CYCLE,      // under way, and found to be in a circle (reported once)
     RESOLVE_DONE,
 };
 
@@ -174,9 +174,15 @@ struct Ast_Int : Ast {
     u64 value;
 };
 
-// A float literal, its value read by the lexer as the nearest double.
+// A float literal, its value read by the lexer twice, from its decimal text:
+// as the nearest double, the untyped constant's value, and as the nearest
+// float32, which it is when it becomes a float32 (check_expr.cpp's
+// float_bits). Rounding the double to a float32 instead would round twice,
+// and a literal near a halfway point between two float32s could land on
+// the wrong one.
 struct Ast_Float : Ast {
     f64 value;
+    f32 float32_value;
 };
 
 struct Ast_Bool : Ast {

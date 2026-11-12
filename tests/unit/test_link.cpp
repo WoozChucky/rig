@@ -207,8 +207,8 @@ static String without_cr(Arena *a, String s) {
 
 TEST(panic_program_exits_101_with_its_message) {
     // A program that prints a line, then panics, run as the test runner
-    // runs programs: stdout a pipe, so C buffers it and only exit's flush
-    // writes it out. The line must come out all the same, the message on
+    // runs programs: stdout a pipe, so C buffers it and only the panic's
+    // flush writes it out. The line must come out all the same, the message on
     // stderr, and the status must be 101 on both systems.
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);

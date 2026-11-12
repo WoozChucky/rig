@@ -82,15 +82,52 @@ static f64 as_double(Ast *e) {
     return t->is_signed ? (f64)(s64)e->constant : (f64)e->constant;
 }
 
-// The bits of number constant e's value as float type `to`, rounded once,
-// to nearest: a float's rounded to to's precision, an integer's converted
-// straight to `to` (to a float32 directly, not by way of a double, which
-// would round twice and could land on the other neighbour).
+// Whether untyped float constant e is a float literal as written: the
+// literal (in parentheses or not), a - before one, or the name of a
+// constant whose value is one. Then *out is the literal's value as a
+// float32, rounded once from its decimal text (Ast_Float.float32_value),
+// negated by each -, which is exact.
+static bool literal_float32(Ast *e, f32 *out) {
+    switch (e->kind) {
+    case AST_FLOAT: *out = ((Ast_Float *)e)->float32_value; return true;
+    case AST_UNARY: {
+        Ast_Unary *unary = (Ast_Unary *)e;
+        if (unary->op != TOKEN_MINUS || !literal_float32(unary->operand, out)) return false;
+        *out = -*out;
+        return true;
+    }
+    case AST_NAME: {
+        Ast *decl = ((Ast_Name *)e)->decl;
+        return decl && decl->kind == AST_CONST && literal_float32(((Ast_Const *)decl)->value, out);
+    }
+    default: return false;
+    }
+}
+
+// The bits of number constant e's value as float type `to`, rounded to
+// nearest, once, from the value as written:
+// - an untyped float that is a literal as written (literal_float32),
+//   becoming a float32: the literal read as a float32 from its text. Its
+//   double is already rounded once, from the decimal, and rounding that
+//   again to a float32 could land on the other neighbour, when the double
+//   is the halfway point between two float32s (1.0000000596046448 is just
+//   above the halfway point 1 + 2^-24, and its double is that point
+//   exactly, which rounds to even, 1, though the literal is nearer
+//   1 + 2^-23);
+// - any other float: the double rounded to to's precision. Untyped
+//   arithmetic is done in double (fold_float), as written in the spec, so
+//   its result is rounded here a second time; a float64 cast to a float32
+//   rounds once, from the float64 it is;
+// - an integer, converted straight to `to` (to a float32 directly, not by
+//   way of a double, which would round twice).
 static u64 float_bits(Ast *e, Type *to) {
     Type *t = e->type;
     u64 bits = e->constant;
     f64 value;
-    if (t->kind == TYPE_FLOAT) {
+    f32 literal;
+    if (t == &type_untyped_float && to->size == 4 && literal_float32(e, &literal)) {
+        value = (f64)literal;
+    } else if (t->kind == TYPE_FLOAT) {
         value = round_to(f64_from_bits(bits), to);
     } else if (to->size == 4) {
         value = t->is_signed ? (f64)(f32)(s64)bits : (f64)(f32)bits;
@@ -100,12 +137,23 @@ static u64 float_bits(Ast *e, Type *to) {
     return f64_bits(value);
 }
 
-// Whether an untyped float constant's value d can be one of float type t's:
+// Whether untyped float constant e's value can be one of float type t's:
 // every double is a float64; a float32 must not be so large that it rounds
 // to infinity. Infinity and NaN themselves, which IEEE arithmetic on
 // constants can give (1.0 / 0.0), are float32 values too.
-static bool float_fits(f64 d, Type *t) {
+//
+// A literal as written (literal_float32) is rounded to a float32 once,
+// from its text, so that rounding decides: it fits unless it's infinity.
+// Its double can't: a literal just below the overflow point (a tenth below
+// 0x1.ffffffp+127, say) has the overflow point itself as its nearest
+// double, which would round on to infinity, while the literal rounds down,
+// to the largest float32. Anything else, arithmetic folded in double, is
+// rounded from its double (float_bits), so its double decides.
+static bool float_fits(Ast *e, Type *t) {
+    f64 d = f64_from_bits(e->constant);
     if (t->size == 8 || __builtin_isinf(d) || __builtin_isnan(d)) return true;
+    f32 literal;
+    if (literal_float32(e, &literal)) return !__builtin_isinf(literal);
     return __builtin_fabs(d) < FLOAT32_OVERFLOW;
 }
 
@@ -142,7 +190,7 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
         if (to->kind == TYPE_FLOAT) {
             // Only an untyped float's constant is a double's bits; an
             // untyped integer's is the integer, which fits any float type.
-            if (from == &type_untyped_float && !float_fits(f64_from_bits(e->constant), to)) {
+            if (from == &type_untyped_float && !float_fits(e, to)) {
                 f64 value = f64_from_bits(e->constant);
                 diag_error(c->diag, e->start, "%g doesn't fit in '" STR_FMT "'", value,
                            STR_ARG(type_name(c->arena, to)));
