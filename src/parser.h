@@ -6,6 +6,7 @@
 //
 //   file        = top_level* EOF
 //   top_level   = IDENT '::' procedure
+//               | IDENT '::' 'struct' '{' {IDENT ':' type ';'} '}'   a struct and its fields
 //               | IDENT ':' type ['=' (expression | '---')] ';'     a global variable
 //               | IDENT ':=' expression ';'                         a global variable
 //               | IDENT '::' expression ';'                         a constant
@@ -30,14 +31,28 @@
 //                   1: ||   2: &&   3: == != < <= > >=   4: + - | ^   5: * / % << >> &
 //   unary       = ('-' | '~' | '!' | '*') unary | cast | postfix
 //   cast        = 'cast' [',' IDENT] '(' type ')' unary       (the IDENT: trunc)
-//   postfix     = primary { '(' [expression {',' expression}] ')' | '.' '*' }
+//   postfix     = primary { '(' [expression {',' expression}] ')' | '.' '*' | '.' IDENT
+//                           | '.' '{' fields '}' }                  (after a name: the literal's type)
 //   primary     = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null'
-//               | 'size_of' '(' type ')' | '(' expression ')'
+//               | 'size_of' '(' type ')' | '(' expression ')' | '.' '{' fields '}'
+//   fields      = [field {',' field} [',']]
+//   field       = [IDENT '='] expression
 //
 // The precedence levels are Go's (spec 6.1). A cast is a prefix operator,
 // like -: cast(u8) a / b is (cast(u8) a) / b. Its only modifier is trunc
 // (cast,trunc(u8) x); any other is "unknown cast modifier 'foo'; the one
 // there is is 'trunc'", at the name.
+//
+// Structs are Jai's (spec 6.5): `Vec2 :: struct { x: float; y: float; }`,
+// at the top level only; inside a body, `Vec2 :: struct` is "structs can
+// only be declared at the top level, for now", at the name. e.x is a field,
+// a postfix operator as a call is (a.b.c is (a.b).c, -a.b is -(a.b), p.*.x
+// the field of what p points at). A literal is T.{a, b} (the values in
+// order) or T.{x = a} (by name), where T is a name: a '.' then '{' after a
+// name makes the name a type; after anything else it's "expected a field's
+// name". .{a, b} has no type written, and takes the one it meets. Named and
+// in order don't mix: "a struct literal's fields are all named or all in
+// order, not both", at the first that breaks the pattern.
 //
 // Pointers are Jai's (spec 6.5): the prefix *x is x's address, binding as
 // - does (*a + 1 is (*a) + 1), and the postfix p.* is what p points at,
@@ -62,7 +77,8 @@
 //
 // Expressions and blocks nest at most 1000 levels deep (spec 6.1, a limit
 // of the compiler; parser.cpp's MAX_DEPTH): each parenthesis, prefix
-// operator, cast, call, dereference and binary operator is a level above
+// operator, cast, call, dereference, field, struct literal and binary
+// operator is a level above
 // what it holds, so a chain of 1001 '+' is too deep too, and a procedure's
 // body is the first block. Deeper is "this expression is nested too deeply
 // (more than 1000 levels)", at the start of the outermost expression, or
@@ -107,10 +123,11 @@
 // line of a global that failed (`counter : int = 1 2; f :: () {}`), the
 // global keeping its name.
 //
-// A body never closed ends at the end of the file or at a procedure's
-// declaration in column 1, the only declaration a body can't hold: a
-// constant in column 1 (`N :: 5;`) is a local constant, as an indented one
-// is. The body is then taken to end before the column-1 declarations
+// A body never closed ends at the end of the file or at a procedure's or a
+// struct's declaration in column 1 (`name :: (` or `Name :: struct`), the
+// only declarations a body can't hold: a constant in column 1 (`N :: 5;`)
+// is a local constant, as an indented one is. A struct's braces never
+// closed end there too, "expected '}'" said at that declaration. The body is then taken to end before the column-1 declarations
 // (IDENT ':', ':=' or '::') right before that point, at its own level:
 // "expected '}'" is reported at the first of them, and the top level
 // resumes there, so they're read as the globals and constants they were

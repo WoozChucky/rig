@@ -632,6 +632,7 @@ static String declared_name(Ast *decl) {
     case AST_PROC: return ((Ast_Proc *)decl)->name;
     case AST_VAR: return ((Ast_Var *)decl)->name;
     case AST_CONST: return ((Ast_Const *)decl)->name;
+    case AST_STRUCT: return ((Ast_Struct *)decl)->name;
     default: RIG_ASSERT(!"not a top-level declaration"); return {};
     }
 }
@@ -688,7 +689,9 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
     // yet: one used by an earlier one's value was checked there
     // (resolve_global). All are done before the bodies, which only find
     // them finished.
-    for (s64 i = 0; i < file->globals.count; i++) resolve_global(&c, file->globals[i]);
+    for (s64 i = 0; i < file->globals.count; i++) {
+        if (file->globals[i]->kind != AST_STRUCT) resolve_global(&c, file->globals[i]);
+    }
 
     // Then the bodies. A broken entry has none: the parser gave up on it.
     for (s64 i = 0; i < file->procs.count; i++) {

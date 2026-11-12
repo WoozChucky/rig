@@ -1155,10 +1155,10 @@ TEST(parses_address_and_deref) {
     CHECK_EQ(address->operand->pos.col, 12);
     CHECK_EQ(address->operand->start.col, 11);
     token_list_free(list);
-    // A '.' followed by anything but '*' isn't a dereference (fields come
-    // with structs).
-    body_dump(&a, "p.x;", &errors);
-    CHECK_STR(errors, "2:6: expected ';', found '.'\n");
+    // A '.' followed by a name is a field (structs, issue #58); followed by
+    // anything else that isn't '*' or '{', it's an error.
+    body_dump(&a, "p.(x);", &errors);
+    CHECK_STR(errors, "2:7: expected a field's name, found '('\n");
     arena_free(&a);
 }
 
@@ -1221,5 +1221,180 @@ TEST(dereferences_nest_up_to_a_thousand_levels) {
     CHECK_STR(errors, "");
     body_dump(&a, string_cstr(&a, string_printf(&a, STR_FMT ".*;", STR_ARG(chain))), &errors);
     CHECK_STR(errors, "2:10: this expression is nested too deeply (more than 1000 levels)\n");
+    arena_free(&a);
+}
+
+// Milestone 2b (issue #58): structs. A struct is declared at the top level,
+// Name :: struct { field: type; ... }; e.x is a field, a postfix operator as
+// .* is; T.{...} and .{...} are literals.
+
+TEST(parses_struct_declarations) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "Vec2 :: struct {\n"
+                        "    x: float32;\n"
+                        "    y: float32;\n"
+                        "}\n"
+                        "origin : Vec2;\n"
+                        "Node :: struct { value: int; next: *Node; }\n"
+                        "Empty :: struct {}\n"
+                        "main :: () { }\n",
+                        &errors),
+              "(struct Vec2 (x float32) (y float32))\n"
+              "(var origin Vec2)\n"
+              "(struct Node (value int) (next (ptr Node)))\n"
+              "(struct Empty)\n"
+              "(proc main (params) (block))\n");
+    CHECK_STR(errors, "");
+    // The fields' types are dumped as written: float, not float32.
+    CHECK_STR(parse_src(&a, "V :: struct { x: float; }\n", &errors), "(struct V (x float))\n");
+    CHECK_STR(errors, "");
+    // The structs are in the file's globals, in source order with the
+    // variables and constants; each at its name, each field at its own.
+    Token_List *list = src("N :: 1;\nVec2 :: struct {\n    x: float;\n    y: float;\n}\ng : Vec2;\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(file->globals.count, 3);
+    CHECK_EQ(file->globals[1]->kind, AST_STRUCT);
+    Ast_Struct *s = (Ast_Struct *)file->globals[1];
+    CHECK_STR(s->name, "Vec2");
+    CHECK_EQ(s->pos.line, 2);
+    CHECK_EQ(s->pos.col, 1);
+    CHECK_EQ(s->fields.count, 2);
+    CHECK_EQ(s->fields[1]->kind, AST_FIELD);
+    CHECK_STR(s->fields[1]->name, "y");
+    CHECK_EQ(s->fields[1]->pos.line, 4);
+    CHECK_EQ(s->fields[1]->pos.col, 5);
+    token_list_free(list);
+    // A field is a name, ':' and a type, then ';', even the last.
+    parse_src(&a, "V :: struct { x: float }\n", &errors);
+    CHECK_STR(errors, "1:24: expected ';', found '}'\n");
+    parse_src(&a, "V :: struct { x float; }\n", &errors);
+    CHECK_STR(errors, "1:17: expected ':', found identifier 'float'\n");
+    parse_src(&a, "V :: struct { 1 }\n", &errors);
+    CHECK_STR(errors, "1:15: expected a field's name, found integer literal\n");
+    parse_src(&a, "V :: struct x: int;\n", &errors);
+    CHECK_STR(errors, "1:13: expected '{', found identifier 'x'\n");
+    arena_free(&a);
+}
+
+TEST(parses_member_access) {
+    Arena a = arena_make();
+    String errors;
+    // A postfix operator, applied left to right as calls and .* are, and
+    // tighter than any prefix one.
+    CHECK_STR(body_dump(&a, "a.b.c;", &errors), "(block (member (member (name a) b) c))");
+    CHECK_STR(body_dump(&a, "p.*.x;", &errors), "(block (member (deref (name p)) x))");
+    CHECK_STR(body_dump(&a, "x := -a.b;", &errors), "(block (var x _ (unary - (member (name a) b))))");
+    CHECK_STR(body_dump(&a, "x := *a.b + f(p).next.*.value;", &errors),
+              "(block (var x _ (binary + (unary * (member (name a) b)) "
+              "(member (deref (member (call f (name p)) next)) value))))");
+    CHECK_STR(body_dump(&a, "p.x = 1; v.pos.y += 2;", &errors),
+              "(block (assign = (member (name p) x) (int 1)) (assign += (member (member (name v) pos) y) (int 2)))");
+    CHECK_STR(errors, "");
+    // The member's node is at its field's name, and starts where its
+    // operand does.
+    Token_List *list = src("f :: () {\n    x := (v).pos;\n}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    Ast_Member *member = (Ast_Member *)((Ast_Var *)file->procs[0]->body->statements[0])->value;
+    CHECK_EQ(member->kind, AST_MEMBER);
+    CHECK_STR(member->name, "pos");
+    CHECK_EQ(member->pos.col, 14);
+    CHECK_EQ(member->start.col, 10);
+    CHECK_EQ(member->operand->kind, AST_NAME);
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(parses_struct_literals) {
+    Arena a = arena_make();
+    String errors;
+    // The four forms: a type or none, the values in order or named.
+    CHECK_STR(body_dump(&a, "v := Vec2.{1, 2};", &errors), "(block (var v _ (literal Vec2 (int 1) (int 2))))");
+    CHECK_STR(body_dump(&a, "v := Vec2.{y = 2};", &errors), "(block (var v _ (literal Vec2 (y (int 2)))))");
+    CHECK_STR(body_dump(&a, "v : Vec2 = .{1, 2};", &errors), "(block (var v Vec2 (literal _ (int 1) (int 2))))");
+    CHECK_STR(body_dump(&a, "v : Vec2 = .{x = 1, y = 2};", &errors),
+              "(block (var v Vec2 (literal _ (x (int 1)) (y (int 2)))))");
+    // None at all, a comma after the last, nested, and as an argument, an
+    // operand or a member's operand.
+    CHECK_STR(body_dump(&a, "v := Vec2.{}; w := Rect.{.{1, 2}, Vec2.{x = 3,},};", &errors),
+              "(block (var v _ (literal Vec2)) "
+              "(var w _ (literal Rect (literal _ (int 1) (int 2)) (literal Vec2 (x (int 3))))))");
+    CHECK_STR(body_dump(&a, "f(.{a == b}, Vec2.{-1, 2}.x);", &errors),
+              "(block (call f (literal _ (binary == (name a) (name b))) "
+              "(member (literal Vec2 (unary - (int 1)) (int 2)) x)))");
+    CHECK_STR(errors, "");
+    // The literal is at its '.', and starts at its type when it has one; a
+    // named value's name is where it's written.
+    Token_List *list = src("f :: () {\n    v := Vec2.{y = 2};\n    w := .{1};\n}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    Ast_Literal *typed = (Ast_Literal *)((Ast_Var *)file->procs[0]->body->statements[0])->value;
+    CHECK_EQ(typed->kind, AST_LITERAL);
+    CHECK_EQ(typed->pos.col, 14);
+    CHECK_EQ(typed->start.col, 10);
+    CHECK_EQ(typed->name_positions.count, 1);
+    CHECK_EQ(typed->name_positions[0].col, 16);
+    Ast_Literal *untyped = (Ast_Literal *)((Ast_Var *)file->procs[0]->body->statements[1])->value;
+    CHECK(!untyped->type_expr);
+    CHECK_EQ(untyped->pos.col, 10);
+    CHECK_EQ(untyped->start.col, 10);
+    token_list_free(list);
+    // Named and in order don't mix: said at the first that breaks the
+    // pattern.
+    body_dump(&a, "v := Vec2.{x = 1, 2};", &errors);
+    CHECK_STR(errors, "2:23: a struct literal's fields are all named or all in order, not both\n");
+    body_dump(&a, "v := Vec2.{1, y = 2};", &errors);
+    CHECK_STR(errors, "2:19: a struct literal's fields are all named or all in order, not both\n");
+    // A literal's type is a name before the '.'.
+    body_dump(&a, "v := f().{1};", &errors);
+    CHECK_STR(errors, "2:14: expected a field's name, found '{'\n");
+    body_dump(&a, "v := .{1 2};", &errors);
+    CHECK_STR(errors, "2:14: expected '}', found integer literal\n");
+    arena_free(&a);
+}
+
+TEST(struct_in_a_body_is_reported) {
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_src(&a,
+                            "main :: () {\n"
+                            "    Vec2 :: struct { x: int; }\n"
+                            "}\n"
+                            "g :: () { }\n",
+                            &errors);
+    CHECK_STR(errors, "2:5: structs can only be declared at the top level, for now\n");
+    // main is given up on, and parsing goes on after its '}'.
+    CHECK_STR(dump, "(broken main)\n(proc g (params) (block))\n");
+    arena_free(&a);
+}
+
+TEST(unclosed_body_ends_at_a_struct) {
+    // A struct's declaration in column 1, like a procedure's, can't be a
+    // statement, so a body still open there was never closed: the struct
+    // and what follows are read as the top level's.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_src(&a,
+                            "main :: () {\n"
+                            "    x := 1;\n"
+                            "Vec2 :: struct { x: int; }\n"
+                            "g :: () { }\n",
+                            &errors);
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'Vec2'\n");
+    CHECK_STR(dump, "(broken main)\n(struct Vec2 (x int))\n(proc g (params) (block))\n");
+    // A struct's own body, never closed, ends at a procedure's declaration
+    // or another struct's in column 1.
+    dump = parse_src(&a,
+                     "Vec2 :: struct {\n"
+                     "    x: int;\n"
+                     "Node :: struct { next: *Node; }\n"
+                     "main :: () { }\n",
+                     &errors);
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'Node'\n");
+    CHECK_STR(dump, "(broken Vec2)\n(struct Node (next (ptr Node)))\n(proc main (params) (block))\n");
+    // After an error inside a struct, parsing goes on after its '}'.
+    dump = parse_src(&a, "V :: struct {\n    x int;\n    y: int;\n}\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "2:7: expected ':', found identifier 'int'\n");
+    CHECK_STR(dump, "(broken V)\n(proc main (params) (block))\n");
     arena_free(&a);
 }
