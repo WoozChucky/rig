@@ -196,16 +196,16 @@ TEST(panic_program_exits_101_with_its_message) {
     Ir_Proc *puts_proc = new_proc_returning(m, &a, "puts", IR_I32);
     puts_proc->is_foreign = true;
     ir_add_param(puts_proc, IR_PTR, IR_EXT_NONE);
-    // __rig_main :: () { puts("before"); panic }
-    Ir_Proc *rig_main = new_proc_returning(m, &a, "__rig_main", IR_VOID);
-    s32 b = ir_new_block(&a, rig_main);
-    Ir_Instr *address = ir_emit(rig_main, b, IR_ADDR, IR_PTR);
+    // program :: () { puts("before"); panic }
+    Ir_Proc *program = new_proc_returning(m, &a, "program", IR_VOID);
+    s32 b = ir_new_block(&a, program);
+    Ir_Instr *address = ir_emit(program, b, IR_ADDR, IR_PTR);
     address->target = before;
     Array<s32> args = {};
     array_add(&args, address->result);
-    ir_emit_call(m, rig_main, b, 0, args);
-    ir_emit(rig_main, b, IR_PANIC, IR_VOID)->target = message;
-    // main() -> i32 { __rig_main(); return 0; }, which never gets to return.
+    ir_emit_call(m, program, b, 0, args);
+    ir_emit(program, b, IR_PANIC, IR_VOID)->target = message;
+    // main() -> i32 { program(); return 0; }, which never gets to return.
     Ir_Proc *entry = new_proc_returning(m, &a, "main", IR_I32);
     entry->is_export = true;
     s32 e = ir_new_block(&a, entry);
@@ -235,33 +235,33 @@ TEST(byte_globals_and_memory_run) {
     puts_proc->is_foreign = true;
     ir_add_param(puts_proc, IR_PTR, IR_EXT_NONE);
 
-    // __rig_main :: () {
+    // program :: () {
     //     copy = table; puts(copy[8..16] as a pointer);
     //     zero copy; if the pointer at 8 isn't null, panic.
     // }
-    Ir_Proc *rig_main = new_proc_returning(m, &a, "__rig_main", IR_VOID);
-    s32 b = ir_new_block(&a, rig_main), done = ir_new_block(&a, rig_main), fail = ir_new_block(&a, rig_main);
-    s32 copy = emit_local_bytes(rig_main, b, 16, 8);
-    Ir_Instr *address = ir_emit(rig_main, b, IR_ADDR, IR_PTR);
+    Ir_Proc *program = new_proc_returning(m, &a, "program", IR_VOID);
+    s32 b = ir_new_block(&a, program), done = ir_new_block(&a, program), fail = ir_new_block(&a, program);
+    s32 copy = emit_local_bytes(program, b, 16, 8);
+    Ir_Instr *address = ir_emit(program, b, IR_ADDR, IR_PTR);
     address->target = table;
-    emit_copy(rig_main, b, copy, address->result, 16);
-    s32 field = emit_ptradd(rig_main, b, copy, emit_const(rig_main, b, IR_I64, 8));
-    Ir_Instr *text = ir_emit(rig_main, b, IR_LOAD, IR_PTR);
+    emit_copy(program, b, copy, address->result, 16);
+    s32 field = emit_ptradd(program, b, copy, emit_const(program, b, IR_I64, 8));
+    Ir_Instr *text = ir_emit(program, b, IR_LOAD, IR_PTR);
     text->a = field;
     Array<s32> args = {};
     array_add(&args, text->result);
-    ir_emit_call(m, rig_main, b, 0, args);
-    emit_zero(rig_main, b, copy, 16);
-    Ir_Instr *after = ir_emit(rig_main, b, IR_LOAD, IR_PTR);
+    ir_emit_call(m, program, b, 0, args);
+    emit_zero(program, b, copy, 16);
+    Ir_Instr *after = ir_emit(program, b, IR_LOAD, IR_PTR);
     after->a = field;
-    s32 is_null = emit_cmp(rig_main, b, IR_EQ, IR_PTR, after->result, emit_const(rig_main, b, IR_PTR, 0));
-    Ir_Instr *branch = ir_emit(rig_main, b, IR_BRANCH, IR_VOID);
+    s32 is_null = emit_cmp(program, b, IR_EQ, IR_PTR, after->result, emit_const(program, b, IR_PTR, 0));
+    Ir_Instr *branch = ir_emit(program, b, IR_BRANCH, IR_VOID);
     branch->c = is_null;
     branch->target = done;
     branch->target2 = fail;
-    emit_ret(rig_main, done, -1);
-    ir_emit(rig_main, fail, IR_PANIC, IR_VOID)->target = message;
-    // main() -> i32 { __rig_main(); return 0; }
+    emit_ret(program, done, -1);
+    ir_emit(program, fail, IR_PANIC, IR_VOID)->target = message;
+    // main() -> i32 { program(); return 0; }
     Ir_Proc *entry = new_proc_returning(m, &a, "main", IR_I32);
     entry->is_export = true;
     s32 e = ir_new_block(&a, entry);

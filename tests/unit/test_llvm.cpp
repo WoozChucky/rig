@@ -15,11 +15,11 @@ TEST(llvm_ir_of_hello_world) {
         CHECK(llvm_ir_text(&a, m, target, &text, &error));
         CHECK(contains(text, "c\"Hello, World!\\00\""));
         CHECK(contains(text, "declare i32 @puts(ptr"));
-        CHECK(contains(text, "define internal void @__rig_main()"));
-        CHECK(contains(text, "call i32 @puts(ptr @str.0)"));
+        // Rig's main is C's, exported, returning 0; nothing wraps it.
         CHECK(contains(text, "define i32 @main()"));
-        CHECK(contains(text, "call void @__rig_main()"));
+        CHECK(contains(text, "call i32 @puts(ptr @str.0)"));
         CHECK(contains(text, "ret i32 0"));
+        CHECK(!contains(text, "__rig_main"));
         CHECK(contains(text, string_cstr(&a, string_printf(&a, "target triple = \"%s\"", target_triple(target)))));
         CHECK(!contains(text, " nsw ") && !contains(text, " nuw "));  // overflow wraps (spec 6.4)
     }
@@ -250,11 +250,11 @@ TEST(llvm_operations_have_no_wrap_flags) {
     arena_free(&a);
 }
 
-// __rig_main :: () { panic with "oops" }.
+// program :: () { panic with "oops" }.
 static Ir_Module *panic_module(Arena *a) {
     Ir_Module *m = arena_new<Ir_Module>(a);
     s32 message = add_string(m, "str.0", "oops");
-    Ir_Proc *p = new_proc_returning(m, a, "__rig_main", IR_VOID);
+    Ir_Proc *p = new_proc_returning(m, a, "program", IR_VOID);
     ir_emit(p, ir_new_block(a, p), IR_PANIC, IR_VOID)->target = message;
     return m;
 }
@@ -313,7 +313,7 @@ TEST(llvm_runtime_names_win_over_the_programs) {
     Ir_Proc *own_exit = new_proc_returning(m, &a, "exit", IR_VOID);
     own_exit->is_foreign = true;
     ir_add_param(own_exit, IR_I32, IR_EXT_NONE);
-    Ir_Proc *p = new_proc_returning(m, &a, "__rig_main", IR_VOID);
+    Ir_Proc *p = new_proc_returning(m, &a, "program", IR_VOID);
     s32 b = ir_new_block(&a, p);
     ir_emit_call(m, p, b, 0, {});
     Array<s32> args = {};
@@ -350,7 +350,7 @@ TEST(llvm_runtime_names_win_over_the_programs) {
     own_global.name = str("write");
     own_global.type = IR_I64;
     array_add(&m->globals, own_global);
-    p = new_proc_returning(m, &a, "__rig_main", IR_VOID);
+    p = new_proc_returning(m, &a, "program", IR_VOID);
     b = ir_new_block(&a, p);
     Ir_Instr *address = ir_emit(p, b, IR_ADDR, IR_PTR);
     address->target = 1;
@@ -374,7 +374,7 @@ TEST(llvm_runtime_names_win_over_the_programs) {
         message = add_string(m, "str.0", "oops");
         Ir_Proc *own_flush = new_proc_returning(m, &a, "fflush", IR_VOID);
         emit_ret(own_flush, ir_new_block(&a, own_flush), -1);
-        p = new_proc_returning(m, &a, "__rig_main", IR_VOID);
+        p = new_proc_returning(m, &a, "program", IR_VOID);
         b = ir_new_block(&a, p);
         ir_emit_call(m, p, b, 0, {});
         ir_emit(p, b, IR_PANIC, IR_VOID)->target = message;
@@ -392,7 +392,7 @@ TEST(llvm_runtime_names_win_over_the_programs) {
         Ir_Proc *own_flush = new_proc_returning(m, &a, "fflush", IR_I32);
         own_flush->is_foreign = true;
         ir_add_param(own_flush, IR_PTR, IR_EXT_NONE);
-        p = new_proc_returning(m, &a, "__rig_main", IR_VOID);
+        p = new_proc_returning(m, &a, "program", IR_VOID);
         b = ir_new_block(&a, p);
         Array<s32> null_args = {};
         array_add(&null_args, emit_const(p, b, IR_PTR, 0));
@@ -892,7 +892,7 @@ TEST(llvm_linux_functions_probe_the_stack) {
     Arena a = arena_make();
     String text = llvm_text(&a, panic_module(&a), TARGET_LINUX_X64);
     CHECK(contains(text, "\"probe-stack\"=\"inline-asm\""));
-    CHECK(contains(text, "define internal void @__rig_main() #"));
+    CHECK(contains(text, "define internal void @program() #"));
     CHECK(contains(text, "define internal void @__rig_panic(ptr %0, i64 %1) #"));
     text = llvm_text(&a, panic_module(&a), TARGET_WINDOWS_X64);
     CHECK(!contains(text, "probe-stack"));

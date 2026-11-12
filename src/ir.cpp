@@ -54,6 +54,7 @@ Ir_Instr *ir_emit(Ir_Proc *p, s32 block, Ir_Op op, Ir_Type type) {
     instr.result = gives_value ? p->value_count++ : -1;
     instr.a = instr.b = instr.c = -1;
     instr.target = instr.target2 = -1;
+    instr.scope = -1;  // no position, no scope: lowering gives both (emit_in)
     Ir_Block *b = p->blocks[block];
     array_add(&b->instrs, instr);
     return &b->instrs[b->instrs.count - 1];
@@ -217,8 +218,9 @@ static void out_values(Printer *p, Array<s32> values) {
     for (s64 i = 0; i < values.count; i++) out(p, "%s%%%d", i ? ", " : "", values[i]);
 }
 
-// One instruction, indented, on its own line.
-static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr) {
+// One instruction, indented, on its own line; with `debug`, its position
+// and scope at the end of the line, when it has one.
+static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr, bool debug) {
     out(p, "  ");
     if (instr->result >= 0) {
         // A call defines one value per result, numbered from `result` on.
@@ -308,6 +310,7 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr) {
         break;
     case IR_UNREACHABLE: out(p, "%s", op); break;
     }
+    if (debug && instr->pos.line > 0) out(p, "  ; %d:%d s%d", instr->pos.line, instr->pos.col, instr->scope);
     out(p, "\n");
 }
 
@@ -341,8 +344,44 @@ static void out_param(Printer *p, Ir_Param param) {
     out(p, "%s%s", ir_type_name(param.type), ir_ext_name(param.ext));
 }
 
-String ir_print(Arena *a, Ir_Module *m) {
+static const char *ir_var_kind_name(Ir_Var_Kind k) {
+    switch (k) {
+    case IR_VAR_SLOT: return "slot";
+    case IR_VAR_VALUE: return "value";
+    case IR_VAR_ADDRESS: return "address";
+    }
+    return "?";
+}
+
+// What ir_print_debug adds after a procedure's line: where it is in the
+// source, its scopes from 1 (0 is the body, whose '{' is on the first line)
+// and its variables. Nothing for a procedure the compiler made.
+static void out_proc_debug(Printer *p, Arena *a, Ir_Proc *proc) {
+    if (!proc->source_name.count) return;
+    out(p, "  ; source " STR_FMT " at %d:%d, body %d:%d\n", STR_ARG(proc->source_name), proc->pos.line, proc->pos.col,
+        proc->body.line, proc->body.col);
+    for (s64 i = 1; i < proc->scopes.count; i++) {
+        Ir_Scope *s = &proc->scopes[i];
+        out(p, "  ; scope %lld in %d at %d:%d\n", (long long)i, s->parent, s->pos.line, s->pos.col);
+    }
+    for (s64 i = 0; i < proc->vars.count; i++) {
+        Ir_Var *v = &proc->vars[i];
+        out(p, "  ; var " STR_FMT " " STR_FMT " %s %%%d", STR_ARG(v->name), STR_ARG(type_name(a, v->type)),
+            ir_var_kind_name(v->kind), v->value);
+        if (v->arg) out(p, " arg %d", v->arg);
+        out(p, " in %d at %d:%d\n", v->scope, v->pos.line, v->pos.col);
+    }
+}
+
+// The module as ir_print writes it, with the debug information when `debug`
+// (ir_print_debug).
+static String print_module(Arena *a, Ir_Module *m, bool debug) {
     Printer p = {};
+    if (debug && m->source_path.count) {
+        out(&p, "; source " STR_FMT " md5 ", STR_ARG(m->source_path));
+        for (int i = 0; i < 16; i++) out(&p, "%02x", m->source_md5[i]);
+        out(&p, "\n");
+    }
     for (s64 i = 0; i < m->globals.count; i++) {
         Ir_Global *g = &m->globals[i];
         if (g->type == IR_VOID && g->is_variable) {
@@ -359,6 +398,9 @@ String ir_print(Arena *a, Ir_Module *m) {
             } else {
                 out(&p, "%llu\n", (unsigned long long)g->initial);
             }
+        }
+        if (debug && g->rig_type) {
+            out(&p, "  ; type " STR_FMT " at %d:%d\n", STR_ARG(type_name(a, g->rig_type)), g->pos.line, g->pos.col);
         }
     }
     for (s64 i = 0; i < m->procs.count; i++) {
@@ -379,10 +421,11 @@ String ir_print(Arena *a, Ir_Module *m) {
             continue;
         }
         out(&p, " {\n");
+        if (debug) out_proc_debug(&p, a, proc);
         for (s64 k = 0; k < proc->blocks.count; k++) {
             out(&p, "b%lld:\n", (long long)k);
             Ir_Block *block = proc->blocks[k];
-            for (s64 n = 0; n < block->instrs.count; n++) out_instr(&p, m, &block->instrs[n]);
+            for (s64 n = 0; n < block->instrs.count; n++) out_instr(&p, m, &block->instrs[n], debug);
         }
         out(&p, "}\n");
     }
@@ -390,3 +433,7 @@ String ir_print(Arena *a, Ir_Module *m) {
     array_free(&p.text);
     return text;
 }
+
+String ir_print(Arena *a, Ir_Module *m) { return print_module(a, m, false); }
+
+String ir_print_debug(Arena *a, Ir_Module *m) { return print_module(a, m, true); }

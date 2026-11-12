@@ -35,13 +35,22 @@ static bool starts_with(String s, const char *prefix) {
     return s.count >= n && memcmp(s.data, prefix, (size_t)n) == 0;
 }
 
+// Records where the file is, as rig build does (driver.cpp): in the
+// directory the tests run in, its absolute path made from its name, so a
+// module lowered from it knows its source as one rig builds does.
+static void locate_file(Diagnostics *d, s32 file) {
+    Arena a = arena_make();
+    diag_locate_file(d, file, os_current_directory(&a), target_host() == TARGET_WINDOWS_X64);
+    arena_free(&a);
+}
+
 // The description's tokens, in a Token_List the caller frees with
 // token_list_free. The list's Diagnostics has one file, index 0, holding the
 // description itself, so errors can be rendered.
 static Token_List *toks(const char *description) {
     Token_List *list = (Token_List *)calloc(1, sizeof(Token_List));
     Arena *a = &list->arena;
-    diag_add_file(&list->diag, str("test.rig"), str(description));
+    locate_file(&list->diag, diag_add_file(&list->diag, str("test.rig"), str(description)));
     String text = str(description);
     s32 line = 1, col = 1;
     s64 i = 0;
@@ -97,6 +106,7 @@ static Token_List *toks(const char *description) {
 static Token_List *src_named(const char *path, const char *text) {
     Token_List *list = (Token_List *)calloc(1, sizeof(Token_List));
     s32 file = diag_add_file(&list->diag, str(path), str(text));
+    locate_file(&list->diag, file);
     list->tokens = lex(&list->diag, file, &list->arena);
     RIG_ASSERT(list->diag.error_count == 0);
     return list;

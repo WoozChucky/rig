@@ -84,6 +84,9 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Modul
     // kept: they live in the arena.
     Diagnostics d = {};
     s32 file = diag_add_file(&d, path, text);
+    // Messages name the file by its path as given; the debug information
+    // by its absolute path, from the directory rig runs in (ir_lower).
+    diag_locate_file(&d, file, os_current_directory(a), target_host() == TARGET_WINDOWS_X64);
     Array<Token> tokens = lex(&d, file, a);
     Ast_File *tree = parse(tokens, a, &d);
     check(tree, a, &d);
@@ -96,7 +99,8 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Modul
         diag_print(&d);
     }
     // Lowered while d still holds the file's path, which a runtime error's
-    // message names; the module keeps its own copy.
+    // message names, and its absolute path and directory, which the debug
+    // information does; the module keeps its own copies.
     if (ok && lowered) *lowered = ir_lower(tree, &d, a, bounds_checks);
     diag_free(&d);
     array_free(&tokens);
