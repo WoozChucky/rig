@@ -68,10 +68,14 @@ TEST(found_identifier_is_named) {
 }
 
 TEST(non_procedure_declaration) {
+    // Since issue #36 a constant can be declared at the top level too; what
+    // follows the name must still make a declaration.
     Arena a = arena_make();
     String errors;
-    parse_dump(&a, "IDENT:x :: INT:5 ;", &errors);
-    CHECK_STR(errors, "1:5: only procedures can be declared at the top level for now\n");
+    CHECK_STR(parse_dump(&a, "IDENT:x :: INT:5 ;", &errors), "(const x (int 5))\n");
+    CHECK_STR(errors, "");
+    parse_dump(&a, "IDENT:x INT:5 ;", &errors);
+    CHECK_STR(errors, "1:3: expected '::', found integer literal\n");
     arena_free(&a);
 }
 
@@ -96,12 +100,12 @@ TEST(parser_recovers_at_next_declaration) {
     String errors;
     String dump = parse_dump(&a,
                              "IDENT:a :: ( ) { IDENT:f ( } | "
-                             "IDENT:b :: INT:5 ; | "
+                             "IDENT:b :: INT:5 INT:6 ; | "
                              "IDENT:c :: ( ) { IDENT:g ( ) ; }",
                              &errors);
     CHECK_STR(errors,
               "1:15: expected an expression, found '}'\n"
-              "2:5: only procedures can be declared at the top level for now\n");
+              "2:7: expected ';', found integer literal\n");
     // a and b are kept as broken entries, their names alone, so the checker
     // knows they're declared.
     CHECK_STR(dump, "(broken a)\n(broken b)\n(proc c (params) (block (call g)))\n");
@@ -660,5 +664,169 @@ TEST(unknown_cast_modifier) {
     String errors;
     body_dump(&a, "y := cast,foo(u8) x;", &errors);
     CHECK_STR(errors, "2:15: unknown cast modifier 'foo'; the one there is is 'trunc'\n");
+    arena_free(&a);
+}
+
+// Milestone 2a (issue #36): several results, several names or targets
+// receiving them, and globals and constants at the top level.
+
+TEST(parses_several_results) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "divmod :: (a: int, b: int) -> int, int {\n"
+                        "    q := a / b;\n"
+                        "    r := a % b;\n"
+                        "    return q, r;\n"
+                        "}\n",
+                        &errors),
+              "(proc divmod (params (a int) (b int)) (returns int int) (block (var q _ (binary / (name a) (name b))) "
+              "(var r _ (binary % (name a) (name b))) (return (name q) (name r))))\n");
+    CHECK_STR(errors, "");
+    // The results' list ends at the body's '{' or the directive; a foreign
+    // one with two is the checker's to refuse.
+    CHECK_STR(parse_src(&a, "pair :: () -> s32, *u8 #foreign libc;\n", &errors),
+              "(proc pair (params) (returns s32 (ptr u8)) (foreign libc))\n");
+    CHECK_STR(errors, "");
+    // Each value of a return is a whole expression.
+    CHECK_STR(body_dump(&a, "return a + 1, f(b, c), -d;", &errors),
+              "(block (return (binary + (name a) (int 1)) (call f (name b) (name c)) (unary - (name d))))");
+    CHECK_STR(errors, "");
+    parse_src(&a, "f :: () -> int, { }\n", &errors);
+    CHECK_STR(errors, "1:17: expected a type, found '{'\n");
+    body_dump(&a, "return a,;", &errors);
+    CHECK_STR(errors, "2:14: expected an expression, found ';'\n");
+    arena_free(&a);
+}
+
+TEST(parses_multi_var_and_multi_assign) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "q, r := divmod(7, 2);", &errors),
+              "(block (multi-var (q r) (call divmod (int 7) (int 2))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "a, b = swap(a, b);", &errors),
+              "(block (assign = ((name a) (name b)) (call swap (name a) (name b))))");
+    CHECK_STR(errors, "");
+    // Three names; one name is still an ordinary declaration or assignment.
+    CHECK_STR(body_dump(&a, "x, y, z := f(); x := 1; x = 2;", &errors),
+              "(block (multi-var (x y z) (call f)) (var x _ (int 1)) (assign = (name x) (int 2)))");
+    CHECK_STR(errors, "");
+    // The names are variables, each at its own name; the node is at the
+    // first.
+    Token_List *list = src("f :: () {\n    q, r := g();\n}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    Ast_Block *body = file->procs[0]->body;
+    Ast *s = body ? body->statements[0] : nullptr;
+    CHECK(s && s->kind == AST_MULTI_VAR);
+    if (s && s->kind == AST_MULTI_VAR) {
+        Ast_Multi_Var *multi = (Ast_Multi_Var *)s;
+        CHECK_EQ(multi->pos.col, 5);
+        CHECK_EQ(multi->vars.count, 2);
+        CHECK_STR(multi->vars[1]->name, "r");
+        CHECK_EQ(multi->vars[1]->pos.col, 8);
+        CHECK(multi->vars[1]->kind == AST_VAR && !multi->vars[1]->value);
+    }
+    token_list_free(list);
+    // Several targets take only '=': a compound operator has one.
+    body_dump(&a, "a, b += f();", &errors);
+    CHECK_STR(errors, "2:10: expected '=', found '+='\n");
+    body_dump(&a, "a, b;", &errors);
+    CHECK_STR(errors, "2:9: expected '=', found ';'\n");
+    // '---' has no type to give the names.
+    body_dump(&a, "a, b := ---;", &errors);
+    CHECK_STR(errors, "2:13: '---' needs a type, as in x : int = ---;\n");
+    // Only names can be declared: a target that isn't one makes an
+    // assignment, which ':=' isn't.
+    body_dump(&a, "a, f() := g();", &errors);
+    CHECK_STR(errors, "2:12: expected '=', found ':='\n");
+    arena_free(&a);
+}
+
+TEST(parses_globals_and_constants) {
+    Arena a = arena_make();
+    String errors;
+    Token_List *list = src("counter : int;\n"
+                           "LIMIT :: 100;\n"
+                           "start := LIMIT - 1;\n"
+                           "flag : bool = true;\n"
+                           "junk : u8 = ---;\n"
+                           "main :: () { }\n"
+                           "N :: -1;\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    // Procedures and globals together, in source order.
+    CHECK_STR(ast_dump(&a, file),
+              "(var counter int)\n"
+              "(const LIMIT (int 100))\n"
+              "(var start _ (binary - (name LIMIT) (int 1)))\n"
+              "(var flag bool (bool true))\n"
+              "(var junk u8 ---)\n"
+              "(proc main (params) (block))\n"
+              "(const N (unary - (int 1)))\n");
+    CHECK_EQ(file->procs.count, 1);
+    CHECK_EQ(file->globals.count, 6);
+    if (file->globals.count == 6) {
+        CHECK(file->globals[0]->kind == AST_VAR && ((Ast_Var *)file->globals[0])->is_global);
+        CHECK(file->globals[1]->kind == AST_CONST);
+        CHECK(file->globals[4]->kind == AST_VAR && ((Ast_Var *)file->globals[4])->is_uninitialized);
+    }
+    token_list_free(list);
+    // A local is no global.
+    list = src("f :: () {\n    x := 1;\n}\n");
+    file = parse(list->tokens, &a, &list->diag);
+    Ast_Block *body = file->procs[0]->body;
+    CHECK(body && !((Ast_Var *)body->statements[0])->is_global);
+    token_list_free(list);
+    // What a declaration needs is what it needs inside a body.
+    parse_src(&a, "x := ---;\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:6: '---' needs a type, as in x : int = ---;\n");
+    parse_src(&a, "x : int = 5\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "2:1: expected ';', found identifier 'main'\n");
+    arena_free(&a);
+}
+
+TEST(parenthesised_constant_isnt_a_procedure) {
+    // After '::', '(' ')' or '(' IDENT ':' starts a procedure's parameters;
+    // any other '(' starts a constant's value.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "N :: (1 + 2);\n"
+                        "M :: (N) * 2;\n"
+                        "f :: () { }\n"
+                        "g :: (a: int) -> int { return a; }\n",
+                        &errors),
+              "(const N (binary + (int 1) (int 2)))\n"
+              "(const M (binary * (name N) (int 2)))\n"
+              "(proc f (params) (block))\n"
+              "(proc g (params (a int)) (returns int) (block (return (name a))))\n");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(recovery_stops_at_a_global) {
+    // After an error, a global variable's declaration in column 1 is the
+    // next declaration, as a procedure's is: it's kept, so its uses aren't
+    // unknown. Inside a body, an indented local declared the same way isn't.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_src(&a,
+                            "f :: () {\n"
+                            "    x := ;\n"
+                            "    y : int;\n"
+                            "}\n"
+                            "counter : int;\n"
+                            "start := 1;\n"
+                            "main :: () { }\n",
+                            &errors);
+    CHECK_STR(errors, "2:10: expected an expression, found ';'\n");
+    CHECK_STR(dump, "(broken f)\n(var counter int)\n(var start _ (int 1))\n(proc main (params) (block))\n");
+    // A global that fails is a broken entry with its name, and the next one
+    // is kept.
+    dump = parse_src(&a, "counter : int = 1 2;\nstart := 1;\n", &errors);
+    CHECK_STR(errors, "1:19: expected ';', found integer literal\n");
+    CHECK_STR(dump, "(broken counter)\n(var start _ (int 1))\n");
     arena_free(&a);
 }

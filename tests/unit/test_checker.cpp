@@ -214,8 +214,8 @@ TEST(a_broken_declaration_of_anything_is_declared) {
     // x isn't a procedure, but the program says it exists: using it is
     // nothing more to report.
     Arena a = arena_make();
-    CHECK_STR(errors_after_parse(&a, "IDENT:x :: INT:5 ; | IDENT:main :: ( ) { IDENT:x ; IDENT:x ( ) ; }"),
-              "1:5: only procedures can be declared at the top level for now\n");
+    CHECK_STR(errors_after_parse(&a, "IDENT:x :: INT:5 INT:6 ; | IDENT:main :: ( ) { IDENT:x ; IDENT:x ( ) ; }"),
+              "1:7: expected ';', found integer literal\n");
     arena_free(&a);
 }
 
