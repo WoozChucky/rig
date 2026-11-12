@@ -1088,6 +1088,26 @@ TEST(blocks_nest_up_to_a_thousand_levels) {
     arena_free(&a);
 }
 
+TEST(types_nest_up_to_a_thousand_levels) {
+    // Each pointer, array and view is a level above what it holds: 1000
+    // levels build, through every stage; one more is one message, at the
+    // '*' or '[' of the 1001st, rather than a stack overflow. Mixed counts
+    // the same.
+    Arena a = arena_make();
+    CHECK(builds(&a, nested_source(&a, "x : ", "*", 1000, "int", "", ";\nmain :: () { }\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, "x : ", "*", 1001, "int", "", ";\nmain :: () { }\n")),
+              "1:1005: this type is nested too deeply (more than 1000 levels)\n");
+    CHECK(builds(&a, nested_source(&a, "x : ", "[1]", 1000, "u8", "", ";\nmain :: () { }\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, "x : ", "[1]", 1001, "u8", "", ";\nmain :: () { }\n")),
+              "1:3005: this type is nested too deeply (more than 1000 levels)\n");
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () { x : ", "[]*", 501, "int", "", "; }\n")),
+              "1:1518: this type is nested too deeply (more than 1000 levels)\n");
+    // Far deeper says the same, once.
+    CHECK_STR(check_source(&a, nested_source(&a, "x : ", "*", 300000, "int", "", ";\nmain :: () { }\n")),
+              "1:1005: this type is nested too deeply (more than 1000 levels)\n");
+    arena_free(&a);
+}
+
 TEST(a_local_constant_in_column_1_is_a_statement) {
     // Indentation means nothing to the language: `N :: 5;` in column 1 of
     // a body is a local constant. Only a procedure's signature after a

@@ -19,6 +19,7 @@ struct Parser {
     s32 height;                 // the levels of the expression the last parse_ function returned
     Position expression_start;  // where the outermost expression being read starts
     s32 blocks;                 // the blocks open around the next token
+    s32 types;                  // the pointer, array and view types open around the next token
     // After a body found never closed: the token where the top level
     // resumes (parse_block_rest), or -1.
     s64 resume;
@@ -37,7 +38,9 @@ struct Parser {
 // operator, cast, call, dereference (.*), field (.x), element (a[i]),
 // literal and binary operator is one level above what it holds, and a
 // name, a number, a string, null or size_of(T) is none. An array type's
-// count ([N]T) is read a level down too, wherever the type is.
+// count ([N]T) is read a level down too, wherever the type is. A type
+// nests at most MAX_DEPTH levels too, each pointer, array and view a level
+// above what it holds (parse_type).
 // So ((x)) is 2, - - x is 2, f(g(x)) is 2, and x + x + x is 2 too: the
 // Pratt loop builds it as (x + x) + x, a left-leaning tree whose height
 // grows with each operator, though the parser itself doesn't recurse to
@@ -903,8 +906,28 @@ static Ast_Block *parse_block(Parser *p) {
 // count holding a cast whose type has a count ... can't recurse past
 // MAX_DEPTH; the height kept for the expression around the type stays as
 // it was.
+//
+// Types nest at most MAX_DEPTH deep, each pointer, array and view a level
+// above what it holds (*[]int is 2): "this type is nested too deeply (more
+// than 1000 levels)", at the '*' or '[' of the one too many. The parser,
+// the checker and lowering recurse into each, as into an expression.
+static Ast_Type *parse_type_rest(Parser *p, Token *t);
+
 static Ast_Type *parse_type(Parser *p) {
     Token *t = peek(p);
+    if (t->kind != TOKEN_STAR && t->kind != TOKEN_LBRACKET) return parse_type_rest(p, t);
+    if (p->types == MAX_DEPTH) {
+        diag_error(p->diag, t->pos, "this type is nested too deeply (more than %d levels)", MAX_DEPTH);
+        return nullptr;
+    }
+    p->types++;
+    Ast_Type *type = parse_type_rest(p, t);
+    p->types--;
+    return type;
+}
+
+// parse_type's type, once its level is counted: t is its first token.
+static Ast_Type *parse_type_rest(Parser *p, Token *t) {
     if (t->kind == TOKEN_STAR) {
         advance(p);
         Ast_Type *pointer = ast_new<Ast_Type>(p->arena, AST_TYPE_POINTER, t->pos);
@@ -1283,7 +1306,7 @@ static Ast_Proc *broken_entry(Parser *p, s64 start) {
 
 Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
-    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, -1};
+    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, -1};
     Ast_File *file = arena_new<Ast_File>(a);
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;
