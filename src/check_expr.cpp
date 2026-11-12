@@ -384,13 +384,28 @@ static void report_type_as_value(Checker *c, Ast_Name *name) {
     diag_error(c->diag, name->pos, "'" STR_FMT "' is a type, not a value", STR_ARG(name->name));
 }
 
+// A name nothing declares, used as a value: "unknown identifier 'foo'".
+// A built-in type's name (int, string, ...) isn't declared, but isn't
+// unknown either: it's said to be a type, as a struct's name is
+// (report_type_as_value), or, being called, "'s64' isn't a procedure, so
+// it can't be called".
+static void report_undeclared(Checker *c, Ast_Name *name, bool called) {
+    if (!type_from_name(name->name)) {
+        diag_error(c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
+    } else if (called) {
+        diag_error(c->diag, name->pos, "'" STR_FMT "' isn't a procedure, so it can't be called", STR_ARG(name->name));
+    } else {
+        report_type_as_value(c, name);
+    }
+}
+
 // A name used as a value: a variable's or parameter's value, or a
 // constant's, which is known while compiling.
 static Type *check_name(Checker *c, Ast_Name *name) {
     Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
     if (!decl) {
-        diag_error(c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
+        report_undeclared(c, name, false);
         return nullptr;
     }
     switch (decl->kind) {
@@ -422,7 +437,7 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
     if (!decl) {
-        diag_error(c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
+        report_undeclared(c, name, true);
     } else if (decl->kind != AST_PROC) {
         // A variable, constant or parameter of that name, which hides the
         // procedure if there is one.
@@ -1049,8 +1064,8 @@ static Type *check_float_cast(Checker *c, Ast_Cast *cast, Type *to) {
     return to;
 }
 
-// cast(T) e where e or T is a pointer and the other a pointer, a number or
-// a bool (check_cast has seen to null and strings) (spec 6.5):
+// cast(T) e where e is a pointer and T anything, or T a pointer and e a
+// number or a bool (check_cast has seen to null and strings) (spec 6.5):
 // - a pointer to any pointer: the same address, taken to point at
 //   something else. A null stays null, a constant.
 // - a pointer to and from int, s64 or u64: the address as a number, and a
@@ -1138,8 +1153,8 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
     if ((from == &type_string && to == bytes) || (from == bytes && to == &type_string)) return to;
     bool bool_to_integer = from == &type_bool && to->kind == TYPE_INTEGER;
     if (!bool_to_integer && !check_convert(c, value, to)) {
-        diag_error(c->diag, cast->pos, "can't cast '" STR_FMT "' to '" STR_FMT "'", STR_ARG(type_name(c->arena, from)),
-                   STR_ARG(type_name(c->arena, to)));
+        diag_error(c->diag, cast->pos, "can't cast '" STR_FMT "' to '" STR_FMT "'%s", STR_ARG(type_name(c->arena, from)),
+                   STR_ARG(type_name(c->arena, to)), conversion_hint(from, to));
         return nullptr;
     }
     // A bool constant's 1 or 0 is the integer's value too.
@@ -1252,7 +1267,7 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing) {
         Ast *decl = check_lookup(c, name->name);
         name->decl = decl;
         if (!decl) {
-            diag_error(c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
+            report_undeclared(c, name, false);
             return false;
         }
         if (!name_is_place(c, name, for_writing)) return false;
@@ -1376,14 +1391,23 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
 // e.x: the field x of struct e, or of the struct e points at (p.x is
 // p.*.x: one pointer, so a **Node needs .* first). Reported at the field's
 // name: "'Vec2' has no field 'z'", or on anything else "'.x' needs a struct
-// or a pointer to one, not 'int'". m->index is the field's. An array's, a
-// view's or a string's .count and .data are check_sequence_member's (not
-// through a pointer: p.*.count).
+// or a pointer to one, not 'int'". m->index is the field's, whose type is
+// made now if it's a late field's not made yet (check_late_field). An
+// array's, a view's or a string's .count and .data are
+// check_sequence_member's, not reached through a pointer: on a pointer to
+// one, "'.count' isn't reached through a pointer, '*string'; write
+// .*.count".
 static Type *check_member(Checker *c, Ast_Member *m) {
     Type *t = check_operand(c, m->operand);
     if (!t) return nullptr;
     if (t->kind == TYPE_ARRAY || type_is_view_or_string(t)) return check_sequence_member(c, m, t);
     Type *s = type_is_pointer(t) && t->pointee->kind == TYPE_STRUCT ? t->pointee : t;
+    bool sequence = type_is_pointer(t) && (t->pointee->kind == TYPE_ARRAY || type_is_view_or_string(t->pointee));
+    if (sequence && (string_eq(m->name, str("count")) || string_eq(m->name, str("data")))) {
+        diag_error(c->diag, m->pos, "'." STR_FMT "' isn't reached through a pointer, '" STR_FMT "'; write .*." STR_FMT,
+                   STR_ARG(m->name), STR_ARG(type_name(c->arena, t)), STR_ARG(m->name));
+        return nullptr;
+    }
     if (s->kind != TYPE_STRUCT) {
         diag_error(c->diag, m->pos, "'." STR_FMT "' needs a struct or a pointer to one, not '" STR_FMT "'",
                    STR_ARG(m->name), STR_ARG(type_name(c->arena, t)));
@@ -1395,6 +1419,7 @@ static Type *check_member(Checker *c, Ast_Member *m) {
                    STR_ARG(m->name));
         return nullptr;
     }
+    check_late_field(c, s, m->index);
     return s->fields[m->index].type;
 }
 
@@ -1421,7 +1446,8 @@ static void check_stray_value(Checker *c, Ast *value) {
 // each must be a field ("'Vec2' has no field 'z'"), given once ("field 'x'
 // is given twice"), each said at the name. The fields not given are zeroed
 // (lowering). After any of these, a value with no field to go to is still
-// checked for its own mistakes (check_stray_value).
+// checked for its own mistakes (check_stray_value). A late field's type is
+// made before its value meets it, if it isn't yet (check_late_field).
 static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t) {
     if (!literal->names.count) {
         if (literal->values.count > t->fields.count) {
@@ -1433,6 +1459,7 @@ static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t) {
             return;
         }
         for (s64 i = 0; i < literal->values.count; i++) {
+            check_late_field(c, t, (s32)i);
             check_field_value(c, literal->values[i], t->fields[i].type);
         }
         return;
@@ -1449,6 +1476,7 @@ static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t) {
         } else if (given_before) {
             diag_error(c->diag, at, "field '" STR_FMT "' is given twice", STR_ARG(name));
         } else {
+            check_late_field(c, t, index);
             check_field_value(c, literal->values[i], t->fields[index].type);
             continue;
         }

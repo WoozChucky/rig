@@ -1,0 +1,14 @@
+// == on two strings of the same count reads their bytes: when that count
+// is above 0 and either one's data is null, it stops at the operator with
+// a null pointer dereference (spec 6.5). Strings of different counts are
+// told apart by their counts, with nothing read, so that isn't an error.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    s : string;
+    s.count = 2;
+    if s == "abc" { puts("never"); }
+    puts("before");
+    if s == "ab" { puts("never"); }
+    puts("after");
+}
