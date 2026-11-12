@@ -1,0 +1,11 @@
+// Only a string literal converts to *u8: any other string's bytes may not
+// end with the zero C reads up to (spec 6.5), so it's given as its .data,
+// which says so.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    s := "hello";
+    p : *u8 = s;
+    puts(s);
+    puts(s.data);
+}
