@@ -1,0 +1,12 @@
+// Parameters are read-only (spec 6.1), so they have no address: a pointer
+// to one would let the procedure change it. One message: p's type is then
+// unknown, and its use says nothing more.
+double :: (n: int) -> int {
+    p := *n;
+    p.* *= 2;
+    return n;
+}
+
+main :: () {
+    double(4);
+}
