@@ -10,15 +10,17 @@
 struct Checker {
     Arena *arena;
     Diagnostics *diag;
-    Table<Ast *> top_level;      // every procedure, global variable and top-level constant, by
-                                 // name: visible everywhere (Ast_Proc, Ast_Var, Ast_Const)
+    Table<Ast *> top_level;      // every procedure, global variable, top-level constant and
+                                 // struct, by name: visible everywhere (Ast_Proc, Ast_Var,
+                                 // Ast_Const, Ast_Struct)
     Array<Table<Ast *>> scopes;  // the blocks being checked, innermost last: the names
                                  // declared in each so far (Ast_Var, Ast_Const, Ast_Param)
     Ast_Proc *proc;              // the procedure whose body is being checked
     Array<Ast *> loops;          // the loops around the statement being checked, innermost
                                  // last (Ast_While, Ast_For): what break and continue act on
-    Array<Ast *> resolving;      // the globals and constants under way, each needed by the one
-                                 // before it (resolve_global): a circle is the end of this list
+    Array<Ast *> resolving;      // the globals, constants, structs' layouts and late fields' types
+                                 // under way, each needed by the one before it (resolve_global,
+                                 // resolve_struct, make_late_field): a circle is the end of this list
 };
 
 // checker.cpp
@@ -38,6 +40,13 @@ Type *resolve_type(Checker *c, Ast_Type *written);
 // resolve_type, but void itself is a type too: for size_of, which says
 // what's wrong with it.
 Type *resolve_type_or_void(Checker *c, Ast_Type *written);
+
+// Makes sure the type of field `index` of struct t is known: a late field's
+// (one holding a pointer or a view, checker.cpp's lay_out) is made here if
+// it isn't yet, as a literal or a field access checked during the structs'
+// layouts (in a global an array's count names) needs it before every layout
+// is done. Anything else's already is.
+void check_late_field(Checker *c, Type *t, s32 index);
 
 // [count]element (type_array_of), or null after "'[N]T' is too big", at
 // `at`: larger than any type may be (TYPE_MAX_SIZE), its count read as
