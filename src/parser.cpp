@@ -14,7 +14,30 @@ struct Parser {
     s64 next;  // index of the next token to read
     Arena *arena;
     Diagnostics *diag;
+    // How deeply the code being read nests (see MAX_DEPTH):
+    s32 levels;                 // the expression levels open around the next token
+    s32 height;                 // the levels of the expression the last parse_ function returned
+    Position expression_start;  // where the outermost expression being read starts
+    s32 blocks;                 // the blocks open around the next token
 };
+
+// A limit of the compiler (spec 6.1): an expression nests at most MAX_DEPTH
+// levels deep, and blocks too. The parser, the checker and lowering all walk
+// the tree recursively, a call or a few per level, on the main thread's
+// stack (1 MB on Windows, 8 MB on Linux): without a limit, a file with a few
+// thousand nested parentheses, or a generated sum of a few thousand terms,
+// crashes rig with a stack overflow and no message. The parser enforces it,
+// so no later stage ever sees a deeper tree. 1000 levels fit on Windows'
+// stack with room to spare, even inside 1000 nested blocks.
+//
+// An expression's levels are its tree's height: each parenthesis, prefix
+// operator, cast, call and binary operator is one level above what it
+// holds, and a name or a literal is none. So ((x)) is 2, - - x is 2,
+// f(g(x)) is 2, and x + x + x is 2 too: the Pratt loop builds it as
+// (x + x) + x, a left-leaning tree whose height grows with each operator,
+// though the parser itself doesn't recurse to build it (the checker does,
+// to check it).
+static const s32 MAX_DEPTH = 1000;
 
 static Token *peek(Parser *p, s64 ahead = 0) {
     s64 i = p->next + ahead;
@@ -53,9 +76,49 @@ static Ast *parse_unary(Parser *p);
 static Ast_Type *parse_type(Parser *p);
 static bool parameters_follow(Parser *p, s64 open);
 
+// "this expression is nested too deeply (more than 1000 levels)", at the
+// start of the outermost expression being read. Every parse_ function then
+// returns null, so the rest of the expression reports nothing more, and the
+// declaration is given up as after any syntax error.
+static void report_too_deep(Parser *p) {
+    diag_error(p->diag, p->expression_start, "this expression is nested too deeply (more than %d levels)",
+               MAX_DEPTH);
+}
+
+// Opens one level of the expression being read, before reading what's
+// inside it (a parenthesis's value, an operator's operand, a call's
+// arguments): false, after reporting, when that's one level more than
+// MAX_DEPTH allows. Checking on the way down stops the parser before its
+// own recursion gets too deep; the caller closes the level (p->levels--)
+// once what's inside is read, whether or not it could be. A level open
+// means the tree will be at least that high, so this never rejects an
+// expression that fits.
+static bool open_level(Parser *p) {
+    if (p->levels == MAX_DEPTH) {
+        report_too_deep(p);
+        return false;
+    }
+    p->levels++;
+    return true;
+}
+
+// The expression just built is `height` levels high (p->height, for its
+// parent): false, after reporting, when that's more than MAX_DEPTH. Checking
+// on the way up catches what doesn't nest on the way down: a chain of
+// binary operators, built in a loop.
+static bool set_height(Parser *p, s32 height) {
+    if (height > MAX_DEPTH) {
+        report_too_deep(p);
+        return false;
+    }
+    p->height = height;
+    return true;
+}
+
 // primary = IDENT | INT | FLOAT | STRING | 'true' | 'false' | '(' expression ')'
 static Ast *parse_primary(Parser *p) {
     Token *t = peek(p);
+    p->height = 0;  // a name or a literal; parentheses say otherwise below
     switch (t->kind) {
     case TOKEN_IDENT: {
         advance(p);
@@ -89,11 +152,14 @@ static Ast *parse_primary(Parser *p) {
         return value;
     }
     case TOKEN_LPAREN: {
-        // Parentheses only group, so they add no node; the value inside
-        // starts at the '(' though, for messages about the whole value.
+        // Parentheses only group, so they add no node (though they are a
+        // level, MAX_DEPTH); the value inside starts at the '(' though, for
+        // messages about the whole value.
         advance(p);
+        if (!open_level(p)) return nullptr;
         Ast *inner = parse_expression(p, 1);
-        if (!inner || !expect(p, TOKEN_RPAREN)) return nullptr;
+        p->levels--;
+        if (!inner || !set_height(p, p->height + 1) || !expect(p, TOKEN_RPAREN)) return nullptr;
         inner->start = t->pos;
         return inner;
     }
@@ -111,16 +177,20 @@ static Ast *parse_postfix(Parser *p) {
         advance(p);
         call->start = e->start;
         call->callee = e;
+        s32 height = p->height;  // the callee's; the call is a level above it and its arguments
         if (peek(p)->kind != TOKEN_RPAREN) {
             for (;;) {
+                if (!open_level(p)) return nullptr;
                 Ast *arg = parse_expression(p, 1);
+                p->levels--;
                 if (!arg) return nullptr;
+                if (p->height > height) height = p->height;
                 array_add(&call->args, arg);
                 if (peek(p)->kind != TOKEN_COMMA) break;
                 advance(p);
             }
         }
-        if (!expect(p, TOKEN_RPAREN)) return nullptr;
+        if (!set_height(p, height + 1) || !expect(p, TOKEN_RPAREN)) return nullptr;
         e = call;
     }
     return e;
@@ -150,8 +220,10 @@ static Ast *parse_cast(Parser *p) {
     if (!expect(p, TOKEN_LPAREN)) return nullptr;
     cast->type_expr = parse_type(p);
     if (!cast->type_expr || !expect(p, TOKEN_RPAREN)) return nullptr;
+    if (!open_level(p)) return nullptr;
     cast->value = parse_unary(p);
-    return cast->value ? cast : nullptr;
+    p->levels--;
+    return cast->value && set_height(p, p->height + 1) ? cast : nullptr;
 }
 
 // unary = ('-' | '~' | '!') unary | cast | postfix
@@ -164,8 +236,10 @@ static Ast *parse_unary(Parser *p) {
     if (op->kind == TOKEN_CAST) return parse_cast(p);
     if (op->kind != TOKEN_MINUS && op->kind != TOKEN_TILDE && op->kind != TOKEN_BANG) return parse_postfix(p);
     advance(p);
+    if (!open_level(p)) return nullptr;
     Ast *operand = parse_unary(p);
-    if (!operand) return nullptr;
+    p->levels--;
+    if (!operand || !set_height(p, p->height + 1)) return nullptr;
     Ast_Unary *unary = ast_new<Ast_Unary>(p->arena, AST_UNARY, op->pos);
     unary->op = op->kind;
     unary->operand = operand;
@@ -225,15 +299,24 @@ static int binary_precedence(Token_Kind kind) {
 // takes that - itself, with a - b as its left operand: (a - b) - c. That's
 // left associativity: an operator never takes another of its own level as
 // its right operand.
+//
+// Each binary node is a level above both its operands (MAX_DEPTH): the
+// right operand is read a level down, and the node's height is one more
+// than the higher of the two.
 static Ast *parse_expression(Parser *p, int min_precedence) {
+    if (p->levels == 0) p->expression_start = peek(p)->pos;  // the outermost expression
     Ast *left = parse_unary(p);
     while (left) {
+        s32 left_height = p->height;
         Token *op = peek(p);
         int precedence = binary_precedence(op->kind);
         if (precedence == 0 || precedence < min_precedence) break;
         advance(p);
+        if (!open_level(p)) return nullptr;
         Ast *right = parse_expression(p, precedence + 1);
+        p->levels--;
         if (!right) return nullptr;
+        if (!set_height(p, (left_height > p->height ? left_height : p->height) + 1)) return nullptr;
         Ast_Binary *binary = ast_new<Ast_Binary>(p->arena, AST_BINARY, op->pos);
         binary->start = left->start;
         binary->op = op->kind;
@@ -534,10 +617,8 @@ static Ast *parse_statement(Parser *p) {
     return e;
 }
 
-// block = '{' statement* '}'
-static Ast_Block *parse_block(Parser *p) {
-    Token *open = expect(p, TOKEN_LBRACE);
-    if (!open) return nullptr;
+// The statements of the block that `open` began, and its '}'.
+static Ast_Block *parse_block_rest(Parser *p, Token *open) {
     Ast_Block *block = ast_new<Ast_Block>(p->arena, AST_BLOCK, open->pos);
     while (peek(p)->kind != TOKEN_RBRACE) {
         // The end of the file, or a declaration at the start of a line
@@ -552,6 +633,24 @@ static Ast_Block *parse_block(Parser *p) {
         array_add(&block->statements, statement);
     }
     block->end = advance(p)->pos;
+    return block;
+}
+
+// block = '{' statement* '}'
+//
+// Blocks nest at most MAX_DEPTH deep, a procedure's body the first:
+// "blocks are nested too deeply (more than 1000 levels)" at the '{' of the
+// one too many. The parser, the checker and lowering recurse into each.
+static Ast_Block *parse_block(Parser *p) {
+    Token *open = expect(p, TOKEN_LBRACE);
+    if (!open) return nullptr;
+    if (p->blocks == MAX_DEPTH) {
+        diag_error(p->diag, open->pos, "blocks are nested too deeply (more than %d levels)", MAX_DEPTH);
+        return nullptr;
+    }
+    p->blocks++;
+    Ast_Block *block = parse_block_rest(p, open);
+    p->blocks--;
     return block;
 }
 
@@ -857,7 +956,7 @@ static Ast_Proc *broken_entry(Parser *p, s64 start) {
 
 Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
-    Parser p = {tokens, 0, a, d};
+    Parser p = {tokens, 0, a, d, 0, 0, {}, 0};
     Ast_File *file = arena_new<Ast_File>(a);
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;
