@@ -9,6 +9,9 @@
 // Arena's fields, and Table's but count, are private: nothing outside this
 // file and base.cpp looks inside them. Array's and String's fields are
 // public, because the rest of the compiler reads them directly.
+//
+// At the end, two helpers on bytes that need nothing else: making a path
+// absolute, and MD5 (milestone 2c's debug information).
 
 #pragma once
 
@@ -305,3 +308,28 @@ void table_free(Table<V> *t) {
     free(t->slots);
     *t = {};
 }
+
+// ---------------------------------------------------------------------------
+// Paths and checksums, for the debug information (milestone 2c): it names
+// the source file by its absolute path, so an editor's breakpoint (which
+// names files that way) finds it, with the MD5 of its bytes, so a debugger
+// can tell the file has changed since the program was built.
+
+// `path` made absolute: joined to `directory` (an absolute path, as
+// os_current_directory gives) when it's relative, its "." segments dropped
+// and each ".." taking away the segment before it, by the text alone (no
+// link is followed, and the file needn't exist); ".." at the root stays at
+// the root. On Windows (`windows`) both / and \ separate, and the result
+// has \ only. A root there is a drive, "C:", or a network share's
+// "\\server\share": a path with one is absolute, and a path that starts
+// with a separator but has none takes directory's. On Linux only /
+// separates. The result has no separator doubled, and none at its end but
+// a root's own ("C:\", "/").
+String path_absolute(Arena *a, String directory, String path, bool windows);
+
+// The MD5 digest of `bytes` (RFC 1321) in `out`, its 16 bytes in the order
+// they're written: printed as 32 hex digits from out[0], it's what md5sum
+// shows. MD5 is no longer safe against someone forging a file to match, but
+// as a checksum against an accidental change it's what debuggers ask for
+// (DWARF 5's and CodeView's file checksums).
+void md5(String bytes, u8 out[16]);
