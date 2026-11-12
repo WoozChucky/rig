@@ -14,6 +14,7 @@ main :: () { puts("Hello, World!"); }
 ```
 
 `bin/rig build hello.rig` (`bin\rig build hello.rig` in Windows' command prompt) writes `hello.exe` on Windows and `hello` on Linux, in the current directory. `-o OUTPUT` names it otherwise; on Windows a name with no extension gets `.exe`. The object file goes into a `.build` directory, made in the current directory. So far Rig has integers of every size (`s8` to `s64`, `u8` to `u64`, and `int`) with `+`, `-`, `*`, bitwise operators and shifts (no division yet), bools with comparisons and `&&`, `||` and `!`, variables and constants inside procedures, `if`/`else`, `while`, and `for` over a range with `break` and `continue`, procedures that take parameters and return a value, string literals, and C functions declared `#foreign libc`.
+`bin/rig check hello.rig` stops at the errors: it reads and checks the program as `build` does and prints the same diagnostics, but writes nothing, and with `--stdin` it checks the text on its standard input under that file name, which is how an editor checks what you are typing before it is saved.
 
 ## Building
 
