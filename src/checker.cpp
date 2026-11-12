@@ -639,8 +639,9 @@ static void resolve_late_fields(Checker *c, Ast_Struct *s) {
     }
 }
 
-// The type of an assignment's target, a place in memory (a variable or
-// p.*), or null after reporting what else it is (check_addressable).
+// The type of an assignment's target, a place in memory (a variable, p.*,
+// a field or an element), or null after reporting what else it is
+// (check_addressable).
 static Type *check_target(Checker *c, Ast *target) {
     return check_addressable(c, target, true) ? target->type : nullptr;
 }
