@@ -1641,13 +1641,48 @@ TEST(types_nest_at_most_max_depth) {
         CHECK_STR(check_source(&a, nested_source(&a, local, shape.pattern, n, more, "", local_after)),
                   types_too_deep(&a, 2, (s64)strlen("    x : ") + at));
     }
-    // A type inside an array's count is inside the type around it: 500
-    // '*', the array, and 499 more in the count's size_of are 1000 levels;
-    // 500 there are 1001, the message at the 500th.
-    const char *outer = nested_source(&a, "main :: () {\n    x : ", "*", 500, "[size_of(", "", "");
-    CHECK(builds(&a, nested_source(&a, outer, "*", 499, "int)]int", "", ";\n}\n")));
-    CHECK_STR(check_source(&a, nested_source(&a, outer, "*", 500, "int)]int", "", ";\n}\n")),
-              types_too_deep(&a, 2, 8 + 500 + 9 + 500));
+    arena_free(&a);
+}
+
+TEST(types_and_expressions_share_max_depth) {
+    // A type holds an expression (an array's count) and an expression a
+    // type (size_of's, a cast's), so the two nest inside each other, and
+    // every stage recurses through both: their levels count together,
+    // against one MAX_DEPTH. Counted apart, a thousand of each alternating
+    // ([size_of([size_of(...u8)]u8)]u8) overflowed Windows' stack, under
+    // both limits.
+    Arena a = arena_make();
+    const char *local = "main :: () {\n    x : ";
+    s64 x_col = (s64)strlen("    x : ") + 1;  // where the type starts
+    // Each [size_of( is two levels, the array and the size_of: 500 of them
+    // are 1000 levels; the 501st '[' is one too many, and a thousand of
+    // them are the same one message, with no crash.
+    CHECK(builds(&a, nested_source(&a, local, "[size_of(", 500, "u8", ")]u8", ";\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, local, "[size_of(", 501, "u8", ")]u8", ";\n}\n")),
+              types_too_deep(&a, 2, x_col + 500 * 9));
+    CHECK_STR(check_source(&a, nested_source(&a, local, "[size_of(", MAX_DEPTH, "u8", ")]u8", ";\n}\n")),
+              types_too_deep(&a, 2, x_col + 500 * 9));
+    // A type in a count: 500 '*', the array, its size_of and 498 '*' in it
+    // are 1000 levels; a 499th there is one too many.
+    const char *outer = nested_source(&a, local, "*", 500, "[size_of(", "", "");
+    CHECK(builds(&a, nested_source(&a, outer, "*", 498, "int)]int", "", ";\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, outer, "*", 499, "int)]int", "", ";\n}\n")),
+              types_too_deep(&a, 2, x_col + 500 + 9 + 498));
+    // A count's expression: 500 '*' and the array leave 499 levels for it,
+    // a chain of 499 operators; 500 are one too many, the expression's
+    // message at its start.
+    const char *array = nested_source(&a, local, "*", 500, "[1", "", "");
+    CHECK(builds(&a, nested_source(&a, array, " * 1", 499, "]u8", "", ";\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, array, " * 1", 500, "]u8", "", ";\n}\n")),
+              "2:510: this expression is nested too deeply (more than 1000 levels)\n");
+    // A cast's type is read a level down, as its value is: 500 parentheses,
+    // the cast and 499 '*' are 1000 levels; a 500th '*' is one too many.
+    const char *cast = "main :: () {\n    y : *int = null;\n    x := ";
+    CHECK(builds(&a, nested_source(&a, nested_source(&a, cast, "(", 500, "cast(", "", ""), "*", 499, "int) y", "",
+                                   nested_source(&a, "", ")", 500, ";\n}\n", "", ""))));
+    CHECK_STR(check_source(&a, nested_source(&a, nested_source(&a, cast, "(", 500, "cast(", "", ""), "*", 500,
+                                             "int) y", "", nested_source(&a, "", ")", 500, ";\n}\n", "", ""))),
+              types_too_deep(&a, 3, (s64)strlen("    x := ") + 1 + 500 + 5 + 499));
     arena_free(&a);
 }
 
