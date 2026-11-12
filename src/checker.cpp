@@ -181,11 +181,11 @@ static Ast_Resolve *resolve_state(Ast *decl) {
 // found in one (marked RESOLVE_CYCLE) isn't reported, being the same
 // tangle, but its declarations are marked all the same, from that one to
 // the end of c->resolving, or b would keep its type and a global that used
-// it (`d : int = b;`) would be told b's value isn't known. RESOLVE_CYCLE only ever means under
-// way (a done declaration is RESOLVE_DONE, whatever it was), so finding one
-// is finding a circle. A declaration that only leads into a circle
-// (`first := a;` checked first) isn't in it, and keeps its own messages,
-// though the circle's uses say nothing.
+// it (`d : int = b;`) would be told b's value isn't known. RESOLVE_CYCLE
+// only ever means under way (a done declaration is RESOLVE_DONE, whatever
+// it was), so finding one is finding a circle. A declaration that only
+// leads into a circle (`first := a;` checked first) isn't in it, and keeps
+// its own messages, though the circle's uses say nothing.
 //
 // Every global is resolved before any procedure body is checked, so the
 // scopes are always empty here: a local's name can never leak into a
