@@ -1,0 +1,7 @@
+// Constants can come in any order, but not need themselves.
+SIDE :: AREA / 2;
+AREA :: SIDE * SIDE;
+
+main :: () {
+    x := AREA;
+}
