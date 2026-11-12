@@ -577,6 +577,26 @@ TEST(for_needs_a_range) {
     arena_free(&a);
 }
 
+TEST(for_with_a_mistyped_iterator) {
+    // A name, then neither '..' nor the body's '{': the ':' of a named
+    // iterator is missing, or another language's `in` took its place. The
+    // message shows the form, at what came instead of the ':' (issue #52).
+    // Anything else that isn't '..' is "expected '..'".
+    Arena a = arena_make();
+    String errors;
+    body_dump(&a, "for i 0..9 { }", &errors);
+    CHECK_STR(errors, "2:11: expected ':' after the iterator's name, as in for i: 0..9\n");
+    body_dump(&a, "for x in 0..9 { }", &errors);
+    CHECK_STR(errors, "2:11: expected ':' after the iterator's name, as in for i: 0..9\n");
+    body_dump(&a, "for x := 0..9 { }", &errors);
+    CHECK_STR(errors, "2:11: expected ':' after the iterator's name, as in for i: 0..9\n");
+    body_dump(&a, "for 0 9 { }", &errors);
+    CHECK_STR(errors, "2:11: expected '..', found integer literal\n");
+    body_dump(&a, "for i: x y { }", &errors);
+    CHECK_STR(errors, "2:14: expected '..', found identifier 'y'\n");
+    arena_free(&a);
+}
+
 TEST(comparison_precedence) {
     // Go's levels (spec 6.1): || loosest, then &&, then the comparisons,
     // then + and *; all left-associative.
@@ -741,6 +761,13 @@ TEST(parses_multi_var_and_multi_assign) {
     // assignment, which ':=' isn't.
     body_dump(&a, "a, f() := g();", &errors);
     CHECK_STR(errors, "2:12: expected '=', found ':='\n");
+    // Several values come only from a call (spec 6.7): a Go-style swap, or
+    // a list of values, gets the checker's message for `a, b = b;`, at the
+    // first value, not "expected ';'" at its comma (issue #52).
+    body_dump(&a, "a, b = b, a;", &errors);
+    CHECK_STR(errors, "2:12: only a call can give several values, as in q, r := divmod(7, 2);\n");
+    body_dump(&a, "c, d := 1, 2;", &errors);
+    CHECK_STR(errors, "2:13: only a call can give several values, as in q, r := divmod(7, 2);\n");
     arena_free(&a);
 }
 
@@ -917,6 +944,30 @@ TEST(recovery_keeps_the_globals_after_a_body_never_closed) {
     dump = parse_src(&a, "main :: () {\n    x := 1;\nf :: () { }\n", &errors);
     CHECK_STR(errors, "3:1: expected '}', found identifier 'f'\n");
     CHECK_STR(dump, "(broken main)\n(proc f (params) (block))\n");
+    arena_free(&a);
+}
+
+TEST(a_broken_global_keeps_its_name) {
+    // A global whose declaration fails keeps its name (a broken entry), so
+    // its uses aren't unknown (issue #52): written C's way, a name and
+    // then a type, two names in a row, which never begin an expression;
+    // and with another declaration after it on the same line, which is
+    // still parsed whole.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "counter int = 0;\nmain :: () { counter = 1; }\n"),
+              "1:9: expected '::', found identifier 'int'\n");
+    CHECK_STR(check_source(&a,
+                           "counter : int = 1 2; f :: () { counter = 3; }\n"
+                           "main :: () { counter = 1; f(); }\n"),
+              "1:19: expected ';', found integer literal\n");
+    String errors;
+    String dump = parse_src(&a, "start := 1 2; f :: () { }\n", &errors);
+    CHECK_STR(errors, "1:12: expected ';', found integer literal\n");
+    CHECK_STR(dump, "(broken start)\n(proc f (params) (block))\n");
+    // Stray tokens before a declaration still leave no entry.
+    dump = parse_src(&a, "*greet :: () { }\n", &errors);
+    CHECK_STR(errors, "1:1: expected identifier, found '*'\n");
+    CHECK_STR(dump, "(proc greet (params) (block))\n");
     arena_free(&a);
 }
 

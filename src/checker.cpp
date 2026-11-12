@@ -104,8 +104,21 @@ static void check_var(Checker *c, Ast_Var *var) {
 // variable lives (lower.cpp); there's no code that could run before main
 // to work it out. Without a value, or with ---, it starts at zero: a
 // global is never on the stack, so it never holds what was there before.
+//
+// A string literal is known while compiling, but its address isn't a
+// number the file can hold as it is: the linker would have to fill it in
+// (a relocation), which lowering doesn't ask for yet. So a global can't
+// hold one yet, which is what it's told, rather than that its value isn't
+// known: "global variables can't hold a string literal yet; assign it in
+// a procedure" (a *u8 global, set in main, can).
 static void check_global_var(Checker *c, Ast_Var *var) {
-    if (check_var_value(c, var) && !var->value->is_constant) {
+    if (!check_var_value(c, var) || var->value->is_constant) return;
+    Ast *value = var->value;
+    while (value->kind == AST_CAST) value = ((Ast_Cast *)value)->value;  // cast(*u8) "hi" too
+    if (value->kind == AST_STRING) {
+        diag_error(c->diag, var->value->start,
+                   "global variables can't hold a string literal yet; assign it in a procedure");
+    } else {
         diag_error(c->diag, var->value->start, "a global's value must be known while compiling, for now");
     }
 }
