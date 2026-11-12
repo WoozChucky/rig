@@ -864,6 +864,62 @@ TEST(recovery_stops_at_a_global) {
     arena_free(&a);
 }
 
+TEST(recovery_keeps_the_globals_after_a_body_never_closed) {
+    // A body left open (an if's '}' forgotten) reads the column-1 globals
+    // after it as its own statements, until a procedure in column 1 ends
+    // it. The body ends before them instead: the column-1 declarations
+    // (IDENT ':', ':=' or '::') right before the end, at the body's own
+    // level, are read again as globals. So one mistake is one message, at
+    // the first of them, and their uses aren't unknown (issue #52).
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    x := 1;\n"
+                           "    if x == 1 {\n"
+                           "        x = 2;\n"
+                           "}\n"
+                           "\n"
+                           "counter : int;\n"
+                           "start := 1;\n"
+                           "f :: () { counter = start; }\n"),
+              "7:1: expected '}', found identifier 'counter'\n");
+    CHECK_STR(check_source(&a,
+                           "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                           "main :: () {\n"
+                           "    puts(\"x\");\n"
+                           "\n"
+                           "counter : int = 1;\n"
+                           "other :: () {\n"
+                           "    counter = 2;\n"
+                           "}\n"),
+              "5:1: expected '}', found identifier 'counter'\n");
+    String errors;
+    String dump = parse_src(&a, "main :: () {\n    x := 1;\ncounter : int;\nN :: 2;\nf :: () { }\n", &errors);
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'counter'\n");
+    CHECK_STR(dump, "(broken main)\n(var counter int)\n(const N (int 2))\n(proc f (params) (block))\n");
+    // An inner block left open too: the globals are the inner block's last
+    // statements, and the top level resumes at them all the same.
+    dump = parse_src(&a, "main :: () {\n    if true {\n        x := 1;\ncounter : int;\nf :: () { }\n", &errors);
+    CHECK_STR(errors, "4:1: expected '}', found identifier 'counter'\n");
+    CHECK_STR(dump, "(broken main)\n(var counter int)\n(proc f (params) (block))\n");
+    // Only the run right before the end: a column-1 local followed by an
+    // indented statement, or inside a closed block, stays the body's.
+    dump = parse_src(&a, "main :: () {\nx := 1;\n    x = 2;\n    {\ny := 3;\n    }\ncounter : int;\nf :: () { }\n",
+                     &errors);
+    CHECK_STR(errors, "7:1: expected '}', found identifier 'counter'\n");
+    CHECK_STR(dump, "(broken main)\n(var counter int)\n(proc f (params) (block))\n");
+    // The end of the file ends a body the same way.
+    dump = parse_src(&a, "main :: () {\n    x := 1;\ncounter : int;\n", &errors);
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'counter'\n");
+    CHECK_STR(dump, "(broken main)\n(var counter int)\n");
+    // With no such run, the message is where the body's end was found, as
+    // in milestone 1.
+    dump = parse_src(&a, "main :: () {\n    x := 1;\nf :: () { }\n", &errors);
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'f'\n");
+    CHECK_STR(dump, "(broken main)\n(proc f (params) (block))\n");
+    arena_free(&a);
+}
+
 // Milestone 2a (issue #37): floats.
 
 TEST(parses_float_literals) {
