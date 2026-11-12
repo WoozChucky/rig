@@ -11,9 +11,15 @@
 //   Problems panel;
 // - the commands "Rig: Build Current File" and "Rig: Run Current File"
 //   (rig.buildFile, rig.runFile), which start those same tasks, so a build
-//   shows its output and errors in one place however it was started.
+//   shows its output and errors in one place however it was started;
+// - the live check: `rig check FILE --stdin` on an open .rig file as you
+//   type, its errors shown as squiggles and in the Problems panel without
+//   building (the setting rig.check). While it's on, the tasks use the
+//   problem matcher `$rig-runtime` instead, which takes only a program's
+//   runtime errors, so a build doesn't list the compile errors twice.
 //
-// It's CommonJS and requires only VS Code's API and Node's built-in modules:
+// It's CommonJS and requires only VS Code's API, Node's built-in modules and
+// diagnostics.js beside it (reading rig's output, which needs no VS Code):
 // no npm packages, no build step. VS Code loads it as it is.
 
 'use strict';
@@ -23,6 +29,7 @@ const child_process = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { samePath, parseDiagnostics, characterOfByteColumn } = require('./diagnostics');
 
 const windows = process.platform === 'win32';
 
@@ -30,13 +37,6 @@ const windows = process.platform === 'win32';
 const TASK_NAMES = { build: 'build current file', run: 'run current file' };
 
 // --- Finding the files ------------------------------------------------------
-
-// Whether two paths name the same file: Windows' file names ignore case.
-function samePath(a, b) {
-    const x = path.resolve(a);
-    const y = path.resolve(b);
-    return windows ? x.toLowerCase() === y.toLowerCase() : x === y;
-}
 
 // Whether `file` is inside the directory `dir` (at any depth). Outside, the
 // relative path climbs out: it is `..` or starts with `../` (`..\` on
@@ -395,9 +395,16 @@ class RigTerminal {
 // A task of type rig: `definition` is { type: 'rig', command: 'build' or
 // 'run', file? }. Its terminal is made when it runs, from the definition
 // with VS Code's variables replaced.
+//
+// Its problem matcher: `$rig`, every diagnostic, when the live check is off
+// (the build is the only place the compile errors come from); otherwise
+// `$rig-runtime`, a program's runtime errors alone, since the live check
+// already shows the compile errors and the Problems panel would list each
+// one twice. The setting is the task's workspace folder's.
 function makeTask(definition, scope, name) {
     const execution = new vscode.CustomExecution(async (resolved) => new RigTerminal(resolved, scope));
-    const task = new vscode.Task(definition, scope, name, 'rig', execution, '$rig');
+    const matcher = checkSetting(scope && scope.uri) === 'off' ? '$rig' : '$rig-runtime';
+    const task = new vscode.Task(definition, scope, name, 'rig', execution, matcher);
     if (definition.command === 'build') task.group = vscode.TaskGroup.Build;
     // Each run starts on a clean terminal, so the output is this run's.
     task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, clear: true };
@@ -468,12 +475,201 @@ async function runFile(command, uri) {
     return vscode.tasks.executeTask(makeTask(definition, defaultScope(file), TASK_NAMES[command]));
 }
 
+// --- The live check -----------------------------------------------------------
+
+// How long the live check waits after the last change before checking, so
+// it runs once at a pause in the typing rather than once per keystroke.
+const CHECK_DELAY = 400;
+
+// The setting rig.check for a document or folder (its uri; undefined for
+// none): 'onType', 'onSave' or 'off'.
+function checkSetting(uri) {
+    return vscode.workspace.getConfiguration('rig', uri).get('check', 'onType');
+}
+
+// One rig diagnostic ({ line, column, severity, message }, from
+// parseDiagnostics) as VS Code's, in `document`. rig's column counts bytes,
+// VS Code's characters, hence characterOfByteColumn. The range runs from
+// the column to the end of the word there (`putz` in `putz("x")`), or is
+// one character when there's no word (a stray `;`). The document may have
+// changed since rig read it, so the line is kept within it.
+function toDiagnostic(document, d) {
+    const line = Math.max(0, Math.min(d.line - 1, document.lineCount - 1));
+    const text = document.lineAt(line).text;
+    const character = characterOfByteColumn(text, d.column);
+    const start = new vscode.Position(line, character);
+    // A word that merely ends at the column (the position touches it) is
+    // the word before: not this diagnostic's.
+    const word = document.getWordRangeAtPosition(start);
+    const end =
+        word && word.end.character > character ? word.end : new vscode.Position(line, Math.min(character + 1, text.length));
+    const severity = d.severity === 'warning' ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Error;
+    const diagnostic = new vscode.Diagnostic(new vscode.Range(start, end), d.message, severity);
+    diagnostic.source = 'rig';
+    return diagnostic;
+}
+
+// The live check: runs `rig check FILE --stdin` on open .rig files, with the
+// document's text on its standard input, so what's checked is what's on
+// screen, saved or not, and puts the errors in a diagnostic collection, the
+// extension's own list of problems, which VS Code shows as squiggles and in
+// the Problems panel. Each check replaces the document's list.
+//
+// One check per document at a time: a newer one ends the older's process,
+// and the older's output, if any comes, is ignored. Checking writes no file,
+// so ending it halfway does no harm.
+class LiveCheck {
+    constructor() {
+        this.collection = vscode.languages.createDiagnosticCollection('rig');
+        this.timers = new Map();  // a document's uri (as a string) -> its pending onType check
+        this.running = new Map(); // a document's uri -> the rig process checking it now
+        this.toldMissing = false; // said once that there's no compiler
+    }
+
+    // Whether a document is one to check: a .rig file on disk. An untitled
+    // one has no file name for rig to report, and isn't checked.
+    wanted(document) {
+        return document && document.languageId === 'rig' && document.uri && document.uri.scheme === 'file';
+    }
+
+    // Checks `document` CHECK_DELAY ms from now, unless it changes again
+    // before then, which starts the wait over.
+    schedule(document) {
+        const key = document.uri.toString();
+        clearTimeout(this.timers.get(key));
+        this.timers.set(
+            key,
+            setTimeout(() => {
+                this.timers.delete(key);
+                this.run(document);
+            }, CHECK_DELAY),
+        );
+    }
+
+    // Ends the check of a document, if one is running, so its output is
+    // ignored, and drops its pending one.
+    stop(key) {
+        clearTimeout(this.timers.get(key));
+        this.timers.delete(key);
+        const child = this.running.get(key);
+        if (child) {
+            this.running.delete(key);
+            child.kill();
+        }
+    }
+
+    // A document closed, or no longer to be checked: no check, no problems.
+    forget(document) {
+        if (!document || !document.uri) return;
+        this.stop(document.uri.toString());
+        this.collection.delete(document.uri);
+    }
+
+    // Checks `document` now. Resolves when the check is done (or ended by a
+    // newer one); nothing waits for that but test/check.js.
+    run(document) {
+        if (!this.wanted(document)) return Promise.resolve();
+        const key = document.uri.toString();
+        this.stop(key);
+        // Checking runs rig, so not in Restricted Mode, as building doesn't.
+        if (checkSetting(document.uri) === 'off' || !vscode.workspace.isTrusted) return Promise.resolve();
+        const file = document.uri.fsPath;
+        const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+        const found = findCompiler(file, folder);
+        if (found.error) {
+            // Said once, with the button to the setting; on every keystroke
+            // it would be in the way. The build command says it again.
+            this.collection.delete(document.uri);
+            if (!this.toldMissing) {
+                this.toldMissing = true;
+                compilerError(`Rig: ${found.error}`);
+            }
+            return Promise.resolve();
+        }
+
+        // rig runs where a build would, the file's workspace folder (or its
+        // directory), and gets the file's full path, which its diagnostics
+        // then name. The file needn't exist: with --stdin the name is only a
+        // name.
+        const cwd = folder ? folder.uri.fsPath : path.dirname(file);
+        return new Promise((resolve) => {
+            const child = child_process.spawn(found.compiler, ['check', file, '--stdin'], { cwd, windowsHide: true });
+            this.running.set(key, child);
+            let output = '';
+            child.stderr.setEncoding('utf8'); // whole UTF-8 characters, even split across reads
+            child.stderr.on('data', (text) => (output += text));
+            child.stdout.resume(); // rig check writes nothing there, but a pipe must be drained
+            child.stdin.on('error', () => {}); // rig ended (or was ended) before reading it all
+            child.stdin.end(document.getText());
+            // Couldn't start (the compiler was deleted, or isn't a program):
+            // said once, like a missing compiler.
+            child.on('error', (e) => {
+                if (this.running.get(key) === child) {
+                    this.running.delete(key);
+                    this.collection.delete(document.uri);
+                    if (!this.toldMissing) {
+                        this.toldMissing = true;
+                        compilerError(`Rig: couldn't run ${found.compiler}: ${e.message}`);
+                    }
+                }
+                resolve();
+            });
+            child.on('close', () => {
+                if (this.running.get(key) === child) {
+                    this.running.delete(key);
+                    const diagnostics = parseDiagnostics(output, file, cwd).map((d) => toDiagnostic(document, d));
+                    this.collection.set(document.uri, diagnostics);
+                }
+                resolve();
+            });
+        });
+    }
+
+    // Every open document again, after the settings or the workspace's
+    // trust changed: checked, or with rig.check off, forgotten.
+    refreshAll() {
+        for (const document of vscode.workspace.textDocuments) {
+            if (!this.wanted(document)) continue;
+            if (checkSetting(document.uri) === 'off') this.forget(document);
+            else this.run(document);
+        }
+    }
+
+    dispose() {
+        for (const key of [...this.timers.keys(), ...this.running.keys()]) this.stop(key);
+        this.collection.dispose();
+    }
+}
+
 function activate(context) {
+    const live = new LiveCheck();
     context.subscriptions.push(
         vscode.tasks.registerTaskProvider('rig', taskProvider),
         vscode.commands.registerCommand('rig.buildFile', (uri) => runFile('build', uri)),
         vscode.commands.registerCommand('rig.runFile', (uri) => runFile('run', uri)),
+        live,
+        // On open and save with onType and onSave alike; on each change,
+        // after a pause, with onType only. (A change event with no changes
+        // is the document becoming dirty or clean: nothing to check.)
+        vscode.workspace.onDidOpenTextDocument((document) => live.run(document)),
+        vscode.workspace.onDidSaveTextDocument((document) => live.run(document)),
+        vscode.workspace.onDidChangeTextDocument((event) => {
+            const document = event.document;
+            if (!event.contentChanges.length || !live.wanted(document)) return;
+            if (checkSetting(document.uri) === 'onType') live.schedule(document);
+        }),
+        vscode.workspace.onDidCloseTextDocument((document) => live.forget(document)),
+        vscode.workspace.onDidChangeConfiguration((event) => {
+            if (event.affectsConfiguration('rig.compilerPath')) live.toldMissing = false;
+            if (event.affectsConfiguration('rig.check') || event.affectsConfiguration('rig.compilerPath')) {
+                live.refreshAll();
+            }
+        }),
+        vscode.workspace.onDidGrantWorkspaceTrust(() => live.refreshAll()),
     );
+    // The documents open before the extension started (the one whose
+    // opening started it, among them) had no open event for it.
+    live.refreshAll();
 }
 
 function deactivate() {}
