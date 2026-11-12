@@ -1,0 +1,11 @@
+// A u64 index above int's range is out of bounds, never wrapped into a
+// negative number that might look in range; the message gives it unsigned.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    a := int.[1, 2, 3];
+    i : u64 = 18446744073709551615;
+    puts("before");
+    x := a[i];
+    puts("after");
+}

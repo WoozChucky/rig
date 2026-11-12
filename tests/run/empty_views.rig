@@ -1,0 +1,43 @@
+// Empty arrays and views (spec 6.5): a for over one runs zero times, its
+// count is 0, and any index of it is out of bounds, stopping the program.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+print_int :: (n: int) {
+    if n < 0 {
+        putchar(45);
+        print_int(-n);
+        return;
+    }
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+println :: (n: int) {
+    print_int(n);
+    putchar(10);
+}
+
+sum :: (v: []int) -> int {
+    s := 0;
+    for v { s += it; }
+    return s;
+}
+
+main :: () {
+    v : []int;
+    println(v.count);
+    n := 0;
+    for v { n += 1; }
+    for * v { n += 1; }
+    e : [0]int;
+    for e { n += 1; }
+    println(n);
+    println(e.count);
+    w : []int = e;
+    println(w.count);
+    println(sum(e));
+    println(size_of([0]int));
+    i := 0;
+    println(v[i]);
+    println(99);
+}
