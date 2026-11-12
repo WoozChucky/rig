@@ -14,6 +14,11 @@
 // The whole file into the arena. False if it can't be read.
 bool os_read_file(Arena *a, String path, String *out);
 
+// Everything on standard input, to its end, into the arena: the bytes as
+// they come, with no text-mode translation (a "\r\n" stays two bytes, as
+// os_read_file would read it from the file). False if it can't be read.
+bool os_read_stdin(Arena *a, String *out);
+
 // Creates or replaces the file with exactly these bytes.
 bool os_write_file(String path, String data);
 
@@ -39,7 +44,8 @@ struct Process_Result {
 // Runs argv[0] with the other arguments exactly as given. argv[0] is a path
 // (it has a slash, either kind), used exactly as given (no .exe added), or a
 // bare name, searched for in the PATH (on Windows with .exe added). Waits
-// for the program and captures its output; its stdin is empty. False only
+// for the program and captures its output; its stdin is empty (but see
+// os_run_with_input). False only
 // when the program couldn't be started; a program that runs and fails gives
 // true and its exit code.
 bool os_run(Arena *a, Array<String> argv, Process_Result *result);
@@ -63,6 +69,13 @@ bool os_run_in(Arena *a, Array<String> argv, String directory, Process_Result *r
 // What it wrote until then is in out and err. directory may be {}: the
 // caller's.
 bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result);
+
+// os_run_for, with `input` on the program's stdin instead of nothing: the
+// program reads those bytes, exactly, then the end of its input. A program
+// that ends, or is killed, before reading them all is fine: the rest is
+// dropped. Empty input is the same as os_run_for's empty stdin.
+bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 seconds, String input,
+                       Process_Result *result);
 
 // Why the last failing os_ function failed, as a sentence from the system.
 String os_error_message(Arena *a);
