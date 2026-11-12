@@ -1198,39 +1198,63 @@ static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source);
 // A branch that doesn't reach its end (it returns) doesn't jump; when
 // neither does, there's no `after` at all, and nothing that follows is
 // lowered: the current block has ended. else if is an if lowered inside the
-// else block.
-static void lower_if(Lowering *l, Ast_If *branch, Ast_Proc *source) {
-    s32 condition = lower_value(l, branch->condition, &type_bool);
-    s32 test = l->block;
-    emit_branch(l, condition, -1, -1);
+// else block, so a chain of them is ifs inside ifs: each arm's `after` is
+// where the arm after it ends up, and the first arm's is the whole chain's.
+//
+// A chain is lowered in a loop rather than by lower_if calling itself for
+// each else if (parse_if says why), in two passes that make the same blocks
+// in the same order as that recursion would. Down the chain, arm by arm:
+// the condition and its branch, the then block, and the else block that the
+// next arm (or the last else's block) is lowered into. Then back up, from
+// the last arm to the first: each arm's `after`, and the jumps to it, made
+// once everything inside the arm's else part is, as the recursion made them
+// on its way back out.
+struct If_Arm {
+    Ast_If *branch;
+    s32 test;      // the block ending in the arm's branch
+    s32 then_end;  // the then branch's last block: T may have made more
+};
 
-    s32 then_block = new_block(l);
-    terminator_of(l, test)->target = then_block;
-    l->block = then_block;
-    lower_block(l, branch->then_block, source);
-    s32 then_end = l->block;  // the then branch's last block: T may have made more
+static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
+    Array<If_Arm> arms = {};
+    Ast *part = first;
+    while (part && part->kind == AST_IF) {
+        Ast_If *branch = (Ast_If *)part;
+        s32 condition = lower_value(l, branch->condition, &type_bool);
+        s32 test = l->block;
+        emit_branch(l, condition, -1, -1);
 
-    s32 else_end = -1;
-    if (branch->else_part) {
-        s32 else_block = new_block(l);
-        terminator_of(l, test)->target2 = else_block;
-        l->block = else_block;
-        if (branch->else_part->kind == AST_IF) {
-            lower_if(l, (Ast_If *)branch->else_part, source);
-        } else {
-            lower_block(l, (Ast_Block *)branch->else_part, source);
+        s32 then_block = new_block(l);
+        terminator_of(l, test)->target = then_block;
+        l->block = then_block;
+        lower_block(l, branch->then_block, source);
+        array_add(&arms, If_Arm{branch, test, l->block});
+
+        part = branch->else_part;
+        if (part) {
+            s32 else_block = new_block(l);
+            terminator_of(l, test)->target2 = else_block;
+            l->block = else_block;
         }
-        else_end = l->block;
     }
+    if (part) lower_block(l, (Ast_Block *)part, source);  // the last else
 
-    bool then_goes_on = !has_ended(l, then_end);
-    bool else_goes_on = branch->else_part ? !has_ended(l, else_end) : true;  // no else: the false edge
-    if (!then_goes_on && !else_goes_on) return;  // l->block is else_end, which has ended
-    s32 after = new_block(l);
-    if (!branch->else_part) terminator_of(l, test)->target2 = after;
-    if (then_goes_on) emit_jump(l, then_end, after);
-    if (branch->else_part && else_goes_on) emit_jump(l, else_end, after);
-    l->block = after;
+    for (s64 i = arms.count - 1; i >= 0; i--) {
+        If_Arm arm = arms[i];
+        bool has_else = arm.branch->else_part != nullptr;
+        // With an else: the block its else part ended in, the last else's
+        // own or, for an else if, where the arms after this one left off.
+        s32 else_end = l->block;
+        bool then_goes_on = !has_ended(l, arm.then_end);
+        bool else_goes_on = has_else ? !has_ended(l, else_end) : true;  // no else: the false edge
+        if (!then_goes_on && !else_goes_on) continue;  // l->block is else_end, which has ended
+        s32 after = new_block(l);
+        if (!has_else) terminator_of(l, arm.test)->target2 = after;
+        if (then_goes_on) emit_jump(l, arm.then_end, after);
+        if (has_else && else_goes_on) emit_jump(l, else_end, after);
+        l->block = after;
+    }
+    array_free(&arms);
 }
 
 // The loop's body, with the loop the innermost one for break and continue;
