@@ -2160,6 +2160,59 @@ TEST(array_to_view_views_the_array) {
     arena_free(&a);
 }
 
+TEST(view_of_a_literal_or_a_result_sees_a_copy) {
+    // A literal is built in a temporary of its own, then copied into the
+    // view's temporary, so `w = .[w[1], w[0]];` in a loop reads the old
+    // view whole before the copy lands. A call's array result going into a
+    // view is copied out of the hidden temporary too, which stays fresh.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "two :: () -> [2]int, int { r : [2]int; return r, 1; }\n"
+                                          "main :: () {\n"
+                                          "    w : []int = int.[1, 2];\n"
+                                          "    n : int;\n"
+                                          "    w, n = two();\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local 16 align 8\n"
+              "  %1 = local 16 align 8\n"
+              "  %2 = const i64 1\n"
+              "  store i64 %2, %1\n"
+              "  %3 = const i64 8\n"
+              "  %4 = ptradd %1, %3\n"
+              "  %5 = const i64 2\n"
+              "  store i64 %5, %4\n"
+              "  %6 = local 16 align 8\n"
+              "  copy %6, %1, 16\n"
+              "  %7 = local 16 align 8\n"
+              "  %8 = const i64 2\n"
+              "  store i64 %8, %7\n"
+              "  %9 = const i64 8\n"
+              "  %10 = ptradd %7, %9\n"
+              "  store ptr %6, %10\n"
+              "  copy %0, %7, 16\n"
+              "  %11 = local i64\n"
+              "  %12 = const i64 0\n"
+              "  store i64 %12, %11\n"
+              "  %13 = local 16 align 8\n"
+              "  %14 = call @two(%13)\n"
+              "  %15 = local 16 align 8\n"
+              "  copy %15, %13, 16\n"
+              "  %16 = local 16 align 8\n"
+              "  %17 = const i64 2\n"
+              "  store i64 %17, %16\n"
+              "  %18 = const i64 8\n"
+              "  %19 = ptradd %16, %18\n"
+              "  store ptr %15, %19\n"
+              "  copy %0, %16, 16\n"
+              "  store i64 %14, %11\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
 TEST(bounds_failed_buffer_fits_a_long_path) {
     // The buffer holds the longest `where` the module passes, the 33 bytes
     // of fixed text and two numbers of up to 20 characters each: for a
