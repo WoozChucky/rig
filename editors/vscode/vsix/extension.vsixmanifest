@@ -5,7 +5,7 @@
   <Metadata>
     <Identity Language="en-US" Id="rig-language" Version="0.1.0" Publisher="woozchucky" />
     <DisplayName>Rig</DisplayName>
-    <Description xml:space="preserve">The Rig programming language: syntax highlighting, snippets, build errors in the Problems panel, build and run commands</Description>
+    <Description xml:space="preserve">The Rig programming language: syntax highlighting, snippets, errors as you type, build and run commands</Description>
     <Tags>rig</Tags>
     <Categories>Programming Languages</Categories>
     <GalleryFlags>Public</GalleryFlags>
