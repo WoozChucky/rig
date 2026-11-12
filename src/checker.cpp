@@ -200,13 +200,6 @@ static bool check_var_value(Checker *c, Ast_Var *var) {
                 t = nullptr;
                 fine = false;
             }
-            // A string is a pointer and a length (spec 6.5), which the IR
-            // can't hold yet.
-            if (t == &type_string) {
-                diag_error(c->diag, var->value->start, "variables can't hold a 'string' yet; give it the type '*u8'");
-                t = nullptr;
-                fine = false;
-            }
         }
     }
     var->type = t;
@@ -226,17 +219,19 @@ static void check_var(Checker *c, Ast_Var *var) {
 // to work it out. Without a value, or with ---, it starts at zero: a
 // global is never on the stack, so it never holds what was there before.
 //
-// A string literal is known while compiling, but its address isn't a
-// number the file can hold as it is: the linker would have to fill it in
-// (a relocation), which lowering doesn't ask for yet. So a global can't
-// hold one yet, which is what it's told, rather than that its value isn't
-// known: "global variables can't hold a string literal yet; assign it in
-// a procedure" (a *u8 global, set in main, can).
-//
 // A struct's value is a literal whose values are all known while compiling
 // (nested literals' too): the bytes lowering writes into the file. Not a
 // constant itself (Ast.constant is one number), so it's looked into here;
 // the first value that isn't known is the one reported.
+//
+// A string literal is known while compiling too, though its address isn't a
+// number the file can hold as it is: the linker fills it in (a relocation,
+// lower.cpp's constant_bytes). So a global (or a field or an element of one)
+// may be a literal as a string, a *u8, or through casts that keep the
+// address, as cast([]u8) "abc" or cast(*void) cast(*u8) "x" do
+// (literal_address); not as an integer (cast(int) cast(*u8) "hi"), which
+// would need the linker to write a number, nor a string that isn't a
+// literal.
 static bool check_global_value(Checker *c, Ast *value) {
     if (value->is_constant) return true;
     if (!value->type) return false;  // a value inside a literal whose own error was reported
@@ -247,14 +242,8 @@ static bool check_global_value(Checker *c, Ast *value) {
         }
         return true;
     }
-    Ast *inner = value;
-    while (inner->kind == AST_CAST) inner = ((Ast_Cast *)inner)->value;  // cast(*u8) "hi" too
-    if (inner->kind == AST_STRING) {
-        diag_error(c->diag, value->start,
-                   "global variables can't hold a string literal yet; assign it in a procedure");
-    } else {
-        diag_error(c->diag, value->start, "a global's value must be known while compiling, for now");
-    }
+    if (literal_address(value)) return true;
+    diag_error(c->diag, value->start, "a global's value must be known while compiling, for now");
     return false;
 }
 
@@ -732,10 +721,12 @@ static void check_while(Checker *c, Ast_While *loop) {
 // for a..b: the ends are integers that meet at a type as an arithmetic
 // operator's operands do; untyped ends (for 0..9) make an int. That's the
 // iterator's type. A range's numbers are made on the spot, so there's
-// nothing for `for *` to point at: "'for *' needs an array or a view, not a
-// range", at the first end.
+// nothing for `for *` to point at: "'for *' needs an array, a view or a
+// string, not a range", at the first end.
 static Type *check_range(Checker *c, Ast_For *loop) {
-    if (loop->by_pointer) diag_error(c->diag, loop->first->start, "'for *' needs an array or a view, not a range");
+    if (loop->by_pointer) {
+        diag_error(c->diag, loop->first->start, "'for *' needs an array, a view or a string, not a range");
+    }
     Type *first = check_operand(c, loop->first);
     Type *last = check_operand(c, loop->last);
     Type *t = nullptr;
@@ -750,21 +741,21 @@ static Type *check_range(Checker *c, Ast_For *loop) {
     return t;
 }
 
-// for a: a is an array or a view, worked out once, before the first
-// iteration (lowering), and the iterator is each element in turn, a copy;
-// for * a, a pointer to each, through which the body can change it. So
-// `for * a` needs a's elements to have an address, as *a[i] does: an
-// array's when the array has one (not a parameter's, nor a call's or a
-// literal's: "can't take the address of 'a': it's a parameter"), a view's
-// always. Anything else is "'for' needs a range, an array or a view, not
-// 'int'", at it.
+// for a: a is an array, a view or a string, worked out once, before the
+// first iteration (lowering), and the iterator is each element in turn, a
+// copy (a string's, each byte, a u8); for * a, a pointer to each, through
+// which the body can change it. So `for * a` needs a's elements to have an
+// address, as *a[i] does: an array's when the array has one (not a
+// parameter's, nor a call's or a literal's: "can't take the address of 'a':
+// it's a parameter"), a view's or a string's always. Anything else is
+// "'for' needs a range, an array, a view or a string, not 'int'", at it.
 static Type *check_sequence(Checker *c, Ast_For *loop) {
     Ast *sequence = loop->sequence;
     Type *t = check_operand(c, sequence);
     if (!t) return nullptr;
-    if (t->kind != TYPE_ARRAY && t->kind != TYPE_VIEW) {
+    if (t->kind != TYPE_ARRAY && !type_is_view_or_string(t)) {
         check_default_type(c, sequence);  // `for 10` names the type 10 has: int
-        diag_error(c->diag, sequence->start, "'for' needs a range, an array or a view, not '" STR_FMT "'",
+        diag_error(c->diag, sequence->start, "'for' needs a range, an array, a view or a string, not '" STR_FMT "'",
                    STR_ARG(type_name(c->arena, sequence->type)));
         return nullptr;
     }
@@ -941,13 +932,19 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 // a C struct of the same layout, which passes. C has no views, and takes an
 // array as a pointer to its first element: "a foreign procedure can't take a
 // '[3]int'; pass its .data" (or a view's .data, with its count if C needs
-// it).
+// it). A C string is a pointer to bytes ending with a zero, which a literal
+// converts to, but another string's bytes needn't end with one: "a foreign
+// procedure can't take a 'string'; pass its .data, which may not end with a
+// zero, or a literal".
 static void check_signature(Checker *c, Ast_Proc *proc) {
     for (s64 i = 0; i < proc->params.count; i++) {
         Ast_Param *param = proc->params[i];
         param->type = resolve_type(c, param->type_expr);
         if (proc->is_foreign && param->type && type_is_aggregate(param->type)) {
-            const char *hint = param->type->kind == TYPE_STRUCT ? " yet; pass a pointer to it" : "; pass its .data";
+            Type_Kind kind = param->type->kind;
+            const char *hint = kind == TYPE_STRUCT   ? " yet; pass a pointer to it"
+                               : kind == TYPE_STRING ? "; pass its .data, which may not end with a zero, or a literal"
+                                                     : "; pass its .data";
             diag_error(c->diag, param->type_expr->pos, "a foreign procedure can't take a '" STR_FMT "'%s",
                        STR_ARG(type_name(c->arena, param->type)), hint);
         }
