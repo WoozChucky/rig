@@ -11,7 +11,7 @@
 //               | IDENT '::' expression ';'                         a constant
 //   procedure   = '(' [param {',' param}] ')' ['->' type {',' type}] (block | '#foreign' IDENT ';')
 //   param       = IDENT ':' type
-//   type        = '*' type | IDENT
+//   type        = '*' type | IDENT                                 (*void: a pointer to anything)
 //   block       = '{' statement* '}'
 //   statement   = declaration | multi_var | assignment | return | block
 //               | if | while | for | 'break' ';' | 'continue' ';' | expression ';'
@@ -28,13 +28,22 @@
 //   for         = 'for' [IDENT ':'] expression '..' expression block
 //   expression  = unary { BINARY_OPERATOR unary }, binary operators left-associative, tightest last:
 //                   1: ||   2: &&   3: == != < <= > >=   4: + - | ^   5: * / % << >> &
-//   unary       = ('-' | '~' | '!') unary | cast | postfix
+//   unary       = ('-' | '~' | '!' | '*') unary | cast | postfix
 //   cast        = 'cast' [',' IDENT] '(' type ')' unary       (the IDENT: trunc)
-//   postfix     = primary { '(' [expression {',' expression}] ')' }
-//   primary     = IDENT | INT | FLOAT | STRING | 'true' | 'false' | '(' expression ')'
+//   postfix     = primary { '(' [expression {',' expression}] ')' | '.' '*' }
+//   primary     = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null'
+//               | 'size_of' '(' type ')' | '(' expression ')'
 //
 // The precedence levels are Go's (spec 6.1). A cast is a prefix operator,
-// like -: cast(u8) a / b is (cast(u8) a) / b. Its only modifier is trunc
+// like -: cast(u8) a / b is (cast(u8) a) / b.
+//
+// Pointers are Jai's (spec 6.5): the prefix *x is x's address, binding as -
+// does (*a + 1 is (*a) + 1), and the postfix p.* is what p points at,
+// binding as a call does, tighter than any prefix (*p.* is *(p.*)). The
+// lexer reads a '*' right after a '.' alone, so p.*=5 is p.* = 5 and
+// p.*==q compares (lexer.h). size_of isn't a keyword: the name size_of
+// followed by '(' is the built-in, whose argument is a type; anywhere else
+// it's a name. Its only modifier is trunc
 // (cast,trunc(u8) x); any other is "unknown cast modifier 'foo'; the one
 // there is is 'trunc'", at the name.
 //
@@ -53,9 +62,9 @@
 //
 // Expressions and blocks nest at most 1000 levels deep (spec 6.1, a limit
 // of the compiler; parser.cpp's MAX_DEPTH): each parenthesis, prefix
-// operator, cast, call and binary operator is a level above what it holds,
-// so a chain of 1001 '+' is too deep too, and a procedure's body is the
-// first block. Deeper is "this expression is nested too deeply (more than
+// operator, cast, call, dereference and binary operator is a level above
+// what it holds, so a chain of 1001 '+' is too deep too, and a procedure's
+// body is the first block. Deeper is "this expression is nested too deeply (more than
 // 1000 levels)", at the start of the outermost expression, or "blocks are
 // nested too deeply (more than 1000 levels)", at the '{' one too many; the
 // declaration is then given up, as after any other error below, not only

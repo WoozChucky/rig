@@ -5,7 +5,8 @@
 // variables and constants (several variables at once, from a call's
 // results), assignments, returns, if, while, for, break, continue and
 // expressions; expressions made of calls, names, strings, integers,
-// floats, bools, operators and casts.
+// floats, bools, null, operators, casts, addresses and dereferences, and
+// size_of.
 // Each node kind is a struct that starts with Ast, so a pointer to any node
 // is also an Ast *, and `kind` says which it is.
 //
@@ -32,7 +33,7 @@ enum Ast_Kind : u8 {
     AST_CONST,         // Ast_Const: N :: e;
     AST_ASSIGN,        // Ast_Assign: x = e;  x += e; ...
     AST_RETURN,        // Ast_Return: return;  return e;  return a, b;
-    AST_UNARY,         // Ast_Unary: -e  ~e  !e
+    AST_UNARY,         // Ast_Unary: -e  ~e  !e  *e
     AST_BINARY,        // Ast_Binary: a + b, a << b, a < b, a && b, ...
     AST_BOOL,          // Ast_Bool: true, false
     AST_IF,            // Ast_If: if c { ... } else ...
@@ -43,6 +44,9 @@ enum Ast_Kind : u8 {
     AST_CAST,          // Ast_Cast: cast(T) e  cast,trunc(T) e
     AST_MULTI_VAR,     // Ast_Multi_Var: a, b := f();
     AST_FLOAT,         // Ast_Float: 1.5, 2.5e-3
+    AST_NULL,          // a plain Ast: null
+    AST_DEREF,         // Ast_Deref: e.*
+    AST_SIZE_OF,       // Ast_Size_Of: size_of(T)
 };
 
 struct Ast {
@@ -139,10 +143,24 @@ struct Ast_Return : Ast {
     Array<Ast *> values;
 };
 
-// A prefix operator applied to an operand: -e, ~e, !e.
+// A prefix operator applied to an operand: -e, ~e, !e, and *e, e's address
+// (Jai's way of writing C's &e).
 struct Ast_Unary : Ast {
-    Token_Kind op;  // TOKEN_MINUS, TOKEN_TILDE, TOKEN_BANG
+    Token_Kind op;  // TOKEN_MINUS, TOKEN_TILDE, TOKEN_BANG, TOKEN_STAR
     Ast *operand;
+};
+
+// e.*: what the pointer e points at (C's *e). A postfix operator, as a call
+// is, so it binds tighter than any prefix one: *p.* is *(p.*). pos is the
+// '.', where a null pointer's runtime error points.
+struct Ast_Deref : Ast {
+    Ast *operand;
+};
+
+// size_of(T): T's size in bytes, an untyped integer constant. pos is the
+// name size_of.
+struct Ast_Size_Of : Ast {
+    Ast_Type *type_expr;
 };
 
 // An operator between two operands; pos is the operator's.
@@ -280,6 +298,7 @@ Token_Kind compound_operator(Token_Kind op);
 //   (var w int ---)       w : int = ---;    (var z u8)          z : u8;
 //   (const N (int 10))    N :: 10;          (assign += (name x) (int 2))
 //   (return)  (return (name x))  (unary - (name a))  (binary * (name b) (name c))
+//   (unary * (name x))  *x;    (deref (name p))  p.*;   (null)   (size_of (ptr int))  size_of(*int)
 //   (bool true)   (float 1.5)   (break)   (continue)   (while (name c) (block ...))
 //   (if (name c) (block ...) (if (name d) (block ...) (block ...)))
 //                 if c { ... } else if d { ... } else { ... }
