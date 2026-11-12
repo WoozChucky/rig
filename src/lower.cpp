@@ -111,7 +111,8 @@
 //   is lowered: each instruction is stamped with the position and scope of
 //   the statement being lowered (Lowering.pos and scope, emit_in);
 //   lower_statement moves to each statement's first token, a loop or an if
-//   back to its keyword for its own code, a failing check to the check.
+//   back to its keyword for its own code (but the jumps out of an if's
+//   blocks, at their '}'), a failing check to the check.
 //   Each block that's a scope adds an Ir_Scope (lower_scoped_block, and the
 //   loops, which are one), each declaration an Ir_Var (add_local_var, and
 //   the parameters in ir_lower).
@@ -1353,14 +1354,29 @@ static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) 
 // once everything inside the arm's else part is, as the recursion made them
 // on its way back out.
 //
-// Each arm's own code, its condition, its branch and the jumps to its
-// `after`, is at its `if` (an else if's own), in the scope around the
-// chain; its blocks are scopes of their own (lower_scoped_block).
+// Each arm's own code, its condition and its branch, is at its `if` (an
+// else if's own), in the scope around the chain; its blocks are scopes of
+// their own (lower_scoped_block). The jumps to its `after` are at the '}'
+// that ends what they leave, in the scope around the chain too: the then
+// block's, and the else part's last (the_end_of). That's where clang puts
+// them: at the `if`, the jump over the else would be a step back to the
+// `if` line after the then block's last statement.
 struct If_Arm {
     Ast_If *branch;
     s32 test;      // the block ending in the arm's branch
     s32 then_end;  // the then branch's last block: T may have made more
 };
+
+// The '}' that ends an if's else part: its block's, or for an else if,
+// whatever ends that one's own chain.
+static Position the_end_of(Ast *else_part) {
+    while (else_part->kind == AST_IF) {
+        Ast_If *branch = (Ast_If *)else_part;
+        if (!branch->else_part) return branch->then_block->end;
+        else_part = branch->else_part;
+    }
+    return ((Ast_Block *)else_part)->end;
+}
 
 static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
     s32 outer = l->scope;
@@ -1390,7 +1406,6 @@ static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
 
     for (s64 i = arms.count - 1; i >= 0; i--) {
         If_Arm arm = arms[i];
-        place(l, arm.branch->pos, outer);
         bool has_else = arm.branch->else_part != nullptr;
         // With an else: the block its else part ended in, the last else's
         // own or, for an else if, where the arms after this one left off.
@@ -1400,8 +1415,14 @@ static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
         if (!then_goes_on && !else_goes_on) continue;  // l->block is else_end, which has ended
         s32 after = new_block(l);
         if (!has_else) terminator_of(l, arm.test)->target2 = after;
-        if (then_goes_on) emit_jump(l, arm.then_end, after);
-        if (has_else && else_goes_on) emit_jump(l, else_end, after);
+        if (then_goes_on) {
+            place(l, arm.branch->then_block->end, outer);
+            emit_jump(l, arm.then_end, after);
+        }
+        if (has_else && else_goes_on) {
+            place(l, the_end_of(arm.branch->else_part), outer);
+            emit_jump(l, else_end, after);
+        }
         l->block = after;
     }
     place(l, first->pos, outer);

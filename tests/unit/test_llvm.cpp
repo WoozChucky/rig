@@ -1,7 +1,8 @@
 // test_llvm.cpp: Rig's IR to LLVM IR and object files: hello world from
 // tokens (issue #10), then IR built by hand for issues #32 to #37 (integer
 // widths, blocks and branches, the runtime's panic, several results,
-// globals and floats), #52 (the panic flushing first) and #56 (memory).
+// globals and floats), #52 (the panic flushing first) and #56 (memory);
+// last, milestone 2c's line tables (#71), on modules lowered from source.
 // Uses test_ir.cpp's HELLO and max_module.
 
 #include "test.h"
@@ -78,6 +79,10 @@ TEST(llvm_doesnt_extend_narrow_integers_on_windows) {
 }
 
 TEST(objects_for_both_targets) {
+    // Lowered from tokens, the module knows its source file (helpers.cpp's
+    // locate_file), so it has debug information, which must verify too, and
+    // the object carries it: CodeView in COFF's .debug$S section, DWARF in
+    // ELF's .debug_info and .debug_line (both names are in the file's bytes).
     Arena a = arena_make();
     Ir_Module *m = lower_tokens(&a, HELLO);
     os_make_directory(str(".build"));
@@ -94,8 +99,11 @@ TEST(objects_for_both_targets) {
         if ((Target)t == TARGET_WINDOWS_X64) {
             CHECK_EQ(bytes.data[0], 0x64);  // COFF: machine AMD64, 0x8664, little-endian
             CHECK_EQ(bytes.data[1], 0x86);
+            CHECK(contains(bytes, ".debug$S"));
         } else {
             CHECK(memcmp(bytes.data, "\x7f" "ELF", 4) == 0);
+            CHECK(contains(bytes, ".debug_info"));
+            CHECK(contains(bytes, ".debug_line"));
         }
     }
     arena_free(&a);
@@ -896,5 +904,254 @@ TEST(llvm_linux_functions_probe_the_stack) {
     CHECK(contains(text, "define internal void @__rig_panic(ptr %0, i64 %1) #"));
     text = llvm_text(&a, panic_module(&a), TARGET_WINDOWS_X64);
     CHECK(!contains(text, "probe-stack"));
+    arena_free(&a);
+}
+
+// Milestone 2c (issue #71): line tables. A module lowered from a source file
+// gets debug information: a compile unit naming the file, a subprogram per
+// Rig procedure, a lexical block per scope, and a location on each
+// instruction, which LLVM writes as DWARF (Linux) or CodeView (Windows). In
+// LLVM's text each is a metadata node, !N, defined on a line of its own at
+// the end ("!7 = !DILocation(line: 4, column: 5, scope: !3)"), and an
+// instruction names its location as an attachment ("call ..., !dbg !7").
+
+// A file with a call on line 4 and another in an if's block, on line 6.
+// Its MD5 is 2d6d83719e184598cb6b6bd6505ea090 (md5sum of these bytes).
+static const char *LINES =
+    "puts :: (s: *u8) -> s32 #foreign libc;\n"
+    "main :: () {\n"
+    "    x := 1;\n"
+    "    puts(\"one\");\n"
+    "    if x > 0 {\n"
+    "        puts(\"two\");\n"
+    "    }\n"
+    "}\n";
+
+// The first line of `text` containing `needle`, without its "\n"; {} when
+// there's none. A needle starting with "\n" finds the line after that one.
+static String line_with(String text, const char *needle) {
+    s64 at = index_of(text, needle);
+    if (at < 0) return {};
+    if (needle[0] == '\n') at++;
+    s64 start = at, end = at;
+    while (start > 0 && text.data[start - 1] != '\n') start--;
+    while (end < text.count && text.data[end] != '\n') end++;
+    return string_slice(text, start, end - start);
+}
+
+// The metadata node a line names after `label` ("!dbg", "scope:"): "!7"
+// from "call void @f(), !dbg !7"; {} when it names none.
+static String attached(Arena *a, String line, const char *label) {
+    s64 at = index_of(line, string_cstr(a, string_printf(a, "%s !", label)));
+    if (at < 0) return {};
+    s64 start = at + (s64)strlen(label) + 1, end = start + 1;
+    while (end < line.count && line.data[end] >= '0' && line.data[end] <= '9') end++;
+    return string_slice(line, start, end - start);
+}
+
+// The definition of metadata node `node` ("!7"): its line, from "!7 = ".
+static String node_line(Arena *a, String text, String node) {
+    return line_with(text, string_cstr(a, string_printf(a, "\n" STR_FMT " = ", STR_ARG(node))));
+}
+
+// A string as LLVM's text writes it inside quotes: a backslash doubled (so
+// Windows' C:\dev is C:\\dev), a quote and anything unprintable as \XX in
+// hex.
+static String llvm_escaped(Arena *a, String s) {
+    String out = string_printf(a, "");
+    for (s64 i = 0; i < s.count; i++) {
+        u8 c = s.data[i];
+        if (c == '\\') {
+            out = string_printf(a, STR_FMT "\\\\", STR_ARG(out));
+        } else if (c >= 0x20 && c < 0x7f && c != '"') {
+            out = string_printf(a, STR_FMT "%c", STR_ARG(out), c);
+        } else {
+            out = string_printf(a, STR_FMT "\\%02X", STR_ARG(out), c);
+        }
+    }
+    return out;
+}
+
+TEST(llvm_debug_info_has_a_compile_unit) {
+    // One compile unit, as C99 (whose expression syntax a debugger then
+    // uses, and which suits Rig's), produced by "rig 0.1.0 (clang version
+    // 23.1.4)": Microsoft's debuggers read some records right only from a
+    // compiler whose name has "clang" in it. The file is the source's
+    // absolute path, in the directory rig ran in, with its MD5. Module
+    // flags say which debug information LLVM writes: CodeView on Windows,
+    // DWARF 5 on Linux.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, LINES);
+    for (int t = 0; t < 2; t++) {
+        Target target = (Target)t;
+        String text = llvm_text(&a, m, target);
+        CHECK(contains(text, "!DICompileUnit(language: DW_LANG_C99"));
+        CHECK(contains(text, "producer: \"rig 0.1.0 (clang version 23.1.4)\""));
+        CHECK(contains(text, "isOptimized: false"));
+        CHECK(contains(text, "emissionKind: FullDebug"));
+        String file = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\", directory: \"" STR_FMT "\"",
+                                    STR_ARG(llvm_escaped(&a, m->source_path)), STR_ARG(llvm_escaped(&a, m->directory)));
+        CHECK(contains(text, string_cstr(&a, file)));
+        CHECK(contains(text, "checksumkind: CSK_MD5, checksum: \"2d6d83719e184598cb6b6bd6505ea090\""));
+        CHECK(contains(text, "!\"Debug Info Version\", i32 3}"));
+        if (target == TARGET_WINDOWS_X64) {
+            CHECK(contains(text, "!\"CodeView\", i32 1}"));
+            CHECK(!contains(text, "Dwarf Version"));
+        } else {
+            CHECK(contains(text, "!\"Dwarf Version\", i32 5}"));
+            CHECK(!contains(text, "CodeView"));
+        }
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_procedures_have_subprograms) {
+    // Each Rig procedure is a subprogram named as in the source, with no
+    // linkage name: LLVM renamed the Rig memset memset.1 (C's memset was
+    // declared first, for the struct's zeroing), and a debugger must still
+    // call it memset. The procedures the compiler makes have none.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Point :: struct { x: int; y: int; }\n"
+                                "memset :: () { }\n"
+                                "get :: (a: []int, i: int) -> int {\n"
+                                "    return a[i];\n"
+                                "}\n"
+                                "main :: () {\n"
+                                "    p: Point;\n"
+                                "    memset();\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "define internal void @memset.1() #"));
+        CHECK(contains(text, "!DISubprogram(name: \"memset\", scope: "));
+        CHECK(contains(text, "!DISubprogram(name: \"get\", scope: "));
+        CHECK(!contains(text, "linkageName"));
+        // main: exported, so not local to the unit; its line and its body's.
+        String main = line_with(text, "!DISubprogram(name: \"main\"");
+        CHECK(contains(main, "line: 6, "));
+        CHECK(contains(main, "scopeLine: 6, flags: DIFlagPrototyped, spFlags: DISPFlagDefinition, "));
+        String memset = line_with(text, "!DISubprogram(name: \"memset\"");
+        CHECK(contains(memset, "spFlags: DISPFlagLocalToUnit | DISPFlagDefinition, "));
+        // Each definition names its subprogram; the compiler's don't.
+        CHECK(attached(&a, line_with(text, "define i32 @main()"), "!dbg").count > 0);
+        CHECK(attached(&a, line_with(text, "define internal void @memset.1()"), "!dbg").count > 0);
+        String bounds = line_with(text, "define internal void @__rig_bounds_failed(");
+        CHECK(bounds.count > 0);
+        CHECK(!contains(bounds, "!dbg"));
+        String panic = line_with(text, "define internal void @__rig_panic(");
+        CHECK(panic.count > 0);
+        CHECK(!contains(panic, "!dbg"));
+        CHECK(!contains(text, "name: \"__rig"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_instructions_have_their_lines) {
+    // A call is at its statement's line and column (Windows: no column, as
+    // clang-cl writes CodeView, where a change of column starts a new
+    // entry), in its procedure's subprogram; one inside an if's block is in
+    // that block's lexical block, inside the subprogram. The stack slots,
+    // hoisted to the entry block, have no location.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, LINES);
+    for (int t = 0; t < 2; t++) {
+        Target target = (Target)t;
+        String text = llvm_text(&a, m, target);
+        String one = node_line(&a, text, attached(&a, line_with(text, "call i32 @puts(ptr @str.0)"), "!dbg"));
+        CHECK(contains(one, "!DILocation(line: 4, "));
+        if (target == TARGET_LINUX_X64) {
+            CHECK(contains(one, "!DILocation(line: 4, column: 5, scope: "));
+        } else {
+            CHECK(!contains(one, "column: "));
+        }
+        String main = attached(&a, line_with(text, "define i32 @main()"), "!dbg");
+        CHECK(main.count > 0);
+        CHECK(contains(one, string_cstr(&a, string_printf(&a, "scope: " STR_FMT ")", STR_ARG(main)))));
+
+        String two = node_line(&a, text, attached(&a, line_with(text, "call i32 @puts(ptr @str.1)"), "!dbg"));
+        CHECK(contains(two, "!DILocation(line: 6, "));
+        String block = node_line(&a, text, attached(&a, two, "scope:"));
+        CHECK(contains(block, string_cstr(&a, string_printf(&a, "!DILexicalBlock(scope: " STR_FMT ", ", STR_ARG(main)))));
+        CHECK(contains(block, "line: 5, "));
+
+        String alloca = line_with(text, "alloca");
+        CHECK(alloca.count > 0);
+        CHECK(!contains(alloca, "!dbg"));
+    }
+    arena_free(&a);
+}
+
+// The functions of `text` (LLVM's text of a module) that are defined
+// without "frame-pointer"="all" in their attribute group, their define
+// lines one after another; with *defined set to how many there are. A
+// definition names its group after its parameters ("define i32 @main() #0
+// !dbg !5 {"), which is a line of its own ("attributes #0 = { ... }").
+static String without_frame_pointers(Arena *a, String text, s64 *defined) {
+    String out = string_printf(a, "");
+    *defined = 0;
+    for (s64 at = index_of(text, "\ndefine "); at >= 0;) {
+        String line = line_with(string_slice(text, at, text.count - at), "\ndefine ");
+        (*defined)++;
+        String group = {};
+        s64 hash = index_of(line, ") #");
+        if (hash >= 0) {
+            s64 start = hash + 2, end = start + 1;
+            while (end < line.count && line.data[end] >= '0' && line.data[end] <= '9') end++;
+            group = string_slice(line, start, end - start);
+        }
+        String attributes = {};
+        if (group.count > 1) {
+            attributes = line_with(text, string_cstr(a, string_printf(a, "\nattributes " STR_FMT " = {", STR_ARG(group))));
+        }
+        if (!contains(attributes, "\"frame-pointer\"=\"all\"")) {
+            out = string_printf(a, STR_FMT STR_FMT "\n", STR_ARG(out), STR_ARG(line));
+        }
+        s64 next = index_of(string_slice(text, at + 1, text.count - at - 1), "\ndefine ");
+        at = next < 0 ? -1 : at + 1 + next;
+    }
+    return out;
+}
+
+TEST(llvm_functions_keep_frame_pointers) {
+    // Every function the module defines keeps its frame pointer (rbp), so a
+    // debugger or a profiler can walk the stack from frame to frame:
+    // lowered or built by hand, Rig's own and the runtime's. Each define's
+    // own attribute group says so.
+    Arena a = arena_make();
+    for (int t = 0; t < 2; t++) {
+        s64 defined = 0;
+        String text = llvm_text(&a, lower_source(&a, LINES), (Target)t);
+        CHECK(contains(text, "define i32 @main() #"));
+        String missing = without_frame_pointers(&a, text, &defined);
+        CHECK(defined >= 1);
+        if (missing.count) printf("    no frame pointer:\n" STR_FMT, STR_ARG(missing));
+        CHECK(missing.count == 0);
+
+        text = llvm_text(&a, panic_module(&a), (Target)t);
+        CHECK(contains(text, "define internal void @program() #"));
+        CHECK(contains(text, "define internal void @__rig_panic(ptr %0, i64 %1) #"));
+        missing = without_frame_pointers(&a, text, &defined);
+        CHECK(defined == 2);  // program and __rig_panic
+        if (missing.count) printf("    no frame pointer:\n" STR_FMT, STR_ARG(missing));
+        CHECK(missing.count == 0);
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_hand_built_modules_have_no_debug_info) {
+    // A module built by hand has no source file, so no debug information at
+    // all: no compile unit, no flag, no location.
+    Arena a = arena_make();
+    for (int t = 0; t < 2; t++) {
+        Ir_Module *modules[] = {max_module(&a), panic_module(&a)};
+        for (Ir_Module *m : modules) {
+            String text = llvm_text(&a, m, (Target)t);
+            CHECK(text.count > 0);
+            CHECK(!contains(text, "!dbg"));
+            CHECK(!contains(text, "DICompileUnit"));
+            CHECK(!contains(text, "Debug Info Version"));
+        }
+    }
     arena_free(&a);
 }
