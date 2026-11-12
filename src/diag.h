@@ -24,8 +24,12 @@ struct Position {
 };
 
 struct Source_File {
-    String path;  // as given on the command line
+    String path;           // as given on the command line: what messages name
     String text;
+    // Where the file is, for the debug information (diag_locate_file);
+    // empty until then.
+    String absolute_path;  // path made absolute (path_absolute)
+    String directory;      // the directory rig ran in, which a relative path starts from
 };
 
 struct Diagnostic {
@@ -44,6 +48,12 @@ struct Diagnostics {
 // Registers a file; the result is its index, for Position.file. The text
 // isn't copied: the caller keeps it alive.
 s32 diag_add_file(Diagnostics *d, String path, String text);
+
+// Records where file `file` is, for the debug information: `directory`, the
+// one rig runs in (os_current_directory), and the file's path made
+// absolute from it, by Windows' rules or Linux's (path_absolute). Both are
+// copied.
+void diag_locate_file(Diagnostics *d, s32 file, String directory, bool windows);
 
 // Records an error at pos, with a printf-style message.
 void diag_error(Diagnostics *d, Position pos, const char *fmt, ...);
