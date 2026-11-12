@@ -1,0 +1,39 @@
+// A struct can hold a view of arrays of itself, or pointers to arrays of
+// itself (spec 6.5): neither holds a copy of the struct, so neither needs
+// its size to lay it out. A tree of pairs, summed.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+print_int :: (n: int) {
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+Node :: struct { pairs: [][2]Node; v: int; }
+Link :: struct { next: *[2]Link; v: int; }
+
+sum :: (n: *Node) -> int {
+    total := n.v;
+    for * n.pairs { total += sum(*it.*[0]) + sum(*it.*[1]); }
+    return total;
+}
+
+main :: () {
+    leaves : [2][2]Node;
+    leaves[0][0].v = 2;
+    leaves[0][1].v = 3;
+    leaves[1][0].v = 4;
+    leaves[1][1].v = 5;
+    root := Node.{leaves, 1};
+    print_int(sum(*root));
+    putchar(10);
+
+    two : [2]Link;
+    two[1].v = 7;
+    head := Link.{*two, 1};
+    print_int(head.next.*[1].v + head.v);
+    putchar(10);
+    print_int(size_of(Node));
+    putchar(32);
+    print_int(size_of(Link));
+    putchar(10);
+}

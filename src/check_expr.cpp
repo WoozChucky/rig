@@ -1376,9 +1376,10 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
 // e.x: the field x of struct e, or of the struct e points at (p.x is
 // p.*.x: one pointer, so a **Node needs .* first). Reported at the field's
 // name: "'Vec2' has no field 'z'", or on anything else "'.x' needs a struct
-// or a pointer to one, not 'int'". m->index is the field's. An array's, a
-// view's or a string's .count and .data are check_sequence_member's (not
-// through a pointer: p.*.count).
+// or a pointer to one, not 'int'". m->index is the field's, whose type is
+// made now if it's a late field's not made yet (check_late_field). An
+// array's, a view's or a string's .count and .data are
+// check_sequence_member's (not through a pointer: p.*.count).
 static Type *check_member(Checker *c, Ast_Member *m) {
     Type *t = check_operand(c, m->operand);
     if (!t) return nullptr;
@@ -1395,6 +1396,7 @@ static Type *check_member(Checker *c, Ast_Member *m) {
                    STR_ARG(m->name));
         return nullptr;
     }
+    check_late_field(c, s, m->index);
     return s->fields[m->index].type;
 }
 
@@ -1421,7 +1423,8 @@ static void check_stray_value(Checker *c, Ast *value) {
 // each must be a field ("'Vec2' has no field 'z'"), given once ("field 'x'
 // is given twice"), each said at the name. The fields not given are zeroed
 // (lowering). After any of these, a value with no field to go to is still
-// checked for its own mistakes (check_stray_value).
+// checked for its own mistakes (check_stray_value). A late field's type is
+// made before its value meets it, if it isn't yet (check_late_field).
 static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t) {
     if (!literal->names.count) {
         if (literal->values.count > t->fields.count) {
@@ -1433,6 +1436,7 @@ static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t) {
             return;
         }
         for (s64 i = 0; i < literal->values.count; i++) {
+            check_late_field(c, t, (s32)i);
             check_field_value(c, literal->values[i], t->fields[i].type);
         }
         return;
@@ -1449,6 +1453,7 @@ static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t) {
         } else if (given_before) {
             diag_error(c->diag, at, "field '" STR_FMT "' is given twice", STR_ARG(name));
         } else {
+            check_late_field(c, t, index);
             check_field_value(c, literal->values[i], t->fields[index].type);
             continue;
         }

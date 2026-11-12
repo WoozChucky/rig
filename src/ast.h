@@ -80,6 +80,10 @@ struct Ast_Type : Ast {
     Ast_Type *pointee;  // AST_TYPE_POINTER
     Ast *count;         // AST_TYPE_ARRAY: N in [N]T, an expression the checker needs to be a constant
     Ast_Type *element;  // AST_TYPE_ARRAY and AST_TYPE_VIEW: T in [N]T and []T
+    bool count_checked; // AST_TYPE_ARRAY: N has been checked, once (a struct's layout may need
+                        // it before the field's type is made: checker.cpp's array_count)
+    bool count_fine;    // ... and is a count, count_value
+    u64 count_value;
 };
 
 struct Ast_Param : Ast {
@@ -147,6 +151,9 @@ struct Ast_Const : Ast {
 struct Ast_Field : Ast {
     String name;
     Ast_Type *type_expr;
+    bool is_late;         // its type holds a pointer or a view: laid out from what's written,
+                          // the type made later (checker.cpp's lay_out, make_late_field)
+    Ast_Resolve resolve;  // a late field's type: how far the checker has got with it
 };
 
 // A struct's declaration, `Vec2 :: struct { x: float; y: float; }`, at the
