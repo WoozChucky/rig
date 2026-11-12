@@ -19,19 +19,23 @@ struct Parser {
     s32 height;                 // the levels of the expression the last parse_ function returned
     Position expression_start;  // where the outermost expression being read starts
     s32 blocks;                 // the blocks open around the next token
+    s32 type_levels;            // the type levels (*, [] and [N]) open around the next token
     // After a body found never closed: the token where the top level
     // resumes (parse_block_rest), or -1.
     s64 resume;
 };
 
 // A limit of the compiler (spec 6.1): an expression nests at most MAX_DEPTH
-// levels deep, and blocks too. The parser, the checker and lowering all walk
-// the tree recursively, a call or a few per level, on the main thread's
-// stack (1 MB on Windows, 8 MB on Linux): without a limit, a file with a few
-// thousand nested parentheses, or a generated sum of a few thousand terms,
-// crashes rig with a stack overflow and no message. The parser enforces it,
-// so no later stage ever sees a deeper tree. 1000 levels fit on Windows'
-// stack with room to spare, even inside 1000 nested blocks.
+// levels deep, and blocks and types too. The parser, the checker and
+// lowering all walk the tree recursively, a call or a few per level, on the
+// main thread's stack (1 MB on Windows, 8 MB on Linux): without a limit, a
+// file with a few thousand nested parentheses, or a generated sum of a few
+// thousand terms, crashes rig with a stack overflow and no message. The
+// parser enforces it, so no later stage ever sees a deeper tree. 1000 levels
+// fit on Windows' stack with room to spare, even inside 1000 nested blocks.
+//
+// A type's levels are each '*', '[]' and '[N]' in it (parse_type): ***int is
+// 3, [][4]*u8 is 3, a name none.
 //
 // An expression's levels are its tree's height: each parenthesis, prefix
 // operator, cast, call, dereference (.*), field (.x), element (a[i]),
@@ -903,7 +907,36 @@ static Ast_Block *parse_block(Parser *p) {
 // count holding a cast whose type has a count ... can't recurse past
 // MAX_DEPTH; the height kept for the expression around the type stays as
 // it was.
+//
+// A type nests at most MAX_DEPTH levels, each '*', '[]' and '[N]' one:
+// "types are nested too deeply (more than 1000 levels)" at the '*' or '['
+// one too many. The checker resolves a type, names it in messages and lays
+// it out by recursing into what it's made of, and the stages after it walk
+// types the same way, so ten thousand '*' would overflow the stack; counting
+// here means none of them ever sees a deeper type. A type written
+// inside a count ([size_of(**int)]u8) is inside the type around it, so its
+// levels add to that type's: with each type's count restarting at zero, a
+// type in a count in a type in a count ... could recurse a thousand times
+// a thousand levels deep.
+static Ast_Type *parse_type_level(Parser *p);
+
 static Ast_Type *parse_type(Parser *p) {
+    Token *t = peek(p);
+    if (t->kind != TOKEN_STAR && t->kind != TOKEN_LBRACKET) return parse_type_level(p);
+    if (p->type_levels == MAX_DEPTH) {
+        diag_error(p->diag, t->pos, "types are nested too deeply (more than %d levels)", MAX_DEPTH);
+        return nullptr;
+    }
+    p->type_levels++;
+    Ast_Type *type = parse_type_level(p);
+    p->type_levels--;
+    return type;
+}
+
+// The type rule's alternatives: '*' type, '[' [expression] ']' type (a
+// level each, which parse_type counted) or a name. The type after a '*' or
+// ']' goes back through parse_type, so its levels are counted too.
+static Ast_Type *parse_type_level(Parser *p) {
     Token *t = peek(p);
     if (t->kind == TOKEN_STAR) {
         advance(p);
@@ -1283,7 +1316,7 @@ static Ast_Proc *broken_entry(Parser *p, s64 start) {
 
 Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
-    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, -1};
+    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, -1};
     Ast_File *file = arena_new<Ast_File>(a);
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;
