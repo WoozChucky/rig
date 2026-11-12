@@ -1,0 +1,39 @@
+// Aggregates inside a loop of ten million iterations: an array local is
+// zeroed each time, and an array literal viewed by a procedure is rebuilt
+// each time. Their memory is in the procedure's frame once (every slot in
+// the entry block), so the stack doesn't grow.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+print_int :: (n: int) {
+    if n < 0 {
+        putchar(45);
+        print_int(-n);
+        return;
+    }
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+println :: (n: int) {
+    print_int(n);
+    putchar(10);
+}
+
+sum :: (v: []int) -> int {
+    s := 0;
+    for v { s += it; }
+    return s;
+}
+
+main :: () {
+    zeroed := 0;
+    rebuilt := 0;
+    for 1..10000000 {
+        buffer : [1000]u8;
+        buffer[it % 1000] += 1;
+        zeroed += buffer[it % 1000];
+        rebuilt += sum(.[it, 1, 2]) - it;
+    }
+    println(zeroed);
+    println(rebuilt);
+}

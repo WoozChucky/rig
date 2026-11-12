@@ -1,0 +1,55 @@
+// Layout as C has it (spec 5, 6.5): the offsets of a struct's fields, an
+// array's elements and a view's two fields, measured at run time from their
+// addresses.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+print_int :: (n: int) {
+    if n < 0 {
+        putchar(45);
+        print_int(-n);
+        return;
+    }
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+println :: (n: int) {
+    print_int(n);
+    putchar(10);
+}
+
+S :: struct {
+    a: u8;
+    b: s64;
+    c: u16;
+    d: bool;
+    e: *u8;
+    f: float32;
+    g: [3]u16;
+}
+
+main :: () {
+    s : S;
+    base := cast(int) *s;
+    println(cast(int) *s.a - base);
+    println(cast(int) *s.b - base);
+    println(cast(int) *s.c - base);
+    println(cast(int) *s.d - base);
+    println(cast(int) *s.e - base);
+    println(cast(int) *s.f - base);
+    println(cast(int) *s.g - base);
+    println(cast(int) *s.g[2] - base);
+    println(size_of(S));
+
+    // A view is { count: int; data: *T; }, count first.
+    v : []int;
+    println(cast(int) *v.count - cast(int) *v);
+    println(cast(int) *v.data - cast(int) *v);
+    println(size_of([]int));
+
+    // An array's elements are one after another, each at a multiple of its size.
+    many : [4]S;
+    println(cast(int) *many[1] - cast(int) *many);
+    println(cast(int) *many[3].g[2] - cast(int) *many);
+    println(size_of([4]S));
+}

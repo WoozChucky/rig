@@ -1,0 +1,108 @@
+// Fixed arrays (issue #59, spec 6.5): elements read and written, .count
+// and .data, whole copies, arrays in structs and structs in arrays, arrays
+// of arrays, literals, a global array, and for and for * over them.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+print_int :: (n: int) {
+    if n < 0 {
+        putchar(45);
+        print_int(-n);
+        return;
+    }
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+println :: (n: int) {
+    print_int(n);
+    putchar(10);
+}
+
+Vec2 :: struct { x: int; y: int; }
+Polygon :: struct { points: [3]Vec2; count: u8; }
+
+// The parameter is the caller's copy: changing a local copy of it changes
+// neither.
+total :: (a: [4]int) -> int {
+    sum := 0;
+    for a { sum += it; }
+    copy := a;
+    copy[0] = 1000;
+    return sum;
+}
+
+// Returned whole, as a struct is.
+squares :: () -> [4]int {
+    r : [4]int;
+    for * r { it.* = it_index * it_index; }
+    return r;
+}
+
+g := int.[1, 2, 3];
+
+main :: () {
+    a : [4]int;
+    println(a.count);
+    println(a[0] + a[1] + a[2] + a[3]);
+    a[0] = 10;
+    a[1] = 20;
+    a[2] = a[0] + a[1];
+    a[3] = -1;
+    println(a[2]);
+    i := 3;
+    a[i] += 5;
+    println(a[3]);
+
+    // .data is the first element's address.
+    p := a.data;
+    p[1] = 21;
+    println(a[1]);
+    println((p + 2).*);
+
+    // An array is copied whole.
+    b := a;
+    b[0] = 99;
+    println(a[0]);
+    println(b[0]);
+    println(total(a));
+    println(a[0]);
+
+    s := squares();
+    for s { println(it); }
+
+    // Structs in arrays, arrays in structs.
+    poly : Polygon;
+    poly.points[1].x = 7;
+    poly.points[2] = Vec2.{3, 4};
+    poly.count = 3;
+    println(poly.points[1].x + poly.points[2].y);
+    for * poly.points { it.y += 100; }
+    println(poly.points[0].y);
+    println(poly.points[2].y);
+    sum := 0;
+    for pt: poly.points { sum += pt.x + pt.y; }
+    println(sum);
+    println(poly.points.count);
+    println(size_of([3]Vec2));
+
+    // Arrays of arrays.
+    grid : [2][3]int;
+    for * row: grid {
+        for * cell: row.* { cell.* = it_index; }
+    }
+    grid[1][2] = 50;
+    println(grid[0][2] + grid[1][2]);
+    println(size_of([2][3]int));
+
+    // Literals: written with their element type, or taking the type they meet.
+    c := int.[5, 6, 7];
+    println(c[0] * c[2]);
+    d : [3]u8 = .[250, 251, 252];
+    for d { println(it); }
+    for e: c { println(it_index * 100 + e); }
+
+    // A global array.
+    println(g[1]);
+    g[2] = 30;
+    println(g[0] + g[2]);
+}

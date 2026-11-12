@@ -1,0 +1,90 @@
+// Views (issue #59, spec 6.5): a view of an array sees the array itself; a
+// view built by hand from malloc'd memory with .data and .count; views
+// passed, changed through and returned; a literal's view; global views.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+print_int :: (n: int) {
+    if n < 0 {
+        putchar(45);
+        print_int(-n);
+        return;
+    }
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+println :: (n: int) {
+    print_int(n);
+    putchar(10);
+}
+
+malloc :: (size: u64) -> *void #foreign libc;
+free :: (p: *void) #foreign libc;
+
+sum :: (v: []int) -> int {
+    s := 0;
+    for v { s += it; }
+    return s;
+}
+
+fill :: (v: []int, value: int) {
+    for * v { it.* = value; }
+}
+
+double_all :: (v: []int) {
+    for i: 0..v.count - 1 { v[i] *= 2; }
+}
+
+first_half :: (v: []int) -> []int {
+    h := v;
+    h.count = v.count / 2;
+    return h;
+}
+
+Vec2 :: struct { x: int; y: int; }
+Path :: struct { points: []Vec2; closed: bool; }
+
+numbers : []int = .[4, 5, 6];
+square := Path.{.[.{0, 0}, .{0, 1}, .{1, 1}, .{1, 0}], true};
+
+main :: () {
+    a := int.[1, 2, 3, 4, 5, 6];
+    println(sum(a));
+    v : []int = a;
+    println(v.count);
+    v[0] = 100;
+    println(a[0]);
+    double_all(a);
+    println(a[5]);
+    println(sum(first_half(a)));
+
+    // A view moved along an array.
+    w := v;
+    w.data += 1;
+    w.count -= 1;
+    println(w[0]);
+    println(sum(w));
+
+    // Memory from malloc, seen through a view built by hand.
+    n := 5;
+    heap : []int;
+    heap.data = malloc(cast(u64) n * size_of(int));
+    heap.count = n;
+    fill(heap, 7);
+    heap[4] = 1;
+    println(sum(heap));
+    free(heap.data);
+
+    // A literal's view, of a temporary.
+    println(sum(.[10, 20, 30]));
+    println(sum(int.[1, 1]));
+
+    // Global views, of global arrays.
+    println(sum(numbers));
+    numbers[0] = 40;
+    println(sum(numbers));
+    corners := 0;
+    for square.points { corners += it.x * 10 + it.y; }
+    println(corners);
+    println(square.points.count);
+}

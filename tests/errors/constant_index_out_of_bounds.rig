@@ -1,0 +1,7 @@
+// A constant index of an array is checked while compiling (spec 6.5): an
+// error, not a runtime check, so it stays with --no-bounds-checks and
+// #no_abc too.
+main :: () {
+    a : [3]int;
+    a[3] = 1;
+}

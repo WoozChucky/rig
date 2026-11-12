@@ -1999,3 +1999,187 @@ TEST(member_through_a_pointer_is_null_checked) {
     CHECK_STR(message_of(m, 1), "test.rig:6:7: runtime error: null pointer dereference\n");
     arena_free(&a);
 }
+
+// Milestone 2b (issue #59): arrays and views. An index of an array or a
+// view is compared with its count, unsigned, after widening by its own sign
+// (so -1 and a u64 above int's range fail too); a failing check calls
+// __rig_bounds_failed, which writes the message and panics.
+
+TEST(index_is_bounds_checked) {
+    // v[i] on a view: the view's count and data are loaded, i compared with
+    // the count (a view's count may have been set negative, which no index
+    // is inside), then the element is data + i * 8.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "f :: (v: []int, i: int) -> int {\n"
+                                "    return v[i];\n"
+                                "}\n"
+                                "g :: (i: u8) -> int {\n"
+                                "    a : [3]int;\n"
+                                "    return a[i];\n"
+                                "}\n"
+                                "h :: () -> int {\n"
+                                "    a : [3]int;\n"
+                                "    return a[2];\n"
+                                "}\n"
+                                "main :: () { }\n");
+    String ir = ir_print(&a, m);
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(ptr, i64) -> i64 {\n"
+              "b0:\n"
+              "  %2 = load i64 %0\n"
+              "  %3 = const i64 8\n"
+              "  %4 = ptradd %0, %3\n"
+              "  %5 = load ptr %4\n"
+              "  %6 = cmp uge i64 %1, %2\n"
+              "  %7 = const i64 0\n"
+              "  %8 = cmp slt i64 %2, %7\n"
+              "  %9 = or i1 %6, %8\n"
+              "  branch %9, b1, b2\n"
+              "b1:\n"
+              "  %10 = addr @str.0\n"
+              "  %11 = const i64 30\n"
+              "  %12 = const i1 1\n"
+              "  call @__rig_bounds_failed(%10, %11, %1, %2, %12)\n"
+              "  unreachable\n"
+              "b2:\n"
+              "  %13 = const i64 8\n"
+              "  %14 = mul i64 %1, %13\n"
+              "  %15 = ptradd %5, %14\n"
+              "  %16 = load i64 %15\n"
+              "  ret %16\n"
+              "}\n");
+    // The place the message names, without the rest of it, which
+    // __rig_bounds_failed writes after it.
+    CHECK_STR(message_of(m, 0), "test.rig:2:13: runtime error: ");
+    // An array's count is its constant; a u8 index widens by its sign, and
+    // is unsigned in the message.
+    String g = proc_ir(ir, "g");
+    CHECK(contains(g, "zext i8 %0 to i64"));
+    CHECK(contains(g, "= const i64 3\n"));
+    CHECK(contains(g, "cmp uge i64"));
+    CHECK(contains(g, "= const i1 0\n"));
+    CHECK(contains(g, "call @__rig_bounds_failed("));
+    // A constant index of an array was checked while compiling.
+    String h = proc_ir(ir, "h");
+    CHECK(!contains(h, "cmp uge"));
+    CHECK(!contains(h, "__rig_bounds_failed"));
+    CHECK(contains(h, "= const i64 16\n"));
+    arena_free(&a);
+}
+
+TEST(no_abc_drops_the_check) {
+    // #no_abc turns one procedure's bounds checks off; --no-bounds-checks
+    // (ir_lower's bounds_checks false) every procedure's. A pointer's null
+    // check stays either way.
+    Arena a = arena_make();
+    const char *source = "f :: (v: []int, i: int) -> int #no_abc {\n"
+                         "    return v[i];\n"
+                         "}\n"
+                         "g :: (v: []int, i: int) -> int {\n"
+                         "    return v[i];\n"
+                         "}\n"
+                         "h :: (p: *int, i: int) -> int {\n"
+                         "    return p[i];\n"
+                         "}\n"
+                         "main :: () { }\n";
+    String ir = ir_print(&a, lower_source(&a, source));
+    String f = proc_ir(ir, "f");
+    CHECK(!contains(f, "cmp uge"));
+    CHECK(!contains(f, "__rig_bounds_failed"));
+    CHECK(contains(f, "mul i64 %1, "));
+    CHECK(contains(proc_ir(ir, "g"), "call @__rig_bounds_failed("));
+    String off = ir_print(&a, lower_file(&a, "test.rig", source, false));
+    CHECK(!contains(off, "cmp uge"));
+    CHECK(!contains(off, "__rig_bounds_failed"));
+    CHECK(contains(proc_ir(off, "h"), "cmp eq ptr %0, "));
+    arena_free(&a);
+}
+
+TEST(bounds_failed_formats_its_numbers) {
+    // __rig_bounds_failed is made once per module, after the file's
+    // procedures, and only when some index is checked. It writes the
+    // message into a buffer of its own: where, then the fixed text, the
+    // numbers in decimal (udiv and urem by 10), and panics with it.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: (v: []int, i: int) -> int { return v[i]; }\n"
+                                          "g :: (v: []u8, i: s8) -> u8 { return v[i]; }\n"
+                                          "main :: () { }\n"));
+    CHECK_EQ(count_of(ir, "proc @__rig_bounds_failed(ptr, i64, i64, i64, i1) {"), 1);
+    CHECK(index_of(ir, "proc @g(") < index_of(ir, "proc @__rig_bounds_failed("));
+    CHECK(index_of(ir, "proc @__rig_bounds_failed(") < index_of(ir, "export proc @main("));
+    String failed = proc_ir(ir, "__rig_bounds_failed");
+    CHECK(contains(failed, "udiv i64"));
+    CHECK(contains(failed, "urem i64"));
+    CHECK(contains(failed, "panic %"));
+    CHECK(contains(ir, "\"index \\00\""));
+    CHECK(contains(ir, "\" is out of bounds (count \\00\""));
+    CHECK(contains(ir, "\")\\0A\\00\""));
+    // No index checked, no procedure: a constant index of an array, and a
+    // pointer's index, need none.
+    String none = ir_print(&a, lower_source(&a,
+                                            "f :: (p: *int, i: int) -> int { a : [2]int; return a[1] + p[i]; }\n"
+                                            "main :: () { }\n"));
+    CHECK(!contains(none, "__rig_bounds_failed"));
+    arena_free(&a);
+}
+
+TEST(array_to_view_views_the_array) {
+    // An array converted to a view is seen where it is: the view's data is
+    // the array's own slot, so a procedure taking the view changes the
+    // array. One that isn't a place (a parameter, here) is copied into a
+    // temporary first, which the view sees.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "sum :: (v: []int) -> int { return v.count; }\n"
+                                          "f :: (a: [3]int) -> int { return sum(a); }\n"
+                                          "main :: () {\n"
+                                          "    a : [3]int;\n"
+                                          "    n := sum(a);\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local 24 align 8\n"
+              "  zero %0, 24\n"
+              "  %1 = local i64\n"
+              "  %2 = local 16 align 8\n"
+              "  %3 = const i64 3\n"
+              "  store i64 %3, %2\n"
+              "  %4 = const i64 8\n"
+              "  %5 = ptradd %2, %4\n"
+              "  store ptr %0, %5\n"
+              "  %6 = local 16 align 8\n"
+              "  copy %6, %2, 16\n"
+              "  %7 = call @sum(%6)\n"
+              "  store i64 %7, %1\n"
+              "  ret\n"
+              "}\n");
+    CHECK(contains(proc_ir(ir, "f"), "copy %1, %0, 24\n"));
+    arena_free(&a);
+}
+
+TEST(bounds_failed_buffer_fits_a_long_path) {
+    // The buffer holds the longest `where` the module passes, the fixed
+    // text and two numbers of up to 20 characters: for a path of 300 bytes,
+    // at least 300 + 64.
+    Arena a = arena_make();
+    char path[301];
+    memset(path, 'p', 296);
+    memcpy(path + 296, ".rig", 4);
+    path[300] = 0;
+    String ir = ir_print(&a, lower_file(&a, path,
+                                        "f :: (v: []int, i: int) -> int { return v[i]; }\n"
+                                        "main :: () { }\n",
+                                        true));
+    String failed = proc_ir(ir, "__rig_bounds_failed");
+    s64 at = index_of(failed, "= local ");
+    CHECK(at >= 0);
+    if (at >= 0) {
+        String rest = string_slice(failed, at + 8, failed.count - at - 8);
+        s64 size = strtoll(string_cstr(&a, rest), nullptr, 10);
+        CHECK(size >= 364);
+    }
+    arena_free(&a);
+}
