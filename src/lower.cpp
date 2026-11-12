@@ -40,8 +40,19 @@
 // - What Rig defines and LLVM doesn't is checked at run time (spec 6.4): a
 //   divisor not known while compiling is compared with 0, and a signed one
 //   with -1 (lower_division); a cast checks that the number survives
-//   (lower_cast). A check that fails is a runtime error: a block of its own
-//   panics with "PATH:LINE:COL: runtime error: MESSAGE" (emit_runtime_check).
+//   (lower_cast); a pointer is compared with null before anything is read
+//   or written through it (emit_null_check). A check that fails is a
+//   runtime error: a block of its own panics with "PATH:LINE:COL: runtime
+//   error: MESSAGE" (emit_runtime_check).
+// - Pointers (spec 6.5) are ptr values. Since every variable is a slot
+//   already, *x is x's slot (a global's addr), and p.* a load or store
+//   through p, once it's checked not to be null (lower_address finds the
+//   place an assignment writes, or *e takes). p + n is a ptradd by n times
+//   the size of what p points at; p - q divides the bytes between them by
+//   that size. Casts between pointers keep the address; to and from a 64-bit
+//   integer they're ptrtoint and inttoptr. A bool through a pointer is the
+//   same i1 load and store as in a variable: one byte in memory, any byte
+//   but 0 read as true (the backend's, ir.h).
 //
 // Blocks are numbered in the order they're made, and made in the order
 // their code comes in the source, so the printed IR reads like the program.
@@ -88,7 +99,9 @@ struct Lowering {
 static Ir_Type ir_type_of(Type *t) {
     if (!t || t->kind == TYPE_VOID) return IR_VOID;
     if (t->kind == TYPE_BOOL) return IR_I1;
-    if (t->kind == TYPE_POINTER || t->kind == TYPE_STRING) return IR_PTR;
+    // null always meets a pointer type before lowering (the checker reports
+    // one that doesn't), but it's a pointer's 0 wherever it is.
+    if (t->kind == TYPE_POINTER || t->kind == TYPE_STRING || t->kind == TYPE_NULL) return IR_PTR;
     if (t->kind == TYPE_FLOAT) return t->size == 4 ? IR_F32 : IR_F64;
     RIG_ASSERT(t->kind == TYPE_INTEGER);
     switch (t->size) {
@@ -335,6 +348,20 @@ static void emit_runtime_check(Lowering *l, s32 fails, Position at, String messa
     l->block = ok;
 }
 
+// A pointer about to be read or written through, %pointer: when it's null,
+// a runtime error at `at` (spec 6.5: "null pointer dereference"); otherwise
+// the code goes on in a new block. Made where the place is computed, so a
+// place reached through a null pointer is never even an address: *p.*
+// with p null fails, rather than giving null back.
+//
+//     %null = const ptr 0
+//     %fails = cmp eq ptr %pointer, %null
+//     branch %fails, fail, ok        (emit_runtime_check)
+static void emit_null_check(Lowering *l, s32 pointer, Position at) {
+    s32 null = emit_constant(l, IR_PTR, 0);
+    emit_runtime_check(l, emit_compare(l, IR_EQ, IR_PTR, pointer, null), at, str("null pointer dereference"));
+}
+
 // left / right or left % right (op), both of type t: %left is the left
 // operand's value, `right` the divisor, `at` the operator's position. C's
 // division, which truncates toward zero, is Rig's, but LLVM leaves two
@@ -388,11 +415,57 @@ static s32 lower_division(Lowering *l, Token_Kind op, Type *t, s32 left, Ast *ri
     return emit_select(l, type, minus_one, negated, result);
 }
 
+// How many bytes a pointer to `pointee` moves for p + n (p - n when
+// `subtract`), n any integer: n widened to an i64 by its own sign, times
+// pointee's size, negated for -. A constant n gives a constant offset. The
+// multiplication wraps, as the address does (spec 6.5: nothing is checked).
+//
+//     %n64 = sext/zext n to i64      (nothing for an i64)
+//     %bytes = mul i64 %n64, SIZE    (nothing when SIZE is 1)
+//     %offset = sub i64 0, %bytes    (for -)
+static s32 lower_pointer_offset(Lowering *l, Ast *n, Type *pointee, bool subtract) {
+    u64 size = (u64)pointee->size;
+    if (n->is_constant) {
+        // Ast.constant is n's value extended to 64 bits by its own sign, so
+        // the 64-bit product is the offset, negative ones included.
+        u64 bytes = n->constant * size;
+        return emit_constant(l, IR_I64, subtract ? 0 - bytes : bytes);
+    }
+    s32 offset = resize(l, lower_expr(l, n), n->type, IR_I64);
+    if (size != 1) offset = emit_binary(l, IR_MUL, IR_I64, offset, emit_constant(l, IR_I64, size));
+    if (subtract) offset = emit_binary(l, IR_SUB, IR_I64, emit_constant(l, IR_I64, 0), offset);
+    return offset;
+}
+
+// p - q, two pointers of the same type: how many of what they point at
+// lie between them, the bytes between their addresses divided by its size.
+// sdiv rounds toward zero, and its divisor is a positive constant (the
+// checker refused a size of 0), so it's always defined.
+//
+//     %a = ptrtoint ptr %p to i64
+//     %b = ptrtoint ptr %q to i64
+//     %bytes = sub i64 %a, %b
+//     %count = sdiv i64 %bytes, SIZE (nothing when SIZE is 1)
+static s32 lower_pointer_difference(Lowering *l, Ast_Binary *b) {
+    Type *pointer = b->operand_type;
+    s32 left = emit_convert(l, IR_PTRTOINT, IR_PTR, lower_value(l, b->left, pointer), IR_I64);
+    s32 right = emit_convert(l, IR_PTRTOINT, IR_PTR, lower_value(l, b->right, pointer), IR_I64);
+    s32 bytes = emit_binary(l, IR_SUB, IR_I64, left, right);
+    u64 size = (u64)pointer->pointee->size;
+    if (size == 1) return bytes;
+    return emit_binary(l, IR_SDIV, IR_I64, bytes, emit_constant(l, IR_I64, size));
+}
+
 // `left op right` where both are of type t (the right, for a shift, the
-// amount, of any integer type); left's value is %left, and `at` is the
-// operator's position, where a division's runtime error points. A float
-// division is IEEE 754's, with nothing to check.
+// amount, of any integer type; for a pointer t, + or -, the integer it
+// moves by); left's value is %left, and `at` is the operator's position,
+// where a division's runtime error points. A float division is IEEE 754's,
+// with nothing to check.
 static s32 lower_operation(Lowering *l, Token_Kind op, Type *t, s32 left, Ast *right, Position at) {
+    if (type_is_pointer(t)) {
+        s32 offset = lower_pointer_offset(l, right, t->pointee, op == TOKEN_MINUS);
+        return emit_binary(l, IR_PTRADD, IR_PTR, left, offset);
+    }
     bool integer = t->kind == TYPE_INTEGER;
     if (integer && (op == TOKEN_SLASH || op == TOKEN_PERCENT)) return lower_division(l, op, t, left, right, at);
     s32 r = op == TOKEN_SHIFT_LEFT || op == TOKEN_SHIFT_RIGHT ? lower_shift_amount(l, right, t)
@@ -449,10 +522,18 @@ static s32 lower_float_cast(Lowering *l, s32 v, Type *from, Type *to) {
 //     keeps the number: no check.
 // - From a bool, the i1 widens to 0 or 1 (zext); a cast to the same type,
 //   or of a string literal to *u8, is the value as it is.
+// - A pointer to a pointer is the same address; to an int, s64 or u64 it's
+//   ptrtoint, and from one inttoptr: the address as a number and back,
+//   unchecked (spec 6.5).
+// The value may be a constant even when the cast isn't (cast(*int) 4096):
+// it's made at its own type.
 static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
     Type *from = cast->value->type, *to = cast->type;
     Ir_Type have = ir_type_of(from), want = ir_type_of(to);
-    s32 v = lower_expr(l, cast->value);
+    s32 v = lower_value(l, cast->value, from);
+    if (type_is_pointer(from) && type_is_pointer(to)) return v;
+    if (type_is_pointer(from)) return emit_convert(l, IR_PTRTOINT, IR_PTR, v, IR_I64);
+    if (type_is_pointer(to) && from->kind == TYPE_INTEGER) return emit_convert(l, IR_INTTOPTR, IR_I64, v, IR_PTR);
     if (from->kind == TYPE_FLOAT || to->kind == TYPE_FLOAT) return lower_float_cast(l, v, from, to);
     if (cast->is_trunc || from->kind != TYPE_INTEGER || to->kind != TYPE_INTEGER) return resize(l, v, from, want);
     if (ir_bits(want) < ir_bits(have)) {
@@ -549,6 +630,22 @@ static s32 lower_logical(Lowering *l, Ast_Binary *b) {
 
 static s32 lower_call(Lowering *l, Ast_Call *call);
 
+// The address of a place in memory (the checker's check_addressable): what
+// *e gives, and where an assignment to e stores. A variable's is its slot,
+// or its global's addr; p.*'s is p's value, once checked not to be null, at
+// the '.'. A place's operands, and its checks, are worked out here, before
+// any value an assignment stores (spec 6.5's order).
+static s32 lower_address(Lowering *l, Ast *e) {
+    if (e->kind == AST_DEREF) {
+        Ast *pointer = ((Ast_Deref *)e)->operand;
+        s32 address = lower_value(l, pointer, pointer->type);
+        emit_null_check(l, address, e->pos);
+        return address;
+    }
+    RIG_ASSERT(e->kind == AST_NAME);  // a variable: the checker allowed nothing else
+    return address_of(l, ((Ast_Name *)e)->decl);
+}
+
 // The value of an expression the checker didn't mark constant, of its own
 // type. Returns the value's number (-1 for a call that returns nothing).
 static s32 lower_expr(Lowering *l, Ast *e) {
@@ -565,8 +662,10 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         if (decl->kind == AST_PARAM) return local_of(l, decl)->value;
         return emit_load(l, ir_type_of(decl->type), address_of(l, decl));
     }
+    case AST_DEREF: return emit_load(l, ir_type_of(e->type), lower_address(l, e));
     case AST_UNARY: {
         Ast_Unary *u = (Ast_Unary *)e;
+        if (u->op == TOKEN_STAR) return lower_address(l, u->operand);
         Ir_Type t = ir_type_of(e->type);
         s32 x = lower_value(l, u->operand, e->type);
         // -x on a float flips its sign bit (fneg; 0 - x would give 0.0 for
@@ -596,6 +695,15 @@ static s32 lower_expr(Lowering *l, Ast *e) {
             cmp->a = left;
             cmp->b = right;
             return cmp->result;
+        }
+        if (type_is_pointer(b->operand_type)) {
+            // p - q; or n + p, the integer first, as written: p + n and
+            // p - n are lower_operation's, as p += n is.
+            if (e->type->kind == TYPE_INTEGER) return lower_pointer_difference(l, b);
+            if (!type_is_pointer(b->left->type)) {
+                s32 offset = lower_pointer_offset(l, b->left, e->type->pointee, false);
+                return emit_binary(l, IR_PTRADD, IR_PTR, lower_value(l, b->right, e->type), offset);
+            }
         }
         return lower_operation(l, b->op, e->type, lower_value(l, b->left, e->type), b->right, b->pos);
     }
@@ -819,15 +927,17 @@ static void lower_multi_var(Lowering *l, Ast_Multi_Var *multi) {
 // a, b = f(); the call first, then each result stored into its target, in
 // order, widened first when the target's type is wider (the checker made
 // sure each converts). The targets are read only after the call, so
-// `a, b = swap(a, b);` passes the old values and stores the new ones.
+// `a, b = swap(a, b);` passes the old values and stores the new ones; each
+// target's place (and its null check, for p.*) is found just before its
+// store.
 static void lower_multi_assign(Lowering *l, Ast_Assign *assign) {
     Ast_Call *call = (Ast_Call *)assign->value;
     s32 first = lower_expr(l, call);
     for (s64 i = 0; i < assign->targets.count; i++) {
-        Ast *decl = ((Ast_Name *)assign->targets[i])->decl;  // a variable: checked
-        s32 address = address_of(l, decl);
-        s32 value = resize(l, first + (s32)i, call->proc->results[i]->type, ir_type_of(decl->type));
-        emit_store(l, ir_type_of(decl->type), value, address);
+        Ast *target = assign->targets[i];  // a place in memory: checked
+        s32 address = lower_address(l, target);
+        s32 value = resize(l, first + (s32)i, call->proc->results[i]->type, ir_type_of(target->type));
+        emit_store(l, ir_type_of(target->type), value, address);
     }
 }
 
@@ -853,10 +963,12 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
             lower_multi_assign(l, assign);
             break;
         }
-        Ast_Name *target = (Ast_Name *)assign->targets[0];  // the checker made sure it's a variable
-        Type *type = target->decl->type;
+        // Where it writes first, its checks included, then the value (spec
+        // 6.5): `p.* = f();` checks p before calling f.
+        Ast *target = assign->targets[0];  // a place in memory: checked
+        Type *type = target->type;
         Ir_Type t = ir_type_of(type);
-        s32 slot = address_of(l, target->decl);
+        s32 slot = lower_address(l, target);
         s32 value;
         if (assign->op == TOKEN_EQUAL) {
             value = lower_value(l, assign->value, type);

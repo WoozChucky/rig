@@ -1,0 +1,3 @@
+tests/errors/address_of_a_parameter.rig:5:11: error: can't take the address of 'n': it's a parameter
+        p := *n;
+              ^
