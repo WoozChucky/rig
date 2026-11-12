@@ -6,8 +6,8 @@
 // results), assignments, returns, if, while, for, break, continue and
 // expressions; expressions made of calls, names, strings, integers,
 // floats, bools, null, operators, casts, addresses and dereferences,
-// size_of, fields (e.x) and struct literals (Vec2.{1, 2}). And structs,
-// declared at the top level.
+// size_of, fields (e.x), struct literals (Vec2.{1, 2}), elements (a[i])
+// and array literals (int.[1, 2]). And structs, declared at the top level.
 // Each node kind is a struct that starts with Ast, so a pointer to any node
 // is also an Ast *, and `kind` says which it is.
 //
@@ -25,6 +25,8 @@ enum Ast_Kind : u8 {
     AST_PARAM,         // Ast_Param: name: type
     AST_TYPE_NAME,     // Ast_Type: a type by its name: u8, s32
     AST_TYPE_POINTER,  // Ast_Type: *pointee
+    AST_TYPE_ARRAY,    // Ast_Type: [count]element
+    AST_TYPE_VIEW,     // Ast_Type: []element
     AST_BLOCK,         // Ast_Block: { statement; ... }
     AST_CALL,          // Ast_Call: callee(args)
     AST_NAME,          // Ast_Name: an identifier used as a value
@@ -51,7 +53,8 @@ enum Ast_Kind : u8 {
     AST_STRUCT,        // Ast_Struct: Vec2 :: struct { x: float; y: float; }
     AST_FIELD,         // Ast_Field: x: float;  in a struct
     AST_MEMBER,        // Ast_Member: e.x
-    AST_LITERAL,       // Ast_Literal: Vec2.{1, 2}  Vec2.{y = 2}  .{1, 2}
+    AST_LITERAL,       // Ast_Literal: Vec2.{1, 2}  Vec2.{y = 2}  .{1, 2}  int.[1, 2]  .[1, 2]
+    AST_INDEX,         // Ast_Index: a[i]
 };
 
 struct Ast {
@@ -70,9 +73,13 @@ struct Ast {
                        // (f64_bits), which for a float32 is a float32's value
 };
 
+// A type as written. Its node is at its first token: the name, the '*', or
+// an array's or a view's '['.
 struct Ast_Type : Ast {
-    String name;       // AST_TYPE_NAME
-    Ast_Type *pointee; // AST_TYPE_POINTER
+    String name;        // AST_TYPE_NAME
+    Ast_Type *pointee;  // AST_TYPE_POINTER
+    Ast *count;         // AST_TYPE_ARRAY: N in [N]T, an expression the checker needs to be a constant
+    Ast_Type *element;  // AST_TYPE_ARRAY and AST_TYPE_VIEW: T in [N]T and []T
 };
 
 struct Ast_Param : Ast {
@@ -97,6 +104,7 @@ struct Ast_Proc : Ast {
     Array<Ast_Type *> results;  // what it returns: none, one or several (-> int, int)
     Ast_Block *body;            // null for a foreign procedure
     bool is_foreign;
+    bool no_bounds_checks;      // #no_abc: its indexing isn't checked against counts (spec 6.5)
     bool is_broken;             // the parser gave up on it
     String foreign_library;     // #foreign's library name
     Position library_pos;       // where that name is written
@@ -201,13 +209,26 @@ struct Ast_Member : Ast {
 // `T.{x = a}` by name; the fields not given are zeroed. `.{a, b}` has no T
 // written: its type comes from where it's used (a declaration's type, an
 // assignment's target, an argument, a return, a field of an outer literal).
-// pos is the '.'; start is T's name when there is one.
+// Or of an array: `T.[a, b]` is a [2]T, T being the element type; `.[a, b]`
+// takes its element type and count from where it's used, as .{a, b} takes
+// its struct. pos is the '.'; start is T's name when there is one.
 struct Ast_Literal : Ast {
-    Ast_Type *type_expr;            // the T before the '.', or null: the type comes from where it's used
-    Array<String> names;            // the field each value is for (x = a), or empty: in order
+    Ast_Type *type_expr;            // the T before the '.' (an array's element type), or null: the type
+                                    // comes from where it's used
+    Array<String> names;            // the field each value is for (x = a), or empty: in order (always
+                                    // for an array)
     Array<Position> name_positions; // where each of those names is written
     Array<Ast *> values;
-    bool is_array;                  // T.[a, b] (milestone 2b's arrays, not yet)
+    bool is_array;                  // T.[a, b] or .[a, b]: an array's elements, in order
+};
+
+// a[i]: element i of the array or view a, or what the pointer a points at
+// i elements on (C's a[i], unchecked). A postfix operator, as a call is.
+// pos is the '[', where a bounds check's runtime error points; start is
+// a's.
+struct Ast_Index : Ast {
+    Ast *operand;  // a
+    Ast *index;    // i
 };
 
 // An operator between two operands; pos is the operator's.
@@ -269,14 +290,20 @@ struct Ast_While : Ast {
     Ast_Block *body;
 };
 
-// for first..last { ... } or for name: first..last { ... }; pos is the
-// 'for'. The loop declares two read-only variables (spec 6.1), visible in
-// its body: the iterator, which takes each value from first to last, both
-// included, and it_index, an int counting the iterations from 0.
+// for first..last { ... } or for name: first..last { ... }, a range; or
+// for a { ... }, for name: a { ... }, over the elements of an array or a
+// view a (its sequence); pos is the 'for'. The loop declares two read-only
+// variables (spec 6.1), visible in its body: the iterator, which takes each
+// value from first to last, both included, or each element of a in order
+// (a copy), and it_index, an int counting the iterations from 0. `for * a`
+// makes the iterator a pointer to each element instead, through which the
+// body can change it.
 struct Ast_For : Ast {
     Ast_Var *iterator;  // `it`, at the 'for', or the name in `for i: 0..9`, at the name; is_iterator set
     Ast_Var *index;     // `it_index`, at the 'for'; is_iterator set
-    Ast *first, *last;  // both ends included
+    Ast *first, *last;  // a range's ends, both included; null over a sequence
+    Ast *sequence;      // what `for a` goes over; null for a range
+    bool by_pointer;    // `for * a`: the iterator points at each element
     Position dots;      // the '..', where a message about the ends' types points
     Ast_Block *body;
 };
@@ -360,6 +387,12 @@ Token_Kind compound_operator(Token_Kind op);
 //   (assign = ((name a) (name b)) (call swap (name a) (name b)))   a, b = swap(a, b);
 //   (member (name p) x)   p.x;    (literal Vec2 (int 1) (int 2))   Vec2.{1, 2}
 //   (literal _ (x (int 1)) (y (int 2)))   .{x = 1, y = 2}
+//   (array (int 3) int)  [3]int    (view int)  []int    (index (name a) (int 1))  a[1]
+//   (literal-array int (int 1) (int 2))   int.[1, 2]    (literal-array _ (int 1))   .[1]
+//   (for it (name a) (block ...))      for a { ... }      (for x (name a) ...)  for x: a { ... }
+//   (for * it (name a) (block ...))    for * a { ... }
+//   (proc f (params) (no_abc) (block ...))   f :: () #no_abc { ... }
+// An array's count prints as written: (array (name N) int) for [N]int.
 // A struct prints as (struct Vec2 (x float32) (y float32)), each field's
 // type as written ((x float) for x: float).
 // Globals print as locals do, (var counter int) and (const LIMIT (int 100)),
