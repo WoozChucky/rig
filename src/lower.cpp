@@ -1026,7 +1026,10 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         // An array's .data is the array's address, its value; its .count
         // is a constant, never lowered here.
         Ast_Member *m = (Ast_Member *)e;
-        if (m->operand->type->kind == TYPE_ARRAY) return lower_expr(l, m->operand);
+        if (m->operand->type->kind == TYPE_ARRAY) {
+            RIG_ASSERT(string_eq(m->name, str("data")));
+            return lower_expr(l, m->operand);
+        }
         return emit_get(l, e->type, lower_member_address(l, m));
     }
     case AST_INDEX: return emit_get(l, e->type, lower_index_address(l, (Ast_Index *)e));

@@ -202,7 +202,8 @@ struct Ast_Size_Of : Ast {
 struct Ast_Member : Ast {
     Ast *operand;  // e
     String name;   // x
-    s32 index;     // the field's index in its struct's type, set by the checker
+    s32 index;     // the field's index in its struct's type, set by the checker; -1 for an
+                   // array's or a view's .count and .data, which lowering knows by name
 };
 
 // A literal of a struct (Jai's): `T.{a, b}` gives T's fields in order,
