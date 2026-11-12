@@ -17,6 +17,8 @@ struct Checker {
     Ast_Proc *proc;              // the procedure whose body is being checked
     Array<Ast *> loops;          // the loops around the statement being checked, innermost
                                  // last (Ast_While, Ast_For): what break and continue act on
+    Array<Ast *> resolving;      // the globals and constants under way, each needed by the one
+                                 // before it (resolve_global): a circle is the end of this list
 };
 
 // checker.cpp

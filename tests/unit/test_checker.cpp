@@ -1648,6 +1648,48 @@ TEST(constant_cycle) {
     arena_free(&a);
 }
 
+TEST(cycle_through_typed_globals) {
+    // A global with a written type has a type before its value is known,
+    // but in a circle its value isn't one: every declaration in the circle
+    // gives no type, so the circle is one message, whatever the types and
+    // however many go round it (issue #52). A global that only uses the
+    // circle, outside it, says nothing more either.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "a : int = b;\n"
+                           "b : int = a;\n"
+                           "main :: () {}\n"),
+              "1:1: 'a' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a,
+                           "ga : int = gb + 1;\n"
+                           "gb : int = gc * 2;\n"
+                           "gc : int = ga - 3;\n"
+                           "outside : int = gb;\n"
+                           "main :: () { x := ga + gb + gc + outside; }\n"),
+              "1:1: 'ga' is defined in terms of itself\n");
+    // Constants and globals in one circle: written either way round.
+    CHECK_STR(check_source(&a,
+                           "A :: g;\n"
+                           "g : int = A;\n"
+                           "main :: () {}\n"),
+              "1:1: 'A' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a,
+                           "N :: 2 * g;\n"
+                           "g : int = M;\n"
+                           "M :: N + 1;\n"
+                           "main :: () {}\n"),
+              "1:1: 'N' is defined in terms of itself\n");
+    // Only the declarations in the circle lose their type: one that leads
+    // into it, and is checked first, isn't in it.
+    CHECK_STR(check_source(&a,
+                           "first : int = a;\n"
+                           "a : int = b;\n"
+                           "b : int = a;\n"
+                           "main :: () {}\n"),
+              "2:1: 'a' is defined in terms of itself\n");
+    arena_free(&a);
+}
+
 // Milestone 2a (issue #37): floats (spec 6.4).
 
 // The value of a float constant, from the double's bits Ast.constant keeps.
