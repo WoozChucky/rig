@@ -488,3 +488,17 @@ bool os_run_on_stack(u64 stack_size, void (*fn)(void *data), void *data) {
     CloseHandle(thread);
     return true;
 }
+
+u64 os_stack_size() {
+    ULONG_PTR low = 0, high = 0;
+    GetCurrentThreadStackLimits(&low, &high);
+    return (u64)(high - low);
+}
+
+// The main thread's id: static objects are made on the main thread, before
+// main() runs.
+static const DWORD main_thread_id = GetCurrentThreadId();
+
+bool os_on_main_thread() {
+    return GetCurrentThreadId() == main_thread_id;
+}

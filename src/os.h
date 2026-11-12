@@ -97,3 +97,13 @@ const u64 RIG_STACK_SIZE = 8 * 1024 * 1024;
 // Runs fn(data) on a new thread with a stack of stack_size bytes, and waits
 // for it to end. False, with nothing run, when the thread can't be made.
 bool os_run_on_stack(u64 stack_size, void (*fn)(void *data), void *data);
+
+// The size of the calling thread's stack, as the system reports it: the
+// whole of it, used or not (what was reserved for it on Windows; the
+// thread's attributes on Linux, `ulimit -s` for the main thread). 0 if the
+// system won't say.
+u64 os_stack_size();
+
+// Whether the calling thread is the program's main thread, the one main()
+// started on.
+bool os_on_main_thread();

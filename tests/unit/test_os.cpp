@@ -322,37 +322,43 @@ TEST(os_read_missing_file_fails) {
 // Issue #77: the compiler works on a stack of its own, RIG_STACK_SIZE (8 MB)
 // on every system, rather than the main thread's (1 MB on Windows).
 
-// Uses about `kilobytes` KB of the stack, a KB a call, and returns
-// `kilobytes`: each call's buffer is volatile, so it's really there, and
-// the addition after the call keeps it from being a jump.
-static s64 use_stack(s64 kilobytes) {
-    volatile char frame[1024];
-    frame[0] = 1;
-    if (kilobytes <= 1) return frame[0];
-    return use_stack(kilobytes - 1) + frame[0];
-}
-
-struct Stack_Use {
-    s64 kilobytes;  // how much to use
-    s64 used;       // use_stack's answer, once it has run
+// What the thread a test function ran on had: its stack's size, as the
+// system reports it (os_stack_size), and whether it was the main thread.
+struct Stack_Seen {
+    u64 size;
+    bool on_main_thread;
 };
 
-static void use_stack_on_thread(void *data) {
-    Stack_Use *use = (Stack_Use *)data;
-    use->used = use_stack(use->kilobytes);
+static void look_at_stack(void *data) {
+    Stack_Seen *seen = (Stack_Seen *)data;
+    seen->size = os_stack_size();
+    seen->on_main_thread = os_on_main_thread();
 }
 
 TEST(os_run_on_stack_gives_the_stack_asked_for) {
-    // 4 MB of calls: four times Windows' main thread's stack, half of the
-    // thread's. It runs, on its own thread, and returns when it's done.
-    Stack_Use use = {4096, 0};
-    CHECK(os_run_on_stack(RIG_STACK_SIZE, use_stack_on_thread, &use));
-    CHECK_EQ(use.used, 4096);
+    // The stack is the size asked for, whatever the main thread's is: the
+    // compiler's, and a smaller one, less than any system's default for a
+    // new thread (Linux's is `ulimit -s`, usually 8 MB), so a thread made
+    // without asking couldn't pass. Measured, not recursed through: a
+    // recursion an optimiser can shrink passes for the wrong reason.
+    Stack_Seen seen = {0, true};
+    CHECK(os_run_on_stack(RIG_STACK_SIZE, look_at_stack, &seen));
+    CHECK(seen.size >= RIG_STACK_SIZE && seen.size < 2 * RIG_STACK_SIZE);
+    CHECK(!seen.on_main_thread);
+    seen = {0, true};
+    CHECK(os_run_on_stack(2 * 1024 * 1024, look_at_stack, &seen));
+    CHECK(seen.size >= 2 * 1024 * 1024 && seen.size < 4 * 1024 * 1024);
+    // The main thread's own (this one's, once unit.cpp is undone, or rig's
+    // main) is the system's.
+    CHECK(os_stack_size() > 0);
 }
 
 TEST(the_tests_run_on_the_compilers_stack) {
     // unit.cpp runs the tests on a stack of RIG_STACK_SIZE, as rig runs the
     // compiler, so the tests at the compiler's limits (MAX_DEPTH) have the
-    // room rig has. On the main thread's 1 MB, on Windows, this overflows.
-    CHECK_EQ(use_stack(4096), 4096);
+    // room rig has. On the main thread they'd have the system's: 1 MB on
+    // Windows, and on Linux `ulimit -s`, which may be 8 MB too, so that
+    // they're on a thread of their own is checked as well.
+    CHECK(os_stack_size() >= RIG_STACK_SIZE);
+    CHECK(!os_on_main_thread());
 }

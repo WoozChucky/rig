@@ -406,3 +406,16 @@ bool os_run_on_stack(u64 stack_size, void (*fn)(void *data), void *data) {
     pthread_join(thread, nullptr);
     return true;
 }
+
+u64 os_stack_size() {
+    pthread_attr_t attributes;
+    if (pthread_getattr_np(pthread_self(), &attributes) != 0) return 0;
+    size_t size = 0;
+    pthread_attr_getstacksize(&attributes, &size);
+    pthread_attr_destroy(&attributes);
+    return (u64)size;
+}
+
+bool os_on_main_thread() {
+    return gettid() == getpid();  // the main thread's id is the process's
+}
