@@ -411,6 +411,15 @@ TEST(source_path_is_absolute_and_normalised) {
     // root of the current directory's drive.
     CHECK_STR(absolute(&a, "C:\\dev\\rig", "D:/a/b.rig", true), "D:\\a\\b.rig");
     CHECK_STR(absolute(&a, "C:\\dev\\rig", "\\x.rig", true), "C:\\x.rig");
+    // A drive with no separator after it, "C:x.rig", is relative to that
+    // drive's current directory: the directory, when it's on the same drive
+    // (whatever the letter's case); another drive's isn't known, so its root
+    // stands for it.
+    CHECK_STR(absolute(&a, "C:\\dev\\rig", "C:x.rig", true), "C:\\dev\\rig\\x.rig");
+    CHECK_STR(absolute(&a, "C:\\dev\\rig", "c:..\\other\\x.rig", true), "C:\\dev\\other\\x.rig");
+    CHECK_STR(absolute(&a, "c:\\dev\\rig", "C:x.rig", true), "c:\\dev\\rig\\x.rig");
+    CHECK_STR(absolute(&a, "C:\\dev\\rig", "D:x.rig", true), "D:\\x.rig");
+    CHECK_STR(absolute(&a, "\\\\server\\share\\dev", "C:x.rig", true), "C:\\x.rig");
     // A drive's root as the directory (os_current_directory keeps its
     // separator), doubled separators, and .. above the root, which stays
     // there.

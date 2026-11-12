@@ -322,8 +322,11 @@ void table_free(Table<V> *t) {
 // the root. On Windows (`windows`) both / and \ separate, and the result
 // has \ only. A root there is a drive, "C:", or a network share's
 // "\\server\share": a path with one is absolute, and a path that starts
-// with a separator but has none takes directory's. On Linux only /
-// separates. The result has no separator doubled, and none at its end but
+// with a separator but has none takes directory's. A drive with no
+// separator after it, "C:x.rig", is relative to that drive's current
+// directory: on directory's drive that's directory; another drive's the
+// process can't know, so its root stands for it ("D:x.rig" is "D:\x.rig").
+// On Linux only / separates. The result has no separator doubled, and none at its end but
 // a root's own ("C:\", "/").
 String path_absolute(Arena *a, String directory, String path, bool windows);
 

@@ -54,6 +54,7 @@ Ir_Instr *ir_emit(Ir_Proc *p, s32 block, Ir_Op op, Ir_Type type) {
     instr.result = gives_value ? p->value_count++ : -1;
     instr.a = instr.b = instr.c = -1;
     instr.target = instr.target2 = -1;
+    instr.scope = -1;  // no position, no scope: lowering gives both (emit_in)
     Ir_Block *b = p->blocks[block];
     array_add(&b->instrs, instr);
     return &b->instrs[b->instrs.count - 1];

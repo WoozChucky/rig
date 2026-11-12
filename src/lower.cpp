@@ -168,7 +168,7 @@ struct Lowering {
     // place that stands for their own code, and a block that's a scope sets
     // scope while its statements are lowered.
     Position pos;             // line 0 in the procedures the compiler makes
-    s32 scope;                // an index in proc->scopes
+    s32 scope;                // an index in proc->scopes; -1 in the procedures the compiler makes
     bool is_entry;            // the procedure being lowered is Rig's main, C's main: its returns
                               // give C's int, 0
 };
@@ -2335,9 +2335,9 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
 
     // __rig_bounds_failed, if a check calls it: after every body, so the
     // longest message start is known. __rig_string_equal, if == on strings
-    // calls it. Neither comes from the source: their instructions have no
-    // position (line 0) and they have no scopes.
-    place(&l, {}, 0);
+    // calls it. Neither comes from the source: they have no scopes, and
+    // their instructions no position (line 0) and no scope (-1).
+    place(&l, {}, -1);
     if (l.bounds_failed >= 0) lower_bounds_failed(&l);
     if (l.string_equal >= 0) lower_string_equal(&l);
 

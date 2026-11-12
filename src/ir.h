@@ -96,10 +96,11 @@
 //   them.
 // - Scopes. A lexical block is a part of a procedure where some names are
 //   visible: each Ir_Scope is one, the body scope 0, and each instruction
-//   says which it runs in (Ir_Instr.scope). They follow the checker's
-//   scopes: an if's or else's block, or a block statement, is a scope; a
-//   for's or while's body is the loop's scope, which starts at the
-//   keyword and holds the iterator and it_index. So where an inner block
+//   with a position says which it runs in (Ir_Instr.scope; one without, in
+//   a procedure the compiler makes, is in none, -1). They follow the
+//   checker's scopes: an if's or else's block, or a block statement, is a
+//   scope; a for's or while's body is the loop's scope, which starts at
+//   the keyword and holds the iterator and it_index. So where an inner block
 //   declares x again, a debugger shows the inner x inside it and the outer
 //   one after.
 // - Variables (Ir_Var): every parameter, local, iterator and it_index, by
@@ -203,7 +204,9 @@ struct Ir_Instr {
     Position pos;      // where it comes from: the statement it was lowered from, or the place
                        // standing for it (see "Debug information" above); line 0: none, which
                        // only the procedures the compiler makes have
-    s32 scope;         // the Ir_Scope it runs in, an index in its procedure's scopes
+    s32 scope;         // the Ir_Scope it runs in, an index in its procedure's scopes; -1 when
+                       // it has no position (line 0), in a procedure the compiler makes or
+                       // a module built by hand, which have no scopes
 };
 
 struct Ir_Block {
@@ -338,9 +341,10 @@ s32 ir_add_param(Ir_Proc *p, Ir_Type type, Ir_Ext ext);
 // Appends an empty block and returns its index.
 s32 ir_new_block(Arena *a, Ir_Proc *p);
 
-// Appends an instruction to the block, its operands -1, and numbers its
-// value unless type is IR_VOID or op gives nothing whatever its type: a
-// terminator, or IR_STORE, IR_COPY or IR_ZERO, which write memory. An
+// Appends an instruction to the block, its operands -1, with no position
+// (line 0) and no scope (-1), and numbers its value unless type is IR_VOID
+// or op gives nothing whatever its type: a terminator, or IR_STORE,
+// IR_COPY or IR_ZERO, which write memory. An
 // IR_LOCAL always gives a value, its address, whatever its type. The block
 // mustn't have ended (a terminator is last). The pointer is valid until the
 // next instruction is appended to the same block.
