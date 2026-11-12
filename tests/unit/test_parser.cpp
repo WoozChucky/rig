@@ -1108,6 +1108,34 @@ TEST(types_nest_up_to_a_thousand_levels) {
     arena_free(&a);
 }
 
+TEST(a_message_names_a_deep_type_in_the_time_of_its_length) {
+    // A message may name a type of any depth: one written, up to the 1000
+    // levels the parser allows, or one `*x` makes, which nothing bounds.
+    // Naming it costs time and stack in the name's length: not twice the
+    // work per level, and not a frame per level.
+    Arena a = arena_make();
+    CHECK_STR(type_name(&a, type_view_of(type_array_of(type_pointer_to(type_from_name(str("u8"))), 3))),
+              "[][3]*u8");
+    CHECK_STR(check_source(&a, nested_source(&a, "x : ", "*", 1000, "int", "", ";\nmain :: () { y : int = x; }\n")),
+              nested_source(&a, "2:24: a value of type '", "*", 1000, "int",
+                            "", "' doesn't convert to 'int' implicitly\n"));
+    CHECK_STR(check_source(&a, nested_source(&a, "x : ", "[]*[2]", 333, "u8", "", ";\nmain :: () { y : int = x; }\n")),
+              nested_source(&a, "2:24: a value of type '", "[]*[2]", 333, "u8",
+                            "", "' doesn't convert to 'int' implicitly\n"));
+    // `a1 := *a0;` and so on: a pointer a level deeper each time, with no
+    // limit, 20001 levels at the end.
+    s64 n = 20000;
+    char *text = (char *)arena_alloc(&a, (u64)(n + 4) * 40, 1);
+    char *at = text;
+    at += sprintf(at, "main :: () {\n    a0 : *int;\n");
+    for (s64 i = 1; i <= n; i++) at += sprintf(at, "    a%lld := *a%lld;\n", (long long)i, (long long)(i - 1));
+    sprintf(at, "    y : int = a%lld;\n}\n", (long long)n);
+    String line = string_printf(&a, "%lld:15: a value of type '", (long long)(n + 3));
+    CHECK_STR(check_source(&a, text), nested_source(&a, string_cstr(&a, line), "*", n + 1, "int", "",
+                                                    "' doesn't convert to 'int' implicitly\n"));
+    arena_free(&a);
+}
+
 TEST(a_local_constant_in_column_1_is_a_statement) {
     // Indentation means nothing to the language: `N :: 5;` in column 1 of
     // a body is a local constant. Only a procedure's signature after a

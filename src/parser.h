@@ -108,7 +108,10 @@
 // '[' one too many; the declaration is then given up, as after any other error below, not only the
 // statement: the parser has no recovery inside a body, and skipping just the
 // statement would leave a variable it declares (`x := ((...));`) undeclared,
-// so every later use of it would be one more message.
+// so every later use of it would be one more message. The limit is on the
+// types a program writes: `*x` makes a type a level deeper than x's, with no
+// limit, and nothing walks a type recursively (types.cpp's type_name names
+// one in a pass down its chain).
 //
 // Several results (spec 6.7) are a list of types after '->', with no
 // parentheses: `divmod :: (a: int, b: int) -> int, int { ... }`; a return
