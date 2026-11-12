@@ -311,21 +311,21 @@ static void emit_runtime_check(Lowering *l, s32 fails, Position at, String messa
 static s32 lower_division(Lowering *l, Token_Kind op, Type *t, s32 left, Ast *right, Position at) {
     Ir_Type type = ir_type_of(t);
     bool quotient = op == TOKEN_SLASH;
-    Ir_Op divide = quotient ? (t->is_signed ? IR_SDIV : IR_UDIV) : (t->is_signed ? IR_SREM : IR_UREM);
+    Ir_Op operation = quotient ? (t->is_signed ? IR_SDIV : IR_UDIV) : (t->is_signed ? IR_SREM : IR_UREM);
     if (right->is_constant) {
         if (t->is_signed && right->constant == ~(u64)0) {  // -1, sign-extended
             if (!quotient) return emit_constant(l, type, 0);
             return emit_binary(l, IR_SUB, type, emit_constant(l, type, 0), left);
         }
-        return emit_binary(l, divide, type, left, emit_constant(l, type, right->constant));
+        return emit_binary(l, operation, type, left, emit_constant(l, type, right->constant));
     }
     s32 divisor = lower_value(l, right, t);
     s32 zero = emit_compare(l, IR_EQ, type, divisor, emit_constant(l, type, 0));
     emit_runtime_check(l, zero, at, str("division by zero"));
-    if (!t->is_signed) return emit_binary(l, divide, type, left, divisor);
+    if (!t->is_signed) return emit_binary(l, operation, type, left, divisor);
     s32 minus_one = emit_compare(l, IR_EQ, type, divisor, emit_constant(l, type, ~(u64)0));
     s32 safe = emit_select(l, type, minus_one, emit_constant(l, type, 1), divisor);
-    s32 result = emit_binary(l, divide, type, left, safe);
+    s32 result = emit_binary(l, operation, type, left, safe);
     if (!quotient) return result;
     s32 negated = emit_binary(l, IR_SUB, type, emit_constant(l, type, 0), left);
     return emit_select(l, type, minus_one, negated, result);
