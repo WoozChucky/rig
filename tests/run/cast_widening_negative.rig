@@ -1,0 +1,7 @@
+// Widening from signed to unsigned keeps every number but the negative
+// ones: an s8's -1 isn't a u64, so the program stops at the cast with
+// status 101, though a u64 has room for every s8's bits.
+main :: () {
+    x : s8 = -1;
+    y := cast(u64) x;
+}

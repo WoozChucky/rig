@@ -1,0 +1,47 @@
+// Signed division at run time. x86's idiv traps on the most negative value
+// divided by -1, for / and % alike; Rig wraps instead (spec 6.4): the
+// quotient is the most negative value, the remainder 0, at every width.
+// The operands are variables, so nothing is folded while compiling. Each
+// line is printed only when its results are right.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    m8 : s8 = -128;
+    d8 : s8 = -1;
+    if m8 / d8 == -128 && m8 % d8 == 0 { puts("s8"); }
+
+    m16 : s16 = -32768;
+    d16 : s16 = -1;
+    if m16 / d16 == -32768 && m16 % d16 == 0 { puts("s16"); }
+
+    m32 : s32 = -2147483648;
+    d32 : s32 = -1;
+    if m32 / d32 == -2147483648 && m32 % d32 == 0 { puts("s32"); }
+
+    m64 : s64 = -9223372036854775808;
+    d64 : s64 = -1;
+    if m64 / d64 == -9223372036854775808 && m64 % d64 == 0 { puts("s64"); }
+
+    // The same through compound assignments.
+    q := m64;
+    q /= d64;
+    r := m64;
+    r %= d64;
+    if q == -9223372036854775808 && r == 0 { puts("s64 /= and %="); }
+
+    // Any other -1 divides as usual: the negation.
+    seven : int = 7;
+    minus_one : int = -1;
+    if seven / minus_one == -7 && seven % minus_one == 0 { puts("7 by -1"); }
+
+    // Truncation toward zero, the remainder taking the dividend's sign.
+    two : int = 2;
+    minus_two : int = -2;
+    if -7 / two == -3 && -7 % two == -1 { puts("-7 by 2"); }
+    if seven / minus_two == -3 && seven % minus_two == 1 { puts("7 by -2"); }
+
+    // Unsigned: all ones is the largest u64, not -1.
+    big : u64 = 18446744073709551615;
+    ten : u64 = 10;
+    if big / ten == 1844674407370955161 && big % ten == 5 { puts("u64"); }
+}

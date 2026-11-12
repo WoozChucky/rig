@@ -233,6 +233,10 @@ static bool is_shift(Token_Kind op) {
     return op == TOKEN_SHIFT_LEFT || op == TOKEN_SHIFT_RIGHT;
 }
 
+bool is_division(Token_Kind op) {
+    return op == TOKEN_SLASH || op == TOKEN_PERCENT;
+}
+
 // The value of an untyped constant expression `left op right`, exact, in
 // b->constant; or the overflow reported. Shifts are check_shift's.
 static Type *fold_untyped(Checker *c, Ast_Binary *b) {
@@ -244,6 +248,20 @@ static Type *fold_untyped(Checker *c, Ast_Binary *b) {
     case TOKEN_PLUS: overflow = __builtin_add_overflow(left, right, &result); break;
     case TOKEN_MINUS: overflow = __builtin_sub_overflow(left, right, &result); break;
     case TOKEN_STAR: overflow = __builtin_mul_overflow(left, right, &result); break;
+    // C's / truncates toward zero and its % takes the dividend's sign, which
+    // is Rig's rule. The divisor isn't 0 (check_binary said so). The one
+    // quotient outside int's range is int's most negative value divided by
+    // -1, one past int's largest; its remainder, 0, is in range, but C
+    // leaves INT64_MIN % -1 undefined (x86 traps on it), so a divisor of -1
+    // is never given to C's %.
+    case TOKEN_SLASH:
+        if (left == INT64_MIN && right == -1) {
+            overflow = true;
+        } else {
+            result = left / right;
+        }
+        break;
+    case TOKEN_PERCENT: result = right == -1 ? 0 : left % right; break;
     // Bitwise operators on two's complement values in range stay in range.
     case TOKEN_AMP: result = left & right; break;
     case TOKEN_PIPE: result = left | right; break;
@@ -255,17 +273,35 @@ static Type *fold_untyped(Checker *c, Ast_Binary *b) {
     return &type_untyped_int;
 }
 
+// left / right (op TOKEN_SLASH) or left % right (TOKEN_PERCENT), for two
+// constants of a type with this sign, kept as Ast.constant keeps them; the
+// divisor isn't 0. Unsigned, the 64 bits are the numbers themselves.
+// Signed, they're the numbers sign-extended, so s64 division gives each
+// type's quotient and remainder, except by -1: there the quotient is the
+// negation, wrapping (the most negative value's is itself), and the
+// remainder 0, as Rig's run time gives them. C leaves INT64_MIN / -1 and
+// INT64_MIN % -1 undefined, so -1 is never handed to its / and %.
+static u64 divide(Token_Kind op, u64 left, u64 right, bool is_signed) {
+    bool quotient = op == TOKEN_SLASH;
+    if (!is_signed) return quotient ? left / right : left % right;
+    if ((s64)right == -1) return quotient ? 0 - left : 0;
+    s64 l = (s64)left, r = (s64)right;
+    return (u64)(quotient ? l / r : l % r);
+}
+
 // The value of a typed constant expression `left op right` of type t:
 // computed on the 64 bits with unsigned arithmetic, which wraps, then
 // wrapped to t's width, which gives the bits t's own arithmetic gives
 // (two's complement: + - * and the bitwise operators don't depend on the
-// sign).
+// sign; / and % do, and divide sees to it).
 static u64 fold_typed(Token_Kind op, u64 left, u64 right, Type *t) {
     u64 result = 0;
     switch (op) {
     case TOKEN_PLUS: result = left + right; break;
     case TOKEN_MINUS: result = left - right; break;
     case TOKEN_STAR: result = left * right; break;
+    case TOKEN_SLASH:
+    case TOKEN_PERCENT: result = divide(op, left, right, t->is_signed); break;
     case TOKEN_AMP: result = left & right; break;
     case TOKEN_PIPE: result = left | right; break;
     case TOKEN_CARET: result = left ^ right; break;
@@ -420,14 +456,16 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
     return &type_bool;
 }
 
-// + - * & | ^ << >> (spec 6.4), and the comparisons and && || (above).
+// + - * / % & | ^ << >> (spec 6.4), and the comparisons and && || (above).
 // Arithmetic takes two integers, which meet at a type (check_unify_integers)
 // that is also the result's. Untyped with untyped gives untyped; untyped
 // with typed, the typed one's type, the untyped one taking it (it must
 // fit); typed with typed, the same type, or the type the other operand
 // widens to (int with s64: the left one's). Anything else needs a cast,
 // which says which type is meant. No integer promotion: u8 + u8 is a u8,
-// wrapping at 8 bits.
+// wrapping at 8 bits. A divisor that is the constant 0 is an error here,
+// at the operator; any other divisor not known while compiling is checked
+// at run time (lowering's job).
 static Type *check_binary(Checker *c, Ast_Binary *b) {
     Type *left = check_value(c, b->left);
     Type *right = check_value(c, b->right);
@@ -444,12 +482,86 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
     Type *t = check_unify_integers(c, b->left, b->right, b->pos, op);
     if (!t) return nullptr;
     b->operand_type = t;
+    if (is_division(b->op) && b->right->is_constant && b->right->constant == 0) {
+        diag_error(c->diag, b->pos, "division by zero");
+        return nullptr;
+    }
 
     if (!b->left->is_constant || !b->right->is_constant) return t;
     b->is_constant = true;
     if (type_is_untyped(t)) return fold_untyped(c, b);
     b->constant = fold_typed(b->op, b->left->constant, b->right->constant, t);
     return t;
+}
+
+// Whether `bits`, the value of a constant of integer type `from` (its 64
+// bits as Ast.constant keeps them), is also one of integer type `to`'s
+// values.
+static bool constant_fits(u64 bits, Type *from, Type *to) {
+    // An unsigned value above s64's range: only a u64 holds it.
+    if (!from->is_signed && bits > (u64)INT64_MAX) return !to->is_signed && to->size == 8;
+    return fits((s64)bits, to);
+}
+
+// cast(T) e and cast,trunc(T) e (spec 6.4). The result has type T.
+// - From an integer to an integer: cast keeps the number, so it's checked:
+//   a constant that isn't one of T's values is reported here ("300 doesn't
+//   fit in 'u8'", at the cast), and any other value is checked at run time
+//   (lowering). cast,trunc is C's conversion, unchecked: narrowing keeps
+//   the low bits, widening extends by the source's sign. An untyped
+//   constant is an int here.
+// - From a bool to an integer: 0 or 1.
+// - To a bool, from an integer: no cast; a comparison says which values
+//   are true ("can't cast 'int' to 'bool': compare instead, as in
+//   x != 0").
+// - Anything else casts only where it converts implicitly: to its own
+//   type, or a string literal to *u8. Otherwise "can't cast 'A' to 'B'":
+//   pointers and strings have no casts yet.
+// - cast,trunc takes integers only: "cast,trunc only takes integers".
+// A cast of a constant is a constant of T: a checked cast's is the same
+// number, a cast,trunc's is wrapped to T as at run time (wrap_to).
+static Type *check_cast(Checker *c, Ast_Cast *cast) {
+    Type *to = resolve_type(c, cast->type_expr);
+    Type *from = check_value(c, cast->value);
+    if (!to || !from) return nullptr;
+    Ast *value = cast->value;
+    bool integers = from->kind == TYPE_INTEGER && to->kind == TYPE_INTEGER;
+    if (cast->is_trunc && !integers) {
+        diag_error(c->diag, cast->pos, "cast,trunc only takes integers");
+        return nullptr;
+    }
+    if (integers) {
+        check_default_type(value);
+        from = value->type;
+        if (!value->is_constant) return to;
+        if (!cast->is_trunc && !constant_fits(value->constant, from, to)) {
+            // The number, read by its type's sign: a u64 can be above s64's range.
+            u64 v = value->constant;
+            String number = from->is_signed ? string_printf(c->arena, "%lld", (long long)v)
+                                            : string_printf(c->arena, "%llu", (unsigned long long)v);
+            diag_error(c->diag, cast->pos, STR_FMT " doesn't fit in '" STR_FMT "'", STR_ARG(number),
+                       STR_ARG(type_name(c->arena, to)));
+            return nullptr;
+        }
+        cast->is_constant = true;
+        cast->constant = wrap_to(value->constant, to);
+        return to;
+    }
+    if (to == &type_bool && from->kind == TYPE_INTEGER) {
+        diag_error(c->diag, cast->pos, "can't cast '" STR_FMT "' to 'bool': compare instead, as in x != 0",
+                   STR_ARG(type_name(c->arena, from)));
+        return nullptr;
+    }
+    bool bool_to_integer = from == &type_bool && to->kind == TYPE_INTEGER;
+    if (!bool_to_integer && !check_convert(c, value, to)) {
+        diag_error(c->diag, cast->pos, "can't cast '" STR_FMT "' to '" STR_FMT "'", STR_ARG(type_name(c->arena, from)),
+                   STR_ARG(type_name(c->arena, to)));
+        return nullptr;
+    }
+    // A bool constant's 1 or 0 is the integer's value too.
+    cast->is_constant = value->is_constant;
+    cast->constant = value->constant;
+    return to;
 }
 
 Type *check_expression(Checker *c, Ast *e) {
@@ -466,6 +578,7 @@ Type *check_expression(Checker *c, Ast *e) {
     case AST_CALL: t = check_call(c, (Ast_Call *)e); break;
     case AST_UNARY: t = check_unary(c, (Ast_Unary *)e); break;
     case AST_BINARY: t = check_binary(c, (Ast_Binary *)e); break;
+    case AST_CAST: t = check_cast(c, (Ast_Cast *)e); break;
     default: RIG_ASSERT(!"not an expression");
     }
     e->type = t;
