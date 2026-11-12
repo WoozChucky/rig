@@ -174,8 +174,10 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
     return os_run_with_input(a, argv, directory, seconds, {}, result);
 }
 
-bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 seconds, String input,
-                       Process_Result *result) {
+// os_run_with_input, and with `merge` os_run_merged: the program's stderr
+// is then its stdout's pipe too.
+static bool run_process(Arena *a, Array<String> argv, String directory, s32 seconds, String input, bool merge,
+                        Process_Result *result) {
     RIG_ASSERT(argv.count > 0 && seconds >= 0);
     result->timed_out = false;
     char **cargv = arena_new_array<char *>(a, argv.count + 1);
@@ -210,15 +212,17 @@ bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 secon
         return false;
     }
 
-    // The child's stdout and stderr are the pipes' write ends, its stdin is
-    // /dev/null, or with input the read end of a third pipe. dup2 clears
-    // O_CLOEXEC on the copies, so only they survive into the program.
+    // The child's stdout and stderr are the pipes' write ends (both the
+    // first one's when merged: the second pipe then sees no writer and ends
+    // at once), its stdin is /dev/null, or with input the read end of a
+    // third pipe. dup2 clears O_CLOEXEC on the copies, so only they survive
+    // into the program.
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
     if (input.count) posix_spawn_file_actions_adddup2(&actions, in_pipe[0], 0);
     else posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
     posix_spawn_file_actions_adddup2(&actions, out_pipe[1], 1);
-    posix_spawn_file_actions_adddup2(&actions, err_pipe[1], 2);
+    posix_spawn_file_actions_adddup2(&actions, merge ? out_pipe[1] : err_pipe[1], 2);
     if (directory.count) posix_spawn_file_actions_addchdir_np(&actions, string_cstr(a, directory));
     // With a timeout the program gets a process group of its own, whose
     // number is its pid, so kill(-pid) ends it and whatever it started (a
@@ -343,6 +347,15 @@ bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 secon
     array_free(&out);
     array_free(&err);
     return true;
+}
+
+bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 seconds, String input,
+                       Process_Result *result) {
+    return run_process(a, argv, directory, seconds, input, false, result);
+}
+
+bool os_run_merged(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result) {
+    return run_process(a, argv, directory, seconds, {}, true, result);
 }
 
 // The arena is in os.h's signature for Windows, which converts its UTF-16
