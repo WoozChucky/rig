@@ -24,8 +24,8 @@ struct Type;  // types.h: what the checker finds each node's type to be
 // this many levels deep, expressions and types together (parser.cpp says
 // what a level is), and so do the declarations the checker works out one
 // inside another, with their own levels (checker.cpp's open_declaration).
-// Each stage recurses a level at a time on the main thread's stack (1 MB on
-// Windows): deeper would overflow it, with no message.
+// Each stage recurses a level at a time on a stack of a fixed size
+// (RIG_STACK_SIZE, os.h): deeper would overflow it, with no message.
 const s32 MAX_DEPTH = 1000;
 
 enum Ast_Kind : u8 {

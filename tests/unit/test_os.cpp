@@ -318,3 +318,41 @@ TEST(os_read_missing_file_fails) {
     CHECK(!os_file_exists(str(".build/no-such-file.rig")));
     arena_free(&a);
 }
+
+// Issue #77: the compiler works on a stack of its own, RIG_STACK_SIZE (8 MB)
+// on every system, rather than the main thread's (1 MB on Windows).
+
+// Uses about `kilobytes` KB of the stack, a KB a call, and returns
+// `kilobytes`: each call's buffer is volatile, so it's really there, and
+// the addition after the call keeps it from being a jump.
+static s64 use_stack(s64 kilobytes) {
+    volatile char frame[1024];
+    frame[0] = 1;
+    if (kilobytes <= 1) return frame[0];
+    return use_stack(kilobytes - 1) + frame[0];
+}
+
+struct Stack_Use {
+    s64 kilobytes;  // how much to use
+    s64 used;       // use_stack's answer, once it has run
+};
+
+static void use_stack_on_thread(void *data) {
+    Stack_Use *use = (Stack_Use *)data;
+    use->used = use_stack(use->kilobytes);
+}
+
+TEST(os_run_on_stack_gives_the_stack_asked_for) {
+    // 4 MB of calls: four times Windows' main thread's stack, half of the
+    // thread's. It runs, on its own thread, and returns when it's done.
+    Stack_Use use = {4096, 0};
+    CHECK(os_run_on_stack(RIG_STACK_SIZE, use_stack_on_thread, &use));
+    CHECK_EQ(use.used, 4096);
+}
+
+TEST(the_tests_run_on_the_compilers_stack) {
+    // unit.cpp runs the tests on a stack of RIG_STACK_SIZE, as rig runs the
+    // compiler, so the tests at the compiler's limits (MAX_DEPTH) have the
+    // room rig has. On the main thread's 1 MB, on Windows, this overflows.
+    CHECK_EQ(use_stack(4096), 4096);
+}

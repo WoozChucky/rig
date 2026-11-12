@@ -28,13 +28,14 @@ struct Parser {
 
 // A limit of the compiler (spec 6.1): an expression nests at most MAX_DEPTH
 // levels deep, and blocks and types too. The parser, the checker and
-// lowering all walk the tree recursively, a call or a few per level, on the
-// main thread's stack (1 MB on Windows, 8 MB on Linux): without a limit, a
-// file with a few thousand nested parentheses, or a generated sum of a few
-// thousand terms, crashes rig with a stack overflow and no message. The
+// lowering all walk the tree recursively, a call or a few per level, on a
+// stack of a fixed size (RIG_STACK_SIZE, os.h, 8 MB): without a limit, a
+// file with tens of thousands of nested parentheses, or a generated sum of
+// that many terms, crashes rig with a stack overflow and no message. The
 // parser enforces it, so no later stage ever sees a deeper tree. 1000 levels
-// fit on Windows' stack, even inside 1000 nested blocks: the tests build
-// each kind of level 1000 deep.
+// fit even on the 1 MB of Windows' main thread, inside 1000 nested blocks
+// (the tests build each kind of level 1000 deep, and did there before
+// issue #77), so the 8 MB leave most of it to spare.
 //
 // An expression's levels are its tree's height: each parenthesis, prefix
 // operator, cast, call, dereference (.*), field (.x), element (a[i]),
