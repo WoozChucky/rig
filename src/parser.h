@@ -15,20 +15,26 @@
 //   declaration = IDENT ':' type ['=' (expression | '---')] ';'
 //               | IDENT ':=' expression ';'
 //               | IDENT '::' expression ';'
-//   assignment  = expression ('=' | '+=' | '-=' | '*=' | '&=' | '|=' | '^=' | '<<=' | '>>=') expression ';'
+//   assignment  = expression ('=' | '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|=' | '^=' | '<<=' | '>>=')
+//                 expression ';'
 //   if          = 'if' expression block ['else' (block | if)]
 //   while       = 'while' expression block
 //   for         = 'for' [IDENT ':'] expression '..' expression block
 //   expression  = unary { BINARY_OPERATOR unary }, binary operators left-associative, tightest last:
-//                   1: ||   2: &&   3: == != < <= > >=   4: + - | ^   5: * << >> &
-//   unary       = ('-' | '~' | '!') unary | postfix
+//                   1: ||   2: &&   3: == != < <= > >=   4: + - | ^   5: * / % << >> &
+//   unary       = ('-' | '~' | '!') unary | cast | postfix
+//   cast        = 'cast' [',' IDENT] '(' type ')' unary       (the IDENT: trunc)
 //   postfix     = primary { '(' [expression {',' expression}] ')' }
 //   primary     = IDENT | INT | STRING | 'true' | 'false' | '(' expression ')'
 //
-// The precedence levels are Go's (spec 6.1); a later task of milestone 2a
-// adds / and % at 5. A statement is a declaration when it starts with IDENT
-// and then ':', ':=' or '::'; otherwise, unless a keyword starts it, it's an
-// expression, and an assignment if '=' or a compound operator follows.
+// The precedence levels are Go's (spec 6.1). A cast is a prefix operator,
+// like -: cast(u8) a / b is (cast(u8) a) / b. Its only modifier is trunc
+// (cast,trunc(u8) x); any other is "unknown cast modifier 'foo'; the one
+// there is is 'trunc'", at the name.
+//
+// A statement is a declaration when it starts with IDENT and then ':',
+// ':=' or '::'; otherwise, unless a keyword starts it, it's an expression,
+// and an assignment if '=' or a compound operator follows.
 // Inside a body, `x := ---;` is "'---' needs a type, as in x : int = ---;"
 // (there's no value to take the type from), and `helper :: () {` is
 // "procedures can only be declared at the top level, for now".
