@@ -45,9 +45,8 @@ struct Process_Result {
 // (it has a slash, either kind), used exactly as given (no .exe added), or a
 // bare name, searched for in the PATH (on Windows with .exe added). Waits
 // for the program and captures its output; its stdin is empty (but see
-// os_run_with_input). False only
-// when the program couldn't be started; a program that runs and fails gives
-// true and its exit code.
+// os_run_with_input). False only when the program couldn't be started; a
+// program that runs and fails gives true and its exit code.
 bool os_run(Arena *a, Array<String> argv, Process_Result *result);
 
 // The program's arguments, argv[0] included, as UTF-8. On Linux that's

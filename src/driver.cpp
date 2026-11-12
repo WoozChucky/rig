@@ -132,11 +132,23 @@ static int build(Arena *a, String path, String output) {
     return 0;
 }
 
+// Whether the source file's name, as given to rig build or rig check, ends
+// in .rig; when it doesn't, says so. Both commands refuse such a name (exit
+// 1, as for any other error rig names): a Rig program is a .rig file, and
+// another file given by mistake (hello.out for hello.rig) would otherwise
+// get a page of syntax errors, or with build, a program named after it.
+static bool source_named_rig(String path) {
+    if (is_rig_file(path)) return true;
+    fprintf(stderr, "rig: error: '" STR_FMT "' isn't a .rig file\n", STR_ARG(path));
+    return false;
+}
+
 // rig build's command line: the words after "build", FILE.rig [-o OUTPUT],
 // in either order. Returns the exit code; 2 with the usage for a malformed
 // line (no file, two files, -o with no name or an empty one, -o twice).
-// An output ending in .rig is refused: it's a mistake for the source's name,
-// and the linker would overwrite the source with the program.
+// A source not ending in .rig is refused (source_named_rig), and so is an
+// output ending in .rig: it's a mistake for the source's name, and the
+// linker would overwrite the source with the program.
 int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
     String path = {}, output = {};
     bool have_path = false, have_output = false;
@@ -160,6 +172,7 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
         print_usage();
         return 2;
     }
+    if (!source_named_rig(path)) return 1;
     if (is_rig_file(output)) {
         fprintf(stderr, "rig: error: the output '" STR_FMT "' ends in .rig; is it the source file?\n", STR_ARG(output));
         return 1;
@@ -169,10 +182,10 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
 
 // rig check's command line: the words after "check", FILE.rig [--stdin], in
 // either order. Returns the exit code: 1 if the program has errors (printed
-// as rig build prints them) or can't be read, else 0; 2 for a malformed line
-// (no file, two files, --stdin twice, or -o: check writes nothing, so there
-// is no output to name), with the usage, and for a file whose name doesn't
-// end in .rig.
+// as rig build prints them), can't be read or isn't named .rig (as rig build
+// refuses it, source_named_rig), else 0; 2 for a malformed line (no file,
+// two files, --stdin twice, or -o: check writes nothing, so there is no
+// output to name), with the usage.
 //
 // It runs read_and_check, rig build's front half, and stops: nothing is
 // lowered, LLVM and the linker aren't involved, and no file or .build
@@ -199,9 +212,6 @@ int command_check(Arena *a, Array<String> words, void (*print_usage)()) {
         print_usage();
         return 2;
     }
-    if (!is_rig_file(path)) {
-        fprintf(stderr, "rig: error: '" STR_FMT "' isn't a .rig file\n", STR_ARG(path));
-        return 2;
-    }
+    if (!source_named_rig(path)) return 1;
     return read_and_check(a, path, from_stdin) ? 0 : 1;
 }

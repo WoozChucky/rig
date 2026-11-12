@@ -77,11 +77,24 @@ function match(line) {
     };
 }
 
-check('the problem matcher is $rig, owned by rig, paths from the workspace folder', () => {
+check('the problem matcher is $rig, owned by rig-build, paths from the workspace folder', () => {
     const rig = matcher();
-    assert.strictEqual(rig.owner, 'rig');
+    assert.strictEqual(rig.owner, 'rig-build');
     assert.strictEqual(rig.source, 'rig');
     assert.deepStrictEqual(rig.fileLocation, ['autoDetect', '${workspaceFolder}']);
+});
+
+// VS Code keeps the problems of a problem matcher, and of a diagnostic
+// collection, under an owner: the matcher's `owner`, the collection's name.
+// A task's matcher replaces or clears its owner's problems for the files it
+// reports, so a matcher owned by the live check's collection ('rig') would
+// wipe the live check's diagnostics whenever a task using it ran.
+check('no problem matcher shares its owner with the live check\'s collection', () => {
+    const collection = /createDiagnosticCollection\(\s*'([^']*)'\s*\)/.exec(read('extension.js'));
+    assert.ok(collection, 'extension.js makes no diagnostic collection');
+    const owners = readJson('package.json').contributes.problemMatchers.map((m) => m.owner);
+    assert.ok(!owners.includes(collection[1]), `a problem matcher is owned by '${collection[1]}'`);
+    assert.strictEqual(new Set(owners).size, owners.length, 'two problem matchers share an owner');
 });
 
 // tests/errors/NAME.err is what `rig build tests/errors/NAME.rig` prints,
@@ -984,11 +997,16 @@ check('an untitled document, a non-Rig one and an untrusted workspace aren\'t ch
             uri: { scheme: 'untitled', fsPath: 'Untitled-1', toString: () => 'untitled:Untitled-1' },
             isUntitled: true,
         });
-        const doc = fakeDocument(path.join(dir, 'b.rig'), 'putz');
-        stub.trusted = false;
-        for (const d of [notRig, untitledRig, doc]) fire('open', d);
+        // In a trusted workspace, where a .rig file would be checked: the
+        // stand-in would report their `putz`, had they been.
+        for (const d of [notRig, untitledRig]) fire('open', d);
         await sleep(500);
-        assert.deepStrictEqual([...live.keys()], []);
+        assert.deepStrictEqual([...live.keys()], [], 'an untitled or non-Rig document was checked');
+        // A .rig file, but in Restricted Mode.
+        stub.trusted = false;
+        fire('open', fakeDocument(path.join(dir, 'b.rig'), 'putz'));
+        await sleep(500);
+        assert.deepStrictEqual([...live.keys()], [], 'a document was checked in an untrusted workspace');
         assert.deepStrictEqual(stub.errors, []);
     });
 });
@@ -1029,6 +1047,78 @@ check('a compiler that isn\'t there is said once, and nothing is checked', async
         assert.strictEqual(stub.errors.length, 1, stub.errors.join('\n'));
         assert.match(stub.errors[0], /rig\.compilerPath/);
         assert.ok(!live.has(doc.uri.toString()) || live.get(doc.uri.toString()).length === 0);
+    });
+});
+
+// A compiler that's there but that Node can't start, and which it says so
+// about by throwing from spawn at once rather than with the 'error' event
+// later. On Windows that's a .cmd or .bat file (rig.cmd, a common wrapper),
+// which needs a shell; findCompiler accepts it, since on Windows it can only
+// ask whether a file exists. Elsewhere spawn throws only for rarer reasons
+// (ELOOP, E2BIG), so there the check makes spawn throw for that one file
+// itself. `fn` gets the file's path; afterwards no promise may have been
+// left rejected with nobody to handle it.
+async function withUnstartable(dir, fn) {
+    const windows = process.platform === 'win32';
+    const program = path.join(dir, windows ? 'rig.cmd' : 'rig');
+    fs.writeFileSync(program, windows ? '@echo off\r\n' : '#!/bin/sh\n', { mode: 0o755 });
+    const child_process = require('child_process');
+    const spawn = child_process.spawn;
+    if (!windows) {
+        child_process.spawn = (file, ...rest) => {
+            if (file !== program) return spawn.call(child_process, file, ...rest);
+            throw Object.assign(new Error('spawn ELOOP'), { code: 'ELOOP' });
+        };
+    }
+    const rejections = [];
+    const rejected = (e) => rejections.push(String(e));
+    process.on('unhandledRejection', rejected);
+    try {
+        await fn(program);
+        await sleep(50); // Node reports an unhandled rejection after the current task
+        assert.deepStrictEqual(rejections, [], 'a promise was rejected and nothing handled it');
+    } finally {
+        child_process.spawn = spawn;
+        process.off('unhandledRejection', rejected);
+    }
+}
+
+check('a compiler Node can\'t start is said once, and the old diagnostics go', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const doc = fakeDocument(path.join(dir, 'e.rig'), 'putz');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        fire('open', doc);
+        await until('the first check', () => live.has(key) && live.get(key).length === 1);
+        await withUnstartable(dir, async (program) => {
+            // Setting another compiler checks again, and may say so again.
+            stub.compilerPath = program;
+            fire('configuration', { affectsConfiguration: (section) => section === 'rig.compilerPath' || section === 'rig' });
+            fire('save', doc);
+            await sleep(300);
+            fire('save', doc);
+            await sleep(100);
+            assert.ok(!live.has(key), 'the last check\'s diagnostics stayed');
+            assert.strictEqual(stub.errors.length, 1, stub.errors.join('\n'));
+            assert.ok(stub.errors[0].includes(`couldn't run ${program}`), stub.errors[0]);
+            if (process.platform === 'win32') assert.match(stub.errors[0], /\.cmd file needs a shell/);
+        });
+    });
+});
+
+check('a build whose compiler Node can\'t start says so and fails', async () => {
+    const { RigTerminal } = loadExtension().forTests;
+    await withStandIn(async (dir) => {
+        await withUnstartable(dir, async (program) => {
+            const terminal = new RigTerminal({ type: 'rig', command: 'build' }, undefined);
+            let text = '';
+            terminal.onDidWrite((t) => (text += t));
+            assert.strictEqual(await terminal.spawn(program, ['build', 'a.rig'], dir), 1);
+            assert.ok(text.includes(`Couldn't run ${program}`), text);
+            assert.strictEqual(terminal.child, null);
+        });
     });
 });
 

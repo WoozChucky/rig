@@ -149,7 +149,7 @@
             {
                 "name": "rig",
                 "label": "Rig compiler diagnostics",
-                "owner": "rig",
+                "owner": "rig-build",
                 "source": "rig",
                 "fileLocation": [
                     "autoDetect",
