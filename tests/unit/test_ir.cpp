@@ -2183,3 +2183,139 @@ TEST(bounds_failed_buffer_fits_a_long_path) {
     }
     arena_free(&a);
 }
+
+// Lowering strings (issue #60): a string is a view of bytes, a literal a
+// view of its constant bytes; == calls __rig_string_equal; a global holding
+// a literal has a relocation.
+
+TEST(string_literal_is_a_view_of_its_bytes) {
+    // A literal used as a string is a view built in a temporary: its count
+    // (the bytes without the zero after them) and its bytes' address. Met
+    // by a *u8, it's only the address, as in milestone 1.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                          "f :: () -> int { s := \"hi\"; return s.count; }\n"
+                                          "main :: () { puts(\"hey\"); }\n"));
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f() -> i64 {\n"
+              "b0:\n"
+              "  %0 = local 16 align 8\n"
+              "  %1 = addr @str.0\n"
+              "  %2 = local 16 align 8\n"
+              "  %3 = const i64 2\n"
+              "  store i64 %3, %2\n"
+              "  %4 = const i64 8\n"
+              "  %5 = ptradd %2, %4\n"
+              "  store ptr %1, %5\n"
+              "  copy %0, %2, 16\n"
+              "  %6 = load i64 %0\n"
+              "  ret %6\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = addr @str.1\n"
+              "  %1 = call @puts(%0)\n"
+              "  ret\n"
+              "}\n");
+    CHECK(contains(ir, "global @str.0 = \"hi\\00\"\n"));
+    arena_free(&a);
+}
+
+TEST(string_equality_calls_the_helper) {
+    // a == b loads each string's count and data, a's before b is worked
+    // out, and calls __rig_string_equal, an IR procedure lowering adds to
+    // the module (once, after the file's procedures): equal counts, then
+    // equal bytes, compared one at a time in a loop, no C call. != is its
+    // negation.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: (a: string, b: string) -> bool { return a == b; }\n"
+                                          "g :: (a: string, b: string) -> bool { return a != b; }\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(ptr, ptr) -> i1 {\n"
+              "b0:\n"
+              "  %2 = load i64 %0\n"
+              "  %3 = const i64 8\n"
+              "  %4 = ptradd %0, %3\n"
+              "  %5 = load ptr %4\n"
+              "  %6 = load i64 %1\n"
+              "  %7 = const i64 8\n"
+              "  %8 = ptradd %1, %7\n"
+              "  %9 = load ptr %8\n"
+              "  %10 = call @__rig_string_equal(%2, %5, %6, %9)\n"
+              "  ret %10\n"
+              "}\n");
+    CHECK(contains(proc_ir(ir, "g"),
+                   "  %10 = call @__rig_string_equal(%2, %5, %6, %9)\n"
+                   "  %11 = const i1 1\n"
+                   "  %12 = xor i1 %10, %11\n"
+                   "  ret %12\n"));
+    CHECK_EQ(count_of(ir, "proc @__rig_string_equal("), 1);
+    CHECK(index_of(ir, "proc @g(") < index_of(ir, "proc @__rig_string_equal("));
+    CHECK(index_of(ir, "proc @__rig_string_equal(") < index_of(ir, "export proc @main("));
+    // Counts first: unequal ones differ without a byte read. The loop goes
+    // while k < count, compared signed, so a count set below 0 compares no
+    // bytes, as for over such a view runs no iteration.
+    CHECK_STR(proc_ir(ir, "__rig_string_equal"),
+              "proc @__rig_string_equal(i64, ptr, i64, ptr) -> i1 {\n"
+              "b0:\n"
+              "  %4 = local i64\n"
+              "  %5 = const i64 0\n"
+              "  store i64 %5, %4\n"
+              "  %6 = cmp ne i64 %0, %2\n"
+              "  branch %6, b5, b1\n"
+              "b1:\n"
+              "  %7 = load i64 %4\n"
+              "  %8 = cmp sge i64 %7, %0\n"
+              "  branch %8, b4, b2\n"
+              "b2:\n"
+              "  %9 = ptradd %1, %7\n"
+              "  %10 = load i8 %9\n"
+              "  %11 = ptradd %3, %7\n"
+              "  %12 = load i8 %11\n"
+              "  %13 = cmp ne i8 %10, %12\n"
+              "  branch %13, b5, b3\n"
+              "b3:\n"
+              "  %14 = const i64 1\n"
+              "  %15 = add i64 %7, %14\n"
+              "  store i64 %15, %4\n"
+              "  jump b1\n"
+              "b4:\n"
+              "  %16 = const i1 1\n"
+              "  ret %16\n"
+              "b5:\n"
+              "  %17 = const i1 0\n"
+              "  ret %17\n"
+              "}\n");
+    // No string compared, no helper.
+    CHECK(!contains(ir_print(&a, lower_source(&a, "main :: () { s := \"a\"; }\n")), "__rig_string_equal"));
+    arena_free(&a);
+}
+
+TEST(string_global_has_a_relocation) {
+    // A global holding a literal is bytes with the literal's address in
+    // them, which the linker writes: a string's count, then its data, a
+    // relocation at 8 to the literal's constant bytes; a *u8's at 0; a
+    // struct's string field's at the field's offset plus 8.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "Named :: struct { size: int; name: string; }\n"
+                                          "greeting := \"hi\";\n"
+                                          "g : *u8 = \"hey\";\n"
+                                          "n := Named.{3, \"abc\"};\n"
+                                          "main :: () { }\n"));
+    CHECK(contains(ir,
+                   "global @str.0 = \"hi\\00\"\n"
+                   "global @greeting: 16 align 8 = "
+                   "\"\\02\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @str.0\n"
+                   "global @str.1 = \"hey\\00\"\n"
+                   "global @g: 8 align 8 = \"\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 0 @str.1\n"
+                   "global @str.2 = \"abc\\00\"\n"
+                   "global @n: 24 align 8 = "
+                   "\"\\03\\00\\00\\00\\00\\00\\00\\00\\03\\00\\00\\00\\00\\00\\00\\00"
+                   "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 16 @str.2\n"));
+    arena_free(&a);
+}

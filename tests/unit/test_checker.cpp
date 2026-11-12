@@ -776,18 +776,6 @@ TEST(declarations_and_assignments_convert) {
     arena_free(&a);
 }
 
-TEST(strings_arent_kept_in_variables_yet) {
-    // A string is a pointer and a length (spec 6.5), which the IR can't hold
-    // yet; a literal still goes into a *u8.
-    Arena a = arena_make();
-    CHECK_STR(check_source(&a,
-                           "main :: () {\n"
-                           "    s := \"hi\";\n"
-                           "}\n"),
-              "2:10: variables can't hold a 'string' yet; give it the type '*u8'\n");
-    arena_free(&a);
-}
-
 TEST(expressions_other_than_calls_still_arent_statements) {
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
@@ -1330,9 +1318,9 @@ TEST(cast_trunc_of_a_constant_wraps) {
 
 TEST(cast_rules) {
     // Integers cast to integers, and bools to integers (0 or 1). Nothing
-    // casts to a bool but a bool; a string only to its own type (or a
-    // literal to *u8). Pointers cast to pointers and to 64-bit integers
-    // (pointer_casts).
+    // casts to a bool but a bool; a string only to its own type and to []u8
+    // (string_casts), a literal to *u8 too. Pointers cast to pointers and to
+    // 64-bit integers (pointer_casts).
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "main :: () {\n"
@@ -1602,7 +1590,8 @@ TEST(globals_are_visible_everywhere) {
 
 TEST(global_value_must_be_constant) {
     // A global's first value is in the program's file, so it must be known
-    // while compiling; without one it's zero.
+    // while compiling; without one it's zero. A string literal is known
+    // (milestone 2b: its address is a relocation), as a string or a *u8.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "f :: () -> int { return 1; }\n"
@@ -1618,10 +1607,7 @@ TEST(global_value_must_be_constant) {
                            "main :: () { }\n"),
               "2:6: a global's value must be known while compiling, for now\n"
               "3:11: a global's value must be known while compiling, for now\n"
-              "5:10: 300 doesn't fit in 'u8'\n"
-              "6:11: global variables can't hold a string literal yet; assign it in a procedure\n"
-              "7:6: variables can't hold a 'string' yet; give it the type '*u8'\n"
-              "8:11: global variables can't hold a string literal yet; assign it in a procedure\n");
+              "5:10: 300 doesn't fit in 'u8'\n");
     Checked c = check_src(&a, "c := 1 + LIMIT;\nLIMIT :: 255;\nmain :: () { }\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     Ast_Var *var = (Ast_Var *)global_named(&c, "c");
@@ -3012,7 +2998,6 @@ TEST(global_struct_literal_must_be_constant) {
                            "main :: () { }\n"),
               "5:14: a global's value must be known while compiling, for now\n"
               "6:9: a global's value must be known while compiling, for now\n"
-              "7:16: global variables can't hold a string literal yet; assign it in a procedure\n"
               "8:6: a constant can only be a number or a bool, for now\n"
               "9:6: this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}\n");
     arena_free(&a);
@@ -3320,8 +3305,8 @@ TEST(index_rules) {
               "4:5: can't assign to 'a': it's a parameter\n"
               "5:11: can't take the address of 'a': it's a parameter\n"
               "7:5: only a variable, a field or an element can be assigned to\n"
-              "9:11: '[]' needs an array, a view or a pointer, not 'int'\n"
-              "10:17: '[]' needs an array, a view or a pointer, not 'Vec2'\n"
+              "9:11: '[]' needs an array, a view, a string or a pointer, not 'int'\n"
+              "10:17: '[]' needs an array, a view, a string or a pointer, not 'Vec2'\n"
               "11:12: an index must be an integer, not 'float32'\n"
               "12:12: an index must be an integer, not 'bool'\n"
               "13:12: an index must be an integer, not '[]int'\n"
@@ -3582,12 +3567,12 @@ TEST(for_over_a_sequence) {
               "2:11: can't take the address of 'a': it's a parameter\n"
               "4:13: can't assign to 'it': it's the loop's iterator\n"
               "5:14: can't take the address of 'a': it's a parameter\n"
-              "9:9: 'for' needs a range, an array or a view, not 'int'\n"
-              "10:11: 'for *' needs an array or a view, not a range\n"
-              "12:9: 'for' needs a range, an array or a view, not 'int'\n"
+              "9:9: 'for' needs a range, an array, a view or a string, not 'int'\n"
+              "10:11: 'for *' needs an array, a view or a string, not a range\n"
+              "12:9: 'for' needs a range, an array, a view or a string, not 'int'\n"
               "13:11: only a variable, a field or an element has an address\n"
               "14:11: only a variable, a field or an element has an address\n"
-              "15:14: 'for *' needs an array or a view, not a range\n"
+              "15:14: 'for *' needs an array, a view or a string, not a range\n"
               "16:9: this literal's type isn't known; write it before the '.', as in int.[1, 2]\n");
     arena_free(&a);
 }
@@ -3607,5 +3592,262 @@ TEST(foreign_procedures_take_no_arrays) {
               "2:10: a foreign procedure can't take a '[]u8'; pass its .data\n"
               "3:12: a foreign procedure can't return a '[2]int' yet\n"
               "4:12: a foreign procedure can't return a '[]int' yet\n");
+    arena_free(&a);
+}
+
+// Milestone 2b (issue #60): strings. A string is { count: int; data: *u8; },
+// a view of bytes not ended by a zero: .count, .data, s[i], for s, == and
+// !=, casts to and from []u8; a literal is one, and still converts to *u8.
+
+TEST(string_literal_is_a_string) {
+    // A literal is a string a variable holds; it still converts to *u8, its
+    // bytes ending with the zero C needs.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    x := \"hi\";\n"
+                          "    p : *u8 = \"hi\";\n"
+                          "    y : string = x;\n"
+                          "    n := x.count;\n"
+                          "    d := x.data;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "x"), "string");
+    CHECK_STR(type_of(&a, &c, "p"), "*u8");
+    CHECK_STR(type_of(&a, &c, "y"), "string");
+    CHECK_STR(type_of(&a, &c, "n"), "int");
+    CHECK_STR(type_of(&a, &c, "d"), "*u8");
+    CHECK(!value_of(&c, "x")->is_constant);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(string_doesnt_become_a_c_string) {
+    // Only a literal's bytes are known to end with a zero: any other string
+    // is a view of bytes that may go on, so it doesn't convert to *u8, and
+    // the message says why. Its .data is a *u8 (a pointer, not a C string).
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                           "f :: (s: string) -> *u8 { return s; }\n"
+                           "main :: () {\n"
+                           "    s := \"hi\";\n"
+                           "    p : *u8 = s;\n"
+                           "    puts(s);\n"
+                           "    p = s;\n"
+                           "    q : *u8 = cast(string) \"hi\";\n"
+                           "    r : *u8 = s.data;\n"
+                           "    t : *u8 = \"hi\";\n"
+                           "    puts(\"hi\");\n"
+                           "}\n"),
+              "2:34: a value of type 'string' doesn't convert to '*u8' implicitly; its .data may not end with a "
+              "zero\n"
+              "5:15: a value of type 'string' doesn't convert to '*u8' implicitly; its .data may not end with a "
+              "zero\n"
+              "6:10: argument 1 of 'puts' has type 'string', which can't be converted to '*u8'; its .data may "
+              "not end with a zero\n"
+              "7:9: a value of type 'string' doesn't convert to '*u8' implicitly; its .data may not end with a "
+              "zero\n"
+              "8:15: a value of type 'string' doesn't convert to '*u8' implicitly; its .data may not end with a "
+              "zero\n");
+    arena_free(&a);
+}
+
+TEST(string_members_and_index) {
+    // A string is a view of u8: .count an int and .data a *u8, places when
+    // the string is one; s[i] a u8, always a place (the bytes lie
+    // elsewhere, as a view's elements do); for s gives each byte, for * s a
+    // pointer to each.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "f :: (s: string) {\n"
+                          "    s[0] = 65;\n"
+                          "    for * s { it.* = 66; }\n"
+                          "}\n"
+                          "main :: () {\n"
+                          "    s := \"hello\";\n"
+                          "    n := s.count;\n"
+                          "    d := s.data;\n"
+                          "    c := s[1];\n"
+                          "    s[0] = 72;\n"
+                          "    s.count = 2;\n"
+                          "    s.data = d;\n"
+                          "    i : u8 = 1;\n"
+                          "    e := s[i];\n"
+                          "    p := *s[0];\n"
+                          "    q := *s.count;\n"
+                          "    for s { x := it; k := it_index; }\n"
+                          "    for * s { y := it; }\n"
+                          "    for b: \"abc\" { z := b; }\n"
+                          "    l := \"abc\".count;\n"
+                          "    m := \"abc\"[0];\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "n"), "int");
+    CHECK_STR(type_of(&a, &c, "d"), "*u8");
+    CHECK_STR(type_of(&a, &c, "c"), "u8");
+    CHECK_STR(type_of(&a, &c, "e"), "u8");
+    CHECK_STR(type_of(&a, &c, "p"), "*u8");
+    CHECK_STR(type_of(&a, &c, "q"), "*int");
+    CHECK_STR(type_of(&a, &c, "x"), "u8");
+    CHECK_STR(type_of(&a, &c, "k"), "int");
+    CHECK_STR(type_of(&a, &c, "y"), "*u8");
+    CHECK_STR(type_of(&a, &c, "z"), "u8");
+    CHECK_STR(type_of(&a, &c, "l"), "int");
+    CHECK_STR(type_of(&a, &c, "m"), "u8");
+    // A string's count is its field, read at run time, not a constant.
+    CHECK(!value_of(&c, "l")->is_constant);
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "f :: (s: string) {\n"
+                           "    s.count = 1;\n"
+                           "}\n"
+                           "main :: () {\n"
+                           "    x := 5;\n"
+                           "    for x { }\n"
+                           "    y := x[0];\n"
+                           "    for * 1..2 { }\n"
+                           "    s := \"hi\";\n"
+                           "    z := s.size;\n"
+                           "    w := s[true];\n"
+                           "    \"hi\".count = 1;\n"
+                           "    v := s[1.5];\n"
+                           "}\n"),
+              "2:5: can't assign to 's': it's a parameter\n"
+              "6:9: 'for' needs a range, an array, a view or a string, not 'int'\n"
+              "7:11: '[]' needs an array, a view, a string or a pointer, not 'int'\n"
+              "8:11: 'for *' needs an array, a view or a string, not a range\n"
+              "10:12: 'string' has no field 'size'\n"
+              "11:12: an index must be an integer, not 'bool'\n"
+              "12:5: only a variable, a field or an element can be assigned to\n"
+              "13:12: an index must be an integer, not 'float32'\n");
+    arena_free(&a);
+}
+
+TEST(strings_compare) {
+    // == and != compare two strings' bytes (lowering); they meet nothing
+    // else, and nothing else takes them.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    a := \"abc\";\n"
+                          "    b := \"abd\";\n"
+                          "    e := a == b;\n"
+                          "    n := a != \"abc\";\n"
+                          "    l := \"x\" == \"y\";\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "e"), "bool");
+    CHECK_STR(type_of(&a, &c, "n"), "bool");
+    CHECK_STR(type_of(&a, &c, "l"), "bool");
+    CHECK(((Ast_Binary *)value_of(&c, "e"))->operand_type == &type_string);
+    CHECK(((Ast_Binary *)value_of(&c, "l"))->operand_type == &type_string);
+    CHECK(!value_of(&c, "l")->is_constant);
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    a := \"abc\";\n"
+                           "    p : *u8 = \"x\";\n"
+                           "    c := a == p;\n"
+                           "    d := a < a;\n"
+                           "    f := a + a;\n"
+                           "    g := a == 1;\n"
+                           "    h := null != a;\n"
+                           "}\n"),
+              "4:12: mismatched types 'string' and '*u8' for '=='\n"
+              "5:12: '<' needs numbers, not 'string'\n"
+              "6:12: '+' needs numbers, not 'string'\n"
+              "7:12: mismatched types 'string' and 'int' for '=='\n"
+              "8:15: mismatched types 'null' and 'string' for '!='\n");
+    arena_free(&a);
+}
+
+TEST(string_casts) {
+    // A string and a []u8 are the same view, retyped by a cast either way;
+    // nothing else casts to or from a string.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    s := \"hi\";\n"
+                          "    v := cast([]u8) s;\n"
+                          "    t := cast(string) v;\n"
+                          "    u := cast(string) \"x\";\n"
+                          "    w := cast([]u8) \"x\";\n"
+                          "    x := cast(string) s;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "v"), "[]u8");
+    CHECK_STR(type_of(&a, &c, "t"), "string");
+    CHECK_STR(type_of(&a, &c, "u"), "string");
+    CHECK_STR(type_of(&a, &c, "w"), "[]u8");
+    CHECK_STR(type_of(&a, &c, "x"), "string");
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    s := \"hi\";\n"
+                           "    a : [2]u8;\n"
+                           "    x := cast(string) a;\n"
+                           "    y := cast([]s8) s;\n"
+                           "    z := cast(int) s;\n"
+                           "    q := cast(*u8) s;\n"
+                           "    r : []u8 = s;\n"
+                           "    v : []u8;\n"
+                           "    k : string = v;\n"
+                           "    m := cast,trunc(string) s;\n"
+                           "}\n"),
+              "4:10: can't cast '[2]u8' to 'string'\n"
+              "5:10: can't cast 'string' to '[]s8'\n"
+              "6:10: can't cast 'string' to 'int'\n"
+              "7:10: can't cast 'string' to '*u8'\n"
+              "8:16: a value of type 'string' doesn't convert to '[]u8' implicitly\n"
+              "10:18: a value of type '[]u8' doesn't convert to 'string' implicitly\n"
+              "11:10: cast,trunc only takes integers\n");
+    arena_free(&a);
+}
+
+TEST(string_globals) {
+    // A literal is known while compiling: a global string, *u8 or []u8
+    // holds its address (a relocation, lowering's), a struct's field or an
+    // array's element too. A string that isn't a literal isn't known.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Named :: struct { name: string; size: int; }\n"
+                          "greeting := \"hi\";\n"
+                          "g : *u8 = \"hi\";\n"
+                          "q : *u8 = cast(*u8) \"hi\";\n"
+                          "h := cast([]u8) \"abc\";\n"
+                          "text := Named.{\"hi\", 2};\n"
+                          "names := string.[\"a\", \"bc\"];\n"
+                          "p : *void = cast(*void) cast(*u8) \"x\";\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_name(&a, ((Ast_Var *)global_named(&c, "greeting"))->type), "string");
+    CHECK_STR(type_name(&a, ((Ast_Var *)global_named(&c, "h"))->type), "[]u8");
+    CHECK_STR(type_name(&a, ((Ast_Var *)global_named(&c, "names"))->type), "[2]string");
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "greeting := \"hi\";\n"
+                           "copy := greeting;\n"
+                           "n : int = cast(int) cast(*u8) \"hi\";\n"
+                           "s : string = cast(string) cast([]u8) copy;\n"
+                           "main :: () { }\n"),
+              "2:9: a global's value must be known while compiling, for now\n"
+              "3:11: a global's value must be known while compiling, for now\n"
+              "4:14: a global's value must be known while compiling, for now\n");
+    arena_free(&a);
+}
+
+TEST(foreign_procedures_take_no_strings) {
+    // C has no strings, only pointers to bytes ending with a zero: a literal
+    // passes as one, any other string's .data may not end with a zero.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "a :: (s: string) #foreign libc;\n"
+                           "b :: () -> string #foreign libc;\n"
+                           "c :: (s: *u8) -> s32 #foreign libc;\n"
+                           "main :: () { c(\"hi\"); }\n"),
+              "1:10: a foreign procedure can't take a 'string'; pass its .data, which may not end with a zero, "
+              "or a literal\n"
+              "2:12: a foreign procedure can't return a 'string' yet\n");
     arena_free(&a);
 }

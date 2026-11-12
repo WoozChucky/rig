@@ -179,9 +179,34 @@ static u64 saturate(f64 d, Type *t) {
     return (u64)whole;
 }
 
+// Whether t is *u8, the type of a C string, which a string literal converts
+// to.
+static bool is_c_string(Type *t) {
+    return type_is_pointer(t) && t->pointee == type_from_name(str("u8"));
+}
+
+// What a message about a value of type `from` that doesn't convert to `to`
+// adds, after the message: why a string doesn't become a *u8 when a literal
+// does (only a literal's bytes are known to end with a zero, which C reads
+// up to), and nothing for anything else.
+static const char *conversion_hint(Type *from, Type *to) {
+    return from == &type_string && is_c_string(to) ? "; its .data may not end with a zero" : "";
+}
+
 void report_no_conversion(Checker *c, Ast *value, Type *to) {
-    diag_error(c->diag, value->start, "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly",
-               STR_ARG(type_name(c->arena, value->type)), STR_ARG(type_name(c->arena, to)));
+    diag_error(c->diag, value->start, "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly%s",
+               STR_ARG(type_name(c->arena, value->type)), STR_ARG(type_name(c->arena, to)),
+               conversion_hint(value->type, to));
+}
+
+Ast_String *literal_address(Ast *e) {
+    for (;;) {
+        Type *t = e->type;
+        if (!t || (!type_is_view_or_string(t) && !type_is_pointer(t))) return nullptr;
+        if (e->kind == AST_STRING) return (Ast_String *)e;
+        if (e->kind != AST_CAST) return nullptr;
+        e = ((Ast_Cast *)e)->value;
+    }
 }
 
 static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t);
@@ -276,10 +301,11 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
         return true;
     }
     // A string literal's bytes are stored with a zero after them, so C can
-    // read them through a *u8 (milestone 1's rule).
-    if (e->kind == AST_STRING && to->kind == TYPE_POINTER && to->pointee == type_from_name(str("u8"))) {
-        return true;
-    }
+    // read them through a *u8 (milestone 1's rule): the literal converts to
+    // its bytes' address, though its type stays string (lowering looks at
+    // where it goes). Any other string's bytes may go on past its count, so
+    // it doesn't (type_converts).
+    if (e->kind == AST_STRING && is_c_string(to)) return true;
     return type_converts(from, to);
 }
 
@@ -423,9 +449,9 @@ static Type *check_call(Checker *c, Ast_Call *call) {
             if (!check_convert(c, arg, to)) {
                 diag_error(c->diag, arg->start,
                            "argument %lld of '" STR_FMT "' has type '" STR_FMT "', which can't be converted to '" STR_FMT
-                           "'",
+                           "'%s",
                            (long long)(i + 1), STR_ARG(proc->name), STR_ARG(type_name(c->arena, from)),
-                           STR_ARG(type_name(c->arena, to)));
+                           STR_ARG(type_name(c->arena, to)), conversion_hint(from, to));
             }
         }
     }
@@ -869,9 +895,12 @@ static bool takes_equality(Type *t) {
 // order, and isn't equal or unequal to a number, which is never one (spec
 // 6.1). Two pointers meet at a pointer type (check_unify_pointers) and
 // compare as addresses, unsigned numbers (a pointer type isn't signed).
+// == and != compare two strings by their bytes (lowering): equal when their
+// counts are and so is each byte. A string meets no other type, not even a
+// *u8, whose bytes' count isn't known ("mismatched types 'string' and '*u8'
+// for '=='"), and has no order ("'<' needs numbers, not 'string'").
 // Anything else isn't compared: "'==' needs numbers, bools, pointers or
-// strings, not 'Vec2'" (strings compare from milestone 2b's strings), "'<'
-// needs numbers, not 'Vec2'".
+// strings, not 'Vec2'", "'<' needs numbers, not 'Vec2'".
 static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right) {
     const char *op = token_kind_name(b->op);
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
@@ -882,14 +911,17 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
                    STR_ARG(type_name(c->arena, not_equatable)));
         return nullptr;
     }
-    if (equality && (left == &type_bool || right == &type_bool)) {
+    // Bools and strings are equal only to their own type. No cast makes an
+    // integer a bool, nor a pointer a string, so the message suggests none.
+    bool bools = left == &type_bool || right == &type_bool;
+    bool strings = left == &type_string || right == &type_string;
+    if (equality && (bools || strings)) {
         if (left != right) {
-            // No cast makes an integer a bool, so the message suggests none.
             diag_error(c->diag, b->pos, "mismatched types '" STR_FMT "' and '" STR_FMT "' for %s",
                        STR_ARG(type_name(c->arena, left)), STR_ARG(type_name(c->arena, right)), op);
             return nullptr;
         }
-        t = &type_bool;
+        t = left;
     } else if (type_is_pointer(left) || type_is_pointer(right) || left == &type_null || right == &type_null) {
         t = check_unify_pointers(c, b, left, right, op);
         if (!t) return nullptr;
@@ -899,6 +931,7 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
         if (!t) return nullptr;
     }
     b->operand_type = t;
+    // Constants fold (never strings: a literal isn't a constant).
     if (b->left->is_constant && b->right->is_constant) {
         b->is_constant = true;
         if (t->kind == TYPE_FLOAT) {
@@ -1057,9 +1090,11 @@ static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to
 //   x != 0").
 // - A pointer to or from a pointer, a number or a bool:
 //   check_pointer_cast.
+// - A string to a []u8 and a []u8 to a string: the same view, retyped
+//   (spec 6.5), the same bytes.
 // - Anything else casts only where it converts implicitly: to its own
-//   type, null to a pointer, or a string literal to *u8. Otherwise "can't
-//   cast 'A' to 'B'": strings have no casts yet.
+//   type, null to a pointer, an array to a view of it, or a string literal
+//   to *u8. Otherwise "can't cast 'A' to 'B'".
 // - cast,trunc takes integers only: "cast,trunc only takes integers".
 // A cast of a constant is a constant of T: a checked cast's is the same
 // number, a cast,trunc's is wrapped to T as at run time (wrap_to).
@@ -1099,6 +1134,8 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
                    STR_ARG(type_name(c->arena, from)));
         return nullptr;
     }
+    Type *bytes = type_view_of(type_from_name(str("u8")));
+    if ((from == &type_string && to == bytes) || (from == bytes && to == &type_string)) return to;
     bool bool_to_integer = from == &type_bool && to->kind == TYPE_INTEGER;
     if (!bool_to_integer && !check_convert(c, value, to)) {
         diag_error(c->diag, cast->pos, "can't cast '" STR_FMT "' to '" STR_FMT "'", STR_ARG(type_name(c->arena, from)),
@@ -1152,11 +1189,12 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
 
 // A field is a place when its struct is, or always when it's reached
 // through a pointer (p.x is p.*.x, and p.* is a place whatever p is). An
-// element is one when its array is; a view's or a pointer's always is, its
-// elements lying elsewhere (v[0] = 1 for a view parameter v changes the
-// elements it sees, not v). A view's count and data are fields like a
-// struct's. An array's .count is a constant and its .data an address worked
-// out on the spot, so neither is a place.
+// element is one when its array is; a view's, a string's or a pointer's
+// always is, its elements lying elsewhere (v[0] = 1 for a view parameter v
+// changes the elements it sees, not v; s[0] = 1 on a literal writes its
+// read-only bytes, a memory error, spec 6.4). A view's or a string's count
+// and data are fields like a struct's. An array's .count is a constant and
+// its .data an address worked out on the spot, so neither is a place.
 bool expr_is_place(Ast *e) {
     switch (e->kind) {
     case AST_NAME: {
@@ -1244,21 +1282,22 @@ static Type *check_deref(Checker *c, Ast_Deref *deref) {
     return t->pointee;
 }
 
-// a[i] (spec 6.5): element i of array or view a, or the T i T's on from
-// where pointer a points (C's a[i], p.* moved by i, unchecked). i is any
-// integer, read by its own sign; an untyped one becomes an int. Reported at
-// the '[': "'[]' needs an array, a view or a pointer, not 'int'", or "can't
-// index a '*void'; ..." (it points at nothing with a size); at i: "an index
-// must be an integer, not 'float32'". A constant i of an array is checked
-// here, by its sign: "index 3 is out of bounds for '[3]int'". Any other
-// index of an array or a view is checked at run time (lowering), unless the
-// procedure says #no_abc or the build --no-bounds-checks.
+// a[i] (spec 6.5): element i of array, view or string a (a string's, a
+// u8), or the T i T's on from where pointer a points (C's a[i], p.* moved by
+// i, unchecked). i is any integer, read by its own sign; an untyped one
+// becomes an int. Reported at the '[': "'[]' needs an array, a view, a
+// string or a pointer, not 'int'", or "can't index a '*void'; ..." (it
+// points at nothing with a size); at i: "an index must be an integer, not
+// 'float32'". A constant i of an array is checked here, by its sign: "index
+// 3 is out of bounds for '[3]int'". Any other index of an array, a view or a
+// string is checked at run time (lowering), unless the procedure says
+// #no_abc or the build --no-bounds-checks.
 static Type *check_index(Checker *c, Ast_Index *ix) {
     Type *t = check_operand(c, ix->operand);
     Type *index = check_operand(c, ix->index);
     if (!t) return nullptr;
     Type *element = nullptr;
-    if (t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW) {
+    if (t->kind == TYPE_ARRAY || type_is_view_or_string(t)) {
         element = t->element;
     } else if (type_is_pointer(t) && t->pointee != &type_void) {
         element = t->pointee;
@@ -1266,7 +1305,7 @@ static Type *check_index(Checker *c, Ast_Index *ix) {
         diag_error(c->diag, ix->pos, "can't index a '*void'; cast it to a pointer to something first");
         return nullptr;
     } else {
-        diag_error(c->diag, ix->pos, "'[]' needs an array, a view or a pointer, not '" STR_FMT "'",
+        diag_error(c->diag, ix->pos, "'[]' needs an array, a view, a string or a pointer, not '" STR_FMT "'",
                    STR_ARG(type_name(c->arena, t)));
         return nullptr;
     }
@@ -1309,13 +1348,14 @@ static Type *check_size_of(Checker *c, Ast_Size_Of *size_of) {
     return &type_untyped_int;
 }
 
-// a.count and a.data of an array or a view a (spec 6.5), the only two
-// names they have ("'[3]int' has no field 'size'", at the name); m->index
-// stays -1, lowering knowing them by name. A view's are its fields: an int
-// and a *T. An array's .count is its N, an untyped integer constant as
-// size_of is (so b : u8 = a.count; takes it), a isn't evaluated for it; its
-// .data, a *T, is the address of its first element, so a must have one, as
-// for *a[0] ("can't take the address of 'a': it's a parameter").
+// a.count and a.data of an array, a view or a string a (spec 6.5), the only
+// two names they have ("'[3]int' has no field 'size'", at the name);
+// m->index stays -1, lowering knowing them by name. A view's are its fields:
+// an int and a *T; a string's an int and a *u8. An array's .count is its N,
+// an untyped integer constant as size_of is (so b : u8 = a.count; takes it),
+// a isn't evaluated for it; its .data, a *T, is the address of its first
+// element, so a must have one, as for *a[0] ("can't take the address of 'a':
+// it's a parameter").
 static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
     m->index = -1;
     bool count = string_eq(m->name, str("count"));
@@ -1324,7 +1364,7 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
                    STR_ARG(m->name));
         return nullptr;
     }
-    if (t->kind == TYPE_VIEW) return count ? &type_int : type_pointer_to(t->element);
+    if (type_is_view_or_string(t)) return count ? &type_int : type_pointer_to(t->element);
     if (count) {
         m->is_constant = true;
         m->constant = (u64)t->count;
@@ -1336,13 +1376,13 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
 // e.x: the field x of struct e, or of the struct e points at (p.x is
 // p.*.x: one pointer, so a **Node needs .* first). Reported at the field's
 // name: "'Vec2' has no field 'z'", or on anything else "'.x' needs a struct
-// or a pointer to one, not 'int'". m->index is the field's. An array's or a
-// view's .count and .data are check_sequence_member's (not through a
-// pointer: p.*.count).
+// or a pointer to one, not 'int'". m->index is the field's. An array's, a
+// view's or a string's .count and .data are check_sequence_member's (not
+// through a pointer: p.*.count).
 static Type *check_member(Checker *c, Ast_Member *m) {
     Type *t = check_operand(c, m->operand);
     if (!t) return nullptr;
-    if (t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW) return check_sequence_member(c, m, t);
+    if (t->kind == TYPE_ARRAY || type_is_view_or_string(t)) return check_sequence_member(c, m, t);
     Type *s = type_is_pointer(t) && t->pointee->kind == TYPE_STRUCT ? t->pointee : t;
     if (s->kind != TYPE_STRUCT) {
         diag_error(c->diag, m->pos, "'." STR_FMT "' needs a struct or a pointer to one, not '" STR_FMT "'",

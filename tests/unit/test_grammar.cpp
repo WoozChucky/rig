@@ -185,11 +185,15 @@ static const Operator_Scope OPERATOR_SCOPES[] = {
 // Types
 
 // Type names the language will have (spec 6.4 and 6.5) but the checker
-// doesn't know yet. Milestone 2a's tasks add them one at a time; listing
-// them here keeps them highlighted meanwhile, so a file's highlighting
-// doesn't flicker as each lands. Once the checker knows one (it's in
+// doesn't know yet. Milestones 2a and 2b added them one at a time; listing
+// them here kept them highlighted meanwhile, so a file's highlighting didn't
+// flicker as each landed. Once the checker knows one (it's in
 // src/types.cpp's NAMED_TYPES), the test says to remove it from here.
-static const char *const RESERVED_TYPES[] = {"string"};
+// string, the last, landed with milestone 2b, so there are none now: a name
+// a later milestone reserves goes in an array RESERVED_TYPES here, given to
+// grammar_tables() in place of the null and 0 it passes.
+static const char *const *const RESERVED_TYPES = nullptr;
+static const s64 RESERVED_TYPE_COUNT = 0;
 
 // ---------------------------------------------------------------------------
 // Generating the grammar
@@ -215,7 +219,7 @@ static Grammar_Tables grammar_tables() {
     return {
         KEYWORDS,        GRAMMAR_COUNT(KEYWORDS),        KEYWORD_SCOPES, GRAMMAR_COUNT(KEYWORD_SCOPES),
         PUNCTUATION,     GRAMMAR_COUNT(PUNCTUATION),     OPERATOR_SCOPES, GRAMMAR_COUNT(OPERATOR_SCOPES),
-        NAMED_TYPES,     GRAMMAR_COUNT(NAMED_TYPES),     RESERVED_TYPES, GRAMMAR_COUNT(RESERVED_TYPES),
+        NAMED_TYPES,     GRAMMAR_COUNT(NAMED_TYPES),     RESERVED_TYPES, RESERVED_TYPE_COUNT,
     };
 }
 
@@ -680,7 +684,7 @@ TEST(vscode_grammar_fills_in_the_placeholders) {
     static const Operator_Scope operator_scopes[] = {
         {"<", OPERATORS_COMPARISON}, {"..", OPERATORS_RANGE}, {"(", OPERATORS_NONE}, {"<<", OPERATORS_BITWISE}};
     static Type *const named_types[] = {&type_int};
-    static const char *const reserved_types[] = {"string"};
+    static const char *const reserved_types[] = {"Any"};
     Grammar_Tables tables = {
         keywords,    GRAMMAR_COUNT(keywords),    keyword_scopes,  GRAMMAR_COUNT(keyword_scopes),
         punctuation, GRAMMAR_COUNT(punctuation), operator_scopes, GRAMMAR_COUNT(operator_scopes),
@@ -704,7 +708,7 @@ TEST(vscode_grammar_fills_in_the_placeholders) {
     CHECK_STR(grammar,
               "{\n"
               "    \"keywords\": \"if|while true\",\n"
-              "    \"types\": \"int|string\",\n"
+              "    \"types\": \"int|Any\",\n"
               "    \"operators\": {\n"
               "        \"match\": \"(\\\\.\\\\.)|(<<)|(<)\",\n"
               "        \"captures\": {\n"
@@ -786,7 +790,7 @@ TEST(vscode_grammar_needs_a_scope_for_every_operator) {
 }
 
 TEST(vscode_grammar_drops_a_reserved_type_once_built_in) {
-    static const char *const reserved[] = {"int", "string"};
+    static const char *const reserved[] = {"int", "Any"};
     Grammar_Tables tables = grammar_tables();
     tables.reserved_types = reserved;
     tables.reserved_type_count = GRAMMAR_COUNT(reserved);

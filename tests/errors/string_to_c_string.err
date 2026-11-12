@@ -1,0 +1,6 @@
+tests/errors/string_to_c_string.rig:8:15: error: a value of type 'string' doesn't convert to '*u8' implicitly; its .data may not end with a zero
+        p : *u8 = s;
+                  ^
+tests/errors/string_to_c_string.rig:9:10: error: argument 1 of 'puts' has type 'string', which can't be converted to '*u8'; its .data may not end with a zero
+        puts(s);
+             ^

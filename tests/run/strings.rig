@@ -1,0 +1,150 @@
+// Strings (issue #60, spec 6.5): a string is a view of bytes, { count: int;
+// data: *u8; }, not ended by a zero. A literal is one (its count the bytes
+// without the zero C needs after them), and still goes to C as a *u8.
+// Counts, indexing, for and for *, == and != by count and by byte, strings
+// passed, returned, cut and kept in structs, and bytes made at run time
+// cast from a []u8 to a string.
+putchar :: (c: s32) -> s32 #foreign libc;
+puts :: (s: *u8) -> s32 #foreign libc;
+malloc :: (size: u64) -> *void #foreign libc;
+free :: (p: *void) #foreign libc;
+
+print_int :: (n: int) {
+    if n < 0 {
+        putchar(45);
+        print_int(-n);
+        return;
+    }
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+print :: (s: string) {
+    for s { putchar(it); }
+}
+
+println :: (s: string) {
+    print(s);
+    putchar(10);
+}
+
+println_int :: (n: int) {
+    print_int(n);
+    putchar(10);
+}
+
+println_bool :: (b: bool) {
+    if b { println("true"); } else { println("false"); }
+}
+
+Person :: struct {
+    name: string;
+    age: int;
+}
+
+// The first word of s: a view of its bytes up to the first space, which
+// are s's own bytes, not a copy.
+first_word :: (s: string) -> string {
+    for s {
+        if it == 32 {
+            word := s;
+            word.count = it_index;
+            return word;
+        }
+    }
+    return s;
+}
+
+saved := "abc";
+
+// Changes the global the caller compares, and gives what it held: an
+// operand of == is read whole before the other is worked out.
+change_saved :: () -> string {
+    saved = "xyz";
+    return "abc";
+}
+
+main :: () {
+    // A literal's count is its bytes, without the zero after them; an
+    // escape is one byte.
+    hello := "hello";
+    println_int(hello.count);
+    println_int("a\tb\n".count);
+    println_int("".count);
+
+    // An element is a byte, a u8.
+    println_int(hello[0]);
+    putchar(hello[4]);
+    putchar(10);
+
+    // for: each byte, it_index its index.
+    for hello {
+        putchar(it);
+        putchar(48 + cast(s32) it_index);
+    }
+    putchar(10);
+    for b: "xyz" { putchar(b); }
+    putchar(10);
+
+    // == and != compare the counts, then the bytes.
+    println_bool(hello == "hello");
+    println_bool(hello == "hell");
+    println_bool(hello == "hellp");
+    println_bool(hello != "jello");
+    println_bool(hello != "hello");
+    println_bool("" == "");
+    println_bool(first_word("big cat") == "big");
+    println_bool(saved == change_saved());
+    println(saved);
+
+    // A string's count and data are its fields: changing them cuts it.
+    println(first_word("hello world"));
+    s := "abcdef";
+    s.count = 3;
+    println(s);
+    s.data += 1;
+    println(s);
+
+    // A count set below 0 has no bytes to compare: two strings with the
+    // same such count are equal whatever their data, and different counts
+    // are unequal.
+    x := "ab";
+    y := "cd";
+    x.count = -1;
+    y.count = -1;
+    println_bool(x == y);
+    y.count = -2;
+    println_bool(x == y);
+
+    // A string in a struct is copied with it.
+    p := Person.{"Ada", 36};
+    q := p;
+    q.name = "Grace";
+    println(p.name);
+    println(q.name);
+    println_int(q.age);
+
+    // Bytes made at run time: a []u8 over malloc'd memory, filled through
+    // for *, cast to a string. Writing an element through the string writes
+    // the bytes the view sees too.
+    bytes : []u8;
+    bytes.data = malloc(3);
+    bytes.count = 3;
+    for * bytes { it.* = cast(u8) (65 + it_index); }
+    abc := cast(string) bytes;
+    println(abc);
+    println_bool(abc == "ABC");
+    abc[1] = 98;
+    println(cast(string) bytes);
+    for * abc { it.* += 1; }
+    println(abc);
+    free(bytes.data);
+
+    // A literal still goes to C as a *u8, its bytes ending with a zero, and
+    // its .data is that address.
+    puts("to C");
+    puts("data".data);
+    v := cast([]u8) "xyz";
+    println_int(v.count);
+    println_int(size_of(string));
+}
