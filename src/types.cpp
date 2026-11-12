@@ -7,7 +7,7 @@
 // it lasts the whole run, as its pointers do.
 #define BUILT_IN(kind, name, size, align, is_signed)                                       \
     {kind, size, align, is_signed, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr, \
-     nullptr, {}, nullptr, nullptr}
+     nullptr, {}, nullptr, nullptr, nullptr, 0, nullptr, nullptr, nullptr}
 // The numbers' alignment is their size, as in C on x86-64.
 #define INTEGER(name, size, is_signed) BUILT_IN(TYPE_INTEGER, name, size, size, is_signed)
 #define FLOAT(name, size) BUILT_IN(TYPE_FLOAT, name, size, size, false)
@@ -26,16 +26,18 @@ Type type_float64 = FLOAT("float64", 8);
 Type type_untyped_float = FLOAT("float32", 8);
 // A pointer's size: what it becomes once it meets a pointer type.
 Type type_null = BUILT_IN(TYPE_NULL, "null", 8, 8, false);
-// No size of its own: the struct it meets gives it one. Its name is only a
-// fallback; the checker reports such a literal before any message would
-// name its type.
+// .{...} and .[...] before they meet a type. No size of its own: the type
+// it meets gives it one, a struct for .{...}, an array or a view for
+// .[...]. Its name is only a fallback; the checker reports such a literal
+// before any message would name its type.
 Type type_untyped_literal = BUILT_IN(TYPE_UNTYPED_LITERAL, ".{...}", 0, 1, false);
 
 // float, a name only: type_from_name gives float32 for it. It's an entry of
 // its own so NAMED_TYPES, and the editor's grammar made from it, list the
 // name.
 static Type float_name = {
-    TYPE_FLOAT, 4, 4, false, nullptr, {(const u8 *)"float", 5}, nullptr, &type_float32, {}, nullptr, nullptr,
+    TYPE_FLOAT, 4, 4,       false,   nullptr, {(const u8 *)"float", 5}, nullptr, &type_float32, {}, nullptr, nullptr,
+    nullptr,    0, nullptr, nullptr, nullptr,
 };
 
 static Type integer_types[] = {
@@ -74,7 +76,7 @@ bool type_is_pointer(Type *t) {
 }
 
 bool type_is_aggregate(Type *t) {
-    return t->kind == TYPE_STRUCT;
+    return t->kind == TYPE_STRUCT || t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW;
 }
 
 s32 type_field_index(Type *t, String name) {
@@ -88,28 +90,68 @@ s32 type_align(Type *t) {
     return t->align;
 }
 
-// A pointer type is cached in the type it points at (Type.pointer), so it
-// must last as long as that type does, and no longer: a pointer to a
-// struct, which lives in its compilation's arena, comes from that arena
-// too, and is freed with the struct (and so is a pointer to that pointer).
-// A built-in type lasts the whole run, so its pointers come from this
-// arena, never freed.
-static Arena pointer_types;
+// A pointer, array or view type is cached in the type it's made from
+// (Type.pointer, Type.arrays, Type.view), so it must last as long as that
+// type does, and no longer: one made from a struct, which lives in its
+// compilation's arena, comes from that arena too, and is freed with the
+// struct (and so is a pointer to that pointer, an array of it, ...). A
+// built-in type lasts the whole run, so the types made from it come from
+// this arena, never freed.
+static Arena derived_types;
+
+// A new type of this kind, made from `from` (what it points at, or its
+// elements), in from's arena.
+static Type *derived_from(Type *from, Type_Kind kind) {
+    Type *t = arena_new<Type>(from->arena ? from->arena : &derived_types);
+    t->kind = kind;
+    t->arena = from->arena;
+    return t;
+}
 
 Type *type_pointer_to(Type *t) {
     if (!t->pointer) {
-        Type *p = arena_new<Type>(t->arena ? t->arena : &pointer_types);
-        p->kind = TYPE_POINTER;
+        Type *p = derived_from(t, TYPE_POINTER);
         p->size = 8;
         p->align = 8;
         p->pointee = t;
-        p->arena = t->arena;
         t->pointer = p;
     }
     return t->pointer;
 }
 
+// The array types of one element are few (one per count a program writes),
+// so a list is enough to find each again.
+Type *type_array_of(Type *element, s64 count) {
+    for (Type *t = element->arrays; t; t = t->next_array) {
+        if (t->count == count) return t;
+    }
+    RIG_ASSERT(count >= 0 && (element->size == 0 || count <= TYPE_MAX_SIZE / element->size));
+    Type *t = derived_from(element, TYPE_ARRAY);
+    t->size = count * element->size;
+    t->align = element->align;
+    t->element = element;
+    t->count = count;
+    t->next_array = element->arrays;
+    element->arrays = t;
+    return t;
+}
+
+Type *type_view_of(Type *element) {
+    if (!element->view) {
+        Type *t = derived_from(element, TYPE_VIEW);
+        t->size = 16;
+        t->align = 8;
+        t->element = element;
+        element->view = t;
+    }
+    return element->view;
+}
+
 String type_name(Arena *a, Type *t) {
-    if (t->kind == TYPE_POINTER) return string_printf(a, "*" STR_FMT, STR_ARG(type_name(a, t->pointee)));
-    return t->name;
+    switch (t->kind) {
+    case TYPE_POINTER: return string_printf(a, "*" STR_FMT, STR_ARG(type_name(a, t->pointee)));
+    case TYPE_ARRAY: return string_printf(a, "[%lld]" STR_FMT, (long long)t->count, STR_ARG(type_name(a, t->element)));
+    case TYPE_VIEW: return string_printf(a, "[]" STR_FMT, STR_ARG(type_name(a, t->element)));
+    default: return t->name;
+    }
 }
