@@ -9,7 +9,7 @@ puts :: (s: *u8) -> s32 #foreign libc;
 main :: () { puts("Hello, World!"); }
 ```
 
-**Architecture:** source → lexer (Nuno) → parser → checker → Rig IR → LLVM (C API, statically linked) → object file → `link.exe` (Windows) or the bundled `ld.lld` (Linux) with the C runtime. The compiler is one C-style C++23 translation unit built by `build.bat` / `build.sh`. Every stage after the lexer handles only milestone 1's subset, but each is shaped for the full language (the parser's expression entry point is where Nuno's Pratt parser goes in milestone 2).
+**Architecture:** source → lexer (hand-written) → parser → checker → Rig IR → LLVM (C API, statically linked) → object file → `link.exe` (Windows) or the bundled `ld.lld` (Linux) with the C runtime. The compiler is one C-style C++23 translation unit built by `build.bat` / `build.sh`. Every stage after the lexer handles only milestone 1's subset, but each is shaped for the full language (the parser's expression entry point is where the Pratt parser goes in milestone 2).
 
 **Tech Stack:** C++23 with clang (no STL, no exceptions, no RTTI), LLVM 23.1.4's C API (`llvm-c`) from the official release archives, GitHub Actions on Ubuntu.
 
@@ -27,13 +27,13 @@ main :: () { puts("Hello, World!"); }
 - **Linking:** Windows: `link.exe` found from the Visual Studio installation (our own code, the `microsoft_craziness.h` approach: the Setup Configuration COM API, the Windows Kits registry key), `lld-link.exe` (copied from the archive into `bin/`) when the installation has no `link.exe`; the dynamic C runtime (`msvcrt.lib`, `vcruntime.lib`, `ucrt.lib`). Linux: `bin/ld.lld` (copied from the archive), glibc's `crt1.o`, `crti.o`, `crtn.o`, `-lc`, dynamic.
 - **Positions in every error**, `path:line:col: error: message`, and the front end continues after an error (spec section 3, the language server).
 - **Nothing copied** from Jai or anyone else; own code throughout (spec section 9).
-- **No AI attribution** in commits, pull requests, issues or code. Commits are Nuno's style: short imperative summary, no trailers.
+- **Commits:** short imperative summary, no trailers.
 - **CI on Linux only**; on Windows, `build.bat`, `bin\unit-tests.exe` and `bin\run-tests.exe` pass locally before every push.
-- **Work flow (spec section 10):** each task is a GitHub issue in milestone `1: Hello world`, labelled `mine` or `your turn`; a branch and pull request per issue, `Closes #N` in the description. Nuno merges. A `mine` task whose predecessor is still in review branches from that predecessor's branch.
+- **Work flow (spec section 10):** each task is a GitHub issue in milestone `1: Hello world`, labelled `mine` or `your turn`; a branch and pull request per issue, `Closes #N` in the description. The maintainer merges. A `mine` task whose predecessor is still in review branches from that predecessor's branch.
 
 ## Review Focus
 
-1. **Paths with spaces.** Visual Studio lives under `C:\Program Files\...`; Nuno's projects may too. Every command line Rig runs (linker, tests) must quote arguments the way the C runtime parses them. Pinned by `os_run_passes_arguments_unchanged` (Task 4).
+1. **Paths with spaces.** Visual Studio lives under `C:\Program Files\...`; projects may too. Every command line Rig runs (linker, tests) must quote arguments the way the C runtime parses them. Pinned by `os_run_passes_arguments_unchanged` (Task 4).
 2. **Source text from real editors:** CRLF line endings, a UTF-8 byte-order mark, no newline at the end, an empty file, tabs before an error. Positions and lexing must be right for all of them. Pinned by the lexer tests `crlf_lines_count_once`, `bom_is_skipped`, `empty_file_is_just_eof` (Task 6), the diagnostics tests `caret_follows_tabs` and `bom_is_not_part_of_line_one` (Task 5) and the end-to-end tests `crlf.rig`, `bom.rig` and `errors/bom_error.rig` (Task 12).
 3. **A missing toolchain piece** (no Visual Studio or Windows SDK, no glibc development files, no `bin/ld.lld`): a sentence saying what to install, never a crash. Pinned by `missing_crt_files_say_what_to_install` and `missing_linker_says_where_it_looked` (Task 11).
 4. **Several mistakes in one file:** every one reported, in source order, with its position, and no crash or cascade of follow-on errors. Each stage reports in the order it finds things (the lexer before the parser, the checker's signatures before its bodies), so the driver sorts the errors by position (`diag_sort`, Task 5) before printing them; `diag_render` itself keeps the order it's given. Pinned by `parser_recovers_at_next_declaration` (Task 8), `checker_reports_every_unknown_name` and `statements_are_calls_for_now` (Task 9), `sorting_puts_errors_in_source_order` (Task 5) and `errors/two_errors.rig`, `errors/errors_in_source_order.rig` and `errors/non_call_statement.rig` (Task 12).
@@ -42,12 +42,12 @@ main :: () { puts("Hello, World!"); }
 ## Order and gates
 
 ```
-1 skeleton ─ 2 harness+CI ─ 3 containers issue ─▶ [Nuno: containers] ─┬─ 4 os ─ 5 diagnostics ─ 6 lexer issue ─▶ [Nuno: lexer] ─┐
-                                                                       │                                                          │
-                                                                       └──────── 7 AST ─ 8 parser ─ 9 checker ─ 10 IR+LLVM ─ 11 linking ─ 12 driver + end to end
+1 skeleton ─ 2 harness+CI ─ 3 containers issue ─▶ [by hand: containers] ─┬─ 4 os ─ 5 diagnostics ─ 6 lexer issue ─▶ [by hand: lexer] ─┐
+                                                                         │                                                            │
+                                                                         └──────── 7 AST ─ 8 parser ─ 9 checker ─ 10 IR+LLVM ─ 11 linking ─ 12 driver + end to end
 ```
 
-Tasks 7 to 11 don't need the lexer: their tests build tokens or ASTs by hand. Task 12 needs everything, which is the point: hello world waits for Nuno's two pieces.
+Tasks 7 to 11 don't need the lexer: their tests build tokens or ASTs by hand. Task 12 needs everything, which is the point: hello world waits for the two hand-written pieces.
 
 ---
 
@@ -56,7 +56,7 @@ Tasks 7 to 11 don't need the lexer: their tests build tokens or ASTs by hand. Ta
 **Files:**
 - Create: `build.bat`, `build.sh`, `scripts/get_llvm.bat`, `scripts/get_llvm.sh`
 - Create: `src/common.h`, `src/rig.cpp` (the unity file), `src/main.cpp`
-- Modify: `.gitignore` (add `deps/`, `.build/`), `README.md` (a "Building" section), the spec's status line ("Approved by Nuno, 2026-11-11.")
+- Modify: `.gitignore` (add `deps/`, `.build/`), `README.md` (a "Building" section), the spec's status line ("Approved, 2026-11-11.")
 
 **Interfaces:**
 - Produces, in `src/common.h`: `s8 s16 s32 s64 u8 u16 u32 u64 f32 f64` typedefs; `RIG_ASSERT(cond)`; `RIG_TODO()` (prints `not implemented yet: FUNCTION (FILE:LINE)` to stderr and exits with status 3); `RIG_VERSION "0.1.0"`; `[[noreturn]] void rig_assert_failed(const char *cond, const char *file, int line)`.
@@ -66,8 +66,8 @@ Tasks 7 to 11 don't need the lexer: their tests build tokens or ASTs by hand. Ta
 - [ ] **Step 1: Create the labels and milestone, and open an issue per task of this plan**
 
 ```bash
-gh label create "mine" -R WoozChucky/rig -c 1d76db -d "Claude codes it"
-gh label create "your turn" -R WoozChucky/rig -c 0e8a16 -d "Nuno codes it, with references and tests written beforehand"
+gh label create "mine" -R WoozChucky/rig -c 1d76db -d "Written directly, reviewed before merge"
+gh label create "your turn" -R WoozChucky/rig -c 0e8a16 -d "A learning exercise: interface, references and tests first, the body by hand"
 gh api repos/WoozChucky/rig/milestones -f title="1: Hello world" -f description="puts from main through LLVM on Windows and Linux"
 ```
 One issue per task (12), titles as this plan's task titles, the `mine` or `your turn` label, the milestone. Tasks 3 and 6 are the `your turn` issues; their bodies are written in those tasks.
@@ -148,16 +148,16 @@ Expected: both exit 0; the second prints `1 passed, 0 failed`.
 Run: `build.bat && bin\unit-tests.exe --self-test && bin\unit-tests.exe`
 Expected: as Step 4. Then commit (`Unit test harness and CI on Linux`), push, PR `Closes #2`, and `gh pr checks` green.
 
-### Task 3: The containers issue, for Nuno (`mine`, then `your turn`)
+### Task 3: The containers issue (`mine`, then `your turn`)
 
-Claude writes the interface, stubs and tests on branch `your-turn/containers`; Nuno writes the bodies and opens the pull request; Claude reviews.
+The interface, stubs and tests are written first, on branch `your-turn/containers`; the bodies are written by hand, in a pull request that is reviewed.
 
 **Files:**
 - Create: `src/base.h` (interface and template bodies stubbed with `RIG_TODO()`), `src/base.cpp` (non-template stubs), `tests/unit/test_base.cpp`
 - Modify: `src/all.cpp` (include `base.cpp`), `tests/unit/test.h` (the `String` overload of `CHECK_STR`)
 
 **Interfaces:**
-- Produces, in `src/base.h` (struct fields are Nuno's except where named):
+- Produces, in `src/base.h` (struct fields are left to the bodies' author except where named):
   - `struct Arena;` `Arena arena_make(u64 block_size = 64 * 1024);` `void *arena_alloc(Arena *a, u64 size, u64 align = 8);` (zeroed, aligned; a request larger than the block size gets its own block) `void arena_reset(Arena *a);` (everything freed at once, memory kept for reuse) `void arena_free(Arena *a);` and, given: `template<typename T> T *arena_new(Arena *a)`, `template<typename T> T *arena_new_array(Arena *a, s64 count)`.
   - `struct String { const u8 *data; s64 count; };` `String str(const char *cstr);` (a view, no copy) `bool string_eq(String a, String b);` `String string_copy(Arena *a, String s);` `const char *string_cstr(Arena *a, String s);` (zero-terminated copy) `String string_printf(Arena *a, const char *fmt, ...);` (also zero-terminated past `count`) `String string_slice(String s, s64 start, s64 count);` (asserts the range) and, given: `#define STR_FMT "%.*s"`, `#define STR_ARG(s) (int)(s).count, (const char *)(s).data`.
   - `template<typename T> struct Array { T *data; s64 count; s64 capacity; T &operator[](s64 i); };` (asserts the index) `array_add(Array<T> *a, T value)`, `array_reserve(Array<T> *a, s64 capacity)`, `T array_pop(Array<T> *a)`, `array_free(Array<T> *a)`; heap memory (`malloc`/`realloc`), capacity doubling from 8.
@@ -184,15 +184,15 @@ TEST(hash_string_is_fnv1a)                 // "" -> 0xcbf29ce484222325, "a" -> 0
 - [ ] **Step 2: Run: they fail with the stubs**
 
 Run: `./build.sh && bin/unit-tests base`
-Expected: exits with status 3 and `not implemented yet: arena_make (...)`. The tests are expected to fail until Nuno's work is in, so this branch's CI is red on purpose.
+Expected: exits with status 3 and `not implemented yet: arena_make (...)`. The tests are expected to fail until the bodies are in, so this branch's CI is red on purpose.
 
 - [ ] **Step 3: Write the issue body (issue #3) and push the branch**
 
-The body: the goal; what an arena is and why a compiler wants one (lifetimes grouped, no per-node frees); a growable array's doubling and why it's amortised O(1); open addressing with linear probing, tombstones not needed (no removal yet), load factor; FNV-1a in five lines of prose; the reading, in order: Ryan Fleury, "Untangling Lifetimes: The Arena Allocator" (rfleury.com); Ginger Bill, "Memory Allocation Strategies, Part 2: Linear/Arena Allocators" (gingerbill.org); *Crafting Interpreters* chapter 14's dynamic array section and chapter 20, "Hash Tables"; the FNV page (isthe.com/chongo/tech/comp/fnv). Then the interface (link to `src/base.h`), how to run the tests, and "done when `bin/unit-tests base` passes on Windows and in WSL". Commit `Containers: interface, stubs and tests for Nuno`, push `your-turn/containers`.
+The body: the goal; what an arena is and why a compiler wants one (lifetimes grouped, no per-node frees); a growable array's doubling and why it's amortised O(1); open addressing with linear probing, tombstones not needed (no removal yet), load factor; FNV-1a in five lines of prose; the reading, in order: Ryan Fleury, "Untangling Lifetimes: The Arena Allocator" (rfleury.com); Ginger Bill, "Memory Allocation Strategies, Part 2: Linear/Arena Allocators" (gingerbill.org); *Crafting Interpreters* chapter 14's dynamic array section and chapter 20, "Hash Tables"; the FNV page (isthe.com/chongo/tech/comp/fnv). Then the interface (link to `src/base.h`), how to run the tests, and "done when `bin/unit-tests base` passes on Windows and in WSL". Commit `Containers: interface, stubs and tests`, push `your-turn/containers`.
 
-- [ ] **Step 4 (gate): Nuno's pull request merged after review**
+- [ ] **Step 4 (gate): the pull request merged after review**
 
-Review on his PR: correctness, readability, speed, each comment with its why, suggestions not changes. Expected after merge: `bin/unit-tests` all pass on main, CI green.
+Review on the pull request: correctness, readability, speed, each comment with its why, suggestions not changes. Expected after merge: `bin/unit-tests` all pass on main, CI green.
 
 ### Task 4: The operating system layer (`mine`)
 
@@ -267,9 +267,9 @@ TEST(errors_keep_their_order)      // two errors, two files: rendered in the ord
 
 - [ ] **Step 5: Commit (`Diagnostics: errors with positions and the source line`), push, PR `Closes #5`**
 
-### Task 6: The lexer issue, for Nuno (`mine`, then `your turn`)
+### Task 6: The lexer issue (`mine`, then `your turn`)
 
-Claude writes the interface, stubs, tests and issue; Nuno writes the lexer. `src/lexer.h` (with `token_kind_name`, which is given) goes to main first in its own small pull request, so Tasks 8 to 10 can use the token types while Nuno works; the stub of `lex`, the tests and the issue go on branch `your-turn/lexer`.
+The interface, stubs, tests and issue are written first; the lexer is written by hand. `src/lexer.h` (with `token_kind_name`, which is given) goes to main first in its own small pull request, so Tasks 8 to 10 can use the token types while the lexer is written; the stub of `lex`, the tests and the issue go on branch `your-turn/lexer`.
 
 **Files:**
 - Create: `src/lexer.h`, `src/lexer.cpp` (stubs), `tests/unit/test_lexer.cpp`
@@ -313,9 +313,9 @@ TEST(unterminated_comment_is_an_error)  // "/* never": at 1:1
 
 - [ ] **Step 3: Write the issue body (issue #6) and push the branch**
 
-The goal; what a lexer is and why it's separate from the parser; the loop of "look at the current character, pick the token, advance"; maximal munch (`<<=`), why `0..9` needs one character of lookahead after `0.`; decoding escapes into the arena; error tokens and continuing. The reading, in order: *Crafting Interpreters* chapter 4, "Scanning", and chapter 16, "Scanning on Demand" (its C version is closest to what Rig needs); *Engineering a Compiler* chapter 2 (optional, the theory under scanners); the Jai Primer (github.com/BSVino/JaiPrimer) for the syntax being lexed. The interface (link to `src/lexer.h`), how to run the tests, and "done when `bin/unit-tests lex` passes on Windows and in WSL, and your PR is reviewed". Commit `Lexer: interface, stubs and tests for Nuno`, push.
+The goal; what a lexer is and why it's separate from the parser; the loop of "look at the current character, pick the token, advance"; maximal munch (`<<=`), why `0..9` needs one character of lookahead after `0.`; decoding escapes into the arena; error tokens and continuing. The reading, in order: *Crafting Interpreters* chapter 4, "Scanning", and chapter 16, "Scanning on Demand" (its C version is closest to what Rig needs); *Engineering a Compiler* chapter 2 (optional, the theory under scanners); the Jai Primer (github.com/BSVino/JaiPrimer) for the syntax being lexed. The interface (link to `src/lexer.h`), how to run the tests, and "done when `bin/unit-tests lex` passes on Windows and in WSL, and your PR is reviewed". Commit `Lexer: interface, stubs and tests`, push.
 
-- [ ] **Step 4 (gate): Nuno's pull request merged after review** (as Task 3's).
+- [ ] **Step 4 (gate): the pull request merged after review** (as Task 3's).
 
 ### Task 7: The syntax tree (`mine`)
 
@@ -358,7 +358,7 @@ primary     = IDENT | INT | STRING | '(' expression ')'
 ```
 - Error messages, exactly: `expected X, found Y` with `token_kind_name` for both (`expected ';', found '}'`; `found identifier 'x'` for identifiers); at top level a `::` not followed by `(`: `only procedures can be declared at the top level for now`; a directive other than `#foreign` after a signature: `unknown directive '#name'`. After an error the parser skips to the next token that starts a line and is `IDENT` followed by `::` (the next declaration), so one mistake gives one error.
 
-- [ ] **Step 1: Write `tests/unit/test_parser.cpp`** with a helper building tokens from a compact spec, `toks("IDENT:puts :: ( IDENT:s : * IDENT:u8 ) -> IDENT:s32 #foreign IDENT:libc ;")`, positions advancing one column per token, and a second helper that lexes once Nuno's lexer is in (not needed for these tests):
+- [ ] **Step 1: Write `tests/unit/test_parser.cpp`** with a helper building tokens from a compact spec, `toks("IDENT:puts :: ( IDENT:s : * IDENT:u8 ) -> IDENT:s32 #foreign IDENT:libc ;")`, positions advancing one column per token, and a second helper that lexes once the lexer is in (not needed for these tests):
 
 ```cpp
 TEST(parses_hello_world)                 // ast_dump == the two lines of Task 7
@@ -381,7 +381,7 @@ TEST(eof_inside_block)                   // main :: () { puts("x");  -> "expecte
 - Consumes: the AST, `Table`, `diag_error`.
 - Produces:
   - `struct Type` with a kind (`void`, integer, pointer, string), size, signedness, pointee; `Type *type_from_name(String name);` for the built-in names `s8 s16 s32 s64 u8 u16 u32 u64 int`; `Type *type_pointer_to(Arena *a, Type *t);` (one pointer type per pointee); `String type_name(Arena *a, Type *t);` (`"*u8"`, `"s32"`).
-  - `bool check(Ast_File *f, Arena *a, Diagnostics *d);` fills each expression's `Type *`, each call's callee declaration, each procedure's parameter and return types. Rules: names resolve in one global table of procedures (declaration order free); a string literal has type `string` and converts implicitly to `*u8` (literals are stored with a trailing zero byte, Jai's rule); an integer literal converts to any integer type it fits; the only library name is `libc`, meaning the C runtime that is always linked (Claude's call until `#system_library` arrives); `main` must exist, take nothing and return nothing; a call's value may be ignored.
+  - `bool check(Ast_File *f, Arena *a, Diagnostics *d);` fills each expression's `Type *`, each call's callee declaration, each procedure's parameter and return types. Rules: names resolve in one global table of procedures (declaration order free); a string literal has type `string` and converts implicitly to `*u8` (literals are stored with a trailing zero byte, Jai's rule); an integer literal converts to any integer type it fits; the only library name is `libc`, meaning the C runtime that is always linked (until `#system_library` arrives); `main` must exist, take nothing and return nothing; a call's value may be ignored.
   - Error messages, exactly: `unknown identifier 'putz'`; `unknown type 'u9'`; `'puts' is already declared at a.rig:1:1`; `'puts' takes 1 argument, but 2 were given` (`argument`/`arguments` by count); `argument 1 of 'puts' has type 'int', which can't be converted to '*u8'`; `3000000000 doesn't fit in 's32'`; `unknown library 'foo'; the only one so far is 'libc'`; `a procedure called 'main' is needed` (at 1:1 of the first file); `'main' must take no arguments and return nothing`. An expression whose type is unknown after an error reports nothing more.
 
 - [ ] **Step 1: Write `tests/unit/test_checker.cpp`**, parsing from tokens as in Task 8 (or building ASTs), one test per message above plus:
@@ -462,7 +462,7 @@ TEST(finds_this_machines_toolchain)         // Windows only: true, link_exe and 
 - [ ] **Step 2: Run failing; Step 3: implement; Step 4: run passing on both platforms** (`bin/unit-tests link`).
 - [ ] **Step 5: Commit (`Linking: link.exe or lld-link on Windows, the bundled ld.lld on Linux`), push, PR `Closes #11`.**
 
-### Task 12: `rig build` and the end-to-end tests (`mine`), after Nuno's lexer
+### Task 12: `rig build` and the end-to-end tests (`mine`), after the lexer
 
 **Files:**
 - Modify: `src/main.cpp` (the `build` subcommand), `build.sh`, `build.bat` (build `bin/run-tests`), `.github/workflows/ci.yml` (run it), `README.md` (hello world)
@@ -474,7 +474,7 @@ TEST(finds_this_machines_toolchain)         // Windows only: true, link_exe and 
 - Consumes: everything above.
 - Produces:
   - `rig build FILE.rig [-o OUTPUT]`: read, lex, parse, check; on errors print the diagnostics and exit 1; lower, write the object to `.build/NAME.obj` (Windows) or `.build/NAME.o` (Linux) in the current directory, creating `.build/`; link to `OUTPUT`, by default `NAME.exe` / `NAME` in the current directory (`NAME` is the file's name without directory and `.rig`); exit 0. `rig: error: cannot read 'PATH': REASON`, `rig: error: cannot create '.build': REASON`, `rig: error: cannot write 'OBJECT': REASON` and `rig: error: linking failed` (after the linker's output) exit 1. `.rig` is matched in any case. A malformed command line (no file, two, `-o` with no name or an empty one, `-o` twice) gives the usage and exit 2; an `-o` ending in `.rig` is refused with `rig: error: the output 'OUTPUT' ends in .rig; is it the source file?`, exit 1 (added after the final review).
-  - `bin/run-tests [RIG]` (default `bin/rig[.exe]`), run from the repository root: for each `tests/run/*.rig`, `RIG build tests/run/NAME.rig -o .build/tests/NAME[.exe]`, run it, compare stdout with `NAME.out` byte for byte and the exit code with `NAME.exit` (0 when absent); and its stderr must be empty; for each `tests/errors/*.rig`, `RIG build` must exit 1 with stderr equal to `NAME.err`, writing no object or program. Then fixed cases: the default output from another directory, an unwritable `.build/` and object, and the command line's mistakes. Every program gets 60 seconds (`os_run_for`), then is killed and fails (the review's additions). On Windows the C runtime writes `\r\n` for `\n` on text-mode stdout, so the runner turns the program's `\r\n` into `\n` there before comparing (milestone 4's own `print` won't need it; Claude's call). Prints `PASS name` / `FAIL name` with the first differing line, then `N passed, M failed`; exits 1 on any failure.
+  - `bin/run-tests [RIG]` (default `bin/rig[.exe]`), run from the repository root: for each `tests/run/*.rig`, `RIG build tests/run/NAME.rig -o .build/tests/NAME[.exe]`, run it, compare stdout with `NAME.out` byte for byte and the exit code with `NAME.exit` (0 when absent); and its stderr must be empty; for each `tests/errors/*.rig`, `RIG build` must exit 1 with stderr equal to `NAME.err`, writing no object or program. Then fixed cases: the default output from another directory, an unwritable `.build/` and object, and the command line's mistakes. Every program gets 60 seconds (`os_run_for`), then is killed and fails (the review's additions). On Windows the C runtime writes `\r\n` for `\n` on text-mode stdout, so the runner turns the program's `\r\n` into `\n` there before comparing (milestone 4's own `print` won't need it). Prints `PASS name` / `FAIL name` with the first differing line, then `N passed, M failed`; exits 1 on any failure.
 
 - [ ] **Step 1: Write the test programs and their expected files**
 
