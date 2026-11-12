@@ -262,6 +262,84 @@ TEST(panic_program_exits_101_with_its_message) {
     arena_free(&a);
 }
 
+TEST(byte_globals_and_memory_run) {
+    // Milestone 2b's memory (issue #56), linked and run: a global of bytes
+    // holding the address of "ok" at offset 8, which only the linker knows,
+    // is copied into a local; the address read back from the local's copy
+    // is given to puts. Then the local is zeroed, and the same address must
+    // read back as null, or the program panics.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    s32 table = add_byte_global(m, "table", 16, 8);
+    s32 ok = add_string(m, "str.0", "ok");
+    s32 message = add_string(m, "str.1", "x.rig:1:1: runtime error: not zeroed\n");
+    array_add(&m->globals[table].relocs, {8, ok});
+    Ir_Proc *puts_proc = new_proc_returning(m, &a, "puts", IR_I32);
+    puts_proc->is_foreign = true;
+    ir_add_param(puts_proc, IR_PTR, IR_EXT_NONE);
+
+    // __rig_main :: () {
+    //     copy = table; puts(copy[8..16] as a pointer);
+    //     zero copy; if the pointer at 8 isn't null, panic.
+    // }
+    Ir_Proc *rig_main = new_proc_returning(m, &a, "__rig_main", IR_VOID);
+    s32 b = ir_new_block(&a, rig_main), done = ir_new_block(&a, rig_main), fail = ir_new_block(&a, rig_main);
+    s32 copy = emit_local_bytes(rig_main, b, 16, 8);
+    Ir_Instr *address = ir_emit(rig_main, b, IR_ADDR, IR_PTR);
+    address->target = table;
+    emit_copy(rig_main, b, copy, address->result, 16);
+    s32 field = emit_ptradd(rig_main, b, copy, emit_const(rig_main, b, IR_I64, 8));
+    Ir_Instr *text = ir_emit(rig_main, b, IR_LOAD, IR_PTR);
+    text->a = field;
+    Array<s32> args = {};
+    array_add(&args, text->result);
+    ir_emit_call(m, rig_main, b, 0, args);
+    emit_zero(rig_main, b, copy, 16);
+    Ir_Instr *after = ir_emit(rig_main, b, IR_LOAD, IR_PTR);
+    after->a = field;
+    s32 is_null = emit_cmp(rig_main, b, IR_EQ, IR_PTR, after->result, emit_const(rig_main, b, IR_PTR, 0));
+    Ir_Instr *branch = ir_emit(rig_main, b, IR_BRANCH, IR_VOID);
+    branch->c = is_null;
+    branch->target = done;
+    branch->target2 = fail;
+    emit_ret(rig_main, done, -1);
+    ir_emit(rig_main, fail, IR_PANIC, IR_VOID)->target = message;
+    // main() -> i32 { __rig_main(); return 0; }
+    Ir_Proc *entry = new_proc_returning(m, &a, "main", IR_I32);
+    entry->is_export = true;
+    s32 e = ir_new_block(&a, entry);
+    ir_emit_call(m, entry, e, 1, {});
+    emit_ret(entry, e, emit_const(entry, e, IR_I32, 0));
+
+    os_make_directory(str(".build"));
+#ifdef _WIN32
+    String object = str(".build/memory-test.obj"), program = str(".build/memory-test.exe");
+#else
+    String object = str(".build/memory-test.o"), program = str(".build/memory-test");
+#endif
+    String error = {};
+    bool emitted = llvm_emit_object(m, target_host(), object, &a, &error);
+    CHECK(emitted);
+    if (!emitted) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+    Array<String> objects = {};
+    array_add(&objects, object);
+    bool linked = emitted && link_executable(&a, target_host(), objects, program, &error);
+    CHECK(linked);
+    if (emitted && !linked) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+    Array<String> argv = {};
+    array_add(&argv, program);
+    Process_Result result = {};
+    bool ran = linked && os_run_for(&a, argv, {}, 60, &result);
+    CHECK(ran);
+    CHECK(!result.timed_out);
+    CHECK_STR(without_cr(&a, result.out), "ok\n");
+    CHECK_STR(without_cr(&a, result.err), "");
+    CHECK_EQ(result.exit_code, 0);
+    array_free(&objects);
+    array_free(&argv);
+    arena_free(&a);
+}
+
 TEST(windows_linker_falls_back_to_lld_link) {
     // link.exe when Visual Studio has it; otherwise the lld-link.exe
     // build.bat copied beside rig; otherwise a sentence.
