@@ -2,10 +2,13 @@
 // root: bin/run-tests [RIG], RIG being bin/rig by default.
 //
 // tests/run/NAME.rig is built with `RIG build tests/run/NAME.rig -o
-// .build/tests/NAME` and run; its stdout must equal NAME.out byte for byte,
-// its exit code the number in NAME.exit (0 when there's none), and its
-// stderr NAME.err byte for byte (a runtime error's message, say), or be
-// empty when there's no NAME.err.
+// .build/tests/NAME` and run; its stdout must equal NAME.out, its exit code
+// the number in NAME.exit (0 when there's none), and its stderr NAME.err (a
+// runtime error's message, say), or be empty when there's no NAME.err.
+// On Windows the program's newlines are normalised first, since C's
+// text-mode streams write \r\n for each \n: every \r\n in its stdout and
+// stderr becomes \n (normalise_newlines). The rest is compared byte for
+// byte. .out and .err aren't normalised; .gitattributes keeps them LF.
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, and it writes neither an object file nor a program.

@@ -1,0 +1,1 @@
+tests/run/remainder_by_zero.rig:8:13: runtime error: division by zero

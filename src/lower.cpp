@@ -304,10 +304,13 @@ static void emit_runtime_check(Lowering *l, s32 fails, Position at, String messa
 //     %neg = sub 0, %a
 //     %result = select %m1, %neg, %q
 //
-//   selects, not branches: no new blocks, and LLVM turns them into
-//   conditional moves. A constant divisor needs neither check: -1 is the
-//   negation or 0 directly, and any other is safe as it is. Unsigned
-//   division has no -1.
+//   selects, not branches: a select adds no branch and no block, and it
+//   is always defined (both of its values are computed, and neither can
+//   trap), which is all Rig's rule needs. A machine can do it without a
+//   jump (x86 with a conditional move), though nothing here asks for one.
+//
+// A constant divisor needs neither check: -1 is the negation or 0
+// directly, and any other is safe as it is. Unsigned division has no -1.
 static s32 lower_division(Lowering *l, Token_Kind op, Type *t, s32 left, Ast *right, Position at) {
     Ir_Type type = ir_type_of(t);
     bool quotient = op == TOKEN_SLASH;
@@ -341,6 +344,15 @@ static s32 lower_operation(Lowering *l, Token_Kind op, Type *t, s32 left, Ast *r
     return emit_binary(l, ir_op_of(op, t), ir_type_of(t), left, r);
 }
 
+// A checked cast's runtime check: `fails` true stops the program at the
+// cast. The message is made here, so the casts that need no check (most
+// widenings, and a cast to the same type) format nothing.
+static void emit_cast_check(Lowering *l, s32 fails, Ast_Cast *cast) {
+    String message =
+        string_printf(l->arena, "the value doesn't fit in '" STR_FMT "'", STR_ARG(type_name(l->arena, cast->type)));
+    emit_runtime_check(l, fails, cast->pos, message);
+}
+
 // cast(T) e and cast,trunc(T) e, e not a constant (a constant cast is a
 // constant, made where it's used, as every constant is).
 // - cast,trunc is C's conversion: trunc to narrow, sext or zext by the
@@ -362,16 +374,15 @@ static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
     Ir_Type have = ir_type_of(from), want = ir_type_of(to);
     s32 v = lower_expr(l, cast->value);
     if (cast->is_trunc || from->kind != TYPE_INTEGER || to->kind != TYPE_INTEGER) return resize(l, v, from, want);
-    String message = string_printf(l->arena, "the value doesn't fit in '" STR_FMT "'", STR_ARG(type_name(l->arena, to)));
     if (ir_bits(want) < ir_bits(have)) {
         s32 narrow = resize(l, v, from, want);
         s32 back = resize(l, narrow, to, have);
-        emit_runtime_check(l, emit_compare(l, IR_NE, have, back, v), cast->pos, message);
+        emit_cast_check(l, emit_compare(l, IR_NE, have, back, v), cast);
         return narrow;
     }
     if (from->is_signed != to->is_signed && (ir_bits(want) == ir_bits(have) || from->is_signed)) {
         s32 negative = emit_compare(l, IR_SLT, have, v, emit_constant(l, have, 0));
-        emit_runtime_check(l, negative, cast->pos, message);
+        emit_cast_check(l, negative, cast);
     }
     return resize(l, v, from, want);
 }

@@ -1356,8 +1356,13 @@ TEST(cast_rules) {
                           "    w := cast(u64) cast(s8) x;\n"
                           "    q := cast(*u8) p;\n"
                           "    k := cast(bool) b;\n"
+                          "    s := cast(*u8) \"hi\";\n"
                           "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
+    // A string literal casts to *u8, the type it converts to implicitly
+    // (spec 6.4); the cast is the literal's address, no constant.
+    CHECK_STR(type_of(&a, &c, "s"), "*u8");
+    CHECK(!((Ast_Var *)local_named(&c, "s"))->value->is_constant);
     CHECK_STR(type_of(&a, &c, "i"), "int");
     Ast *u = ((Ast_Var *)local_named(&c, "u"))->value;
     CHECK(u->is_constant);
