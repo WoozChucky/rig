@@ -31,8 +31,8 @@ enum Ast_Kind : u8 {
     AST_VAR,           // Ast_Var: x : T = e;  x := e;  x : T;  x : T = ---;
     AST_CONST,         // Ast_Const: N :: e;
     AST_ASSIGN,        // Ast_Assign: x = e;  x += e; ...
-    AST_RETURN,        // Ast_Return: return;  return e;
-    AST_UNARY,         // Ast_Unary: -e  ~e
+    AST_RETURN,        // Ast_Return: return;  return e;  return a, b;
+    AST_UNARY,         // Ast_Unary: -e  ~e  !e
     AST_BINARY,        // Ast_Binary: a + b, a << b, a < b, a && b, ...
     AST_BOOL,          // Ast_Bool: true, false
     AST_IF,            // Ast_If: if c { ... } else ...

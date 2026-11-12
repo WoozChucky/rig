@@ -1,7 +1,8 @@
 // test_checker.cpp: names, types and calls (issue #9), then scopes,
 // constants, operators, conversions and returns (issue #33), then bools,
 // conditions and loops (issue #34), then division and casts (issue #35),
-// then several results, globals and top-level constants (issue #36).
+// then several results, globals and top-level constants (issue #36), then
+// floats (issue #37), and the fixes from milestone 2a's review (issue #52).
 // Milestone 1's tests build tokens by hand (toks(), helpers.cpp), milestone
 // 2a's lex real source (src()); either way, parsed, then checked.
 

@@ -134,11 +134,13 @@
 //   implicitly" (an argument: "argument N of 'f' has type 'A', which can't
 //   be converted to 'B'"). A compound assignment x op= e converts e to x's
 //   type (a shift's amount: any integer).
-// - Only a variable can be assigned to: not a constant, a parameter
-//   (read-only, spec 6.1), a loop's iterator or index ("can't assign to
-//   'it': it's the loop's iterator", "... 'it_index': it's the loop's
-//   index") or a procedure ("can't assign to 'N': it's a constant"), nor
-//   anything but a name.
+// - Only a variable can be assigned to, and only by its name. Not:
+//   - a constant: "can't assign to 'N': it's a constant";
+//   - a parameter, read-only (spec 6.1): "can't assign to 'N': it's a
+//     parameter";
+//   - a loop's iterator or index: "can't assign to 'it': it's the loop's
+//     iterator", "can't assign to 'it_index': it's the loop's index";
+//   - a procedure: "can't assign to 'N': it's a procedure".
 // - N :: e; needs e a number or a bool ("a constant can only be a number
 //   or a bool, for now": only they fold yet) known while compiling
 //   ("the value of constant 'N' isn't known while compiling").
