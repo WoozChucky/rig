@@ -31,7 +31,7 @@
 //   unary       = ('-' | '~' | '!') unary | cast | postfix
 //   cast        = 'cast' [',' IDENT] '(' type ')' unary       (the IDENT: trunc)
 //   postfix     = primary { '(' [expression {',' expression}] ')' }
-//   primary     = IDENT | INT | STRING | 'true' | 'false' | '(' expression ')'
+//   primary     = IDENT | INT | FLOAT | STRING | 'true' | 'false' | '(' expression ')'
 //
 // The precedence levels are Go's (spec 6.1). A cast is a prefix operator,
 // like -: cast(u8) a / b is (cast(u8) a) / b. Its only modifier is trunc

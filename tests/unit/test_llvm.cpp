@@ -1,5 +1,7 @@
-// test_llvm.cpp: Rig's IR to LLVM IR and object files (issues #10, #32 and
-// #34).
+// test_llvm.cpp: Rig's IR to LLVM IR and object files: hello world from
+// tokens (issue #10), then IR built by hand for issues #32 to #37 (integer
+// widths, blocks and branches, the runtime's panic, several results,
+// globals and floats) and #52 (the panic flushing first).
 // Uses test_ir.cpp's HELLO and max_module.
 
 #include "test.h"

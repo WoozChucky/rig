@@ -118,7 +118,7 @@ All of section 6 is **Jai's way** by Nuno's decision unless marked.
 - **How far "no undefined behaviour" reaches: Jai's realistic approach** (Nuno chose option B over a strict guarantee that would slow release builds and deny LLVM most optimisations):
   - **Always defined, in every build, optimised or not** (Claude's rules, accepted by Nuno):
     - integer overflow wraps (two's complement): the compiler never gives LLVM `nsw`/`nuw`;
-    - division by zero always crashes with a message (an explicit check before every division);
+    - integer division by zero (`/` or `%`) never goes unnoticed: a constant divisor of 0 is a compile error, and any other divisor is checked before the division, which crashes with a message when it's 0; a float divided by zero is IEEE 754's, an infinity, or NaN for `0 / 0`, and no error;
     - a shift amount wraps to the type's width (x86's behaviour; LLVM would treat it as undefined, so the compiler masks it);
     - a float converted to an out-of-range integer gives a defined result (saturating, LLVM's `fptosi.sat`/`fptoui.sat`) (Claude's call);
     - **variables start zeroed** unless declared uninitialised on purpose (Jai's `---`), so a forgotten initialisation is never undefined. Reading an on-purpose-uninitialised variable before writing it gives an unspecified value. (Claude's call, from Jai)
