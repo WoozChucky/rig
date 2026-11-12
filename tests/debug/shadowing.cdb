@@ -1,0 +1,14 @@
+l+t
+l+s
+l+l
+bp `shadowing.rig:9`
+bp `shadowing.rig:11`
+bp `shadowing.rig:14`
+g
+dv /t x
+?? x
+g
+?? x
+g
+dv /t it
+q

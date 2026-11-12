@@ -1,5 +1,7 @@
 14:     s := a + b;
 lines!add+
+int64 a = 0n2
+int64 b = 0n3
 Call Site
 lines!add+
 [@ROOT@\tests\debug\lines.rig @ 14]
