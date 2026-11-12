@@ -1,8 +1,8 @@
 // test_checker.cpp: names, types and calls (issue #9), then scopes,
 // constants, operators, conversions and returns (issue #33), then bools,
-// conditions and loops (issue #34). Milestone 1's tests build tokens by hand
-// (toks(), helpers.cpp), milestone 2a's lex real source (src()); either way,
-// parsed, then checked.
+// conditions and loops (issue #34), then division and casts (issue #35).
+// Milestone 1's tests build tokens by hand (toks(), helpers.cpp), milestone
+// 2a's lex real source (src()); either way, parsed, then checked.
 
 #include "test.h"
 
@@ -1174,5 +1174,223 @@ TEST(a_broken_condition_says_nothing_about_returns) {
               "5:11: unknown identifier 'nope'\n"
               "8:8: the condition of 'if' must be a bool, not 'int'\n"
               "11:36: the condition of 'if' must be a bool, not 'int'\n");
+    arena_free(&a);
+}
+
+// Milestone 2a (issue #35): division, remainder and casts (spec 6.4).
+
+TEST(division_by_constant_zero) {
+    // A divisor that is the constant 0 is a compile error, at the operator,
+    // for / and % and their compound assignments, untyped or typed; the
+    // result's type is then unknown, so its uses say nothing more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    x := 5;\n"
+                           "    y := x / 0;\n"
+                           "    z := x % (2 - 2);\n"
+                           "    x /= 0;\n"
+                           "    w := 7 / 0;\n"
+                           "    u : u8 = 1; v := u / cast,trunc(u8) 256;\n"
+                           "    t := y + z;\n"
+                           "}\n"),
+              "3:12: division by zero\n"
+              "4:12: division by zero\n"
+              "5:7: division by zero\n"
+              "6:12: division by zero\n"
+              "7:24: division by zero\n");
+    // / and % meet types as + does.
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    a : u32; b : s32;\n"
+                           "    c := a / b;\n"
+                           "    d := true % 2;\n"
+                           "}\n"),
+              "3:12: mismatched types 'u32' and 's32' for '/'; cast one of them\n"
+              "4:15: '%' needs integers, not 'bool'\n");
+    arena_free(&a);
+}
+
+TEST(constant_division_folds) {
+    // / truncates toward zero and % takes the dividend's sign, as in C.
+    // Typed constants wrap as their type does at run time: the most negative
+    // value divided by -1 is itself, its remainder 0.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    A :: 7 / -2;\n"
+                          "    B :: 7 % -2;\n"
+                          "    C :: -7 % 2;\n"
+                          "    D :: -7 / 2;\n"
+                          "    E :: cast(u8) 200 / 3;\n"
+                          "    F :: cast(s8) -128 / -1;\n"
+                          "    G :: cast(s8) -128 % -1;\n"
+                          "    H :: cast(int) -9223372036854775808 / -1;\n"
+                          "    I :: 18446744073709551615 % 10;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_EQ(local_named(&c, "A")->constant, -3);
+    CHECK_EQ(local_named(&c, "B")->constant, 1);
+    CHECK_EQ(local_named(&c, "C")->constant, -1);
+    CHECK_EQ(local_named(&c, "D")->constant, -3);
+    CHECK(type_is_untyped(local_named(&c, "A")->type));
+    CHECK_EQ(local_named(&c, "E")->constant, 66);
+    CHECK_STR(type_of(&a, &c, "E"), "u8");
+    CHECK_EQ(local_named(&c, "F")->constant, -128);
+    CHECK_STR(type_of(&a, &c, "F"), "s8");
+    CHECK_EQ(local_named(&c, "G")->constant, 0);
+    CHECK(local_named(&c, "H")->constant == (u64)INT64_MIN);
+    CHECK_STR(type_of(&a, &c, "H"), "int");
+    // A u64 divides as an unsigned number: 18446744073709551615 isn't -1.
+    CHECK_EQ(local_named(&c, "I")->constant, 5);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(untyped_min_over_minus_one_overflows) {
+    // Untyped arithmetic is exact: int's most negative value divided by -1
+    // is one past int's largest. Its remainder, 0, is fine.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    N :: -9223372036854775808 / -1;\n"
+                           "    M :: -9223372036854775808 % -1;\n"
+                           "}\n"),
+              "2:31: constant overflows 'int'\n");
+    Checked c = check_src(&a, "main :: () { M :: -9223372036854775808 % -1; }\n");
+    CHECK(local_named(&c, "M")->is_constant);
+    CHECK_EQ(local_named(&c, "M")->constant, 0);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(cast_of_a_constant_that_doesnt_fit) {
+    // A checked cast of a constant is checked while compiling: the value
+    // must be the same number in the new type. Said at the cast, where the
+    // check would fail at run time.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    a := cast(u8) 300;\n"
+                           "    b := cast(u64) -1;\n"
+                           "    N :: 18446744073709551615;\n"
+                           "    c := cast(s64) N;\n"
+                           "    d := cast(u8) 255;\n"
+                           "    e := cast(s8) -129;\n"
+                           "}\n"),
+              "2:10: 300 doesn't fit in 'u8'\n"
+              "3:10: -1 doesn't fit in 'u64'\n"
+              "5:10: 18446744073709551615 doesn't fit in 's64'\n"
+              "7:10: -129 doesn't fit in 's8'\n");
+    // One that fits is a constant of the new type.
+    Checked c = check_src(&a, "main :: () { d := cast(u8) 255; e := cast(s16) -129; }\n");
+    Ast *d = ((Ast_Var *)local_named(&c, "d"))->value;
+    CHECK(d->is_constant);
+    CHECK_EQ(d->constant, 255);
+    CHECK_STR(type_of(&a, &c, "d"), "u8");
+    CHECK_EQ(((Ast_Var *)local_named(&c, "e"))->value->constant, -129);
+    CHECK_STR(type_of(&a, &c, "e"), "s16");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(cast_trunc_of_a_constant_wraps) {
+    // cast,trunc is C's conversion, on constants too: narrowing keeps the
+    // low bits, widening extends by the source's sign.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    A :: cast,trunc(u8) 300;\n"
+                          "    B :: cast,trunc(s8) 200;\n"
+                          "    C :: cast,trunc(u16) cast(s8) -1;\n"
+                          "    D :: cast,trunc(u64) -1;\n"
+                          "    E :: cast,trunc(s32) cast(u8) 255;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_EQ(local_named(&c, "A")->constant, 44);
+    CHECK_STR(type_of(&a, &c, "A"), "u8");
+    CHECK_EQ(local_named(&c, "B")->constant, -56);
+    CHECK_STR(type_of(&a, &c, "B"), "s8");
+    CHECK_EQ(local_named(&c, "C")->constant, 65535);
+    CHECK(local_named(&c, "D")->constant == ~(u64)0);
+    CHECK_STR(type_of(&a, &c, "D"), "u64");
+    CHECK_EQ(local_named(&c, "E")->constant, 255);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(cast_rules) {
+    // Integers cast to integers, and bools to integers (0 or 1). Nothing
+    // casts to a bool but a bool; anything else casts only to its own type.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    b := true;\n"
+                           "    i := cast(int) b;\n"
+                           "    u := cast(u8) false;\n"
+                           "    x := 5;\n"
+                           "    c := cast(bool) x;\n"
+                           "    s := cast(int) \"hi\";\n"
+                           "    p : *u8 = \"hi\";\n"
+                           "    q := cast(*u8) p;\n"
+                           "    r := cast(*s8) p;\n"
+                           "    k := cast(bool) b;\n"
+                           "    n := cast(int) p;\n"
+                           "    m := cast(bool) 1;\n"
+                           "    f := cast(nope) x;\n"
+                           "    g := cast(int) nope;\n"
+                           "}\n"),
+              "6:10: can't cast 'int' to 'bool': compare instead, as in x != 0\n"
+              "7:10: can't cast 'string' to 'int'\n"
+              "10:10: can't cast '*u8' to '*s8'\n"
+              "12:10: can't cast '*u8' to 'int'\n"
+              "13:10: can't cast 'int' to 'bool': compare instead, as in x != 0\n"
+              "14:15: unknown type 'nope'\n"
+              "15:20: unknown identifier 'nope'\n");
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    b := true; x : u16 = 300; p : *u8;\n"
+                          "    i := cast(int) b;\n"
+                          "    u := cast(u8) false;\n"
+                          "    v := cast(s8) x;\n"
+                          "    w := cast(u64) cast(s8) x;\n"
+                          "    q := cast(*u8) p;\n"
+                          "    k := cast(bool) b;\n"
+                          "    s := cast(*u8) \"hi\";\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    // A string literal casts to *u8, the type it converts to implicitly
+    // (spec 6.4); the cast is the literal's address, no constant.
+    CHECK_STR(type_of(&a, &c, "s"), "*u8");
+    CHECK(!((Ast_Var *)local_named(&c, "s"))->value->is_constant);
+    CHECK_STR(type_of(&a, &c, "i"), "int");
+    Ast *u = ((Ast_Var *)local_named(&c, "u"))->value;
+    CHECK(u->is_constant);
+    CHECK_EQ(u->constant, 0);
+    CHECK_STR(type_of(&a, &c, "u"), "u8");
+    // Not a constant: checked at run time.
+    CHECK(!((Ast_Var *)local_named(&c, "v"))->value->is_constant);
+    CHECK_STR(type_of(&a, &c, "v"), "s8");
+    CHECK_STR(type_of(&a, &c, "w"), "u64");
+    CHECK_STR(type_of(&a, &c, "q"), "*u8");
+    CHECK_STR(type_of(&a, &c, "k"), "bool");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(cast_trunc_needs_integers) {
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    b := true;\n"
+                           "    x := 5;\n"
+                           "    p : *u8 = \"hi\";\n"
+                           "    i := cast,trunc(int) b;\n"
+                           "    c := cast,trunc(bool) x;\n"
+                           "    q := cast,trunc(*u8) p;\n"
+                           "}\n"),
+              "5:10: cast,trunc only takes integers\n"
+              "6:10: cast,trunc only takes integers\n"
+              "7:10: cast,trunc only takes integers\n");
     arena_free(&a);
 }

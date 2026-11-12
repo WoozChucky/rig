@@ -1,0 +1,10 @@
+// A remainder by a zero that isn't known while compiling is a runtime
+// error too, at the operator, with the same message as a division.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    puts("before");
+    zero := 0;
+    x := 10 % zero;
+    puts("after");
+}
