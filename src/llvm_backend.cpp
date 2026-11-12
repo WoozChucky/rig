@@ -273,10 +273,11 @@ static LLVMRealPredicate llvm_real_predicate(Ir_Pred p) {
 // A float constant of IR type t (f32 or f64), from the double whose bits
 // IR_CONST keeps. LLVMConstReal takes a double and converts it to the
 // constant's type, rounding to the nearest value (ties to even), as fptrunc
-// does at run time: 0.1 as an f32 is 0.100000001490116..., which LLVM writes
-// as the double holding exactly that, 0x3FB99999A0000000. (LLVM rounds,
-// rather than a C++ (float) cast here, because C++ leaves the cast of a
-// double beyond float's range undefined; LLVM gives infinity.)
+// does at run time: 1/3 as an f32 is 0.3333333432674408..., which LLVM
+// prints as f0x3EAAAAAB, the float's own bits (a float that six significant
+// digits give back exactly, as 0.1's, it prints in decimal, 1.000000e-01).
+// (LLVM rounds, rather than a C++ (float) cast here, because C++ leaves the
+// cast of a double beyond float's range undefined; LLVM gives infinity.)
 static LLVMValueRef float_constant(LLVMContextRef c, Ir_Type t, u64 bits) {
     return LLVMConstReal(llvm_type(c, t), f64_from_bits(bits));
 }
