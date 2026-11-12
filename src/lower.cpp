@@ -12,7 +12,8 @@
 //   procedure, stored to where it's declared: its value, or zero (spec 6.4:
 //   variables start zeroed), or nothing at all for ---. Reading it is an
 //   IR_LOAD, assigning it an IR_STORE. Parameters are read-only, so they
-//   need no slot: a parameter is its value, %0 to %(count-1).
+//   need no slot: a parameter is its value, %0 to %(count-1) (after the
+//   hidden ones for struct results, below).
 // - A global variable is an Ir_Global of its type, whose first value (the
 //   constant the checker made sure it has, or zero) is in the program's
 //   file. It's read and written as a slot is, through its address, an
@@ -53,6 +54,25 @@
 //   integer they're ptrtoint and inttoptr. A bool through a pointer is the
 //   same i1 load and store as in a variable: one byte in memory, any byte
 //   but 0 read as true (the backend's, ir.h).
+// - Structs (spec 6.5's "How it's compiled") are aggregates: bytes in
+//   memory, never a value in a register. An aggregate's value, wherever
+//   lowering passes one around, is the address of memory holding it: a
+//   variable's slot of bytes (local N align A), a global's bytes, a
+//   parameter's pointer, a temporary. Reading one is taking that address,
+//   and putting one somewhere is a copy (a memmove: the two sides may be the
+//   same bytes); zeroing one is a zero. e.x is the address of e plus x's
+//   offset, a ptradd (none for a field at offset 0), loaded when x is a
+//   scalar; p.x through a pointer checks p first, as p.* does.
+// - A struct parameter is a ptr to a copy the caller makes in a temporary
+//   of its own, so the callee only reads it and nothing the callee does
+//   changes it. A struct result is a hidden ptr parameter, one per struct
+//   result in result order, before the visible ones; return copies the
+//   value into it, and the IR's results are the scalar results only. The
+//   caller passes a fresh temporary for each, never the place the result
+//   is going, and copies it there after the call (lower_call_results): so
+//   `g1, g2 = f();` gives the right answer even when f returns g2, g1. A
+//   literal is built in a temporary too, and copied: `v = Vec2.{v.y, v.x};`
+//   reads v whole before writing it.
 //
 // Blocks are numbered in the order they're made, and made in the order
 // their code comes in the source, so the printed IR reads like the program.
@@ -95,13 +115,15 @@ struct Lowering {
 };
 
 // The IR type of a checked type. Strings aren't values yet: a literal is
-// only ever the address of its bytes, passed or stored as a *u8.
+// only ever the address of its bytes, passed or stored as a *u8. An
+// aggregate's value is the address of its bytes, a ptr too.
 static Ir_Type ir_type_of(Type *t) {
     if (!t || t->kind == TYPE_VOID) return IR_VOID;
     if (t->kind == TYPE_BOOL) return IR_I1;
     // null always meets a pointer type before lowering (the checker reports
     // one that doesn't), but it's a pointer's 0 wherever it is.
     if (t->kind == TYPE_POINTER || t->kind == TYPE_STRING || t->kind == TYPE_NULL) return IR_PTR;
+    if (type_is_aggregate(t)) return IR_PTR;
     if (t->kind == TYPE_FLOAT) return t->size == 4 ? IR_F32 : IR_F64;
     RIG_ASSERT(t->kind == TYPE_INTEGER);
     switch (t->size) {
@@ -274,6 +296,77 @@ static s32 address_of(Lowering *l, Ast *decl) {
     Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
     addr->target = *index;
     return addr->result;
+}
+
+// A new stack slot for a value of type t; its address. A scalar's is a slot
+// of its IR type; an aggregate's a block of its bytes, at its alignment:
+//
+//     %n = local i64
+//     %n = local 8 align 4       (a Vec2)
+static s32 emit_slot(Lowering *l, Type *t) {
+    if (!type_is_aggregate(t)) return emit(l, IR_LOCAL, ir_type_of(t))->result;
+    Ir_Instr *local = emit(l, IR_LOCAL, IR_VOID);
+    local->constant = (u64)t->size;
+    local->align = (u32)t->align;
+    return local->result;
+}
+
+// The value %value, of type t, put into the memory at %to: a scalar
+// stored, an aggregate (%value the address of its bytes) copied whole. The
+// copy is a memmove, so `a = a;` and `x = p.*;` with p pointing at x copy
+// bytes onto themselves, which is fine.
+static void emit_put(Lowering *l, Type *t, s32 value, s32 to) {
+    if (!type_is_aggregate(t)) {
+        emit_store(l, ir_type_of(t), value, to);
+        return;
+    }
+    Ir_Instr *copy = emit(l, IR_COPY, IR_VOID);
+    copy->a = to;
+    copy->b = value;
+    copy->constant = (u64)t->size;
+}
+
+// The memory at %to, holding a t, set to zero (spec 6.4: variables start
+// zeroed): a scalar's 0 stored, an aggregate's bytes zeroed, its padding
+// too.
+static void emit_zero(Lowering *l, Type *t, s32 to) {
+    if (!type_is_aggregate(t)) {
+        Ir_Type type = ir_type_of(t);
+        emit_store(l, type, emit_constant(l, type, 0), to);
+        return;
+    }
+    Ir_Instr *zero = emit(l, IR_ZERO, IR_VOID);
+    zero->a = to;
+    zero->constant = (u64)t->size;
+}
+
+// The value of type t in the memory at %from: a scalar loaded; an
+// aggregate's value is its address, %from itself, and nothing is read until
+// it's copied somewhere.
+static s32 emit_get(Lowering *l, Type *t, s32 from) {
+    if (type_is_aggregate(t)) return from;
+    return emit_load(l, ir_type_of(t), from);
+}
+
+// The address of a field `offset` bytes into the struct at %base: %base
+// itself for the first field, at 0; otherwise
+//
+//     %offset = const i64 OFFSET
+//     %field = ptradd %base, %offset
+static s32 emit_field_address(Lowering *l, s32 base, s64 offset) {
+    if (offset == 0) return base;
+    return emit_binary(l, IR_PTRADD, IR_PTR, base, emit_constant(l, IR_I64, (u64)offset));
+}
+
+// How many of the procedure's results are aggregates: each is a hidden ptr
+// parameter, before the visible ones, so its visible parameters are numbered
+// from this count.
+static s32 aggregate_results(Ast_Proc *proc) {
+    s32 count = 0;
+    for (s64 i = 0; i < proc->results.count; i++) {
+        if (type_is_aggregate(proc->results[i]->type)) count++;
+    }
+    return count;
 }
 
 static s32 lower_expr(Lowering *l, Ast *e);
@@ -531,6 +624,8 @@ static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
     Type *from = cast->value->type, *to = cast->type;
     Ir_Type have = ir_type_of(from), want = ir_type_of(to);
     s32 v = lower_value(l, cast->value, from);
+    // A struct is only ever cast to its own type: the same bytes.
+    if (type_is_aggregate(from)) return v;
     if (type_is_pointer(from) && type_is_pointer(to)) return v;
     if (type_is_pointer(from)) return emit_convert(l, IR_PTRTOINT, IR_PTR, v, IR_I64);
     if (type_is_pointer(to) && from->kind == TYPE_INTEGER) return emit_convert(l, IR_INTTOPTR, IR_I64, v, IR_PTR);
@@ -630,11 +725,31 @@ static s32 lower_logical(Lowering *l, Ast_Binary *b) {
 
 static s32 lower_call(Lowering *l, Ast_Call *call);
 
+// The address of the field e.x. Through a pointer, p.x is p.*.x: p's value,
+// checked not to be null at the field's name (as p.* is at its '.'), before
+// anything is read or written. Otherwise e is a struct, whose value is its
+// address already: a variable's slot, a parameter's copy, a call's or a
+// literal's temporary, a field of an outer struct. Then x's offset is added.
+static s32 lower_member_address(Lowering *l, Ast_Member *m) {
+    Ast *operand = m->operand;
+    Type *t = operand->type;
+    s32 base;
+    if (type_is_pointer(t)) {
+        base = lower_value(l, operand, t);
+        emit_null_check(l, base, m->pos);
+        t = t->pointee;
+    } else {
+        base = lower_expr(l, operand);
+    }
+    return emit_field_address(l, base, t->fields[m->index].offset);
+}
+
 // The address of a place in memory (the checker's check_addressable): what
 // *e gives, and where an assignment to e stores. A variable's is its slot,
 // or its global's addr; p.*'s is p's value, once checked not to be null, at
-// the '.'. A place's operands, and its checks, are worked out here, before
-// any value an assignment stores (spec 6.5's order).
+// the '.'; a field's, its struct's plus the field's offset. A place's
+// operands, and its checks, are worked out here, before any value an
+// assignment stores (spec 6.5's order).
 static s32 lower_address(Lowering *l, Ast *e) {
     if (e->kind == AST_DEREF) {
         Ast *pointer = ((Ast_Deref *)e)->operand;
@@ -642,8 +757,35 @@ static s32 lower_address(Lowering *l, Ast *e) {
         emit_null_check(l, address, e->pos);
         return address;
     }
+    if (e->kind == AST_MEMBER) return lower_member_address(l, (Ast_Member *)e);
     RIG_ASSERT(e->kind == AST_NAME);  // a variable: the checker allowed nothing else
     return address_of(l, ((Ast_Name *)e)->decl);
+}
+
+// A struct literal, T.{a, b} or T.{y = b}, built in a temporary of its
+// own: zeroed first (the fields not given are zero, and so is the padding
+// between fields, which a copy then carries along), then each value given
+// put into its field, in the order written. Its value is the temporary's
+// address, copied from wherever it's used. Never built in the place it's
+// going: `v = Vec2.{v.y, v.x};` reads v's fields before the copy writes v.
+//
+//     %t = local 8 align 4
+//     zero %t, 8
+//     store f32 %a, %t           (x, at 0)
+//     %4 = const i64 4
+//     %5 = ptradd %t, %4
+//     store f32 %b, %5           (y, at 4)
+static s32 lower_literal(Lowering *l, Ast_Literal *literal) {
+    Type *t = literal->type;  // a struct: the checker gave an untyped literal the one it met
+    s32 temporary = emit_slot(l, t);
+    emit_zero(l, t, temporary);
+    for (s64 i = 0; i < literal->values.count; i++) {
+        s32 index = literal->names.count ? type_field_index(t, literal->names[i]) : (s32)i;
+        Type_Field *field = &t->fields[index];
+        s32 address = emit_field_address(l, temporary, field->offset);
+        emit_put(l, field->type, lower_value(l, literal->values[i], field->type), address);
+    }
+    return temporary;
 }
 
 // The value of an expression the checker didn't mark constant, of its own
@@ -658,11 +800,15 @@ static s32 lower_expr(Lowering *l, Ast *e) {
     case AST_CAST: return lower_cast(l, (Ast_Cast *)e);
     case AST_CALL: return lower_call(l, (Ast_Call *)e);
     case AST_NAME: {
+        // A parameter is its value (an aggregate's, the caller's copy's
+        // address); a variable is read from its slot.
         Ast *decl = ((Ast_Name *)e)->decl;
         if (decl->kind == AST_PARAM) return local_of(l, decl)->value;
-        return emit_load(l, ir_type_of(decl->type), address_of(l, decl));
+        return emit_get(l, decl->type, address_of(l, decl));
     }
-    case AST_DEREF: return emit_load(l, ir_type_of(e->type), lower_address(l, e));
+    case AST_DEREF: return emit_get(l, e->type, lower_address(l, e));
+    case AST_MEMBER: return emit_get(l, e->type, lower_member_address(l, (Ast_Member *)e));
+    case AST_LITERAL: return lower_literal(l, (Ast_Literal *)e);
     case AST_UNARY: {
         Ast_Unary *u = (Ast_Unary *)e;
         if (u->op == TOKEN_STAR) return lower_address(l, u->operand);
@@ -711,15 +857,65 @@ static s32 lower_expr(Lowering *l, Ast *e) {
     }
 }
 
-// A call's instruction; its value's number, or -1 when the callee returns
-// nothing.
-static s32 lower_call(Lowering *l, Ast_Call *call) {
+// A call; `results` gets one value per result of the callee, in order: a
+// scalar's IR value, or an aggregate's address.
+// - First, a temporary for each aggregate result, passed as the hidden
+//   parameters, before the arguments: the callee's return copies the result
+//   there. Never the place the result is going, which the callee might read
+//   (f returning g2, g1 for `g1, g2 = f();`): the caller copies the
+//   temporaries there once the call is done.
+// - Then the arguments, in order, each converted to its parameter's type;
+//   an aggregate one is copied into a temporary as soon as it's worked out,
+//   and the temporary's address passed. So the callee's parameter is the
+//   value as it was then, whatever happens to the variable it came from (the
+//   callee may change the global it was given).
+// - The scalar results are the call's values, consecutive (ir_emit_call).
+//
+//     v := make(3);              %0 = local 8 align 4      (v)
+//                                %1 = local 8 align 4      (the result)
+//                                %2 = const i64 3
+//                                call @make(%1, %2)
+//                                copy %0, %1, 8
+static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results) {
     Ast_Proc *callee = call->proc;
     s32 *index = table_get(&l->proc_index, callee->name);
     RIG_ASSERT(index);
-    Array<s32> args = {};
-    for (s64 i = 0; i < call->args.count; i++) array_add(&args, lower_value(l, call->args[i], callee->params[i]->type));
-    return ir_emit_call(l->module, l->proc, l->block, *index, args)->result;
+    Array<s32> args = {};  // the call instruction keeps it
+    for (s64 i = 0; i < callee->results.count; i++) {
+        Type *t = callee->results[i]->type;
+        if (type_is_aggregate(t)) array_add(&args, emit_slot(l, t));
+    }
+    s32 hidden = (s32)args.count;
+    for (s64 i = 0; i < call->args.count; i++) {
+        Type *t = callee->params[i]->type;
+        s32 value = lower_value(l, call->args[i], t);
+        if (type_is_aggregate(t)) {
+            s32 copy = emit_slot(l, t);
+            emit_put(l, t, value, copy);
+            value = copy;
+        }
+        array_add(&args, value);
+    }
+    s32 next = ir_emit_call(l->module, l->proc, l->block, *index, args)->result;
+    s32 temporary = 0;
+    for (s64 i = 0; i < callee->results.count; i++) {
+        if (type_is_aggregate(callee->results[i]->type)) {
+            array_add(results, args[temporary++]);
+        } else {
+            array_add(results, next++);
+        }
+    }
+    RIG_ASSERT(temporary == hidden);
+}
+
+// A call whose first result (if any) is wanted: its value, or -1 when the
+// callee returns nothing.
+static s32 lower_call(Lowering *l, Ast_Call *call) {
+    Array<s32> results = {};
+    lower_call_results(l, call, &results);
+    s32 first = results.count ? results[0] : -1;
+    array_free(&results);
+    return first;
 }
 
 static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source);
@@ -900,9 +1096,9 @@ static void lower_jump(Lowering *l, Ast_Jump *jump) {
 }
 
 // q, r := f(); a slot per name, as a variable's declaration makes, then
-// the call, whose results are consecutive values (ir_emit_call), each
-// stored into its name's slot. Each name has its result's own type, so
-// nothing is converted.
+// the call (lower_call_results), each result put into its name's slot: a
+// scalar stored, an aggregate copied from its temporary. Each name has its
+// result's own type, so nothing is converted.
 //
 //     %q = local i64
 //     %r = local i64
@@ -913,45 +1109,46 @@ static void lower_multi_var(Lowering *l, Ast_Multi_Var *multi) {
     Array<s32> slots = {};
     for (s64 i = 0; i < multi->vars.count; i++) {
         Ast_Var *var = multi->vars[i];
-        s32 slot = emit(l, IR_LOCAL, ir_type_of(var->type))->result;
+        s32 slot = emit_slot(l, var->type);
         array_add(&l->locals, {var, slot});
         array_add(&slots, slot);
     }
-    s32 first = lower_expr(l, multi->value);  // the checker made sure it's such a call
-    for (s64 i = 0; i < multi->vars.count; i++) {
-        emit_store(l, ir_type_of(multi->vars[i]->type), first + (s32)i, slots[i]);
-    }
+    Array<s32> results = {};
+    lower_call_results(l, (Ast_Call *)multi->value, &results);  // the checker made sure it's such a call
+    for (s64 i = 0; i < multi->vars.count; i++) emit_put(l, multi->vars[i]->type, results[i], slots[i]);
+    array_free(&results);
     array_free(&slots);
 }
 
-// a, b = f(); the call first, then each result stored into its target, in
+// a, b = f(); the call first, then each result put into its target, in
 // order, widened first when the target's type is wider (the checker made
-// sure each converts). The targets are read only after the call, so
-// `a, b = swap(a, b);` passes the old values and stores the new ones; each
-// target's place (and its null check, for p.*) is found just before its
-// store.
+// sure each converts), or copied from its temporary when it's an aggregate.
+// The targets are read only after the call, so `a, b = swap(a, b);` passes
+// the old values and stores the new ones; each target's place (and its null
+// check, for p.*) is found just before its store.
 static void lower_multi_assign(Lowering *l, Ast_Assign *assign) {
     Ast_Call *call = (Ast_Call *)assign->value;
-    s32 first = lower_expr(l, call);
+    Array<s32> results = {};
+    lower_call_results(l, call, &results);
     for (s64 i = 0; i < assign->targets.count; i++) {
         Ast *target = assign->targets[i];  // a place in memory: checked
         s32 address = lower_address(l, target);
-        s32 value = resize(l, first + (s32)i, call->proc->results[i]->type, ir_type_of(target->type));
-        emit_store(l, ir_type_of(target->type), value, address);
+        s32 value = resize(l, results[i], call->proc->results[i]->type, ir_type_of(target->type));
+        emit_put(l, target->type, value, address);
     }
+    array_free(&results);
 }
 
 static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     switch (s->kind) {
     case AST_VAR: {
         Ast_Var *var = (Ast_Var *)s;
-        Ir_Type t = ir_type_of(var->type);
-        s32 slot = emit(l, IR_LOCAL, t)->result;
+        s32 slot = emit_slot(l, var->type);
         array_add(&l->locals, {var, slot});
         if (var->value) {
-            emit_store(l, t, lower_value(l, var->value, var->type), slot);
+            emit_put(l, var->type, lower_value(l, var->value, var->type), slot);
         } else if (!var->is_uninitialized) {
-            emit_store(l, t, emit_constant(l, t, 0), slot);
+            emit_zero(l, var->type, slot);
         }
         break;
     }
@@ -973,19 +1170,30 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
         if (assign->op == TOKEN_EQUAL) {
             value = lower_value(l, assign->value, type);
         } else {
-            // x op= e is x = x op e, x read once.
+            // x op= e is x = x op e, x read once (only numbers and
+            // pointers take an operator: never an aggregate).
             Ir_Instr *load = emit(l, IR_LOAD, t);
             load->a = slot;
             value = lower_operation(l, compound_operator(assign->op), type, load->result, assign->value, assign->pos);
         }
-        emit_store(l, t, value, slot);
+        emit_put(l, type, value, slot);
         break;
     }
     case AST_RETURN: {
+        // Each aggregate value is copied into its hidden parameter as soon
+        // as it's worked out (the caller's temporary, which nothing else can
+        // reach); the scalar ones are the ret's values.
         Ast_Return *ret = (Ast_Return *)s;
         Array<s32> values = {};
+        s32 hidden = 0;
         for (s64 i = 0; i < ret->values.count; i++) {
-            array_add(&values, lower_value(l, ret->values[i], source->results[i]->type));
+            Type *t = source->results[i]->type;
+            s32 value = lower_value(l, ret->values[i], t);
+            if (type_is_aggregate(t)) {
+                emit_put(l, t, value, hidden++);
+            } else {
+                array_add(&values, value);
+            }
         }
         emit(l, IR_RET, IR_VOID)->args = values;
         break;
@@ -1010,6 +1218,36 @@ static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source) {
     }
 }
 
+// The bytes of a constant value of type t, written at `bytes` as they lie
+// in memory (little-endian, as both of Rig's targets are): a struct
+// literal's values at their fields' offsets (the fields not given, and the
+// padding, stay zero), an integer's low bytes, a bool's 0 or 1, a float's
+// IEEE 754 bits (a float32's rounded from the double the constant keeps, as
+// the backend rounds an f32 constant), a pointer's address (null's zeros).
+// The checker made sure the value is a constant, or a literal of them
+// (check_global_value).
+static void constant_bytes(u8 *bytes, Type *t, Ast *value) {
+    if (type_is_aggregate(t)) {
+        RIG_ASSERT(value->kind == AST_LITERAL);
+        Ast_Literal *literal = (Ast_Literal *)value;
+        for (s64 i = 0; i < literal->values.count; i++) {
+            s32 index = literal->names.count ? type_field_index(t, literal->names[i]) : (s32)i;
+            Type_Field *field = &t->fields[index];
+            constant_bytes(bytes + field->offset, field->type, literal->values[i]);
+        }
+        return;
+    }
+    RIG_ASSERT(value->is_constant);
+    u64 bits = value->constant;
+    if (t->kind == TYPE_FLOAT && t->size == 4) {
+        f32 single = (f32)f64_from_bits(bits);
+        u32 single_bits;
+        memcpy(&single_bits, &single, sizeof single_bits);
+        bits = single_bits;
+    }
+    for (s64 k = 0; k < t->size; k++) bytes[k] = (u8)(bits >> (8 * k));
+}
+
 Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
     Ir_Module *m = arena_new<Ir_Module>(a);
     Lowering l = {};
@@ -1022,15 +1260,29 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
     // type. Its first value is the constant the checker made sure it has
     // (an integer's bits cut to the type's width, a float's whole, as an
     // IR_CONST keeps them), or zero: without a value, or with ---, since a
-    // global isn't on the stack and nothing else was ever there. Constants
-    // are skipped: their uses are constants.
+    // global isn't on the stack and nothing else was ever there. A struct
+    // is a global of bytes, its literal's (constant_bytes) or zeros.
+    // Constants and structs' declarations are skipped: a constant's uses
+    // are constants, and a struct is only a type.
     for (s64 i = 0; i < f->globals.count; i++) {
         if (f->globals[i]->kind != AST_VAR) continue;
         Ast_Var *var = (Ast_Var *)f->globals[i];
         Ir_Global g = {};
         g.name = var->name;
-        g.type = ir_type_of(var->type);
-        if (var->value) {
+        if (type_is_aggregate(var->type)) {
+            g.type = IR_VOID;
+            g.is_variable = true;
+            g.size = var->type->size;
+            g.align = (u32)var->type->align;
+            if (var->value) {
+                u8 *bytes = (u8 *)arena_alloc(a, var->type->size, 1);  // zeroed
+                constant_bytes(bytes, var->type, var->value);
+                g.bytes = {bytes, var->type->size};
+            }
+        } else {
+            g.type = ir_type_of(var->type);
+        }
+        if (var->value && g.type != IR_VOID) {
             RIG_ASSERT(var->value->is_constant);
             g.initial = var->value->constant;
             if (g.type != IR_PTR && !ir_is_float(g.type) && ir_bits(g.type) < 64) {
@@ -1051,13 +1303,20 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
         bool is_main = !source->is_foreign && string_eq(source->name, str("main"));
         Ir_Proc *p = ir_new_proc(m, a, is_main ? str("__rig_main") : source->name);
         p->is_foreign = source->is_foreign;
+        // An aggregate result is a hidden ptr parameter, before the visible
+        // ones; an aggregate parameter a ptr to the caller's copy. The IR's
+        // results are the scalar results only. (A foreign procedure has
+        // neither: the checker allows no struct across C's boundary yet.)
+        for (s64 k = 0; k < source->results.count; k++) {
+            if (type_is_aggregate(source->results[k]->type)) ir_add_param(p, IR_PTR, IR_EXT_NONE);
+        }
         for (s64 k = 0; k < source->params.count; k++) {
             Type *t = source->params[k]->type;
             ir_add_param(p, ir_type_of(t), ir_ext_of(t));
         }
         for (s64 k = 0; k < source->results.count; k++) {
             Type *t = source->results[k]->type;
-            array_add(&p->results, {ir_type_of(t), ir_ext_of(t)});
+            if (!type_is_aggregate(t)) array_add(&p->results, {ir_type_of(t), ir_ext_of(t)});
         }
         table_put(&l.proc_index, source->name, (s32)i);
     }
@@ -1069,7 +1328,10 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
         l.proc = m->procs[i];
         l.block = ir_new_block(a, l.proc);
         l.locals.count = 0;
-        for (s64 k = 0; k < source->params.count; k++) array_add(&l.locals, {(Ast *)source->params[k], (s32)k});
+        s32 hidden = aggregate_results(source);
+        for (s64 k = 0; k < source->params.count; k++) {
+            array_add(&l.locals, {(Ast *)source->params[k], hidden + (s32)k});
+        }
         lower_block(&l, source->body, source);
         if (!ir_block_has_ended(l.proc, l.block)) {
             // Control reaches the '}'. The checker made sure that only

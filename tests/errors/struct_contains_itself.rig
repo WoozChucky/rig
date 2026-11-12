@@ -1,0 +1,12 @@
+// A struct can't hold itself by value: it would be bigger than itself. It
+// can hold a pointer to itself (spec 6.5). The message is at the struct
+// whose layout was being worked out when the circle closed, and nothing
+// that uses the struct says more.
+Node :: struct {
+    value: int;
+    next: Node;
+}
+
+main :: () {
+    n : Node;
+}
