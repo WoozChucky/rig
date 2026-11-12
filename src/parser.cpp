@@ -124,9 +124,10 @@ static s32 open_levels(Parser *p) {
 }
 
 // The text read reaches `levels` levels: kept in p->deepest if it's the
-// most so far. Only levels the limit has checked are reached: a name
-// read a level down by size_of or a cast (parse_type_below) is no level,
-// and reaches none.
+// most so far. A name read a level down by size_of or a cast
+// (parse_type_below) is at that level, which the limit doesn't check, so
+// it's counted as MAX_DEPTH at most: a struct it names is then too deep to
+// work out there, and that's the checker's to say.
 static void reach(Parser *p, s32 levels) {
     if (levels > p->deepest) p->deepest = levels;
 }
@@ -183,6 +184,7 @@ static bool set_height(Parser *p, s32 height) {
 // checks the levels before each '*' or '[' it opens.
 static Ast_Type *parse_type_below(Parser *p) {
     p->levels++;
+    reach(p, open_levels(p) < MAX_DEPTH ? open_levels(p) : MAX_DEPTH);
     Ast_Type *type = parse_type(p);
     p->levels--;
     return type;
