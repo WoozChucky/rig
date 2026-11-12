@@ -1,0 +1,31 @@
+// Built with --no-bounds-checks (no_bounds_checks.flags): an index is not
+// checked, so one past the end of a struct's array reads the field after
+// it. Memory nothing checks, as C has it.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+print_int :: (n: int) {
+    if n < 0 {
+        putchar(45);
+        print_int(-n);
+        return;
+    }
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+println :: (n: int) {
+    print_int(n);
+    putchar(10);
+}
+
+Holder :: struct {
+    a: [4]int;
+    b: int;
+}
+
+main :: () {
+    h : Holder;
+    h.b = 42;
+    i := 4;
+    println(h.a[i]);
+}
