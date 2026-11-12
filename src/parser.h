@@ -10,24 +10,33 @@
 //   param       = IDENT ':' type
 //   type        = '*' type | IDENT
 //   block       = '{' statement* '}'
-//   statement   = declaration | assignment | 'return' [expression] ';' | block | expression ';'
+//   statement   = declaration | assignment | 'return' [expression] ';' | block
+//               | if | while | for | 'break' ';' | 'continue' ';' | expression ';'
 //   declaration = IDENT ':' type ['=' (expression | '---')] ';'
 //               | IDENT ':=' expression ';'
 //               | IDENT '::' expression ';'
 //   assignment  = expression ('=' | '+=' | '-=' | '*=' | '&=' | '|=' | '^=' | '<<=' | '>>=') expression ';'
+//   if          = 'if' expression block ['else' (block | if)]
+//   while       = 'while' expression block
+//   for         = 'for' [IDENT ':'] expression '..' expression block
 //   expression  = unary { BINARY_OPERATOR unary }, binary operators left-associative, tightest last:
-//                   4: + - | ^      5: * << >> &
-//   unary       = ('-' | '~') unary | postfix
+//                   1: ||   2: &&   3: == != < <= > >=   4: + - | ^   5: * << >> &
+//   unary       = ('-' | '~' | '!') unary | postfix
 //   postfix     = primary { '(' [expression {',' expression}] ')' }
-//   primary     = IDENT | INT | STRING | '(' expression ')'
+//   primary     = IDENT | INT | STRING | 'true' | 'false' | '(' expression ')'
 //
-// The precedence levels are Go's (spec 6.1); milestone 2a's later tasks add
-// 1: ||  2: &&  3: == != < <= > >=, and / % at 5. A statement is a
-// declaration when it starts with IDENT and then ':', ':=' or '::';
-// otherwise it's an expression, and an assignment if '=' or a compound
-// operator follows. Inside a body, `x := ---;` is "'---' needs a type, as in
-// x : int = ---;" (there's no value to take the type from), and `helper ::
-// () {` is "procedures can only be declared at the top level, for now".
+// The precedence levels are Go's (spec 6.1); a later task of milestone 2a
+// adds / and % at 5. A statement is a declaration when it starts with IDENT
+// and then ':', ':=' or '::'; otherwise, unless a keyword starts it, it's an
+// expression, and an assignment if '=' or a compound operator follows.
+// Inside a body, `x := ---;` is "'---' needs a type, as in x : int = ---;"
+// (there's no value to take the type from), and `helper :: () {` is
+// "procedures can only be declared at the top level, for now".
+//
+// The bodies of if, else, while and for are always blocks in braces (spec
+// 6.1), and a condition needs no parentheses: the body's '{' ends it. A for
+// without '..' after its first expression is "'for' needs a range, as in
+// for 0..9, for now", at that expression.
 //
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;
