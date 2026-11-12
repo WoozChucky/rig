@@ -228,7 +228,8 @@ struct Ir_Proc {
 struct Ir_Module {
     Array<Ir_Global> globals;
     Array<Ir_Proc *> procs;  // the file's, in order, then __rig_bounds_failed when a bounds check
-                             // calls it (lower.cpp), then the entry point
+                             // calls it and __rig_string_equal when == on strings does (lower.cpp,
+                             // in the order first needed), then the entry point
 };
 
 // Whether t is f32 or f64.
