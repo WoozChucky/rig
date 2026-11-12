@@ -46,7 +46,15 @@ jobs:
       - name: Unit tests
         run: bin/unit-tests --self-test && bin/unit-tests
 
+      # gdb, for the debugger tests (tests/debug): GitHub's Ubuntu image
+      # has none. Required, so a gdb that can't start fails the run rather
+      # than skipping them.
+      - name: gdb
+        run: sudo apt-get update && sudo apt-get install -y gdb && gdb --version | head -1
+
       - name: End-to-end tests
+        env:
+          RIG_DEBUGGER_TESTS: required
         run: bin/run-tests
 
       # The VS Code extension's checks (editors/vscode/test/check.js): not
