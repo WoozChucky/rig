@@ -47,8 +47,10 @@ Ir_Instr *ir_emit(Ir_Proc *p, s32 block, Ir_Op op, Ir_Type type) {
     instr.op = op;
     instr.type = type;
     // A local's value is its address, a ptr, even when its type is void (a
-    // block of bytes); a copy or a zero, like a store, gives nothing.
-    bool gives_value = op == IR_LOCAL || (type != IR_VOID && op != IR_STORE && !is_terminator(op));
+    // block of bytes). A store, a copy or a zero writes memory and gives
+    // nothing, whatever its type.
+    bool writes_memory = op == IR_STORE || op == IR_COPY || op == IR_ZERO;
+    bool gives_value = op == IR_LOCAL || (type != IR_VOID && !writes_memory && !is_terminator(op));
     instr.result = gives_value ? p->value_count++ : -1;
     instr.a = instr.b = instr.c = -1;
     instr.target = instr.target2 = -1;

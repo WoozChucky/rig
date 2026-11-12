@@ -610,12 +610,31 @@ TEST(ir_prints_memory_operations) {
     arena_free(&a);
 }
 
+TEST(copy_and_zero_never_give_a_value) {
+    // Like a store, a copy or a zero writes memory and gives nothing, by its
+    // op: the type it's emitted with doesn't number a value nobody defines.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(m, &a, "f", IR_VOID);
+    s32 at = ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    s32 b = ir_new_block(&a, p);
+    s32 values = p->value_count;
+    Ir_Instr *copy = ir_emit(p, b, IR_COPY, IR_PTR);
+    copy->a = copy->b = at;
+    CHECK_EQ(copy->result, -1);
+    Ir_Instr *zero = ir_emit(p, b, IR_ZERO, IR_I64);
+    zero->a = at;
+    CHECK_EQ(zero->result, -1);
+    CHECK_EQ(p->value_count, values);
+    arena_free(&a);
+}
+
 TEST(ir_prints_byte_globals) {
     // A variable of bytes prints its size and alignment, then `zero` when
     // every byte is 0 and it holds no address; otherwise its bytes, as a
     // string literal's print, and where each address goes. Here @table is
-    // a string's 24 bytes as 2b lays them out, its count (3) first, then
-    // where its bytes are (@str.0, a later global), then 8 more bytes.
+    // 24 bytes: a count (3) in the first 8, the address of @str.0 (a later
+    // global) at offset 8, then 8 zero bytes.
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
     add_byte_global(m, "origin", 16, 8);
