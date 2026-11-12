@@ -160,42 +160,53 @@ Type *type_view_of(Type *element) {
     return element->view;
 }
 
-// The prefix a pointer, array or view puts before the name of the type it
-// holds ("*", "[3]", "[]"), written into `out`, which has room for any; its
-// length. 0 for any other type, whose name is its own.
-static int name_prefix(Type *t, char out[32]) {
+// What a message names t after: a pointer's target, an array's or a view's
+// elements; null for any other type, named by its own name alone (a string
+// has u8 elements, but is "string").
+static Type *named_after(Type *t) {
     switch (t->kind) {
-    case TYPE_POINTER: return snprintf(out, 32, "*");
-    case TYPE_ARRAY: return snprintf(out, 32, "[%lld]", (long long)t->count);
-    case TYPE_VIEW: return snprintf(out, 32, "[]");
-    default: return 0;
+    case TYPE_POINTER: return t->pointee;
+    case TYPE_ARRAY:
+    case TYPE_VIEW: return t->element;
+    default: return nullptr;
     }
 }
 
-// The type a pointer, array or view holds.
-static Type *held_type(Type *t) {
-    return t->kind == TYPE_POINTER ? t->pointee : t->element;
+// What t, named after another type, puts in front of that one's name: "*",
+// "[3]" or "[]". Written at `to`, which has room for it and the zero
+// snprintf adds, or only measured, with `to` null and no room; its length
+// either way.
+static s64 name_prefix(Type *t, char *to, u64 room) {
+    switch (t->kind) {
+    case TYPE_POINTER: return snprintf(to, room, "*");
+    case TYPE_ARRAY: return snprintf(to, room, "[%lld]", (long long)t->count);
+    default: return snprintf(to, room, "[]");
+    }
 }
 
-// A name reads from the outside in: each level's prefix, then the name of
-// the innermost type, one with a name of its own. It's built by walking down
-// the chain twice, once to measure and once to write, not recursively: a
-// type made by `*x` may be any number of levels deep (the parser's limit,
-// spec 6.1, bounds only the types a program writes), so neither the time
-// nor the stack may grow faster than the name itself.
+// The prefixes, outermost first, then the innermost type's name: **[3]u8 is
+// "*", "*", "[3]" and "u8". Written in a loop, down the chain twice, once
+// to measure and once to write, rather than by naming what t is made of and
+// adding to that: a type may be any number of levels deep (the parser
+// limits the types a program writes, not those the checker infers: each
+// `p2 := *p1;` is a level deeper), so a call per level could run out of
+// stack, and each level copying the name below it would take time growing
+// with the square of the levels. (It was once written that way, worse: as
+// string_printf(a, "*" STR_FMT, STR_ARG(type_name(a, t->pointee))), and
+// STR_ARG uses its argument twice, so each level named the rest twice,
+// doubling the time per level: a message about a type 30 levels deep never
+// came.)
 String type_name(Arena *a, Type *t) {
-    char prefix[32];
-    s64 count = 0;
-    Type *u = t;
-    for (int n; (n = name_prefix(u, prefix)) > 0; u = held_type(u)) count += n;
-    count += u->name.count;
-    char *name = (char *)arena_alloc(a, (u64)count + 1, 1);
-    char *at = name;
-    for (int n; (n = name_prefix(t, prefix)) > 0; t = held_type(t)) {
-        memcpy(at, prefix, (size_t)n);
-        at += n;
+    s64 length = 0;
+    Type *inner = t;
+    for (; named_after(inner); inner = named_after(inner)) length += name_prefix(inner, nullptr, 0);
+    if (inner == t) return t->name;
+    length += inner->name.count;
+    char *name = (char *)arena_alloc(a, (u64)length + 1, 1);
+    s64 at = 0;
+    for (Type *level = t; level != inner; level = named_after(level)) {
+        at += name_prefix(level, name + at, (u64)(length + 1 - at));
     }
-    if (t->name.count) memcpy(at, t->name.data, (size_t)t->name.count);
-    at[t->name.count] = 0;  // zero-terminated past count, as string_printf's results
-    return {(const u8 *)name, count};
+    if (inner->name.count > 0) memcpy(name + at, inner->name.data, (size_t)inner->name.count);
+    return {(const u8 *)name, length};
 }
