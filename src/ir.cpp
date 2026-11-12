@@ -46,7 +46,9 @@ Ir_Instr *ir_emit(Ir_Proc *p, s32 block, Ir_Op op, Ir_Type type) {
     Ir_Instr instr = {};
     instr.op = op;
     instr.type = type;
-    bool gives_value = type != IR_VOID && op != IR_STORE && !is_terminator(op);
+    // A local's value is its address, a ptr, even when its type is void (a
+    // block of bytes); a copy or a zero, like a store, gives nothing.
+    bool gives_value = op == IR_LOCAL || (type != IR_VOID && op != IR_STORE && !is_terminator(op));
     instr.result = gives_value ? p->value_count++ : -1;
     instr.a = instr.b = instr.c = -1;
     instr.target = instr.target2 = -1;
@@ -136,6 +138,11 @@ static const char *ir_op_name(Ir_Op op) {
     // LLVM's intrinsics' names, llvm.fptosi.sat without the llvm.
     case IR_FPTOSI_SAT: return "fptosi.sat";
     case IR_FPTOUI_SAT: return "fptoui.sat";
+    case IR_PTRADD: return "ptradd";
+    case IR_PTRTOINT: return "ptrtoint";
+    case IR_INTTOPTR: return "inttoptr";
+    case IR_COPY: return "copy";
+    case IR_ZERO: return "zero";
     case IR_JUMP: return "jump";
     case IR_BRANCH: return "branch";
     case IR_RET: return "ret";
@@ -229,8 +236,7 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr) {
             out(p, "%s %s %llu", op, type, (unsigned long long)instr->constant);
         }
         break;
-    case IR_ADDR:
-    case IR_PANIC: out(p, "%s @" STR_FMT, op, STR_ARG(m->globals[instr->target].name)); break;
+    case IR_ADDR: out(p, "%s @" STR_FMT, op, STR_ARG(m->globals[instr->target].name)); break;
     case IR_CALL:
         out(p, "%s @" STR_FMT "(", op, STR_ARG(m->procs[instr->target]->name));
         out_values(p, instr->args);
@@ -244,8 +250,21 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr) {
     case IR_SITOFP:
     case IR_UITOFP:
     case IR_FPTOSI_SAT:
-    case IR_FPTOUI_SAT: out(p, "%s %s %%%d to %s", op, ir_type_name(instr->from), instr->a, type); break;
-    case IR_LOCAL: out(p, "%s %s", op, type); break;
+    case IR_FPTOUI_SAT:
+    case IR_PTRTOINT:
+    case IR_INTTOPTR: out(p, "%s %s %%%d to %s", op, ir_type_name(instr->from), instr->a, type); break;
+    case IR_LOCAL:
+        if (instr->type == IR_VOID) {
+            out(p, "%s %llu align %u", op, (unsigned long long)instr->constant, instr->align);
+        } else {
+            out(p, "%s %s", op, type);
+        }
+        break;
+    // The memory operations' operands are ptrs (and ptradd's offset an
+    // i64), so they print no type.
+    case IR_PTRADD: out(p, "%s %%%d, %%%d", op, instr->a, instr->b); break;
+    case IR_COPY: out(p, "%s %%%d, %%%d, %llu", op, instr->a, instr->b, (unsigned long long)instr->constant); break;
+    case IR_ZERO: out(p, "%s %%%d, %llu", op, instr->a, (unsigned long long)instr->constant); break;
     case IR_LOAD:
     case IR_FNEG: out(p, "%s %s %%%d", op, type, instr->a); break;
     case IR_STORE:
@@ -276,7 +295,41 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr) {
         if (instr->args.count) out(p, " ");
         out_values(p, instr->args);
         break;
+    case IR_PANIC:
+        // The message is a string literal's bytes, or computed: a ptr and a
+        // count.
+        if (instr->target >= 0) {
+            out(p, "%s @" STR_FMT, op, STR_ARG(m->globals[instr->target].name));
+        } else {
+            out(p, "%s %%%d, %%%d", op, instr->a, instr->b);
+        }
+        break;
     case IR_UNREACHABLE: out(p, "%s", op); break;
+    }
+    out(p, "\n");
+}
+
+// A variable of bytes: its size and alignment, then `zero` when it's all
+// zeros, or else its `size` bytes (the ones it was given, then zeros) and
+// where each address goes:
+//   global @origin: 16 align 8 = zero
+//   global @greeting: 16 align 8 = "\02\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00" reloc 8 @str.0
+static void out_byte_global(Printer *p, Ir_Module *m, Ir_Global *g) {
+    RIG_ASSERT(g->bytes.count <= g->size);
+    out(p, "global @" STR_FMT ": %lld align %u = ", STR_ARG(g->name), (long long)g->size, g->align);
+    bool all_zero = g->relocs.count == 0;
+    for (s64 i = 0; i < g->bytes.count && all_zero; i++) all_zero = g->bytes.data[i] == 0;
+    if (all_zero) {
+        out(p, "zero\n");
+        return;
+    }
+    out(p, "\"");
+    out_bytes(p, g->bytes);
+    for (s64 i = g->bytes.count; i < g->size; i++) out(p, "\\00");
+    out(p, "\"");
+    for (s64 i = 0; i < g->relocs.count; i++) {
+        Ir_Reloc r = g->relocs[i];
+        out(p, " reloc %lld @" STR_FMT, (long long)r.offset, STR_ARG(m->globals[r.global].name));
     }
     out(p, "\n");
 }
@@ -290,7 +343,10 @@ String ir_print(Arena *a, Ir_Module *m) {
     Printer p = {};
     for (s64 i = 0; i < m->globals.count; i++) {
         Ir_Global *g = &m->globals[i];
-        if (g->type == IR_VOID) {
+        if (g->type == IR_VOID && g->is_variable) {
+            out_byte_global(&p, m, g);
+        } else if (g->type == IR_VOID) {
+            // A string literal's constant bytes.
             out(&p, "global @" STR_FMT " = \"", STR_ARG(g->name));
             out_bytes(&p, g->bytes);
             out(&p, "\"\n");

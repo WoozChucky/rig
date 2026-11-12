@@ -69,6 +69,20 @@ static LLVMTypeRef llvm_type(LLVMContextRef c, Ir_Type t) {
     return nullptr;
 }
 
+// The type a value of IR type t has in memory: its own, but for a bool (an
+// i1), which is a byte there, C's _Bool. LLVM's own i1 in memory is a byte
+// too, but loading one is undefined unless the byte is 0 or 1, and a byte C
+// wrote or a pointer cast reached may be anything; so a slot or a global of
+// a bool is an i8, stored as 0 or 1 and read as byte != 0 (build_instr).
+static LLVMTypeRef memory_type(LLVMContextRef c, Ir_Type t) {
+    return t == IR_I1 ? LLVMInt8TypeInContext(c) : llvm_type(c, t);
+}
+
+// An array of n bytes, [n x i8]: a local of bytes, or a run of a global's.
+static LLVMTypeRef bytes_type(LLVMContextRef c, s64 n) {
+    return LLVMArrayType2(LLVMInt8TypeInContext(c), (u64)n);
+}
+
 // What a function returns: void for no result, the type of one, and for
 // several an LLVM literal struct of their types, { i64, i64 }, returned
 // whole. Only Rig's own procedures have several, so no C code ever sees
@@ -149,18 +163,67 @@ static void add_function_attribute(LLVMContextRef c, LLVMValueRef function, cons
     LLVMAddAttributeAtIndex(function, LLVMAttributeFunctionIndex, LLVMCreateEnumAttribute(c, kind, 0));
 }
 
-// Whether any procedure of the module has an IR_PANIC.
-static bool module_panics(Ir_Module *m) {
+// Marks a function the module defines (not one it only declares) with what
+// every definition needs on the target.
+//
+// On Linux, that's probing the stack: "probe-stack"="inline-asm", what
+// clang's -fstack-clash-protection sets. Below the stack is a guard page,
+// which no program may touch, so a stack that grows into it crashes rather
+// than overwriting whatever memory lies below. A function whose frame is
+// bigger than a page (a [100000]u8 local) moves the stack pointer past the
+// guard page in one step, and its first write could land beyond it, in
+// another thread's stack or the heap, with no crash. With the attribute
+// LLVM touches each page of a big frame in order, from the top, so the
+// guard page is always hit first. Windows' code does this already: LLVM
+// calls __chkstk for a frame bigger than a page on any Windows target,
+// which touches every page the same way.
+static void mark_definition(Backend *b, LLVMValueRef function) {
+    if (b->target != TARGET_LINUX_X64) return;
+    const char *key = "probe-stack", *value = "inline-asm";
+    LLVMAttributeRef attribute =
+        LLVMCreateStringAttribute(b->context, key, (unsigned)strlen(key), value, (unsigned)strlen(value));
+    LLVMAddAttributeAtIndex(function, LLVMAttributeFunctionIndex, attribute);
+}
+
+// Whether any procedure of the module has an instruction of operation op.
+static bool module_has(Ir_Module *m, Ir_Op op) {
     for (s64 i = 0; i < m->procs.count; i++) {
         Ir_Proc *p = m->procs[i];
         for (s64 k = 0; k < p->blocks.count; k++) {
             Ir_Block *block = p->blocks[k];
             for (s64 n = 0; n < block->instrs.count; n++) {
-                if (block->instrs[n].op == IR_PANIC) return true;
+                if (block->instrs[n].op == op) return true;
             }
         }
     }
     return false;
+}
+
+// The C library's memmove, memset and memcpy, declared before the program's
+// own functions, in a module that copies or zeroes memory:
+//
+//   declare ptr @memmove(ptr, ptr, i64)
+//   declare ptr @memset(ptr, i32, i64)
+//   declare ptr @memcpy(ptr, ptr, i64)
+//
+// IR_COPY and IR_ZERO are LLVM's llvm.memmove and llvm.memset intrinsics,
+// which LLVM makes into stores when the size is small and otherwise into
+// calls to C's memmove and memset (or memcpy, when it can prove the two
+// sides don't overlap), by name. Nothing in the module calls these
+// declarations; they're here to take the names, as build_runtime takes
+// write and exit: a program's own procedure called memset is then the one
+// LLVM renames (memset.1), so LLVM's call goes to C's memset and not to the
+// program's. (size_t is 64 bits on both targets, and C's int 32.)
+static void declare_memory_functions(Backend *b) {
+    LLVMContextRef c = b->context;
+    LLVMTypeRef ptr = LLVMPointerTypeInContext(c, 0), i32 = LLVMInt32TypeInContext(c),
+                i64 = LLVMInt64TypeInContext(c);
+    LLVMTypeRef move_params[] = {ptr, ptr, i64};
+    LLVMTypeRef move_type = LLVMFunctionType(ptr, move_params, 3, 0);
+    LLVMAddFunction(b->module, "memmove", move_type);
+    LLVMTypeRef set_params[] = {ptr, i32, i64};
+    LLVMAddFunction(b->module, "memset", LLVMFunctionType(ptr, set_params, 3, 0));
+    LLVMAddFunction(b->module, "memcpy", move_type);
 }
 
 // The runtime: the code a program needs that it didn't write. So far one
@@ -212,6 +275,7 @@ static void build_runtime(Backend *b) {
     b->panic = LLVMAddFunction(b->module, "__rig_panic", b->panic_type);
     LLVMSetLinkage(b->panic, LLVMInternalLinkage);
     add_function_attribute(c, b->panic, "noreturn");
+    mark_definition(b, b->panic);
 
     LLVMBuilderRef builder = LLVMCreateBuilderInContext(c);
     LLVMPositionBuilderAtEnd(builder, LLVMAppendBasicBlockInContext(c, b->panic, "entry"));
@@ -403,8 +467,18 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
                              llvm_type(c, instr->type));
         break;
     case IR_LOCAL: return;  // its alloca is already in the entry block (build_body)
-    case IR_LOAD: v = LLVMBuildLoad2(builder, llvm_type(c, instr->type), value(body, instr->a), ""); break;
-    case IR_STORE: LLVMBuildStore(builder, value(body, instr->a), value(body, instr->b)); break;
+    case IR_LOAD:
+        v = LLVMBuildLoad2(builder, memory_type(c, instr->type), value(body, instr->a), "");
+        // A bool is a byte in memory (memory_type): any byte but 0 is true.
+        if (instr->type == IR_I1) v = LLVMBuildICmp(builder, LLVMIntNE, v, LLVMConstNull(LLVMTypeOf(v)), "");
+        break;
+    case IR_STORE: {
+        // A bool is stored as the byte 0 or 1.
+        LLVMValueRef stored = value(body, instr->a);
+        if (instr->type == IR_I1) stored = LLVMBuildZExt(builder, stored, memory_type(c, IR_I1), "");
+        LLVMBuildStore(builder, stored, value(body, instr->b));
+        break;
+    }
     case IR_ADD:
     case IR_SUB:
     case IR_MUL:
@@ -437,6 +511,31 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
     case IR_SELECT:
         v = LLVMBuildSelect(builder, value(body, instr->c), value(body, instr->a), value(body, instr->b), "");
         break;
+    case IR_PTRADD: {
+        // getelementptr i8, ptr %a, i64 %b: the address %b bytes on. Without
+        // inbounds (LLVMBuildGEP2 sets no flag), which would make an address
+        // outside the object %a points into poison: Rig's pointer arithmetic
+        // may go anywhere, and only a load or store through the result can
+        // be wrong (spec 6.4).
+        LLVMValueRef offset = value(body, instr->b);
+        v = LLVMBuildGEP2(builder, LLVMInt8TypeInContext(c), value(body, instr->a), &offset, 1, "");
+        break;
+    }
+    case IR_PTRTOINT: v = LLVMBuildPtrToInt(builder, value(body, instr->a), llvm_type(c, instr->type), ""); break;
+    case IR_INTTOPTR: v = LLVMBuildIntToPtr(builder, value(body, instr->a), llvm_type(c, instr->type), ""); break;
+    case IR_COPY:
+        // llvm.memmove, not llvm.memcpy, which would assume the two sides
+        // don't overlap: Rig's `a = a;` and a struct copied into itself
+        // through a pointer must work. Alignment 1 on both sides, since
+        // nothing is assumed about where a pointer points; LLVM still copies
+        // in wide moves on x86, which doesn't need aligned addresses.
+        LLVMBuildMemMove(builder, value(body, instr->a), 1, value(body, instr->b), 1,
+                         LLVMConstInt(LLVMInt64TypeInContext(c), instr->constant, 0));
+        break;
+    case IR_ZERO:
+        LLVMBuildMemSet(builder, value(body, instr->a), LLVMConstNull(LLVMInt8TypeInContext(c)),
+                        LLVMConstInt(LLVMInt64TypeInContext(c), instr->constant, 0), 1);
+        break;
     case IR_JUMP: LLVMBuildBr(builder, llvm_block(body, instr->target)); break;
     case IR_BRANCH:
         LLVMBuildCondBr(builder, value(body, instr->c), llvm_block(body, instr->target),
@@ -468,11 +567,18 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
         }
         break;
     case IR_PANIC: {
-        // The message's bytes but the zero that ends them.
-        Ir_Global *g = &m->globals[instr->target];
-        RIG_ASSERT(g->type == IR_VOID && g->bytes.count > 0);
-        LLVMValueRef args[] = {llvm_global(body, instr->target),
-                               LLVMConstInt(LLVMInt64TypeInContext(c), (u64)(g->bytes.count - 1), 0)};
+        LLVMValueRef args[2];
+        if (instr->target >= 0) {
+            // A string literal's bytes but the zero that ends them.
+            Ir_Global *g = &m->globals[instr->target];
+            RIG_ASSERT(g->type == IR_VOID && !g->is_variable && g->bytes.count > 0);
+            args[0] = llvm_global(body, instr->target);
+            args[1] = LLVMConstInt(LLVMInt64TypeInContext(c), (u64)(g->bytes.count - 1), 0);
+        } else {
+            // A message made at run time: where its bytes are, and how many.
+            args[0] = value(body, instr->a);
+            args[1] = value(body, instr->b);
+        }
         LLVMBuildCall2(builder, b->panic_type, b->panic, args, 2, "");
         LLVMBuildUnreachable(builder);
         break;
@@ -514,15 +620,25 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
     // runs, until the function returns: one in a loop's body would take more
     // on every iteration, and a long loop would overflow the stack. In the
     // entry block each runs once; it's also where LLVM's mem2reg looks for
-    // the slots it can turn into registers.
+    // the slots it can turn into registers. A local of bytes (a struct's, an
+    // array's) is an alloca of [N x i8] with the alignment it asks for; a
+    // bool's slot is a byte (memory_type).
     LLVMPositionBuilderAtEnd(body.builder, body.blocks[0]);
     for (s64 k = 0; k < p->blocks.count; k++) {
         Ir_Block *block = p->blocks[k];
         for (s64 n = 0; n < block->instrs.count; n++) {
             Ir_Instr *instr = &block->instrs[n];
             if (instr->op != IR_LOCAL) continue;
-            RIG_ASSERT(instr->result >= 0);  // a slot for a type: never IR_VOID
-            body.values[instr->result] = LLVMBuildAlloca(body.builder, llvm_type(c, instr->type), "");
+            RIG_ASSERT(instr->result >= 0);  // ir_emit numbers every local
+            LLVMValueRef slot = nullptr;
+            if (instr->type == IR_VOID) {
+                RIG_ASSERT(instr->align > 0 && (instr->align & (instr->align - 1)) == 0);
+                slot = LLVMBuildAlloca(body.builder, bytes_type(c, (s64)instr->constant), "");
+                LLVMSetAlignment(slot, instr->align);
+            } else {
+                slot = LLVMBuildAlloca(body.builder, memory_type(c, instr->type), "");
+            }
+            body.values[instr->result] = slot;
         }
     }
 
@@ -534,6 +650,57 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
         }
     }
     LLVMDisposeBuilder(body.builder);
+}
+
+// A variable of bytes as LLVM has it: its type, and, given `globals` (every
+// global's LLVM value, by IR index, m->globals.count of them), its first
+// value in *init.
+//
+// Without relocations it's an array of its bytes, [N x i8] (zeroinitializer
+// when they're all 0). With them it can't be: an address isn't a number
+// until the program is linked and loaded, so it's a ptr constant, and the
+// global a packed struct (no padding between its fields, so each is at the
+// offset it's meant to be) of its runs of bytes and the addresses between
+// them, for which LLVM writes the linker a relocation each:
+//
+//   @table = internal global <{ [8 x i8], ptr, [8 x i8] }>
+//            <{ [8 x i8] c"\03\00\00\00\00\00\00\00", ptr @str.0, [8 x i8] zeroinitializer }>, align 8
+static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Global *g, LLVMValueRef *globals,
+                               LLVMValueRef *init) {
+    RIG_ASSERT(g->bytes.count <= g->size);
+    // All `size` bytes: the ones the IR gives, then zeros.
+    u8 *bytes = (u8 *)arena_alloc(a, g->size ? (u64)g->size : 1, 1);  // zeroed
+    if (g->bytes.count) memcpy(bytes, g->bytes.data, (size_t)g->bytes.count);
+    if (g->relocs.count == 0) {
+        if (globals) *init = LLVMConstStringInContext2(c, (const char *)bytes, (size_t)g->size, 1);
+        return bytes_type(c, g->size);
+    }
+    // At most a run of bytes before each address, the address, and a run
+    // after the last.
+    s64 most = 2 * g->relocs.count + 1, count = 0, at = 0;
+    LLVMTypeRef *types = arena_new_array<LLVMTypeRef>(a, most);
+    LLVMValueRef *values = arena_new_array<LLVMValueRef>(a, most);
+    for (s64 i = 0; i <= g->relocs.count; i++) {
+        // The run of bytes up to the next address, or to the end.
+        s64 end = i < g->relocs.count ? g->relocs[i].offset : g->size;
+        RIG_ASSERT(end >= at);  // the relocations in increasing order, none overlapping another
+        if (end > at) {
+            types[count] = bytes_type(c, end - at);
+            if (globals) values[count] = LLVMConstStringInContext2(c, (const char *)bytes + at, (size_t)(end - at), 1);
+            count++;
+        }
+        if (i == g->relocs.count) break;
+        // The address, 8 bytes, which the IR's bytes leave zero.
+        Ir_Reloc r = g->relocs[i];
+        RIG_ASSERT(r.offset + 8 <= g->size && r.global >= 0 && r.global < m->globals.count);
+        for (s64 k = 0; k < 8; k++) RIG_ASSERT(bytes[r.offset + k] == 0);
+        types[count] = LLVMPointerTypeInContext(c, 0);
+        if (globals) values[count] = globals[r.global];
+        count++;
+        at = r.offset + 8;
+    }
+    if (globals) *init = LLVMConstStructInContext(c, values, (unsigned)count, 1);
+    return LLVMStructTypeInContext(c, types, (unsigned)count, 1);
 }
 
 // Builds and verifies the LLVM module for `m`. False with `error` set when
@@ -563,38 +730,57 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     LLVMDisposeTargetData(layout);
 
     // The runtime first, so its C names are taken before the program's.
-    if (module_panics(m)) build_runtime(b);
+    if (module_has(m, IR_PANIC)) build_runtime(b);
+    if (module_has(m, IR_COPY) || module_has(m, IR_ZERO)) declare_memory_functions(b);
 
+    // The globals in two passes: every one made first, with its type, then
+    // each given its first value. A variable of bytes may hold the address
+    // of any global (a relocation), a later one too, and that address is the
+    // LLVM global itself, which must exist by then.
     LLVMContextRef c = b->context;
     LLVMValueRef *globals = arena_new_array<LLVMValueRef>(a, m->globals.count ? m->globals.count : 1);
     for (s64 i = 0; i < m->globals.count; i++) {
         Ir_Global *g = &m->globals[i];
         LLVMValueRef global = nullptr;
-        if (g->type == IR_VOID) {
-            // Constant bytes. They already end with their zero, so LLVM
-            // mustn't add another.
-            LLVMValueRef init = LLVMConstStringInContext2(c, (const char *)g->bytes.data, (size_t)g->bytes.count, 1);
-            global = LLVMAddGlobal(b->module, LLVMTypeOf(init), string_cstr(a, g->name));
-            LLVMSetInitializer(global, init);
+        if (g->type == IR_VOID && !g->is_variable) {
+            // A string literal's constant bytes, read-only.
+            global = LLVMAddGlobal(b->module, bytes_type(c, g->bytes.count), string_cstr(a, g->name));
             LLVMSetGlobalConstant(global, 1);
             LLVMSetLinkage(global, LLVMPrivateLinkage);
             LLVMSetUnnamedAddress(global, LLVMGlobalUnnamedAddr);
             LLVMSetAlignment(global, 1);
+        } else if (g->type == IR_VOID) {
+            // A variable of bytes, writable and internal like the program's
+            // procedures, aligned as the IR says.
+            RIG_ASSERT(g->align > 0 && (g->align & (g->align - 1)) == 0);
+            global = LLVMAddGlobal(b->module, byte_global(c, a, m, g, nullptr, nullptr), string_cstr(a, g->name));
+            LLVMSetLinkage(global, LLVMInternalLinkage);
+            LLVMSetAlignment(global, g->align);
         } else {
-            // A variable, internal like the program's procedures.
-            LLVMTypeRef type = llvm_type(c, g->type);
-            global = LLVMAddGlobal(b->module, type, string_cstr(a, g->name));
-            if (g->type == IR_PTR) {
-                RIG_ASSERT(g->initial == 0);
-                LLVMSetInitializer(global, LLVMConstNull(type));
-            } else if (ir_is_float(g->type)) {
-                LLVMSetInitializer(global, float_constant(c, g->type, g->initial));
-            } else {
-                LLVMSetInitializer(global, LLVMConstInt(type, g->initial, 0));
-            }
+            // A variable of a scalar type, internal too (a bool's a byte).
+            global = LLVMAddGlobal(b->module, memory_type(c, g->type), string_cstr(a, g->name));
             LLVMSetLinkage(global, LLVMInternalLinkage);
         }
         globals[i] = global;
+    }
+    for (s64 i = 0; i < m->globals.count; i++) {
+        Ir_Global *g = &m->globals[i];
+        LLVMValueRef init = nullptr;
+        if (g->type == IR_VOID && !g->is_variable) {
+            // The bytes already end with their zero, so LLVM mustn't add
+            // another.
+            init = LLVMConstStringInContext2(c, (const char *)g->bytes.data, (size_t)g->bytes.count, 1);
+        } else if (g->type == IR_VOID) {
+            byte_global(c, a, m, g, globals, &init);
+        } else if (g->type == IR_PTR) {
+            RIG_ASSERT(g->initial == 0);
+            init = LLVMConstNull(llvm_type(c, IR_PTR));
+        } else if (ir_is_float(g->type)) {
+            init = float_constant(c, g->type, g->initial);
+        } else {
+            init = LLVMConstInt(memory_type(c, g->type), g->initial, 0);
+        }
+        LLVMSetInitializer(globals[i], init);
     }
 
     // Every function first, so a body can call one defined after it.
@@ -611,6 +797,7 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
         } else {
             functions[i] = LLVMAddFunction(b->module, name, function_type(c, p, a));
             if (!p->is_foreign && !p->is_export) LLVMSetLinkage(functions[i], LLVMInternalLinkage);
+            if (!p->is_foreign) mark_definition(b, functions[i]);
         }
         mark_extensions(b, p, functions[i], false);
     }

@@ -237,6 +237,49 @@ static s32 add_string(Ir_Module *m, const char *name, const char *text) {
     return (s32)(m->globals.count - 1);
 }
 
+// Milestone 2b's memory (issue #56).
+
+// A local of `size` bytes aligned to `align`; its address.
+static s32 emit_local_bytes(Ir_Proc *p, s32 block, u64 size, u32 align) {
+    Ir_Instr *local = ir_emit(p, block, IR_LOCAL, IR_VOID);
+    local->constant = size;
+    local->align = align;
+    return local->result;
+}
+
+// %at plus %offset bytes.
+static s32 emit_ptradd(Ir_Proc *p, s32 block, s32 at, s32 offset) {
+    return emit_binary(p, block, IR_PTRADD, IR_PTR, at, offset);
+}
+
+// copy %to, %from, size.
+static void emit_copy(Ir_Proc *p, s32 block, s32 to, s32 from, u64 size) {
+    Ir_Instr *copy = ir_emit(p, block, IR_COPY, IR_VOID);
+    copy->a = to;
+    copy->b = from;
+    copy->constant = size;
+}
+
+// zero %at, size.
+static void emit_zero(Ir_Proc *p, s32 block, s32 at, u64 size) {
+    Ir_Instr *zero = ir_emit(p, block, IR_ZERO, IR_VOID);
+    zero->a = at;
+    zero->constant = size;
+}
+
+// A variable of `size` bytes aligned to `align`, all zero, with no
+// relocations; its index.
+static s32 add_byte_global(Ir_Module *m, const char *name, s64 size, u32 align) {
+    Ir_Global g = {};
+    g.name = str(name);
+    g.type = IR_VOID;
+    g.is_variable = true;
+    g.size = size;
+    g.align = align;
+    array_add(&m->globals, g);
+    return (s32)(m->globals.count - 1);
+}
+
 // A procedure returning one value of type `result`, or nothing (IR_VOID).
 static Ir_Proc *new_proc_returning(Ir_Module *m, Arena *a, const char *name, Ir_Type result) {
     Ir_Proc *p = ir_new_proc(m, a, str(name));
