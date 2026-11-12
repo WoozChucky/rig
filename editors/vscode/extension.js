@@ -38,10 +38,18 @@ function samePath(a, b) {
     return windows ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
-// Whether `file` is inside the directory `dir` (at any depth).
+// Whether `file` is inside the directory `dir` (at any depth). Outside, the
+// relative path climbs out: it is `..` or starts with `../` (`..\` on
+// Windows). A directory whose name merely starts with dots, like `..cache`,
+// is inside.
 function isInside(file, dir) {
     const relative = path.relative(dir, file);
-    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+    return (
+        relative !== '' &&
+        relative !== '..' &&
+        !relative.startsWith(`..${path.sep}`) &&
+        !path.isAbsolute(relative)
+    );
 }
 
 // The program `rig build FILE` writes, as src/driver.cpp names it: the file's
@@ -82,7 +90,8 @@ function searchPath(name) {
 //    there is an error, rather than quietly building with another rig. A
 //    leading ~ is the home directory, ${workspaceFolder} the folder, and a
 //    relative path is taken from the folder; a bare name (no slash) is
-//    looked for on the PATH.
+//    looked for on the PATH. On Windows a path may leave off the .exe, as
+//    a shell lets you.
 // 2. bin/rig.exe (Windows) or bin/rig in a workspace folder, the file's
 //    first: where this repository's build.bat and build.sh put it.
 // 3. rig on the PATH.
@@ -92,7 +101,19 @@ function findCompiler(file, folder) {
         .get('compilerPath', '')
         .trim();
     if (setting) {
-        let wanted = setting.replace(/\$\{workspaceFolder\}/g, folder ? folder.uri.fsPath : '');
+        // Outside a workspace folder, ${workspaceFolder} and a relative
+        // path have no folder to start from. Replacing the variable with
+        // nothing would turn '${workspaceFolder}/bin/rig' into '/bin/rig',
+        // a real path on Linux and another rig: an error instead.
+        const usesFolder = /\$\{workspaceFolder\}/.test(setting);
+        if (usesFolder && !folder) {
+            return {
+                error: `The setting rig.compilerPath is "${setting}", which uses \${workspaceFolder}, but ${file} isn't in a workspace folder.`,
+            };
+        }
+        // A function as the replacement, so a $ in the folder's path is
+        // taken as it is, not as one of replace's patterns.
+        let wanted = setting.replace(/\$\{workspaceFolder\}/g, () => folder.uri.fsPath);
         if (wanted === '~' || wanted.startsWith('~/') || wanted.startsWith('~\\')) {
             wanted = path.join(os.homedir(), wanted.slice(1));
         }
@@ -101,7 +122,20 @@ function findCompiler(file, folder) {
             if (found) return { compiler: found };
             return { error: `The setting rig.compilerPath is "${setting}", which isn't on the PATH.` };
         }
-        if (!path.isAbsolute(wanted) && folder) wanted = path.join(folder.uri.fsPath, wanted);
+        if (!path.isAbsolute(wanted)) {
+            if (!folder) {
+                return {
+                    error: `The setting rig.compilerPath is "${setting}", a path relative to the workspace folder, but ${file} isn't in a workspace folder.`,
+                };
+            }
+            wanted = path.join(folder.uri.fsPath, wanted);
+        }
+        // One kind of slash ('${workspaceFolder}/bin/rig' on Windows mixes
+        // them), as the terminal shows the command.
+        wanted = path.normalize(wanted);
+        // Windows runs NAME.exe for NAME; so does this, for a path with no
+        // extension (C:\tools\rig, bin/rig), as searchPath does for a name.
+        if (windows && path.extname(wanted) === '' && isProgram(`${wanted}.exe`)) wanted = `${wanted}.exe`;
         if (isProgram(wanted)) return { compiler: wanted };
         return { error: `The setting rig.compilerPath is "${setting}", but ${wanted} isn't a program.` };
     }
@@ -124,18 +158,40 @@ function findCompiler(file, folder) {
     };
 }
 
-// The .rig file a task works on: the definition's `file` when given (a
-// relative path from the workspace folder; VS Code has already replaced
-// variables like ${file}), else the active editor's file.
+// The .rig file of an editor's document, as { file }, or { error } saying
+// why there's none to build. rig reads files on disk, so a document that
+// isn't one can't be built: an untitled one (Ctrl+N) must be saved first,
+// and says so with `untitled`, for the commands to offer Save As.
+function documentFile(document) {
+    if (!document || document.languageId !== 'rig') return { error: 'open a .rig file to build it.' };
+    if (document.uri.scheme === 'file') return { file: document.uri.fsPath };
+    if (document.isUntitled || document.uri.scheme === 'untitled') {
+        return { error: 'save the file first: rig builds files on disk.', untitled: true };
+    }
+    return { error: `${document.uri.toString()} isn't a file on disk, and rig builds files on disk.` };
+}
+
+function activeDocument() {
+    const editor = vscode.window.activeTextEditor;
+    return editor ? editor.document : undefined;
+}
+
+// The .rig file a task works on, as { file } or { error }: the definition's
+// `file` when given (VS Code has already replaced variables like ${file}),
+// else the active editor's file. A relative `file` is from the task's
+// workspace folder; a task with none (one in a .code-workspace file, or with
+// no folder open) has nothing to take it from, and needs a full path.
 function taskFile(definition, folder) {
     if (definition.file) {
-        return folder ? path.resolve(folder.uri.fsPath, definition.file) : path.resolve(definition.file);
+        if (path.isAbsolute(definition.file)) return { file: path.resolve(definition.file) };
+        if (folder) return { file: path.resolve(folder.uri.fsPath, definition.file) };
+        return {
+            error:
+                `the task's file "${definition.file}" is relative, but the task isn't in a workspace folder ` +
+                `to take it from: give the full path, or \${workspaceFolder:NAME}/${definition.file}.`,
+        };
     }
-    const editor = vscode.window.activeTextEditor;
-    if (editor && editor.document.uri.scheme === 'file' && editor.document.languageId === 'rig') {
-        return editor.document.uri.fsPath;
-    }
-    return null;
+    return documentFile(activeDocument());
 }
 
 // Shows an error with a button that opens the setting rig.compilerPath.
@@ -151,6 +207,18 @@ function compilerError(message) {
 function forTerminal(text) {
     return text.replace(/\r?\n/g, '\r\n');
 }
+
+// The escape sequences a terminal sends for keys that aren't text, which
+// a line of input has no use for: the arrows, Home, F1 and the like
+// (ESC [ ... a final byte, or ESC O and a letter), Alt+key (ESC and the
+// key), and the markers around a pasted text (ESC [200~ and ESC [201~). A
+// lone ESC at the end goes too.
+const ESCAPES = /\x1b(?:\[[0-?]*[ -\/]*[@-~]|O[\s\S]|[\s\S])?/g;
+
+// Why the commands and tasks don't run in Restricted Mode.
+const UNTRUSTED =
+    'building and running need a trusted workspace: they run rig and the program it builds. ' +
+    'The grammar and snippets still work.';
 
 // A task's work and the terminal VS Code shows it in. This is a
 // Pseudoterminal: VS Code asks it for text to show (onDidWrite), tells it
@@ -210,11 +278,15 @@ class RigTerminal {
         if (command !== 'build' && command !== 'run') {
             return this.fail(`A rig task's command is 'build' or 'run', not '${command}'.`);
         }
-        const file = taskFile(this.definition, this.scope);
-        if (!file) {
-            vscode.window.showErrorMessage('Rig: open a .rig file to build it.');
-            return this.fail('No .rig file to build: open one, or give the task a "file".');
+        // VS Code runs no task in Restricted Mode; this is in case it ever
+        // does, since a build runs rig and a run runs the program.
+        if (!vscode.workspace.isTrusted) return this.fail(`Rig: ${UNTRUSTED}`);
+        const target = taskFile(this.definition, this.scope);
+        if (target.error) {
+            vscode.window.showErrorMessage(`Rig: ${target.error}`);
+            return this.fail(`Rig: ${target.error}`);
         }
+        const file = target.file;
         // The file's own workspace folder, else the task's (a file from
         // outside the workspace), else none.
         const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file)) || this.scope;
@@ -287,12 +359,13 @@ class RigTerminal {
 
     // What the user types in the terminal goes to the running program's
     // standard input a line at a time, as a terminal would send it: echoed,
-    // with Backspace, Enter sending the line, Ctrl+D ending the input and
-    // Ctrl+C stopping the program. Escape sequences (arrow keys) are dropped.
+    // with Backspace, Enter sending the line, Tab kept, Ctrl+D ending the
+    // input and Ctrl+C stopping the program. Escape sequences (ESCAPES) are
+    // dropped wherever they are, and other control characters too.
     handleInput(data) {
         const child = this.child;
-        if (!child || data.startsWith('\x1b')) return;
-        for (const ch of data) {
+        if (!child) return;
+        for (const ch of data.replace(ESCAPES, '')) {
             if (ch === '\r') {
                 this.write('\n');
                 child.stdin.write(`${this.line}\n`);
@@ -309,7 +382,7 @@ class RigTerminal {
             } else if (ch === '\x03') {
                 this.write('^C\n');
                 child.kill();
-            } else if (ch >= ' ') {
+            } else if (ch >= ' ' || ch === '\t') {
                 this.line += ch;
                 this.write(ch);
             }
@@ -340,8 +413,9 @@ function defaultScope(file) {
     return folders && folders.length ? folders[0] : vscode.TaskScope.Workspace;
 }
 
+// The active editor's .rig file, or undefined.
 function activeRigFile() {
-    return taskFile({}, undefined);
+    return documentFile(activeDocument()).file;
 }
 
 // The task provider: VS Code asks it for the tasks to list (Terminal > Run
@@ -365,12 +439,30 @@ const taskProvider = {
 // rig.buildFile and rig.runFile: run the task for the file. From the editor
 // title's button VS Code passes the file's uri; from the command palette,
 // nothing, and the task takes the active editor's file.
-function runFile(command, uri) {
-    const file = uri && uri.scheme === 'file' ? uri.fsPath : activeRigFile();
-    if (!file) {
-        vscode.window.showErrorMessage('Rig: open a .rig file to build it.');
+//
+// In Restricted Mode (a folder not trusted) they only say why they don't
+// run. An untitled file gets a Save As button; once saved, the command goes
+// on with the new file.
+async function runFile(command, uri) {
+    if (!vscode.workspace.isTrusted) {
+        const choice = await vscode.window.showErrorMessage(`Rig: ${UNTRUSTED}`, 'Manage Workspace Trust');
+        if (choice) vscode.commands.executeCommand('workbench.trust.manage');
         return;
     }
+    let target = uri && uri.scheme === 'file' ? { file: uri.fsPath } : documentFile(activeDocument());
+    if (target.untitled) {
+        const choice = await vscode.window.showErrorMessage(`Rig: ${target.error}`, 'Save As...');
+        if (!choice) return;
+        await vscode.commands.executeCommand('workbench.action.files.saveAs');
+        // Saved: the editor now shows the file. Cancelled: still untitled,
+        // and the message has been seen once already.
+        target = documentFile(activeDocument());
+        if (target.error) return;
+    } else if (target.error) {
+        vscode.window.showErrorMessage(`Rig: ${target.error}`);
+        return;
+    }
+    const file = target.file;
     const definition = { type: 'rig', command };
     if (uri && uri.scheme === 'file') definition.file = uri.fsPath;
     return vscode.tasks.executeTask(makeTask(definition, defaultScope(file), TASK_NAMES[command]));
@@ -386,4 +478,7 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate };
+// VS Code needs activate and deactivate. forTests is for test/check.js,
+// which loads this file with a stand-in for VS Code's API and checks the
+// helpers' behaviour.
+module.exports = { activate, deactivate, forTests: { isInside, findCompiler, taskFile, RigTerminal } };

@@ -324,17 +324,288 @@ check('extensionKind is workspace first, in package.json and the manifest alike'
     assert.deepStrictEqual(identity.slice(1), [p.name, p.version, p.publisher]);
 });
 
-// --- Running them ----------------------------------------------------------
+check('package.json says the extension is limited in an untrusted workspace', () => {
+    // Without this, VS Code may turn the whole extension off in Restricted
+    // Mode, grammar and snippets included. With it, only what runs code is
+    // held back: the tasks (VS Code's own rule), the commands (extension.js
+    // checks), and a workspace's rig.compilerPath (VS Code ignores it).
+    const trust = ((readJson('package.json').capabilities || {}).untrustedWorkspaces) || {};
+    assert.strictEqual(trust.supported, 'limited');
+    assert.ok(trust.description, 'untrustedWorkspaces has no description');
+    assert.deepStrictEqual(trust.restrictedConfigurations, ['rig.compilerPath']);
+});
 
-let failed = 0;
-for (const { name, fn } of checks) {
-    try {
-        fn();
-        console.log(`ok    ${name}`);
-    } catch (e) {
-        failed++;
-        console.log(`FAIL  ${name}\n      ${String(e.message).split('\n').join('\n      ')}`);
+// --- extension.js's behaviour, with a stand-in vscode ----------------------
+
+// extension.js requires 'vscode', which only exists inside VS Code. These
+// checks give it a stand-in instead: plain objects with the few parts of
+// VS Code's API it uses, whose state each check sets (the active editor,
+// the setting, whether the workspace is trusted) and whose calls it records
+// (error messages, commands, tasks started). extension.js exports its
+// helpers as `forTests` for them.
+const Module = require('module');
+const os = require('os');
+
+class EventEmitter {
+    constructor() {
+        this.listeners = [];
+        this.event = (listener) => {
+            this.listeners.push(listener);
+            return { dispose() {} };
+        };
+    }
+    fire(value) {
+        for (const listener of this.listeners) listener(value);
     }
 }
-console.log(failed ? `${failed} of ${checks.length} checks failed` : `all ${checks.length} checks passed`);
-process.exitCode = failed ? 1 : 0;
+
+const fileUri = (p) => ({ scheme: 'file', fsPath: path.resolve(p), toString: () => `file://${p}` });
+const fakeFolder = (p) => ({ uri: fileUri(p), name: path.basename(p), index: 0 });
+
+// What a check sets, and what extension.js did; reset() before each use.
+const stub = {};
+function reset() {
+    Object.assign(stub, {
+        folders: [],             // workspace folders
+        compilerPath: '',        // the setting rig.compilerPath
+        trusted: true,           // vscode.workspace.isTrusted
+        document: undefined,     // the active editor's document
+        answers: [],             // what showErrorMessage's buttons answer, in turn
+        errors: [],              // the messages it showed
+        commands: [],            // executeCommand's calls
+        onCommand: () => {},     // what a command does
+        executed: [],            // tasks started
+    });
+}
+reset();
+
+const vscodeStub = {
+    EventEmitter,
+    Uri: { file: fileUri },
+    TaskGroup: { Build: 'build' },
+    TaskRevealKind: { Always: 1 },
+    TaskScope: { Global: 1, Workspace: 2 },
+    CustomExecution: class {
+        constructor(callback) {
+            this.callback = callback;
+        }
+    },
+    Task: class {
+        constructor(definition, scope, name, source, execution, problemMatchers) {
+            Object.assign(this, { definition, scope, name, source, execution, problemMatchers });
+        }
+    },
+    workspace: {
+        get workspaceFolders() {
+            return stub.folders;
+        },
+        get isTrusted() {
+            return stub.trusted;
+        },
+        get textDocuments() {
+            return stub.document ? [stub.document] : [];
+        },
+        getWorkspaceFolder: (uri) => stub.folders.find((f) => uri.fsPath.startsWith(f.uri.fsPath + path.sep)),
+        getConfiguration: () => ({ get: (key, fallback) => (key === 'compilerPath' ? stub.compilerPath : fallback) }),
+    },
+    window: {
+        get activeTextEditor() {
+            return stub.document ? { document: stub.document } : undefined;
+        },
+        showErrorMessage: (message) => {
+            stub.errors.push(message);
+            return Promise.resolve(stub.answers.shift());
+        },
+    },
+    commands: {
+        registerCommand: (name, fn) => {
+            stub.registered = stub.registered || {};
+            stub.registered[name] = fn;
+            return { dispose() {} };
+        },
+        executeCommand: (...args) => {
+            stub.commands.push(args);
+            return Promise.resolve(stub.onCommand(...args));
+        },
+    },
+    tasks: {
+        registerTaskProvider: () => ({ dispose() {} }),
+        executeTask: (task) => {
+            stub.executed.push(task);
+            return Promise.resolve();
+        },
+    },
+};
+
+// Loads extension.js with the stand-in as 'vscode', once, and activates it.
+let loaded = null;
+function loadExtension() {
+    if (loaded) return loaded;
+    const resolve = Module._resolveFilename;
+    Module._resolveFilename = function (request, ...rest) {
+        return request === 'vscode' ? 'vscode' : resolve.call(this, request, ...rest);
+    };
+    require.cache.vscode = { id: 'vscode', filename: 'vscode', loaded: true, exports: vscodeStub };
+    loaded = require(path.join(extension, 'extension.js'));
+    loaded.activate({ subscriptions: [] });
+    assert.ok(loaded.forTests, 'extension.js exports no forTests');
+    return loaded;
+}
+
+// A scratch directory, removed after `fn`.
+function withScratch(fn) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-vscode-check-'));
+    try {
+        return fn(dir);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+check('a file under a directory named ..cache is inside the folder', () => {
+    const { isInside } = loadExtension().forTests;
+    const dir = path.resolve('w');
+    assert.strictEqual(isInside(path.join(dir, '..cache', 'a.rig'), dir), true);
+    assert.strictEqual(isInside(path.join(dir, '..x'), dir), true);
+    assert.strictEqual(isInside(path.join(dir, 'a', 'b.rig'), dir), true);
+    assert.strictEqual(isInside(path.join(dir, '..', 'a.rig'), dir), false);
+    assert.strictEqual(isInside(path.join(dir, '..'), dir), false);
+    assert.strictEqual(isInside(dir, dir), false);
+});
+
+// '${workspaceFolder}/bin/rig' outside a folder would otherwise become
+// '/bin/rig', a real path at the root on Linux: another rig than the one
+// the setting means.
+check('rig.compilerPath with ${workspaceFolder} and no folder is an error', () => {
+    const { findCompiler } = loadExtension().forTests;
+    reset();
+    stub.compilerPath = '${workspaceFolder}/bin/rig';
+    const found = findCompiler(path.resolve('a.rig'), undefined);
+    assert.ok(found.error, `found ${found.compiler}`);
+    assert.match(found.error, /\$\{workspaceFolder\}/);
+    assert.match(found.error, /isn't in a workspace folder/);
+    // Likewise a relative path, which is taken from the folder.
+    stub.compilerPath = 'bin/rig';
+    const relative = findCompiler(path.resolve('a.rig'), undefined);
+    assert.ok(relative.error, `found ${relative.compiler}`);
+    assert.match(relative.error, /isn't in a workspace folder/);
+});
+
+// On Windows a program is NAME.exe, and the setting may leave off the .exe
+// as a shell lets you; elsewhere nothing is added.
+check('rig.compilerPath may leave off .exe on Windows', () => {
+    const { findCompiler } = loadExtension().forTests;
+    withScratch((dir) => {
+        reset();
+        fs.writeFileSync(path.join(dir, 'rig.exe'), '');
+        fs.chmodSync(path.join(dir, 'rig.exe'), 0o755);
+        const folder = fakeFolder(dir);
+        stub.folders = [folder];
+        for (const setting of [path.join(dir, 'rig'), 'rig', '${workspaceFolder}/rig']) {
+            // A bare name is looked for on the PATH, so make it relative.
+            stub.compilerPath = setting === 'rig' ? './rig' : setting;
+            const found = findCompiler(path.join(dir, 'a.rig'), folder);
+            if (process.platform === 'win32') {
+                assert.deepStrictEqual(found, { compiler: path.join(dir, 'rig.exe') }, setting);
+            } else {
+                assert.ok(found.error, `${setting}: found ${found.compiler}`);
+            }
+        }
+    });
+});
+
+check('a relative task file with no workspace folder is an error', () => {
+    const { taskFile } = loadExtension().forTests;
+    reset();
+    const relative = taskFile({ type: 'rig', command: 'build', file: 'hello.rig' }, undefined);
+    assert.ok(relative.error, `took ${relative.file}`);
+    assert.match(relative.error, /workspace folder/);
+    const absolute = path.resolve('x', 'hello.rig');
+    assert.deepStrictEqual(taskFile({ type: 'rig', command: 'build', file: absolute }, undefined), { file: absolute });
+    const folder = fakeFolder(path.resolve('w'));
+    assert.deepStrictEqual(taskFile({ type: 'rig', command: 'build', file: 'hello.rig' }, folder), {
+        file: path.join(folder.uri.fsPath, 'hello.rig'),
+    });
+});
+
+// What reaches the program from what's typed: escape sequences (arrow keys,
+// Alt+key, or inside a pasted text) are dropped wherever they are; a Tab is
+// kept.
+check('typed input drops escape sequences anywhere and keeps Tab', () => {
+    const { RigTerminal } = loadExtension().forTests;
+    const terminal = new RigTerminal({ type: 'rig', command: 'run' }, undefined);
+    let sent = '';
+    terminal.child = { stdin: { write: (s) => (sent += s), end() {} }, kill() {} };
+    terminal.handleInput('ab\x1b[Acd\te\x1bOBf\x1b[1;5Cg\x1bxh\x1b[200~i\x1b[201~\r');
+    assert.strictEqual(sent, 'abcd\tefghi\n');
+    sent = '';
+    terminal.handleInput('\x1b[D');
+    terminal.handleInput('x\x7fy\r');
+    assert.strictEqual(sent, 'y\n');
+});
+
+const untitled = { uri: { scheme: 'untitled', fsPath: 'Untitled-1', toString: () => 'untitled:Untitled-1' }, languageId: 'rig', isUntitled: true, isDirty: true };
+
+check('an untitled .rig file asks to be saved, then builds', async () => {
+    loadExtension();
+    reset();
+    stub.document = untitled;
+    await stub.registered['rig.runFile']();
+    assert.strictEqual(stub.executed.length, 0);
+    assert.strictEqual(stub.errors.length, 1);
+    assert.match(stub.errors[0], /save/i);
+    assert.doesNotMatch(stub.errors[0], /open a \.rig file/);
+
+    // Its button saves it (Save As), and the run goes on with the new file.
+    reset();
+    stub.document = untitled;
+    const saved = path.resolve('w', 'hello.rig');
+    stub.answers = ['Save As...'];
+    stub.onCommand = (name) => {
+        if (name === 'workbench.action.files.saveAs') stub.document = { uri: fileUri(saved), languageId: 'rig', isDirty: false };
+    };
+    await stub.registered['rig.runFile']();
+    assert.deepStrictEqual(stub.commands.map((c) => c[0]), ['workbench.action.files.saveAs']);
+    assert.strictEqual(stub.executed.length, 1);
+    assert.strictEqual(stub.executed[0].definition.command, 'run');
+
+    // Still no file (the dialog cancelled): nothing runs, no second message.
+    reset();
+    stub.document = untitled;
+    stub.answers = ['Save As...'];
+    await stub.registered['rig.buildFile']();
+    assert.strictEqual(stub.executed.length, 0);
+    assert.strictEqual(stub.errors.length, 1);
+});
+
+check('the commands do nothing in an untrusted workspace but say so', async () => {
+    loadExtension();
+    reset();
+    stub.trusted = false;
+    stub.document = { uri: fileUri(path.resolve('w', 'hello.rig')), languageId: 'rig', isDirty: false };
+    await stub.registered['rig.buildFile']();
+    assert.strictEqual(stub.executed.length, 0);
+    assert.strictEqual(stub.errors.length, 1);
+    assert.match(stub.errors[0], /trust/i);
+    // And a trusted one builds.
+    stub.trusted = true;
+    await stub.registered['rig.buildFile']();
+    assert.strictEqual(stub.executed.length, 1);
+});
+
+// --- Running them ----------------------------------------------------------
+
+(async () => {
+    let failed = 0;
+    for (const { name, fn } of checks) {
+        try {
+            await fn();
+            console.log(`ok    ${name}`);
+        } catch (e) {
+            failed++;
+            console.log(`FAIL  ${name}\n      ${String(e.message).split('\n').join('\n      ')}`);
+        }
+    }
+    console.log(failed ? `${failed} of ${checks.length} checks failed` : `all ${checks.length} checks passed`);
+    process.exitCode = failed ? 1 : 0;
+})();
