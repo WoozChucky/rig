@@ -411,6 +411,16 @@ static const Punctuation PUNCTUATION[] = {
 
 // Punctuation, or a byte that starts no token at all.
 static void lex_other(Lexer *l, Position pos, s64 start) {
+    // p.* dereferences p (issue #57). Maximal munch would read p.*=5 as
+    // . *= 5 and p.*==q as . *= = q, neither of which the parser could take
+    // apart again without inventing tokens; so right after a '.' a '*' is
+    // always a token of its own, and what follows it is read afresh.
+    s64 count = l->tokens.count;
+    if (peek(l) == '*' && count > 0 && l->tokens[count - 1].kind == TOKEN_DOT) {
+        advance(l);
+        add_token(l, TOKEN_STAR, pos, start);
+        return;
+    }
     String rest = string_slice(l->text, l->at, l->text.count - l->at);
     for (const Punctuation &p : PUNCTUATION) {
         String s = str(p.text);

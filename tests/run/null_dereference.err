@@ -1,0 +1,1 @@
+tests/run/null_dereference.rig:9:11: runtime error: null pointer dereference

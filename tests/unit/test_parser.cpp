@@ -1123,3 +1123,103 @@ TEST(a_local_constant_in_column_1_is_a_statement) {
     CHECK_STR(dump, "(broken x)\n(const N (int 5))\n");
     arena_free(&a);
 }
+
+// Milestone 2b (issue #57): pointers. *e is e's address, a prefix operator
+// as - is; e.* is what e points at, a postfix operator as a call is; null
+// and size_of(T) are primaries.
+
+TEST(parses_address_and_deref) {
+    Arena a = arena_make();
+    String errors;
+    // .* binds tighter than the prefix *: *p.* is the address of what p
+    // points at, which is p again.
+    CHECK_STR(body_dump(&a, "*p.*;", &errors), "(block (unary * (deref (name p))))");
+    CHECK_STR(body_dump(&a, "p.*.*;", &errors), "(block (deref (deref (name p))))");
+    // The lexer reads a '*' right after a '.' alone, so p.*=5 is .* then =,
+    // not . then *=; and p.*==q compares.
+    CHECK_STR(body_dump(&a, "p.*=5;", &errors), "(block (assign = (deref (name p)) (int 5)))");
+    CHECK_STR(body_dump(&a, "x := p.*==q;", &errors), "(block (var x _ (binary == (deref (name p)) (name q))))");
+    CHECK_STR(body_dump(&a, "p.* *= 2; p.**=3;", &errors),
+              "(block (assign *= (deref (name p)) (int 2)) (assign *= (deref (name p)) (int 3)))");
+    // A call's result can be dereferenced, and a dereference called... the
+    // checker says what it thinks of that.
+    CHECK_STR(body_dump(&a, "f(x).*; **q;", &errors), "(block (deref (call f (name x))) (unary * (unary * (name q))))");
+    CHECK_STR(errors, "");
+    // The deref's node is at its '.', the address's at its '*'.
+    Token_List *list = src("f :: () {\n    x := *p.*;\n}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    Ast_Unary *address = (Ast_Unary *)((Ast_Var *)file->procs[0]->body->statements[0])->value;
+    CHECK_EQ(address->kind, AST_UNARY);
+    CHECK_EQ(address->pos.col, 10);
+    CHECK_EQ(address->operand->kind, AST_DEREF);
+    CHECK_EQ(address->operand->pos.col, 12);
+    CHECK_EQ(address->operand->start.col, 11);
+    token_list_free(list);
+    // A '.' followed by anything but '*' isn't a dereference (fields come
+    // with structs).
+    body_dump(&a, "p.x;", &errors);
+    CHECK_STR(errors, "2:6: expected ';', found '.'\n");
+    arena_free(&a);
+}
+
+TEST(parses_null_and_size_of) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "p : *int = null;", &errors), "(block (var p (ptr int) (null)))");
+    CHECK_STR(body_dump(&a, "n := size_of(*int) + size_of(u8);", &errors),
+              "(block (var n _ (binary + (size_of (ptr int)) (size_of u8))))");
+    // size_of without a '(' after it is a name like any other.
+    CHECK_STR(body_dump(&a, "n := size_of;", &errors), "(block (var n _ (name size_of)))");
+    CHECK_STR(errors, "");
+    CHECK_STR(parse_src(&a, "head : *int = null;\nN :: size_of(s32);\n", &errors),
+              "(var head (ptr int) (null))\n(const N (size_of s32))\n");
+    CHECK_STR(errors, "");
+    // Its argument is a type, not an expression.
+    body_dump(&a, "n := size_of(1);", &errors);
+    CHECK_STR(errors, "2:18: expected a type, found integer literal\n");
+    body_dump(&a, "n := size_of(int;", &errors);
+    CHECK_STR(errors, "2:21: expected ')', found ';'\n");
+    arena_free(&a);
+}
+
+TEST(address_binds_like_minus) {
+    // A prefix operator, as - is: it takes the operand right after it, and
+    // binary operators come after.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "*a + 1;", &errors), "(block (binary + (unary * (name a)) (int 1)))");
+    CHECK_STR(body_dump(&a, "x := a * *b;", &errors), "(block (var x _ (binary * (name a) (unary * (name b)))))");
+    CHECK_STR(body_dump(&a, "x := -*a; y := cast(*u8) *b;", &errors),
+              "(block (var x _ (unary - (unary * (name a)))) (var y _ (cast (ptr u8) (unary * (name b)))))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(parses_void_pointer_type) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "malloc :: (size: u64) -> *void #foreign libc;\n"
+                        "free :: (p: *void) #foreign libc;\n",
+                        &errors),
+              "(proc malloc (params (size u64)) (returns (ptr void)) (foreign libc))\n"
+              "(proc free (params (p (ptr void))) (foreign libc))\n");
+    CHECK_STR(body_dump(&a, "p : **void; q := cast(*void) p;", &errors),
+              "(block (var p (ptr (ptr void))) (var q _ (cast (ptr void) (name p))))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(dereferences_nest_up_to_a_thousand_levels) {
+    // Each .* is a level above its operand (MAX_DEPTH), as a call is, though
+    // the parser reads a chain of them in a loop.
+    Arena a = arena_make();
+    String errors;
+    String chain = string_printf(&a, "x := p");
+    for (int i = 0; i < 1000; i++) chain = string_printf(&a, STR_FMT ".*", STR_ARG(chain));
+    body_dump(&a, string_cstr(&a, string_printf(&a, STR_FMT ";", STR_ARG(chain))), &errors);
+    CHECK_STR(errors, "");
+    body_dump(&a, string_cstr(&a, string_printf(&a, STR_FMT ".*;", STR_ARG(chain))), &errors);
+    CHECK_STR(errors, "2:10: this expression is nested too deeply (more than 1000 levels)\n");
+    arena_free(&a);
+}
