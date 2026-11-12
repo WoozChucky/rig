@@ -112,6 +112,8 @@ struct Lowering {
     s32 block;                // the block instructions go into
     Array<Local> locals;      // the current procedure's variables and parameters so far
     Array<Loop> loops;        // the loops around the statement being lowered, innermost last
+    bool bounds_checks;       // whether a[i] is checked against a's count (rig build's
+                              // --no-bounds-checks clears it; #no_abc, for one procedure)
 };
 
 // The IR type of a checked type. Strings aren't values yet: a literal is
@@ -1248,11 +1250,12 @@ static void constant_bytes(u8 *bytes, Type *t, Ast *value) {
     for (s64 k = 0; k < t->size; k++) bytes[k] = (u8)(bits >> (8 * k));
 }
 
-Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
+Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     Ir_Module *m = arena_new<Ir_Module>(a);
     Lowering l = {};
     l.arena = a;
     l.diag = d;
+    l.bounds_checks = bounds_checks;
     l.module = m;
     l.block = -1;
 

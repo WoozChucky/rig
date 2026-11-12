@@ -141,7 +141,7 @@ static Ir_Module *lower_source(Arena *a, const char *text) {
     bool ok = check(file, a, &list->diag);
     if (!ok) fprintf(stderr, "lower_source: doesn't check:\n%.*s", STR_ARG(messages(a, &list->diag)));
     RIG_ASSERT(ok);
-    Ir_Module *m = ir_lower(file, &list->diag, a);
+    Ir_Module *m = ir_lower(file, &list->diag, a, true);
     token_list_free(list);
     return m;
 }
@@ -153,7 +153,7 @@ static Ir_Module *lower_tokens(Arena *a, const char *description) {
     Ast_File *file = parse(list->tokens, a, &list->diag);
     bool ok = check(file, a, &list->diag);
     RIG_ASSERT(ok);
-    Ir_Module *m = ir_lower(file, &list->diag, a);
+    Ir_Module *m = ir_lower(file, &list->diag, a, true);
     token_list_free(list);
     return m;
 }

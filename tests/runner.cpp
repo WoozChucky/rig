@@ -2,9 +2,11 @@
 // root: bin/run-tests [RIG], RIG being bin/rig by default.
 //
 // tests/run/NAME.rig is built with `RIG build tests/run/NAME.rig -o
-// .build/tests/NAME` and run; its stdout must equal NAME.out, its exit code
-// the number in NAME.exit (0 when there's none), and its stderr NAME.err (a
-// runtime error's message, say), or be empty when there's no NAME.err.
+// .build/tests/NAME`, followed by the words of NAME.flags when there is one
+// (`--no-bounds-checks`: one line, words split at spaces), and run; its
+// stdout must equal NAME.out, its exit code the number in NAME.exit (0 when
+// there's none), and its stderr NAME.err (a runtime error's message, say),
+// or be empty when there's no NAME.err.
 // On Windows the program's newlines are normalised first, since C's
 // text-mode streams write \r\n for each \n: every \r\n in its stdout and
 // stderr becomes \n (normalise_newlines). The rest is compared byte for
@@ -158,6 +160,22 @@ static Array<String> build_command(Arena *a, String rig, const char *dir, String
     return argv;
 }
 
+// The words of tests/run/NAME.flags, added to rig build's command line:
+// split at spaces, tabs and line breaks (a \r\n's \r too). No file, no
+// words.
+static void add_flags(Arena *a, Array<String> *argv, String name) {
+    String text = {};
+    if (!os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".flags", STR_ARG(name)), &text)) return;
+    s64 start = 0;
+    for (s64 i = 0; i <= text.count; i++) {
+        bool space = i == text.count || text.data[i] == ' ' || text.data[i] == '\t' || text.data[i] == '\r' ||
+                     text.data[i] == '\n';
+        if (!space) continue;
+        if (i > start) array_add(argv, string_slice(text, start, i - start));
+        start = i + 1;
+    }
+}
+
 // A program that must build, run and print its .out. {} when it passes,
 // otherwise why not.
 static String run_test(Arena *a, String rig, String name) {
@@ -167,6 +185,7 @@ static String run_test(Arena *a, String rig, String name) {
     // mustn't be found and run in its place.
     remove(string_cstr(a, program));
     Array<String> argv = build_command(a, rig, "tests/run", name, program);
+    add_flags(a, &argv, name);
     Process_Result built = {};
     bool started = run(a, argv, {}, &built, &why);
     array_free(&argv);
@@ -396,9 +415,13 @@ struct Command_Case {
 };
 
 static const Command_Case COMMAND_CASES[] = {
-    {"no command", {nullptr}, 2, "usage: rig build FILE.rig [-o OUTPUT]\n"},
-    {"an unknown command", {"frob"}, 2, "usage: rig build FILE.rig [-o OUTPUT]\n"},
-    {"rig build with no file", {"build"}, 2, "usage: rig build FILE.rig [-o OUTPUT]\n"},
+    {"no command", {nullptr}, 2, "usage: rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]\n"},
+    {"an unknown command", {"frob"}, 2, "usage: rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]\n"},
+    {"rig build with no file", {"build"}, 2, "usage: rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]\n"},
+    {"--no-bounds-checks twice", {"build", "tests/run/hello.rig", "--no-bounds-checks", "--no-bounds-checks"}, 2,
+     "usage: "},
+    {"--no-bounds-checks with no file", {"build", "--no-bounds-checks"}, 2, "usage: "},
+    {"rig check with --no-bounds-checks", {"check", "--no-bounds-checks", "tests/run/hello.rig"}, 2, "usage: "},
     {"rig build with two files", {"build", "tests/run/hello.rig", "tests/run/hello.rig"}, 2, "usage: "},
     {"-o with no name", {"build", "tests/run/hello.rig", "-o"}, 2, "usage: "},
     {"-o with an empty name", {"build", "tests/run/hello.rig", "-o", ""}, 2, "usage: "},
