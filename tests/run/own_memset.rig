@@ -1,0 +1,44 @@
+// A program may have a procedure of its own called memset: C's isn't part
+// of Rig. LLVM turns the copies and the zeroing of big structs into calls to
+// C's memmove and memset, which still reach the C library's, while the
+// program's memset stays its own (llvm_backend.cpp's
+// declare_memory_functions).
+putchar :: (c: s32) -> s32 #foreign libc;
+
+print_int :: (n: int) {
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+println :: (n: int) {
+    print_int(n);
+    putchar(10);
+}
+
+memset :: (x: int) -> int {
+    return x + 1;
+}
+
+Eight :: struct { a: int; b: int; c: int; d: int; e: int; f: int; g: int; h: int; }
+Quad :: struct { a: Eight; b: Eight; c: Eight; d: Eight; }
+Huge :: struct { a: Quad; b: Quad; c: Quad; d: Quad; }
+
+last :: (h: Huge) -> int {
+    return h.d.d.h;
+}
+
+main :: () {
+    h : Huge;
+    h.d.d.h = memset(41);
+    h.a.a.a = 7;
+    copy := h;
+    h.d.d.h = 0;
+    println(copy.d.d.h);
+    println(copy.a.a.a);
+    println(copy.b.c.d);
+    println(last(copy));
+    println(memset(1));
+    h = copy;
+    println(h.d.d.h);
+    println(size_of(Huge));
+}
