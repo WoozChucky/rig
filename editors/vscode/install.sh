@@ -19,7 +19,7 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # The extension's files, from this directory: what the .vsix holds under
 # extension/. install.bat has the same list, and test/check.js checks the
 # two agree and hold every file package.json names.
-files="package.json language-configuration.json README.md extension.js syntaxes/rig.tmLanguage.json snippets/rig.json"
+files="package.json language-configuration.json README.md extension.js diagnostics.js syntaxes/rig.tmLanguage.json snippets/rig.json"
 
 if ! command -v code >/dev/null 2>&1; then
     echo "install.sh: 'code' isn't on the PATH; in VS Code, run \"Shell Command: Install 'code' command in PATH\"" >&2

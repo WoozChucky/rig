@@ -5,6 +5,7 @@
 static void print_usage() {
     fprintf(stderr,
             "usage: rig build FILE.rig [-o OUTPUT]\n"
+            "       rig check FILE.rig [--stdin]\n"
             "       rig version\n");
 }
 
@@ -36,6 +37,11 @@ int main(int argc, char **argv) {
         // A view of args, not an array of its own: never grown or freed.
         Array<String> words = {args.data + 2, args.count - 2, args.count - 2};
         status = command_build(&a, words, print_usage);
+    } else if (args.count >= 2 && string_eq(args[1], str("check"))) {
+        // rig check: rig build without the build, only the diagnostics
+        // (driver.cpp).
+        Array<String> words = {args.data + 2, args.count - 2, args.count - 2};
+        status = command_check(&a, words, print_usage);
     } else {
         print_usage();
     }

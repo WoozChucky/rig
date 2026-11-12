@@ -111,6 +111,19 @@ static int helper_mode(int argc, char **argv) {
         arena_free(&a);
         return 0;
     }
+    if (strcmp(argv[1], "--echo-stdin") == 0) {
+        // Its stdin, read with os_read_stdin, back on stdout byte for byte
+        // (stdout is binary here, above).
+        Arena a = arena_make();
+        String input = {};
+        if (!os_read_stdin(&a, &input)) {
+            fprintf(stderr, "can't read stdin: " STR_FMT "\n", STR_ARG(os_error_message(&a)));
+            return 1;
+        }
+        fwrite(input.data, 1, (size_t)input.count, stdout);
+        arena_free(&a);
+        return 0;
+    }
     if (strcmp(argv[1], "--fail-with") == 0) {
         fprintf(stderr, "oops\n");
         return atoi(argv[2]);

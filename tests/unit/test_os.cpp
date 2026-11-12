@@ -1,7 +1,7 @@
 // test_os.cpp: the operating system layer (issue #4). The process tests run
 // this same program, bin/unit-tests, with the helper flags of unit.cpp
-// (--echo-args, --cwd, --fail-with, --spam, --sleep, --close-and-sleep,
-// --spawn-sleeper).
+// (--echo-args, --echo-stdin, --cwd, --fail-with, --spam, --sleep,
+// --close-and-sleep, --spawn-sleeper).
 
 #include "test.h"
 
@@ -181,6 +181,73 @@ TEST(os_run_for_lets_a_quick_program_finish) {
     CHECK(os_run_for(&a, argv, {}, 30, &result));
     CHECK(!result.timed_out);
     CHECK_EQ(result.exit_code, 3);
+    CHECK_STR(result.err, "oops\n");
+    array_free(&argv);
+    arena_free(&a);
+}
+
+TEST(os_run_with_input_gives_the_program_exactly_those_bytes) {
+    // A "\r\n" and a zero byte arrive as they are: neither end translates
+    // text (os_read_stdin reads in binary mode on Windows).
+    Arena a = arena_make();
+    Array<String> argv = {};
+    array_add(&argv, unit_tests_path(&a));
+    array_add(&argv, str("--echo-stdin"));
+    String input = str("a\r\nb\0c\n");
+    input.count = 7;  // the zero byte too
+    Process_Result result = {};
+    CHECK(os_run_with_input(&a, argv, {}, 30, input, &result));
+    CHECK(!result.timed_out);
+    CHECK_EQ(result.exit_code, 0);
+    CHECK_EQ(result.out.count, 7);
+    CHECK(string_eq(result.out, input));
+    CHECK_STR(result.err, "");
+    // No input: stdin is empty, as os_run_for's.
+    CHECK(os_run_with_input(&a, argv, {}, 30, {}, &result));
+    CHECK_EQ(result.exit_code, 0);
+    CHECK_STR(result.out, "");
+    array_free(&argv);
+    arena_free(&a);
+}
+
+// More than a pipe holds (64 KiB on Linux, 4 KiB to 64 KiB on Windows): the
+// input has to be written while the output is read, or the two programs
+// wait on each other.
+static String big_input(Arena *a, s64 n) {
+    u8 *data = (u8 *)arena_alloc(a, (u64)n, 1);
+    for (s64 i = 0; i < n; i++) data[i] = (u8)('a' + i % 26);
+    return {data, n};
+}
+
+TEST(os_run_with_input_writes_and_reads_at_once) {
+    Arena a = arena_make();
+    Array<String> argv = {};
+    array_add(&argv, unit_tests_path(&a));
+    array_add(&argv, str("--echo-stdin"));
+    String input = big_input(&a, 1000000);
+    Process_Result result = {};
+    CHECK(os_run_with_input(&a, argv, {}, 30, input, &result));
+    CHECK(!result.timed_out);
+    CHECK_EQ(result.exit_code, 0);
+    CHECK_EQ(result.out.count, input.count);
+    CHECK(string_eq(result.out, input));
+    array_free(&argv);
+    arena_free(&a);
+}
+
+TEST(os_run_with_input_survives_a_program_that_never_reads_it) {
+    // The program ends with most of the input unread: writing the rest
+    // fails (on Linux with SIGPIPE, which by default would end the caller),
+    // and must neither hang nor end this program.
+    Arena a = arena_make();
+    Array<String> argv = {};
+    array_add(&argv, unit_tests_path(&a));
+    array_add(&argv, str("--fail-with"));
+    array_add(&argv, str("5"));
+    Process_Result result = {};
+    CHECK(os_run_with_input(&a, argv, {}, 30, big_input(&a, 1000000), &result));
+    CHECK(!result.timed_out);
+    CHECK_EQ(result.exit_code, 5);
     CHECK_STR(result.err, "oops\n");
     array_free(&argv);
     arena_free(&a);

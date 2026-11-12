@@ -1,4 +1,5 @@
-// driver.cpp: rig build, every stage in order.
+// driver.cpp: rig build, every stage in order, and rig check, the stages up
+// to the diagnostics (command_check, at the end).
 //
 // rig build FILE.rig [-o OUTPUT] reads the file, lexes, parses and checks it,
 // and stops there with the diagnostics on stderr if anything was wrong
@@ -57,35 +58,54 @@ String executable_path(Arena *a, String output, String name, Target t) {
     return string_printf(a, STR_FMT ".exe", STR_ARG(output));
 }
 
-// rig build's work; returns the exit code. `output` may be {}: the default.
-static int build(Arena *a, String path, String output) {
+// The front half of the compiler, all of rig check and the start of rig
+// build: reads the source (the file at `path`, or with from_stdin standard
+// input, named `path` all the same), lexes, parses and checks it, and
+// prints every diagnostic to stderr. Returns the checked tree, or nullptr
+// when the source couldn't be read or had errors, which it has then
+// reported. With `lowered`, as rig build asks, a program without errors is
+// also lowered into *lowered; rig check passes nullptr and stops at the
+// checker.
+static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Module **lowered) {
     String text = {};
-    if (!os_read_file(a, path, &text)) {
-        fprintf(stderr, "rig: error: cannot read '" STR_FMT "': " STR_FMT "\n", STR_ARG(path),
-                STR_ARG(os_error_message(a)));
-        return 1;
+    bool read = from_stdin ? os_read_stdin(a, &text) : os_read_file(a, path, &text);
+    if (!read) {
+        if (from_stdin) {
+            fprintf(stderr, "rig: error: cannot read standard input: " STR_FMT "\n", STR_ARG(os_error_message(a)));
+        } else {
+            fprintf(stderr, "rig: error: cannot read '" STR_FMT "': " STR_FMT "\n", STR_ARG(path),
+                    STR_ARG(os_error_message(a)));
+        }
+        return nullptr;
     }
 
+    // The tokens and the diagnostics are freed here, the tree and the module
+    // kept: they live in the arena.
     Diagnostics d = {};
     s32 file = diag_add_file(&d, path, text);
     Array<Token> tokens = lex(&d, file, a);
     Ast_File *tree = parse(tokens, a, &d);
     check(tree, a, &d);
-    if (d.error_count > 0) {
+    bool ok = d.error_count == 0;
+    if (!ok) {
         // Into source order: the lexer reported the whole file before the
         // parser began, the parser the whole file before the checker, and
         // the checker reports every signature before any body.
         diag_sort(&d);
         diag_print(&d);
-        diag_free(&d);
-        array_free(&tokens);
-        return 1;
     }
     // Lowered while d still holds the file's path, which a runtime error's
     // message names; the module keeps its own copy.
-    Ir_Module *module = ir_lower(tree, &d, a);
+    if (ok && lowered) *lowered = ir_lower(tree, &d, a);
     diag_free(&d);
     array_free(&tokens);
+    return ok ? tree : nullptr;
+}
+
+// rig build's work; returns the exit code. `output` may be {}: the default.
+static int build(Arena *a, String path, String output) {
+    Ir_Module *module = nullptr;
+    if (!read_and_check(a, path, false, &module)) return 1;
 
     Target target = target_host();
     String name = program_name(path);
@@ -117,11 +137,23 @@ static int build(Arena *a, String path, String output) {
     return 0;
 }
 
+// Whether the source file's name, as given to rig build or rig check, ends
+// in .rig; when it doesn't, says so. Both commands refuse such a name (exit
+// 1, as for any other error rig names): a Rig program is a .rig file, and
+// another file given by mistake (hello.out for hello.rig) would otherwise
+// get a page of syntax errors, or with build, a program named after it.
+static bool source_named_rig(String path) {
+    if (is_rig_file(path)) return true;
+    fprintf(stderr, "rig: error: '" STR_FMT "' isn't a .rig file\n", STR_ARG(path));
+    return false;
+}
+
 // rig build's command line: the words after "build", FILE.rig [-o OUTPUT],
 // in either order. Returns the exit code; 2 with the usage for a malformed
 // line (no file, two files, -o with no name or an empty one, -o twice).
-// An output ending in .rig is refused: it's a mistake for the source's name,
-// and the linker would overwrite the source with the program.
+// A source not ending in .rig is refused (source_named_rig), and so is an
+// output ending in .rig: it's a mistake for the source's name, and the
+// linker would overwrite the source with the program.
 int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
     String path = {}, output = {};
     bool have_path = false, have_output = false;
@@ -145,9 +177,46 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
         print_usage();
         return 2;
     }
+    if (!source_named_rig(path)) return 1;
     if (is_rig_file(output)) {
         fprintf(stderr, "rig: error: the output '" STR_FMT "' ends in .rig; is it the source file?\n", STR_ARG(output));
         return 1;
     }
     return build(a, path, output);
+}
+
+// rig check's command line: the words after "check", FILE.rig [--stdin], in
+// either order. Returns the exit code: 1 if the program has errors (printed
+// as rig build prints them), can't be read or isn't named .rig (as rig build
+// refuses it, source_named_rig), else 0; 2 for a malformed line (no file,
+// two files, --stdin twice, or -o: check writes nothing, so there is no
+// output to name), with the usage.
+//
+// It runs read_and_check, rig build's front half, and stops: nothing is
+// lowered, LLVM and the linker aren't involved, and no file or .build
+// directory is written. That makes it quick and harmless to run on every
+// keystroke, which is what an editor does with it: --stdin reads the source
+// from standard input, so the editor can send what's on screen, saved or
+// not, and FILE.rig is then only the name the diagnostics give it (it
+// needn't exist).
+int command_check(Arena *a, Array<String> words, void (*print_usage)()) {
+    String path = {};
+    bool have_path = false, from_stdin = false;
+    for (s64 i = 0; i < words.count; i++) {
+        if (string_eq(words[i], str("--stdin")) && !from_stdin) {
+            from_stdin = true;
+        } else if (string_eq(words[i], str("--stdin")) || string_eq(words[i], str("-o")) || have_path) {
+            print_usage();
+            return 2;
+        } else {
+            path = words[i];
+            have_path = true;
+        }
+    }
+    if (!have_path) {
+        print_usage();
+        return 2;
+    }
+    if (!source_named_rig(path)) return 1;
+    return read_and_check(a, path, from_stdin, nullptr) ? 0 : 1;
 }
