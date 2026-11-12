@@ -12,6 +12,9 @@
 // Then a few fixed cases: rig build without -o from another directory, the
 // command line's mistakes, and a .build/ or an object file rig can't write.
 //
+// Last, rig check on every program of both directories, from a file and
+// from stdin, and its own command line (check_tests).
+//
 // Every program, rig included, gets TIMEOUT seconds; one that takes longer
 // is killed and its test fails, so a hang can't stall the run. (On Linux
 // that puts each program in a process group of its own, which Ctrl-C in
@@ -407,6 +410,203 @@ static void run_directory(Arena *a, String rig, const char *dir, String (*test)(
     array_free(&names);
 }
 
+// --- rig check ---------------------------------------------------------------
+//
+// rig check FILE.rig [--stdin] does what rig build does up to the
+// diagnostics and stops there: it must say exactly what rig build says
+// about a program in tests/errors, nothing about one in tests/run, and
+// write nothing, neither an object, a program nor a .build directory. With
+// --stdin it reads the source from its standard input (what an editor has
+// on screen, unsaved) and names it FILE.rig, which needn't exist.
+
+// The directory the checks that must write nothing run in.
+static const char *CHECK_DIR = ".build/tests/check";
+
+// run(), with `input` on the program's stdin.
+static bool run_with_input(Arena *a, Array<String> argv, String directory, String input, Process_Result *result,
+                           String *why) {
+    if (!os_run_with_input(a, argv, directory, TIMEOUT, input, result)) {
+        *why = string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(argv[0]), STR_ARG(os_error_message(a)));
+        return false;
+    }
+    result->out = normalise_newlines(a, result->out);
+    result->err = normalise_newlines(a, result->err);
+    if (result->timed_out) {
+        *why = with_stderr(a, string_printf(a, STR_FMT " took longer than %d seconds", STR_ARG(argv[0]), TIMEOUT),
+                           result->err);
+        return false;
+    }
+    return true;
+}
+
+// rig check FILE, or rig check FILE --stdin with `input` on stdin, in
+// `directory` ({}: this one); false with `why` when it couldn't run.
+static bool run_check(Arena *a, String rig, String file, bool from_stdin, String input, String directory,
+                      Process_Result *result, String *why) {
+    Array<String> argv = {};
+    array_add(&argv, rig);
+    array_add(&argv, str("check"));
+    array_add(&argv, file);
+    if (from_stdin) array_add(&argv, str("--stdin"));
+    bool started = run_with_input(a, argv, directory, input, result, why);
+    array_free(&argv);
+    return started;
+}
+
+// What's wrong with a check's result, or {}: its exit code, stdout and
+// stderr against what they must be.
+static String check_result(Arena *a, const char *what, Process_Result *r, s32 exit_code, String err) {
+    if (r->exit_code != exit_code) {
+        return with_stderr(a,
+                           string_printf(a, "%s exited with " STR_FMT ", expected %d", what,
+                                         STR_ARG(exit_code_text(a, r->exit_code)), exit_code),
+                           r->err);
+    }
+    if (r->out.count) return string_printf(a, "%s wrote to stdout: \"" STR_FMT "\"", what, STR_ARG(r->out));
+    if (!string_eq(r->err, err)) {
+        return first_difference(a, string_cstr(a, string_printf(a, "%s's stderr", what)), err, r->err);
+    }
+    return {};
+}
+
+// What a check of tests/DIR/NAME.rig mustn't leave behind in the
+// repository's root, where it runs: the object file rig build would write
+// there, and the program.
+static String check_wrote(Arena *a, String name) {
+    String object = string_printf(a, ".build/" STR_FMT "%s", STR_ARG(name), OBJ);
+    String program = string_printf(a, STR_FMT "%s", STR_ARG(name), EXE);
+    if (os_file_exists(object)) return object;
+    if (os_file_exists(program)) return program;
+    return {};
+}
+
+// tests/DIR/NAME.rig checked twice: by its path from the repository's
+// root, and through --stdin from CHECK_DIR (where the name needn't exist,
+// and the diagnostics must still name it as given). Both must exit with
+// `exit_code` and print `err`, and write nothing.
+static String check_both_ways(Arena *a, String rig, const char *dir, String name, s32 exit_code, String err) {
+    String file = string_printf(a, "%s/" STR_FMT ".rig", dir, STR_ARG(name));
+    String source = {};
+    if (!os_read_file(a, file, &source)) return string_printf(a, "can't read " STR_FMT, STR_ARG(file));
+    // rig build put an object here earlier; rig check mustn't make one.
+    remove(string_cstr(a, string_printf(a, ".build/" STR_FMT "%s", STR_ARG(name), OBJ)));
+
+    Process_Result r = {};
+    String why = {};
+    if (!run_check(a, rig, file, false, {}, {}, &r, &why)) return why;
+    why = check_result(a, "rig check", &r, exit_code, err);
+    if (why.count) return why;
+    String wrote = check_wrote(a, name);
+    if (wrote.count) return string_printf(a, "rig check wrote " STR_FMT, STR_ARG(wrote));
+
+    if (!run_check(a, rig, file, true, source, str(CHECK_DIR), &r, &why)) return why;
+    return check_result(a, "rig check --stdin", &r, exit_code, err);
+}
+
+// A program of tests/errors: exit 1 and its .err, as rig build gives.
+static String check_error_test(Arena *a, String rig, String name) {
+    String expected = {};
+    if (!os_read_file(a, string_printf(a, "tests/errors/" STR_FMT ".err", STR_ARG(name)), &expected)) {
+        return str("no .err file");
+    }
+    return check_both_ways(a, rig, "tests/errors", name, 1, expected);
+}
+
+// A program of tests/run: nothing to say, exit 0. (One that fails when it
+// runs still checks clean: checking never runs it.)
+static String check_run_test(Arena *a, String rig, String name) {
+    return check_both_ways(a, rig, "tests/run", name, 0, {});
+}
+
+// rig check, run in CHECK_DIR, where check_tests removed any .build, leaves
+// none: it never gets as far as writing an object. Every --stdin check ran
+// there before this one, so this covers them too.
+static String check_writes_nothing_test(Arena *a, String rig) {
+    String dir = str(CHECK_DIR);
+    String program = string_printf(a, STR_FMT "/hello%s", STR_ARG(dir), EXE);
+    remove(string_cstr(a, program));
+    Process_Result r = {};
+    String why = {};
+    if (!run_check(a, rig, str("../../../tests/run/hello.rig"), false, {}, dir, &r, &why)) return why;
+    why = check_result(a, "rig check", &r, 0, {});
+    if (why.count) return why;
+    String nested_build = string_printf(a, STR_FMT "/.build", STR_ARG(dir));
+    if (os_file_exists(nested_build)) return string_printf(a, "rig check made " STR_FMT, STR_ARG(nested_build));
+    if (os_file_exists(program)) return string_printf(a, "rig check wrote " STR_FMT, STR_ARG(program));
+    return {};
+}
+
+// --stdin with a name that isn't a file: the source is what came in, and
+// the diagnostics name the file as given.
+static String check_stdin_without_a_file_test(Arena *a, String rig) {
+    String file = str("tests/no-such-directory/typed.rig");
+    if (os_file_exists(file)) return str("tests/no-such-directory/typed.rig exists");
+    Process_Result r = {};
+    String why = {};
+    String hello = str("puts :: (s: *u8) -> s32 #foreign libc;\nmain :: () { puts(\"hi\"); }\n");
+    if (!run_check(a, rig, file, true, hello, {}, &r, &why)) return why;
+    why = check_result(a, "rig check --stdin", &r, 0, {});
+    if (why.count) return why;
+
+    String broken = str("main :: () { putz(\"hi\"); }\n");
+    if (!run_check(a, rig, file, true, broken, {}, &r, &why)) return why;
+    return check_result(a, "rig check --stdin", &r, 1,
+                        str("tests/no-such-directory/typed.rig:1:14: error: unknown identifier 'putz'\n"
+                            "    main :: () { putz(\"hi\"); }\n"
+                            "                 ^\n"));
+}
+
+// rig check's command line, right and wrong, as COMMAND_CASES rig build's.
+static const Command_Case CHECK_CASES[] = {
+    {"rig check with no file", {"check"}, 2, "usage: "},
+    {"rig check with two files", {"check", "tests/run/hello.rig", "tests/run/hello.rig"}, 2, "usage: "},
+    {"rig check with -o", {"check", "tests/run/hello.rig", "-o", ".build/tests/output.RIG"}, 2, "usage: "},
+    {"rig check with --stdin twice", {"check", "--stdin", "tests/run/hello.rig", "--stdin"}, 2, "usage: "},
+    {"rig check of a file not ending in .rig",
+     {"check", "tests/run/hello.out"},
+     2,
+     "rig: error: 'tests/run/hello.out' isn't a .rig file\n"},
+    {"rig check --stdin with a name not ending in .rig",
+     {"check", "--stdin", "typed.txt"},
+     2,
+     "rig: error: 'typed.txt' isn't a .rig file\n"},
+    {"rig check of a file that isn't there",
+     {"check", "tests/missing.rig"},
+     1,
+     "rig: error: cannot read 'tests/missing.rig': "},
+};
+
+// Every rig check test, one after another.
+static void check_tests(Arena *a, String rig, s64 *passed, s64 *failed) {
+    os_make_directory(str(CHECK_DIR));
+    if (!remove_nested_build(a, str(CHECK_DIR))) {
+        report("rig check", str("couldn't remove the last run's .build/tests/check/.build"), passed, failed);
+        return;
+    }
+    const char *dirs[2] = {"tests/run", "tests/errors"};
+    String (*tests[2])(Arena *, String, String) = {check_run_test, check_error_test};
+    for (int d = 0; d < 2; d++) {
+        Array<String> names = {};
+        if (!os_list_directory(a, str(dirs[d]), &names)) {
+            report(dirs[d], string_printf(a, "can't list it: " STR_FMT, STR_ARG(os_error_message(a))), passed, failed);
+            continue;
+        }
+        for (s64 i = 0; i < names.count; i++) {
+            if (!ends_with(names[i], ".rig")) continue;
+            String name = string_slice(names[i], 0, names[i].count - 4);
+            String why = tests[d](a, rig, name);
+            String test_name = string_printf(a, "rig check %s/" STR_FMT, dirs[d], STR_ARG(name));
+            report(string_cstr(a, test_name), why, passed, failed);
+        }
+        array_free(&names);
+    }
+    report("rig check writes nothing, not even .build", check_writes_nothing_test(a, rig), passed, failed);
+    report("rig check --stdin of a file that isn't there", check_stdin_without_a_file_test(a, rig), passed, failed);
+    for (const Command_Case &c : CHECK_CASES) {
+        report(string_cstr(a, string_printf(a, "rig: %s", c.what)), command_test(a, rig, &c), passed, failed);
+    }
+}
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     // A program that crashes, or can't find a DLL, fails with its exit code
@@ -429,6 +629,7 @@ int main(int argc, char **argv) {
     for (const Command_Case &c : COMMAND_CASES) {
         report(string_cstr(&a, string_printf(&a, "rig: %s", c.what)), command_test(&a, rig, &c), &passed, &failed);
     }
+    check_tests(&a, rig, &passed, &failed);
     printf("%lld passed, %lld failed\n", (long long)passed, (long long)failed);
     arena_free(&a);
     return failed ? 1 : 0;
