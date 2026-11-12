@@ -465,3 +465,26 @@ String os_error_message(Arena *a) {
     LocalFree(message);
     return s;
 }
+
+struct Thread_Start {
+    void (*fn)(void *data);
+    void *data;
+};
+
+static DWORD WINAPI thread_start(LPVOID start) {
+    Thread_Start *s = (Thread_Start *)start;
+    s->fn(s->data);
+    return 0;
+}
+
+bool os_run_on_stack(u64 stack_size, void (*fn)(void *data), void *data) {
+    Thread_Start start = {fn, data};
+    // The size reserves the stack's addresses; pages are committed only as
+    // the stack grows into them, so a large one costs nothing until used.
+    HANDLE thread = CreateThread(nullptr, (SIZE_T)stack_size, thread_start, &start,
+                                 STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+    if (!thread) return os_fail();
+    WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+    return true;
+}
