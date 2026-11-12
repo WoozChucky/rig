@@ -39,6 +39,11 @@ Type *resolve_type(Checker *c, Ast_Type *written);
 // what's wrong with it.
 Type *resolve_type_or_void(Checker *c, Ast_Type *written);
 
+// [count]element (type_array_of), or null after "'[N]T' is too big", at
+// `at`: larger than any type may be (TYPE_MAX_SIZE), its count read as
+// unsigned. For a written [N]T and for a literal's array.
+Type *check_array_type(Checker *c, Type *element, u64 count, Position at);
+
 // check_expr.cpp
 
 // Checks an expression, filling in its type (also returned; null after an
@@ -49,7 +54,7 @@ Type *check_expression(Checker *c, Ast *e);
 
 // check_expression for an expression whose value is used: a call returning
 // nothing is reported ("'greet' returns nothing, so it has no value"), and
-// gives null. A struct literal without its type written, .{...}, has type
+// gives null. A literal without its type written, .{...} or .[...], has type
 // type_untyped_literal, its values not yet checked: where it meets a type,
 // check_convert completes it, and where it meets none, check_default_type
 // reports it.
@@ -68,23 +73,25 @@ Type *check_operand(Checker *c, Ast *e);
 // doesn't fit is reported here, then counted as converting, so the caller
 // doesn't report it again. .{...} takes the struct type `to`, its values
 // checked against its fields here ("a '.{' literal needs a struct type, not
-// 'int'" for any other, also counted as converting). True also when either
-// type is unknown (null): the error was reported already.
+// 'int'" for any other, also counted as converting); .[...] an array type,
+// or a view type, becoming then an array of its own count. True also when
+// either type is unknown (null): the error was reported already.
 bool check_convert(Checker *c, Ast *e, Type *to);
 
 // "a value of type 'A' doesn't convert to 'B' implicitly", at the value.
 void report_no_conversion(Checker *c, Ast *value, Type *to);
 
 // Whether a value of type `from`, not an untyped constant, converts
-// implicitly to `to`: the same type, an integer that widens, or a float32
-// to a float64 (spec 6.4). True when either is unknown (null): the error
+// implicitly to `to`: the same type, an integer that widens, a float32 to a
+// float64 (spec 6.4), a *void to or from any pointer, or [N]T to []T (spec
+// 6.5). True when either is unknown (null): the error
 // was reported already.
 bool type_converts(Type *from, Type *to);
 
 // An untyped constant that meets no type becomes an int (x := 5;), or a
-// float32 (x := 0.5;), which it must fit. A struct literal that meets none,
-// .{...}, is "this literal's type isn't known; write it before the '.', as
-// in Vec2.{1, 2}", and its type becomes unknown (null).
+// float32 (x := 0.5;), which it must fit. A literal that meets none,
+// .{...} or .[...], is "this literal's type isn't known; write it before the
+// '.', as in Vec2.{1, 2}" (int.[1, 2]), and its type becomes unknown (null).
 void check_default_type(Checker *c, Ast *e);
 
 // "null needs a pointer type, as in p : *int = null;", at e, a null that
@@ -100,8 +107,13 @@ void report_null_without_a_type(Checker *c, Ast *e);
 // message: "can't assign to 'a': it's a parameter" or "can't take the
 // address of 'a': it's a parameter" (v.x for a parameter v too); "only a
 // variable, a field or an element can be assigned to" or "... has an
-// address". Arrays (milestone 2b's next task) add their elements here.
+// address". An element is a place when its array is, or always when it's a
+// view's or a pointer's (its elements lie elsewhere); an array's .count and
+// .data never are ("can't assign to an array's 'count'").
 bool check_addressable(Checker *c, Ast *e, bool for_writing);
+
+// check_addressable for an e already checked, its type known.
+bool is_place(Checker *c, Ast *e, bool for_writing);
 
 // p += n or p -= n (`op_name`, at `at`), p's type the pointer type
 // `pointer`, or the offset of p + n, n + p or p - n: n must be an integer

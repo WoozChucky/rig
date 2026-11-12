@@ -6,17 +6,95 @@
 static Ast *find_name(Checker *c, String name);
 static Type *resolve_struct(Checker *c, Ast_Struct *s);
 
-// A type by its name: a built-in one, or a struct's, whose layout is worked
-// out here if it isn't yet (resolve_struct). Any other name declared where
-// the type is written isn't a type ("'foo' is not a type"), and a name
+Type *check_array_type(Checker *c, Type *element, u64 count, Position at) {
+    // Dividing, so the check can't overflow itself: count * size could.
+    bool too_big = count > (u64)INT64_MAX || (element->size && (s64)count > TYPE_MAX_SIZE / element->size);
+    if (too_big) {
+        diag_error(c->diag, at, "'[%llu]" STR_FMT "' is too big", (unsigned long long)count,
+                   STR_ARG(type_name(c->arena, element)));
+        return nullptr;
+    }
+    return type_array_of(element, (s64)count);
+}
+
+// N in [N]T (spec 6.5): an integer known while compiling, from 0 up. True,
+// with its value in *out (by its type's sign: a u64 may be above s64's
+// range, which check_array_type finds too big); otherwise false after
+// saying what it is instead, at it:
+// - not an integer: "an array's count must be an integer, not 'float32'"
+//   (an untyped constant named by the type it would take);
+// - not known while compiling: "an array's count must be known while
+//   compiling" (a variable, a call);
+// - below 0: "an array's count can't be negative (-1)".
+// An untyped constant becomes an int, as one that meets no type does.
+static bool check_array_count(Checker *c, Ast *count, u64 *out) {
+    if (!check_operand(c, count)) return false;
+    check_default_type(c, count);
+    Type *t = count->type;
+    if (!t) return false;  // an untyped float too large for a float32, reported
+    if (t->kind != TYPE_INTEGER) {
+        diag_error(c->diag, count->start, "an array's count must be an integer, not '" STR_FMT "'",
+                   STR_ARG(type_name(c->arena, t)));
+        return false;
+    }
+    if (!count->is_constant) {
+        diag_error(c->diag, count->start, "an array's count must be known while compiling");
+        return false;
+    }
+    if (t->is_signed && (s64)count->constant < 0) {
+        diag_error(c->diag, count->start, "an array's count can't be negative (%lld)", (long long)count->constant);
+        return false;
+    }
+    *out = count->constant;
+    return true;
+}
+
+static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer);
+
+// T in [N]T or []T: any type but void, which has no values to hold ("'void'
+// is only a pointer's target, as in *void", at it).
+static Type *resolve_element(Checker *c, Ast_Type *written, bool behind_pointer) {
+    Type *t = resolve_written(c, written, behind_pointer);
+    if (t == &type_void) {
+        diag_error(c->diag, written->pos, "'void' is only a pointer's target, as in *void");
+        return nullptr;
+    }
+    return t;
+}
+
+// A written type. A name is a built-in type, or a struct's, whose layout is
+// worked out here if it isn't yet (resolve_struct). Any other name declared
+// where the type is written isn't a type ("'foo' is not a type"), and a name
 // declared nowhere is "unknown type 'foo'". A broken entry's name may have
 // been anything, so nothing is said about it. A struct found to contain
 // itself has no type: its uses say nothing more.
-Type *resolve_type_or_void(Checker *c, Ast_Type *written) {
-    if (written->kind == AST_TYPE_POINTER) {
+//
+// behind_pointer: the type is what a pointer points at, or a view's
+// elements, which lie elsewhere: only the struct's Type is needed, not its
+// layout, which isn't worked out here. So a struct can hold a []Tree or a
+// [2]*Tree of itself while its own layout is under way (lay_out). An array
+// holds its elements, so it needs their size: [2]Bad inside Bad is Bad
+// holding itself.
+static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer) {
+    switch (written->kind) {
+    case AST_TYPE_POINTER: {
         // *void is a pointer to anything, so void is fine here.
-        Type *pointee = resolve_type_or_void(c, written->pointee);
+        Type *pointee = resolve_written(c, written->pointee, true);
         return pointee ? type_pointer_to(pointee) : nullptr;
+    }
+    case AST_TYPE_VIEW: {
+        Type *element = resolve_element(c, written->element, true);
+        return element ? type_view_of(element) : nullptr;
+    }
+    case AST_TYPE_ARRAY: {
+        // The count's mistakes first, then the element type's: source order.
+        u64 count = 0;
+        bool counted = check_array_count(c, written->count, &count);
+        Type *element = resolve_element(c, written->element, false);
+        if (!counted || !element) return nullptr;
+        return check_array_type(c, element, count, written->pos);
+    }
+    default: break;
     }
     Type *t = type_from_name(written->name);
     if (t) return t;
@@ -24,23 +102,24 @@ Type *resolve_type_or_void(Checker *c, Ast_Type *written) {
     if (!decl) {
         diag_error(c->diag, written->pos, "unknown type '" STR_FMT "'", STR_ARG(written->name));
     } else if (decl->kind == AST_STRUCT) {
-        return resolve_struct(c, (Ast_Struct *)decl);
+        Ast_Struct *s = (Ast_Struct *)decl;
+        if (behind_pointer && s->resolve != RESOLVE_DONE) return s->declared;
+        return resolve_struct(c, s);
     } else if (decl->kind != AST_PROC || !((Ast_Proc *)decl)->is_broken) {
         diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
     }
     return nullptr;
 }
 
+Type *resolve_type_or_void(Checker *c, Ast_Type *written) {
+    return resolve_written(c, written, false);
+}
+
 // void names no value at all, so a variable, a parameter, a result or a
 // cast can't have it as its type (a procedure that returns nothing has no
 // -> instead): only a pointer can point at it.
 Type *resolve_type(Checker *c, Ast_Type *written) {
-    Type *t = resolve_type_or_void(c, written);
-    if (t == &type_void) {
-        diag_error(c->diag, written->pos, "'void' is only a pointer's target, as in *void");
-        return nullptr;
-    }
-    return t;
+    return resolve_element(c, written, false);
 }
 
 // Scopes. Each block being checked has a table of the names declared in it
@@ -309,7 +388,10 @@ static void resolve_global(Checker *c, Ast *decl) {
 // way. A pointer is 8 bytes whatever it points at, so a field that is a
 // pointer is laid out without looking at what it points at, and its type is
 // filled in only once every struct is laid out (resolve_pointer_fields):
-// Node can hold a *Node, and A a *B while B holds an A.
+// Node can hold a *Node, and A a *B while B holds an A. A view is 16 bytes
+// whatever its elements are, and a pointer inside another type (an array of
+// pointers, [2]*Node) is 8, so neither looks at their struct's layout either
+// (resolve_written's behind_pointer): Tree can hold a []Tree.
 
 // The field of struct s before its i-th with the same name, or null.
 static Ast_Field *earlier_field(Ast_Struct *s, s64 i) {
@@ -368,7 +450,9 @@ static void lay_out(Checker *c, Ast_Struct *s) {
 // was under way when the circle closed. Every struct in the circle then has
 // no type (Ast_Struct.declared is null), so nothing more is said about it
 // or its uses; a struct that only holds one in a circle isn't in it, and
-// keeps its type, the field that holds it having none.
+// keeps its type, the field that holds it having none. A struct larger
+// than any type may be (TYPE_MAX_SIZE), its fields each fine, is "'Huge' is
+// too big", at its name, and has no type either.
 static Type *resolve_struct(Checker *c, Ast_Struct *s) {
     if (s->resolve == RESOLVE_DONE) return s->declared;
     if (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE) {
@@ -384,7 +468,12 @@ static Type *resolve_struct(Checker *c, Ast_Struct *s) {
     array_add(&c->resolving, (Ast *)s);
     lay_out(c, s);
     c->resolving.count--;
-    if (s->resolve == RESOLVE_CYCLE) s->declared = nullptr;
+    if (s->resolve == RESOLVE_CYCLE) {
+        s->declared = nullptr;
+    } else if (s->declared->size > TYPE_MAX_SIZE) {
+        diag_error(c->diag, s->pos, "'" STR_FMT "' is too big", STR_ARG(s->name));
+        s->declared = nullptr;
+    }
     s->resolve = RESOLVE_DONE;
     return s->declared;
 }
@@ -606,11 +695,11 @@ static void check_while(Checker *c, Ast_While *loop) {
 
 // for a..b: the ends are integers that meet at a type as an arithmetic
 // operator's operands do; untyped ends (for 0..9) make an int. That's the
-// iterator's type, and it_index is an int. Both are declared in the body's
-// own block, as parameters are in a procedure's, so the body can't declare
-// them again, and they end with the loop. A named iterator is declared
-// instead of it, so inside `for i: ...` an outer loop's it is still it.
-static void check_for(Checker *c, Ast_For *loop) {
+// iterator's type. A range's numbers are made on the spot, so there's
+// nothing for `for *` to point at: "'for *' needs an array or a view, not a
+// range", at the first end.
+static Type *check_range(Checker *c, Ast_For *loop) {
+    if (loop->by_pointer) diag_error(c->diag, loop->first->start, "'for *' needs an array or a view, not a range");
     Type *first = check_operand(c, loop->first);
     Type *last = check_operand(c, loop->last);
     Type *t = nullptr;
@@ -622,6 +711,41 @@ static void check_for(Checker *c, Ast_For *loop) {
             t = &type_int;
         }
     }
+    return t;
+}
+
+// for a: a is an array or a view, worked out once, before the first
+// iteration (lowering), and the iterator is each element in turn, a copy;
+// for * a, a pointer to each, through which the body can change it. So
+// `for * a` needs a's elements to have an address, as *a[i] does: an
+// array's when the array has one (not a parameter's, nor a call's or a
+// literal's: "can't take the address of 'a': it's a parameter"), a view's
+// always. Anything else is "'for' needs a range, an array or a view, not
+// 'int'", at it.
+static Type *check_sequence(Checker *c, Ast_For *loop) {
+    Ast *sequence = loop->sequence;
+    Type *t = check_operand(c, sequence);
+    if (!t) return nullptr;
+    if (t->kind != TYPE_ARRAY && t->kind != TYPE_VIEW) {
+        check_default_type(c, sequence);  // `for 10` names the type 10 has: int
+        diag_error(c->diag, sequence->start, "'for' needs a range, an array or a view, not '" STR_FMT "'",
+                   STR_ARG(type_name(c->arena, sequence->type)));
+        return nullptr;
+    }
+    if (!loop->by_pointer) return t->element;
+    if (t->kind == TYPE_ARRAY && !is_place(c, sequence, false)) return nullptr;
+    return type_pointer_to(t->element);
+}
+
+// A for loop, over a range or a sequence. it_index is an int, counting the
+// iterations from 0. The iterator and it_index are declared in the body's
+// own block, as parameters are in a procedure's, so the body can't declare
+// them again, and they end with the loop. A named iterator is declared
+// instead of it, so inside `for i: ...` an outer loop's it is still it.
+// Both are read-only (name_is_place): for * changes an element through
+// the iterator, never the iterator itself.
+static void check_for(Checker *c, Ast_For *loop) {
+    Type *t = loop->sequence ? check_sequence(c, loop) : check_range(c, loop);
     // Unknown after an error: the iterator's uses then say nothing more.
     loop->iterator->type = t;
     loop->index->type = &type_int;
@@ -778,15 +902,18 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 // value by rules of its own on each platform, which come with milestone 6's
 // bindings ("a foreign procedure can't take a 'Vec2' yet; pass a pointer to
 // it", "... can't return a 'Vec2' yet"). A pointer to one is a C pointer to
-// a C struct of the same layout, which passes.
+// a C struct of the same layout, which passes. C has no views, and takes an
+// array as a pointer to its first element: "a foreign procedure can't take a
+// '[3]int'; pass its .data" (or a view's .data, with its count if C needs
+// it).
 static void check_signature(Checker *c, Ast_Proc *proc) {
     for (s64 i = 0; i < proc->params.count; i++) {
         Ast_Param *param = proc->params[i];
         param->type = resolve_type(c, param->type_expr);
         if (proc->is_foreign && param->type && type_is_aggregate(param->type)) {
-            diag_error(c->diag, param->type_expr->pos,
-                       "a foreign procedure can't take a '" STR_FMT "' yet; pass a pointer to it",
-                       STR_ARG(type_name(c->arena, param->type)));
+            const char *hint = param->type->kind == TYPE_STRUCT ? " yet; pass a pointer to it" : "; pass its .data";
+            diag_error(c->diag, param->type_expr->pos, "a foreign procedure can't take a '" STR_FMT "'%s",
+                       STR_ARG(type_name(c->arena, param->type)), hint);
         }
     }
     for (s64 i = 0; i < proc->results.count; i++) {

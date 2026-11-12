@@ -1,11 +1,12 @@
 // types.h: Rig's types, as the checker sees them.
 //
-// The integer types, the float types, bool, pointers, structs, string and
-// void, and the types of untyped integer and float constants, of null and
-// of a struct literal without its type written (.{1, 2}). Each type exists
-// once, so two types are the same exactly when their pointers are equal
-// (type_pointer_to keeps one *T per T; a struct's type is its declaration's,
-// Ast_Struct.declared).
+// The integer types, the float types, bool, pointers, structs, arrays,
+// views, string and void, and the types of untyped integer and float
+// constants, of null and of a literal without its type written (.{1, 2},
+// .[1, 2]). Each type exists once, so two types are the same exactly when
+// their pointers are equal (type_pointer_to keeps one *T per T, and
+// type_array_of and type_view_of one [N]T and one []T; a struct's type is
+// its declaration's, Ast_Struct.declared).
 //
 // Every type has a size and an alignment, C's (spec 5): s8 u8 bool 1, s16
 // u16 2, s32 u32 float32 4, s64 u64 int float64 and pointers 8. A value of
@@ -14,7 +15,10 @@
 // C does (checker.cpp's lay_out): each field at the next offset that is a
 // multiple of its alignment, the struct's alignment its largest field's (1
 // when it has none), its size rounded up to a multiple of that, so an array
-// of them keeps every one aligned.
+// of them keeps every one aligned. An array, [N]T, is N T's one after
+// another: N times T's size, aligned as a T. A view, []T, is a struct of
+// its own, { count: int; data: *T; } (spec 6.5: Jai's order, count first):
+// 16 bytes, aligned to 8.
 
 #pragma once
 
@@ -29,8 +33,10 @@ enum Type_Kind : u8 {
     TYPE_FLOAT,    // float32, float64: IEEE 754's single and double precision
     TYPE_NULL,     // the type of null, and of nothing else (type_null)
     TYPE_STRUCT,   // a struct a program declares: its fields, in order
-    TYPE_UNTYPED_LITERAL,  // a struct literal with no type written, .{...}, until it meets one
+    TYPE_UNTYPED_LITERAL,  // a literal with no type written, .{...} or .[...], until it meets one
                            // (type_untyped_literal)
+    TYPE_ARRAY,    // [N]T: N T's one after another, N known while compiling
+    TYPE_VIEW,     // []T: a count and a pointer to that many T's that lie somewhere else
 };
 
 struct Ast_Struct;  // ast.h: a struct's declaration
@@ -53,10 +59,27 @@ struct Type {
     Type *alias_of;  // a second name for another type (float for float32): the type it names
     Array<Type_Field> fields;  // TYPE_STRUCT: in order, which is their order in memory
     Ast_Struct *decl;          // TYPE_STRUCT: its declaration
-    Arena *arena;    // where this type lives, and the pointer types made from it: a struct's is
-                     // the compilation's arena (and so its pointers'), freed with it; a
-                     // built-in type's, null: it and its pointers last the whole run
+    Arena *arena;    // where this type lives, and the pointer, array and view types made from it: a
+                     // struct's is the compilation's arena (and so theirs), freed with it; a
+                     // built-in type's, null: it and the types made from it last the whole run
+    Type *element;   // TYPE_ARRAY, TYPE_VIEW: T in [N]T and []T
+    s64 count;       // TYPE_ARRAY: N
+    Type *view;      // the type []this, once asked for
+    Type *arrays;    // the array types of this element asked for so far ([N]this), linked
+                     // through next_array: each N made once
+    Type *next_array;
 };
+
+// The largest size a type may have, 2^40 bytes (a terabyte): an array or a
+// struct over it is "'[...]T' is too big". Far beyond any memory a program
+// gets, it keeps sizes, and an index times an element's size, well inside
+// 64 bits, so no size ever wraps (checker.cpp's resolve_type).
+const s64 TYPE_MAX_SIZE = (s64)1 << 40;
+
+// Where a view's fields are, as its struct would have them: the count, an
+// int, then the pointer to the elements.
+const s64 VIEW_COUNT_OFFSET = 0;
+const s64 VIEW_DATA_OFFSET = 8;
 
 // The type a built-in name means (s8 s16 s32 s64 u8 u16 u32 u64 int bool
 // float32 float64 float void), or null. int is s64's size and sign, but its
@@ -70,7 +93,15 @@ Type *type_from_name(String name);
 // arena (Type.arena), so it lasts as long as t does.
 Type *type_pointer_to(Type *t);
 
-// How a message names t: "s32", "*u8", "string".
+// [count]element, the same Type every time, made as type_pointer_to makes
+// *T. Its size is count times element's, which the caller has made sure is
+// at most TYPE_MAX_SIZE.
+Type *type_array_of(Type *element, s64 count);
+
+// []element, the same Type every time, made as type_pointer_to makes *T.
+Type *type_view_of(Type *element);
+
+// How a message names t: "s32", "*u8", "string", "[3]int", "[]*u8".
 String type_name(Arena *a, Type *t);
 
 // t's alignment, in bytes: where in memory a value of type t may start.
@@ -81,8 +112,8 @@ s32 type_align(Type *t);
 bool type_is_pointer(Type *t);
 
 // Whether a value of type t is an aggregate: bytes in memory, copied whole,
-// never a value in a register (spec 6.5's "How it's compiled"). Structs are
-// (arrays, views and strings will be).
+// never a value in a register (spec 6.5's "How it's compiled"). Structs,
+// arrays and views are (strings will be).
 bool type_is_aggregate(Type *t);
 
 // The index in struct type t's fields of the one called `name`, or -1.
@@ -131,12 +162,14 @@ extern Type type_float64;
 // default), so messages call it 'float32'.
 extern Type type_untyped_float;
 
-// The type of a struct literal written without its type, `.{1, 2}`, until
-// it meets one: as an untyped constant takes the type it meets, the literal
-// takes the struct type of what it's given to (a declaration's type, an
-// assignment's target, an argument, a return, a field of an outer literal),
-// and its values are checked against that struct's fields only then
-// (check_convert). Meeting none, it's an error (check_default_type).
+// The type of a literal written without its type, `.{1, 2}` or `.[1, 2]`,
+// until it meets one: as an untyped constant takes the type it meets, the
+// literal takes the struct type of what it's given to (a declaration's
+// type, an assignment's target, an argument, a return, a field or element
+// of an outer literal), or for .[...] an array type, or a view's elements
+// (it's then a [N]T of its N values, which converts to the view), and its
+// values are checked only then (check_convert). Meeting none, it's an error
+// (check_default_type).
 extern Type type_untyped_literal;
 
 // Whether t is the type of an untyped constant, integer or float.
