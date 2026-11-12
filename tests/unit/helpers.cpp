@@ -90,16 +90,21 @@ static Token_List *toks(const char *description) {
     return list;
 }
 
-// The tokens of `text`, lexed as the file test.rig, in a Token_List the
+// The tokens of `text`, lexed as the file `path`, in a Token_List the
 // caller frees with token_list_free. The text must lex without errors: the
 // tests that use this are about the stages after the lexer. Positions are
 // the real ones, so "2:5" is line 2, column 5 of `text`.
-static Token_List *src(const char *text) {
+static Token_List *src_named(const char *path, const char *text) {
     Token_List *list = (Token_List *)calloc(1, sizeof(Token_List));
-    s32 file = diag_add_file(&list->diag, str("test.rig"), str(text));
+    s32 file = diag_add_file(&list->diag, str(path), str(text));
     list->tokens = lex(&list->diag, file, &list->arena);
     RIG_ASSERT(list->diag.error_count == 0);
     return list;
+}
+
+// src_named, as the file test.rig: the name every test's messages show.
+static Token_List *src(const char *text) {
+    return src_named("test.rig", text);
 }
 
 static void token_list_free(Token_List *list) {
@@ -133,17 +138,23 @@ static String check_source(Arena *a, const char *text) {
     return result;
 }
 
-// Parses, checks and lowers `text` (lexed with src()), which must check
-// cleanly; the module lives in the arena.
-static Ir_Module *lower_source(Arena *a, const char *text) {
-    Token_List *list = src(text);
+// Parses, checks and lowers `text`, lexed as the file `path` (src_named),
+// which must check cleanly, with or without bounds checks (rig build's
+// --no-bounds-checks); the module lives in the arena.
+static Ir_Module *lower_file(Arena *a, const char *path, const char *text, bool bounds_checks) {
+    Token_List *list = src_named(path, text);
     Ast_File *file = parse(list->tokens, a, &list->diag);
     bool ok = check(file, a, &list->diag);
-    if (!ok) fprintf(stderr, "lower_source: doesn't check:\n%.*s", STR_ARG(messages(a, &list->diag)));
+    if (!ok) fprintf(stderr, "lower_file: doesn't check:\n%.*s", STR_ARG(messages(a, &list->diag)));
     RIG_ASSERT(ok);
-    Ir_Module *m = ir_lower(file, &list->diag, a);
+    Ir_Module *m = ir_lower(file, &list->diag, a, bounds_checks);
     token_list_free(list);
     return m;
+}
+
+// lower_file as test.rig, bounds checked, as rig build lowers by default.
+static Ir_Module *lower_source(Arena *a, const char *text) {
+    return lower_file(a, "test.rig", text, true);
 }
 
 // Parses, checks and lowers the tokens, which must check cleanly; the module
@@ -153,7 +164,7 @@ static Ir_Module *lower_tokens(Arena *a, const char *description) {
     Ast_File *file = parse(list->tokens, a, &list->diag);
     bool ok = check(file, a, &list->diag);
     RIG_ASSERT(ok);
-    Ir_Module *m = ir_lower(file, &list->diag, a);
+    Ir_Module *m = ir_lower(file, &list->diag, a, true);
     token_list_free(list);
     return m;
 }

@@ -1,0 +1,28 @@
+// A [65536]u8 local: a frame bigger than a page (4 KiB), which Windows
+// grows one guard page at a time (LLVM probes it, __chkstk) and Linux as it
+// faults. Every byte is written, then summed.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+print_int :: (n: int) {
+    if n < 0 {
+        putchar(45);
+        print_int(-n);
+        return;
+    }
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+println :: (n: int) {
+    print_int(n);
+    putchar(10);
+}
+
+main :: () {
+    bytes : [65536]u8;
+    for * bytes { it.* = cast,trunc(u8) it_index; }
+    sum := 0;
+    for bytes { sum += it; }
+    println(sum);
+    println(bytes[65535]);
+}

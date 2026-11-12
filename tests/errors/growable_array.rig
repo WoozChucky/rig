@@ -1,0 +1,4 @@
+// Growable arrays, [..]T, come with the Basic module (milestone 4).
+main :: () {
+    a : [..]int;
+}

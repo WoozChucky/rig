@@ -73,6 +73,23 @@
 //   `g1, g2 = f();` gives the right answer even when f returns g2, g1. A
 //   literal is built in a temporary too, and copied: `v = Vec2.{v.y, v.x};`
 //   reads v whole before writing it.
+// - Arrays and views (spec 6.5) are aggregates too: an array is its N
+//   elements' bytes, a view 16 bytes, its count (an i64) and then its data
+//   (a ptr). a[i] is the element's address, data + i * size (a ptradd, no
+//   inbounds), after i is checked: widened to an i64 by its own sign, it
+//   must be below the count, compared unsigned, so -1 and a u64 above int's
+//   range fail too. A failing check calls __rig_bounds_failed, which writes
+//   "PATH:L:C: runtime error: index I is out of bounds (count C)" and panics
+//   (lower_index_address, lower_bounds_failed). #no_abc and rig build
+//   --no-bounds-checks leave the check out; a pointer's index is never
+//   checked (C's p[i]), only its null.
+// - An array becomes a view where the checker said it converts: a view of
+//   the array itself when it's a place, so a procedure given it changes it;
+//   otherwise of a temporary (lower_view_of). A literal is built in a
+//   temporary of its own, element by element. for over an array or a view
+//   takes its data and count once, then counts an index up to the count
+//   (lower_for_sequence). A global view of a literal points at a global
+//   array made for the literal (constant_bytes).
 //
 // Blocks are numbered in the order they're made, and made in the order
 // their code comes in the source, so the printed IR reads like the program.
@@ -80,8 +97,8 @@
 // if, a loop's exit, where a break goes) is emitted with the target unset
 // and filled in once the block is made (terminator_of).
 
+#include "checker.h"
 #include "ir.h"
-
 #include "types.h"
 
 // Where a procedure's variable or parameter lives: a variable's slot (the
@@ -112,6 +129,12 @@ struct Lowering {
     s32 block;                // the block instructions go into
     Array<Local> locals;      // the current procedure's variables and parameters so far
     Array<Loop> loops;        // the loops around the statement being lowered, innermost last
+    bool bounds_checks;       // whether a[i] is checked against a's count: rig build's
+                              // --no-bounds-checks clears it
+    bool checking_bounds;     // whether this procedure's are: bounds_checks, unless it says #no_abc
+    s32 bounds_failed;        // __rig_bounds_failed's index in module->procs, once a check needs it; -1
+    s64 longest_where;        // the longest "PATH:L:C: runtime error: " a bounds check passes it
+    s32 array_count;          // the array.N globals made so far: the arrays global views see
 };
 
 // The IR type of a checked type. Strings aren't values yet: a literal is
@@ -370,12 +393,62 @@ static s32 aggregate_results(Ast_Proc *proc) {
 }
 
 static s32 lower_expr(Lowering *l, Ast *e);
+static s32 lower_address(Lowering *l, Ast *e);
+
+// A view's count and data, loaded from the view at %view (its fields, as
+// types.h lays them out).
+static s32 load_view_count(Lowering *l, s32 view) {
+    return emit_load(l, IR_I64, emit_field_address(l, view, VIEW_COUNT_OFFSET));
+}
+
+static s32 load_view_data(Lowering *l, s32 view) {
+    return emit_load(l, IR_PTR, emit_field_address(l, view, VIEW_DATA_OFFSET));
+}
+
+// A view of the elements of an array of type `array` at %data, built in a
+// temporary of its own (the view's value is its address, as every
+// aggregate's):
+//
+//     %v = local 16 align 8
+//     %n = const i64 N
+//     store i64 %n, %v
+//     %8 = const i64 8
+//     %d = ptradd %v, %8
+//     store ptr %data, %d
+static s32 view_of_array(Lowering *l, Type *array, s32 data) {
+    s32 view = emit_slot(l, type_view_of(array->element));
+    emit_store(l, IR_I64, emit_constant(l, IR_I64, (u64)array->count), emit_field_address(l, view, VIEW_COUNT_OFFSET));
+    emit_store(l, IR_PTR, data, emit_field_address(l, view, VIEW_DATA_OFFSET));
+    return view;
+}
+
+// The view an array e converts to (spec 6.5). When e is a place (the
+// checker's expr_is_place), a view of it where it is: `sort(numbers)` sorts
+// numbers. A call's result and a literal are temporaries already, made
+// here, one per place in the source (so a loop rebuilds the same one each
+// time round): the view sees that. Anything else (a parameter, which is the
+// caller's copy, a loop's iterator, a cast) is copied into a temporary
+// first, so writing through the view can't change what mustn't change.
+static s32 lower_view_of(Lowering *l, Ast *e) {
+    s32 data;
+    if (expr_is_place(e)) {
+        data = lower_address(l, e);
+    } else if (e->kind == AST_CALL || e->kind == AST_LITERAL) {
+        data = lower_expr(l, e);
+    } else {
+        s32 value = lower_expr(l, e);
+        data = emit_slot(l, e->type);
+        emit_put(l, e->type, value, data);
+    }
+    return view_of_array(l, e->type, data);
+}
 
 // The value of `e`, of the type `to` its use wants (the checker said it
-// converts): a constant made at that type, or e's value widened to it.
-// Returns the value's number.
+// converts): a constant made at that type, e's value widened to it, or an
+// array's view (lower_view_of). Returns the value's number.
 static s32 lower_value(Lowering *l, Ast *e, Type *to) {
     if (e->is_constant) return emit_constant(l, ir_type_of(to), e->constant);
+    if (to && to->kind == TYPE_VIEW && e->type->kind == TYPE_ARRAY) return lower_view_of(l, e);
     return resize(l, lower_expr(l, e), e->type, ir_type_of(to));
 }
 
@@ -622,9 +695,11 @@ static s32 lower_float_cast(Lowering *l, s32 v, Type *from, Type *to) {
 // it's made at its own type.
 static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
     Type *from = cast->value->type, *to = cast->type;
+    // An array to a view converts as anywhere else.
+    if (from->kind == TYPE_ARRAY && to->kind == TYPE_VIEW) return lower_value(l, cast->value, to);
     Ir_Type have = ir_type_of(from), want = ir_type_of(to);
     s32 v = lower_value(l, cast->value, from);
-    // A struct is only ever cast to its own type: the same bytes.
+    // An aggregate is otherwise only ever cast to its own type: the same bytes.
     if (type_is_aggregate(from)) return v;
     if (type_is_pointer(from) && type_is_pointer(to)) return v;
     if (type_is_pointer(from)) return emit_convert(l, IR_PTRTOINT, IR_PTR, v, IR_I64);
@@ -733,6 +808,11 @@ static s32 lower_call(Lowering *l, Ast_Call *call);
 static s32 lower_member_address(Lowering *l, Ast_Member *m) {
     Ast *operand = m->operand;
     Type *t = operand->type;
+    if (t->kind == TYPE_VIEW) {
+        // A view's two fields, by name (the checker left m->index -1).
+        s64 offset = string_eq(m->name, str("count")) ? VIEW_COUNT_OFFSET : VIEW_DATA_OFFSET;
+        return emit_field_address(l, lower_expr(l, operand), offset);
+    }
     s32 base;
     if (type_is_pointer(t)) {
         base = lower_value(l, operand, t);
@@ -742,6 +822,106 @@ static s32 lower_member_address(Lowering *l, Ast_Member *m) {
         base = lower_expr(l, operand);
     }
     return emit_field_address(l, base, t->fields[m->index].offset);
+}
+
+static s32 bounds_failed_proc(Lowering *l);
+
+// A bounds check (spec 6.5): when the i1 %fails is 1, a block of its own
+// calls __rig_bounds_failed with where the check is (at, the '['), the
+// index %index and the count %count, both i64s, and whether the index's
+// type is signed, which says how to write it; the call never returns.
+// Otherwise the code goes on in a new block:
+//
+//     branch %fails, fail, ok
+//   fail:
+//     %w = addr @str.N          "PATH:L:C: runtime error: "
+//     %wl = const i64 LENGTH
+//     %s = const i1 SIGNED
+//     call @__rig_bounds_failed(%w, %wl, %index, %count, %s)
+//     unreachable
+//   ok:
+//
+// The message's start is a global per check, as a panic's message is; the
+// rest, with its two numbers, is only known at run time, so
+// __rig_bounds_failed writes it. Its buffer must hold the longest start
+// any check passes it, which is kept here.
+static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s32 count, bool is_signed) {
+    String path = l->diag->files[at.file].path;
+    String where = string_printf(l->arena, STR_FMT ":%d:%d: runtime error: ", STR_ARG(path), at.line, at.col);
+    if (where.count > l->longest_where) l->longest_where = where.count;
+    s32 fail = new_block(l);
+    s32 ok = new_block(l);
+    emit_branch(l, fails, fail, ok);
+    l->block = fail;
+    Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
+    addr->target = add_bytes(l, where);
+    Array<s32> args = {};  // the call keeps it
+    array_add(&args, addr->result);
+    array_add(&args, emit_constant(l, IR_I64, (u64)where.count));
+    array_add(&args, index);
+    array_add(&args, count);
+    array_add(&args, emit_constant(l, IR_I1, is_signed ? 1 : 0));
+    ir_emit_call(l->module, l->proc, l->block, bounds_failed_proc(l), args);
+    emit(l, IR_UNREACHABLE, IR_VOID);
+    l->block = ok;
+}
+
+// The address of a[i] (spec 6.5), in this order: a (a view's count and
+// data loaded from it), then i (widened to an i64 by its own sign), then the
+// checks, then the address. So an assignment's target is found, checks and
+// all, before its value is worked out.
+// - An array's value is its address, which is its data; its count, N, is
+//   a constant. A constant index of an array needs no check: the checker
+//   made sure it's inside.
+// - A view's count and data are loaded from it, before i: a view changed
+//   while i is worked out isn't seen. A count below 0 (set by hand) has no
+//   index inside it, so that fails the check too.
+// - A pointer is checked for null, not bounds: p[i] is C's, p.* moved by i
+//   elements, which may be anywhere.
+// The check compares unsigned: i as an unsigned number is below the count
+// exactly when 0 <= i < count, so -1, all ones, fails, and so does a u64
+// above int's range, which no count reaches:
+//
+//     %fails = cmp uge i64 %i, %count
+//     (a view: %neg = cmp slt i64 %count, 0; %fails = or i1 %fails, %neg)
+//     branch %fails, fail, ok       (emit_bounds_check)
+//   ok:
+//     %bytes = mul i64 %i, SIZE     (nothing when SIZE is 1)
+//     %element = ptradd %data, %bytes
+static s32 lower_index_address(Lowering *l, Ast_Index *ix) {
+    Ast *operand = ix->operand, *i = ix->index;
+    Type *t = operand->type;
+    bool pointer = type_is_pointer(t);
+    Type *element = pointer ? t->pointee : t->element;
+    s32 base = pointer ? lower_value(l, operand, t) : lower_expr(l, operand);
+    // A view's count and data are read before the index is worked out, as a
+    // pointer's value is: v[f()] indexes v as it was, whatever f does to it.
+    bool view = t->kind == TYPE_VIEW;
+    s32 count = -1, data = base;
+    if (view) {
+        count = load_view_count(l, base);
+        data = load_view_data(l, base);
+    }
+    s32 index = i->is_constant ? emit_constant(l, IR_I64, i->constant) : resize(l, lower_expr(l, i), i->type, IR_I64);
+    if (pointer) {
+        emit_null_check(l, base, ix->pos);
+    } else {
+        if (l->checking_bounds && (view || !i->is_constant)) {
+            if (!view) count = emit_constant(l, IR_I64, (u64)t->count);
+            s32 fails = emit_compare(l, IR_UGE, IR_I64, index, count);
+            if (view) {
+                s32 negative = emit_compare(l, IR_SLT, IR_I64, count, emit_constant(l, IR_I64, 0));
+                fails = emit_binary(l, IR_OR, IR_I1, fails, negative);
+            }
+            emit_bounds_check(l, fails, ix->pos, index, count, i->type->is_signed);
+        }
+    }
+    u64 size = (u64)element->size;
+    // A constant index's offset is a constant: i * SIZE wraps as the
+    // address does (p[-1] is SIZE bytes back).
+    if (i->is_constant) return emit_field_address(l, data, (s64)(i->constant * size));
+    s32 bytes = size == 1 ? index : emit_binary(l, IR_MUL, IR_I64, index, emit_constant(l, IR_I64, size));
+    return emit_binary(l, IR_PTRADD, IR_PTR, data, bytes);
 }
 
 // The address of a place in memory (the checker's check_addressable): what
@@ -758,6 +938,7 @@ static s32 lower_address(Lowering *l, Ast *e) {
         return address;
     }
     if (e->kind == AST_MEMBER) return lower_member_address(l, (Ast_Member *)e);
+    if (e->kind == AST_INDEX) return lower_index_address(l, (Ast_Index *)e);
     RIG_ASSERT(e->kind == AST_NAME);  // a variable: the checker allowed nothing else
     return address_of(l, ((Ast_Name *)e)->decl);
 }
@@ -775,8 +956,21 @@ static s32 lower_address(Lowering *l, Ast *e) {
 //     %4 = const i64 4
 //     %5 = ptradd %t, %4
 //     store f32 %b, %5           (y, at 4)
+//
+// An array literal, T.[a, b] or .[a, b], is built the same way, element by
+// element at i * SIZE, but isn't zeroed: it gives every element, and an
+// array has no padding between them (each one's size is a multiple of its
+// alignment, and a struct element brings its own padding, zeroed).
 static s32 lower_literal(Lowering *l, Ast_Literal *literal) {
-    Type *t = literal->type;  // a struct: the checker gave an untyped literal the one it met
+    Type *t = literal->type;  // the checker gave an untyped literal the type it met
+    if (literal->is_array) {
+        s32 temporary = emit_slot(l, t);
+        for (s64 i = 0; i < literal->values.count; i++) {
+            s32 address = emit_field_address(l, temporary, i * t->element->size);
+            emit_put(l, t->element, lower_value(l, literal->values[i], t->element), address);
+        }
+        return temporary;
+    }
     s32 temporary = emit_slot(l, t);
     emit_zero(l, t, temporary);
     for (s64 i = 0; i < literal->values.count; i++) {
@@ -807,7 +1001,17 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         return emit_get(l, decl->type, address_of(l, decl));
     }
     case AST_DEREF: return emit_get(l, e->type, lower_address(l, e));
-    case AST_MEMBER: return emit_get(l, e->type, lower_member_address(l, (Ast_Member *)e));
+    case AST_MEMBER: {
+        // An array's .data is the array's address, its value; its .count
+        // is a constant, never lowered here.
+        Ast_Member *m = (Ast_Member *)e;
+        if (m->operand->type->kind == TYPE_ARRAY) {
+            RIG_ASSERT(string_eq(m->name, str("data")));
+            return lower_expr(l, m->operand);
+        }
+        return emit_get(l, e->type, lower_member_address(l, m));
+    }
+    case AST_INDEX: return emit_get(l, e->type, lower_index_address(l, (Ast_Index *)e));
     case AST_LITERAL: return lower_literal(l, (Ast_Literal *)e);
     case AST_UNARY: {
         Ast_Unary *u = (Ast_Unary *)e;
@@ -1042,7 +1246,86 @@ static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
 // one, and %it + 1 is never computed for it. Testing it <= last after
 // adding instead would never end when last is the type's largest value
 // (for 0..255 on a u8: 255 + 1 wraps to 0, which is <= 255 again).
+// for a { B } over an array or a view, `for * a` with it a pointer to each
+// element:
+//
+//     %a = ...                        a, once
+//     %data, %count                   an array's address and N; a view's, loaded
+//     it_index = 0
+//     jump test
+//   test:
+//     %i = load it_index
+//     %done = cmp sge i64 %i, %count  signed: a count below 0 runs no iteration
+//     branch %done, exit, body
+//   body:
+//     %element = ptradd %data, %i * SIZE
+//     it = %element.*                 (for *: it = %element)
+//     B; jump step                    (continue: jump step; break: jump exit)
+//   step:
+//     it_index += 1
+//     jump test
+//   exit:
+//
+// a is worked out once, before the first iteration, and its data and count
+// taken then: the body may change a view (or call what does), which the
+// loop doesn't see. it is a copy of each element, an aggregate one copied
+// whole, so the body reading it sees the element as it was when its
+// iteration began.
+static void lower_for_sequence(Lowering *l, Ast_For *loop, Ast_Proc *source) {
+    Ast *sequence = loop->sequence;
+    Type *t = sequence->type, *element = t->element;
+    s32 base = lower_expr(l, sequence);
+    s32 data = base, count;
+    if (t->kind == TYPE_VIEW) {
+        count = load_view_count(l, base);
+        data = load_view_data(l, base);
+    } else {
+        count = emit_constant(l, IR_I64, (u64)t->count);
+    }
+    s32 iterator = loop->by_pointer ? emit(l, IR_LOCAL, IR_PTR)->result : emit_slot(l, element);
+    s32 index = emit(l, IR_LOCAL, IR_I64)->result;
+    emit_store(l, IR_I64, emit_constant(l, IR_I64, 0), index);
+    array_add(&l->locals, {loop->iterator, iterator});
+    array_add(&l->locals, {loop->index, index});
+
+    s32 test = new_block(l);
+    emit_jump(l, l->block, test);
+    l->block = test;
+    s32 i = emit_load(l, IR_I64, index);
+    emit_branch(l, emit_compare(l, IR_SGE, IR_I64, i, count), -1, -1);
+
+    s32 body = new_block(l);
+    terminator_of(l, test)->target2 = body;
+    l->block = body;
+    u64 size = (u64)element->size;
+    s32 bytes = size == 1 ? i : emit_binary(l, IR_MUL, IR_I64, i, emit_constant(l, IR_I64, size));
+    s32 address = emit_binary(l, IR_PTRADD, IR_PTR, data, bytes);
+    if (loop->by_pointer) {
+        emit_store(l, IR_PTR, address, iterator);
+    } else {
+        emit_put(l, element, emit_get(l, element, address), iterator);
+    }
+    Loop lowered = lower_loop_body(l, loop, loop->body, source);
+    s32 body_end = l->block;
+
+    s32 step = new_block(l);
+    if (!has_ended(l, body_end)) emit_jump(l, body_end, step);
+    l->block = step;
+    s32 current = emit_load(l, IR_I64, index);
+    emit_store(l, IR_I64, emit_binary(l, IR_ADD, IR_I64, current, emit_constant(l, IR_I64, 1)), index);
+    emit_jump(l, step, test);
+
+    s32 exit = new_block(l);
+    terminator_of(l, test)->target = exit;
+    finish_loop(l, &lowered, exit, step);
+    l->block = exit;
+}
+
 static void lower_for(Lowering *l, Ast_For *loop, Ast_Proc *source) {
+    if (loop->sequence) {
+        lower_for_sequence(l, loop, source);
+        return;
+    }
     Type *t = loop->iterator->type;
     Ir_Type type = ir_type_of(t);
     s32 first = lower_value(l, loop->first, t);
@@ -1133,7 +1416,11 @@ static void lower_multi_assign(Lowering *l, Ast_Assign *assign) {
     for (s64 i = 0; i < assign->targets.count; i++) {
         Ast *target = assign->targets[i];  // a place in memory: checked
         s32 address = lower_address(l, target);
-        s32 value = resize(l, results[i], call->proc->results[i]->type, ir_type_of(target->type));
+        Type *from = call->proc->results[i]->type;
+        // An array result going into a view: a view of the call's temporary.
+        s32 value = from->kind == TYPE_ARRAY && target->type->kind == TYPE_VIEW
+                        ? view_of_array(l, from, results[i])
+                        : resize(l, results[i], from, ir_type_of(target->type));
         emit_put(l, target->type, value, address);
     }
     array_free(&results);
@@ -1218,22 +1505,58 @@ static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source) {
     }
 }
 
-// The bytes of a constant value of type t, written at `bytes` as they lie
-// in memory (little-endian, as both of Rig's targets are): a struct
-// literal's values at their fields' offsets (the fields not given, and the
-// padding, stay zero), an integer's low bytes, a bool's 0 or 1, a float's
-// IEEE 754 bits (a float32's rounded from the double the constant keeps, as
-// the backend rounds an f32 constant), a pointer's address (null's zeros).
-// The checker made sure the value is a constant, or a literal of them
+// `size` bytes of `bits` at `at`, as they lie in memory: little-endian, as
+// both of Rig's targets are.
+static void write_bits(u8 *at, u64 bits, s64 size) {
+    for (s64 k = 0; k < size; k++) at[k] = (u8)(bits >> (8 * k));
+}
+
+static s32 add_global_array(Lowering *l, Type *array, Ast *literal);
+
+// The bytes of a constant value of type t, written `offset` bytes into a
+// global's `bytes`: a struct literal's values at their fields' offsets (the
+// fields not given, and the padding, stay zero), an array literal's at i
+// times the element's size, an integer's low bytes, a bool's 0 or 1, a
+// float's IEEE 754 bits (a float32's rounded from the double the constant
+// keeps, as the backend rounds an f32 constant), a pointer's address (null's
+// zeros). A view's value is an array literal (the checker allows nothing
+// else in a global), which becomes a global array of its own: the view's
+// count is written here, and its data is that array's address, which only
+// the linker knows, so a relocation says where it goes. The backend wants
+// `relocs` in increasing order of offset, so the values are written in that
+// order: an array's in turn, and a struct's by its fields, in the order they
+// are laid out, not the order a literal with names gives them. The checker
+// made sure every value is a constant, or a literal of them
 // (check_global_value).
-static void constant_bytes(u8 *bytes, Type *t, Ast *value) {
+static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *relocs, Type *t, Ast *value) {
+    if (t->kind == TYPE_VIEW) {
+        Type *array = value->type;  // the literal's [N]T
+        s32 global = add_global_array(l, array, value);
+        write_bits(bytes + offset + VIEW_COUNT_OFFSET, (u64)array->count, 8);
+        array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, global});
+        return;
+    }
     if (type_is_aggregate(t)) {
         RIG_ASSERT(value->kind == AST_LITERAL);
         Ast_Literal *literal = (Ast_Literal *)value;
-        for (s64 i = 0; i < literal->values.count; i++) {
-            s32 index = literal->names.count ? type_field_index(t, literal->names[i]) : (s32)i;
-            Type_Field *field = &t->fields[index];
-            constant_bytes(bytes + field->offset, field->type, literal->values[i]);
+        if (t->kind == TYPE_ARRAY) {
+            for (s64 i = 0; i < literal->values.count; i++) {
+                constant_bytes(l, bytes, offset + i * t->element->size, relocs, t->element, literal->values[i]);
+            }
+            return;
+        }
+        // Field by field; a named literal's value for each, if it gives one.
+        for (s64 f = 0; f < t->fields.count; f++) {
+            s64 i = f;
+            if (literal->names.count) {
+                i = -1;
+                for (s64 k = 0; k < literal->names.count; k++) {
+                    if (string_eq(literal->names[k], t->fields[f].name)) i = k;
+                }
+            }
+            if (i < 0 || i >= literal->values.count) continue;
+            Type_Field *field = &t->fields[f];
+            constant_bytes(l, bytes, offset + field->offset, relocs, field->type, literal->values[i]);
         }
         return;
     }
@@ -1245,14 +1568,195 @@ static void constant_bytes(u8 *bytes, Type *t, Ast *value) {
         memcpy(&single_bits, &single, sizeof single_bits);
         bits = single_bits;
     }
-    for (s64 k = 0; k < t->size; k++) bytes[k] = (u8)(bits >> (8 * k));
+    write_bits(bytes + offset, bits, t->size);
 }
 
-Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
+// A global of bytes for a global view's array literal, `array.N`: a
+// variable (the view may write its elements), the literal's bytes; its
+// index. Its name can't be a Rig global's, which has no '.'.
+static s32 add_global_array(Lowering *l, Type *array, Ast *literal) {
+    Ir_Global g = {};
+    g.name = string_printf(l->arena, "array.%d", l->array_count++);
+    g.type = IR_VOID;
+    g.is_variable = true;
+    g.size = array->size;
+    g.align = (u32)array->align;
+    u8 *bytes = (u8 *)arena_alloc(l->arena, array->size ? array->size : 1, 1);  // zeroed
+    constant_bytes(l, bytes, 0, &g.relocs, array, literal);
+    g.bytes = {bytes, array->size};
+    array_add(&l->module->globals, g);
+    return (s32)(l->module->globals.count - 1);
+}
+
+// __rig_bounds_failed(ptr where, i64 where_length, i64 index, i64 count,
+// i1 index_is_signed): what a failing bounds check calls (emit_bounds_check).
+// Made the first time a check needs it, with no body yet: its body is made
+// once every procedure's is (lower_bounds_failed), when the longest `where`
+// is known. Its index in the module's procedures, after the file's.
+static s32 bounds_failed_proc(Lowering *l) {
+    if (l->bounds_failed < 0) {
+        Ir_Proc *p = ir_new_proc(l->module, l->arena, str("__rig_bounds_failed"));
+        ir_add_param(p, IR_PTR, IR_EXT_NONE);
+        ir_add_param(p, IR_I64, IR_EXT_NONE);
+        ir_add_param(p, IR_I64, IR_EXT_NONE);
+        ir_add_param(p, IR_I64, IR_EXT_NONE);
+        ir_add_param(p, IR_I1, IR_EXT_NONE);
+        l->bounds_failed = (s32)(l->module->procs.count - 1);
+    }
+    return l->bounds_failed;
+}
+
+// Appends `count` bytes (an i64 value) from %from to the buffer at
+// %buffer, at the length in the slot %length, which it then adds them to:
+// a byte at a time, since `copy` takes only a constant count.
+//
+//     %start = load i64 length; k = 0
+//   test:
+//     %k = load k
+//     branch (cmp uge %k, %count), exit, body
+//   body:
+//     store i8 (load i8 %from + %k), %buffer + %start + %k
+//     k = %k + 1; jump test
+//   exit:
+//     length = %start + %count
+static void append_bytes(Lowering *l, s32 buffer, s32 length, s32 from, s32 count) {
+    s32 start = emit_load(l, IR_I64, length);
+    s32 k = emit(l, IR_LOCAL, IR_I64)->result;
+    emit_store(l, IR_I64, emit_constant(l, IR_I64, 0), k);
+    s32 test = new_block(l);
+    emit_jump(l, l->block, test);
+    l->block = test;
+    s32 i = emit_load(l, IR_I64, k);
+    emit_branch(l, emit_compare(l, IR_UGE, IR_I64, i, count), -1, -1);
+    s32 body = new_block(l);
+    terminator_of(l, test)->target2 = body;
+    l->block = body;
+    s32 byte = emit_load(l, IR_I8, emit_binary(l, IR_PTRADD, IR_PTR, from, i));
+    s32 to = emit_binary(l, IR_PTRADD, IR_PTR, buffer, emit_binary(l, IR_ADD, IR_I64, start, i));
+    emit_store(l, IR_I8, byte, to);
+    emit_store(l, IR_I64, emit_binary(l, IR_ADD, IR_I64, i, emit_constant(l, IR_I64, 1)), k);
+    emit_jump(l, body, test);
+    s32 exit = new_block(l);
+    terminator_of(l, test)->target = exit;
+    l->block = exit;
+    emit_store(l, IR_I64, emit_binary(l, IR_ADD, IR_I64, start, count), length);
+}
+
+// append_bytes of a text known now, a constant global's bytes.
+static void append_text(Lowering *l, s32 buffer, s32 length, const char *text) {
+    String bytes = str(text);
+    Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
+    addr->target = add_bytes(l, bytes);
+    append_bytes(l, buffer, length, addr->result, emit_constant(l, IR_I64, (u64)bytes.count));
+}
+
+// Appends the i64 %value in decimal, read as signed when the i1
+// %is_signed is 1 and as unsigned otherwise, to the buffer at %buffer at
+// the length in the slot %length, which it then moves past it. At most 20
+// characters: a u64's largest value has 20 digits, an s64's smallest a '-'
+// and 19.
+// - A '-' is stored at the end, whatever the sign, and the length moved
+//   past it only for a negative value (by the i1 widened to 0 or 1): no
+//   branch, and a non-negative number's first digit overwrites it.
+// - The magnitude: 0 - value for a negative value, which as an unsigned
+//   number is right even for the most negative one (2^63); the value itself
+//   otherwise. From then on everything is unsigned (udiv, urem).
+// - Its digits are counted first (dividing by 10 while it's 10 or more),
+//   then written from the last one back, each the remainder by 10.
+static void append_number(Lowering *l, s32 buffer, s32 length, s32 value, s32 is_signed) {
+    s32 zero = emit_constant(l, IR_I64, 0);
+    s32 below_zero = emit_compare(l, IR_SLT, IR_I64, value, zero);
+    s32 negative = emit_binary(l, IR_AND, IR_I1, below_zero, is_signed);
+    s32 negated = emit_binary(l, IR_SUB, IR_I64, zero, value);
+    s32 magnitude = emit_select(l, IR_I64, negative, negated, value);
+    s32 start = emit_load(l, IR_I64, length);
+    emit_store(l, IR_I8, emit_constant(l, IR_I8, '-'), emit_binary(l, IR_PTRADD, IR_PTR, buffer, start));
+    s32 first = emit_binary(l, IR_ADD, IR_I64, start, emit_convert(l, IR_ZEXT, IR_I1, negative, IR_I64));
+    s32 ten = emit_constant(l, IR_I64, 10);
+
+    // How many digits: 1, and one more for each division by 10 while the
+    // rest is 10 or more.
+    s32 rest = emit(l, IR_LOCAL, IR_I64)->result;
+    s32 digits = emit(l, IR_LOCAL, IR_I64)->result;
+    emit_store(l, IR_I64, magnitude, rest);
+    emit_store(l, IR_I64, emit_constant(l, IR_I64, 1), digits);
+    s32 test = new_block(l);
+    emit_jump(l, l->block, test);
+    l->block = test;
+    s32 r = emit_load(l, IR_I64, rest);
+    emit_branch(l, emit_compare(l, IR_UGE, IR_I64, r, ten), -1, -1);
+    s32 more = new_block(l);
+    terminator_of(l, test)->target = more;
+    l->block = more;
+    emit_store(l, IR_I64, emit_binary(l, IR_UDIV, IR_I64, r, ten), rest);
+    s32 d = emit_load(l, IR_I64, digits);
+    emit_store(l, IR_I64, emit_binary(l, IR_ADD, IR_I64, d, emit_constant(l, IR_I64, 1)), digits);
+    emit_jump(l, more, test);
+    s32 counted = new_block(l);
+    terminator_of(l, test)->target2 = counted;
+    l->block = counted;
+    s32 end = emit_binary(l, IR_ADD, IR_I64, first, emit_load(l, IR_I64, digits));
+
+    // The digits, last first: at least one, so the test comes after.
+    s32 at = emit(l, IR_LOCAL, IR_I64)->result;
+    emit_store(l, IR_I64, magnitude, rest);
+    emit_store(l, IR_I64, end, at);
+    s32 write = new_block(l);
+    emit_jump(l, l->block, write);
+    l->block = write;
+    s32 k = emit_binary(l, IR_SUB, IR_I64, emit_load(l, IR_I64, at), emit_constant(l, IR_I64, 1));
+    emit_store(l, IR_I64, k, at);
+    s32 m = emit_load(l, IR_I64, rest);
+    s32 digit = emit_binary(l, IR_ADD, IR_I64, emit_binary(l, IR_UREM, IR_I64, m, ten), emit_constant(l, IR_I64, '0'));
+    emit_store(l, IR_I8, emit_convert(l, IR_TRUNC, IR_I64, digit, IR_I8), emit_binary(l, IR_PTRADD, IR_PTR, buffer, k));
+    emit_store(l, IR_I64, emit_binary(l, IR_UDIV, IR_I64, m, ten), rest);
+    emit_branch(l, emit_compare(l, IR_UGT, IR_I64, k, first), write, -1);
+    s32 done = new_block(l);
+    terminator_of(l, write)->target2 = done;
+    l->block = done;
+    emit_store(l, IR_I64, end, length);
+}
+
+// __rig_bounds_failed's body: the message written into a buffer of its
+// own, then a panic with it (the panic flushes the program's output first,
+// writes the bytes to stderr and exits with 101, as every runtime error):
+//
+//     WHERE "index " I " is out of bounds (count " C ")\n"
+//
+// WHERE as the check passed it ("PATH:L:C: runtime error: "), I the index
+// as signed or unsigned by the index's type, C the count, always signed (a
+// view's may have been set below 0). The buffer is a local of the longest
+// WHERE any check passes plus 73 bytes: the fixed text is 33 ("index ", 6,
+// " is out of bounds (count ", 25, ")\n", 2), and each number at most 20.
+static void lower_bounds_failed(Lowering *l) {
+    l->proc = l->module->procs[l->bounds_failed];
+    l->block = ir_new_block(l->arena, l->proc);
+    s32 where = 0, where_length = 1, index = 2, count = 3, index_is_signed = 4;
+    Ir_Instr *local = emit(l, IR_LOCAL, IR_VOID);
+    local->constant = (u64)(l->longest_where + 73);
+    local->align = 1;
+    s32 buffer = local->result;
+    s32 length = emit(l, IR_LOCAL, IR_I64)->result;
+    emit_store(l, IR_I64, emit_constant(l, IR_I64, 0), length);
+    append_bytes(l, buffer, length, where, where_length);
+    append_text(l, buffer, length, "index ");
+    append_number(l, buffer, length, index, index_is_signed);
+    append_text(l, buffer, length, " is out of bounds (count ");
+    append_number(l, buffer, length, count, emit_constant(l, IR_I1, 1));
+    append_text(l, buffer, length, ")\n");
+    s32 total = emit_load(l, IR_I64, length);
+    Ir_Instr *panic = emit(l, IR_PANIC, IR_VOID);
+    panic->a = buffer;
+    panic->b = total;
+}
+
+Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     Ir_Module *m = arena_new<Ir_Module>(a);
     Lowering l = {};
     l.arena = a;
     l.diag = d;
+    l.bounds_checks = bounds_checks;
+    l.bounds_failed = -1;
     l.module = m;
     l.block = -1;
 
@@ -1261,7 +1765,8 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
     // (an integer's bits cut to the type's width, a float's whole, as an
     // IR_CONST keeps them), or zero: without a value, or with ---, since a
     // global isn't on the stack and nothing else was ever there. A struct
-    // is a global of bytes, its literal's (constant_bytes) or zeros.
+    // is a global of bytes, its literal's (constant_bytes) or zeros; so is
+    // an array, and a view, whose literal's array is a global of its own.
     // Constants and structs' declarations are skipped: a constant's uses
     // are constants, and a struct is only a type.
     for (s64 i = 0; i < f->globals.count; i++) {
@@ -1275,8 +1780,8 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
             g.size = var->type->size;
             g.align = (u32)var->type->align;
             if (var->value) {
-                u8 *bytes = (u8 *)arena_alloc(a, var->type->size, 1);  // zeroed
-                constant_bytes(bytes, var->type, var->value);
+                u8 *bytes = (u8 *)arena_alloc(a, var->type->size ? var->type->size : 1, 1);  // zeroed
+                constant_bytes(&l, bytes, 0, &g.relocs, var->type, var->value);
                 g.bytes = {bytes, var->type->size};
             }
         } else {
@@ -1328,6 +1833,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
         l.proc = m->procs[i];
         l.block = ir_new_block(a, l.proc);
         l.locals.count = 0;
+        l.checking_bounds = l.bounds_checks && !source->no_bounds_checks;
         s32 hidden = aggregate_results(source);
         for (s64 k = 0; k < source->params.count; k++) {
             array_add(&l.locals, {(Ast *)source->params[k], hidden + (s32)k});
@@ -1340,6 +1846,10 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
             emit(&l, source->results.count ? IR_UNREACHABLE : IR_RET, IR_VOID);
         }
     }
+
+    // __rig_bounds_failed, if a check calls it: after every body, so the
+    // longest message start is known.
+    if (l.bounds_failed >= 0) lower_bounds_failed(&l);
 
     // The C entry point: main() -> i32 { __rig_main(); return 0; }
     s32 *rig_main = table_get(&l.proc_index, str("main"));

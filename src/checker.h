@@ -4,9 +4,9 @@
 // every expression, folds the constants, and checks each call, declaration,
 // assignment and return against the types involved. It fills in the tree as
 // it goes (Ast.type, Ast.is_constant and Ast.constant, Ast_Name.decl,
-// Ast_Call.proc, Ast_Member.index, and each struct's type and layout,
-// Ast_Struct.declared), so the stages after it never look anything up
-// again.
+// Ast_Call.proc, Ast_Member.index (-1 for an array's or a view's .count and
+// .data), and each struct's type and layout, Ast_Struct.declared), so the
+// stages after it never look anything up again.
 // checker.cpp checks declarations and statements, check_expr.cpp
 // expressions; check.h is what they share.
 //
@@ -145,8 +145,8 @@
 //   be converted to 'B'"). A compound assignment x op= e converts e to x's
 //   type (a shift's amount: any integer).
 // - Only a place in memory can be assigned to: a variable, by its name,
-//   what a pointer points at, p.*, or a field of either (check_addressable,
-//   the rule *x follows too). Not:
+//   what a pointer points at, p.*, a field of either, or an element
+//   (check_addressable, the rule *x follows too; arrays below). Not:
 //   - a constant: "can't assign to 'N': it's a constant";
 //   - a parameter, read-only (spec 6.1): "can't assign to 'N': it's a
 //     parameter";
@@ -163,7 +163,8 @@
 // - for a..b: the ends are integers meeting as an arithmetic operator's
 //   operands do ("mismatched types 'A' and 'B' for '..'; cast one of them",
 //   "'..' needs integers, not 'bool'"); the iterator has the type they meet
-//   at, int when both are untyped. it_index is an int.
+//   at, int when both are untyped. it_index is an int. for over an array or
+//   a view is below.
 // - break and continue act on the innermost loop around them; outside any:
 //   "'break' is only allowed inside a loop".
 // - A return gives one value per result of its procedure ("'f' returns
@@ -273,6 +274,60 @@
 //   procedure can't take a 'Vec2' yet; pass a pointer to it", "a foreign
 //   procedure can't return a 'Vec2' yet", at the type. A pointer to a
 //   struct passes, as a C pointer to a C struct of the same layout.
+// - A struct larger than any type may be, 2^40 bytes (TYPE_MAX_SIZE), is
+//   "'Huge' is too big", at its name.
+//
+// Arrays and views (spec 6.5, Jai's).
+// - [N]T is N T's one after another; N is an integer known while compiling,
+//   from 0 up: "an array's count must be an integer, not 'float32'", "an
+//   array's count must be known while compiling", "an array's count can't
+//   be negative (-1)", at N. One over 2^40 bytes is "'[1099511627777]u8' is
+//   too big", at its '['. []T is a view: { count: int; data: *T; }, T's that
+//   lie elsewhere. T is any type but void ("'void' is only a pointer's
+//   target, as in *void"). A struct holding an array of itself holds
+//   itself; a view of itself, or an array of pointers to itself, is fine.
+//   A field that holds a struct with no type (one in a circle, or too
+//   big), in any way, in a view or an array of pointers too, has none
+//   either, so its uses say nothing more.
+// - a[i] is an element of an array or a view, or of what a pointer points
+//   at (C's p[i], unchecked); i is any integer, read by its sign, an untyped
+//   one an int. Otherwise: "'[]' needs an array, a view or a pointer, not
+//   'int'", "can't index a '*void'; cast it to a pointer to something
+//   first", at the '['; "an index must be an integer, not 'bool'", at i. A
+//   constant i of an array is checked here: "index 3 is out of bounds for
+//   '[3]int'", at i; every other index of an array or a view is checked at
+//   run time (lowering), unless the procedure has #no_abc or the build
+//   --no-bounds-checks. An element is a place when its array is (so a[0] =
+//   1 for a parameter a is "can't assign to 'a': it's a parameter"); a
+//   view's or a pointer's always.
+// - a.count and a.data: a view's are its fields (an int, a *T, places when
+//   the view is one); an array's .count is its N, an untyped integer
+//   constant (a isn't evaluated), and its .data the address of its first
+//   element, a *T, which needs a to have an address, as *a[0] does. Neither
+//   of an array's can be assigned to ("can't assign to an array's
+//   'count'"). Nothing else: "'[3]int' has no field 'size'".
+// - [N]T converts implicitly to []T, a view of its N elements, wherever a
+//   value converts (a declaration, an assignment, an argument, a return, a
+//   cast); nothing else converts to or from either but its own type. No
+//   operator takes them ("'==' needs numbers, bools, pointers or strings,
+//   not '[3]int'").
+// - T.[a, b] is a [2]T, each value converting to T; .[a, b] takes its type
+//   where it's used, as .{...} does: an array type, whose count it must
+//   give ("'[3]int' has 3 elements, but this literal gives 2"), or a view
+//   type, whose elements it makes a [2]T of (then converted to the view).
+//   Anything else: "a '.[' literal needs an array or a view type, not
+//   'int'"; with no type: "this literal's type isn't known; write it before
+//   the '.', as in int.[1, 2]".
+// - for a goes over an array or a view a, worked out once: it is each
+//   element, a copy, it_index its index. for * a makes it a pointer to each,
+//   which needs a's elements to have an address, as *a[i] does: "can't take
+//   the address of 'a': it's a parameter", "only a variable, a field or an
+//   element has an address". On anything else: "'for' needs a range, an
+//   array or a view, not 'int'"; a range's numbers have none: "'for *'
+//   needs an array or a view, not a range".
+// - A foreign procedure takes no array or view: "a foreign procedure can't
+//   take a '[3]int'; pass its .data", and returns none ("... can't return a
+//   '[]int' yet").
 //
 // Globals and top-level constants.
 // - A global variable is declared as a local one is. Its value must be
@@ -281,9 +336,10 @@
 //   one, or with ---, it starts at zero. A string literal is known while
 //   compiling, but its address needs the linker to fill it in, which
 //   lowering doesn't ask for yet: "global variables can't hold a string
-//   literal yet; assign it in a procedure". A struct's value is a literal
-//   whose values are all known while compiling (nested literals' too); the
-//   first that isn't is the one reported.
+//   literal yet; assign it in a procedure". A struct's or an array's value
+//   is a literal whose values are all known while compiling (nested
+//   literals' too); the first that isn't is the one reported. A view's is an
+//   array literal, which becomes a global array of its own.
 // - A top-level constant follows a local one's rules: a number or a bool,
 //   so not a struct (`N :: Vec2.{1, 2};` is "a constant can only be a
 //   number or a bool, for now").
@@ -320,3 +376,12 @@
 // Checks the file, filling in types and the procedures calls refer to.
 // True when the checker reported no errors (the parser may have).
 bool check(Ast_File *file, Arena *a, Diagnostics *d);
+
+// Whether e, checked with no errors, is a place in memory: a variable, but
+// not a loop's iterator or index; p.*; a field of a place, or of a struct
+// reached through a pointer; an element of a place's array, or of a view's
+// or a pointer's. An array's .count and .data never are. The one statement
+// of the rule: the checker asks it before taking an address or assigning
+// (and says why not), and lowering asks it what an array converted to a
+// view is seen through (lower_view_of): the array itself, or a copy of it.
+bool expr_is_place(Ast *e);

@@ -10,9 +10,11 @@
 //               | IDENT ':' type ['=' (expression | '---')] ';'     a global variable
 //               | IDENT ':=' expression ';'                         a global variable
 //               | IDENT '::' expression ';'                         a constant
-//   procedure   = '(' [param {',' param}] ')' ['->' type {',' type}] (block | '#foreign' IDENT ';')
+//   procedure   = '(' [param {',' param}] ')' ['->' type {',' type}]
+//                   (['#no_abc'] block | '#foreign' IDENT ';')
 //   param       = IDENT ':' type
-//   type        = '*' type | IDENT                                 (*void: a pointer to anything)
+//   type        = '*' type | '[' expression ']' type | '[' ']' type | IDENT
+//                                                                  (*void: a pointer to anything)
 //   block       = '{' statement* '}'
 //   statement   = declaration | multi_var | assignment | return | block
 //               | if | while | for | 'break' ';' | 'continue' ';' | expression ';'
@@ -26,17 +28,19 @@
 //   return      = 'return' [expression {',' expression}] ';'
 //   if          = 'if' expression block ['else' (block | if)]
 //   while       = 'while' expression block
-//   for         = 'for' [IDENT ':'] expression '..' expression block
+//   for         = 'for' ['*'] [IDENT ':'] expression ['..' expression] block
 //   expression  = unary { BINARY_OPERATOR unary }, binary operators left-associative, tightest last:
 //                   1: ||   2: &&   3: == != < <= > >=   4: + - | ^   5: * / % << >> &
 //   unary       = ('-' | '~' | '!' | '*') unary | cast | postfix
 //   cast        = 'cast' [',' IDENT] '(' type ')' unary       (the IDENT: trunc)
-//   postfix     = primary { '(' [expression {',' expression}] ')' | '.' '*' | '.' IDENT
-//                           | '.' '{' fields '}' }                  (after a name: the literal's type)
+//   postfix     = primary { '(' [expression {',' expression}] ')' | '[' expression ']'
+//                           | '.' '*' | '.' IDENT
+//                           | '.' '{' fields '}' | '.' '[' values ']' }   (after a name: the literal's type)
 //   primary     = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null'
-//               | 'size_of' '(' type ')' | '(' expression ')' | '.' '{' fields '}'
+//               | 'size_of' '(' type ')' | '(' expression ')' | '.' '{' fields '}' | '.' '[' values ']'
 //   fields      = [field {',' field} [',']]
 //   field       = [IDENT '='] expression
+//   values      = [expression {',' expression} [',']]
 //
 // The precedence levels are Go's (spec 6.1). A cast is a prefix operator,
 // like -: cast(u8) a / b is (cast(u8) a) / b. Its only modifier is trunc
@@ -54,6 +58,20 @@
 // has no type written, and takes the one it meets. Named and in order don't
 // mix: "a struct literal's fields are all named or all in order, not both",
 // at the first that breaks the pattern.
+//
+// Arrays and views are Jai's (spec 6.5): [N]T is an array of N T's, N an
+// expression (the checker needs a constant), []T a view of T's, and [..]T,
+// a growable array, "growable arrays ([..]T) come with the Basic module, in
+// milestone 4", at its '['. a[i] is an element, a postfix operator as a call
+// is (*a[0] is *(a[0]), a[i].x[j] is ((a[i]).x)[j]), at its '['. An array
+// literal is T.[a, b] (T the elements' type, a name, as a struct literal's
+// is) or .[a, b], which takes its type where it's used; its values are in
+// order, never named. `for a { ... }` goes over a's elements: the
+// expression after 'for' (and the iterator's name) with the body's '{'
+// right after it, no '..', is the loop's sequence, and `for * a` makes the
+// iterator a pointer to each element; whether a is an array or a view, and
+// whether a range takes the '*', is the checker's to say. #no_abc after a
+// procedure's results turns its bounds checks off; a body must follow it.
 //
 // Pointers are Jai's (spec 6.5): the prefix *x is x's address, binding as
 // - does (*a + 1 is (*a) + 1), and the postfix p.* is what p points at,
@@ -76,18 +94,18 @@
 // call can give several values, as in q, r := divmod(7, 2);", at the
 // first, as the checker says of `a, b = b;`.
 //
-// Expressions and blocks nest at most 1000 levels deep (spec 6.1, a limit
-// of the compiler; parser.cpp's MAX_DEPTH): each parenthesis, prefix
-// operator, cast, call, dereference, field, struct literal and binary
-// operator is a level above what it holds, so a chain of 1001 '+' is too
-// deep too, and a procedure's body is the first block. Deeper is "this
-// expression is nested too deeply (more than 1000 levels)", at the start of
-// the outermost expression, or "blocks are nested too deeply (more than
-// 1000 levels)", at the '{' one too many; the declaration is then given up,
-// as after any other error below, not only the statement: the parser has no
-// recovery inside a body, and skipping just the statement would leave a
-// variable it declares (`x := ((...));`) undeclared, so every later use of
-// it would be one more message.
+// Expressions and blocks nest at most 1000 levels deep (spec 6.1, a limit of
+// the compiler; parser.cpp's MAX_DEPTH): each parenthesis, prefix operator,
+// cast, call, dereference, field, element, literal and binary operator is a
+// level above what it holds (an array type's count is read a level down too),
+// so a chain of 1001 '+' is too deep too, and a procedure's body is the first
+// block. Deeper is "this expression is nested too deeply (more than 1000
+// levels)", at the start of the outermost expression, or "blocks are nested
+// too deeply (more than 1000 levels)", at the '{' one too many; the
+// declaration is then given up, as after any other error below, not only the
+// statement: the parser has no recovery inside a body, and skipping just the
+// statement would leave a variable it declares (`x := ((...));`) undeclared,
+// so every later use of it would be one more message.
 //
 // Several results (spec 6.7) are a list of types after '->', with no
 // parentheses: `divmod :: (a: int, b: int) -> int, int { ... }`; a return
@@ -103,11 +121,11 @@
 //
 // The bodies of if, else, while and for are always blocks in braces (spec
 // 6.1), and a condition needs no parentheses: the body's '{' ends it. A for
-// whose first expression the body's '{' follows, not '..', is "'for' needs
-// a range, as in for 0..9, for now", at that expression; with no iterator
-// named, a name followed by anything else (`for i 0..9`, `for x in 0..9`)
-// is "expected ':' after the iterator's name, as in for i: 0..9", at what
-// came instead of the ':'; anything else is "expected '..'".
+// whose first expression the body's '{' follows, not '..', goes over that
+// expression's elements; with no iterator named, a name followed by
+// anything else (`for i 0..9`, `for x in 0..9`) is "expected ':' after the
+// iterator's name, as in for i: 0..9", at what came instead of the ':';
+// anything else is "expected '..'".
 //
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;

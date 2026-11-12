@@ -2597,6 +2597,7 @@ TEST(struct_layout_is_cs) {
                           "    d: bool;\n"
                           "    e: *u8;\n"
                           "    f: float32;\n"
+                          "    g: [3]u16;\n"
                           "}\n"
                           "Small :: struct { a: u8; b: u16; c: u8; }\n"
                           "Outer :: struct { tag: u8; inner: S; small: Small; }\n"
@@ -2607,12 +2608,15 @@ TEST(struct_layout_is_cs) {
     CHECK_EQ(s->kind, TYPE_STRUCT);
     CHECK_STR(type_name(&a, s), "S");
     CHECK(s->decl == (Ast_Struct *)global_named(&c, "S"));
-    static const s64 OFFSETS[] = {0, 8, 16, 18, 24, 32};
-    CHECK_EQ(s->fields.count, 6);
-    for (s64 i = 0; i < s->fields.count && i < 6; i++) CHECK_EQ(s->fields[i].offset, OFFSETS[i]);
+    // An array is its elements one after another, aligned as one of them
+    // (issue #59): [3]u16 at 36, 6 bytes, so S is 42 rounded up to 48.
+    static const s64 OFFSETS[] = {0, 8, 16, 18, 24, 32, 36};
+    CHECK_EQ(s->fields.count, 7);
+    for (s64 i = 0; i < s->fields.count && i < 7; i++) CHECK_EQ(s->fields[i].offset, OFFSETS[i]);
     CHECK_STR(s->fields[4].name, "e");
     CHECK_STR(type_name(&a, s->fields[4].type), "*u8");
-    CHECK_EQ(s->size, 40);
+    CHECK_STR(type_name(&a, s->fields[6].type), "[3]u16");
+    CHECK_EQ(s->size, 48);
     CHECK_EQ(type_align(s), 8);
     Type *packed = struct_named(&c, "Small");
     CHECK_EQ(packed->fields[1].offset, 2);
@@ -2622,8 +2626,8 @@ TEST(struct_layout_is_cs) {
     // A struct inside another is aligned as its largest field.
     Type *outer = struct_named(&c, "Outer");
     CHECK_EQ(outer->fields[1].offset, 8);
-    CHECK_EQ(outer->fields[2].offset, 48);
-    CHECK_EQ(outer->size, 56);
+    CHECK_EQ(outer->fields[2].offset, 56);
+    CHECK_EQ(outer->size, 64);
     CHECK_EQ(type_align(outer), 8);
     Type *empty = struct_named(&c, "Empty");
     CHECK_EQ(empty->fields.count, 0);
@@ -3113,5 +3117,495 @@ TEST(literal_value_with_no_field_says_nothing_more) {
               "4:19: field 'x' is given twice\n"
               "6:16: 'Vec2' has no field 'z'\n"
               "6:30: unknown identifier 'nope'\n");
+    arena_free(&a);
+}
+
+// Milestone 2b (issue #59): fixed arrays and views. [N]T is N T's one after
+// another; []T is { count: int; data: *T; }; a[i] is an element; .count and
+// .data; an array converts to a view of it; T.[...] and .[...] literals; for
+// over an array or a view.
+
+TEST(array_types) {
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Tree :: struct { kids: []Tree; first: [2]*Tree; }\n"
+                          "Vec2 :: struct { x: float; y: float; }\n"
+                          "main :: () {\n"
+                          "    a : [3]int;\n"
+                          "    b : [4]u16;\n"
+                          "    c : [2][3]u8;\n"
+                          "    d : []float64;\n"
+                          "    e : [0]int;\n"
+                          "    f : [5]Vec2;\n"
+                          "    N :: 4;\n"
+                          "    g : [N * 2]bool;\n"
+                          "    h : *[3]int;\n"
+                          "    k : [3]*int;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    struct Expected {
+        const char *name, *type;
+        s64 size, align;
+    };
+    static const Expected EXPECTED[] = {
+        {"a", "[3]int", 24, 8},  {"b", "[4]u16", 8, 2},  {"c", "[2][3]u8", 6, 1}, {"d", "[]float64", 16, 8},
+        {"e", "[0]int", 0, 8},   {"f", "[5]Vec2", 40, 4}, {"g", "[8]bool", 8, 1}, {"h", "*[3]int", 8, 8},
+        {"k", "[3]*int", 24, 8},
+    };
+    for (const Expected &x : EXPECTED) {
+        CHECK_STR(type_of(&a, &c, x.name), x.type);
+        Type *t = local_named(&c, x.name)->type;
+        if (!t) continue;
+        CHECK_EQ(t->size, x.size);
+        CHECK_EQ(type_align(t), x.align);
+    }
+    // Each array or view type exists once, as each pointer type does.
+    Type *array = local_named(&c, "a")->type;
+    CHECK_EQ(array->kind, TYPE_ARRAY);
+    CHECK(array == type_array_of(&type_int, 3));
+    CHECK(array->element == &type_int);
+    CHECK_EQ(array->count, 3);
+    CHECK(array != type_array_of(&type_int, 4));
+    Type *view = local_named(&c, "d")->type;
+    CHECK_EQ(view->kind, TYPE_VIEW);
+    CHECK(view == type_view_of(&type_float64));
+    CHECK(view->element == &type_float64);
+    CHECK(type_is_aggregate(array) && type_is_aggregate(view));
+    CHECK(local_named(&c, "c")->type == type_array_of(type_array_of(type_from_name(str("u8")), 3), 2));
+    // An array or a view of a struct lives with the struct, in the
+    // compilation's arena; of a built-in type, for the whole run.
+    CHECK(arena_holds(&a, local_named(&c, "f")->type));
+    CHECK(!arena_holds(&a, array));
+    // A struct holds a view of itself, or an array of pointers to itself:
+    // neither needs its size.
+    Type *tree = struct_named(&c, "Tree");
+    CHECK_EQ(tree->size, 32);
+    CHECK_EQ(tree->fields[1].offset, 16);
+    CHECK_STR(type_name(&a, tree->fields[0].type), "[]Tree");
+    CHECK_STR(type_name(&a, tree->fields[1].type), "[2]*Tree");
+    token_list_free(c.list);
+    // An array of itself is holding itself.
+    CHECK_STR(check_source(&a,
+                           "Bad :: struct { all: [2]Bad; }\n"
+                           "main :: () { x : [3]void; y : []void; }\n"),
+              "1:1: 'Bad' contains itself; it can hold a pointer to itself, *Bad\n"
+              "2:21: 'void' is only a pointer's target, as in *void\n"
+              "2:33: 'void' is only a pointer's target, as in *void\n");
+    arena_free(&a);
+}
+
+TEST(broken_struct_behind_a_view_says_nothing_more) {
+    // A struct laid out before one it holds behind a view, or an array of
+    // pointers, takes that struct's type before its layout is known. If the
+    // layout then fails (a circle, too big), the struct has no type, and
+    // neither has the field: its uses say nothing more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Good :: struct { v: []Bad; q: *Bad; a: [2]*Bad; vv: [][]Bad; }\n"
+                           "Bad :: struct { n: int; again: Bad; }\n"
+                           "Holder :: struct { v: []Big; }\n"
+                           "Big :: struct { x: [1099511627776]u8; y: u8; }\n"
+                           "main :: () {\n"
+                           "    g : Good;\n"
+                           "    w := g.v[0];\n"
+                           "    k : int = w;\n"
+                           "    p := g.a[0];\n"
+                           "    m : int = p.n;\n"
+                           "    r : int = g.q.n;\n"
+                           "    s : int = g.vv[0][0];\n"
+                           "    h : Holder;\n"
+                           "    z : int = h.v[0];\n"
+                           "}\n"),
+              "2:1: 'Bad' contains itself; it can hold a pointer to itself, *Bad\n"
+              "4:1: 'Big' is too big\n");
+    arena_free(&a);
+}
+
+TEST(array_count_rules) {
+    // [N]T: N an integer known while compiling, from 0 up; the type at most
+    // 2^40 bytes.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "N :: 3;\n"
+                           "M : int = 3;\n"
+                           "f :: () -> int { return 3; }\n"
+                           "main :: () {\n"
+                           "    a : [N]int;\n"
+                           "    b : [M]int;\n"
+                           "    c : [f()]int;\n"
+                           "    d : [-1]int;\n"
+                           "    e : [1.5]int;\n"
+                           "    g : [true]int;\n"
+                           "    h : [1099511627777]u8;\n"
+                           "    i : [1099511627776]u8;\n"
+                           "    j : [137438953473]u64;\n"
+                           "    k : [cast(u8) 2]int;\n"
+                           "    l : [0x7fffffffffffffff][2]u8;\n"
+                           "    m : [nope]int;\n"
+                           "    n : [cast(s8) -2]int;\n"
+                           "}\n"),
+              "6:10: an array's count must be known while compiling\n"
+              "7:10: an array's count must be known while compiling\n"
+              "8:10: an array's count can't be negative (-1)\n"
+              "9:10: an array's count must be an integer, not 'float32'\n"
+              "10:10: an array's count must be an integer, not 'bool'\n"
+              "11:9: '[1099511627777]u8' is too big\n"
+              "13:9: '[137438953473]u64' is too big\n"
+              "15:9: '[9223372036854775807][2]u8' is too big\n"
+              "16:10: unknown identifier 'nope'\n"
+              "17:10: an array's count can't be negative (-2)\n");
+    // A struct over 2^40 bytes, made of arrays that aren't, is too big too.
+    CHECK_STR(check_source(&a,
+                           "Huge :: struct { a: [1099511627776]u8; b: u8; }\n"
+                           "main :: () { }\n"),
+              "1:1: 'Huge' is too big\n");
+    arena_free(&a);
+}
+
+TEST(index_rules) {
+    // a[i] on an array, a view or a pointer is an element; i any integer.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Vec2 :: struct { x: int; y: int; }\n"
+                          "main :: () {\n"
+                          "    a : [3]int;\n"
+                          "    v : []u8;\n"
+                          "    p : *s16;\n"
+                          "    g : [2][4]Vec2;\n"
+                          "    i := 1;\n"
+                          "    u : u64 = 2;\n"
+                          "    x := a[i];\n"
+                          "    y := v[u];\n"
+                          "    z := p[-1];\n"
+                          "    w := g[1][i].y;\n"
+                          "    q := *a[2];\n"
+                          "    r := *v[0];\n"
+                          "    a[i] = 5;\n"
+                          "    v[0] += 1;\n"
+                          "    p[2] = 3;\n"
+                          "    g[0][cast(u8) 1].x = 4;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "x"), "int");
+    CHECK_STR(type_of(&a, &c, "y"), "u8");
+    CHECK_STR(type_of(&a, &c, "z"), "s16");
+    CHECK_STR(type_of(&a, &c, "w"), "int");
+    CHECK_STR(type_of(&a, &c, "q"), "*int");
+    CHECK_STR(type_of(&a, &c, "r"), "*u8");
+    // An untyped index is an int.
+    Ast_Index *z = (Ast_Index *)value_of(&c, "z");
+    CHECK_EQ(z->kind, AST_INDEX);
+    CHECK(z->index->type == &type_int);
+    token_list_free(c.list);
+    // An array's element is a place when the array is; a view's or a
+    // pointer's always is.
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: int; y: int; }\n"
+                           "get :: () -> [3]int { return .[1, 2, 3]; }\n"
+                           "f :: (a: [3]int, v: []int, n: int) {\n"
+                           "    a[0] = 1;\n"
+                           "    x := *a[1];\n"
+                           "    v[0] = 1;\n"
+                           "    get()[0] = 1;\n"
+                           "    y := get()[n];\n"
+                           "    z := n[0];\n"
+                           "    s := Vec2.{}[0];\n"
+                           "    t := a[1.5];\n"
+                           "    u := a[true];\n"
+                           "    w := a[v];\n"
+                           "    pv : *void;\n"
+                           "    k := pv[0];\n"
+                           "}\n"
+                           "main :: () { }\n"),
+              "4:5: can't assign to 'a': it's a parameter\n"
+              "5:11: can't take the address of 'a': it's a parameter\n"
+              "7:5: only a variable, a field or an element can be assigned to\n"
+              "9:11: '[]' needs an array, a view or a pointer, not 'int'\n"
+              "10:17: '[]' needs an array, a view or a pointer, not 'Vec2'\n"
+              "11:12: an index must be an integer, not 'float32'\n"
+              "12:12: an index must be an integer, not 'bool'\n"
+              "13:12: an index must be an integer, not '[]int'\n"
+              "15:12: can't index a '*void'; cast it to a pointer to something first\n");
+    arena_free(&a);
+}
+
+TEST(constant_index_out_of_bounds) {
+    // A constant index of an array is checked while compiling, by its own
+    // sign; a view's count is known only at run time.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    a : [3]int;\n"
+                           "    x := a[3];\n"
+                           "    y := a[-1];\n"
+                           "    z := a[cast(u64) 18446744073709551615];\n"
+                           "    w := a[2];\n"
+                           "    e : [0]int;\n"
+                           "    k := e[0];\n"
+                           "    v : []int;\n"
+                           "    m := v[5];\n"
+                           "    N :: 7;\n"
+                           "    a[N] = 1;\n"
+                           "}\n"),
+              "3:12: index 3 is out of bounds for '[3]int'\n"
+              "4:12: index -1 is out of bounds for '[3]int'\n"
+              "5:12: index 18446744073709551615 is out of bounds for '[3]int'\n"
+              "8:12: index 0 is out of bounds for '[0]int'\n"
+              "12:7: index 7 is out of bounds for '[3]int'\n");
+    arena_free(&a);
+}
+
+TEST(count_and_data) {
+    // An array's .count is its count, a constant, and .data the address of
+    // its first element; a view's are its fields.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "S :: struct { items: [4]s16; }\n"
+                          "main :: () {\n"
+                          "    a : [3]int;\n"
+                          "    v : []u8;\n"
+                          "    s : S;\n"
+                          "    n := a.count;\n"
+                          "    p := a.data;\n"
+                          "    m := v.count;\n"
+                          "    q := v.data;\n"
+                          "    v.count = 2;\n"
+                          "    v.data = q;\n"
+                          "    r := s.items.data;\n"
+                          "    c := s.items.count;\n"
+                          "    t := *v.count;\n"
+                          "    b : u8 = a.count;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "n"), "int");
+    CHECK_STR(type_of(&a, &c, "p"), "*int");
+    CHECK_STR(type_of(&a, &c, "m"), "int");
+    CHECK_STR(type_of(&a, &c, "q"), "*u8");
+    CHECK_STR(type_of(&a, &c, "r"), "*s16");
+    CHECK_STR(type_of(&a, &c, "t"), "*int");
+    Ast *count = value_of(&c, "c");
+    CHECK(count->is_constant);
+    CHECK_EQ(count->constant, 4);
+    CHECK(!value_of(&c, "m")->is_constant);
+    token_list_free(c.list);
+    // .data needs the array to have an address, as *a does, so a parameter's
+    // elements can't be written through it; .count and .data of an array
+    // can't be assigned to.
+    CHECK_STR(check_source(&a,
+                           "get :: () -> [2]int { return .[1, 2]; }\n"
+                           "f :: (a: [3]int, v: []int) {\n"
+                           "    p := a.data;\n"
+                           "    n := a.count;\n"
+                           "    v.count = 1;\n"
+                           "    w := get().data;\n"
+                           "    k := get().count;\n"
+                           "    q := v.data;\n"
+                           "}\n"
+                           "main :: () {\n"
+                           "    b : [3]int;\n"
+                           "    b.count = 1;\n"
+                           "    b.data = null;\n"
+                           "    x := b.size;\n"
+                           "    u : []int;\n"
+                           "    y := u.length;\n"
+                           "    z := *b.count;\n"
+                           "}\n"),
+              "3:10: can't take the address of 'a': it's a parameter\n"
+              "5:5: can't assign to 'v': it's a parameter\n"
+              "6:10: only a variable, a field or an element has an address\n"
+              "12:7: can't assign to an array's 'count'\n"
+              "13:7: can't assign to an array's 'data'\n"
+              "14:12: '[3]int' has no field 'size'\n"
+              "16:12: '[]int' has no field 'length'\n"
+              "17:11: only a variable, a field or an element has an address\n");
+    arena_free(&a);
+}
+
+TEST(array_converts_to_view) {
+    // [N]T converts implicitly to []T, wherever a value converts: a
+    // declaration, an assignment, an argument, a return, a cast.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "sum :: (v: []int) -> int { return 0; }\n"
+                          "get :: () -> [2]int { return .[1, 2]; }\n"
+                          "take :: (v: []int) -> []int { return int.[1]; }\n"
+                          "main :: () {\n"
+                          "    a : [3]int;\n"
+                          "    v : []int = a;\n"
+                          "    n := sum(a);\n"
+                          "    w : []int;\n"
+                          "    w = a;\n"
+                          "    m := sum(get());\n"
+                          "    x := take(int.[4, 5]);\n"
+                          "    y : []int = .[1, 2, 3];\n"
+                          "    c := cast([]int) a;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "v"), "[]int");
+    CHECK_STR(type_of(&a, &c, "x"), "[]int");
+    CHECK_STR(type_of(&a, &c, "y"), "[]int");
+    CHECK_STR(type_of(&a, &c, "c"), "[]int");
+    // The literal is an array; it's converted where it's used.
+    CHECK_STR(type_name(&a, value_of(&c, "y")->type), "[3]int");
+    token_list_free(c.list);
+    // Only to a view of the same element type; never back, nor to another
+    // count. Arrays and views aren't compared.
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    a : [3]int;\n"
+                           "    b : [3]u8;\n"
+                           "    v : []u8 = a;\n"
+                           "    w : [3]int = v;\n"
+                           "    x : [4]int = a;\n"
+                           "    y : []int = b;\n"
+                           "    p : *int = a;\n"
+                           "    same := a == a;\n"
+                           "    q := cast([]int) b;\n"
+                           "}\n"),
+              "4:16: a value of type '[3]int' doesn't convert to '[]u8' implicitly\n"
+              "5:18: a value of type '[]u8' doesn't convert to '[3]int' implicitly\n"
+              "6:18: a value of type '[3]int' doesn't convert to '[4]int' implicitly\n"
+              "7:17: a value of type '[3]u8' doesn't convert to '[]int' implicitly\n"
+              "8:16: a value of type '[3]int' doesn't convert to '*int' implicitly\n"
+              "9:15: '==' needs numbers, bools, pointers or strings, not '[3]int'\n"
+              "10:10: can't cast '[3]u8' to '[]int'\n");
+    arena_free(&a);
+}
+
+TEST(array_literal_rules) {
+    // T.[...] is a [N]T of its N values; .[...] takes its element type and
+    // count from the array it meets, or its element type from the view it
+    // meets.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Vec2 :: struct { x: int; y: int; }\n"
+                          "main :: () {\n"
+                          "    a := int.[1, 2, 3];\n"
+                          "    b : [3]u8 = .[1, 2, 3];\n"
+                          "    c := Vec2.[.{1, 2}, .{3, 4}];\n"
+                          "    d : [2][2]int = .[.[1, 2], int.[3, 4]];\n"
+                          "    e := u8.[];\n"
+                          "    f : []Vec2 = .[.{1, 2}];\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "a"), "[3]int");
+    CHECK_STR(type_of(&a, &c, "b"), "[3]u8");
+    CHECK_STR(type_of(&a, &c, "c"), "[2]Vec2");
+    CHECK_STR(type_of(&a, &c, "d"), "[2][2]int");
+    CHECK_STR(type_of(&a, &c, "e"), "[0]u8");
+    CHECK_STR(type_of(&a, &c, "f"), "[]Vec2");
+    CHECK_STR(type_name(&a, value_of(&c, "f")->type), "[1]Vec2");
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    a : [3]int = .[1, 2];\n"
+                           "    b : [2]int = .[1, 2, 3];\n"
+                           "    c := .[1, 2];\n"
+                           "    d : int = .[1];\n"
+                           "    e := u8.[300];\n"
+                           "    f := nope.[1];\n"
+                           "    g : [2]int = int.[1, 2, 3];\n"
+                           "    h := int.[1, true];\n"
+                           "    k : [1]int = .{1};\n"
+                           "    m : Vec2 = .[1];\n"
+                           "}\n"
+                           "Vec2 :: struct { x: int; }\n"),
+              "2:18: '[3]int' has 3 elements, but this literal gives 2\n"
+              "3:18: '[2]int' has 2 elements, but this literal gives 3\n"
+              "4:10: this literal's type isn't known; write it before the '.', as in int.[1, 2]\n"
+              "5:15: a '.[' literal needs an array or a view type, not 'int'\n"
+              "6:14: 300 doesn't fit in 'u8'\n"
+              "7:10: unknown type 'nope'\n"
+              "8:18: a value of type '[3]int' doesn't convert to '[2]int' implicitly\n"
+              "9:18: a value of type 'bool' doesn't convert to 'int' implicitly\n"
+              "10:18: a '.{' literal needs a struct type, not '[1]int'\n"
+              "11:16: a '.[' literal needs an array or a view type, not 'Vec2'\n");
+    // A global array is a literal of constants; a global view, one of a
+    // literal, which is then a global array too.
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: int; y: int; }\n"
+                           "Path :: struct { points: []Vec2; }\n"
+                           "g := int.[1, 2];\n"
+                           "h : []int = .[1, 2, 3];\n"
+                           "p := Path.{.[.{1, 2}]};\n"
+                           "z : [4]u8;\n"
+                           "n := 5;\n"
+                           "k : []int = g;\n"
+                           "m := int.[1, n];\n"
+                           "main :: () { }\n"),
+              "8:13: a global's value must be known while compiling, for now\n"
+              "9:14: a global's value must be known while compiling, for now\n");
+    arena_free(&a);
+}
+
+TEST(for_over_a_sequence) {
+    // for a: it is each element (a copy, read-only); for * a: a pointer to
+    // each. it_index counts from 0.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Vec2 :: struct { x: int; y: int; }\n"
+                          "make :: () -> []Vec2 { v : []Vec2; return v; }\n"
+                          "main :: () {\n"
+                          "    a : [3]u16;\n"
+                          "    for a { x := it; i := it_index; }\n"
+                          "    for * a { p := it; }\n"
+                          "    for e: make() { y := e; }\n"
+                          "    for * f: make() { q := f; }\n"
+                          "    for int.[1, 2] { z := it; }\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "x"), "u16");
+    CHECK_STR(type_of(&a, &c, "i"), "int");
+    CHECK_STR(type_of(&a, &c, "p"), "*u16");
+    CHECK_STR(type_of(&a, &c, "y"), "Vec2");
+    CHECK_STR(type_of(&a, &c, "q"), "*Vec2");
+    CHECK_STR(type_of(&a, &c, "z"), "int");
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "f :: (a: [3]int, v: []int) {\n"
+                           "    for * a { }\n"
+                           "    for * v { it.* = 1; }\n"
+                           "    for a { it = 1; }\n"
+                           "    for * x: a { }\n"
+                           "}\n"
+                           "get :: () -> [2]int { return .[1, 2]; }\n"
+                           "main :: () {\n"
+                           "    for 10 { }\n"
+                           "    for * 0..9 { }\n"
+                           "    n := 5;\n"
+                           "    for n { }\n"
+                           "    for * get() { }\n"
+                           "    for * int.[1, 2] { }\n"
+                           "    for * p: 1..3 { }\n"
+                           "    for .[1, 2] { }\n"
+                           "}\n"),
+              "2:11: can't take the address of 'a': it's a parameter\n"
+              "4:13: can't assign to 'it': it's the loop's iterator\n"
+              "5:14: can't take the address of 'a': it's a parameter\n"
+              "9:9: 'for' needs a range, an array or a view, not 'int'\n"
+              "10:11: 'for *' needs an array or a view, not a range\n"
+              "12:9: 'for' needs a range, an array or a view, not 'int'\n"
+              "13:11: only a variable, a field or an element has an address\n"
+              "14:11: only a variable, a field or an element has an address\n"
+              "15:14: 'for *' needs an array or a view, not a range\n"
+              "16:9: this literal's type isn't known; write it before the '.', as in int.[1, 2]\n");
+    arena_free(&a);
+}
+
+TEST(foreign_procedures_take_no_arrays) {
+    // C has no views, and passes arrays as pointers: a foreign procedure
+    // takes a pointer to the elements, .data.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "a :: (x: [3]int) #foreign libc;\n"
+                           "b :: (v: []u8) #foreign libc;\n"
+                           "c :: () -> [2]int #foreign libc;\n"
+                           "d :: () -> []int #foreign libc;\n"
+                           "e :: (p: *[3]int) -> *u8 #foreign libc;\n"
+                           "main :: () { }\n"),
+              "1:10: a foreign procedure can't take a '[3]int'; pass its .data\n"
+              "2:10: a foreign procedure can't take a '[]u8'; pass its .data\n"
+              "3:12: a foreign procedure can't return a '[2]int' yet\n"
+              "4:12: a foreign procedure can't return a '[]int' yet\n");
     arena_free(&a);
 }

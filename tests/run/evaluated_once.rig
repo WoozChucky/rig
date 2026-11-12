@@ -1,0 +1,105 @@
+// Each operand is evaluated once (spec 6.5): a call inside a compound
+// assignment's target, the call a for loop goes over, an assignment's target
+// worked out before its value, and an indexed view read before its index.
+// Each called procedure counts its calls.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+print_int :: (n: int) {
+    if n < 0 {
+        putchar(45);
+        print_int(-n);
+        return;
+    }
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+println :: (n: int) {
+    print_int(n);
+    putchar(10);
+}
+
+calls := 0;
+numbers := int.[10, 20, 30];
+
+Counter :: struct { value: int; }
+counter : Counter;
+
+pick :: () -> int {
+    calls += 1;
+    return 1;
+}
+
+next :: () -> *Counter {
+    calls += 1;
+    return *counter;
+}
+
+third :: () -> *int {
+    calls += 1;
+    return *numbers[2];
+}
+
+make_view :: () -> []int {
+    calls += 1;
+    return numbers;
+}
+
+first := int.[1, 2, 3];
+second := int.[7, 8, 9];
+seen : []int;
+
+// Points `seen` at the second array, as an index is worked out.
+swap :: () -> int {
+    seen = second;
+    return 0;
+}
+
+order : [8]int;
+order_count := 0;
+
+note :: (n: int) -> int {
+    order[order_count] = n;
+    order_count += 1;
+    return n;
+}
+
+main :: () {
+    numbers[pick()] += 1;
+    println(calls);
+    println(numbers[1]);
+    next().value += 5;
+    println(calls);
+    println(counter.value);
+    third().* += 2;
+    println(calls);
+    println(numbers[2]);
+
+    // The sequence is worked out once, before the first iteration.
+    total := 0;
+    for make_view() { total += it; }
+    println(calls);
+    println(total);
+
+    // The target's index first, then the value.
+    numbers[note(0)] = note(1) + note(2);
+    for k: 0..order_count - 1 { println(order[k]); }
+    println(numbers[0]);
+
+    // A view's count is taken once: the loop doesn't see it change.
+    v : []int = numbers;
+    n := 0;
+    for v {
+        v.count = 0;
+        n += 1;
+    }
+    println(n);
+
+    // The target before its index: a view, as a pointer, is read before
+    // the index changes it.
+    seen = first;
+    println(seen[swap()]);
+    p := first.data;
+    seen = first;
+    println(p[swap() + 1]);
+}
