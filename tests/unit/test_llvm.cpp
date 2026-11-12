@@ -1,7 +1,7 @@
 // test_llvm.cpp: Rig's IR to LLVM IR and object files: hello world from
 // tokens (issue #10), then IR built by hand for issues #32 to #37 (integer
 // widths, blocks and branches, the runtime's panic, several results,
-// globals and floats) and #52 (the panic flushing first).
+// globals and floats), #52 (the panic flushing first) and #56 (memory).
 // Uses test_ir.cpp's HELLO and max_module.
 
 #include "test.h"
@@ -591,5 +591,256 @@ TEST(llvm_float_parameters_and_globals) {
         CHECK(contains(text, "@scale = internal global float 1.500000e+00"));
         CHECK(contains(text, "declare double @half(float)"));
     }
+    arena_free(&a);
+}
+
+// Milestone 2b's memory (issue #56), on IR built by hand.
+
+TEST(llvm_aggregate_locals_are_in_the_entry_block) {
+    // A local of bytes (a struct's, an array's) is an alloca like any slot,
+    // in the entry block whichever block declares it, so one in a loop's
+    // body takes its stack once, not on every iteration.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(m, &a, "f", IR_VOID);
+    s32 b0 = ir_new_block(&a, p), b1 = ir_new_block(&a, p), b2 = ir_new_block(&a, p);
+    ir_emit(p, b0, IR_JUMP, IR_VOID)->target = b1;
+    ir_emit(p, b1, IR_JUMP, IR_VOID)->target = b2;
+    s32 buffer = emit_local_bytes(p, b2, 1000, 1);
+    emit_zero(p, b2, buffer, 1000);
+    emit_ret(p, b2, -1);
+    String text = llvm_text(&a, m, target_host());
+    s64 alloca = index_of(text, "alloca [1000 x i8], align 1"), first_branch = index_of(text, "br label");
+    CHECK(alloca >= 0);
+    CHECK(first_branch >= 0);
+    CHECK(alloca < first_branch);
+    arena_free(&a);
+}
+
+TEST(llvm_ptradd_has_no_inbounds) {
+    // ptradd is a getelementptr over bytes, without inbounds: Rig's pointer
+    // arithmetic may leave the object it started in (spec 6.4), and inbounds
+    // would make that poison.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(m, &a, "f", IR_PTR);
+    s32 at = ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    s32 offset = ir_add_param(p, IR_I64, IR_EXT_NONE);
+    s32 b = ir_new_block(&a, p);
+    emit_ret(p, b, emit_ptradd(p, b, at, offset));
+    String text = llvm_text(&a, m, target_host());
+    CHECK(contains(text, "getelementptr i8, ptr %0, i64 %1"));
+    CHECK(!contains(text, "inbounds"));
+    arena_free(&a);
+}
+
+TEST(llvm_copy_is_memmove) {
+    // copy is llvm.memmove, never llvm.memcpy: the two sides may overlap
+    // (a = a, or a struct copied into itself through a pointer). Neither
+    // copy nor zero assumes anything of the addresses' alignment.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(m, &a, "f", IR_VOID);
+    s32 to = ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    s32 from = ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    s32 b = ir_new_block(&a, p);
+    emit_copy(p, b, to, from, 24);
+    emit_zero(p, b, to, 16);
+    emit_ret(p, b, -1);
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "call void @llvm.memmove.p0.p0.i64(ptr align 1 %0, ptr align 1 %1, i64 24, i1 false)"));
+        CHECK(contains(text, "call void @llvm.memset.p0.i64(ptr align 1 %0, i8 0, i64 16, i1 false)"));
+        // (C's memcpy is declared, for what LLVM may call itself, but the
+        // program's copies are never the memcpy intrinsic.)
+        CHECK(!contains(text, "@llvm.memcpy"));
+    }
+    arena_free(&a);
+}
+
+// A module with @str.0 = "abc" and @table, 24 bytes aligned to 8: a byte 3,
+// 7 zeros, the address of @str.0, and 8 zeros. `string_first` says which of
+// the two is global 0.
+static Ir_Module *table_module(Arena *a, bool string_first) {
+    Ir_Module *m = arena_new<Ir_Module>(a);
+    s32 text = -1;
+    if (string_first) text = add_string(m, "str.0", "abc");
+    s32 table = add_byte_global(m, "table", 24, 8);
+    if (!string_first) text = add_string(m, "str.0", "abc");
+    u8 *bytes = (u8 *)arena_alloc(a, 24, 1);  // zeroed
+    bytes[0] = 3;
+    m->globals[table].bytes = {bytes, 24};
+    array_add(&m->globals[table].relocs, {8, text});
+    return m;
+}
+
+TEST(llvm_byte_global_with_a_relocation) {
+    // A variable of bytes holding an address is a packed struct of LLVM's
+    // (no padding between its fields), its bytes split where the address
+    // goes: the address is a ptr constant, which the linker fills in. A
+    // variable of bytes that are all zero is an array of zeros. Both are
+    // writable, internal, and aligned as the IR says.
+    Arena a = arena_make();
+    Ir_Module *m = table_module(&a, true);
+    add_byte_global(m, "origin", 16, 8);
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "@table = internal global <{ [8 x i8], ptr, [8 x i8] }> "
+                             "<{ [8 x i8] c\"\\03\\00\\00\\00\\00\\00\\00\\00\", ptr @str.0, "
+                             "[8 x i8] zeroinitializer }>, align 8"));
+        CHECK(contains(text, "@origin = internal global [16 x i8] zeroinitializer, align 8"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_byte_global_layouts) {
+    // The struct has a run of bytes only where there are bytes: none before
+    // an address at offset 0, between two addresses side by side, or after
+    // one that ends the global, so @pair is just its two addresses. Being
+    // packed, the struct puts an address at any offset, aligned or not, as
+    // @odd's at 3. Bytes that aren't all zero, with no address among them,
+    // are an array of them, as a string literal's are.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    s32 text = add_string(m, "str.0", "abc");
+    s32 pair = add_byte_global(m, "pair", 16, 8);
+    array_add(&m->globals[pair].relocs, {0, text});
+    array_add(&m->globals[pair].relocs, {8, text});
+    s32 odd = add_byte_global(m, "odd", 12, 4);
+    u8 *odd_bytes = (u8 *)arena_alloc(&a, 12, 1);  // zeroed
+    odd_bytes[0] = 1;
+    odd_bytes[11] = 2;
+    m->globals[odd].bytes = {odd_bytes, 12};
+    array_add(&m->globals[odd].relocs, {3, text});
+    s32 counts = add_byte_global(m, "counts", 4, 4);
+    static const u8 four[] = {1, 2, 3, 4};
+    m->globals[counts].bytes = {four, 4};
+    for (int t = 0; t < 2; t++) {
+        String llvm = llvm_text(&a, m, (Target)t);  // and it verifies
+        CHECK(contains(llvm, "@pair = internal global <{ ptr, ptr }> <{ ptr @str.0, ptr @str.0 }>, align 8"));
+        CHECK(contains(llvm, "@odd = internal global <{ [3 x i8], ptr, [1 x i8] }> "
+                             "<{ [3 x i8] c\"\\01\\00\\00\", ptr @str.0, [1 x i8] c\"\\02\" }>, align 4"));
+        CHECK(contains(llvm, "@counts = internal global [4 x i8] c\"\\01\\02\\03\\04\", align 4"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_relocation_to_a_later_global) {
+    // Every global is made before any is given its first value, so a
+    // relocation may name a global that comes after it.
+    Arena a = arena_make();
+    Ir_Module *m = table_module(&a, false);
+    String text = llvm_text(&a, m, target_host());
+    CHECK(contains(text, "@table = internal global <{ [8 x i8], ptr, [8 x i8] }>"));
+    CHECK(contains(text, ", ptr @str.0, [8 x i8] zeroinitializer }>"));
+    CHECK(index_of(text, "@table =") < index_of(text, "@str.0 ="));
+    arena_free(&a);
+}
+
+TEST(llvm_panic_with_a_computed_message) {
+    // panic %a, %b calls the runtime's __rig_panic with them, as panic @g
+    // does with g's address and length.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(m, &a, "fail", IR_VOID);
+    s32 message = ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    s32 count = ir_add_param(p, IR_I64, IR_EXT_NONE);
+    Ir_Instr *panic = ir_emit(p, ir_new_block(&a, p), IR_PANIC, IR_VOID);
+    panic->a = message;
+    panic->b = count;
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "call void @__rig_panic(ptr %0, i64 %1)"));
+        CHECK(contains(text, "define internal void @__rig_panic("));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_bool_in_memory_is_a_byte) {
+    // A bool's slot is a byte. A store writes the i1 widened to 0 or 1; a
+    // load reads the byte and compares it with 0, so any nonzero byte (one C
+    // or a cast left there) is true. LLVM's own load i1 would be undefined
+    // for any byte but 0 and 1. A bool global is a byte too, its first value
+    // 0 or 1, read and written the same way through its address.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Global ready = {};
+    ready.name = str("ready");
+    ready.type = IR_I1;
+    ready.initial = 1;
+    array_add(&m->globals, ready);
+    Ir_Proc *p = new_proc_returning(m, &a, "f", IR_I1);
+    s32 flag = ir_add_param(p, IR_I1, IR_EXT_NONE);
+    s32 b = ir_new_block(&a, p);
+    s32 slot = ir_emit(p, b, IR_LOCAL, IR_I1)->result;
+    emit_binary(p, b, IR_STORE, IR_I1, flag, slot);
+    Ir_Instr *load = ir_emit(p, b, IR_LOAD, IR_I1);
+    load->a = slot;
+    Ir_Instr *address = ir_emit(p, b, IR_ADDR, IR_PTR);
+    address->target = 0;
+    Ir_Instr *was = ir_emit(p, b, IR_LOAD, IR_I1);
+    was->a = address->result;
+    emit_binary(p, b, IR_STORE, IR_I1, load->result, address->result);
+    s32 both = emit_binary(p, b, IR_AND, IR_I1, load->result, was->result);
+    emit_ret(p, b, both);
+    String text = llvm_text(&a, m, target_host());
+    CHECK(contains(text, "alloca i8"));
+    CHECK(contains(text, "zext i1 %0 to i8"));
+    CHECK(contains(text, "store i8 %"));
+    CHECK(contains(text, "load i8, ptr %"));
+    CHECK(contains(text, "icmp ne i8 %"));
+    CHECK(contains(text, "@ready = internal global i8 1"));
+    CHECK(contains(text, "  %5 = load i8, ptr @ready, align 1\n"
+                         "  %6 = icmp ne i8 %5, 0\n"
+                         "  %7 = zext i1 %4 to i8\n"
+                         "  store i8 %7, ptr @ready, align 1\n"));
+    CHECK(!contains(text, "load i1"));
+    CHECK(!contains(text, "store i1"));
+    arena_free(&a);
+}
+
+TEST(llvm_memory_functions_win_over_the_programs) {
+    // LLVM turns its memmove and memset intrinsics into calls to C's
+    // memmove and memset (and memcpy, where it proves the two sides apart),
+    // by name. So the three are declared first, as the runtime's write and
+    // exit are: a program's own memset is the one renamed, and keeps working.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *own = new_proc_returning(m, &a, "memset", IR_VOID);
+    emit_ret(own, ir_new_block(&a, own), -1);
+    Ir_Proc *p = new_proc_returning(m, &a, "f", IR_VOID);
+    s32 at = ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    s32 b = ir_new_block(&a, p);
+    ir_emit_call(m, p, b, 0, {});
+    emit_zero(p, b, at, 8);
+    emit_ret(p, b, -1);
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "declare ptr @memset(ptr, i32, i64)"));
+        CHECK(contains(text, "declare ptr @memmove(ptr, ptr, i64)"));
+        CHECK(contains(text, "declare ptr @memcpy(ptr, ptr, i64)"));
+        CHECK(contains(text, "define internal void @memset.1()"));
+        CHECK(contains(text, "call void @memset.1()"));
+    }
+    // A module with no copy or zero declares none of them.
+    String text = llvm_text(&a, max_module(&a), target_host());
+    CHECK(!contains(text, "@memset"));
+    CHECK(!contains(text, "@memmove"));
+    CHECK(!contains(text, "@memcpy"));
+    arena_free(&a);
+}
+
+TEST(llvm_linux_functions_probe_the_stack) {
+    // On Linux every function Rig defines probes its stack frame page by
+    // page (clang's -fstack-clash-protection), so a frame bigger than a page
+    // (a [100000]u8 local) can't step over the guard page below the stack
+    // into other memory. Windows' __chkstk does that already.
+    Arena a = arena_make();
+    String text = llvm_text(&a, panic_module(&a), TARGET_LINUX_X64);
+    CHECK(contains(text, "\"probe-stack\"=\"inline-asm\""));
+    CHECK(contains(text, "define internal void @__rig_main() #"));
+    CHECK(contains(text, "define internal void @__rig_panic(ptr %0, i64 %1) #"));
+    text = llvm_text(&a, panic_module(&a), TARGET_WINDOWS_X64);
+    CHECK(!contains(text, "probe-stack"));
     arena_free(&a);
 }
