@@ -174,9 +174,15 @@ struct Ast_Int : Ast {
     u64 value;
 };
 
-// A float literal, its value read by the lexer as the nearest double.
+// A float literal, its value read by the lexer twice, from its decimal text:
+// as the nearest double, the untyped constant's value, and as the nearest
+// float32, which it is when it becomes a float32 (check_expr.cpp's
+// float_bits). Rounding the double to a float32 instead would round twice,
+// and a literal near a halfway point between two float32s could land on
+// the wrong one.
 struct Ast_Float : Ast {
     f64 value;
+    f32 float32_value;
 };
 
 struct Ast_Bool : Ast {

@@ -140,6 +140,7 @@ static Ast *parse_primary(Parser *p) {
         advance(p);
         Ast_Float *number = ast_new<Ast_Float>(p->arena, AST_FLOAT, t->pos);
         number->value = t->float_value;
+        number->float32_value = t->float32_value;
         return number;
     }
     case TOKEN_STRING: {
