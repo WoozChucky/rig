@@ -1546,7 +1546,9 @@ TEST(foreign_returns_one_value) {
 static Ast *global_named(Checked *c, const char *name) {
     for (s64 i = 0; i < c->file->globals.count; i++) {
         Ast *g = c->file->globals[i];
-        String n = g->kind == AST_VAR ? ((Ast_Var *)g)->name : ((Ast_Const *)g)->name;
+        String n = g->kind == AST_VAR     ? ((Ast_Var *)g)->name
+                   : g->kind == AST_STRUCT ? ((Ast_Struct *)g)->name
+                                           : ((Ast_Const *)g)->name;
         if (string_eq(n, str(name))) return g;
     }
     RIG_ASSERT(!"no such global");
@@ -2568,5 +2570,548 @@ TEST(null_global) {
                            "main :: () { }\n"),
               "2:12: a global's value must be known while compiling, for now\n"
               "3:8: null needs a pointer type, as in p : *int = null;\n");
+    arena_free(&a);
+}
+
+// Milestone 2b (issue #58): structs. A struct is a type, laid out as C lays
+// it out; e.x is a field; T.{...} and .{...} are its literals; struct
+// values copy, and aren't compared.
+
+// The type of struct `name`, from the file's globals.
+static Type *struct_named(Checked *c, const char *name) {
+    Ast *s = global_named(c, name);
+    RIG_ASSERT(s->kind == AST_STRUCT);
+    return ((Ast_Struct *)s)->declared;
+}
+
+TEST(struct_layout_is_cs) {
+    // Each field at the next offset that is a multiple of its alignment, the
+    // struct's alignment its largest field's (1 with none), its size rounded
+    // up to that: C's layout (spec 5), so C sees the same struct.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "S :: struct {\n"
+                          "    a: u8;\n"
+                          "    b: s64;\n"
+                          "    c: u16;\n"
+                          "    d: bool;\n"
+                          "    e: *u8;\n"
+                          "    f: float32;\n"
+                          "}\n"
+                          "Small :: struct { a: u8; b: u16; c: u8; }\n"
+                          "Outer :: struct { tag: u8; inner: S; small: Small; }\n"
+                          "Empty :: struct {}\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Type *s = struct_named(&c, "S");
+    CHECK_EQ(s->kind, TYPE_STRUCT);
+    CHECK_STR(type_name(&a, s), "S");
+    CHECK(s->decl == (Ast_Struct *)global_named(&c, "S"));
+    static const s64 OFFSETS[] = {0, 8, 16, 18, 24, 32};
+    CHECK_EQ(s->fields.count, 6);
+    for (s64 i = 0; i < s->fields.count && i < 6; i++) CHECK_EQ(s->fields[i].offset, OFFSETS[i]);
+    CHECK_STR(s->fields[4].name, "e");
+    CHECK_STR(type_name(&a, s->fields[4].type), "*u8");
+    CHECK_EQ(s->size, 40);
+    CHECK_EQ(type_align(s), 8);
+    Type *packed = struct_named(&c, "Small");
+    CHECK_EQ(packed->fields[1].offset, 2);
+    CHECK_EQ(packed->fields[2].offset, 4);
+    CHECK_EQ(packed->size, 6);
+    CHECK_EQ(type_align(packed), 2);
+    // A struct inside another is aligned as its largest field.
+    Type *outer = struct_named(&c, "Outer");
+    CHECK_EQ(outer->fields[1].offset, 8);
+    CHECK_EQ(outer->fields[2].offset, 48);
+    CHECK_EQ(outer->size, 56);
+    CHECK_EQ(type_align(outer), 8);
+    Type *empty = struct_named(&c, "Empty");
+    CHECK_EQ(empty->fields.count, 0);
+    CHECK_EQ(empty->size, 0);
+    CHECK_EQ(type_align(empty), 1);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(structs_in_any_order) {
+    // A struct's name is a type everywhere, before its declaration too: in
+    // another struct, a signature, a literal, a body.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Line :: struct { from: Vec2; to: Vec2; }\n"
+                          "make :: (x: float) -> Vec2 { return Vec2.{x, x}; }\n"
+                          "main :: () {\n"
+                          "    l : Line;\n"
+                          "    v := make(1);\n"
+                          "    N :: size_of(Line);\n"
+                          "}\n"
+                          "Vec2 :: struct { x: float; y: float; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "v"), "Vec2");
+    CHECK_EQ(local_named(&c, "N")->constant, 16);
+    CHECK_EQ(struct_named(&c, "Line")->fields[1].offset, 8);
+    token_list_free(c.list);
+    // Its name is the top level's, shared with procedures, globals and
+    // constants; its fields' names are its own.
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: float; x: int; }\n"
+                           "Vec2 :: () { }\n"
+                           "main :: () { }\n"),
+              "1:28: 'x' is already declared at test.rig:1:18\n"
+              "2:1: 'Vec2' is already declared at test.rig:1:1\n");
+    arena_free(&a);
+}
+
+TEST(struct_contains_itself) {
+    // A struct can't hold itself, directly or through other structs: it
+    // would have no end. Said once per circle, at the struct whose layout
+    // was being worked out when the circle closed; the struct then has no
+    // type, and its uses say nothing more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Node :: struct { value: int; next: Node; }\n"
+                           "A :: struct { b: B; }\n"
+                           "B :: struct { c: C; }\n"
+                           "C :: struct { a: A; }\n"
+                           "main :: () {\n"
+                           "    n : Node;\n"
+                           "    a : A;\n"
+                           "    s := size_of(B);\n"
+                           "    v := n.value;\n"
+                           "}\n"),
+              "1:1: 'Node' contains itself; it can hold a pointer to itself, *Node\n"
+              "2:1: 'A' contains itself; it can hold a pointer to itself, *A\n");
+    // A struct that only holds one in a circle isn't in it: nothing is said
+    // about it, and its field's uses say nothing either.
+    CHECK_STR(check_source(&a,
+                           "Outer :: struct { inner: Inner; }\n"
+                           "Inner :: struct { again: Inner; }\n"
+                           "main :: () { o : Outer; x := o.inner; }\n"),
+              "2:1: 'Inner' contains itself; it can hold a pointer to itself, *Inner\n");
+    arena_free(&a);
+}
+
+TEST(pointer_to_itself_is_fine) {
+    // A pointer's size doesn't depend on what it points at, so a struct can
+    // hold a pointer to itself, or to a struct that holds it.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Node :: struct { value: int; next: *Node; }\n"
+                          "A :: struct { b: *B; }\n"
+                          "B :: struct { a: A; }\n"
+                          "main :: () {\n"
+                          "    n : Node;\n"
+                          "    n.next = *n;\n"
+                          "    v := n.next.next.value;\n"
+                          "    b : B;\n"
+                          "    w := b.a.b.a.b;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "v"), "int");
+    CHECK_STR(type_of(&a, &c, "w"), "*B");
+    CHECK_EQ(struct_named(&c, "Node")->size, 16);
+    CHECK_EQ(struct_named(&c, "B")->size, 8);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(member_rules) {
+    // e.x is a field of a struct, or of the struct a pointer points at (one
+    // pointer). It can be assigned to, or have its address taken, when e
+    // can, or always through a pointer.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Vec2 :: struct { x: float; y: float; }\n"
+                          "Box :: struct { pos: Vec2; ptr: *Vec2; }\n"
+                          "main :: () {\n"
+                          "    v : Vec2;\n"
+                          "    b : Box;\n"
+                          "    p := *v;\n"
+                          "    q := *p;\n"
+                          "    a := v.x;\n"
+                          "    c := b.pos.y;\n"
+                          "    d := b.ptr.x;\n"
+                          "    e := p.x;\n"
+                          "    w := q.*.y;\n"
+                          "    k := Vec2.{1, 2}.y;\n"
+                          "    v.x = 1;\n"
+                          "    p.y = 2;\n"
+                          "    b.pos.x += 1;\n"
+                          "    b.ptr.y -= 1;\n"
+                          "    r := *b.pos.x;\n"
+                          "    t := *b.ptr.y;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    const char *floats[] = {"a", "c", "d", "e", "w", "k"};
+    for (const char *name : floats) CHECK_STR(type_of(&a, &c, name), "float32");
+    CHECK_STR(type_of(&a, &c, "r"), "*float32");
+    CHECK_STR(type_of(&a, &c, "t"), "*float32");
+    CHECK_EQ(((Ast_Member *)value_of(&c, "c"))->index, 1);
+    CHECK_EQ(((Ast_Member *)((Ast_Member *)value_of(&c, "c"))->operand)->index, 0);
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: float; y: float; }\n"
+                           "make :: () -> Vec2 { return .{}; }\n"
+                           "g :: (v: Vec2, p: *Vec2) {\n"
+                           "    v.x = 1;\n"
+                           "    p.x = 1;\n"
+                           "    w := *v.y;\n"
+                           "    make().x = 1;\n"
+                           "    u := *make().y;\n"
+                           "    x := p.x + v.y;\n"
+                           "}\n"
+                           "main :: () {\n"
+                           "    v : Vec2;\n"
+                           "    p := *v;\n"
+                           "    q := *p;\n"
+                           "    n := 5;\n"
+                           "    a := v.z;\n"
+                           "    b := n.x;\n"
+                           "    c := q.x;\n"
+                           "    d := p.z;\n"
+                           "    v.z = 1;\n"
+                           "    e := a.x;\n"
+                           "}\n"),
+              "4:5: can't assign to 'v': it's a parameter\n"
+              "6:11: can't take the address of 'v': it's a parameter\n"
+              "7:5: only a variable, a field or an element can be assigned to\n"
+              "8:11: only a variable, a field or an element has an address\n"
+              "16:12: 'Vec2' has no field 'z'\n"
+              "17:12: '.x' needs a struct or a pointer to one, not 'int'\n"
+              "18:12: '.x' needs a struct or a pointer to one, not '**Vec2'\n"
+              "19:12: 'Vec2' has no field 'z'\n"
+              "20:7: 'Vec2' has no field 'z'\n");
+    arena_free(&a);
+}
+
+TEST(literal_rules) {
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: float; y: float; }\n"
+                           "main :: () {\n"
+                           "    a := Vec2.{1, 2, 3};\n"
+                           "    b := Vec2.{x = 1, x = 2};\n"
+                           "    c := Vec2.{z = 1};\n"
+                           "    d := Vec2.{true};\n"
+                           "    e : int = .{1};\n"
+                           "    f := .{1, 2};\n"
+                           "    g := int.{1};\n"
+                           "    h := Nope.{1};\n"
+                           "    i : Vec2 = .{1, .{2}};\n"
+                           "    j : Vec2 = .{x = 1, y = 1.5, };\n"
+                           "    k := Vec2.{y = undefined_name};\n"
+                           "}\n"),
+              "3:10: 'Vec2' has 2 fields, but this literal gives 3\n"
+              "4:23: field 'x' is given twice\n"
+              "5:16: 'Vec2' has no field 'z'\n"
+              "6:16: a value of type 'bool' doesn't convert to 'float32' implicitly\n"
+              "7:15: a '.{' literal needs a struct type, not 'int'\n"
+              "8:10: this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}\n"
+              "9:10: a '.{' literal needs a struct type, not 'int'\n"
+              "10:10: unknown type 'Nope'\n"
+              "11:21: a '.{' literal needs a struct type, not 'float32'\n"
+              "13:20: unknown identifier 'undefined_name'\n");
+    // The parser's: named and in order don't mix.
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: float; y: float; }\n"
+                           "main :: () {\n"
+                           "    a := Vec2.{x = 1, 2};\n"
+                           "}\n"),
+              "3:23: a struct literal's fields are all named or all in order, not both\n");
+    arena_free(&a);
+}
+
+TEST(untyped_literal_takes_its_type) {
+    // .{...} takes the struct type it meets: a declaration's, an argument's,
+    // a return's, an assignment's target's, an outer literal's field's.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Vec2 :: struct { x: float; y: float; }\n"
+                          "Rect :: struct { min: Vec2; max: Vec2; }\n"
+                          "take :: (v: Vec2) { }\n"
+                          "make :: () -> Vec2 { return .{1, 2}; }\n"
+                          "main :: () {\n"
+                          "    a : Vec2 = .{1, 2};\n"
+                          "    take(.{y = 3});\n"
+                          "    a = .{};\n"
+                          "    r := Rect.{.{1, 2}, .{3, 4}};\n"
+                          "    s : Rect = .{max = .{x = 5}};\n"
+                          "    p := *a;\n"
+                          "    p.* = .{3, 4};\n"
+                          "    s.min = .{y = 1};\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_name(&a, value_of(&c, "a")->type), "Vec2");
+    Ast_Literal *r = (Ast_Literal *)value_of(&c, "r");
+    CHECK_STR(type_name(&a, r->type), "Rect");
+    CHECK_STR(type_name(&a, r->values[1]->type), "Vec2");
+    Ast *three = ((Ast_Literal *)r->values[1])->values[0];
+    CHECK_STR(type_name(&a, three->type), "float32");
+    CHECK(three->is_constant);
+    Ast_Literal *s = (Ast_Literal *)value_of(&c, "s");
+    CHECK_STR(type_name(&a, ((Ast_Literal *)s->values[0])->type), "Vec2");
+    token_list_free(c.list);
+    // A literal that meets no type is reported, unless what it's given to
+    // is wrong already: a call with the wrong number of arguments, a return
+    // with the wrong number of values.
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: float; y: float; }\n"
+                           "take :: (v: Vec2) { }\n"
+                           "two :: () -> Vec2, int { return .{1, 2}; }\n"
+                           "main :: () {\n"
+                           "    take(.{1}, 2);\n"
+                           "    x := .{1} + 1;\n"
+                           "    if .{true} { }\n"
+                           "}\n"),
+              "3:26: 'two' returns 2 values, but this return gives 1\n"
+              "5:5: 'take' takes 1 argument, but 2 were given\n"
+              "6:10: this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}\n"
+              "7:8: this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}\n");
+    arena_free(&a);
+}
+
+TEST(struct_values_copy) {
+    // A struct is a value: assigned, passed and returned (several results
+    // too) whole, as a copy.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Vec2 :: struct { x: float; y: float; }\n"
+                          "swap :: (a: Vec2, b: Vec2) -> Vec2, Vec2 { return b, a; }\n"
+                          "main :: () {\n"
+                          "    a := Vec2.{1, 2};\n"
+                          "    b : Vec2;\n"
+                          "    c : Vec2 = ---;\n"
+                          "    b = a;\n"
+                          "    c = b;\n"
+                          "    a, b = swap(a, b);\n"
+                          "    d, e := swap(a, b);\n"
+                          "    p := *a;\n"
+                          "    f := p.*;\n"
+                          "    g := cast(Vec2) a;\n"
+                          "    h := swap(a, b);\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    const char *vectors[] = {"a", "d", "e", "f", "g", "h"};
+    for (const char *name : vectors) CHECK_STR(type_of(&a, &c, name), "Vec2");
+    token_list_free(c.list);
+    // Only to its own type, a cast included.
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: float; y: float; }\n"
+                           "Rect :: struct { min: Vec2; max: Vec2; }\n"
+                           "main :: () {\n"
+                           "    a : Vec2;\n"
+                           "    r : Rect = a;\n"
+                           "    n : float = a;\n"
+                           "    m := cast(int) a;\n"
+                           "    v := cast(Vec2) 1;\n"
+                           "    w := cast(Vec2) r;\n"
+                           "}\n"),
+              "5:16: a value of type 'Vec2' doesn't convert to 'Rect' implicitly\n"
+              "6:17: a value of type 'Vec2' doesn't convert to 'float32' implicitly\n"
+              "7:10: can't cast 'Vec2' to 'int'\n"
+              "8:10: can't cast 'int' to 'Vec2'\n"
+              "9:10: can't cast 'Rect' to 'Vec2'\n");
+    arena_free(&a);
+}
+
+TEST(structs_arent_compared) {
+    // Neither == nor arithmetic nor a condition takes a struct.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: float; y: float; }\n"
+                           "main :: () {\n"
+                           "    a : Vec2;\n"
+                           "    b : Vec2;\n"
+                           "    c := a == b;\n"
+                           "    d := 1 != a;\n"
+                           "    e := a < b;\n"
+                           "    f := a + b;\n"
+                           "    if a { }\n"
+                           "    g := -a;\n"
+                           "    h := !a;\n"
+                           "    i := a == null;\n"
+                           "    a += b;\n"
+                           "    while b { }\n"
+                           "}\n"),
+              "5:12: '==' needs numbers, bools, pointers or strings, not 'Vec2'\n"
+              "6:12: '!=' needs numbers, bools, pointers or strings, not 'Vec2'\n"
+              "7:12: '<' needs numbers, not 'Vec2'\n"
+              "8:12: '+' needs numbers, not 'Vec2'\n"
+              "9:8: the condition of 'if' must be a bool, not 'Vec2'\n"
+              "10:10: '-' needs a number, not 'Vec2'\n"
+              "11:10: '!' needs a bool, not 'Vec2'\n"
+              "12:12: '==' needs numbers, bools, pointers or strings, not 'Vec2'\n"
+              "13:7: '+=' needs numbers, not 'Vec2'\n"
+              "14:11: the condition of 'while' must be a bool, not 'Vec2'\n");
+    arena_free(&a);
+}
+
+TEST(pointers_to_an_empty_struct_dont_subtract) {
+    // A struct with no fields has size 0: a pointer to one moves by
+    // nothing, and two have no distance in it to count.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Empty :: struct {}\n"
+                           "main :: () {\n"
+                           "    a : Empty;\n"
+                           "    b : Empty;\n"
+                           "    p := *a;\n"
+                           "    q := *b;\n"
+                           "    n := p - q;\n"
+                           "    r := p + 1;\n"
+                           "    s := size_of(Empty);\n"
+                           "}\n"),
+              "7:12: can't subtract pointers to 'Empty': it has no size\n");
+    arena_free(&a);
+}
+
+TEST(foreign_procedures_take_no_structs) {
+    // C passes structs by its own rules, which come with milestone 6's
+    // bindings; a pointer to one is a C pointer to a C struct of the same
+    // layout.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: float; y: float; }\n"
+                           "draw :: (v: Vec2) #foreign libc;\n"
+                           "make :: () -> Vec2 #foreign libc;\n"
+                           "fill :: (p: *Vec2) -> *Vec2 #foreign libc;\n"
+                           "main :: () { }\n"),
+              "2:13: a foreign procedure can't take a 'Vec2' yet; pass a pointer to it\n"
+              "3:15: a foreign procedure can't return a 'Vec2' yet\n");
+    arena_free(&a);
+}
+
+TEST(global_struct_literal_must_be_constant) {
+    // A global struct starts zeroed, or as a literal whose values are all
+    // known while compiling, which is written into the program's file.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: float; y: float; }\n"
+                           "Rect :: struct { min: Vec2; max: Vec2; on: bool; p: *int; }\n"
+                           "origin : Vec2;\n"
+                           "one := Vec2.{1, 1};\n"
+                           "two : Vec2 = .{y = 2};\n"
+                           "box := Rect.{.{1, 2}, Vec2.{3, -4}, true, null};\n"
+                           "later : Vec2 = ---;\n"
+                           "main :: () { }\n"),
+              "");
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: float; y: float; }\n"
+                           "Named :: struct { name: *u8; size: int; }\n"
+                           "one := Vec2.{1, 1};\n"
+                           "n : float = 5;\n"
+                           "bad := Vec2.{n, 1};\n"
+                           "copy := one;\n"
+                           "text := Named.{\"hi\", 2};\n"
+                           "N :: Vec2.{1, 2};\n"
+                           "M :: .{1, 2};\n"
+                           "main :: () { }\n"),
+              "5:14: a global's value must be known while compiling, for now\n"
+              "6:9: a global's value must be known while compiling, for now\n"
+              "7:16: global variables can't hold a string literal yet; assign it in a procedure\n"
+              "8:6: a constant can only be a number or a bool, for now\n"
+              "9:6: this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}\n");
+    arena_free(&a);
+}
+
+TEST(type_and_value_names) {
+    // A struct's name is a type, not a value; a name that isn't a type
+    // can't be used as one.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: float; y: float; }\n"
+                           "foo :: () { }\n"
+                           "counter : int;\n"
+                           "main :: () {\n"
+                           "    a := Vec2;\n"
+                           "    b : foo;\n"
+                           "    c : counter;\n"
+                           "    d : bar;\n"
+                           "    x := 1;\n"
+                           "    e : *x;\n"
+                           "    p := *Vec2;\n"
+                           "    Vec2 = 1;\n"
+                           "    f := Vec2.x;\n"
+                           "    Vec2(1);\n"
+                           "}\n"),
+              "5:10: 'Vec2' is a type, not a value\n"
+              "6:9: 'foo' is not a type\n"
+              "7:9: 'counter' is not a type\n"
+              "8:9: unknown type 'bar'\n"
+              "10:10: 'x' is not a type\n"
+              "11:11: 'Vec2' is a type, not a value\n"
+              "12:5: 'Vec2' is a type, not a value\n"
+              "13:10: 'Vec2' is a type, not a value\n"
+              "14:5: 'Vec2' isn't a procedure, so it can't be called\n");
+    arena_free(&a);
+}
+
+// Whether p is memory arena a gave out: in one of its blocks.
+static bool arena_holds(Arena *a, void *p) {
+    Arena_Block *chains[] = {a->first, a->big};
+    for (Arena_Block *b : chains) {
+        for (; b; b = b->next) {
+            u8 *data = (u8 *)(b + 1);
+            if ((u8 *)p >= data && (u8 *)p < data + b->size) return true;
+        }
+    }
+    return false;
+}
+
+TEST(pointer_to_a_struct_lives_with_it) {
+    // A struct's type is in the compilation's arena, and so are the pointer
+    // types made from it (*Vec2, **Vec2): freed with it, never left behind
+    // pointing at freed memory. A built-in type's pointers last the run.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Vec2 :: struct { x: float; y: float; }\n"
+                          "main :: () {\n"
+                          "    p : *Vec2;\n"
+                          "    q : **Vec2;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Type *s = struct_named(&c, "Vec2");
+    CHECK(arena_holds(&a, s));
+    CHECK(s->pointer && arena_holds(&a, s->pointer));
+    CHECK(s->pointer->pointer && arena_holds(&a, s->pointer->pointer));
+    CHECK(!arena_holds(&a, type_pointer_to(&type_int)));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(struct_named_like_a_built_in_type) {
+    // A built-in type's name always means the built-in type, so a struct
+    // can't take one: it could never be named.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "u8 :: struct { x: int; }\n"
+                           "float :: struct { }\n"
+                           "void :: struct { }\n"
+                           "main :: () { v : u8 = 1; }\n"),
+              "1:1: 'u8' is a built-in type\n"
+              "2:1: 'float' is a built-in type\n"
+              "3:1: 'void' is a built-in type\n");
+    arena_free(&a);
+}
+
+TEST(literal_value_with_no_field_says_nothing_more) {
+    // A value that has no field to go to (too many in order, an unknown or
+    // repeated name) is checked for its own mistakes, but a .{...} there has
+    // no type to take, and nothing more is said of it: not that its type
+    // isn't known, nor, in a global, that it isn't known while compiling.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: int; y: int; }\n"
+                           "g := Vec2.{z = .{1}};\n"
+                           "h := Vec2.{1, 2, .{3}};\n"
+                           "k := Vec2.{x = 1, x = .{nope}};\n"
+                           "main :: () {\n"
+                           "    v := Vec2.{z = .{1}, y = nope};\n"
+                           "}\n"),
+              "2:12: 'Vec2' has no field 'z'\n"
+              "3:6: 'Vec2' has 2 fields, but this literal gives 3\n"
+              "4:19: field 'x' is given twice\n"
+              "6:16: 'Vec2' has no field 'z'\n"
+              "6:30: unknown identifier 'nope'\n");
     arena_free(&a);
 }

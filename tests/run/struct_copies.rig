@@ -1,0 +1,84 @@
+// A struct is copied whole wherever it goes (spec 6.5), and each copy is
+// made so that nothing it copies from changes halfway through: a struct
+// argument is the caller's own copy, a struct result lands in a temporary
+// and is copied into its target only after the call, and a literal is built
+// apart from what it's assigned to. Each line below would come out wrong if
+// a copy were made in place.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+print_int :: (n: int) {
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+Vec2 :: struct { x: int; y: int; }
+
+g1 := Vec2.{1, 2};
+g2 := Vec2.{3, 4};
+shared : Vec2;
+
+show :: (v: Vec2) {
+    print_int(v.x);
+    putchar(32);
+    print_int(v.y);
+    putchar(10);
+}
+
+// Changes the global it was given, then returns its parameter: the copy the
+// caller made, so the old value.
+bump :: (v: Vec2) -> Vec2 {
+    shared.x = 100;
+    shared.y = 200;
+    return v;
+}
+
+swap :: (a: Vec2, b: Vec2) -> Vec2, Vec2 {
+    return b, a;
+}
+
+f :: () -> Vec2, Vec2 {
+    return g2, g1;
+}
+
+main :: () {
+    // Itself: a copy whose two sides are the same bytes.
+    a := Vec2.{5, 6};
+    a = a;
+    show(a);
+
+    // From a pointer to itself.
+    x := Vec2.{7, 8};
+    p := *x;
+    x = p.*;
+    show(x);
+
+    // The parameter is the old value, whatever the procedure does to the
+    // global it came from; and that global is the result's target too.
+    shared = Vec2.{9, 10};
+    old := bump(shared);
+    show(old);
+    show(shared);
+    shared = Vec2.{9, 10};
+    shared = bump(shared);
+    show(shared);
+
+    // A swap through a procedure: both arguments are copied before either
+    // target is written.
+    a, x = swap(a, x);
+    show(a);
+    show(x);
+
+    // Two results, from the targets' own values, the other way round.
+    g1, g2 = f();
+    show(g1);
+    show(g2);
+
+    // A literal made of the fields it replaces.
+    v := Vec2.{1, 2};
+    v = Vec2.{v.y, v.x};
+    show(v);
+    v = .{v.y, v.x};
+    show(v);
+    v = Vec2.{y = v.x};
+    show(v);
+}
