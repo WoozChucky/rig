@@ -556,7 +556,8 @@ static String check_stdin_without_a_file_test(Arena *a, String rig) {
                             "                 ^\n"));
 }
 
-// rig check's command line, right and wrong, as COMMAND_CASES rig build's.
+// rig check's command line, right and wrong, as COMMAND_CASES rig build's,
+// and the rule the two share: the source file's name ends in .rig.
 static const Command_Case CHECK_CASES[] = {
     {"rig check with no file", {"check"}, 2, "usage: "},
     {"rig check with two files", {"check", "tests/run/hello.rig", "tests/run/hello.rig"}, 2, "usage: "},
@@ -564,12 +565,20 @@ static const Command_Case CHECK_CASES[] = {
     {"rig check with --stdin twice", {"check", "--stdin", "tests/run/hello.rig", "--stdin"}, 2, "usage: "},
     {"rig check of a file not ending in .rig",
      {"check", "tests/run/hello.out"},
-     2,
+     1,
      "rig: error: 'tests/run/hello.out' isn't a .rig file\n"},
     {"rig check --stdin with a name not ending in .rig",
      {"check", "--stdin", "typed.txt"},
-     2,
+     1,
      "rig: error: 'typed.txt' isn't a .rig file\n"},
+    {"rig build of a file not ending in .rig",
+     {"build", "tests/run/hello.out"},
+     1,
+     "rig: error: 'tests/run/hello.out' isn't a .rig file\n"},
+    {"rig build of a file not ending in .rig, with -o",
+     {"build", "tests/run/hello.out", "-o", ".build/tests/output.RIG"},
+     1,
+     "rig: error: 'tests/run/hello.out' isn't a .rig file\n"},
     {"rig check of a file that isn't there",
      {"check", "tests/missing.rig"},
      1,

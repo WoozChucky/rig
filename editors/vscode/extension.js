@@ -201,6 +201,38 @@ function compilerError(message) {
     });
 }
 
+// --- Starting processes -----------------------------------------------------
+
+// Starts `program` with `args` in `cwd`, its stdin, stdout and stderr pipes:
+// the ChildProcess, or the Error if Node refused to start it at once.
+//
+// Node reports a program that can't be started in one of two ways. Most
+// failures (no such file, no permission) come later, as the child's 'error'
+// event. Others make spawn throw right away: on Windows, a .bat or .cmd file
+// (EINVAL: it needs a shell, which these processes don't get) or a file
+// that isn't a program at all (EFTYPE). findCompiler can't tell those apart
+// on Windows, where it only asks whether the file exists, so rig.compilerPath
+// may name one. Returning the error, rather than letting it be thrown, has
+// each caller handle both ways in one place.
+function startProcess(program, args, cwd) {
+    try {
+        return child_process.spawn(program, args, { cwd, windowsHide: true });
+    } catch (e) {
+        return e instanceof Error ? e : new Error(String(e));
+    }
+}
+
+// What to say when the compiler, `program`, couldn't be started, Node's
+// error `e` (whose message is often as short as "spawn EINVAL"). For a .bat
+// or .cmd file on Windows, also what to do about it.
+function compilerFailure(program, e) {
+    let text = `couldn't run ${program}: ${e.message}`;
+    if (windows && /^\.(bat|cmd)$/i.test(path.extname(program))) {
+        text += '. A .bat or .cmd file needs a shell; set rig.compilerPath to rig.exe itself.';
+    }
+    return text;
+}
+
 // --- The terminal a task runs in --------------------------------------------
 
 // Text for the terminal: it needs \r\n, where programs on Linux write \n.
@@ -338,7 +370,14 @@ class RigTerminal {
                 resolve(status);
             };
             if (this.closed) return end(1);
-            const child = child_process.spawn(program, args, { cwd, windowsHide: true });
+            // It couldn't start: Node says so by throwing (startProcess
+            // returns the error) or with the 'error' event.
+            const couldntRun = (e) => {
+                this.write(`\x1b[31mCouldn't run ${program}: ${e.message}\x1b[0m\n`);
+                end(1);
+            };
+            const child = startProcess(program, args, cwd);
+            if (child instanceof Error) return couldntRun(child);
             this.child = child;
             this.line = '';
             child.stdout.setEncoding('utf8'); // whole UTF-8 characters, even split across reads
@@ -346,10 +385,7 @@ class RigTerminal {
             child.stdout.on('data', (text) => this.write(text));
             child.stderr.on('data', (text) => this.write(text));
             child.stdin.on('error', () => {}); // the program exited before reading what was typed
-            child.on('error', (e) => {
-                this.write(`\x1b[31mCouldn't run ${program}: ${e.message}\x1b[0m\n`);
-                end(1);
-            });
+            child.on('error', couldntRun);
             child.on('close', (code, signal) => {
                 if (signal) this.write(`\x1b[31m${path.basename(program)} was killed by ${signal}\x1b[0m\n`);
                 end(code === null ? 1 : code);
@@ -593,7 +629,21 @@ class LiveCheck {
         // name.
         const cwd = folder ? folder.uri.fsPath : path.dirname(file);
         return new Promise((resolve) => {
-            const child = child_process.spawn(found.compiler, ['check', file, '--stdin'], { cwd, windowsHide: true });
+            // The compiler couldn't be started (it was deleted, or isn't a
+            // program): no problems listed, and said once, like a missing
+            // compiler.
+            const couldntRun = (e) => {
+                this.collection.delete(document.uri);
+                if (!this.toldMissing) {
+                    this.toldMissing = true;
+                    compilerError(`Rig: ${compilerFailure(found.compiler, e)}`);
+                }
+                resolve();
+            };
+            // Node says so in one of two ways (see startProcess): by throwing
+            // here, or with the 'error' event below.
+            const child = startProcess(found.compiler, ['check', file, '--stdin'], cwd);
+            if (child instanceof Error) return couldntRun(child);
             this.running.set(key, child);
             let output = '';
             child.stderr.setEncoding('utf8'); // whole UTF-8 characters, even split across reads
@@ -601,18 +651,13 @@ class LiveCheck {
             child.stdout.resume(); // rig check writes nothing there, but a pipe must be drained
             child.stdin.on('error', () => {}); // rig ended (or was ended) before reading it all
             child.stdin.end(document.getText());
-            // Couldn't start (the compiler was deleted, or isn't a program):
-            // said once, like a missing compiler.
+            // The other way of not starting: handled as above, unless a newer
+            // check has taken over this document, whose results are the ones
+            // to keep.
             child.on('error', (e) => {
-                if (this.running.get(key) === child) {
-                    this.running.delete(key);
-                    this.collection.delete(document.uri);
-                    if (!this.toldMissing) {
-                        this.toldMissing = true;
-                        compilerError(`Rig: couldn't run ${found.compiler}: ${e.message}`);
-                    }
-                }
-                resolve();
+                if (this.running.get(key) !== child) return resolve();
+                this.running.delete(key);
+                couldntRun(e);
             });
             child.on('close', () => {
                 if (this.running.get(key) === child) {
