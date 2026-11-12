@@ -19,6 +19,9 @@ struct Parser {
     s32 height;                 // the levels of the expression the last parse_ function returned
     Position expression_start;  // where the outermost expression being read starts
     s32 blocks;                 // the blocks open around the next token
+    // After a body found never closed: the token where the top level
+    // resumes (parse_block_rest), or -1.
+    s64 resume;
 };
 
 // A limit of the compiler (spec 6.1): an expression nests at most MAX_DEPTH
@@ -75,6 +78,7 @@ static Ast *parse_expression(Parser *p, int min_precedence);
 static Ast *parse_unary(Parser *p);
 static Ast_Type *parse_type(Parser *p);
 static bool parameters_follow(Parser *p, s64 open);
+static bool starts_global(Parser *p);
 
 // "this expression is nested too deeply (more than 1000 levels)", at the
 // start of the outermost expression being read. Every parse_ function then
@@ -631,17 +635,41 @@ static Ast *parse_statement(Parser *p) {
     return e;
 }
 
+// Whether the next tokens declare something in column 1 that the top level
+// could also declare: a global (IDENT ':' or ':='), or a constant (IDENT
+// '::'). Inside a body that's a local, unindented.
+static bool declares_in_column_1(Parser *p) {
+    Token_Kind after = peek(p, 1)->kind;
+    return starts_global(p) || (peek(p)->kind == TOKEN_IDENT && peek(p)->pos.col == 1 && after == TOKEN_COLON_COLON);
+}
+
 // The statements of the block that `open` began, and its '}'.
+//
+// The end of the file, or a procedure's declaration at the start of a line
+// (`name :: (` in column 1, starts_declaration), before the '}' means the
+// block was never closed: an if's '}' forgotten, say. Everything up to
+// there has been read as the block's statements, globals in column 1
+// included, which belong after the body; read as its locals, they'd be
+// lost with it, and every use of them unknown. So the block is taken to
+// end before the run of statements in column 1 that declare something
+// (declares_in_column_1) right before the end, at this block's own level:
+// "expected '}'" is reported at the first of them, and the top level
+// resumes there (p->resume), reading them again as globals and constants.
+// Without such a run, it's reported at the end itself, where the top level
+// resumes. A local that wasn't indented, followed by any other statement,
+// starts no run, so only the declarations next to the end are taken.
 static Ast_Block *parse_block_rest(Parser *p, Token *open) {
     Ast_Block *block = ast_new<Ast_Block>(p->arena, AST_BLOCK, open->pos);
+    s64 run = -1;  // where the run of column-1 declarations up to here starts, or -1
     while (peek(p)->kind != TOKEN_RBRACE) {
-        // The end of the file, or a procedure's declaration at the start
-        // of a line (`name :: (` in column 1, starts_declaration): the block
-        // was never closed. The declaration stays for parse() to read.
         if (peek(p)->kind == TOKEN_EOF || starts_declaration(p)) {
+            if (run >= 0) p->next = run;
             error_expected(p, token_kind_name(TOKEN_RBRACE));
+            p->resume = p->next;
             return nullptr;
         }
+        if (!declares_in_column_1(p)) run = -1;
+        else if (run < 0) run = p->next;
         Ast *statement = parse_statement(p);
         if (!statement) return nullptr;
         array_add(&block->statements, statement);
@@ -979,12 +1007,20 @@ static Ast_Proc *broken_entry(Parser *p, s64 start) {
 
 Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
-    Parser p = {tokens, 0, a, d, 0, 0, {}, 0};
+    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, -1};
     Ast_File *file = arena_new<Ast_File>(a);
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;
         Ast *decl = parse_declaration(&p);
-        if (!decl) {
+        if (!decl && p.resume >= 0) {
+            // A body never closed said where the top level goes on
+            // (parse_block_rest), inside the body, so after start; the
+            // declaration it was in is broken.
+            RIG_ASSERT(p.resume > start);
+            decl = broken_entry(&p, start);
+            p.next = p.resume;
+            p.resume = -1;
+        } else if (!decl) {
             s64 resume = declaration_after_stray_tokens(&p, start);
             if (resume >= 0) {
                 // The tokens before it were stray, not a declaration, so

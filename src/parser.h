@@ -81,14 +81,23 @@
 // identifier at the start of a line, followed by '::', outside the braces
 // of the body it gave up in, or a procedure's, `name :: (`, in column 1;
 // or a global variable's name in column 1, followed by ':' or ':=', outside
-// any braces or parameter list) and goes on. A procedure's declaration in
-// column 1 also ends a body never closed ("expected '}'"); a constant in
-// column 1 (`N :: 5;`) doesn't, it's a local constant like an indented
-// one, since procedures are the only declarations a body can't hold. Stray tokens in front of a declaration's name
-// (`*greet :: () {}`) are reported and skipped, and the declaration after
-// them is parsed whole. So one mistake gives one error, and the checker can
-// still check the rest of the file: the broken declaration's name is known
-// to be declared, so its uses aren't reported as unknown.
+// any braces or parameter list) and goes on. Stray tokens in front of a
+// declaration's name (`*greet :: () {}`) are reported and skipped, and the
+// declaration after them is parsed whole.
+//
+// A body never closed ends at the end of the file or at a procedure's
+// declaration in column 1, the only declaration a body can't hold: a
+// constant in column 1 (`N :: 5;`) is a local constant, as an indented one
+// is. The body is then taken to end before the column-1 declarations
+// (IDENT ':', ':=' or '::') right before that point, at its own level:
+// "expected '}'" is reported at the first of them, and the top level
+// resumes there, so they're read as the globals and constants they were
+// meant to be (an if's '}' forgotten, then globals). Without them, it's
+// reported where the end was found.
+//
+// So one mistake gives one error, and the checker can still check the rest
+// of the file: the broken declaration's name is known to be declared, so
+// its uses aren't reported as unknown.
 
 #pragma once
 
