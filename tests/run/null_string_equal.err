@@ -1,0 +1,1 @@
+tests/run/null_string_equal.rig:12:10: runtime error: null pointer dereference

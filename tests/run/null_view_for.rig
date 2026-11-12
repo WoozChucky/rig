@@ -1,0 +1,15 @@
+// for over a view or a string whose count says it has elements but whose
+// data is null stops before the first element is read, at the sequence,
+// with a null pointer dereference (spec 6.5). With a count of 0 the loop
+// runs zero times and reads nothing, so a zeroed view is fine.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    empty : string;
+    for empty { puts("never"); }
+    puts("before");
+    v : []int;
+    v.count = 2;
+    for v { puts("never"); }
+    puts("after");
+}
