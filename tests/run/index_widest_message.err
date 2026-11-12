@@ -1,0 +1,1 @@
+tests/run/index_widest_message.rig:12:11: runtime error: index 18446744073709551615 is out of bounds (count -9223372036854775808)

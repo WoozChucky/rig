@@ -26,9 +26,10 @@ Type type_float64 = FLOAT("float64", 8);
 Type type_untyped_float = FLOAT("float32", 8);
 // A pointer's size: what it becomes once it meets a pointer type.
 Type type_null = BUILT_IN(TYPE_NULL, "null", 8, 8, false);
-// No size of its own: the struct it meets gives it one. Its name is only a
-// fallback; the checker reports such a literal before any message would
-// name its type.
+// .{...} and .[...] before they meet a type. No size of its own: the type
+// it meets gives it one, a struct for .{...}, an array or a view for
+// .[...]. Its name is only a fallback; the checker reports such a literal
+// before any message would name its type.
 Type type_untyped_literal = BUILT_IN(TYPE_UNTYPED_LITERAL, ".{...}", 0, 1, false);
 
 // float, a name only: type_from_name gives float32 for it. It's an entry of

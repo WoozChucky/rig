@@ -387,11 +387,14 @@ static void resolve_global(Checker *c, Ast *decl) {
 // found as a global's circle is (resolve_global), by finding a struct under
 // way. A pointer is 8 bytes whatever it points at, so a field that is a
 // pointer is laid out without looking at what it points at, and its type is
-// filled in only once every struct is laid out (resolve_pointer_fields):
+// filled in only once every struct is laid out (resolve_late_fields):
 // Node can hold a *Node, and A a *B while B holds an A. A view is 16 bytes
 // whatever its elements are, and a pointer inside another type (an array of
 // pointers, [2]*Node) is 8, so neither looks at their struct's layout either
-// (resolve_written's behind_pointer): Tree can hold a []Tree.
+// (resolve_written's behind_pointer): Tree can hold a []Tree. Such a field
+// takes the struct's Type before its layout is known, and that layout may
+// still fail (a circle, too big), leaving the struct no type; so these
+// fields' types are made again then too (resolve_again).
 
 // The field of struct s before its i-th with the same name, or null.
 static Ast_Field *earlier_field(Ast_Struct *s, s64 i) {
@@ -478,15 +481,48 @@ static Type *resolve_struct(Checker *c, Ast_Struct *s) {
     return s->declared;
 }
 
-// The types of struct s's pointer fields, once every struct is laid out
-// (lay_out left them for now). A struct in a circle has no type, but its
-// pointer fields' types are still looked at, for their own mistakes.
-static void resolve_pointer_fields(Checker *c, Ast_Struct *s) {
+// Type t, which `written` gave during a layout, made again now that every
+// struct is laid out: the same pointers, views and arrays (the same counts:
+// nothing is checked or said twice) of what each struct named in it has
+// become, so null if any of them has no type now. A struct taken behind a
+// pointer or in a view before its layout (resolve_written's behind_pointer)
+// may since have been found in a circle, or too big. Nothing else changes.
+static Type *resolve_again(Checker *c, Ast_Type *written, Type *t) {
+    if (!t) return nullptr;
+    switch (written->kind) {
+    case AST_TYPE_POINTER: {
+        Type *pointee = resolve_again(c, written->pointee, t->pointee);
+        return pointee ? type_pointer_to(pointee) : nullptr;
+    }
+    case AST_TYPE_VIEW: {
+        Type *element = resolve_again(c, written->element, t->element);
+        return element ? type_view_of(element) : nullptr;
+    }
+    case AST_TYPE_ARRAY: {
+        Type *element = resolve_again(c, written->element, t->element);
+        return element ? type_array_of(element, t->count) : nullptr;
+    }
+    default: break;
+    }
+    if (t->kind != TYPE_STRUCT) return t;  // a built-in type
+    return ((Ast_Struct *)find_name(c, written->name))->declared;
+}
+
+// The types of struct s's fields that lay_out couldn't settle, once every
+// struct is laid out. A pointer field's, which lay_out left for now: a
+// struct in a circle has no type, but its pointer fields' types are still
+// looked at, for their own mistakes. Any other field's again
+// (resolve_again), in case a struct it holds behind a pointer or in a view
+// has no type now; its size can't have changed, so the layout stays.
+static void resolve_late_fields(Checker *c, Ast_Struct *s) {
     Type *t = s->declared;
     for (s64 i = 0; i < s->fields.count; i++) {
         Ast_Field *field = s->fields[i];
-        if (field->type_expr->kind != AST_TYPE_POINTER) continue;
-        field->type = resolve_type(c, field->type_expr);
+        if (field->type_expr->kind == AST_TYPE_POINTER) {
+            field->type = resolve_type(c, field->type_expr);
+        } else {
+            field->type = resolve_again(c, field->type_expr, field->type);
+        }
         // A second field of the name isn't in the type (lay_out).
         if (t && !earlier_field(s, i)) t->fields[type_field_index(t, field->name)].type = field->type;
     }
@@ -1010,13 +1046,14 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
         }
     }
     // The structs' layouts, in source order (one held by another is laid
-    // out where it's first needed), then their pointer fields' types: a
-    // signature, a global or a body may need a struct's size and fields.
+    // out where it's first needed), then the types of their fields that
+    // wait for every layout (resolve_late_fields): a signature, a global or
+    // a body may need a struct's size and fields.
     for (s64 i = 0; i < file->globals.count; i++) {
         if (file->globals[i]->kind == AST_STRUCT) resolve_struct(&c, (Ast_Struct *)file->globals[i]);
     }
     for (s64 i = 0; i < file->globals.count; i++) {
-        if (file->globals[i]->kind == AST_STRUCT) resolve_pointer_fields(&c, (Ast_Struct *)file->globals[i]);
+        if (file->globals[i]->kind == AST_STRUCT) resolve_late_fields(&c, (Ast_Struct *)file->globals[i]);
     }
 
     // The signatures, before any value or body is checked: a call anywhere

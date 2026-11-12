@@ -97,8 +97,8 @@
 // if, a loop's exit, where a break goes) is emitted with the target unset
 // and filled in once the block is made (terminator_of).
 
+#include "checker.h"
 #include "ir.h"
-
 #include "types.h"
 
 // Where a procedure's variable or parameter lives: a variable's slot (the
@@ -422,39 +422,16 @@ static s32 view_of_array(Lowering *l, Type *array, s32 data) {
     return view;
 }
 
-// Whether e is a place in memory (the checker's is_place, which said so
-// already, without its messages): a variable, but not a loop's iterator or
-// index; p.*; a field of a place, or through a pointer; an element of a
-// place's array, or of a view or a pointer.
-static bool names_a_place(Ast *e) {
-    switch (e->kind) {
-    case AST_NAME: {
-        Ast *decl = ((Ast_Name *)e)->decl;
-        return decl->kind == AST_VAR && !((Ast_Var *)decl)->is_iterator;
-    }
-    case AST_DEREF: return true;
-    case AST_MEMBER: {
-        Ast *operand = ((Ast_Member *)e)->operand;
-        return type_is_pointer(operand->type) || (operand->type->kind != TYPE_ARRAY && names_a_place(operand));
-    }
-    case AST_INDEX: {
-        Ast *operand = ((Ast_Index *)e)->operand;
-        return operand->type->kind != TYPE_ARRAY || names_a_place(operand);
-    }
-    default: return false;
-    }
-}
-
-// The view an array e converts to (spec 6.5). When e is a place, a view of
-// it where it is: `sort(numbers)` sorts numbers. A call's result and a
-// literal are temporaries already, made here, one per place in the source
-// (so a loop rebuilds the same one each time round): the view sees that.
-// Anything else (a parameter, which is the caller's copy, a loop's
-// iterator, a cast) is copied into a temporary first, so writing through
-// the view can't change what mustn't change.
+// The view an array e converts to (spec 6.5). When e is a place (the
+// checker's expr_is_place), a view of it where it is: `sort(numbers)` sorts
+// numbers. A call's result and a literal are temporaries already, made
+// here, one per place in the source (so a loop rebuilds the same one each
+// time round): the view sees that. Anything else (a parameter, which is the
+// caller's copy, a loop's iterator, a cast) is copied into a temporary
+// first, so writing through the view can't change what mustn't change.
 static s32 lower_view_of(Lowering *l, Ast *e) {
     s32 data;
-    if (names_a_place(e)) {
+    if (expr_is_place(e)) {
         data = lower_address(l, e);
     } else if (e->kind == AST_CALL || e->kind == AST_LITERAL) {
         data = lower_expr(l, e);
@@ -889,15 +866,16 @@ static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s3
     l->block = ok;
 }
 
-// The address of a[i] (spec 6.5), in this order: a, then i (widened to an
-// i64 by its own sign), then the checks, then the address. So an
-// assignment's target is found, checks and all, before its value is worked
-// out.
+// The address of a[i] (spec 6.5), in this order: a (a view's count and
+// data loaded from it), then i (widened to an i64 by its own sign), then the
+// checks, then the address. So an assignment's target is found, checks and
+// all, before its value is worked out.
 // - An array's value is its address, which is its data; its count, N, is
 //   a constant. A constant index of an array needs no check: the checker
 //   made sure it's inside.
-// - A view's count and data are loaded from it. A count below 0 (set by
-//   hand) has no index inside it, so that fails the check too.
+// - A view's count and data are loaded from it, before i: a view changed
+//   while i is worked out isn't seen. A count below 0 (set by hand) has no
+//   index inside it, so that fails the check too.
 // - A pointer is checked for null, not bounds: p[i] is C's, p.* moved by i
 //   elements, which may be anywhere.
 // The check compares unsigned: i as an unsigned number is below the count
@@ -916,17 +894,18 @@ static s32 lower_index_address(Lowering *l, Ast_Index *ix) {
     bool pointer = type_is_pointer(t);
     Type *element = pointer ? t->pointee : t->element;
     s32 base = pointer ? lower_value(l, operand, t) : lower_expr(l, operand);
+    // A view's count and data are read before the index is worked out, as a
+    // pointer's value is: v[f()] indexes v as it was, whatever f does to it.
+    bool view = t->kind == TYPE_VIEW;
+    s32 count = -1, data = base;
+    if (view) {
+        count = load_view_count(l, base);
+        data = load_view_data(l, base);
+    }
     s32 index = i->is_constant ? emit_constant(l, IR_I64, i->constant) : resize(l, lower_expr(l, i), i->type, IR_I64);
-    s32 data = base;
     if (pointer) {
         emit_null_check(l, base, ix->pos);
     } else {
-        bool view = t->kind == TYPE_VIEW;
-        s32 count = -1;
-        if (view) {
-            count = load_view_count(l, base);
-            data = load_view_data(l, base);
-        }
         if (l->checking_bounds && (view || !i->is_constant)) {
             if (!view) count = emit_constant(l, IR_I64, (u64)t->count);
             s32 fails = emit_compare(l, IR_UGE, IR_I64, index, count);
@@ -1543,9 +1522,12 @@ static s32 add_global_array(Lowering *l, Type *array, Ast *literal);
 // zeros). A view's value is an array literal (the checker allows nothing
 // else in a global), which becomes a global array of its own: the view's
 // count is written here, and its data is that array's address, which only
-// the linker knows, so a relocation says where it goes (`relocs`, in
-// increasing order of offset, as the values come). The checker made sure
-// every value is a constant, or a literal of them (check_global_value).
+// the linker knows, so a relocation says where it goes. The backend wants
+// `relocs` in increasing order of offset, so the values are written in that
+// order: an array's in turn, and a struct's by its fields, in the order they
+// are laid out, not the order a literal with names gives them. The checker
+// made sure every value is a constant, or a literal of them
+// (check_global_value).
 static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *relocs, Type *t, Ast *value) {
     if (t->kind == TYPE_VIEW) {
         Type *array = value->type;  // the literal's [N]T
@@ -1557,13 +1539,23 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
     if (type_is_aggregate(t)) {
         RIG_ASSERT(value->kind == AST_LITERAL);
         Ast_Literal *literal = (Ast_Literal *)value;
-        for (s64 i = 0; i < literal->values.count; i++) {
-            if (t->kind == TYPE_ARRAY) {
+        if (t->kind == TYPE_ARRAY) {
+            for (s64 i = 0; i < literal->values.count; i++) {
                 constant_bytes(l, bytes, offset + i * t->element->size, relocs, t->element, literal->values[i]);
-                continue;
             }
-            s32 index = literal->names.count ? type_field_index(t, literal->names[i]) : (s32)i;
-            Type_Field *field = &t->fields[index];
+            return;
+        }
+        // Field by field; a named literal's value for each, if it gives one.
+        for (s64 f = 0; f < t->fields.count; f++) {
+            s64 i = f;
+            if (literal->names.count) {
+                i = -1;
+                for (s64 k = 0; k < literal->names.count; k++) {
+                    if (string_eq(literal->names[k], t->fields[f].name)) i = k;
+                }
+            }
+            if (i < 0 || i >= literal->values.count) continue;
+            Type_Field *field = &t->fields[f];
             constant_bytes(l, bytes, offset + field->offset, relocs, field->type, literal->values[i]);
         }
         return;

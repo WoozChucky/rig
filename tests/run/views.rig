@@ -47,6 +47,11 @@ Path :: struct { points: []Vec2; closed: bool; }
 numbers : []int = .[4, 5, 6];
 square := Path.{.[.{0, 0}, .{0, 1}, .{1, 1}, .{1, 0}], true};
 
+// Named fields given out of their order: the views' addresses are still
+// placed by increasing offset.
+Pair :: struct { a: []int; b: []int; }
+swapped := Pair.{b = .[1, 2], a = .[3]};
+
 main :: () {
     a := int.[1, 2, 3, 4, 5, 6];
     println(sum(a));
@@ -87,4 +92,5 @@ main :: () {
     for square.points { corners += it.x * 10 + it.y; }
     println(corners);
     println(square.points.count);
+    println(sum(swapped.a) * 10 + sum(swapped.b));
 }
