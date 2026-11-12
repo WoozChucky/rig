@@ -1732,34 +1732,6 @@ static char *else_if_arms(char *at, s64 arms, const char *indent, const char *bo
     return at;
 }
 
-// Builds `text` as rig build does (lowered with bounds checks, an object
-// for the host, its linker) into .build/NAME, runs it, and returns what it
-// printed; "" and a failed check when any step fails.
-static String run_source(Arena *a, const char *text, const char *name) {
-    Ir_Module *m = lower_source(a, text);
-    os_make_directory(str(".build"));
-#ifdef _WIN32
-    String object = string_printf(a, ".build/%s.obj", name), program = string_printf(a, ".build/%s.exe", name);
-#else
-    String object = string_printf(a, ".build/%s.o", name), program = string_printf(a, ".build/%s", name);
-#endif
-    String error = {};
-    Array<String> objects = {};
-    array_add(&objects, object);
-    Array<String> argv = {};
-    array_add(&argv, program);
-    Process_Result result = {};
-    bool ran = llvm_emit_object(m, target_host(), object, a, &error) &&
-               link_executable(a, target_host(), objects, program, &error) && os_run_for(a, argv, {}, 60, &result);
-    CHECK(ran);
-    if (!ran) fprintf(stderr, "  run_source: " STR_FMT "\n", STR_ARG(error));
-    CHECK(!result.timed_out);
-    CHECK_EQ(result.exit_code, 0);
-    array_free(&objects);
-    array_free(&argv);
-    return ran ? result.out : String{};
-}
-
 TEST(else_if_chains_of_10000_arms) {
     // An else-if chain is an if whose else part is the next if, so the
     // tree nests one level per arm; every stage walks the chain in a loop,
@@ -1802,7 +1774,9 @@ TEST(else_if_chains_of_10000_arms) {
                       "    }\n"
                       "}\n");
     CHECK(builds(&a, text));
-    CHECK_STR(run_source(&a, text, "else-if-test"), "ok");
+    Process_Result run = run_module(&a, lower_source(&a, text), "else-if-test");
+    CHECK_EQ(run.exit_code, 0);
+    CHECK_STR(run.out, "ok");
     // The tree's dump nests one parenthesis per arm too: every arm is
     // there, and main's if.
     String errors;
