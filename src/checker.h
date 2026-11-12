@@ -391,6 +391,8 @@
 //   in the declarations that need it (more than 1000 levels)", at its name,
 //   once; what needed it says nothing more, and it's worked out later, in
 //   its own turn. A chain declared in the order it's needed never nests.
+//   A signature is one of them: one whose array count needs a global whose
+//   value calls it is a circle, "'f' is defined in terms of itself".
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
