@@ -56,13 +56,28 @@ static void out_operator(Array<u8> *buffer, Token_Kind op) {
     out(buffer, string_slice(quoted, 1, quoted.count - 2));
 }
 
+// (ptr int), (array (int 3) int) with the count as written, (view int), or
+// a name.
 static void dump_type(Array<u8> *buffer, Ast_Type *type) {
-    if (type->kind == AST_TYPE_POINTER) {
+    switch (type->kind) {
+    case AST_TYPE_POINTER:
         out(buffer, "(ptr ");
         dump_type(buffer, type->pointee);
         out(buffer, ")");
-    } else {
-        out(buffer, type->name);
+        break;
+    case AST_TYPE_ARRAY:
+        out(buffer, "(array ");
+        dump(buffer, type->count);
+        out(buffer, " ");
+        dump_type(buffer, type->element);
+        out(buffer, ")");
+        break;
+    case AST_TYPE_VIEW:
+        out(buffer, "(view ");
+        dump_type(buffer, type->element);
+        out(buffer, ")");
+        break;
+    default: out(buffer, type->name); break;
     }
 }
 
@@ -95,6 +110,7 @@ static void dump(Array<u8> *buffer, Ast *node) {
             }
             out(buffer, ")");
         }
+        if (proc->no_bounds_checks) out(buffer, " (no_abc)");
         if (proc->is_foreign) {
             out(buffer, " (foreign ");
             out(buffer, proc->foreign_library);
@@ -118,6 +134,8 @@ static void dump(Array<u8> *buffer, Ast *node) {
     }
     case AST_TYPE_NAME:
     case AST_TYPE_POINTER:
+    case AST_TYPE_ARRAY:
+    case AST_TYPE_VIEW:
         dump_type(buffer, (Ast_Type *)node);
         break;
     case AST_BLOCK: {
@@ -267,13 +285,19 @@ static void dump(Array<u8> *buffer, Ast *node) {
         break;
     }
     case AST_FOR: {
+        // (for it (int 0) (int 9) (block)) over a range, (for it (name a)
+        // (block)) over a sequence, (for * it (name a) (block)) by pointer.
         Ast_For *loop = (Ast_For *)node;
-        out(buffer, "(for ");
+        out(buffer, loop->by_pointer ? "(for * " : "(for ");
         out(buffer, loop->iterator->name);
         out(buffer, " ");
-        dump(buffer, loop->first);
-        out(buffer, " ");
-        dump(buffer, loop->last);
+        if (loop->sequence) {
+            dump(buffer, loop->sequence);
+        } else {
+            dump(buffer, loop->first);
+            out(buffer, " ");
+            dump(buffer, loop->last);
+        }
         out(buffer, " ");
         dump(buffer, loop->body);
         out(buffer, ")");
@@ -342,9 +366,10 @@ static void dump(Array<u8> *buffer, Ast *node) {
     }
     case AST_LITERAL: {
         // (literal Vec2 (int 1) (int 2)), or with names (literal _ (x (int 1))):
-        // _ when the type comes from where it's used.
+        // _ when the type comes from where it's used. An array's is
+        // (literal-array int (int 1) (int 2)), its element type first.
         Ast_Literal *literal = (Ast_Literal *)node;
-        out(buffer, "(literal ");
+        out(buffer, literal->is_array ? "(literal-array " : "(literal ");
         if (literal->type_expr) {
             dump_type(buffer, literal->type_expr);
         } else {
@@ -360,6 +385,15 @@ static void dump(Array<u8> *buffer, Ast *node) {
             dump(buffer, literal->values[i]);
             if (literal->names.count) out(buffer, ")");
         }
+        out(buffer, ")");
+        break;
+    }
+    case AST_INDEX: {
+        Ast_Index *index = (Ast_Index *)node;
+        out(buffer, "(index ");
+        dump(buffer, index->operand);
+        out(buffer, " ");
+        dump(buffer, index->index);
         out(buffer, ")");
         break;
     }
