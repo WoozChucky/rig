@@ -1142,9 +1142,24 @@ TEST(while_true_with_break_doesnt) {
                            "h :: (x: int) -> int {\n"
                            "    while true { while true { break; } if x > 0 { break; } }\n"
                            "}\n"
+                           // In an else-if chain, the break may be in any
+                           // arm, the last else's included (issue #54:
+                           // breaks_out_of follows the chain in a loop);
+                           // with none in any arm, the loop never ends.
+                           "i :: (x: int) -> int {\n"
+                           "    while true { if x == 0 { } else if x == 1 { } else { break; } }\n"
+                           "}\n"
+                           "j :: (x: int) -> int {\n"
+                           "    while true { if x == 0 { } else if x == 1 { break; } else if x == 2 { } else { } }\n"
+                           "}\n"
+                           "k :: (x: int) -> int {\n"
+                           "    while true { if x == 0 { } else if x == 1 { } else { } }\n"
+                           "}\n"
                            "main :: () { }\n"),
               "3:1: 'f' must return a value on every path, and this one reaches its end\n"
-              "9:1: 'h' must return a value on every path, and this one reaches its end\n");
+              "9:1: 'h' must return a value on every path, and this one reaches its end\n"
+              "12:1: 'i' must return a value on every path, and this one reaches its end\n"
+              "15:1: 'j' must return a value on every path, and this one reaches its end\n");
     arena_free(&a);
 }
 

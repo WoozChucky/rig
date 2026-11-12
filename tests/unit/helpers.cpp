@@ -297,3 +297,34 @@ static Ir_Proc *new_proc_returning(Ir_Module *m, Arena *a, const char *name, Ir_
     if (result != IR_VOID) array_add(&p->results, {result, IR_EXT_NONE});
     return p;
 }
+
+// Builds `m` as rig build does, an object for the host and its linker, into
+// .build/NAME (NAME.exe on Windows), runs it with a minute to finish, and
+// returns what it printed and its exit status. A step that fails is a
+// failed check, with a line saying why; the result is then empty, its exit
+// status -1.
+static Process_Result run_module(Arena *a, Ir_Module *m, const char *name) {
+    os_make_directory(str(".build"));
+#ifdef _WIN32
+    String object = string_printf(a, ".build/%s.obj", name), program = string_printf(a, ".build/%s.exe", name);
+#else
+    String object = string_printf(a, ".build/%s.o", name), program = string_printf(a, ".build/%s", name);
+#endif
+    String error = {};
+    Array<String> objects = {};
+    array_add(&objects, object);
+    Array<String> argv = {};
+    array_add(&argv, program);
+    Process_Result result = {};
+    result.exit_code = -1;
+    bool emitted = llvm_emit_object(m, target_host(), object, a, &error);
+    bool linked = emitted && link_executable(a, target_host(), objects, program, &error);
+    if (!linked) fprintf(stderr, "  run_module: " STR_FMT "\n", STR_ARG(error));
+    bool ran = linked && os_run_for(a, argv, {}, 60, &result);
+    if (linked && !ran) fprintf(stderr, "  run_module: " STR_FMT "\n", STR_ARG(os_error_message(a)));
+    CHECK(ran);
+    CHECK(!result.timed_out);
+    array_free(&objects);
+    array_free(&argv);
+    return result;
+}

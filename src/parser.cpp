@@ -19,29 +19,45 @@ struct Parser {
     s32 height;                 // the levels of the expression the last parse_ function returned
     Position expression_start;  // where the outermost expression being read starts
     s32 blocks;                 // the blocks open around the next token
+    s32 type_levels;            // the type levels (*, [] and [N]) open around the next token
     // After a body found never closed: the token where the top level
     // resumes (parse_block_rest), or -1.
     s64 resume;
 };
 
 // A limit of the compiler (spec 6.1): an expression nests at most MAX_DEPTH
-// levels deep, and blocks too. The parser, the checker and lowering all walk
-// the tree recursively, a call or a few per level, on the main thread's
-// stack (1 MB on Windows, 8 MB on Linux): without a limit, a file with a few
-// thousand nested parentheses, or a generated sum of a few thousand terms,
-// crashes rig with a stack overflow and no message. The parser enforces it,
-// so no later stage ever sees a deeper tree. 1000 levels fit on Windows'
-// stack with room to spare, even inside 1000 nested blocks.
+// levels deep, and blocks and types too. The parser, the checker and
+// lowering all walk the tree recursively, a call or a few per level, on the
+// main thread's stack (1 MB on Windows, 8 MB on Linux): without a limit, a
+// file with a few thousand nested parentheses, or a generated sum of a few
+// thousand terms, crashes rig with a stack overflow and no message. The
+// parser enforces it, so no later stage ever sees a deeper tree. 1000 levels
+// fit on Windows' stack, even inside 1000 nested blocks: the tests build
+// each kind of level 1000 deep.
 //
 // An expression's levels are its tree's height: each parenthesis, prefix
 // operator, cast, call, dereference (.*), field (.x), element (a[i]),
 // literal and binary operator is one level above what it holds, and a
-// name, a number, a string, null or size_of(T) is none. An array type's
-// count ([N]T) is read a level down too, wherever the type is.
-// So ((x)) is 2, - - x is 2, f(g(x)) is 2, and x + x + x is 2 too: the
-// Pratt loop builds it as (x + x) + x, a left-leaning tree whose height
-// grows with each operator, though the parser itself doesn't recurse to
-// build it (the checker does, to check it).
+// name, a number, a string, null or size_of(T) is none. So ((x)) is 2,
+// - - x is 2, f(g(x)) is 2, and x + x + x is 2 too: the Pratt loop builds
+// it as (x + x) + x, a left-leaning tree whose height grows with each
+// operator, though the parser itself doesn't recurse to build it (the
+// checker does, to check it).
+//
+// A type's levels are each '*', '[]' and '[N]' in it (parse_type): ***int is
+// 3, [][4]*u8 is 3, a name none.
+//
+// Types and expressions nest inside each other: an array's count is an
+// expression inside its '[N]' level, and size_of(T) and cast(T) read their
+// type a level down, as a cast reads its value. The stages recurse through
+// both alike, so both count against the one limit: from the outermost
+// expression or type to the innermost, expression levels and type levels
+// together are at most MAX_DEPTH. So [size_of([size_of(u8)]u8)]u8 is 4
+// levels, and in ***...[N]u8 with 999 '*', N can only be a name or a
+// number. Counted apart, a thousand of each alternating overflowed the
+// stack, every stage paying for both at each step. p->levels and
+// p->type_levels are the two kinds open around the next token, and
+// open_levels(p) their sum.
 static const s32 MAX_DEPTH = 1000;
 
 static Token *peek(Parser *p, s64 ahead = 0) {
@@ -93,16 +109,22 @@ static void report_too_deep(Parser *p) {
                MAX_DEPTH);
 }
 
+// The levels open around the next token, expression and type levels
+// together (MAX_DEPTH).
+static s32 open_levels(Parser *p) {
+    return p->levels + p->type_levels;
+}
+
 // Opens one level of the expression being read, before reading what's
 // inside it (a parenthesis's value, an operator's operand, a call's
 // arguments): false, after reporting, when that's one level more than
 // MAX_DEPTH allows. Checking on the way down stops the parser before its
 // own recursion gets too deep; the caller closes the level (p->levels--)
 // once what's inside is read, whether or not it could be. A level open
-// means the tree will be at least that high, so this never rejects an
+// means the tree will be at least that deep, so this never rejects an
 // expression that fits.
 static bool open_level(Parser *p) {
-    if (p->levels == MAX_DEPTH) {
+    if (open_levels(p) >= MAX_DEPTH) {
         report_too_deep(p);
         return false;
     }
@@ -111,11 +133,15 @@ static bool open_level(Parser *p) {
 }
 
 // The expression just built is `height` levels high (p->height, for its
-// parent): false, after reporting, when that's more than MAX_DEPTH. Checking
-// on the way up catches what doesn't nest on the way down: a chain of
-// binary operators, built in a loop.
+// parent): false, after reporting, when the levels open around it and its
+// own are more than MAX_DEPTH, its deepest part that far from the
+// outermost expression or type. Checking on the way up catches what
+// doesn't nest on the way down: a chain of binary operators, built in a
+// loop. In an expression on its own, that sum is never more than the whole
+// expression's height; in an array's count, the type's levels around it
+// count too.
 static bool set_height(Parser *p, s32 height) {
-    if (height > MAX_DEPTH) {
+    if (open_levels(p) + height > MAX_DEPTH) {
         report_too_deep(p);
         return false;
     }
@@ -123,13 +149,28 @@ static bool set_height(Parser *p, s32 height) {
     return true;
 }
 
+// Reads the type of a size_of or a cast a level down (MAX_DEPTH): every
+// stage goes from the expression into its type, so that's one more level
+// on the way to whatever the type holds. The level opens unchecked: a type
+// that's a name opens nothing and reaches no deeper, so size_of(int) and
+// cast(int) x are fine at any depth an expression may have; parse_type
+// checks the levels before each '*' or '[' it opens.
+static Ast_Type *parse_type_below(Parser *p) {
+    p->levels++;
+    Ast_Type *type = parse_type(p);
+    p->levels--;
+    return type;
+}
+
 // size_of '(' type ')': the built-in that gives a type's size. The caller
-// saw the name size_of and a '(' after it.
+// saw the name size_of and a '(' after it. Its type is a level down
+// (parse_type_below), though size_of(T) is a leaf of the expression around
+// it, a level of none, as a name is.
 static Ast *parse_size_of(Parser *p) {
     Token *name = advance(p);
     advance(p);  // the '('
     Ast_Size_Of *size_of = ast_new<Ast_Size_Of>(p->arena, AST_SIZE_OF, name->pos);
-    size_of->type_expr = parse_type(p);
+    size_of->type_expr = parse_type_below(p);
     if (!size_of->type_expr || !expect(p, TOKEN_RPAREN)) return nullptr;
     return size_of;
 }
@@ -375,7 +416,7 @@ static Ast *parse_cast(Parser *p) {
         cast->is_trunc = true;
     }
     if (!expect(p, TOKEN_LPAREN)) return nullptr;
-    cast->type_expr = parse_type(p);
+    cast->type_expr = parse_type_below(p);  // a level down, as the value is
     if (!cast->type_expr || !expect(p, TOKEN_RPAREN)) return nullptr;
     if (!open_level(p)) return nullptr;
     cast->value = parse_unary(p);
@@ -667,19 +708,34 @@ static Ast_Block *parse_block(Parser *p);
 // expression, since no expression goes on with a '{'. The bodies are always
 // blocks, so no else can dangle: `else if` is an if as the whole else part,
 // and a chain of them nests to the right.
+//
+// A chain has no limit to its length, unlike the nesting MAX_DEPTH limits:
+// a generated one (a state machine's states, a table written as code) can
+// have thousands of arms, and its tree is then thousands of levels deep.
+// So it's read here in a loop, arm by arm, rather than by parse_if calling
+// itself for each `else if`, and every stage after the parser follows the
+// chain in a loop too (the checker's check_if, breaks_out_of and goes_past,
+// lowering's lower_if, ast_dump): none of them uses more stack for a
+// longer chain.
 static Ast *parse_if(Parser *p) {
-    Token *keyword = advance(p);
-    Ast_If *branch = ast_new<Ast_If>(p->arena, AST_IF, keyword->pos);
-    branch->condition = parse_expression(p, 1);
-    if (!branch->condition) return nullptr;
-    branch->then_block = parse_block(p);
-    if (!branch->then_block) return nullptr;
-    if (peek(p)->kind == TOKEN_ELSE) {
+    Ast_If *first = nullptr;
+    Ast_If *last = nullptr;  // the arm read last, whose else part comes next
+    for (;;) {
+        Token *keyword = advance(p);  // the 'if'
+        Ast_If *branch = ast_new<Ast_If>(p->arena, AST_IF, keyword->pos);
+        if (last) last->else_part = branch;
+        else first = branch;
+        last = branch;
+        branch->condition = parse_expression(p, 1);
+        if (!branch->condition) return nullptr;
+        branch->then_block = parse_block(p);
+        if (!branch->then_block) return nullptr;
+        if (peek(p)->kind != TOKEN_ELSE) return first;
         advance(p);
-        branch->else_part = peek(p)->kind == TOKEN_IF ? parse_if(p) : parse_block(p);
-        if (!branch->else_part) return nullptr;
+        if (peek(p)->kind != TOKEN_IF) break;  // else { ... }, the chain's end
     }
-    return branch;
+    last->else_part = parse_block(p);
+    return last->else_part ? first : nullptr;
 }
 
 // while = 'while' expression block
@@ -898,12 +954,49 @@ static Ast_Block *parse_block(Parser *p) {
 // [N]T is an array of N T's, N any expression (the checker needs it to be
 // a constant); []T a view of T's. [..]T, a growable array, needs the
 // context's allocator, so it comes with the Basic module: "growable arrays
-// ([..]T) come with the Basic module, in milestone 4", at the '['. A type
-// isn't an expression level, but its count is read a level down, so a
-// count holding a cast whose type has a count ... can't recurse past
-// MAX_DEPTH; the height kept for the expression around the type stays as
-// it was.
+// ([..]T) come with the Basic module, in milestone 4", at the '['. The
+// height kept for the expression around a type, if any, stays as it was: a
+// count's isn't part of it.
+//
+// A type's '*', '[]' and '[N]' are a level each of the compiler's limit
+// (MAX_DEPTH), counted with the levels of the types and expressions the
+// type is inside: the one level too many is "types are nested too deeply
+// (more than 1000 levels)", at its '*' or '['. That
+// needs >= below, not ==: parse_type_below opens size_of's and a cast's
+// level unchecked, so the levels may already be one over when a type is
+// read there; a name is fine, a '*' isn't. A count is read inside its
+// '[N]' level, so [1][1]...int is a level per [1], however many, and a type
+// inside a count ([size_of(**int)]u8) adds its levels to the type around
+// it. The checker resolves a written type, and lays it out, by recursing
+// into what it's made of, and the stages after it walk written types the
+// same way, so ten thousand '*' would overflow the stack; counting here
+// means none of them ever sees a deeper one. The limit is on the types a
+// program writes. One the checker infers has none (each `p2 := *p1;` is a
+// pointer a level deeper than the last), and nothing recurses through it:
+// the checker builds it a level at a time, and the one stage that walks
+// all of its levels, naming it in a message, does so in a loop
+// (type_name).
+static Ast_Type *parse_type_level(Parser *p);
+
 static Ast_Type *parse_type(Parser *p) {
+    Token *t = peek(p);
+    if (t->kind != TOKEN_STAR && t->kind != TOKEN_LBRACKET) return parse_type_level(p);
+    if (open_levels(p) >= MAX_DEPTH) {
+        diag_error(p->diag, t->pos, "types are nested too deeply (more than %d levels)", MAX_DEPTH);
+        return nullptr;
+    }
+    p->type_levels++;
+    Ast_Type *type = parse_type_level(p);
+    p->type_levels--;
+    return type;
+}
+
+// The type rule's alternatives: '*' type, '[' [expression] ']' type (a
+// level each, which parse_type counted) or a name. The type after a '*' or
+// ']' goes back through parse_type, so its levels are counted too; a
+// count is read inside the level its '[N]' opened, and no other, so its
+// expression levels are counted from there.
+static Ast_Type *parse_type_level(Parser *p) {
     Token *t = peek(p);
     if (t->kind == TOKEN_STAR) {
         advance(p);
@@ -921,10 +1014,7 @@ static Ast_Type *parse_type(Parser *p) {
         Ast_Type *type = ast_new<Ast_Type>(p->arena, view ? AST_TYPE_VIEW : AST_TYPE_ARRAY, t->pos);
         if (!view) {
             s32 height = p->height;
-            if (p->levels == 0) p->expression_start = peek(p)->pos;
-            if (!open_level(p)) return nullptr;
             type->count = parse_expression(p, 1);
-            p->levels--;
             p->height = height;
             if (!type->count) return nullptr;
         }
@@ -1283,7 +1373,7 @@ static Ast_Proc *broken_entry(Parser *p, s64 start) {
 
 Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
-    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, -1};
+    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, -1};
     Ast_File *file = arena_new<Ast_File>(a);
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;
