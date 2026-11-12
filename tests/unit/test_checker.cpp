@@ -3325,7 +3325,8 @@ TEST(global_checked_during_a_layout_sees_the_fields_types) {
 TEST(struct_circle_through_a_global) {
     // A struct whose array count needs a global holding that struct holds
     // no copy of itself: its size depends on itself, through the global,
-    // which is said as a global's circle is.
+    // which is said as a global's circle is, at the declaration whose turn
+    // in source order came first: the circle closes where it started.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "S :: struct { a: [g.count]int; }\n"
@@ -3336,7 +3337,7 @@ TEST(struct_circle_through_a_global) {
                            "N :: size_of(S);\n"
                            "S :: struct { a: [N]int; }\n"
                            "main :: () { }\n"),
-              "2:1: 'S' is defined in terms of itself\n");
+              "1:1: 'N' is defined in terms of itself\n");
     arena_free(&a);
 }
 
@@ -4010,5 +4011,237 @@ TEST(foreign_procedures_take_no_strings) {
               "1:10: a foreign procedure can't take a 'string'; pass its .data, which may not end with a zero, "
               "or a literal\n"
               "2:12: a foreign procedure can't return a 'string' yet\n");
+    arena_free(&a);
+}
+
+// Issue #68: declarations the checker works out where they're first needed,
+// each inside the one that needs it, nest as deeply as the chain is long,
+// and nothing counted them: a long enough chain overflowed the stack.
+
+// `line`, a printf format given two numbers, i and i + delta, for each i
+// from `from` to `to`, counting down when `to` is below: so
+// "A%lld :: A%lld;\n" from 0 to 2 by +1 is A0 :: A1; A1 :: A2; A2 :: A3;.
+static const char *chain_of(Arena *a, const char *line, s64 from, s64 to, s64 delta) {
+    s64 step = to < from ? -1 : 1;
+    s64 count = 0;
+    for (s64 i = from; i != to + step; i += step) {
+        count += snprintf(nullptr, 0, line, (long long)i, (long long)(i + delta));
+    }
+    char *text = (char *)arena_alloc(a, (u64)count + 1, 1);
+    char *at = text;
+    *at = 0;
+    for (s64 i = from; i != to + step; i += step) at += sprintf(at, line, (long long)i, (long long)(i + delta));
+    return text;
+}
+
+// The pieces one after another, as a C string in the arena.
+static const char *joined(Arena *a, const char *first, const char *second, const char *third = "",
+                          const char *fourth = "") {
+    return string_cstr(a, string_printf(a, "%s%s%s%s", first, second, third, fourth));
+}
+
+// "L:1: 'NAME' is nested too deeply in the declarations that need it (more
+// than 1000 levels)\n".
+static const char *needed_too_deeply(Arena *a, s64 line, const char *name) {
+    return string_cstr(a, string_printf(a,
+                                        "%lld:1: '%s' is nested too deeply in the declarations that need it "
+                                        "(more than 1000 levels)\n",
+                                        (long long)line, name));
+}
+
+TEST(declarations_needed_inside_others_nest_at_most_max_depth) {
+    // A declaration worked out inside the one that needs it (spec 6.1) is a
+    // level below that one's deepest level, and its own levels count from
+    // there, against the one MAX_DEPTH. A chain at the limit goes through
+    // every stage; the declaration one too many is one message, at it, and
+    // no crash (before the limit, 2000 structs or 1000 constants overflowed
+    // Windows' stack). The declarations that needed it are left without a
+    // type, saying nothing more.
+    Arena a = arena_make();
+    const char *main_a = "main :: () { v := A0; }\n";
+    // A name is no level: A0 is at 0, A1 at 1, ..., A1000 at 1000. A1001 is
+    // one too many, on line 1003.
+    CHECK(builds(&a, joined(&a, main_a, chain_of(&a, "A%lld :: A%lld;\n", 0, 999, 1), "A1000 :: 0;\n")));
+    CHECK_STR(check_source(&a, joined(&a, main_a, chain_of(&a, "A%lld :: A%lld;\n", 0, 1000, 1), "A1001 :: 0;\n")),
+              needed_too_deeply(&a, 1003, "A1001"));
+    // A + is a level, so each of these is two: A500 is at 1000, where 0
+    // fits, being no level; A500 :: A501 + 1 reaches 1001, so it is the one
+    // too many.
+    CHECK(builds(&a, joined(&a, main_a, chain_of(&a, "A%lld :: A%lld + 1;\n", 0, 499, 1), "A500 :: 0;\n")));
+    CHECK_STR(check_source(&a, joined(&a, main_a, chain_of(&a, "A%lld :: A%lld + 1;\n", 0, 500, 1), "A501 :: 0;\n")),
+              needed_too_deeply(&a, 502, "A500"));
+    // Structs held by value, each before the one it holds: S1000 is laid
+    // out at 0, S0 at 1000. Declared the other way round, each is laid out
+    // before the next needs it, and the chain has no limit.
+    const char *holds = "S%lld :: struct { s: S%lld; }\n", *last = "S0 :: struct { x: int; }\n";
+    CHECK(builds(&a, joined(&a, "main :: () { v : S1000; }\n", chain_of(&a, holds, 1000, 1, -1), last)));
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { v : S1001; }\n", chain_of(&a, holds, 1001, 1, -1), last)),
+              needed_too_deeply(&a, 1003, "S0"));
+    CHECK(builds(&a, joined(&a, last, chain_of(&a, holds, 1, 3000, -1), "main :: () { v : S3000; }\n")));
+    // A circle longer than the limit is too deep before it's found to be
+    // one: still one message, and no crash.
+    CHECK_STR(check_source(&a, joined(&a, main_a, chain_of(&a, "A%lld :: A%lld;\n", 0, 1999, 1), "A2000 :: A0;\n")),
+              needed_too_deeply(&a, 1003, "A1001"));
+    arena_free(&a);
+}
+
+TEST(a_declarations_own_levels_count_toward_those_it_needs) {
+    // The levels of a declaration's value or type are its own, and one it
+    // needs starts a level below its deepest, wherever the name is in it.
+    Arena a = arena_make();
+    // 999 parentheses around B: B is at 1000. Around 1000, at 1001.
+    const char *value = "main :: () { v := A; }\nA :: ";
+    CHECK(builds(&a, joined(&a, nested_source(&a, value, "(", 999, "B", ")", ";\n"), "B :: 0;\n")));
+    CHECK_STR(check_source(&a, joined(&a, nested_source(&a, value, "(", 1000, "B", ")", ";\n"), "B :: 0;\n")),
+              needed_too_deeply(&a, 3, "B"));
+    // Global variables, each typed by the next one's count: [g1.count]u8
+    // is two levels (the array, and the field .count in it), so g0 is at
+    // 0, g1 at 3, ..., g333 at 999 with its one level, [1]u8.
+    const char *counts = "g%lld : [g%lld.count]u8;\n";
+    CHECK(builds(&a, joined(&a, "main :: () { }\n", chain_of(&a, counts, 0, 332, 1), "g333 : [1]u8;\n")));
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, counts, 0, 333, 1), "g334 : [1]u8;\n")),
+              needed_too_deeply(&a, 335, "g333"));
+    // A procedure's signature, whose turn comes before N's, needs N from a
+    // type of 998 '*' and an array: N is at 1000. With 999 '*', at 1001.
+    const char *after = "[N]int) { }\nN :: 1;\nmain :: () { }\n";
+    CHECK(builds(&a, nested_source(&a, "f :: (p: ", "*", 998, after, "", "")));
+    CHECK_STR(check_source(&a, nested_source(&a, "f :: (p: ", "*", 999, after, "", "")), needed_too_deeply(&a, 2, "N"));
+    // A struct's field, held by value ([1]...[1][N]u8, while the struct is
+    // laid out) or behind a pointer (*...*[N]u8, once every struct is).
+    const char *field_after = "[N]u8; }\nN :: 1;\nmain :: () { v : S; }\n";
+    CHECK(builds(&a, nested_source(&a, "S :: struct { a: ", "[1]", 998, field_after, "", "")));
+    CHECK_STR(check_source(&a, nested_source(&a, "S :: struct { a: ", "[1]", 999, field_after, "", "")),
+              needed_too_deeply(&a, 2, "N"));
+    // A late field's type is made after the pass (or when a global's value
+    // needs it first), so a pointer's levels don't count toward its
+    // struct's layout: N has had its turn by then.
+    CHECK(builds(&a, nested_source(&a, "S :: struct { p: ", "*", 999, field_after, "", "")));
+    // Here A0's value, two levels, needs the late field a before then, so a
+    // starts at 3: [3] and 996 '*' fit, 997 don't, and the message is at
+    // the field.
+    const char *late_before = "S :: struct { a: [3]";
+    const char *late_after = "int; }\ng : S;\nA0 :: g.a.count;\nmain :: () { v := A0; }\n";
+    CHECK(builds(&a, nested_source(&a, late_before, "*", 996, late_after, "", "")));
+    CHECK_STR(check_source(&a, nested_source(&a, late_before, "*", 997, late_after, "", "")),
+              "1:15: 'a' is nested too deeply in the declarations that need it (more than 1000 levels)\n");
+    // Only the type that needs a declaration counts toward it, not the
+    // deepest of a struct's fields or a signature's types: T and N are a
+    // level below a name, though p is a thousand levels deep.
+    const char *deep_pointer = nested_source(&a, "", "*", MAX_DEPTH, "int", "", "");
+    CHECK(builds(&a, joined(&a, "S :: struct { p: ", deep_pointer,
+                            "; t: T; }\nT :: struct { x: int; }\nmain :: () { v : S; }\n")));
+    CHECK(builds(&a, joined(&a, "f :: (p: ", deep_pointer, ", a: [N]int) { }\nN :: 1;\nmain :: () { }\n")));
+    arena_free(&a);
+}
+
+TEST(declarations_have_their_turns_in_source_order) {
+    // Every declaration has its turn in one pass in source order, structs,
+    // signatures, globals and constants alike, so a chain each needing the
+    // one before it never nests, whatever needs its end first.
+    Arena a = arena_make();
+    const char *constants = joined(&a, "A0 :: 1;\n", chain_of(&a, "A%lld :: A%lld;\n", 1, 1500, -1));
+    CHECK(builds(&a, joined(&a, constants, "S :: struct { a: [A1500]u8; }\nmain :: () { v : S; }\n")));
+    CHECK(builds(&a, joined(&a, constants, "f :: (a: [A1500]int) { }\nmain :: () { }\n")));
+    const char *structs =
+        joined(&a, "S0 :: struct { x: int; }\n", chain_of(&a, "S%lld :: struct { s: S%lld; }\n", 1, 1500, -1));
+    CHECK(builds(&a, joined(&a, structs, "N :: size_of(S1500);\ng : S1500;\nmain :: () { }\n")));
+    // A declaration found too deep is said once, however many need it.
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { v := A0; }\n", chain_of(&a, "A%lld :: A%lld;\n", 0, 998, 1),
+                                      "A999 :: A1000 + A1000;\nA1000 :: 0;\n")),
+              needed_too_deeply(&a, 1002, "A1000"));
+    // A call in a global's value is checked against a procedure declared
+    // after it, and a field reached through a pointer in one against a
+    // struct declared after it, though their turns haven't come.
+    CHECK_STR(check_source(&a,
+                           "g := f(\"x\");\n"
+                           "p : *S;\n"
+                           "n := p.x;\n"
+                           "f :: (n: int) -> int { return n; }\n"
+                           "S :: struct { x: int; }\n"
+                           "main :: () { }\n"),
+              "1:6: a global's value must be known while compiling, for now\n"
+              "1:8: argument 1 of 'f' has type 'string', which can't be converted to 'int'\n"
+              "3:6: a global's value must be known while compiling, for now\n");
+    // A type made before its struct's layout failed (a global's, a
+    // signature's) has no type once it has: its uses say nothing more.
+    CHECK_STR(check_source(&a,
+                           "g : *S;\n"
+                           "f :: (p: *S) -> *S { x := p.y; return p; }\n"
+                           "S :: struct { s: S; }\n"
+                           "main :: () { h := g.z; f(g).w = 1; k : int = g; m : int = f(g); }\n"),
+              "3:1: 'S' contains itself; it can hold a pointer to itself, *S\n");
+    arena_free(&a);
+}
+
+TEST(a_struct_is_laid_out_before_its_size_or_fields_are_needed) {
+    // A global before a struct in source order may reach it behind a
+    // pointer or in a view before its turn; what needs its size or its
+    // fields lays it out then (check_layout).
+    Arena a = arena_make();
+    // A view's literal is an array of the struct: its size, and its fields
+    // for each value.
+    const char *view = "g : []S = .[ .{1, 2}, .{y = 5} ];\n"
+                       "S :: struct { x: int; y: int; }\n"
+                       "main :: () { }\n";
+    CHECK_STR(check_source(&a, view), "");
+    CHECK(builds(&a, view));
+    CHECK(builds(&a, "g := T.{ .[ .{1, 2} ] };\nT :: struct { v: []S; }\nS :: struct { x: int; y: int; }\n"
+                     "main :: () { }\n"));
+    // The array it makes is the same [2]S as any other, the size right.
+    Checked c = check_src(&a,
+                          "h : []S = .[ .{}, .{} ];\n"
+                          "S :: struct { x: int; }\n"
+                          "N :: size_of([2]S);\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_EQ(global_named(&c, "N")->constant, 16);
+    token_list_free(c.list);
+    // Pointers subtract by the size of what they point at.
+    CHECK_STR(check_source(&a,
+                           "p : *S = null;\n"
+                           "d := p - p;\n"
+                           "S :: struct { x: int; }\n"
+                           "main :: () { }\n"),
+              "2:6: a global's value must be known while compiling, for now\n");
+    // A struct found to contain itself after a global took it behind a
+    // pointer: what the global's value said stays said, true whatever the
+    // struct; later uses say nothing more.
+    CHECK_STR(check_source(&a,
+                           "g : *N = null;\n"
+                           "h : int = g;\n"
+                           "N :: struct { n: N; }\n"
+                           "main :: () { k : int = g; }\n"),
+              "2:11: a value of type '*N' doesn't convert to 'int' implicitly\n"
+              "3:1: 'N' contains itself; it can hold a pointer to itself, *N\n");
+    arena_free(&a);
+}
+
+TEST(a_signature_that_needs_itself_is_a_circle) {
+    // f's parameter's count needs g, whose value calls f: a circle, said
+    // once at the declaration whose turn came first, and nothing more.
+    // Unreported, it checked cleanly and rig build crashed.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: (a: [g]int) -> int { return 0; }\n"
+                           "g := f(1);\n"
+                           "main :: () { x := f(2); }\n"),
+              "1:1: 'f' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a,
+                           "g := f(1);\n"
+                           "f :: (a: [g]int) -> int { return 0; }\n"
+                           "main :: () { }\n"),
+              "1:1: 'g' is defined in terms of itself\n");
+    arena_free(&a);
+}
+
+TEST(a_name_read_a_level_down_is_at_that_level) {
+    // size_of(S)'s type is a level down: S is at 999 inside 998
+    // parentheses, so its layout starts at 1000; inside 999, at 1001.
+    Arena a = arena_make();
+    const char *before = "main :: () { v := A; }\nA :: ";
+    const char *after = ";\nS :: struct { x: int; }\n";
+    CHECK(builds(&a, nested_source(&a, before, "(", 998, "size_of(S)", ")", after)));
+    CHECK_STR(check_source(&a, nested_source(&a, before, "(", 999, "size_of(S)", ")", after)),
+              needed_too_deeply(&a, 3, "S"));
     arena_free(&a);
 }
