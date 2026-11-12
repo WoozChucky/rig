@@ -1,6 +1,7 @@
 int to u8
 int to s8
 u64 to s16
+u16 to s8, its largest
 s32 to s8, its smallest
 u32 to u16, its largest
 u64 to s64
