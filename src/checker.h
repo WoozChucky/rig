@@ -17,6 +17,11 @@
 //   declare the same name again, hiding the outer one; the same block may
 //   not ("'x' is already declared at PATH:L:C"). A procedure's parameters
 //   are in its body's block.
+// - A for loop declares its iterator (it, or the name in `for i: 0..9`,
+//   which is then declared instead of it) and it_index in its body's block.
+//   The iterator can't take it_index's name: `for it_index: 0..9` is "a
+//   loop's iterator can't be called 'it_index'", said at the name, and
+//   it_index is then the loop's index.
 // - A procedure's name used as a value: "procedures can only be called,
 //   for now". A call of one that returns nothing, used as a value: "'greet'
 //   returns nothing, so it has no value". A call of anything else (a local
@@ -52,6 +57,19 @@
 //   bytes are stored with a zero after them, Jai's rule, so C can read it).
 //   A variable can't hold a string yet.
 //
+// Bools and comparisons.
+// - true and false are bool constants. A bool isn't an integer, and
+//   neither converts to the other implicitly.
+// - == != < <= > >= give a bool. Two integers meet as an arithmetic
+//   operator's operands do (above), and are compared as numbers of that
+//   type, signed or unsigned. == and != also compare two bools; ordering a
+//   bool is "'<' needs integers, not 'bool'", and a bool with anything else
+//   is "mismatched types 'bool' and 'int' for '=='".
+// - && || ! take bools and give one: "'&&' needs bools, not 'int'", "'!'
+//   needs a bool, not 'int'". && and || don't evaluate their right operand
+//   when the left one decides.
+// - Constant operands fold, for every one of these operators.
+//
 // Statements.
 // - Declarations, assignments, arguments and returns convert their value
 //   by the rules above: an untyped constant takes the type, an integer
@@ -60,15 +78,28 @@
 //   be converted to 'B'"). A compound assignment x op= e converts e to x's
 //   type (a shift's amount: any integer).
 // - Only a variable can be assigned to: not a constant, a parameter
-//   (read-only, spec 6.1) or a procedure ("can't assign to 'N': it's a
-//   constant"), nor anything but a name.
-// - N :: e; needs e an integer ("a constant can only be an integer, for
-//   now": only integers fold yet) known while compiling ("the value of
-//   constant 'N' isn't known while compiling").
+//   (read-only, spec 6.1), a loop's iterator or index ("can't assign to
+//   'it': it's the loop's iterator", "... 'it_index': it's the loop's
+//   index") or a procedure ("can't assign to 'N': it's a constant"), nor
+//   anything but a name.
+// - N :: e; needs e an integer or a bool ("a constant can only be an
+//   integer or a bool, for now": only they fold yet) known while compiling
+//   ("the value of constant 'N' isn't known while compiling").
+// - The condition of if and while is a bool: "the condition of 'if' must
+//   be a bool, not 'int'".
+// - for a..b: the ends are integers meeting as an arithmetic operator's
+//   operands do ("mismatched types 'A' and 'B' for '..'; cast one of them",
+//   "'..' needs integers, not 'bool'"); the iterator has the type they meet
+//   at, int when both are untyped. it_index is an int.
+// - break and continue act on the innermost loop around them; outside any:
+//   "'break' is only allowed inside a loop".
 // - A return gives a value exactly when its procedure returns one. A
 //   procedure that returns a value mustn't reach the '}' of its body: a
-//   block reaches its end unless its last statement is a return, or a
-//   block that doesn't reach its own end.
+//   block reaches its end unless its last statement is a return, a block
+//   that doesn't reach its own end, an if with an else whose branches both
+//   don't, or a `while` whose condition is the constant true and that has
+//   no break of its own. An if or while whose condition was an error
+//   doesn't reach its end either, so the condition's is the one message.
 // - An expression statement must be a call, whose value may be ignored
 //   (spec 6.7).
 //
