@@ -10,7 +10,8 @@
 struct Checker {
     Arena *arena;
     Diagnostics *diag;
-    Table<Ast_Proc *> procs;     // every procedure, by name: visible everywhere
+    Table<Ast *> top_level;      // every procedure, global variable and top-level constant, by
+                                 // name: visible everywhere (Ast_Proc, Ast_Var, Ast_Const)
     Array<Table<Ast *>> scopes;  // the blocks being checked, innermost last: the names
                                  // declared in each so far (Ast_Var, Ast_Const, Ast_Param)
     Ast_Proc *proc;              // the procedure whose body is being checked
@@ -21,7 +22,10 @@ struct Checker {
 // checker.cpp
 
 // The declaration `name` means where the checker is: the innermost block's
-// that declares it, else a procedure's; null when there's none.
+// that declares it, else the top level's (a procedure, a global or a
+// constant); null when there's none. A global or constant found at the top
+// level is checked first if it hasn't been yet (resolve_global), so its
+// type and value are known, whatever the order of the declarations.
 Ast *check_lookup(Checker *c, String name);
 
 // The type a written type means, or null after reporting an unknown name.
@@ -47,6 +51,11 @@ Type *check_value(Checker *c, Ast *e);
 // doesn't report it again. True also when either type is unknown (null):
 // the error was reported already.
 bool check_convert(Checker *c, Ast *e, Type *to);
+
+// Whether a value of type `from`, not an untyped constant, converts
+// implicitly to `to`: the same type, or an integer that widens (spec 6.4).
+// True when either is unknown (null): the error was reported already.
+bool type_converts(Type *from, Type *to);
 
 // An untyped constant that meets no type becomes an int (x := 5;).
 void check_default_type(Ast *e);

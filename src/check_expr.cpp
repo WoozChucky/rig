@@ -56,14 +56,17 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
         e->type = to;
         return true;
     }
-    if (from == to) return true;
     // A string literal's bytes are stored with a zero after them, so C can
     // read them through a *u8 (milestone 1's rule).
     if (e->kind == AST_STRING && to->kind == TYPE_POINTER && to->pointee == type_from_name(str("u8"))) {
         return true;
     }
-    if (from->kind == TYPE_INTEGER && to->kind == TYPE_INTEGER) return widens(from, to);
-    return false;
+    return type_converts(from, to);
+}
+
+bool type_converts(Type *from, Type *to) {
+    if (!from || !to || from == to) return true;
+    return from->kind == TYPE_INTEGER && to->kind == TYPE_INTEGER && widens(from, to);
 }
 
 void check_default_type(Ast *e) {

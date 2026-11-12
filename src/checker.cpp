@@ -16,8 +16,8 @@ Type *resolve_type(Checker *c, Ast_Type *written) {
 // Scopes. Each block being checked has a table of the names declared in it
 // so far, innermost last, so a name is looked up from the inside out: a
 // declaration in an inner block hides one of the same name outside it
-// until that block ends. Procedures are visible everywhere, after every
-// block.
+// until that block ends. The top level's names, procedures, globals and
+// constants, are visible everywhere, after every block.
 
 static void push_scope(Checker *c) {
     array_add(&c->scopes, Table<Ast *>{});
@@ -28,13 +28,17 @@ static void pop_scope(Checker *c) {
     c->scopes.count--;
 }
 
+static void resolve_global(Checker *c, Ast *decl);
+
 Ast *check_lookup(Checker *c, String name) {
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {
         Ast **found = table_get(&c->scopes[i], name);
         if (found) return *found;
     }
-    Ast_Proc **proc = table_get(&c->procs, name);
-    return proc ? *proc : nullptr;
+    Ast **found = table_get(&c->top_level, name);
+    if (!found) return nullptr;
+    if ((*found)->kind == AST_VAR || (*found)->kind == AST_CONST) resolve_global(c, *found);
+    return *found;
 }
 
 // Declares `name` in the innermost block, from here to its end. The same
@@ -58,35 +62,59 @@ static void report_no_conversion(Checker *c, Ast *value, Type *to) {
                STR_ARG(type_name(c->arena, value->type)), STR_ARG(type_name(c->arena, to)));
 }
 
-// x : T = e;  x := e;  x : T;  x : T = ---;
-// The variable is declared after its value is checked, so `x := x + 1;`
-// in an inner block reads the outer x.
-static void check_var(Checker *c, Ast_Var *var) {
+// x : T = e;  x := e;  x : T;  x : T = ---;  a local or a global: works out
+// the variable's type, its written one or its value's, and checks the
+// value. Returns whether there was a value and it had no error: checked,
+// and converting to the type.
+static bool check_var_value(Checker *c, Ast_Var *var) {
     Type *t = var->type_expr ? resolve_type(c, var->type_expr) : nullptr;
+    bool fine = false;
     if (var->value) {
         Type *value = check_value(c, var->value);
         if (var->type_expr) {
-            if (!check_convert(c, var->value, t)) report_no_conversion(c, var->value, t);
+            bool converts = check_convert(c, var->value, t);
+            if (!converts) report_no_conversion(c, var->value, t);
+            fine = value && t && converts;
         } else if (value) {
             check_default_type(var->value);
             t = var->value->type;
+            fine = true;
             // A string is a pointer and a length (spec 6.5), which the IR
             // can't hold yet.
             if (t == &type_string) {
                 diag_error(c->diag, var->value->start, "variables can't hold a 'string' yet; give it the type '*u8'");
                 t = nullptr;
+                fine = false;
             }
         }
     }
     var->type = t;
+    return fine;
+}
+
+// A local variable. It's declared after its value is checked, so
+// `x := x + 1;` in an inner block reads the outer x.
+static void check_var(Checker *c, Ast_Var *var) {
+    check_var_value(c, var);
     declare(c, var->name, var);
+}
+
+// A global variable: as a local, but its value must be known while
+// compiling, because it's written into the program's file, where the
+// variable lives (lower.cpp); there's no code that could run before main
+// to work it out. Without a value, or with ---, it starts at zero: a
+// global is never on the stack, so it never holds what was there before.
+static void check_global_var(Checker *c, Ast_Var *var) {
+    if (check_var_value(c, var) && !var->value->is_constant) {
+        diag_error(c->diag, var->value->start, "a global's value must be known while compiling, for now");
+    }
 }
 
 // N :: e; the value must be an integer or a bool known while compiling, and
 // the constant keeps it, with its type: untyped when e is, so N meets types
 // as a literal does. Only integers and bools fold so far, so a string
 // literal, though known while compiling, can't be a constant yet.
-static void check_const(Checker *c, Ast_Const *constant) {
+static void check_const_value(Checker *c, Ast_Const *constant) {
     Type *t = check_value(c, constant->value);
     if (t && t->kind != TYPE_INTEGER && t != &type_bool) {
         diag_error(c->diag, constant->value->start, "a constant can only be an integer or a bool, for now");
@@ -101,7 +129,52 @@ static void check_const(Checker *c, Ast_Const *constant) {
         constant->constant = constant->value->constant;
     }
     constant->type = t;
+}
+
+// A local constant, declared from here to the end of its block.
+static void check_const(Checker *c, Ast_Const *constant) {
+    check_const_value(c, constant);
     declare(c, constant->name, constant);
+}
+
+// A global variable or a top-level constant, checked the first time it's
+// needed: by the loop in check() that goes through them all in source
+// order, or earlier, by a use in the value of one before it (check_lookup
+// calls this). So declarations at the top level can come in any order:
+// in `A :: B + 1; B :: 2;`, checking A finds B, checks B there and then,
+// and A is the constant 3.
+//
+// A value that needs itself, directly (`C :: C;`) or through others
+// (`A :: B; B :: A;`), would make that endless. The resolve state breaks
+// the circle: a use that finds the declaration still under way reports
+// "'A' is defined in terms of itself", at its name, once, and gives no
+// type, so nothing more is said about the rest of the circle.
+//
+// Every global is resolved before any procedure body is checked, so the
+// scopes are always empty here: a local's name can never leak into a
+// global's value.
+static void resolve_global(Checker *c, Ast *decl) {
+    Ast_Resolve *state = decl->kind == AST_VAR ? &((Ast_Var *)decl)->resolve : &((Ast_Const *)decl)->resolve;
+    if (*state == RESOLVE_DONE || *state == RESOLVE_CYCLE) return;
+    String name = decl->kind == AST_VAR ? ((Ast_Var *)decl)->name : ((Ast_Const *)decl)->name;
+    if (*state == RESOLVE_UNDER_WAY) {
+        diag_error(c->diag, decl->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(name));
+        *state = RESOLVE_CYCLE;
+        return;
+    }
+    RIG_ASSERT(c->scopes.count == 0);
+    *state = RESOLVE_UNDER_WAY;
+    if (decl->kind == AST_VAR) {
+        check_global_var(c, (Ast_Var *)decl);
+    } else {
+        check_const_value(c, (Ast_Const *)decl);
+    }
+    // In a circle, what was worked out came from a value that isn't one.
+    if (*state == RESOLVE_CYCLE) {
+        decl->type = nullptr;
+        decl->is_constant = false;
+    }
+    *state = RESOLVE_DONE;
 }
 
 // The type of an assignment's target, a variable, or null after reporting
@@ -145,11 +218,80 @@ static Type *check_target(Checker *c, Ast *target) {
     return nullptr;
 }
 
+// "1 value", "2 values".
+static String count_of_values(Checker *c, s64 n) {
+    return string_printf(c->arena, "%lld value%s", (long long)n, n == 1 ? "" : "s");
+}
+
+// The value that `count` names or targets receive (spec 6.7): a call of a
+// procedure with exactly that many results, which is returned; or null
+// after reporting what it is instead:
+// - not a call: "only a call can give several values, as in q, r :=
+//   divmod(7, 2);";
+// - a call of one that returns nothing: "'greet' returns nothing, so it has
+//   no value", as anywhere a value is needed;
+// - a call with another number of results: "'divmod' returns 2 values, but
+//   3 names receive them".
+// Each is said at the value. A value whose type is unknown says nothing
+// more.
+static Ast_Proc *check_several_values(Checker *c, Ast *value, s64 count) {
+    Type *t = check_value(c, value);
+    if (!t) return nullptr;
+    if (value->kind != AST_CALL) {
+        diag_error(c->diag, value->start, "only a call can give several values, as in q, r := divmod(7, 2);");
+        return nullptr;
+    }
+    Ast_Proc *proc = ((Ast_Call *)value)->proc;  // a known type means a procedure was called
+    if (proc->results.count != count) {
+        diag_error(c->diag, value->start, "'" STR_FMT "' returns " STR_FMT ", but %lld names receive them",
+                   STR_ARG(proc->name), STR_ARG(count_of_values(c, proc->results.count)), (long long)count);
+        return nullptr;
+    }
+    return proc;
+}
+
+// q, r := divmod(7, 2); declares a variable per result, each of the type of
+// the result it receives, in order. After an error each is still
+// declared, with an unknown type, so its uses aren't reported too.
+static void check_multi_var(Checker *c, Ast_Multi_Var *multi) {
+    Ast_Proc *proc = check_several_values(c, multi->value, multi->vars.count);
+    for (s64 i = 0; i < multi->vars.count; i++) {
+        Ast_Var *var = multi->vars[i];
+        var->type = proc ? proc->results[i]->type : nullptr;
+        declare(c, var->name, var);
+    }
+}
+
+static Type *check_target(Checker *c, Ast *target);
+
+// a, b = f(); the targets must be variables, f must return as many results,
+// and each result converts to its target's type as a value assigned to it
+// would ("a value of type 'int' doesn't convert to 'u8' implicitly", at
+// the target).
+static void check_multi_assign(Checker *c, Ast_Assign *assign) {
+    Array<Type *> targets = {};
+    for (s64 i = 0; i < assign->targets.count; i++) array_add(&targets, check_target(c, assign->targets[i]));
+    Ast_Proc *proc = check_several_values(c, assign->value, assign->targets.count);
+    for (s64 i = 0; proc && i < targets.count; i++) {
+        Type *from = proc->results[i]->type, *to = targets[i];
+        if (!type_converts(from, to)) {
+            diag_error(c->diag, assign->targets[i]->start,
+                       "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly",
+                       STR_ARG(type_name(c->arena, from)), STR_ARG(type_name(c->arena, to)));
+        }
+    }
+    array_free(&targets);
+}
+
 // x = e; converts e to x's type. x op= e; is x = x op e, so x must be an
 // integer, and e converts to x's type, as an untyped constant or a
 // narrower integer does (a shift's amount: any integer). x /= 0 and
 // x %= 0 are "division by zero", as x / 0 is, at the operator.
 static void check_assign(Checker *c, Ast_Assign *assign) {
+    if (assign->targets.count > 1) {
+        check_multi_assign(c, assign);
+        return;
+    }
     Ast *target = assign->targets[0];
     Type *to = check_target(c, target);
     Type *value = check_value(c, assign->value);
@@ -174,26 +316,43 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
     }
 }
 
-// return; and return e; against what the procedure returns.
+// return; return e; return a, b; against what the procedure returns: one
+// value per result, each converting to its result's type. Another number
+// of values is reported at the 'return', after the values' own mistakes
+// are:
+// - "'f' returns 's32', but this return gives no value" (one result);
+// - "'g' returns nothing, but this return gives a value" ("... 2 values");
+// - "'divmod' returns 2 values, but this return gives 1" ("gives none").
+// A return of a call with as many results (return divmod(a, b);) is one
+// value, the call's first result, so it doesn't count as several.
 static void check_return(Checker *c, Ast_Return *ret) {
     Ast_Proc *proc = c->proc;
-    Type *result = proc->results.count ? proc->results[0]->type : nullptr;
-    if (ret->values.count == 0) {
+    s64 want = proc->results.count, given = ret->values.count;
+    if (want == given) {
+        for (s64 i = 0; i < given; i++) {
+            Ast *value = ret->values[i];
+            Type *result = proc->results[i]->type;
+            if (check_value(c, value) && !check_convert(c, value, result)) report_no_conversion(c, value, result);
+        }
+        return;
+    }
+    for (s64 i = 0; i < given; i++) check_expression(c, ret->values[i]);
+    if (want == 0) {
+        String values = given == 1 ? str("a value") : count_of_values(c, given);
+        diag_error(c->diag, ret->pos, "'" STR_FMT "' returns nothing, but this return gives " STR_FMT,
+                   STR_ARG(proc->name), STR_ARG(values));
+    } else if (want == 1 && given == 0) {
         // An unknown result type was reported with the signature.
+        Type *result = proc->results[0]->type;
         if (result) {
             diag_error(c->diag, ret->pos, "'" STR_FMT "' returns '" STR_FMT "', but this return gives no value",
                        STR_ARG(proc->name), STR_ARG(type_name(c->arena, result)));
         }
-        return;
+    } else {
+        String values = given == 0 ? str("none") : string_printf(c->arena, "%lld", (long long)given);
+        diag_error(c->diag, ret->pos, "'" STR_FMT "' returns " STR_FMT ", but this return gives " STR_FMT,
+                   STR_ARG(proc->name), STR_ARG(count_of_values(c, want)), STR_ARG(values));
     }
-    Ast *value = ret->values[0];
-    if (!proc->results.count) {
-        check_expression(c, value);
-        diag_error(c->diag, ret->pos, "'" STR_FMT "' returns nothing, but this return gives a value",
-                   STR_ARG(proc->name));
-        return;
-    }
-    if (check_value(c, value) && !check_convert(c, value, result)) report_no_conversion(c, value, result);
 }
 
 static void check_block(Checker *c, Ast_Block *block);
@@ -291,6 +450,7 @@ static void check_statement(Checker *c, Ast *statement) {
     switch (statement->kind) {
     case AST_VAR: check_var(c, (Ast_Var *)statement); break;
     case AST_CONST: check_const(c, (Ast_Const *)statement); break;
+    case AST_MULTI_VAR: check_multi_var(c, (Ast_Multi_Var *)statement); break;
     case AST_ASSIGN: check_assign(c, (Ast_Assign *)statement); break;
     case AST_RETURN: check_return(c, (Ast_Return *)statement); break;
     case AST_BLOCK: check_scoped_block(c, (Ast_Block *)statement); break;
@@ -413,9 +573,24 @@ static void check_signature(Checker *c, Ast_Proc *proc) {
         param->type = resolve_type(c, param->type_expr);
     }
     for (s64 i = 0; i < proc->results.count; i++) proc->results[i]->type = resolve_type(c, proc->results[i]);
+    // C returns one value; several are Rig's own (spec 6.7), made in a way
+    // only Rig's procedures agree on.
+    if (proc->is_foreign && proc->results.count > 1) {
+        diag_error(c->diag, proc->results[1]->pos, "a foreign procedure can return at most one value");
+    }
     if (proc->is_foreign && !string_eq(proc->foreign_library, str("libc"))) {
         diag_error(c->diag, proc->library_pos, "unknown library '" STR_FMT "'; the only one so far is 'libc'",
                    STR_ARG(proc->foreign_library));
+    }
+}
+
+// The name a top-level declaration declares.
+static String declared_name(Ast *decl) {
+    switch (decl->kind) {
+    case AST_PROC: return ((Ast_Proc *)decl)->name;
+    case AST_VAR: return ((Ast_Var *)decl)->name;
+    case AST_CONST: return ((Ast_Const *)decl)->name;
+    default: RIG_ASSERT(!"not a top-level declaration"); return {};
     }
 }
 
@@ -425,21 +600,25 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
     c.arena = a;
     c.diag = d;
 
-    // First every name, so procedures can be used before they're declared.
-    // The whole declarations first: a name declared twice is reported
-    // there.
-    for (s64 i = 0; i < file->procs.count; i++) {
-        Ast_Proc *proc = file->procs[i];
-        if (proc->is_broken) continue;
-        Ast_Proc **earlier = table_get(&c.procs, proc->name);
+    // First every name, so procedures, globals and constants can be used
+    // before they're declared. They share one table: a global can't have a
+    // procedure's name. The whole declarations first, in source order: a
+    // name declared twice is reported at the later one.
+    Array<Ast *> declarations = ast_declarations(file);
+    for (s64 i = 0; i < declarations.count; i++) {
+        Ast *decl = declarations[i];
+        if (decl->kind == AST_PROC && ((Ast_Proc *)decl)->is_broken) continue;
+        String name = declared_name(decl);
+        Ast **earlier = table_get(&c.top_level, name);
         if (earlier) {
             Position at = (*earlier)->pos;
-            diag_error(d, proc->pos, "'" STR_FMT "' is already declared at " STR_FMT ":%d:%d", STR_ARG(proc->name),
+            diag_error(d, decl->pos, "'" STR_FMT "' is already declared at " STR_FMT ":%d:%d", STR_ARG(name),
                        STR_ARG(d->files[at.file].path), at.line, at.col);
             continue;
         }
-        table_put(&c.procs, proc->name, proc);
+        table_put(&c.top_level, name, decl);
     }
+    array_free(&declarations);
     // Then the broken ones (parser.h), the names of declarations the parser
     // gave up on. Each is declared, with an unknown type, so its uses are
     // nothing to report; the syntax error already was. Nothing is said
@@ -453,13 +632,21 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
         if (!proc->is_broken) continue;
         if (!proc->name.count) {
             lost_a_name = true;
-        } else if (!table_get(&c.procs, proc->name)) {
-            table_put(&c.procs, proc->name, proc);
+        } else if (!table_get(&c.top_level, proc->name)) {
+            table_put(&c.top_level, proc->name, proc);
         }
     }
+    // The signatures, before any value or body is checked: a call anywhere
+    // needs its procedure's parameters and results.
     for (s64 i = 0; i < file->procs.count; i++) {
         if (!file->procs[i]->is_broken) check_signature(&c, file->procs[i]);
     }
+
+    // Then the globals and constants, in source order, each one that isn't
+    // yet: one used by an earlier one's value was checked there
+    // (resolve_global). All are done before the bodies, which only find
+    // them finished.
+    for (s64 i = 0; i < file->globals.count; i++) resolve_global(&c, file->globals[i]);
 
     // Then the bodies. A broken entry has none: the parser gave up on it.
     for (s64 i = 0; i < file->procs.count; i++) {
@@ -467,19 +654,20 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
     }
 
     // A broken main, or a broken declaration whose name was lost, has
-    // nothing to say about main: what it declares is unknown.
-    Ast_Proc **main_proc = table_get(&c.procs, str("main"));
-    if (!main_proc) {
+    // nothing to say about main: what it declares is unknown. A global
+    // called main is no procedure, so it's as if there were none.
+    Ast **main_decl = table_get(&c.top_level, str("main"));
+    if (!main_decl || (*main_decl)->kind != AST_PROC) {
         if (!lost_a_name) diag_error(d, {0, 1, 1}, "a procedure called 'main' is needed");
-    } else if (!(*main_proc)->is_broken) {
-        Ast_Proc *m = *main_proc;
+    } else if (!((Ast_Proc *)*main_decl)->is_broken) {
+        Ast_Proc *m = (Ast_Proc *)*main_decl;
         if (m->params.count > 0 || m->results.count) {
             diag_error(d, m->pos, "'main' must take no arguments and return nothing");
         }
         if (!m->body) diag_error(d, m->pos, "'main' must have a body: it's where the program starts");
     }
 
-    table_free(&c.procs);
+    table_free(&c.top_level);
     array_free(&c.scopes);
     array_free(&c.loops);
     return d->error_count == errors_before;
