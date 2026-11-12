@@ -4,8 +4,8 @@
 // global variables and constants; in a body, blocks of statements: local
 // variables and constants (several variables at once, from a call's
 // results), assignments, returns, if, while, for, break, continue and
-// expressions; expressions made of calls, names, strings, integers, bools,
-// operators and casts.
+// expressions; expressions made of calls, names, strings, integers,
+// floats, bools, operators and casts.
 // Each node kind is a struct that starts with Ast, so a pointer to any node
 // is also an Ast *, and `kind` says which it is.
 //
@@ -42,6 +42,7 @@ enum Ast_Kind : u8 {
     AST_CONTINUE,      // Ast_Jump: continue;
     AST_CAST,          // Ast_Cast: cast(T) e  cast,trunc(T) e
     AST_MULTI_VAR,     // Ast_Multi_Var: a, b := f();
+    AST_FLOAT,         // Ast_Float: 1.5, 2.5e-3
 };
 
 struct Ast {
@@ -56,7 +57,8 @@ struct Ast {
     bool is_constant;  // the checker knows the value while compiling (spec 6.4)
     u64 constant;      // that value's bits: an integer's sign-extended to 64 bits when its
                        // type is signed or untyped, zero-extended when unsigned; a bool's
-                       // 1 or 0
+                       // 1 or 0; a float's, the bits of the double holding its value
+                       // (f64_bits), which for a float32 is a float32's value
 };
 
 struct Ast_Type : Ast {
@@ -172,6 +174,11 @@ struct Ast_Int : Ast {
     u64 value;
 };
 
+// A float literal, its value read by the lexer as the nearest double.
+struct Ast_Float : Ast {
+    f64 value;
+};
+
 struct Ast_Bool : Ast {
     bool value;
 };
@@ -267,7 +274,7 @@ Token_Kind compound_operator(Token_Kind op);
 //   (var w int ---)       w : int = ---;    (var z u8)          z : u8;
 //   (const N (int 10))    N :: 10;          (assign += (name x) (int 2))
 //   (return)  (return (name x))  (unary - (name a))  (binary * (name b) (name c))
-//   (bool true)   (break)   (continue)   (while (name c) (block ...))
+//   (bool true)   (float 1.5)   (break)   (continue)   (while (name c) (block ...))
 //   (if (name c) (block ...) (if (name d) (block ...) (block ...)))
 //                 if c { ... } else if d { ... } else { ... }
 //   (for it (int 0) (int 9) (block ...))      for 0..9 { ... }

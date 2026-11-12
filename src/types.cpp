@@ -2,13 +2,23 @@
 
 #include "types.h"
 
-#define INTEGER(name, size, is_signed) {TYPE_INTEGER, size, is_signed, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr}
+#define INTEGER(name, size, is_signed) \
+    {TYPE_INTEGER, size, is_signed, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr, nullptr}
+#define FLOAT(name, size) {TYPE_FLOAT, size, false, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr, nullptr}
 
-Type type_void = {TYPE_VOID, 0, false, nullptr, {(const u8 *)"void", 4}, nullptr};
-Type type_string = {TYPE_STRING, 16, false, nullptr, {(const u8 *)"string", 6}, nullptr};
+Type type_void = {TYPE_VOID, 0, false, nullptr, {(const u8 *)"void", 4}, nullptr, nullptr};
+Type type_string = {TYPE_STRING, 16, false, nullptr, {(const u8 *)"string", 6}, nullptr, nullptr};
 Type type_int = INTEGER("int", 8, true);
-Type type_bool = {TYPE_BOOL, 1, false, nullptr, {(const u8 *)"bool", 4}, nullptr};
+Type type_bool = {TYPE_BOOL, 1, false, nullptr, {(const u8 *)"bool", 4}, nullptr, nullptr};
 Type type_untyped_int = INTEGER("int", 8, true);
+Type type_float32 = FLOAT("float32", 4);
+Type type_float64 = FLOAT("float64", 8);
+Type type_untyped_float = FLOAT("float32", 8);
+
+// float, a name only: type_from_name gives float32 for it. It's an entry of
+// its own so NAMED_TYPES, and the editor's grammar made from it, list the
+// name.
+static Type float_name = {TYPE_FLOAT, 4, false, nullptr, {(const u8 *)"float", 5}, nullptr, &type_float32};
 
 static Type integer_types[] = {
     INTEGER("s8", 1, true),  INTEGER("s16", 2, true),  INTEGER("s32", 4, true),  INTEGER("s64", 8, true),
@@ -22,19 +32,23 @@ static Type integer_types[] = {
 static Type *const NAMED_TYPES[] = {
     &integer_types[0], &integer_types[1], &integer_types[2], &integer_types[3],  // s8 s16 s32 s64
     &integer_types[4], &integer_types[5], &integer_types[6], &integer_types[7],  // u8 u16 u32 u64
-    &type_int,  &type_bool,
+    &type_int,  &type_bool,  &float_name, &type_float32, &type_float64,
 };
 static_assert(sizeof integer_types / sizeof integer_types[0] == 8, "NAMED_TYPES lists integer_types one by one");
 
 Type *type_from_name(String name) {
     for (Type *t : NAMED_TYPES) {
-        if (string_eq(name, t->name)) return t;
+        if (string_eq(name, t->name)) return t->alias_of ? t->alias_of : t;
     }
     return nullptr;
 }
 
 bool type_is_untyped(Type *t) {
-    return t == &type_untyped_int;
+    return t == &type_untyped_int || t == &type_untyped_float;
+}
+
+bool type_is_number(Type *t) {
+    return t->kind == TYPE_INTEGER || t->kind == TYPE_FLOAT;
 }
 
 // Pointer types live as long as the built-in types that cache them, so they

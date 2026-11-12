@@ -235,6 +235,14 @@ static void dump(Array<u8> *buffer, Ast *node) {
         out(buffer, digits);
         break;
     }
+    case AST_FLOAT: {
+        // %g: the shortest of %e and %f, six significant digits (1.5,
+        // 0.0025, 1e+30); enough to see which literal it was.
+        char digits[48];
+        snprintf(digits, sizeof digits, "(float %g)", ((Ast_Float *)node)->value);
+        out(buffer, digits);
+        break;
+    }
     case AST_BOOL: out(buffer, ((Ast_Bool *)node)->value ? "(bool true)" : "(bool false)"); break;
     case AST_IF: {
         Ast_If *branch = (Ast_If *)node;
