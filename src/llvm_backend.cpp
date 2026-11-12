@@ -515,9 +515,9 @@ static void begin_debug_info(Backend *b, Ir_Module *m, Arena *a) {
     // CodeView's compiler name contains "clang", as a pointer otherwise
     // (measured with cdb: "rig 0.1.0" and "rig 0.1.0 (LLVM 23.1.4)" show a
     // pointer, "rig 0.1.0 (clang version 23.1.4)" the struct). So the
-    // producer says which clang's code generator made the code, as rustc's
-    // and zig's say which LLVM. Not optimised; full emission (types and
-    // variables too, not only lines).
+    // producer names the clang whose code generator made the code (rustc's
+    // says "clang LLVM (rustc version ...)", for the same reason). Not
+    // optimised; full emission (types and variables too, not only lines).
     unsigned major = 0, minor = 0, patch = 0;
     LLVMGetVersion(&major, &minor, &patch);
     String producer = string_printf(a, "rig %s (clang version %u.%u.%u)", RIG_VERSION, major, minor, patch);
