@@ -182,7 +182,10 @@
 // - A global variable is declared as a local one is. Its value must be
 //   known while compiling ("a global's value must be known while
 //   compiling, for now"): it's written into the program's file. Without
-//   one, or with ---, it starts at zero.
+//   one, or with ---, it starts at zero. A string literal is known while
+//   compiling, but its address needs the linker to fill it in, which
+//   lowering doesn't ask for yet: "global variables can't hold a string
+//   literal yet; assign it in a procedure".
 // - A top-level constant follows a local one's rules.
 // - Both are checked where they're first needed (in another's value, or in
 //   source order), so their order doesn't matter: in `A :: B + 1; B :: 2;`

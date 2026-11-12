@@ -46,7 +46,10 @@
 // '=', found '+='"). `x := ---;` and `a, b := ---;` are "'---' needs a
 // type, as in x : int = ---;" (there's no value to take the type from),
 // and inside a body `helper :: () {` is "procedures can only be declared at
-// the top level, for now".
+// the top level, for now". Several names or targets take one value, a
+// call's results (spec 6.7): a second value, `a, b = b, a;`, is "only a
+// call can give several values, as in q, r := divmod(7, 2);", at the
+// first, as the checker says of `a, b = b;`.
 //
 // Expressions and blocks nest at most 1000 levels deep (spec 6.1, a limit
 // of the compiler; parser.cpp's MAX_DEPTH): each parenthesis, prefix
@@ -71,19 +74,25 @@
 //
 // The bodies of if, else, while and for are always blocks in braces (spec
 // 6.1), and a condition needs no parentheses: the body's '{' ends it. A for
-// without '..' after its first expression is "'for' needs a range, as in
-// for 0..9, for now", at that expression.
+// whose first expression the body's '{' follows, not '..', is "'for' needs
+// a range, as in for 0..9, for now", at that expression; with no iterator
+// named, a name followed by anything else (`for i 0..9`, `for x in 0..9`)
+// is "expected ':' after the iterator's name, as in for i: 0..9", at what
+// came instead of the ':'; anything else is "expected '..'".
 //
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;
 // the name only where the tokens still look like a declaration of it, as
-// in `greet () {` or `greet := () {`), skips to the next declaration (an
+// in `greet () {`, `greet := () {`, `counter : int = 1 2;` or C's
+// `counter int = 0;`), skips to the next declaration (an
 // identifier at the start of a line, followed by '::', outside the braces
 // of the body it gave up in, or a procedure's, `name :: (`, in column 1;
 // or a global variable's name in column 1, followed by ':' or ':=', outside
 // any braces or parameter list) and goes on. Stray tokens in front of a
 // declaration's name (`*greet :: () {}`) are reported and skipped, and the
-// declaration after them is parsed whole.
+// declaration after them is parsed whole; so is a declaration later on the
+// line of a global that failed (`counter : int = 1 2; f :: () {}`), the
+// global keeping its name.
 //
 // A body never closed ends at the end of the file or at a procedure's
 // declaration in column 1, the only declaration a body can't hold: a

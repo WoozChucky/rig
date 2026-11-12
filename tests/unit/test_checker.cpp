@@ -1588,14 +1588,16 @@ TEST(global_value_must_be_constant) {
                            "d : u8 = 300;\n"
                            "p : *u8 = \"hi\";\n"
                            "s := \"hi\";\n"
+                           "q : *u8 = cast(*u8) \"hi\";\n"
                            "e : u8 = LIMIT;\n"
                            "LIMIT :: 255;\n"
                            "main :: () { }\n"),
               "2:6: a global's value must be known while compiling, for now\n"
               "3:11: a global's value must be known while compiling, for now\n"
               "5:10: 300 doesn't fit in 'u8'\n"
-              "6:11: a global's value must be known while compiling, for now\n"
-              "7:6: variables can't hold a 'string' yet; give it the type '*u8'\n");
+              "6:11: global variables can't hold a string literal yet; assign it in a procedure\n"
+              "7:6: variables can't hold a 'string' yet; give it the type '*u8'\n"
+              "8:11: global variables can't hold a string literal yet; assign it in a procedure\n");
     Checked c = check_src(&a, "c := 1 + LIMIT;\nLIMIT :: 255;\nmain :: () { }\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     Ast_Var *var = (Ast_Var *)global_named(&c, "c");

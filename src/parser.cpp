@@ -432,6 +432,17 @@ static bool multi_var_follows(Parser *p) {
 // (multi_var_follows said so): the variables receive the results of the
 // call that is the value, in order (spec 6.7). Each name gets its own
 // Ast_Var, with no value of its own; the checker gives each its type.
+// After the value given to several names or targets: a ',' would begin a
+// second value, as in Go's swap `a, b = b, a;` or `c, d := 1, 2;`. Several
+// values come only from a call (spec 6.7), so that's the checker's message
+// for `a, b = b;`, at the first value, rather than "expected ';'" at the
+// comma. False after reporting it.
+static bool one_value_given(Parser *p, Ast *value) {
+    if (peek(p)->kind != TOKEN_COMMA) return true;
+    diag_error(p->diag, value->start, "only a call can give several values, as in q, r := divmod(7, 2);");
+    return false;
+}
+
 static Ast *parse_multi_var(Parser *p) {
     Ast_Multi_Var *multi = ast_new<Ast_Multi_Var>(p->arena, AST_MULTI_VAR, peek(p)->pos);
     for (;;) {
@@ -446,7 +457,7 @@ static Ast *parse_multi_var(Parser *p) {
         return nullptr;
     }
     multi->value = parse_expression(p, 1);
-    if (!multi->value || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+    if (!multi->value || !one_value_given(p, multi->value) || !expect(p, TOKEN_SEMICOLON)) return nullptr;
     return multi;
 }
 
@@ -532,12 +543,21 @@ static Ast_Var *loop_variable(Parser *p, String name, Position pos) {
 // for = 'for' [IDENT ':'] expression '..' expression block
 //
 // The first end is a whole expression, which stops at the '..' since that
-// isn't a binary operator: `for a + 1..n` starts at a + 1. A for over
-// anything but a range (an array's elements, milestone 2b) isn't there yet.
+// isn't a binary operator: `for a + 1..n` starts at a + 1. When no '..'
+// follows it:
+// - the body's '{': a for over something that isn't a range (an array's
+//   elements, milestone 2b), which isn't there yet: "'for' needs a range,
+//   as in for 0..9, for now", at that something;
+// - with no iterator named, a name and then anything else (`for i 0..9`,
+//   `for x in 0..9`): the name was meant as the iterator's, and its ':' is
+//   missing: "expected ':' after the iterator's name, as in for i: 0..9",
+//   at what came instead;
+// - otherwise, "expected '..'".
 static Ast *parse_for(Parser *p) {
     Token *keyword = advance(p);
     Ast_For *loop = ast_new<Ast_For>(p->arena, AST_FOR, keyword->pos);
-    if (peek(p)->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON) {
+    bool named_iterator = peek(p)->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON;
+    if (named_iterator) {
         Token *name = advance(p);
         advance(p);
         loop->iterator = loop_variable(p, name->text, name->pos);
@@ -547,9 +567,15 @@ static Ast *parse_for(Parser *p) {
     loop->index = loop_variable(p, str("it_index"), keyword->pos);
     loop->first = parse_expression(p, 1);
     if (!loop->first) return nullptr;
-    if (peek(p)->kind != TOKEN_DOT_DOT) {
-        if (peek(p)->kind != TOKEN_ERROR) {
+    Token *after = peek(p);
+    if (after->kind != TOKEN_DOT_DOT) {
+        if (after->kind == TOKEN_ERROR) return nullptr;  // the lexer said what's wrong
+        if (after->kind == TOKEN_LBRACE) {
             diag_error(p->diag, loop->first->start, "'for' needs a range, as in for 0..9, for now");
+        } else if (!named_iterator && loop->first->kind == AST_NAME) {
+            diag_error(p->diag, after->pos, "expected ':' after the iterator's name, as in for i: 0..9");
+        } else {
+            error_expected(p, "'..'");
         }
         return nullptr;
     }
@@ -619,7 +645,7 @@ static Ast *parse_statement(Parser *p) {
         assign->op = TOKEN_EQUAL;
         assign->targets = targets;
         assign->value = parse_expression(p, 1);
-        if (!assign->value || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+        if (!assign->value || !one_value_given(p, assign->value) || !expect(p, TOKEN_SEMICOLON)) return nullptr;
         return assign;
     }
     Token *op = peek(p);
@@ -963,6 +989,9 @@ static bool parameters_follow(Parser *p, s64 open) {
 //   At the top level ':' and ':=' also declare a global variable, so a
 //   global that fails (`counter : int = 1 2;`) keeps its name this way
 //   too, on purpose: its uses aren't then reported as unknown;
+// - another name: a global declared C's way, its type after its name
+//   (`counter int = 0;`). Two names in a row never begin an expression, so
+//   a stray call outside any body can't look like this;
 // - a character the lexer refused (perhaps a mistyped '::' too);
 // - '(' with no '::' (`greet () {`, a C habit), when the parentheses are
 //   a signature's, as parameters_follow says, not a call's;
@@ -976,6 +1005,7 @@ static bool looks_declared(Parser *p, s64 start) {
     case TOKEN_COLON:
     case TOKEN_COLON_EQUAL:
     case TOKEN_EQUAL:
+    case TOKEN_IDENT:
     case TOKEN_ERROR: return true;
     case TOKEN_LPAREN: return parameters_follow(p, start + 1);
     default: {
@@ -1025,9 +1055,16 @@ Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
             s64 resume = declaration_after_stray_tokens(&p, start);
             if (resume >= 0) {
                 // The tokens before it were stray, not a declaration, so
-                // they leave no entry. The failed attempt stopped at them,
+                // they leave no entry; unless they began a global's
+                // declaration, which failed before the next one on the line
+                // (`counter : int = 1 2; f :: () {}`): that keeps its name,
+                // as any failed global does. The failed attempt stopped
                 // before resume (> start, so the loop moves on).
                 RIG_ASSERT(p.next <= resume);
+                Token_Kind after = p.tokens[start + 1].kind;
+                if (p.tokens[start].kind == TOKEN_IDENT && (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL)) {
+                    array_add(&file->procs, broken_entry(&p, start));
+                }
                 p.next = resume;
                 continue;
             }
