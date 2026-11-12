@@ -671,19 +671,34 @@ static Ast_Block *parse_block(Parser *p);
 // expression, since no expression goes on with a '{'. The bodies are always
 // blocks, so no else can dangle: `else if` is an if as the whole else part,
 // and a chain of them nests to the right.
+//
+// A chain has no limit to its length, unlike the nesting MAX_DEPTH limits:
+// a generated one (a state machine's states, a table written as code) can
+// have thousands of arms, and its tree is then thousands of levels deep.
+// So it's read here in a loop, arm by arm, rather than by parse_if calling
+// itself for each `else if`, and every stage after the parser follows the
+// chain in a loop too (the checker's check_if, breaks_out_of and goes_past,
+// lowering's lower_if, ast_dump): none of them uses more stack for a
+// longer chain.
 static Ast *parse_if(Parser *p) {
-    Token *keyword = advance(p);
-    Ast_If *branch = ast_new<Ast_If>(p->arena, AST_IF, keyword->pos);
-    branch->condition = parse_expression(p, 1);
-    if (!branch->condition) return nullptr;
-    branch->then_block = parse_block(p);
-    if (!branch->then_block) return nullptr;
-    if (peek(p)->kind == TOKEN_ELSE) {
+    Ast_If *first = nullptr;
+    Ast_If *last = nullptr;  // the arm read last, whose else part comes next
+    for (;;) {
+        Token *keyword = advance(p);  // the 'if'
+        Ast_If *branch = ast_new<Ast_If>(p->arena, AST_IF, keyword->pos);
+        if (last) last->else_part = branch;
+        else first = branch;
+        last = branch;
+        branch->condition = parse_expression(p, 1);
+        if (!branch->condition) return nullptr;
+        branch->then_block = parse_block(p);
+        if (!branch->then_block) return nullptr;
+        if (peek(p)->kind != TOKEN_ELSE) return first;
         advance(p);
-        branch->else_part = peek(p)->kind == TOKEN_IF ? parse_if(p) : parse_block(p);
-        if (!branch->else_part) return nullptr;
+        if (peek(p)->kind != TOKEN_IF) break;  // else { ... }, the chain's end
     }
-    return branch;
+    last->else_part = parse_block(p);
+    return last->else_part ? first : nullptr;
 }
 
 // while = 'while' expression block
