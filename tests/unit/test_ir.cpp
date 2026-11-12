@@ -1825,6 +1825,33 @@ TEST(struct_argument_is_copied_by_the_caller) {
     arena_free(&a);
 }
 
+TEST(uninitialised_struct_isnt_zeroed) {
+    // x : Vec2 = ---; gets its slot and nothing else: its bytes are whatever
+    // was there. x : Vec2; is zeroed.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Vec2 :: struct { x: float; y: float; }\n"
+                                "main :: () {\n"
+                                "    u : Vec2 = ---;\n"
+                                "    v : Vec2;\n"
+                                "    u.y = 1;\n"
+                                "}\n");
+    String ir = ir_print(&a, m);
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local 8 align 4\n"
+              "  %1 = local 8 align 4\n"
+              "  zero %1, 8\n"
+              "  %2 = const i64 4\n"
+              "  %3 = ptradd %0, %2\n"
+              "  %4 = const f32 1\n"
+              "  store f32 %4, %3\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
 TEST(struct_result_goes_through_a_hidden_pointer) {
     // Each aggregate result is a ptr parameter before the visible ones, into
     // which return copies the value; the IR's results are the scalar ones.

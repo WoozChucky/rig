@@ -53,6 +53,9 @@ struct Type {
     Type *alias_of;  // a second name for another type (float for float32): the type it names
     Array<Type_Field> fields;  // TYPE_STRUCT: in order, which is their order in memory
     Ast_Struct *decl;          // TYPE_STRUCT: its declaration
+    Arena *arena;    // where this type lives, and the pointer types made from it: a struct's is
+                     // the compilation's arena (and so its pointers'), freed with it; a
+                     // built-in type's, null: it and its pointers last the whole run
 };
 
 // The type a built-in name means (s8 s16 s32 s64 u8 u16 u32 u64 int bool
@@ -63,7 +66,8 @@ struct Type {
 // the checker sees to that.
 Type *type_from_name(String name);
 
-// *t, the same Type every time, for the whole run.
+// *t, the same Type every time: made the first time it's asked for, in t's
+// arena (Type.arena), so it lasts as long as t does.
 Type *type_pointer_to(Type *t);
 
 // How a message names t: "s32", "*u8", "string".

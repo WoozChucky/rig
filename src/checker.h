@@ -20,7 +20,8 @@
 // - A struct's name is a type: used as a value, it's "'Vec2' is a type, not
 //   a value". A name declared as anything else, written where a type goes,
 //   is "'foo' is not a type"; a name declared nowhere, "unknown type
-//   'foo'".
+//   'foo'". A built-in type's name always means the built-in type, so a
+//   struct can't take one: "'u8' is a built-in type", at its name.
 // - A name declared in a block (a variable or a constant) is visible from
 //   after its declaration to the end of the block. An inner block may
 //   declare the same name again, hiding the outer one; the same block may
