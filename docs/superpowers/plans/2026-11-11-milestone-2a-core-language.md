@@ -27,18 +27,18 @@ main :: () {
 
 **Tech Stack:** C++23 with clang (no STL, no exceptions, no RTTI), LLVM 23.1.4's C API, GitHub Actions on Ubuntu.
 
-**Spec:** `docs/superpowers/specs/2026-11-11-rig-language-design.md` (sections 5, 6.1, 6.4, 6.7, 7, 10, 11). The language decisions this plan makes are recorded there as Claude's calls (6.1, 6.4, 6.7), in the same pull request as this plan.
+**Spec:** `docs/superpowers/specs/2026-11-11-rig-language-design.md` (sections 5, 6.1, 6.4, 6.7, 7, 10, 11). The language decisions this plan makes are recorded there as design choices (6.1, 6.4, 6.7), in the same pull request as this plan.
 
 ## Global Constraints
 
-- **Milestone 1's rules hold:** C-style C++23 built by `build.bat`/`build.sh` as a unity build (`src/all.cpp`, `tests/unit/unit.cpp`), no STL, LLVM 23.1.4 through `llvm-c/*.h` only, `-Wall -Wextra` with no warnings, own code throughout, no AI attribution in commits, pull requests, issues or code.
+- **Milestone 1's rules hold:** C-style C++23 built by `build.bat`/`build.sh` as a unity build (`src/all.cpp`, `tests/unit/unit.cpp`), no STL, LLVM 23.1.4 through `llvm-c/*.h` only, `-Wall -Wextra` with no warnings, own code throughout; commits a short imperative summary, no trailers.
 - **Rig never borrows LLVM's undefined behaviour** (spec 6.4): no `nsw`, `nuw`, `exact` or `inbounds` flag; every `sdiv`, `udiv`, `srem`, `urem` has a divisor known not to be 0 (a constant, or checked) and, for `sdiv`/`srem`, not -1 on the most negative value; every shift amount is masked to the width first; float to integer uses `llvm.fptosi.sat`/`llvm.fptoui.sat`.
 - **No release builds yet:** milestone 2a doesn't optimise, so the debug-only checks of spec 6.4 (narrowing casts) are always on. The IR marks nothing as debug-only; the milestone that adds `-release` decides how they're dropped. A `---` variable is a stack slot with no store; reading it unoptimised gives whatever is there (the optimising milestone adds `freeze`).
-- **Runtime errors** (Claude's call, recorded in spec 6.4): the program writes `PATH:LINE:COL: runtime error: MESSAGE\n` to stderr, where `PATH` is the source path as given to `rig build`, then calls C's `exit(101)` (so stdout's buffer is flushed). 101 on both systems.
+- **Runtime errors** (recorded in spec 6.4): the program writes `PATH:LINE:COL: runtime error: MESSAGE\n` to stderr, where `PATH` is the source path as given to `rig build`, then calls C's `exit(101)` (so stdout's buffer is flushed). 101 on both systems.
 - **Diagnostics:** `path:line:col: error: message`, as milestone 1; every message in this plan is exact text, with `'` quotes as shown. After an error, an expression of unknown type reports nothing more (one mistake, one message).
 - **Tests:** unit tests in `tests/unit/`, named as given; new ones lex real source with `src()` (Task 2) instead of hand-built tokens. End-to-end tests in `tests/run/NAME.rig` with `NAME.out`, optional `NAME.exit`, and (from Task 4) optional `NAME.err`; error tests in `tests/errors/NAME.rig` with `NAME.err`. Milestone 1's tests keep passing; a test whose expected text changes says why in the commit.
 - **Both hosts:** before each push, on Windows `build.bat`, `bin\unit-tests.exe`, `bin\run-tests.exe`, and on Linux (WSL, `RIG_LLVM_DIR` set) `./build.sh`, `bin/unit-tests`, `bin/run-tests`, all passing with no warnings. CI runs Linux.
-- **Work flow (spec 10):** Claude writes all of milestone 2 (Nuno's call). Each task is an issue labelled `mine` in the GitHub milestone `2a: The core language`; a branch and pull request per issue, `Closes #N`; a review subagent before the pull request is marked ready, every finding fixed; Nuno merges. Code is study material: each new piece has a comment saying what it does and why (the Pratt parser, the constant rules, the division lowering most of all).
+- **Work flow (spec 10):** all of milestone 2 is written directly (decided 2026-11-11). Each task is an issue labelled `mine` in the GitHub milestone `2a: The core language`; a branch and pull request per issue, `Closes #N`; a review before the pull request is marked ready, every finding fixed; the maintainer merges. Code is study material: each new piece has a comment saying what it does and why (the Pratt parser, the constant rules, the division lowering most of all).
 
 ## Review Focus
 
@@ -211,7 +211,7 @@ struct Ast_Binary : Ast { Token_Kind op; Ast *left, *right; };
 - Produces, in `src/types.h`: `extern Type type_untyped_int;` (kind `TYPE_INTEGER`, size 8, signed, name `int`, but its own pointer: the type of an untyped constant); `bool type_is_untyped(Type *t);`.
 - Produces, test helpers in `tests/unit/helpers.cpp`: `Token_List *src(const char *text)` (lexes `text` as file `test.rig`, asserting no lexer errors); `String check_source(Arena *a, const char *text)` (parse + check, returns `messages()`); `Ir_Module *lower_source(Arena *a, const char *text)` (asserts it checks).
 
-**The grammar after this task** (in `parser.h`'s comment, Go's precedence table, Claude's call in spec 6.1):
+**The grammar after this task** (in `parser.h`'s comment, Go's precedence table, recorded in spec 6.1):
 
 ```
 statement   = declaration | assignment | 'return' [expression] ';' | block | expression ';'
@@ -224,7 +224,7 @@ postfix     = primary { '(' args ')' }
 ```
 A declaration starts with `IDENT ':'`, `IDENT ':='` or `IDENT '::'`; anything else is an expression, then an assignment if `=` or a compound follows. `IDENT :: (` inside a body is `procedures can only be declared at the top level, for now`.
 
-**The checker's rules** (spec 6.4; Claude's calls recorded there):
+**The checker's rules** (spec 6.4, recorded there):
 - An integer literal up to `INT64_MAX` is an untyped constant; a larger one has type `u64`; `-` applied directly to the literal `9223372036854775808` is the untyped constant `INT64_MIN`. Untyped constant arithmetic is exact and must stay within `int`: otherwise `constant overflows 'int'`. A `::` constant is untyped when its value is.
 - Where an untyped constant meets an integer type (an operand, a declared type, an argument, a return), it takes that type if its value fits, else `V doesn't fit in 'T'` (V in decimal, signed). Alone (`x := 5;`) it becomes `int`.
 - Binary arithmetic and bitwise operators: both operands untyped, the result is untyped; one untyped, it takes the other's type; both typed, the same type, or the one the other widens to implicitly (milestone 1's `converts`: same sign and wider, or unsigned into a wider signed); `int` with `s64` gives the left operand's. Otherwise `mismatched types 'A' and 'B' for 'OP'; cast one of them`. No promotion: `u8 + u8` is a `u8` and wraps at 8 bits.
@@ -233,7 +233,7 @@ A declaration starts with `IDENT ':'`, `IDENT ':='` or `IDENT '::'`; anything el
 - Typed constants (Task 4's casts) fold with the wrapping of their type, as at run time.
 - Declarations, assignments, arguments and returns convert by the same rule; otherwise `a value of type 'A' doesn't convert to 'B' implicitly` (arguments keep milestone 1's message). A compound assignment's right side converts to the target's type (shifts: any integer).
 - Names: declared in a block are visible after their declaration to the end of the block, inner blocks may shadow, the same block may not (`'x' is already declared at PATH:L:C`); procedures (and Task 5's globals) are visible everywhere. A procedure name used as a value: `procedures can only be called, for now` (milestone 1's). A call of a procedure returning nothing used as a value: `'greet' returns nothing, so it has no value`.
-- Assignment targets: `can't assign to 'N': it's a constant`, `... it's a parameter`, `... it's a procedure`; anything but a name: `only a variable can be assigned to`. Parameters are read-only (spec 6.1, Claude's call).
+- Assignment targets: `can't assign to 'N': it's a constant`, `... it's a parameter`, `... it's a procedure`; anything but a name: `only a variable can be assigned to`. Parameters are read-only (spec 6.1).
 - `x := ---;` is the parser's `'---' needs a type, as in x : int = ---;`. A `::` constant whose value isn't constant: `the value of constant 'N' isn't known while compiling`.
 - Returns: `'f' returns 'T', but this return gives no value`, `'f' returns nothing, but this return gives a value`. A procedure with results whose body can reach its `}`: `'f' must return a value on every path, and this one reaches its end`, at the `}`. A block reaches its end unless its last statement is a `return` or a block that doesn't (Task 3 adds `if`/`else` and `while true`).
 - `main` keeps milestone 1's rules; milestone 1's `can't return a value: Rig has no return statement yet` goes.
@@ -307,11 +307,11 @@ struct Ast_For : Ast {
 struct Ast_Jump : Ast { Ast *loop; };   // AST_BREAK, AST_CONTINUE; the loop, set by the checker
 ```
   `extern Type type_bool;` (`TYPE_BOOL`, size 1, name `bool`), and the IR's `IR_I1` for it. Dump forms: `(bool true)`, `(if (name c) (block ...) (if (name d) (block ...) (block ...)))`, `(while (name c) (block ...))`, `(for it (int 0) (int 9) (block ...))`, `(for i ...)`, `(break)`, `(continue)`.
-- Grammar added: `'if' expression block ['else' (block | if)]`, `'while' expression block`, `'for' [IDENT ':'] expression '..' expression block`, `'break' ';'`, `'continue' ';'`; operators `||` (1), `&&` (2), `== != < <= > >=` (3), prefix `!`. Braces are required (spec 6.1, Claude's call); parentheses around a condition are just a parenthesised expression. A `for` without `..`: `'for' needs a range, as in for 0..9, for now`.
+- Grammar added: `'if' expression block ['else' (block | if)]`, `'while' expression block`, `'for' [IDENT ':'] expression '..' expression block`, `'break' ';'`, `'continue' ';'`; operators `||` (1), `&&` (2), `== != < <= > >=` (3), prefix `!`. Braces are required (spec 6.1); parentheses around a condition are just a parenthesised expression. A `for` without `..`: `'for' needs a range, as in for 0..9, for now`.
 
 **Rules:**
 - Comparisons unify their operands as arithmetic does and give `bool`; `==` and `!=` also take two bools; ordering bools gives `'<' needs integers, not 'bool'`. `&&`, `||`, `!` take bools: `'&&' needs bools, not 'int'`, `'!' needs a bool, not 'int'`. Constant operands fold.
-- Conditions must be `bool` (Claude's call): `the condition of 'if' must be a bool, not 'int'` (`'while'` likewise).
+- Conditions must be `bool` (spec 6.1): `the condition of 'if' must be a bool, not 'int'` (`'while'` likewise).
 - `for a..b`: the ends unify like an arithmetic operator's (`mismatched types 'A' and 'B' for '..'; cast one of them`); untyped ends make an `int` iterator; the ends are evaluated once, before the first iteration, `a` first; if `a > b` the body never runs; otherwise it runs for `a`, ..., `b`, and stops after `b` without computing `b + 1`. `it_index` counts 0, 1, ...; a named iterator hides `it` (`unknown identifier 'it'` inside `for i: ...`), `it_index` stays. Iterators are read-only: `can't assign to 'it': it's the loop's iterator`.
 - `break`/`continue` act on the innermost loop; outside one: `'break' is only allowed inside a loop` (`'continue'` likewise). `continue` in a `for` goes to the step.
 - Every path returns, extended: an `if` with an `else` doesn't reach its end when neither branch does; `while true` (the constant) without a `break` of its own doesn't.
@@ -378,7 +378,7 @@ struct Ast_Multi_Var : Ast { Array<Ast_Var *> vars; Ast *value; };  // a, b := f
 // ast_dump prints procedures and globals together, in source order.
 ```
   Dump: `(proc divmod (params ...) (returns int int) (block ...))`, `(return (name q) (name r))`, `(multi-var (q r) (call divmod (int 7) (int 2)))`, `(assign = ((name a) (name b)) (call swap (name a) (name b)))`, top-level `(var counter int)`, `(const LIMIT (int 100))`.
-- Grammar: results `'->' type {',' type}` (spec 6.7, Claude's call: `-> int, bool`); `'return' [expression {',' expression}] ';'`; `IDENT {',' IDENT} ':=' expression ';'` with more than one name; an assignment's targets `expression {',' expression}`. Top level: `IDENT ':' type ['=' (expression | '---')] ';'`, `IDENT ':=' expression ';'`, and `IDENT '::'` followed by a procedure when the next tokens are `'(' ')'` or `'(' IDENT ':'`, otherwise by an expression and `';'` (so `N :: (1 + 2);` is a constant). The broken-entry rules of milestone 1 still apply to declarations that fail to parse; `tests/errors/declaration_without_colons.rig` and friends keep their messages unless the commit says why.
+- Grammar: results `'->' type {',' type}` (spec 6.7: `-> int, bool`); `'return' [expression {',' expression}] ';'`; `IDENT {',' IDENT} ':=' expression ';'` with more than one name; an assignment's targets `expression {',' expression}`. Top level: `IDENT ':' type ['=' (expression | '---')] ';'`, `IDENT ':=' expression ';'`, and `IDENT '::'` followed by a procedure when the next tokens are `'(' ')'` or `'(' IDENT ':'`, otherwise by an expression and `';'` (so `N :: (1 + 2);` is a constant). The broken-entry rules of milestone 1 still apply to declarations that fail to parse; `tests/errors/declaration_without_colons.rig` and friends keep their messages unless the commit says why.
 
 **Rules:**
 - A procedure with several results returns them all on every path; `return` gives exactly that many: `'f' returns 2 values, but this return gives 1`. Several names receive exactly as many: `'f' returns 2 values, but 3 names receive them` (`1 value` singular). Several targets (`a, b = f();`) need a call on the right with that many results, each converting to its target. A multi-value call used as an ordinary value gives its first result (spec 6.7, from Jai). A foreign procedure: `a foreign procedure can return at most one value`.
@@ -408,7 +408,7 @@ struct Ast_Multi_Var : Ast { Array<Ast_Var *> vars; Ast *value; };  // a, b := f
 **Rules** (spec 6.4):
 - A float literal is an untyped float constant; alone it becomes `float32` (Jai's default: `float` is `float32`). Untyped float constants fold in double precision; one meeting `float32` must be within its range: `1e+300 doesn't fit in 'float32'` (`%g`). An untyped integer constant converts to a float type. `float32` widens to `float64` implicitly; nothing else converts implicitly between integers and floats or from `float64` to `float32` (`a value of type 'int' doesn't convert to 'float32' implicitly`).
 - `+ - * /` and unary `-` on floats (strict IEEE 754: division by zero gives infinity or NaN, no check); `%`, bitwise operators and shifts: `'%' needs integers, not 'float32'`. Comparisons are ordered except `!=` (unordered, so NaN != NaN).
-- Casts: float to float rounds to nearest; integer to float rounds to nearest; float to integer, `cast(T)`, truncates toward zero and saturates at `T`'s limits, NaN gives 0 (`fptosi.sat`/`fptoui.sat`), with no runtime check (spec 6.4's float rule is the one that applies; Claude's call). A cast of a constant folds by the same rules: `cast(s32) 1e30` is the constant 2147483647, not an error. `cast,trunc` stays integers only. Float to `bool`: `can't cast 'float32' to 'bool': compare instead, as in x != 0`.
+- Casts: float to float rounds to nearest; integer to float rounds to nearest; float to integer, `cast(T)`, truncates toward zero and saturates at `T`'s limits, NaN gives 0 (`fptosi.sat`/`fptoui.sat`), with no runtime check (spec 6.4's float rule is the one that applies). A cast of a constant folds by the same rules: `cast(s32) 1e30` is the constant 2147483647, not an error. `cast,trunc` stays integers only. Float to `bool`: `can't cast 'float32' to 'bool': compare instead, as in x != 0`.
 - Foreign procedures take and return `float32`/`float64` as C's `float`/`double`.
 
 - [ ] **Step 1: Failing IR/LLVM tests:** `ir_prints_float_operations`, `llvm_float_to_int_saturates` (`call i32 @llvm.fptosi.sat.i32.f64`), `llvm_float32_constant_is_rounded` (`float 0x3FB99999A0000000` for 0.1).
