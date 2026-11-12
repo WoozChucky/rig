@@ -1635,6 +1635,39 @@ TEST(an_assignment_through_a_pointer_finds_its_place_first) {
     arena_free(&a);
 }
 
+TEST(several_targets_find_their_places_after_the_call) {
+    // p.*, x = two(); keeps 2a's order for several targets (spec 6.5): the
+    // call first, then each target's place, p's null check included, just
+    // before its store.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "two :: () -> int, int { return 1, 2; }\n"
+                                "g :: (p: *int) {\n"
+                                "    x : int;\n"
+                                "    p.*, x = two();\n"
+                                "}\n"
+                                "main :: () { }\n");
+    CHECK_STR(proc_ir(ir_print(&a, m), "g"),
+              "proc @g(ptr) {\n"
+              "b0:\n"
+              "  %1 = local i64\n"
+              "  %2 = const i64 0\n"
+              "  store i64 %2, %1\n"
+              "  %3, %4 = call @two()\n"
+              "  %5 = const ptr 0\n"
+              "  %6 = cmp eq ptr %0, %5\n"
+              "  branch %6, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  store i64 %3, %0\n"
+              "  store i64 %4, %1\n"
+              "  ret\n"
+              "}\n");
+    CHECK_STR(message_of(m, 0), "test.rig:4:6: runtime error: null pointer dereference\n");
+    arena_free(&a);
+}
+
 TEST(pointer_plus_scales) {
     // p + n moves by n of what p points at: n, widened to an i64 by its own
     // sign, times their size, then ptradd (no inbounds: spec 6.4). p - n
@@ -1735,6 +1768,8 @@ TEST(pointer_plus_scales) {
 }
 
 TEST(pointers_compare_as_unsigned_addresses) {
+    // A pointer type has no sign, so < compares addresses unsigned (ult);
+    // the *void q and the *int p meet at *void, and null at p's type.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_source(&a,
                                           "f :: (p: *int, q: *void) -> bool {\n"

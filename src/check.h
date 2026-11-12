@@ -83,8 +83,8 @@ void report_null_without_a_type(Checker *c, Ast *e);
 // was reported already. for_writing says which message: "can't assign to
 // 'a': it's a parameter" or "can't take the address of 'a': it's a
 // parameter"; "only a variable, a field or an element can be assigned to"
-// or "... has an address". Later milestones add a struct's fields and an
-// array's elements here.
+// or "... has an address". Structs and arrays (milestone 2b's later tasks)
+// add a struct's fields and an array's elements here.
 bool check_addressable(Checker *c, Ast *e, bool for_writing);
 
 // p += n or p -= n (`op_name`, at `at`), p's type the pointer type
