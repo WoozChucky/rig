@@ -1,0 +1,14 @@
+// A view whose count says it has elements but whose data is null (made by
+// hand, or from a failed allocation): indexing it passes the bounds check,
+// then stops at the '[' with a null pointer dereference, as p[i] does
+// (spec 6.5), instead of crashing. Indexing a zeroed view, count 0, is an
+// index out of bounds, checked first.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    puts("before");
+    v : []int;
+    v.count = 3;
+    x := v[1];
+    puts("after");
+}

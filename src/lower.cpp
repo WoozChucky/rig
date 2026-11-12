@@ -42,7 +42,9 @@
 //   divisor not known while compiling is compared with 0, and a signed one
 //   with -1 (lower_division); a cast checks that the number survives
 //   (lower_cast); a pointer is compared with null before anything is read
-//   or written through it (emit_null_check). A check that fails is a
+//   or written through it (emit_null_check), and so is a view's or a
+//   string's data before an element is read (lower_index_address,
+//   emit_data_check, lower_string_comparison). A check that fails is a
 //   runtime error: a block of its own panics with "PATH:LINE:COL: runtime
 //   error: MESSAGE" (emit_runtime_check).
 // - Pointers (spec 6.5) are ptr values. Since every variable is a slot
@@ -93,8 +95,8 @@
 //   that temporary, nor a call's result's: running the same place again in
 //   a loop can't rebuild what an old view still reads. for over an array, a
 //   view or a string takes its data and count once, then counts an index up
-//   to the count (lower_for_sequence). A global view of a literal points at a global
-//   array made for the literal (constant_bytes).
+//   to the count (lower_for_sequence). A global view of a literal points at
+//   a global array made for the literal (constant_bytes).
 // - A string (spec 6.5) is a view of bytes, laid out as one: s[i], .count,
 //   .data and for are a view's. A literal used as a string is a view built
 //   in a temporary, its count and its constant bytes' address (str.N, which
@@ -572,6 +574,22 @@ static void emit_null_check(Lowering *l, s32 pointer, Position at) {
     emit_runtime_check(l, emit_compare(l, IR_EQ, IR_PTR, pointer, null), at, str("null pointer dereference"));
 }
 
+// A view's or a string's data %data, about to be read up to its count
+// %count: when the count says there are elements (above 0) and the data is
+// null, a runtime error at `at`, the null dereference reading the first
+// would be (spec 6.5). A count of 0 or below reads nothing, so a zeroed
+// view passes.
+//
+//     %some = cmp sgt i64 %count, 0
+//     %null = cmp eq ptr %data, null
+//     %fails = and i1 %some, %null
+//     branch %fails, fail, ok        (emit_runtime_check)
+static void emit_data_check(Lowering *l, s32 count, s32 data, Position at) {
+    s32 some = emit_compare(l, IR_SGT, IR_I64, count, emit_constant(l, IR_I64, 0));
+    s32 null = emit_compare(l, IR_EQ, IR_PTR, data, emit_constant(l, IR_PTR, 0));
+    emit_runtime_check(l, emit_binary(l, IR_AND, IR_I1, some, null), at, str("null pointer dereference"));
+}
+
 // left / right or left % right (op), both of type t: %left is the left
 // operand's value, `right` the divisor, `at` the operator's position. C's
 // division, which truncates toward zero, is Rig's, but LLVM leaves two
@@ -853,21 +871,43 @@ static s32 string_equal_proc(Lowering *l);
 
 // a == b and a != b on two strings (spec 6.5): a's count and data are loaded
 // before b is worked out (b may be a call that changes a), then b's, and
-// __rig_string_equal compares them; != is its result xor 1.
+// __rig_string_equal compares them; != is its result xor 1. It reads the
+// bytes only when the counts are the same, so that's when the data is
+// checked: the same count, above 0, with either data null is a null
+// dereference, at the operator. Different counts read nothing, and pass.
 //
 //     %ca = load i64 %a; %da = load ptr (%a + 8)
 //     %cb = load i64 %b; %db = load ptr (%b + 8)
+//     %same = cmp eq i64 %ca, %cb
+//     %some = cmp sgt i64 %ca, 0
+//     %read = and i1 %same, %some
+//     %null = or i1 (cmp eq ptr %da, null), (cmp eq ptr %db, null)
+//     %fails = and i1 %read, %null
+//     branch %fails, fail, ok         (emit_runtime_check)
+//   ok:
 //     %eq = call @__rig_string_equal(%ca, %da, %cb, %db)
 //     %ne = xor i1 %eq, 1             (for !=)
 static s32 lower_string_comparison(Lowering *l, Ast_Binary *b) {
     Array<s32> args = {};  // the call keeps it
     s32 left = lower_value(l, b->left, &type_string);
-    array_add(&args, load_view_count(l, left));
-    array_add(&args, load_view_data(l, left));
+    s32 count_a = load_view_count(l, left), data_a = load_view_data(l, left);
     s32 right = lower_value(l, b->right, &type_string);
-    array_add(&args, load_view_count(l, right));
-    array_add(&args, load_view_data(l, right));
-    s32 equal = ir_emit_call(l->module, l->proc, l->block, string_equal_proc(l), args)->result;
+    s32 count_b = load_view_count(l, right), data_b = load_view_data(l, right);
+    // One instruction per line, so they come in the order written.
+    s32 same = emit_compare(l, IR_EQ, IR_I64, count_a, count_b);
+    s32 zero = emit_constant(l, IR_I64, 0);
+    s32 some = emit_compare(l, IR_SGT, IR_I64, count_a, zero);
+    s32 read = emit_binary(l, IR_AND, IR_I1, same, some);
+    s32 null = emit_constant(l, IR_PTR, 0);
+    s32 null_a = emit_compare(l, IR_EQ, IR_PTR, data_a, null);
+    s32 null_b = emit_compare(l, IR_EQ, IR_PTR, data_b, null);
+    s32 some_null = emit_binary(l, IR_OR, IR_I1, null_a, null_b);
+    emit_runtime_check(l, emit_binary(l, IR_AND, IR_I1, read, some_null), b->pos, str("null pointer dereference"));
+    array_add(&args, count_a);
+    array_add(&args, data_a);
+    array_add(&args, count_b);
+    array_add(&args, data_b);
+    s32 equal =ir_emit_call(l->module, l->proc, l->block, string_equal_proc(l), args)->result;
     if (b->op == TOKEN_EQUAL_EQUAL) return equal;
     return emit_binary(l, IR_XOR, IR_I1, equal, emit_constant(l, IR_I1, 1));
 }
@@ -948,8 +988,10 @@ static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s3
 //   made sure it's inside.
 // - A view's count and data are loaded from it, before i: a view changed
 //   while i is worked out isn't seen. A count below 0 (set by hand) has no
-//   index inside it, so that fails the check too. A string is a view of
-//   bytes, checked the same way.
+//   index inside it, so that fails the check too. Then its data is checked
+//   for null, as a pointer is (a count set by hand, a failed allocation),
+//   with or without bounds checks. A string is a view of bytes, checked the
+//   same way.
 // - A pointer is checked for null, not bounds: p[i] is C's, p.* moved by i
 //   elements, which may be anywhere.
 // The check compares unsigned: i as an unsigned number is below the count
@@ -989,6 +1031,10 @@ static s32 lower_index_address(Lowering *l, Ast_Index *ix) {
             }
             emit_bounds_check(l, fails, ix->pos, index, count, i->type->is_signed);
         }
+        // A view's data is a pointer, read through: null, it fails as p[i]
+        // does, once the index is known to be inside (so an empty view's
+        // index is out of bounds, not a null dereference).
+        if (view) emit_null_check(l, data, ix->pos);
     }
     u64 size = (u64)element->size;
     // A constant index's offset is a constant: i * SIZE wraps as the
@@ -1330,6 +1376,7 @@ static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
 //
 //     %a = ...                        a, once
 //     %data, %count                   an array's address and N; a view's or a string's, loaded
+//     (a view or a string: emit_data_check, its data null with a count above 0 fails)
 //     it_index = 0
 //     jump test
 //   test:
@@ -1349,7 +1396,9 @@ static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
 // taken then: the body may change a view (or call what does), which the
 // loop doesn't see. it is a copy of each element, an aggregate one copied
 // whole, so the body reading it sees the element as it was when its
-// iteration began.
+// iteration began. A view's data is checked for null once, before the
+// loop, when its count says there are elements to read (emit_data_check),
+// at the sequence: a zeroed view runs no iteration and reads nothing.
 static void lower_for_sequence(Lowering *l, Ast_For *loop, Ast_Proc *source) {
     Ast *sequence = loop->sequence;
     Type *t = sequence->type, *element = t->element;  // a string's element is u8
@@ -1358,6 +1407,7 @@ static void lower_for_sequence(Lowering *l, Ast_For *loop, Ast_Proc *source) {
     if (type_is_view_or_string(t)) {
         count = load_view_count(l, base);
         data = load_view_data(l, base);
+        emit_data_check(l, count, data, sequence->pos);
     } else {
         count = emit_constant(l, IR_I64, (u64)t->count);
     }
