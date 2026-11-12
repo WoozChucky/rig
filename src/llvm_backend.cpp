@@ -652,34 +652,83 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
     LLVMDisposeBuilder(body.builder);
 }
 
+// A zero tail at least this long is a zeroinitializer of its own, after the
+// bytes before it, rather than zeros written out in one array with them
+// (clang does the same for an array with a long tail of zeros): the
+// compiler never holds a big global's zeros, only the bytes the IR gives.
+static const s64 LONG_ZEROS = 4096;
+
+// The pieces of a global of bytes, in order: runs of bytes and addresses,
+// their types and (when `values` isn't null) their values.
+struct Global_Pieces {
+    LLVMTypeRef *types;
+    LLVMValueRef *values;
+    s64 count;
+};
+
+static void add_piece(Global_Pieces *p, LLVMTypeRef type, LLVMValueRef value) {
+    p->types[p->count] = type;
+    if (p->values) p->values[p->count] = value;
+    p->count++;
+}
+
+// Bytes [from, to) of the global g as pieces: the bytes the IR gives, read
+// where they are, and zeros past them (g->bytes.count may be less than
+// g->size). All zeros is a zeroinitializer, [N x i8] of no bytes at all;
+// given bytes followed by a long tail of zeros (LONG_ZEROS) are two pieces,
+// the bytes and the zeroinitializer; with a short tail they're one array,
+// its bytes copied out with their zeros.
+static void add_byte_run(LLVMContextRef c, Arena *a, Global_Pieces *p, Ir_Global *g, s64 from, s64 to) {
+    if (to <= from) return;
+    s64 given = g->bytes.count < from ? from : (g->bytes.count < to ? g->bytes.count : to);  // given in [from, given)
+    bool zero = true;
+    for (s64 i = from; i < given && zero; i++) zero = g->bytes.data[i] == 0;
+    if (zero) {
+        add_piece(p, bytes_type(c, to - from), p->values ? LLVMConstNull(bytes_type(c, to - from)) : nullptr);
+        return;
+    }
+    const char *bytes = (const char *)g->bytes.data + from;
+    if (given < to && to - given < LONG_ZEROS) {
+        // A short tail: the run's bytes in one array, the zeros written out.
+        if (p->values) {
+            char *copy = (char *)arena_alloc(a, (u64)(to - from), 1);  // zeroed
+            memcpy(copy, bytes, (size_t)(given - from));
+            bytes = copy;
+        }
+        given = to;
+    }
+    add_piece(p, bytes_type(c, given - from),
+              p->values ? LLVMConstStringInContext2(c, bytes, (size_t)(given - from), 1) : nullptr);
+    if (given < to) {
+        add_piece(p, bytes_type(c, to - given), p->values ? LLVMConstNull(bytes_type(c, to - given)) : nullptr);
+    }
+}
+
 // A variable of bytes as LLVM has it: its type, and, given `globals` (every
 // global's LLVM value, by IR index, m->globals.count of them), its first
 // value in *init.
 //
-// Without relocations it's an array of its bytes, [N x i8] (zeroinitializer
-// when they're all 0). With them it can't be: an address isn't a number
-// until the program is linked and loaded, so it's a ptr constant, and the
-// global a packed struct (no padding between its fields, so each is at the
-// offset it's meant to be) of its runs of bytes and the addresses between
-// them, for which LLVM writes the linker a relocation each:
+// When it's one run of bytes it's an array of them, [N x i8]
+// (zeroinitializer when they're all 0, as a global given no value is,
+// whatever its size). Otherwise it's a packed struct (no padding between
+// its fields, so each is at the offset it's meant to be) of its pieces: its
+// runs of bytes, a long tail of zeros (add_byte_run), and the addresses
+// between them. An address isn't a number until the program is linked and
+// loaded, so it's a ptr constant, for which LLVM writes the linker a
+// relocation:
 //
 //   @table = internal global <{ [8 x i8], ptr, [8 x i8] }>
 //            <{ [8 x i8] c"\03\00\00\00\00\00\00\00", ptr @str.0, [8 x i8] zeroinitializer }>, align 8
 static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Global *g, LLVMValueRef *globals,
                                LLVMValueRef *init) {
     RIG_ASSERT(g->bytes.count <= g->size);
-    // All `size` bytes: the ones the IR gives, then zeros.
-    u8 *bytes = (u8 *)arena_alloc(a, g->size ? (u64)g->size : 1, 1);  // zeroed
-    if (g->bytes.count) memcpy(bytes, g->bytes.data, (size_t)g->bytes.count);
-    if (g->relocs.count == 0) {
-        if (globals) *init = LLVMConstStringInContext2(c, (const char *)bytes, (size_t)g->size, 1);
-        return bytes_type(c, g->size);
-    }
-    // At most a run of bytes before each address, the address, and a run
-    // after the last.
-    s64 most = 2 * g->relocs.count + 1, count = 0, at = 0;
-    LLVMTypeRef *types = arena_new_array<LLVMTypeRef>(a, most);
-    LLVMValueRef *values = arena_new_array<LLVMValueRef>(a, most);
+    // At most two pieces for a run of bytes before each address, the
+    // address, and two for the run after the last.
+    s64 most = 3 * g->relocs.count + 2;
+    Global_Pieces p = {};
+    p.types = arena_new_array<LLVMTypeRef>(a, most);
+    p.values = globals ? arena_new_array<LLVMValueRef>(a, most) : nullptr;
+    s64 at = 0;
     for (s64 i = 0; i <= g->relocs.count; i++) {
         // The run of bytes up to the next address, or to the end.
         bool last = i == g->relocs.count;
@@ -690,21 +739,24 @@ static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Glob
         // read.
         RIG_ASSERT(end >= at && end <= g->size);
         RIG_ASSERT(last || (r.offset + 8 <= g->size && r.global >= 0 && r.global < m->globals.count));
-        if (end > at) {
-            types[count] = bytes_type(c, end - at);
-            if (globals) values[count] = LLVMConstStringInContext2(c, (const char *)bytes + at, (size_t)(end - at), 1);
-            count++;
-        }
+        add_byte_run(c, a, &p, g, at, end);
         if (last) break;
         // The address, 8 bytes, which the IR's bytes leave zero.
-        for (s64 k = 0; k < 8; k++) RIG_ASSERT(bytes[r.offset + k] == 0);
-        types[count] = LLVMPointerTypeInContext(c, 0);
-        if (globals) values[count] = globals[r.global];
-        count++;
+        for (s64 k = 0; k < 8 && r.offset + k < g->bytes.count; k++) RIG_ASSERT(g->bytes.data[r.offset + k] == 0);
+        add_piece(&p, LLVMPointerTypeInContext(c, 0), globals ? globals[r.global] : nullptr);
         at = r.offset + 8;
     }
-    if (globals) *init = LLVMConstStructInContext(c, values, (unsigned)count, 1);
-    return LLVMStructTypeInContext(c, types, (unsigned)count, 1);
+    if (p.count == 0) {
+        // No bytes at all: [0 x i8].
+        if (globals) *init = LLVMConstNull(bytes_type(c, 0));
+        return bytes_type(c, 0);
+    }
+    if (p.count == 1 && g->relocs.count == 0) {
+        if (globals) *init = p.values[0];
+        return p.types[0];
+    }
+    if (globals) *init = LLVMConstStructInContext(c, p.values, (unsigned)p.count, 1);
+    return LLVMStructTypeInContext(c, p.types, (unsigned)p.count, 1);
 }
 
 // Builds and verifies the LLVM module for `m`. False with `error` set when

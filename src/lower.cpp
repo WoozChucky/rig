@@ -1665,6 +1665,43 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
     write_bits(bytes + offset, bits, t->size);
 }
 
+// How many of a global's bytes constant_bytes needs for a value of type t:
+// up to the end of the last value a struct or array literal gives (none
+// for an empty one), or t's whole size for anything else, a scalar, a view
+// or a string. The bytes after it are zeros, which the global's size covers
+// and the compiler never holds: `big : [1 << 30]u8;` has no bytes at all,
+// and `S.{x = 1}` only up to x's.
+static s64 constant_extent(Type *t, Ast *value) {
+    if (!type_is_aggregate(t) || t->kind == TYPE_VIEW || literal_address(value)) return t->size;
+    RIG_ASSERT(value->kind == AST_LITERAL);  // a string's value is a string literal
+    Ast_Literal *literal = (Ast_Literal *)value;
+    s64 extent = 0;
+    for (s64 i = 0; i < literal->values.count; i++) {
+        Type *field;
+        s64 offset;
+        if (t->kind == TYPE_ARRAY) {
+            field = t->element;
+            offset = i * t->element->size;
+        } else {
+            Type_Field *f = &t->fields[literal->names.count ? type_field_index(t, literal->names[i]) : (s32)i];
+            field = f->type;
+            offset = f->offset;
+        }
+        s64 end = offset + constant_extent(field, literal->values[i]);
+        if (end > extent) extent = end;
+    }
+    return extent;
+}
+
+// A global of bytes of type t whose first value is `value`: the bytes up
+// to constant_extent, written by constant_bytes, and the relocations.
+static void global_value(Lowering *l, Ir_Global *g, Type *t, Ast *value) {
+    s64 extent = constant_extent(t, value);
+    u8 *bytes = (u8 *)arena_alloc(l->arena, extent ? (u64)extent : 1, 1);  // zeroed
+    constant_bytes(l, bytes, 0, &g->relocs, t, value);
+    g->bytes = {bytes, extent};
+}
+
 // A global of bytes for a global view's array literal, `array.N`: a
 // variable (the view may write its elements), the literal's bytes; its
 // index. Its name can't be a Rig global's, which has no '.'.
@@ -1675,9 +1712,7 @@ static s32 add_global_array(Lowering *l, Type *array, Ast *literal) {
     g.is_variable = true;
     g.size = array->size;
     g.align = (u32)array->align;
-    u8 *bytes = (u8 *)arena_alloc(l->arena, array->size ? array->size : 1, 1);  // zeroed
-    constant_bytes(l, bytes, 0, &g.relocs, array, literal);
-    g.bytes = {bytes, array->size};
+    global_value(l, &g, array, literal);
     array_add(&l->module->globals, g);
     return (s32)(l->module->globals.count - 1);
 }
@@ -1943,9 +1978,10 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     // (an integer's bits cut to the type's width, a float's whole, as an
     // IR_CONST keeps them), or zero: without a value, or with ---, since a
     // global isn't on the stack and nothing else was ever there. A struct
-    // is a global of bytes, its literal's (constant_bytes) or zeros; so is
-    // an array, and a view, whose literal's array is a global of its own,
-    // and a string. A pointer holding a string literal's address is a
+    // is a global of bytes, its literal's (constant_bytes, only as far as
+    // its last value: global_value) or zeros, of which the IR holds none;
+    // so is an array, and a view, whose literal's array is a global of its
+    // own, and a string. A pointer holding a string literal's address is a
     // global of bytes too, 8 of them: an address the linker writes is a
     // relocation, which only a global of bytes has. Constants and structs'
     // declarations are skipped: a constant's uses are constants, and a
@@ -1960,11 +1996,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
             g.is_variable = true;
             g.size = var->type->size;
             g.align = (u32)var->type->align;
-            if (var->value) {
-                u8 *bytes = (u8 *)arena_alloc(a, var->type->size ? var->type->size : 1, 1);  // zeroed
-                constant_bytes(&l, bytes, 0, &g.relocs, var->type, var->value);
-                g.bytes = {bytes, var->type->size};
-            }
+            if (var->value) global_value(&l, &g, var->type, var->value);
         } else {
             g.type = ir_type_of(var->type);
         }
