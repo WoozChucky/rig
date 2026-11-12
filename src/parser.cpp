@@ -887,9 +887,9 @@ static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
 // inside braces still open is passed over, unless it's a procedure's in
 // column 1 (starts_declaration), which parse_block takes for a top-level
 // declaration after a body never closed. A constant in column 1 is passed
-// over there, as an indented one is. A global variable is taken only outside every brace and
-// parameter list still open, even right where the failed declaration
-// stopped: an unindented local (`y : int;` in column 1 of a body) and a
+// over there, as an indented one is. A global variable is taken only
+// outside every brace and parameter list still open, even right where the
+// failed declaration stopped: an unindented local (`y : int;` in column 1 of a body) and a
 // parameter list over two lines (`n: s32` starting the second) look like
 // one too. A call's or a value's parentheses left open don't count (see
 // count_open): `counter : int = f(1` or `puts("a"` in a body, then a
