@@ -828,5 +828,14 @@ TEST(recovery_stops_at_a_global) {
     dump = parse_src(&a, "counter : int = 1 2;\nstart := 1;\n", &errors);
     CHECK_STR(errors, "1:19: expected ';', found integer literal\n");
     CHECK_STR(dump, "(broken counter)\n(var start _ (int 1))\n");
+    // Inside a body or a parameter list still open, a name in column 1
+    // followed by ':' isn't a global, even right where the failed
+    // declaration stopped: one error each, and no entry for y or b.
+    dump = parse_src(&a, "main :: () {\nx := 1\ny : int;\n}\n", &errors);
+    CHECK_STR(errors, "3:1: expected ';', found identifier 'y'\n");
+    CHECK_STR(dump, "(broken main)\n");
+    dump = parse_src(&a, "f :: (a: int\nb: int) { }\n", &errors);
+    CHECK_STR(errors, "2:1: expected ')', found identifier 'b'\n");
+    CHECK_STR(dump, "(broken f)\n");
     arena_free(&a);
 }

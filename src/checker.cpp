@@ -262,8 +262,6 @@ static void check_multi_var(Checker *c, Ast_Multi_Var *multi) {
     }
 }
 
-static Type *check_target(Checker *c, Ast *target);
-
 // a, b = f(); the targets must be variables, f must return as many results,
 // and each result converts to its target's type as a value assigned to it
 // would ("a value of type 'int' doesn't convert to 'u8' implicitly", at
@@ -559,8 +557,11 @@ static void check_body(Checker *c, Ast_Proc *proc) {
     // main's results are reported by check() already: main returns nothing.
     bool is_main = string_eq(proc->name, str("main"));
     if (proc->results.count && !is_main && reaches_end(proc->body)) {
-        diag_error(c->diag, proc->body->end,
-                   "'" STR_FMT "' must return a value on every path, and this one reaches its end", STR_ARG(proc->name));
+        // "a value" for one result, "its values" for several: every path
+        // returns all of them.
+        const char *what = proc->results.count > 1 ? "its values" : "a value";
+        diag_error(c->diag, proc->body->end, "'" STR_FMT "' must return %s on every path, and this one reaches its end",
+                   STR_ARG(proc->name), what);
     }
     c->proc = nullptr;
 }

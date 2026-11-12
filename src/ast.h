@@ -4,8 +4,8 @@
 // global variables and constants; in a body, blocks of statements: local
 // variables and constants (several variables at once, from a call's
 // results), assignments, returns, if, while, for, break, continue and
-// expressions; expressions
-// made of calls, names, strings, integers, bools, operators and casts.
+// expressions; expressions made of calls, names, strings, integers, bools,
+// operators and casts.
 // Each node kind is a struct that starts with Ast, so a pointer to any node
 // is also an Ast *, and `kind` says which it is.
 //

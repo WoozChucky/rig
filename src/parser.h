@@ -72,12 +72,11 @@
 // identifier at the start of a line, followed by '::', outside the braces
 // of the body it gave up in, or in column 1; or a global variable's name in
 // column 1, followed by ':' or ':=', outside any braces and parentheses)
-// and goes on. Stray tokens in
-// front of a declaration's name (`*greet :: () {}`) are reported and
-// skipped, and the declaration after them is parsed whole. So one mistake
-// gives one error, and the checker can still check the rest of the file:
-// the broken declaration's name is known to be declared, so its uses aren't
-// reported as unknown.
+// and goes on. Stray tokens in front of a declaration's name
+// (`*greet :: () {}`) are reported and skipped, and the declaration after
+// them is parsed whole. So one mistake gives one error, and the checker can
+// still check the rest of the file: the broken declaration's name is known
+// to be declared, so its uses aren't reported as unknown.
 
 #pragma once
 

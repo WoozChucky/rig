@@ -675,6 +675,13 @@ static bool starts_global(Parser *p) {
     return t->kind == TOKEN_IDENT && t->pos.col == 1 && (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL);
 }
 
+// Counts a token of kind `kind` into the braces (`depth`) and parentheses
+// (`parens`) still open: '{' and '(' open one, '}' and ')' close one.
+static void count_open(Token_Kind kind, s64 *depth, s64 *parens) {
+    *depth += kind == TOKEN_LBRACE ? 1 : kind == TOKEN_RBRACE ? -1 : 0;
+    *parens += kind == TOKEN_LPAREN ? 1 : kind == TOKEN_RPAREN ? -1 : 0;
+}
+
 // After an error in a declaration that began at token `start`: skips to the
 // next token that starts a line and begins a declaration (IDENT '::', or a
 // global variable's IDENT ':' or ':=' in column 1), or to the end. A
@@ -687,28 +694,24 @@ static bool starts_global(Parser *p) {
 // inside braces still open is passed over, unless it's in column 1, where
 // parse_block takes it for a top-level declaration after a body never
 // closed. A global variable is taken only outside every brace and
-// parenthesis still open: a parameter list over two lines has `n: s32` in
-// column 1 too.
+// parenthesis still open, even right where the failed declaration stopped:
+// an unindented local (`y : int;` in column 1 of a body) and a parameter
+// list over two lines (`n: s32` starting the second) look like one too.
 static void skip_to_next_declaration(Parser *p, s64 start) {
-    if (p->next > start && (starts_declaration(p) || starts_global(p))) return;
-    if (peek(p)->kind != TOKEN_EOF) advance(p);
     s64 depth = 0;   // braces opened and not yet closed since `start`
     s64 parens = 0;  // the same for parentheses
-    for (s64 i = start; i < p->next; i++) {
-        Token_Kind kind = p->tokens[i].kind;
-        depth += kind == TOKEN_LBRACE ? 1 : kind == TOKEN_RBRACE ? -1 : 0;
-        parens += kind == TOKEN_LPAREN ? 1 : kind == TOKEN_RPAREN ? -1 : 0;
-    }
-    while (peek(p)->kind != TOKEN_EOF) {
+    for (s64 i = start; i < p->next; i++) count_open(p->tokens[i].kind, &depth, &parens);
+    if (p->next > start && (starts_declaration(p) || (depth <= 0 && parens <= 0 && starts_global(p)))) return;
+    // At least one token is skipped, whatever it is.
+    for (bool first = true; peek(p)->kind != TOKEN_EOF; first = false) {
         Token *t = peek(p);
         bool starts_line = p->next == 0 || p->tokens[p->next - 1].pos.line != t->pos.line;
-        if (starts_line && t->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON_COLON &&
+        if (!first && starts_line && t->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON_COLON &&
             (depth <= 0 || t->pos.col == 1)) {
             return;
         }
-        if (starts_line && depth <= 0 && parens <= 0 && starts_global(p)) return;
-        depth += t->kind == TOKEN_LBRACE ? 1 : t->kind == TOKEN_RBRACE ? -1 : 0;
-        parens += t->kind == TOKEN_LPAREN ? 1 : t->kind == TOKEN_RPAREN ? -1 : 0;
+        if (!first && starts_line && depth <= 0 && parens <= 0 && starts_global(p)) return;
+        count_open(t->kind, &depth, &parens);
         advance(p);
     }
 }
@@ -774,7 +777,10 @@ static bool parameters_follow(Parser *p, s64 open) {
 // looks like a declaration of that name, mistyped. That is the name
 // followed by:
 // - '::' (the mistake came later), or ':' for it (`greet : () {`);
-// - ':=' or '=' for it (`greet := () {`, the way a variable is declared);
+// - ':=' or '=' for it (`greet := () {`, the way a variable is declared).
+//   At the top level ':' and ':=' also declare a global variable, so a
+//   global that fails (`counter : int = 1 2;`) keeps its name this way
+//   too, on purpose: its uses aren't then reported as unknown;
 // - a character the lexer refused (perhaps a mistyped '::' too);
 // - '(' with no '::' (`greet () {`, a C habit), when the parentheses are
 //   a signature's, as parameters_follow says, not a call's;
