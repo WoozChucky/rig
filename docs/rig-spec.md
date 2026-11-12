@@ -1385,7 +1385,7 @@ example.rig:4:1: error: expected ';', found '}'
     ^
 ```
 
-An identifier found is named: `expected '::', found identifier 'greet'`. After a syntax error the compiler gives up on the declaration it was in and goes on at the next one, so the errors in the rest of the file are reported too, type errors included. The declaration given up on keeps its name when the text still looks like a declaration of it, and nothing more is reported about it or its uses, so one mistake gives one message. A missing `main` is not reported when a declaration with a syntax error might have been it.
+An identifier found is named: `counter int = 0;` is `expected '::', found identifier 'int'`. After a syntax error the compiler gives up on the declaration it was in and goes on at the next one, so the errors in the rest of the file are reported too, type errors included. The declaration given up on keeps its name when the text still looks like a declaration of it, and nothing more is reported about it or its uses, so one mistake gives one message. A missing `main` is not reported when a declaration with a syntax error might have been it.
 
 ### 9.3 Representative messages
 
@@ -1443,7 +1443,7 @@ rig version
 
 Both `build` and `check` take only a source file whose name ends in `.rig`, in any case: `rig: error: 'hello.txt' isn't a .rig file`. A file that cannot be read is `rig: error: cannot read 'hello.rig': MESSAGE`, with the system's reason.
 
-The exit status is 0 on success; 1 when the program has errors, cannot be read, or cannot be built or linked; and 2 when the command line is malformed (no file, two files, an option given twice, `-o` without a name, an option the command does not take), in which case the usage is printed.
+The exit status is 0 on success; 1 when the program has errors, cannot be read, or cannot be built or linked; and 2 when the command line is malformed (no file, two files, an option given twice, `-o` without a name, or `-o` or `--no-bounds-checks` given to `rig check`), in which case the usage is printed.
 
 ### 10.2 The compiler's stages
 
@@ -1529,7 +1529,7 @@ The debug information holds:
 - **Lexical blocks** following the program's scopes (section 4.7): each `if`, `else` and standalone block, and each loop's body, which starts at its `for` or `while`.
 - **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}`, a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
 
-Frame pointers are kept (section 10.4), so the stack can be walked without unwind tables.
+The debug information describes no variables and no types: a debugger shows the program's procedures, lines, scopes and call stack. Frame pointers are kept (section 10.4), so the stack can be walked without unwind tables.
 
 ## Appendix A: Grammar
 
