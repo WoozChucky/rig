@@ -49,6 +49,19 @@ static bool check_array_count(Checker *c, Ast *count, u64 *out) {
     return true;
 }
 
+// N of the written array type `written`, checked the first time it's
+// needed (check_array_count) and kept: a struct's field may need it for the
+// struct's layout before the field's type is made (lay_out), and its
+// mistakes are said once.
+static bool array_count(Checker *c, Ast_Type *written, u64 *out) {
+    if (!written->count_checked) {
+        written->count_checked = true;
+        written->count_fine = check_array_count(c, written->count, &written->count_value);
+    }
+    *out = written->count_value;
+    return written->count_fine;
+}
+
 static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer);
 
 // T in [N]T or []T: any type but void, which has no values to hold ("'void'
@@ -70,11 +83,11 @@ static Type *resolve_element(Checker *c, Ast_Type *written, bool behind_pointer)
 // itself has no type: its uses say nothing more.
 //
 // behind_pointer: the type is what a pointer points at, or a view's
-// elements, which lie elsewhere: only the struct's Type is needed, not its
-// layout, which isn't worked out here. So a struct can hold a []Tree or a
-// [2]*Tree of itself while its own layout is under way (lay_out). An array
-// holds its elements, so it needs their size: [2]Bad inside Bad is Bad
-// holding itself.
+// elements, which lie elsewhere: a struct named right there needs only its
+// Type, not its layout, which isn't worked out here. An array's Type holds
+// its size, so it needs its elements' layout, behind a pointer too: *[2]Node
+// lays Node out. (A struct's own fields never need that while it's laid
+// out: one holding a pointer or a view has its type made later, lay_out.)
 static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer) {
     switch (written->kind) {
     case AST_TYPE_POINTER: {
@@ -89,7 +102,7 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
     case AST_TYPE_ARRAY: {
         // The count's mistakes first, then the element type's: source order.
         u64 count = 0;
-        bool counted = check_array_count(c, written->count, &count);
+        bool counted = array_count(c, written, &count);
         Type *element = resolve_element(c, written->element, false);
         if (!counted || !element) return nullptr;
         return check_array_type(c, element, count, written->pos);
@@ -283,13 +296,14 @@ static void check_const(Checker *c, Ast_Const *constant) {
     declare(c, constant->name, constant);
 }
 
-// How far a global variable's, a top-level constant's or a struct's
-// checking has got.
+// How far a global variable's, a top-level constant's, a struct's or a late
+// field's type's (make_late_field) checking has got.
 static Ast_Resolve *resolve_state(Ast *decl) {
     switch (decl->kind) {
     case AST_VAR: return &((Ast_Var *)decl)->resolve;
     case AST_CONST: return &((Ast_Const *)decl)->resolve;
     case AST_STRUCT: return &((Ast_Struct *)decl)->resolve;
+    case AST_FIELD: return &((Ast_Field *)decl)->resolve;
     default: RIG_ASSERT(!"not resolved where first needed"); return nullptr;
     }
 }
@@ -374,16 +388,27 @@ static void resolve_global(Checker *c, Ast *decl) {
 // it needs its size, which needs its fields' sizes, and so on: a struct
 // that holds itself, directly or through others, would never end, and is
 // found as a global's circle is (resolve_global), by finding a struct under
-// way. A pointer is 8 bytes whatever it points at, so a field that is a
-// pointer is laid out without looking at what it points at, and its type is
-// filled in only once every struct is laid out (resolve_late_fields):
-// Node can hold a *Node, and A a *B while B holds an A. A view is 16 bytes
-// whatever its elements are, and a pointer inside another type (an array of
-// pointers, [2]*Node) is 8, so neither looks at their struct's layout either
-// (resolve_written's behind_pointer): Tree can hold a []Tree. Such a field
-// takes the struct's Type before its layout is known, and that layout may
-// still fail (a circle, too big), leaving the struct no type; so these
-// fields' types are made again then too (resolve_again).
+// way.
+//
+// A pointer is 8 bytes whatever it points at, and a view 16 whatever its
+// elements are, so a field whose type holds a pointer or a view anywhere
+// (*Node, []Tree, [2]*Tree, [][2]Tree, *[2]Node) is a late field: laid out
+// from what's written, without looking at what lies behind the pointer or
+// in the view (late_layout), and its type made only once every struct is
+// laid out (resolve_late_fields). So Node can hold a *Node, A a *B while B
+// holds an A, and Tree a view of arrays of itself, as C's struct Node can
+// hold a struct Node (*kids)[2]. Only what a struct holds by value, its
+// other fields' types and its arrays' counts, is worked out while it's
+// laid out.
+//
+// An array's count may name a global (or a constant naming one), which is
+// then checked in the middle of the layouts. A struct literal or a field
+// access there (in the global's value) needs the field's type before
+// resolve_late_fields gets to it: it's made then, when first needed
+// (make_late_field, check_late_field). A late field's type can take a
+// struct's Type before its layout is known (*Bad), and that layout may still
+// fail (a circle, too big), leaving the struct no type; so a type made
+// before every layout is done is made again at the end (resolve_again).
 
 // The field of struct s before its i-th with the same name, or null.
 static Ast_Field *earlier_field(Ast_Struct *s, s64 i) {
@@ -398,19 +423,56 @@ static s64 align_up(s64 offset, s32 align) {
     return (offset + align - 1) & ~(s64)(align - 1);
 }
 
+// Whether a written type holds a pointer or a view: is one, or is an array
+// of what holds one. Such a field is a late field.
+static bool holds_pointer_or_view(Ast_Type *written) {
+    if (written->kind == AST_TYPE_POINTER || written->kind == AST_TYPE_VIEW) return true;
+    if (written->kind == AST_TYPE_ARRAY) return holds_pointer_or_view(written->element);
+    return false;
+}
+
+// The size and alignment of a type that holds a pointer or a view
+// (holds_pointer_or_view), from what's written, before the type is made: a
+// pointer is 8 bytes, a view 16 (both aligned to 8), and an array N times
+// its element's, at its element's alignment. Nothing behind a pointer or in
+// a view is looked at, so no struct is laid out here. An array's count is
+// checked (array_count), and kept for the type; one that's wrong, or makes
+// the array too big, takes no room (the type, made later, says it's too
+// big).
+static void late_layout(Checker *c, Ast_Type *written, s64 *size, s32 *align) {
+    if (written->kind != AST_TYPE_ARRAY) {
+        RIG_ASSERT(written->kind == AST_TYPE_POINTER || written->kind == AST_TYPE_VIEW);
+        *size = written->kind == AST_TYPE_POINTER ? 8 : 16;
+        *align = 8;
+        return;
+    }
+    u64 count = 0;
+    bool counted = array_count(c, written, &count);
+    late_layout(c, written->element, size, align);
+    // Dividing, as check_array_type does, so the check can't overflow.
+    if (!counted || (*size && count > (u64)(TYPE_MAX_SIZE / *size))) {
+        *size = 0;
+        return;
+    }
+    *size *= (s64)count;
+}
+
 // Struct s's fields, offsets, size and alignment, into its Type: each field
 // at the next offset that is a multiple of its alignment, the struct's
 // alignment its largest field's (1 when it has none), its size rounded up to
 // that, so in an array (or another struct) every copy stays aligned. A
-// field whose type was an error is kept, so its uses say nothing more, but
-// takes no room. Two fields of one name: "'x' is already declared at
-// PATH:L:C", the second not kept.
+// late field (holds_pointer_or_view) is laid out from what's written, its
+// type made later; any other's type is worked out here. A field whose type
+// was an error is kept, so its uses say nothing more, but takes no room.
+// Two fields of one name: "'x' is already declared at PATH:L:C", the second
+// not kept (though a late one's type is still made, for its own mistakes).
 static void lay_out(Checker *c, Ast_Struct *s) {
     Type *t = s->declared;
     s64 offset = 0;
     s32 align = 1;
     for (s64 i = 0; i < s->fields.count; i++) {
         Ast_Field *field = s->fields[i];
+        field->is_late = holds_pointer_or_view(field->type_expr);
         Ast_Field *earlier = earlier_field(s, i);
         if (earlier) {
             Position at = earlier->pos;
@@ -418,10 +480,12 @@ static void lay_out(Checker *c, Ast_Struct *s) {
                        STR_ARG(field->name), STR_ARG(c->diag->files[at.file].path), at.line, at.col);
             continue;
         }
-        Type *type = nullptr;  // a pointer's comes later
-        s64 size = 8;
-        s32 field_align = 8;
-        if (field->type_expr->kind != AST_TYPE_POINTER) {
+        Type *type = nullptr;  // a late field's comes later
+        s64 size;
+        s32 field_align;
+        if (field->is_late) {
+            late_layout(c, field->type_expr, &size, &field_align);
+        } else {
             type = resolve_type(c, field->type_expr);
             size = type ? type->size : 0;
             field_align = type ? type_align(type) : 1;
@@ -436,19 +500,38 @@ static void lay_out(Checker *c, Ast_Struct *s) {
     t->size = align_up(offset, align);
 }
 
+// Whether the circle that `decl` closes (decl and every declaration needed
+// since, to the end of c->resolving) runs through a global, a constant or a
+// late field's type: a struct's size then depends on itself through a
+// value (S :: struct { a: [g.count]int; } g : [2]S;), not by holding a copy
+// of itself.
+static bool circle_through_a_value(Checker *c, Ast *decl) {
+    s64 i = c->resolving.count - 1;
+    while (c->resolving[i] != decl) i--;
+    for (; i < c->resolving.count; i++) {
+        if (c->resolving[i]->kind != AST_STRUCT) return true;
+    }
+    return false;
+}
+
 // A struct's layout, worked out the first time it's needed; its type, or
 // null when it contains itself: "'Node' contains itself; it can hold a
 // pointer to itself, *Node", once per circle, at the struct whose layout
-// was under way when the circle closed. Every struct in the circle then has
-// no type (Ast_Struct.declared is null), so nothing more is said about it
-// or its uses; a struct that only holds one in a circle isn't in it, and
-// keeps its type, the field that holds it having none. A struct larger
-// than any type may be (TYPE_MAX_SIZE), its fields each fine, is "'Huge' is
-// too big", at its name, and has no type either.
+// was under way when the circle closed. When the circle runs through a
+// global, a constant or a field's type (circle_through_a_value), the struct
+// doesn't hold itself, its size depends on itself: "'S' is defined in terms
+// of itself", as for a global. Every struct in the circle then has no type
+// (Ast_Struct.declared is null), so nothing more is said about it or its
+// uses; a struct that only holds one in a circle isn't in it, and keeps its
+// type, the field that holds it having none. A struct larger than any type
+// may be (TYPE_MAX_SIZE), its fields each fine, is "'Huge' is too big", at
+// its name, and has no type either.
 static Type *resolve_struct(Checker *c, Ast_Struct *s) {
     if (s->resolve == RESOLVE_DONE) return s->declared;
     if (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE) {
-        if (s->resolve == RESOLVE_UNDER_WAY) {
+        if (s->resolve == RESOLVE_UNDER_WAY && circle_through_a_value(c, s)) {
+            diag_error(c->diag, s->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(s->name));
+        } else if (s->resolve == RESOLVE_UNDER_WAY) {
             diag_error(c->diag, s->pos,
                        "'" STR_FMT "' contains itself; it can hold a pointer to itself, *" STR_FMT, STR_ARG(s->name),
                        STR_ARG(s->name));
@@ -470,8 +553,47 @@ static Type *resolve_struct(Checker *c, Ast_Struct *s) {
     return s->declared;
 }
 
-// Type t, which `written` gave during a layout, made again now that every
-// struct is laid out: the same pointers, views and arrays (the same counts:
+// The type of struct s's i-th field, a late one, made the first time it's
+// needed: by a literal or a field access checked during the layouts
+// (check_late_field), or else by resolve_late_fields once they're done. It
+// may need a struct's layout (an array of structs behind a pointer, *[2]U),
+// and that layout a global whose value needs this field's type again: a
+// circle, found as a global's is, "'k' is defined in terms of itself", at
+// the field, and every declaration in it is left without a type.
+static void make_late_field(Checker *c, Ast_Struct *s, s64 i) {
+    Ast_Field *field = s->fields[i];
+    if (field->resolve == RESOLVE_DONE) return;
+    if (field->resolve == RESOLVE_UNDER_WAY || field->resolve == RESOLVE_CYCLE) {
+        if (field->resolve == RESOLVE_UNDER_WAY) {
+            diag_error(c->diag, field->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(field->name));
+        }
+        mark_circle(c, field);
+        return;
+    }
+    field->resolve = RESOLVE_UNDER_WAY;
+    array_add(&c->resolving, (Ast *)field);
+    Type *type = resolve_type(c, field->type_expr);
+    c->resolving.count--;
+    if (field->resolve == RESOLVE_CYCLE) type = nullptr;
+    field->resolve = RESOLVE_DONE;
+    field->type = type;
+    // A second field of the name isn't in the type (lay_out).
+    Type *t = s->declared;
+    if (t && !earlier_field(s, i)) t->fields[type_field_index(t, field->name)].type = type;
+}
+
+void check_late_field(Checker *c, Type *t, s32 index) {
+    Ast_Struct *s = t->decl;
+    if (!s || s->resolve != RESOLVE_DONE || s->declared != t) return;
+    for (s64 i = 0; i < s->fields.count; i++) {
+        if (s->fields[i]->is_late && !earlier_field(s, i) && string_eq(s->fields[i]->name, t->fields[index].name)) {
+            make_late_field(c, s, i);
+        }
+    }
+}
+
+// Type t, which `written` gave before every struct was laid out, made again
+// now that they are: the same pointers, views and arrays (the same counts:
 // nothing is checked or said twice) of what each struct named in it has
 // become, so null if any of them has no type now. A struct taken behind a
 // pointer or in a view before its layout (resolve_written's behind_pointer)
@@ -497,28 +619,29 @@ static Type *resolve_again(Checker *c, Ast_Type *written, Type *t) {
     return ((Ast_Struct *)find_name(c, written->name))->declared;
 }
 
-// The types of struct s's fields that lay_out couldn't settle, once every
-// struct is laid out. A pointer field's, which lay_out left for now: a
-// struct in a circle has no type, but its pointer fields' types are still
-// looked at, for their own mistakes. Any other field's again
-// (resolve_again), in case a struct it holds behind a pointer or in a view
-// has no type now; its size can't have changed, so the layout stays.
+// The types of struct s's late fields, once every struct is laid out: made
+// now (make_late_field), or, for one a literal or a field access needed
+// during the layouts, made again (resolve_again), in case a struct it named
+// behind a pointer or in a view has no type now; its size can't have
+// changed, so the layout stays. A struct in a circle has no type, but its
+// late fields' types are still made, for their own mistakes.
 static void resolve_late_fields(Checker *c, Ast_Struct *s) {
     Type *t = s->declared;
     for (s64 i = 0; i < s->fields.count; i++) {
         Ast_Field *field = s->fields[i];
-        if (field->type_expr->kind == AST_TYPE_POINTER) {
-            field->type = resolve_type(c, field->type_expr);
-        } else {
-            field->type = resolve_again(c, field->type_expr, field->type);
+        if (!field->is_late) continue;
+        if (field->resolve != RESOLVE_DONE) {
+            make_late_field(c, s, i);
+            continue;
         }
-        // A second field of the name isn't in the type (lay_out).
+        field->type = resolve_again(c, field->type_expr, field->type);
         if (t && !earlier_field(s, i)) t->fields[type_field_index(t, field->name)].type = field->type;
     }
 }
 
-// The type of an assignment's target, a place in memory (a variable or
-// p.*), or null after reporting what else it is (check_addressable).
+// The type of an assignment's target, a place in memory (a variable, p.*,
+// a field or an element), or null after reporting what else it is
+// (check_addressable).
 static Type *check_target(Checker *c, Ast *target) {
     return check_addressable(c, target, true) ? target->type : nullptr;
 }

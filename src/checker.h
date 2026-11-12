@@ -165,8 +165,8 @@
 // - for a..b: the ends are integers meeting as an arithmetic operator's
 //   operands do ("mismatched types 'A' and 'B' for '..'; cast one of them",
 //   "'..' needs integers, not 'bool'"); the iterator has the type they meet
-//   at, int when both are untyped. it_index is an int. for over an array or
-//   a view is below.
+//   at, int when both are untyped. it_index is an int. for over an array, a
+//   view or a string is below.
 // - break and continue act on the innermost loop around them; outside any:
 //   "'break' is only allowed inside a loop".
 // - A return gives one value per result of its procedure ("'f' returns
@@ -199,7 +199,9 @@
 //
 // Pointers (spec 6.5, Jai's).
 // - *x is x's address, a *T for an x of type T that has one
-//   (check_addressable): a variable, local or global, or p.*. Parameters
+//   (check_addressable): a variable, local or global, p.*, a field or an
+//   element (of a struct or an array that has one, or through a pointer, a
+//   view or a string). Parameters
 //   are read-only, so they have none: "can't take the address of 'a': it's
 //   a parameter" (or "it's a constant", "it's the loop's iterator", "it's
 //   the loop's index", "it's a procedure"); any other value, "only a
@@ -245,7 +247,11 @@
 //   declared at PATH:L:C". A struct can't hold itself by value, directly or
 //   through others: "'Node' contains itself; it can hold a pointer to
 //   itself, *Node", at the struct whose layout was being worked out when
-//   the circle closed, once per circle; a pointer to itself is fine.
+//   the circle closed, once per circle. Anything behind a pointer or in a
+//   view lies elsewhere and is fine: *Node, []Node, [2]*Node, [][2]Node,
+//   *[2]Node. A struct whose size needs itself through a global or a
+//   constant (an array's count, `S :: struct { a: [g.count]int; } g :
+//   [2]S;`) holds no copy of itself: "'S' is defined in terms of itself".
 // - e.x is the field x of e, a struct or a pointer to one (one pointer:
 //   **Node needs .* first): "'Vec2' has no field 'z'", or on anything else
 //   "'.x' needs a struct or a pointer to one, not 'int'", at the field's

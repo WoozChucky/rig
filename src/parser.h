@@ -69,9 +69,10 @@
 // order, never named. `for a { ... }` goes over a's elements: the
 // expression after 'for' (and the iterator's name) with the body's '{'
 // right after it, no '..', is the loop's sequence, and `for * a` makes the
-// iterator a pointer to each element; whether a is an array or a view, and
-// whether a range takes the '*', is the checker's to say. #no_abc after a
-// procedure's results turns its bounds checks off; a body must follow it.
+// iterator a pointer to each element; whether a is an array, a view or a
+// string, and whether a range takes the '*', is the checker's to say.
+// #no_abc after a procedure's results turns its bounds checks off; a body
+// must follow it.
 //
 // Pointers are Jai's (spec 6.5): the prefix *x is x's address, binding as
 // - does (*a + 1 is (*a) + 1), and the postfix p.* is what p points at,
@@ -130,7 +131,7 @@
 // expression's elements; with no iterator named, a name followed by
 // anything else (`for i 0..9`, `for x in 0..9`) is "expected ':' after the
 // iterator's name, as in for i: 0..9", at what came instead of the ':';
-// anything else is "expected '..'".
+// anything else is "expected '..' or the loop's '{'".
 //
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;

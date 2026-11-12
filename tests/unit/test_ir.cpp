@@ -2056,7 +2056,7 @@ TEST(member_through_a_pointer_is_null_checked) {
 TEST(index_is_bounds_checked) {
     // v[i] on a view: the view's count and data are loaded, i compared with
     // the count (a view's count may have been set negative, which no index
-    // is inside), then the element is data + i * 8.
+    // is inside), the data checked for null, then the element is data + i * 8.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "f :: (v: []int, i: int) -> int {\n"
@@ -2091,15 +2091,22 @@ TEST(index_is_bounds_checked) {
               "  call @__rig_bounds_failed(%10, %11, %1, %2, %12)\n"
               "  unreachable\n"
               "b2:\n"
-              "  %13 = const i64 8\n"
-              "  %14 = mul i64 %1, %13\n"
-              "  %15 = ptradd %5, %14\n"
-              "  %16 = load i64 %15\n"
-              "  ret %16\n"
+              "  %13 = const ptr 0\n"
+              "  %14 = cmp eq ptr %5, %13\n"
+              "  branch %14, b3, b4\n"
+              "b3:\n"
+              "  panic @str.1\n"
+              "b4:\n"
+              "  %15 = const i64 8\n"
+              "  %16 = mul i64 %1, %15\n"
+              "  %17 = ptradd %5, %16\n"
+              "  %18 = load i64 %17\n"
+              "  ret %18\n"
               "}\n");
     // The place the message names, without the rest of it, which
     // __rig_bounds_failed writes after it.
     CHECK_STR(message_of(m, 0), "test.rig:2:13: runtime error: ");
+    CHECK_STR(message_of(m, 1), "test.rig:2:13: runtime error: null pointer dereference\n");
     // An array's count is its constant; a u8 index widens by its sign, and
     // is unsigned in the message.
     String g = proc_ir(ir, "g");
@@ -2116,10 +2123,37 @@ TEST(index_is_bounds_checked) {
     arena_free(&a);
 }
 
+TEST(for_over_a_view_checks_its_data_once) {
+    // for over a view or a string checks, once, before the loop, that data
+    // isn't null when the count says there are elements, at the sequence;
+    // an array's data is its own address, never null, and isn't checked.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "f :: (v: []int) { for v { } }\n"
+                                "g :: () { a : [2]int; for a { } }\n"
+                                "main :: () { }\n");
+    String ir = ir_print(&a, m);
+    CHECK(contains(proc_ir(ir, "f"),
+                   "  %4 = load ptr %3\n"
+                   "  %5 = const i64 0\n"
+                   "  %6 = cmp sgt i64 %1, %5\n"
+                   "  %7 = const ptr 0\n"
+                   "  %8 = cmp eq ptr %4, %7\n"
+                   "  %9 = and i1 %6, %8\n"
+                   "  branch %9, b1, b2\n"
+                   "b1:\n"
+                   "  panic @str.0\n"
+                   "b2:\n"
+                   "  %10 = local i64\n"));
+    CHECK_STR(message_of(m, 0), "test.rig:1:23: runtime error: null pointer dereference\n");
+    CHECK(!contains(proc_ir(ir, "g"), "panic"));
+    arena_free(&a);
+}
+
 TEST(no_abc_drops_the_check) {
     // #no_abc turns one procedure's bounds checks off; --no-bounds-checks
     // (ir_lower's bounds_checks false) every procedure's. A pointer's null
-    // check stays either way.
+    // check stays either way, and so does a view's data's.
     Arena a = arena_make();
     const char *source = "f :: (v: []int, i: int) -> int #no_abc {\n"
                          "    return v[i];\n"
@@ -2141,6 +2175,8 @@ TEST(no_abc_drops_the_check) {
     CHECK(!contains(off, "cmp uge"));
     CHECK(!contains(off, "__rig_bounds_failed"));
     CHECK(contains(proc_ir(off, "h"), "cmp eq ptr %0, "));
+    CHECK(contains(f, "cmp eq ptr %5, "));
+    CHECK(contains(proc_ir(off, "g"), "cmp eq ptr %5, "));
     arena_free(&a);
 }
 
@@ -2205,6 +2241,59 @@ TEST(array_to_view_views_the_array) {
               "  ret\n"
               "}\n");
     CHECK(contains(proc_ir(ir, "f"), "copy %1, %0, 24\n"));
+    arena_free(&a);
+}
+
+TEST(view_of_a_literal_or_a_result_sees_a_copy) {
+    // A literal is built in a temporary of its own, then copied into the
+    // view's temporary, so `w = .[w[1], w[0]];` in a loop reads the old
+    // view whole before the copy lands. A call's array result going into a
+    // view is copied out of the hidden temporary too, which stays fresh.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "two :: () -> [2]int, int { r : [2]int; return r, 1; }\n"
+                                          "main :: () {\n"
+                                          "    w : []int = int.[1, 2];\n"
+                                          "    n : int;\n"
+                                          "    w, n = two();\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local 16 align 8\n"
+              "  %1 = local 16 align 8\n"
+              "  %2 = const i64 1\n"
+              "  store i64 %2, %1\n"
+              "  %3 = const i64 8\n"
+              "  %4 = ptradd %1, %3\n"
+              "  %5 = const i64 2\n"
+              "  store i64 %5, %4\n"
+              "  %6 = local 16 align 8\n"
+              "  copy %6, %1, 16\n"
+              "  %7 = local 16 align 8\n"
+              "  %8 = const i64 2\n"
+              "  store i64 %8, %7\n"
+              "  %9 = const i64 8\n"
+              "  %10 = ptradd %7, %9\n"
+              "  store ptr %6, %10\n"
+              "  copy %0, %7, 16\n"
+              "  %11 = local i64\n"
+              "  %12 = const i64 0\n"
+              "  store i64 %12, %11\n"
+              "  %13 = local 16 align 8\n"
+              "  %14 = call @two(%13)\n"
+              "  %15 = local 16 align 8\n"
+              "  copy %15, %13, 16\n"
+              "  %16 = local 16 align 8\n"
+              "  %17 = const i64 2\n"
+              "  store i64 %17, %16\n"
+              "  %18 = const i64 8\n"
+              "  %19 = ptradd %16, %18\n"
+              "  store ptr %15, %19\n"
+              "  copy %0, %16, 16\n"
+              "  store i64 %14, %11\n"
+              "  ret\n"
+              "}\n");
     arena_free(&a);
 }
 
@@ -2273,7 +2362,9 @@ TEST(string_literal_is_a_view_of_its_bytes) {
 
 TEST(string_equality_calls_the_helper) {
     // a == b loads each string's count and data, a's before b is worked
-    // out, and calls __rig_string_equal, an IR procedure lowering adds to
+    // out, checks the data for null when the counts say bytes will be read
+    // (the same count, above 0), and calls __rig_string_equal, an IR
+    // procedure lowering adds to
     // the module (once, after the file's procedures): equal counts, then
     // equal bytes, compared one at a time in a loop, no C call. != is its
     // negation.
@@ -2293,14 +2384,27 @@ TEST(string_equality_calls_the_helper) {
               "  %7 = const i64 8\n"
               "  %8 = ptradd %1, %7\n"
               "  %9 = load ptr %8\n"
-              "  %10 = call @__rig_string_equal(%2, %5, %6, %9)\n"
-              "  ret %10\n"
+              "  %10 = cmp eq i64 %2, %6\n"
+              "  %11 = const i64 0\n"
+              "  %12 = cmp sgt i64 %2, %11\n"
+              "  %13 = and i1 %10, %12\n"
+              "  %14 = const ptr 0\n"
+              "  %15 = cmp eq ptr %5, %14\n"
+              "  %16 = cmp eq ptr %9, %14\n"
+              "  %17 = or i1 %15, %16\n"
+              "  %18 = and i1 %13, %17\n"
+              "  branch %18, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  %19 = call @__rig_string_equal(%2, %5, %6, %9)\n"
+              "  ret %19\n"
               "}\n");
     CHECK(contains(proc_ir(ir, "g"),
-                   "  %10 = call @__rig_string_equal(%2, %5, %6, %9)\n"
-                   "  %11 = const i1 1\n"
-                   "  %12 = xor i1 %10, %11\n"
-                   "  ret %12\n"));
+                   "  %19 = call @__rig_string_equal(%2, %5, %6, %9)\n"
+                   "  %20 = const i1 1\n"
+                   "  %21 = xor i1 %19, %20\n"
+                   "  ret %21\n"));
     CHECK_EQ(count_of(ir, "proc @__rig_string_equal("), 1);
     CHECK(index_of(ir, "proc @g(") < index_of(ir, "proc @__rig_string_equal("));
     CHECK(index_of(ir, "proc @__rig_string_equal(") < index_of(ir, "export proc @main("));

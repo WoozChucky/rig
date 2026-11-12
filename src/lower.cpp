@@ -42,7 +42,9 @@
 //   divisor not known while compiling is compared with 0, and a signed one
 //   with -1 (lower_division); a cast checks that the number survives
 //   (lower_cast); a pointer is compared with null before anything is read
-//   or written through it (emit_null_check). A check that fails is a
+//   or written through it (emit_null_check), and so is a view's or a
+//   string's data before an element is read (lower_index_address,
+//   emit_data_check, lower_string_comparison). A check that fails is a
 //   runtime error: a block of its own panics with "PATH:LINE:COL: runtime
 //   error: MESSAGE" (emit_runtime_check).
 // - Pointers (spec 6.5) are ptr values. Since every variable is a slot
@@ -68,9 +70,11 @@
 //   changes it. A struct result is a hidden ptr parameter, one per struct
 //   result in result order, before the visible ones; return copies the
 //   value into it, and the IR's results are the scalar results only. The
-//   caller passes a fresh temporary for each, never the place the result
-//   is going, and copies it there after the call (lower_call_results): so
-//   `g1, g2 = f();` gives the right answer even when f returns g2, g1. A
+//   caller passes a temporary for each, never the place the result is
+//   going, and copies it there after the call (lower_call_results): so
+//   `g1, g2 = f();` gives the right answer even when f returns g2, g1. The
+//   temporary stays fresh: it's copied out wherever its value goes, even
+//   into a view (view_of_copy), so nothing the callee reads points at it. A
 //   literal is built in a temporary too, and copied: `v = Vec2.{v.y, v.x};`
 //   reads v whole before writing it.
 // - Arrays and views (spec 6.5) are aggregates too: an array is its N
@@ -85,11 +89,14 @@
 //   checked (C's p[i]), only its null.
 // - An array becomes a view where the checker said it converts: a view of
 //   the array itself when it's a place, so a procedure given it changes it;
-//   otherwise of a temporary (lower_view_of). A literal is built in a
-//   temporary of its own, element by element. for over an array or a view
-//   takes its data and count once, then counts an index up to the count
-//   (lower_for_sequence). A global view of a literal points at a global
-//   array made for the literal (constant_bytes).
+//   otherwise of a temporary of the view's own, the array copied into it
+//   once it's worked out (lower_view_of, view_of_copy). A literal is built
+//   element by element in a temporary of its own, and a view never sees
+//   that temporary, nor a call's result's: running the same place again in
+//   a loop can't rebuild what an old view still reads. for over an array, a
+//   view or a string takes its data and count once, then counts an index up
+//   to the count (lower_for_sequence). A global view of a literal points at
+//   a global array made for the literal (constant_bytes).
 // - A string (spec 6.5) is a view of bytes, laid out as one: s[i], .count,
 //   .data and for are a view's. A literal used as a string is a view built
 //   in a temporary, its count and its constant bytes' address (str.N, which
@@ -447,25 +454,36 @@ static s32 literal_bytes(Lowering *l, Ast_String *literal) {
     return addr->result;
 }
 
+// A view of the array `value` of type `array` (its address) that isn't a
+// place: a view of a temporary of its own, one per place in the source,
+// which the whole array is copied into once it's worked out.
+//
+// The view never sees the value's own memory. A literal's temporary is
+// built element by element, and a call's result temporary is written by the
+// callee's return, both again each time a loop runs the same place: a view
+// of either, kept from the last time round, would be read while it's being
+// rebuilt. `pair = .[pair[1], pair[0] + pair[1]];` would then read pair[0]
+// after the literal's first element had replaced it, and a call given such
+// a view back (`a, b = step(a);`) would read its parameter after its return
+// had changed it. A copy into a temporary nothing else writes lands only
+// once every value has been read (spec 6.5), and leaves a call's result
+// temporaries out of every view's reach, fresh for the next call. A
+// parameter (the caller's copy), a loop's iterator or a cast is copied for
+// the same reason, and so writing through the view can't change what
+// mustn't change.
+static s32 view_of_copy(Lowering *l, Type *array, s32 value) {
+    s32 data = emit_slot(l, array);
+    emit_put(l, array, value, data);
+    return view_of_array(l, array, data);
+}
+
 // The view an array e converts to (spec 6.5). When e is a place (the
 // checker's expr_is_place), a view of it where it is: `sort(numbers)` sorts
-// numbers. A call's result and a literal are temporaries already, made
-// here, one per place in the source (so a loop rebuilds the same one each
-// time round): the view sees that. Anything else (a parameter, which is the
-// caller's copy, a loop's iterator, a cast) is copied into a temporary
-// first, so writing through the view can't change what mustn't change.
+// numbers. Anything else, a literal, a call's result, a parameter, is
+// copied first (view_of_copy).
 static s32 lower_view_of(Lowering *l, Ast *e) {
-    s32 data;
-    if (expr_is_place(e)) {
-        data = lower_address(l, e);
-    } else if (e->kind == AST_CALL || e->kind == AST_LITERAL) {
-        data = lower_expr(l, e);
-    } else {
-        s32 value = lower_expr(l, e);
-        data = emit_slot(l, e->type);
-        emit_put(l, e->type, value, data);
-    }
-    return view_of_array(l, e->type, data);
+    if (expr_is_place(e)) return view_of_array(l, e->type, lower_address(l, e));
+    return view_of_copy(l, e->type, lower_expr(l, e));
 }
 
 // The value of `e`, of the type `to` its use wants (the checker said it
@@ -554,6 +572,22 @@ static void emit_runtime_check(Lowering *l, s32 fails, Position at, String messa
 static void emit_null_check(Lowering *l, s32 pointer, Position at) {
     s32 null = emit_constant(l, IR_PTR, 0);
     emit_runtime_check(l, emit_compare(l, IR_EQ, IR_PTR, pointer, null), at, str("null pointer dereference"));
+}
+
+// A view's or a string's data %data, about to be read up to its count
+// %count: when the count says there are elements (above 0) and the data is
+// null, a runtime error at `at`, the null dereference reading the first
+// would be (spec 6.5). A count of 0 or below reads nothing, so a zeroed
+// view passes.
+//
+//     %some = cmp sgt i64 %count, 0
+//     %null = cmp eq ptr %data, null
+//     %fails = and i1 %some, %null
+//     branch %fails, fail, ok        (emit_runtime_check)
+static void emit_data_check(Lowering *l, s32 count, s32 data, Position at) {
+    s32 some = emit_compare(l, IR_SGT, IR_I64, count, emit_constant(l, IR_I64, 0));
+    s32 null = emit_compare(l, IR_EQ, IR_PTR, data, emit_constant(l, IR_PTR, 0));
+    emit_runtime_check(l, emit_binary(l, IR_AND, IR_I1, some, null), at, str("null pointer dereference"));
 }
 
 // left / right or left % right (op), both of type t: %left is the left
@@ -837,21 +871,43 @@ static s32 string_equal_proc(Lowering *l);
 
 // a == b and a != b on two strings (spec 6.5): a's count and data are loaded
 // before b is worked out (b may be a call that changes a), then b's, and
-// __rig_string_equal compares them; != is its result xor 1.
+// __rig_string_equal compares them; != is its result xor 1. It reads the
+// bytes only when the counts are the same, so that's when the data is
+// checked: the same count, above 0, with either data null is a null
+// dereference, at the operator. Different counts read nothing, and pass.
 //
 //     %ca = load i64 %a; %da = load ptr (%a + 8)
 //     %cb = load i64 %b; %db = load ptr (%b + 8)
+//     %same = cmp eq i64 %ca, %cb
+//     %some = cmp sgt i64 %ca, 0
+//     %read = and i1 %same, %some
+//     %null = or i1 (cmp eq ptr %da, null), (cmp eq ptr %db, null)
+//     %fails = and i1 %read, %null
+//     branch %fails, fail, ok         (emit_runtime_check)
+//   ok:
 //     %eq = call @__rig_string_equal(%ca, %da, %cb, %db)
 //     %ne = xor i1 %eq, 1             (for !=)
 static s32 lower_string_comparison(Lowering *l, Ast_Binary *b) {
     Array<s32> args = {};  // the call keeps it
     s32 left = lower_value(l, b->left, &type_string);
-    array_add(&args, load_view_count(l, left));
-    array_add(&args, load_view_data(l, left));
+    s32 count_a = load_view_count(l, left), data_a = load_view_data(l, left);
     s32 right = lower_value(l, b->right, &type_string);
-    array_add(&args, load_view_count(l, right));
-    array_add(&args, load_view_data(l, right));
-    s32 equal = ir_emit_call(l->module, l->proc, l->block, string_equal_proc(l), args)->result;
+    s32 count_b = load_view_count(l, right), data_b = load_view_data(l, right);
+    // One instruction per line, so they come in the order written.
+    s32 same = emit_compare(l, IR_EQ, IR_I64, count_a, count_b);
+    s32 zero = emit_constant(l, IR_I64, 0);
+    s32 some = emit_compare(l, IR_SGT, IR_I64, count_a, zero);
+    s32 read = emit_binary(l, IR_AND, IR_I1, same, some);
+    s32 null = emit_constant(l, IR_PTR, 0);
+    s32 null_a = emit_compare(l, IR_EQ, IR_PTR, data_a, null);
+    s32 null_b = emit_compare(l, IR_EQ, IR_PTR, data_b, null);
+    s32 some_null = emit_binary(l, IR_OR, IR_I1, null_a, null_b);
+    emit_runtime_check(l, emit_binary(l, IR_AND, IR_I1, read, some_null), b->pos, str("null pointer dereference"));
+    array_add(&args, count_a);
+    array_add(&args, data_a);
+    array_add(&args, count_b);
+    array_add(&args, data_b);
+    s32 equal =ir_emit_call(l->module, l->proc, l->block, string_equal_proc(l), args)->result;
     if (b->op == TOKEN_EQUAL_EQUAL) return equal;
     return emit_binary(l, IR_XOR, IR_I1, equal, emit_constant(l, IR_I1, 1));
 }
@@ -932,8 +988,10 @@ static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s3
 //   made sure it's inside.
 // - A view's count and data are loaded from it, before i: a view changed
 //   while i is worked out isn't seen. A count below 0 (set by hand) has no
-//   index inside it, so that fails the check too. A string is a view of
-//   bytes, checked the same way.
+//   index inside it, so that fails the check too. Then its data is checked
+//   for null, as a pointer is (a count set by hand, a failed allocation),
+//   with or without bounds checks. A string is a view of bytes, checked the
+//   same way.
 // - A pointer is checked for null, not bounds: p[i] is C's, p.* moved by i
 //   elements, which may be anywhere.
 // The check compares unsigned: i as an unsigned number is below the count
@@ -973,6 +1031,10 @@ static s32 lower_index_address(Lowering *l, Ast_Index *ix) {
             }
             emit_bounds_check(l, fails, ix->pos, index, count, i->type->is_signed);
         }
+        // A view's data is a pointer, read through: null, it fails as p[i]
+        // does, once the index is known to be inside (so an empty view's
+        // index is out of bounds, not a null dereference).
+        if (view) emit_null_check(l, data, ix->pos);
     }
     u64 size = (u64)element->size;
     // A constant index's offset is a constant: i * SIZE wraps as the
@@ -1005,8 +1067,10 @@ static s32 lower_address(Lowering *l, Ast *e) {
 // own: zeroed first (the fields not given are zero, and so is the padding
 // between fields, which a copy then carries along), then each value given
 // put into its field, in the order written. Its value is the temporary's
-// address, copied from wherever it's used. Never built in the place it's
-// going: `v = Vec2.{v.y, v.x};` reads v's fields before the copy writes v.
+// address, copied from wherever it's used, a view's own temporary included
+// (view_of_copy). Never built in the place it's going, nor where anything
+// else can read it: `v = Vec2.{v.y, v.x};` reads v's fields before the copy
+// writes v.
 //
 //     %t = local 8 align 4
 //     zero %t, 8
@@ -1336,6 +1400,7 @@ static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
 //
 //     %a = ...                        a, once
 //     %data, %count                   an array's address and N; a view's or a string's, loaded
+//     (a view or a string: emit_data_check, its data null with a count above 0 fails)
 //     it_index = 0
 //     jump test
 //   test:
@@ -1355,7 +1420,9 @@ static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
 // taken then: the body may change a view (or call what does), which the
 // loop doesn't see. it is a copy of each element, an aggregate one copied
 // whole, so the body reading it sees the element as it was when its
-// iteration began.
+// iteration began. A view's data is checked for null once, before the
+// loop, when its count says there are elements to read (emit_data_check),
+// at the sequence: a zeroed view runs no iteration and reads nothing.
 static void lower_for_sequence(Lowering *l, Ast_For *loop, Ast_Proc *source) {
     Ast *sequence = loop->sequence;
     Type *t = sequence->type, *element = t->element;  // a string's element is u8
@@ -1364,6 +1431,7 @@ static void lower_for_sequence(Lowering *l, Ast_For *loop, Ast_Proc *source) {
     if (type_is_view_or_string(t)) {
         count = load_view_count(l, base);
         data = load_view_data(l, base);
+        emit_data_check(l, count, data, sequence->pos);
     } else {
         count = emit_constant(l, IR_I64, (u64)t->count);
     }
@@ -1502,9 +1570,10 @@ static void lower_multi_assign(Lowering *l, Ast_Assign *assign) {
         Ast *target = assign->targets[i];  // a place in memory: checked
         s32 address = lower_address(l, target);
         Type *from = call->proc->results[i]->type;
-        // An array result going into a view: a view of the call's temporary.
+        // An array result going into a view: a view of a copy of it, never
+        // of the call's own temporary (view_of_copy).
         s32 value = from->kind == TYPE_ARRAY && target->type->kind == TYPE_VIEW
-                        ? view_of_array(l, from, results[i])
+                        ? view_of_copy(l, from, results[i])
                         : resize(l, results[i], from, ir_type_of(target->type));
         emit_put(l, target->type, value, address);
     }
@@ -1670,6 +1739,43 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
     write_bits(bytes + offset, bits, t->size);
 }
 
+// How many of a global's bytes constant_bytes needs for a value of type t:
+// up to the end of the last value a struct or array literal gives (none
+// for an empty one), or t's whole size for anything else, a scalar, a view
+// or a string. The bytes after it are zeros, which the global's size covers
+// and the compiler never holds: `big : [1 << 30]u8;` has no bytes at all,
+// and `S.{x = 1}` only up to x's.
+static s64 constant_extent(Type *t, Ast *value) {
+    if (!type_is_aggregate(t) || t->kind == TYPE_VIEW || literal_address(value)) return t->size;
+    RIG_ASSERT(value->kind == AST_LITERAL);  // a string's value is a string literal
+    Ast_Literal *literal = (Ast_Literal *)value;
+    s64 extent = 0;
+    for (s64 i = 0; i < literal->values.count; i++) {
+        Type *field;
+        s64 offset;
+        if (t->kind == TYPE_ARRAY) {
+            field = t->element;
+            offset = i * t->element->size;
+        } else {
+            Type_Field *f = &t->fields[literal->names.count ? type_field_index(t, literal->names[i]) : (s32)i];
+            field = f->type;
+            offset = f->offset;
+        }
+        s64 end = offset + constant_extent(field, literal->values[i]);
+        if (end > extent) extent = end;
+    }
+    return extent;
+}
+
+// A global of bytes of type t whose first value is `value`: the bytes up
+// to constant_extent, written by constant_bytes, and the relocations.
+static void global_value(Lowering *l, Ir_Global *g, Type *t, Ast *value) {
+    s64 extent = constant_extent(t, value);
+    u8 *bytes = (u8 *)arena_alloc(l->arena, extent ? (u64)extent : 1, 1);  // zeroed
+    constant_bytes(l, bytes, 0, &g->relocs, t, value);
+    g->bytes = {bytes, extent};
+}
+
 // A global of bytes for a global view's array literal, `array.N`: a
 // variable (the view may write its elements), the literal's bytes; its
 // index. Its name can't be a Rig global's, which has no '.'.
@@ -1680,9 +1786,7 @@ static s32 add_global_array(Lowering *l, Type *array, Ast *literal) {
     g.is_variable = true;
     g.size = array->size;
     g.align = (u32)array->align;
-    u8 *bytes = (u8 *)arena_alloc(l->arena, array->size ? array->size : 1, 1);  // zeroed
-    constant_bytes(l, bytes, 0, &g.relocs, array, literal);
-    g.bytes = {bytes, array->size};
+    global_value(l, &g, array, literal);
     array_add(&l->module->globals, g);
     return (s32)(l->module->globals.count - 1);
 }
@@ -1948,9 +2052,10 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     // (an integer's bits cut to the type's width, a float's whole, as an
     // IR_CONST keeps them), or zero: without a value, or with ---, since a
     // global isn't on the stack and nothing else was ever there. A struct
-    // is a global of bytes, its literal's (constant_bytes) or zeros; so is
-    // an array, and a view, whose literal's array is a global of its own,
-    // and a string. A pointer holding a string literal's address is a
+    // is a global of bytes, its literal's (constant_bytes, only as far as
+    // its last value: global_value) or zeros, of which the IR holds none;
+    // so is an array, and a view, whose literal's array is a global of its
+    // own, and a string. A pointer holding a string literal's address is a
     // global of bytes too, 8 of them: an address the linker writes is a
     // relocation, which only a global of bytes has. Constants and structs'
     // declarations are skipped: a constant's uses are constants, and a
@@ -1965,11 +2070,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
             g.is_variable = true;
             g.size = var->type->size;
             g.align = (u32)var->type->align;
-            if (var->value) {
-                u8 *bytes = (u8 *)arena_alloc(a, var->type->size ? var->type->size : 1, 1);  // zeroed
-                constant_bytes(&l, bytes, 0, &g.relocs, var->type, var->value);
-                g.bytes = {bytes, var->type->size};
-            }
+            if (var->value) global_value(&l, &g, var->type, var->value);
         } else {
             g.type = ir_type_of(var->type);
         }
@@ -1997,7 +2098,8 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         // An aggregate result is a hidden ptr parameter, before the visible
         // ones; an aggregate parameter a ptr to the caller's copy. The IR's
         // results are the scalar results only. (A foreign procedure has
-        // neither: the checker allows no struct across C's boundary yet.)
+        // neither: the checker allows no aggregate, a struct, an array, a
+        // view or a string, across C's boundary yet.)
         for (s64 k = 0; k < source->results.count; k++) {
             if (type_is_aggregate(source->results[k]->type)) ir_add_param(p, IR_PTR, IR_EXT_NONE);
         }

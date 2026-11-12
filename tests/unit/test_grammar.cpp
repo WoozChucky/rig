@@ -917,3 +917,20 @@ TEST(vscode_grammar_says_where_the_committed_file_differs) {
               "  run RIG_BLESS=1 bin/unit-tests vscode_grammar to rewrite it\n");
     arena_free(&a);
 }
+
+TEST(vscode_grammar_reads_a_dereference_as_the_lexer_does) {
+    // The lexer reads a '*' right after a '.' token alone (src/lexer.h), so
+    // p.*=5 is p.* = 5 and p.*==q is p.* == q. The operators' longest match
+    // would take *= instead, so a rule of its own takes '.' and '*' first:
+    // listed before the operators, which TextMate tries in order at the same
+    // place. Not after another '.', which is the range's '..'.
+    Arena a = arena_make();
+    String grammar = {};
+    CHECK(os_read_file(&a, str(GRAMMAR_PATH), &grammar));
+    s64 dereference = index_of(grammar, "\"include\": \"#dereference\"");
+    CHECK(dereference >= 0);
+    CHECK(dereference < index_of(grammar, "\"include\": \"#operators\""));
+    CHECK(contains(grammar, "\"match\": \"(?<!\\\\.)(\\\\.)\\\\s*(\\\\*)\""));
+    CHECK(contains(grammar, "\"name\": \"keyword.operator.dereference.rig\""));
+    arena_free(&a);
+}
