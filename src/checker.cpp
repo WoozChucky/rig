@@ -351,9 +351,11 @@ static bool reaches_end(Ast_Block *block);
 // (a procedure's body, and the blocks and ifs that end it) or about
 // whole loops, so it never sees one.
 // An if or while whose condition was an error (its type unknown, or not
-// bool: check_condition reported it) is taken not to go past. What it would
-// do isn't known (`while 1` was likely meant as `while true`), and saying
-// the procedure reaches its end would be a second message for one mistake.
+// bool: check_condition reported it) is taken not to go past, whatever its
+// branches do. That's a policy, so the condition's message is the only one:
+// for `while 1` (likely meant as `while true`) a missing-return message
+// would be wrong, and for an if a real missing return shows up once the
+// condition is fixed.
 static bool goes_past(Ast *s) {
     switch (s->kind) {
     case AST_RETURN: return false;
