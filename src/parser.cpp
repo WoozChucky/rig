@@ -34,9 +34,10 @@ struct Parser {
 // stack with room to spare, even inside 1000 nested blocks.
 //
 // An expression's levels are its tree's height: each parenthesis, prefix
-// operator, cast, call, dereference (.*), field (.x), struct literal and
-// binary operator is one level above what it holds, and a name, a number,
-// a string, null or size_of(T) is none.
+// operator, cast, call, dereference (.*), field (.x), element (a[i]),
+// literal and binary operator is one level above what it holds, and a
+// name, a number, a string, null or size_of(T) is none. An array type's
+// count ([N]T) is read a level down too, wherever the type is.
 // So ((x)) is 2, - - x is 2, f(g(x)) is 2, and x + x + x is 2 too: the
 // Pratt loop builds it as (x + x) + x, a left-leaning tree whose height
 // grows with each operator, though the parser itself doesn't recurse to
@@ -135,9 +136,10 @@ static Ast *parse_size_of(Parser *p) {
 
 // primary = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null'
 //         | 'size_of' '(' type ')' | '(' expression ')' | '.' '{' fields '}'
+//         | '.' '[' values ']'
 //
-// A '.' starting an expression is a struct literal without its type,
-// .{1, 2}, which takes the type it meets (parse_literal).
+// A '.' starting an expression is a literal without its type, .{1, 2} or
+// .[1, 2], which takes the type it meets (parse_literal).
 //
 // size_of isn't a keyword: it's the name size_of followed by '(', whose
 // argument is a type, not a value, so it can't be parsed as a call (a type
@@ -184,7 +186,7 @@ static Ast *parse_primary(Parser *p) {
         advance(p);
         return ast_new<Ast>(p->arena, AST_NULL, t->pos);
     case TOKEN_DOT:
-        if (peek(p, 1)->kind == TOKEN_LBRACE) {
+        if (peek(p, 1)->kind == TOKEN_LBRACE || peek(p, 1)->kind == TOKEN_LBRACKET) {
             Token *dot = advance(p);
             return parse_literal(p, nullptr, dot, dot->pos);
         }
@@ -210,24 +212,29 @@ static Ast *parse_primary(Parser *p) {
 
 // fields = [field {',' field} [',']]
 // field  = [IDENT '='] expression
+// values = [expression {',' expression} [',']]
 //
-// The inside of a struct literal, after its '.': T.{1, 2} or .{x = 1}. The
-// values are either all named or all in order: "a struct literal's fields
-// are all named or all in order, not both", at the first that breaks the
-// pattern. A name is a field's only when '=' follows it (x == 1 is a value
-// in order). The literal is at its '.' and starts at `start` (its type's
-// name, or the '.'); it's a level above its values, as a call is above its
-// arguments. Which fields there are, and what each value converts to, is
-// the checker's business.
+// The inside of a literal, after its '.': a struct's, T.{1, 2} or
+// .{x = 1}, or an array's, T.[1, 2] or .[1, 2] (T its element type), as the
+// '{' or '[' after the '.' says. A struct's values are either all named or
+// all in order: "a struct literal's fields are all named or all in order,
+// not both", at the first that breaks the pattern. A name is a field's only
+// when '=' follows it (x == 1 is a value in order). An array's are in
+// order, with no names. The literal is at its '.' and starts at `start`
+// (its type's name, or the '.'); it's a level above its values, as a call
+// is above its arguments. Which fields there are, how many elements, and
+// what each value converts to, is the checker's business.
 static Ast *parse_literal(Parser *p, Ast_Type *type_expr, Token *dot, Position start) {
-    advance(p);  // the '{'
+    Token *open = advance(p);  // the '{' or '['
     Ast_Literal *literal = ast_new<Ast_Literal>(p->arena, AST_LITERAL, dot->pos);
     literal->start = start;
     literal->type_expr = type_expr;
+    literal->is_array = open->kind == TOKEN_LBRACKET;
+    Token_Kind close = literal->is_array ? TOKEN_RBRACKET : TOKEN_RBRACE;
     s32 height = 0;  // the highest value's
-    while (peek(p)->kind != TOKEN_RBRACE) {
+    while (peek(p)->kind != close) {
         Token *first = peek(p);
-        bool named = first->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_EQUAL;
+        bool named = !literal->is_array && first->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_EQUAL;
         bool named_before = literal->names.count > 0;
         if (literal->values.count > 0 && named != named_before) {
             diag_error(p->diag, first->pos, "a struct literal's fields are all named or all in order, not both");
@@ -248,7 +255,7 @@ static Ast *parse_literal(Parser *p, Ast_Type *type_expr, Token *dot, Position s
         if (peek(p)->kind != TOKEN_COMMA) break;
         advance(p);
     }
-    if (!expect(p, TOKEN_RBRACE) || !set_height(p, height + 1)) return nullptr;
+    if (!expect(p, close) || !set_height(p, height + 1)) return nullptr;
     return literal;
 }
 
@@ -258,16 +265,17 @@ static bool in_parentheses(Ast *e) {
     return e->start.line != e->pos.line || e->start.col != e->pos.col;
 }
 
-// postfix = primary { '(' [expression {',' expression}] ')' | '.' '*' | '.' IDENT
-//                   | '.' '{' fields '}' }
+// postfix = primary { '(' [expression {',' expression}] ')' | '[' expression ']'
+//                   | '.' '*' | '.' IDENT | '.' '{' fields '}' | '.' '[' values ']' }
 //
 // The postfix operators apply left to right, each to everything before it:
 // f(x).* dereferences the call's result, p.*.* dereferences twice, a.b.c is
-// (a.b).c, and p.*.x is the field x of what p points at. A '.' after a name
-// and followed by '{' makes the name a type, of the struct literal that
-// follows (Vec2.{1, 2}); after anything else, a name in parentheses
-// included, it's "expected a field's name". The lexer reads a '*' after a
-// '.' alone (lexer.h), so p.*=5 is p.* = 5.
+// (a.b).c, p.*.x is the field x of what p points at, and a[i].x[j] is
+// ((a[i]).x)[j]. A '.' after a name and followed by '{' or '[' makes the
+// name a type, of the literal that follows: a struct's (Vec2.{1, 2}), or an
+// array's whose elements are of that type (int.[1, 2]); after anything
+// else, a name in parentheses included, it's "expected a field's name". The
+// lexer reads a '*' after a '.' alone (lexer.h), so p.*=5 is p.* = 5.
 static Ast *parse_postfix(Parser *p) {
     Ast *e = parse_primary(p);
     for (;;) {
@@ -291,9 +299,11 @@ static Ast *parse_postfix(Parser *p) {
                 member->index = -1;
                 if (!set_height(p, p->height + 1)) return nullptr;
                 e = member;
-            } else if (after->kind == TOKEN_LBRACE && e->kind == AST_NAME && !in_parentheses(e)) {
-                // The name was a type's: T.{...}. A type is never in
-                // parentheses, so (Vec2).{1} is no literal.
+            } else if ((after->kind == TOKEN_LBRACE || after->kind == TOKEN_LBRACKET) && e->kind == AST_NAME &&
+                       !in_parentheses(e)) {
+                // The name was a type's: T.{...}, or T.[...] with T the
+                // elements' type. A type is never in parentheses, so
+                // (Vec2).{1} is no literal.
                 Ast_Type *type = ast_new<Ast_Type>(p->arena, AST_TYPE_NAME, e->pos);
                 type->name = ((Ast_Name *)e)->name;
                 e = parse_literal(p, type, dot, e->start);
@@ -301,6 +311,23 @@ static Ast *parse_postfix(Parser *p) {
                 error_expected(p, "a field's name");
                 return nullptr;
             }
+            continue;
+        }
+        if (peek(p)->kind == TOKEN_LBRACKET) {
+            // a[i]: at the '[', a level above the operand and the index,
+            // as a call is above its callee and arguments.
+            Ast_Index *index = ast_new<Ast_Index>(p->arena, AST_INDEX, peek(p)->pos);
+            advance(p);
+            index->start = e->start;
+            index->operand = e;
+            s32 height = p->height;  // the operand's
+            if (!open_level(p)) return nullptr;
+            index->index = parse_expression(p, 1);
+            p->levels--;
+            if (!index->index) return nullptr;
+            if (p->height > height) height = p->height;
+            if (!set_height(p, height + 1) || !expect(p, TOKEN_RBRACKET)) return nullptr;
+            e = index;
             continue;
         }
         if (peek(p)->kind != TOKEN_LPAREN) return e;
@@ -674,22 +701,27 @@ static Ast_Var *loop_variable(Parser *p, String name, Position pos) {
     return var;
 }
 
-// for = 'for' [IDENT ':'] expression '..' expression block
+// for = 'for' ['*'] [IDENT ':'] expression ['..' expression] block
 //
-// The first end is a whole expression, which stops at the '..' since that
-// isn't a binary operator: `for a + 1..n` starts at a + 1. When no '..'
-// follows it:
-// - the body's '{': a for over something that isn't a range (an array's
-//   elements, milestone 2b), which isn't there yet: "'for' needs a range,
-//   as in for 0..9, for now", at that something;
+// The first expression is a whole one, which stops at the '..' since that
+// isn't a binary operator: `for a + 1..n` starts at a + 1. After it:
+// - '..': a range, whose last end follows;
+// - the body's '{': what the loop goes over, its sequence (an array or a
+//   view; the checker says whether it is one);
 // - with no iterator named, a name and then anything else (`for i 0..9`,
 //   `for x in 0..9`): the name was meant as the iterator's, and its ':' is
 //   missing: "expected ':' after the iterator's name, as in for i: 0..9",
 //   at what came instead;
 // - otherwise, "expected '..'".
+// A '*' right after 'for' makes the iterator a pointer to each element
+// (`for * a`); a range takes none, which the checker says.
 static Ast *parse_for(Parser *p) {
     Token *keyword = advance(p);
     Ast_For *loop = ast_new<Ast_For>(p->arena, AST_FOR, keyword->pos);
+    if (peek(p)->kind == TOKEN_STAR) {
+        advance(p);
+        loop->by_pointer = true;
+    }
     bool named_iterator = peek(p)->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON;
     if (named_iterator) {
         Token *name = advance(p);
@@ -702,11 +734,15 @@ static Ast *parse_for(Parser *p) {
     loop->first = parse_expression(p, 1);
     if (!loop->first) return nullptr;
     Token *after = peek(p);
+    if (after->kind == TOKEN_LBRACE) {
+        loop->sequence = loop->first;
+        loop->first = nullptr;
+        loop->body = parse_block(p);
+        return loop->body ? loop : nullptr;
+    }
     if (after->kind != TOKEN_DOT_DOT) {
         if (after->kind == TOKEN_ERROR) return nullptr;  // the lexer said what's wrong
-        if (after->kind == TOKEN_LBRACE) {
-            diag_error(p->diag, loop->first->start, "'for' needs a range, as in for 0..9, for now");
-        } else if (!named_iterator && loop->first->kind == AST_NAME) {
+        if (!named_iterator && loop->first->kind == AST_NAME) {
             diag_error(p->diag, after->pos, "expected ':' after the iterator's name, as in for i: 0..9");
         } else {
             error_expected(p, "'..'");
@@ -857,7 +893,16 @@ static Ast_Block *parse_block(Parser *p) {
     return block;
 }
 
-// type = '*' type | IDENT
+// type = '*' type | '[' expression ']' type | '[' ']' type | IDENT
+//
+// [N]T is an array of N T's, N any expression (the checker needs it to be
+// a constant); []T a view of T's. [..]T, a growable array, needs the
+// context's allocator, so it comes with the Basic module: "growable arrays
+// ([..]T) come with the Basic module, in milestone 4", at the '['. A type
+// isn't an expression level, but its count is read a level down, so a
+// count holding a cast whose type has a count ... can't recurse past
+// MAX_DEPTH; the height kept for the expression around the type stays as
+// it was.
 static Ast_Type *parse_type(Parser *p) {
     Token *t = peek(p);
     if (t->kind == TOKEN_STAR) {
@@ -865,6 +910,27 @@ static Ast_Type *parse_type(Parser *p) {
         Ast_Type *pointer = ast_new<Ast_Type>(p->arena, AST_TYPE_POINTER, t->pos);
         pointer->pointee = parse_type(p);
         return pointer->pointee ? pointer : nullptr;
+    }
+    if (t->kind == TOKEN_LBRACKET) {
+        advance(p);
+        if (peek(p)->kind == TOKEN_DOT_DOT) {
+            diag_error(p->diag, t->pos, "growable arrays ([..]T) come with the Basic module, in milestone 4");
+            return nullptr;
+        }
+        bool view = peek(p)->kind == TOKEN_RBRACKET;
+        Ast_Type *type = ast_new<Ast_Type>(p->arena, view ? AST_TYPE_VIEW : AST_TYPE_ARRAY, t->pos);
+        if (!view) {
+            s32 height = p->height;
+            if (p->levels == 0) p->expression_start = peek(p)->pos;
+            if (!open_level(p)) return nullptr;
+            type->count = parse_expression(p, 1);
+            p->levels--;
+            p->height = height;
+            if (!type->count) return nullptr;
+        }
+        if (!expect(p, TOKEN_RBRACKET)) return nullptr;
+        type->element = parse_type(p);
+        return type->element ? type : nullptr;
     }
     if (t->kind == TOKEN_IDENT) {
         advance(p);
@@ -886,12 +952,15 @@ static Ast_Param *parse_param(Parser *p) {
     return param->type_expr ? param : nullptr;
 }
 
-// procedure = '(' [param {',' param}] ')' ['->' type {',' type}] (block | '#foreign' IDENT ';')
+// procedure = '(' [param {',' param}] ')' ['->' type {',' type}]
+//               (['#no_abc'] block | '#foreign' IDENT ';')
 //
 // Several results are written as a list after the arrow, with no
 // parentheses (spec 6.7): divmod :: (a: int, b: int) -> int, int { ... }.
 // The list ends at the body's '{' or the directive, which no type goes on
-// with.
+// with. #no_abc (Jai's name: no array bounds checks) turns off the bounds
+// checks of the body that must follow it (spec 6.5); any directive there
+// but it and #foreign is "unknown directive '#foo'".
 static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     Ast_Proc *proc = ast_new<Ast_Proc>(p->arena, AST_PROC, name->pos);
     proc->name = name->text;
@@ -918,6 +987,12 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     }
 
     Token *t = peek(p);
+    if (t->kind == TOKEN_DIRECTIVE && string_eq(t->text, str("no_abc"))) {
+        advance(p);
+        proc->no_bounds_checks = true;
+        proc->body = parse_block(p);
+        return proc->body ? proc : nullptr;
+    }
     if (t->kind == TOKEN_DIRECTIVE) {
         if (!string_eq(t->text, str("foreign"))) {
             diag_error(p->diag, t->pos, "unknown directive '#" STR_FMT "'", STR_ARG(t->text));

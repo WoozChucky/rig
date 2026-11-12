@@ -564,15 +564,16 @@ TEST(for_with_named_iterator) {
     arena_free(&a);
 }
 
-TEST(for_needs_a_range) {
-    // Only ranges, for now: a for over anything else (an array, milestone
-    // 2b) is reported at what it was given.
+TEST(for_without_dots_goes_over_a_sequence) {
+    // An expression with no '..' after it, then the body: what the loop goes
+    // over (an array or a view, issue #59). Whether it is one is the
+    // checker's to say, so `for 10 { }` parses.
     Arena a = arena_make();
     String errors;
-    body_dump(&a, "for 10 { }", &errors);
-    CHECK_STR(errors, "2:9: 'for' needs a range, as in for 0..9, for now\n");
-    body_dump(&a, "for i: n + 1 { }", &errors);
-    CHECK_STR(errors, "2:12: 'for' needs a range, as in for 0..9, for now\n");
+    CHECK_STR(body_dump(&a, "for 10 { }", &errors), "(block (for it (int 10) (block)))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "for i: n + 1 { }", &errors), "(block (for i (binary + (name n) (int 1)) (block)))");
+    CHECK_STR(errors, "");
     body_dump(&a, "for 0.. { }", &errors);
     CHECK_STR(errors, "2:13: expected an expression, found '{'\n");
     arena_free(&a);
@@ -1399,5 +1400,207 @@ TEST(unclosed_body_ends_at_a_struct) {
     dump = parse_src(&a, "V :: struct {\n    x int;\n    y: int;\n}\nmain :: () { }\n", &errors);
     CHECK_STR(errors, "2:7: expected ':', found identifier 'int'\n");
     CHECK_STR(dump, "(broken V)\n(proc main (params) (block))\n");
+    arena_free(&a);
+}
+
+// Milestone 2b (issue #59): fixed arrays, views and indexing. [N]T and []T
+// are types; a[i] is a postfix operator, as a call is; T.[a, b] and .[a, b]
+// are array literals; for goes over an array or a view; #no_abc turns a
+// procedure's bounds checks off.
+
+TEST(parses_array_and_view_types) {
+    Arena a = arena_make();
+    String errors;
+    // The count is an expression, dumped as written; the element any type,
+    // an array's or a pointer's too.
+    CHECK_STR(parse_src(&a,
+                        "grid : [3][4]int;\n"
+                        "N :: 2;\n"
+                        "row : [N * 2]u8;\n"
+                        "f :: (v: []int, p: *[3]int, q: []*u8) -> [2]float { }\n",
+                        &errors),
+              "(var grid (array (int 3) (array (int 4) int)))\n"
+              "(const N (int 2))\n"
+              "(var row (array (binary * (name N) (int 2)) u8))\n"
+              "(proc f (params (v (view int)) (p (ptr (array (int 3) int))) (q (view (ptr u8)))) "
+              "(returns (array (int 2) float)) (block))\n");
+    CHECK_STR(errors, "");
+    // Anywhere a type goes: a local, a cast, size_of, a struct's field.
+    CHECK_STR(body_dump(&a, "x := size_of([2]int) + cast(int) y; v : []u8 = ---;", &errors),
+              "(block (var x _ (binary + (size_of (array (int 2) int)) (cast int (name y)))) (var v (view u8) ---))");
+    CHECK_STR(parse_src(&a, "S :: struct { items: [8]u16; rest: []S; }\n", &errors),
+              "(struct S (items (array (int 8) u16)) (rest (view S)))\n");
+    CHECK_STR(errors, "");
+    // The type is at its '['; its count and element are nodes of their own.
+    Token_List *list = src("g : [3]int;\nh : []u8;\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    Ast_Type *array = ((Ast_Var *)file->globals[0])->type_expr;
+    CHECK_EQ(array->kind, AST_TYPE_ARRAY);
+    CHECK_EQ(array->pos.col, 5);
+    CHECK_EQ(array->count->kind, AST_INT);
+    CHECK_EQ(array->count->pos.col, 6);
+    CHECK_EQ(array->element->kind, AST_TYPE_NAME);
+    CHECK_EQ(array->element->pos.col, 8);
+    Ast_Type *view = ((Ast_Var *)file->globals[1])->type_expr;
+    CHECK_EQ(view->kind, AST_TYPE_VIEW);
+    CHECK(!view->count);
+    CHECK_STR(view->element->name, "u8");
+    token_list_free(list);
+    // A count needs its ']', and a type follows it.
+    parse_src(&a, "g : [3 int;\n", &errors);
+    CHECK_STR(errors, "1:8: expected ']', found identifier 'int'\n");
+    parse_src(&a, "g : [3];\n", &errors);
+    CHECK_STR(errors, "1:8: expected a type, found ';'\n");
+    parse_src(&a, "g : [];\n", &errors);
+    CHECK_STR(errors, "1:7: expected a type, found ';'\n");
+    arena_free(&a);
+}
+
+TEST(growable_array_is_reported) {
+    // [..]T, an array that grows, needs the context's allocator: it comes
+    // with the Basic module (spec 6.5). Said at the '[', in a body or out.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_src(&a, "g : [..]int;\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:5: growable arrays ([..]T) come with the Basic module, in milestone 4\n");
+    CHECK_STR(dump, "(broken g)\n(proc main (params) (block))\n");
+    body_dump(&a, "x : [..]u8;", &errors);
+    CHECK_STR(errors, "2:9: growable arrays ([..]T) come with the Basic module, in milestone 4\n");
+    parse_src(&a, "f :: (a: [..]int) { }\n", &errors);
+    CHECK_STR(errors, "1:10: growable arrays ([..]T) come with the Basic module, in milestone 4\n");
+    arena_free(&a);
+}
+
+TEST(parses_index) {
+    Arena a = arena_make();
+    String errors;
+    // A postfix operator, left to right with calls, fields and .*, and
+    // tighter than any prefix one.
+    CHECK_STR(body_dump(&a, "a[i].x[j];", &errors), "(block (index (member (index (name a) (name i)) x) (name j)))");
+    CHECK_STR(body_dump(&a, "x := *a[0];", &errors), "(block (var x _ (unary * (index (name a) (int 0)))))");
+    CHECK_STR(body_dump(&a, "a[i + 1] = b[c[0]];", &errors),
+              "(block (assign = (index (name a) (binary + (name i) (int 1))) (index (name b) (index (name c) (int 0)))))");
+    CHECK_STR(body_dump(&a, "f(x)[2].* += -p[1][2];", &errors),
+              "(block (assign += (deref (index (call f (name x)) (int 2))) "
+              "(unary - (index (index (name p) (int 1)) (int 2)))))");
+    CHECK_STR(errors, "");
+    // The node is at its '[', where a bounds check's runtime error points,
+    // and starts where its operand does.
+    Token_List *list = src("f :: () {\n    x := (v)[n];\n}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    Ast_Index *index = (Ast_Index *)((Ast_Var *)file->procs[0]->body->statements[0])->value;
+    CHECK_EQ(index->kind, AST_INDEX);
+    CHECK_EQ(index->pos.col, 13);
+    CHECK_EQ(index->start.col, 10);
+    CHECK_EQ(index->operand->kind, AST_NAME);
+    CHECK_EQ(index->index->kind, AST_NAME);
+    token_list_free(list);
+    body_dump(&a, "a[1;", &errors);
+    CHECK_STR(errors, "2:8: expected ']', found ';'\n");
+    body_dump(&a, "a[];", &errors);
+    CHECK_STR(errors, "2:7: expected an expression, found ']'\n");
+    arena_free(&a);
+}
+
+TEST(parses_array_literals) {
+    Arena a = arena_make();
+    String errors;
+    // T.[...] with its element type T written, .[...] without: it takes its
+    // element type and count from where it's used.
+    CHECK_STR(body_dump(&a, "v := int.[1, 2, 3];", &errors),
+              "(block (var v _ (literal-array int (int 1) (int 2) (int 3))))");
+    CHECK_STR(body_dump(&a, "v : [2]int = .[1, 2,];", &errors),
+              "(block (var v (array (int 2) int) (literal-array _ (int 1) (int 2))))");
+    CHECK_STR(body_dump(&a, "v := Vec2.[.{1, 2}, Vec2.{3, 4}]; w := u8.[];", &errors),
+              "(block (var v _ (literal-array Vec2 (literal _ (int 1) (int 2)) (literal Vec2 (int 3) (int 4)))) "
+              "(var w _ (literal-array u8)))");
+    CHECK_STR(body_dump(&a, "sort(.[.[1], .[2, 3]]); n := int.[4, 5][1];", &errors),
+              "(block (call sort (literal-array _ (literal-array _ (int 1)) (literal-array _ (int 2) (int 3)))) "
+              "(var n _ (index (literal-array int (int 4) (int 5)) (int 1))))");
+    CHECK_STR(errors, "");
+    // The literal is at its '.', and starts at its element type when there
+    // is one.
+    Token_List *list = src("f :: () {\n    v := int.[1];\n    w := .[2];\n}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    Ast_Literal *typed = (Ast_Literal *)((Ast_Var *)file->procs[0]->body->statements[0])->value;
+    CHECK_EQ(typed->kind, AST_LITERAL);
+    CHECK(typed->is_array);
+    CHECK_STR(typed->type_expr->name, "int");
+    CHECK_EQ(typed->pos.col, 13);
+    CHECK_EQ(typed->start.col, 10);
+    Ast_Literal *untyped = (Ast_Literal *)((Ast_Var *)file->procs[0]->body->statements[1])->value;
+    CHECK(untyped->is_array);
+    CHECK(!untyped->type_expr);
+    CHECK_EQ(untyped->pos.col, 10);
+    token_list_free(list);
+    // Its values are expressions only: no names.
+    body_dump(&a, "v := int.[1 2];", &errors);
+    CHECK_STR(errors, "2:17: expected ']', found integer literal\n");
+    body_dump(&a, "v := int.[x = 1];", &errors);
+    CHECK_STR(errors, "2:17: expected ']', found '='\n");
+    // As a struct literal's, its type is a name, never in parentheses.
+    body_dump(&a, "v := (int).[1];", &errors);
+    CHECK_STR(errors, "2:16: expected a field's name, found '['\n");
+    arena_free(&a);
+}
+
+TEST(parses_for_over_a_sequence) {
+    Arena a = arena_make();
+    String errors;
+    // for a, for x: a, for * a, for * x: a.
+    CHECK_STR(body_dump(&a, "for a { f(it); }", &errors), "(block (for it (name a) (block (call f (name it)))))");
+    CHECK_STR(body_dump(&a, "for x: a { }", &errors), "(block (for x (name a) (block)))");
+    CHECK_STR(body_dump(&a, "for * a { it.* = 0; }", &errors),
+              "(block (for * it (name a) (block (assign = (deref (name it)) (int 0)))))");
+    CHECK_STR(body_dump(&a, "for * x: s.items { }", &errors), "(block (for * x (member (name s) items) (block)))");
+    // Whether a range takes '*' is the checker's to say.
+    CHECK_STR(body_dump(&a, "for * 0..9 { }", &errors), "(block (for * it (int 0) (int 9) (block)))");
+    CHECK_STR(errors, "");
+    // What the loop goes over is its sequence; first and last are null.
+    Token_List *list;
+    Ast_For *loop = first_loop(&a, "f :: () {\n    for * x: make() { }\n}\n", &list);
+    if (loop) {
+        CHECK(loop->by_pointer);
+        CHECK_EQ(loop->sequence->kind, AST_CALL);
+        CHECK(!loop->first);
+        CHECK(!loop->last);
+        CHECK_STR(loop->iterator->name, "x");
+        CHECK_EQ(loop->iterator->pos.col, 11);
+    }
+    token_list_free(list);
+    loop = first_loop(&a, "f :: () {\n    for 0..9 { }\n}\n", &list);
+    if (loop) {
+        CHECK(!loop->by_pointer);
+        CHECK(!loop->sequence);
+    }
+    token_list_free(list);
+    body_dump(&a, "for * { }", &errors);
+    CHECK_STR(errors, "2:11: expected an expression, found '{'\n");
+    arena_free(&a);
+}
+
+TEST(parses_no_abc) {
+    // #no_abc (Jai's: no array bounds checks) after a procedure's results,
+    // before its body.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "f :: (a: []int) -> int #no_abc { return a[0]; }\n"
+                        "g :: () #no_abc { }\n",
+                        &errors),
+              "(proc f (params (a (view int))) (returns int) (no_abc) (block (return (index (name a) (int 0)))))\n"
+              "(proc g (params) (no_abc) (block))\n");
+    CHECK_STR(errors, "");
+    Token_List *list = src("f :: () #no_abc { }\ng :: () { }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK(file->procs[0]->no_bounds_checks);
+    CHECK(!file->procs[1]->no_bounds_checks);
+    token_list_free(list);
+    // It needs a body to act on, and it's the only directive there but
+    // #foreign.
+    parse_src(&a, "p :: () #no_abc #foreign libc;\n", &errors);
+    CHECK_STR(errors, "1:17: expected '{', found directive\n");
+    parse_src(&a, "p :: () #abc { }\n", &errors);
+    CHECK_STR(errors, "1:9: unknown directive '#abc'\n");
     arena_free(&a);
 }
