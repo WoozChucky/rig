@@ -92,6 +92,8 @@ struct Ast_Type : Ast {
                         // it before the field's type is made: checker.cpp's array_count)
     bool count_fine;    // ... and is a count, count_value
     u64 count_value;
+    s32 levels;         // a parameter's, a result's or a field's whole type: the deepest levels
+                        // in it (MAX_DEPTH), where a declaration it needs starts a level below
 };
 
 struct Ast_Param : Ast {
@@ -102,6 +104,18 @@ struct Ast_Param : Ast {
 struct Ast_Block : Ast {
     Array<Ast *> statements;
     Position end;  // its '}': where a procedure that runs off its end is reported
+};
+
+// How far the checker has got with a global variable, a top-level
+// constant, a struct's layout, a late field's type or a procedure's
+// signature. Those are worked out where they're first needed, so they can
+// be used in any order (checker.cpp's resolve_global): a use that finds one
+// under way means it needs itself.
+enum Ast_Resolve : u8 {
+    RESOLVE_NOT_YET,
+    RESOLVE_UNDER_WAY,
+    RESOLVE_CYCLE,      // under way, and found to be in a circle (reported once)
+    RESOLVE_DONE,
 };
 
 // A declaration. When the parser gave up on one (a syntax error), it is
@@ -120,19 +134,8 @@ struct Ast_Proc : Ast {
     bool is_broken;             // the parser gave up on it
     String foreign_library;     // #foreign's library name
     Position library_pos;       // where that name is written
-    s32 levels;                 // the deepest levels of its parameters' and results' types
-                                // (MAX_DEPTH): a declaration they need starts a level below
-};
-
-// How far the checker has got with a global variable or a top-level
-// constant. Those are checked where they're first needed, so they can be
-// used in any order (checker.cpp's resolve_global): a use that finds one
-// under way means its value needs itself.
-enum Ast_Resolve : u8 {
-    RESOLVE_NOT_YET,
-    RESOLVE_UNDER_WAY,
-    RESOLVE_CYCLE,      // under way, and found to be in a circle (reported once)
-    RESOLVE_DONE,
+    Ast_Resolve resolve;        // its signature's: checked in source order, or earlier by a call
+                                // in a global's value (checker.cpp's resolve_signature)
 };
 
 // A variable: `x : T = e;`, `x := e;` (its type is e's), `x : T;` (zeroed)
@@ -167,7 +170,6 @@ struct Ast_Field : Ast {
     bool is_late;         // its type holds a pointer or a view: laid out from what's written,
                           // the type made later (checker.cpp's lay_out, make_late_field)
     Ast_Resolve resolve;  // a late field's type: how far the checker has got with it
-    s32 levels;           // the deepest levels of its type (MAX_DEPTH), as Ast_Var's
 };
 
 // A struct's declaration, `Vec2 :: struct { x: float; y: float; }`, at the
@@ -181,8 +183,6 @@ struct Ast_Struct : Ast {
     Type *declared;             // its type: made when the checker collects the top level's names,
                                 // so a pointer can name it before its layout is known; null once
                                 // it's found to contain itself
-    s32 levels;                 // the deepest of its fields' levels (MAX_DEPTH): what its layout
-                                // needs starts a level below
 };
 
 // An assignment: `x = e;`, or a compound one, `x += e;` meaning x = x + e,

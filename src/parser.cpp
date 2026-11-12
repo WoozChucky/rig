@@ -64,7 +64,9 @@ struct Parser {
 // A declaration's levels are the most its type or value reaches
 // (p->deepest, take_deepest), kept for the checker: a declaration it needs
 // is worked out inside it, a level below all of them (checker.cpp's
-// open_declaration).
+// open_declaration). A struct's fields and a procedure's parameters and
+// results are worked out one at a time, so each type keeps its own
+// (parse_whole_type).
 
 static Token *peek(Parser *p, s64 ahead = 0) {
     s64 i = p->next + ahead;
@@ -1061,13 +1063,24 @@ static Ast_Type *parse_type_level(Parser *p) {
     return nullptr;
 }
 
+// A type written on its own, a parameter's, a result's or a field's, with
+// its levels (Ast_Type.levels): the checker works each out alone, and
+// counts them (checker.cpp's open_declaration).
+static Ast_Type *parse_whole_type(Parser *p) {
+    take_deepest(p);
+    Ast_Type *type = parse_type(p);
+    s32 levels = take_deepest(p);
+    if (type) type->levels = levels;
+    return type;
+}
+
 // param = IDENT ':' type
 static Ast_Param *parse_param(Parser *p) {
     Token *name = expect(p, TOKEN_IDENT);
     if (!name || !expect(p, TOKEN_COLON)) return nullptr;
     Ast_Param *param = ast_new<Ast_Param>(p->arena, AST_PARAM, name->pos);
     param->name = name->text;
-    param->type_expr = parse_type(p);
+    param->type_expr = parse_whole_type(p);
     return param->type_expr ? param : nullptr;
 }
 
@@ -1083,7 +1096,6 @@ static Ast_Param *parse_param(Parser *p) {
 static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     Ast_Proc *proc = ast_new<Ast_Proc>(p->arena, AST_PROC, name->pos);
     proc->name = name->text;
-    take_deepest(p);
     if (!expect(p, TOKEN_LPAREN)) return nullptr;
     if (peek(p)->kind != TOKEN_RPAREN) {
         for (;;) {
@@ -1098,14 +1110,13 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     if (peek(p)->kind == TOKEN_ARROW) {
         advance(p);
         for (;;) {
-            Ast_Type *result = parse_type(p);
+            Ast_Type *result = parse_whole_type(p);
             if (!result) return nullptr;
             array_add(&proc->results, result);
             if (peek(p)->kind != TOKEN_COMMA) break;
             advance(p);
         }
     }
-    proc->levels = take_deepest(p);
 
     Token *t = peek(p);
     if (t->kind == TOKEN_DIRECTIVE && string_eq(t->text, str("no_abc"))) {
@@ -1157,10 +1168,7 @@ static Ast *parse_struct(Parser *p, Token *name) {
         if (!expect(p, TOKEN_COLON)) return nullptr;
         Ast_Field *field = ast_new<Ast_Field>(p->arena, AST_FIELD, field_name->pos);
         field->name = field_name->text;
-        take_deepest(p);
-        field->type_expr = parse_type(p);
-        field->levels = take_deepest(p);
-        if (field->levels > s->levels) s->levels = field->levels;
+        field->type_expr = parse_whole_type(p);
         if (!field->type_expr || !expect(p, TOKEN_SEMICOLON)) return nullptr;
         array_add(&s->fields, field);
     }
