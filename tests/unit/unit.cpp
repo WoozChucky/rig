@@ -201,27 +201,45 @@ static int helper_mode(int argc, char **argv) {
     return -1;
 }
 
+// The tests whose name or file contains `filter`, and how many of them
+// passed and failed (run_tests).
+struct Test_Run {
+    const char *filter;
+    int passed, failed;
+};
+
+static void run_tests(void *data) {
+    Test_Run *run = (Test_Run *)data;
+    for (int i = 0; i < test_case_count; i++) {
+        Test_Case *test = &test_cases[i];
+        bool chosen = strstr(test->name, run->filter) || strstr(test->file, run->filter);
+        if (ends_with(test->name, "_deliberately") || !chosen) continue;
+        if (run_test(test)) {
+            run->passed++;
+        } else {
+            printf("FAIL %s\n", test->name);
+            run->failed++;
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "--self-test") == 0) return self_test();
     if (argc >= 2 && strncmp(argv[1], "--", 2) == 0) {
         int status = helper_mode(argc, argv);
         if (status >= 0) return status;
     }
-    const char *filter = argc >= 2 ? argv[1] : "";
-
-    int passed = 0, failed = 0;
-    for (int i = 0; i < test_case_count; i++) {
-        Test_Case *test = &test_cases[i];
-        if (ends_with(test->name, "_deliberately") || !(strstr(test->name, filter) || strstr(test->file, filter))) continue;
-        if (run_test(test)) {
-            passed++;
-        } else {
-            printf("FAIL %s\n", test->name);
-            failed++;
-        }
+    // The tests run on the compiler's stack, RIG_STACK_SIZE, as rig works
+    // (main.cpp), so the tests at its limits have the room rig has.
+    Test_Run run = {argc >= 2 ? argv[1] : "", 0, 0};
+    if (!os_run_on_stack(RIG_STACK_SIZE, run_tests, &run)) {
+        Arena a = arena_make();
+        fprintf(stderr, "unit-tests: can't start the tests' thread: " STR_FMT "\n", STR_ARG(os_error_message(&a)));
+        arena_free(&a);
+        return 1;
     }
-    printf("%d passed, %d failed\n", passed, failed);
-    return failed ? 1 : 0;
+    printf("%d passed, %d failed\n", run.passed, run.failed);
+    return run.failed ? 1 : 0;
 }
 
 // The test files.
