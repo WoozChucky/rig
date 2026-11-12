@@ -1,0 +1,16 @@
+// A variable declared in a loop's body: its stack slot is allocated once,
+// in the procedure's entry block, or ten million iterations would overflow
+// the stack; and each iteration's declaration zeroes it again (spec 6.4),
+// though the last iteration left a value in the slot.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    n := 0;
+    while n < 10_000_000 {
+        x : int;
+        if x != 0 { puts("not zeroed"); }
+        x = n + 1;
+        n += 1;
+    }
+    puts("done");
+}

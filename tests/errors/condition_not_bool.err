@@ -1,0 +1,3 @@
+tests/errors/condition_not_bool.rig:5:11: error: the condition of 'while' must be a bool, not 'int'
+        while n {
+              ^

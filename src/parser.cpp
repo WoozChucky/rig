@@ -52,7 +52,7 @@ static Ast *parse_expression(Parser *p, int min_precedence);
 static Ast_Type *parse_type(Parser *p);
 static bool parameters_follow(Parser *p, s64 open);
 
-// primary = IDENT | INT | STRING | '(' expression ')'
+// primary = IDENT | INT | STRING | 'true' | 'false' | '(' expression ')'
 static Ast *parse_primary(Parser *p) {
     Token *t = peek(p);
     switch (t->kind) {
@@ -73,6 +73,13 @@ static Ast *parse_primary(Parser *p) {
         Ast_String *string = ast_new<Ast_String>(p->arena, AST_STRING, t->pos);
         string->value = t->string_value;
         return string;
+    }
+    case TOKEN_TRUE:
+    case TOKEN_FALSE: {
+        advance(p);
+        Ast_Bool *value = ast_new<Ast_Bool>(p->arena, AST_BOOL, t->pos);
+        value->value = t->kind == TOKEN_TRUE;
+        return value;
     }
     case TOKEN_LPAREN: {
         // Parentheses only group, so they add no node; the value inside
@@ -112,13 +119,13 @@ static Ast *parse_postfix(Parser *p) {
     return e;
 }
 
-// unary = ('-' | '~') unary | postfix
+// unary = ('-' | '~' | '!') unary | postfix
 //
 // A prefix operator applies to everything after it that binds tighter than
-// any binary operator: -f(x) + 1 is (-(f(x))) + 1.
+// any binary operator: -f(x) + 1 is (-(f(x))) + 1, !a && b is (!a) && b.
 static Ast *parse_unary(Parser *p) {
     Token *op = peek(p);
-    if (op->kind != TOKEN_MINUS && op->kind != TOKEN_TILDE) return parse_postfix(p);
+    if (op->kind != TOKEN_MINUS && op->kind != TOKEN_TILDE && op->kind != TOKEN_BANG) return parse_postfix(p);
     advance(p);
     Ast *operand = parse_unary(p);
     if (!operand) return nullptr;
@@ -130,10 +137,23 @@ static Ast *parse_unary(Parser *p) {
 
 // How tightly a binary operator holds its operands, Go's levels (spec 6.1):
 // the higher, the tighter. 0 for a token that isn't a binary operator, so
-// an expression ends there. Task 3 adds 1: ||  2: &&  3: comparisons;
+// an expression ends there (at a ';', a ')', a body's '{', a range's '..').
 // Task 4 adds / and % at 5.
+//
+// The comparisons bind looser than arithmetic, so a + 1 < b compares the
+// sum; & is a multiplication, as in Go, so x & 1 == 0 is (x & 1) == 0, not
+// C's x & (1 == 0); and && binds tighter than ||, so a || b && c is
+// a || (b && c), as in C.
 static int binary_precedence(Token_Kind kind) {
     switch (kind) {
+    case TOKEN_PIPE_PIPE: return 1;
+    case TOKEN_AMP_AMP: return 2;
+    case TOKEN_EQUAL_EQUAL:
+    case TOKEN_BANG_EQUAL:
+    case TOKEN_LESS:
+    case TOKEN_LESS_EQUAL:
+    case TOKEN_GREATER:
+    case TOKEN_GREATER_EQUAL: return 3;
     case TOKEN_PLUS:
     case TOKEN_MINUS:
     case TOKEN_PIPE:
@@ -274,16 +294,108 @@ static bool is_assignment_operator(Token_Kind kind) {
 
 static Ast_Block *parse_block(Parser *p);
 
-// statement = declaration | assignment | 'return' [expression] ';' | block | expression ';'
+// if = 'if' expression block ['else' (block | if)]
 //
-// A declaration starts with IDENT and then ':', ':=' or '::', which no
-// expression can; anything else is an expression, and then an assignment
-// if '=' or a compound operator follows it:
+// The condition is any expression. Parentheses around it are allowed, as a
+// parenthesised expression, but not needed: the body's '{' ends the
+// expression, since no expression goes on with a '{'. The bodies are always
+// blocks, so no else can dangle: `else if` is an if as the whole else part,
+// and a chain of them nests to the right.
+static Ast *parse_if(Parser *p) {
+    Token *keyword = advance(p);
+    Ast_If *branch = ast_new<Ast_If>(p->arena, AST_IF, keyword->pos);
+    branch->condition = parse_expression(p, 1);
+    if (!branch->condition) return nullptr;
+    branch->then_block = parse_block(p);
+    if (!branch->then_block) return nullptr;
+    if (peek(p)->kind == TOKEN_ELSE) {
+        advance(p);
+        branch->else_part = peek(p)->kind == TOKEN_IF ? parse_if(p) : parse_block(p);
+        if (!branch->else_part) return nullptr;
+    }
+    return branch;
+}
+
+// while = 'while' expression block
+static Ast *parse_while(Parser *p) {
+    Token *keyword = advance(p);
+    Ast_While *loop = ast_new<Ast_While>(p->arena, AST_WHILE, keyword->pos);
+    loop->condition = parse_expression(p, 1);
+    if (!loop->condition) return nullptr;
+    loop->body = parse_block(p);
+    return loop->body ? loop : nullptr;
+}
+
+// One of the read-only variables a for loop declares: it (or the iterator's
+// own name) and it_index. The checker gives it its type.
+static Ast_Var *loop_variable(Parser *p, String name, Position pos) {
+    Ast_Var *var = ast_new<Ast_Var>(p->arena, AST_VAR, pos);
+    var->name = name;
+    var->is_iterator = true;
+    return var;
+}
+
+// for = 'for' [IDENT ':'] expression '..' expression block
+//
+// The first end is a whole expression, which stops at the '..' since that
+// isn't a binary operator: `for a + 1..n` starts at a + 1. A for over
+// anything but a range (an array's elements, milestone 2b) isn't there yet.
+static Ast *parse_for(Parser *p) {
+    Token *keyword = advance(p);
+    Ast_For *loop = ast_new<Ast_For>(p->arena, AST_FOR, keyword->pos);
+    if (peek(p)->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON) {
+        Token *name = advance(p);
+        advance(p);
+        loop->iterator = loop_variable(p, name->text, name->pos);
+    } else {
+        loop->iterator = loop_variable(p, str("it"), keyword->pos);
+    }
+    loop->index = loop_variable(p, str("it_index"), keyword->pos);
+    loop->first = parse_expression(p, 1);
+    if (!loop->first) return nullptr;
+    if (peek(p)->kind != TOKEN_DOT_DOT) {
+        if (peek(p)->kind != TOKEN_ERROR) {
+            diag_error(p->diag, loop->first->start, "'for' needs a range, as in for 0..9, for now");
+        }
+        return nullptr;
+    }
+    loop->dots = advance(p)->pos;
+    loop->last = parse_expression(p, 1);
+    if (!loop->last) return nullptr;
+    loop->body = parse_block(p);
+    return loop->body ? loop : nullptr;
+}
+
+// 'break' ';' and 'continue' ';'. The loop each one leaves or goes on with
+// is the checker's to find.
+static Ast *parse_jump(Parser *p) {
+    Token *keyword = advance(p);
+    Ast_Kind kind = keyword->kind == TOKEN_BREAK ? AST_BREAK : AST_CONTINUE;
+    Ast_Jump *jump = ast_new<Ast_Jump>(p->arena, kind, keyword->pos);
+    if (!expect(p, TOKEN_SEMICOLON)) return nullptr;
+    return jump;
+}
+
+// statement = declaration | assignment | 'return' [expression] ';' | block
+//           | if | while | for | 'break' ';' | 'continue' ';' | expression ';'
+//
+// A keyword starts most of them. A declaration starts with IDENT and then
+// ':', ':=' or '::', which no expression can; anything else is an
+// expression, and then an assignment if '=' or a compound operator follows
+// it:
 // assignment = expression ('=' | '+=' | ...) expression ';'
 static Ast *parse_statement(Parser *p) {
     Token *t = peek(p);
-    if (t->kind == TOKEN_LBRACE) return parse_block(p);
-    if (t->kind == TOKEN_RETURN) return parse_return(p);
+    switch (t->kind) {
+    case TOKEN_LBRACE: return parse_block(p);
+    case TOKEN_RETURN: return parse_return(p);
+    case TOKEN_IF: return parse_if(p);
+    case TOKEN_WHILE: return parse_while(p);
+    case TOKEN_FOR: return parse_for(p);
+    case TOKEN_BREAK:
+    case TOKEN_CONTINUE: return parse_jump(p);
+    default: break;
+    }
     if (t->kind == TOKEN_IDENT) {
         Token_Kind after = peek(p, 1)->kind;
         if (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL || after == TOKEN_COLON_COLON) {

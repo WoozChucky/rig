@@ -1,7 +1,8 @@
 // test_checker.cpp: names, types and calls (issue #9), then scopes,
-// constants, operators, conversions and returns (issue #33). Milestone 1's
-// tests build tokens by hand (toks(), helpers.cpp), milestone 2a's lex real
-// source (src()); either way, parsed, then checked.
+// constants, operators, conversions and returns (issue #33), then bools,
+// conditions and loops (issue #34). Milestone 1's tests build tokens by hand
+// (toks(), helpers.cpp), milestone 2a's lex real source (src()); either way,
+// parsed, then checked.
 
 #include "test.h"
 
@@ -308,17 +309,37 @@ static Checked check_src(Arena *a, const char *text) {
     return {list, file, ok};
 }
 
+static Ast *find_local(Ast_Block *block, const char *name);
+
+// The local called `name` declared in statement s or the blocks inside it:
+// a variable or constant, or a for loop's iterator or it_index; or null.
+static Ast *find_in_statement(Ast *s, const char *name) {
+    switch (s->kind) {
+    case AST_VAR: return string_eq(((Ast_Var *)s)->name, str(name)) ? s : nullptr;
+    case AST_CONST: return string_eq(((Ast_Const *)s)->name, str(name)) ? s : nullptr;
+    case AST_BLOCK: return find_local((Ast_Block *)s, name);
+    case AST_IF: {
+        Ast_If *branch = (Ast_If *)s;
+        Ast *found = find_local(branch->then_block, name);
+        return found || !branch->else_part ? found : find_in_statement(branch->else_part, name);
+    }
+    case AST_WHILE: return find_local(((Ast_While *)s)->body, name);
+    case AST_FOR: {
+        Ast_For *loop = (Ast_For *)s;
+        if (string_eq(loop->iterator->name, str(name))) return loop->iterator;
+        if (string_eq(loop->index->name, str(name))) return loop->index;
+        return find_local(loop->body, name);
+    }
+    default: return nullptr;
+    }
+}
+
 // The local variable or constant called `name` anywhere in the statements of
 // `block` and the blocks inside it (the first, in source order), or null.
 static Ast *find_local(Ast_Block *block, const char *name) {
     for (s64 i = 0; i < block->statements.count; i++) {
-        Ast *s = block->statements[i];
-        if (s->kind == AST_VAR && string_eq(((Ast_Var *)s)->name, str(name))) return s;
-        if (s->kind == AST_CONST && string_eq(((Ast_Const *)s)->name, str(name))) return s;
-        if (s->kind == AST_BLOCK) {
-            Ast *found = find_local((Ast_Block *)s, name);
-            if (found) return found;
-        }
+        Ast *found = find_in_statement(block->statements[i], name);
+        if (found) return found;
     }
     return nullptr;
 }
@@ -688,13 +709,13 @@ TEST(local_constant_must_be_constant) {
                            "}\n"),
               "4:10: the value of constant 'N' isn't known while compiling\n"
               "6:10: the value of constant 'K' isn't known while compiling\n"
-              "7:10: a constant can only be an integer, for now\n"
-              "9:10: a constant can only be an integer, for now\n");
+              "7:10: a constant can only be an integer or a bool, for now\n"
+              "9:10: a constant can only be an integer or a bool, for now\n");
     arena_free(&a);
 }
 
 TEST(bool_and_string_arent_integers) {
-    // (bool comes with Task 3; strings and pointers are what there is now.)
+    // Strings and pointers; bools have bools_dont_order.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "main :: () {\n"
@@ -795,5 +816,363 @@ TEST(a_value_in_parentheses_starts_at_the_parenthesis) {
               "8:14: 300 doesn't fit in 'u8'\n"
               "9:15: a value of type 's32' doesn't convert to 'u32' implicitly\n"
               "10:6: 'a' isn't a procedure, so it can't be called\n");
+    arena_free(&a);
+}
+
+// Milestone 2a (issue #34): bools, comparisons and logic, conditions, loops,
+// break and continue, and every path returning through if/else and while.
+
+TEST(conditions_must_be_bool) {
+    // An integer isn't a condition (spec 6.1): x != 0 says what's meant.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "greet :: () { }\n"
+                           "main :: () {\n"
+                           "    x := 1;\n"
+                           "    if x { }\n"
+                           "    while x + 1 { }\n"
+                           "    if x == 1 { } else if 2 { }\n"
+                           "    b := true;\n"
+                           "    if b { } else if !b { }\n"
+                           "    while (b) { }\n"
+                           "    if greet() { }\n"
+                           "    if nope { }\n"
+                           "}\n"),
+              "4:8: the condition of 'if' must be a bool, not 'int'\n"
+              "5:11: the condition of 'while' must be a bool, not 'int'\n"
+              "6:27: the condition of 'if' must be a bool, not 'int'\n"
+              "10:8: 'greet' returns nothing, so it has no value\n"
+              "11:8: unknown identifier 'nope'\n");
+    arena_free(&a);
+}
+
+// The value of the last procedure's local `name`, a variable's or a
+// constant's.
+static Ast *value_of(Checked *c, const char *name) {
+    Ast *local = local_named(c, name);
+    return local->kind == AST_VAR ? ((Ast_Var *)local)->value : ((Ast_Const *)local)->value;
+}
+
+TEST(comparisons_give_bool) {
+    // A comparison's operands meet as an arithmetic operator's do, and it
+    // gives a bool; == and != also compare two bools. Constants fold, as
+    // signed or unsigned numbers by the type they're compared as.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    a : u8 = 1; b : u16 = 2;\n"
+                          "    c := a < b;\n"
+                          "    d := a == 255;\n"
+                          "    e := c != d;\n"
+                          "    f := c == true;\n"
+                          "    s : s8 = -1;\n"
+                          "    g := s <= 1;\n"
+                          "    N :: 3 < 5;\n"
+                          "    M :: -1 < 1;\n"
+                          "    K :: 18446744073709551615 > 1;\n"
+                          "    L :: N == false;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    const char *bools[] = {"c", "d", "e", "f", "g", "N", "M", "K", "L"};
+    for (const char *name : bools) CHECK_STR(type_of(&a, &c, name), "bool");
+    // a widens to u16, the type the two are compared as; 255 takes a's type.
+    Ast_Binary *less = (Ast_Binary *)value_of(&c, "c");
+    CHECK_STR(type_name(&a, less->operand_type), "u16");
+    Ast_Binary *equal = (Ast_Binary *)value_of(&c, "d");
+    CHECK_STR(type_name(&a, equal->operand_type), "u8");
+    CHECK_STR(type_name(&a, equal->right->type), "u8");
+    CHECK_STR(type_name(&a, ((Ast_Binary *)value_of(&c, "e"))->operand_type), "bool");
+    CHECK_STR(type_name(&a, ((Ast_Binary *)value_of(&c, "g"))->operand_type), "s8");
+    CHECK(!less->is_constant);
+    // -1 < 1 compares signed numbers; the u64 18446744073709551615 is
+    // greater than 1, compared unsigned.
+    const char *constants[] = {"N", "M", "K", "L"};
+    const u64 values[] = {1, 1, 1, 0};
+    for (s64 i = 0; i < 4; i++) {
+        Ast *constant = local_named(&c, constants[i]);
+        CHECK(constant->is_constant);
+        CHECK_EQ(constant->constant, values[i]);
+    }
+    token_list_free(c.list);
+
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    a : s32; b : u64;\n"
+                           "    c := a < b;\n"
+                           "    d : u8;\n"
+                           "    e := d < 300;\n"
+                           "}\n"),
+              "3:12: mismatched types 's32' and 'u64' for '<'; cast one of them\n"
+              "5:14: 300 doesn't fit in 'u8'\n");
+    arena_free(&a);
+}
+
+TEST(logic_needs_bools) {
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    x := 1; b := true;\n"
+                           "    c := x && b;\n"
+                           "    d := b || x;\n"
+                           "    e := !x;\n"
+                           "    f := !b && (b || false);\n"
+                           "    g := -b;\n"
+                           "    h := ~b;\n"
+                           "}\n"),
+              "3:12: '&&' needs bools, not 'int'\n"
+              "4:12: '||' needs bools, not 'int'\n"
+              "5:10: '!' needs a bool, not 'int'\n"
+              "7:10: '-' needs an integer, not 'bool'\n"
+              "8:10: '~' needs an integer, not 'bool'\n");
+
+    // Constant operands fold.
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    T :: true && !false;\n"
+                          "    F :: T && false || !T;\n"
+                          "    b := true;\n"
+                          "    c := b && T;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(local_named(&c, "T")->is_constant);
+    CHECK_EQ(local_named(&c, "T")->constant, 1);
+    CHECK(local_named(&c, "F")->is_constant);
+    CHECK_EQ(local_named(&c, "F")->constant, 0);
+    Ast_Binary *both = (Ast_Binary *)value_of(&c, "c");
+    CHECK(!both->is_constant);
+    CHECK_STR(type_name(&a, both->type), "bool");
+    CHECK_STR(type_name(&a, both->operand_type), "bool");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(bools_dont_order) {
+    // A bool is only equal or not to another bool: it has no order, it
+    // isn't a number, and an integer is never one.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    a := true; b := false;\n"
+                           "    c := a < b;\n"
+                           "    d := a >= true;\n"
+                           "    e := a == 1;\n"
+                           "    f := a + b;\n"
+                           "    g := a == b;\n"
+                           "    h := 1 != a;\n"
+                           "    a += 1;\n"
+                           "    k : int = a;\n"
+                           "    a = 1;\n"
+                           "}\n"),
+              "3:12: '<' needs integers, not 'bool'\n"
+              "4:12: '>=' needs integers, not 'bool'\n"
+              "5:12: mismatched types 'bool' and 'int' for '=='\n"
+              "6:12: '+' needs integers, not 'bool'\n"
+              "8:12: mismatched types 'int' and 'bool' for '!='\n"
+              "9:7: '+=' needs integers, not 'bool'\n"
+              "10:15: a value of type 'bool' doesn't convert to 'int' implicitly\n"
+              "11:9: a value of type 'int' doesn't convert to 'bool' implicitly\n");
+    arena_free(&a);
+}
+
+TEST(break_outside_a_loop) {
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    break;\n"
+                           "    if true { continue; }\n"
+                           "    while true { break; }\n"
+                           "    for 0..1 { if true { continue; } { break; } }\n"
+                           "}\n"),
+              "2:5: 'break' is only allowed inside a loop\n"
+              "3:15: 'continue' is only allowed inside a loop\n");
+
+    // Each acts on the innermost loop around it.
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    while true {\n"
+                          "        for 0..1 { break; }\n"
+                          "        continue;\n"
+                          "    }\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_While *outer = (Ast_While *)c.file->procs[0]->body->statements[0];
+    Ast_For *inner = (Ast_For *)outer->body->statements[0];
+    CHECK(((Ast_Jump *)inner->body->statements[0])->loop == inner);
+    CHECK(((Ast_Jump *)outer->body->statements[1])->loop == outer);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(iterators_are_read_only) {
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    for 0..9 { it = 1; it_index += 1; }\n"
+                           "    for i: 0..9 { i = 2; }\n"
+                           "}\n"),
+              "2:16: can't assign to 'it': it's the loop's iterator\n"
+              "2:24: can't assign to 'it_index': it's the loop's index\n"
+              "3:19: can't assign to 'i': it's the loop's iterator\n");
+    arena_free(&a);
+}
+
+TEST(named_iterator_hides_it) {
+    // A named loop declares its name instead of it, so an outer loop's it
+    // is still the it inside it; it_index is always declared. Both are in
+    // the body's block, as parameters are in a procedure's, and end with
+    // the loop.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    for i: 0..9 { x := it + i + it_index; }\n"
+                           "    for 0..3 { for j: 0..3 { y := it + j; } }\n"
+                           "    for 0..1 { it := 5; }\n"
+                           "    z := it;\n"
+                           "}\n"),
+              "2:24: unknown identifier 'it'\n"
+              "4:16: 'it' is already declared at test.rig:4:5\n"
+              "5:10: unknown identifier 'it'\n");
+    arena_free(&a);
+}
+
+TEST(an_iterator_cant_be_called_it_index) {
+    // Every loop declares it_index, so an iterator by that name is reported
+    // at the name, once; it_index in the body is then the loop's index.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    for it_index: 0..9 { x := it_index; }\n"
+                           "}\n"),
+              "2:9: a loop's iterator can't be called 'it_index'\n");
+    arena_free(&a);
+}
+
+TEST(range_ends_unify) {
+    // The ends meet as an arithmetic operator's operands do, and the
+    // iterator has the type they meet at: untyped ends make an int.
+    // it_index is always an int.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    n : u8 = 10;\n"
+                          "    for 0..n { x := it; }\n"
+                          "    for 1..5 { y := it; z := it_index; }\n"
+                          "    m : s32 = 3;\n"
+                          "    for k: m..n { }\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "x"), "u8");
+    CHECK_STR(type_of(&a, &c, "y"), "int");
+    CHECK_STR(type_of(&a, &c, "z"), "int");
+    CHECK_STR(type_of(&a, &c, "k"), "s32");
+    token_list_free(c.list);
+
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    m : s32; q : u32;\n"
+                           "    for m..q { }\n"
+                           "    for true..1 { }\n"
+                           "    n : u8;\n"
+                           "    for -1..n { }\n"
+                           "}\n"),
+              "3:10: mismatched types 's32' and 'u32' for '..'; cast one of them\n"
+              "4:13: '..' needs integers, not 'bool'\n"
+              "6:9: -1 doesn't fit in 'u8'\n");
+    arena_free(&a);
+}
+
+TEST(if_else_that_returns_on_both_paths) {
+    // An if with an else doesn't reach its end when neither branch does;
+    // without an else, it always may.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: (x: int) -> int {\n"
+                           "    if x > 0 { return 1; } else { return 2; }\n"
+                           "}\n"
+                           "g :: (x: int) -> int {\n"
+                           "    if x > 0 { return 1; } else if x < 0 { return -1; } else { return 0; }\n"
+                           "}\n"
+                           "h :: (x: int) -> int {\n"
+                           "    if x > 0 { return 1; }\n"
+                           "}\n"
+                           "k :: (x: int) -> int {\n"
+                           "    if x > 0 { return 1; } else if x < 0 { return -1; }\n"
+                           "}\n"
+                           "m :: (x: int) -> int {\n"
+                           "    if x > 0 { return 1; } else { y := 1; }\n"
+                           "}\n"
+                           "main :: () { }\n"),
+              "9:1: 'h' must return a value on every path, and this one reaches its end\n"
+              "12:1: 'k' must return a value on every path, and this one reaches its end\n"
+              "15:1: 'm' must return a value on every path, and this one reaches its end\n");
+    arena_free(&a);
+}
+
+TEST(while_true_returns) {
+    // A while whose condition is the constant true only ends by a break,
+    // or never: without a break of its own, it doesn't reach its end.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: () -> int {\n"
+                           "    while true { }\n"
+                           "}\n"
+                           "g :: (x: int) -> int {\n"
+                           "    while true { if x > 0 { return x; } }\n"
+                           "}\n"
+                           "h :: () -> int {\n"
+                           "    RUNNING :: true;\n"
+                           "    while RUNNING { }\n"
+                           "}\n"
+                           "k :: (x: int) -> int {\n"
+                           "    while x > 0 { return 1; }\n"
+                           "}\n"
+                           "main :: () { }\n"),
+              "13:1: 'k' must return a value on every path, and this one reaches its end\n");
+    arena_free(&a);
+}
+
+TEST(while_true_with_break_doesnt) {
+    // A break of the loop's own, anywhere in its body, ends it; one of a
+    // loop inside it ends only that loop.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: (x: int) -> int {\n"
+                           "    while true { if x > 0 { break; } }\n"
+                           "}\n"
+                           "g :: (x: int) -> int {\n"
+                           "    while true { for 0..x { break; } }\n"
+                           "}\n"
+                           "h :: (x: int) -> int {\n"
+                           "    while true { while true { break; } if x > 0 { break; } }\n"
+                           "}\n"
+                           "main :: () { }\n"),
+              "3:1: 'f' must return a value on every path, and this one reaches its end\n"
+              "9:1: 'h' must return a value on every path, and this one reaches its end\n");
+    arena_free(&a);
+}
+
+TEST(a_broken_condition_says_nothing_about_returns) {
+    // One mistake, one message: once a condition is an error, whether its
+    // if or while reaches its end isn't known, so only the condition is
+    // reported, not a missing return as well.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: () -> int {\n"
+                           "    while 1 { return 1; }\n"
+                           "}\n"
+                           "g :: () -> int {\n"
+                           "    while nope { }\n"
+                           "}\n"
+                           "h :: () -> int {\n"
+                           "    if 1 { return 1; }\n"
+                           "}\n"
+                           "k :: (x: int) -> int {\n"
+                           "    if x > 0 { return 1; } else if 2 { return 0; }\n"
+                           "}\n"
+                           "main :: () { }\n"),
+              "2:11: the condition of 'while' must be a bool, not 'int'\n"
+              "5:11: unknown identifier 'nope'\n"
+              "8:8: the condition of 'if' must be a bool, not 'int'\n"
+              "11:36: the condition of 'if' must be a bool, not 'int'\n");
     arena_free(&a);
 }
