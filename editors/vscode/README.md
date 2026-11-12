@@ -64,7 +64,7 @@ Type the prefix and press `Tab` (or pick it from the suggestions); `Tab` then mo
 | `let` | `name := ;` (the type is the value's) |
 | `const` | `NAME :: ;` |
 
-They follow the language as the design gives it (section 6), a little ahead of the compiler: today's `rig` doesn't take top-level constants (`const` outside a procedure) yet.
+They follow the language as the design gives it (section 6), and every one of them builds with today's `rig`: `var`, `let` and `const` inside a procedure or at the top level.
 
 ## Building and running
 
@@ -116,7 +116,7 @@ The grammar is generated: a unit test, `tests/unit/test_grammar.cpp`, makes `syn
 
 - **The shapes** (numbers, strings, comments, directives, `name :: (` declarations, `it`/`it_index`, `cast,trunc`) are written by hand in the template. They follow the lexer's rules (`src/lexer.h`, the comment above `lex()`): when a literal form changes there, change it here too.
 - **The word lists** go where the template says `@NAME@`, filled in from the compiler's own tables: the keywords from the lexer's `KEYWORDS` (`src/lexer.cpp`), the operators and punctuation from its `PUNCTUATION`, the type names from the checker's `NAMED_TYPES` (`src/types.cpp`). The operators are one regex, longest first, each in its own capture group, so the first that matches is the longest, as the lexer reads them: `<<=` is one operator, not `<<` and `=`.
-- **The categories tables** in `test_grammar.cpp` give each word its scope (the name a colour theme colours): `KEYWORD_SCOPES` puts every keyword in a group (control, storage, cast, other, constant), `OPERATOR_SCOPES` every punctuation token (brackets get none). A word the compiler has and a table lacks, or the other way round, fails the test, which says what to add or remove. `RESERVED_TYPES` lists type names the language will have but the checker doesn't know yet (`bool`, `float`, ...), so they're highlighted before they land; once the checker knows one, the test says to take it out.
+- **The categories tables** in `test_grammar.cpp` give each word its scope (the name a colour theme colours): `KEYWORD_SCOPES` puts every keyword in a group (control, storage, cast, other, constant), `OPERATOR_SCOPES` every punctuation token (brackets get none). A word the compiler has and a table lacks, or the other way round, fails the test, which says what to add or remove. `RESERVED_TYPES` lists type names the language will have but the checker doesn't know yet (`float`, `string`, ...), so they're highlighted before they land; once the checker knows one, the test says to take it out.
 - **Blessing.** The test `vscode_grammar_is_current` generates the grammar and compares it with the committed file, byte for byte, naming the first line that differs. After changing the template or one of the tables, rewrite the file from the repository's root and commit it with the change:
 
   ```

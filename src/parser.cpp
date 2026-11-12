@@ -245,28 +245,26 @@ static bool starts_declaration(Parser *p) {
     return t->kind == TOKEN_IDENT && t->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON;
 }
 
-// declaration = IDENT ':' type ['=' (expression | '---')] ';'
-//             | IDENT ':=' expression ';'
-//             | IDENT '::' expression ';'
-// inside a body: a local variable or constant. The caller saw IDENT and
-// one of ':', ':=', '::'.
-static Ast *parse_local_declaration(Parser *p) {
-    Token *name = advance(p);
-    Token *colons = advance(p);
-    if (colons->kind == TOKEN_COLON_COLON) {
-        // `helper :: () {`: parentheses that are a signature's, not a
-        // constant's value in parentheses (N :: (2 + 3) * 4;).
-        if (peek(p)->kind == TOKEN_LPAREN && parameters_follow(p, p->next)) {
-            diag_error(p->diag, name->pos, "procedures can only be declared at the top level, for now");
-            return nullptr;
-        }
-        Ast_Const *constant = ast_new<Ast_Const>(p->arena, AST_CONST, name->pos);
-        constant->name = name->text;
-        constant->value = parse_expression(p, 1);
-        if (!constant->value || !expect(p, TOKEN_SEMICOLON)) return nullptr;
-        return constant;
-    }
+// The value of the constant `name` after its '::': expression ';'. The
+// caller read IDENT '::' and made sure no procedure follows.
+static Ast *parse_constant(Parser *p, Token *name) {
+    Ast_Const *constant = ast_new<Ast_Const>(p->arena, AST_CONST, name->pos);
+    constant->name = name->text;
+    constant->value = parse_expression(p, 1);
+    if (!constant->value || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+    return constant;
+}
 
+// "'---' needs a type, as in x : int = ---;" at the '---' the parser is at:
+// ':=' takes the variables' type from the value, and --- has none.
+static void report_untyped_triple_dash(Parser *p) {
+    diag_error(p->diag, peek(p)->pos, "'---' needs a type, as in x : int = ---;");
+}
+
+// The variable `name`, after its ':' or ':=' (`colons`), the same at the
+// top level and in a body:
+//   IDENT ':' type ['=' (expression | '---')] ';'  |  IDENT ':=' expression ';'
+static Ast_Var *parse_variable(Parser *p, Token *name, Token *colons) {
     Ast_Var *var = ast_new<Ast_Var>(p->arena, AST_VAR, name->pos);
     var->name = name->text;
     if (colons->kind == TOKEN_COLON) {
@@ -283,9 +281,8 @@ static Ast *parse_local_declaration(Parser *p) {
             }
         }
     } else {
-        // ':=' takes the type of its value, and --- has none.
         if (peek(p)->kind == TOKEN_TRIPLE_DASH) {
-            diag_error(p->diag, peek(p)->pos, "'---' needs a type, as in x : int = ---;");
+            report_untyped_triple_dash(p);
             return nullptr;
         }
         var->value = parse_expression(p, 1);
@@ -295,14 +292,69 @@ static Ast *parse_local_declaration(Parser *p) {
     return var;
 }
 
-// 'return' [expression] ';'
+// declaration = IDENT ':' type ['=' (expression | '---')] ';'
+//             | IDENT ':=' expression ';'
+//             | IDENT '::' expression ';'
+// inside a body: a local variable or constant. The caller saw IDENT and
+// one of ':', ':=', '::'.
+static Ast *parse_local_declaration(Parser *p) {
+    Token *name = advance(p);
+    Token *colons = advance(p);
+    if (colons->kind != TOKEN_COLON_COLON) return parse_variable(p, name, colons);
+    // `helper :: () {`: parentheses that are a signature's, not a
+    // constant's value in parentheses (N :: (2 + 3) * 4;).
+    if (peek(p)->kind == TOKEN_LPAREN && parameters_follow(p, p->next)) {
+        diag_error(p->diag, name->pos, "procedures can only be declared at the top level, for now");
+        return nullptr;
+    }
+    return parse_constant(p, name);
+}
+
+// Whether the statement starting at the next token declares several
+// variables at once: IDENT {',' IDENT} ':=' with at least two names. Only
+// tokens are looked at, nothing is read: `a, b = f();` (an assignment) and
+// `a, f() := g();` (not names) aren't.
+static bool multi_var_follows(Parser *p) {
+    s64 i = 0;
+    while (peek(p, i)->kind == TOKEN_IDENT && peek(p, i + 1)->kind == TOKEN_COMMA) i += 2;
+    return i > 0 && peek(p, i)->kind == TOKEN_IDENT && peek(p, i + 1)->kind == TOKEN_COLON_EQUAL;
+}
+
+// multi_var = IDENT {',' IDENT} ':=' expression ';', two names or more
+// (multi_var_follows said so): the variables receive the results of the
+// call that is the value, in order (spec 6.7). Each name gets its own
+// Ast_Var, with no value of its own; the checker gives each its type.
+static Ast *parse_multi_var(Parser *p) {
+    Ast_Multi_Var *multi = ast_new<Ast_Multi_Var>(p->arena, AST_MULTI_VAR, peek(p)->pos);
+    for (;;) {
+        Token *name = advance(p);
+        Ast_Var *var = ast_new<Ast_Var>(p->arena, AST_VAR, name->pos);
+        var->name = name->text;
+        array_add(&multi->vars, var);
+        if (advance(p)->kind == TOKEN_COLON_EQUAL) break;  // else the ',' before the next name
+    }
+    if (peek(p)->kind == TOKEN_TRIPLE_DASH) {
+        report_untyped_triple_dash(p);
+        return nullptr;
+    }
+    multi->value = parse_expression(p, 1);
+    if (!multi->value || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+    return multi;
+}
+
+// 'return' [expression {',' expression}] ';'
+// One value per result of the procedure: the checker counts them.
 static Ast *parse_return(Parser *p) {
     Token *keyword = advance(p);
     Ast_Return *ret = ast_new<Ast_Return>(p->arena, AST_RETURN, keyword->pos);
     if (peek(p)->kind != TOKEN_SEMICOLON) {
-        Ast *value = parse_expression(p, 1);
-        if (!value) return nullptr;
-        array_add(&ret->values, value);
+        for (;;) {
+            Ast *value = parse_expression(p, 1);
+            if (!value) return nullptr;
+            array_add(&ret->values, value);
+            if (peek(p)->kind != TOKEN_COMMA) break;
+            advance(p);
+        }
     }
     if (!expect(p, TOKEN_SEMICOLON)) return nullptr;
     return ret;
@@ -410,14 +462,16 @@ static Ast *parse_jump(Parser *p) {
     return jump;
 }
 
-// statement = declaration | assignment | 'return' [expression] ';' | block
+// statement = declaration | multi_var | assignment | return | block
 //           | if | while | for | 'break' ';' | 'continue' ';' | expression ';'
 //
 // A keyword starts most of them. A declaration starts with IDENT and then
-// ':', ':=' or '::', which no expression can; anything else is an
-// expression, and then an assignment if '=' or a compound operator follows
-// it:
+// ':', ':=' or '::', which no expression can, and a multi_var with names
+// separated by commas and then ':='. Anything else is an expression, and
+// then an assignment if '=' or a compound operator follows it, or if a ','
+// does (several targets, which take only '='):
 // assignment = expression ('=' | '+=' | ...) expression ';'
+//            | expression ',' expression {',' expression} '=' expression ';'
 static Ast *parse_statement(Parser *p) {
     Token *t = peek(p);
     switch (t->kind) {
@@ -435,10 +489,31 @@ static Ast *parse_statement(Parser *p) {
         if (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL || after == TOKEN_COLON_COLON) {
             return parse_local_declaration(p);
         }
+        if (multi_var_follows(p)) return parse_multi_var(p);
     }
 
     Ast *e = parse_expression(p, 1);
     if (!e) return nullptr;
+    if (peek(p)->kind == TOKEN_COMMA) {
+        // a, b = f();  The targets, then '=': a compound operator has one
+        // target (a, b += f() would mean nothing clear).
+        Array<Ast *> targets = {};
+        array_add(&targets, e);
+        while (peek(p)->kind == TOKEN_COMMA) {
+            advance(p);
+            Ast *target = parse_expression(p, 1);
+            if (!target) return nullptr;
+            array_add(&targets, target);
+        }
+        Token *op = expect(p, TOKEN_EQUAL);
+        if (!op) return nullptr;
+        Ast_Assign *assign = ast_new<Ast_Assign>(p->arena, AST_ASSIGN, op->pos);
+        assign->op = TOKEN_EQUAL;
+        assign->targets = targets;
+        assign->value = parse_expression(p, 1);
+        if (!assign->value || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+        return assign;
+    }
     Token *op = peek(p);
     if (is_assignment_operator(op->kind)) {
         advance(p);
@@ -503,7 +578,12 @@ static Ast_Param *parse_param(Parser *p) {
     return param->type_expr ? param : nullptr;
 }
 
-// procedure = '(' [param {',' param}] ')' ['->' type] (block | '#foreign' IDENT ';')
+// procedure = '(' [param {',' param}] ')' ['->' type {',' type}] (block | '#foreign' IDENT ';')
+//
+// Several results are written as a list after the arrow, with no
+// parentheses (spec 6.7): divmod :: (a: int, b: int) -> int, int { ... }.
+// The list ends at the body's '{' or the directive, which no type goes on
+// with.
 static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     Ast_Proc *proc = ast_new<Ast_Proc>(p->arena, AST_PROC, name->pos);
     proc->name = name->text;
@@ -520,9 +600,13 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     if (!expect(p, TOKEN_RPAREN)) return nullptr;
     if (peek(p)->kind == TOKEN_ARROW) {
         advance(p);
-        Ast_Type *result = parse_type(p);
-        if (!result) return nullptr;
-        array_add(&proc->results, result);
+        for (;;) {
+            Ast_Type *result = parse_type(p);
+            if (!result) return nullptr;
+            array_add(&proc->results, result);
+            if (peek(p)->kind != TOKEN_COMMA) break;
+            advance(p);
+        }
     }
 
     Token *t = peek(p);
@@ -544,46 +628,115 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
 }
 
 // top_level = IDENT '::' procedure
-static Ast_Proc *parse_declaration(Parser *p) {
+//           | IDENT '::' expression ';'                       a constant
+//           | IDENT ':' type ['=' (expression | '---')] ';'   a global variable
+//           | IDENT ':=' expression ';'                       a global variable
+//
+// After '::', a procedure's parameters start with '(' ')' or '(' IDENT ':'.
+// Any other '(' begins a constant's value in parentheses: N :: (1 + 2); is
+// a constant. A global variable is written as a local one; whether its
+// value is known while compiling is the checker's to say.
+//
+// ':' or ':=' followed by a signature (`greet : () {`, `greet := () {`) is
+// a procedure's declaration with its '::' mistyped, so it's reported as
+// milestone 1 did, "expected '::', found ':'", rather than as a type or a
+// value that can't begin with '('. Anything else after the name is
+// "expected '::'": procedures are what's most often declared.
+static Ast *parse_declaration(Parser *p) {
     Token *name = expect(p, TOKEN_IDENT);
-    if (!name || !expect(p, TOKEN_COLON_COLON)) return nullptr;
-    if (peek(p)->kind != TOKEN_LPAREN) {
-        if (peek(p)->kind != TOKEN_ERROR) {
-            diag_error(p->diag, peek(p)->pos, "only procedures can be declared at the top level for now");
-        }
+    if (!name) return nullptr;
+    Token_Kind after = peek(p)->kind;
+    bool signature_follows =
+        peek(p, 1)->kind == TOKEN_LPAREN &&
+        (after == TOKEN_COLON || (after == TOKEN_COLON_EQUAL && parameters_follow(p, p->next + 1)));
+    if (signature_follows) {
+        error_expected(p, token_kind_name(TOKEN_COLON_COLON));
         return nullptr;
     }
-    return parse_procedure(p, name);
+    if (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL) {
+        Ast_Var *var = parse_variable(p, name, advance(p));
+        if (var) var->is_global = true;
+        return var;
+    }
+    if (!expect(p, TOKEN_COLON_COLON)) return nullptr;
+    bool procedure = peek(p)->kind == TOKEN_LPAREN &&
+                     (peek(p, 1)->kind == TOKEN_RPAREN ||
+                      (peek(p, 1)->kind == TOKEN_IDENT && peek(p, 2)->kind == TOKEN_COLON));
+    if (procedure) return parse_procedure(p, name);
+    return parse_constant(p, name);
+}
+
+// Whether the next tokens look like a global variable's declaration to the
+// recovery: an identifier in column 1, then ':' or ':='. Column 1 only,
+// since a local variable is declared the same way, and is indented.
+static bool starts_global(Parser *p) {
+    Token *t = peek(p);
+    Token_Kind after = peek(p, 1)->kind;
+    return t->kind == TOKEN_IDENT && t->pos.col == 1 && (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL);
+}
+
+// Counts token `i` into the braces (`depth`) and the parameter list's
+// parentheses (`parens`) still open. '{' opens a brace and '}' closes one.
+// Only a parameter list's parentheses are counted, since only a parameter
+// list holds a name followed by ':' (`n: s32`), which a line can start
+// with: a call's or a value's parentheses never do, so a global after one
+// whose ')' is missing is still the next declaration. A list starts at a
+// '(' followed by ')' or IDENT ':', as parse_declaration tells a procedure
+// from a constant (`greet (s: *u8,` too, a C habit), or by IDENT IDENT, a
+// first parameter missing its ':' (`f :: (a int,`): two names in a row
+// never begin an expression. Inside a list every '(' and ')' counts. A
+// list holds no braces, so a '{' or '}' ends it, closed or not: a body has
+// begun or ended.
+static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
+    Token_Kind kind = p->tokens[i].kind;
+    if (kind == TOKEN_LBRACE || kind == TOKEN_RBRACE) {
+        *depth += kind == TOKEN_LBRACE ? 1 : -1;
+        *parens = 0;
+    } else if (kind == TOKEN_LPAREN) {
+        // A token follows a '(': the last one is TOKEN_EOF, and none follows
+        // it, so tokens[i + 2] is read only after an IDENT.
+        Token_Kind next = p->tokens[i + 1].kind;
+        Token_Kind after = next == TOKEN_IDENT ? p->tokens[i + 2].kind : TOKEN_EOF;
+        bool list = next == TOKEN_RPAREN || (next == TOKEN_IDENT && (after == TOKEN_COLON || after == TOKEN_IDENT));
+        if (*parens > 0 || list) *parens += 1;
+    } else if (kind == TOKEN_RPAREN && *parens > 0) {
+        *parens -= 1;
+    }
 }
 
 // After an error in a declaration that began at token `start`: skips to the
-// next token that starts a line and begins a declaration (IDENT '::'), or
-// to the end. A declaration the failed one stopped right at (an unclosed
-// block) is kept; otherwise at least one token is skipped, so parse() always
-// moves on.
+// next token that starts a line and begins a declaration (IDENT '::', or a
+// global variable's IDENT ':' or ':=' in column 1), or to the end. A
+// declaration the failed one stopped right at (an unclosed block, a
+// missing ';') is kept; otherwise at least one token is skipped, so parse()
+// always moves on.
 //
 // Inside a body, `N :: 5;` starting a line is a local constant, not the next
 // declaration, so the skipping counts braces from `start` on: an IDENT '::'
 // inside braces still open is passed over, unless it's in column 1, where
 // parse_block takes it for a top-level declaration after a body never
-// closed.
+// closed. A global variable is taken only outside every brace and
+// parameter list still open, even right where the failed declaration
+// stopped: an unindented local (`y : int;` in column 1 of a body) and a
+// parameter list over two lines (`n: s32` starting the second) look like
+// one too. A call's or a value's parentheses left open don't count (see
+// count_open): `counter : int = f(1` or `puts("a"` in a body, then a
+// global, keeps the global.
 static void skip_to_next_declaration(Parser *p, s64 start) {
-    if (p->next > start && starts_declaration(p)) return;
-    if (peek(p)->kind != TOKEN_EOF) advance(p);
-    s64 depth = 0;  // braces opened and not yet closed since `start`
-    for (s64 i = start; i < p->next; i++) {
-        if (p->tokens[i].kind == TOKEN_LBRACE) depth++;
-        if (p->tokens[i].kind == TOKEN_RBRACE) depth--;
-    }
-    while (peek(p)->kind != TOKEN_EOF) {
+    s64 depth = 0;   // braces opened and not yet closed since `start`
+    s64 parens = 0;  // the same for a parameter list's parentheses
+    for (s64 i = start; i < p->next; i++) count_open(p, i, &depth, &parens);
+    if (p->next > start && (starts_declaration(p) || (depth <= 0 && parens <= 0 && starts_global(p)))) return;
+    // At least one token is skipped, whatever it is.
+    for (bool first = true; peek(p)->kind != TOKEN_EOF; first = false) {
         Token *t = peek(p);
         bool starts_line = p->next == 0 || p->tokens[p->next - 1].pos.line != t->pos.line;
-        if (starts_line && t->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON_COLON &&
+        if (!first && starts_line && t->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON_COLON &&
             (depth <= 0 || t->pos.col == 1)) {
             return;
         }
-        if (t->kind == TOKEN_LBRACE) depth++;
-        if (t->kind == TOKEN_RBRACE) depth--;
+        if (!first && starts_line && depth <= 0 && parens <= 0 && starts_global(p)) return;
+        count_open(p, p->next, &depth, &parens);
         advance(p);
     }
 }
@@ -649,7 +802,10 @@ static bool parameters_follow(Parser *p, s64 open) {
 // looks like a declaration of that name, mistyped. That is the name
 // followed by:
 // - '::' (the mistake came later), or ':' for it (`greet : () {`);
-// - ':=' or '=' for it (`greet := () {`, the way a variable is declared);
+// - ':=' or '=' for it (`greet := () {`, the way a variable is declared).
+//   At the top level ':' and ':=' also declare a global variable, so a
+//   global that fails (`counter : int = 1 2;`) keeps its name this way
+//   too, on purpose: its uses aren't then reported as unknown;
 // - a character the lexer refused (perhaps a mistyped '::' too);
 // - '(' with no '::' (`greet () {`, a C habit), when the parentheses are
 //   a signature's, as parameters_follow says, not a call's;
@@ -699,8 +855,8 @@ Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
     Ast_File *file = arena_new<Ast_File>(a);
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;
-        Ast_Proc *proc = parse_declaration(&p);
-        if (!proc) {
+        Ast *decl = parse_declaration(&p);
+        if (!decl) {
             s64 resume = declaration_after_stray_tokens(&p, start);
             if (resume >= 0) {
                 // The tokens before it were stray, not a declaration, so
@@ -710,10 +866,17 @@ Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
                 p.next = resume;
                 continue;
             }
-            proc = broken_entry(&p, start);
+            // Whatever the declaration was meant to be, a procedure, a
+            // global or a constant, its entry is a broken Ast_Proc: only
+            // its name matters.
+            decl = broken_entry(&p, start);
             skip_to_next_declaration(&p, start);
         }
-        array_add(&file->procs, proc);
+        if (decl->kind == AST_PROC) {
+            array_add(&file->procs, (Ast_Proc *)decl);
+        } else {
+            array_add(&file->globals, decl);
+        }
     }
     return file;
 }

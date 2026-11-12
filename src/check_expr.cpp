@@ -56,14 +56,17 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
         e->type = to;
         return true;
     }
-    if (from == to) return true;
     // A string literal's bytes are stored with a zero after them, so C can
     // read them through a *u8 (milestone 1's rule).
     if (e->kind == AST_STRING && to->kind == TYPE_POINTER && to->pointee == type_from_name(str("u8"))) {
         return true;
     }
-    if (from->kind == TYPE_INTEGER && to->kind == TYPE_INTEGER) return widens(from, to);
-    return false;
+    return type_converts(from, to);
+}
+
+bool type_converts(Type *from, Type *to) {
+    if (!from || !to || from == to) return true;
+    return from->kind == TYPE_INTEGER && to->kind == TYPE_INTEGER && widens(from, to);
 }
 
 void check_default_type(Ast *e) {
@@ -108,8 +111,8 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         name->constant = decl->constant;
         return decl->type;
     case AST_PROC:
-        // A broken declaration may not even be a procedure (x :: 5): its
-        // type is unknown, so there's nothing to say.
+        // A broken declaration may not even be a procedure (x :: 5 6; or
+        // x : int = 1 2;): its type is unknown, so there's nothing to say.
         if (!((Ast_Proc *)decl)->is_broken) diag_error(c->diag, name->pos, "procedures can only be called, for now");
         return nullptr;
     default: RIG_ASSERT(!"not a declaration"); return nullptr;

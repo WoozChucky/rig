@@ -1,6 +1,7 @@
 // test_checker.cpp: names, types and calls (issue #9), then scopes,
 // constants, operators, conversions and returns (issue #33), then bools,
-// conditions and loops (issue #34), then division and casts (issue #35).
+// conditions and loops (issue #34), then division and casts (issue #35),
+// then several results, globals and top-level constants (issue #36).
 // Milestone 1's tests build tokens by hand (toks(), helpers.cpp), milestone
 // 2a's lex real source (src()); either way, parsed, then checked.
 
@@ -214,8 +215,8 @@ TEST(a_broken_declaration_of_anything_is_declared) {
     // x isn't a procedure, but the program says it exists: using it is
     // nothing more to report.
     Arena a = arena_make();
-    CHECK_STR(errors_after_parse(&a, "IDENT:x :: INT:5 ; | IDENT:main :: ( ) { IDENT:x ; IDENT:x ( ) ; }"),
-              "1:5: only procedures can be declared at the top level for now\n");
+    CHECK_STR(errors_after_parse(&a, "IDENT:x :: INT:5 INT:6 ; | IDENT:main :: ( ) { IDENT:x ; IDENT:x ( ) ; }"),
+              "1:7: expected ';', found integer literal\n");
     arena_free(&a);
 }
 
@@ -317,6 +318,13 @@ static Ast *find_in_statement(Ast *s, const char *name) {
     switch (s->kind) {
     case AST_VAR: return string_eq(((Ast_Var *)s)->name, str(name)) ? s : nullptr;
     case AST_CONST: return string_eq(((Ast_Const *)s)->name, str(name)) ? s : nullptr;
+    case AST_MULTI_VAR: {
+        Ast_Multi_Var *multi = (Ast_Multi_Var *)s;
+        for (s64 i = 0; i < multi->vars.count; i++) {
+            if (string_eq(multi->vars[i]->name, str(name))) return multi->vars[i];
+        }
+        return nullptr;
+    }
     case AST_BLOCK: return find_local((Ast_Block *)s, name);
     case AST_IF: {
         Ast_If *branch = (Ast_If *)s;
@@ -1392,5 +1400,250 @@ TEST(cast_trunc_needs_integers) {
               "5:10: cast,trunc only takes integers\n"
               "6:10: cast,trunc only takes integers\n"
               "7:10: cast,trunc only takes integers\n");
+    arena_free(&a);
+}
+
+// Milestone 2a (issue #36): several results (spec 6.7), globals and
+// constants at the top level.
+
+TEST(return_gives_every_result) {
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "divmod :: (a: int, b: int) -> int, int {\n"
+                           "    if a < 0 { return a; }\n"
+                           "    if a < 1 { return; }\n"
+                           "    if a < 2 { return a, b, a; }\n"
+                           "    if a < 3 { return 300, true; }\n"
+                           "    return a / b, a % b;\n"
+                           "}\n"
+                           "one :: () -> int { return 1, 2; }\n"
+                           "none :: () { return 1, 2; }\n"
+                           "main :: () { }\n"),
+              "2:16: 'divmod' returns 2 values, but this return gives 1\n"
+              "3:16: 'divmod' returns 2 values, but this return gives none\n"
+              "4:16: 'divmod' returns 2 values, but this return gives 3\n"
+              "5:28: a value of type 'bool' doesn't convert to 'int' implicitly\n"
+              "8:20: 'one' returns 1 value, but this return gives 2\n"
+              "9:14: 'none' returns nothing, but this return gives 2 values\n");
+    // Every path must return them all, as it must one.
+    CHECK_STR(check_source(&a,
+                           "divmod :: (a: int, b: int) -> int, int {\n"
+                           "    if b != 0 { return a / b, a % b; }\n"
+                           "}\n"
+                           "main :: () { }\n"),
+              "3:1: 'divmod' must return its values on every path, and this one reaches its end\n");
+    arena_free(&a);
+}
+
+TEST(names_receive_every_result) {
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "divmod :: (a: int, b: int) -> int, int { return a / b, a % b; }\n"
+                           "one :: () -> int { return 1; }\n"
+                           "greet :: () { }\n"
+                           "main :: () {\n"
+                           "    q, r := divmod(7, 2);\n"
+                           "    x, y, z := divmod(7, 2);\n"
+                           "    s, t := one();\n"
+                           "    u, v := greet();\n"
+                           "    m, n := 5;\n"
+                           "    q, k := divmod(1, 1);\n"
+                           "    w := x + y + s + u + m;\n"
+                           "}\n"),
+              "6:16: 'divmod' returns 2 values, but 3 names receive them\n"
+              "7:13: 'one' returns 1 value, but 2 names receive them\n"
+              "8:13: 'greet' returns nothing, so it has no value\n"
+              "9:13: only a call can give several values, as in q, r := divmod(7, 2);\n"
+              "10:5: 'q' is already declared at test.rig:5:5\n");
+    // Each name has the type of the result it receives.
+    Checked c = check_src(&a,
+                          "pair :: () -> u8, bool { return 1, true; }\n"
+                          "main :: () {\n"
+                          "    n, ok := pair();\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "n"), "u8");
+    CHECK_STR(type_of(&a, &c, "ok"), "bool");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(several_targets_receive_every_result) {
+    // a, b = f(); each result converts to its target, as a value assigned
+    // to it would.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "divmod :: (a: int, b: int) -> int, int { return a / b, a % b; }\n"
+                           "pair :: () -> u8, s32 { return 1, 2; }\n"
+                           "N :: 1;\n"
+                           "main :: () {\n"
+                           "    a : int; b : int; c : u8;\n"
+                           "    a, b = divmod(7, 2);\n"
+                           "    a, b = pair();\n"
+                           "    c, a = divmod(7, 2);\n"
+                           "    a, b, c = divmod(7, 2);\n"
+                           "    N, a = divmod(7, 2);\n"
+                           "    a, b = 5;\n"
+                           "}\n"),
+              "8:5: a value of type 'int' doesn't convert to 'u8' implicitly\n"
+              "9:15: 'divmod' returns 2 values, but 3 names receive them\n"
+              "10:5: can't assign to 'N': it's a constant\n"
+              "11:12: only a call can give several values, as in q, r := divmod(7, 2);\n");
+    arena_free(&a);
+}
+
+TEST(first_result_as_a_value) {
+    // A call used as one value gives its first result (spec 6.7).
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "divmod :: (a: int, b: int) -> int, int { return a / b, a % b; }\n"
+                          "take :: (n: int) { }\n"
+                          "main :: () {\n"
+                          "    q := divmod(7, 2);\n"
+                          "    take(divmod(9, 4));\n"
+                          "    s := divmod(7, 2) + 1;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "q"), "int");
+    CHECK_STR(type_of(&a, &c, "s"), "int");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(foreign_returns_one_value) {
+    // C returns one value: several are Rig's own.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "pair :: () -> s32, s32 #foreign libc;\n"
+                           "main :: () { }\n"),
+              "1:20: a foreign procedure can return at most one value\n");
+    arena_free(&a);
+}
+
+// The global variable or top-level constant called `name`, which must exist.
+static Ast *global_named(Checked *c, const char *name) {
+    for (s64 i = 0; i < c->file->globals.count; i++) {
+        Ast *g = c->file->globals[i];
+        String n = g->kind == AST_VAR ? ((Ast_Var *)g)->name : ((Ast_Const *)g)->name;
+        if (string_eq(n, str(name))) return g;
+    }
+    RIG_ASSERT(!"no such global");
+    return nullptr;
+}
+
+TEST(globals_are_visible_everywhere) {
+    // As procedures are: in every body, used above their declaration.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "bump :: () { counter += STEP; }\n"
+                          "main :: () {\n"
+                          "    bump();\n"
+                          "    x := counter;\n"
+                          "    flag = !flag;\n"
+                          "}\n"
+                          "counter : int;\n"
+                          "STEP :: 2;\n"
+                          "flag : bool = ---;\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast *counter = global_named(&c, "counter");
+    CHECK_STR(type_name(&a, counter->type), "int");
+    Ast_Name *read = (Ast_Name *)((Ast_Var *)local_named(&c, "x"))->value;
+    CHECK(read->decl == counter);
+    CHECK_STR(type_of(&a, &c, "x"), "int");
+    CHECK(global_named(&c, "STEP")->is_constant);
+    CHECK_STR(type_name(&a, global_named(&c, "flag")->type), "bool");
+    token_list_free(c.list);
+
+    // They share the procedures' names; a local may hide one.
+    CHECK_STR(check_source(&a,
+                           "counter : int;\n"
+                           "counter :: () { }\n"
+                           "STEP :: 1;\n"
+                           "STEP := 2;\n"
+                           "f :: () { }\n"
+                           "f : u8;\n"
+                           "main :: () { counter := 1; f(); }\n"),
+              "2:1: 'counter' is already declared at test.rig:1:1\n"
+              "4:1: 'STEP' is already declared at test.rig:3:1\n"
+              "6:1: 'f' is already declared at test.rig:5:1\n");
+    // A global isn't called, and main must be a procedure.
+    CHECK_STR(check_source(&a,
+                           "x : int;\n"
+                           "f :: () { x(); }\n"
+                           "main := 5;\n"),
+              "1:1: a procedure called 'main' is needed\n"
+              "2:11: 'x' isn't a procedure, so it can't be called\n");
+    arena_free(&a);
+}
+
+TEST(global_value_must_be_constant) {
+    // A global's first value is in the program's file, so it must be known
+    // while compiling; without one it's zero.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: () -> int { return 1; }\n"
+                           "a := f();\n"
+                           "b : int = a;\n"
+                           "c := 1 + LIMIT;\n"
+                           "d : u8 = 300;\n"
+                           "p : *u8 = \"hi\";\n"
+                           "s := \"hi\";\n"
+                           "e : u8 = LIMIT;\n"
+                           "LIMIT :: 255;\n"
+                           "main :: () { }\n"),
+              "2:6: a global's value must be known while compiling, for now\n"
+              "3:11: a global's value must be known while compiling, for now\n"
+              "5:10: 300 doesn't fit in 'u8'\n"
+              "6:11: a global's value must be known while compiling, for now\n"
+              "7:6: variables can't hold a 'string' yet; give it the type '*u8'\n");
+    Checked c = check_src(&a, "c := 1 + LIMIT;\nLIMIT :: 255;\nmain :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Var *var = (Ast_Var *)global_named(&c, "c");
+    CHECK_STR(type_name(&a, var->type), "int");
+    CHECK(var->value->is_constant);
+    CHECK_EQ(var->value->constant, 256);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(constants_in_any_order) {
+    // A top-level constant is worked out where it's first needed, so it can
+    // be used above its declaration, by another constant or a global too.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "A :: B + 1;\n"
+                          "B :: 2;\n"
+                          "v := C * A;\n"
+                          "C :: cast(u8) 4;\n"
+                          "main :: () { x : u8 = A; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast *constant = global_named(&c, "A");
+    CHECK(constant->is_constant);
+    CHECK_EQ(constant->constant, 3);
+    CHECK(type_is_untyped(constant->type));
+    Ast_Var *v = (Ast_Var *)global_named(&c, "v");
+    CHECK_STR(type_name(&a, v->type), "u8");
+    CHECK_EQ(v->value->constant, 12);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(constant_cycle) {
+    // A value that needs itself, directly or through others, is reported
+    // once, at the name whose value was being worked out; its uses then
+    // say nothing more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "A :: B + 1;\n"
+                           "B :: A * 2;\n"
+                           "C :: C;\n"
+                           "x := y;\n"
+                           "y := x;\n"
+                           "D :: D + D;\n"
+                           "main :: () { z := A + C + D + x; }\n"),
+              "1:1: 'A' is defined in terms of itself\n"
+              "3:1: 'C' is defined in terms of itself\n"
+              "4:1: 'x' is defined in terms of itself\n"
+              "6:1: 'D' is defined in terms of itself\n");
     arena_free(&a);
 }

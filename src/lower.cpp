@@ -8,11 +8,20 @@
 //   lower_while, lower_for, lower_logical show the shapes). Statements
 //   after a block has ended (a return, a break) can't run, and aren't
 //   lowered.
-// - Every variable (Ast_Var) is a stack slot, an IR_LOCAL, in its
+// - Every local variable (Ast_Var) is a stack slot, an IR_LOCAL, in its
 //   procedure, stored to where it's declared: its value, or zero (spec 6.4:
 //   variables start zeroed), or nothing at all for ---. Reading it is an
 //   IR_LOAD, assigning it an IR_STORE. Parameters are read-only, so they
 //   need no slot: a parameter is its value, %0 to %(count-1).
+// - A global variable is an Ir_Global of its type, whose first value (the
+//   constant the checker made sure it has, or zero) is in the program's
+//   file. It's read and written as a slot is, through its address, an
+//   IR_ADDR. Constants, local or top-level, never reach the IR: every use
+//   of one is a constant already.
+// - Several results: a return gives one value per result, a call numbers
+//   one value per result (its first is the call's value where one is
+//   wanted), and names or targets receiving them are stored from those
+//   values in order (lower_multi_var, lower_multi_assign).
 // - Every expression the checker marked constant is one IR_CONST, of the
 //   type its use wants: `2 + 3 * 4` is `const i64 14`.
 // - Arithmetic is at the width of its type (no promotion), and wraps: the
@@ -58,13 +67,15 @@ struct Loop {
 
 struct Lowering {
     Arena *arena;
-    Diagnostics *diag;      // only for the source files' paths, which runtime errors name
+    Diagnostics *diag;        // only for the source files' paths, which runtime errors name
     Ir_Module *module;
-    Table<s32> proc_index;  // a Rig or foreign procedure's index in module->procs, by name
-    Ir_Proc *proc;          // the procedure whose body is being lowered
-    s32 block;              // the block instructions go into
-    Array<Local> locals;    // the current procedure's variables and parameters so far
-    Array<Loop> loops;      // the loops around the statement being lowered, innermost last
+    Table<s32> proc_index;    // a Rig or foreign procedure's index in module->procs, by name
+    Table<s32> global_index;  // a global variable's index in module->globals, by name
+    s32 string_count;         // the str.N globals made so far: string literals and panic messages
+    Ir_Proc *proc;            // the procedure whose body is being lowered
+    s32 block;                // the block instructions go into
+    Array<Local> locals;      // the current procedure's variables and parameters so far
+    Array<Loop> loops;        // the loops around the statement being lowered, innermost last
 };
 
 // The IR type of a checked type. Strings aren't values yet: a literal is
@@ -161,7 +172,7 @@ static s32 emit_select(Lowering *l, Ir_Type t, s32 condition, s32 if_true, s32 i
 // message (written without the zero).
 static s32 add_bytes(Lowering *l, String bytes) {
     Ir_Global g = {};
-    g.name = string_printf(l->arena, "str.%lld", (long long)l->module->globals.count);
+    g.name = string_printf(l->arena, "str.%d", l->string_count++);
     g.type = IR_VOID;
     u8 *copy = (u8 *)arena_alloc(l->arena, bytes.count + 1, 1);
     memcpy(copy, bytes.data, (size_t)bytes.count);  // arena memory is zeroed: the last byte is 0
@@ -216,6 +227,20 @@ static Local *local_of(Lowering *l, Ast *decl) {
     }
     RIG_ASSERT(!"a name with no slot");
     return nullptr;
+}
+
+// The address of variable `decl` (an Ast_Var), where it's loaded from and
+// stored to: a local's slot, or a global's address, emitted here. A
+// global's name is its own: the checker allowed no other top-level
+// declaration of it.
+static s32 address_of(Lowering *l, Ast *decl) {
+    RIG_ASSERT(decl->kind == AST_VAR);
+    if (!((Ast_Var *)decl)->is_global) return local_of(l, decl)->value;
+    s32 *index = table_get(&l->global_index, ((Ast_Var *)decl)->name);
+    RIG_ASSERT(index);
+    Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
+    addr->target = *index;
+    return addr->result;
 }
 
 static s32 lower_expr(Lowering *l, Ast *e);
@@ -463,11 +488,8 @@ static s32 lower_expr(Lowering *l, Ast *e) {
     case AST_CALL: return lower_call(l, (Ast_Call *)e);
     case AST_NAME: {
         Ast *decl = ((Ast_Name *)e)->decl;
-        Local *local = local_of(l, decl);
-        if (decl->kind == AST_PARAM) return local->value;
-        Ir_Instr *load = emit(l, IR_LOAD, ir_type_of(decl->type));
-        load->a = local->value;
-        return load->result;
+        if (decl->kind == AST_PARAM) return local_of(l, decl)->value;
+        return emit_load(l, ir_type_of(decl->type), address_of(l, decl));
     }
     case AST_UNARY: {
         Ast_Unary *u = (Ast_Unary *)e;
@@ -684,6 +706,46 @@ static void lower_jump(Lowering *l, Ast_Jump *jump) {
     array_add(jump->kind == AST_BREAK ? &loop->breaks : &loop->continues, l->block);
 }
 
+// q, r := f(); a slot per name, as a variable's declaration makes, then
+// the call, whose results are consecutive values (ir_emit_call), each
+// stored into its name's slot. Each name has its result's own type, so
+// nothing is converted.
+//
+//     %q = local i64
+//     %r = local i64
+//     %v, %v+1 = call @f(...)
+//     store i64 %v, %q
+//     store i64 %v+1, %r
+static void lower_multi_var(Lowering *l, Ast_Multi_Var *multi) {
+    Array<s32> slots = {};
+    for (s64 i = 0; i < multi->vars.count; i++) {
+        Ast_Var *var = multi->vars[i];
+        s32 slot = emit(l, IR_LOCAL, ir_type_of(var->type))->result;
+        array_add(&l->locals, {var, slot});
+        array_add(&slots, slot);
+    }
+    s32 first = lower_expr(l, multi->value);  // the checker made sure it's such a call
+    for (s64 i = 0; i < multi->vars.count; i++) {
+        emit_store(l, ir_type_of(multi->vars[i]->type), first + (s32)i, slots[i]);
+    }
+    array_free(&slots);
+}
+
+// a, b = f(); the call first, then each result stored into its target, in
+// order, widened first when the target's type is wider (the checker made
+// sure each converts). The targets are read only after the call, so
+// `a, b = swap(a, b);` passes the old values and stores the new ones.
+static void lower_multi_assign(Lowering *l, Ast_Assign *assign) {
+    Ast_Call *call = (Ast_Call *)assign->value;
+    s32 first = lower_expr(l, call);
+    for (s64 i = 0; i < assign->targets.count; i++) {
+        Ast *decl = ((Ast_Name *)assign->targets[i])->decl;  // a variable: checked
+        s32 address = address_of(l, decl);
+        s32 value = resize(l, first + (s32)i, call->proc->results[i]->type, ir_type_of(decl->type));
+        emit_store(l, ir_type_of(decl->type), value, address);
+    }
+}
+
 static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     switch (s->kind) {
     case AST_VAR: {
@@ -699,12 +761,17 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
         break;
     }
     case AST_CONST: break;  // its uses are constants already
+    case AST_MULTI_VAR: lower_multi_var(l, (Ast_Multi_Var *)s); break;
     case AST_ASSIGN: {
         Ast_Assign *assign = (Ast_Assign *)s;
+        if (assign->targets.count > 1) {
+            lower_multi_assign(l, assign);
+            break;
+        }
         Ast_Name *target = (Ast_Name *)assign->targets[0];  // the checker made sure it's a variable
         Type *type = target->decl->type;
         Ir_Type t = ir_type_of(type);
-        s32 slot = local_of(l, target->decl)->value;
+        s32 slot = address_of(l, target->decl);
         s32 value;
         if (assign->op == TOKEN_EQUAL) {
             value = lower_value(l, assign->value, type);
@@ -753,6 +820,27 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
     l.diag = d;
     l.module = m;
     l.block = -1;
+
+    // The global variables, in source order, each an Ir_Global of its
+    // type. Its first value is the constant the checker made sure it has
+    // (its bits cut to the type's width, as an IR_CONST keeps them), or
+    // zero: without a value, or with ---, since a global isn't on the stack
+    // and nothing else was ever there. Constants are skipped: their uses
+    // are constants.
+    for (s64 i = 0; i < f->globals.count; i++) {
+        if (f->globals[i]->kind != AST_VAR) continue;
+        Ast_Var *var = (Ast_Var *)f->globals[i];
+        Ir_Global g = {};
+        g.name = var->name;
+        g.type = ir_type_of(var->type);
+        if (var->value) {
+            RIG_ASSERT(var->value->is_constant);
+            g.initial = var->value->constant;
+            if (g.type != IR_PTR && ir_bits(g.type) < 64) g.initial &= ((u64)1 << ir_bits(g.type)) - 1;
+        }
+        table_put(&l.global_index, var->name, (s32)m->globals.count);
+        array_add(&m->globals, g);
+    }
 
     // Every procedure first, so a call can name one declared later.
     for (s64 i = 0; i < f->procs.count; i++) {
@@ -805,6 +893,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
     array_add(&emit(&l, IR_RET, IR_VOID)->args, zero);
 
     table_free(&l.proc_index);
+    table_free(&l.global_index);
     array_free(&l.locals);
     array_free(&l.loops);
     return m;

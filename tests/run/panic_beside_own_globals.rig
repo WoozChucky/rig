@@ -1,0 +1,14 @@
+// The runtime's panic calls C's write (_write on Windows) and exit. This
+// program has globals of its own called write and exit, which LLVM renames
+// since the runtime declared C's first (spec 6.4); a division by zero must
+// still print the runtime's message and exit with 101, not store to them.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+write : int = 0;
+exit : u8 = 3;
+
+main :: () {
+    puts("before");
+    x := cast(int) exit / write;
+    puts("after");
+}

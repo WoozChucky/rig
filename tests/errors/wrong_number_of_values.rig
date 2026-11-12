@@ -1,0 +1,8 @@
+// A return gives every result, and as many names receive them.
+divmod :: (a: int, b: int) -> int, int {
+    return a / b;
+}
+
+main :: () {
+    q, r, s := divmod(7, 2);
+}
