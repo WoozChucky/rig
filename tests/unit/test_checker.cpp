@@ -3194,6 +3194,33 @@ TEST(array_types) {
     arena_free(&a);
 }
 
+TEST(broken_struct_behind_a_view_says_nothing_more) {
+    // A struct laid out before one it holds behind a view, or an array of
+    // pointers, takes that struct's type before its layout is known. If the
+    // layout then fails (a circle, too big), the struct has no type, and
+    // neither has the field: its uses say nothing more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Good :: struct { v: []Bad; q: *Bad; a: [2]*Bad; vv: [][]Bad; }\n"
+                           "Bad :: struct { n: int; again: Bad; }\n"
+                           "Holder :: struct { v: []Big; }\n"
+                           "Big :: struct { x: [1099511627776]u8; y: u8; }\n"
+                           "main :: () {\n"
+                           "    g : Good;\n"
+                           "    w := g.v[0];\n"
+                           "    k : int = w;\n"
+                           "    p := g.a[0];\n"
+                           "    m : int = p.n;\n"
+                           "    r : int = g.q.n;\n"
+                           "    s : int = g.vv[0][0];\n"
+                           "    h : Holder;\n"
+                           "    z : int = h.v[0];\n"
+                           "}\n"),
+              "2:1: 'Bad' contains itself; it can hold a pointer to itself, *Bad\n"
+              "4:1: 'Big' is too big\n");
+    arena_free(&a);
+}
+
 TEST(array_count_rules) {
     // [N]T: N an integer known while compiling, from 0 up; the type at most
     // 2^40 bytes.

@@ -1,0 +1,14 @@
+// The widest bounds message: a u64 index at its largest, given unsigned,
+// and a view's count at int's smallest, given signed. Both numbers are 20
+// characters, so the message fills its buffer to the last byte.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    a := int.[1, 2, 3];
+    v : []int = a;
+    v.count = -9223372036854775807 - 1;
+    i : u64 = 18446744073709551615;
+    puts("before");
+    x := v[i];
+    puts("after");
+}

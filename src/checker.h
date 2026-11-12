@@ -5,9 +5,8 @@
 // assignment and return against the types involved. It fills in the tree as
 // it goes (Ast.type, Ast.is_constant and Ast.constant, Ast_Name.decl,
 // Ast_Call.proc, Ast_Member.index (-1 for an array's or a view's .count and
-// .data), and each struct's type and layout,
-// Ast_Struct.declared), so the stages after it never look anything up
-// again.
+// .data), and each struct's type and layout, Ast_Struct.declared), so the
+// stages after it never look anything up again.
 // checker.cpp checks declarations and statements, check_expr.cpp
 // expressions; check.h is what they share.
 //
@@ -287,6 +286,9 @@
 //   lie elsewhere. T is any type but void ("'void' is only a pointer's
 //   target, as in *void"). A struct holding an array of itself holds
 //   itself; a view of itself, or an array of pointers to itself, is fine.
+//   A field that holds a struct with no type (one in a circle, or too
+//   big), in any way, in a view or an array of pointers too, has none
+//   either, so its uses say nothing more.
 // - a[i] is an element of an array or a view, or of what a pointer points
 //   at (C's p[i], unchecked); i is any integer, read by its sign, an untyped
 //   one an int. Otherwise: "'[]' needs an array, a view or a pointer, not
@@ -374,3 +376,12 @@
 // Checks the file, filling in types and the procedures calls refer to.
 // True when the checker reported no errors (the parser may have).
 bool check(Ast_File *file, Arena *a, Diagnostics *d);
+
+// Whether e, checked with no errors, is a place in memory: a variable, but
+// not a loop's iterator or index; p.*; a field of a place, or of a struct
+// reached through a pointer; an element of a place's array, or of a view's
+// or a pointer's. An array's .count and .data never are. The one statement
+// of the rule: the checker asks it before taking an address or assigning
+// (and says why not), and lowering asks it what an array converted to a
+// view is seen through (lower_view_of): the array itself, or a copy of it.
+bool expr_is_place(Ast *e);

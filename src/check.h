@@ -84,8 +84,7 @@ void report_no_conversion(Checker *c, Ast *value, Type *to);
 // Whether a value of type `from`, not an untyped constant, converts
 // implicitly to `to`: the same type, an integer that widens, a float32 to a
 // float64 (spec 6.4), a *void to or from any pointer, or [N]T to []T (spec
-// 6.5). True when either is unknown (null): the error
-// was reported already.
+// 6.5). True when either is unknown (null): the error was reported already.
 bool type_converts(Type *from, Type *to);
 
 // An untyped constant that meets no type becomes an int (x := 5;), or a
@@ -112,7 +111,8 @@ void report_null_without_a_type(Checker *c, Ast *e);
 // .data never are ("can't assign to an array's 'count'").
 bool check_addressable(Checker *c, Ast *e, bool for_writing);
 
-// check_addressable for an e already checked, its type known.
+// check_addressable for an e already checked, its type known: whether
+// expr_is_place (checker.h), and if not, why not.
 bool is_place(Checker *c, Ast *e, bool for_writing);
 
 // p += n or p -= n (`op_name`, at `at`), p's type the pointer type

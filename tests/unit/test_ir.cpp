@@ -2161,9 +2161,9 @@ TEST(array_to_view_views_the_array) {
 }
 
 TEST(bounds_failed_buffer_fits_a_long_path) {
-    // The buffer holds the longest `where` the module passes, the fixed
-    // text and two numbers of up to 20 characters: for a path of 300 bytes,
-    // at least 300 + 64.
+    // The buffer holds the longest `where` the module passes, the 33 bytes
+    // of fixed text and two numbers of up to 20 characters each: for a
+    // path of 300 bytes, `PATH:1:42: runtime error: ` (322 bytes) + 73.
     Arena a = arena_make();
     char path[301];
     memset(path, 'p', 296);
@@ -2179,7 +2179,7 @@ TEST(bounds_failed_buffer_fits_a_long_path) {
     if (at >= 0) {
         String rest = string_slice(failed, at + 8, failed.count - at - 8);
         s64 size = strtoll(string_cstr(&a, rest), nullptr, 10);
-        CHECK(size >= 364);
+        CHECK(size == 300 + 22 + 73);
     }
     arena_free(&a);
 }

@@ -1112,10 +1112,11 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
 }
 
 // Whether the name `name`, whose declaration is known (Ast_Name.decl), is a
-// place in memory: a variable, but not a loop's iterator or index; otherwise
-// false, after saying what it is instead, for an assignment (for_writing)
-// or an address.
+// place in memory (expr_is_place: a variable, but not a loop's iterator or
+// index); otherwise false, after saying what it is instead, for an
+// assignment (for_writing) or an address.
 static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
+    if (expr_is_place(name)) return true;
     Ast *decl = name->decl;
     const char *what = nullptr;
     switch (decl->kind) {
@@ -1125,7 +1126,6 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
         // read-only (spec 6.1): the loop sets them, each iteration, and a
         // pointer to one would let the body change it.
         Ast_Var *var = (Ast_Var *)decl;
-        if (!var->is_iterator) return true;
         // it_index is the only one by that name: check_for reports an
         // iterator called it_index and doesn't declare it.
         what = string_eq(var->name, str("it_index")) ? "the loop's index" : "the loop's iterator";
@@ -1156,26 +1156,46 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
 // elements lying elsewhere (v[0] = 1 for a view parameter v changes the
 // elements it sees, not v). A view's count and data are fields like a
 // struct's. An array's .count is a constant and its .data an address worked
-// out on the spot: assigning to them is "can't assign to an array's
-// 'count'", at the name, and neither has an address.
-bool is_place(Checker *c, Ast *e, bool for_writing) {
+// out on the spot, so neither is a place.
+bool expr_is_place(Ast *e) {
     switch (e->kind) {
-    case AST_NAME: return name_is_place(c, (Ast_Name *)e, for_writing);
+    case AST_NAME: {
+        // A variable, but not a loop's iterator or index (name_is_place
+        // says why).
+        Ast *decl = ((Ast_Name *)e)->decl;
+        return decl->kind == AST_VAR && !((Ast_Var *)decl)->is_iterator;
+    }
     case AST_DEREF: return true;
     case AST_MEMBER: {
+        Type *t = ((Ast_Member *)e)->operand->type;
+        return type_is_pointer(t) || (t->kind != TYPE_ARRAY && expr_is_place(((Ast_Member *)e)->operand));
+    }
+    case AST_INDEX: {
+        Ast *operand = ((Ast_Index *)e)->operand;
+        return operand->type->kind != TYPE_ARRAY || expr_is_place(operand);
+    }
+    default: return false;
+    }
+}
+
+// expr_is_place decides; this says why e isn't one, at the part of it that
+// isn't: a name's own message (name_is_place), "can't assign to an array's
+// 'count'" at the name, or else that only a variable, a field or an
+// element is one.
+bool is_place(Checker *c, Ast *e, bool for_writing) {
+    if (expr_is_place(e)) return true;
+    switch (e->kind) {
+    case AST_NAME: return name_is_place(c, (Ast_Name *)e, for_writing);
+    case AST_MEMBER: {
         Ast_Member *m = (Ast_Member *)e;
-        Type *t = m->operand->type;
-        if (t->kind != TYPE_ARRAY) return type_is_pointer(t) || is_place(c, m->operand, for_writing);
+        if (m->operand->type->kind != TYPE_ARRAY) return is_place(c, m->operand, for_writing);
         if (for_writing) {
             diag_error(c->diag, m->pos, "can't assign to an array's '" STR_FMT "'", STR_ARG(m->name));
             return false;
         }
         break;
     }
-    case AST_INDEX: {
-        Ast *operand = ((Ast_Index *)e)->operand;
-        return operand->type->kind != TYPE_ARRAY || is_place(c, operand, for_writing);
-    }
+    case AST_INDEX: return is_place(c, ((Ast_Index *)e)->operand, for_writing);
     default: break;
     }
     // A value computed on the spot (1 + 2, f(), *x, f().x) lives in no
