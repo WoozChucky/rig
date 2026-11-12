@@ -684,7 +684,9 @@ static Type *check_pointer_arithmetic(Checker *c, Ast_Binary *b, Type *left, Typ
         diag_error(c->diag, b->pos, "can't add two pointers");
         return nullptr;
     }
-    if (b->op == TOKEN_MINUS && right_pointer && !left_pointer) {
+    // n - p, n an integer. Anything else on the left (1.5 - p, null - p) is
+    // reported below as p moved by what isn't an integer, as 1.5 + p is.
+    if (b->op == TOKEN_MINUS && right_pointer && left->kind == TYPE_INTEGER) {
         diag_error(c->diag, b->pos, "can't subtract a pointer from an integer");
         return nullptr;
     }
