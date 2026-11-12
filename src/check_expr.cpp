@@ -140,8 +140,10 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
         // a float one, a float type only (no float becomes an integer
         // implicitly, spec 6.4). Its value is converted to the type's.
         if (to->kind == TYPE_FLOAT) {
-            f64 value = f64_from_bits(e->constant);
-            if (from == &type_untyped_float && !float_fits(value, to)) {
+            // Only an untyped float's constant is a double's bits; an
+            // untyped integer's is the integer, which fits any float type.
+            if (from == &type_untyped_float && !float_fits(f64_from_bits(e->constant), to)) {
+                f64 value = f64_from_bits(e->constant);
                 diag_error(c->diag, e->start, "%g doesn't fit in '" STR_FMT "'", value,
                            STR_ARG(type_name(c->arena, to)));
             }
@@ -441,8 +443,9 @@ static u64 fold_typed(Token_Kind op, u64 left, u64 right, Type *t) {
 // The value of a float constant expression `left op right` (+ - * /) of
 // float type t: IEEE 754's double arithmetic, rounded to t's precision. A
 // float32's operation is done on the doubles, then rounded once: for these
-// four the result is the one float32 arithmetic gives (a double has more
-// than twice float32's 24 bits, so rounding twice can't go wrong). A
+// four the result is the one float32 arithmetic gives (a double's 53 bits
+// are at least 2 * 24 + 2, enough that rounding twice gives the once-rounded
+// result for these four operations). A
 // division by zero is an infinity, or NaN for 0 / 0, as at run time.
 static u64 fold_float(Token_Kind op, f64 left, f64 right, Type *t) {
     f64 result = 0;
@@ -676,7 +679,21 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
     if (!b->left->is_constant || !b->right->is_constant) return t;
     b->is_constant = true;
     if (is_float) {
-        b->constant = fold_float(b->op, as_double(b->left), as_double(b->right), t);
+        f64 left = as_double(b->left), right = as_double(b->right);
+        b->constant = fold_float(b->op, left, right, t);
+        // Untyped arithmetic overflows a double as integer arithmetic
+        // overflows int: finite operands giving an infinity is an error
+        // (1e300 * 1e300), rather than an infinity a float32 would take
+        // where 1e300 itself doesn't fit. A division by zero is how a
+        // constant infinity is written; typed constants fold as at run
+        // time.
+        bool finite = __builtin_isfinite(left) && __builtin_isfinite(right);
+        bool by_zero = b->op == TOKEN_SLASH && right == 0;
+        if (type_is_untyped(t) && finite && !by_zero && __builtin_isinf(f64_from_bits(b->constant))) {
+            diag_error(c->diag, b->pos, "constant overflows 'float64'");
+            b->is_constant = false;
+            return nullptr;
+        }
         return t;
     }
     if (type_is_untyped(t)) return fold_untyped(c, b);

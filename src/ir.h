@@ -123,10 +123,10 @@ enum Ir_Pred : u8 {
 
 struct Ir_Instr {
     Ir_Op op;
-    Ir_Type type;      // the value's type; IR_STORE, IR_CMP, IR_SELECT: the operands'; IR_LOCAL: the slot's;
+    Ir_Type type;      // the value's type; IR_STORE, IR_CMP, IR_FCMP, IR_SELECT: the operands'; IR_LOCAL: the slot's;
                        // IR_CALL: the first result's; IR_VOID when none
     Ir_Type from;      // the conversions (IR_SEXT ... IR_TRUNC, IR_FPEXT ... IR_FPTOUI_SAT): the operand's type
-    Ir_Pred pred;      // IR_CMP
+    Ir_Pred pred;      // IR_CMP, IR_FCMP
     s32 result;        // the (first) value's number, or -1
     s32 a, b, c;       // operands, value numbers (-1: none); c is IR_SELECT's and IR_BRANCH's condition
     s32 target;        // IR_ADDR, IR_PANIC: a global; IR_CALL: a procedure; IR_JUMP, IR_BRANCH: a block (the true one)
