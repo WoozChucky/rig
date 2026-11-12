@@ -160,11 +160,42 @@ Type *type_view_of(Type *element) {
     return element->view;
 }
 
-String type_name(Arena *a, Type *t) {
+// The prefix a pointer, array or view puts before the name of the type it
+// holds ("*", "[3]", "[]"), written into `out`, which has room for any; its
+// length. 0 for any other type, whose name is its own.
+static int name_prefix(Type *t, char out[32]) {
     switch (t->kind) {
-    case TYPE_POINTER: return string_printf(a, "*" STR_FMT, STR_ARG(type_name(a, t->pointee)));
-    case TYPE_ARRAY: return string_printf(a, "[%lld]" STR_FMT, (long long)t->count, STR_ARG(type_name(a, t->element)));
-    case TYPE_VIEW: return string_printf(a, "[]" STR_FMT, STR_ARG(type_name(a, t->element)));
-    default: return t->name;
+    case TYPE_POINTER: return snprintf(out, 32, "*");
+    case TYPE_ARRAY: return snprintf(out, 32, "[%lld]", (long long)t->count);
+    case TYPE_VIEW: return snprintf(out, 32, "[]");
+    default: return 0;
     }
+}
+
+// The type a pointer, array or view holds.
+static Type *held_type(Type *t) {
+    return t->kind == TYPE_POINTER ? t->pointee : t->element;
+}
+
+// A name reads from the outside in: each level's prefix, then the name of
+// the innermost type, one with a name of its own. It's built by walking down
+// the chain twice, once to measure and once to write, not recursively: a
+// type made by `*x` may be any number of levels deep (the parser's limit,
+// spec 6.1, bounds only the types a program writes), so neither the time
+// nor the stack may grow faster than the name itself.
+String type_name(Arena *a, Type *t) {
+    char prefix[32];
+    s64 count = 0;
+    Type *u = t;
+    for (int n; (n = name_prefix(u, prefix)) > 0; u = held_type(u)) count += n;
+    count += u->name.count;
+    char *name = (char *)arena_alloc(a, (u64)count + 1, 1);
+    char *at = name;
+    for (int n; (n = name_prefix(t, prefix)) > 0; t = held_type(t)) {
+        memcpy(at, prefix, (size_t)n);
+        at += n;
+    }
+    if (t->name.count) memcpy(at, t->name.data, (size_t)t->name.count);
+    at[t->name.count] = 0;  // zero-terminated past count, as string_printf's results
+    return {(const u8 *)name, count};
 }
