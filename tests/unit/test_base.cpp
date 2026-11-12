@@ -366,3 +366,66 @@ TEST(hash_string_is_fnv1a) {
     CHECK_EQ(hash_string(str("a")), 0xaf63dc4c8601ec8cull);
     CHECK_EQ(hash_string(str("foobar")), 0x85944171f73967e8ull);
 }
+
+// --- MD5 and paths (milestone 2c: the source file in the debug information) ---
+
+// md5 of `text`, as the 32 lowercase hex digits a checksum is written in.
+static String md5_hex(Arena *a, const char *text) {
+    u8 digest[16];
+    md5(str(text), digest);
+    String hex = {};
+    for (int i = 0; i < 16; i++) hex = string_printf(a, STR_FMT "%02x", STR_ARG(hex), digest[i]);
+    return hex;
+}
+
+TEST(md5_matches_rfc_1321) {
+    // The test suite of RFC 1321's appendix A.5. The last two are longer
+    // than a 64-byte block, and the 62-byte one leaves too little room in its
+    // last block for the padding's length, which then takes a block of its
+    // own.
+    Arena a = arena_make();
+    CHECK_STR(md5_hex(&a, ""), "d41d8cd98f00b204e9800998ecf8427e");
+    CHECK_STR(md5_hex(&a, "a"), "0cc175b9c0f1b6a831c399e269772661");
+    CHECK_STR(md5_hex(&a, "abc"), "900150983cd24fb0d6963f7d28e17f72");
+    CHECK_STR(md5_hex(&a, "message digest"), "f96b697d7cb7938d525a2f31aaf161d0");
+    CHECK_STR(md5_hex(&a, "abcdefghijklmnopqrstuvwxyz"), "c3fcd3d76192e4007dfb496cca67e13b");
+    CHECK_STR(md5_hex(&a, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"),
+              "d174ab98d277d9f5a5611c2c9f419d9f");
+    CHECK_STR(md5_hex(&a, "12345678901234567890123456789012345678901234567890123456789012345678901234567890"),
+              "57edf4a22be3c955ac49da2e2107b67a");
+    arena_free(&a);
+}
+
+// path_absolute on Windows (`windows` true) or Linux, from `directory`.
+static String absolute(Arena *a, const char *directory, const char *path, bool windows) {
+    return path_absolute(a, str(directory), str(path), windows);
+}
+
+TEST(source_path_is_absolute_and_normalised) {
+    Arena a = arena_make();
+    // Windows: either slash separates, and the result has backslashes; . and
+    // .. are resolved by their text.
+    CHECK_STR(absolute(&a, "C:\\dev\\rig", "tests/run/x.rig", true), "C:\\dev\\rig\\tests\\run\\x.rig");
+    CHECK_STR(absolute(&a, "C:\\dev\\rig", "..\\other\\.\\x.rig", true), "C:\\dev\\other\\x.rig");
+    // A drive makes a path absolute; a leading separator alone means the
+    // root of the current directory's drive.
+    CHECK_STR(absolute(&a, "C:\\dev\\rig", "D:/a/b.rig", true), "D:\\a\\b.rig");
+    CHECK_STR(absolute(&a, "C:\\dev\\rig", "\\x.rig", true), "C:\\x.rig");
+    // A drive's root as the directory (os_current_directory keeps its
+    // separator), doubled separators, and .. above the root, which stays
+    // there.
+    CHECK_STR(absolute(&a, "C:\\", "x.rig", true), "C:\\x.rig");
+    CHECK_STR(absolute(&a, "C:\\dev", "a//b\\\\c.rig", true), "C:\\dev\\a\\b\\c.rig");
+    CHECK_STR(absolute(&a, "C:\\dev", "..\\..\\..\\x.rig", true), "C:\\x.rig");
+    // A network share's \\server\share is its root, as a drive is.
+    CHECK_STR(absolute(&a, "\\\\server\\share\\dev", "..\\..\\x.rig", true), "\\\\server\\share\\x.rig");
+    CHECK_STR(absolute(&a, "C:\\dev", "//server/share/x.rig", true), "\\\\server\\share\\x.rig");
+    // Linux: only / separates (a backslash is part of a name).
+    CHECK_STR(absolute(&a, "/home/n/rig", "../x.rig", false), "/home/n/x.rig");
+    CHECK_STR(absolute(&a, "/home/n/rig", "/abs/./y.rig", false), "/abs/y.rig");
+    CHECK_STR(absolute(&a, "/home/n/rig", "tests/run/x.rig", false), "/home/n/rig/tests/run/x.rig");
+    CHECK_STR(absolute(&a, "/", "x.rig", false), "/x.rig");
+    CHECK_STR(absolute(&a, "/home", "../../x.rig", false), "/x.rig");
+    CHECK_STR(absolute(&a, "/home", "a\\b.rig", false), "/home/a\\b.rig");
+    arena_free(&a);
+}
