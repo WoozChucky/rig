@@ -1,0 +1,16 @@
+// A bool in memory is a byte, C's _Bool (spec 6.5): any byte but 0 reads
+// as true. Here b's byte is set to 2 through a *u8, which a bool store never
+// writes; b is still a defined bool, true, and as an integer 1.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    b : bool;
+    byte := cast(*u8) *b;
+    byte.* = 2;
+    if b { puts("true"); } else { puts("false"); }
+    if cast(int) b == 1 { puts("1"); }
+    if b == true { puts("equal to true"); }
+    if !b { puts("not b"); } else { puts("not b is false"); }
+    byte.* = 0;
+    if b { puts("true"); } else { puts("false"); }
+}

@@ -30,8 +30,14 @@ struct Checker {
 // type and value are known, whatever the order of the declarations.
 Ast *check_lookup(Checker *c, String name);
 
-// The type a written type means, or null after reporting an unknown name.
+// The type a written type means, or null after reporting an unknown name,
+// or void anywhere but behind a pointer ("'void' is only a pointer's
+// target, as in *void").
 Type *resolve_type(Checker *c, Ast_Type *written);
+
+// resolve_type, but void itself is a type too: for size_of, which says
+// what's wrong with it.
+Type *resolve_type_or_void(Checker *c, Ast_Type *written);
 
 // check_expr.cpp
 
@@ -65,6 +71,28 @@ bool type_converts(Type *from, Type *to);
 // An untyped constant that meets no type becomes an int (x := 5;), or a
 // float32 (x := 0.5;), which it must fit.
 void check_default_type(Checker *c, Ast *e);
+
+// "null needs a pointer type, as in p : *int = null;", at e, a null that
+// meets no pointer type (x := null;): it has no type to take.
+void report_null_without_a_type(Checker *c, Ast *e);
+
+// Whether e is a place in memory, which has an address (*e) and can be
+// assigned to (e = v): a local or global variable, or p.*. Checks e,
+// filling in its type, and returns true when it's such a place and its type
+// is known; otherwise false, after saying why not, unless e's own error
+// was reported already. for_writing says which message: "can't assign to
+// 'a': it's a parameter" or "can't take the address of 'a': it's a
+// parameter"; "only a variable, a field or an element can be assigned to"
+// or "... has an address". Structs and arrays (milestone 2b's later tasks)
+// add a struct's fields and an array's elements here.
+bool check_addressable(Checker *c, Ast *e, bool for_writing);
+
+// p += n or p -= n (`op_name`, at `at`), p's type the pointer type
+// `pointer`, or the offset of p + n, n + p or p - n: n must be an integer
+// ("'+=' moves a pointer by an integer, not 'float32'"), and an untyped one
+// becomes an int; a *void moves by nothing ("can't do arithmetic on a
+// '*void'; ..."). False after reporting.
+bool check_pointer_move(Checker *c, Type *pointer, Ast *offset, Position at, const char *op_name);
 
 // True when both operand types, of an operator or a range's '..' (`op_name`
 // names it in the message: "'+'", "'..'"), are integers; otherwise false,

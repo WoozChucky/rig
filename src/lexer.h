@@ -151,6 +151,9 @@ const char *token_kind_name(Token_Kind kind);
 //   name too: #função is one TOKEN_ERROR, '#' included. A number ends before
 //   such a byte: 1ção is INT 1, then the bad name ção.
 // - Punctuation takes the longest match: <<= is one token, not < and <=.
+//   But a '*' right after a '.' token is read alone, whatever follows it:
+//   p.* is a dereference, so p.*=5 is . * = 5 (an assignment through p),
+//   not . *= 5, and p.*==q is . * == q, not . *= = q.
 // Error messages, exactly (the position in brackets):
 //   unterminated string literal         [the opening quote]
 //   unterminated block comment          [its /*]

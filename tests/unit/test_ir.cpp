@@ -1491,3 +1491,292 @@ TEST(ir_of_float_variables_and_globals) {
               "}\n");
     arena_free(&a);
 }
+
+// Lowering milestone 2b's pointers (issue #57).
+
+TEST(addresses_are_slots_and_globals) {
+    // Every variable is a slot already, so *x is the slot's address and a
+    // global's is an addr. A cast between pointers keeps the address; to and
+    // from a 64-bit integer it's ptrtoint and inttoptr.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "counter : int;\n"
+                                "head : *int = null;\n"
+                                "main :: () {\n"
+                                "    x := 5;\n"
+                                "    p := *x;\n"
+                                "    q := *counter;\n"
+                                "    b : bool;\n"
+                                "    c := cast(*u8) *b;\n"
+                                "    n := cast(u64) p;\n"
+                                "    r := cast(*int) n;\n"
+                                "    s := cast(*int) 4096;\n"
+                                "}\n");
+    String ir = ir_print(&a, m);
+    CHECK(contains(ir, "global @head: ptr = 0\n"));
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local i64\n"
+              "  %1 = const i64 5\n"
+              "  store i64 %1, %0\n"
+              "  %2 = local ptr\n"
+              "  store ptr %0, %2\n"
+              "  %3 = local ptr\n"
+              "  %4 = addr @counter\n"
+              "  store ptr %4, %3\n"
+              "  %5 = local i1\n"
+              "  %6 = const i1 0\n"
+              "  store i1 %6, %5\n"
+              "  %7 = local ptr\n"
+              "  store ptr %5, %7\n"
+              "  %8 = local i64\n"
+              "  %9 = load ptr %2\n"
+              "  %10 = ptrtoint ptr %9 to i64\n"
+              "  store i64 %10, %8\n"
+              "  %11 = local ptr\n"
+              "  %12 = load i64 %8\n"
+              "  %13 = inttoptr i64 %12 to ptr\n"
+              "  store ptr %13, %11\n"
+              "  %14 = local ptr\n"
+              "  %15 = const i64 4096\n"
+              "  %16 = inttoptr i64 %15 to ptr\n"
+              "  store ptr %16, %14\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(deref_is_null_checked) {
+    // p.* reads or writes through p once p is known not to be null: a null
+    // p is a runtime error at the '.', as a division by zero is at its
+    // operator. A compound assignment computes the place, its check
+    // included, once; and *p.* is p, checked all the same.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "f :: (p: *int) -> int {\n"
+                                "    return p.*;\n"
+                                "}\n"
+                                "g :: (p: *s32) {\n"
+                                "    p.* += 2;\n"
+                                "}\n"
+                                "h :: (p: *int) -> *int {\n"
+                                "    return *p.*;\n"
+                                "}\n"
+                                "main :: () { }\n");
+    String ir = ir_print(&a, m);
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(ptr) -> i64 {\n"
+              "b0:\n"
+              "  %1 = const ptr 0\n"
+              "  %2 = cmp eq ptr %0, %1\n"
+              "  branch %2, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  %3 = load i64 %0\n"
+              "  ret %3\n"
+              "}\n");
+    CHECK_STR(message_of(m, 0), "test.rig:2:13: runtime error: null pointer dereference\n");
+    CHECK_STR(proc_ir(ir, "g"),
+              "proc @g(ptr) {\n"
+              "b0:\n"
+              "  %1 = const ptr 0\n"
+              "  %2 = cmp eq ptr %0, %1\n"
+              "  branch %2, b1, b2\n"
+              "b1:\n"
+              "  panic @str.1\n"
+              "b2:\n"
+              "  %3 = load i32 %0\n"
+              "  %4 = const i32 2\n"
+              "  %5 = add i32 %3, %4\n"
+              "  store i32 %5, %0\n"
+              "  ret\n"
+              "}\n");
+    CHECK_STR(message_of(m, 1), "test.rig:5:6: runtime error: null pointer dereference\n");
+    CHECK_STR(proc_ir(ir, "h"),
+              "proc @h(ptr) -> ptr {\n"
+              "b0:\n"
+              "  %1 = const ptr 0\n"
+              "  %2 = cmp eq ptr %0, %1\n"
+              "  branch %2, b1, b2\n"
+              "b1:\n"
+              "  panic @str.2\n"
+              "b2:\n"
+              "  ret %0\n"
+              "}\n");
+    CHECK_STR(message_of(m, 2), "test.rig:8:14: runtime error: null pointer dereference\n");
+    arena_free(&a);
+}
+
+TEST(an_assignment_through_a_pointer_finds_its_place_first) {
+    // p.* = f(); works out where it writes, the check included, before the
+    // value (spec 6.5's order): the call comes after the branch.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "f :: () -> int { return 1; }\n"
+                                "g :: (p: *int) {\n"
+                                "    p.* = f();\n"
+                                "}\n"
+                                "main :: () { }\n");
+    CHECK_STR(proc_ir(ir_print(&a, m), "g"),
+              "proc @g(ptr) {\n"
+              "b0:\n"
+              "  %1 = const ptr 0\n"
+              "  %2 = cmp eq ptr %0, %1\n"
+              "  branch %2, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  %3 = call @f()\n"
+              "  store i64 %3, %0\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(several_targets_find_their_places_after_the_call) {
+    // p.*, x = two(); keeps 2a's order for several targets (spec 6.5): the
+    // call first, then each target's place, p's null check included, just
+    // before its store.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "two :: () -> int, int { return 1, 2; }\n"
+                                "g :: (p: *int) {\n"
+                                "    x : int;\n"
+                                "    p.*, x = two();\n"
+                                "}\n"
+                                "main :: () { }\n");
+    CHECK_STR(proc_ir(ir_print(&a, m), "g"),
+              "proc @g(ptr) {\n"
+              "b0:\n"
+              "  %1 = local i64\n"
+              "  %2 = const i64 0\n"
+              "  store i64 %2, %1\n"
+              "  %3, %4 = call @two()\n"
+              "  %5 = const ptr 0\n"
+              "  %6 = cmp eq ptr %0, %5\n"
+              "  branch %6, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  store i64 %3, %0\n"
+              "  store i64 %4, %1\n"
+              "  ret\n"
+              "}\n");
+    CHECK_STR(message_of(m, 0), "test.rig:4:6: runtime error: null pointer dereference\n");
+    arena_free(&a);
+}
+
+TEST(pointer_plus_scales) {
+    // p + n moves by n of what p points at: n, widened to an i64 by its own
+    // sign, times their size, then ptradd (no inbounds: spec 6.4). p - n
+    // moves by the negation; a constant n is a constant offset. p - q is the
+    // bytes between them divided by the size, rounded toward zero (sdiv).
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: (p: *s32, i: int) -> *s32 {\n"
+                                          "    return p + i;\n"
+                                          "}\n"
+                                          "g :: (p: *s32, n: u8) -> *s32 {\n"
+                                          "    return p - n;\n"
+                                          "}\n"
+                                          "h :: (p: *s32, q: *s32) -> int {\n"
+                                          "    return p - q;\n"
+                                          "}\n"
+                                          "k :: (p: *u8) -> *u8 {\n"
+                                          "    return 2 + p;\n"
+                                          "}\n"
+                                          "m :: (p: *int) -> *int {\n"
+                                          "    return p - 1;\n"
+                                          "}\n"
+                                          "n :: (p: *u8, q: *u8) -> int {\n"
+                                          "    return p - q;\n"
+                                          "}\n"
+                                          "main :: () {\n"
+                                          "    x := 1;\n"
+                                          "    p := *x;\n"
+                                          "    p += 3;\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(ptr, i64) -> ptr {\n"
+              "b0:\n"
+              "  %2 = const i64 4\n"
+              "  %3 = mul i64 %1, %2\n"
+              "  %4 = ptradd %0, %3\n"
+              "  ret %4\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "g"),
+              "proc @g(ptr, i8 zeroext) -> ptr {\n"
+              "b0:\n"
+              "  %2 = zext i8 %1 to i64\n"
+              "  %3 = const i64 4\n"
+              "  %4 = mul i64 %2, %3\n"
+              "  %5 = const i64 0\n"
+              "  %6 = sub i64 %5, %4\n"
+              "  %7 = ptradd %0, %6\n"
+              "  ret %7\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "h"),
+              "proc @h(ptr, ptr) -> i64 {\n"
+              "b0:\n"
+              "  %2 = ptrtoint ptr %0 to i64\n"
+              "  %3 = ptrtoint ptr %1 to i64\n"
+              "  %4 = sub i64 %2, %3\n"
+              "  %5 = const i64 4\n"
+              "  %6 = sdiv i64 %4, %5\n"
+              "  ret %6\n"
+              "}\n");
+    // A u8 is one byte: nothing to multiply or divide by.
+    CHECK_STR(proc_ir(ir, "k"),
+              "proc @k(ptr) -> ptr {\n"
+              "b0:\n"
+              "  %1 = const i64 2\n"
+              "  %2 = ptradd %0, %1\n"
+              "  ret %2\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "m"),
+              "proc @m(ptr) -> ptr {\n"
+              "b0:\n"
+              "  %1 = const i64 18446744073709551608\n"
+              "  %2 = ptradd %0, %1\n"
+              "  ret %2\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "n"),
+              "proc @n(ptr, ptr) -> i64 {\n"
+              "b0:\n"
+              "  %2 = ptrtoint ptr %0 to i64\n"
+              "  %3 = ptrtoint ptr %1 to i64\n"
+              "  %4 = sub i64 %2, %3\n"
+              "  ret %4\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local i64\n"
+              "  %1 = const i64 1\n"
+              "  store i64 %1, %0\n"
+              "  %2 = local ptr\n"
+              "  store ptr %0, %2\n"
+              "  %3 = load ptr %2\n"
+              "  %4 = const i64 24\n"
+              "  %5 = ptradd %3, %4\n"
+              "  store ptr %5, %2\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(pointers_compare_as_unsigned_addresses) {
+    // A pointer type has no sign, so < compares addresses unsigned (ult);
+    // the *void q and the *int p meet at *void, and null at p's type.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: (p: *int, q: *void) -> bool {\n"
+                                          "    return p < q || p == null;\n"
+                                          "}\n"
+                                          "main :: () { }\n"));
+    CHECK(contains(ir, "  %3 = cmp ult ptr %0, %1\n"));
+    CHECK(contains(ir, "  %4 = const ptr 0\n  %5 = cmp eq ptr %0, %4\n"));
+    arena_free(&a);
+}

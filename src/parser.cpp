@@ -34,12 +34,12 @@ struct Parser {
 // stack with room to spare, even inside 1000 nested blocks.
 //
 // An expression's levels are its tree's height: each parenthesis, prefix
-// operator, cast, call and binary operator is one level above what it
-// holds, and a name or a literal is none. So ((x)) is 2, - - x is 2,
-// f(g(x)) is 2, and x + x + x is 2 too: the Pratt loop builds it as
-// (x + x) + x, a left-leaning tree whose height grows with each operator,
-// though the parser itself doesn't recurse to build it (the checker does,
-// to check it).
+// operator, cast, call, dereference (.*) and binary operator is one level
+// above what it holds, and a name, a literal, null or size_of(T) is none.
+// So ((x)) is 2, - - x is 2, f(g(x)) is 2, and x + x + x is 2 too: the
+// Pratt loop builds it as (x + x) + x, a left-leaning tree whose height
+// grows with each operator, though the parser itself doesn't recurse to
+// build it (the checker does, to check it).
 static const s32 MAX_DEPTH = 1000;
 
 static Token *peek(Parser *p, s64 ahead = 0) {
@@ -120,12 +120,30 @@ static bool set_height(Parser *p, s32 height) {
     return true;
 }
 
-// primary = IDENT | INT | FLOAT | STRING | 'true' | 'false' | '(' expression ')'
+// size_of '(' type ')': the built-in that gives a type's size. The caller
+// saw the name size_of and a '(' after it.
+static Ast *parse_size_of(Parser *p) {
+    Token *name = advance(p);
+    advance(p);  // the '('
+    Ast_Size_Of *size_of = ast_new<Ast_Size_Of>(p->arena, AST_SIZE_OF, name->pos);
+    size_of->type_expr = parse_type(p);
+    if (!size_of->type_expr || !expect(p, TOKEN_RPAREN)) return nullptr;
+    return size_of;
+}
+
+// primary = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null'
+//         | 'size_of' '(' type ')' | '(' expression ')'
+//
+// size_of isn't a keyword: it's the name size_of followed by '(', whose
+// argument is a type, not a value, so it can't be parsed as a call (a type
+// such as *int isn't an expression). Without a '(' it's a name like any
+// other.
 static Ast *parse_primary(Parser *p) {
     Token *t = peek(p);
     p->height = 0;  // a name or a literal; parentheses say otherwise below
     switch (t->kind) {
     case TOKEN_IDENT: {
+        if (string_eq(t->text, str("size_of")) && peek(p, 1)->kind == TOKEN_LPAREN) return parse_size_of(p);
         advance(p);
         Ast_Name *name = ast_new<Ast_Name>(p->arena, AST_NAME, t->pos);
         name->name = t->text;
@@ -157,6 +175,9 @@ static Ast *parse_primary(Parser *p) {
         value->value = t->kind == TOKEN_TRUE;
         return value;
     }
+    case TOKEN_NULL:
+        advance(p);
+        return ast_new<Ast>(p->arena, AST_NULL, t->pos);
     case TOKEN_LPAREN: {
         // Parentheses only group, so they add no node (though they are a
         // level, MAX_DEPTH); the value inside starts at the '(' though, for
@@ -175,10 +196,27 @@ static Ast *parse_primary(Parser *p) {
     }
 }
 
-// postfix = primary { '(' [expression {',' expression}] ')' }
+// postfix = primary { '(' [expression {',' expression}] ')' | '.' '*' }
+//
+// The postfix operators apply left to right, each to everything before it:
+// f(x).* dereferences the call's result, p.*.* dereferences twice. A '.'
+// followed by anything but '*' isn't one (fields come with structs), so the
+// expression ends before it. The lexer reads a '*' after a '.' alone (lexer.h),
+// so p.*=5 is p.* = 5.
 static Ast *parse_postfix(Parser *p) {
     Ast *e = parse_primary(p);
-    while (e && peek(p)->kind == TOKEN_LPAREN) {
+    for (;;) {
+        if (!e) return nullptr;
+        if (peek(p)->kind == TOKEN_DOT && peek(p, 1)->kind == TOKEN_STAR) {
+            Ast_Deref *deref = ast_new<Ast_Deref>(p->arena, AST_DEREF, advance(p)->pos);
+            advance(p);  // the '*'
+            deref->start = e->start;
+            deref->operand = e;
+            if (!set_height(p, p->height + 1)) return nullptr;
+            e = deref;
+            continue;
+        }
+        if (peek(p)->kind != TOKEN_LPAREN) return e;
         Ast_Call *call = ast_new<Ast_Call>(p->arena, AST_CALL, peek(p)->pos);
         advance(p);
         call->start = e->start;
@@ -199,7 +237,6 @@ static Ast *parse_postfix(Parser *p) {
         if (!set_height(p, height + 1) || !expect(p, TOKEN_RPAREN)) return nullptr;
         e = call;
     }
-    return e;
 }
 
 // cast = 'cast' [',' IDENT] '(' type ')' unary
@@ -232,15 +269,19 @@ static Ast *parse_cast(Parser *p) {
     return cast->value && set_height(p, p->height + 1) ? cast : nullptr;
 }
 
-// unary = ('-' | '~' | '!') unary | cast | postfix
+// unary = ('-' | '~' | '!' | '*') unary | cast | postfix
 //
 // A prefix operator applies to everything after it that binds tighter than
 // any binary operator: -f(x) + 1 is (-(f(x))) + 1, !a && b is (!a) && b,
-// and cast(s32) n % 10 is (cast(s32) n) % 10.
+// and cast(s32) n % 10 is (cast(s32) n) % 10. A '*' here, where an operand
+// is expected, is an address (*x + 1 is (*x) + 1); between two operands, the
+// Pratt loop reads it as a multiplication (a * *b).
 static Ast *parse_unary(Parser *p) {
     Token *op = peek(p);
     if (op->kind == TOKEN_CAST) return parse_cast(p);
-    if (op->kind != TOKEN_MINUS && op->kind != TOKEN_TILDE && op->kind != TOKEN_BANG) return parse_postfix(p);
+    bool prefix = op->kind == TOKEN_MINUS || op->kind == TOKEN_TILDE || op->kind == TOKEN_BANG ||
+                  op->kind == TOKEN_STAR;
+    if (!prefix) return parse_postfix(p);
     advance(p);
     if (!open_level(p)) return nullptr;
     Ast *operand = parse_unary(p);
