@@ -52,6 +52,9 @@ enum Keyword_Group : u8 {
     KEYWORD_GROUP_COUNT
 };
 
+// Each group's placeholder name, in the enum's order. A group added to the
+// enum without its name here gets a null one, which check_grammar_groups
+// reports.
 static const char *const KEYWORD_GROUP_NAMES[KEYWORD_GROUP_COUNT] = {
     "KEYWORDS_CONTROL", "KEYWORDS_STORAGE", "KEYWORDS_CAST", "KEYWORDS_OTHER", "KEYWORDS_CONSTANT",
 };
@@ -100,6 +103,9 @@ enum Operator_Group : u8 {
     OPERATOR_GROUP_COUNT
 };
 
+// Each group's scope, in the enum's order; null for the brackets only. A
+// group added to the enum without its scope here gets a null one, which
+// check_grammar_groups reports (it would otherwise pass for brackets).
 static const char *const OPERATOR_GROUP_SCOPES[OPERATOR_GROUP_COUNT] = {
     nullptr,
     "keyword.operator.declaration.rig",
@@ -234,10 +240,60 @@ static bool is_named_type(const Grammar_Tables *t, const char *name) {
     return false;
 }
 
+// Every group has its entry in KEYWORD_GROUP_NAMES and OPERATOR_GROUP_SCOPES
+// (passed in, so a test can pass altered copies). Both arrays are sized by
+// their enum's count, so a group added to the enum without its entry gets a
+// null one, silently: a keyword group with no placeholder name, or an
+// operator group that looks like the brackets and would drop out of the
+// grammar unhighlighted.
+static void check_grammar_groups(Arena *a, const char *const *keyword_group_names,
+                                 const char *const *operator_group_scopes, Array<String> *problems) {
+    for (int g = 0; g < KEYWORD_GROUP_COUNT; g++) {
+        if (keyword_group_names[g]) continue;
+        array_add(problems, string_printf(a,
+                                          "tests/unit/test_grammar.cpp's KEYWORD_GROUP_NAMES has no name for "
+                                          "Keyword_Group %d: add its placeholder's name",
+                                          g));
+    }
+    for (int g = 0; g < OPERATOR_GROUP_COUNT; g++) {
+        if (g == OPERATORS_NONE || operator_group_scopes[g]) continue;
+        array_add(problems, string_printf(a,
+                                          "tests/unit/test_grammar.cpp's OPERATOR_GROUP_SCOPES has no scope for "
+                                          "Operator_Group %d: add it (only OPERATORS_NONE, the brackets, has none)",
+                                          g));
+    }
+}
+
 // Every word must have a scope, and every scope a word: the tables here and
 // the compiler's must name the same keywords and the same punctuation. A
 // reserved type name the checker now knows must go.
 static void check_grammar_tables(Arena *a, const Grammar_Tables *t, Array<String> *problems) {
+    check_grammar_groups(a, KEYWORD_GROUP_NAMES, OPERATOR_GROUP_SCOPES, problems);
+
+    // Each word once: find_keyword_scope and find_operator_scope take the
+    // first entry, so a second one would be ignored, though it reads like a
+    // choice. (Said at the second entry, so once however many there are.)
+    for (s64 i = 0; i < t->keyword_scope_count; i++) {
+        const char *text = t->keyword_scopes[i].text;
+        s64 earlier = 0;
+        for (s64 k = 0; k < i; k++) earlier += strcmp(t->keyword_scopes[k].text, text) == 0;
+        if (earlier == 1) {
+            array_add(problems,
+                      string_printf(a, "tests/unit/test_grammar.cpp's KEYWORD_SCOPES lists '%s' twice: keep one",
+                                    text));
+        }
+    }
+    for (s64 i = 0; i < t->operator_scope_count; i++) {
+        const char *text = t->operator_scopes[i].text;
+        s64 earlier = 0;
+        for (s64 k = 0; k < i; k++) earlier += strcmp(t->operator_scopes[k].text, text) == 0;
+        if (earlier == 1) {
+            array_add(problems,
+                      string_printf(a, "tests/unit/test_grammar.cpp's OPERATOR_SCOPES lists '%s' twice: keep one",
+                                    text));
+        }
+    }
+
     for (s64 i = 0; i < t->keyword_count; i++) {
         const char *text = t->keywords[i].text;
         if (!find_keyword_scope(t, text)) {
@@ -451,7 +507,8 @@ static String generate_grammar(Arena *a, String tmpl, const Grammar_Tables *t, A
 
         bool known = false;
         for (int g = 0; g < KEYWORD_GROUP_COUNT; g++) {
-            if (!string_eq(name, str(KEYWORD_GROUP_NAMES[g]))) continue;
+            // A group without a name is a problem already (check_grammar_groups).
+            if (!KEYWORD_GROUP_NAMES[g] || !string_eq(name, str(KEYWORD_GROUP_NAMES[g]))) continue;
             known = keywords_used[g] = true;
             if (grammar_out_keywords(&out, t, (Keyword_Group)g) == 0) {
                 // \b(?:)\b would match an empty string at every word boundary.
@@ -489,6 +546,7 @@ static String generate_grammar(Arena *a, String tmpl, const Grammar_Tables *t, A
 
     // A list nobody placed would leave its words unhighlighted.
     for (int g = 0; g < KEYWORD_GROUP_COUNT; g++) {
+        if (!KEYWORD_GROUP_NAMES[g]) continue;
         bool has_words = false;
         for (s64 k = 0; k < t->keyword_scope_count; k++) has_words |= t->keyword_scopes[k].group == g;
         if (has_words && !keywords_used[g]) {
@@ -520,6 +578,35 @@ static s64 grammar_line_at(String s, s64 at, String *line) {
     while (end < s.count && s.data[end] != '\n') end++;
     *line = string_slice(s, start, end - start);
     return number;
+}
+
+// One file's side of a difference: its line holding the first differing
+// byte, and, when the file ends there (it's a prefix of the other), that it
+// ends.
+static String grammar_side(Arena *a, String s, s64 at) {
+    String line = {};
+    grammar_line_at(s, at, &line);
+    if (at < s.count) return line;
+    if (line.count == 0) return str("(the file ends)");
+    return string_printf(a, STR_FMT " (the file ends)", STR_ARG(line));
+}
+
+// What vscode_grammar_is_current says when the committed grammar isn't the
+// generated one: the first line that differs, as each file has it, and how
+// to rewrite the file. Empty when they're the same.
+static String grammar_difference(Arena *a, String committed, String generated) {
+    if (string_eq(committed, generated)) return {};
+    s64 at = 0;
+    while (at < committed.count && at < generated.count && committed.data[at] == generated.data[at]) at++;
+    String unused = {};
+    s64 line = grammar_line_at(committed, at, &unused);  // the same line number in both: the bytes before agree
+    String committed_side = grammar_side(a, committed, at), generated_side = grammar_side(a, generated, at);
+    return string_printf(a,
+                         "  " GRAMMAR_PATH " isn't what the template and the compiler's tables make, from line %lld:\n"
+                         "    committed: " STR_FMT "\n"
+                         "    generated: " STR_FMT "\n"
+                         "  run RIG_BLESS=1 bin/unit-tests vscode_grammar to rewrite it\n",
+                         (long long)line, STR_ARG(committed_side), STR_ARG(generated_side));
 }
 
 TEST(vscode_grammar_is_current) {
@@ -558,19 +645,12 @@ TEST(vscode_grammar_is_current) {
     if (!os_read_file(&a, str(GRAMMAR_PATH), &committed)) {
         fprintf(stderr, "  run RIG_BLESS=1 bin/unit-tests vscode_grammar to write it\n");
         test_fail(__FILE__, __LINE__, "reading " GRAMMAR_PATH);
-    } else if (!string_eq(committed, generated)) {
-        s64 at = 0;
-        while (at < committed.count && at < generated.count && committed.data[at] == generated.data[at]) at++;
-        String committed_line = {}, generated_line = {};
-        s64 line = grammar_line_at(committed, at, &committed_line);
-        grammar_line_at(generated, at, &generated_line);
-        fprintf(stderr,
-                "  " GRAMMAR_PATH " isn't what the template and the compiler's tables make, from line %lld:\n"
-                "    committed: " STR_FMT "\n"
-                "    generated: " STR_FMT "\n"
-                "  run RIG_BLESS=1 bin/unit-tests vscode_grammar to rewrite it\n",
-                (long long)line, STR_ARG(committed_line), STR_ARG(generated_line));
-        test_fail(__FILE__, __LINE__, "comparing " GRAMMAR_PATH);
+    } else {
+        String difference = grammar_difference(&a, committed, generated);
+        if (difference.count > 0) {
+            fprintf(stderr, STR_FMT, STR_ARG(difference));
+            test_fail(__FILE__, __LINE__, "comparing " GRAMMAR_PATH);
+        }
     }
     array_free(&problems);
     arena_free(&a);
@@ -738,6 +818,8 @@ TEST(vscode_grammar_knows_every_placeholder) {
                               "@OPERATOR_CAPTURES@ must be a whole JSON string: \"@OPERATOR_CAPTURES@\""));
     CHECK(grammar_has_problem(problems, "the template has no @KEYWORDS_CONTROL@: add a rule for those keywords"));
     CHECK(grammar_has_problem(problems, "the template has no @TYPES@: add a rule for the type names"));
+    CHECK(grammar_has_problem(problems,
+                              "the template needs @OPERATORS@ and \"@OPERATOR_CAPTURES@\", the operator rule"));
 
     // A group with no keywords in it would be \b(?:)\b, which matches at
     // every word boundary.
@@ -751,5 +833,83 @@ TEST(vscode_grammar_knows_every_placeholder) {
     generate_grammar(&a, str("@KEYWORDS_CAST@"), &tables, &problems);
     CHECK(grammar_has_problem(problems, "no keyword is in KEYWORDS_CAST: remove its rule from the template"));
     array_free(&problems);
+    arena_free(&a);
+}
+
+TEST(vscode_grammar_lists_each_word_once) {
+    // A second entry for a word would be ignored (the first one wins), even
+    // though it reads like a choice.
+    Keyword_Scope keyword_scopes[GRAMMAR_COUNT(KEYWORD_SCOPES) + 1];
+    s64 keyword_n = 0;
+    for (const Keyword_Scope &s : KEYWORD_SCOPES) keyword_scopes[keyword_n++] = s;
+    keyword_scopes[keyword_n++] = {"cast", KEYWORDS_OTHER};
+    Operator_Scope operator_scopes[GRAMMAR_COUNT(OPERATOR_SCOPES) + 1];
+    s64 operator_n = 0;
+    for (const Operator_Scope &s : OPERATOR_SCOPES) operator_scopes[operator_n++] = s;
+    operator_scopes[operator_n++] = {"~", OPERATORS_LOGICAL};
+    Grammar_Tables tables = grammar_tables();
+    tables.keyword_scopes = keyword_scopes;
+    tables.keyword_scope_count = keyword_n;
+    tables.operator_scopes = operator_scopes;
+    tables.operator_scope_count = operator_n;
+
+    Arena a = arena_make();
+    Array<String> problems = {};
+    generate_grammar(&a, str(""), &tables, &problems);
+    CHECK(grammar_has_problem(problems, "tests/unit/test_grammar.cpp's KEYWORD_SCOPES lists 'cast' twice: keep one"));
+    CHECK(grammar_has_problem(problems, "tests/unit/test_grammar.cpp's OPERATOR_SCOPES lists '~' twice: keep one"));
+    array_free(&problems);
+    arena_free(&a);
+}
+
+TEST(vscode_grammar_gives_every_group_a_name_and_a_scope) {
+    // The real tables have every entry.
+    Arena a = arena_make();
+    Array<String> problems = {};
+    check_grammar_groups(&a, KEYWORD_GROUP_NAMES, OPERATOR_GROUP_SCOPES, &problems);
+    CHECK_EQ(problems.count, 0);
+
+    // An enumerator added without its entry leaves a null there: the
+    // keyword group would have no placeholder, and the operator group would
+    // look like brackets and drop out of the grammar unhighlighted.
+    const char *keyword_group_names[KEYWORD_GROUP_COUNT];
+    for (int g = 0; g < KEYWORD_GROUP_COUNT; g++) keyword_group_names[g] = KEYWORD_GROUP_NAMES[g];
+    keyword_group_names[KEYWORDS_CAST] = nullptr;
+    const char *operator_group_scopes[OPERATOR_GROUP_COUNT];
+    for (int g = 0; g < OPERATOR_GROUP_COUNT; g++) operator_group_scopes[g] = OPERATOR_GROUP_SCOPES[g];
+    operator_group_scopes[OPERATORS_RANGE] = nullptr;
+    check_grammar_groups(&a, keyword_group_names, operator_group_scopes, &problems);
+    CHECK(grammar_has_problem(problems,
+                              "tests/unit/test_grammar.cpp's KEYWORD_GROUP_NAMES has no name for Keyword_Group 2: "
+                              "add its placeholder's name"));
+    CHECK(grammar_has_problem(problems,
+                              "tests/unit/test_grammar.cpp's OPERATOR_GROUP_SCOPES has no scope for Operator_Group 3: "
+                              "add it (only OPERATORS_NONE, the brackets, has none)"));
+    array_free(&problems);
+    arena_free(&a);
+}
+
+TEST(vscode_grammar_says_where_the_committed_file_differs) {
+    Arena a = arena_make();
+    CHECK_EQ(grammar_difference(&a, str("a\nb\n"), str("a\nb\n")).count, 0);
+
+    // The first differing line, numbered from 1, from both files.
+    CHECK_STR(grammar_difference(&a, str("one\ntwo\nthree\n"), str("one\ntwo\nTHREE\n")),
+              "  " GRAMMAR_PATH " isn't what the template and the compiler's tables make, from line 3:\n"
+              "    committed: three\n"
+              "    generated: THREE\n"
+              "  run RIG_BLESS=1 bin/unit-tests vscode_grammar to rewrite it\n");
+
+    // One file a prefix of the other: the shorter one ends where they differ.
+    CHECK_STR(grammar_difference(&a, str("one\ntwo\n"), str("one\ntwo\nthree\n")),
+              "  " GRAMMAR_PATH " isn't what the template and the compiler's tables make, from line 3:\n"
+              "    committed: (the file ends)\n"
+              "    generated: three\n"
+              "  run RIG_BLESS=1 bin/unit-tests vscode_grammar to rewrite it\n");
+    CHECK_STR(grammar_difference(&a, str("one\ntwo"), str("one\ntwo\n")),
+              "  " GRAMMAR_PATH " isn't what the template and the compiler's tables make, from line 2:\n"
+              "    committed: two (the file ends)\n"
+              "    generated: two\n"
+              "  run RIG_BLESS=1 bin/unit-tests vscode_grammar to rewrite it\n");
     arena_free(&a);
 }
