@@ -583,7 +583,7 @@ TEST(for_with_a_mistyped_iterator) {
     // A name, then neither '..' nor the body's '{': the ':' of a named
     // iterator is missing, or another language's `in` took its place. The
     // message shows the form, at what came instead of the ':' (issue #52).
-    // Anything else that isn't '..' is "expected '..'".
+    // Anything else that isn't '..' or '{' is "expected '..' or the loop's '{'".
     Arena a = arena_make();
     String errors;
     body_dump(&a, "for i 0..9 { }", &errors);
@@ -593,9 +593,9 @@ TEST(for_with_a_mistyped_iterator) {
     body_dump(&a, "for x := 0..9 { }", &errors);
     CHECK_STR(errors, "2:11: expected ':' after the iterator's name, as in for i: 0..9\n");
     body_dump(&a, "for 0 9 { }", &errors);
-    CHECK_STR(errors, "2:11: expected '..', found integer literal\n");
+    CHECK_STR(errors, "2:11: expected '..' or the loop's '{', found integer literal\n");
     body_dump(&a, "for i: x y { }", &errors);
-    CHECK_STR(errors, "2:14: expected '..', found identifier 'y'\n");
+    CHECK_STR(errors, "2:14: expected '..' or the loop's '{', found identifier 'y'\n");
     arena_free(&a);
 }
 
