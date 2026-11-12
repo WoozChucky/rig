@@ -105,6 +105,16 @@
 //   an IR procedure lowering adds to a module that compares strings
 //   (lower_string_equal), and != negates it. A global holding a literal
 //   points at its bytes through a relocation (constant_bytes).
+// - Rig's main is C's main (ir.h): exported, its every return a ret of C's
+//   int 0, so the program needs no wrapper around it.
+// - What a debugger needs (ir.h's "Debug information") is kept as the code
+//   is lowered: each instruction is stamped with the position and scope of
+//   the statement being lowered (Lowering.pos and scope, emit_in);
+//   lower_statement moves to each statement's first token, a loop or an if
+//   back to its keyword for its own code, a failing check to the check.
+//   Each block that's a scope adds an Ir_Scope (lower_scoped_block, and the
+//   loops, which are one), each declaration an Ir_Var (add_local_var, and
+//   the parameters in ir_lower).
 //
 // Blocks are numbered in the order they're made, and made in the order
 // their code comes in the source, so the printed IR reads like the program.
@@ -152,7 +162,22 @@ struct Lowering {
     s32 array_count;          // the array.N globals made so far: the arrays global views see
     s32 string_equal;         // __rig_string_equal's index in module->procs, once == on strings
                               // needs it; -1
+    // Where the instructions being emitted come from (ir.h's "Debug
+    // information"): every one emitted gets them. lower_statement sets pos
+    // to each statement's; a loop, an if and a failing check set it to the
+    // place that stands for their own code, and a block that's a scope sets
+    // scope while its statements are lowered.
+    Position pos;             // line 0 in the procedures the compiler makes
+    s32 scope;                // an index in proc->scopes
+    bool is_entry;            // the procedure being lowered is Rig's main, C's main: its returns
+                              // give C's int, 0
 };
+
+// The `pos` and `scope` the next instructions get.
+static void place(Lowering *l, Position pos, s32 scope) {
+    l->pos = pos;
+    l->scope = scope;
+}
 
 // The IR type of a checked type. An aggregate's value (a string's too) is
 // the address of its bytes, a ptr.
@@ -192,7 +217,41 @@ static Ir_Ext ir_ext_of(Type *t) {
     return t->is_signed ? IR_EXT_SIGN : IR_EXT_ZERO;
 }
 
-static Ir_Instr *emit(Lowering *l, Ir_Op op, Ir_Type type) { return ir_emit(l->proc, l->block, op, type); }
+// An instruction appended to `block`, at the current position and scope:
+// every instruction lowering makes comes through here or emit_call, so none
+// is left without them.
+static Ir_Instr *emit_in(Lowering *l, s32 block, Ir_Op op, Ir_Type type) {
+    Ir_Instr *instr = ir_emit(l->proc, block, op, type);
+    instr->pos = l->pos;
+    instr->scope = l->scope;
+    return instr;
+}
+
+static Ir_Instr *emit(Lowering *l, Ir_Op op, Ir_Type type) { return emit_in(l, l->block, op, type); }
+
+// A call of module->procs[callee] in the current block (ir_emit_call), at
+// the current position and scope.
+static Ir_Instr *emit_call(Lowering *l, s32 callee, Array<s32> args) {
+    Ir_Instr *call = ir_emit_call(l->module, l->proc, l->block, callee, args);
+    call->pos = l->pos;
+    call->scope = l->scope;
+    return call;
+}
+
+// A new scope of the current procedure, inside the current one, starting
+// at `pos`; its index. It's made when lowering reaches its code, so scopes
+// are numbered in the order their code comes. (The instructions go on in
+// the current scope until the caller makes the new one current.)
+static s32 new_scope(Lowering *l, Position pos) {
+    array_add(&l->proc->scopes, Ir_Scope{l->scope, pos});
+    return (s32)(l->proc->scopes.count - 1);
+}
+
+// Records the variable `decl` (an Ast_Var: a local, an iterator, it_index)
+// living in the stack slot %slot, declared in `scope`.
+static void add_local_var(Lowering *l, Ast_Var *decl, s32 slot, s32 scope) {
+    array_add(&l->proc->vars, Ir_Var{decl->name, decl->type, decl->pos, scope, IR_VAR_SLOT, slot, 0});
+}
 
 // A constant of IR type t; its value's number. The checker keeps an
 // integer constant's bits extended to 64 (Ast.constant); an IR_CONST keeps
@@ -265,7 +324,7 @@ static s32 add_bytes(Lowering *l, String bytes) {
 // Ends block `from` with a jump to block `to` (-1: not made yet, filled in
 // later through terminator_of).
 static void emit_jump(Lowering *l, s32 from, s32 to) {
-    ir_emit(l->proc, from, IR_JUMP, IR_VOID)->target = to;
+    emit_in(l, from, IR_JUMP, IR_VOID)->target = to;
 }
 
 // Ends the current block with a branch on the i1 %condition, to `if_true`
@@ -548,7 +607,9 @@ static Ir_Op ir_op_of(Token_Kind op, Type *t) {
 // The panic writes the message to stderr and exits with status 101
 // (llvm_backend.cpp's __rig_panic). PATH is the source file's path as rig
 // build was given it. Each check has a message of its own, since each names
-// its own position.
+// its own position. The branch is the statement's code, at its position; the
+// panic is at `at`, the place the message names, so a debugger stopped there
+// shows the same place.
 static void emit_runtime_check(Lowering *l, s32 fails, Position at, String message) {
     String path = l->diag->files[at.file].path;
     String text = string_printf(l->arena, STR_FMT ":%d:%d: runtime error: " STR_FMT "\n", STR_ARG(path), at.line,
@@ -556,7 +617,10 @@ static void emit_runtime_check(Lowering *l, s32 fails, Position at, String messa
     s32 fail = new_block(l);
     s32 ok = new_block(l);
     emit_branch(l, fails, fail, ok);
-    ir_emit(l->proc, fail, IR_PANIC, IR_VOID)->target = add_bytes(l, text);
+    Position statement = l->pos;
+    l->pos = at;
+    emit_in(l, fail, IR_PANIC, IR_VOID)->target = add_bytes(l, text);
+    l->pos = statement;
     l->block = ok;
 }
 
@@ -907,7 +971,7 @@ static s32 lower_string_comparison(Lowering *l, Ast_Binary *b) {
     array_add(&args, data_a);
     array_add(&args, count_b);
     array_add(&args, data_b);
-    s32 equal =ir_emit_call(l->module, l->proc, l->block, string_equal_proc(l), args)->result;
+    s32 equal = emit_call(l, string_equal_proc(l), args)->result;
     if (b->op == TOKEN_EQUAL_EQUAL) return equal;
     return emit_binary(l, IR_XOR, IR_I1, equal, emit_constant(l, IR_I1, 1));
 }
@@ -957,7 +1021,8 @@ static s32 bounds_failed_proc(Lowering *l);
 // The message's start is a global per check, as a panic's message is; the
 // rest, with its two numbers, is only known at run time, so
 // __rig_bounds_failed writes it. Its buffer must hold the longest start
-// any check passes it, which is kept here.
+// any check passes it, which is kept here. The fail block is at `at`, as a
+// runtime check's panic is (emit_runtime_check).
 static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s32 count, bool is_signed) {
     String path = l->diag->files[at.file].path;
     String where = string_printf(l->arena, STR_FMT ":%d:%d: runtime error: ", STR_ARG(path), at.line, at.col);
@@ -965,6 +1030,8 @@ static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s3
     s32 fail = new_block(l);
     s32 ok = new_block(l);
     emit_branch(l, fails, fail, ok);
+    Position statement = l->pos;
+    l->pos = at;
     l->block = fail;
     Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
     addr->target = add_bytes(l, where);
@@ -974,8 +1041,9 @@ static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s3
     array_add(&args, index);
     array_add(&args, count);
     array_add(&args, emit_constant(l, IR_I1, is_signed ? 1 : 0));
-    ir_emit_call(l->module, l->proc, l->block, bounds_failed_proc(l), args);
+    emit_call(l, bounds_failed_proc(l), args);
     emit(l, IR_UNREACHABLE, IR_VOID);
+    l->pos = statement;
     l->block = ok;
 }
 
@@ -1225,7 +1293,7 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
         }
         array_add(&args, value);
     }
-    s32 next = ir_emit_call(l->module, l->proc, l->block, *index, args)->result;
+    s32 next = emit_call(l, *index, args)->result;
     s32 temporary = 0;
     for (s64 i = 0; i < callee->results.count; i++) {
         if (type_is_aggregate(callee->results[i]->type)) {
@@ -1248,6 +1316,17 @@ static s32 lower_call(Lowering *l, Ast_Call *call) {
 }
 
 static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source);
+
+// A block that's a scope of its own (ir.h's "Debug information"): a block
+// statement, or an if's or an else's. Its statements run in a new scope
+// inside the current one, starting at its '{'; then the current scope is
+// the one around it again.
+static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) {
+    s32 outer = l->scope;
+    l->scope = new_scope(l, block->pos);
+    lower_block(l, block, source);
+    l->scope = outer;
+}
 
 // if c { T } else { E }:
 //
@@ -1273,6 +1352,10 @@ static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source);
 // the last arm to the first: each arm's `after`, and the jumps to it, made
 // once everything inside the arm's else part is, as the recursion made them
 // on its way back out.
+//
+// Each arm's own code, its condition, its branch and the jumps to its
+// `after`, is at its `if` (an else if's own), in the scope around the
+// chain; its blocks are scopes of their own (lower_scoped_block).
 struct If_Arm {
     Ast_If *branch;
     s32 test;      // the block ending in the arm's branch
@@ -1280,10 +1363,12 @@ struct If_Arm {
 };
 
 static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
+    s32 outer = l->scope;
     Array<If_Arm> arms = {};
     Ast *part = first;
     while (part && part->kind == AST_IF) {
         Ast_If *branch = (Ast_If *)part;
+        place(l, branch->pos, outer);
         s32 condition = lower_value(l, branch->condition, &type_bool);
         s32 test = l->block;
         emit_branch(l, condition, -1, -1);
@@ -1291,7 +1376,7 @@ static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
         s32 then_block = new_block(l);
         terminator_of(l, test)->target = then_block;
         l->block = then_block;
-        lower_block(l, branch->then_block, source);
+        lower_scoped_block(l, branch->then_block, source);
         array_add(&arms, If_Arm{branch, test, l->block});
 
         part = branch->else_part;
@@ -1301,10 +1386,11 @@ static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
             l->block = else_block;
         }
     }
-    if (part) lower_block(l, (Ast_Block *)part, source);  // the last else
+    if (part) lower_scoped_block(l, (Ast_Block *)part, source);  // the last else
 
     for (s64 i = arms.count - 1; i >= 0; i--) {
         If_Arm arm = arms[i];
+        place(l, arm.branch->pos, outer);
         bool has_else = arm.branch->else_part != nullptr;
         // With an else: the block its else part ended in, the last else's
         // own or, for an else if, where the arms after this one left off.
@@ -1318,17 +1404,22 @@ static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
         if (has_else && else_goes_on) emit_jump(l, else_end, after);
         l->block = after;
     }
+    place(l, first->pos, outer);
     array_free(&arms);
 }
 
 // The loop's body, with the loop the innermost one for break and continue;
 // returns its Loop, whose jumps the caller points at their targets
-// (finish_loop) once they're made.
+// (finish_loop) once they're made. The body is no scope of its own: its
+// statements run in the loop's, which is current, and the code after them,
+// the loop's own, is at the loop's keyword again.
 static Loop lower_loop_body(Lowering *l, Ast *loop, Ast_Block *body, Ast_Proc *source) {
+    s32 scope = l->scope;
     array_add(&l->loops, Loop{loop, {}, {}});
     lower_block(l, body, source);
     Loop done = l->loops[l->loops.count - 1];
     l->loops.count--;
+    place(l, loop->pos, scope);
     return done;
 }
 
@@ -1353,9 +1444,16 @@ static void finish_loop(Lowering *l, Loop *loop, s32 exit, s32 next) {
 //
 // The condition has a block of its own, since every iteration comes back
 // to it.
+//
+// All of it is at the `while`. The loop is a scope of its own, starting
+// there, which its body's declarations are in; the test and the jump back
+// to it run in it, only the jump into the loop in the scope around it.
 static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
+    s32 outer = l->scope;
+    s32 scope = new_scope(l, loop->pos);
     s32 test = new_block(l);
     emit_jump(l, l->block, test);
+    place(l, loop->pos, scope);
     l->block = test;
     s32 condition = lower_value(l, loop->condition, &type_bool);
     s32 test_end = l->block;  // the condition may have made blocks (a && b)
@@ -1371,6 +1469,7 @@ static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
     terminator_of(l, test_end)->target2 = exit;
     finish_loop(l, &lowered, exit, test);
     l->block = exit;
+    place(l, loop->pos, outer);
 }
 
 // for first..last { B }, with it from first to last, both included, and
@@ -1423,7 +1522,16 @@ static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
 // iteration began. A view's data is checked for null once, before the
 // loop, when its count says there are elements to read (emit_data_check),
 // at the sequence: a zeroed view runs no iteration and reads nothing.
+//
+// Either for is at its `for`, and is a scope of its own starting there,
+// holding it (or the named iterator) and it_index, and the body's
+// declarations. What runs once before the loop, up to the jump or branch
+// into it, runs in the scope around it; the rest, the test, the step and
+// the copy of each element into it, in the loop's scope, where a debugger
+// shows it and it_index.
 static void lower_for_sequence(Lowering *l, Ast_For *loop, Ast_Proc *source) {
+    s32 outer = l->scope;
+    s32 scope = new_scope(l, loop->pos);
     Ast *sequence = loop->sequence;
     Type *t = sequence->type, *element = t->element;  // a string's element is u8
     s32 base = lower_expr(l, sequence);
@@ -1440,9 +1548,12 @@ static void lower_for_sequence(Lowering *l, Ast_For *loop, Ast_Proc *source) {
     emit_store(l, IR_I64, emit_constant(l, IR_I64, 0), index);
     array_add(&l->locals, {loop->iterator, iterator});
     array_add(&l->locals, {loop->index, index});
+    add_local_var(l, loop->iterator, iterator, scope);
+    add_local_var(l, loop->index, index, scope);
 
     s32 test = new_block(l);
     emit_jump(l, l->block, test);
+    l->scope = scope;
     l->block = test;
     s32 i = emit_load(l, IR_I64, index);
     emit_branch(l, emit_compare(l, IR_SGE, IR_I64, i, count), -1, -1);
@@ -1472,6 +1583,7 @@ static void lower_for_sequence(Lowering *l, Ast_For *loop, Ast_Proc *source) {
     terminator_of(l, test)->target = exit;
     finish_loop(l, &lowered, exit, step);
     l->block = exit;
+    place(l, loop->pos, outer);
 }
 
 static void lower_for(Lowering *l, Ast_For *loop, Ast_Proc *source) {
@@ -1479,6 +1591,8 @@ static void lower_for(Lowering *l, Ast_For *loop, Ast_Proc *source) {
         lower_for_sequence(l, loop, source);
         return;
     }
+    s32 outer = l->scope;
+    s32 scope = new_scope(l, loop->pos);
     Type *t = loop->iterator->type;
     Ir_Type type = ir_type_of(t);
     s32 first = lower_value(l, loop->first, t);
@@ -1489,6 +1603,10 @@ static void lower_for(Lowering *l, Ast_For *loop, Ast_Proc *source) {
     emit_store(l, IR_I64, emit_constant(l, IR_I64, 0), index);
     array_add(&l->locals, {loop->iterator, iterator});
     array_add(&l->locals, {loop->index, index});
+    add_local_var(l, loop->iterator, iterator, scope);
+    add_local_var(l, loop->index, index, scope);
+    // Whether there's a first iteration is the loop's test, in its scope.
+    l->scope = scope;
     s32 empty = emit_compare(l, t->is_signed ? IR_SGT : IR_UGT, type, first, last);
     s32 entry = l->block;
     emit_branch(l, empty, -1, -1);
@@ -1519,6 +1637,7 @@ static void lower_for(Lowering *l, Ast_For *loop, Ast_Proc *source) {
     terminator_of(l, step)->target = exit;
     finish_loop(l, &lowered, exit, step);
     l->block = exit;
+    place(l, loop->pos, outer);
 }
 
 // break and continue: a jump out of the innermost loop's body, whose target
@@ -1547,6 +1666,7 @@ static void lower_multi_var(Lowering *l, Ast_Multi_Var *multi) {
         Ast_Var *var = multi->vars[i];
         s32 slot = emit_slot(l, var->type);
         array_add(&l->locals, {var, slot});
+        add_local_var(l, var, slot, l->scope);
         array_add(&slots, slot);
     }
     Array<s32> results = {};
@@ -1580,12 +1700,44 @@ static void lower_multi_assign(Lowering *l, Ast_Assign *assign) {
     array_free(&results);
 }
 
+// Where a statement is, for a debugger: its first token. A declaration's is
+// its (first) name, which is its pos; an assignment's is its first target's
+// start (its pos is the operator), an expression statement's (a call) its
+// start (its pos is the '('); every other statement's pos is its keyword.
+static Position statement_position(Ast *s) {
+    switch (s->kind) {
+    case AST_ASSIGN: return ((Ast_Assign *)s)->targets[0]->start;
+    case AST_VAR:
+    case AST_CONST:
+    case AST_MULTI_VAR:
+    case AST_RETURN:
+    case AST_BLOCK:
+    case AST_IF:
+    case AST_WHILE:
+    case AST_FOR:
+    case AST_BREAK:
+    case AST_CONTINUE: return s->pos;
+    default: return s->start;  // an expression
+    }
+}
+
+// The return of Rig's main, which is C's: C's int, 0 (ir_lower).
+static void emit_entry_return(Lowering *l) {
+    s32 zero = emit_constant(l, IR_I32, 0);
+    array_add(&emit(l, IR_RET, IR_VOID)->args, zero);
+}
+
+// A statement, every instruction of it at its position (statement_position)
+// but where the statement itself says otherwise: a loop's and an if's own
+// code is at its keyword, and a failing check at the check.
 static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
+    l->pos = statement_position(s);
     switch (s->kind) {
     case AST_VAR: {
         Ast_Var *var = (Ast_Var *)s;
         s32 slot = emit_slot(l, var->type);
         array_add(&l->locals, {var, slot});
+        add_local_var(l, var, slot, l->scope);
         if (var->value) {
             emit_put(l, var->type, lower_value(l, var->value, var->type), slot);
         } else if (!var->is_uninitialized) {
@@ -1625,6 +1777,10 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
         // as it's worked out (the caller's temporary, which nothing else can
         // reach); the scalar ones are the ret's values.
         Ast_Return *ret = (Ast_Return *)s;
+        if (l->is_entry) {
+            emit_entry_return(l);  // main returns nothing in Rig
+            break;
+        }
         Array<s32> values = {};
         s32 hidden = 0;
         for (s64 i = 0; i < ret->values.count; i++) {
@@ -1639,7 +1795,7 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
         emit(l, IR_RET, IR_VOID)->args = values;
         break;
     }
-    case AST_BLOCK: lower_block(l, (Ast_Block *)s, source); break;
+    case AST_BLOCK: lower_scoped_block(l, (Ast_Block *)s, source); break;
     case AST_IF: lower_if(l, (Ast_If *)s, source); break;
     case AST_WHILE: lower_while(l, (Ast_While *)s, source); break;
     case AST_FOR: lower_for(l, (Ast_For *)s, source); break;
@@ -2047,6 +2203,15 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     l.module = m;
     l.block = -1;
 
+    // The source file, for a debugger (ir.h): copied, since d is freed
+    // before the module is.
+    if (d->files.count > 0) {
+        Source_File *file = &d->files[0];
+        m->source_path = string_copy(a, file->absolute_path);
+        m->directory = string_copy(a, file->directory);
+        md5(file->text, m->source_md5);
+    }
+
     // The global variables, in source order, each an Ir_Global of its
     // type. Its first value is the constant the checker made sure it has
     // (an integer's bits cut to the type's width, a float's whole, as an
@@ -2065,6 +2230,8 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         Ast_Var *var = (Ast_Var *)f->globals[i];
         Ir_Global g = {};
         g.name = var->name;
+        g.rig_type = var->type;
+        g.pos = var->pos;
         if (type_is_aggregate(var->type) || (var->value && literal_address(var->value))) {
             g.type = IR_VOID;
             g.is_variable = true;
@@ -2092,8 +2259,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         // for a TOKEN_ERROR the parser stopped at), and rig build stops
         // before lowering a file with errors.
         RIG_ASSERT(!source->is_broken);
-        bool is_main = !source->is_foreign && string_eq(source->name, str("main"));
-        Ir_Proc *p = ir_new_proc(m, a, is_main ? str("__rig_main") : source->name);
+        Ir_Proc *p = ir_new_proc(m, a, source->name);
         p->is_foreign = source->is_foreign;
         // An aggregate result is a hidden ptr parameter, before the visible
         // ones; an aggregate parameter a ptr to the caller's copy. The IR's
@@ -2111,6 +2277,20 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
             Type *t = source->results[k]->type;
             if (!type_is_aggregate(t)) array_add(&p->results, {ir_type_of(t), ir_ext_of(t)});
         }
+        // Rig's main is C's main, the program's entry point: exported, and
+        // returning C's int, 0 for success, which the C runtime that calls
+        // it hands to exit. (The checker made sure it takes and returns
+        // nothing in Rig; a Rig call of main ignores the int.) So a
+        // debugger's `break main` stops in the program's own main.
+        if (!source->is_foreign && string_eq(source->name, str("main"))) {
+            p->is_export = true;
+            array_add(&p->results, {IR_I32, IR_EXT_NONE});
+        }
+        if (!source->is_foreign) {
+            p->source_name = source->name;
+            p->pos = source->pos;
+            p->body = source->body->pos;
+        }
         table_put(&l.proc_index, source->name, (s32)i);
     }
 
@@ -2122,36 +2302,44 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         l.block = ir_new_block(a, l.proc);
         l.locals.count = 0;
         l.checking_bounds = l.bounds_checks && !source->no_bounds_checks;
+        l.is_entry = string_eq(source->name, str("main"));
+        // The body is scope 0, at its '{'. Its parameters are its first
+        // variables: a scalar one is the value it's passed as, an aggregate
+        // one the pointer to the caller's copy. The hidden result pointers
+        // before them are no variable, and don't count in `arg`.
+        l.scope = -1;
+        place(&l, source->body->pos, new_scope(&l, source->body->pos));
         s32 hidden = aggregate_results(source);
         for (s64 k = 0; k < source->params.count; k++) {
-            array_add(&l.locals, {(Ast *)source->params[k], hidden + (s32)k});
+            Ast_Param *param = source->params[k];
+            array_add(&l.locals, {(Ast *)param, hidden + (s32)k});
+            // The k-th visible parameter is the value hidden + k.
+            Ir_Var_Kind kind = type_is_aggregate(param->type) ? IR_VAR_ADDRESS : IR_VAR_VALUE;
+            s32 value = hidden + (s32)k, arg = (s32)k + 1;
+            array_add(&l.proc->vars, Ir_Var{param->name, param->type, param->pos, 0, kind, value, arg});
         }
         lower_block(&l, source->body, source);
         if (!ir_block_has_ended(l.proc, l.block)) {
-            // Control reaches the '}'. The checker made sure that only
-            // happens in a procedure that returns nothing; anywhere else,
-            // the end can't be reached.
-            emit(&l, source->results.count ? IR_UNREACHABLE : IR_RET, IR_VOID);
+            // Control reaches the '}', where its return is. The checker made
+            // sure that only happens in a procedure that returns nothing;
+            // anywhere else, the end can't be reached.
+            place(&l, source->body->end, 0);
+            if (l.is_entry) {
+                emit_entry_return(&l);
+            } else {
+                emit(&l, source->results.count ? IR_UNREACHABLE : IR_RET, IR_VOID);
+            }
         }
     }
+    l.is_entry = false;
 
     // __rig_bounds_failed, if a check calls it: after every body, so the
     // longest message start is known. __rig_string_equal, if == on strings
-    // calls it.
+    // calls it. Neither comes from the source: their instructions have no
+    // position (line 0) and they have no scopes.
+    place(&l, {}, 0);
     if (l.bounds_failed >= 0) lower_bounds_failed(&l);
     if (l.string_equal >= 0) lower_string_equal(&l);
-
-    // The C entry point: main() -> i32 { __rig_main(); return 0; }
-    s32 *rig_main = table_get(&l.proc_index, str("main"));
-    RIG_ASSERT(rig_main);
-    Ir_Proc *entry = ir_new_proc(m, a, str("main"));
-    entry->is_export = true;
-    array_add(&entry->results, {IR_I32, IR_EXT_NONE});
-    l.proc = entry;
-    l.block = ir_new_block(a, entry);
-    ir_emit_call(m, entry, l.block, *rig_main, {});
-    s32 zero = emit_constant(&l, IR_I32, 0);
-    array_add(&emit(&l, IR_RET, IR_VOID)->args, zero);
 
     table_free(&l.proc_index);
     table_free(&l.global_index);

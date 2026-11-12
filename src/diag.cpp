@@ -3,8 +3,14 @@
 #include "diag.h"
 
 s32 diag_add_file(Diagnostics *d, String path, String text) {
-    array_add(&d->files, {string_copy(&d->arena, path), text});
+    array_add(&d->files, {string_copy(&d->arena, path), text, {}, {}});
     return (s32)(d->files.count - 1);
+}
+
+void diag_locate_file(Diagnostics *d, s32 file, String directory, bool windows) {
+    Source_File *f = &d->files[file];
+    f->directory = string_copy(&d->arena, directory);
+    f->absolute_path = path_absolute(&d->arena, directory, f->path, windows);
 }
 
 void diag_error(Diagnostics *d, Position pos, const char *fmt, ...) {

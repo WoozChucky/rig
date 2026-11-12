@@ -256,7 +256,8 @@ String path_absolute(Arena *a, String directory, String path, bool windows) {
             // "\x.rig" starts at the root of directory's drive; "x.rig" in
             // the directory itself.
             if (path.count == 0 || !is_separator(path.data[0], true)) {
-                add_segments(&segments, string_slice(directory, directory_root, directory.count - directory_root), true);
+                String below_root = string_slice(directory, directory_root, directory.count - directory_root);
+                add_segments(&segments, below_root, true);
             }
             add_segments(&segments, path, true);
         }
@@ -267,7 +268,9 @@ String path_absolute(Arena *a, String directory, String path, bool windows) {
 
     u8 separator = windows ? '\\' : '/';
     Array<u8> out = {};
-    for (s64 i = 0; i < root.count; i++) array_add(&out, is_separator(root.data[i], windows) ? separator : root.data[i]);
+    for (s64 i = 0; i < root.count; i++) {
+        array_add(&out, is_separator(root.data[i], windows) ? separator : root.data[i]);
+    }
     for (s64 i = 0; i < segments.count; i++) {
         array_add(&out, separator);
         for (s64 k = 0; k < segments[i].count; k++) array_add(&out, segments[i].data[k]);
