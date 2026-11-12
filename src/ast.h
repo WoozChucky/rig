@@ -311,8 +311,8 @@ struct Ast_Multi_Var : Ast {
 // A parsed file: its declarations, in source order, broken ones included.
 // Procedures (and broken entries, which are Ast_Procs) are in procs; the
 // globals, top-level variables (Ast_Var, is_global set), constants
-// (Ast_Const) and structs (Ast_Struct), in globals. Each list is in source order on its own;
-// ast_declarations merges them back by position.
+// (Ast_Const) and structs (Ast_Struct), in globals. Each list is in source
+// order on its own; ast_declarations merges them back by position.
 struct Ast_File {
     Array<Ast_Proc *> procs;
     Array<Ast *> globals;

@@ -252,6 +252,12 @@ static Ast *parse_literal(Parser *p, Ast_Type *type_expr, Token *dot, Position s
     return literal;
 }
 
+// Whether the name e was written in parentheses, (e): they leave no node,
+// but move its start to the outermost '(' (parse_primary).
+static bool in_parentheses(Ast *e) {
+    return e->start.line != e->pos.line || e->start.col != e->pos.col;
+}
+
 // postfix = primary { '(' [expression {',' expression}] ')' | '.' '*' | '.' IDENT
 //                   | '.' '{' fields '}' }
 //
@@ -259,9 +265,9 @@ static Ast *parse_literal(Parser *p, Ast_Type *type_expr, Token *dot, Position s
 // f(x).* dereferences the call's result, p.*.* dereferences twice, a.b.c is
 // (a.b).c, and p.*.x is the field x of what p points at. A '.' after a name
 // and followed by '{' makes the name a type, of the struct literal that
-// follows (Vec2.{1, 2}); after anything else it's "expected a field's
-// name". The lexer reads a '*' after a '.' alone (lexer.h), so p.*=5 is
-// p.* = 5.
+// follows (Vec2.{1, 2}); after anything else, a name in parentheses
+// included, it's "expected a field's name". The lexer reads a '*' after a
+// '.' alone (lexer.h), so p.*=5 is p.* = 5.
 static Ast *parse_postfix(Parser *p) {
     Ast *e = parse_primary(p);
     for (;;) {
@@ -285,8 +291,9 @@ static Ast *parse_postfix(Parser *p) {
                 member->index = -1;
                 if (!set_height(p, p->height + 1)) return nullptr;
                 e = member;
-            } else if (after->kind == TOKEN_LBRACE && e->kind == AST_NAME) {
-                // The name was a type's: T.{...}.
+            } else if (after->kind == TOKEN_LBRACE && e->kind == AST_NAME && !in_parentheses(e)) {
+                // The name was a type's: T.{...}. A type is never in
+                // parentheses, so (Vec2).{1} is no literal.
                 Ast_Type *type = ast_new<Ast_Type>(p->arena, AST_TYPE_NAME, e->pos);
                 type->name = ((Ast_Name *)e)->name;
                 e = parse_literal(p, type, dot, e->start);

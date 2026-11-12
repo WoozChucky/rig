@@ -1348,6 +1348,9 @@ TEST(parses_struct_literals) {
     // A literal's type is a name before the '.'.
     body_dump(&a, "v := f().{1};", &errors);
     CHECK_STR(errors, "2:14: expected a field's name, found '{'\n");
+    // A type is never in parentheses, so neither is a literal's.
+    body_dump(&a, "v := (Vec2).{1};", &errors);
+    CHECK_STR(errors, "2:17: expected a field's name, found '{'\n");
     body_dump(&a, "v := .{1 2};", &errors);
     CHECK_STR(errors, "2:14: expected '}', found integer literal\n");
     arena_free(&a);

@@ -3,9 +3,11 @@
 #include "types.h"
 
 // A built-in type of this kind, size and alignment, named `name` (a string
-// literal); an integer's sign is is_signed.
-#define BUILT_IN(kind, name, size, align, is_signed) \
-    {kind, size, align, is_signed, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr, nullptr, {}, nullptr}
+// literal); an integer's sign is is_signed. It has no arena (Type.arena):
+// it lasts the whole run, as its pointers do.
+#define BUILT_IN(kind, name, size, align, is_signed)                                       \
+    {kind, size, align, is_signed, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr, \
+     nullptr, {}, nullptr, nullptr}
 // The numbers' alignment is their size, as in C on x86-64.
 #define INTEGER(name, size, is_signed) BUILT_IN(TYPE_INTEGER, name, size, size, is_signed)
 #define FLOAT(name, size) BUILT_IN(TYPE_FLOAT, name, size, size, false)
@@ -33,7 +35,7 @@ Type type_untyped_literal = BUILT_IN(TYPE_UNTYPED_LITERAL, ".{...}", 0, 1, false
 // its own so NAMED_TYPES, and the editor's grammar made from it, list the
 // name.
 static Type float_name = {
-    TYPE_FLOAT, 4, 4, false, nullptr, {(const u8 *)"float", 5}, nullptr, &type_float32, {}, nullptr,
+    TYPE_FLOAT, 4, 4, false, nullptr, {(const u8 *)"float", 5}, nullptr, &type_float32, {}, nullptr, nullptr,
 };
 
 static Type integer_types[] = {
@@ -86,17 +88,22 @@ s32 type_align(Type *t) {
     return t->align;
 }
 
-// Pointer types live as long as the built-in types that cache them, so they
-// can't come from an arena a caller frees.
+// A pointer type is cached in the type it points at (Type.pointer), so it
+// must last as long as that type does, and no longer: a pointer to a
+// struct, which lives in its compilation's arena, comes from that arena
+// too, and is freed with the struct (and so is a pointer to that pointer).
+// A built-in type lasts the whole run, so its pointers come from this
+// arena, never freed.
 static Arena pointer_types;
 
 Type *type_pointer_to(Type *t) {
     if (!t->pointer) {
-        Type *p = arena_new<Type>(&pointer_types);
+        Type *p = arena_new<Type>(t->arena ? t->arena : &pointer_types);
         p->kind = TYPE_POINTER;
         p->size = 8;
         p->align = 8;
         p->pointee = t;
+        p->arena = t->arena;
         t->pointer = p;
     }
     return t->pointer;
