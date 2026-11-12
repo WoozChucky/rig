@@ -686,8 +686,8 @@ TEST(llvm_byte_global_with_a_relocation) {
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);
         CHECK(contains(text, "@table = internal global <{ [8 x i8], ptr, [8 x i8] }> "
-                             "<{ [8 x i8] c\"\\03\\00\\00\\00\\00\\00\\00\\00\", ptr @str.0, [8 x i8] zeroinitializer }>, "
-                             "align 8"));
+                             "<{ [8 x i8] c\"\\03\\00\\00\\00\\00\\00\\00\\00\", ptr @str.0, "
+                             "[8 x i8] zeroinitializer }>, align 8"));
         CHECK(contains(text, "@origin = internal global [16 x i8] zeroinitializer, align 8"));
     }
     arena_free(&a);

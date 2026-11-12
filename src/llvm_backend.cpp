@@ -512,11 +512,11 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
         v = LLVMBuildSelect(builder, value(body, instr->c), value(body, instr->a), value(body, instr->b), "");
         break;
     case IR_PTRADD: {
-        // getelementptr i8, ptr %a, i64 %b: the address %b bytes on. Without
-        // inbounds (LLVMBuildGEP2 sets no flag), which would make an address
-        // outside the object %a points into poison: Rig's pointer arithmetic
-        // may go anywhere, and only a load or store through the result can
-        // be wrong (spec 6.4).
+        // getelementptr i8, ptr %a, i64 %b: the address %b bytes on, without
+        // inbounds (LLVMBuildGEP2 sets no flag). With inbounds, an address
+        // outside the object %a points into would be poison; Rig's pointer
+        // arithmetic may go anywhere, and only a load or store through the
+        // result can be wrong (spec 6.4).
         LLVMValueRef offset = value(body, instr->b);
         v = LLVMBuildGEP2(builder, LLVMInt8TypeInContext(c), value(body, instr->a), &offset, 1, "");
         break;
