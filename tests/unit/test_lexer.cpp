@@ -635,3 +635,14 @@ TEST(punctuation_at_the_end_of_the_file) {
     CHECK_KINDS(l, TOKEN_DOT_DOT, TOKEN_DOT, TOKEN_TRIPLE_DASH, TOKEN_MINUS, TOKEN_SLASH, TOKEN_EOF);
     lexed_free(l);
 }
+
+TEST(star_after_a_dot_is_alone) {
+    // p.* is a dereference (issue #57), so a '*' right after a '.' is read
+    // alone, whatever follows it: p.*=5 assigns, p.*==q compares. Anywhere
+    // else maximal munch holds: *= is one token.
+    Lexed *l = lex_text("p.*=5 p.*==q p. *= x *= ..*=");
+    CHECK_KINDS(l, TOKEN_IDENT, TOKEN_DOT, TOKEN_STAR, TOKEN_EQUAL, TOKEN_INT, TOKEN_IDENT, TOKEN_DOT, TOKEN_STAR,
+                TOKEN_EQUAL_EQUAL, TOKEN_IDENT, TOKEN_IDENT, TOKEN_DOT, TOKEN_STAR, TOKEN_EQUAL, TOKEN_IDENT,
+                TOKEN_STAR_EQUAL, TOKEN_DOT_DOT, TOKEN_STAR_EQUAL, TOKEN_EOF);
+    lexed_free(l);
+}

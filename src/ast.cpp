@@ -300,6 +300,17 @@ static void dump(Array<u8> *buffer, Ast *node) {
         out(buffer, ")");
         break;
     }
+    case AST_NULL: out(buffer, "(null)"); break;
+    case AST_DEREF:
+        out(buffer, "(deref ");
+        dump(buffer, ((Ast_Deref *)node)->operand);
+        out(buffer, ")");
+        break;
+    case AST_SIZE_OF:
+        out(buffer, "(size_of ");
+        dump_type(buffer, ((Ast_Size_Of *)node)->type_expr);
+        out(buffer, ")");
+        break;
     case AST_BREAK: out(buffer, "(break)"); break;
     case AST_CONTINUE: out(buffer, "(continue)"); break;
     }
