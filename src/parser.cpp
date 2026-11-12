@@ -327,11 +327,25 @@ static Ast *parse_expression(Parser *p, int min_precedence) {
     return left;
 }
 
-// Whether the next tokens are IDENT '::' with the name in column 1, the way
-// a top-level declaration starts.
+// Whether a procedure's parameter list starts `ahead` tokens on: '(' ')' or
+// '(' IDENT ':'. Any other '(' after '::' begins a constant's value in
+// parentheses (N :: (1 + 2);).
+static bool procedure_follows(Parser *p, s64 ahead) {
+    return peek(p, ahead)->kind == TOKEN_LPAREN &&
+           (peek(p, ahead + 1)->kind == TOKEN_RPAREN ||
+            (peek(p, ahead + 1)->kind == TOKEN_IDENT && peek(p, ahead + 2)->kind == TOKEN_COLON));
+}
+
+// Whether the next tokens are a procedure's declaration with the name in
+// column 1, IDENT '::' '(' ..., the way a top-level procedure starts: inside
+// a body, a body that was never closed. A constant (`N :: 5;`) isn't, in
+// column 1 or not: it's a local constant, a statement of the body, and
+// indentation means nothing to the language. Procedures are declared only
+// at the top level, so one can't be a statement.
 static bool starts_declaration(Parser *p) {
     Token *t = peek(p);
-    return t->kind == TOKEN_IDENT && t->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON;
+    return t->kind == TOKEN_IDENT && t->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON &&
+           procedure_follows(p, 2);
 }
 
 // The value of the constant `name` after its '::': expression ';'. The
@@ -621,9 +635,9 @@ static Ast *parse_statement(Parser *p) {
 static Ast_Block *parse_block_rest(Parser *p, Token *open) {
     Ast_Block *block = ast_new<Ast_Block>(p->arena, AST_BLOCK, open->pos);
     while (peek(p)->kind != TOKEN_RBRACE) {
-        // The end of the file, or a declaration at the start of a line
-        // (`name ::` in column 1): the block was never closed. The
-        // declaration stays for parse() to read.
+        // The end of the file, or a procedure's declaration at the start
+        // of a line (`name :: (` in column 1, starts_declaration): the block
+        // was never closed. The declaration stays for parse() to read.
         if (peek(p)->kind == TOKEN_EOF || starts_declaration(p)) {
             error_expected(p, token_kind_name(TOKEN_RBRACE));
             return nullptr;
@@ -764,10 +778,7 @@ static Ast *parse_declaration(Parser *p) {
         return var;
     }
     if (!expect(p, TOKEN_COLON_COLON)) return nullptr;
-    bool procedure = peek(p)->kind == TOKEN_LPAREN &&
-                     (peek(p, 1)->kind == TOKEN_RPAREN ||
-                      (peek(p, 1)->kind == TOKEN_IDENT && peek(p, 2)->kind == TOKEN_COLON));
-    if (procedure) return parse_procedure(p, name);
+    if (procedure_follows(p, 0)) return parse_procedure(p, name);
     return parse_constant(p, name);
 }
 
@@ -818,9 +829,10 @@ static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
 //
 // Inside a body, `N :: 5;` starting a line is a local constant, not the next
 // declaration, so the skipping counts braces from `start` on: an IDENT '::'
-// inside braces still open is passed over, unless it's in column 1, where
-// parse_block takes it for a top-level declaration after a body never
-// closed. A global variable is taken only outside every brace and
+// inside braces still open is passed over, unless it's a procedure's in
+// column 1 (starts_declaration), which parse_block takes for a top-level
+// declaration after a body never closed. A constant in column 1 is passed
+// over there, as an indented one is. A global variable is taken only outside every brace and
 // parameter list still open, even right where the failed declaration
 // stopped: an unindented local (`y : int;` in column 1 of a body) and a
 // parameter list over two lines (`n: s32` starting the second) look like
@@ -831,13 +843,24 @@ static void skip_to_next_declaration(Parser *p, s64 start) {
     s64 depth = 0;   // braces opened and not yet closed since `start`
     s64 parens = 0;  // the same for a parameter list's parentheses
     for (s64 i = start; i < p->next; i++) count_open(p, i, &depth, &parens);
-    if (p->next > start && (starts_declaration(p) || (depth <= 0 && parens <= 0 && starts_global(p)))) return;
+    // Where the failed declaration stopped, the declaration there is kept:
+    // a procedure's in column 1 (inside braces too: a body never closed);
+    // outside every brace, any IDENT '::' in column 1, a constant's too;
+    // and a global's outside every brace and parameter list.
+    Token *stop = peek(p);
+    bool in_column_1 = stop->kind == TOKEN_IDENT && stop->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON;
+    bool outside = depth <= 0;
+    if (p->next > start &&
+        (starts_declaration(p) || (outside && in_column_1) || (outside && parens <= 0 && starts_global(p)))) {
+        return;
+    }
     // At least one token is skipped, whatever it is.
     for (bool first = true; peek(p)->kind != TOKEN_EOF; first = false) {
         Token *t = peek(p);
         bool starts_line = p->next == 0 || p->tokens[p->next - 1].pos.line != t->pos.line;
-        if (!first && starts_line && t->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON_COLON &&
-            (depth <= 0 || t->pos.col == 1)) {
+        if (!first && starts_line &&
+            ((depth <= 0 && t->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON_COLON) ||
+             starts_declaration(p))) {
             return;
         }
         if (!first && starts_line && depth <= 0 && parens <= 0 && starts_global(p)) return;

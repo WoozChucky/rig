@@ -978,3 +978,40 @@ TEST(blocks_nest_up_to_a_thousand_levels) {
     CHECK(builds(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "while y == 1 {", 999, "y = 2;", "}", "\n}\n")));
     arena_free(&a);
 }
+
+TEST(a_local_constant_in_column_1_is_a_statement) {
+    // Indentation means nothing to the language: `N :: 5;` in column 1 of
+    // a body is a local constant. Only a procedure's signature after a
+    // column-1 IDENT '::' ends a body never closed, since procedures are
+    // declared only at the top level.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "putchar :: (c: s32) -> s32 #foreign libc;\n"
+                           "main :: () {\n"
+                           "N :: 5;\n"
+                           "x : int = N;\n"
+                           "y := 2;\n"
+                           "    putchar(cast(s32) (x + y + 48));\n"
+                           "}\n"),
+              "");
+    String errors;
+    String dump = parse_src(&a, "main :: () {\nN :: 5;\nM :: (N + 1);\n}\n", &errors);
+    CHECK_STR(errors, "");
+    CHECK_STR(dump, "(proc main (params) (block (const N (int 5)) (const M (binary + (name N) (int 1)))))\n");
+    // A procedure there still ends the body, as in milestone 1, ...
+    dump = parse_src(&a, "main :: () {\n    x := 1;\nf :: () { }\ng :: (n: int) { }\n", &errors);
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'f'\n");
+    CHECK_STR(dump, "(broken main)\n(proc f (params) (block))\n(proc g (params (n int)) (block))\n");
+    // ... and the skipping after an error inside a body passes over a
+    // column-1 constant, as over an indented one, to resume at the next
+    // procedure.
+    dump = parse_src(&a, "main :: () {\n    x := ;\nN :: 5;\n    y := N;\n}\nf :: () { }\n", &errors);
+    CHECK_STR(errors, "2:10: expected an expression, found ';'\n");
+    CHECK_STR(dump, "(broken main)\n(proc f (params) (block))\n");
+    // Outside every brace, a column-1 constant is still the next
+    // declaration, kept where a failed one stopped.
+    dump = parse_src(&a, "x := 1\nN :: 5;\n", &errors);
+    CHECK_STR(errors, "2:1: expected ';', found identifier 'N'\n");
+    CHECK_STR(dump, "(broken x)\n(const N (int 5))\n");
+    arena_free(&a);
+}

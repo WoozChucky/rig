@@ -79,9 +79,12 @@
 // the name only where the tokens still look like a declaration of it, as
 // in `greet () {` or `greet := () {`), skips to the next declaration (an
 // identifier at the start of a line, followed by '::', outside the braces
-// of the body it gave up in, or in column 1; or a global variable's name in
-// column 1, followed by ':' or ':=', outside any braces or parameter
-// list) and goes on. Stray tokens in front of a declaration's name
+// of the body it gave up in, or a procedure's, `name :: (`, in column 1;
+// or a global variable's name in column 1, followed by ':' or ':=', outside
+// any braces or parameter list) and goes on. A procedure's declaration in
+// column 1 also ends a body never closed ("expected '}'"); a constant in
+// column 1 (`N :: 5;`) doesn't, it's a local constant like an indented
+// one, since procedures are the only declarations a body can't hold. Stray tokens in front of a declaration's name
 // (`*greet :: () {}`) are reported and skipped, and the declaration after
 // them is parsed whole. So one mistake gives one error, and the checker can
 // still check the rest of the file: the broken declaration's name is known
