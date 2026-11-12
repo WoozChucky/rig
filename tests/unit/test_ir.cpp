@@ -1,6 +1,6 @@
 // test_ir.cpp: lowering checked trees to Rig's IR (issue #10, with tokens
-// by hand; issue #33, from real source), and the IR's builders and printing
-// (issue #32), with IR by hand (helpers.cpp).
+// by hand; issues #33 and #34, from real source), and the IR's builders and
+// printing (issue #32), with IR by hand (helpers.cpp).
 
 #include "test.h"
 
@@ -320,7 +320,8 @@ TEST(nothing_is_lowered_after_a_return) {
 // lowering makes it.
 
 // max :: (a: int, b: int) -> int { if a > b { return a; } return b; }, as
-// lowering will make it: three blocks, a comparison and a branch.
+// lowering makes it (lowering_makes_the_hand_built_max): three blocks, a
+// comparison and a branch.
 static Ir_Module *max_module(Arena *a) {
     Ir_Module *m = arena_new<Ir_Module>(a);
     Ir_Proc *p = new_proc_returning(m, a, "max", IR_I64);
@@ -517,5 +518,257 @@ TEST(ir_knows_when_a_block_has_ended) {
     CHECK(!ir_block_has_ended(p, b));
     emit_ret(p, b, -1);
     CHECK(ir_block_has_ended(p, b));
+    arena_free(&a);
+}
+
+// Lowering milestone 2a's bools and control flow (issue #34): blocks and
+// branches.
+
+TEST(and_evaluates_its_right_side_only_when_needed) {
+    // a && check(): check() is called only when a is true, in a block of its
+    // own that only the branch on a reaches; a || check(), only when a is
+    // false. The result goes through a stack slot, stored on both paths and
+    // loaded where they meet.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "check :: () -> bool { return true; }\n"
+                                          "main :: () {\n"
+                                          "    a := false;\n"
+                                          "    b := a && check();\n"
+                                          "    c := a || check();\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local i1\n"
+              "  %1 = const i1 0\n"
+              "  store i1 %1, %0\n"
+              "  %2 = local i1\n"
+              "  %3 = local i1\n"
+              "  %4 = load i1 %0\n"
+              "  store i1 %4, %3\n"
+              "  branch %4, b1, b2\n"
+              "b1:\n"
+              "  %5 = call @check()\n"
+              "  store i1 %5, %3\n"
+              "  jump b2\n"
+              "b2:\n"
+              "  %6 = load i1 %3\n"
+              "  store i1 %6, %2\n"
+              "  %7 = local i1\n"
+              "  %8 = local i1\n"
+              "  %9 = load i1 %0\n"
+              "  store i1 %9, %8\n"
+              "  branch %9, b4, b3\n"
+              "b3:\n"
+              "  %10 = call @check()\n"
+              "  store i1 %10, %8\n"
+              "  jump b4\n"
+              "b4:\n"
+              "  %11 = load i1 %8\n"
+              "  store i1 %11, %7\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(ir_of_comparisons_and_not) {
+    // A comparison is a cmp at the type its operands meet at, signed or
+    // unsigned by that type's sign; ! is xor with 1; a bool is an i1.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: (a: u8, b: u16, s: s32) -> bool {\n"
+                                          "    return !(a < b) && s >= -2;\n"
+                                          "}\n"
+                                          "g :: (x: bool, y: bool) -> bool { return x != y; }\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(i8 zeroext, i16 zeroext, i32) -> i1 {\n"
+              "b0:\n"
+              "  %3 = local i1\n"
+              "  %4 = zext i8 %0 to i16\n"
+              "  %5 = cmp ult i16 %4, %1\n"
+              "  %6 = const i1 1\n"
+              "  %7 = xor i1 %5, %6\n"
+              "  store i1 %7, %3\n"
+              "  branch %7, b1, b2\n"
+              "b1:\n"
+              "  %8 = const i32 4294967294\n"
+              "  %9 = cmp sge i32 %2, %8\n"
+              "  store i1 %9, %3\n"
+              "  jump b2\n"
+              "b2:\n"
+              "  %10 = load i1 %3\n"
+              "  ret %10\n"
+              "}\n");
+    CHECK(contains(proc_ir(ir, "g"), "  %2 = cmp ne i1 %0, %1\n  ret %2\n"));
+    arena_free(&a);
+}
+
+TEST(ir_of_if_else_and_while) {
+    // if: the condition's branch to the then block or the else part; each
+    // branch that gets to its end jumps to the block after the if. while:
+    // its condition in a block of its own, which the body jumps back to; a
+    // break jumps to the block after the loop.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "sign :: (x: int) -> int {\n"
+                                          "    if x > 0 { return 1; } else if x < 0 { return -1; }\n"
+                                          "    return 0;\n"
+                                          "}\n"
+                                          "count :: (n: int) -> int {\n"
+                                          "    i := 0;\n"
+                                          "    while i < n {\n"
+                                          "        if i == 5 { break; }\n"
+                                          "        i += 1;\n"
+                                          "    }\n"
+                                          "    return i;\n"
+                                          "}\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "sign"),
+              "proc @sign(i64) -> i64 {\n"
+              "b0:\n"
+              "  %1 = const i64 0\n"
+              "  %2 = cmp sgt i64 %0, %1\n"
+              "  branch %2, b1, b2\n"
+              "b1:\n"
+              "  %3 = const i64 1\n"
+              "  ret %3\n"
+              "b2:\n"
+              "  %4 = const i64 0\n"
+              "  %5 = cmp slt i64 %0, %4\n"
+              "  branch %5, b3, b4\n"
+              "b3:\n"
+              "  %6 = const i64 18446744073709551615\n"
+              "  ret %6\n"
+              "b4:\n"
+              "  jump b5\n"
+              "b5:\n"
+              "  %7 = const i64 0\n"
+              "  ret %7\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "count"),
+              "proc @count(i64) -> i64 {\n"
+              "b0:\n"
+              "  %1 = local i64\n"
+              "  %2 = const i64 0\n"
+              "  store i64 %2, %1\n"
+              "  jump b1\n"
+              "b1:\n"
+              "  %3 = load i64 %1\n"
+              "  %4 = cmp slt i64 %3, %0\n"
+              "  branch %4, b2, b5\n"
+              "b2:\n"
+              "  %5 = load i64 %1\n"
+              "  %6 = const i64 5\n"
+              "  %7 = cmp eq i64 %5, %6\n"
+              "  branch %7, b3, b4\n"
+              "b3:\n"
+              "  jump b5\n"
+              "b4:\n"
+              "  %8 = load i64 %1\n"
+              "  %9 = const i64 1\n"
+              "  %10 = add i64 %8, %9\n"
+              "  store i64 %10, %1\n"
+              "  jump b1\n"
+              "b5:\n"
+              "  %11 = load i64 %1\n"
+              "  ret %11\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(ir_of_a_for_loop) {
+    // The ends once, first then last; none at all when first > last
+    // (unsigned here: the iterator is a u8). The step ends the loop when the
+    // iterator is last, before adding 1, which would go past 255; a continue
+    // jumps to the step too.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "sum :: (n: u8) -> int {\n"
+                                          "    total := 0;\n"
+                                          "    for 1..n { if it == 3 { continue; } total += it_index; }\n"
+                                          "    return total;\n"
+                                          "}\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "sum"),
+              "proc @sum(i8 zeroext) -> i64 {\n"
+              "b0:\n"
+              "  %1 = local i64\n"
+              "  %2 = const i64 0\n"
+              "  store i64 %2, %1\n"
+              "  %3 = const i8 1\n"
+              "  %4 = local i8\n"
+              "  store i8 %3, %4\n"
+              "  %5 = local i64\n"
+              "  %6 = const i64 0\n"
+              "  store i64 %6, %5\n"
+              "  %7 = cmp ugt i8 %3, %0\n"
+              "  branch %7, b6, b1\n"
+              "b1:\n"
+              "  %8 = load i8 %4\n"
+              "  %9 = const i8 3\n"
+              "  %10 = cmp eq i8 %8, %9\n"
+              "  branch %10, b2, b3\n"
+              "b2:\n"
+              "  jump b4\n"
+              "b3:\n"
+              "  %11 = load i64 %1\n"
+              "  %12 = load i64 %5\n"
+              "  %13 = add i64 %11, %12\n"
+              "  store i64 %13, %1\n"
+              "  jump b4\n"
+              "b4:\n"
+              "  %14 = load i8 %4\n"
+              "  %15 = cmp eq i8 %14, %0\n"
+              "  branch %15, b6, b5\n"
+              "b5:\n"
+              "  %16 = const i8 1\n"
+              "  %17 = add i8 %14, %16\n"
+              "  store i8 %17, %4\n"
+              "  %18 = load i64 %5\n"
+              "  %19 = const i64 1\n"
+              "  %20 = add i64 %18, %19\n"
+              "  store i64 %20, %5\n"
+              "  jump b1\n"
+              "b6:\n"
+              "  %21 = load i64 %1\n"
+              "  ret %21\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(a_body_that_never_ends_has_no_ret) {
+    // while true without a break: the block after it is never reached, and
+    // a procedure returning a value ends there with unreachable.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "spin :: () -> int {\n"
+                                          "    while true { }\n"
+                                          "}\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "spin"),
+              "proc @spin() -> i64 {\n"
+              "b0:\n"
+              "  jump b1\n"
+              "b1:\n"
+              "  %0 = const i1 1\n"
+              "  branch %0, b2, b3\n"
+              "b2:\n"
+              "  jump b1\n"
+              "b3:\n"
+              "  unreachable\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(lowering_makes_the_hand_built_max) {
+    // max_module was built by hand, before lowering could make it, as
+    // lowering would: an if without an else that returns, then a return.
+    Arena a = arena_make();
+    String lowered = ir_print(&a, lower_source(&a,
+                                               "max :: (a: int, b: int) -> int { if a > b { return a; } return b; }\n"
+                                               "main :: () { }\n"));
+    CHECK_STR(proc_ir(lowered, "max"), string_cstr(&a, proc_ir(ir_print(&a, max_module(&a)), "max")));
     arena_free(&a);
 }

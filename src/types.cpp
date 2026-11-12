@@ -7,6 +7,7 @@
 Type type_void = {TYPE_VOID, 0, false, nullptr, {(const u8 *)"void", 4}, nullptr};
 Type type_string = {TYPE_STRING, 16, false, nullptr, {(const u8 *)"string", 6}, nullptr};
 Type type_int = INTEGER("int", 8, true);
+Type type_bool = {TYPE_BOOL, 1, false, nullptr, {(const u8 *)"bool", 4}, nullptr};
 Type type_untyped_int = INTEGER("int", 8, true);
 
 static Type integer_types[] = {
@@ -21,7 +22,7 @@ static Type integer_types[] = {
 static Type *const NAMED_TYPES[] = {
     &integer_types[0], &integer_types[1], &integer_types[2], &integer_types[3],  // s8 s16 s32 s64
     &integer_types[4], &integer_types[5], &integer_types[6], &integer_types[7],  // u8 u16 u32 u64
-    &type_int,
+    &type_int,  &type_bool,
 };
 static_assert(sizeof integer_types / sizeof integer_types[0] == 8, "NAMED_TYPES lists integer_types one by one");
 
