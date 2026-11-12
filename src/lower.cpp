@@ -68,9 +68,11 @@
 //   changes it. A struct result is a hidden ptr parameter, one per struct
 //   result in result order, before the visible ones; return copies the
 //   value into it, and the IR's results are the scalar results only. The
-//   caller passes a fresh temporary for each, never the place the result
-//   is going, and copies it there after the call (lower_call_results): so
-//   `g1, g2 = f();` gives the right answer even when f returns g2, g1. A
+//   caller passes a temporary for each, never the place the result is
+//   going, and copies it there after the call (lower_call_results): so
+//   `g1, g2 = f();` gives the right answer even when f returns g2, g1. The
+//   temporary stays fresh: it's copied out wherever its value goes, even
+//   into a view (view_of_copy), so nothing the callee reads points at it. A
 //   literal is built in a temporary too, and copied: `v = Vec2.{v.y, v.x};`
 //   reads v whole before writing it.
 // - Arrays and views (spec 6.5) are aggregates too: an array is its N
@@ -85,10 +87,13 @@
 //   checked (C's p[i]), only its null.
 // - An array becomes a view where the checker said it converts: a view of
 //   the array itself when it's a place, so a procedure given it changes it;
-//   otherwise of a temporary (lower_view_of). A literal is built in a
-//   temporary of its own, element by element. for over an array or a view
-//   takes its data and count once, then counts an index up to the count
-//   (lower_for_sequence). A global view of a literal points at a global
+//   otherwise of a temporary of the view's own, the array copied into it
+//   once it's worked out (lower_view_of, view_of_copy). A literal is built
+//   element by element in a temporary of its own, and a view never sees
+//   that temporary, nor a call's result's: running the same place again in
+//   a loop can't rebuild what an old view still reads. for over an array, a
+//   view or a string takes its data and count once, then counts an index up
+//   to the count (lower_for_sequence). A global view of a literal points at a global
 //   array made for the literal (constant_bytes).
 // - A string (spec 6.5) is a view of bytes, laid out as one: s[i], .count,
 //   .data and for are a view's. A literal used as a string is a view built
@@ -447,25 +452,36 @@ static s32 literal_bytes(Lowering *l, Ast_String *literal) {
     return addr->result;
 }
 
+// A view of the array `value` of type `array` (its address) that isn't a
+// place: a view of a temporary of its own, one per place in the source,
+// which the whole array is copied into once it's worked out.
+//
+// The view never sees the value's own memory. A literal's temporary is
+// built element by element, and a call's result temporary is written by the
+// callee's return, both again each time a loop runs the same place: a view
+// of either, kept from the last time round, would be read while it's being
+// rebuilt. `pair = .[pair[1], pair[0] + pair[1]];` would then read pair[0]
+// after the literal's first element had replaced it, and a call given such
+// a view back (`a, b = step(a);`) would read its parameter after its return
+// had changed it. A copy into a temporary nothing else writes lands only
+// once every value has been read (spec 6.5), and leaves a call's result
+// temporaries out of every view's reach, fresh for the next call. A
+// parameter (the caller's copy), a loop's iterator or a cast is copied for
+// the same reason, and so writing through the view can't change what
+// mustn't change.
+static s32 view_of_copy(Lowering *l, Type *array, s32 value) {
+    s32 data = emit_slot(l, array);
+    emit_put(l, array, value, data);
+    return view_of_array(l, array, data);
+}
+
 // The view an array e converts to (spec 6.5). When e is a place (the
 // checker's expr_is_place), a view of it where it is: `sort(numbers)` sorts
-// numbers. A call's result and a literal are temporaries already, made
-// here, one per place in the source (so a loop rebuilds the same one each
-// time round): the view sees that. Anything else (a parameter, which is the
-// caller's copy, a loop's iterator, a cast) is copied into a temporary
-// first, so writing through the view can't change what mustn't change.
+// numbers. Anything else, a literal, a call's result, a parameter, is
+// copied first (view_of_copy).
 static s32 lower_view_of(Lowering *l, Ast *e) {
-    s32 data;
-    if (expr_is_place(e)) {
-        data = lower_address(l, e);
-    } else if (e->kind == AST_CALL || e->kind == AST_LITERAL) {
-        data = lower_expr(l, e);
-    } else {
-        s32 value = lower_expr(l, e);
-        data = emit_slot(l, e->type);
-        emit_put(l, e->type, value, data);
-    }
-    return view_of_array(l, e->type, data);
+    if (expr_is_place(e)) return view_of_array(l, e->type, lower_address(l, e));
+    return view_of_copy(l, e->type, lower_expr(l, e));
 }
 
 // The value of `e`, of the type `to` its use wants (the checker said it
@@ -1005,8 +1021,10 @@ static s32 lower_address(Lowering *l, Ast *e) {
 // own: zeroed first (the fields not given are zero, and so is the padding
 // between fields, which a copy then carries along), then each value given
 // put into its field, in the order written. Its value is the temporary's
-// address, copied from wherever it's used. Never built in the place it's
-// going: `v = Vec2.{v.y, v.x};` reads v's fields before the copy writes v.
+// address, copied from wherever it's used, a view's own temporary included
+// (view_of_copy). Never built in the place it's going, nor where anything
+// else can read it: `v = Vec2.{v.y, v.x};` reads v's fields before the copy
+// writes v.
 //
 //     %t = local 8 align 4
 //     zero %t, 8
@@ -1478,9 +1496,10 @@ static void lower_multi_assign(Lowering *l, Ast_Assign *assign) {
         Ast *target = assign->targets[i];  // a place in memory: checked
         s32 address = lower_address(l, target);
         Type *from = call->proc->results[i]->type;
-        // An array result going into a view: a view of the call's temporary.
+        // An array result going into a view: a view of a copy of it, never
+        // of the call's own temporary (view_of_copy).
         s32 value = from->kind == TYPE_ARRAY && target->type->kind == TYPE_VIEW
-                        ? view_of_array(l, from, results[i])
+                        ? view_of_copy(l, from, results[i])
                         : resize(l, results[i], from, ir_type_of(target->type));
         emit_put(l, target->type, value, address);
     }
