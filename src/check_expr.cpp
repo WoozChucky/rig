@@ -450,6 +450,7 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     // arguments may be right, and the call's type is unknown too.
     if (!decl || decl->kind != AST_PROC || ((Ast_Proc *)decl)->is_broken) return nullptr;
     Ast_Proc *proc = (Ast_Proc *)decl;
+    check_proc_signature(c, proc);
 
     call->proc = proc;
     if (call->args.count != proc->params.count) {
@@ -1413,6 +1414,7 @@ static Type *check_member(Checker *c, Ast_Member *m) {
                    STR_ARG(m->name), STR_ARG(type_name(c->arena, t)));
         return nullptr;
     }
+    if (!check_layout(c, s)) return nullptr;
     m->index = type_field_index(s, m->name);
     if (m->index < 0) {
         diag_error(c->diag, m->pos, "'" STR_FMT "' has no field '" STR_FMT "'", STR_ARG(type_name(c->arena, s)),
