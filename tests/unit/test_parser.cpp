@@ -1,6 +1,6 @@
 // test_parser.cpp: the parser. Milestone 1's tests (issue #8) build tokens
 // by hand with toks() (helpers.cpp), so they don't need the lexer;
-// milestone 2a's (issues #33 and #34) lex real source with src().
+// milestone 2a's (issues #33, #34 and #35) lex real source with src().
 
 #include "test.h"
 
@@ -598,5 +598,67 @@ TEST(comparison_precedence) {
     CHECK_STR(body_dump(&a, "x := true; y : bool = false;", &errors),
               "(block (var x _ (bool true)) (var y bool (bool false)))");
     CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+// Milestone 2a (issue #35): division, remainder and casts.
+
+TEST(parses_division_and_casts) {
+    // / and % bind as * does (level 5, Go's), and a cast is a prefix
+    // operator: it takes only the operand right after it.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "cast(u8) a / b % c;", &errors),
+              "(block (binary % (binary / (cast u8 (name a)) (name b)) (name c)))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "a + b / c - d % e;", &errors),
+              "(block (binary - (binary + (name a) (binary / (name b) (name c))) (binary % (name d) (name e))))");
+    CHECK_STR(body_dump(&a, "x /= 2; x %= 3;", &errors),
+              "(block (assign /= (name x) (int 2)) (assign %= (name x) (int 3)))");
+    // Parentheses make the cast take a whole expression, and a cast binds
+    // looser than a call: cast(s32) f(x) casts the call's value.
+    CHECK_STR(body_dump(&a, "y := cast(s32) (n % 10) + 48;", &errors),
+              "(block (var y _ (binary + (cast s32 (binary % (name n) (int 10))) (int 48))))");
+    CHECK_STR(body_dump(&a, "cast(*u8) f(x); -cast(int) -b;", &errors),
+              "(block (cast (ptr u8) (call f (name x))) (unary - (cast int (unary - (name b)))))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(cast_trunc) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "y := cast,trunc(u8) x;", &errors), "(block (var y _ (cast,trunc u8 (name x))))");
+    CHECK_STR(errors, "");
+    // The cast's node is at 'cast', where messages about it point.
+    Token_List *list = src("f :: () {\n    y := cast,trunc(u8) x;\n}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    Ast_Block *body = file->procs[0]->body;  // null if f didn't parse
+    Ast *value = body ? ((Ast_Var *)body->statements[0])->value : nullptr;
+    CHECK(value && value->kind == AST_CAST);
+    if (value && value->kind == AST_CAST) {
+        Ast_Cast *cast = (Ast_Cast *)value;
+        CHECK(cast->is_trunc);
+        CHECK_EQ(cast->pos.col, 10);
+        CHECK_EQ(cast->start.col, 10);
+        CHECK_STR(cast->type_expr->name, "u8");
+    }
+    token_list_free(list);
+    // What a cast needs: its type in parentheses, then a value.
+    body_dump(&a, "y := cast u8 x;", &errors);
+    CHECK_STR(errors, "2:15: expected '(', found identifier 'u8'\n");
+    body_dump(&a, "y := cast(u8);", &errors);
+    CHECK_STR(errors, "2:18: expected an expression, found ';'\n");
+    body_dump(&a, "y := cast,(u8) x;", &errors);
+    CHECK_STR(errors, "2:15: expected identifier, found '('\n");
+    arena_free(&a);
+}
+
+TEST(unknown_cast_modifier) {
+    Arena a = arena_make();
+    String errors;
+    body_dump(&a, "y := cast,foo(u8) x;", &errors);
+    CHECK_STR(errors, "2:15: unknown cast modifier 'foo'; the one there is is 'trunc'\n");
     arena_free(&a);
 }
