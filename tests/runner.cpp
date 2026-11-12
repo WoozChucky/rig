@@ -3,7 +3,8 @@
 //
 // tests/run/NAME.rig is built with `RIG build tests/run/NAME.rig -o
 // .build/tests/NAME`, followed by the words of NAME.flags when there is one
-// (`--no-bounds-checks`: one line, words split at spaces), and run; its
+// (`--no-bounds-checks`; words separated by spaces, tabs or line breaks,
+// on any number of lines: add_flags), and run; its
 // stdout must equal NAME.out, its exit code the number in NAME.exit (0 when
 // there's none), and its stderr NAME.err (a runtime error's message, say),
 // or be empty when there's no NAME.err.
