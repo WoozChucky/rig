@@ -30,8 +30,9 @@ struct Parser {
 // levels deep, and blocks and types too. The parser, the checker and
 // lowering all walk the tree recursively, a call or a few per level, on a
 // stack of a fixed size (RIG_STACK_SIZE, os.h, 8 MB): without a limit, a
-// file with tens of thousands of nested parentheses, or a generated sum of
-// that many terms, crashes rig with a stack overflow and no message. The
+// file with about ten thousand nested parentheses, or a generated sum of a
+// few tens of thousands of terms, crashes rig with a stack overflow and no
+// message (measured with the limit raised, issue #77's review). The
 // parser enforces it, so no later stage ever sees a deeper tree. 1000 levels
 // fit even on the 1 MB of Windows' main thread, inside 1000 nested blocks
 // (the tests build each kind of level 1000 deep, and did there before
