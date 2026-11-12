@@ -49,18 +49,31 @@ Type *check_expression(Checker *c, Ast *e);
 
 // check_expression for an expression whose value is used: a call returning
 // nothing is reported ("'greet' returns nothing, so it has no value"), and
-// gives null.
+// gives null. A struct literal without its type written, .{...}, has type
+// type_untyped_literal, its values not yet checked: where it meets a type,
+// check_convert completes it, and where it meets none, check_default_type
+// reports it.
 Type *check_value(Checker *c, Ast *e);
 
+// check_value for an operand of an operator, a condition, a loop's range, a
+// dereference or a field: where no type is met, so .{...} is reported
+// (check_default_type) and gives null.
+Type *check_operand(Checker *c, Ast *e);
+
 // Whether e's value converts implicitly to `to`, where a declaration, an
-// assignment, an argument, a return or an operator puts it (spec 6.4). An
-// untyped constant takes the type `to` if it can: an untyped integer an
-// integer or float type, an untyped float a float type; its value is
-// converted to the type's (Ast.constant). A constant that doesn't fit is
-// reported here, then counted as converting, so the caller doesn't report
-// it again. True also when either type is unknown (null): the error was
-// reported already.
+// assignment, an argument, a return, an operator or a literal's field puts
+// it (spec 6.4). An untyped constant takes the type `to` if it can: an
+// untyped integer an integer or float type, an untyped float a float type;
+// its value is converted to the type's (Ast.constant). A constant that
+// doesn't fit is reported here, then counted as converting, so the caller
+// doesn't report it again. .{...} takes the struct type `to`, its values
+// checked against its fields here ("a '.{' literal needs a struct type, not
+// 'int'" for any other, also counted as converting). True also when either
+// type is unknown (null): the error was reported already.
 bool check_convert(Checker *c, Ast *e, Type *to);
+
+// "a value of type 'A' doesn't convert to 'B' implicitly", at the value.
+void report_no_conversion(Checker *c, Ast *value, Type *to);
 
 // Whether a value of type `from`, not an untyped constant, converts
 // implicitly to `to`: the same type, an integer that widens, or a float32
@@ -69,7 +82,9 @@ bool check_convert(Checker *c, Ast *e, Type *to);
 bool type_converts(Type *from, Type *to);
 
 // An untyped constant that meets no type becomes an int (x := 5;), or a
-// float32 (x := 0.5;), which it must fit.
+// float32 (x := 0.5;), which it must fit. A struct literal that meets none,
+// .{...}, is "this literal's type isn't known; write it before the '.', as
+// in Vec2.{1, 2}", and its type becomes unknown (null).
 void check_default_type(Checker *c, Ast *e);
 
 // "null needs a pointer type, as in p : *int = null;", at e, a null that
@@ -77,14 +92,15 @@ void check_default_type(Checker *c, Ast *e);
 void report_null_without_a_type(Checker *c, Ast *e);
 
 // Whether e is a place in memory, which has an address (*e) and can be
-// assigned to (e = v): a local or global variable, or p.*. Checks e,
-// filling in its type, and returns true when it's such a place and its type
-// is known; otherwise false, after saying why not, unless e's own error
-// was reported already. for_writing says which message: "can't assign to
-// 'a': it's a parameter" or "can't take the address of 'a': it's a
-// parameter"; "only a variable, a field or an element can be assigned to"
-// or "... has an address". Structs and arrays (milestone 2b's later tasks)
-// add a struct's fields and an array's elements here.
+// assigned to (e = v): a local or global variable, p.*, or a field of a
+// place (v.x, b.pos.x) or of a struct a pointer points at (p.x, whatever p
+// is). Checks e, filling in its type, and returns true when it's such a
+// place and its type is known; otherwise false, after saying why not,
+// unless e's own error was reported already. for_writing says which
+// message: "can't assign to 'a': it's a parameter" or "can't take the
+// address of 'a': it's a parameter" (v.x for a parameter v too); "only a
+// variable, a field or an element can be assigned to" or "... has an
+// address". Arrays (milestone 2b's next task) add their elements here.
 bool check_addressable(Checker *c, Ast *e, bool for_writing);
 
 // p += n or p -= n (`op_name`, at `at`), p's type the pointer type
