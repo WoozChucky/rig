@@ -67,15 +67,15 @@ struct Loop {
 
 struct Lowering {
     Arena *arena;
-    Diagnostics *diag;      // only for the source files' paths, which runtime errors name
+    Diagnostics *diag;        // only for the source files' paths, which runtime errors name
     Ir_Module *module;
-    Table<s32> proc_index;  // a Rig or foreign procedure's index in module->procs, by name
+    Table<s32> proc_index;    // a Rig or foreign procedure's index in module->procs, by name
     Table<s32> global_index;  // a global variable's index in module->globals, by name
-    s32 string_count;       // the str.N globals made so far: string literals and panic messages
-    Ir_Proc *proc;          // the procedure whose body is being lowered
-    s32 block;              // the block instructions go into
-    Array<Local> locals;    // the current procedure's variables and parameters so far
-    Array<Loop> loops;      // the loops around the statement being lowered, innermost last
+    s32 string_count;         // the str.N globals made so far: string literals and panic messages
+    Ir_Proc *proc;            // the procedure whose body is being lowered
+    s32 block;                // the block instructions go into
+    Array<Local> locals;      // the current procedure's variables and parameters so far
+    Array<Loop> loops;        // the loops around the statement being lowered, innermost last
 };
 
 // The IR type of a checked type. Strings aren't values yet: a literal is

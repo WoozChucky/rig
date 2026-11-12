@@ -1431,7 +1431,7 @@ TEST(return_gives_every_result) {
                            "    if b != 0 { return a / b, a % b; }\n"
                            "}\n"
                            "main :: () { }\n"),
-              "3:1: 'divmod' must return a value on every path, and this one reaches its end\n");
+              "3:1: 'divmod' must return its values on every path, and this one reaches its end\n");
     arena_free(&a);
 }
 

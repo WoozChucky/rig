@@ -111,8 +111,8 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         name->constant = decl->constant;
         return decl->type;
     case AST_PROC:
-        // A broken declaration may not even be a procedure (x :: 5): its
-        // type is unknown, so there's nothing to say.
+        // A broken declaration may not even be a procedure (x :: 5 6; or
+        // x : int = 1 2;): its type is unknown, so there's nothing to say.
         if (!((Ast_Proc *)decl)->is_broken) diag_error(c->diag, name->pos, "procedures can only be called, for now");
         return nullptr;
     default: RIG_ASSERT(!"not a declaration"); return nullptr;

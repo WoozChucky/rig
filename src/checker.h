@@ -122,12 +122,15 @@
 //   's32', but this return gives no value", "'g' returns nothing, but this
 //   return gives a value", "'divmod' returns 2 values, but this return
 //   gives 1"), each converting to its result's type. A procedure that
-//   returns values mustn't reach the '}' of its body: a
-//   block reaches its end unless its last statement is a return, a block
-//   that doesn't reach its own end, an if with an else whose branches both
-//   don't, or a `while` whose condition is the constant true and that has
-//   no break of its own. An if or while whose condition was an error
-//   doesn't reach its end either, so the condition's is the one message.
+//   returns values must return all of them on every path, so it mustn't
+//   reach the '}' of its body ("'f' must return a value on every path, and
+//   this one reaches its end", or "'divmod' must return its values on every
+//   path, ..." when it has several). A block reaches its end unless its
+//   last statement is a return, a block that doesn't reach its own end, an
+//   if with an else whose branches both don't, or a `while` whose condition
+//   is the constant true and that has no break of its own. An if or while
+//   whose condition was an error doesn't reach its end either, so the
+//   condition's is the one message.
 // - An expression statement must be a call, whose value may be ignored
 //   (spec 6.7).
 //
