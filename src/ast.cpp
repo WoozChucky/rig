@@ -316,16 +316,26 @@ static bool before(Position a, Position b) {
     return a.col < b.col;
 }
 
-String ast_dump(Arena *a, Ast_File *file) {
-    // The procedures and the globals are two lists, each in source order:
-    // merged by position, they're the file's declarations in its order.
-    Array<u8> buffer = {};
+// The procedures and the globals are two lists, each in source order:
+// merged by position, they're the file's declarations in its order.
+Array<Ast *> ast_declarations(Ast_File *file) {
+    Array<Ast *> all = {};
     s64 p = 0, g = 0;
     while (p < file->procs.count || g < file->globals.count) {
         bool proc_first = g == file->globals.count ||
                           (p < file->procs.count && before(file->procs[p]->pos, file->globals[g]->pos));
-        dump(&buffer, proc_first ? (Ast *)file->procs[p++] : file->globals[g++]);
+        array_add(&all, proc_first ? (Ast *)file->procs[p++] : file->globals[g++]);
+    }
+    return all;
+}
+
+String ast_dump(Arena *a, Ast_File *file) {
+    Array<u8> buffer = {};
+    Array<Ast *> declarations = ast_declarations(file);
+    for (s64 i = 0; i < declarations.count; i++) {
+        dump(&buffer, declarations[i]);
         out(&buffer, "\n");
     }
+    array_free(&declarations);
     return finish(a, &buffer);
 }

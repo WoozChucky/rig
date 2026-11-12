@@ -91,6 +91,17 @@ struct Ast_Proc : Ast {
     Position library_pos;       // where that name is written
 };
 
+// How far the checker has got with a global variable or a top-level
+// constant. Those are checked where they're first needed, so they can be
+// used in any order (checker.cpp's resolve_global): a use that finds one
+// under way means its value needs itself.
+enum Ast_Resolve : u8 {
+    RESOLVE_NOT_YET,
+    RESOLVE_UNDER_WAY,
+    RESOLVE_CYCLE,      // under way, and found to need itself (reported once)
+    RESOLVE_DONE,
+};
+
 // A variable: `x : T = e;`, `x := e;` (its type is e's), `x : T;` (zeroed)
 // or `x : T = ---;` (left as it is, on purpose). Ast.type is the variable's
 // type, and pos is its name's.
@@ -101,6 +112,7 @@ struct Ast_Var : Ast {
     bool is_uninitialized;  // = ---
     bool is_global;         // declared at the top level: lives for the whole run, not on the stack
     bool is_iterator;       // a for loop's it, it_index or named iterator: read-only
+    Ast_Resolve resolve;    // a global's: how far the checker has got with it
 };
 
 // A constant: `N :: e;`. The checker folds e, so the constant's value is in
@@ -108,6 +120,7 @@ struct Ast_Var : Ast {
 struct Ast_Const : Ast {
     String name;
     Ast *value;
+    Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it
 };
 
 // An assignment: `x = e;`, or a compound one, `x += e;` meaning x = x + e,
@@ -224,6 +237,10 @@ struct Ast_File {
     Array<Ast_Proc *> procs;
     Array<Ast *> globals;
 };
+
+// The file's declarations, procedures (broken entries included) and globals
+// together, in source order. The caller frees the Array.
+Array<Ast *> ast_declarations(Ast_File *file);
 
 // A new, zeroed node of struct T and kind `kind`, in the arena.
 template<typename T>
