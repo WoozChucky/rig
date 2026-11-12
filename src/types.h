@@ -1,14 +1,20 @@
 // types.h: Rig's types, as the checker sees them.
 //
-// The integer types, the float types, bool, pointers, string and void, and
-// the types of untyped integer and float constants and of null. Each type
-// exists once, so two types are the same exactly when their pointers are
-// equal (type_pointer_to keeps one *T per T).
+// The integer types, the float types, bool, pointers, structs, string and
+// void, and the types of untyped integer and float constants, of null and
+// of a struct literal without its type written (.{1, 2}). Each type exists
+// once, so two types are the same exactly when their pointers are equal
+// (type_pointer_to keeps one *T per T; a struct's type is its declaration's,
+// Ast_Struct.declared).
 //
 // Every type has a size and an alignment, C's (spec 5): s8 u8 bool 1, s16
 // u16 2, s32 u32 float32 4, s64 u64 int float64 and pointers 8. A value of
 // the type sits in memory at an address that is a multiple of its alignment,
-// and takes its size in bytes.
+// and takes its size in bytes. A struct's are worked out from its fields as
+// C does (checker.cpp's lay_out): each field at the next offset that is a
+// multiple of its alignment, the struct's alignment its largest field's (1
+// when it has none), its size rounded up to a multiple of that, so an array
+// of them keeps every one aligned.
 
 #pragma once
 
@@ -22,6 +28,18 @@ enum Type_Kind : u8 {
     TYPE_STRING,   // string: a pointer and a length (spec 6.5)
     TYPE_FLOAT,    // float32, float64: IEEE 754's single and double precision
     TYPE_NULL,     // the type of null, and of nothing else (type_null)
+    TYPE_STRUCT,   // a struct a program declares: its fields, in order
+    TYPE_UNTYPED_LITERAL,  // a struct literal with no type written, .{...}, until it meets one
+                           // (type_untyped_literal)
+};
+
+struct Ast_Struct;  // ast.h: a struct's declaration
+
+// A field of a struct type: its name, its type and where it is.
+struct Type_Field {
+    String name;
+    Type *type;   // null when the field's type was an error (reported)
+    s64 offset;   // in bytes, from the start of the struct
 };
 
 struct Type {
@@ -30,9 +48,11 @@ struct Type {
     s32 align;       // in bytes, a power of 2: where in memory a value of the type may start
     bool is_signed;  // TYPE_INTEGER
     Type *pointee;   // TYPE_POINTER
-    String name;     // a built-in type's name
+    String name;     // a built-in type's name, or a struct's (its declaration's)
     Type *pointer;   // the type *this, once asked for
     Type *alias_of;  // a second name for another type (float for float32): the type it names
+    Array<Type_Field> fields;  // TYPE_STRUCT: in order, which is their order in memory
+    Ast_Struct *decl;          // TYPE_STRUCT: its declaration
 };
 
 // The type a built-in name means (s8 s16 s32 s64 u8 u16 u32 u64 int bool
@@ -55,6 +75,14 @@ s32 type_align(Type *t);
 // Whether t is a pointer type, *T (null's type isn't one: it converts to
 // every pointer type, but has no type to point at).
 bool type_is_pointer(Type *t);
+
+// Whether a value of type t is an aggregate: bytes in memory, copied whole,
+// never a value in a register (spec 6.5's "How it's compiled"). Structs are
+// (arrays, views and strings will be).
+bool type_is_aggregate(Type *t);
+
+// The index in struct type t's fields of the one called `name`, or -1.
+s32 type_field_index(Type *t, String name);
 
 // void: what a procedure without -> returns (the type of a call of one,
 // which has no value), and what a *void points at. A *void is a pointer to
@@ -98,6 +126,14 @@ extern Type type_float64;
 // (x : float64 = 0.1;), and float32 when it meets none (x := 0.1;, Jai's
 // default), so messages call it 'float32'.
 extern Type type_untyped_float;
+
+// The type of a struct literal written without its type, `.{1, 2}`, until
+// it meets one: as an untyped constant takes the type it meets, the literal
+// takes the struct type of what it's given to (a declaration's type, an
+// assignment's target, an argument, a return, a field of an outer literal),
+// and its values are checked against that struct's fields only then
+// (check_convert). Meeting none, it's an error (check_default_type).
+extern Type type_untyped_literal;
 
 // Whether t is the type of an untyped constant, integer or float.
 bool type_is_untyped(Type *t);
