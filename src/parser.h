@@ -95,23 +95,23 @@
 // call can give several values, as in q, r := divmod(7, 2);", at the
 // first, as the checker says of `a, b = b;`.
 //
-// Expressions, blocks and types nest at most 1000 levels deep (spec 6.1, a
-// limit of the compiler; parser.cpp's MAX_DEPTH): each parenthesis, prefix
-// operator, cast, call, dereference, field, element, literal and binary
-// operator is a level above what it holds (an array type's count is read a
-// level down too), so a chain of 1001 '+' is too deep too; a procedure's
-// body is the first block; each pointer, array and view is a level above the
-// type it holds. Deeper is "this expression is nested too deeply (more than
-// 1000 levels)", at the start of the outermost expression, "blocks are
-// nested too deeply (more than 1000 levels)", at the '{' one too many, or
-// "this type is nested too deeply (more than 1000 levels)", at the '*' or
-// '[' one too many; the declaration is then given up, as after any other error below, not only the
-// statement: the parser has no recovery inside a body, and skipping just the
-// statement would leave a variable it declares (`x := ((...));`) undeclared,
-// so every later use of it would be one more message. The limit is on the
-// types a program writes: `*x` makes a type a level deeper than x's, with no
-// limit, and nothing walks a type recursively (types.cpp's type_name names
-// one in a pass down its chain).
+// Expressions and blocks nest at most 1000 levels deep (spec 6.1, a limit of
+// the compiler; parser.cpp's MAX_DEPTH): each parenthesis, prefix operator,
+// cast, call, dereference, field, element, literal and binary operator is a
+// level above what it holds, so a chain of 1001 '+' is too deep too, and a
+// procedure's body is the first block. Deeper is "this expression is nested
+// too deeply (more than 1000 levels)", at the start of the outermost
+// expression, or "blocks are nested too deeply (more than 1000 levels)", at
+// the '{' one too many; the declaration is then given up, as after any
+// other error below, not only the statement: the parser has no recovery
+// inside a body, and skipping just the statement would leave a variable it
+// declares (`x := ((...));`) undeclared, so every later use of it would be
+// one more message. Types nest at most
+// 1000 levels too, each '*', '[]' and '[N]' one, and the levels of types and
+// expressions inside each other count together: an array's count is read
+// inside its '[N]' level, size_of's and a cast's type a level down. The
+// level one too many, when it's a '*' or '[', is "types are nested too
+// deeply (more than 1000 levels)", there.
 //
 // Several results (spec 6.7) are a list of types after '->', with no
 // parentheses: `divmod :: (a: int, b: int) -> int, int { ... }`; a return

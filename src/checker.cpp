@@ -816,14 +816,19 @@ static void check_condition(Checker *c, Ast *condition, const char *keyword) {
     }
 }
 
+// An if and the else ifs after it, in a loop along the chain rather than by
+// recursion (parse_if says why); each block is a scope of its own.
 static void check_if(Checker *c, Ast_If *branch) {
-    check_condition(c, branch->condition, "if");
-    check_scoped_block(c, branch->then_block);
-    if (!branch->else_part) return;
-    if (branch->else_part->kind == AST_IF) {
-        check_if(c, (Ast_If *)branch->else_part);
-    } else {
-        check_scoped_block(c, (Ast_Block *)branch->else_part);
+    for (;;) {
+        check_condition(c, branch->condition, "if");
+        check_scoped_block(c, branch->then_block);
+        Ast *rest = branch->else_part;
+        if (!rest) return;
+        if (rest->kind != AST_IF) {
+            check_scoped_block(c, (Ast_Block *)rest);
+            return;
+        }
+        branch = (Ast_If *)rest;
     }
 }
 
@@ -966,9 +971,15 @@ static bool breaks_out_of(Ast *s, Ast *loop) {
         return false;
     }
     case AST_IF: {
-        Ast_If *branch = (Ast_If *)s;
-        if (breaks_out_of(branch->then_block, loop)) return true;
-        return branch->else_part && breaks_out_of(branch->else_part, loop);
+        // Arm by arm along an else-if chain, in a loop (parse_if says why),
+        // then the last else's block, if there is one.
+        Ast *part = s;
+        while (part && part->kind == AST_IF) {
+            Ast_If *branch = (Ast_If *)part;
+            if (breaks_out_of(branch->then_block, loop)) return true;
+            part = branch->else_part;
+        }
+        return part && breaks_out_of(part, loop);
     }
     case AST_WHILE: return breaks_out_of(((Ast_While *)s)->body, loop);
     case AST_FOR: return breaks_out_of(((Ast_For *)s)->body, loop);
@@ -1002,9 +1013,18 @@ static bool goes_past(Ast *s) {
     case AST_RETURN: return false;
     case AST_BLOCK: return reaches_end((Ast_Block *)s);
     case AST_IF: {
-        Ast_If *branch = (Ast_If *)s;
-        if (branch->condition->type != &type_bool) return false;
-        return !branch->else_part || reaches_end(branch->then_block) || goes_past(branch->else_part);
+        // Arm by arm along an else-if chain, in a loop (parse_if says why):
+        // control goes past the chain when an arm's condition may be false
+        // with no else after it, or an arm's block reaches its end, or the
+        // last else's block does.
+        Ast *part = s;
+        while (part->kind == AST_IF) {
+            Ast_If *branch = (Ast_If *)part;
+            if (branch->condition->type != &type_bool) return false;
+            if (!branch->else_part || reaches_end(branch->then_block)) return true;
+            part = branch->else_part;
+        }
+        return reaches_end((Ast_Block *)part);
     }
     case AST_WHILE: {
         Ast_While *loop = (Ast_While *)s;

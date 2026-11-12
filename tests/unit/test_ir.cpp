@@ -823,6 +823,54 @@ TEST(ir_of_if_else_and_while) {
     arena_free(&a);
 }
 
+TEST(ir_of_an_else_if_chain) {
+    // else if is an if inside the else block (b2), so the inner if's after
+    // block (b5, which its then and else jump to) comes first, then the
+    // outer's (b6, which the first arm and b5 jump to). lower_if walks the
+    // chain in a loop (issue #54) and makes these blocks as recursing into
+    // each else if did, in the same order.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "grade :: (x: int) -> int {\n"
+                                          "    r := 0;\n"
+                                          "    if x > 90 { r = 1; } else if x > 50 { r = 2; } else { r = 3; }\n"
+                                          "    return r;\n"
+                                          "}\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "grade"),
+              "proc @grade(i64) -> i64 {\n"
+              "b0:\n"
+              "  %1 = local i64\n"
+              "  %2 = const i64 0\n"
+              "  store i64 %2, %1\n"
+              "  %3 = const i64 90\n"
+              "  %4 = cmp sgt i64 %0, %3\n"
+              "  branch %4, b1, b2\n"
+              "b1:\n"
+              "  %5 = const i64 1\n"
+              "  store i64 %5, %1\n"
+              "  jump b6\n"
+              "b2:\n"
+              "  %6 = const i64 50\n"
+              "  %7 = cmp sgt i64 %0, %6\n"
+              "  branch %7, b3, b4\n"
+              "b3:\n"
+              "  %8 = const i64 2\n"
+              "  store i64 %8, %1\n"
+              "  jump b5\n"
+              "b4:\n"
+              "  %9 = const i64 3\n"
+              "  store i64 %9, %1\n"
+              "  jump b5\n"
+              "b5:\n"
+              "  jump b6\n"
+              "b6:\n"
+              "  %10 = load i64 %1\n"
+              "  ret %10\n"
+              "}\n");
+    arena_free(&a);
+}
+
 TEST(ir_of_a_for_loop) {
     // The ends once, first then last; none at all when first > last
     // (unsigned here: the iterator is a u8). The step ends the loop when the
