@@ -567,6 +567,92 @@ TEST(ir_prints_float_operations) {
     arena_free(&a);
 }
 
+// Milestone 2b's memory (issue #56), on IR built by hand.
+
+TEST(ir_prints_memory_operations) {
+    // A local of bytes, ptradd, copy, zero, the conversions between
+    // pointers and integers, and a panic whose message is computed, each in
+    // the form later tests compare against. A local is a value (its address)
+    // whatever its type, so a local of bytes is numbered like any other.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(m, &a, "f", IR_VOID);
+    s32 from = ir_add_param(p, IR_PTR, IR_EXT_NONE);  // %0
+    s32 b = ir_new_block(&a, p);
+    s32 local = emit_local_bytes(p, b, 24, 8);  // %1
+    CHECK_EQ(local, 1);
+    s32 eight = emit_const(p, b, IR_I64, 8);     // %2
+    emit_ptradd(p, b, local, eight);             // %3
+    emit_copy(p, b, local, from, 24);
+    emit_zero(p, b, local, 24);
+    s32 address = emit_convert(p, b, IR_PTRTOINT, IR_PTR, from, IR_I64);  // %4
+    s32 back = emit_convert(p, b, IR_INTTOPTR, IR_I64, address, IR_PTR);  // %5
+    s32 count = emit_const(p, b, IR_I64, 2);                              // %6
+    Ir_Instr *panic = ir_emit(p, b, IR_PANIC, IR_VOID);
+    panic->a = back;
+    panic->b = count;
+    CHECK_EQ(panic->result, -1);
+    CHECK(ir_block_has_ended(p, b));
+
+    CHECK_STR(ir_print(&a, m),
+              "proc @f(ptr) {\n"
+              "b0:\n"
+              "  %1 = local 24 align 8\n"
+              "  %2 = const i64 8\n"
+              "  %3 = ptradd %1, %2\n"
+              "  copy %1, %0, 24\n"
+              "  zero %1, 24\n"
+              "  %4 = ptrtoint ptr %0 to i64\n"
+              "  %5 = inttoptr i64 %4 to ptr\n"
+              "  %6 = const i64 2\n"
+              "  panic %5, %6\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(copy_and_zero_never_give_a_value) {
+    // Like a store, a copy or a zero writes memory and gives nothing, by its
+    // op: the type it's emitted with doesn't number a value nobody defines.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(m, &a, "f", IR_VOID);
+    s32 at = ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    s32 b = ir_new_block(&a, p);
+    s32 values = p->value_count;
+    Ir_Instr *copy = ir_emit(p, b, IR_COPY, IR_PTR);
+    copy->a = copy->b = at;
+    CHECK_EQ(copy->result, -1);
+    Ir_Instr *zero = ir_emit(p, b, IR_ZERO, IR_I64);
+    zero->a = at;
+    CHECK_EQ(zero->result, -1);
+    CHECK_EQ(p->value_count, values);
+    arena_free(&a);
+}
+
+TEST(ir_prints_byte_globals) {
+    // A variable of bytes prints its size and alignment, then `zero` when
+    // every byte is 0 and it holds no address; otherwise its bytes, as a
+    // string literal's print, and where each address goes. Here @table is
+    // 24 bytes: a count (3) in the first 8, the address of @str.0 (a later
+    // global) at offset 8, then 8 zero bytes.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    add_byte_global(m, "origin", 16, 8);
+    s32 table = add_byte_global(m, "table", 24, 8);
+    s32 text = add_string(m, "str.0", "abc");
+    u8 *bytes = (u8 *)arena_alloc(&a, 24, 1);  // zeroed
+    bytes[0] = 3;
+    m->globals[table].bytes = {bytes, 24};
+    array_add(&m->globals[table].relocs, {8, text});
+    CHECK_STR(ir_print(&a, m),
+              "global @origin: 16 align 8 = zero\n"
+              "global @table: 24 align 8 = "
+              "\"\\03\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\""
+              " reloc 8 @str.0\n"
+              "global @str.0 = \"abc\\00\"\n");
+    arena_free(&a);
+}
+
 TEST(ir_knows_when_a_block_has_ended) {
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
