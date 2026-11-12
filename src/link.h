@@ -40,14 +40,19 @@ bool choose_windows_linker(Arena *a, String link_exe, String lld_link, String *c
 
 // link.exe's (or lld-link's) arguments, argv[0] included:
 //   LINK /NOLOGO /INCREMENTAL:NO /SUBSYSTEM:CONSOLE /MACHINE:X64 /OUT:OUTPUT
+//        /DEBUG:FULL /PDB:OUTPUT_WITHOUT_EXE.pdb
 //        /LIBPATH:MSVC /LIBPATH:UCRT /LIBPATH:UM OBJECTS...
 //        msvcrt.lib vcruntime.lib ucrt.lib kernel32.lib
+// The PDB, the program's debug information, is written beside it:
+// hello.exe's is hello.pdb.
 Array<String> link_command_windows(Arena *a, Windows_Toolchain *tc, Array<String> objects, String output);
 
 // ld.lld's arguments, argv[0] included:
 //   LD_LLD -o OUTPUT --eh-frame-hdr -m elf_x86_64
 //          -dynamic-linker /lib64/ld-linux-x86-64.so.2
 //          CRT/crt1.o CRT/crti.o OBJECTS... -LCRT -lc CRT/crtn.o
+// The objects' DWARF (.debug_* sections) is kept in the executable as it
+// is: ld.lld drops it only when told to (-S, --strip-debug).
 Array<String> link_command_linux(Arena *a, String ld_lld, String crt_dir, Array<String> objects, String output);
 
 // False with a sentence saying how to get it when there's no linker at
