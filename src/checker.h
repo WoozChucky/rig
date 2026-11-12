@@ -381,6 +381,14 @@
 //   through a declaration already found in one is the same tangle: its
 //   declarations lose their types too, without a message (`a : int = c + b;
 //   b : int = a; c : int = a;` is one message, at a).
+// - Declarations worked out where they're first needed, globals, constants
+//   and structs' layouts, each inside the one that needs it, nest at most
+//   MAX_DEPTH levels deep (issue #68): one starts a level below the deepest
+//   level of the type or value that needs it, and its own levels count from
+//   there (checker.cpp's open_declaration). The one too many is "'A1001' is
+//   nested too deeply in the declarations that need it (more than 1000
+//   levels)", at its name; what needed it says nothing more, and it's
+//   worked out later, in its own turn.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

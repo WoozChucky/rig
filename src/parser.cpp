@@ -20,6 +20,7 @@ struct Parser {
     Position expression_start;  // where the outermost expression being read starts
     s32 blocks;                 // the blocks open around the next token
     s32 type_levels;            // the type levels (*, [] and [N]) open around the next token
+    s32 deepest;                // the most levels reached since take_deepest last restarted it
     // After a body found never closed: the token where the top level
     // resumes (parse_block_rest), or -1.
     s64 resume;
@@ -57,8 +58,13 @@ struct Parser {
 // number. Counted apart, a thousand of each alternating overflowed the
 // stack, every stage paying for both at each step. p->levels and
 // p->type_levels are the two kinds open around the next token, and
-// open_levels(p) their sum.
-static const s32 MAX_DEPTH = 1000;
+// open_levels(p) their sum. (MAX_DEPTH itself is in ast.h: the checker
+// counts against it too.)
+//
+// A declaration's levels are the most its type or value reaches
+// (p->deepest, take_deepest), kept for the checker: a declaration it needs
+// is worked out inside it, a level below all of them (checker.cpp's
+// open_declaration).
 
 static Token *peek(Parser *p, s64 ahead = 0) {
     s64 i = p->next + ahead;
@@ -115,6 +121,22 @@ static s32 open_levels(Parser *p) {
     return p->levels + p->type_levels;
 }
 
+// The text read reaches `levels` levels: kept in p->deepest if it's the
+// most so far. Only levels the limit has checked are reached: a name
+// read a level down by size_of or a cast (parse_type_below) is no level,
+// and reaches none.
+static void reach(Parser *p, s32 levels) {
+    if (levels > p->deepest) p->deepest = levels;
+}
+
+// The most levels reached since the last call (0 at the start): a
+// declaration's levels, when called before and after reading it.
+static s32 take_deepest(Parser *p) {
+    s32 deepest = p->deepest;
+    p->deepest = 0;
+    return deepest;
+}
+
 // Opens one level of the expression being read, before reading what's
 // inside it (a parenthesis's value, an operator's operand, a call's
 // arguments): false, after reporting, when that's one level more than
@@ -129,6 +151,7 @@ static bool open_level(Parser *p) {
         return false;
     }
     p->levels++;
+    reach(p, open_levels(p));
     return true;
 }
 
@@ -146,6 +169,7 @@ static bool set_height(Parser *p, s32 height) {
         return false;
     }
     p->height = height;
+    reach(p, open_levels(p) + height);
     return true;
 }
 
@@ -556,7 +580,9 @@ static bool starts_declaration(Parser *p) {
 static Ast *parse_constant(Parser *p, Token *name) {
     Ast_Const *constant = ast_new<Ast_Const>(p->arena, AST_CONST, name->pos);
     constant->name = name->text;
+    take_deepest(p);
     constant->value = parse_expression(p, 1);
+    constant->levels = take_deepest(p);
     if (!constant->value || !expect(p, TOKEN_SEMICOLON)) return nullptr;
     return constant;
 }
@@ -573,6 +599,7 @@ static void report_untyped_triple_dash(Parser *p) {
 static Ast_Var *parse_variable(Parser *p, Token *name, Token *colons) {
     Ast_Var *var = ast_new<Ast_Var>(p->arena, AST_VAR, name->pos);
     var->name = name->text;
+    take_deepest(p);
     if (colons->kind == TOKEN_COLON) {
         var->type_expr = parse_type(p);
         if (!var->type_expr) return nullptr;
@@ -594,6 +621,7 @@ static Ast_Var *parse_variable(Parser *p, Token *name, Token *colons) {
         var->value = parse_expression(p, 1);
         if (!var->value) return nullptr;
     }
+    var->levels = take_deepest(p);
     if (!expect(p, TOKEN_SEMICOLON)) return nullptr;
     return var;
 }
@@ -986,6 +1014,7 @@ static Ast_Type *parse_type(Parser *p) {
         return nullptr;
     }
     p->type_levels++;
+    reach(p, open_levels(p));
     Ast_Type *type = parse_type_level(p);
     p->type_levels--;
     return type;
@@ -1054,6 +1083,7 @@ static Ast_Param *parse_param(Parser *p) {
 static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     Ast_Proc *proc = ast_new<Ast_Proc>(p->arena, AST_PROC, name->pos);
     proc->name = name->text;
+    take_deepest(p);
     if (!expect(p, TOKEN_LPAREN)) return nullptr;
     if (peek(p)->kind != TOKEN_RPAREN) {
         for (;;) {
@@ -1075,6 +1105,7 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
             advance(p);
         }
     }
+    proc->levels = take_deepest(p);
 
     Token *t = peek(p);
     if (t->kind == TOKEN_DIRECTIVE && string_eq(t->text, str("no_abc"))) {
@@ -1126,7 +1157,10 @@ static Ast *parse_struct(Parser *p, Token *name) {
         if (!expect(p, TOKEN_COLON)) return nullptr;
         Ast_Field *field = ast_new<Ast_Field>(p->arena, AST_FIELD, field_name->pos);
         field->name = field_name->text;
+        take_deepest(p);
         field->type_expr = parse_type(p);
+        field->levels = take_deepest(p);
+        if (field->levels > s->levels) s->levels = field->levels;
         if (!field->type_expr || !expect(p, TOKEN_SEMICOLON)) return nullptr;
         array_add(&s->fields, field);
     }
@@ -1373,7 +1407,7 @@ static Ast_Proc *broken_entry(Parser *p, s64 start) {
 
 Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
-    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, -1};
+    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, 0, -1};
     Ast_File *file = arena_new<Ast_File>(a);
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;

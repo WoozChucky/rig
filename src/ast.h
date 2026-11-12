@@ -20,6 +20,14 @@
 
 struct Type;  // types.h: what the checker finds each node's type to be
 
+// A limit of the compiler (spec 6.1): what the parser reads nests at most
+// this many levels deep, expressions and types together (parser.cpp says
+// what a level is), and so do the declarations the checker works out one
+// inside another, with their own levels (checker.cpp's open_declaration).
+// Each stage recurses a level at a time on the main thread's stack (1 MB on
+// Windows): deeper would overflow it, with no message.
+const s32 MAX_DEPTH = 1000;
+
 enum Ast_Kind : u8 {
     AST_PROC,          // Ast_Proc: name :: (params) -> type { body }, or #foreign
     AST_PARAM,         // Ast_Param: name: type
@@ -112,6 +120,8 @@ struct Ast_Proc : Ast {
     bool is_broken;             // the parser gave up on it
     String foreign_library;     // #foreign's library name
     Position library_pos;       // where that name is written
+    s32 levels;                 // the deepest levels of its parameters' and results' types
+                                // (MAX_DEPTH): a declaration they need starts a level below
 };
 
 // How far the checker has got with a global variable or a top-level
@@ -136,6 +146,8 @@ struct Ast_Var : Ast {
     bool is_global;         // declared at the top level: lives for the whole run, not on the stack
     bool is_iterator;       // a for loop's it, it_index or named iterator: read-only
     Ast_Resolve resolve;    // a global's: how far the checker has got with it
+    s32 levels;             // the deepest levels of its type and value (MAX_DEPTH): a global
+                            // or a constant they need starts a level below
 };
 
 // A constant: `N :: e;`. The checker folds e, so the constant's value is in
@@ -144,6 +156,7 @@ struct Ast_Const : Ast {
     String name;
     Ast *value;
     Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it
+    s32 levels;           // the deepest levels of its value (MAX_DEPTH), as Ast_Var's
 };
 
 // A field of a struct: `x: float;`, at its name. Its type is in Ast.type
@@ -154,6 +167,7 @@ struct Ast_Field : Ast {
     bool is_late;         // its type holds a pointer or a view: laid out from what's written,
                           // the type made later (checker.cpp's lay_out, make_late_field)
     Ast_Resolve resolve;  // a late field's type: how far the checker has got with it
+    s32 levels;           // the deepest levels of its type (MAX_DEPTH), as Ast_Var's
 };
 
 // A struct's declaration, `Vec2 :: struct { x: float; y: float; }`, at the
@@ -167,6 +181,8 @@ struct Ast_Struct : Ast {
     Type *declared;             // its type: made when the checker collects the top level's names,
                                 // so a pointer can name it before its layout is known; null once
                                 // it's found to contain itself
+    s32 levels;                 // the deepest of its fields' levels (MAX_DEPTH): what its layout
+                                // needs starts a level below
 };
 
 // An assignment: `x = e;`, or a compound one, `x += e;` meaning x = x + e,
