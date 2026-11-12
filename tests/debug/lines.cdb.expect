@@ -1,0 +1,8 @@
+14:     s := a + b;
+lines!add+
+Call Site
+lines!add+
+[@ROOT@\tests\debug\lines.rig @ 14]
+lines!main+
+[@ROOT@\tests\debug\lines.rig @ 20]
+15:     return s;

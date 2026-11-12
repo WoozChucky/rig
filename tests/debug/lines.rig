@@ -1,0 +1,23 @@
+// A debugger's view of lines (bin/run-tests runs it under gdb with
+// lines.gdb and under cdb with lines.cdb): breakpoints on procedures and on
+// a line, the file a stop is in, the stack with each frame's line, and a
+// step to the next line.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+// Named as C's write, which gdb's `break write` finds too: main calls this
+// one before anything is printed, so the first stop there is in Rig's.
+write :: (n: int) {
+    twice := n * 2;
+}
+
+add :: (a: int, b: int) -> int {
+    s := a + b;
+    return s;
+}
+
+main :: () {
+    write(1);
+    sum := add(2, 3);
+    putchar(cast(s32) sum + 48);
+    putchar(10);
+}
