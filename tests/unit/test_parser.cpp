@@ -1604,3 +1604,49 @@ TEST(parses_no_abc) {
     CHECK_STR(errors, "1:9: unknown directive '#abc'\n");
     arena_free(&a);
 }
+
+// Issue #54: the nesting MAX_DEPTH didn't count yet, types and else-if
+// chains.
+
+// "L:C: types are nested too deeply (more than 1000 levels)\n".
+static const char *types_too_deep(Arena *a, int line, s64 col) {
+    return string_cstr(a, string_printf(a, "%d:%lld: types are nested too deeply (more than 1000 levels)\n", line,
+                                        (long long)col));
+}
+
+TEST(types_nest_at_most_max_depth) {
+    // Each *, [] and [N] is a level (MAX_DEPTH). A type of 1000 levels, a
+    // parameter's and a local's, goes through every stage; 1001 is one
+    // message, at the '*' or '[' one too many, and no crash (before the
+    // limit, ten thousand '*' overflowed the checker's stack). The arrays
+    // have one element, so even the deepest is 8 bytes.
+    Arena a = arena_make();
+    struct Shape {
+        const char *pattern;  // repeated to make the type
+        s64 levels;           // the levels in one pattern
+        const char *one_more; // one level more, after the repeats
+    };
+    Shape shapes[] = {{"*", 1, "*"}, {"[]", 1, "[]"}, {"[1]", 1, "[1]"}, {"*[]*[1]", 4, "*"}};
+    for (const Shape &shape : shapes) {
+        s64 n = MAX_DEPTH / shape.levels;
+        const char *more = string_cstr(&a, string_printf(&a, "%sint", shape.one_more));
+        // The level one too many starts right after the repeats.
+        s64 at = n * (s64)strlen(shape.pattern) + 1;
+        const char *param = "f :: (p: ", *param_after = ") { }\nmain :: () { }\n";
+        CHECK(builds(&a, nested_source(&a, param, shape.pattern, n, "int", "", param_after)));
+        CHECK_STR(check_source(&a, nested_source(&a, param, shape.pattern, n, more, "", param_after)),
+                  types_too_deep(&a, 1, (s64)strlen(param) + at));
+        const char *local = "main :: () {\n    x : ", *local_after = ";\n}\n";
+        CHECK(builds(&a, nested_source(&a, local, shape.pattern, n, "int", "", local_after)));
+        CHECK_STR(check_source(&a, nested_source(&a, local, shape.pattern, n, more, "", local_after)),
+                  types_too_deep(&a, 2, (s64)strlen("    x : ") + at));
+    }
+    // A type inside an array's count is inside the type around it: 500
+    // '*', the array, and 499 more in the count's size_of are 1000 levels;
+    // 500 there are 1001, the message at the 500th.
+    const char *outer = nested_source(&a, "main :: () {\n    x : ", "*", 500, "[size_of(", "", "");
+    CHECK(builds(&a, nested_source(&a, outer, "*", 499, "int)]int", "", ";\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, outer, "*", 500, "int)]int", "", ";\n}\n")),
+              types_too_deep(&a, 2, 8 + 500 + 9 + 500));
+    arena_free(&a);
+}
