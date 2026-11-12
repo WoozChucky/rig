@@ -70,10 +70,11 @@ struct Type {
     Type *next_array;
 };
 
-// The largest size a type may have, 2^40 bytes (a terabyte): an array or a
-// struct over it is "'[...]T' is too big". Far beyond any memory a program
-// gets, it keeps sizes, and an index times an element's size, well inside
-// 64 bits, so no size ever wraps (checker.cpp's resolve_type).
+// The largest size a type may have, 2^40 bytes (a terabyte): an array over
+// it is "'[N]T' is too big", a struct "'S' is too big". Far beyond any
+// memory a program gets, it keeps sizes, and an index within bounds times
+// an element's size, well inside 64 bits, so no size ever wraps
+// (checker.cpp's check_array_type and resolve_struct).
 const s64 TYPE_MAX_SIZE = (s64)1 << 40;
 
 // Where a view's fields are, as its struct would have them: the count, an
