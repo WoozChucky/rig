@@ -1,0 +1,1 @@
+tests/run/cast_widening_negative.rig:6:10: runtime error: the value doesn't fit in 'u64'

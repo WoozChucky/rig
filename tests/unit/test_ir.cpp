@@ -1025,3 +1025,20 @@ TEST(cast_trunc_isnt) {
     CHECK(!contains(ir, "panic"));
     arena_free(&a);
 }
+
+TEST(cast_of_a_string_literal_is_its_address) {
+    // cast(*u8) "hi" is the conversion a string literal has anyway: its
+    // bytes' address, unchecked.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: () -> *u8 { return cast(*u8) \"hi\"; }\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f() -> ptr {\n"
+              "b0:\n"
+              "  %0 = addr @str.0\n"
+              "  ret %0\n"
+              "}\n");
+    CHECK(!contains(ir, "panic"));
+    arena_free(&a);
+}

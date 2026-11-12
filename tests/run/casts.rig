@@ -46,4 +46,7 @@ main :: () {
     if cast,trunc(s32) byte == 255 { puts("trunc zero-extends"); }
     all : int = -1;
     if cast,trunc(u64) all == 18446744073709551615 { puts("trunc keeps the bits"); }
+
+    // A string literal casts to *u8, as it converts to it anyway.
+    puts(cast(*u8) "string literal to *u8");
 }

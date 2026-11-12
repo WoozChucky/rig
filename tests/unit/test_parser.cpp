@@ -616,7 +616,7 @@ TEST(parses_division_and_casts) {
     CHECK_STR(body_dump(&a, "x /= 2; x %= 3;", &errors),
               "(block (assign /= (name x) (int 2)) (assign %= (name x) (int 3)))");
     // Parentheses make the cast take a whole expression, and a cast binds
-    // looser than a call: cast(s32) f(x) casts the call's value.
+    // looser than a call: cast(*u8) f(x) casts the call's value.
     CHECK_STR(body_dump(&a, "y := cast(s32) (n % 10) + 48;", &errors),
               "(block (var y _ (binary + (cast s32 (binary % (name n) (int 10))) (int 48))))");
     CHECK_STR(body_dump(&a, "cast(*u8) f(x); -cast(int) -b;", &errors),
