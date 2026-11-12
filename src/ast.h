@@ -232,7 +232,7 @@ struct Ast_Multi_Var : Ast {
 // Procedures (and broken entries, which are Ast_Procs) are in procs; the
 // globals, top-level variables (Ast_Var, is_global set) and constants
 // (Ast_Const), in globals. Each list is in source order on its own;
-// ast_dump merges them back by position.
+// ast_declarations merges them back by position.
 struct Ast_File {
     Array<Ast_Proc *> procs;
     Array<Ast *> globals;

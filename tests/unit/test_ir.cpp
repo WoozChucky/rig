@@ -1,5 +1,5 @@
 // test_ir.cpp: lowering checked trees to Rig's IR (issue #10, with tokens
-// by hand; issues #33, #34 and #35, from real source), and the IR's
+// by hand; issues #33 to #36, from real source), and the IR's
 // builders and printing (issue #32), with IR by hand (helpers.cpp).
 
 #include "test.h"
