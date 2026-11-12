@@ -1082,19 +1082,59 @@ TEST(llvm_instructions_have_their_lines) {
     arena_free(&a);
 }
 
+// The functions of `text` (LLVM's text of a module) that are defined
+// without "frame-pointer"="all" in their attribute group, their define
+// lines one after another; with *defined set to how many there are. A
+// definition names its group after its parameters ("define i32 @main() #0
+// !dbg !5 {"), which is a line of its own ("attributes #0 = { ... }").
+static String without_frame_pointers(Arena *a, String text, s64 *defined) {
+    String out = string_printf(a, "");
+    *defined = 0;
+    for (s64 at = index_of(text, "\ndefine "); at >= 0;) {
+        String line = line_with(string_slice(text, at, text.count - at), "\ndefine ");
+        (*defined)++;
+        String group = {};
+        s64 hash = index_of(line, ") #");
+        if (hash >= 0) {
+            s64 start = hash + 2, end = start + 1;
+            while (end < line.count && line.data[end] >= '0' && line.data[end] <= '9') end++;
+            group = string_slice(line, start, end - start);
+        }
+        String attributes = {};
+        if (group.count > 1) {
+            attributes = line_with(text, string_cstr(a, string_printf(a, "\nattributes " STR_FMT " = {", STR_ARG(group))));
+        }
+        if (!contains(attributes, "\"frame-pointer\"=\"all\"")) {
+            out = string_printf(a, STR_FMT STR_FMT "\n", STR_ARG(out), STR_ARG(line));
+        }
+        s64 next = index_of(string_slice(text, at + 1, text.count - at - 1), "\ndefine ");
+        at = next < 0 ? -1 : at + 1 + next;
+    }
+    return out;
+}
+
 TEST(llvm_functions_keep_frame_pointers) {
     // Every function the module defines keeps its frame pointer (rbp), so a
     // debugger or a profiler can walk the stack from frame to frame:
-    // lowered or built by hand, Rig's own and the runtime's.
+    // lowered or built by hand, Rig's own and the runtime's. Each define's
+    // own attribute group says so.
     Arena a = arena_make();
     for (int t = 0; t < 2; t++) {
+        s64 defined = 0;
         String text = llvm_text(&a, lower_source(&a, LINES), (Target)t);
-        CHECK(contains(text, "\"frame-pointer\"=\"all\""));
         CHECK(contains(text, "define i32 @main() #"));
+        String missing = without_frame_pointers(&a, text, &defined);
+        CHECK(defined >= 1);
+        if (missing.count) printf("    no frame pointer:\n" STR_FMT, STR_ARG(missing));
+        CHECK(missing.count == 0);
+
         text = llvm_text(&a, panic_module(&a), (Target)t);
-        CHECK(contains(text, "\"frame-pointer\"=\"all\""));
         CHECK(contains(text, "define internal void @program() #"));
         CHECK(contains(text, "define internal void @__rig_panic(ptr %0, i64 %1) #"));
+        missing = without_frame_pointers(&a, text, &defined);
+        CHECK(defined == 2);  // program and __rig_panic
+        if (missing.count) printf("    no frame pointer:\n" STR_FMT, STR_ARG(missing));
+        CHECK(missing.count == 0);
     }
     arena_free(&a);
 }
