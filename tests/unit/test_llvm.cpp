@@ -414,3 +414,125 @@ TEST(llvm_bool_parameter_from_rig_is_zeroext) {
     }
     arena_free(&a);
 }
+
+// Milestone 2a's floats (issue #37), on IR built by hand.
+
+TEST(llvm_float_to_int_saturates) {
+    // LLVM's plain fptosi and fptoui give poison for a value outside the
+    // integer's range, and for NaN; Rig's cast saturates instead (spec 6.4),
+    // which is what the fptosi.sat and fptoui.sat intrinsics do. Each is a
+    // call, named by the integer type, then the float type.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(m, &a, "f", IR_I32);
+    s32 x = ir_add_param(p, IR_F64, IR_EXT_NONE);
+    s32 y = ir_add_param(p, IR_F32, IR_EXT_NONE);
+    s32 b = ir_new_block(&a, p);
+    s32 sign = emit_convert(p, b, IR_FPTOSI_SAT, IR_F64, x, IR_I32);
+    s32 byte = emit_convert(p, b, IR_FPTOUI_SAT, IR_F32, y, IR_I8);
+    s32 wide = emit_convert(p, b, IR_ZEXT, IR_I8, byte, IR_I32);
+    emit_ret(p, b, emit_binary(p, b, IR_ADD, IR_I32, sign, wide));
+    String text = llvm_text(&a, m, target_host());
+    CHECK(contains(text, "call i32 @llvm.fptosi.sat.i32.f64(double %0)"));
+    CHECK(contains(text, "call i8 @llvm.fptoui.sat.i8.f32(float %1)"));
+    CHECK(!contains(text, "= fptosi "));
+    CHECK(!contains(text, "= fptoui "));
+    arena_free(&a);
+}
+
+TEST(llvm_float32_constant_is_rounded) {
+    // A float constant holds its value as a double's bits; for an f32 the
+    // backend rounds it to the nearest float. LLVM 23 writes a constant in
+    // decimal when six digits give it back exactly, and otherwise as its
+    // own bits in hex, f0x...: so 0.1, which six digits give back as a float
+    // and as a double, can't show the rounding, and 1/3 can. Its double is
+    // 0x3FD5555555555555, a 1 bit then 01 repeated; a float keeps 23 bits of
+    // that fraction, 0x2AAAAA, and the next bit is 1, so to nearest it
+    // rounds up, to 0x3EAAAAAB (truncating would give 0x3EAAAAAA).
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *f = new_proc_returning(m, &a, "single", IR_F32);
+    s32 b = ir_new_block(&a, f);
+    emit_ret(f, b, emit_const(f, b, IR_F32, f64_bits(1.0 / 3.0)));
+    Ir_Proc *g = new_proc_returning(m, &a, "double", IR_F64);
+    b = ir_new_block(&a, g);
+    emit_ret(g, b, emit_const(g, b, IR_F64, f64_bits(1.0 / 3.0)));
+    Ir_Proc *h = new_proc_returning(m, &a, "tenth", IR_F32);
+    b = ir_new_block(&a, h);
+    emit_ret(h, b, emit_const(h, b, IR_F32, f64_bits(0.1)));
+    String text = llvm_text(&a, m, target_host());
+    CHECK(contains(text, "ret float f0x3EAAAAAB"));
+    CHECK(contains(text, "ret double f0x3FD5555555555555"));
+    CHECK(contains(text, "ret float 1.000000e-01"));
+    arena_free(&a);
+}
+
+TEST(llvm_float_operations_are_strict) {
+    // IEEE 754 arithmetic exactly (spec 6.4): no fast-math flag on any
+    // operation, so LLVM may not assume away NaN, infinity or -0.0, nor
+    // reorder the arithmetic. NaN != NaN is true: != is fcmp une, the other
+    // comparisons ordered.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(m, &a, "f", IR_F64);
+    s32 x = ir_add_param(p, IR_F64, IR_EXT_NONE);
+    s32 y = ir_add_param(p, IR_F64, IR_EXT_NONE);
+    s32 n = ir_add_param(p, IR_I32, IR_EXT_NONE);
+    s32 s = ir_add_param(p, IR_F32, IR_EXT_NONE);
+    s32 b = ir_new_block(&a, p);
+    const Ir_Op ops[] = {IR_FADD, IR_FSUB, IR_FMUL, IR_FDIV};
+    for (Ir_Op op : ops) emit_binary(p, b, op, IR_F64, x, y);
+    ir_emit(p, b, IR_FNEG, IR_F64)->a = x;
+    const Ir_Pred preds[] = {IR_FOEQ, IR_FUNE, IR_FOLT, IR_FOLE, IR_FOGT, IR_FOGE};
+    for (Ir_Pred pred : preds) {
+        Ir_Instr *cmp = ir_emit(p, b, IR_FCMP, IR_F64);
+        cmp->pred = pred;
+        cmp->a = x;
+        cmp->b = y;
+    }
+    emit_convert(p, b, IR_FPEXT, IR_F32, s, IR_F64);
+    emit_convert(p, b, IR_FPTRUNC, IR_F64, x, IR_F32);
+    emit_convert(p, b, IR_SITOFP, IR_I32, n, IR_F64);
+    s32 last = emit_convert(p, b, IR_UITOFP, IR_I32, n, IR_F64);
+    emit_ret(p, b, last);
+    String text = llvm_text(&a, m, target_host());
+    const char *names[] = {"fadd", "fsub", "fmul", "fdiv"};
+    for (const char *name : names) {
+        CHECK(contains(text, string_cstr(&a, string_printf(&a, "= %s double %%0, %%1", name))));
+    }
+    CHECK(contains(text, "= fneg double %0"));
+    const char *predicates[] = {"oeq", "une", "olt", "ole", "ogt", "oge"};
+    for (const char *pred : predicates) {
+        CHECK(contains(text, string_cstr(&a, string_printf(&a, "= fcmp %s double %%0, %%1", pred))));
+    }
+    CHECK(contains(text, "= fpext float %3 to double"));
+    CHECK(contains(text, "= fptrunc double %0 to float"));
+    CHECK(contains(text, "= sitofp i32 %2 to double"));
+    CHECK(contains(text, "= uitofp i32 %2 to double"));
+    const char *flags[] = {"fast", "nnan", "ninf", "nsz", "arcp", "contract", "afn", "reassoc"};
+    for (const char *flag : flags) CHECK(!contains(text, flag));
+    arena_free(&a);
+}
+
+TEST(llvm_float_parameters_and_globals) {
+    // A foreign procedure takes and returns floats as C's float and double:
+    // LLVM's float and double types, which each target's calling convention
+    // passes in the SSE registers, with no extension. A float global holds
+    // its first value as a constant of its type.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Global g = {};
+    g.name = str("scale");
+    g.type = IR_F32;
+    g.initial = f64_bits(1.5);
+    array_add(&m->globals, g);
+    Ir_Proc *f = new_proc_returning(m, &a, "half", IR_F64);
+    f->is_foreign = true;
+    ir_add_param(f, IR_F32, IR_EXT_NONE);
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "@scale = internal global float 1.500000e+00"));
+        CHECK(contains(text, "declare double @half(float)"));
+    }
+    arena_free(&a);
+}
