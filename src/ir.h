@@ -50,8 +50,9 @@
 // any byte a cast or C left there reads as a defined bool.
 //
 // Rig's procedures keep their names and are internal, except Rig's main,
-// which becomes __rig_main; lowering adds the C entry point, an exported
-// main() -> i32 that calls __rig_main and returns 0. Printed, a module is:
+// which is C's: the program's entry point, exported, returning an i32, 0
+// (a debugger's `break main` finds it, not a wrapper around it). Printed, a
+// module is:
 //
 //   global @counter: i64 = 0
 //   global @str.0 = "hi\00"
@@ -71,14 +72,54 @@
 //   ...
 //   export proc @main() -> i32 {
 //   b0:
-//     call @__rig_main()
-//     %0 = const i32 0
-//     ret %0
+//     %0 = addr @str.0
+//     %1 = call @puts(%0)
+//     %2 = const i32 0
+//     ret %2
 //   }
+//
+// Debug information (milestone 2c). A debugger shows the program as its
+// source: it stops at a line, steps from statement to statement, and shows
+// the variables in scope there by name. The IR keeps what that needs, as
+// data any backend can read (the LLVM backend turns it into DWARF or
+// CodeView; Rig's own x64 backend will write them itself):
+// - Positions. Each instruction has the source position of the statement
+//   it was lowered from (Ir_Instr.pos), its first token, so a backend's
+//   line table maps each machine instruction back to a line. A few
+//   instructions belong to no statement of their own and get the place a
+//   debugger should show for them: a loop's test and step are at its
+//   `for` or `while`, an if's test at its `if`, a runtime check's failure
+//   at the check (the place its message names), the implicit return at
+//   the end of a body at its '}'. Line 0 is no position: only the
+//   procedures the compiler makes itself (__rig_bounds_failed,
+//   __rig_string_equal) have none, and no source, so a debugger steps over
+//   them.
+// - Scopes. A lexical block is a part of a procedure where some names are
+//   visible: each Ir_Scope is one, the body scope 0, and each instruction
+//   with a position says which it runs in (Ir_Instr.scope; one without, in
+//   a procedure the compiler makes, is in none, -1). They follow the
+//   checker's scopes: an if's or else's block, or a block statement, is a
+//   scope; a for's or while's body is the loop's scope, which starts at
+//   the keyword and holds the iterator and it_index. So where an inner block
+//   declares x again, a debugger shows the inner x inside it and the outer
+//   one after.
+// - Variables (Ir_Var): every parameter, local, iterator and it_index, by
+//   name, with its Rig type, its scope, and where it lives: a local in its
+//   stack slot (an IR_LOCAL), a scalar parameter in no memory at all (it's
+//   a value, which a backend spills to a slot of its own for the
+//   debugger), an aggregate parameter behind the pointer it's passed as.
+//   Temporaries and hidden result pointers aren't variables: the source
+//   has no name for them.
+// - Globals keep their Rig type (Ir_Global.rig_type) and position; the
+//   module, the source file's absolute path, the directory rig ran in, and
+//   the file's MD5 (Ir_Module), so a debugger finds the file and can tell
+//   it has changed since.
+// ir_print leaves all of this out; ir_print_debug adds it as comments.
 
 #pragma once
 
 #include "ast.h"
+#include "types.h"
 
 enum Ir_Type : u8 {
     IR_VOID,  // no value
@@ -160,6 +201,12 @@ struct Ir_Instr {
                        // IR_LOCAL of bytes, IR_COPY, IR_ZERO: the number of bytes
     u32 align;         // IR_LOCAL of bytes: its alignment, a power of 2
     Array<s32> args;   // IR_CALL's arguments, IR_RET's values
+    Position pos;      // where it comes from: the statement it was lowered from, or the place
+                       // standing for it (see "Debug information" above); line 0: none, which
+                       // only the procedures the compiler makes have
+    s32 scope;         // the Ir_Scope it runs in, an index in its procedure's scopes; -1 when
+                       // it has no position (line 0), in a procedure the compiler makes or
+                       // a module built by hand, which have no scopes
 };
 
 struct Ir_Block {
@@ -194,6 +241,9 @@ struct Ir_Global {
     s64 size;               // a variable of bytes: its size, bytes.count or more
     u32 align;              // a variable of bytes: its alignment, a power of 2
     Array<Ir_Reloc> relocs; // a variable of bytes: where it holds addresses, by increasing offset
+    Type *rig_type;         // a Rig global's type, for a debugger; null for what the compiler
+                            // makes (str.N, array.N), which the source doesn't name
+    Position pos;           // a Rig global's declaration: its name
 };
 
 // How a parameter or result narrower than 32 bits widens, by its Rig type's
@@ -215,6 +265,37 @@ struct Ir_Param {
     Ir_Ext ext;
 };
 
+// A lexical block of a procedure (see "Debug information" above): the part
+// of its code where the variables it declares are visible. The body is
+// scope 0; the others are numbered in the order their code comes, each
+// inside its parent.
+struct Ir_Scope {
+    s32 parent;    // the scope it's inside; -1 for scope 0
+    Position pos;  // where it starts: its '{', or a loop's `for` or `while`
+};
+
+// Where a variable lives, which says what Ir_Var.value is.
+enum Ir_Var_Kind : u8 {
+    IR_VAR_SLOT,     // in memory, a stack slot: value is the IR_LOCAL's result, its address
+    IR_VAR_VALUE,    // a scalar parameter, in no memory: value is its value's number (a
+                     // backend spills it to a slot of its own, where a debugger can read it)
+    IR_VAR_ADDRESS,  // an aggregate parameter: value is the ptr parameter holding its address
+                     // (the caller's copy)
+};
+
+// A variable a debugger shows: a parameter, a local, a for's iterator or
+// it_index.
+struct Ir_Var {
+    String name;       // as in the source: "x", "it", "it_index"
+    Type *type;        // its Rig type
+    Position pos;      // where it's declared: its name (it and it_index: the `for`)
+    s32 scope;         // the Ir_Scope that declares it
+    Ir_Var_Kind kind;
+    s32 value;         // a value's number: what, Ir_Var_Kind says
+    s32 arg;           // a parameter's place among the visible ones, from 1 (the hidden
+                       // result pointers before them don't count); 0 for any other
+};
+
 struct Ir_Proc {
     String name;
     Array<Ir_Param> params;    // the parameters are the values %0 ... %(count-1) (ir_add_param)
@@ -223,13 +304,24 @@ struct Ir_Proc {
     bool is_export;            // visible to the linker; otherwise internal
     Array<Ir_Block *> blocks;  // blocks[0] is the entry
     s32 value_count;           // the values numbered so far
+    // For a debugger. A procedure the compiler makes has none of them.
+    String source_name;        // its name in the source ("main", "sort"); empty for one the compiler makes
+    Position pos;              // its declaration: its name
+    Position body;             // its body's '{'
+    Array<Ir_Scope> scopes;    // scope 0 is the body; empty without a source_name
+    Array<Ir_Var> vars;        // in the order they're declared, the parameters first
 };
 
 struct Ir_Module {
     Array<Ir_Global> globals;
     Array<Ir_Proc *> procs;  // the file's, in order, then __rig_bounds_failed when a bounds check
                              // calls it and __rig_string_equal when == on strings does (lower.cpp,
-                             // in the order first needed), then the entry point
+                             // in the order first needed)
+    // The source file, for a debugger: empty for a module built by hand,
+    // which gets no debug information.
+    String source_path;      // absolute, normalised (path_absolute): how an editor names it
+    String directory;        // the directory rig ran in
+    u8 source_md5[16];       // the MD5 of the file's bytes
 };
 
 // Whether t is f32 or f64.
@@ -249,9 +341,10 @@ s32 ir_add_param(Ir_Proc *p, Ir_Type type, Ir_Ext ext);
 // Appends an empty block and returns its index.
 s32 ir_new_block(Arena *a, Ir_Proc *p);
 
-// Appends an instruction to the block, its operands -1, and numbers its
-// value unless type is IR_VOID or op gives nothing whatever its type: a
-// terminator, or IR_STORE, IR_COPY or IR_ZERO, which write memory. An
+// Appends an instruction to the block, its operands -1, with no position
+// (line 0) and no scope (-1), and numbers its value unless type is IR_VOID
+// or op gives nothing whatever its type: a terminator, or IR_STORE,
+// IR_COPY or IR_ZERO, which write memory. An
 // IR_LOCAL always gives a value, its address, whatever its type. The block
 // mustn't have ended (a terminator is last). The pointer is valid until the
 // next instruction is appended to the same block.
@@ -268,11 +361,34 @@ bool ir_block_has_ended(Ir_Proc *p, s32 block);
 // The module for a file that checked without errors (lower.cpp). `d` holds
 // the paths of the files the tree's positions refer to: a runtime error's
 // message names its place in the source as PATH:LINE:COL, PATH as given to
-// rig build (spec 6.4). With bounds_checks, as rig build has it unless told
-// --no-bounds-checks, every a[i] of a view or a string, and of an array
-// but where i is a constant (which the checker made sure is inside), is
-// checked at run time, but in a procedure marked #no_abc (spec 6.5).
+// rig build (spec 6.4). The module's source_path and directory are the
+// first file's absolute_path and directory (empty when they are), and its
+// source_md5 that file's text's. With bounds_checks, as rig build has it
+// unless told --no-bounds-checks, every a[i] of a view or a string, and of
+// an array but where i is a constant (which the checker made sure is
+// inside), is checked at run time, but in a procedure marked #no_abc (spec
+// 6.5).
 Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks);
 
 // The module as text, in the format above.
 String ir_print(Arena *a, Ir_Module *m);
+
+// ir_print's text with the debug information as comments: first the source
+// file (when the module has one), then a global's Rig type after its line,
+// a procedure's source, scopes and variables after its own (none for a
+// procedure the compiler makes), and each instruction's position and scope
+// at the end of its line (none at line 0). Lines and columns as L:C:
+//
+//   ; source C:\dev\rig\test.rig md5 0123456789abcdef0123456789abcdef
+//   global @counter: i64 = 0
+//     ; type int at 1:1
+//   proc @sum(i64, ptr) -> i64 {
+//     ; source sum at 2:1, body 2:34
+//     ; scope 1 in 0 at 4:5                        (a scope from 1, in its parent)
+//     ; var n int value %0 arg 1 in 0 at 2:9       (KIND: slot, value or address)
+//     ; var a []int address %1 arg 2 in 0 at 2:17
+//     ; var x int slot %2 in 0 at 3:5
+//   b0:
+//     %2 = local i64  ; 3:5 s0                     (its statement's L:C, its scope)
+//   ...
+String ir_print_debug(Arena *a, Ir_Module *m);
