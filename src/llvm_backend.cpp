@@ -515,8 +515,11 @@ static void begin_debug_info(Backend *b, Ir_Module *m, Arena *a) {
     // CodeView's compiler name contains "clang", as a pointer otherwise
     // (measured with cdb: "rig 0.1.0" and "rig 0.1.0 (LLVM 23.1.4)" show a
     // pointer, "rig 0.1.0 (clang version 23.1.4)" the struct). So the
-    // producer names the clang whose code generator made the code (rustc's
-    // says "clang LLVM (rustc version ...)", for the same reason). Not
+    // producer names the clang whose code generator made the code. (rustc's
+    // names clang too, "clang LLVM (rustc version ...)", but for gdb's
+    // sake: gdb trusts the line table to find a prologue's end only for a
+    // producer that starts with "clang ". Rig's doesn't, and needn't: gdb
+    // also reads DWARF 5's prologue_end, which LLVM writes.) Not
     // optimised; full emission (types and variables too, not only lines).
     unsigned major = 0, minor = 0, patch = 0;
     LLVMGetVersion(&major, &minor, &patch);
@@ -805,10 +808,16 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
     // array's) is an alloca of [N x i8] with the alignment it asks for; a
     // bool's slot is a byte (memory_type).
     //
-    // They have no location (the builder has none yet): they're the
-    // procedure's prologue, which belongs to no statement. LLVM ends the
-    // prologue, where a breakpoint on the procedure stops, at the first
-    // instruction with a location; an alloca with one would end it early.
+    // They have no location (the builder has none yet), as clang leaves
+    // its own: they belong to no statement, and they become no code of
+    // their own. A static alloca in the entry block is a slot of the frame
+    // the prologue sets up, an offset from the frame pointer, so no
+    // instruction runs for it and the line table has nothing to name.
+    // (Code that does run before the body, as a store of a parameter into
+    // its slot, gets no location for another reason: the prologue ends,
+    // and a breakpoint on the procedure stops, at the first instruction
+    // with a location, so a store with one would end it before the
+    // parameters were all stored.)
     LLVMPositionBuilderAtEnd(body.builder, body.blocks[0]);
     for (s64 k = 0; k < p->blocks.count; k++) {
         Ir_Block *block = p->blocks[k];
