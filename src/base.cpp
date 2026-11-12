@@ -256,10 +256,12 @@ String path_absolute(Arena *a, String directory, String path, bool windows) {
         // "C:x.rig", a drive with no separator after it, is x.rig in that
         // drive's current directory. When the directory is on the same drive
         // (its letter in either case), that's the directory itself: the path
-        // after its "C:" is relative to it.
+        // after its "C:" is relative to it. The letters are compared only
+        // once both are known to have one: an empty path has no first byte.
         bool drive_relative = starts_with_drive(path) && (path.count == 2 || !is_separator(path.data[2], true));
-        bool same_drive = starts_with_drive(directory) && (path.data[0] | 0x20) == (directory.data[0] | 0x20);
-        if (drive_relative && same_drive) {
+        bool same_drive = drive_relative && starts_with_drive(directory) &&
+                          (path.data[0] | 0x20) == (directory.data[0] | 0x20);
+        if (same_drive) {
             root = string_slice(directory, 0, directory_root);
             add_segments(&segments, string_slice(directory, directory_root, directory.count - directory_root), true);
             add_segments(&segments, string_slice(path, own_root, path.count - own_root), true);
