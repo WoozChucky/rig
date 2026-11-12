@@ -1977,6 +1977,63 @@ TEST(float_casts) {
     arena_free(&a);
 }
 
+TEST(float32_values_are_rounded_once) {
+    // A float literal that becomes a float32, alone or meeting one, is
+    // rounded once, from its decimal text, as C's strtof reads it (issue
+    // #52). 1.0000000596046448 is a little above 1 + 2^-24, halfway between
+    // the float32s 1 and 1 + 2^-23, so it's 1 + 2^-23; but the double
+    // nearest to it is that halfway point exactly, which a second rounding
+    // would take to even, 1. The same through parentheses, a -, and a
+    // constant's name. Arithmetic on untyped constants is a double's, though,
+    // rounded once at the end (spec 6.4): 0.5 + 0.5000000596046448 is the
+    // halfway point as a double, so 1. And a cast of a literal makes it a
+    // float64 first, as C's (float) of a double literal: 1 too.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    a : float32 = 1.0000000596046448;\n"
+                          "    b : float32 = 1.000000059604644775390625001;\n"
+                          "    c := 1.0000000596046448;\n"
+                          "    d : float32 = -(1.0000000596046448);\n"
+                          "    N :: 1.0000000596046448;\n"
+                          "    e : float32 = N;\n"
+                          "    one : float32 = 1.0;\n"
+                          "    f := one * 1.0000000596046448;\n"
+                          "    g : float64 = 1.0000000596046448;\n"
+                          "    h : float32 = 0.5 + 0.5000000596046448;\n"
+                          "    k := cast(float32) 1.0000000596046448;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    f64 above = 1.0 + __builtin_ldexp(1.0, -23);
+    CHECK(float_value(value_of(&c, "a")) == above);
+    CHECK(float_value(value_of(&c, "b")) == above);
+    CHECK(float_value(value_of(&c, "c")) == above);
+    CHECK_STR(type_of(&a, &c, "c"), "float32");
+    CHECK(float_value(value_of(&c, "d")) == -above);
+    CHECK(float_value(value_of(&c, "e")) == above);
+    CHECK(float_value(((Ast_Binary *)value_of(&c, "f"))->right) == above);
+    CHECK(float_value(value_of(&c, "g")) == 1.0000000596046448);
+    CHECK(float_value(value_of(&c, "h")) == 1.0);
+    CHECK(float_value(value_of(&c, "k")) == 1.0);
+    token_list_free(c.list);
+
+    // An integer constant becomes a float32 in one rounding too, never by
+    // way of a double: 2^60 + 2^36 + 1 is nearer 2^60 + 2^37 than 2^60
+    // (float32's 24 bits step by 2^37 there), but as a double it's 2^60 +
+    // 2^36, the halfway point, which would then round to even, 2^60. (16777217
+    // in float_casts can't tell: a double holds it exactly.)
+    c = check_src(&a,
+                  "main :: () {\n"
+                  "    A :: cast(float32) 1152921573326323713;\n"
+                  "    x : float32 = 1152921573326323713;\n"
+                  "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(float_value(local_named(&c, "A")) == 1152921642045800448.0);
+    CHECK(float_value(value_of(&c, "x")) == 1152921642045800448.0);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
 TEST(float_comparisons) {
     // Comparisons of floats give a bool and fold: ordered, so NaN is neither
     // less, greater nor equal, but != is true for it, NaN != NaN included.

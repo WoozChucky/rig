@@ -82,15 +82,52 @@ static f64 as_double(Ast *e) {
     return t->is_signed ? (f64)(s64)e->constant : (f64)e->constant;
 }
 
-// The bits of number constant e's value as float type `to`, rounded once,
-// to nearest: a float's rounded to to's precision, an integer's converted
-// straight to `to` (to a float32 directly, not by way of a double, which
-// would round twice and could land on the other neighbour).
+// Whether untyped float constant e is a float literal as written: the
+// literal (in parentheses or not), a - before one, or the name of a
+// constant whose value is one. Then *out is the literal's value as a
+// float32, rounded once from its decimal text (Ast_Float.float32_value),
+// negated by each -, which is exact.
+static bool literal_float32(Ast *e, f32 *out) {
+    switch (e->kind) {
+    case AST_FLOAT: *out = ((Ast_Float *)e)->float32_value; return true;
+    case AST_UNARY: {
+        Ast_Unary *unary = (Ast_Unary *)e;
+        if (unary->op != TOKEN_MINUS || !literal_float32(unary->operand, out)) return false;
+        *out = -*out;
+        return true;
+    }
+    case AST_NAME: {
+        Ast *decl = ((Ast_Name *)e)->decl;
+        return decl && decl->kind == AST_CONST && literal_float32(((Ast_Const *)decl)->value, out);
+    }
+    default: return false;
+    }
+}
+
+// The bits of number constant e's value as float type `to`, rounded to
+// nearest, once, from the value as written:
+// - an untyped float that is a literal as written (literal_float32),
+//   becoming a float32: the literal read as a float32 from its text. Its
+//   double is already rounded once, from the decimal, and rounding that
+//   again to a float32 could land on the other neighbour, when the double
+//   is the halfway point between two float32s (1.0000000596046448 is just
+//   above the halfway point 1 + 2^-24, and its double is that point
+//   exactly, which rounds to even, 1, though the literal is nearer
+//   1 + 2^-23);
+// - any other float: the double rounded to to's precision. Untyped
+//   arithmetic is done in double (fold_float), as written in the spec, so
+//   its result is rounded here a second time; a float64 cast to a float32
+//   rounds once, from the float64 it is;
+// - an integer, converted straight to `to` (to a float32 directly, not by
+//   way of a double, which would round twice).
 static u64 float_bits(Ast *e, Type *to) {
     Type *t = e->type;
     u64 bits = e->constant;
     f64 value;
-    if (t->kind == TYPE_FLOAT) {
+    f32 literal;
+    if (t == &type_untyped_float && to->size == 4 && literal_float32(e, &literal)) {
+        value = (f64)literal;
+    } else if (t->kind == TYPE_FLOAT) {
         value = round_to(f64_from_bits(bits), to);
     } else if (to->size == 4) {
         value = t->is_signed ? (f64)(f32)(s64)bits : (f64)(f32)bits;

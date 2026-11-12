@@ -99,4 +99,14 @@ main :: () {
     acc -= 0.5;
     line(cast(int) (acc * 10));
     yes_or_no(a > x);
+
+    // A float32 is rounded once, while compiling as at run time. An
+    // integer: the folded cast equals the program's own conversion of the
+    // same number, 2^60 + 2^36 + 1 to 2^60 + 2^37 (by way of a double it
+    // would be 2^60). A literal: 1.0000000596046448 as a float32 is 1 +
+    // 2^-23, as C's strtof reads it, not 1 (its double, rounded again).
+    wide : int = 1152921573326323713;
+    yes_or_no(cast(float32) 1152921573326323713 == cast(float32) wide);
+    near : float32 = 1.0000000596046448;
+    yes_or_no(near > 1.0);
 }
