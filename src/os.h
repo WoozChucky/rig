@@ -84,3 +84,26 @@ bool os_run_merged(Arena *a, Array<String> argv, String directory, s32 seconds, 
 
 // Why the last failing os_ function failed, as a sentence from the system.
 String os_error_message(Arena *a);
+
+// The stack the compiler works on, on every system (issue #77): the parser,
+// the checker and lowering recurse a level at a time, up to MAX_DEPTH
+// (ast.h), and the main thread's stack is the system's, 1 MB on Windows and
+// `ulimit -s` (8 MB, usually) on Linux. rig, and the unit tests, do their
+// work on a thread with this much instead (os_run_on_stack), as clang and
+// rustc do, so every system has the same room, well past what the limits
+// need.
+const u64 RIG_STACK_SIZE = 8 * 1024 * 1024;
+
+// Runs fn(data) on a new thread with a stack of stack_size bytes, and waits
+// for it to end. False, with nothing run, when the thread can't be made.
+bool os_run_on_stack(u64 stack_size, void (*fn)(void *data), void *data);
+
+// The size of the calling thread's stack, as the system reports it: the
+// whole of it, used or not (what was reserved for it on Windows; the
+// thread's attributes on Linux, `ulimit -s` for the main thread). 0 if the
+// system won't say.
+u64 os_stack_size();
+
+// Whether the calling thread is the program's main thread, the one main()
+// started on.
+bool os_on_main_thread();
