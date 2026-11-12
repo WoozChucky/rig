@@ -263,16 +263,24 @@ static void dump(Array<u8> *buffer, Ast *node) {
     }
     case AST_BOOL: out(buffer, ((Ast_Bool *)node)->value ? "(bool true)" : "(bool false)"); break;
     case AST_IF: {
-        Ast_If *branch = (Ast_If *)node;
-        out(buffer, "(if ");
-        dump(buffer, branch->condition);
-        out(buffer, " ");
-        dump(buffer, branch->then_block);
-        if (branch->else_part) {
+        // An else-if chain is (if c1 T1 (if c2 T2 E)), each if inside the
+        // one before; it's followed in a loop rather than by recursion
+        // (parse_if says why), its parentheses all closed at the end.
+        Ast *part = node;
+        s64 arms = 0;
+        while (part && part->kind == AST_IF) {
+            Ast_If *branch = (Ast_If *)part;
+            out(buffer, arms++ ? " (if " : "(if ");
+            dump(buffer, branch->condition);
             out(buffer, " ");
-            dump(buffer, branch->else_part);
+            dump(buffer, branch->then_block);
+            part = branch->else_part;
         }
-        out(buffer, ")");
+        if (part) {  // the last else's block
+            out(buffer, " ");
+            dump(buffer, part);
+        }
+        for (s64 i = 0; i < arms; i++) out(buffer, ")");
         break;
     }
     case AST_WHILE: {
