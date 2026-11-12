@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -377,4 +378,44 @@ String os_current_directory(Arena *a) {
 
 String os_error_message(Arena *a) {
     return string_copy(a, str(strerror(os_last_error)));
+}
+
+struct Thread_Start {
+    void (*fn)(void *data);
+    void *data;
+};
+
+static void *thread_start(void *start) {
+    Thread_Start *s = (Thread_Start *)start;
+    s->fn(s->data);
+    return nullptr;
+}
+
+bool os_run_on_stack(u64 stack_size, void (*fn)(void *data), void *data) {
+    Thread_Start start = {fn, data};
+    pthread_attr_t attributes;
+    pthread_attr_init(&attributes);
+    int error = pthread_attr_setstacksize(&attributes, (size_t)stack_size);
+    pthread_t thread;
+    if (!error) error = pthread_create(&thread, &attributes, thread_start, &start);
+    pthread_attr_destroy(&attributes);
+    if (error) {
+        os_last_error = error;
+        return false;
+    }
+    pthread_join(thread, nullptr);
+    return true;
+}
+
+u64 os_stack_size() {
+    pthread_attr_t attributes;
+    if (pthread_getattr_np(pthread_self(), &attributes) != 0) return 0;
+    size_t size = 0;
+    pthread_attr_getstacksize(&attributes, &size);
+    pthread_attr_destroy(&attributes);
+    return (u64)size;
+}
+
+bool os_on_main_thread() {
+    return gettid() == getpid();  // the main thread's id is the process's
 }

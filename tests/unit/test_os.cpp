@@ -318,3 +318,51 @@ TEST(os_read_missing_file_fails) {
     CHECK(!os_file_exists(str(".build/no-such-file.rig")));
     arena_free(&a);
 }
+
+// Issue #77: the compiler works on a stack of its own, RIG_STACK_SIZE (8 MB)
+// on every system, rather than the main thread's (1 MB on Windows).
+
+// What the thread a test function ran on had: its stack's size, as the
+// system reports it (os_stack_size), and whether it was the main thread.
+struct Stack_Seen {
+    u64 size;
+    bool on_main_thread;
+};
+
+static void look_at_stack(void *data) {
+    Stack_Seen *seen = (Stack_Seen *)data;
+    seen->size = os_stack_size();
+    seen->on_main_thread = os_on_main_thread();
+}
+
+TEST(os_run_on_stack_gives_the_stack_asked_for) {
+    // The stack is the size asked for, whatever the main thread's is: the
+    // compiler's, and 1.5 MB, neither system's default for a new thread
+    // (Windows' 1 MB, Linux's `ulimit -s`, usually 8 MB), so a thread made
+    // without asking couldn't pass. Not 2 MB: glibc hands a new thread a
+    // stack it kept from an ended one when that's at most four times the
+    // size asked for, so 2 MB can get the 8 MB just used. Measured, not
+    // recursed through: a recursion an optimiser can shrink passes for the
+    // wrong reason.
+    Stack_Seen seen = {0, true};
+    CHECK(os_run_on_stack(RIG_STACK_SIZE, look_at_stack, &seen));
+    CHECK(seen.size >= RIG_STACK_SIZE && seen.size < 2 * RIG_STACK_SIZE);
+    CHECK(!seen.on_main_thread);
+    const u64 SMALL = 3 * 512 * 1024;
+    seen = {0, true};
+    CHECK(os_run_on_stack(SMALL, look_at_stack, &seen));
+    CHECK(seen.size >= SMALL && seen.size < 2 * SMALL);
+    // The main thread's own (this one's, once unit.cpp is undone, or rig's
+    // main) is the system's.
+    CHECK(os_stack_size() > 0);
+}
+
+TEST(the_tests_run_on_the_compilers_stack) {
+    // unit.cpp runs the tests on a stack of RIG_STACK_SIZE, as rig runs the
+    // compiler, so the tests at the compiler's limits (MAX_DEPTH) have the
+    // room rig has. On the main thread they'd have the system's: 1 MB on
+    // Windows, and on Linux `ulimit -s`, which may be 8 MB too, so that
+    // they're on a thread of their own is checked as well.
+    CHECK(os_stack_size() >= RIG_STACK_SIZE);
+    CHECK(!os_on_main_thread());
+}
