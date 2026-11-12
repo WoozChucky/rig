@@ -260,7 +260,8 @@ static Ir_Module *panic_module(Arena *a) {
 TEST(llvm_panic_writes_then_exits) {
     // A panic calls the runtime's __rig_panic with its message, all but the
     // final zero; __rig_panic writes it to stderr (file descriptor 2) and
-    // exits with 101, through C's exit so stdout's buffer is flushed.
+    // exits with 101, through C's exit (llvm_panic_flushes_before_it_writes:
+    // stdout's buffer is flushed first).
     Arena a = arena_make();
     String linux_text = llvm_text(&a, panic_module(&a), TARGET_LINUX_X64);
     CHECK(contains(linux_text, "define internal void @__rig_panic(ptr %0, i64 %1)"));
@@ -277,6 +278,22 @@ TEST(llvm_panic_writes_then_exits) {
         String text = llvm_text(&a, max_module(&a), (Target)t);
         CHECK(!contains(text, "__rig_panic"));
         CHECK(!contains(text, "@exit"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_panic_flushes_before_it_writes) {
+    // stdout's buffer is flushed (C's fflush(NULL): every stream) before the
+    // message is written, so when stdout and stderr go to one place (2>&1)
+    // the program's earlier output comes first, then the error.
+    Arena a = arena_make();
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, panic_module(&a), (Target)t);
+        s64 flush = index_of(text, "call i32 @fflush(ptr null)");
+        s64 write = index_of(text, t == TARGET_WINDOWS_X64 ? "call i32 @_write(i32 2," : "call i64 @write(i32 2,");
+        CHECK(flush >= 0);
+        CHECK(write >= 0);
+        CHECK(flush < write);
     }
     arena_free(&a);
 }
