@@ -187,11 +187,14 @@ static void dump(Array<u8> *buffer, Ast *node) {
         Ast_Assign *assign = (Ast_Assign *)node;
         out(buffer, "(assign ");
         out_operator(buffer, assign->op);
+        // One target bare, several as a list: (assign = ((name a) (name b)) ...).
+        bool several = assign->targets.count > 1;
+        out(buffer, several ? " (" : " ");
         for (s64 i = 0; i < assign->targets.count; i++) {
-            out(buffer, " ");
+            if (i > 0) out(buffer, " ");
             dump(buffer, assign->targets[i]);
         }
-        out(buffer, " ");
+        out(buffer, several ? ") " : " ");
         dump(buffer, assign->value);
         out(buffer, ")");
         break;
@@ -277,6 +280,18 @@ static void dump(Array<u8> *buffer, Ast *node) {
         out(buffer, ")");
         break;
     }
+    case AST_MULTI_VAR: {
+        Ast_Multi_Var *multi = (Ast_Multi_Var *)node;
+        out(buffer, "(multi-var (");
+        for (s64 i = 0; i < multi->vars.count; i++) {
+            if (i > 0) out(buffer, " ");
+            out(buffer, multi->vars[i]->name);
+        }
+        out(buffer, ") ");
+        dump(buffer, multi->value);
+        out(buffer, ")");
+        break;
+    }
     case AST_BREAK: out(buffer, "(break)"); break;
     case AST_CONTINUE: out(buffer, "(continue)"); break;
     }
@@ -294,10 +309,22 @@ String ast_dump_node(Arena *a, Ast *node) {
     return finish(a, &buffer);
 }
 
+// Whether position a comes before position b in the source.
+static bool before(Position a, Position b) {
+    if (a.file != b.file) return a.file < b.file;
+    if (a.line != b.line) return a.line < b.line;
+    return a.col < b.col;
+}
+
 String ast_dump(Arena *a, Ast_File *file) {
+    // The procedures and the globals are two lists, each in source order:
+    // merged by position, they're the file's declarations in its order.
     Array<u8> buffer = {};
-    for (s64 i = 0; i < file->procs.count; i++) {
-        dump(&buffer, file->procs[i]);
+    s64 p = 0, g = 0;
+    while (p < file->procs.count || g < file->globals.count) {
+        bool proc_first = g == file->globals.count ||
+                          (p < file->procs.count && before(file->procs[p]->pos, file->globals[g]->pos));
+        dump(&buffer, proc_first ? (Ast *)file->procs[p++] : file->globals[g++]);
         out(&buffer, "\n");
     }
     return finish(a, &buffer);
