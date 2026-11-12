@@ -675,11 +675,29 @@ static bool starts_global(Parser *p) {
     return t->kind == TOKEN_IDENT && t->pos.col == 1 && (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL);
 }
 
-// Counts a token of kind `kind` into the braces (`depth`) and parentheses
-// (`parens`) still open: '{' and '(' open one, '}' and ')' close one.
-static void count_open(Token_Kind kind, s64 *depth, s64 *parens) {
-    *depth += kind == TOKEN_LBRACE ? 1 : kind == TOKEN_RBRACE ? -1 : 0;
-    *parens += kind == TOKEN_LPAREN ? 1 : kind == TOKEN_RPAREN ? -1 : 0;
+// Counts token `i` into the braces (`depth`) and the parameter list's
+// parentheses (`parens`) still open. '{' opens a brace and '}' closes one.
+// Only a parameter list's parentheses are counted, since only a parameter
+// list holds a name followed by ':' (`n: s32`), which a line can start
+// with: a call's or a value's parentheses never do, so a global after one
+// whose ')' is missing is still the next declaration. A list starts at a
+// '(' followed by ')' or IDENT ':', as parse_declaration tells a procedure
+// from a constant (`greet (s: *u8,` too, a C habit); inside it every '('
+// and ')' counts. A list holds no braces, so a '{' or '}' ends it, closed
+// or not: a body has begun or ended.
+static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
+    Token_Kind kind = p->tokens[i].kind;
+    if (kind == TOKEN_LBRACE || kind == TOKEN_RBRACE) {
+        *depth += kind == TOKEN_LBRACE ? 1 : -1;
+        *parens = 0;
+    } else if (kind == TOKEN_LPAREN) {
+        // A token follows a '(': the last one is TOKEN_EOF.
+        Token_Kind next = p->tokens[i + 1].kind;
+        bool list = next == TOKEN_RPAREN || (next == TOKEN_IDENT && p->tokens[i + 2].kind == TOKEN_COLON);
+        if (*parens > 0 || list) *parens += 1;
+    } else if (kind == TOKEN_RPAREN && *parens > 0) {
+        *parens -= 1;
+    }
 }
 
 // After an error in a declaration that began at token `start`: skips to the
@@ -694,13 +712,16 @@ static void count_open(Token_Kind kind, s64 *depth, s64 *parens) {
 // inside braces still open is passed over, unless it's in column 1, where
 // parse_block takes it for a top-level declaration after a body never
 // closed. A global variable is taken only outside every brace and
-// parenthesis still open, even right where the failed declaration stopped:
-// an unindented local (`y : int;` in column 1 of a body) and a parameter
-// list over two lines (`n: s32` starting the second) look like one too.
+// parameter list still open, even right where the failed declaration
+// stopped: an unindented local (`y : int;` in column 1 of a body) and a
+// parameter list over two lines (`n: s32` starting the second) look like
+// one too. A call's or a value's parentheses left open don't count (see
+// count_open): `counter : int = f(1` or `puts("a"` in a body, then a
+// global, keeps the global.
 static void skip_to_next_declaration(Parser *p, s64 start) {
     s64 depth = 0;   // braces opened and not yet closed since `start`
-    s64 parens = 0;  // the same for parentheses
-    for (s64 i = start; i < p->next; i++) count_open(p->tokens[i].kind, &depth, &parens);
+    s64 parens = 0;  // the same for a parameter list's parentheses
+    for (s64 i = start; i < p->next; i++) count_open(p, i, &depth, &parens);
     if (p->next > start && (starts_declaration(p) || (depth <= 0 && parens <= 0 && starts_global(p)))) return;
     // At least one token is skipped, whatever it is.
     for (bool first = true; peek(p)->kind != TOKEN_EOF; first = false) {
@@ -711,7 +732,7 @@ static void skip_to_next_declaration(Parser *p, s64 start) {
             return;
         }
         if (!first && starts_line && depth <= 0 && parens <= 0 && starts_global(p)) return;
-        count_open(t->kind, &depth, &parens);
+        count_open(p, p->next, &depth, &parens);
         advance(p);
     }
 }

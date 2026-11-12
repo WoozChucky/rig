@@ -837,5 +837,24 @@ TEST(recovery_stops_at_a_global) {
     dump = parse_src(&a, "f :: (a: int\nb: int) { }\n", &errors);
     CHECK_STR(errors, "2:1: expected ')', found identifier 'b'\n");
     CHECK_STR(dump, "(broken f)\n");
+    dump = parse_src(&a, "greet (s: *u8,\nn: s32) { }\n", &errors);
+    CHECK_STR(errors, "1:7: expected '::', found '('\n");
+    CHECK_STR(dump, "(broken greet)\n");
+    // Only a parameter list's parentheses count: a call's or a value's
+    // never holds a name in column 1 followed by ':', so a global after
+    // one whose ')' is missing is kept, at the top level or after a body.
+    dump = parse_src(&a, "counter : int = f(1\nstart := 1;\n", &errors);
+    CHECK_STR(errors, "2:1: expected ')', found identifier 'start'\n");
+    CHECK_STR(dump, "(broken counter)\n(var start _ (int 1))\n");
+    dump = parse_src(&a, "N :: (1 + 2\nstart := 1;\n", &errors);
+    CHECK_STR(errors, "2:1: expected ')', found identifier 'start'\n");
+    CHECK_STR(dump, "(broken N)\n(var start _ (int 1))\n");
+    dump = parse_src(&a, "main :: () {\n    puts(\"a\"\n}\ncounter := 1;\n", &errors);
+    CHECK_STR(errors, "3:1: expected ')', found '}'\n");
+    CHECK_STR(dump, "(broken main)\n(var counter _ (int 1))\n");
+    // A body's '{' ends a parameter list, closed or not.
+    dump = parse_src(&a, "f :: (a: int {\n}\nstart := 1;\n", &errors);
+    CHECK_STR(errors, "1:14: expected ')', found '{'\n");
+    CHECK_STR(dump, "(broken f)\n(var start _ (int 1))\n");
     arena_free(&a);
 }
