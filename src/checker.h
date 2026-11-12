@@ -245,7 +245,11 @@
 //   declared at PATH:L:C". A struct can't hold itself by value, directly or
 //   through others: "'Node' contains itself; it can hold a pointer to
 //   itself, *Node", at the struct whose layout was being worked out when
-//   the circle closed, once per circle; a pointer to itself is fine.
+//   the circle closed, once per circle. Anything behind a pointer or in a
+//   view lies elsewhere and is fine: *Node, []Node, [2]*Node, [][2]Node,
+//   *[2]Node. A struct whose size needs itself through a global or a
+//   constant (an array's count, `S :: struct { a: [g.count]int; } g :
+//   [2]S;`) holds no copy of itself: "'S' is defined in terms of itself".
 // - e.x is the field x of e, a struct or a pointer to one (one pointer:
 //   **Node needs .* first): "'Vec2' has no field 'z'", or on anything else
 //   "'.x' needs a struct or a pointer to one, not 'int'", at the field's
