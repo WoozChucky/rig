@@ -4,9 +4,10 @@
 // every expression, folds the constants, and checks each call, declaration,
 // assignment and return against the types involved. It fills in the tree as
 // it goes (Ast.type, Ast.is_constant and Ast.constant, Ast_Name.decl,
-// Ast_Call.proc, Ast_Member.index (-1 for an array's or a view's .count and
-// .data), and each struct's type and layout, Ast_Struct.declared), so the
-// stages after it never look anything up again.
+// Ast_Call.proc, Ast_Member.index (-1 for an array's, a view's or a
+// string's .count and .data), and each struct's type and layout,
+// Ast_Struct.declared), so the stages after it never look anything up
+// again.
 // checker.cpp checks declarations and statements, check_expr.cpp
 // expressions; check.h is what they share.
 //
@@ -73,9 +74,9 @@
 //   integers, not 'T'" ("'~' needs an integer, not 'T'"). The same for a
 //   compound assignment's target or value ("'+=' needs numbers, not
 //   '*u8'", "'%=' needs integers, not 'float32'").
-// - A string literal has type string, and converts to *u8 implicitly (its
-//   bytes are stored with a zero after them, Jai's rule, so C can read it).
-//   A variable can't hold a string yet.
+// - A string literal has type string (below), and also converts to *u8
+//   implicitly (its bytes are stored with a zero after them, Jai's rule, so
+//   C can read it).
 //
 // Floats (spec 6.4).
 // - float32 and float64 are IEEE 754's single and double; float is float32,
@@ -106,9 +107,10 @@
 //   the cast, and any other value is checked at run time. From a bool to an
 //   integer: 0 or 1. An integer to a bool: "can't cast 'int' to 'bool':
 //   compare instead, as in x != 0". A pointer to and from a pointer or a
-//   64-bit integer (below). Anything else only to the type it converts to
-//   implicitly (its own, or a string literal's *u8); otherwise "can't cast
-//   'string' to 'int'".
+//   64-bit integer (below); a string to and from a []u8 (below). Anything
+//   else only to the type it converts to implicitly (its own, an array's
+//   view, or a string literal's *u8); otherwise "can't cast 'string' to
+//   'int'".
 // - cast,trunc(T) e is C's conversion, unchecked: narrowing keeps the low
 //   bits, widening extends by the source's sign (cast,trunc(u8) 300 is the
 //   u8 constant 44). It takes integers only: "cast,trunc only takes
@@ -289,17 +291,17 @@
 //   A field that holds a struct with no type (one in a circle, or too
 //   big), in any way, in a view or an array of pointers too, has none
 //   either, so its uses say nothing more.
-// - a[i] is an element of an array or a view, or of what a pointer points
-//   at (C's p[i], unchecked); i is any integer, read by its sign, an untyped
-//   one an int. Otherwise: "'[]' needs an array, a view or a pointer, not
-//   'int'", "can't index a '*void'; cast it to a pointer to something
-//   first", at the '['; "an index must be an integer, not 'bool'", at i. A
-//   constant i of an array is checked here: "index 3 is out of bounds for
-//   '[3]int'", at i; every other index of an array or a view is checked at
-//   run time (lowering), unless the procedure has #no_abc or the build
-//   --no-bounds-checks. An element is a place when its array is (so a[0] =
-//   1 for a parameter a is "can't assign to 'a': it's a parameter"); a
-//   view's or a pointer's always.
+// - a[i] is an element of an array, a view or a string (below), or of what
+//   a pointer points at (C's p[i], unchecked); i is any integer, read by its
+//   sign, an untyped one an int. Otherwise: "'[]' needs an array, a view, a
+//   string or a pointer, not 'int'", "can't index a '*void'; cast it to a
+//   pointer to something first", at the '['; "an index must be an integer,
+//   not 'bool'", at i. A constant i of an array is checked here: "index 3 is
+//   out of bounds for '[3]int'", at i; every other index of an array, a view
+//   or a string is checked at run time (lowering), unless the procedure has
+//   #no_abc or the build --no-bounds-checks. An element is a place when its
+//   array is (so a[0] = 1 for a parameter a is "can't assign to 'a': it's a
+//   parameter"); a view's, a string's or a pointer's always.
 // - a.count and a.data: a view's are its fields (an int, a *T, places when
 //   the view is one); an array's .count is its N, an untyped integer
 //   constant (a isn't evaluated), and its .data the address of its first
@@ -318,28 +320,48 @@
 //   Anything else: "a '.[' literal needs an array or a view type, not
 //   'int'"; with no type: "this literal's type isn't known; write it before
 //   the '.', as in int.[1, 2]".
-// - for a goes over an array or a view a, worked out once: it is each
-//   element, a copy, it_index its index. for * a makes it a pointer to each,
-//   which needs a's elements to have an address, as *a[i] does: "can't take
-//   the address of 'a': it's a parameter", "only a variable, a field or an
-//   element has an address". On anything else: "'for' needs a range, an
-//   array or a view, not 'int'"; a range's numbers have none: "'for *'
-//   needs an array or a view, not a range".
+// - for a goes over an array, a view or a string a, worked out once: it is
+//   each element, a copy, it_index its index. for * a makes it a pointer to
+//   each, which needs a's elements to have an address, as *a[i] does:
+//   "can't take the address of 'a': it's a parameter", "only a variable, a
+//   field or an element has an address". On anything else: "'for' needs a
+//   range, an array, a view or a string, not 'int'"; a range's numbers have
+//   none: "'for *' needs an array, a view or a string, not a range".
 // - A foreign procedure takes no array or view: "a foreign procedure can't
 //   take a '[3]int'; pass its .data", and returns none ("... can't return a
 //   '[]int' yet").
+//
+// Strings (spec 6.5).
+// - string is a view of bytes, laid out as []u8, { count: int; data: *u8; },
+//   not ended by a zero. A string literal is one, its count the bytes
+//   without the zero after them (x := "hi"; x.count is 2). .count and .data,
+//   s[i] (a u8), for s (it a u8) and for * s (it a *u8) are a view's.
+// - Only a literal converts to *u8, since only its bytes are known to end
+//   with a zero; any other string doesn't: "a value of type 'string'
+//   doesn't convert to '*u8' implicitly; its .data may not end with a zero"
+//   (an argument's message ends the same way).
+// - == and != compare two strings by their bytes; a string meets no other
+//   type ("mismatched types 'string' and '*u8' for '=='"), and has no order
+//   or arithmetic ("'<' needs numbers, not 'string'").
+// - cast(string) v of a []u8 v and cast([]u8) s of a string s are the same
+//   view, retyped. Nothing else casts to or from a string.
+// - A literal's bytes are read-only, as in C: s[0] = 65 for s := "abc"
+//   writes them, a memory error (spec 6.4), not caught.
+// - A foreign procedure takes no string: "a foreign procedure can't take a
+//   'string'; pass its .data, which may not end with a zero, or a literal",
+//   and returns none ("... can't return a 'string' yet").
 //
 // Globals and top-level constants.
 // - A global variable is declared as a local one is. Its value must be
 //   known while compiling ("a global's value must be known while
 //   compiling, for now"): it's written into the program's file. Without
-//   one, or with ---, it starts at zero. A string literal is known while
-//   compiling, but its address needs the linker to fill it in, which
-//   lowering doesn't ask for yet: "global variables can't hold a string
-//   literal yet; assign it in a procedure". A struct's or an array's value
-//   is a literal whose values are all known while compiling (nested
-//   literals' too); the first that isn't is the one reported. A view's is an
-//   array literal, which becomes a global array of its own.
+//   one, or with ---, it starts at zero. A struct's or an array's value is
+//   a literal whose values are all known while compiling (nested literals'
+//   too); the first that isn't is the one reported. A view's is an array
+//   literal, which becomes a global array of its own. A string literal is
+//   known while compiling too, as a string, a *u8 or a []u8 (or a field or
+//   an element of one): its address is put in the global's bytes by the
+//   linker (literal_address).
 // - A top-level constant follows a local one's rules: a number or a bool,
 //   so not a struct (`N :: Vec2.{1, 2};` is "a constant can only be a
 //   number or a bool, for now").
@@ -379,9 +401,18 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d);
 
 // Whether e, checked with no errors, is a place in memory: a variable, but
 // not a loop's iterator or index; p.*; a field of a place, or of a struct
-// reached through a pointer; an element of a place's array, or of a view's
-// or a pointer's. An array's .count and .data never are. The one statement
-// of the rule: the checker asks it before taking an address or assigning
-// (and says why not), and lowering asks it what an array converted to a
-// view is seen through (lower_view_of): the array itself, or a copy of it.
+// reached through a pointer; an element of a place's array, or of a view's,
+// a string's or a pointer's. An array's .count and .data never are. The one
+// statement of the rule: the checker asks it before taking an address or
+// assigning (and says why not), and lowering asks it what an array
+// converted to a view is seen through (lower_view_of): the array itself, or
+// a copy of it.
 bool expr_is_place(Ast *e);
+
+// The string literal whose address e, checked, is: the literal itself (as a
+// string, or where it meets a *u8), or a cast of it that keeps the address,
+// to []u8 or between pointers (cast(*void) cast(*u8) "x"); null for anything
+// else, a cast of it to an integer too. A global may hold one, its address
+// written there by the linker: the checker asks this to allow it, and
+// lowering to write it (constant_bytes).
+Ast_String *literal_address(Ast *e);
