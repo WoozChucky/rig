@@ -41,6 +41,9 @@
             "include": "#calls"
         },
         {
+            "include": "#dereference"
+        },
+        {
             "include": "#operators"
         },
         {
@@ -256,6 +259,18 @@
             "captures": {
                 "1": {
                     "name": "entity.name.function.call.rig"
+                }
+            }
+        },
+        "dereference": {
+            "comment": "p.* reads what p points at. The lexer reads a '*' right after a '.' token alone, whatever follows it (src/lexer.h), so p.*=5 is p.* = 5 and p.*==q is p.* == q; the operators' longest match would take *= instead, so this comes first. Not after another '.': that's the range's '..'.",
+            "match": "(?<!\\.)(\\.)\\s*(\\*)",
+            "captures": {
+                "1": {
+                    "name": "punctuation.accessor.rig"
+                },
+                "2": {
+                    "name": "keyword.operator.dereference.rig"
                 }
             }
         },

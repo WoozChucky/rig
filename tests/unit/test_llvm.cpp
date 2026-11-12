@@ -725,6 +725,43 @@ TEST(llvm_byte_global_layouts) {
     arena_free(&a);
 }
 
+TEST(llvm_big_global_holds_no_zeros) {
+    // A global's zeros are never in the compiler's memory: a terabyte with no
+    // value is a zeroinitializer (the program's .bss), lowered from the
+    // source and built into an object for both targets; a value's bytes
+    // stop at its last field given, and a long tail of zeros after them is
+    // a zeroinitializer of its own; a short tail is written out with them.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "big : [1099511627776]u8;\n"
+                                "S :: struct { x: int; a: [8192]u8; }\n"
+                                "s := S.{x = 3};\n"
+                                "main :: () { big[5] = 1; }\n");
+    CHECK_EQ(m->globals[0].bytes.count, 0);
+    CHECK_EQ(m->globals[1].bytes.count, 8);
+    String ir = ir_print(&a, m);
+    CHECK(contains(ir, "global @big: 1099511627776 align 1 = zero\n"));
+    static const u8 one[] = {1};
+    s32 short_tail = add_byte_global(m, "short_tail", 16, 8);
+    m->globals[short_tail].bytes = {one, 1};
+    os_make_directory(str(".build"));
+    const char *paths[] = {".build/big-global-windows.obj", ".build/big-global-linux.o"};
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "@big = internal global [1099511627776 x i8] zeroinitializer, align 1"));
+        CHECK(contains(text, "@s = internal global <{ [8 x i8], [8192 x i8] }> "
+                             "<{ [8 x i8] c\"\\03\\00\\00\\00\\00\\00\\00\\00\", [8192 x i8] zeroinitializer }>, "
+                             "align 8"));
+        CHECK(contains(text, "@short_tail = internal global [16 x i8] "
+                             "c\"\\01\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\", align 8"));
+        String error = {};
+        bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), &a, &error);
+        CHECK(ok);
+        if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+    }
+    arena_free(&a);
+}
+
 TEST(llvm_relocation_to_a_later_global) {
     // Every global is made before any is given its first value, so a
     // relocation may name a global that comes after it.
@@ -827,6 +864,23 @@ TEST(llvm_memory_functions_win_over_the_programs) {
     CHECK(!contains(text, "@memset"));
     CHECK(!contains(text, "@memmove"));
     CHECK(!contains(text, "@memcpy"));
+    arena_free(&a);
+}
+
+TEST(llvm_stack_probe_wins_over_the_programs) {
+    // On Windows LLVM calls __chkstk by name for a frame bigger than a page,
+    // so the name is declared first: a program's own __chkstk is renamed.
+    // Linux probes inline and declares nothing.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *own = new_proc_returning(m, &a, "__chkstk", IR_VOID);
+    emit_ret(own, ir_new_block(&a, own), -1);
+    String text = llvm_text(&a, m, TARGET_WINDOWS_X64);
+    CHECK(contains(text, "declare void @__chkstk()"));
+    CHECK(contains(text, "define internal void @__chkstk.1()"));
+    text = llvm_text(&a, m, TARGET_LINUX_X64);
+    CHECK(!contains(text, "declare void @__chkstk()"));
+    CHECK(contains(text, "define internal void @__chkstk()"));
     arena_free(&a);
 }
 

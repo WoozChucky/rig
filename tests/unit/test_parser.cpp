@@ -583,7 +583,7 @@ TEST(for_with_a_mistyped_iterator) {
     // A name, then neither '..' nor the body's '{': the ':' of a named
     // iterator is missing, or another language's `in` took its place. The
     // message shows the form, at what came instead of the ':' (issue #52).
-    // Anything else that isn't '..' is "expected '..'".
+    // Anything else that isn't '..' or '{' is "expected '..' or the loop's '{'".
     Arena a = arena_make();
     String errors;
     body_dump(&a, "for i 0..9 { }", &errors);
@@ -593,9 +593,9 @@ TEST(for_with_a_mistyped_iterator) {
     body_dump(&a, "for x := 0..9 { }", &errors);
     CHECK_STR(errors, "2:11: expected ':' after the iterator's name, as in for i: 0..9\n");
     body_dump(&a, "for 0 9 { }", &errors);
-    CHECK_STR(errors, "2:11: expected '..', found integer literal\n");
+    CHECK_STR(errors, "2:11: expected '..' or the loop's '{', found integer literal\n");
     body_dump(&a, "for i: x y { }", &errors);
-    CHECK_STR(errors, "2:14: expected '..', found identifier 'y'\n");
+    CHECK_STR(errors, "2:14: expected '..' or the loop's '{', found identifier 'y'\n");
     arena_free(&a);
 }
 
@@ -1716,6 +1716,29 @@ TEST(deep_types_are_named_in_messages) {
     CHECK_STR(check_source(&a, text),
               string_cstr(&a, string_printf(&a, "%lld:15: a value of type '%s' doesn't convert to 'int' implicitly\n",
                                             (long long)(LOCALS + 3), deepest)));
+    arena_free(&a);
+}
+
+TEST(deep_types_of_globals_and_mixed_names) {
+    // What types_nest_at_most_max_depth and deep_types_are_named_in_messages
+    // leave out. A global's type goes through every stage too, a global of
+    // nested arrays starting at zero without the compiler holding its
+    // zeros: 1000 levels build, 1001 is the message. Far deeper is still
+    // one message, at the 1001st '*'. A name mixes every kind of level, a
+    // pointer between an array and a view, in the order written.
+    Arena a = arena_make();
+    const char *after = ";\nmain :: () { }\n";
+    CHECK(builds(&a, nested_source(&a, "x : ", "*", MAX_DEPTH, "int", "", after)));
+    CHECK(builds(&a, nested_source(&a, "x : ", "[1]", MAX_DEPTH, "u8", "", after)));
+    CHECK_STR(check_source(&a, nested_source(&a, "x : ", "[1]", MAX_DEPTH + 1, "u8", "", after)),
+              types_too_deep(&a, 1, 5 + 3 * MAX_DEPTH));
+    CHECK_STR(check_source(&a, nested_source(&a, "x : ", "*", 300000, "int", "", after)),
+              types_too_deep(&a, 1, 5 + MAX_DEPTH));
+    CHECK_STR(type_name(&a, type_view_of(type_array_of(type_pointer_to(type_from_name(str("u8"))), 3))),
+              "[][3]*u8");
+    CHECK_STR(check_source(&a, nested_source(&a, "x : ", "[]*[2]", 333, "u8", "", ";\nmain :: () { y : int = x; }\n")),
+              nested_source(&a, "2:24: a value of type '", "[]*[2]", 333, "u8", "",
+                            "' doesn't convert to 'int' implicitly\n"));
     arena_free(&a);
 }
 

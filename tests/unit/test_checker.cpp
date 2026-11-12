@@ -2786,6 +2786,26 @@ TEST(member_rules) {
               "18:12: '.x' needs a struct or a pointer to one, not '**Vec2'\n"
               "19:12: 'Vec2' has no field 'z'\n"
               "20:7: 'Vec2' has no field 'z'\n");
+    // An array's, a view's or a string's .count and .data aren't reached
+    // through a pointer: the message says to write .* first.
+    CHECK_STR(check_source(&a,
+                           "names := string.[\"ab\", \"cde\"];\n"
+                           "advance :: (s: *string, n: int) { s.data += n; }\n"
+                           "main :: () {\n"
+                           "    total := 0;\n"
+                           "    for * names { total += it.count; }\n"
+                           "    rows : [2][]int;\n"
+                           "    for * rows { it.count = 0; }\n"
+                           "    a : [3]int;\n"
+                           "    p := *a;\n"
+                           "    n := p.count;\n"
+                           "    x := p.size;\n"
+                           "}\n"),
+              "2:37: '.data' isn't reached through a pointer, '*string'; write .*.data\n"
+              "5:31: '.count' isn't reached through a pointer, '*string'; write .*.count\n"
+              "7:21: '.count' isn't reached through a pointer, '*[]int'; write .*.count\n"
+              "10:12: '.count' isn't reached through a pointer, '*[3]int'; write .*.count\n"
+              "11:12: '.size' needs a struct or a pointer to one, not '*[3]int'\n");
     arena_free(&a);
 }
 
@@ -3047,6 +3067,25 @@ TEST(type_and_value_names) {
               "12:5: 'Vec2' is a type, not a value\n"
               "13:10: 'Vec2' is a type, not a value\n"
               "14:5: 'Vec2' isn't a procedure, so it can't be called\n");
+    // A built-in type's name is a type as a struct's is, though nothing
+    // declares it: not an unknown identifier.
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    x := int;\n"
+                           "    y := string;\n"
+                           "    z := u8 + 1;\n"
+                           "    p := *bool;\n"
+                           "    float32 = 1;\n"
+                           "    s64(1);\n"
+                           "    q := nope;\n"
+                           "}\n"),
+              "2:10: 'int' is a type, not a value\n"
+              "3:10: 'string' is a type, not a value\n"
+              "4:10: 'u8' is a type, not a value\n"
+              "5:11: 'bool' is a type, not a value\n"
+              "6:5: 'float32' is a type, not a value\n"
+              "7:5: 's64' isn't a procedure, so it can't be called\n"
+              "8:10: unknown identifier 'nope'\n");
     arena_free(&a);
 }
 
@@ -3191,6 +3230,113 @@ TEST(array_types) {
               "1:1: 'Bad' contains itself; it can hold a pointer to itself, *Bad\n"
               "2:21: 'void' is only a pointer's target, as in *void\n"
               "2:33: 'void' is only a pointer's target, as in *void\n");
+    arena_free(&a);
+}
+
+TEST(struct_holds_arrays_of_itself_behind_a_pointer_or_a_view) {
+    // Behind a pointer or in a view, an array of a struct lies elsewhere,
+    // so a struct can hold a view of arrays of itself, or arrays of
+    // pointers to arrays of itself (C's struct Node (*kids)[2]): its layout
+    // takes 16 or 8 bytes for each, without the struct's own size.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Node :: struct { kids: [][2]Node; v: int; }\n"
+                          "Pair :: struct { kids: [2]*[2]Pair; }\n"
+                          "A :: struct { kids: [][2]B; }\n"
+                          "B :: struct { a: A; }\n"
+                          "main :: () {\n"
+                          "    n : Node;\n"
+                          "    v := n.kids[0][1].v;\n"
+                          "    p : Pair;\n"
+                          "    q := p.kids[1].*[0];\n"
+                          "    b : B;\n"
+                          "    w := b.a.kids[0][1].a;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "v"), "int");
+    CHECK_STR(type_of(&a, &c, "q"), "Pair");
+    CHECK_STR(type_of(&a, &c, "w"), "A");
+    Type *node = struct_named(&c, "Node");
+    CHECK_EQ(node->size, 24);
+    CHECK_EQ(node->fields[1].offset, 16);
+    CHECK_STR(type_name(&a, node->fields[0].type), "[][2]Node");
+    CHECK_EQ(struct_named(&c, "Pair")->size, 16);
+    CHECK_STR(type_name(&a, struct_named(&c, "Pair")->fields[0].type), "[2]*[2]Pair");
+    CHECK_EQ(struct_named(&c, "B")->size, 16);
+    token_list_free(c.list);
+    // Their mistakes are said once: a count's while laying out, the rest
+    // when the field's type is made.
+    CHECK_STR(check_source(&a,
+                           "S :: struct { a: [-1]*S; b: [2]*Nope; c: [][1099511627776]S; d: [3][]void; }\n"
+                           "main :: () { }\n"),
+              "1:19: an array's count can't be negative (-1)\n"
+              "1:33: unknown type 'Nope'\n"
+              "1:44: '[1099511627776]S' is too big\n"
+              "1:70: 'void' is only a pointer's target, as in *void\n");
+    arena_free(&a);
+}
+
+TEST(global_checked_during_a_layout_sees_the_fields_types) {
+    // A struct's array count may name a global, which is then checked in
+    // the middle of the layouts. A struct literal there still has every
+    // field's type to convert its values to, a pointer's or a view's
+    // included, made when it's first needed.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Entry :: struct { name: *u8; id: int; }\n"
+                           "entries := Entry.[.{\"first\", 1}, .{2, 2}];\n"
+                           "Seen :: struct { flags: [entries.count]bool; }\n"
+                           "main :: () { }\n"),
+              "2:36: a value of type 'int' doesn't convert to '*u8' implicitly\n");
+    CHECK_STR(check_source(&a,
+                           "N :: g.count;\n"
+                           "T :: struct { a: [N]u8; }\n"
+                           "g := S.[.{5}, .{1.5}];\n"
+                           "S :: struct { p: *int; v: []int; }\n"
+                           "h := S.[.{null, .[1, 2]}, .{v = 3}];\n"
+                           "U :: struct { b: [h.count]u8; }\n"
+                           "main :: () { }\n"),
+              "3:11: a value of type 'int' doesn't convert to '*int' implicitly\n"
+              "3:17: a value of type 'float32' doesn't convert to '*int' implicitly\n"
+              "5:33: a value of type 'int' doesn't convert to '[]int' implicitly\n");
+    // A field's type that needs a layout (an array of U, behind a pointer)
+    // which needs, through a global, that field's type again is defined in
+    // terms of itself; a literal that gives the field no value doesn't
+    // need its type.
+    CHECK_STR(check_source(&a,
+                           "T :: struct { b: [h.count]u8; }\n"
+                           "h := S.[.{null}];\n"
+                           "S :: struct { k: *[2]U; }\n"
+                           "U :: struct { a: [g.count]u8; }\n"
+                           "g := S.[.{null}];\n"
+                           "main :: () { }\n"),
+              "3:15: 'k' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a,
+                           "T :: struct { b: [h.count]u8; }\n"
+                           "h := S.[.{}];\n"
+                           "S :: struct { k: *[2]U; }\n"
+                           "U :: struct { a: [g.count]u8; }\n"
+                           "g := S.[.{}];\n"
+                           "main :: () { }\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(struct_circle_through_a_global) {
+    // A struct whose array count needs a global holding that struct holds
+    // no copy of itself: its size depends on itself, through the global,
+    // which is said as a global's circle is.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "S :: struct { a: [g.count]int; }\n"
+                           "g : [2]S;\n"
+                           "main :: () { }\n"),
+              "1:1: 'S' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a,
+                           "N :: size_of(S);\n"
+                           "S :: struct { a: [N]int; }\n"
+                           "main :: () { }\n"),
+              "2:1: 'S' is defined in terms of itself\n");
     arena_free(&a);
 }
 
@@ -3813,7 +3959,7 @@ TEST(string_casts) {
               "4:10: can't cast '[2]u8' to 'string'\n"
               "5:10: can't cast 'string' to '[]s8'\n"
               "6:10: can't cast 'string' to 'int'\n"
-              "7:10: can't cast 'string' to '*u8'\n"
+              "7:10: can't cast 'string' to '*u8'; its .data may not end with a zero\n"
               "8:16: a value of type 'string' doesn't convert to '[]u8' implicitly\n"
               "10:18: a value of type '[]u8' doesn't convert to 'string' implicitly\n"
               "11:10: cast,trunc only takes integers\n");

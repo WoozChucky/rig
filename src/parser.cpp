@@ -762,13 +762,13 @@ static Ast_Var *loop_variable(Parser *p, String name, Position pos) {
 // The first expression is a whole one, which stops at the '..' since that
 // isn't a binary operator: `for a + 1..n` starts at a + 1. After it:
 // - '..': a range, whose last end follows;
-// - the body's '{': what the loop goes over, its sequence (an array or a
-//   view; the checker says whether it is one);
+// - the body's '{': what the loop goes over, its sequence (an array, a
+//   view or a string; the checker says whether it is one);
 // - with no iterator named, a name and then anything else (`for i 0..9`,
 //   `for x in 0..9`): the name was meant as the iterator's, and its ':' is
 //   missing: "expected ':' after the iterator's name, as in for i: 0..9",
 //   at what came instead;
-// - otherwise, "expected '..'".
+// - otherwise, "expected '..' or the loop's '{'".
 // A '*' right after 'for' makes the iterator a pointer to each element
 // (`for * a`); a range takes none, which the checker says.
 static Ast *parse_for(Parser *p) {
@@ -801,7 +801,7 @@ static Ast *parse_for(Parser *p) {
         if (!named_iterator && loop->first->kind == AST_NAME) {
             diag_error(p->diag, after->pos, "expected ':' after the iterator's name, as in for i: 0..9");
         } else {
-            error_expected(p, "'..'");
+            error_expected(p, "'..' or the loop's '{'");
         }
         return nullptr;
     }
