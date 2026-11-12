@@ -4,6 +4,7 @@
 
 #include <llvm-c/Analysis.h>
 #include <llvm-c/Core.h>
+#include <llvm-c/DebugInfo.h>
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
 
@@ -51,6 +52,11 @@ struct Backend {
     LLVMTargetMachineRef machine;
     LLVMValueRef panic;       // the runtime's __rig_panic, when the module panics
     LLVMTypeRef panic_type;   // its type, void (ptr, i64)
+    // The debug information (see "Debug information" below), all null for
+    // a module with no source file (one built by hand), which gets none.
+    LLVMDIBuilderRef debug;   // makes the metadata nodes, until finalised
+    LLVMMetadataRef unit;     // the compile unit, DICompileUnit
+    LLVMMetadataRef file;     // the source file, DIFile
 };
 
 static LLVMTypeRef llvm_type(LLVMContextRef c, Ir_Type t) {
@@ -163,10 +169,25 @@ static void add_function_attribute(LLVMContextRef c, LLVMValueRef function, cons
     LLVMAddAttributeAtIndex(function, LLVMAttributeFunctionIndex, LLVMCreateEnumAttribute(c, kind, 0));
 }
 
+static void add_string_attribute(LLVMContextRef c, LLVMValueRef function, const char *key, const char *value) {
+    LLVMAttributeRef attribute =
+        LLVMCreateStringAttribute(c, key, (unsigned)strlen(key), value, (unsigned)strlen(value));
+    LLVMAddAttributeAtIndex(function, LLVMAttributeFunctionIndex, attribute);
+}
+
 // Marks a function the module defines (not one it only declares) with what
 // every definition needs on the target.
 //
-// On Linux, that's probing the stack: "probe-stack"="inline-asm", what
+// On both, keeping the frame pointer: "frame-pointer"="all", what clang's
+// -fno-omit-frame-pointer sets. Each function then starts by saving the
+// caller's rbp and pointing rbp at the saved copy, so the frames make a
+// chain, each rbp leading to the one before, with the return address beside
+// it. A debugger or a profiler follows the chain to walk the stack without
+// reading unwind tables, and a debugger finds a frame's variables at fixed
+// offsets from its rbp. Without it LLVM may use rbp as one more register
+// in a function that doesn't need a frame pointer.
+//
+// On Linux, also probing the stack: "probe-stack"="inline-asm", what
 // clang's -fstack-clash-protection sets. Below the stack is a guard page,
 // which no program may touch, so a stack that grows into it crashes rather
 // than overwriting whatever memory lies below. A function whose frame is
@@ -180,11 +201,8 @@ static void add_function_attribute(LLVMContextRef c, LLVMValueRef function, cons
 // name is taken before the program's procedures are made, as C's memset
 // is (declare_stack_probe).
 static void mark_definition(Backend *b, LLVMValueRef function) {
-    if (b->target != TARGET_LINUX_X64) return;
-    const char *key = "probe-stack", *value = "inline-asm";
-    LLVMAttributeRef attribute =
-        LLVMCreateStringAttribute(b->context, key, (unsigned)strlen(key), value, (unsigned)strlen(value));
-    LLVMAddAttributeAtIndex(function, LLVMAttributeFunctionIndex, attribute);
+    add_string_attribute(b->context, function, "frame-pointer", "all");
+    if (b->target == TARGET_LINUX_X64) add_string_attribute(b->context, function, "probe-stack", "inline-asm");
 }
 
 // Whether any procedure of the module has an instruction of operation op.
@@ -271,6 +289,10 @@ static void declare_stack_probe(Backend *b) {
 // internal symbol it works the same under any name. A program's own foreign
 // declaration of exit (or fflush) is then the same function as the
 // runtime's (see backend_build).
+//
+// It has no source, so no debug information: no subprogram, and no location
+// on its instructions (a debugger steps over it, and shows the panicking
+// call's line in the procedure that called it).
 static void build_runtime(Backend *b) {
     LLVMContextRef c = b->context;
     LLVMTypeRef ptr = LLVMPointerTypeInContext(c, 0), i32 = LLVMInt32TypeInContext(c),
@@ -406,6 +428,12 @@ struct Body {
     s64 function_count;
     LLVMValueRef *globals;  // one per Ir_Module.globals
     s64 global_count;
+    // The procedure's debug scopes, one per Ir_Scope: scopes[0] its
+    // subprogram, the others its lexical blocks. Null when it has no
+    // subprogram (a procedure the compiler makes, or a module with no
+    // source file), and then no instruction gets a location.
+    LLVMMetadataRef *scopes;
+    s64 scope_count;
 };
 
 // The LLVM value of %n. Blocks are translated in order, so a value used
@@ -435,11 +463,147 @@ static LLVMValueRef llvm_global(Body *body, s32 n) {
     return body->globals[n];
 }
 
-// One instruction, appended where the builder is.
+// --- Debug information ---------------------------------------------------
+//
+// A debugger knows nothing of Rig: it reads tables the compiler leaves in
+// the program, in a format it knows. On Linux that's DWARF, sections of the
+// executable (.debug_info, .debug_line, ...); on Windows it's CodeView,
+// records in the object file (.debug$S, .debug$T) that the linker gathers
+// into a PDB beside the program (link.cpp's /DEBUG). LLVM writes both from
+// the same description, metadata nodes in the module, which a DIBuilder
+// makes:
+//
+// - The compile unit (DICompileUnit): one per object, saying who made it,
+//   in which language, from which file (DIFile: its path and checksum).
+// - A subprogram (DISubprogram) per procedure: its name, file and line, the
+//   line its body starts on, and its type. Linked to the LLVM function, it
+//   tells the debugger which machine code is which procedure, so `break
+//   sort` and a backtrace's names work.
+// - Lexical blocks (DILexicalBlock): the parts of a procedure where some
+//   names are visible, nested inside its subprogram as the source's blocks
+//   are; a variable belongs to the one that declares it.
+// - The line table: every instruction carries a location (DILocation,
+//   attached as !dbg): a line, a column and a scope, a subprogram or a
+//   block. LLVM turns the locations into a table from machine addresses to
+//   lines, which is what a debugger reads to set a breakpoint on a line, to
+//   show where the program stopped, and to step a line at a time.
+//
+// The IR knows all of it (ir.h's "Debug information"): each instruction's
+// position and scope, each procedure's source name, position and scopes,
+// the module's source file. Only modules with a source file get any; the
+// procedures the compiler makes have no source name and get none.
+
+// Starts the module's debug information: the builder, the file, the compile
+// unit, and the module flags that say which format LLVM writes.
+static void begin_debug_info(Backend *b, Ir_Module *m, Arena *a) {
+    b->debug = LLVMCreateDIBuilder(b->module);
+
+    // The file by its absolute path (an editor's breakpoints name it so),
+    // with the directory rig ran in, and the MD5 of its bytes, in hex, so a
+    // debugger can tell the file it shows has changed since the build.
+    char checksum[33];
+    for (int i = 0; i < 16; i++) snprintf(checksum + 2 * i, 3, "%02x", m->source_md5[i]);
+    b->file = LLVMDIBuilderCreateFileWithChecksum(b->debug, (const char *)m->source_path.data,
+                                                  (size_t)m->source_path.count, (const char *)m->directory.data,
+                                                  (size_t)m->directory.count, CSK_MD5, checksum, 32, nullptr, 0);
+
+    // The language is C99: a debugger evaluates the expressions it's given
+    // in the unit's language, and C's are Rig's (a.count, a[i]; Rig's p.*
+    // is C's *p). Microsoft's debuggers read one record right only for a
+    // compiler named clang: an aggregate parameter passed by its address
+    // (S_DEFRANGE_REGISTER_REL_INDIR) shows as the struct when
+    // CodeView's compiler name contains "clang", as a pointer otherwise
+    // (measured with cdb: "rig 0.1.0" and "rig 0.1.0 (LLVM 23.1.4)" show a
+    // pointer, "rig 0.1.0 (clang version 23.1.4)" the struct). So the
+    // producer names the clang whose code generator made the code. (rustc's
+    // names clang too, "clang LLVM (rustc version ...)", but for gdb's
+    // sake: gdb trusts the line table to find a prologue's end only for a
+    // producer that starts with "clang ". Rig's doesn't, and needn't: gdb
+    // also reads DWARF 5's prologue_end, which LLVM writes.) Not
+    // optimised; full emission (types and variables too, not only lines).
+    unsigned major = 0, minor = 0, patch = 0;
+    LLVMGetVersion(&major, &minor, &patch);
+    String producer = string_printf(a, "rig %s (clang version %u.%u.%u)", RIG_VERSION, major, minor, patch);
+    b->unit = LLVMDIBuilderCreateCompileUnit(b->debug, LLVMDWARFSourceLanguageC99, b->file,
+                                             (const char *)producer.data, (size_t)producer.count, 0, "", 0, 0, "",
+                                             0, LLVMDWARFEmissionFull, 0, 0, 0, "", 0, "", 0);
+
+    // The flags: which version of LLVM's debug metadata this is (a module
+    // whose version LLVM doesn't know has its debug information dropped),
+    // and which format to write: CodeView on Windows, DWARF 5 elsewhere (as
+    // clang; gdb reads it).
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(b->context);
+    struct Flag {
+        const char *key;
+        unsigned value;
+    };
+    Flag flags[2] = {{"Debug Info Version", LLVMDebugMetadataVersion()}, {"Dwarf Version", 5}};
+    if (b->target == TARGET_WINDOWS_X64) flags[1] = {"CodeView", 1};
+    for (Flag &f : flags) {
+        LLVMAddModuleFlag(b->module, LLVMModuleFlagBehaviorWarning, f.key, strlen(f.key),
+                          LLVMValueAsMetadata(LLVMConstInt(i32, f.value, 0)));
+    }
+}
+
+// The subprogram of procedure p, given to its LLVM function, and its
+// lexical blocks, in body->scopes. Nothing for a procedure without a source
+// name (one the compiler made) or in a module without debug information.
+static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMValueRef function, Body *body) {
+    if (!b->debug || p->source_name.count == 0) return;
+    RIG_ASSERT(p->scopes.count > 0);
+    // The procedure's type, its parameters' and results', with none in it yet.
+    LLVMMetadataRef type = LLVMDIBuilderCreateSubroutineType(b->debug, b->file, nullptr, 0, LLVMDIFlagZero);
+    // Its Rig name, and no linkage name (the symbol's): given one, gdb
+    // names the procedure by it, so a Rig `write` that LLVM renamed write.1
+    // (C's write was taken first) would be write.1 to `break` and `bt`.
+    // Local to the unit unless exported, as its symbol is; a definition;
+    // prototyped, as a C function with a parameter list is.
+    LLVMMetadataRef subprogram = LLVMDIBuilderCreateFunction(
+        b->debug, b->file, (const char *)p->source_name.data, (size_t)p->source_name.count, nullptr, 0, b->file,
+        (unsigned)p->pos.line, type, !p->is_export, 1, (unsigned)p->body.line, LLVMDIFlagPrototyped, 0);
+    LLVMSetSubprogram(function, subprogram);
+
+    // Scope 0 is the body, the subprogram itself; each other scope is a
+    // lexical block inside its parent, which comes before it.
+    body->scopes = arena_new_array<LLVMMetadataRef>(a, p->scopes.count);
+    body->scope_count = p->scopes.count;
+    body->scopes[0] = subprogram;
+    for (s64 i = 1; i < p->scopes.count; i++) {
+        Ir_Scope *s = &p->scopes[i];
+        RIG_ASSERT(s->parent >= 0 && s->parent < i);
+        body->scopes[i] = LLVMDIBuilderCreateLexicalBlock(b->debug, body->scopes[s->parent], b->file,
+                                                          (unsigned)s->pos.line, (unsigned)s->pos.col);
+    }
+}
+
+// The location the next instructions built get: instr's line, column and
+// scope, or none. A procedure with no subprogram has no locations at all;
+// in one with a subprogram, every instruction from the IR has a position.
+//
+// On Windows the column is 0, as clang-cl writes it: CodeView's line table
+// starts a new entry at each change of column, so a line holding a call
+// and its argument's computation would be several entries, and cdb refuses
+// a breakpoint on a line with several (and steps through each).
+static void set_location(Backend *b, Body *body, Ir_Instr *instr) {
+    if (!body->scopes) return;
+    LLVMMetadataRef location = nullptr;
+    if (instr->pos.line > 0) {
+        RIG_ASSERT(instr->scope >= 0 && instr->scope < body->scope_count);
+        unsigned column = b->target == TARGET_WINDOWS_X64 ? 0 : (unsigned)instr->pos.col;
+        location = LLVMDIBuilderCreateDebugLocation(b->context, (unsigned)instr->pos.line, column,
+                                                    body->scopes[instr->scope], nullptr);
+    }
+    LLVMSetCurrentDebugLocation2(body->builder, location);
+}
+
+// One instruction, appended where the builder is. Each LLVM instruction it
+// makes gets the IR instruction's location (set_location), the calls LLVM
+// makes for a copy or a zero included.
 static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr *instr) {
     LLVMContextRef c = b->context;
     LLVMBuilderRef builder = body->builder;
     LLVMValueRef v = nullptr;
+    set_location(b, body, instr);
     switch (instr->op) {
     case IR_CONST:
         // LLVM's integer constants are integers only: a ptr constant, which
@@ -633,6 +797,7 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
     body.function_count = m->procs.count;
     body.globals = globals;
     body.global_count = m->globals.count;
+    begin_procedure_debug_info(b, a, p, function, &body);
 
     // Every stack slot's alloca at the top of the entry block, whichever
     // block its IR_LOCAL is in. An alloca takes stack space each time it
@@ -642,6 +807,17 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
     // the slots it can turn into registers. A local of bytes (a struct's, an
     // array's) is an alloca of [N x i8] with the alignment it asks for; a
     // bool's slot is a byte (memory_type).
+    //
+    // They have no location (the builder has none yet), as clang leaves
+    // its own: they belong to no statement, and they become no code of
+    // their own. A static alloca in the entry block is a slot of the frame
+    // the prologue sets up, an offset from the frame pointer, so no
+    // instruction runs for it and the line table has nothing to name.
+    // (Code that does run before the body, as a store of a parameter into
+    // its slot, gets no location for another reason: the prologue ends,
+    // and a breakpoint on the procedure stops, at the first instruction
+    // with a location, so a store with one would end it before the
+    // parameters were all stored.)
     LLVMPositionBuilderAtEnd(body.builder, body.blocks[0]);
     for (s64 k = 0; k < p->blocks.count; k++) {
         Ir_Block *block = p->blocks[k];
@@ -803,6 +979,7 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     LLVMTargetDataRef layout = LLVMCreateTargetDataLayout(b->machine);
     LLVMSetModuleDataLayout(b->module, layout);
     LLVMDisposeTargetData(layout);
+    if (m->source_path.count > 0) begin_debug_info(b, m, a);
 
     // The runtime first, so its C names are taken before the program's.
     if (module_has(m, IR_PANIC)) build_runtime(b);
@@ -881,6 +1058,10 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
         if (!m->procs[i]->is_foreign) build_body(b, a, m, m->procs[i], functions[i], functions, globals);
     }
 
+    // The debug information is complete: the builder resolves what it left
+    // open (the unit's lists of everything it made) before the verifier,
+    // which checks the debug information too, reads it.
+    if (b->debug) LLVMDIBuilderFinalize(b->debug);
     if (LLVMVerifyModule(b->module, LLVMReturnStatusAction, &message)) {
         *error = take_message(a, message);
         return false;
@@ -890,6 +1071,7 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
 }
 
 static void backend_free(Backend *b) {
+    if (b->debug) LLVMDisposeDIBuilder(b->debug);
     if (b->machine) LLVMDisposeTargetMachine(b->machine);
     if (b->module) LLVMDisposeModule(b->module);
     if (b->context) LLVMContextDispose(b->context);
