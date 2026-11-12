@@ -126,6 +126,8 @@ struct Keyword {
     Token_Kind kind;
 };
 
+// The VS Code grammar's keywords are generated from this table
+// (tests/unit/test_grammar.cpp): a new keyword needs a scope there.
 static const Keyword KEYWORDS[] = {
     {"if", TOKEN_IF},         {"else", TOKEN_ELSE},     {"while", TOKEN_WHILE},
     {"for", TOKEN_FOR},       {"break", TOKEN_BREAK},   {"continue", TOKEN_CONTINUE},
@@ -382,6 +384,8 @@ struct Punctuation {
 
 // Longest first: the first that matches is the longest that matches, so
 // <<= is one token, not << and =, nor < and <=. This is "maximal munch".
+// The VS Code grammar's operators are generated from this table too
+// (tests/unit/test_grammar.cpp): a new one needs a scope there.
 static const Punctuation PUNCTUATION[] = {
     {"<<=", TOKEN_SHIFT_LEFT_EQUAL}, {">>=", TOKEN_SHIFT_RIGHT_EQUAL}, {"---", TOKEN_TRIPLE_DASH},
     {"::", TOKEN_COLON_COLON},  {":=", TOKEN_COLON_EQUAL},   {"->", TOKEN_ARROW},       {"..", TOKEN_DOT_DOT},
