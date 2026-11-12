@@ -1,0 +1,18 @@
+int to u8
+int to s8
+u64 to s16
+s32 to s8, its smallest
+u32 to u16, its largest
+u64 to s64
+s32 to u32
+s32 to u64
+u8 to s16
+s16 to int
+u32 to int
+bool to integers
+trunc keeps the low bits
+trunc to a signed type
+trunc sign-extends
+trunc zero-extends
+trunc keeps the bits
+string literal to *u8

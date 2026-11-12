@@ -49,6 +49,7 @@ static Token *expect(Parser *p, Token_Kind kind) {
 }
 
 static Ast *parse_expression(Parser *p, int min_precedence);
+static Ast *parse_unary(Parser *p);
 static Ast_Type *parse_type(Parser *p);
 static bool parameters_follow(Parser *p, s64 open);
 
@@ -119,12 +120,42 @@ static Ast *parse_postfix(Parser *p) {
     return e;
 }
 
-// unary = ('-' | '~' | '!') unary | postfix
+// cast = 'cast' [',' IDENT] '(' type ')' unary
+//
+// The caller saw 'cast'. The modifier after the comma says which cast:
+// none, the checked one; trunc, C's conversion (spec 6.4). Only trunc
+// exists, so any other name is reported, at the name. The type is in
+// parentheses because the value follows with nothing between: cast u8 x
+// would leave no way to tell where a type such as *u8 ends.
+static Ast *parse_cast(Parser *p) {
+    Token *keyword = advance(p);
+    Ast_Cast *cast = ast_new<Ast_Cast>(p->arena, AST_CAST, keyword->pos);
+    if (peek(p)->kind == TOKEN_COMMA) {
+        advance(p);
+        Token *modifier = expect(p, TOKEN_IDENT);
+        if (!modifier) return nullptr;
+        if (!string_eq(modifier->text, str("trunc"))) {
+            diag_error(p->diag, modifier->pos, "unknown cast modifier '" STR_FMT "'; the one there is is 'trunc'",
+                       STR_ARG(modifier->text));
+            return nullptr;
+        }
+        cast->is_trunc = true;
+    }
+    if (!expect(p, TOKEN_LPAREN)) return nullptr;
+    cast->type_expr = parse_type(p);
+    if (!cast->type_expr || !expect(p, TOKEN_RPAREN)) return nullptr;
+    cast->value = parse_unary(p);
+    return cast->value ? cast : nullptr;
+}
+
+// unary = ('-' | '~' | '!') unary | cast | postfix
 //
 // A prefix operator applies to everything after it that binds tighter than
-// any binary operator: -f(x) + 1 is (-(f(x))) + 1, !a && b is (!a) && b.
+// any binary operator: -f(x) + 1 is (-(f(x))) + 1, !a && b is (!a) && b,
+// and cast(s32) n % 10 is (cast(s32) n) % 10.
 static Ast *parse_unary(Parser *p) {
     Token *op = peek(p);
+    if (op->kind == TOKEN_CAST) return parse_cast(p);
     if (op->kind != TOKEN_MINUS && op->kind != TOKEN_TILDE && op->kind != TOKEN_BANG) return parse_postfix(p);
     advance(p);
     Ast *operand = parse_unary(p);
@@ -138,7 +169,6 @@ static Ast *parse_unary(Parser *p) {
 // How tightly a binary operator holds its operands, Go's levels (spec 6.1):
 // the higher, the tighter. 0 for a token that isn't a binary operator, so
 // an expression ends there (at a ';', a ')', a body's '{', a range's '..').
-// Task 4 adds / and % at 5.
 //
 // The comparisons bind looser than arithmetic, so a + 1 < b compares the
 // sum; & is a multiplication, as in Go, so x & 1 == 0 is (x & 1) == 0, not
@@ -159,6 +189,8 @@ static int binary_precedence(Token_Kind kind) {
     case TOKEN_PIPE:
     case TOKEN_CARET: return 4;
     case TOKEN_STAR:
+    case TOKEN_SLASH:
+    case TOKEN_PERCENT:
     case TOKEN_SHIFT_LEFT:
     case TOKEN_SHIFT_RIGHT:
     case TOKEN_AMP: return 5;
@@ -283,6 +315,8 @@ static bool is_assignment_operator(Token_Kind kind) {
     case TOKEN_PLUS_EQUAL:
     case TOKEN_MINUS_EQUAL:
     case TOKEN_STAR_EQUAL:
+    case TOKEN_SLASH_EQUAL:
+    case TOKEN_PERCENT_EQUAL:
     case TOKEN_AMP_EQUAL:
     case TOKEN_PIPE_EQUAL:
     case TOKEN_CARET_EQUAL:

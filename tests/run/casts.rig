@@ -1,0 +1,52 @@
+// Casts at run time (spec 6.4). cast keeps the number, so every cast here
+// fits and passes its check; cast,trunc is C's conversion. The values are
+// variables, so nothing is folded while compiling. Each line is printed
+// only when its result is right.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    // Narrowing, in range.
+    two_hundred : int = 200;
+    if cast(u8) two_hundred == 200 { puts("int to u8"); }
+    minus_five : int = -5;
+    if cast(s8) minus_five == -5 { puts("int to s8"); }
+    three_hundred : u64 = 300;
+    if cast(s16) three_hundred == 300 { puts("u64 to s16"); }
+    low : s32 = -128;
+    if cast(s8) low == -128 { puts("s32 to s8, its smallest"); }
+    high : u32 = 65535;
+    if cast(u16) high == 65535 { puts("u32 to u16, its largest"); }
+
+    // The same width, the other sign, while the sign bit is clear.
+    largest : u64 = 9223372036854775807;
+    if cast(s64) largest == 9223372036854775807 { puts("u64 to s64"); }
+    seven : s32 = 7;
+    if cast(u32) seven == 7 { puts("s32 to u32"); }
+
+    // Widening: signed to unsigned when not negative; otherwise always.
+    if cast(u64) seven == 7 { puts("s32 to u64"); }
+    byte : u8 = 255;
+    if cast(s16) byte == 255 { puts("u8 to s16"); }
+    minus_one : s16 = -1;
+    if cast(int) minus_one == -1 { puts("s16 to int"); }
+    big : u32 = 4000000000;
+    if cast(int) big == 4000000000 { puts("u32 to int"); }
+
+    // A bool is 0 or 1.
+    yes := true;
+    no := false;
+    if cast(int) yes == 1 && cast(u8) no == 0 { puts("bool to integers"); }
+
+    // cast,trunc: narrowing keeps the low bits, widening extends by the
+    // source's sign.
+    if cast,trunc(u8) three_hundred == 44 { puts("trunc keeps the low bits"); }
+    if cast,trunc(s8) two_hundred == -56 { puts("trunc to a signed type"); }
+    m1 : s8 = -1;
+    if cast,trunc(u32) m1 == 4294967295 { puts("trunc sign-extends"); }
+    if cast,trunc(s32) byte == 255 { puts("trunc zero-extends"); }
+    all : int = -1;
+    if cast,trunc(u64) all == 18446744073709551615 { puts("trunc keeps the bits"); }
+
+    // A string literal casts to *u8, as it converts to it anyway.
+    puts(cast(*u8) "string literal to *u8");
+}

@@ -1,0 +1,5 @@
+// A divisor that is the constant 0 is an error while compiling.
+main :: () {
+    x := 10;
+    y := x / 0;
+}
