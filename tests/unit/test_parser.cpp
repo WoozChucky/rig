@@ -840,6 +840,11 @@ TEST(recovery_stops_at_a_global) {
     dump = parse_src(&a, "greet (s: *u8,\nn: s32) { }\n", &errors);
     CHECK_STR(errors, "1:7: expected '::', found '('\n");
     CHECK_STR(dump, "(broken greet)\n");
+    // A first parameter missing its ':' (IDENT IDENT, never an expression)
+    // still opens a list, so its second line isn't a global.
+    dump = parse_src(&a, "f :: (a int,\nb: int) { }\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:9: expected ')', found identifier 'int'\n");
+    CHECK_STR(dump, "(broken f)\n(proc main (params) (block))\n");
     // Only a parameter list's parentheses count: a call's or a value's
     // never holds a name in column 1 followed by ':', so a global after
     // one whose ')' is missing is kept, at the top level or after a body.
