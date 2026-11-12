@@ -248,7 +248,8 @@ s32 ir_add_param(Ir_Proc *p, Ir_Type type, Ir_Ext ext);
 s32 ir_new_block(Arena *a, Ir_Proc *p);
 
 // Appends an instruction to the block, its operands -1, and numbers its
-// value unless op is IR_STORE or a terminator, or type is IR_VOID; an
+// value unless type is IR_VOID or op gives nothing whatever its type: a
+// terminator, or IR_STORE, IR_COPY or IR_ZERO, which write memory. An
 // IR_LOCAL always gives a value, its address, whatever its type. The block
 // mustn't have ended (a terminator is last). The pointer is valid until the
 // next instruction is appended to the same block.

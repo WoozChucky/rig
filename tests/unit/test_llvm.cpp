@@ -693,6 +693,38 @@ TEST(llvm_byte_global_with_a_relocation) {
     arena_free(&a);
 }
 
+TEST(llvm_byte_global_layouts) {
+    // The struct has a run of bytes only where there are bytes: none before
+    // an address at offset 0, between two addresses side by side, or after
+    // one that ends the global, so @pair is just its two addresses. Being
+    // packed, the struct puts an address at any offset, aligned or not, as
+    // @odd's at 3. Bytes that aren't all zero, with no address among them,
+    // are an array of them, as a string literal's are.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    s32 text = add_string(m, "str.0", "abc");
+    s32 pair = add_byte_global(m, "pair", 16, 8);
+    array_add(&m->globals[pair].relocs, {0, text});
+    array_add(&m->globals[pair].relocs, {8, text});
+    s32 odd = add_byte_global(m, "odd", 12, 4);
+    u8 *odd_bytes = (u8 *)arena_alloc(&a, 12, 1);  // zeroed
+    odd_bytes[0] = 1;
+    odd_bytes[11] = 2;
+    m->globals[odd].bytes = {odd_bytes, 12};
+    array_add(&m->globals[odd].relocs, {3, text});
+    s32 counts = add_byte_global(m, "counts", 4, 4);
+    static const u8 four[] = {1, 2, 3, 4};
+    m->globals[counts].bytes = {four, 4};
+    for (int t = 0; t < 2; t++) {
+        String llvm = llvm_text(&a, m, (Target)t);  // and it verifies
+        CHECK(contains(llvm, "@pair = internal global <{ ptr, ptr }> <{ ptr @str.0, ptr @str.0 }>, align 8"));
+        CHECK(contains(llvm, "@odd = internal global <{ [3 x i8], ptr, [1 x i8] }> "
+                             "<{ [3 x i8] c\"\\01\\00\\00\", ptr @str.0, [1 x i8] c\"\\02\" }>, align 4"));
+        CHECK(contains(llvm, "@counts = internal global [4 x i8] c\"\\01\\02\\03\\04\", align 4"));
+    }
+    arena_free(&a);
+}
+
 TEST(llvm_relocation_to_a_later_global) {
     // Every global is made before any is given its first value, so a
     // relocation may name a global that comes after it.
@@ -728,9 +760,15 @@ TEST(llvm_bool_in_memory_is_a_byte) {
     // A bool's slot is a byte. A store writes the i1 widened to 0 or 1; a
     // load reads the byte and compares it with 0, so any nonzero byte (one C
     // or a cast left there) is true. LLVM's own load i1 would be undefined
-    // for any byte but 0 and 1.
+    // for any byte but 0 and 1. A bool global is a byte too, its first value
+    // 0 or 1, read and written the same way through its address.
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Global ready = {};
+    ready.name = str("ready");
+    ready.type = IR_I1;
+    ready.initial = 1;
+    array_add(&m->globals, ready);
     Ir_Proc *p = new_proc_returning(m, &a, "f", IR_I1);
     s32 flag = ir_add_param(p, IR_I1, IR_EXT_NONE);
     s32 b = ir_new_block(&a, p);
@@ -738,13 +776,24 @@ TEST(llvm_bool_in_memory_is_a_byte) {
     emit_binary(p, b, IR_STORE, IR_I1, flag, slot);
     Ir_Instr *load = ir_emit(p, b, IR_LOAD, IR_I1);
     load->a = slot;
-    emit_ret(p, b, load->result);
+    Ir_Instr *address = ir_emit(p, b, IR_ADDR, IR_PTR);
+    address->target = 0;
+    Ir_Instr *was = ir_emit(p, b, IR_LOAD, IR_I1);
+    was->a = address->result;
+    emit_binary(p, b, IR_STORE, IR_I1, load->result, address->result);
+    s32 both = emit_binary(p, b, IR_AND, IR_I1, load->result, was->result);
+    emit_ret(p, b, both);
     String text = llvm_text(&a, m, target_host());
     CHECK(contains(text, "alloca i8"));
     CHECK(contains(text, "zext i1 %0 to i8"));
     CHECK(contains(text, "store i8 %"));
     CHECK(contains(text, "load i8, ptr %"));
     CHECK(contains(text, "icmp ne i8 %"));
+    CHECK(contains(text, "@ready = internal global i8 1"));
+    CHECK(contains(text, "  %5 = load i8, ptr @ready, align 1\n"
+                         "  %6 = icmp ne i8 %5, 0\n"
+                         "  %7 = zext i1 %4 to i8\n"
+                         "  store i8 %7, ptr @ready, align 1\n"));
     CHECK(!contains(text, "load i1"));
     CHECK(!contains(text, "store i1"));
     arena_free(&a);
