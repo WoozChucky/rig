@@ -1,0 +1,59 @@
+// Milestone 2c's acceptance test: milestone 2b's program
+// (tests/run/acceptance_2b.rig), sort's inner loop written over several
+// lines, under a debugger (bin/run-tests runs it under gdb with
+// acceptance_2c.gdb and under cdb with acceptance_2c.cdb): stopped in the
+// inner loop, the stack is sort called from main, with their lines; sort's
+// variables and main's numbers show their values; a step goes to the next
+// line. (cdb's `k` shows main at the line after `sort(numbers);`: it names
+// a caller's frame by the code its call returns to, which is the next
+// line's when the call is the last thing on its line; it does the same with
+// clang-cl's code. gdb names the call's own line.)
+putchar :: (c: s32) -> s32 #foreign libc;
+malloc :: (size: u64) -> *void #foreign libc;
+free :: (p: *void) #foreign libc;
+
+Node :: struct {
+    value: int;
+    next: *Node;
+}
+
+print_string :: (s: string) { for s { putchar(it); } }
+
+print_int :: (n: int) {
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+push :: (list: *Node, value: int) -> *Node {
+    node : *Node = malloc(size_of(Node));
+    node.value = value;
+    node.next = list;
+    return node;
+}
+
+sort :: (a: []int) {
+    for i: 1..a.count - 1 {
+        x := a[i];
+        j := i;
+        while j > 0 && a[j - 1] > x {
+            a[j] = a[j - 1];
+            j -= 1;
+        }
+        a[j] = x;
+    }
+}
+
+main :: () {
+    numbers := int.[5, 3, 9, 1, 7];
+    sort(numbers);
+    list : *Node = null;
+    for numbers { list = push(list, it); }
+    while list != null {
+        print_int(list.value);
+        putchar(32);
+        next := list.next;
+        free(list);
+        list = next;
+    }
+    print_string("done\n");
+}

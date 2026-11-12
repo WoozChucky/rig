@@ -1,0 +1,31 @@
+main () at
+variables.rig:54
+putchar(10);
+x = 3
+c = -3 '\375'
+u = 65000
+flag = true
+ratio = 1.5
+precise = 2.25
+s = {count = 2, data = 0x
+"hi"}
+point = {x = 1, y = 2}
+numbers = {5, 3, 9, 1, 7}
+view = {count = 5, data = 0x
+node = {value = 42, next = 0x
+tree = {label = 9, children = {count = 0, data = 0x0}}
+empty = {<No data fields>}
+none = 0x
+big = '\000' <repeats 65535 times>
+nothing = 0x0
+$1 = 8
+$2 = {value = 42, next = 0x
+$3 = 3
+greet (s=...) at
+variables.rig:29
+n := s.count;
+s = {count = 2, data = 0x
+"hi"}
+$4 = {count = 2, data = 0x
+"hi"}
+$5 = 2

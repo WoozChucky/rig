@@ -1,0 +1,14 @@
+l+t
+l+s
+l+l
+bp `acceptance_2c.rig:40`
+g
+k
+?? a.count
+?? x
+?? j
+.frame 1
+dx numbers
+.frame 0
+p
+q

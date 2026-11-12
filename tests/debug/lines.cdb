@@ -3,6 +3,7 @@ l+s
 l+l
 bp `lines.rig:14`
 g
+dv /t
 k
 p
 q
