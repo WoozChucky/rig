@@ -2771,6 +2771,26 @@ TEST(member_rules) {
               "18:12: '.x' needs a struct or a pointer to one, not '**Vec2'\n"
               "19:12: 'Vec2' has no field 'z'\n"
               "20:7: 'Vec2' has no field 'z'\n");
+    // An array's, a view's or a string's .count and .data aren't reached
+    // through a pointer: the message says to write .* first.
+    CHECK_STR(check_source(&a,
+                           "names := string.[\"ab\", \"cde\"];\n"
+                           "advance :: (s: *string, n: int) { s.data += n; }\n"
+                           "main :: () {\n"
+                           "    total := 0;\n"
+                           "    for * names { total += it.count; }\n"
+                           "    rows : [2][]int;\n"
+                           "    for * rows { it.count = 0; }\n"
+                           "    a : [3]int;\n"
+                           "    p := *a;\n"
+                           "    n := p.count;\n"
+                           "    x := p.size;\n"
+                           "}\n"),
+              "2:37: '.data' isn't reached through a pointer, '*string'; write .*.data\n"
+              "5:31: '.count' isn't reached through a pointer, '*string'; write .*.count\n"
+              "7:21: '.count' isn't reached through a pointer, '*[]int'; write .*.count\n"
+              "10:12: '.count' isn't reached through a pointer, '*[3]int'; write .*.count\n"
+              "11:12: '.size' needs a struct or a pointer to one, not '*[3]int'\n");
     arena_free(&a);
 }
 
@@ -3032,6 +3052,25 @@ TEST(type_and_value_names) {
               "12:5: 'Vec2' is a type, not a value\n"
               "13:10: 'Vec2' is a type, not a value\n"
               "14:5: 'Vec2' isn't a procedure, so it can't be called\n");
+    // A built-in type's name is a type as a struct's is, though nothing
+    // declares it: not an unknown identifier.
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    x := int;\n"
+                           "    y := string;\n"
+                           "    z := u8 + 1;\n"
+                           "    p := *bool;\n"
+                           "    float32 = 1;\n"
+                           "    s64(1);\n"
+                           "    q := nope;\n"
+                           "}\n"),
+              "2:10: 'int' is a type, not a value\n"
+              "3:10: 'string' is a type, not a value\n"
+              "4:10: 'u8' is a type, not a value\n"
+              "5:11: 'bool' is a type, not a value\n"
+              "6:5: 'float32' is a type, not a value\n"
+              "7:5: 's64' isn't a procedure, so it can't be called\n"
+              "8:10: unknown identifier 'nope'\n");
     arena_free(&a);
 }
 
@@ -3905,7 +3944,7 @@ TEST(string_casts) {
               "4:10: can't cast '[2]u8' to 'string'\n"
               "5:10: can't cast 'string' to '[]s8'\n"
               "6:10: can't cast 'string' to 'int'\n"
-              "7:10: can't cast 'string' to '*u8'\n"
+              "7:10: can't cast 'string' to '*u8'; its .data may not end with a zero\n"
               "8:16: a value of type 'string' doesn't convert to '[]u8' implicitly\n"
               "10:18: a value of type '[]u8' doesn't convert to 'string' implicitly\n"
               "11:10: cast,trunc only takes integers\n");
