@@ -1809,5 +1809,23 @@ TEST(else_if_chains_of_10000_arms) {
     String dump = parse_src(&a, text, &errors);
     CHECK_STR(errors, "");
     CHECK_EQ(count_of(dump, "(if "), 3 * ARMS + 1);
+    // find's return after its loop hides whether the checker saw the
+    // break: lost has none, so its loop must be found to end, through the
+    // break in the chain's last else, ten thousand arms down, for the
+    // message to be there; and the same loop without the break never ends.
+    for (int has_break = 0; has_break < 2; has_break++) {
+        at = text + sprintf(text, "lost :: (x: int) -> int {\n"
+                                  "    while true {\n");
+        at = else_if_arms(at, ARMS, "        ", "");
+        sprintf(at,
+                "        else { %s }\n"
+                "    }\n"
+                "}\n"
+                "main :: () { }\n",
+                has_break ? "break;" : "");
+        CHECK_STR(check_source(&a, text),
+                  has_break ? "10005:1: 'lost' must return a value on every path, and this one reaches its end\n"
+                            : "");
+    }
     arena_free(&a);
 }
