@@ -49,7 +49,7 @@
 //   type the other widens to implicitly (same sign and wider, or unsigned
 //   into a wider signed type; int with s64 gives the left one's).
 //   Otherwise "mismatched types 'A' and 'B' for 'OP'; cast one of them".
-//   No promotion: u8 + u8 is a u8, and wraps at 8 bits.
+//   No promotion: u8 + u8 is a u8, and wraps at 8 bits. (Floats below.)
 // - / truncates toward zero and % takes the dividend's sign, as in C. A
 //   divisor that is the constant 0 is "division by zero", at the operator
 //   (x /= 0 and x %= 0 too); any other divisor not known while compiling is
@@ -60,12 +60,38 @@
 // - << >>: the result has the left operand's type (int when that's untyped
 //   and the amount isn't a constant); the amount is any integer, masked to
 //   the left's width, in constants too.
-// - Operands that aren't integers: "'OP' needs integers, not 'T'" ("'-'
-//   needs an integer, not 'T'" for - and ~), and the same for a compound
-//   assignment's target or value ("'+=' needs integers, not '*u8'").
+// - Operands that aren't numbers, for + - * / and the comparisons: "'OP'
+//   needs numbers, not 'T'" ("'-' needs a number, not 'T'" for unary -);
+//   operands that aren't integers, for % & | ^ << >> and ~: "'OP' needs
+//   integers, not 'T'" ("'~' needs an integer, not 'T'"). The same for a
+//   compound assignment's target or value ("'+=' needs numbers, not
+//   '*u8'", "'%=' needs integers, not 'float32'").
 // - A string literal has type string, and converts to *u8 implicitly (its
 //   bytes are stored with a zero after them, Jai's rule, so C can read it).
 //   A variable can't hold a string yet.
+//
+// Floats (spec 6.4).
+// - float32 and float64 are IEEE 754's single and double; float is float32,
+//   the same type under another name.
+// - A float literal is an untyped float constant (type_untyped_float), a
+//   double; alone it becomes a float32 (x := 1.5;). Untyped float constants
+//   fold in double precision, an untyped integer among them converted to a
+//   double (1 + 0.5 is the untyped float 1.5). Meeting float32, the value
+//   must be within its range ("1e+300 doesn't fit in 'float32'", %g) and is
+//   rounded to it; infinity and NaN, which IEEE arithmetic gives (1.0 /
+//   0.0), are float32 values too.
+// - An untyped integer constant converts to a float type where it meets
+//   one (f * 2, x : float64 = 3;). A float32 widens to a float64
+//   implicitly; nothing else converts implicitly between integers and
+//   floats, or from float64 to float32 ("a value of type 'int' doesn't
+//   convert to 'float32' implicitly").
+// - + - * / and unary - take floats: IEEE 754's arithmetic, so a division
+//   by zero is an infinity or NaN, never an error, constant or not. %, the
+//   bitwise operators and shifts don't ("'%' needs integers, not
+//   'float32'"). Typed float constants fold as at run time: a float32's
+//   result rounded to float32.
+// - Comparisons of floats are IEEE 754's: NaN is unordered, so every
+//   comparison with it is false but !=, which is true (NaN != NaN).
 //
 // Casts.
 // - cast(T) e gives a T. From an integer to an integer it keeps the number:
@@ -79,17 +105,23 @@
 //   bits, widening extends by the source's sign (cast,trunc(u8) 300 is the
 //   u8 constant 44). It takes integers only: "cast,trunc only takes
 //   integers".
-// - A cast of a constant is a constant of T; an untyped one is an int
-//   first.
+// - With floats: float to float and integer to float round to nearest;
+//   float to integer truncates toward zero and saturates at T's limits,
+//   NaN giving 0, with no runtime check. A float to a bool: "can't cast
+//   'float32' to 'bool': compare instead, as in x != 0".
+// - A cast of a constant is a constant of T, folded by the same rules
+//   (cast(s32) 1e30 is 2147483647); an untyped integer is an int first, an
+//   untyped float a float64.
 //
 // Bools and comparisons.
 // - true and false are bool constants. A bool isn't an integer, and
 //   neither converts to the other implicitly.
-// - == != < <= > >= give a bool. Two integers meet as an arithmetic
+// - == != < <= > >= give a bool. Two numbers meet as an arithmetic
 //   operator's operands do (above), and are compared as numbers of that
-//   type, signed or unsigned. == and != also compare two bools; ordering a
-//   bool is "'<' needs integers, not 'bool'", and a bool with anything else
-//   is "mismatched types 'bool' and 'int' for '=='".
+//   type: integers signed or unsigned, floats as IEEE 754 does. == and !=
+//   also compare two bools; ordering a bool is "'<' needs numbers, not
+//   'bool'", and a bool with anything else is "mismatched types 'bool' and
+//   'int' for '=='".
 // - && || ! take bools and give one: "'&&' needs bools, not 'int'", "'!'
 //   needs a bool, not 'int'". && and || don't evaluate their right operand
 //   when the left one decides.
@@ -107,8 +139,8 @@
 //   'it': it's the loop's iterator", "... 'it_index': it's the loop's
 //   index") or a procedure ("can't assign to 'N': it's a constant"), nor
 //   anything but a name.
-// - N :: e; needs e an integer or a bool ("a constant can only be an
-//   integer or a bool, for now": only they fold yet) known while compiling
+// - N :: e; needs e a number or a bool ("a constant can only be a number
+//   or a bool, for now": only they fold yet) known while compiling
 //   ("the value of constant 'N' isn't known while compiling").
 // - The condition of if and while is a bool: "the condition of 'if' must
 //   be a bool, not 'int'".

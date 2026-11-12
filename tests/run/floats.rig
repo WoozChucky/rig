@@ -1,0 +1,102 @@
+// Floats at run time (spec 6.4). Every float is read from a variable, so
+// the arithmetic and the conversions run in the program, not in the
+// compiler (the checker's float_casts test folds the same casts of
+// constants). Integers are printed with print_int, one a line, and bools as
+// yes or no.
+putchar :: (c: s32) -> s32 #foreign libc;
+puts :: (s: *u8) -> s32 #foreign libc;
+atof :: (s: *u8) -> float64 #foreign libc;
+// C's functions taking doubles and floats, an int beside them. (libc's
+// only: floor and sqrt are libm's on Linux, which isn't linked.)
+ldexp :: (x: float64, e: s32) -> float64 #foreign libc;
+copysignf :: (x: float32, y: float32) -> float32 #foreign libc;
+scalbnf :: (x: float32, n: s32) -> float32 #foreign libc;
+
+print_int :: (n: int) {
+    if n < 0 {
+        putchar(45);
+        print_int(0 - n);
+        return;
+    }
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+line :: (n: int) {
+    print_int(n);
+    putchar(10);
+}
+
+yes_or_no :: (b: bool) {
+    if b { puts("yes"); } else { puts("no"); }
+}
+
+scale : float64 = 2.5;
+
+half :: (x: float32) -> float32 { return x / 2; }
+
+main :: () {
+    // Float to integer truncates toward zero and saturates; NaN gives 0.
+    x := 1.5;
+    line(cast(int) (x * 4.0));
+    big : float64 = 1e30;
+    line(cast(s32) big);
+    line(cast(s32) -big);
+    neg := -3.5;
+    line(cast(u8) neg);
+    z := 0.0;
+    line(cast(int) (z / z));
+    a := 2.9;
+    line(cast(int) a);
+    line(cast(int) -a);
+
+    // A C function returning a double.
+    line(cast(int) (atof("2.5") * 2.0));
+
+    // C functions taking a double, two floats, and a float beside an int:
+    // -3.5 * 2^4, 3 with -1's sign, 3 * 2^3.
+    line(cast(int) ldexp(neg, 4));
+    three : float32 = 3;
+    minus_one : float32 = -1;
+    line(cast(int) copysignf(three, minus_one));
+    line(cast(int) scalbnf(three, 3));
+
+    // 0.1 as a float32 is 0.100000001490116..., which widens exactly to a
+    // float64 that isn't the float64 nearest 0.1.
+    f : float32 = 0.1;
+    g : float64 = f;
+    yes_or_no(g != 0.1);
+
+    // NaN is unordered: != is true for it, every other comparison false.
+    nan := z / z;
+    yes_or_no(nan != nan);
+    yes_or_no(nan == nan);
+    yes_or_no(nan < 1.0 || nan >= 1.0);
+
+    // Dividing by zero is infinity, not an error; -0.0 equals 0.0.
+    one := 1.0;
+    yes_or_no(one / z > 1e38);
+    yes_or_no(-z == z);
+
+    // Integers to floats, signed and unsigned; float32 and float64 between
+    // themselves.
+    n := 7;
+    d := cast(float64) n / 2;
+    line(cast(int) (d * 10));
+    u : u64 = 18446744073709551615;
+    yes_or_no(cast(float64) u > 1.8e19);
+    h : float32 = cast(float32) g;
+    yes_or_no(h == f);
+    t : float64 = 3e9;
+    line(cast(int) cast(u32) t);
+
+    // A float32 parameter and result, a float64 global, compound
+    // assignments, and an ordered comparison.
+    line(cast(int) (half(7) * 10));
+    line(cast(int) (scale * 4));
+    acc := 0.5;
+    acc *= 4;
+    acc -= 0.5;
+    line(cast(int) (acc * 10));
+    yes_or_no(a > x);
+}

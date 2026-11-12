@@ -18,16 +18,25 @@
 // blocks in order.
 //
 // Types are sizes only: i1 (a bool, or a comparison's result), i8 i16 i32
-// i64, ptr. Signedness lives in the instructions that need it (sdiv or udiv,
-// sext or zext, cmp slt or ult), and in a signature, whose i8 and i16
-// parameters and results say how they widen (Ir_Ext: Linux's C calling
-// convention widens them at a call).
+// i64, ptr, and the floats f32 and f64 (IEEE 754's single and double, C's
+// float and double). Signedness lives in the instructions that need it (sdiv
+// or udiv, sext or zext, cmp slt or ult, sitofp or uitofp), and in a
+// signature, whose i8 and i16 parameters and results say how they widen
+// (Ir_Ext: Linux's C calling convention widens them at a call).
 //
 // Integer arithmetic wraps: no instruction assumes overflow can't happen
 // (spec 6.4), so none carries LLVM's nsw, nuw or exact. The instructions
 // that LLVM leaves undefined for some operands (a division by 0, or the most
 // negative value by -1; a shift by the width or more) are only ever given
 // operands that are defined: lowering checks or masks them first.
+//
+// Float arithmetic is IEEE 754's, exactly (spec 6.4): no instruction carries
+// LLVM's fast-math flags, which would let it assume there's no NaN or
+// infinity, or reorder operations as if they were exact. A float divided by
+// zero is infinity or NaN, not an error. A float converted to an integer
+// saturates (fptosi.sat, fptoui.sat): a value beyond the integer's range
+// gives its largest or smallest value, and NaN gives 0, where LLVM's plain
+// fptosi would give poison.
 //
 // Rig's procedures keep their names and are internal, except Rig's main,
 // which becomes __rig_main; lowering adds the C entry point, an exported
@@ -66,12 +75,15 @@ enum Ir_Type : u8 {
     IR_I32,
     IR_I64,
     IR_PTR,
+    IR_F32,   // C's float
+    IR_F64,   // C's double
 };
 
 // Each operation as it prints. The fields it uses are Ir_Instr's: %n is
 // `result`, %a %b %c are `a` `b` `c`, T is `type`.
 enum Ir_Op : u8 {
-    IR_CONST,                        // %n = const T bits     (const ptr 0: the null pointer, the only ptr constant)
+    IR_CONST,                        // %n = const T bits     (const ptr 0: the null pointer, the only ptr constant;
+                                     //  a float's value prints as a number, const f64 2.5)
     IR_ADDR,                         // %n = addr @global
     IR_CALL,                         // [%n[, %n+1...] =] call @proc(%a, ...): one value per result
     IR_SEXT, IR_ZEXT, IR_TRUNC,      // %n = sext T %a to U   (`from` is T, `type` U)
@@ -83,6 +95,13 @@ enum Ir_Op : u8 {
     IR_AND, IR_OR, IR_XOR, IR_SHL, IR_LSHR, IR_ASHR,
     IR_CMP,                          // %n = cmp PRED T %a, %b   an i1
     IR_SELECT,                       // %n = select T %c, %a, %b  %a if the i1 %c is 1, else %b
+    // Floats: T is f32 or f64.
+    IR_FADD, IR_FSUB, IR_FMUL, IR_FDIV,  // %n = fadd T %a, %b  IEEE 754's, rounded to nearest
+    IR_FNEG,                         // %n = fneg T %a        flips the sign bit (-0.0 from 0.0)
+    IR_FCMP,                         // %n = fcmp PRED T %a, %b  an i1; PRED is one of the IR_FO.. or IR_FUNE
+    IR_FPEXT, IR_FPTRUNC,            // %n = fpext f32 %a to f64; fptrunc f64 %a to f32 (rounds to nearest)
+    IR_SITOFP, IR_UITOFP,            // %n = sitofp T %a to U  an integer, signed or unsigned, to the nearest float
+    IR_FPTOSI_SAT, IR_FPTOUI_SAT,    // %n = fptosi.sat T %a to U  toward zero, saturating; NaN gives 0
     // Terminators: the last instruction of every block, and only there.
     IR_JUMP,                         // jump bN
     IR_BRANCH,                       // branch %c, bN, bM     to bN if the i1 %c is 1, else bM
@@ -91,21 +110,30 @@ enum Ir_Op : u8 {
     IR_UNREACHABLE,                  // unreachable           control never gets here
 };
 
-// A comparison's predicate, as LLVM's icmp has them: s and u say whether the
-// operands are compared as signed or unsigned numbers.
-enum Ir_Pred : u8 { IR_EQ, IR_NE, IR_SLT, IR_SLE, IR_SGT, IR_SGE, IR_ULT, IR_ULE, IR_UGT, IR_UGE };
+// A comparison's predicate, as LLVM's icmp and fcmp have them. For
+// integers (IR_CMP), s and u say whether the operands are compared as signed
+// or unsigned numbers. For floats (IR_FCMP), o is "ordered": false when
+// either operand is NaN, which isn't equal to, less or greater than anything,
+// itself included. une is "unordered or not equal": true when either is NaN,
+// so x != x holds exactly when x is NaN, as in C.
+enum Ir_Pred : u8 {
+    IR_EQ, IR_NE, IR_SLT, IR_SLE, IR_SGT, IR_SGE, IR_ULT, IR_ULE, IR_UGT, IR_UGE,
+    IR_FOEQ, IR_FUNE, IR_FOLT, IR_FOLE, IR_FOGT, IR_FOGE,
+};
 
 struct Ir_Instr {
     Ir_Op op;
-    Ir_Type type;      // the value's type; IR_STORE, IR_CMP, IR_SELECT: the operands'; IR_LOCAL: the slot's;
+    Ir_Type type;      // the value's type; IR_STORE, IR_CMP, IR_FCMP, IR_SELECT: the operands'; IR_LOCAL: the slot's;
                        // IR_CALL: the first result's; IR_VOID when none
-    Ir_Type from;      // IR_SEXT, IR_ZEXT, IR_TRUNC: the operand's type
-    Ir_Pred pred;      // IR_CMP
+    Ir_Type from;      // the conversions (IR_SEXT ... IR_TRUNC, IR_FPEXT ... IR_FPTOUI_SAT): the operand's type
+    Ir_Pred pred;      // IR_CMP, IR_FCMP
     s32 result;        // the (first) value's number, or -1
     s32 a, b, c;       // operands, value numbers (-1: none); c is IR_SELECT's and IR_BRANCH's condition
     s32 target;        // IR_ADDR, IR_PANIC: a global; IR_CALL: a procedure; IR_JUMP, IR_BRANCH: a block (the true one)
     s32 target2;       // IR_BRANCH: the false block
-    u64 constant;      // IR_CONST: the bits, zero-extended from the type's width
+    u64 constant;      // IR_CONST: an integer's bits, zero-extended from the type's width; a
+                       // float's value as a double's bits (f64_bits), which the backend
+                       // rounds to the nearest float for an f32
     Array<s32> args;   // IR_CALL's arguments, IR_RET's values
 };
 
@@ -117,7 +145,7 @@ struct Ir_Global {
     String name;      // "str.0", or a Rig global's name
     Ir_Type type;     // IR_VOID: constant bytes; otherwise a variable of this type
     String bytes;     // IR_VOID: the bytes, with a terminating zero
-    u64 initial;      // a variable's first value, its bits
+    u64 initial;      // a variable's first value, its bits (a float's as IR_CONST keeps them)
 };
 
 // How a parameter or result narrower than 32 bits widens, by its Rig type's
@@ -153,6 +181,9 @@ struct Ir_Module {
     Array<Ir_Global> globals;
     Array<Ir_Proc *> procs;  // the file's, in order, then the entry point
 };
+
+// Whether t is f32 or f64.
+inline bool ir_is_float(Ir_Type t) { return t == IR_F32 || t == IR_F64; }
 
 // Building a module. Structs live in the arena, Arrays on the heap, as long
 // as the compilation (like the tree's).

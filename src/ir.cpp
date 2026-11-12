@@ -80,6 +80,8 @@ static const char *ir_type_name(Ir_Type t) {
     case IR_I32: return "i32";
     case IR_I64: return "i64";
     case IR_PTR: return "ptr";
+    case IR_F32: return "f32";
+    case IR_F64: return "f64";
     }
     return "?";
 }
@@ -121,6 +123,19 @@ static const char *ir_op_name(Ir_Op op) {
     case IR_ASHR: return "ashr";
     case IR_CMP: return "cmp";
     case IR_SELECT: return "select";
+    case IR_FADD: return "fadd";
+    case IR_FSUB: return "fsub";
+    case IR_FMUL: return "fmul";
+    case IR_FDIV: return "fdiv";
+    case IR_FNEG: return "fneg";
+    case IR_FCMP: return "fcmp";
+    case IR_FPEXT: return "fpext";
+    case IR_FPTRUNC: return "fptrunc";
+    case IR_SITOFP: return "sitofp";
+    case IR_UITOFP: return "uitofp";
+    // LLVM's intrinsics' names, llvm.fptosi.sat without the llvm.
+    case IR_FPTOSI_SAT: return "fptosi.sat";
+    case IR_FPTOUI_SAT: return "fptoui.sat";
     case IR_JUMP: return "jump";
     case IR_BRANCH: return "branch";
     case IR_RET: return "ret";
@@ -142,6 +157,12 @@ static const char *ir_pred_name(Ir_Pred p) {
     case IR_ULE: return "ule";
     case IR_UGT: return "ugt";
     case IR_UGE: return "uge";
+    case IR_FOEQ: return "oeq";
+    case IR_FUNE: return "une";
+    case IR_FOLT: return "olt";
+    case IR_FOLE: return "ole";
+    case IR_FOGT: return "ogt";
+    case IR_FOGE: return "oge";
     }
     return "?";
 }
@@ -199,7 +220,15 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr) {
     const char *op = ir_op_name(instr->op);
     const char *type = ir_type_name(instr->type);
     switch (instr->op) {
-    case IR_CONST: out(p, "%s %s %llu", op, type, (unsigned long long)instr->constant); break;
+    case IR_CONST:
+        // A float's bits as the number they hold (%g: 2.5, 0.1, 1e+30), for
+        // reading; the bits themselves are what the backend uses.
+        if (ir_is_float(instr->type)) {
+            out(p, "%s %s %g", op, type, f64_from_bits(instr->constant));
+        } else {
+            out(p, "%s %s %llu", op, type, (unsigned long long)instr->constant);
+        }
+        break;
     case IR_ADDR:
     case IR_PANIC: out(p, "%s @" STR_FMT, op, STR_ARG(m->globals[instr->target].name)); break;
     case IR_CALL:
@@ -209,9 +238,16 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr) {
         break;
     case IR_SEXT:
     case IR_ZEXT:
-    case IR_TRUNC: out(p, "%s %s %%%d to %s", op, ir_type_name(instr->from), instr->a, type); break;
+    case IR_TRUNC:
+    case IR_FPEXT:
+    case IR_FPTRUNC:
+    case IR_SITOFP:
+    case IR_UITOFP:
+    case IR_FPTOSI_SAT:
+    case IR_FPTOUI_SAT: out(p, "%s %s %%%d to %s", op, ir_type_name(instr->from), instr->a, type); break;
     case IR_LOCAL: out(p, "%s %s", op, type); break;
-    case IR_LOAD: out(p, "%s %s %%%d", op, type, instr->a); break;
+    case IR_LOAD:
+    case IR_FNEG: out(p, "%s %s %%%d", op, type, instr->a); break;
     case IR_STORE:
     case IR_ADD:
     case IR_SUB:
@@ -225,8 +261,13 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr) {
     case IR_XOR:
     case IR_SHL:
     case IR_LSHR:
-    case IR_ASHR: out(p, "%s %s %%%d, %%%d", op, type, instr->a, instr->b); break;
-    case IR_CMP: out(p, "%s %s %s %%%d, %%%d", op, ir_pred_name(instr->pred), type, instr->a, instr->b); break;
+    case IR_ASHR:
+    case IR_FADD:
+    case IR_FSUB:
+    case IR_FMUL:
+    case IR_FDIV: out(p, "%s %s %%%d, %%%d", op, type, instr->a, instr->b); break;
+    case IR_CMP:
+    case IR_FCMP: out(p, "%s %s %s %%%d, %%%d", op, ir_pred_name(instr->pred), type, instr->a, instr->b); break;
     case IR_SELECT: out(p, "%s %s %%%d, %%%d, %%%d", op, type, instr->c, instr->a, instr->b); break;
     case IR_JUMP: out(p, "%s b%d", op, instr->target); break;
     case IR_BRANCH: out(p, "%s %%%d, b%d, b%d", op, instr->c, instr->target, instr->target2); break;
@@ -254,8 +295,12 @@ String ir_print(Arena *a, Ir_Module *m) {
             out_bytes(&p, g->bytes);
             out(&p, "\"\n");
         } else {
-            out(&p, "global @" STR_FMT ": %s = %llu\n", STR_ARG(g->name), ir_type_name(g->type),
-                (unsigned long long)g->initial);
+            out(&p, "global @" STR_FMT ": %s = ", STR_ARG(g->name), ir_type_name(g->type));
+            if (ir_is_float(g->type)) {
+                out(&p, "%g\n", f64_from_bits(g->initial));
+            } else {
+                out(&p, "%llu\n", (unsigned long long)g->initial);
+            }
         }
     }
     for (s64 i = 0; i < m->procs.count; i++) {

@@ -45,32 +45,45 @@ Type *check_expression(Checker *c, Ast *e);
 Type *check_value(Checker *c, Ast *e);
 
 // Whether e's value converts implicitly to `to`, where a declaration, an
-// assignment, an argument or a return puts it (spec 6.4). An untyped
-// constant takes the type `to` if it's an integer type, and a constant that
-// doesn't fit is reported here, then counted as converting, so the caller
-// doesn't report it again. True also when either type is unknown (null):
-// the error was reported already.
+// assignment, an argument, a return or an operator puts it (spec 6.4). An
+// untyped constant takes the type `to` if it can: an untyped integer an
+// integer or float type, an untyped float a float type; its value is
+// converted to the type's (Ast.constant). A constant that doesn't fit is
+// reported here, then counted as converting, so the caller doesn't report
+// it again. True also when either type is unknown (null): the error was
+// reported already.
 bool check_convert(Checker *c, Ast *e, Type *to);
 
 // Whether a value of type `from`, not an untyped constant, converts
-// implicitly to `to`: the same type, or an integer that widens (spec 6.4).
-// True when either is unknown (null): the error was reported already.
+// implicitly to `to`: the same type, an integer that widens, or a float32
+// to a float64 (spec 6.4). True when either is unknown (null): the error
+// was reported already.
 bool type_converts(Type *from, Type *to);
 
-// An untyped constant that meets no type becomes an int (x := 5;).
-void check_default_type(Ast *e);
+// An untyped constant that meets no type becomes an int (x := 5;), or a
+// float32 (x := 0.5;), which it must fit.
+void check_default_type(Checker *c, Ast *e);
 
 // True when both operand types, of an operator or a range's '..' (`op_name`
 // names it in the message: "'+'", "'..'"), are integers; otherwise false,
 // after "'OP' needs integers, not 'T'" about the first that isn't, at `at`.
 bool check_both_integers(Checker *c, Type *left, Type *right, Position at, const char *op_name);
 
-// The type two checked integer operands meet at, for an arithmetic operator,
+// check_both_integers for the operators that take floats too (+ - * / and
+// the comparisons): "'OP' needs numbers, not 'T'".
+bool check_both_numbers(Checker *c, Type *left, Type *right, Position at, const char *op_name);
+
+// The type two checked number operands meet at, for an arithmetic operator,
 // a comparison or a range's '..' (`op_name` names it in the message: "'+'",
 // "'..'"): an untyped one takes the other's type, a typed one widens to the
 // other's (checker.h). Null after "mismatched types 'A' and 'B' for 'OP';
-// cast one of them", at `at`. Both untyped: the untyped type.
-Type *check_unify_integers(Checker *c, Ast *left, Ast *right, Position at, const char *op_name);
+// cast one of them", at `at`. Both untyped: the untyped type, a float if
+// either is one.
+Type *check_unify_numbers(Checker *c, Ast *left, Ast *right, Position at, const char *op_name);
 
-// Whether op is / or %: the operators whose divisor mustn't be 0.
+// Whether op is / or %: the operators whose integer divisor mustn't be 0.
 bool is_division(Token_Kind op);
+
+// Whether op is + - * /: the arithmetic operators that take floats as well
+// as integers (spec 6.4). The others, % & | ^ << >>, take integers only.
+bool takes_floats(Token_Kind op);
