@@ -179,9 +179,32 @@ static u64 saturate(f64 d, Type *t) {
     return (u64)whole;
 }
 
+void report_no_conversion(Checker *c, Ast *value, Type *to) {
+    diag_error(c->diag, value->start, "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly",
+               STR_ARG(type_name(c->arena, value->type)), STR_ARG(type_name(c->arena, to)));
+}
+
+static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t);
+
 bool check_convert(Checker *c, Ast *e, Type *to) {
     Type *from = e->type;
     if (!from || !to) return true;
+    // .{...} takes the struct type it meets, and its values are checked
+    // against that struct's fields now, nested .{...} included. Any other
+    // type has no fields to give it: reported here, as a constant that
+    // doesn't fit is.
+    if (from == &type_untyped_literal) {
+        Ast_Literal *literal = (Ast_Literal *)e;
+        if (to->kind != TYPE_STRUCT) {
+            diag_error(c->diag, e->start, "a '.{' literal needs a struct type, not '" STR_FMT "'",
+                       STR_ARG(type_name(c->arena, to)));
+            e->type = nullptr;
+            return true;
+        }
+        check_literal_values(c, literal, to);
+        e->type = to;
+        return true;
+    }
     // null takes the pointer type it meets, as an untyped constant takes a
     // number type: p : *int = null; makes it a *int, still the constant 0.
     if (from == &type_null) {
@@ -244,6 +267,11 @@ void check_default_type(Checker *c, Ast *e) {
         e->type = &type_int;
     } else if (e->type == &type_untyped_float) {
         check_convert(c, e, &type_float32);  // reports a value too large for it
+    } else if (e->type == &type_untyped_literal) {
+        // There's no default struct: the type must be written.
+        diag_error(c->diag, e->start,
+                   "this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}");
+        e->type = nullptr;
     }
 }
 
@@ -257,6 +285,13 @@ Type *check_value(Checker *c, Ast *e) {
         return nullptr;
     }
     return t;
+}
+
+Type *check_operand(Checker *c, Ast *e) {
+    Type *t = check_value(c, e);
+    if (t != &type_untyped_literal) return t;
+    check_default_type(c, e);  // reports it
+    return nullptr;
 }
 
 // An integer literal (spec 6.4): up to int's largest value it's an untyped
@@ -273,6 +308,11 @@ static Type *check_float(Ast_Float *number) {
     number->is_constant = true;
     number->constant = f64_bits(number->value);
     return &type_untyped_float;
+}
+
+// "'Vec2' is a type, not a value", at a struct's name used as a value.
+static void report_type_as_value(Checker *c, Ast_Name *name) {
+    diag_error(c->diag, name->pos, "'" STR_FMT "' is a type, not a value", STR_ARG(name->name));
 }
 
 // A name used as a value: a variable's or parameter's value, or a
@@ -296,6 +336,7 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         // x : int = 1 2;): its type is unknown, so there's nothing to say.
         if (!((Ast_Proc *)decl)->is_broken) diag_error(c->diag, name->pos, "procedures can only be called, for now");
         return nullptr;
+    case AST_STRUCT: report_type_as_value(c, name); return nullptr;
     default: RIG_ASSERT(!"not a declaration"); return nullptr;
     }
 }
@@ -369,7 +410,7 @@ static Type *check_unary(Checker *c, Ast_Unary *u) {
     if (u->op == TOKEN_STAR) {
         return check_addressable(c, u->operand, false) ? type_pointer_to(u->operand->type) : nullptr;
     }
-    Type *t = check_value(c, u->operand);
+    Type *t = check_operand(c, u->operand);
     if (!t) return nullptr;
     if (u->op == TOKEN_BANG) {
         if (t != &type_bool) {
@@ -769,6 +810,15 @@ static bool compare_floats(Token_Kind op, f64 left, f64 right) {
     }
 }
 
+// Whether == and != take a value of type t: a number, a bool, a pointer
+// (null too) or a string. Not a struct: two of them could differ only in
+// their padding, bytes no field owns, so comparing their bytes wouldn't say
+// whether their fields are equal, and comparing field by field is a
+// procedure's job (spec 6.5).
+static bool takes_equality(Type *t) {
+    return type_is_number(t) || t == &type_bool || type_is_pointer(t) || t == &type_null || t == &type_string;
+}
+
 // == != < <= > >=: the result is a bool. Two numbers meet at a type as an
 // arithmetic operator's operands do (check_unify_numbers), and are compared
 // as numbers of that type: integers signed or unsigned by its sign, floats
@@ -776,10 +826,19 @@ static bool compare_floats(Token_Kind op, f64 left, f64 right) {
 // order, and isn't equal or unequal to a number, which is never one (spec
 // 6.1). Two pointers meet at a pointer type (check_unify_pointers) and
 // compare as addresses, unsigned numbers (a pointer type isn't signed).
+// Anything else isn't compared: "'==' needs numbers, bools, pointers or
+// strings, not 'Vec2'" (strings compare from milestone 2b's strings), "'<'
+// needs numbers, not 'Vec2'".
 static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right) {
     const char *op = token_kind_name(b->op);
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
     Type *t;
+    Type *not_equatable = !takes_equality(left) ? left : !takes_equality(right) ? right : nullptr;
+    if (equality && not_equatable) {
+        diag_error(c->diag, b->pos, "%s needs numbers, bools, pointers or strings, not '" STR_FMT "'", op,
+                   STR_ARG(type_name(c->arena, not_equatable)));
+        return nullptr;
+    }
     if (equality && (left == &type_bool || right == &type_bool)) {
         if (left != right) {
             // No cast makes an integer a bool, so the message suggests none.
@@ -822,8 +881,8 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
 // (lowering's job). A float divided by zero is IEEE 754's: an infinity, or
 // NaN for 0 / 0, with no check.
 static Type *check_binary(Checker *c, Ast_Binary *b) {
-    Type *left = check_value(c, b->left);
-    Type *right = check_value(c, b->right);
+    Type *left = check_operand(c, b->left);
+    Type *right = check_operand(c, b->right);
     if (!left || !right) return nullptr;
     if (b->op == TOKEN_AMP_AMP || b->op == TOKEN_PIPE_PIPE) return check_logical(c, b, left, right);
     if (is_comparison(b->op)) return check_comparison(c, b, left, right);
@@ -1009,24 +1068,12 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
     return to;
 }
 
-bool check_addressable(Checker *c, Ast *e, bool for_writing) {
-    if (e->kind == AST_DEREF) return check_expression(c, e) != nullptr;
-    if (e->kind != AST_NAME) {
-        // A value computed on the spot (1 + 2, f(), *x) lives in no variable,
-        // so it has no address to take or to store to. Its own mistakes come
-        // first, and an unknown type says nothing more.
-        if (!check_value(c, e)) return false;
-        diag_error(c->diag, e->start, for_writing ? "only a variable, a field or an element can be assigned to"
-                                                  : "only a variable, a field or an element has an address");
-        return false;
-    }
-    Ast_Name *name = (Ast_Name *)e;
-    Ast *decl = check_lookup(c, name->name);
-    name->decl = decl;
-    if (!decl) {
-        diag_error(c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
-        return false;
-    }
+// Whether the name `name`, whose declaration is known (Ast_Name.decl), is a
+// place in memory: a variable, but not a loop's iterator or index; otherwise
+// false, after saying what it is instead, for an assignment (for_writing)
+// or an address.
+static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
+    Ast *decl = name->decl;
     const char *what = nullptr;
     switch (decl->kind) {
     case AST_VAR: {
@@ -1035,10 +1082,7 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing) {
         // read-only (spec 6.1): the loop sets them, each iteration, and a
         // pointer to one would let the body change it.
         Ast_Var *var = (Ast_Var *)decl;
-        if (!var->is_iterator) {
-            name->type = decl->type;
-            return decl->type != nullptr;
-        }
+        if (!var->is_iterator) return true;
         // it_index is the only one by that name: check_for reports an
         // iterator called it_index and doesn't declare it.
         what = string_eq(var->name, str("it_index")) ? "the loop's index" : "the loop's iterator";
@@ -1047,12 +1091,14 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing) {
     // A constant is a value known while compiling, kept nowhere.
     case AST_CONST: what = "a constant"; break;
     // Read-only (spec 6.1): copy it into a variable to change it. Lowering
-    // gives a parameter no slot: it's the value the caller passed.
+    // gives a parameter no slot: it's the value the caller passed (for an
+    // aggregate, a pointer to the caller's copy, which mustn't change).
     case AST_PARAM: what = "a parameter"; break;
     case AST_PROC:
         if (((Ast_Proc *)decl)->is_broken) return false;  // whatever it was, the syntax error said so
         what = "a procedure";
         break;
+    case AST_STRUCT: report_type_as_value(c, name); return false;
     default: RIG_ASSERT(!"not a declaration");
     }
     diag_error(c->diag, name->pos, for_writing ? "can't assign to '" STR_FMT "': it's %s"
@@ -1061,11 +1107,54 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing) {
     return false;
 }
 
+// Whether e, already checked and of a known type, is a place in memory; if
+// not, says why (check_addressable). A field is one when its struct is, or
+// always when it's reached through a pointer (p.x is p.*.x, and p.* is a
+// place whatever p is).
+static bool is_place(Checker *c, Ast *e, bool for_writing) {
+    switch (e->kind) {
+    case AST_NAME: return name_is_place(c, (Ast_Name *)e, for_writing);
+    case AST_DEREF: return true;
+    case AST_MEMBER: {
+        Ast *operand = ((Ast_Member *)e)->operand;
+        return type_is_pointer(operand->type) || is_place(c, operand, for_writing);
+    }
+    default:
+        // A value computed on the spot (1 + 2, f(), *x, f().x) lives in no
+        // variable, so it has no address to take or to store to.
+        diag_error(c->diag, e->start, for_writing ? "only a variable, a field or an element can be assigned to"
+                                                  : "only a variable, a field or an element has an address");
+        return false;
+    }
+}
+
+bool check_addressable(Checker *c, Ast *e, bool for_writing) {
+    if (e->kind == AST_NAME) {
+        // Looked up here rather than checked as a value, so a procedure's
+        // name is "can't assign to 'f': it's a procedure", not "procedures
+        // can only be called".
+        Ast_Name *name = (Ast_Name *)e;
+        Ast *decl = check_lookup(c, name->name);
+        name->decl = decl;
+        if (!decl) {
+            diag_error(c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
+            return false;
+        }
+        if (!name_is_place(c, name, for_writing)) return false;
+        name->type = decl->type;
+        return decl->type != nullptr;
+    }
+    // Anything else is checked as a value first: its own mistakes come
+    // first, and an unknown type says nothing more.
+    if (!check_value(c, e)) return false;
+    return is_place(c, e, for_writing);
+}
+
 // p.*: the T that p, a *T, points at. A *void points at nothing in
 // particular, so there's no T to read; it's cast to a pointer to something
 // first. Reported at the '.'.
 static Type *check_deref(Checker *c, Ast_Deref *deref) {
-    Type *t = check_value(c, deref->operand);
+    Type *t = check_operand(c, deref->operand);
     if (!t) return nullptr;
     if (!type_is_pointer(t)) {
         diag_error(c->diag, deref->pos, "'.*' needs a pointer, not '" STR_FMT "'", STR_ARG(type_name(c->arena, t)));
@@ -1093,6 +1182,94 @@ static Type *check_size_of(Checker *c, Ast_Size_Of *size_of) {
     return &type_untyped_int;
 }
 
+// e.x: the field x of struct e, or of the struct e points at (p.x is
+// p.*.x: one pointer, so a **Node needs .* first). Reported at the field's
+// name: "'Vec2' has no field 'z'", or on anything else "'.x' needs a struct
+// or a pointer to one, not 'int'". m->index is the field's.
+static Type *check_member(Checker *c, Ast_Member *m) {
+    Type *t = check_operand(c, m->operand);
+    if (!t) return nullptr;
+    Type *s = type_is_pointer(t) && t->pointee->kind == TYPE_STRUCT ? t->pointee : t;
+    if (s->kind != TYPE_STRUCT) {
+        diag_error(c->diag, m->pos, "'." STR_FMT "' needs a struct or a pointer to one, not '" STR_FMT "'",
+                   STR_ARG(m->name), STR_ARG(type_name(c->arena, t)));
+        return nullptr;
+    }
+    m->index = type_field_index(s, m->name);
+    if (m->index < 0) {
+        diag_error(c->diag, m->pos, "'" STR_FMT "' has no field '" STR_FMT "'", STR_ARG(type_name(c->arena, s)),
+                   STR_ARG(m->name));
+        return nullptr;
+    }
+    return s->fields[m->index].type;
+}
+
+// The value of field `field_type` given by `value`, in a literal: checked,
+// and converting to the field's type as an assignment's value would (an
+// untyped constant takes the type, .{...} the struct).
+static void check_field_value(Checker *c, Ast *value, Type *field_type) {
+    if (check_value(c, value) && !check_convert(c, value, field_type)) report_no_conversion(c, value, field_type);
+}
+
+// The values of a literal of struct type t (its type written, T.{...}, or
+// met, .{...}). In order, there may be fewer than the fields, never more:
+// "'Vec2' has 2 fields, but this literal gives 3", at the literal. By name,
+// each must be a field ("'Vec2' has no field 'z'"), given once ("field 'x'
+// is given twice"), each said at the name. The fields not given are zeroed
+// (lowering). After any of these, the values are still checked, for their
+// own mistakes.
+static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t) {
+    if (!literal->names.count) {
+        if (literal->values.count > t->fields.count) {
+            s64 n = t->fields.count;
+            diag_error(c->diag, literal->start, "'" STR_FMT "' has %lld field%s, but this literal gives %lld",
+                       STR_ARG(type_name(c->arena, t)), (long long)n, n == 1 ? "" : "s",
+                       (long long)literal->values.count);
+            for (s64 i = 0; i < literal->values.count; i++) check_expression(c, literal->values[i]);
+            return;
+        }
+        for (s64 i = 0; i < literal->values.count; i++) {
+            check_field_value(c, literal->values[i], t->fields[i].type);
+        }
+        return;
+    }
+    for (s64 i = 0; i < literal->values.count; i++) {
+        String name = literal->names[i];
+        Position at = literal->name_positions[i];
+        s32 index = type_field_index(t, name);
+        bool given_before = false;
+        for (s64 j = 0; j < i; j++) given_before |= string_eq(literal->names[j], name);
+        if (index < 0) {
+            diag_error(c->diag, at, "'" STR_FMT "' has no field '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
+                       STR_ARG(name));
+        } else if (given_before) {
+            diag_error(c->diag, at, "field '" STR_FMT "' is given twice", STR_ARG(name));
+        } else {
+            check_field_value(c, literal->values[i], t->fields[index].type);
+            continue;
+        }
+        check_expression(c, literal->values[i]);
+    }
+}
+
+// A struct literal. With its type written, T.{...}, T must be a struct ("a
+// '.{' literal needs a struct type, not 'int'"), and the values are checked
+// against its fields here. Without, .{...} has type_untyped_literal until it
+// meets a type, which checks its values then (check_convert), or meets none
+// (check_default_type).
+static Type *check_literal(Checker *c, Ast_Literal *literal) {
+    if (!literal->type_expr) return &type_untyped_literal;
+    Type *t = resolve_type(c, literal->type_expr);
+    if (!t) return nullptr;
+    if (t->kind != TYPE_STRUCT) {
+        diag_error(c->diag, literal->start, "a '.{' literal needs a struct type, not '" STR_FMT "'",
+                   STR_ARG(type_name(c->arena, t)));
+        return nullptr;
+    }
+    check_literal_values(c, literal, t);
+    return t;
+}
+
 Type *check_expression(Checker *c, Ast *e) {
     Type *t = nullptr;
     switch (e->kind) {
@@ -1117,6 +1294,8 @@ Type *check_expression(Checker *c, Ast *e) {
         break;
     case AST_DEREF: t = check_deref(c, (Ast_Deref *)e); break;
     case AST_SIZE_OF: t = check_size_of(c, (Ast_Size_Of *)e); break;
+    case AST_MEMBER: t = check_member(c, (Ast_Member *)e); break;
+    case AST_LITERAL: t = check_literal(c, (Ast_Literal *)e); break;
     default: RIG_ASSERT(!"not an expression");
     }
     e->type = t;
