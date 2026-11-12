@@ -1,7 +1,7 @@
 {
     "name": "rig-language",
     "displayName": "Rig",
-    "description": "Syntax highlighting for the Rig programming language",
+    "description": "The Rig programming language: syntax highlighting, snippets, build errors in the Problems panel, build and run commands",
     "version": "0.1.0",
     "publisher": "woozchucky",
     "license": "MIT",
@@ -13,13 +13,97 @@
         "vscode": "^1.75.0"
     },
     "extensionKind": [
-        "ui",
-        "workspace"
+        "workspace",
+        "ui"
     ],
     "categories": [
         "Programming Languages"
     ],
+    "main": "./extension.js",
+    "capabilities": {
+        "untrustedWorkspaces": {
+            "supported": "limited",
+            "description": "Building and running need a trusted workspace: they run rig and the program it builds. The grammar and snippets work everywhere.",
+            "restrictedConfigurations": [
+                "rig.compilerPath"
+            ]
+        }
+    },
+    "activationEvents": [
+        "onLanguage:rig",
+        "onTaskType:rig"
+    ],
     "contributes": {
+        "commands": [
+            {
+                "command": "rig.buildFile",
+                "category": "Rig",
+                "title": "Build Current File",
+                "icon": "$(tools)"
+            },
+            {
+                "command": "rig.runFile",
+                "category": "Rig",
+                "title": "Run Current File",
+                "icon": "$(play)"
+            }
+        ],
+        "menus": {
+            "commandPalette": [
+                {
+                    "command": "rig.buildFile",
+                    "when": "editorLangId == rig"
+                },
+                {
+                    "command": "rig.runFile",
+                    "when": "editorLangId == rig"
+                }
+            ],
+            "editor/title": [
+                {
+                    "command": "rig.runFile",
+                    "when": "resourceLangId == rig",
+                    "group": "navigation"
+                }
+            ]
+        },
+        "taskDefinitions": [
+            {
+                "type": "rig",
+                "required": [
+                    "command"
+                ],
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "enum": [
+                            "build",
+                            "run"
+                        ],
+                        "enumDescriptions": [
+                            "rig build FILE",
+                            "rig build FILE, then run the program if the build worked"
+                        ],
+                        "description": "What the task does with the file."
+                    },
+                    "file": {
+                        "type": "string",
+                        "description": "The .rig file, relative to the workspace folder (variables like ${file} work). By default, the active editor's file."
+                    }
+                }
+            }
+        ],
+        "configuration": {
+            "title": "Rig",
+            "properties": {
+                "rig.compilerPath": {
+                    "type": "string",
+                    "default": "",
+                    "scope": "machine-overridable",
+                    "markdownDescription": "The Rig compiler to build with: a path (`~` and `${workspaceFolder}` work; a relative one is from the workspace folder; on Windows the `.exe` may be left off) or a name on the `PATH`. Empty: `bin/rig.exe` (Windows) or `bin/rig` in a workspace folder, as this repository builds it, then `rig` on the `PATH`."
+                }
+            }
+        },
         "languages": [
             {
                 "id": "rig",
@@ -38,6 +122,32 @@
                 "language": "rig",
                 "scopeName": "source.rig",
                 "path": "./syntaxes/rig.tmLanguage.json"
+            }
+        ],
+        "snippets": [
+            {
+                "language": "rig",
+                "path": "./snippets/rig.json"
+            }
+        ],
+        "problemMatchers": [
+            {
+                "name": "rig",
+                "label": "Rig compiler diagnostics",
+                "owner": "rig",
+                "source": "rig",
+                "fileLocation": [
+                    "autoDetect",
+                    "${workspaceFolder}"
+                ],
+                "pattern": {
+                    "regexp": "^(.+?):(\\d+):(\\d+): (?:runtime )?(error|warning): (.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
             }
         ]
     }

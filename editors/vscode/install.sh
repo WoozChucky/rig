@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh: installs Rig's syntax highlighting into VS Code.
+# install.sh: installs Rig's VS Code extension.
 #
 # VS Code installs extensions from a .vsix: a zip holding a manifest,
 # [Content_Types].xml and the extension's files under extension/. This
@@ -8,12 +8,18 @@
 # hands the result to `code --install-extension`. Nothing is downloaded.
 #
 # Any arguments go to `code` first, e.g. ./install.sh --profile Rig.
-# Run it again after changing the grammar; --force replaces the old copy.
-# In WSL with VS Code's WSL extension, `code` installs it for WSL windows;
-# install.bat installs it on the Windows side.
+# Run it again after changing the extension; --force replaces the old copy.
+# In WSL with VS Code's WSL extension, `code` installs it for WSL windows,
+# which is where it runs in them (it starts rig, which is there too);
+# install.bat installs it for Windows windows.
 
 set -e
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+# The extension's files, from this directory: what the .vsix holds under
+# extension/. install.bat has the same list, and test/check.js checks the
+# two agree and hold every file package.json names.
+files="package.json language-configuration.json README.md extension.js syntaxes/rig.tmLanguage.json snippets/rig.json"
 
 if ! command -v code >/dev/null 2>&1; then
     echo "install.sh: 'code' isn't on the PATH; in VS Code, run \"Shell Command: Install 'code' command in PATH\"" >&2
@@ -29,10 +35,11 @@ trap 'rm -rf "$stage"' EXIT
 # dash, Ubuntu's sh, runs the EXIT trap on a signal only if the shell exits
 # through it: Ctrl+C would otherwise leave the directory behind.
 trap 'exit 1' INT TERM HUP
-mkdir -p "$stage/extension/syntaxes"
 cp "$here/vsix/[Content_Types].xml" "$here/vsix/extension.vsixmanifest" "$stage/"
-cp "$here/package.json" "$here/language-configuration.json" "$here/README.md" "$stage/extension/"
-cp "$here/syntaxes/rig.tmLanguage.json" "$stage/extension/syntaxes/"
+for f in $files; do
+    mkdir -p "$stage/extension/$(dirname "$f")"
+    cp "$here/$f" "$stage/extension/$f"
+done
 
 python3 - "$stage" <<'EOF'
 import os, sys, zipfile
@@ -47,4 +54,4 @@ with zipfile.ZipFile(os.path.join(stage, "rig-language.vsix"), "w", zipfile.ZIP_
 EOF
 
 code "$@" --install-extension "$stage/rig-language.vsix" --force
-echo "Installed. Reload VS Code's windows (Developer: Reload Window) to see .rig files highlighted."
+echo "Installed. Reload VS Code's windows (Developer: Reload Window) to use it."

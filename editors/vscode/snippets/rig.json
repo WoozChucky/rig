@@ -1,0 +1,87 @@
+{
+    "Procedure": {
+        "prefix": "proc",
+        "description": "A procedure: name :: (parameters) -> result { ... }",
+        "body": [
+            "${1:name} :: (${2}) -> ${3:int} {",
+            "\t$0",
+            "}"
+        ]
+    },
+    "Main": {
+        "prefix": "main",
+        "description": "The procedure the program starts at",
+        "body": [
+            "main :: () {",
+            "\t$0",
+            "}"
+        ]
+    },
+    "Foreign procedure": {
+        "prefix": "foreign",
+        "description": "A C function from libc, declared for Rig to call",
+        "body": "${1:name} :: (${2}) -> ${3:s32} #foreign libc;"
+    },
+    "If": {
+        "prefix": "if",
+        "description": "if, with no parentheses around the condition (a bool)",
+        "body": [
+            "if ${1:condition} {",
+            "\t$0",
+            "}"
+        ]
+    },
+    "If and else": {
+        "prefix": "ife",
+        "description": "if with an else block",
+        "body": [
+            "if ${1:condition} {",
+            "\t$2",
+            "} else {",
+            "\t$0",
+            "}"
+        ]
+    },
+    "While": {
+        "prefix": "while",
+        "description": "while, with no parentheses around the condition (a bool)",
+        "body": [
+            "while ${1:condition} {",
+            "\t$0",
+            "}"
+        ]
+    },
+    "For": {
+        "prefix": "for",
+        "description": "for over a range, both ends included; the value is `it`, its index `it_index`",
+        "body": [
+            "for ${1:0}..${2:9} {",
+            "\t$0",
+            "}"
+        ]
+    },
+    "For with a named iterator": {
+        "prefix": "fori",
+        "description": "for over a range, both ends included, the value named (it hides `it`)",
+        "body": [
+            "for ${1:i}: ${2:0}..${3:9} {",
+            "\t$0",
+            "}"
+        ]
+    },
+    "Variable": {
+        "prefix": "var",
+        "description": "A variable of a stated type: name : type = value;",
+        "body": "${1:name} : ${2:int} = ${3:0};"
+    },
+    "Variable, type inferred": {
+        "prefix": "let",
+        "description": "A variable whose type is the value's: name := value;",
+        "body": "${1:name} := $0;"
+    },
+    "Constant": {
+        "prefix": "const",
+        "description": "A constant: NAME :: value;",
+        "body": "${1:NAME} :: $0;"
+    }
+}
