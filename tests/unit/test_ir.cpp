@@ -2816,10 +2816,9 @@ TEST(compiler_made_procedures_have_no_source) {
     CHECK(!contains(bounds_failed, ";"));
     CHECK(!contains(string_equal, ";"));
     String entry = proc_ir(ir, "main");
-    CHECK(contains(entry, "call @__rig_bounds_failed("));
-    CHECK(index_of(entry, ")  ; 4:6 s0\n  unreachable  ; 4:6 s0\n") > index_of(entry, "call @__rig_bounds_failed("));
-    CHECK(contains(entry, " = call @__rig_string_equal("));
-    CHECK(index_of(entry, ")  ; 6:5 s0\n") > index_of(entry, " = call @__rig_string_equal("));
+    CHECK(contains(entry, "  call @__rig_bounds_failed(%6, %7, %3, %4, %8)  ; 4:6 s0\n"
+                          "  unreachable  ; 4:6 s0\n"));
+    CHECK(contains(entry, "  %41 = call @__rig_string_equal(%19, %22, %28, %31)  ; 6:5 s0\n"));
     // Their Ir_Procs say so too.
     Ir_Module *m = lower_source(&a, "main :: () { s := \"x\"; if s == \"y\" { } }\n");
     Ir_Proc *helper = m->procs[m->procs.count - 1];
@@ -2827,6 +2826,13 @@ TEST(compiler_made_procedures_have_no_source) {
     CHECK_EQ(helper->source_name.count, 0);
     CHECK_EQ(helper->scopes.count, 0);
     CHECK_EQ(helper->vars.count, 0);
+    // Their instructions are in no scope, -1, as is an instruction of a
+    // module built by hand: there is no scope 0 for them to be in.
+    Ir_Instr *first = &helper->blocks[0]->instrs[0];
+    CHECK_EQ(first->pos.line, 0);
+    CHECK_EQ(first->scope, -1);
+    Ir_Module *by_hand = max_module(&a);
+    CHECK_EQ(by_hand->procs[0]->blocks[0]->instrs[0].scope, -1);
     arena_free(&a);
 }
 
@@ -2907,7 +2913,7 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
                     bool placed = from_source ? instr->pos.line >= first_line && instr->pos.line <= last_line &&
                                                     instr->pos.line > 0 && instr->scope >= 0 &&
                                                     instr->scope < p->scopes.count
-                                              : instr->pos.line == 0 && instr->scope == 0;
+                                              : instr->pos.line == 0 && instr->scope == -1;
                     if (!placed) {
                         fprintf(stderr, STR_FMT ": %s: instruction %lld of b%lld is at %d:%d s%d\n", STR_ARG(path),
                                 string_cstr(&a, p->name), (long long)n, (long long)b, instr->pos.line, instr->pos.col,
