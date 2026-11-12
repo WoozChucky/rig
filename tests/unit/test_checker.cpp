@@ -1319,8 +1319,8 @@ TEST(cast_trunc_of_a_constant_wraps) {
 TEST(cast_rules) {
     // Integers cast to integers, and bools to integers (0 or 1). Nothing
     // casts to a bool but a bool; a string only to its own type and to []u8
-    // (string_casts), a literal to *u8 too. Pointers cast to pointers and to 64-bit integers
-    // (pointer_casts).
+    // (string_casts), a literal to *u8 too. Pointers cast to pointers and to
+    // 64-bit integers (pointer_casts).
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "main :: () {\n"
