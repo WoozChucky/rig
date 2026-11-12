@@ -220,7 +220,7 @@
         "types": {
             "comment": "The checker's built-in type names (src/types.cpp's NAMED_TYPES), then the ones the language will have but the checker doesn't know yet (tests/unit/test_grammar.cpp's RESERVED_TYPES).",
             "name": "support.type.primitive.rig",
-            "match": "\\b(?:s8|s16|s32|s64|u8|u16|u32|u64|int|bool|float|float32|float64|string)\\b"
+            "match": "\\b(?:s8|s16|s32|s64|u8|u16|u32|u64|int|bool|float|float32|float64|void|string)\\b"
         },
         "numbers": {
             "comment": "As the lexer reads them: decimal, 0x and 0b with lowercase prefixes and at least one digit, '_' anywhere after the first digit, floats with a digit after the '.' or an exponent. A number running into letters (123abc, 0b12, 0X10, 1.5f, 1e+, 0x_) is one bad literal.",

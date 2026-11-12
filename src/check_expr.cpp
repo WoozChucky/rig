@@ -16,7 +16,7 @@
 
 // Whether the number `value` is one of integer type t's values.
 static bool fits(s64 value, Type *t) {
-    s32 bits = t->size * 8;
+    s32 bits = (s32)t->size * 8;
     if (t->is_signed) {
         if (bits == 64) return true;
         s64 max = ((s64)1 << (bits - 1)) - 1;
@@ -29,7 +29,7 @@ static bool fits(s64 value, Type *t) {
 // `bits` wrapped to t's width, the way t's arithmetic wraps at run time,
 // then extended back to 64 bits by t's sign (the form Ast.constant keeps).
 static u64 wrap_to(u64 bits, Type *t) {
-    s32 width = t->size * 8;
+    s32 width = (s32)t->size * 8;
     if (width == 64) return bits;
     u64 mask = ((u64)1 << width) - 1;
     u64 low = bits & mask;
@@ -165,7 +165,7 @@ static bool float_fits(Ast *e, Type *t) {
 static u64 saturate(f64 d, Type *t) {
     if (__builtin_isnan(d)) return 0;
     f64 whole = __builtin_trunc(d);
-    s32 bits = t->size * 8;
+    s32 bits = (s32)t->size * 8;
     if (t->is_signed) {
         f64 limit = __builtin_ldexp(1.0, bits - 1);  // t's range is -limit to limit - 1
         s64 max = bits == 64 ? INT64_MAX : ((s64)1 << (bits - 1)) - 1;
@@ -182,6 +182,13 @@ static u64 saturate(f64 d, Type *t) {
 bool check_convert(Checker *c, Ast *e, Type *to) {
     Type *from = e->type;
     if (!from || !to) return true;
+    // null takes the pointer type it meets, as an untyped constant takes a
+    // number type: p : *int = null; makes it a *int, still the constant 0.
+    if (from == &type_null) {
+        if (!type_is_pointer(to)) return false;
+        e->type = to;
+        return true;
+    }
     if (type_is_untyped(from)) {
         // An untyped constant takes the number type it meets, if its value
         // is one of the type's: an integer one, any integer or float type;
@@ -218,9 +225,18 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
 bool type_converts(Type *from, Type *to) {
     if (!from || !to || from == to) return true;
     if (from->kind == TYPE_INTEGER && to->kind == TYPE_INTEGER) return widens(from, to);
+    // A *void is a pointer to anything (C's void *), so malloc's result goes
+    // into any pointer, and any pointer into free's argument. No other
+    // pointer becomes another without a cast: a *u8 isn't a *int, and a
+    // **int isn't a **void (what it points at, a *int, isn't a *void).
+    if (type_is_pointer(from) && type_is_pointer(to)) return from->pointee == &type_void || to->pointee == &type_void;
     // Every float32 value is a float64 one, so a float32 widens; the other
     // way loses precision, and takes a cast.
     return from == &type_float32 && to == &type_float64;
+}
+
+void report_null_without_a_type(Checker *c, Ast *e) {
+    diag_error(c->diag, e->start, "null needs a pointer type, as in p : *int = null;");
 }
 
 void check_default_type(Checker *c, Ast *e) {
@@ -347,8 +363,12 @@ static Type *overflows(Checker *c, Ast *e) {
 // constant, - is exact (so only int's most negative value overflows) and ~
 // flips every bit, as on an int; on a typed one both wrap as at run time.
 // - on a float constant flips its sign, which is exact (0.0 gives -0.0). !
-// on a constant flips it.
+// on a constant flips it. * takes an address: *x is a *T for an x of type
+// T that has one (check_addressable), never a constant.
 static Type *check_unary(Checker *c, Ast_Unary *u) {
+    if (u->op == TOKEN_STAR) {
+        return check_addressable(c, u->operand, false) ? type_pointer_to(u->operand->type) : nullptr;
+    }
     Type *t = check_value(c, u->operand);
     if (!t) return nullptr;
     if (u->op == TOKEN_BANG) {
@@ -523,7 +543,7 @@ static Type *check_shift(Checker *c, Ast_Binary *b, Type *left) {
     if (!b->left->is_constant || !b->right->is_constant) return t;
 
     b->is_constant = true;
-    s32 width = type_is_untyped(t) ? 64 : t->size * 8;
+    s32 width = type_is_untyped(t) ? 64 : (s32)t->size * 8;
     s32 amount = (s32)(b->right->constant & (u64)(width - 1));
     u64 value = b->left->constant;
     if (type_is_untyped(t)) {
@@ -598,6 +618,102 @@ static bool is_comparison(Token_Kind op) {
     }
 }
 
+// The pointer type two operands of a comparison meet at, when either is a
+// pointer or null: null takes the other's type; two pointers, the one the
+// other converts to implicitly (a *void meets any pointer, and is what they
+// meet at). Null after reporting: two nulls have no type to take ("null
+// needs a pointer type, ..."), a pointer meeting a value that isn't one is
+// "mismatched types '*int' and 'int' for '<'" (no cast suggested: only
+// 64-bit integers cast to pointers), and two pointers that don't convert
+// "mismatched types '*int' and '*u8' for '=='; cast one of them".
+static Type *check_unify_pointers(Checker *c, Ast_Binary *b, Type *left, Type *right, const char *op) {
+    if (left == &type_null && right == &type_null) {
+        report_null_without_a_type(c, b->left);
+        return nullptr;
+    }
+    bool left_fits = type_is_pointer(left) || left == &type_null;
+    bool right_fits = type_is_pointer(right) || right == &type_null;
+    const char *hint = "";
+    if (left_fits && right_fits) {
+        if (left == &type_null) {
+            check_convert(c, b->left, right);
+            return right;
+        }
+        if (right == &type_null) {
+            check_convert(c, b->right, left);
+            return left;
+        }
+        if (type_converts(right, left)) return left;
+        if (type_converts(left, right)) return right;
+        hint = "; cast one of them";
+    }
+    diag_error(c->diag, b->pos, "mismatched types '" STR_FMT "' and '" STR_FMT "' for %s%s",
+               STR_ARG(type_name(c->arena, left)), STR_ARG(type_name(c->arena, right)), op, hint);
+    return nullptr;
+}
+
+bool check_pointer_move(Checker *c, Type *pointer, Ast *offset, Position at, const char *op_name) {
+    if (pointer->pointee == &type_void) {
+        diag_error(c->diag, at, "can't do arithmetic on a '*void'; cast it to a pointer to something first");
+        return false;
+    }
+    if (offset->type->kind != TYPE_INTEGER) {
+        diag_error(c->diag, at, "%s moves a pointer by an integer, not '" STR_FMT "'", op_name,
+                   STR_ARG(type_name(c->arena, offset->type)));
+        return false;
+    }
+    check_default_type(c, offset);
+    return true;
+}
+
+// + and - with a pointer on either side (spec 6.5), as C has them:
+// - p + n, n + p, p - n: p moved by n of what it points at, so p + 1 is the
+//   next T after the one p points at (lowering scales n by T's size). The
+//   result has p's type; n is any integer, read by its own sign.
+// - p - q, two pointers of the same type *T: an int, how many T's apart they
+//   are, rounded toward zero. Lowering divides the bytes between them by
+//   T's size, so a T of size 0 (an empty struct) has no answer: "can't
+//   subtract pointers to 'T': it has no size".
+// Two pointers can't be added (what would the sum point at?), and an
+// integer minus a pointer means nothing. A *void points at nothing with a
+// size to move by. Nothing is checked at run time: an address wraps, as an
+// integer does. b->operand_type is the pointer type (p's, or both's).
+static Type *check_pointer_arithmetic(Checker *c, Ast_Binary *b, Type *left, Type *right) {
+    bool left_pointer = type_is_pointer(left), right_pointer = type_is_pointer(right);
+    if (b->op == TOKEN_PLUS && left_pointer && right_pointer) {
+        diag_error(c->diag, b->pos, "can't add two pointers");
+        return nullptr;
+    }
+    if (b->op == TOKEN_MINUS && right_pointer && !left_pointer) {
+        diag_error(c->diag, b->pos, "can't subtract a pointer from an integer");
+        return nullptr;
+    }
+    if (left_pointer && right_pointer) {
+        // p - q
+        if (left->pointee == &type_void || right->pointee == &type_void) {
+            diag_error(c->diag, b->pos, "can't do arithmetic on a '*void'; cast it to a pointer to something first");
+            return nullptr;
+        }
+        if (left != right) {
+            diag_error(c->diag, b->pos, "mismatched types '" STR_FMT "' and '" STR_FMT "' for '-'; cast one of them",
+                       STR_ARG(type_name(c->arena, left)), STR_ARG(type_name(c->arena, right)));
+            return nullptr;
+        }
+        if (left->pointee->size == 0) {
+            diag_error(c->diag, b->pos, "can't subtract pointers to '" STR_FMT "': it has no size",
+                       STR_ARG(type_name(c->arena, left->pointee)));
+            return nullptr;
+        }
+        b->operand_type = left;
+        return &type_int;
+    }
+    Type *pointer = left_pointer ? left : right;
+    Ast *offset = left_pointer ? b->right : b->left;
+    if (!check_pointer_move(c, pointer, offset, b->pos, token_kind_name(b->op))) return nullptr;
+    b->operand_type = pointer;
+    return pointer;
+}
+
 // && and ||: both operands bools, and so is the result. Two constants fold;
 // a constant with a value known only at run time doesn't (true || f()
 // isn't a constant, as in Go, though f() is never called: lowering's
@@ -656,7 +772,8 @@ static bool compare_floats(Token_Kind op, f64 left, f64 right) {
 // as numbers of that type: integers signed or unsigned by its sign, floats
 // as IEEE 754 compares them. == and != also compare two bools; a bool has no
 // order, and isn't equal or unequal to a number, which is never one (spec
-// 6.1).
+// 6.1). Two pointers meet at a pointer type (check_unify_pointers) and
+// compare as addresses, unsigned numbers (a pointer type isn't signed).
 static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right) {
     const char *op = token_kind_name(b->op);
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
@@ -669,6 +786,9 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
             return nullptr;
         }
         t = &type_bool;
+    } else if (type_is_pointer(left) || type_is_pointer(right) || left == &type_null || right == &type_null) {
+        t = check_unify_pointers(c, b, left, right, op);
+        if (!t) return nullptr;
     } else {
         if (!check_both_numbers(c, left, right, b->pos, op)) return nullptr;
         t = check_unify_numbers(c, b->left, b->right, b->pos, op);
@@ -705,6 +825,9 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
     if (!left || !right) return nullptr;
     if (b->op == TOKEN_AMP_AMP || b->op == TOKEN_PIPE_PIPE) return check_logical(c, b, left, right);
     if (is_comparison(b->op)) return check_comparison(c, b, left, right);
+    if ((b->op == TOKEN_PLUS || b->op == TOKEN_MINUS) && (type_is_pointer(left) || type_is_pointer(right))) {
+        return check_pointer_arithmetic(c, b, left, right);
+    }
 
     const char *op = token_kind_name(b->op);
     if (takes_floats(b->op) ? !check_both_numbers(c, left, right, b->pos, op)
@@ -789,6 +912,33 @@ static Type *check_float_cast(Checker *c, Ast_Cast *cast, Type *to) {
     return to;
 }
 
+// cast(T) e where e or T is a pointer and the other a pointer, a number or
+// a bool (check_cast has seen to null and strings) (spec 6.5):
+// - a pointer to any pointer: the same address, taken to point at
+//   something else. A null stays null, a constant.
+// - a pointer to and from int, s64 or u64: the address as a number, and a
+//   number as an address, unchecked. An untyped integer is an int.
+// - anything else: "can't cast '*int' to 'u32'; a pointer casts to another
+//   pointer or to a 64-bit integer". A narrower integer would lose most of
+//   an address, and a float or a bool means nothing as one.
+static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to) {
+    Ast *value = cast->value;
+    if (type_is_pointer(from) && type_is_pointer(to)) {
+        cast->is_constant = value->is_constant;
+        cast->constant = value->constant;
+        return to;
+    }
+    Type *other = type_is_pointer(from) ? to : from;
+    if (other->kind == TYPE_INTEGER && other->size == 8) {
+        check_default_type(c, value);
+        return to;
+    }
+    diag_error(c->diag, cast->pos,
+               "can't cast '" STR_FMT "' to '" STR_FMT "'; a pointer casts to another pointer or to a 64-bit integer",
+               STR_ARG(type_name(c->arena, from)), STR_ARG(type_name(c->arena, to)));
+    return nullptr;
+}
+
 // cast(T) e and cast,trunc(T) e (spec 6.4). The result has type T.
 // - From an integer to an integer: cast keeps the number, so it's checked:
 //   a constant that isn't one of T's values is reported here ("300 doesn't
@@ -801,9 +951,11 @@ static Type *check_float_cast(Checker *c, Ast_Cast *cast, Type *to) {
 // - To a bool, from a number: no cast; a comparison says which values
 //   are true ("can't cast 'int' to 'bool': compare instead, as in
 //   x != 0").
+// - A pointer to or from a pointer, a number or a bool:
+//   check_pointer_cast.
 // - Anything else casts only where it converts implicitly: to its own
-//   type, or a string literal to *u8. Otherwise "can't cast 'A' to 'B'":
-//   pointers and strings have no casts yet.
+//   type, null to a pointer, or a string literal to *u8. Otherwise "can't
+//   cast 'A' to 'B'": strings have no casts yet.
 // - cast,trunc takes integers only: "cast,trunc only takes integers".
 // A cast of a constant is a constant of T: a checked cast's is the same
 // number, a cast,trunc's is wrapped to T as at run time (wrap_to).
@@ -818,6 +970,9 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
         return nullptr;
     }
     if (type_is_number(from) && type_is_number(to) && !integers) return check_float_cast(c, cast, to);
+    if (type_is_pointer(from) || (type_is_pointer(to) && (type_is_number(from) || from == &type_bool))) {
+        return check_pointer_cast(c, cast, from, to);
+    }
     if (integers) {
         check_default_type(c, value);
         from = value->type;
@@ -852,6 +1007,90 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
     return to;
 }
 
+bool check_addressable(Checker *c, Ast *e, bool for_writing) {
+    if (e->kind == AST_DEREF) return check_expression(c, e) != nullptr;
+    if (e->kind != AST_NAME) {
+        // A value computed on the spot (1 + 2, f(), *x) lives in no variable,
+        // so it has no address to take or to store to. Its own mistakes come
+        // first, and an unknown type says nothing more.
+        if (!check_value(c, e)) return false;
+        diag_error(c->diag, e->start, for_writing ? "only a variable, a field or an element can be assigned to"
+                                                  : "only a variable, a field or an element has an address");
+        return false;
+    }
+    Ast_Name *name = (Ast_Name *)e;
+    Ast *decl = check_lookup(c, name->name);
+    name->decl = decl;
+    if (!decl) {
+        diag_error(c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
+        return false;
+    }
+    const char *what = nullptr;
+    switch (decl->kind) {
+    case AST_VAR: {
+        // A variable has a slot, its place in memory (a global's in the
+        // program's file), but a for loop's iterator and it_index are
+        // read-only (spec 6.1): the loop sets them, each iteration, and a
+        // pointer to one would let the body change it.
+        Ast_Var *var = (Ast_Var *)decl;
+        if (!var->is_iterator) {
+            name->type = decl->type;
+            return decl->type != nullptr;
+        }
+        // it_index is the only one by that name: check_for reports an
+        // iterator called it_index and doesn't declare it.
+        what = string_eq(var->name, str("it_index")) ? "the loop's index" : "the loop's iterator";
+        break;
+    }
+    // A constant is a value known while compiling, kept nowhere.
+    case AST_CONST: what = "a constant"; break;
+    // Read-only (spec 6.1): copy it into a variable to change it. Lowering
+    // gives a parameter no slot: it's the value the caller passed.
+    case AST_PARAM: what = "a parameter"; break;
+    case AST_PROC:
+        if (((Ast_Proc *)decl)->is_broken) return false;  // whatever it was, the syntax error said so
+        what = "a procedure";
+        break;
+    default: RIG_ASSERT(!"not a declaration");
+    }
+    diag_error(c->diag, name->pos, for_writing ? "can't assign to '" STR_FMT "': it's %s"
+                                               : "can't take the address of '" STR_FMT "': it's %s",
+               STR_ARG(name->name), what);
+    return false;
+}
+
+// p.*: the T that p, a *T, points at. A *void points at nothing in
+// particular, so there's no T to read; it's cast to a pointer to something
+// first. Reported at the '.'.
+static Type *check_deref(Checker *c, Ast_Deref *deref) {
+    Type *t = check_value(c, deref->operand);
+    if (!t) return nullptr;
+    if (!type_is_pointer(t)) {
+        diag_error(c->diag, deref->pos, "'.*' needs a pointer, not '" STR_FMT "'", STR_ARG(type_name(c->arena, t)));
+        return nullptr;
+    }
+    if (t->pointee == &type_void) {
+        diag_error(c->diag, deref->pos, "can't dereference a '*void'; cast it to a pointer to something first");
+        return nullptr;
+    }
+    return t->pointee;
+}
+
+// size_of(T): T's size in bytes (types.h has them), an untyped integer
+// constant, so it takes the type it meets: malloc(10 * size_of(int)) passes
+// the u64 80. void has no size, being nothing.
+static Type *check_size_of(Checker *c, Ast_Size_Of *size_of) {
+    Type *t = resolve_type_or_void(c, size_of->type_expr);
+    if (!t) return nullptr;
+    if (t == &type_void) {
+        diag_error(c->diag, size_of->type_expr->pos, "'void' has no size");
+        return nullptr;
+    }
+    size_of->is_constant = true;
+    size_of->constant = (u64)t->size;
+    return &type_untyped_int;
+}
+
 Type *check_expression(Checker *c, Ast *e) {
     Type *t = nullptr;
     switch (e->kind) {
@@ -868,6 +1107,14 @@ Type *check_expression(Checker *c, Ast *e) {
     case AST_UNARY: t = check_unary(c, (Ast_Unary *)e); break;
     case AST_BINARY: t = check_binary(c, (Ast_Binary *)e); break;
     case AST_CAST: t = check_cast(c, (Ast_Cast *)e); break;
+    case AST_NULL:
+        // The null pointer, the constant 0, of the type it meets.
+        e->is_constant = true;
+        e->constant = 0;
+        t = &type_null;
+        break;
+    case AST_DEREF: t = check_deref(c, (Ast_Deref *)e); break;
+    case AST_SIZE_OF: t = check_size_of(c, (Ast_Size_Of *)e); break;
     default: RIG_ASSERT(!"not an expression");
     }
     e->type = t;

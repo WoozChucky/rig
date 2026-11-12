@@ -3,13 +3,26 @@
 
 #include "check.h"
 
-Type *resolve_type(Checker *c, Ast_Type *written) {
+Type *resolve_type_or_void(Checker *c, Ast_Type *written) {
     if (written->kind == AST_TYPE_POINTER) {
-        Type *pointee = resolve_type(c, written->pointee);
+        // *void is a pointer to anything, so void is fine here.
+        Type *pointee = resolve_type_or_void(c, written->pointee);
         return pointee ? type_pointer_to(pointee) : nullptr;
     }
     Type *t = type_from_name(written->name);
     if (!t) diag_error(c->diag, written->pos, "unknown type '" STR_FMT "'", STR_ARG(written->name));
+    return t;
+}
+
+// void names no value at all, so a variable, a parameter, a result or a
+// cast can't have it as its type (a procedure that returns nothing has no
+// -> instead): only a pointer can point at it.
+Type *resolve_type(Checker *c, Ast_Type *written) {
+    Type *t = resolve_type_or_void(c, written);
+    if (t == &type_void) {
+        diag_error(c->diag, written->pos, "'void' is only a pointer's target, as in *void");
+        return nullptr;
+    }
     return t;
 }
 
@@ -79,6 +92,12 @@ static bool check_var_value(Checker *c, Ast_Var *var) {
             check_default_type(c, var->value);
             t = var->value->type;
             fine = true;
+            // x := null; has no pointer type for null to take.
+            if (t == &type_null) {
+                report_null_without_a_type(c, var->value);
+                t = nullptr;
+                fine = false;
+            }
             // A string is a pointer and a length (spec 6.5), which the IR
             // can't hold yet.
             if (t == &type_string) {
@@ -223,45 +242,10 @@ static void resolve_global(Checker *c, Ast *decl) {
     *state = RESOLVE_DONE;
 }
 
-// The type of an assignment's target, a variable, or null after reporting
-// what else it is.
+// The type of an assignment's target, a place in memory (a variable or
+// p.*), or null after reporting what else it is (check_addressable).
 static Type *check_target(Checker *c, Ast *target) {
-    if (target->kind != AST_NAME) {
-        diag_error(c->diag, target->start, "only a variable can be assigned to");
-        return nullptr;
-    }
-    Ast_Name *name = (Ast_Name *)target;
-    Ast *decl = check_lookup(c, name->name);
-    name->decl = decl;
-    const char *what = nullptr;
-    if (!decl) {
-        diag_error(c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
-        return nullptr;
-    }
-    switch (decl->kind) {
-    case AST_VAR: {
-        // A for loop's iterator and it_index are read-only (spec 6.1): the
-        // loop sets them, each iteration.
-        Ast_Var *var = (Ast_Var *)decl;
-        if (!var->is_iterator) {
-            name->type = decl->type;
-            return decl->type;
-        }
-        // it_index is the only one by that name: check_for reports an
-        // iterator called it_index and doesn't declare it.
-        what = string_eq(var->name, str("it_index")) ? "the loop's index" : "the loop's iterator";
-        break;
-    }
-    case AST_CONST: what = "a constant"; break;
-    case AST_PARAM: what = "a parameter"; break;  // read-only (spec 6.1): copy it into a variable to change it
-    case AST_PROC:
-        if (((Ast_Proc *)decl)->is_broken) return nullptr;  // whatever it was, the syntax error said so
-        what = "a procedure";
-        break;
-    default: RIG_ASSERT(!"not a declaration");
-    }
-    diag_error(c->diag, name->pos, "can't assign to '" STR_FMT "': it's %s", STR_ARG(name->name), what);
-    return nullptr;
+    return check_addressable(c, target, true) ? target->type : nullptr;
 }
 
 // "1 value", "2 values".
@@ -308,10 +292,10 @@ static void check_multi_var(Checker *c, Ast_Multi_Var *multi) {
     }
 }
 
-// a, b = f(); the targets must be variables, f must return as many results,
-// and each result converts to its target's type as a value assigned to it
-// would ("a value of type 'int' doesn't convert to 'u8' implicitly", at
-// the target).
+// a, b = f(); the targets must be places in memory (check_target), f must
+// return as many results, and each result converts to its target's type as
+// a value assigned to it would ("a value of type 'int' doesn't convert to
+// 'u8' implicitly", at the target).
 static void check_multi_assign(Checker *c, Ast_Assign *assign) {
     Array<Type *> targets = {};
     for (s64 i = 0; i < assign->targets.count; i++) array_add(&targets, check_target(c, assign->targets[i]));
@@ -332,7 +316,8 @@ static void check_multi_assign(Checker *c, Ast_Assign *assign) {
 // converts to x's type, as an untyped constant, a narrower integer or a
 // float32 into a float64 does (a shift's amount: any integer). For an
 // integer x, x /= 0 and x %= 0 are "division by zero", as x / 0 is, at the
-// operator.
+// operator. A pointer x takes += and -= by an integer, which move it, and
+// none of the others (check_pointer_move).
 static void check_assign(Checker *c, Ast_Assign *assign) {
     if (assign->targets.count > 1) {
         check_multi_assign(c, assign);
@@ -347,6 +332,14 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
         return;
     }
     Token_Kind op = compound_operator(assign->op);
+    if (type_is_pointer(to) && (op == TOKEN_PLUS || op == TOKEN_MINUS)) {
+        if (op == TOKEN_PLUS && type_is_pointer(value)) {
+            diag_error(c->diag, assign->pos, "can't add two pointers");
+        } else {
+            check_pointer_move(c, to, assign->value, assign->pos, token_kind_name(assign->op));
+        }
+        return;
+    }
     bool numbers = takes_floats(op);
     if (numbers ? !check_both_numbers(c, to, value, assign->pos, token_kind_name(assign->op))
                 : !check_both_integers(c, to, value, assign->pos, token_kind_name(assign->op))) {
