@@ -928,11 +928,11 @@ static Ast_Block *parse_block(Parser *p) {
 // one too many. The checker resolves a type, names it in messages and lays
 // it out by recursing into what it's made of, and the stages after it walk
 // types the same way, so ten thousand '*' would overflow the stack; counting
-// here means none of them ever sees a deeper type. A type written
-// inside a count ([size_of(**int)]u8) is inside the type around it, so its
-// levels add to that type's: with each type's count restarting at zero, a
-// type in a count in a type in a count ... could recurse a thousand times
-// a thousand levels deep.
+// here means none of them ever sees a deeper type. A type written inside a
+// count ([size_of(**int)]u8) is inside the type around it, so its levels
+// add to that type's: with each type's count restarting at zero, a type in
+// a count in a type in a count ... could recurse a thousand times a
+// thousand levels deep.
 static Ast_Type *parse_type_level(Parser *p);
 
 static Ast_Type *parse_type(Parser *p) {
