@@ -2,8 +2,12 @@
 //
 // The checker has given every expression its type and folded every
 // constant, so lowering only translates:
-// - Each procedure's body is one IR block so far (Task 3's if and while add
-//   more): its statements in order, then a ret if control reaches the end.
+// - Each procedure's body starts in its entry block, b0: its statements in
+//   order, then a ret if control reaches the end. if, while, for, && and ||
+//   split it into more blocks, joined by branches and jumps (lower_if,
+//   lower_while, lower_for, lower_logical show the shapes). Statements
+//   after a block has ended (a return, a break) can't run, and aren't
+//   lowered.
 // - Every variable (Ast_Var) is a stack slot, an IR_LOCAL, in its
 //   procedure, stored to where it's declared: its value, or zero (spec 6.4:
 //   variables start zeroed), or nothing at all for ---. Reading it is an
@@ -17,6 +21,14 @@
 // - A shift's amount is converted to the left operand's type (by its own
 //   sign) and masked to that width less one (spec 6.4: LLVM leaves a shift
 //   by the width or more undefined; Rig wraps the amount, as x86 does).
+// - A bool is an i1, 0 or 1; a comparison is an IR_CMP at the type its
+//   operands meet at, signed or unsigned by that type's sign.
+//
+// Blocks are numbered in the order they're made, and made in the order
+// their code comes in the source, so the printed IR reads like the program.
+// A jump or branch to a block that doesn't exist yet (the block after an
+// if, a loop's exit, where a break goes) is emitted with the target unset
+// and filled in once the block is made (terminator_of).
 
 #include "ir.h"
 
@@ -29,6 +41,16 @@ struct Local {
     s32 value;
 };
 
+// A loop being lowered, and the jumps out of its body whose targets aren't
+// made yet: each block listed ends in an IR_JUMP still to be pointed at the
+// loop's exit (a break) or at its next iteration (a continue: a while's
+// condition, a for's step).
+struct Loop {
+    Ast *loop;  // the Ast_While or Ast_For
+    Array<s32> breaks;
+    Array<s32> continues;
+};
+
 struct Lowering {
     Arena *arena;
     Ir_Module *module;
@@ -36,12 +58,14 @@ struct Lowering {
     Ir_Proc *proc;          // the procedure whose body is being lowered
     s32 block;              // the block instructions go into
     Array<Local> locals;    // the current procedure's variables and parameters so far
+    Array<Loop> loops;      // the loops around the statement being lowered, innermost last
 };
 
 // The IR type of a checked type. Strings aren't values yet: a literal is
 // only ever the address of its bytes, passed or stored as a *u8.
 static Ir_Type ir_type_of(Type *t) {
     if (!t || t->kind == TYPE_VOID) return IR_VOID;
+    if (t->kind == TYPE_BOOL) return IR_I1;
     if (t->kind == TYPE_POINTER || t->kind == TYPE_STRING) return IR_PTR;
     RIG_ASSERT(t->kind == TYPE_INTEGER);
     switch (t->size) {
@@ -101,6 +125,46 @@ static void emit_store(Lowering *l, Ir_Type t, s32 value, s32 slot) {
     store->a = value;
     store->b = slot;
 }
+
+static s32 emit_load(Lowering *l, Ir_Type t, s32 slot) {
+    Ir_Instr *load = emit(l, IR_LOAD, t);
+    load->a = slot;
+    return load->result;
+}
+
+static s32 emit_compare(Lowering *l, Ir_Pred pred, Ir_Type t, s32 a, s32 b) {
+    Ir_Instr *cmp = emit(l, IR_CMP, t);
+    cmp->pred = pred;
+    cmp->a = a;
+    cmp->b = b;
+    return cmp->result;
+}
+
+// Ends block `from` with a jump to block `to` (-1: not made yet, filled in
+// later through terminator_of).
+static void emit_jump(Lowering *l, s32 from, s32 to) {
+    ir_emit(l->proc, from, IR_JUMP, IR_VOID)->target = to;
+}
+
+// Ends the current block with a branch on the i1 %condition, to `if_true`
+// when it's 1, else to `if_false`; either may be -1, filled in later.
+static void emit_branch(Lowering *l, s32 condition, s32 if_true, s32 if_false) {
+    Ir_Instr *branch = emit(l, IR_BRANCH, IR_VOID);
+    branch->c = condition;
+    branch->target = if_true;
+    branch->target2 = if_false;
+}
+
+// The jump or branch that ends `block`, to fill in a target made after it.
+static Ir_Instr *terminator_of(Lowering *l, s32 block) {
+    RIG_ASSERT(ir_block_has_ended(l->proc, block));
+    Ir_Block *b = l->proc->blocks[block];
+    return &b->instrs[b->instrs.count - 1];
+}
+
+static bool has_ended(Lowering *l, s32 block) { return ir_block_has_ended(l->proc, block); }
+
+static s32 new_block(Lowering *l) { return ir_new_block(l->arena, l->proc); }
 
 // The value %v of Rig type `from`, made IR type `to`: widened by from's
 // sign, or truncated to its low bits. (Pointers stay as they are.)
@@ -169,6 +233,67 @@ static s32 lower_operation(Lowering *l, Token_Kind op, Type *t, s32 left, Ast *r
     return emit_binary(l, ir_op_of(op, t), ir_type_of(t), left, r);
 }
 
+// The predicate of a comparison operator, for operands compared as a `t`:
+// < <= > >= compare signed or unsigned numbers by t's sign (a bool, which
+// only == and != take, is unsigned).
+static Ir_Pred ir_pred_of(Token_Kind op, Type *t) {
+    bool s = t->is_signed;
+    switch (op) {
+    case TOKEN_EQUAL_EQUAL: return IR_EQ;
+    case TOKEN_BANG_EQUAL: return IR_NE;
+    case TOKEN_LESS: return s ? IR_SLT : IR_ULT;
+    case TOKEN_LESS_EQUAL: return s ? IR_SLE : IR_ULE;
+    case TOKEN_GREATER: return s ? IR_SGT : IR_UGT;
+    case TOKEN_GREATER_EQUAL: return s ? IR_SGE : IR_UGE;
+    default: RIG_ASSERT(!"not a comparison"); return IR_EQ;
+    }
+}
+
+// a && b and a || b, which evaluate b only when a doesn't decide: a && b is
+// false when a is, a || b true when a is. So b is lowered in a block of its
+// own, which the branch on a reaches only when b is needed:
+//
+//   a && b:                          a || b:
+//     %a = ...                         %a = ...
+//     store %a, slot                   store %a, slot
+//     branch %a, right, join           branch %a, join, right
+//   right:                           right:
+//     %b = ...; store %b, slot         %b = ...; store %b, slot
+//     jump join                        jump join
+//   join:
+//     %result = load slot
+//
+// The result is whichever value was stored last: a's, when b wasn't
+// needed, else b's. In SSA form it would be a phi (phi [%a, entry], [%b,
+// right]); the IR has no phis, so a stack slot holds it instead, which
+// LLVM's mem2reg turns back into a phi when it optimises.
+static s32 lower_logical(Lowering *l, Ast_Binary *b) {
+    s32 slot = emit(l, IR_LOCAL, IR_I1)->result;
+    s32 left = lower_value(l, b->left, &type_bool);
+    emit_store(l, IR_I1, left, slot);
+    s32 test = l->block;
+    s32 right_block = new_block(l);
+    if (b->op == TOKEN_AMP_AMP) {
+        emit_branch(l, left, right_block, -1);
+    } else {
+        emit_branch(l, left, -1, right_block);
+    }
+    l->block = right_block;
+    emit_store(l, IR_I1, lower_value(l, b->right, &type_bool), slot);
+    // b may have made blocks of its own (a && b && c): the jump is from the
+    // one it ended in.
+    s32 join = new_block(l);
+    emit_jump(l, l->block, join);
+    Ir_Instr *branch = terminator_of(l, test);
+    if (b->op == TOKEN_AMP_AMP) {
+        branch->target2 = join;
+    } else {
+        branch->target = join;
+    }
+    l->block = join;
+    return emit_load(l, IR_I1, slot);
+}
+
 static s32 lower_call(Lowering *l, Ast_Call *call);
 
 // The value of an expression the checker didn't mark constant, of its own
@@ -201,12 +326,23 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         Ast_Unary *u = (Ast_Unary *)e;
         Ir_Type t = ir_type_of(e->type);
         s32 x = lower_value(l, u->operand, e->type);
-        // -x is 0 - x; ~x is x xor all ones. Both wrap.
+        // -x is 0 - x; ~x is x xor all ones. Both wrap. !x, on an i1, is x
+        // xor 1.
         if (u->op == TOKEN_MINUS) return emit_binary(l, IR_SUB, t, emit_constant(l, t, 0), x);
+        if (u->op == TOKEN_BANG) return emit_binary(l, IR_XOR, t, x, emit_constant(l, t, 1));
         return emit_binary(l, IR_XOR, t, x, emit_constant(l, t, ~(u64)0));
     }
     case AST_BINARY: {
         Ast_Binary *b = (Ast_Binary *)e;
+        if (b->op == TOKEN_AMP_AMP || b->op == TOKEN_PIPE_PIPE) return lower_logical(l, b);
+        if (e->type == &type_bool) {
+            // A comparison: both operands at the type they meet at (the
+            // checker's operand_type), then a cmp, which gives the i1.
+            Type *t = b->operand_type;
+            s32 left = lower_value(l, b->left, t);
+            s32 right = lower_value(l, b->right, t);
+            return emit_compare(l, ir_pred_of(b->op, t), ir_type_of(t), left, right);
+        }
         return lower_operation(l, b->op, e->type, lower_value(l, b->left, e->type), b->right);
     }
     default: RIG_ASSERT(!"not a value"); return -1;
@@ -225,6 +361,181 @@ static s32 lower_call(Lowering *l, Ast_Call *call) {
 }
 
 static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source);
+
+// if c { T } else { E }:
+//
+//     %c = ...
+//     branch %c, then, else      (no else: branch %c, then, after)
+//   then:
+//     T; jump after
+//   else:
+//     E; jump after
+//   after:
+//
+// A branch that doesn't reach its end (it returns) doesn't jump; when
+// neither does, there's no `after` at all, and nothing that follows is
+// lowered: the current block has ended. else if is an if lowered inside the
+// else block.
+static void lower_if(Lowering *l, Ast_If *branch, Ast_Proc *source) {
+    s32 condition = lower_value(l, branch->condition, &type_bool);
+    s32 test = l->block;
+    emit_branch(l, condition, -1, -1);
+
+    s32 then_block = new_block(l);
+    terminator_of(l, test)->target = then_block;
+    l->block = then_block;
+    lower_block(l, branch->then_block, source);
+    s32 then_end = l->block;  // the then branch's last block: T may have made more
+
+    s32 else_end = -1;
+    if (branch->else_part) {
+        s32 else_block = new_block(l);
+        terminator_of(l, test)->target2 = else_block;
+        l->block = else_block;
+        if (branch->else_part->kind == AST_IF) {
+            lower_if(l, (Ast_If *)branch->else_part, source);
+        } else {
+            lower_block(l, (Ast_Block *)branch->else_part, source);
+        }
+        else_end = l->block;
+    }
+
+    bool then_goes_on = !has_ended(l, then_end);
+    bool else_goes_on = branch->else_part ? !has_ended(l, else_end) : true;  // no else: the false edge
+    if (!then_goes_on && !else_goes_on) return;  // l->block is else_end, which has ended
+    s32 after = new_block(l);
+    if (!branch->else_part) terminator_of(l, test)->target2 = after;
+    if (then_goes_on) emit_jump(l, then_end, after);
+    if (branch->else_part && else_goes_on) emit_jump(l, else_end, after);
+    l->block = after;
+}
+
+// The loop's body, with the loop the innermost one for break and continue;
+// returns its Loop, whose jumps the caller points at their targets
+// (finish_loop) once they're made.
+static Loop lower_loop_body(Lowering *l, Ast *loop, Ast_Block *body, Ast_Proc *source) {
+    array_add(&l->loops, Loop{loop, {}, {}});
+    lower_block(l, body, source);
+    Loop done = l->loops[l->loops.count - 1];
+    l->loops.count--;
+    return done;
+}
+
+// Points the loop's breaks at `exit` and its continues at `next`, the block
+// that starts the next iteration.
+static void finish_loop(Lowering *l, Loop *loop, s32 exit, s32 next) {
+    for (s64 i = 0; i < loop->breaks.count; i++) terminator_of(l, loop->breaks[i])->target = exit;
+    for (s64 i = 0; i < loop->continues.count; i++) terminator_of(l, loop->continues[i])->target = next;
+    array_free(&loop->breaks);
+    array_free(&loop->continues);
+}
+
+// while c { B }:
+//
+//     jump test
+//   test:
+//     %c = ...
+//     branch %c, body, exit
+//   body:
+//     B; jump test               (continue: jump test; break: jump exit)
+//   exit:
+//
+// The condition has a block of its own, since every iteration comes back
+// to it.
+static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
+    s32 test = new_block(l);
+    emit_jump(l, l->block, test);
+    l->block = test;
+    s32 condition = lower_value(l, loop->condition, &type_bool);
+    s32 test_end = l->block;  // the condition may have made blocks (a && b)
+    emit_branch(l, condition, -1, -1);
+
+    s32 body = new_block(l);
+    terminator_of(l, test_end)->target = body;
+    l->block = body;
+    Loop lowered = lower_loop_body(l, loop, loop->body, source);
+    if (!has_ended(l, l->block)) emit_jump(l, l->block, test);
+
+    s32 exit = new_block(l);
+    terminator_of(l, test_end)->target2 = exit;
+    finish_loop(l, &lowered, exit, test);
+    l->block = exit;
+}
+
+// for first..last { B }, with it from first to last, both included, and
+// it_index from 0:
+//
+//     %first = ...; %last = ...       each end once, first then last
+//     it = %first; it_index = 0
+//     %empty = cmp sgt %first, %last  (ugt for an unsigned iterator)
+//     branch %empty, exit, body       none at all when first > last
+//   body:
+//     B; jump step                    (continue: jump step; break: jump exit)
+//   step:
+//     %it = load it
+//     %done = cmp eq %it, %last
+//     branch %done, exit, advance
+//   advance:
+//     it = %it + 1; it_index += 1
+//     jump body
+//   exit:
+//
+// The step compares before it adds: the iteration for last is the final
+// one, and %it + 1 is never computed for it. Testing it <= last after
+// adding instead would never end when last is the type's largest value
+// (for 0..255 on a u8: 255 + 1 wraps to 0, which is <= 255 again).
+static void lower_for(Lowering *l, Ast_For *loop, Ast_Proc *source) {
+    Type *t = loop->iterator->type;
+    Ir_Type type = ir_type_of(t);
+    s32 first = lower_value(l, loop->first, t);
+    s32 last = lower_value(l, loop->last, t);
+    s32 iterator = emit(l, IR_LOCAL, type)->result;
+    emit_store(l, type, first, iterator);
+    s32 index = emit(l, IR_LOCAL, IR_I64)->result;
+    emit_store(l, IR_I64, emit_constant(l, IR_I64, 0), index);
+    array_add(&l->locals, {loop->iterator, iterator});
+    array_add(&l->locals, {loop->index, index});
+    s32 empty = emit_compare(l, t->is_signed ? IR_SGT : IR_UGT, type, first, last);
+    s32 entry = l->block;
+    emit_branch(l, empty, -1, -1);
+
+    s32 body = new_block(l);
+    terminator_of(l, entry)->target2 = body;
+    l->block = body;
+    Loop lowered = lower_loop_body(l, loop, loop->body, source);
+    s32 body_end = l->block;
+
+    s32 step = new_block(l);
+    if (!has_ended(l, body_end)) emit_jump(l, body_end, step);
+    l->block = step;
+    s32 current = emit_load(l, type, iterator);
+    s32 done = emit_compare(l, IR_EQ, type, current, last);
+    emit_branch(l, done, -1, -1);
+
+    s32 advance = new_block(l);
+    terminator_of(l, step)->target2 = advance;
+    l->block = advance;
+    emit_store(l, type, emit_binary(l, IR_ADD, type, current, emit_constant(l, type, 1)), iterator);
+    s32 count = emit_load(l, IR_I64, index);
+    emit_store(l, IR_I64, emit_binary(l, IR_ADD, IR_I64, count, emit_constant(l, IR_I64, 1)), index);
+    emit_jump(l, advance, body);
+
+    s32 exit = new_block(l);
+    terminator_of(l, entry)->target = exit;
+    terminator_of(l, step)->target = exit;
+    finish_loop(l, &lowered, exit, step);
+    l->block = exit;
+}
+
+// break and continue: a jump out of the innermost loop's body, whose target
+// (its exit, or where its next iteration starts) is filled in when the
+// loop's lowering has made it.
+static void lower_jump(Lowering *l, Ast_Jump *jump) {
+    Loop *loop = &l->loops[l->loops.count - 1];
+    RIG_ASSERT(loop->loop == jump->loop);
+    emit_jump(l, l->block, -1);
+    array_add(jump->kind == AST_BREAK ? &loop->breaks : &loop->continues, l->block);
+}
 
 static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     switch (s->kind) {
@@ -269,6 +580,11 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
         break;
     }
     case AST_BLOCK: lower_block(l, (Ast_Block *)s, source); break;
+    case AST_IF: lower_if(l, (Ast_If *)s, source); break;
+    case AST_WHILE: lower_while(l, (Ast_While *)s, source); break;
+    case AST_FOR: lower_for(l, (Ast_For *)s, source); break;
+    case AST_BREAK:
+    case AST_CONTINUE: lower_jump(l, (Ast_Jump *)s); break;
     default: lower_expr(l, s); break;  // a call, its value ignored
     }
 }
@@ -342,5 +658,6 @@ Ir_Module *ir_lower(Ast_File *f, Arena *a) {
 
     table_free(&l.proc_index);
     array_free(&l.locals);
+    array_free(&l.loops);
     return m;
 }
