@@ -1,0 +1,1 @@
+tests/run/string_index_out_of_bounds.rig:9:11: runtime error: index 3 is out of bounds (count 3)

@@ -18,7 +18,7 @@
 // of them keeps every one aligned. An array, [N]T, is N T's one after
 // another: N times T's size, aligned as a T. A view, []T, is a struct of
 // its own, { count: int; data: *T; } (spec 6.5: Jai's order, count first):
-// 16 bytes, aligned to 8.
+// 16 bytes, aligned to 8. A string is a view of bytes, laid out as []u8.
 
 #pragma once
 
@@ -29,7 +29,7 @@ enum Type_Kind : u8 {
     TYPE_INTEGER,  // s8 ... u64, int
     TYPE_BOOL,     // bool: true or false
     TYPE_POINTER,  // *T
-    TYPE_STRING,   // string: a pointer and a length (spec 6.5)
+    TYPE_STRING,   // string: a view of bytes, { count: int; data: *u8; } (spec 6.5)
     TYPE_FLOAT,    // float32, float64: IEEE 754's single and double precision
     TYPE_NULL,     // the type of null, and of nothing else (type_null)
     TYPE_STRUCT,   // a struct a program declares: its fields, in order
@@ -62,7 +62,7 @@ struct Type {
     Arena *arena;    // where this type lives, and the pointer, array and view types made from it: a
                      // struct's is the compilation's arena (and so theirs), freed with it; a
                      // built-in type's, null: it and the types made from it last the whole run
-    Type *element;   // TYPE_ARRAY, TYPE_VIEW: T in [N]T and []T
+    Type *element;   // TYPE_ARRAY, TYPE_VIEW: T in [N]T and []T; TYPE_STRING: u8
     s64 count;       // TYPE_ARRAY: N
     Type *view;      // the type []this, once asked for
     Type *arrays;    // the array types of this element asked for so far ([N]this), linked
@@ -78,12 +78,12 @@ struct Type {
 const s64 TYPE_MAX_SIZE = (s64)1 << 40;
 
 // Where a view's fields are, as its struct would have them: the count, an
-// int, then the pointer to the elements.
+// int, then the pointer to the elements. A string's too.
 const s64 VIEW_COUNT_OFFSET = 0;
 const s64 VIEW_DATA_OFFSET = 8;
 
 // The type a built-in name means (s8 s16 s32 s64 u8 u16 u32 u64 int bool
-// float32 float64 float void), or null. int is s64's size and sign, but its
+// float32 float64 float void string), or null. int is s64's size and sign, but its
 // own type, so messages say int where the program did (spec 6.4: int is
 // s64). float is float32 itself, the same type under a second name, so
 // messages call it float32. void is a type only behind a pointer (*void):
@@ -114,8 +114,14 @@ bool type_is_pointer(Type *t);
 
 // Whether a value of type t is an aggregate: bytes in memory, copied whole,
 // never a value in a register (spec 6.5's "How it's compiled"). Structs,
-// arrays and views are (strings will be).
+// arrays, views and strings are.
 bool type_is_aggregate(Type *t);
+
+// Whether t is laid out as a view, { count: int; data: *T; }, its elements
+// lying elsewhere: a view, []T, or a string, a view of bytes (its element
+// type u8). What reads a view's count and data, indexes it or goes over it
+// with for does the same with a string.
+bool type_is_view_or_string(Type *t);
 
 // The index in struct type t's fields of the one called `name`, or -1.
 s32 type_field_index(Type *t, String name);
@@ -126,8 +132,12 @@ s32 type_field_index(Type *t, String name);
 // void * does, and can't be dereferenced or moved by arithmetic (there's no
 // size to move by). Its size is 0, so nothing can be made of one.
 extern Type type_void;
-extern Type type_string;
 extern Type type_int;
+
+// string: a view of bytes, not ended by a zero (spec 6.5), the type of a
+// string literal. A literal's bytes do end with one, so a literal (and only
+// a literal) also converts to *u8, which C reads up to the zero.
+extern Type type_string;
 
 // The type of null, the pointer to nothing: it converts to every pointer
 // type and to nothing else, taking the type it meets as an untyped constant

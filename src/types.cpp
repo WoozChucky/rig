@@ -12,11 +12,25 @@
 #define INTEGER(name, size, is_signed) BUILT_IN(TYPE_INTEGER, name, size, size, is_signed)
 #define FLOAT(name, size) BUILT_IN(TYPE_FLOAT, name, size, size, false)
 
+static Type integer_types[] = {
+    INTEGER("s8", 1, true),  INTEGER("s16", 2, true),  INTEGER("s32", 4, true),  INTEGER("s64", 8, true),
+    INTEGER("u8", 1, false), INTEGER("u16", 2, false), INTEGER("u32", 4, false), INTEGER("u64", 8, false),
+};
+
+// A view of bytes (spec 6.5), not ended by a zero: a view's layout,
+// { count: int; data: *u8; }, 16 bytes aligned to 8, its elements u8's
+// (element: integer_types[4]). A type of its own rather than []u8, since
+// the two differ: a literal is a string, == compares two strings' bytes,
+// and a foreign procedure takes no string. A cast turns either into the
+// other.
+Type type_string = {
+    TYPE_STRING, 16, 8, false, nullptr, {(const u8 *)"string", 6}, nullptr, nullptr, {}, nullptr, nullptr,
+    &integer_types[4], 0, nullptr, nullptr, nullptr,
+};
+
 // void's size is 0 (size_of says it has none) and its alignment 1, so a
 // *void says nothing about where it points.
 Type type_void = BUILT_IN(TYPE_VOID, "void", 0, 1, false);
-// A pointer and a length, 16 bytes, each 8 aligned (spec 6.5).
-Type type_string = BUILT_IN(TYPE_STRING, "string", 16, 8, false);
 Type type_int = INTEGER("int", 8, true);
 // C's _Bool: one byte.
 Type type_bool = BUILT_IN(TYPE_BOOL, "bool", 1, 1, false);
@@ -40,11 +54,6 @@ static Type float_name = {
     nullptr,    0, nullptr, nullptr, nullptr,
 };
 
-static Type integer_types[] = {
-    INTEGER("s8", 1, true),  INTEGER("s16", 2, true),  INTEGER("s32", 4, true),  INTEGER("s64", 8, true),
-    INTEGER("u8", 1, false), INTEGER("u16", 2, false), INTEGER("u32", 4, false), INTEGER("u64", 8, false),
-};
-
 // Every type a program can name, by its built-in name: the one list
 // type_from_name searches. A new built-in type goes here. The VS Code
 // grammar's type names are generated from it too (tests/unit/test_grammar.cpp),
@@ -52,7 +61,7 @@ static Type integer_types[] = {
 static Type *const NAMED_TYPES[] = {
     &integer_types[0], &integer_types[1], &integer_types[2], &integer_types[3],  // s8 s16 s32 s64
     &integer_types[4], &integer_types[5], &integer_types[6], &integer_types[7],  // u8 u16 u32 u64
-    &type_int,  &type_bool,  &float_name, &type_float32, &type_float64, &type_void,
+    &type_int,  &type_bool,  &float_name, &type_float32, &type_float64, &type_void, &type_string,
 };
 static_assert(sizeof integer_types / sizeof integer_types[0] == 8, "NAMED_TYPES lists integer_types one by one");
 
@@ -76,7 +85,11 @@ bool type_is_pointer(Type *t) {
 }
 
 bool type_is_aggregate(Type *t) {
-    return t->kind == TYPE_STRUCT || t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW;
+    return t->kind == TYPE_STRUCT || t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW || t->kind == TYPE_STRING;
+}
+
+bool type_is_view_or_string(Type *t) {
+    return t->kind == TYPE_VIEW || t->kind == TYPE_STRING;
 }
 
 s32 type_field_index(Type *t, String name) {
