@@ -426,6 +426,11 @@ TEST(source_path_is_absolute_and_normalised) {
     CHECK_STR(absolute(&a, "C:\\", "x.rig", true), "C:\\x.rig");
     CHECK_STR(absolute(&a, "C:\\dev", "a//b\\\\c.rig", true), "C:\\dev\\a\\b\\c.rig");
     CHECK_STR(absolute(&a, "C:\\dev", "..\\..\\..\\x.rig", true), "C:\\x.rig");
+    // An empty path is the directory itself, and nothing of it is read: not
+    // even its first byte, which a {} String doesn't have.
+    CHECK_STR(absolute(&a, "C:\\dev", "", true), "C:\\dev");
+    CHECK_STR(path_absolute(&a, str("C:\\dev"), String{}, true), "C:\\dev");
+    CHECK_STR(path_absolute(&a, str("/home"), String{}, false), "/home");
     // A network share's \\server\share is its root, as a drive is.
     CHECK_STR(absolute(&a, "\\\\server\\share\\dev", "..\\..\\x.rig", true), "\\\\server\\share\\x.rig");
     CHECK_STR(absolute(&a, "C:\\dev", "//server/share/x.rig", true), "\\\\server\\share\\x.rig");
