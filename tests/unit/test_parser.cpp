@@ -1686,6 +1686,39 @@ TEST(types_and_expressions_share_max_depth) {
     arena_free(&a);
 }
 
+TEST(deep_types_are_named_in_messages) {
+    // A message naming a type names every level of it. A type written at
+    // the limit, 1000 levels, is named in a message as any other; one the
+    // checker infers has no limit (each `pN := *pM;` is a pointer a level
+    // deeper), and is named too, in a loop: naming it by recursing took
+    // time doubling with each level, and stack with the levels.
+    Arena a = arena_make();
+    const char *stars = nested_source(&a, "", "*", MAX_DEPTH, "", "", "");
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    x : ", "*", MAX_DEPTH, "int", "", " = 5;\n}\n")),
+              string_cstr(&a, string_printf(&a, "2:%d: a value of type 'int' doesn't convert to '%sint' implicitly\n",
+                                            8 + MAX_DEPTH + 7, stars)));
+    const char *arrays = nested_source(&a, "", "[1]", MAX_DEPTH / 2, "", "", "");
+    const char *views = nested_source(&a, "", "[]", MAX_DEPTH / 2, "", "", "");
+    const char *mixed = string_cstr(&a, string_printf(&a, "%s%sint", arrays, views));
+    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, "main :: () {\n    x : %s = 5;\n}\n", mixed))),
+              string_cstr(&a, string_printf(&a, "2:%lld: a value of type 'int' doesn't convert to '%s' implicitly\n",
+                                            (long long)(8 + strlen(mixed) + 4), mixed)));
+    // Ten thousand locals, each a pointer to the one before: they build,
+    // and the last one's type, ten thousand levels deep, is named.
+    const s64 LOCALS = 10000;
+    char *text = (char *)arena_alloc(&a, (u64)(LOCALS * 32 + 256), 1);
+    char *at = text + sprintf(text, "main :: () {\n    p0 := 0;\n");
+    for (s64 i = 1; i <= LOCALS; i++) at += sprintf(at, "    p%lld := *p%lld;\n", (long long)i, (long long)(i - 1));
+    sprintf(at, "    x := p%lld;\n}\n", (long long)LOCALS);
+    CHECK(builds(&a, text));
+    sprintf(at, "    x : int = p%lld;\n}\n", (long long)LOCALS);
+    const char *deepest = nested_source(&a, "", "*", LOCALS, "int", "", "");
+    CHECK_STR(check_source(&a, text),
+              string_cstr(&a, string_printf(&a, "%lld:15: a value of type '%s' doesn't convert to 'int' implicitly\n",
+                                            (long long)(LOCALS + 3), deepest)));
+    arena_free(&a);
+}
+
 // Writes an else-if chain of `arms` arms at `at`, one a line after
 // `indent`, arm i taken when x == i and doing `body` (a printf format, its
 // %lld the arm's number): `if x == 0 { ... }`, then `else if x == 1 { ... }`
