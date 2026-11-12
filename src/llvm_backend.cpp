@@ -682,17 +682,21 @@ static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Glob
     LLVMValueRef *values = arena_new_array<LLVMValueRef>(a, most);
     for (s64 i = 0; i <= g->relocs.count; i++) {
         // The run of bytes up to the next address, or to the end.
-        s64 end = i < g->relocs.count ? g->relocs[i].offset : g->size;
-        RIG_ASSERT(end >= at);  // the relocations in increasing order, none overlapping another
+        bool last = i == g->relocs.count;
+        Ir_Reloc r = last ? Ir_Reloc{} : g->relocs[i];
+        s64 end = last ? g->size : r.offset;
+        // The relocations in increasing order, none overlapping another, and
+        // each inside the global and naming one: checked before any byte is
+        // read.
+        RIG_ASSERT(end >= at && end <= g->size);
+        RIG_ASSERT(last || (r.offset + 8 <= g->size && r.global >= 0 && r.global < m->globals.count));
         if (end > at) {
             types[count] = bytes_type(c, end - at);
             if (globals) values[count] = LLVMConstStringInContext2(c, (const char *)bytes + at, (size_t)(end - at), 1);
             count++;
         }
-        if (i == g->relocs.count) break;
+        if (last) break;
         // The address, 8 bytes, which the IR's bytes leave zero.
-        Ir_Reloc r = g->relocs[i];
-        RIG_ASSERT(r.offset + 8 <= g->size && r.global >= 0 && r.global < m->globals.count);
         for (s64 k = 0; k < 8; k++) RIG_ASSERT(bytes[r.offset + k] == 0);
         types[count] = LLVMPointerTypeInContext(c, 0);
         if (globals) values[count] = globals[r.global];
