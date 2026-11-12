@@ -1,0 +1,3 @@
+tests/errors/struct_contains_itself.rig:5:1: error: 'Node' contains itself; it can hold a pointer to itself, *Node
+    Node :: struct {
+    ^

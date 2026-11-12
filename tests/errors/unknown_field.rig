@@ -1,0 +1,10 @@
+// A field the struct doesn't have, read through a pointer: the message
+// names the struct and is at the field's name.
+Vec2 :: struct { x: float; y: float; }
+
+length :: (v: *Vec2) -> float {
+    return v.x + v.z;
+}
+
+main :: () {
+}
