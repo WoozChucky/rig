@@ -1,9 +1,11 @@
 // ast.h: the syntax tree, what the parser makes of the tokens.
 //
-// Procedures (with a body, or #foreign), their parameters and types; in a
-// body, blocks of statements: local variables and constants, assignments,
-// returns, if, while, for, break, continue and expressions; expressions
-// made of calls, names, strings, integers, bools, operators and casts.
+// Procedures (with a body, or #foreign), their parameters and types, and
+// global variables and constants; in a body, blocks of statements: local
+// variables and constants (several variables at once, from a call's
+// results), assignments, returns, if, while, for, break, continue and
+// expressions; expressions made of calls, names, strings, integers, bools,
+// operators and casts.
 // Each node kind is a struct that starts with Ast, so a pointer to any node
 // is also an Ast *, and `kind` says which it is.
 //
@@ -39,6 +41,7 @@ enum Ast_Kind : u8 {
     AST_BREAK,         // Ast_Jump: break;
     AST_CONTINUE,      // Ast_Jump: continue;
     AST_CAST,          // Ast_Cast: cast(T) e  cast,trunc(T) e
+    AST_MULTI_VAR,     // Ast_Multi_Var: a, b := f();
 };
 
 struct Ast {
@@ -80,12 +83,23 @@ struct Ast_Block : Ast {
 struct Ast_Proc : Ast {
     String name;
     Array<Ast_Param *> params;
-    Array<Ast_Type *> results;  // what it returns: none, or one (milestone 2a's Task 5: several)
+    Array<Ast_Type *> results;  // what it returns: none, one or several (-> int, int)
     Ast_Block *body;            // null for a foreign procedure
     bool is_foreign;
     bool is_broken;             // the parser gave up on it
     String foreign_library;     // #foreign's library name
     Position library_pos;       // where that name is written
+};
+
+// How far the checker has got with a global variable or a top-level
+// constant. Those are checked where they're first needed, so they can be
+// used in any order (checker.cpp's resolve_global): a use that finds one
+// under way means its value needs itself.
+enum Ast_Resolve : u8 {
+    RESOLVE_NOT_YET,
+    RESOLVE_UNDER_WAY,
+    RESOLVE_CYCLE,      // under way, and found to need itself (reported once)
+    RESOLVE_DONE,
 };
 
 // A variable: `x : T = e;`, `x := e;` (its type is e's), `x : T;` (zeroed)
@@ -96,8 +110,9 @@ struct Ast_Var : Ast {
     Ast_Type *type_expr;    // null for :=
     Ast *value;             // null: zeroed, or left uninitialised (---)
     bool is_uninitialized;  // = ---
-    bool is_global;         // declared at the top level (Task 5)
+    bool is_global;         // declared at the top level: lives for the whole run, not on the stack
     bool is_iterator;       // a for loop's it, it_index or named iterator: read-only
+    Ast_Resolve resolve;    // a global's: how far the checker has got with it
 };
 
 // A constant: `N :: e;`. The checker folds e, so the constant's value is in
@@ -105,18 +120,21 @@ struct Ast_Var : Ast {
 struct Ast_Const : Ast {
     String name;
     Ast *value;
+    Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it
 };
 
-// An assignment: `x = e;`, or a compound one, `x += e;` meaning x = x + e.
-// pos is the operator's.
+// An assignment: `x = e;`, or a compound one, `x += e;` meaning x = x + e,
+// or one with several targets, `a, b = f();`, which receive the call's
+// results in order (op is then TOKEN_EQUAL). pos is the operator's.
 struct Ast_Assign : Ast {
     Token_Kind op;          // TOKEN_EQUAL, or a compound: TOKEN_PLUS_EQUAL ...
-    Array<Ast *> targets;   // one, for now (Task 5: a, b = f();)
+    Array<Ast *> targets;   // one, or several for a, b = f();
     Ast *value;
 };
 
+// return;  return e;  return a, b;  one value per result of the procedure.
 struct Ast_Return : Ast {
-    Array<Ast *> values;  // none, or one (Task 5: several)
+    Array<Ast *> values;
 };
 
 // A prefix operator applied to an operand: -e, ~e, !e.
@@ -201,10 +219,28 @@ struct Ast_Cast : Ast {
     bool is_trunc;        // cast,trunc
 };
 
+// Several variables declared at once from a call's several results:
+// `q, r := divmod(7, 2);`. Each name is an Ast_Var with no value of its own,
+// at its name; the node is at the first name. The checker gives each
+// variable the type of the result it receives, in order.
+struct Ast_Multi_Var : Ast {
+    Array<Ast_Var *> vars;
+    Ast *value;  // the call
+};
+
 // A parsed file: its declarations, in source order, broken ones included.
+// Procedures (and broken entries, which are Ast_Procs) are in procs; the
+// globals, top-level variables (Ast_Var, is_global set) and constants
+// (Ast_Const), in globals. Each list is in source order on its own;
+// ast_declarations merges them back by position.
 struct Ast_File {
     Array<Ast_Proc *> procs;
+    Array<Ast *> globals;
 };
+
+// The file's declarations, procedures (broken entries included) and globals
+// together, in source order. The caller frees the Array.
+Array<Ast *> ast_declarations(Ast_File *file);
 
 // A new, zeroed node of struct T and kind `kind`, in the arena.
 template<typename T>
@@ -237,5 +273,11 @@ Token_Kind compound_operator(Token_Kind op);
 //   (for it (int 0) (int 9) (block ...))      for 0..9 { ... }
 //   (for i (int 0) (int 9) (block ...))       for i: 0..9 { ... }
 //   (cast u8 (name x))  cast(u8) x;   (cast,trunc u8 (name x))  cast,trunc(u8) x;
+//   (proc divmod (params ...) (returns int int) (block ...))   -> int, int
+//   (return (name q) (name r))                                  return q, r;
+//   (multi-var (q r) (call divmod (int 7) (int 2)))            q, r := divmod(7, 2);
+//   (assign = ((name a) (name b)) (call swap (name a) (name b)))   a, b = swap(a, b);
+// Globals print as locals do, (var counter int) and (const LIMIT (int 100)),
+// among the procedures in source order.
 String ast_dump(Arena *a, Ast_File *file);
 String ast_dump_node(Arena *a, Ast *node);

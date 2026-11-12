@@ -1,5 +1,5 @@
 // test_ir.cpp: lowering checked trees to Rig's IR (issue #10, with tokens
-// by hand; issues #33, #34 and #35, from real source), and the IR's
+// by hand; issues #33 to #36, from real source), and the IR's
 // builders and printing (issue #32), with IR by hand (helpers.cpp).
 
 #include "test.h"
@@ -1040,5 +1040,150 @@ TEST(cast_of_a_string_literal_is_its_address) {
               "  ret %0\n"
               "}\n");
     CHECK(!contains(ir, "panic"));
+    arena_free(&a);
+}
+
+// Lowering several results, globals and top-level constants (issue #36).
+
+TEST(ir_of_several_results) {
+    // A return gives every value, each at its result's type. Names that
+    // receive a call's results are slots stored from the call's values, in
+    // order; targets are stored the same way, a narrower result widened to
+    // its target first.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "pair :: (a: int) -> int, u8 {\n"
+                                          "    return a + 1, 7;\n"
+                                          "}\n"
+                                          "main :: () {\n"
+                                          "    x, y := pair(1);\n"
+                                          "    w : int;\n"
+                                          "    x, w = pair(x);\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "pair"),
+              "proc @pair(i64) -> i64, i8 zeroext {\n"
+              "b0:\n"
+              "  %1 = const i64 1\n"
+              "  %2 = add i64 %0, %1\n"
+              "  %3 = const i8 7\n"
+              "  ret %2, %3\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local i64\n"
+              "  %1 = local i8\n"
+              "  %2 = const i64 1\n"
+              "  %3, %4 = call @pair(%2)\n"
+              "  store i64 %3, %0\n"
+              "  store i8 %4, %1\n"
+              "  %5 = local i64\n"
+              "  %6 = const i64 0\n"
+              "  store i64 %6, %5\n"
+              "  %7 = load i64 %0\n"
+              "  %8, %9 = call @pair(%7)\n"
+              "  store i64 %8, %0\n"
+              "  %10 = zext i8 %9 to i64\n"
+              "  store i64 %10, %5\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(a_call_as_one_value_is_its_first_result) {
+    // Its other results are numbered too, and left unused.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "pair :: () -> int, int { return 1, 2; }\n"
+                                          "main :: () { x := pair() + 1; }\n"));
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local i64\n"
+              "  %1, %2 = call @pair()\n"
+              "  %3 = const i64 1\n"
+              "  %4 = add i64 %1, %3\n"
+              "  store i64 %4, %0\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(ir_of_globals) {
+    // A global variable is an internal global of its type, its first value
+    // known while compiling (zero without one, or with ---), read and
+    // written through its address. Constants never reach the IR: their
+    // uses are constants already. String literals keep their own count.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                          "counter : int;\n"
+                                          "limit : u8 = 200;\n"
+                                          "flag : bool = !STOPPED;\n"
+                                          "junk : s8 = ---;\n"
+                                          "below : s16 = -2;\n"
+                                          "N :: 5;\n"
+                                          "STOPPED :: false;\n"
+                                          "bump :: () { counter += N; }\n"
+                                          "main :: () {\n"
+                                          "    bump();\n"
+                                          "    x := counter;\n"
+                                          "    puts(\"hi\");\n"
+                                          "}\n"));
+    CHECK(contains(ir,
+                   "global @counter: i64 = 0\n"
+                   "global @limit: i8 = 200\n"
+                   "global @flag: i1 = 1\n"
+                   "global @junk: i8 = 0\n"
+                   "global @below: i16 = 65534\n"
+                   "global @str.0 = \"hi\\00\"\n"));
+    CHECK(!contains(ir, "@N"));
+    CHECK(!contains(ir, "@STOPPED"));
+    CHECK_STR(proc_ir(ir, "bump"),
+              "proc @bump() {\n"
+              "b0:\n"
+              "  %0 = addr @counter\n"
+              "  %1 = load i64 %0\n"
+              "  %2 = const i64 5\n"
+              "  %3 = add i64 %1, %2\n"
+              "  store i64 %3, %0\n"
+              "  ret\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  call @bump()\n"
+              "  %0 = local i64\n"
+              "  %1 = addr @counter\n"
+              "  %2 = load i64 %1\n"
+              "  store i64 %2, %0\n"
+              "  %3 = addr @str.0\n"
+              "  %4 = call @puts(%3)\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(several_targets_can_be_globals) {
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "pair :: () -> int, int { return 1, 2; }\n"
+                                          "g : int;\n"
+                                          "main :: () {\n"
+                                          "    x : int;\n"
+                                          "    g, x = pair();\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local i64\n"
+              "  %1 = const i64 0\n"
+              "  store i64 %1, %0\n"
+              "  %2, %3 = call @pair()\n"
+              "  %4 = addr @g\n"
+              "  store i64 %2, %4\n"
+              "  store i64 %3, %0\n"
+              "  ret\n"
+              "}\n");
     arena_free(&a);
 }

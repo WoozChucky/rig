@@ -1,0 +1,6 @@
+tests/errors/global_after_unclosed_parenthesis.rig:6:1: error: expected ')', found identifier 'start'
+    start := 1;
+    ^
+tests/errors/global_after_unclosed_parenthesis.rig:10:1: error: expected ')', found '}'
+    }
+    ^

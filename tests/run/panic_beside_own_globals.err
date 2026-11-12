@@ -1,0 +1,1 @@
+tests/run/panic_beside_own_globals.rig:12:25: runtime error: division by zero

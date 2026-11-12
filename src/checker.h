@@ -11,7 +11,10 @@
 // The rules (spec 6.1 and 6.4, which record the calls made here):
 //
 // Names.
-// - The program's procedures are visible everywhere, in any order.
+// - The program's procedures, global variables and top-level constants
+//   are visible everywhere, in any order. They share one set of names: a
+//   global can't take a procedure's ("'x' is already declared at
+//   PATH:L:C").
 // - A name declared in a block (a variable or a constant) is visible from
 //   after its declaration to the end of the block. An inner block may
 //   declare the same name again, hiding the outer one; the same block may
@@ -115,19 +118,50 @@
 //   at, int when both are untyped. it_index is an int.
 // - break and continue act on the innermost loop around them; outside any:
 //   "'break' is only allowed inside a loop".
-// - A return gives a value exactly when its procedure returns one. A
-//   procedure that returns a value mustn't reach the '}' of its body: a
-//   block reaches its end unless its last statement is a return, a block
-//   that doesn't reach its own end, an if with an else whose branches both
-//   don't, or a `while` whose condition is the constant true and that has
-//   no break of its own. An if or while whose condition was an error
-//   doesn't reach its end either, so the condition's is the one message.
+// - A return gives one value per result of its procedure ("'f' returns
+//   's32', but this return gives no value", "'g' returns nothing, but this
+//   return gives a value", "'divmod' returns 2 values, but this return
+//   gives 1"), each converting to its result's type. A procedure that
+//   returns values must return all of them on every path, so it mustn't
+//   reach the '}' of its body ("'f' must return a value on every path, and
+//   this one reaches its end", or "'divmod' must return its values on every
+//   path, ..." when it has several). A block reaches its end unless its
+//   last statement is a return, a block that doesn't reach its own end, an
+//   if with an else whose branches both don't, or a `while` whose condition
+//   is the constant true and that has no break of its own. An if or while
+//   whose condition was an error doesn't reach its end either, so the
+//   condition's is the one message.
 // - An expression statement must be a call, whose value may be ignored
 //   (spec 6.7).
 //
+// Several results (spec 6.7).
+// - `q, r := f();` declares a variable per result of f, each of its
+//   result's type; `a, b = f();` assigns them, each converting to its
+//   target's type. The value must be a call with exactly that many results:
+//   "'divmod' returns 2 values, but 3 names receive them" (for targets
+//   too), or for anything but a call "only a call can give several values,
+//   as in q, r := divmod(7, 2);".
+// - A call used as one value (an operand, an argument, x := f()) gives its
+//   first result.
+// - A foreign procedure returns at most one value, as C does: "a foreign
+//   procedure can return at most one value", at the second.
+//
+// Globals and top-level constants.
+// - A global variable is declared as a local one is. Its value must be
+//   known while compiling ("a global's value must be known while
+//   compiling, for now"): it's written into the program's file. Without
+//   one, or with ---, it starts at zero.
+// - A top-level constant follows a local one's rules.
+// - Both are checked where they're first needed (in another's value, or in
+//   source order), so their order doesn't matter: in `A :: B + 1; B :: 2;`
+//   A is 3. A value that needs itself, directly or through others, is "'A'
+//   is defined in terms of itself", at the name whose value was being
+//   worked out when the circle closed.
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
-// - main must exist, have a body, take nothing and return nothing.
+// - main must exist as a procedure, have a body, take nothing and return
+//   nothing.
 //
 // After an error, an expression whose type is unknown (null) reports
 // nothing more, so one mistake gives one message.
