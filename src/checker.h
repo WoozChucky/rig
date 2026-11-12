@@ -41,12 +41,19 @@
 //   type, an assignment, an argument, a return), it takes that type if its
 //   value fits, else "V doesn't fit in 'T'" (V signed, in decimal). Meeting
 //   none (x := 5;), it becomes an int.
-// - + - * & | ^: both operands untyped, the result is untyped; one untyped,
-//   it takes the other's type; both typed, the same type, or the type the
-//   other widens to implicitly (same sign and wider, or unsigned into a
-//   wider signed type; int with s64 gives the left one's). Otherwise
-//   "mismatched types 'A' and 'B' for 'OP'; cast one of them". No
-//   promotion: u8 + u8 is a u8, and wraps at 8 bits.
+// - + - * / % & | ^: both operands untyped, the result is untyped; one
+//   untyped, it takes the other's type; both typed, the same type, or the
+//   type the other widens to implicitly (same sign and wider, or unsigned
+//   into a wider signed type; int with s64 gives the left one's).
+//   Otherwise "mismatched types 'A' and 'B' for 'OP'; cast one of them".
+//   No promotion: u8 + u8 is a u8, and wraps at 8 bits.
+// - / truncates toward zero and % takes the dividend's sign, as in C. A
+//   divisor that is the constant 0 is "division by zero", at the operator
+//   (x /= 0 and x %= 0 too); any other divisor not known while compiling is
+//   checked at run time (lower.cpp). Untyped constants divide exactly, so
+//   int's most negative value / -1 is "constant overflows 'int'"; typed
+//   ones wrap, as at run time: the most negative value / -1 is itself, and
+//   % -1 is 0.
 // - << >>: the result has the left operand's type (int when that's untyped
 //   and the amount isn't a constant); the amount is any integer, masked to
 //   the left's width, in constants too.
@@ -56,6 +63,21 @@
 // - A string literal has type string, and converts to *u8 implicitly (its
 //   bytes are stored with a zero after them, Jai's rule, so C can read it).
 //   A variable can't hold a string yet.
+//
+// Casts.
+// - cast(T) e gives a T. From an integer to an integer it keeps the number:
+//   a constant that isn't one of T's values is "V doesn't fit in 'T'", at
+//   the cast, and any other value is checked at run time. From a bool to an
+//   integer: 0 or 1. An integer to a bool: "can't cast 'int' to 'bool':
+//   compare instead, as in x != 0". Anything else only to the type it
+//   converts to implicitly (its own, or a string literal's *u8); otherwise
+//   "can't cast '*u8' to 'int'".
+// - cast,trunc(T) e is C's conversion, unchecked: narrowing keeps the low
+//   bits, widening extends by the source's sign (cast,trunc(u8) 300 is the
+//   u8 constant 44). It takes integers only: "cast,trunc only takes
+//   integers".
+// - A cast of a constant is a constant of T; an untyped one is an int
+//   first.
 //
 // Bools and comparisons.
 // - true and false are bool constants. A bool isn't an integer, and

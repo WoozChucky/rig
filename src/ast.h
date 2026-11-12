@@ -3,9 +3,9 @@
 // Procedures (with a body, or #foreign), their parameters and types; in a
 // body, blocks of statements: local variables and constants, assignments,
 // returns, if, while, for, break, continue and expressions; expressions
-// made of calls, names, strings, integers, bools and operators. Each node
-// kind is a struct that starts with Ast, so a pointer to any node is also
-// an Ast *, and `kind` says which it is.
+// made of calls, names, strings, integers, bools, operators and casts.
+// Each node kind is a struct that starts with Ast, so a pointer to any node
+// is also an Ast *, and `kind` says which it is.
 //
 // Nodes live in the compiler's arena and start zeroed (ast_new). Their
 // Arrays are on the heap and live as long as the compilation.
@@ -38,6 +38,7 @@ enum Ast_Kind : u8 {
     AST_FOR,           // Ast_For: for a..b { ... }  for i: a..b { ... }
     AST_BREAK,         // Ast_Jump: break;
     AST_CONTINUE,      // Ast_Jump: continue;
+    AST_CAST,          // Ast_Cast: cast(T) e  cast,trunc(T) e
 };
 
 struct Ast {
@@ -188,6 +189,18 @@ struct Ast_Jump : Ast {
                 // checker; null outside any loop
 };
 
+// cast(T) e or cast,trunc(T) e; pos is the 'cast'. A prefix operator: it
+// takes the operand after it as - does, so cast(u8) a / b is
+// (cast(u8) a) / b. Plain cast is checked: the value must be the same number
+// in T, or the program stops with a runtime error. cast,trunc is C's
+// conversion, unchecked: narrowing keeps the low bits, widening extends by
+// the source's sign (spec 6.4).
+struct Ast_Cast : Ast {
+    Ast_Type *type_expr;  // T
+    Ast *value;           // e
+    bool is_trunc;        // cast,trunc
+};
+
 // A parsed file: its declarations, in source order, broken ones included.
 struct Ast_File {
     Array<Ast_Proc *> procs;
@@ -223,5 +236,6 @@ Token_Kind compound_operator(Token_Kind op);
 //                 if c { ... } else if d { ... } else { ... }
 //   (for it (int 0) (int 9) (block ...))      for 0..9 { ... }
 //   (for i (int 0) (int 9) (block ...))       for i: 0..9 { ... }
+//   (cast u8 (name x))  cast(u8) x;   (cast,trunc u8 (name x))  cast,trunc(u8) x;
 String ast_dump(Arena *a, Ast_File *file);
 String ast_dump_node(Arena *a, Ast *node);

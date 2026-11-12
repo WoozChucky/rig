@@ -182,8 +182,11 @@ Ir_Instr *ir_emit_call(Ir_Module *m, Ir_Proc *p, s32 block, s32 callee, Array<s3
 // emitted into it.
 bool ir_block_has_ended(Ir_Proc *p, s32 block);
 
-// The module for a file that checked without errors (lower.cpp).
-Ir_Module *ir_lower(Ast_File *f, Arena *a);
+// The module for a file that checked without errors (lower.cpp). `d` holds
+// the paths of the files the tree's positions refer to: a runtime error's
+// message names its place in the source as PATH:LINE:COL, PATH as given to
+// rig build (spec 6.4).
+Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a);
 
 // The module as text, in the format above.
 String ir_print(Arena *a, Ir_Module *m);

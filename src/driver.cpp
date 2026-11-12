@@ -92,6 +92,9 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin) {
         diag_sort(&d);
         diag_print(&d);
     }
+    // Lowered while d still holds the file's path, which a runtime error's
+    // message names; the module keeps its own copy.
+    Ir_Module *module = ir_lower(tree, &d, a);
     diag_free(&d);
     array_free(&tokens);
     return ok ? tree : nullptr;
@@ -112,7 +115,7 @@ static int build(Arena *a, String path, String output) {
     output = executable_path(a, output, name, target);
 
     String error = {};
-    if (!llvm_emit_object(ir_lower(tree, a), target, object, a, &error)) {
+    if (!llvm_emit_object(module, target, object, a, &error)) {
         // LLVM's message is the system's alone ("permission denied"); the
         // path says which file.
         fprintf(stderr, "rig: error: cannot write '" STR_FMT "': " STR_FMT "\n", STR_ARG(object), STR_ARG(error));

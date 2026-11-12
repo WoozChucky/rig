@@ -147,7 +147,8 @@ static Type *check_target(Checker *c, Ast *target) {
 
 // x = e; converts e to x's type. x op= e; is x = x op e, so x must be an
 // integer, and e converts to x's type, as an untyped constant or a
-// narrower integer does (a shift's amount: any integer).
+// narrower integer does (a shift's amount: any integer). x /= 0 and
+// x %= 0 are "division by zero", as x / 0 is, at the operator.
 static void check_assign(Checker *c, Ast_Assign *assign) {
     Ast *target = assign->targets[0];
     Type *to = check_target(c, target);
@@ -168,6 +169,8 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
         check_default_type(assign->value);
     } else if (!check_convert(c, assign->value, to)) {
         report_no_conversion(c, assign->value, to);
+    } else if (is_division(op) && assign->value->is_constant && assign->value->constant == 0) {
+        diag_error(c->diag, assign->pos, "division by zero");
     }
 }
 

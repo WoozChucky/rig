@@ -62,3 +62,6 @@ bool check_both_integers(Checker *c, Type *left, Type *right, Position at, const
 // other's (checker.h). Null after "mismatched types 'A' and 'B' for 'OP';
 // cast one of them", at `at`. Both untyped: the untyped type.
 Type *check_unify_integers(Checker *c, Ast *left, Ast *right, Position at, const char *op_name);
+
+// Whether op is / or %: the operators whose divisor mustn't be 0.
+bool is_division(Token_Kind op);

@@ -1,0 +1,7 @@
+// A cast between types of one width but other signs checks the sign bit:
+// an s32's -1 isn't a u32, so the program stops at the cast with status
+// 101. (cast,trunc(u32) would keep the bits: 4294967295.)
+main :: () {
+    x : s32 = -1;
+    y := cast(u32) x;
+}

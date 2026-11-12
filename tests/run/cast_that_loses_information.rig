@@ -1,0 +1,7 @@
+// A cast that would change the number stops the program with a runtime
+// error, at the cast: 300 isn't a u8. cast,trunc(u8) is the way to keep
+// the low bits on purpose.
+main :: () {
+    x : int = 300;
+    y := cast(u8) x;
+}

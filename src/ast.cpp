@@ -8,6 +8,8 @@ Token_Kind compound_operator(Token_Kind op) {
     case TOKEN_PLUS_EQUAL: return TOKEN_PLUS;
     case TOKEN_MINUS_EQUAL: return TOKEN_MINUS;
     case TOKEN_STAR_EQUAL: return TOKEN_STAR;
+    case TOKEN_SLASH_EQUAL: return TOKEN_SLASH;
+    case TOKEN_PERCENT_EQUAL: return TOKEN_PERCENT;
     case TOKEN_AMP_EQUAL: return TOKEN_AMP;
     case TOKEN_PIPE_EQUAL: return TOKEN_PIPE;
     case TOKEN_CARET_EQUAL: return TOKEN_CARET;
@@ -263,6 +265,15 @@ static void dump(Array<u8> *buffer, Ast *node) {
         dump(buffer, loop->last);
         out(buffer, " ");
         dump(buffer, loop->body);
+        out(buffer, ")");
+        break;
+    }
+    case AST_CAST: {
+        Ast_Cast *cast = (Ast_Cast *)node;
+        out(buffer, cast->is_trunc ? "(cast,trunc " : "(cast ");
+        dump_type(buffer, cast->type_expr);
+        out(buffer, " ");
+        dump(buffer, cast->value);
         out(buffer, ")");
         break;
     }
