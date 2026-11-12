@@ -1493,6 +1493,27 @@ TEST(several_targets_receive_every_result) {
     arena_free(&a);
 }
 
+TEST(several_targets_are_places) {
+    // Each of several targets is a place, as one target is: p.* and pp.*.*
+    // are, a call and a parameter aren't.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "two :: () -> int, int { return 1, 2; }\n"
+                           "f :: (p: *int, q: int) {\n"
+                           "    x : int;\n"
+                           "    p.*, x = two();\n"
+                           "    two(), x = two();\n"
+                           "    x, q = two();\n"
+                           "    r := p;\n"
+                           "    pp := *r;\n"
+                           "    pp.*.*, p.* = two();\n"
+                           "}\n"
+                           "main :: () { }\n"),
+              "5:5: only a variable, a field or an element can be assigned to\n"
+              "6:8: can't assign to 'q': it's a parameter\n");
+    arena_free(&a);
+}
+
 TEST(first_result_as_a_value) {
     // A call used as one value gives its first result (spec 6.7).
     Arena a = arena_make();
@@ -2335,6 +2356,28 @@ TEST(pointer_arithmetic) {
               "19:7: '+=' needs numbers, not '*s32'\n"
               "20:12: can't do arithmetic on a '*void'; cast it to a pointer to something first\n"
               "21:12: '+' moves a pointer by an integer, not 'bool'\n");
+    arena_free(&a);
+}
+
+TEST(only_an_integer_minus_a_pointer_is_subtracting_from_an_integer) {
+    // 1 - p is an integer minus a pointer, which means nothing; with
+    // anything else on the left, '-' is p moved by a value that isn't an
+    // integer, the message n + p gets.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    a := 1;\n"
+                           "    p := *a;\n"
+                           "    f := 1.5 - p;\n"
+                           "    g := true - p;\n"
+                           "    h := null - p;\n"
+                           "    n : u8 = 1;\n"
+                           "    i := n - p;\n"
+                           "}\n"),
+              "4:14: '-' moves a pointer by an integer, not 'float32'\n"
+              "5:15: '-' moves a pointer by an integer, not 'bool'\n"
+              "6:15: '-' moves a pointer by an integer, not 'null'\n"
+              "8:12: can't subtract a pointer from an integer\n");
     arena_free(&a);
 }
 

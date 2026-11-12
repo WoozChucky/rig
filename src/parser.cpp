@@ -35,11 +35,11 @@ struct Parser {
 //
 // An expression's levels are its tree's height: each parenthesis, prefix
 // operator, cast, call, dereference (.*) and binary operator is one level
-// above what it holds, and a name, a literal, null or size_of(T) is none. So ((x)) is 2, - - x is 2,
-// f(g(x)) is 2, and x + x + x is 2 too: the Pratt loop builds it as
-// (x + x) + x, a left-leaning tree whose height grows with each operator,
-// though the parser itself doesn't recurse to build it (the checker does,
-// to check it).
+// above what it holds, and a name, a literal, null or size_of(T) is none.
+// So ((x)) is 2, - - x is 2, f(g(x)) is 2, and x + x + x is 2 too: the
+// Pratt loop builds it as (x + x) + x, a left-leaning tree whose height
+// grows with each operator, though the parser itself doesn't recurse to
+// build it (the checker does, to check it).
 static const s32 MAX_DEPTH = 1000;
 
 static Token *peek(Parser *p, s64 ahead = 0) {
@@ -279,7 +279,8 @@ static Ast *parse_cast(Parser *p) {
 static Ast *parse_unary(Parser *p) {
     Token *op = peek(p);
     if (op->kind == TOKEN_CAST) return parse_cast(p);
-    bool prefix = op->kind == TOKEN_MINUS || op->kind == TOKEN_TILDE || op->kind == TOKEN_BANG || op->kind == TOKEN_STAR;
+    bool prefix = op->kind == TOKEN_MINUS || op->kind == TOKEN_TILDE || op->kind == TOKEN_BANG ||
+                  op->kind == TOKEN_STAR;
     if (!prefix) return parse_postfix(p);
     advance(p);
     if (!open_level(p)) return nullptr;
