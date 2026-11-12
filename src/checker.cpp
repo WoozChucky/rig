@@ -7,6 +7,10 @@ static Ast *find_name(Checker *c, String name);
 static Type *resolve_struct(Checker *c, Ast_Struct *s);
 
 Type *check_array_type(Checker *c, Type *element, u64 count, Position at) {
+    // An array's size is its element's times its count, so a struct's
+    // layout is needed first: a literal's element type, from a view's
+    // ([]S), may name a struct whose turn hasn't come (check_layout).
+    if (element->kind == TYPE_STRUCT && !check_layout(c, element)) return nullptr;
     // Dividing, so the check can't overflow itself: count * size could.
     bool too_big = count > (u64)INT64_MAX || (element->size && (s64)count > TYPE_MAX_SIZE / element->size);
     if (too_big) {
@@ -304,6 +308,7 @@ static Ast_Resolve *resolve_state(Ast *decl) {
     case AST_CONST: return &((Ast_Const *)decl)->resolve;
     case AST_STRUCT: return &((Ast_Struct *)decl)->resolve;
     case AST_FIELD: return &((Ast_Field *)decl)->resolve;
+    case AST_PROC: return &((Ast_Proc *)decl)->resolve;
     default: RIG_ASSERT(!"not resolved where first needed"); return nullptr;
     }
 }
@@ -314,6 +319,57 @@ static void mark_circle(Checker *c, Ast *decl) {
     s64 i = c->resolving.count - 1;
     while (c->resolving[i] != decl) i--;
     for (; i < c->resolving.count; i++) *resolve_state(c->resolving[i]) = RESOLVE_CYCLE;
+}
+
+// A limit of the compiler (spec 6.1, MAX_DEPTH). A declaration worked out
+// where it's first needed is worked out inside the one that needs it, on
+// the stack: the checker recurses from a global's value into the constant
+// it names, from a struct's layout into the struct it holds by value, and
+// on, so a chain of a few thousand, each needing the next one declared
+// after it, overflowed the stack. Each declaration in such a chain is a
+// level below the one that needs it, and their own levels count too, as
+// types and expressions inside each other do: a declaration starts a level
+// below the deepest level of the type or value that needs it, wherever in
+// it the name is, and its own levels go on from there. A global's or a
+// constant's levels are its type's and value's together (Ast_Var.levels,
+// Ast_Const.levels, from the parser); a struct's fields and a signature's
+// types are worked out one at a time, so each counts on its own
+// (Ast_Type.levels; layout_levels, check_signature), the deepest of them
+// being the declaration's. One worked out in its own turn, check()'s pass
+// in source order, starts at 0. c->levels is where the next one starts.
+//
+// So in `A0 :: A1; A1 :: A2; ...`, a name being no level, A0 is at 0 and
+// A1000 at 1000; A0 :: A1 + 1 is a level, so in a chain of those A1 is at
+// 2. Declared the other way round, each is done in its turn before the
+// next needs it, and the chain is any length.
+//
+// The declaration that would reach past MAX_DEPTH is "'A1001' is nested
+// too deeply in the declarations that need it (more than 1000 levels)", at
+// its name, once however many need it (c->too_deep), and isn't worked out
+// there: what needed it gets no type, so says nothing more, and it's left
+// to be worked out later, from 0, in its own turn, where its own mistakes
+// are found. So a chain more than twice the limit long says so again,
+// further on, and a circle longer than the limit is too deep before it
+// closes, which is what's said about it.
+//
+// Opens declaration decl, its own levels `levels`, at c->levels: false
+// after the message when it doesn't fit. Otherwise the levels below it
+// are the next one's, until the caller sets c->levels back to *outer.
+static bool open_declaration(Checker *c, Ast *decl, String name, s32 levels, s32 *outer) {
+    *outer = c->levels;
+    if (c->levels + levels > MAX_DEPTH) {
+        bool said = false;
+        for (s64 i = 0; i < c->too_deep.count; i++) said = said || c->too_deep[i] == decl;
+        if (!said) {
+            array_add(&c->too_deep, decl);
+            diag_error(c->diag, decl->pos,
+                       "'" STR_FMT "' is nested too deeply in the declarations that need it (more than %d levels)",
+                       STR_ARG(name), MAX_DEPTH);
+        }
+        return false;
+    }
+    c->levels += levels + 1;
+    return true;
 }
 
 // A global variable or a top-level constant, checked the first time it's
@@ -365,14 +421,21 @@ static void resolve_global(Checker *c, Ast *decl) {
         return;
     }
     RIG_ASSERT(c->scopes.count == 0);
+    bool is_var = decl->kind == AST_VAR;
+    String name = is_var ? ((Ast_Var *)decl)->name : ((Ast_Const *)decl)->name;
+    s32 outer;
+    if (!open_declaration(c, decl, name, is_var ? ((Ast_Var *)decl)->levels : ((Ast_Const *)decl)->levels, &outer)) {
+        return;
+    }
     *state = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, decl);
-    if (decl->kind == AST_VAR) {
+    if (is_var) {
         check_global_var(c, (Ast_Var *)decl);
     } else {
         check_const_value(c, (Ast_Const *)decl);
     }
     c->resolving.count--;
+    c->levels = outer;
     // In a circle, what was worked out came from a value that isn't one.
     if (*state == RESOLVE_CYCLE) {
         decl->type = nullptr;
@@ -401,14 +464,19 @@ static void resolve_global(Checker *c, Ast *decl) {
 // other fields' types and its arrays' counts, is worked out while it's
 // laid out.
 //
-// An array's count may name a global (or a constant naming one), which is
-// then checked in the middle of the layouts. A struct literal or a field
-// access there (in the global's value) needs the field's type before
-// resolve_late_fields gets to it: it's made then, when first needed
-// (make_late_field, check_late_field). A late field's type can take a
-// struct's Type before its layout is known (*Bad), and that layout may still
-// fail (a circle, too big), leaving the struct no type; so a type made
-// before every layout is done is made again at the end (resolve_again).
+// Structs, globals, constants and signatures are worked out in one pass,
+// in source order (check()), each earlier where it's first needed: an
+// array's count may name a global (or a constant naming one), which is
+// then checked in the middle of a layout, and a global may come before the
+// structs it uses. A field access in a global's value through a pointer
+// lays its struct out then, if nothing had yet (check_layout); a struct
+// literal or a field access there needs a late field's type before
+// resolve_late_fields gets to it, and it's made then (make_late_field,
+// check_late_field). A late field's type, a global's or a signature's can
+// take a struct's Type before its layout is known (*Bad), and that layout
+// may still fail (a circle, too big), leaving the struct no type; so a
+// type made before every layout is done is made again at the end
+// (made_again).
 
 // The field of struct s before its i-th with the same name, or null.
 static Ast_Field *earlier_field(Ast_Struct *s, s64 i) {
@@ -457,6 +525,17 @@ static void late_layout(Checker *c, Ast_Type *written, s64 *size, s32 *align) {
     *size *= (s64)count;
 }
 
+// The levels of field's type that its struct's layout reaches (MAX_DEPTH):
+// all of a field held by value's; of a late field's, only the arrays it
+// starts with, whose counts the layout needs (late_layout), so all of them
+// when it starts with one, and none when it starts with a pointer or a
+// view, which the layout doesn't look behind.
+static s32 layout_levels(Ast_Field *field) {
+    Ast_Type *written = field->type_expr;
+    if (holds_pointer_or_view(written) && written->kind != AST_TYPE_ARRAY) return 0;
+    return written->levels;
+}
+
 // Struct s's fields, offsets, size and alignment, into its Type: each field
 // at the next offset that is a multiple of its alignment, the struct's
 // alignment its largest field's (1 when it has none), its size rounded up to
@@ -466,7 +545,11 @@ static void late_layout(Checker *c, Ast_Type *written, s64 *size, s32 *align) {
 // was an error is kept, so its uses say nothing more, but takes no room.
 // Two fields of one name: "'x' is already declared at PATH:L:C", the second
 // not kept (though a late one's type is still made, for its own mistakes).
-static void lay_out(Checker *c, Ast_Struct *s) {
+//
+// A field's type starts where the struct does, at `base`, so what it needs
+// starts a level below its own levels (layout_levels; open_declaration),
+// not below the deepest field's.
+static void lay_out(Checker *c, Ast_Struct *s, s32 base) {
     Type *t = s->declared;
     s64 offset = 0;
     s32 align = 1;
@@ -483,6 +566,7 @@ static void lay_out(Checker *c, Ast_Struct *s) {
         Type *type = nullptr;  // a late field's comes later
         s64 size;
         s32 field_align;
+        c->levels = base + layout_levels(field) + 1;
         if (field->is_late) {
             late_layout(c, field->type_expr, &size, &field_align);
         } else {
@@ -522,8 +606,12 @@ static bool circle_through_a_value(Checker *c, Ast *decl) {
 // doesn't hold itself, its size depends on itself: "'S' is defined in terms
 // of itself", as for a global. Every struct in the circle then has no type
 // (Ast_Struct.declared is null), so nothing more is said about it or its
-// uses; a struct that only holds one in a circle isn't in it, and keeps its
-// type, the field that holds it having none. A struct larger than any type
+// uses checked after; a struct that only holds one in a circle isn't in
+// it, and keeps its type, the field that holds it having none. A global or
+// a signature before it in source order may have taken it behind a
+// pointer already (*Node), and what its value says, true of the pointer
+// whatever the struct, stays said (`h : int = g;` with g a *Node); its
+// type is then made again (made_again), so later uses say nothing. A struct larger than any type
 // may be (TYPE_MAX_SIZE), its fields each fine, is "'Huge' is too big", at
 // its name, and has no type either.
 static Type *resolve_struct(Checker *c, Ast_Struct *s) {
@@ -539,10 +627,16 @@ static Type *resolve_struct(Checker *c, Ast_Struct *s) {
         mark_circle(c, s);
         return nullptr;
     }
+    s32 levels = 0, outer;
+    for (s64 i = 0; i < s->fields.count; i++) {
+        if (layout_levels(s->fields[i]) > levels) levels = layout_levels(s->fields[i]);
+    }
+    if (!open_declaration(c, s, s->name, levels, &outer)) return nullptr;
     s->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)s);
-    lay_out(c, s);
+    lay_out(c, s, outer);
     c->resolving.count--;
+    c->levels = outer;
     if (s->resolve == RESOLVE_CYCLE) {
         s->declared = nullptr;
     } else if (s->declared->size > TYPE_MAX_SIZE) {
@@ -570,16 +664,26 @@ static void make_late_field(Checker *c, Ast_Struct *s, s64 i) {
         mark_circle(c, field);
         return;
     }
+    s32 outer;
+    if (!open_declaration(c, field, field->name, field->type_expr->levels, &outer)) return;
     field->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)field);
     Type *type = resolve_type(c, field->type_expr);
     c->resolving.count--;
+    c->levels = outer;
     if (field->resolve == RESOLVE_CYCLE) type = nullptr;
     field->resolve = RESOLVE_DONE;
     field->type = type;
     // A second field of the name isn't in the type (lay_out).
     Type *t = s->declared;
     if (t && !earlier_field(s, i)) t->fields[type_field_index(t, field->name)].type = type;
+}
+
+bool check_layout(Checker *c, Type *t) {
+    Ast_Struct *s = t->decl;
+    if (!s) return true;
+    if (s->resolve == RESOLVE_NOT_YET) resolve_struct(c, s);
+    return s->resolve != RESOLVE_NOT_YET && s->declared == t;
 }
 
 void check_late_field(Checker *c, Type *t, s32 index) {
@@ -592,36 +696,38 @@ void check_late_field(Checker *c, Type *t, s32 index) {
     }
 }
 
-// Type t, which `written` gave before every struct was laid out, made again
-// now that they are: the same pointers, views and arrays (the same counts:
-// nothing is checked or said twice) of what each struct named in it has
-// become, so null if any of them has no type now. A struct taken behind a
-// pointer or in a view before its layout (resolve_written's behind_pointer)
-// may since have been found in a circle, or too big. Nothing else changes.
-static Type *resolve_again(Checker *c, Ast_Type *written, Type *t) {
-    if (!t) return nullptr;
-    switch (written->kind) {
-    case AST_TYPE_POINTER: {
-        Type *pointee = resolve_again(c, written->pointee, t->pointee);
-        return pointee ? type_pointer_to(pointee) : nullptr;
+// Type t, made before every struct was laid out, made again now that they
+// are: the same pointers, views and arrays (the same counts: nothing is
+// checked or said twice) of what the struct at its end has become, so
+// null if that has no type now. A struct taken behind a pointer or in a
+// view before its layout (resolve_written's behind_pointer) may since have
+// been found in a circle, or too big. Nothing else changes. In a loop: a
+// type the checker infers has no limit to its levels (6.1).
+static Type *made_again(Type *t) {
+    Array<Type *> levels = {};  // t's pointers, views and arrays, outermost first
+    Type *inner = t;
+    while (inner && (inner->kind == TYPE_POINTER || inner->kind == TYPE_VIEW || inner->kind == TYPE_ARRAY)) {
+        array_add(&levels, inner);
+        inner = inner->kind == TYPE_POINTER ? inner->pointee : inner->element;
     }
-    case AST_TYPE_VIEW: {
-        Type *element = resolve_again(c, written->element, t->element);
-        return element ? type_view_of(element) : nullptr;
+    if (inner && inner->kind == TYPE_STRUCT && inner->decl) inner = inner->decl->declared;
+    for (s64 i = levels.count - 1; i >= 0 && inner; i--) {
+        Type *level = levels[i];
+        if (level->kind == TYPE_POINTER) {
+            inner = type_pointer_to(inner);
+        } else if (level->kind == TYPE_VIEW) {
+            inner = type_view_of(inner);
+        } else {
+            inner = type_array_of(inner, level->count);
+        }
     }
-    case AST_TYPE_ARRAY: {
-        Type *element = resolve_again(c, written->element, t->element);
-        return element ? type_array_of(element, t->count) : nullptr;
-    }
-    default: break;
-    }
-    if (t->kind != TYPE_STRUCT) return t;  // a built-in type
-    return ((Ast_Struct *)find_name(c, written->name))->declared;
+    array_free(&levels);
+    return inner;
 }
 
 // The types of struct s's late fields, once every struct is laid out: made
 // now (make_late_field), or, for one a literal or a field access needed
-// during the layouts, made again (resolve_again), in case a struct it named
+// during the layouts, made again (made_again), in case a struct it named
 // behind a pointer or in a view has no type now; its size can't have
 // changed, so the layout stays. A struct in a circle has no type, but its
 // late fields' types are still made, for their own mistakes.
@@ -634,7 +740,7 @@ static void resolve_late_fields(Checker *c, Ast_Struct *s) {
             make_late_field(c, s, i);
             continue;
         }
-        field->type = resolve_again(c, field->type_expr, field->type);
+        field->type = made_again(field->type);
         if (t && !earlier_field(s, i)) t->fields[type_field_index(t, field->name)].type = field->type;
     }
 }
@@ -1079,9 +1185,14 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 // converts to, but another string's bytes needn't end with one: "a foreign
 // procedure can't take a 'string'; pass its .data, which may not end with a
 // zero, or a literal".
-static void check_signature(Checker *c, Ast_Proc *proc) {
+//
+// Each type starts where the signature does, at `base`: a global it needs
+// (an array's count) starts a level below its own levels (Ast_Type.levels,
+// open_declaration).
+static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
     for (s64 i = 0; i < proc->params.count; i++) {
         Ast_Param *param = proc->params[i];
+        c->levels = base + param->type_expr->levels + 1;
         param->type = resolve_type(c, param->type_expr);
         if (proc->is_foreign && param->type && type_is_aggregate(param->type)) {
             Type_Kind kind = param->type->kind;
@@ -1093,6 +1204,7 @@ static void check_signature(Checker *c, Ast_Proc *proc) {
         }
     }
     for (s64 i = 0; i < proc->results.count; i++) {
+        c->levels = base + proc->results[i]->levels + 1;
         Type *t = resolve_type(c, proc->results[i]);
         proc->results[i]->type = t;
         if (proc->is_foreign && t && type_is_aggregate(t)) {
@@ -1109,6 +1221,50 @@ static void check_signature(Checker *c, Ast_Proc *proc) {
         diag_error(c->diag, proc->library_pos, "unknown library '" STR_FMT "'; the only one so far is 'libc'",
                    STR_ARG(proc->foreign_library));
     }
+}
+
+// A procedure's signature, checked the first time it's needed: in its turn
+// in source order (check()), or earlier, by a call in a global's value,
+// which is checked against it (check_proc_signature). Its levels are its
+// deepest type's (open_declaration). A signature that needs itself, its
+// array's count naming a global whose value calls it (`f :: (a: [g]int)
+// ...; g := f(1);`), is a circle, found as a global's is (resolve_global):
+// "'f' is defined in terms of itself", once, and every declaration in it
+// has no type, so nothing more is said. Unreported, g had no type and said
+// nothing, [g] neither, and rig build crashed.
+//
+// Whether the signature is known now: false in a circle, under way or
+// found in one, and when it's nested too deeply to check here (said), so a
+// call needing it has no type and says nothing more.
+static bool resolve_signature(Checker *c, Ast_Proc *proc) {
+    if (proc->is_broken || proc->resolve == RESOLVE_DONE) return true;
+    if (proc->resolve == RESOLVE_UNDER_WAY || proc->resolve == RESOLVE_CYCLE) {
+        if (proc->resolve == RESOLVE_UNDER_WAY) {
+            diag_error(c->diag, proc->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(proc->name));
+        }
+        mark_circle(c, proc);
+        return false;
+    }
+    s32 levels = 0, outer;
+    for (s64 i = 0; i < proc->params.count; i++) {
+        if (proc->params[i]->type_expr->levels > levels) levels = proc->params[i]->type_expr->levels;
+    }
+    for (s64 i = 0; i < proc->results.count; i++) {
+        if (proc->results[i]->levels > levels) levels = proc->results[i]->levels;
+    }
+    if (!open_declaration(c, proc, proc->name, levels, &outer)) return false;
+    proc->resolve = RESOLVE_UNDER_WAY;
+    array_add(&c->resolving, (Ast *)proc);
+    check_signature(c, proc, outer);
+    c->resolving.count--;
+    bool in_circle = proc->resolve == RESOLVE_CYCLE;
+    proc->resolve = RESOLVE_DONE;
+    c->levels = outer;
+    return !in_circle;
+}
+
+bool check_proc_signature(Checker *c, Ast_Proc *proc) {
+    return resolve_signature(c, proc);
 }
 
 // The name a top-level declaration declares.
@@ -1167,7 +1323,6 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
         }
         table_put(&c.top_level, name, decl);
     }
-    array_free(&declarations);
     // Then the broken ones (parser.h), the names of declarations the parser
     // gave up on. Each is declared, with an unknown type, so its uses are
     // nothing to report; the syntax error already was. Nothing is said
@@ -1185,30 +1340,40 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
             table_put(&c.top_level, proc->name, proc);
         }
     }
-    // The structs' layouts, in source order (one held by another is laid
-    // out where it's first needed), then the types of their fields that
-    // wait for every layout (resolve_late_fields): a signature, a global or
-    // a body may need a struct's size and fields.
-    for (s64 i = 0; i < file->globals.count; i++) {
-        if (file->globals[i]->kind == AST_STRUCT) resolve_struct(&c, (Ast_Struct *)file->globals[i]);
+    // Then every declaration in its turn, in source order: the structs'
+    // layouts, the signatures, the globals and the constants, each one that
+    // isn't done yet (one needed earlier was worked out there:
+    // resolve_struct, resolve_signature, resolve_global). One pass, so a
+    // chain of declarations each needing the one before it never nests
+    // (open_declaration), whatever kind each is. Then the types of the
+    // structs' fields that wait for every layout (resolve_late_fields), and
+    // the types made before every layout was done, made again (made_again).
+    // All are done before the bodies, which only find them finished: a
+    // body may need a struct's size and fields, a call its procedure's
+    // parameters and results.
+    for (s64 i = 0; i < declarations.count; i++) {
+        Ast *decl = declarations[i];
+        if (decl->kind == AST_STRUCT) {
+            resolve_struct(&c, (Ast_Struct *)decl);
+        } else if (decl->kind == AST_PROC) {
+            resolve_signature(&c, (Ast_Proc *)decl);
+        } else {
+            resolve_global(&c, decl);
+        }
     }
     for (s64 i = 0; i < file->globals.count; i++) {
         if (file->globals[i]->kind == AST_STRUCT) resolve_late_fields(&c, (Ast_Struct *)file->globals[i]);
     }
-
-    // The signatures, before any value or body is checked: a call anywhere
-    // needs its procedure's parameters and results.
-    for (s64 i = 0; i < file->procs.count; i++) {
-        if (!file->procs[i]->is_broken) check_signature(&c, file->procs[i]);
+    for (s64 i = 0; i < declarations.count; i++) {
+        Ast *decl = declarations[i];
+        if (decl->kind == AST_VAR) decl->type = made_again(decl->type);
+        if (decl->kind != AST_PROC) continue;
+        Ast_Proc *proc = (Ast_Proc *)decl;
+        if (proc->is_broken) continue;
+        for (s64 j = 0; j < proc->params.count; j++) proc->params[j]->type = made_again(proc->params[j]->type);
+        for (s64 j = 0; j < proc->results.count; j++) proc->results[j]->type = made_again(proc->results[j]->type);
     }
-
-    // Then the globals and constants, in source order, each one that isn't
-    // yet: one used by an earlier one's value was checked there
-    // (resolve_global). All are done before the bodies, which only find
-    // them finished.
-    for (s64 i = 0; i < file->globals.count; i++) {
-        if (file->globals[i]->kind != AST_STRUCT) resolve_global(&c, file->globals[i]);
-    }
+    array_free(&declarations);
 
     // Then the bodies. A broken entry has none: the parser gave up on it.
     for (s64 i = 0; i < file->procs.count; i++) {
@@ -1233,5 +1398,6 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
     array_free(&c.scopes);
     array_free(&c.loops);
     array_free(&c.resolving);
+    array_free(&c.too_deep);
     return d->error_count == errors_before;
 }
