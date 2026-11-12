@@ -88,9 +88,10 @@
 //   line table maps each machine instruction back to a line. A few
 //   instructions belong to no statement of their own and get the place a
 //   debugger should show for them: a loop's test and step are at its
-//   `for` or `while`, an if's test at its `if`, a runtime check's failure
-//   at the check (the place its message names), the implicit return at
-//   the end of a body at its '}'. Line 0 is no position: only the
+//   `for` or `while`, an if's test at its `if` and the jump out of each of
+//   its blocks at that block's '}', a runtime check's failure at the check
+//   (the place its message names), the implicit return at the end of a
+//   body at its '}'. Line 0 is no position: only the
 //   procedures the compiler makes itself (__rig_bounds_failed,
 //   __rig_string_equal) have none, and no source, so a debugger steps over
 //   them.

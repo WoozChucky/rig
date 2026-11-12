@@ -2730,8 +2730,63 @@ TEST(scopes_follow_blocks) {
     CHECK(contains(entry, "  %7 = local i64  ; 6:9 s2\n"));
     CHECK(contains(entry, "  %15 = local i64  ; 9:9 s3\n"));
     CHECK(contains(entry, "  %17 = local i64  ; 10:11 s4\n"));
-    // The jumps out of the if's blocks are the if's, in the scope around it.
-    CHECK(contains(entry, "  store i64 %6, %5  ; 4:9 s1\n  jump b3  ; 3:5 s0\n"));
+    // The jumps out of the if's blocks are at each block's '}', in the
+    // scope around the if (see jumps_out_of_an_if_are_at_its_braces).
+    CHECK(contains(entry, "  store i64 %6, %5  ; 4:9 s1\n  jump b3  ; 5:5 s0\n"));
+    CHECK(contains(entry, "  store i64 %8, %7  ; 6:9 s2\n  jump b3  ; 7:5 s0\n"));
+    arena_free(&a);
+}
+
+TEST(jumps_out_of_an_if_are_at_its_braces) {
+    // The jump from the end of an if's block to the code after the if is
+    // at that block's '}', as clang places it: at the `if` it would be a
+    // step back to the `if` line after the block's last statement, when
+    // the jump is a real one (over an else). The jump out of an else if's
+    // part is at the '}' that ends the chain. The test and its branch stay
+    // at the `if`.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "main :: () {\n"
+                                                "    x := 1;\n"
+                                                "    if x == 0 {\n"
+                                                "        x = 5;\n"
+                                                "    } else if x == 1 {\n"
+                                                "        x = 6;\n"
+                                                "    }\n"
+                                                "}\n"));
+    CHECK_STR(proc_ir(ir, "main"),
+              "proc @main() -> i32 {\n"
+              "  ; source main at 1:1, body 1:12\n"
+              "  ; scope 1 in 0 at 3:15\n"
+              "  ; scope 2 in 0 at 5:22\n"
+              "  ; var x int slot %0 in 0 at 2:5\n"
+              "b0:\n"
+              "  %0 = local i64  ; 2:5 s0\n"
+              "  %1 = const i64 1  ; 2:5 s0\n"
+              "  store i64 %1, %0  ; 2:5 s0\n"
+              "  %2 = load i64 %0  ; 3:5 s0\n"
+              "  %3 = const i64 0  ; 3:5 s0\n"
+              "  %4 = cmp eq i64 %2, %3  ; 3:5 s0\n"
+              "  branch %4, b1, b2  ; 3:5 s0\n"
+              "b1:\n"
+              "  %5 = const i64 5  ; 4:9 s1\n"
+              "  store i64 %5, %0  ; 4:9 s1\n"
+              "  jump b5  ; 5:5 s0\n"
+              "b2:\n"
+              "  %6 = load i64 %0  ; 5:12 s0\n"
+              "  %7 = const i64 1  ; 5:12 s0\n"
+              "  %8 = cmp eq i64 %6, %7  ; 5:12 s0\n"
+              "  branch %8, b3, b4  ; 5:12 s0\n"
+              "b3:\n"
+              "  %9 = const i64 6  ; 6:9 s2\n"
+              "  store i64 %9, %0  ; 6:9 s2\n"
+              "  jump b4  ; 7:5 s0\n"
+              "b4:\n"
+              "  jump b5  ; 7:5 s0\n"
+              "b5:\n"
+              "  %10 = const i32 0  ; 8:1 s0\n"
+              "  ret %10  ; 8:1 s0\n"
+              "}\n");
     arena_free(&a);
 }
 
