@@ -195,7 +195,10 @@
 //   is defined in terms of itself", at the name whose value was being
 //   worked out when the circle closed: one message per circle, since every
 //   declaration in it then has no type, written or not (`a : int = b;
-//   b : int = a;` is one message), and its uses say nothing more.
+//   b : int = a;` is one message), and its uses say nothing more. A circle
+//   through a declaration already found in one is the same tangle: its
+//   declarations lose their types too, without a message (`a : int = c + b;
+//   b : int = a; c : int = a;` is one message, at a).
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

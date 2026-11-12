@@ -322,9 +322,14 @@ static bool run_process(Arena *a, Array<String> argv, String directory, s32 seco
     startup.dwFlags = STARTF_USESTDHANDLES;
     startup.hStdInput = child_input;
     startup.hStdOutput = out_write;
-    // Merged, both are the stdout pipe's write end; the stderr pipe then has
-    // no writer once the parent's copy closes, and its reader ends at once.
+    // Merged, both are the stdout pipe's write end. The stderr pipe's write
+    // end must then not be inherited either: CreateProcessW, told to inherit
+    // handles, gives the child every inheritable one, not only those named
+    // here, so the child would hold it until it exits. Not inheritable, the
+    // stderr pipe has no writer once the parent's copy closes (below), and
+    // its reader ends at once, with nothing.
     startup.hStdError = merge ? out_write : err_write;
+    if (merge) SetHandleInformation(err_write, HANDLE_FLAG_INHERIT, 0);
     PROCESS_INFORMATION process = {};
     // A bare name has no application name: Windows takes the program from
     // the command line and searches the PATH for it, adding .exe, as a shell

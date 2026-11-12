@@ -365,6 +365,44 @@ TEST(llvm_runtime_names_win_over_the_programs) {
     text = llvm_text(&a, m, TARGET_WINDOWS_X64);
     CHECK(contains(text, "@write = internal global i64 0"));
     CHECK(contains(text, "load i64, ptr @write"));
+
+    // fflush, which the runtime calls first, the same way on both targets:
+    // a program's own internal procedure called fflush is renamed, and the
+    // runtime's call still goes to C's...
+    for (int t = 0; t < 2; t++) {
+        m = arena_new<Ir_Module>(&a);
+        message = add_string(m, "str.0", "oops");
+        Ir_Proc *own_flush = new_proc_returning(m, &a, "fflush", IR_VOID);
+        emit_ret(own_flush, ir_new_block(&a, own_flush), -1);
+        p = new_proc_returning(m, &a, "__rig_main", IR_VOID);
+        b = ir_new_block(&a, p);
+        ir_emit_call(m, p, b, 0, {});
+        ir_emit(p, b, IR_PANIC, IR_VOID)->target = message;
+        text = llvm_text(&a, m, (Target)t);
+        CHECK_EQ(count_of(text, "declare i32 @fflush(ptr)"), 1);
+        CHECK(contains(text, "define internal void @fflush.1()"));
+        CHECK(contains(text, "call void @fflush.1()"));
+        CHECK(contains(text, "call i32 @fflush(ptr null)"));
+    }
+    // ...and a program's own foreign declaration of fflush is the runtime's,
+    // shared: one declaration, both calls to it.
+    for (int t = 0; t < 2; t++) {
+        m = arena_new<Ir_Module>(&a);
+        message = add_string(m, "str.0", "oops");
+        Ir_Proc *own_flush = new_proc_returning(m, &a, "fflush", IR_I32);
+        own_flush->is_foreign = true;
+        ir_add_param(own_flush, IR_PTR, IR_EXT_NONE);
+        p = new_proc_returning(m, &a, "__rig_main", IR_VOID);
+        b = ir_new_block(&a, p);
+        Array<s32> null_args = {};
+        array_add(&null_args, emit_const(p, b, IR_PTR, 0));
+        ir_emit_call(m, p, b, 0, null_args);
+        ir_emit(p, b, IR_PANIC, IR_VOID)->target = message;
+        text = llvm_text(&a, m, (Target)t);
+        CHECK_EQ(count_of(text, "declare i32 @fflush(ptr)"), 1);
+        CHECK(!contains(text, "@fflush."));
+        CHECK_EQ(count_of(text, "call i32 @fflush(ptr null)"), 2);
+    }
     arena_free(&a);
 }
 

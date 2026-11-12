@@ -1690,6 +1690,17 @@ TEST(cycle_through_typed_globals) {
                            "b : int = a;\n"
                            "main :: () {}\n"),
               "2:1: 'a' is defined in terms of itself\n");
+    // Two circles through a: a -> c -> a closes first, while a's value is
+    // still under way; then a -> b -> a finds a already in a circle. b is
+    // in that one, so it loses its type too, and d, which only uses b, says
+    // nothing (it used to say b's value isn't known while compiling).
+    CHECK_STR(check_source(&a,
+                           "a : int = c + b;\n"
+                           "b : int = a;\n"
+                           "c : int = a;\n"
+                           "d : int = b;\n"
+                           "main :: () { x := d; }\n"),
+              "1:1: 'a' is defined in terms of itself\n");
     arena_free(&a);
 }
 
@@ -2033,6 +2044,32 @@ TEST(float32_values_are_rounded_once) {
     CHECK_STR(messages(&a, &c.list->diag), "");
     CHECK(float_value(local_named(&c, "A")) == 1152921642045800448.0);
     CHECK(float_value(value_of(&c, "x")) == 1152921642045800448.0);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(float32_literal_at_the_top_of_its_range) {
+    // Whether a literal fits in a float32 is decided by the float32 it
+    // rounds to, once, from its text: the largest float32 or infinity. A
+    // literal a tenth below the overflow point 0x1.ffffffp+127 (halfway from
+    // the largest float32 to 2^128) is the largest float32, as strtof reads
+    // it; its nearest double is the overflow point itself, which a fit test
+    // on the double would take for infinity. From the overflow point on, a
+    // literal doesn't fit.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    x : float32 = 340282356779733661637539395458142568447.9;\n"
+                          "    y : float32 = -340282356779733661637539395458142568447.9;\n"
+                          "    z := 340282356779733661637539395458142568447.9;\n"
+                          "    w : float32 = 340282356779733661637539395458142568448.0;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "5:19: 3.40282e+38 doesn't fit in 'float32'\n");
+    f64 largest = 0x1.fffffep+127;
+    CHECK(float_value(value_of(&c, "x")) == largest);
+    CHECK(float_value(value_of(&c, "y")) == -largest);
+    CHECK(float_value(value_of(&c, "z")) == largest);
+    CHECK_STR(type_of(&a, &c, "z"), "float32");
     token_list_free(c.list);
     arena_free(&a);
 }
