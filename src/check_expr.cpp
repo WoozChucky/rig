@@ -1211,13 +1211,23 @@ static void check_field_value(Checker *c, Ast *value, Type *field_type) {
     if (check_value(c, value) && !check_convert(c, value, field_type)) report_no_conversion(c, value, field_type);
 }
 
+// A literal's value that has no field to go to, after that was reported:
+// checked for its own mistakes, but it has no type to meet. A .{...} there
+// is given none (null, as after an error) and isn't looked into, so
+// Vec2.{z = .{nope}} says only that Vec2 has no z: not that the inner
+// literal's type isn't known, nor, in a global, that it isn't known while
+// compiling.
+static void check_stray_value(Checker *c, Ast *value) {
+    if (check_expression(c, value) == &type_untyped_literal) value->type = nullptr;
+}
+
 // The values of a literal of struct type t (its type written, T.{...}, or
 // met, .{...}). In order, there may be fewer than the fields, never more:
 // "'Vec2' has 2 fields, but this literal gives 3", at the literal. By name,
 // each must be a field ("'Vec2' has no field 'z'"), given once ("field 'x'
 // is given twice"), each said at the name. The fields not given are zeroed
-// (lowering). After any of these, the values are still checked, for their
-// own mistakes.
+// (lowering). After any of these, a value with no field to go to is still
+// checked for its own mistakes (check_stray_value).
 static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t) {
     if (!literal->names.count) {
         if (literal->values.count > t->fields.count) {
@@ -1225,7 +1235,7 @@ static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t) {
             diag_error(c->diag, literal->start, "'" STR_FMT "' has %lld field%s, but this literal gives %lld",
                        STR_ARG(type_name(c->arena, t)), (long long)n, n == 1 ? "" : "s",
                        (long long)literal->values.count);
-            for (s64 i = 0; i < literal->values.count; i++) check_expression(c, literal->values[i]);
+            for (s64 i = 0; i < literal->values.count; i++) check_stray_value(c, literal->values[i]);
             return;
         }
         for (s64 i = 0; i < literal->values.count; i++) {
@@ -1248,7 +1258,7 @@ static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t) {
             check_field_value(c, literal->values[i], t->fields[index].type);
             continue;
         }
-        check_expression(c, literal->values[i]);
+        check_stray_value(c, literal->values[i]);
     }
 }
 

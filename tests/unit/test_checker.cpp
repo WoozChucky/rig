@@ -3045,3 +3045,73 @@ TEST(type_and_value_names) {
               "14:5: 'Vec2' isn't a procedure, so it can't be called\n");
     arena_free(&a);
 }
+
+// Whether p is memory arena a gave out: in one of its blocks.
+static bool arena_holds(Arena *a, void *p) {
+    Arena_Block *chains[] = {a->first, a->big};
+    for (Arena_Block *b : chains) {
+        for (; b; b = b->next) {
+            u8 *data = (u8 *)(b + 1);
+            if ((u8 *)p >= data && (u8 *)p < data + b->size) return true;
+        }
+    }
+    return false;
+}
+
+TEST(pointer_to_a_struct_lives_with_it) {
+    // A struct's type is in the compilation's arena, and so are the pointer
+    // types made from it (*Vec2, **Vec2): freed with it, never left behind
+    // pointing at freed memory. A built-in type's pointers last the run.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Vec2 :: struct { x: float; y: float; }\n"
+                          "main :: () {\n"
+                          "    p : *Vec2;\n"
+                          "    q : **Vec2;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Type *s = struct_named(&c, "Vec2");
+    CHECK(arena_holds(&a, s));
+    CHECK(s->pointer && arena_holds(&a, s->pointer));
+    CHECK(s->pointer->pointer && arena_holds(&a, s->pointer->pointer));
+    CHECK(!arena_holds(&a, type_pointer_to(&type_int)));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(struct_named_like_a_built_in_type) {
+    // A built-in type's name always means the built-in type, so a struct
+    // can't take one: it could never be named.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "u8 :: struct { x: int; }\n"
+                           "float :: struct { }\n"
+                           "void :: struct { }\n"
+                           "main :: () { v : u8 = 1; }\n"),
+              "1:1: 'u8' is a built-in type\n"
+              "2:1: 'float' is a built-in type\n"
+              "3:1: 'void' is a built-in type\n");
+    arena_free(&a);
+}
+
+TEST(literal_value_with_no_field_says_nothing_more) {
+    // A value that has no field to go to (too many in order, an unknown or
+    // repeated name) is checked for its own mistakes, but a .{...} there has
+    // no type to take, and nothing more is said of it: not that its type
+    // isn't known, nor, in a global, that it isn't known while compiling.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: int; y: int; }\n"
+                           "g := Vec2.{z = .{1}};\n"
+                           "h := Vec2.{1, 2, .{3}};\n"
+                           "k := Vec2.{x = 1, x = .{nope}};\n"
+                           "main :: () {\n"
+                           "    v := Vec2.{z = .{1}, y = nope};\n"
+                           "}\n"),
+              "2:12: 'Vec2' has no field 'z'\n"
+              "3:6: 'Vec2' has 2 fields, but this literal gives 3\n"
+              "4:19: field 'x' is given twice\n"
+              "6:16: 'Vec2' has no field 'z'\n"
+              "6:30: unknown identifier 'nope'\n");
+    arena_free(&a);
+}

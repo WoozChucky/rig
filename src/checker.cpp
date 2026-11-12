@@ -161,7 +161,7 @@ static void check_var(Checker *c, Ast_Var *var) {
 static bool check_global_value(Checker *c, Ast *value) {
     if (value->is_constant) return true;
     if (!value->type) return false;  // a value inside a literal whose own error was reported
-    if (value->kind == AST_LITERAL && value->type && type_is_aggregate(value->type)) {
+    if (value->kind == AST_LITERAL && type_is_aggregate(value->type)) {
         Ast_Literal *literal = (Ast_Literal *)value;
         for (s64 i = 0; i < literal->values.count; i++) {
             if (!check_global_value(c, literal->values[i])) return false;
@@ -842,7 +842,17 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
             t->name = s->name;
             t->align = 1;
             t->decl = s;
+            t->arena = a;  // so its pointer types are freed with it (type_pointer_to)
             s->declared = t;
+            // A built-in type's name always means the built-in type
+            // (resolve_type_or_void looks there first), so a struct of that
+            // name could never be named: "'u8' is a built-in type", and it
+            // isn't declared. Its fields are still checked, for their own
+            // mistakes.
+            if (type_from_name(s->name)) {
+                diag_error(d, s->pos, "'" STR_FMT "' is a built-in type", STR_ARG(s->name));
+                continue;
+            }
         }
         String name = declared_name(decl);
         Ast **earlier = table_get(&c.top_level, name);
