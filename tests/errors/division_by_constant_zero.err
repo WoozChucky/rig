@@ -1,0 +1,3 @@
+tests/errors/division_by_constant_zero.rig:4:12: error: division by zero
+        y := x / 0;
+               ^
