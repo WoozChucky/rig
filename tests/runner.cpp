@@ -21,8 +21,49 @@
 // are one pipe, the command line's mistakes, and a .build/ or an object
 // file rig can't write.
 //
-// Last, rig check on every program of both directories, from a file and
+// Then rig check on every program of both directories, from a file and
 // from stdin, and its own command line (check_tests).
+//
+// Last, the debugger tests: tests/debug/NAME.rig is built as a program of
+// tests/run is (to .build/tests/NAME), then run under the host's debugger
+// with a script of its commands, and what the debugger prints must hold
+// the expectations, NAME.gdb.expect or NAME.cdb.expect (debug_test):
+//   Linux:   gdb -batch -nx -x tests/debug/NAME.gdb .build/tests/NAME
+//   Windows: cdb -lines -y ROOT\.build\tests -c "$<ROOT\tests\debug\NAME.cdb"
+//                ROOT\.build\tests\NAME.exe
+// cdb is $RIG_CDB when that's set, and otherwise the Windows SDK's, at
+// C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe; it needs
+// the program's absolute path, and -y makes it look for the PDB beside the
+// program only (never on Microsoft's symbol server). The debugger's stdout
+// and stderr are one stream, the program's output mixed in.
+//
+// An expectation file holds one piece of text a line, which must appear,
+// in the order given, inside lines of the output: each piece after the one
+// before it, later in the same line or in a line after. A piece never
+// spans lines. Empty lines are ignored, and @ROOT@ stands for the
+// repository's root, absolute, with the host's separators (C:\dev\rig,
+// /home/me/rig). The first piece missing fails the test, which prints it
+// and the whole output. Expectations name procedures, the file's name with
+// line numbers, and source text, never addresses or offsets, which change
+// with the code; nor breakpoint numbers (gdb says "Breakpoint 2.1," for
+// the first place of a breakpoint that has two).
+//
+// A test needs a script for the host's debugger; one without is an error.
+// A debugger that can't be started (not installed) skips each test, SKIP
+// in the output and in the summary's count, unless RIG_DEBUGGER_TESTS is
+// "required", as on CI: then it fails. Installing them: on Debian and
+// Ubuntu, `sudo apt install gdb`; on Windows, the Windows SDK's "Debugging
+// Tools for Windows" (an option of its installer, or of Visual Studio's).
+//
+// cdb sets a breakpoint on a line only when the line's code is in one
+// piece ("Ambiguous symbol error" otherwise), so a .cdb script never breaks
+// at a `for`, `while` or `if` line (their tests, steps and jumps are
+// pieces apart from each other), nor at a line holding a runtime check (an
+// index, a division, a checked cast, a field through a pointer), whose
+// failure block is a second piece. gdb, Visual Studio and VS Code take any
+// line. Every .cdb script starts with `l+t` (step by source line), `l+s`
+// and `l+l` (show the source line at each stop), and ends with `q`; it
+// never uses `.lines`, which with -lines turns the line information off.
 //
 // Every program, rig included, gets TIMEOUT seconds; one that takes longer
 // is killed and its test fails, so a hang can't stall the run. (On Linux
@@ -177,17 +218,14 @@ static void add_flags(Arena *a, Array<String> *argv, String name) {
     }
 }
 
-// A program that must build, run and print its .out. {} when it passes,
-// otherwise why not.
-static String run_test(Arena *a, String rig, String name) {
-    String why = {};
-    String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
+// Runs rig build's command line `argv` (which it frees), which must write
+// `program`. {} when it did, otherwise why not.
+static String build_program(Arena *a, Array<String> argv, String program) {
     // The last run's program, gone: if rig wrote this one somewhere else, it
     // mustn't be found and run in its place.
     remove(string_cstr(a, program));
-    Array<String> argv = build_command(a, rig, "tests/run", name, program);
-    add_flags(a, &argv, name);
     Process_Result built = {};
+    String why = {};
     bool started = run(a, argv, {}, &built, &why);
     array_free(&argv);
     if (!started) return why;
@@ -196,6 +234,17 @@ static String run_test(Arena *a, String rig, String name) {
                            built.err);
     }
     if (!os_file_exists(program)) return string_printf(a, "rig build exited with 0 but wrote no " STR_FMT, STR_ARG(program));
+    return {};
+}
+
+// A program that must build, run and print its .out. {} when it passes,
+// otherwise why not.
+static String run_test(Arena *a, String rig, String name) {
+    String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
+    Array<String> argv = build_command(a, rig, "tests/run", name, program);
+    add_flags(a, &argv, name);
+    String why = build_program(a, argv, program);
+    if (why.count) return why;
 
     String expected_out = {}, exit_text = {};
     if (!os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".out", STR_ARG(name)), &expected_out)) {
@@ -215,7 +264,7 @@ static String run_test(Arena *a, String rig, String name) {
     Array<String> command = {};
     array_add(&command, program);
     Process_Result ran = {};
-    started = run(a, command, {}, &ran, &why);
+    bool started = run(a, command, {}, &ran, &why);
     array_free(&command);
     if (!started) return why;
     if (!string_eq(ran.out, expected_out)) {
@@ -692,6 +741,172 @@ static void check_tests(Arena *a, String rig, s64 *passed, s64 *failed) {
     }
 }
 
+// --- Debugger tests ----------------------------------------------------------
+//
+// See the header: tests/debug/NAME.rig run under gdb or cdb, with what the
+// debugger prints held to NAME.gdb.expect or NAME.cdb.expect.
+
+#ifdef _WIN32
+static const char *DEBUGGER = "cdb";
+static const char *DEFAULT_CDB = "C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe";
+static const char SEPARATOR = '\\';
+#else
+static const char *DEBUGGER = "gdb";
+static const char SEPARATOR = '/';
+#endif
+
+// The repository's root, absolute, with the host's separators: what @ROOT@
+// stands for. The runner runs there.
+static String repository_root(Arena *a) {
+    String root = string_copy(a, os_current_directory(a));
+    for (s64 i = 0; i < root.count; i++) {
+        if (root.data[i] == '/' || root.data[i] == '\\') ((u8 *)root.data)[i] = (u8)SEPARATOR;
+    }
+    return root;
+}
+
+// s with every `from` replaced by `to`.
+static String replace_all(Arena *a, String s, const char *from, String to) {
+    s64 n = (s64)strlen(from);
+    String out = string_printf(a, "");
+    s64 start = 0;
+    for (s64 i = 0; i + n <= s.count;) {
+        if (memcmp(s.data + i, from, (size_t)n) == 0) {
+            out = string_printf(a, STR_FMT STR_FMT STR_FMT, STR_ARG(out), STR_ARG(string_slice(s, start, i - start)),
+                                STR_ARG(to));
+            i += n;
+            start = i;
+        } else {
+            i++;
+        }
+    }
+    return string_printf(a, STR_FMT STR_FMT, STR_ARG(out), STR_ARG(string_slice(s, start, s.count - start)));
+}
+
+// Where `needle` first occurs in `haystack` from `from` on, or -1.
+static s64 find_from(String haystack, s64 from, String needle) {
+    for (s64 i = from; i + needle.count <= haystack.count; i++) {
+        if (memcmp(haystack.data + i, needle.data, (size_t)needle.count) == 0) return i;
+    }
+    return -1;
+}
+
+// The first piece of `expected` (one a line, empty lines ignored) that
+// isn't in `output` after the piece before it; {} when every one is. A
+// piece has no line break, so each is found inside one line.
+static String first_missing(String expected, String output) {
+    s64 at = 0;
+    for (s64 i = 0; i < expected.count;) {
+        s64 end = i;
+        while (end < expected.count && expected.data[end] != '\n') end++;
+        String piece = string_slice(expected, i, end - i);
+        if (piece.count && piece.data[piece.count - 1] == '\r') piece.count--;
+        i = end + 1;
+        if (!piece.count) continue;
+        s64 found = find_from(output, at, piece);
+        if (found < 0) return piece;
+        at = found + piece.count;
+    }
+    return {};
+}
+
+// The debugger's command line for the program built from tests/debug/NAME.
+static Array<String> debugger_command(Arena *a, String root, String name) {
+    Array<String> argv = {};
+#ifdef _WIN32
+    const char *cdb = getenv("RIG_CDB");
+    array_add(&argv, str(cdb && *cdb ? cdb : DEFAULT_CDB));
+    array_add(&argv, str("-lines"));
+    array_add(&argv, str("-y"));
+    array_add(&argv, string_printf(a, STR_FMT "\\.build\\tests", STR_ARG(root)));
+    array_add(&argv, str("-c"));
+    array_add(&argv, string_printf(a, "$<" STR_FMT "\\tests\\debug\\" STR_FMT ".cdb", STR_ARG(root), STR_ARG(name)));
+    array_add(&argv, string_printf(a, STR_FMT "\\.build\\tests\\" STR_FMT ".exe", STR_ARG(root), STR_ARG(name)));
+#else
+    (void)root;
+    array_add(&argv, str("gdb"));
+    array_add(&argv, str("-batch"));
+    array_add(&argv, str("-nx"));
+    array_add(&argv, str("-x"));
+    array_add(&argv, string_printf(a, "tests/debug/" STR_FMT ".gdb", STR_ARG(name)));
+    array_add(&argv, string_printf(a, ".build/tests/" STR_FMT, STR_ARG(name)));
+#endif
+    return argv;
+}
+
+// Whether RIG_DEBUGGER_TESTS says a missing debugger fails the tests.
+static bool debugger_required() {
+    const char *value = getenv("RIG_DEBUGGER_TESTS");
+    return value && strcmp(value, "required") == 0;
+}
+
+// tests/debug/NAME.rig built and run under the host's debugger. {} when it
+// passes, otherwise why not; with *skipped set when the debugger can't be
+// started and isn't required.
+static String debug_test(Arena *a, String rig, String root, String name, bool *skipped) {
+    *skipped = false;
+    String script = string_printf(a, "tests/debug/" STR_FMT ".%s", STR_ARG(name), DEBUGGER);
+    if (!os_file_exists(script)) {
+        return string_printf(a, "no " STR_FMT ": a debugger test needs a script for each host's debugger", STR_ARG(script));
+    }
+    String expected = {};
+    if (!os_read_file(a, string_printf(a, STR_FMT ".expect", STR_ARG(script)), &expected)) {
+        return string_printf(a, "no " STR_FMT ".expect", STR_ARG(script));
+    }
+    expected = replace_all(a, expected, "@ROOT@", root);
+
+    String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
+    String why = build_program(a, build_command(a, rig, "tests/debug", name, program), program);
+    if (why.count) return why;
+
+    Array<String> argv = debugger_command(a, root, name);
+    Process_Result ran = {};
+    bool started = os_run_merged(a, argv, {}, TIMEOUT, &ran);
+    String debugger = argv[0];
+    array_free(&argv);
+    if (!started) {
+        String reason = string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(debugger), STR_ARG(os_error_message(a)));
+        if (debugger_required()) return string_printf(a, STR_FMT " (RIG_DEBUGGER_TESTS is required)", STR_ARG(reason));
+        *skipped = true;
+        return string_printf(a, "no %s", DEBUGGER);
+    }
+    String output = normalise_newlines(a, ran.out);
+    if (ran.timed_out) {
+        return string_printf(a, STR_FMT " took longer than %d seconds; its output:\n" STR_FMT, STR_ARG(debugger), TIMEOUT,
+                             STR_ARG(output));
+    }
+    String missing = first_missing(expected, output);
+    if (missing.count) {
+        return string_printf(a, "%s didn't print \"" STR_FMT "\" (after the expectations before it); its output:\n" STR_FMT,
+                             DEBUGGER, STR_ARG(missing), STR_ARG(output));
+    }
+    return {};
+}
+
+// Every program of tests/debug.
+static void debug_tests(Arena *a, String rig, s64 *passed, s64 *failed, s64 *skipped) {
+    Array<String> names = {};
+    if (!os_list_directory(a, str("tests/debug"), &names)) {
+        report("tests/debug", string_printf(a, "can't list it: " STR_FMT, STR_ARG(os_error_message(a))), passed, failed);
+        return;
+    }
+    String root = repository_root(a);
+    for (s64 i = 0; i < names.count; i++) {
+        if (!ends_with(names[i], ".rig")) continue;
+        String name = string_slice(names[i], 0, names[i].count - 4);
+        bool skip = false;
+        String why = debug_test(a, rig, root, name, &skip);
+        if (skip) {
+            printf("SKIP debug " STR_FMT ": " STR_FMT "\n", STR_ARG(name), STR_ARG(why));
+            fflush(stdout);
+            (*skipped)++;
+            continue;
+        }
+        report(string_cstr(a, string_printf(a, "tests/debug/" STR_FMT, STR_ARG(name))), why, passed, failed);
+    }
+    array_free(&names);
+}
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     // A program that crashes, or can't find a DLL, fails with its exit code
@@ -717,7 +932,11 @@ int main(int argc, char **argv) {
         report(string_cstr(&a, string_printf(&a, "rig: %s", c.what)), command_test(&a, rig, &c), &passed, &failed);
     }
     check_tests(&a, rig, &passed, &failed);
-    printf("%lld passed, %lld failed\n", (long long)passed, (long long)failed);
+    s64 skipped = 0;
+    debug_tests(&a, rig, &passed, &failed, &skipped);
+    printf("%lld passed, %lld failed", (long long)passed, (long long)failed);
+    if (skipped) printf(", %lld skipped", (long long)skipped);
+    printf("\n");
     arena_free(&a);
     return failed ? 1 : 0;
 }
