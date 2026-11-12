@@ -162,26 +162,7 @@ TEST(links_and_runs_hello_world) {
     // Everything after the checker, for real: the object, the host's linker,
     // and the program's output.
     Arena a = arena_make();
-    Ir_Module *m = lower_tokens(&a, HELLO);
-    os_make_directory(str(".build"));
-#ifdef _WIN32
-    String object = str(".build/link-test.obj"), program = str(".build/link-test.exe");
-#else
-    String object = str(".build/link-test.o"), program = str(".build/link-test");
-#endif
-    String error = {};
-    CHECK(llvm_emit_object(m, target_host(), object, &a, &error));
-    Array<String> objects = {};
-    array_add(&objects, object);
-    bool linked = link_executable(&a, target_host(), objects, program, &error);
-    CHECK(linked);
-    if (!linked) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
-    Array<String> argv = {};
-    array_add(&argv, program);
-    Process_Result result = {};
-    bool ran = linked && os_run(&a, argv, &result);
-    CHECK(ran);
-    if (linked && !ran) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(os_error_message(&a)));
+    Process_Result result = run_module(&a, lower_tokens(&a, HELLO), "link-test");
     CHECK_EQ(result.exit_code, 0);
 #ifdef _WIN32
     // The C runtime's stdout is in text mode on Windows, as in any C program.
@@ -189,8 +170,6 @@ TEST(links_and_runs_hello_world) {
 #else
     CHECK_STR(result.out, "Hello, World!\n");
 #endif
-    array_free(&objects);
-    array_free(&argv);
     arena_free(&a);
 }
 
@@ -233,32 +212,10 @@ TEST(panic_program_exits_101_with_its_message) {
     ir_emit_call(m, entry, e, 1, {});
     emit_ret(entry, e, emit_const(entry, e, IR_I32, 0));
 
-    os_make_directory(str(".build"));
-#ifdef _WIN32
-    String object = str(".build/panic-test.obj"), program = str(".build/panic-test.exe");
-#else
-    String object = str(".build/panic-test.o"), program = str(".build/panic-test");
-#endif
-    String error = {};
-    bool emitted = llvm_emit_object(m, target_host(), object, &a, &error);
-    CHECK(emitted);
-    if (!emitted) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
-    Array<String> objects = {};
-    array_add(&objects, object);
-    bool linked = emitted && link_executable(&a, target_host(), objects, program, &error);
-    CHECK(linked);
-    if (emitted && !linked) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
-    Array<String> argv = {};
-    array_add(&argv, program);
-    Process_Result result = {};
-    bool ran = linked && os_run_for(&a, argv, {}, 60, &result);
-    CHECK(ran);
-    CHECK(!result.timed_out);
+    Process_Result result = run_module(&a, m, "panic-test");
     CHECK_STR(without_cr(&a, result.out), "before\n");
     CHECK_STR(without_cr(&a, result.err), "x.rig:1:1: runtime error: test\n");
     CHECK_EQ(result.exit_code, 101);
-    array_free(&objects);
-    array_free(&argv);
     arena_free(&a);
 }
 
@@ -311,32 +268,10 @@ TEST(byte_globals_and_memory_run) {
     ir_emit_call(m, entry, e, 1, {});
     emit_ret(entry, e, emit_const(entry, e, IR_I32, 0));
 
-    os_make_directory(str(".build"));
-#ifdef _WIN32
-    String object = str(".build/memory-test.obj"), program = str(".build/memory-test.exe");
-#else
-    String object = str(".build/memory-test.o"), program = str(".build/memory-test");
-#endif
-    String error = {};
-    bool emitted = llvm_emit_object(m, target_host(), object, &a, &error);
-    CHECK(emitted);
-    if (!emitted) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
-    Array<String> objects = {};
-    array_add(&objects, object);
-    bool linked = emitted && link_executable(&a, target_host(), objects, program, &error);
-    CHECK(linked);
-    if (emitted && !linked) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
-    Array<String> argv = {};
-    array_add(&argv, program);
-    Process_Result result = {};
-    bool ran = linked && os_run_for(&a, argv, {}, 60, &result);
-    CHECK(ran);
-    CHECK(!result.timed_out);
+    Process_Result result = run_module(&a, m, "memory-test");
     CHECK_STR(without_cr(&a, result.out), "ok\n");
     CHECK_STR(without_cr(&a, result.err), "");
     CHECK_EQ(result.exit_code, 0);
-    array_free(&objects);
-    array_free(&argv);
     arena_free(&a);
 }
 
