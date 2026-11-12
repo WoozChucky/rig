@@ -7,6 +7,10 @@ static Ast *find_name(Checker *c, String name);
 static Type *resolve_struct(Checker *c, Ast_Struct *s);
 
 Type *check_array_type(Checker *c, Type *element, u64 count, Position at) {
+    // An array's size is its element's times its count, so a struct's
+    // layout is needed first: a literal's element type, from a view's
+    // ([]S), may name a struct whose turn hasn't come (check_layout).
+    if (element->kind == TYPE_STRUCT && !check_layout(c, element)) return nullptr;
     // Dividing, so the check can't overflow itself: count * size could.
     bool too_big = count > (u64)INT64_MAX || (element->size && (s64)count > TYPE_MAX_SIZE / element->size);
     if (too_big) {
@@ -304,6 +308,7 @@ static Ast_Resolve *resolve_state(Ast *decl) {
     case AST_CONST: return &((Ast_Const *)decl)->resolve;
     case AST_STRUCT: return &((Ast_Struct *)decl)->resolve;
     case AST_FIELD: return &((Ast_Field *)decl)->resolve;
+    case AST_PROC: return &((Ast_Proc *)decl)->resolve;
     default: RIG_ASSERT(!"not resolved where first needed"); return nullptr;
     }
 }
@@ -601,8 +606,12 @@ static bool circle_through_a_value(Checker *c, Ast *decl) {
 // doesn't hold itself, its size depends on itself: "'S' is defined in terms
 // of itself", as for a global. Every struct in the circle then has no type
 // (Ast_Struct.declared is null), so nothing more is said about it or its
-// uses; a struct that only holds one in a circle isn't in it, and keeps its
-// type, the field that holds it having none. A struct larger than any type
+// uses checked after; a struct that only holds one in a circle isn't in
+// it, and keeps its type, the field that holds it having none. A global or
+// a signature before it in source order may have taken it behind a
+// pointer already (*Node), and what its value says, true of the pointer
+// whatever the struct, stays said (`h : int = g;` with g a *Node); its
+// type is then made again (made_again), so later uses say nothing. A struct larger than any type
 // may be (TYPE_MAX_SIZE), its fields each fine, is "'Huge' is too big", at
 // its name, and has no type either.
 static Type *resolve_struct(Checker *c, Ast_Struct *s) {
@@ -1218,12 +1227,24 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
 // in source order (check()), or earlier, by a call in a global's value,
 // which is checked against it (check_proc_signature). Its levels are its
 // deepest type's (open_declaration). A signature that needs itself, its
-// array's count naming a global whose value calls it, finds itself under
-// way: the types not yet known are unknown to that call, which says
-// nothing about them (the global's value isn't known while compiling
-// anyway, and says so).
-static void resolve_signature(Checker *c, Ast_Proc *proc) {
-    if (proc->is_broken || proc->resolve != RESOLVE_NOT_YET) return;
+// array's count naming a global whose value calls it (`f :: (a: [g]int)
+// ...; g := f(1);`), is a circle, found as a global's is (resolve_global):
+// "'f' is defined in terms of itself", once, and every declaration in it
+// has no type, so nothing more is said. Unreported, g had no type and said
+// nothing, [g] neither, and rig build crashed.
+//
+// Whether the signature is known now: false in a circle, under way or
+// found in one, and when it's nested too deeply to check here (said), so a
+// call needing it has no type and says nothing more.
+static bool resolve_signature(Checker *c, Ast_Proc *proc) {
+    if (proc->is_broken || proc->resolve == RESOLVE_DONE) return true;
+    if (proc->resolve == RESOLVE_UNDER_WAY || proc->resolve == RESOLVE_CYCLE) {
+        if (proc->resolve == RESOLVE_UNDER_WAY) {
+            diag_error(c->diag, proc->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(proc->name));
+        }
+        mark_circle(c, proc);
+        return false;
+    }
     s32 levels = 0, outer;
     for (s64 i = 0; i < proc->params.count; i++) {
         if (proc->params[i]->type_expr->levels > levels) levels = proc->params[i]->type_expr->levels;
@@ -1231,15 +1252,19 @@ static void resolve_signature(Checker *c, Ast_Proc *proc) {
     for (s64 i = 0; i < proc->results.count; i++) {
         if (proc->results[i]->levels > levels) levels = proc->results[i]->levels;
     }
-    if (!open_declaration(c, proc, proc->name, levels, &outer)) return;
+    if (!open_declaration(c, proc, proc->name, levels, &outer)) return false;
     proc->resolve = RESOLVE_UNDER_WAY;
+    array_add(&c->resolving, (Ast *)proc);
     check_signature(c, proc, outer);
+    c->resolving.count--;
+    bool in_circle = proc->resolve == RESOLVE_CYCLE;
     proc->resolve = RESOLVE_DONE;
     c->levels = outer;
+    return !in_circle;
 }
 
-void check_proc_signature(Checker *c, Ast_Proc *proc) {
-    resolve_signature(c, proc);
+bool check_proc_signature(Checker *c, Ast_Proc *proc) {
+    return resolve_signature(c, proc);
 }
 
 // The name a top-level declaration declares.

@@ -47,9 +47,9 @@ Type *resolve_type_or_void(Checker *c, Ast_Type *written);
 
 // Makes sure the type of field `index` of struct t is known: a late field's
 // (one holding a pointer or a view, checker.cpp's lay_out) is made here if
-// it isn't yet, as a literal or a field access checked during the structs'
-// layouts (in a global an array's count names) needs it before every layout
-// is done. Anything else's already is.
+// it isn't yet, as a literal or a field access in a global's value or an
+// array's count, checked in the pass before every layout is done, needs it
+// before resolve_late_fields gets to it. Anything else's already is.
 void check_late_field(Checker *c, Type *t, s32 index);
 
 // Makes sure struct t's layout is worked out before its fields are looked
@@ -62,8 +62,10 @@ bool check_layout(Checker *c, Type *t);
 // Makes sure procedure proc's signature is checked, its parameters' and
 // results' types known, before a call is checked against it: a call in a
 // global's value may come before its turn in source order (checker.cpp's
-// resolve_signature). Nothing for a broken entry.
-void check_proc_signature(Checker *c, Ast_Proc *proc);
+// resolve_signature). True when it's known; false when it's in a circle
+// with the call (reported) or nested too deeply to check there (reported),
+// the call then having no type. A broken entry's is never checked: true.
+bool check_proc_signature(Checker *c, Ast_Proc *proc);
 
 // [count]element (type_array_of), or null after "'[N]T' is too big", at
 // `at`: larger than any type may be (TYPE_MAX_SIZE), its count read as

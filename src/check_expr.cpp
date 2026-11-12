@@ -450,7 +450,10 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     // arguments may be right, and the call's type is unknown too.
     if (!decl || decl->kind != AST_PROC || ((Ast_Proc *)decl)->is_broken) return nullptr;
     Ast_Proc *proc = (Ast_Proc *)decl;
-    check_proc_signature(c, proc);
+    // A signature in a circle with this call (it needs the call's value), or
+    // nested too deeply to check here, gives the call no type, so nothing
+    // more is said about it: both were reported.
+    if (!check_proc_signature(c, proc)) return nullptr;
 
     call->proc = proc;
     if (call->args.count != proc->params.count) {
@@ -827,6 +830,9 @@ static Type *check_pointer_arithmetic(Checker *c, Ast_Binary *b, Type *left, Typ
                        STR_ARG(type_name(c->arena, left)), STR_ARG(type_name(c->arena, right)));
             return nullptr;
         }
+        // The size is the struct's layout's, which may not have had its
+        // turn yet (check_layout); one found wrong has been said.
+        if (left->pointee->kind == TYPE_STRUCT && !check_layout(c, left->pointee)) return nullptr;
         if (left->pointee->size == 0) {
             diag_error(c->diag, b->pos, "can't subtract pointers to '" STR_FMT "': it has no size",
                        STR_ARG(type_name(c->arena, left->pointee)));
@@ -1451,6 +1457,7 @@ static void check_stray_value(Checker *c, Ast *value) {
 // checked for its own mistakes (check_stray_value). A late field's type is
 // made before its value meets it, if it isn't yet (check_late_field).
 static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t) {
+    if (!check_layout(c, t)) return;  // its fields aren't known: said already
     if (!literal->names.count) {
         if (literal->values.count > t->fields.count) {
             s64 n = t->fields.count;
