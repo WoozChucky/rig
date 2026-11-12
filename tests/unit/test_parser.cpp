@@ -1604,3 +1604,202 @@ TEST(parses_no_abc) {
     CHECK_STR(errors, "1:9: unknown directive '#abc'\n");
     arena_free(&a);
 }
+
+// Issue #54: the nesting MAX_DEPTH didn't count yet, types and else-if
+// chains.
+
+// "L:C: types are nested too deeply (more than 1000 levels)\n".
+static const char *types_too_deep(Arena *a, int line, s64 col) {
+    return string_cstr(a, string_printf(a, "%d:%lld: types are nested too deeply (more than 1000 levels)\n", line,
+                                        (long long)col));
+}
+
+TEST(types_nest_at_most_max_depth) {
+    // Each *, [] and [N] is a level (MAX_DEPTH). A type of 1000 levels, a
+    // parameter's and a local's, goes through every stage; 1001 is one
+    // message, at the '*' or '[' one too many, and no crash (before the
+    // limit, ten thousand '*' overflowed the checker's stack). The arrays
+    // have one element, so even the deepest is 8 bytes.
+    Arena a = arena_make();
+    struct Shape {
+        const char *pattern;  // repeated to make the type
+        s64 levels;           // the levels in one pattern
+        const char *one_more; // one level more, after the repeats
+    };
+    Shape shapes[] = {{"*", 1, "*"}, {"[]", 1, "[]"}, {"[1]", 1, "[1]"}, {"*[]*[1]", 4, "*"}};
+    for (const Shape &shape : shapes) {
+        s64 n = MAX_DEPTH / shape.levels;
+        const char *more = string_cstr(&a, string_printf(&a, "%sint", shape.one_more));
+        // The level one too many starts right after the repeats.
+        s64 at = n * (s64)strlen(shape.pattern) + 1;
+        const char *param = "f :: (p: ", *param_after = ") { }\nmain :: () { }\n";
+        CHECK(builds(&a, nested_source(&a, param, shape.pattern, n, "int", "", param_after)));
+        CHECK_STR(check_source(&a, nested_source(&a, param, shape.pattern, n, more, "", param_after)),
+                  types_too_deep(&a, 1, (s64)strlen(param) + at));
+        const char *local = "main :: () {\n    x : ", *local_after = ";\n}\n";
+        CHECK(builds(&a, nested_source(&a, local, shape.pattern, n, "int", "", local_after)));
+        CHECK_STR(check_source(&a, nested_source(&a, local, shape.pattern, n, more, "", local_after)),
+                  types_too_deep(&a, 2, (s64)strlen("    x : ") + at));
+    }
+    arena_free(&a);
+}
+
+TEST(types_and_expressions_share_max_depth) {
+    // A type holds an expression (an array's count) and an expression a
+    // type (size_of's, a cast's), so the two nest inside each other, and
+    // every stage recurses through both: their levels count together,
+    // against one MAX_DEPTH. Counted apart, a thousand of each alternating
+    // ([size_of([size_of(...u8)]u8)]u8) overflowed Windows' stack, under
+    // both limits.
+    Arena a = arena_make();
+    const char *local = "main :: () {\n    x : ";
+    s64 x_col = (s64)strlen("    x : ") + 1;  // where the type starts
+    // Each [size_of( is two levels, the array and the size_of: 500 of them
+    // are 1000 levels; the 501st '[' is one too many, and a thousand of
+    // them are the same one message, with no crash.
+    CHECK(builds(&a, nested_source(&a, local, "[size_of(", 500, "u8", ")]u8", ";\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, local, "[size_of(", 501, "u8", ")]u8", ";\n}\n")),
+              types_too_deep(&a, 2, x_col + 500 * 9));
+    CHECK_STR(check_source(&a, nested_source(&a, local, "[size_of(", MAX_DEPTH, "u8", ")]u8", ";\n}\n")),
+              types_too_deep(&a, 2, x_col + 500 * 9));
+    // A type in a count: 500 '*', the array, its size_of and 498 '*' in it
+    // are 1000 levels; a 499th there is one too many.
+    const char *outer = nested_source(&a, local, "*", 500, "[size_of(", "", "");
+    CHECK(builds(&a, nested_source(&a, outer, "*", 498, "int)]int", "", ";\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, outer, "*", 499, "int)]int", "", ";\n}\n")),
+              types_too_deep(&a, 2, x_col + 500 + 9 + 498));
+    // A count's expression: 500 '*' and the array leave 499 levels for it,
+    // a chain of 499 operators; 500 are one too many, the expression's
+    // message at its start.
+    const char *array = nested_source(&a, local, "*", 500, "[1", "", "");
+    CHECK(builds(&a, nested_source(&a, array, " * 1", 499, "]u8", "", ";\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, array, " * 1", 500, "]u8", "", ";\n}\n")),
+              "2:510: this expression is nested too deeply (more than 1000 levels)\n");
+    // A cast's type is read a level down, as its value is: 500 parentheses,
+    // the cast and 499 '*' are 1000 levels; a 500th '*' is one too many.
+    const char *cast = "main :: () {\n    y : *int = null;\n    x := ";
+    CHECK(builds(&a, nested_source(&a, nested_source(&a, cast, "(", 500, "cast(", "", ""), "*", 499, "int) y", "",
+                                   nested_source(&a, "", ")", 500, ";\n}\n", "", ""))));
+    CHECK_STR(check_source(&a, nested_source(&a, nested_source(&a, cast, "(", 500, "cast(", "", ""), "*", 500,
+                                             "int) y", "", nested_source(&a, "", ")", 500, ";\n}\n", "", ""))),
+              types_too_deep(&a, 3, (s64)strlen("    x := ") + 1 + 500 + 5 + 499));
+    arena_free(&a);
+}
+
+TEST(deep_types_are_named_in_messages) {
+    // A message naming a type names every level of it. A type written at
+    // the limit, 1000 levels, is named in a message as any other; one the
+    // checker infers has no limit (each `pN := *pM;` is a pointer a level
+    // deeper), and is named too, in a loop: naming it by recursing took
+    // time doubling with each level, and stack with the levels.
+    Arena a = arena_make();
+    const char *stars = nested_source(&a, "", "*", MAX_DEPTH, "", "", "");
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    x : ", "*", MAX_DEPTH, "int", "", " = 5;\n}\n")),
+              string_cstr(&a, string_printf(&a, "2:%d: a value of type 'int' doesn't convert to '%sint' implicitly\n",
+                                            8 + MAX_DEPTH + 7, stars)));
+    const char *arrays = nested_source(&a, "", "[1]", MAX_DEPTH / 2, "", "", "");
+    const char *views = nested_source(&a, "", "[]", MAX_DEPTH / 2, "", "", "");
+    const char *mixed = string_cstr(&a, string_printf(&a, "%s%sint", arrays, views));
+    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, "main :: () {\n    x : %s = 5;\n}\n", mixed))),
+              string_cstr(&a, string_printf(&a, "2:%lld: a value of type 'int' doesn't convert to '%s' implicitly\n",
+                                            (long long)(8 + strlen(mixed) + 4), mixed)));
+    // Ten thousand locals, each a pointer to the one before: they build,
+    // and the last one's type, ten thousand levels deep, is named.
+    const s64 LOCALS = 10000;
+    char *text = (char *)arena_alloc(&a, (u64)(LOCALS * 32 + 256), 1);
+    char *at = text + sprintf(text, "main :: () {\n    p0 := 0;\n");
+    for (s64 i = 1; i <= LOCALS; i++) at += sprintf(at, "    p%lld := *p%lld;\n", (long long)i, (long long)(i - 1));
+    sprintf(at, "    x := p%lld;\n}\n", (long long)LOCALS);
+    CHECK(builds(&a, text));
+    sprintf(at, "    x : int = p%lld;\n}\n", (long long)LOCALS);
+    const char *deepest = nested_source(&a, "", "*", LOCALS, "int", "", "");
+    CHECK_STR(check_source(&a, text),
+              string_cstr(&a, string_printf(&a, "%lld:15: a value of type '%s' doesn't convert to 'int' implicitly\n",
+                                            (long long)(LOCALS + 3), deepest)));
+    arena_free(&a);
+}
+
+// Writes an else-if chain of `arms` arms at `at`, one a line after
+// `indent`, arm i taken when x == i and doing `body` (a printf format, its
+// %lld the arm's number): `if x == 0 { ... }`, then `else if x == 1 { ... }`
+// and so on. Returns the end of what it wrote.
+static char *else_if_arms(char *at, s64 arms, const char *indent, const char *body) {
+    for (s64 i = 0; i < arms; i++) {
+        at += sprintf(at, "%s%sif x == %lld { ", indent, i ? "else " : "", (long long)i);
+        at += sprintf(at, body, (long long)i);
+        at += sprintf(at, " }\n");
+    }
+    return at;
+}
+
+TEST(else_if_chains_of_10000_arms) {
+    // An else-if chain is an if whose else part is the next if, so the
+    // tree nests one level per arm; every stage walks the chain in a loop,
+    // with no limit to its length. Three procedures of 10000 arms each, for
+    // the three walks that follow the chain: pick's arms all return, so the
+    // checker's goes_past (does pick reach its end?) follows it to the last
+    // else; set's arms assign and join after the chain, as lowering builds
+    // them; find's only break is in the last else, so breaks_out_of (does
+    // the while true end?) follows the chain to it. main checks each picks
+    // the right arm, the first, last, one in between, and none.
+    const s64 ARMS = 10000;
+    Arena a = arena_make();
+    char *text = (char *)arena_alloc(&a, (u64)(3 * ARMS * 64 + 4096), 1);
+    char *at = text;
+    at += sprintf(at, "putchar :: (c: s32) -> s32 #foreign libc;\n"
+                      "pick :: (x: int) -> int {\n");
+    at = else_if_arms(at, ARMS, "    ", "return %lld;");
+    at += sprintf(at, "    else { return -1; }\n"
+                      "}\n"
+                      "set :: (x: int) -> int {\n"
+                      "    r := -1;\n");
+    at = else_if_arms(at, ARMS, "    ", "r = %lld;");
+    at += sprintf(at, "    return r;\n"
+                      "}\n"
+                      "find :: (x: int) -> int {\n"
+                      "    while true {\n");
+    at = else_if_arms(at, ARMS, "        ", "return %lld;");
+    at += sprintf(at, "        else { break; }\n"
+                      "    }\n"
+                      "    return -1;\n"
+                      "}\n"
+                      "picks :: (x: int, arm: int) -> bool {\n"
+                      "    return pick(x) == arm && set(x) == arm && find(x) == arm;\n"
+                      "}\n"
+                      "main :: () {\n"
+                      "    if picks(0, 0) && picks(1, 1) && picks(5000, 5000) && picks(9999, 9999) &&\n"
+                      "       picks(10000, -1) && picks(-3, -1) {\n"
+                      "        putchar(111);\n"
+                      "        putchar(107);\n"
+                      "    }\n"
+                      "}\n");
+    CHECK(builds(&a, text));
+    Process_Result run = run_module(&a, lower_source(&a, text), "else-if-test");
+    CHECK_EQ(run.exit_code, 0);
+    CHECK_STR(run.out, "ok");
+    // The tree's dump nests one parenthesis per arm too: every arm is
+    // there, and main's if.
+    String errors;
+    String dump = parse_src(&a, text, &errors);
+    CHECK_STR(errors, "");
+    CHECK_EQ(count_of(dump, "(if "), 3 * ARMS + 1);
+    // find's return after its loop hides whether the checker saw the
+    // break: lost has none, so its loop must be found to end, through the
+    // break in the chain's last else, ten thousand arms down, for the
+    // message to be there; and the same loop without the break never ends.
+    for (int has_break = 0; has_break < 2; has_break++) {
+        at = text + sprintf(text, "lost :: (x: int) -> int {\n"
+                                  "    while true {\n");
+        at = else_if_arms(at, ARMS, "        ", "");
+        sprintf(at,
+                "        else { %s }\n"
+                "    }\n"
+                "}\n"
+                "main :: () { }\n",
+                has_break ? "break;" : "");
+        CHECK_STR(check_source(&a, text),
+                  has_break ? "10005:1: 'lost' must return a value on every path, and this one reaches its end\n"
+                            : "");
+    }
+    arena_free(&a);
+}
