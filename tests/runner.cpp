@@ -3,8 +3,9 @@
 //
 // tests/run/NAME.rig is built with `RIG build tests/run/NAME.rig -o
 // .build/tests/NAME` and run; its stdout must equal NAME.out byte for byte,
-// its exit code the number in NAME.exit (0 when there's none), and it must
-// write nothing to stderr.
+// its exit code the number in NAME.exit (0 when there's none), and its
+// stderr NAME.err byte for byte (a runtime error's message, say), or be
+// empty when there's no NAME.err.
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, and it writes neither an object file nor a program.
@@ -197,7 +198,14 @@ static String run_test(Arena *a, String rig, String name) {
                                             expected_exit),
                            ran.err);
     }
-    if (ran.err.count) return with_stderr(a, str("the program wrote to stderr"), ran.err);
+    // A program's .err, when it has one, is what it must write to stderr: a
+    // runtime error's message, say. Without one it must write nothing.
+    String expected_err = {};
+    if (os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".err", STR_ARG(name)), &expected_err)) {
+        if (!string_eq(ran.err, expected_err)) return first_difference(a, "stderr", expected_err, ran.err);
+    } else if (ran.err.count) {
+        return with_stderr(a, str("the program wrote to stderr"), ran.err);
+    }
     return {};
 }
 

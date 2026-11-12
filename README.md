@@ -35,7 +35,7 @@ scripts/get_llvm.sh
 bin/rig version
 ```
 
-**Tests:** `bin/unit-tests` (the compiler's parts; give it a name to run only the tests whose name or file contains it) and `bin/run-tests` (Rig programs in `tests/run` built and run, programs in `tests/errors` that must fail with their diagnostics, and rig's command line, right and wrong), both from the repository's root.
+**Tests:** `bin/unit-tests` (the compiler's parts; give it a name to run only the tests whose name or file contains it) and `bin/run-tests` (Rig programs in `tests/run` built and run, programs in `tests/errors` that must fail with their diagnostics, and rig's command line, right and wrong), both from the repository's root. A program `tests/run/NAME.rig` must print `NAME.out`, exit with the number in `NAME.exit` (0 without one) and write `NAME.err` to stderr (nothing without one); `tests/errors/NAME.rig` must make rig exit with 1 and print `NAME.err`.
 
 **VS Code:** open the folder (on Windows, or in WSL through the WSL extension). `Ctrl+Shift+B` builds, *Run Test Task* runs the unit tests, and `F5` debugs `rig` or the unit tests (Visual Studio's debugger on Windows, gdb on Linux). The extensions it needs are recommended when the folder opens.
 
