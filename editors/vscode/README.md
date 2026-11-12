@@ -50,7 +50,7 @@ Type the prefix and press `Tab` (or pick it from the suggestions); `Tab` then mo
 | `let` | `name := ;` (the type is the value's) |
 | `const` | `NAME :: ;` |
 
-They follow the language as the design gives it (section 6), a little ahead of the compiler: today's `rig` doesn't take `if`, `while`, `for` or top-level constants yet.
+They follow the language as the design gives it (section 6), a little ahead of the compiler: today's `rig` doesn't take top-level constants (`const` outside a procedure) yet.
 
 ## Building and running
 
