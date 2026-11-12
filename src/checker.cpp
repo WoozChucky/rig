@@ -316,6 +316,50 @@ static void mark_circle(Checker *c, Ast *decl) {
     for (; i < c->resolving.count; i++) *resolve_state(c->resolving[i]) = RESOLVE_CYCLE;
 }
 
+// A limit of the compiler (spec 6.1, MAX_DEPTH). A declaration worked out
+// where it's first needed is worked out inside the one that needs it, on
+// the stack: the checker recurses from a global's value into the constant
+// it names, from a struct's layout into the struct it holds by value, and
+// on, so a chain of a few thousand, each needing the next one declared
+// after it, overflowed the stack. Each declaration in such a chain is a
+// level below the one that needs it, and their own levels count too, as
+// types and expressions inside each other do: a declaration starts a level
+// below the deepest level of the one that needs it (Ast_Var.levels and the
+// others, from the parser), wherever in it the name is, and its own levels
+// go on from there. One worked out by check()'s loops, in source order,
+// starts at 0, and one a procedure's signature needs a level below the
+// signature's levels (check_signature): once they're done, nothing else
+// works one out. c->levels is where the next one starts.
+//
+// So in `A0 :: A1; A1 :: A2; ...`, a name being no level, A0 is at 0 and
+// A1000 at 1000; A0 :: A1 + 1 is a level, so in a chain of those A1 is at
+// 2. Declared the other way round, each is done before the next needs it,
+// and the chain is any length.
+//
+// The declaration that would reach past MAX_DEPTH is "'A1001' is nested
+// too deeply in the declarations that need it (more than 1000 levels)", at
+// its name, and isn't worked out there: what needed it gets no type, so
+// says nothing more, and it's left to be worked out later, from 0, by its
+// own turn in check()'s loops, where its own mistakes are found. So a chain
+// more than twice the limit long says so again, further on, and a circle
+// longer than the limit is too deep before it closes, which is what's said
+// about it.
+//
+// Opens declaration decl, its own levels `levels`, at c->levels: false
+// after the message when it doesn't fit. Otherwise the levels below it
+// are the next one's, until the caller sets c->levels back to *outer.
+static bool open_declaration(Checker *c, Ast *decl, String name, s32 levels, s32 *outer) {
+    *outer = c->levels;
+    if (c->levels + levels > MAX_DEPTH) {
+        diag_error(c->diag, decl->pos,
+                   "'" STR_FMT "' is nested too deeply in the declarations that need it (more than %d levels)",
+                   STR_ARG(name), MAX_DEPTH);
+        return false;
+    }
+    c->levels += levels + 1;
+    return true;
+}
+
 // A global variable or a top-level constant, checked the first time it's
 // needed: by the loop in check() that goes through them all in source
 // order, or earlier, by a use in the value of one before it (check_lookup
@@ -365,14 +409,21 @@ static void resolve_global(Checker *c, Ast *decl) {
         return;
     }
     RIG_ASSERT(c->scopes.count == 0);
+    bool is_var = decl->kind == AST_VAR;
+    String name = is_var ? ((Ast_Var *)decl)->name : ((Ast_Const *)decl)->name;
+    s32 outer;
+    if (!open_declaration(c, decl, name, is_var ? ((Ast_Var *)decl)->levels : ((Ast_Const *)decl)->levels, &outer)) {
+        return;
+    }
     *state = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, decl);
-    if (decl->kind == AST_VAR) {
+    if (is_var) {
         check_global_var(c, (Ast_Var *)decl);
     } else {
         check_const_value(c, (Ast_Const *)decl);
     }
     c->resolving.count--;
+    c->levels = outer;
     // In a circle, what was worked out came from a value that isn't one.
     if (*state == RESOLVE_CYCLE) {
         decl->type = nullptr;
@@ -539,10 +590,13 @@ static Type *resolve_struct(Checker *c, Ast_Struct *s) {
         mark_circle(c, s);
         return nullptr;
     }
+    s32 outer;
+    if (!open_declaration(c, s, s->name, s->levels, &outer)) return nullptr;
     s->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)s);
     lay_out(c, s);
     c->resolving.count--;
+    c->levels = outer;
     if (s->resolve == RESOLVE_CYCLE) {
         s->declared = nullptr;
     } else if (s->declared->size > TYPE_MAX_SIZE) {
@@ -570,10 +624,13 @@ static void make_late_field(Checker *c, Ast_Struct *s, s64 i) {
         mark_circle(c, field);
         return;
     }
+    s32 outer;
+    if (!open_declaration(c, field, field->name, field->levels, &outer)) return;
     field->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)field);
     Type *type = resolve_type(c, field->type_expr);
     c->resolving.count--;
+    c->levels = outer;
     if (field->resolve == RESOLVE_CYCLE) type = nullptr;
     field->resolve = RESOLVE_DONE;
     field->type = type;
@@ -1080,6 +1137,9 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 // procedure can't take a 'string'; pass its .data, which may not end with a
 // zero, or a literal".
 static void check_signature(Checker *c, Ast_Proc *proc) {
+    // A global its types need (an array's count) is worked out a level
+    // below their levels (open_declaration).
+    c->levels = proc->levels + 1;
     for (s64 i = 0; i < proc->params.count; i++) {
         Ast_Param *param = proc->params[i];
         param->type = resolve_type(c, param->type_expr);
@@ -1100,6 +1160,7 @@ static void check_signature(Checker *c, Ast_Proc *proc) {
                        STR_ARG(type_name(c->arena, t)));
         }
     }
+    c->levels = 0;
     // C returns one value; several are Rig's own (spec 6.7), made in a way
     // only Rig's procedures agree on.
     if (proc->is_foreign && proc->results.count > 1) {

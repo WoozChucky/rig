@@ -21,6 +21,9 @@ struct Checker {
     Array<Ast *> resolving;      // the globals, constants, structs' layouts and late fields' types
                                  // under way, each needed by the one before it (resolve_global,
                                  // resolve_struct, make_late_field): a circle is the end of this list
+    s32 levels;                  // where a declaration worked out now starts (MAX_DEPTH): a level
+                                 // below the deepest of the ones under way, 0 when there's none
+                                 // (checker.cpp's open_declaration)
 };
 
 // checker.cpp
