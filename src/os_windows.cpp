@@ -62,6 +62,36 @@ bool os_read_file(Arena *a, String path, String *out) {
     return true;
 }
 
+// ReadFile on the standard input handle itself, not the C runtime's stdin:
+// the handle gives the bytes as they are, where the C runtime's text mode
+// would turn "\r\n" into "\n" and stop at a Ctrl+Z (0x1A).
+bool os_read_stdin(Arena *a, String *out) {
+    HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+    if (input == nullptr || input == INVALID_HANDLE_VALUE) {
+        SetLastError(ERROR_INVALID_HANDLE);  // started with no stdin at all
+        return os_fail();
+    }
+    Array<u8> buffer = {};
+    u8 chunk[65536];
+    for (;;) {
+        DWORD n = 0;
+        if (!ReadFile(input, chunk, sizeof chunk, &n, nullptr)) {
+            // A pipe whose writer has closed it reports its end this way.
+            if (GetLastError() == ERROR_BROKEN_PIPE) break;
+            os_fail();
+            array_free(&buffer);
+            return false;
+        }
+        if (n == 0) break;  // the end of a file, or Ctrl+Z on a console
+        for (DWORD i = 0; i < n; i++) array_add(&buffer, chunk[i]);
+    }
+    u8 *data = (u8 *)arena_alloc(a, (u64)buffer.count + 1, 1);  // + 1: a zero after, for C
+    if (buffer.count) memcpy(data, buffer.data, (size_t)buffer.count);
+    *out = {data, buffer.count};
+    array_free(&buffer);
+    return true;
+}
+
 bool os_write_file(String path, String data) {
     Arena scratch = arena_make(1024);
     HANDLE file = CreateFileW(to_wide(&scratch, path), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
@@ -199,6 +229,30 @@ static DWORD WINAPI read_pipe(void *argument) {
     return 0;
 }
 
+struct Pipe_Writer {
+    HANDLE pipe;
+    String data;
+};
+
+// Writes the program's input into its stdin pipe, then closes the pipe, so
+// the program reads the end of its input. A thread of its own, like the
+// readers: a program writes while it reads, and the parent writing all of
+// a big input before reading anything would wait on a program waiting on
+// it. If the program ends before reading it all, WriteFile fails (the
+// pipe's other end is gone) and the rest is dropped.
+static DWORD WINAPI write_pipe(void *argument) {
+    Pipe_Writer *writer = (Pipe_Writer *)argument;
+    s64 done = 0;
+    while (done < writer->data.count) {
+        DWORD chunk = (DWORD)(writer->data.count - done > 65536 ? 65536 : writer->data.count - done);
+        DWORD n = 0;
+        if (!WriteFile(writer->pipe, writer->data.data + done, chunk, &n, nullptr)) break;
+        done += n;
+    }
+    CloseHandle(writer->pipe);
+    return 0;
+}
+
 // The milliseconds until `deadline` (on GetTickCount64's clock, which only
 // goes forward), for the Wait functions: 0 once it's past, and INFINITE when
 // there is no deadline (0).
@@ -215,6 +269,11 @@ bool os_run_in(Arena *a, Array<String> argv, String directory, Process_Result *r
 }
 
 bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result) {
+    return os_run_with_input(a, argv, directory, seconds, {}, result);
+}
+
+bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 seconds, String input,
+                       Process_Result *result) {
     RIG_ASSERT(argv.count > 0 && seconds >= 0);
     result->timed_out = false;
     Array<u8> line = {};
@@ -226,7 +285,9 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
     array_free(&line);
 
     // Pipes for stdout and stderr: the child inherits the write ends, the
-    // parent keeps the read ends (not inheritable). stdin is NUL.
+    // parent keeps the read ends (not inheritable). stdin is NUL, or with
+    // input a third pipe the other way round: the child inherits its read
+    // end, and the parent keeps the write end.
     SECURITY_ATTRIBUTES inherit = {sizeof inherit, nullptr, TRUE};
     HANDLE out_read, out_write, err_read, err_write;
     if (!CreatePipe(&out_read, &out_write, &inherit, 0)) return os_fail();
@@ -238,13 +299,26 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
     }
     SetHandleInformation(out_read, HANDLE_FLAG_INHERIT, 0);
     SetHandleInformation(err_read, HANDLE_FLAG_INHERIT, 0);
-    HANDLE null_input = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit,
-                                    OPEN_EXISTING, 0, nullptr);
+    HANDLE child_input = INVALID_HANDLE_VALUE, in_write = nullptr;
+    if (input.count) {
+        if (!CreatePipe(&child_input, &in_write, &inherit, 0)) {
+            os_fail();
+            CloseHandle(out_read);
+            CloseHandle(out_write);
+            CloseHandle(err_read);
+            CloseHandle(err_write);
+            return false;
+        }
+        SetHandleInformation(in_write, HANDLE_FLAG_INHERIT, 0);
+    } else {
+        child_input = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit,
+                                  OPEN_EXISTING, 0, nullptr);
+    }
 
     STARTUPINFOW startup = {};
     startup.cb = sizeof startup;
     startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdInput = null_input;
+    startup.hStdInput = child_input;
     startup.hStdOutput = out_write;
     startup.hStdError = err_write;
     PROCESS_INFORMATION process = {};
@@ -277,26 +351,34 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
         ResumeThread(process.hThread);
     }
     // The parent's copies of the write ends must close, or the read ends
-    // never see the end of the stream.
+    // never see the end of the stream. Likewise its copy of the stdin
+    // pipe's read end: once the program has gone, writing must fail rather
+    // than fill a pipe nobody reads.
     CloseHandle(out_write);
     CloseHandle(err_write);
-    if (null_input != INVALID_HANDLE_VALUE) CloseHandle(null_input);
+    if (child_input != INVALID_HANDLE_VALUE) CloseHandle(child_input);
     if (!started) {
         CloseHandle(out_read);
         CloseHandle(err_read);
+        if (in_write) CloseHandle(in_write);
         if (job) CloseHandle(job);
         return false;
     }
 
+    // The threads: two readers, and the writer when there's input. The
+    // writer closes its pipe itself.
     Pipe_Reader out = {out_read, {}}, err = {err_read, {}};
-    HANDLE readers[2] = {CreateThread(nullptr, 0, read_pipe, &out, 0, nullptr),
-                         CreateThread(nullptr, 0, read_pipe, &err, 0, nullptr)};
-    RIG_ASSERT(readers[0] && readers[1]);
+    Pipe_Writer in = {in_write, input};
+    HANDLE threads[3] = {CreateThread(nullptr, 0, read_pipe, &out, 0, nullptr),
+                         CreateThread(nullptr, 0, read_pipe, &err, 0, nullptr),
+                         in_write ? CreateThread(nullptr, 0, write_pipe, &in, 0, nullptr) : nullptr};
+    DWORD thread_count = in_write ? 3 : 2;
+    RIG_ASSERT(threads[0] && threads[1] && (!in_write || threads[2]));
     // First the program, then the pipes' ends (a program it started may
     // still hold them), all within the time given.
     ULONGLONG deadline = seconds ? GetTickCount64() + (ULONGLONG)seconds * 1000 : 0;
     bool late = WaitForSingleObject(process.hProcess, time_left(deadline)) == WAIT_TIMEOUT;
-    if (!late) late = WaitForMultipleObjects(2, readers, TRUE, time_left(deadline)) == WAIT_TIMEOUT;
+    if (!late) late = WaitForMultipleObjects(thread_count, threads, TRUE, time_left(deadline)) == WAIT_TIMEOUT;
     if (late) {
         if (job) TerminateJobObject(job, 1);
         else TerminateProcess(process.hProcess, 1);
@@ -304,17 +386,16 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
         WaitForSingleObject(process.hProcess, INFINITE);
         // Killed, the program's pipes end, unless something it started
         // outside the job still holds them (when the program couldn't join
-        // it). Then the readers' ReadFile calls are cancelled, which ends
-        // them; again every 100 ms, in case a reader was between two calls.
+        // it). Then the threads' ReadFile and WriteFile calls are
+        // cancelled, which ends them; again every 100 ms, in case a thread
+        // was between two calls.
         DWORD wait = 1000;
-        while (WaitForMultipleObjects(2, readers, TRUE, wait) == WAIT_TIMEOUT) {
-            CancelSynchronousIo(readers[0]);
-            CancelSynchronousIo(readers[1]);
+        while (WaitForMultipleObjects(thread_count, threads, TRUE, wait) == WAIT_TIMEOUT) {
+            for (DWORD i = 0; i < thread_count; i++) CancelSynchronousIo(threads[i]);
             wait = 100;
         }
     }
-    CloseHandle(readers[0]);
-    CloseHandle(readers[1]);
+    for (DWORD i = 0; i < thread_count; i++) CloseHandle(threads[i]);
     CloseHandle(out_read);
     CloseHandle(err_read);
     if (job) CloseHandle(job);

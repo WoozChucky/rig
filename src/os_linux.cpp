@@ -50,6 +50,28 @@ bool os_read_file(Arena *a, String path, String *out) {
     return true;
 }
 
+// Linux has no text mode: read() gives the bytes as they are.
+bool os_read_stdin(Arena *a, String *out) {
+    Array<u8> buffer = {};
+    u8 chunk[65536];
+    for (;;) {
+        ssize_t n = read(0, chunk, sizeof chunk);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) {
+            os_fail();
+            array_free(&buffer);
+            return false;
+        }
+        if (n == 0) break;
+        for (ssize_t i = 0; i < n; i++) array_add(&buffer, chunk[i]);
+    }
+    u8 *data = (u8 *)arena_alloc(a, (u64)buffer.count + 1, 1);  // + 1: a zero after, for C
+    if (buffer.count) memcpy(data, buffer.data, (size_t)buffer.count);
+    *out = {data, buffer.count};
+    array_free(&buffer);
+    return true;
+}
+
 bool os_write_file(String path, String data) {
     Arena scratch = arena_make(1024);
     int fd = open(string_cstr(&scratch, path), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
@@ -149,6 +171,11 @@ bool os_run_in(Arena *a, Array<String> argv, String directory, Process_Result *r
 }
 
 bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result) {
+    return os_run_with_input(a, argv, directory, seconds, {}, result);
+}
+
+bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 seconds, String input,
+                       Process_Result *result) {
     RIG_ASSERT(argv.count > 0 && seconds >= 0);
     result->timed_out = false;
     char **cargv = arena_new_array<char *>(a, argv.count + 1);
@@ -166,7 +193,7 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
                                                          STR_ARG(program)));
     }
 
-    int out_pipe[2], err_pipe[2];
+    int out_pipe[2], err_pipe[2], in_pipe[2] = {-1, -1};
     if (pipe2(out_pipe, O_CLOEXEC) < 0) return os_fail();
     if (pipe2(err_pipe, O_CLOEXEC) < 0) {
         os_fail();
@@ -174,13 +201,22 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
         close(out_pipe[1]);
         return false;
     }
+    if (input.count && pipe2(in_pipe, O_CLOEXEC) < 0) {
+        os_fail();
+        close(out_pipe[0]);
+        close(out_pipe[1]);
+        close(err_pipe[0]);
+        close(err_pipe[1]);
+        return false;
+    }
 
     // The child's stdout and stderr are the pipes' write ends, its stdin is
-    // /dev/null. dup2 clears O_CLOEXEC on the copies, so only they survive
-    // into the program.
+    // /dev/null, or with input the read end of a third pipe. dup2 clears
+    // O_CLOEXEC on the copies, so only they survive into the program.
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
+    if (input.count) posix_spawn_file_actions_adddup2(&actions, in_pipe[0], 0);
+    else posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
     posix_spawn_file_actions_adddup2(&actions, out_pipe[1], 1);
     posix_spawn_file_actions_adddup2(&actions, err_pipe[1], 2);
     if (directory.count) posix_spawn_file_actions_addchdir_np(&actions, string_cstr(a, directory));
@@ -198,24 +234,48 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
     int spawn_error = posix_spawnp(&pid, cargv[0], &actions, &attributes, cargv, environ);
     posix_spawnattr_destroy(&attributes);
     posix_spawn_file_actions_destroy(&actions);
+    // The parent's copies of the child's ends close: the read ends would
+    // otherwise never see the end of the output, and the input's writer
+    // would never learn that the program had gone.
     close(out_pipe[1]);
     close(err_pipe[1]);
+    if (in_pipe[0] >= 0) close(in_pipe[0]);
     if (spawn_error) {
         close(out_pipe[0]);
         close(err_pipe[0]);
+        if (in_pipe[1] >= 0) close(in_pipe[1]);
         os_last_error = spawn_error;
         return false;
+    }
+
+    // Writing to a pipe whose reader has gone (a program that ended without
+    // reading all its input) raises SIGPIPE, which would end this process.
+    // While the input is written it's ignored, so write() fails with EPIPE
+    // instead, and put back afterwards. It's changed only after the spawn:
+    // the program inherits an ignored signal, and must start with SIGPIPE
+    // as it was. (This affects the whole process, so os_run_with_input
+    // shouldn't run in two threads at once; Rig's callers don't.)
+    struct sigaction ignore = {}, old_sigpipe = {};
+    if (input.count) {
+        ignore.sa_handler = SIG_IGN;
+        sigaction(SIGPIPE, &ignore, &old_sigpipe);
+        // A write mustn't block when the pipe is full, so the loop below
+        // goes on reading the program's output meanwhile.
+        fcntl(in_pipe[1], F_SETFL, fcntl(in_pipe[1], F_GETFL) | O_NONBLOCK);
     }
 
     // Read both pipes as data arrives: reading one to its end first would
     // deadlock with a child that fills the other. The pipes end when every
     // program holding them has ended, so with a timeout poll waits no longer
     // than what's left of it, and then kills the group; the pipes then end
-    // too.
+    // too. The input, if any, is written in the same loop whenever its pipe
+    // has room (POLLOUT), and its pipe closed once it's all written, or when
+    // the program can no longer read it.
     Array<u8> out = {}, err = {};
-    struct pollfd fds[2] = {{out_pipe[0], POLLIN, 0}, {err_pipe[0], POLLIN, 0}};
+    struct pollfd fds[3] = {{out_pipe[0], POLLIN, 0}, {err_pipe[0], POLLIN, 0}, {in_pipe[1], POLLOUT, 0}};
     Array<u8> *buffers[2] = {&out, &err};
     int open_count = 2;
+    s64 written = 0;
     s64 deadline = seconds ? milliseconds_now() + (s64)seconds * 1000 : 0;
     while (open_count > 0) {
         int wait = -1;  // for ever
@@ -228,7 +288,7 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
                 wait = (int)left;
             }
         }
-        if (poll(fds, 2, wait) < 0) {
+        if (poll(fds, 3, wait) < 0) {
             if (errno == EINTR) continue;
             break;
         }
@@ -240,7 +300,20 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
                 open_count--;
             }
         }
+        if (fds[2].fd >= 0 && (fds[2].revents & (POLLOUT | POLLHUP | POLLERR))) {
+            ssize_t n = write(fds[2].fd, input.data + written, (size_t)(input.count - written));
+            if (n > 0) written += n;
+            bool failed = n < 0 && errno != EINTR && errno != EAGAIN;  // EPIPE: the program has gone
+            if (failed || written == input.count) {
+                close(fds[2].fd);
+                fds[2].fd = -1;
+            }
+        }
     }
+    // The output ended before the input was all written (the program
+    // closed its stdout and stderr, or ended): the rest is dropped.
+    if (fds[2].fd >= 0) close(fds[2].fd);
+    if (input.count) sigaction(SIGPIPE, &old_sigpipe, nullptr);
 
     // The pipes can end before the program does: it may close its stdout
     // and stderr and run on. Within the time left, check every 10 ms

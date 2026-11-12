@@ -38,7 +38,7 @@ Rig is a new compiled programming language, built as a learning project that fol
 ## 3. The toolchain
 
 - **Name:** Rig. Command `rig`, source files `.rig`, e.g. `rig build hello.rig`. (Nuno) An existing Rust LLM library and an old Unix tool share the name; neither is a language. A web search for other uses was offered and not yet done.
-- **One command, `rig`**, with subcommands: `build`, `run` (Claude's call), `test`, `get`/`fetch`, `lsp`, later `fmt`. (Nuno: one command for everything; subcommand names are Claude's call)
+- **One command, `rig`**, with subcommands: `build`, `run` (Claude's call), `check` (the diagnostics alone, writing nothing: what editors run until `lsp`), `test`, `get`/`fetch`, `lsp`, later `fmt`. (Nuno: one command for everything; subcommand names are Claude's call)
 - **The compiler is written in C++**, as Jai's is. (Nuno)
   - **C-style C++, no STL** (Nuno): structs, functions and a few templates; the compiler's own arena allocator, growable array, string view and hash table; no exceptions, no RTTI.
   - **C++23** (Nuno), compiled with **clang** on both platforms (Nuno). On Windows, clang targets MSVC and uses Visual Studio's headers, libraries and linker (Visual Studio 18 and clang 23.1.4 are installed on Nuno's machine). gcc on Linux should also work (Claude's call).

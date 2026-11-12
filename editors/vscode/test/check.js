@@ -77,11 +77,24 @@ function match(line) {
     };
 }
 
-check('the problem matcher is $rig, owned by rig, paths from the workspace folder', () => {
+check('the problem matcher is $rig, owned by rig-build, paths from the workspace folder', () => {
     const rig = matcher();
-    assert.strictEqual(rig.owner, 'rig');
+    assert.strictEqual(rig.owner, 'rig-build');
     assert.strictEqual(rig.source, 'rig');
     assert.deepStrictEqual(rig.fileLocation, ['autoDetect', '${workspaceFolder}']);
+});
+
+// VS Code keeps the problems of a problem matcher, and of a diagnostic
+// collection, under an owner: the matcher's `owner`, the collection's name.
+// A task's matcher replaces or clears its owner's problems for the files it
+// reports, so a matcher owned by the live check's collection ('rig') would
+// wipe the live check's diagnostics whenever a task using it ran.
+check('no problem matcher shares its owner with the live check\'s collection', () => {
+    const collection = /createDiagnosticCollection\(\s*'([^']*)'\s*\)/.exec(read('extension.js'));
+    assert.ok(collection, 'extension.js makes no diagnostic collection');
+    const owners = readJson('package.json').contributes.problemMatchers.map((m) => m.owner);
+    assert.ok(!owners.includes(collection[1]), `a problem matcher is owned by '${collection[1]}'`);
+    assert.strictEqual(new Set(owners).size, owners.length, 'two problem matchers share an owner');
 });
 
 // tests/errors/NAME.err is what `rig build tests/errors/NAME.rig` prints,
@@ -156,6 +169,120 @@ check('the problem matcher reads a warning, and not rig\'s own errors', () => {
     assert.strictEqual(match('a.rig:1:2: warning: unused').severity, 'warning');
     // No line or column: nothing to put in the Problems panel.
     assert.strictEqual(match("rig: error: cannot read 'a.rig': no such file"), null);
+});
+
+// --- $rig-runtime ----------------------------------------------------------
+
+// The second problem matcher, for the extension's own build and run tasks
+// while `rig check` shows the compile errors live (rig.check isn't off):
+// only a running program's `runtime error` lines, so a build doesn't list
+// the compile errors a second time.
+function runtimeMatcher() {
+    const matchers = readJson('package.json').contributes.problemMatchers || [];
+    const runtime = matchers.find((m) => m.name === 'rig-runtime');
+    assert.ok(runtime, 'package.json declares no problem matcher named "rig-runtime"');
+    return runtime;
+}
+
+function matchRuntime(line) {
+    const p = runtimeMatcher().pattern;
+    const m = new RegExp(p.regexp).exec(line);
+    return m ? { file: m[p.file], line: Number(m[p.line]), column: Number(m[p.column]), severity: m[p.severity], message: m[p.message] } : null;
+}
+
+check('$rig-runtime reads a runtime error, from the workspace folder as $rig does', () => {
+    const runtime = runtimeMatcher();
+    // An owner of its own: VS Code clears a matcher's markers by owner, and
+    // the live check's diagnostics are the collection 'rig''s.
+    assert.strictEqual(runtime.owner, 'rig-runtime');
+    assert.strictEqual(runtime.source, 'rig');
+    assert.deepStrictEqual(runtime.fileLocation, matcher().fileLocation);
+    assert.deepStrictEqual(matchRuntime('tests/run/x.rig:4:13: runtime error: division by zero'), {
+        file: 'tests/run/x.rig',
+        line: 4,
+        column: 13,
+        severity: 'error',
+        message: 'division by zero',
+    });
+    assert.strictEqual(matchRuntime('C:\\x\\y.rig:3:5: runtime error: overflow').file, 'C:\\x\\y.rig');
+});
+
+check('$rig-runtime takes no line of tests/errors', () => {
+    const dir = path.join(root, 'tests', 'errors');
+    for (const name of fs.readdirSync(dir).filter((f) => f.endsWith('.err'))) {
+        for (const line of fs.readFileSync(path.join(dir, name), 'utf8').split(/\r?\n/)) {
+            assert.strictEqual(matchRuntime(line), null, `${name}: $rig-runtime takes ${JSON.stringify(line)}`);
+        }
+    }
+});
+
+// --- Checking as you type: diagnostics.js ----------------------------------
+
+// The part of the live check that needs no VS Code: reading `rig check`'s
+// stderr into diagnostics. extension.js requires it; so does this file,
+// with no stand-in needed.
+function diagnostics() {
+    return require(path.join(extension, 'diagnostics.js'));
+}
+
+check('diagnostics.js reads with the same regular expression as $rig', () => {
+    const { DIAGNOSTIC } = diagnostics();
+    assert.ok(DIAGNOSTIC instanceof RegExp, 'diagnostics.js exports no DIAGNOSTIC regular expression');
+    assert.strictEqual(DIAGNOSTIC.source, new RegExp(matcher().pattern.regexp).source);
+    // And $rig-runtime is that one with `runtime ` required.
+    assert.strictEqual(runtimeMatcher().pattern.regexp, matcher().pattern.regexp.replace('(?:runtime )?', 'runtime '));
+});
+
+// What `rig check tests/errors/NAME.rig` prints is NAME.err: each of its
+// diagnostics, and only those, comes out, at the line and column it names,
+// with its severity and message, and none of the source and caret lines.
+check('diagnostics.js reads every diagnostic of tests/errors', () => {
+    const { parseDiagnostics } = diagnostics();
+    const dir = path.join(root, 'tests', 'errors');
+    for (const name of fs.readdirSync(dir).filter((f) => f.endsWith('.err'))) {
+        const text = fs.readFileSync(path.join(dir, name), 'utf8');
+        const file = path.join(dir, name.replace(/\.err$/, '.rig'));
+        const expected = text
+            .split(/\r?\n/)
+            .filter((l) => l && !/^\s/.test(l))
+            .map((l) => {
+                const m = /^[^:]+:(\d+):(\d+): (error|warning): (.*)$/.exec(l);
+                assert.ok(m, `${name}: ${l}`);
+                return { line: Number(m[1]), column: Number(m[2]), severity: m[3], message: m[4] };
+            });
+        assert.ok(expected.length > 0, name);
+        // The names in the .err are relative to the repository's root,
+        // where rig ran; Windows' \r\n reads the same.
+        assert.deepStrictEqual(parseDiagnostics(text, file, root), expected, name);
+        assert.deepStrictEqual(parseDiagnostics(text.replace(/\r?\n/g, '\r\n'), file, root), expected, `${name}, \\r\\n`);
+        // Another file's diagnostics aren't this one's.
+        assert.deepStrictEqual(parseDiagnostics(text, path.join(dir, 'other.rig'), root), [], `${name}, another file`);
+    }
+});
+
+check('diagnostics.js takes an absolute name, and on Windows any case', () => {
+    const { parseDiagnostics } = diagnostics();
+    const file = path.resolve('w', 'hello.rig');
+    const out = `${file}:2:14: error: unknown identifier 'putz'\n    main :: () { putz(); }\n                 ^\nrig: error: linking failed\n`;
+    assert.deepStrictEqual(parseDiagnostics(out, file, path.resolve('elsewhere')), [
+        { line: 2, column: 14, severity: 'error', message: "unknown identifier 'putz'" },
+    ]);
+    const upper = parseDiagnostics(out.replace(file, file.toUpperCase()), file, path.resolve('elsewhere'));
+    assert.strictEqual(upper.length, process.platform === 'win32' ? 1 : 0);
+    // A warning stays a warning.
+    assert.strictEqual(parseDiagnostics(`${file}:1:1: warning: w\n`, file, '.')[0].severity, 'warning');
+});
+
+// rig counts a column in bytes of UTF-8 (src/diag.h: a tab is one, and so is
+// each byte of a character); VS Code in UTF-16 code units.
+check('diagnostics.js turns rig\'s byte columns into VS Code\'s characters', () => {
+    const { characterOfByteColumn } = diagnostics();
+    assert.strictEqual(characterOfByteColumn('\tmain :: ()', 2), 1);
+    assert.strictEqual(characterOfByteColumn('a := "é"; b', 12), 10);  // é: two bytes, one unit
+    assert.strictEqual(characterOfByteColumn('s := "🎸"; x', 14), 11); // 🎸: four bytes, two units
+    // Past the end (an error at the end of the line): the end.
+    assert.strictEqual(characterOfByteColumn('abc', 9), 3);
+    assert.strictEqual(characterOfByteColumn('', 1), 0);
 });
 
 // --- Snippets --------------------------------------------------------------
@@ -240,8 +367,30 @@ check('every task type in package.json has a provider in extension.js', () => {
     for (const command of definitions[0].properties.command.enum) {
         assert.ok(source.includes(`'${command}'`), `extension.js never mentions the task command '${command}'`);
     }
-    // Its tasks report through the problem matcher package.json declares.
+    // Its tasks report through the problem matchers package.json declares.
     assert.ok(source.includes("'$rig'"), "extension.js doesn't use the problem matcher '$rig'");
+    assert.ok(source.includes("'$rig-runtime'"), "extension.js doesn't use the problem matcher '$rig-runtime'");
+});
+
+check('the setting rig.check is declared: onType, onSave or off', () => {
+    const setting = readJson('package.json').contributes.configuration.properties['rig.check'];
+    assert.ok(setting, 'package.json declares no setting rig.check');
+    assert.strictEqual(setting.type, 'string');
+    assert.deepStrictEqual(setting.enum, ['onType', 'onSave', 'off']);
+    assert.strictEqual(setting.default, 'onType');
+    assert.strictEqual((setting.enumDescriptions || []).length, 3, 'one description per value');
+    assert.ok(setting.markdownDescription || setting.description, 'rig.check has no description');
+    assert.ok(read('extension.js').includes("'check'"), "extension.js never reads 'check'");
+});
+
+// The live check follows the documents: it starts on open, on a change
+// (after a pause) and on save, and forgets a document when it closes.
+check('extension.js listens to documents opening, changing, saving and closing', () => {
+    const source = read('extension.js');
+    for (const event of ['onDidOpenTextDocument', 'onDidChangeTextDocument', 'onDidSaveTextDocument', 'onDidCloseTextDocument']) {
+        assert.ok(new RegExp(`\\bvscode\\.workspace\\.${event}\\(`).test(source), `extension.js doesn't listen to ${event}`);
+    }
+    assert.ok(/createDiagnosticCollection\(\s*'rig'\s*\)/.test(source), "extension.js makes no diagnostic collection 'rig'");
 });
 
 check('the setting rig.compilerPath is declared and read', () => {
@@ -251,21 +400,44 @@ check('the setting rig.compilerPath is declared and read', () => {
     assert.ok(read('extension.js').includes("'compilerPath'"), "extension.js never reads 'compilerPath'");
 });
 
-// No npm packages: VS Code's API and Node's own modules only.
-check('extension.js requires only vscode and Node\'s built-in modules', () => {
-    const allowed = ['vscode', 'child_process', 'path', 'fs', 'os'];
-    const required = [...read('extension.js').matchAll(/\brequire\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
+// What a file passes to require().
+function requires(file) {
+    return [...read(file).matchAll(/\brequire\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
+}
+
+// The extension's own modules extension.js requires ('./diagnostics'), as
+// files of this folder ('diagnostics.js').
+function ownModules() {
+    return requires('extension.js')
+        .filter((name) => name.startsWith('./'))
+        .map((name) => path.posix.normalize(name.endsWith('.js') ? name : `${name}.js`));
+}
+
+// No npm packages: VS Code's API, Node's own modules and the extension's own
+// files only. diagnostics.js doesn't need VS Code at all, so this file can
+// test it as it is.
+check('extension.js requires only vscode, Node\'s built-in modules and its own', () => {
+    const builtIn = ['child_process', 'path', 'fs', 'os'];
+    const required = requires('extension.js');
     assert.ok(required.includes('vscode'), 'extension.js never requires vscode');
-    for (const name of required) assert.ok(allowed.includes(name), `extension.js requires '${name}'`);
+    assert.deepStrictEqual(ownModules(), ['diagnostics.js']);
+    for (const name of required) {
+        assert.ok(name === 'vscode' || name.startsWith('./') || builtIn.includes(name), `extension.js requires '${name}'`);
+    }
+    for (const name of requires('diagnostics.js')) {
+        assert.ok(builtIn.includes(name), `diagnostics.js requires '${name}'`);
+    }
 });
 
-// Node parses the file without running it: a syntax error shows here rather
-// than when VS Code loads the extension.
-check('node --check extension.js', () => {
-    const result = require('child_process').spawnSync(process.execPath, ['--check', path.join(extension, 'extension.js')], {
-        encoding: 'utf8',
-    });
-    assert.strictEqual(result.status, 0, result.stderr);
+// Node parses the files without running them: a syntax error shows here
+// rather than when VS Code loads the extension.
+check('node --check extension.js and diagnostics.js', () => {
+    for (const file of ['extension.js', 'diagnostics.js']) {
+        const result = require('child_process').spawnSync(process.execPath, ['--check', path.join(extension, file)], {
+            encoding: 'utf8',
+        });
+        assert.strictEqual(result.status, 0, `${file}: ${result.stderr}`);
+    }
 });
 
 // --- Packaging -------------------------------------------------------------
@@ -284,11 +456,12 @@ check('both install scripts pack the same files, every one package.json needs', 
     assert.deepStrictEqual(bat, sh, 'install.bat and install.sh list different files');
     for (const f of sh) assert.ok(fs.existsSync(path.join(extension, f)), `${f} is packed but missing`);
 
-    // Every file package.json points VS Code at, and the README the
-    // manifest shows as the extension's page.
+    // Every file package.json points VS Code at, the modules extension.js
+    // requires, and the README the manifest shows as the extension's page.
     const p = readJson('package.json');
     const needed = [
         p.main,
+        ...ownModules(),
         ...p.contributes.languages.map((l) => l.configuration),
         ...p.contributes.grammars.map((g) => g.path),
         ...p.contributes.snippets.map((s) => s.path),
@@ -368,6 +541,7 @@ function reset() {
     Object.assign(stub, {
         folders: [],             // workspace folders
         compilerPath: '',        // the setting rig.compilerPath
+        check: 'onType',         // the setting rig.check
         trusted: true,           // vscode.workspace.isTrusted
         document: undefined,     // the active editor's document
         answers: [],             // what showErrorMessage's buttons answer, in turn
@@ -379,8 +553,53 @@ function reset() {
 }
 reset();
 
+// What activate() set up once, for every check: the listeners it gave each
+// of VS Code's events, by the event's name, the task provider, and the
+// diagnostic collections it made, by name, each a Map from a document's
+// uri (as a string) to its diagnostics.
+const activated = { listeners: {}, taskProvider: null, collections: {} };
+
+function listen(event) {
+    return (listener) => {
+        (activated.listeners[event] = activated.listeners[event] || []).push(listener);
+        return { dispose() {} };
+    };
+}
+
+class Position {
+    constructor(line, character) {
+        Object.assign(this, { line, character });
+    }
+}
+
+class Range {
+    constructor(start, end) {
+        Object.assign(this, { start, end });
+    }
+}
+
 const vscodeStub = {
     EventEmitter,
+    Position,
+    Range,
+    Diagnostic: class {
+        constructor(range, message, severity) {
+            Object.assign(this, { range, message, severity });
+        }
+    },
+    DiagnosticSeverity: { Error: 0, Warning: 1 },
+    languages: {
+        createDiagnosticCollection: (name) => {
+            const map = new Map();
+            activated.collections[name] = map;
+            return {
+                set: (uri, list) => map.set(uri.toString(), list),
+                delete: (uri) => map.delete(uri.toString()),
+                clear: () => map.clear(),
+                dispose: () => map.clear(),
+            };
+        },
+    },
     Uri: { file: fileUri },
     TaskGroup: { Build: 'build' },
     TaskRevealKind: { Always: 1 },
@@ -406,7 +625,15 @@ const vscodeStub = {
             return stub.document ? [stub.document] : [];
         },
         getWorkspaceFolder: (uri) => stub.folders.find((f) => uri.fsPath.startsWith(f.uri.fsPath + path.sep)),
-        getConfiguration: () => ({ get: (key, fallback) => (key === 'compilerPath' ? stub.compilerPath : fallback) }),
+        getConfiguration: () => ({
+            get: (key, fallback) => (key === 'compilerPath' ? stub.compilerPath : key === 'check' ? stub.check : fallback),
+        }),
+        onDidOpenTextDocument: listen('open'),
+        onDidChangeTextDocument: listen('change'),
+        onDidSaveTextDocument: listen('save'),
+        onDidCloseTextDocument: listen('close'),
+        onDidChangeConfiguration: listen('configuration'),
+        onDidGrantWorkspaceTrust: listen('trust'),
     },
     window: {
         get activeTextEditor() {
@@ -429,7 +656,10 @@ const vscodeStub = {
         },
     },
     tasks: {
-        registerTaskProvider: () => ({ dispose() {} }),
+        registerTaskProvider: (type, provider) => {
+            activated.taskProvider = provider;
+            return { dispose() {} };
+        },
         executeTask: (task) => {
             stub.executed.push(task);
             return Promise.resolve();
@@ -591,6 +821,305 @@ check('the commands do nothing in an untrusted workspace but say so', async () =
     stub.trusted = true;
     await stub.registered['rig.buildFile']();
     assert.strictEqual(stub.executed.length, 1);
+});
+
+check('activate listens to the documents for the live check', () => {
+    loadExtension();
+    for (const event of ['open', 'change', 'save', 'close', 'configuration']) {
+        assert.ok((activated.listeners[event] || []).length > 0, `no listener for ${event}`);
+    }
+    assert.ok(activated.collections.rig, "no diagnostic collection 'rig'");
+});
+
+// While the live check shows the compile errors, the tasks' matcher takes
+// only runtime errors, or the Problems panel would list each error twice.
+check('the tasks use $rig-runtime while rig.check is on, $rig when it is off', () => {
+    loadExtension();
+    reset();
+    for (const [setting, expected] of [['onType', '$rig-runtime'], ['onSave', '$rig-runtime'], ['off', '$rig']]) {
+        stub.check = setting;
+        for (const task of activated.taskProvider.provideTasks()) {
+            assert.strictEqual(task.problemMatchers, expected, `rig.check ${setting}: ${task.name}`);
+        }
+    }
+});
+
+// --- The live check, with a stand-in compiler -------------------------------
+//
+// A real check needs rig; these use Node itself as "the compiler" instead.
+// The setting rig.compilerPath names Node, so the extension runs
+// `node check FILE --stdin` in the workspace folder, and Node runs the
+// script check.js there (written by the check, below): a stand-in for
+// `rig check` that reads stdin and reports each `putz` in it as rig would,
+// slowly if the text says `slow`. The documents are stand-ins too, never
+// saved: what's checked is their text.
+
+const STAND_IN = `
+const file = process.argv[2];
+let text = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (s) => (text += s));
+process.stdin.on('end', () => {
+    setTimeout(() => {
+        let errors = 0;
+        text.split(/\\r?\\n/).forEach((line, i) => {
+            const at = line.indexOf('putz');
+            if (at < 0) return;
+            errors++;
+            const column = Buffer.byteLength(line.slice(0, at)) + 1;
+            process.stderr.write(file + ':' + (i + 1) + ':' + column + ": error: unknown identifier 'putz'\\n");
+            process.stderr.write('    ' + line + '\\n');
+        });
+        process.stderr.write('other.rig:1:1: error: not this file\\n');
+        process.exitCode = errors ? 1 : 0;
+    }, text.includes('slow') ? 1500 : 0);
+});
+`;
+
+function fakeDocument(file, text) {
+    return {
+        uri: fileUri(file),
+        languageId: 'rig',
+        isUntitled: false,
+        isDirty: true,
+        text,
+        getText() {
+            return this.text;
+        },
+        get lineCount() {
+            return this.text.split(/\r?\n/).length;
+        },
+        lineAt(n) {
+            return { text: this.text.split(/\r?\n/)[n] || '' };
+        },
+        // A word as Rig's names are; VS Code's default is much the same.
+        getWordRangeAtPosition(at) {
+            const line = this.lineAt(at.line).text;
+            for (const m of line.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
+                if (m.index <= at.character && at.character < m.index + m[0].length) {
+                    return new Range(new Position(at.line, m.index), new Position(at.line, m.index + m[0].length));
+                }
+            }
+            return undefined;
+        },
+    };
+}
+
+// Fires one of VS Code's events at the extension's listeners.
+function fire(event, value) {
+    for (const listener of activated.listeners[event] || []) listener(value);
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Waits, up to 10 s, for `condition` to hold.
+async function until(what, condition) {
+    for (let waited = 0; !condition(); waited += 20) {
+        if (waited > 10000) assert.fail(`still waiting for ${what}`);
+        await sleep(20);
+    }
+}
+
+// withScratch for an async fn, with the stand-in compiler set up: the
+// folder is a workspace folder, and rig.compilerPath is Node.
+async function withStandIn(fn) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-vscode-check-'));
+    try {
+        fs.writeFileSync(path.join(dir, 'check.js'), STAND_IN);
+        reset();
+        stub.folders = [fakeFolder(dir)];
+        stub.compilerPath = process.execPath;
+        await fn(dir);
+    } finally {
+        // Ends any check still running (and its timer) before the folder goes.
+        if (stub.document) fire('close', stub.document);
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+check('a document is checked when it opens, as you type, and forgotten when it closes', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        // The file isn't on disk: what's checked is the text, on stdin.
+        const doc = fakeDocument(path.join(dir, 'a.rig'), 'main :: () {\n\tputz("é");\n}\n');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        fire('open', doc);
+        await until('the first check', () => live.has(key));
+        // Only this file's line; at the word: the tab is one column.
+        const [d, ...rest] = live.get(key);
+        assert.deepStrictEqual(rest, []);
+        assert.strictEqual(d.message, "unknown identifier 'putz'");
+        assert.strictEqual(d.severity, vscodeStub.DiagnosticSeverity.Error);
+        assert.deepStrictEqual([d.range.start.line, d.range.start.character, d.range.end.character], [1, 1, 5]);
+
+        // A change is checked after a pause, not at once.
+        doc.text = 'main :: () {\n}\n';
+        fire('change', { document: doc, contentChanges: [{}] });
+        assert.strictEqual(live.get(key).length, 1, 'checked without waiting');
+        await until('the check after the change', () => live.get(key).length === 0);
+
+        // onSave: a change isn't checked; a save is.
+        stub.check = 'onSave';
+        doc.text = 'main :: () { putz(); }\n';
+        fire('change', { document: doc, contentChanges: [{}] });
+        await sleep(800);
+        assert.strictEqual(live.get(key).length, 0, 'onSave checked a change');
+        fire('save', doc);
+        await until('the check on save', () => live.get(key).length === 1);
+        // A word that starts at the column: from there to its end.
+        assert.deepStrictEqual([live.get(key)[0].range.start.character, live.get(key)[0].range.end.character], [13, 17]);
+
+        // Closing forgets it.
+        fire('close', doc);
+        assert.ok(!live.has(key), 'a closed document keeps its diagnostics');
+
+        // off: clears what's there, and checks nothing.
+        stub.check = 'onType';
+        fire('open', doc);
+        await until('the check on open', () => live.has(key));
+        stub.check = 'off';
+        fire('configuration', { affectsConfiguration: (section) => section === 'rig.check' || section === 'rig' });
+        assert.ok(!live.has(key), 'rig.check off kept the diagnostics');
+        fire('open', doc);
+        await sleep(300);
+        assert.ok(!live.has(key), 'rig.check off still checked');
+    });
+});
+
+check('an untitled document, a non-Rig one and an untrusted workspace aren\'t checked', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const notRig = Object.assign(fakeDocument(path.join(dir, 'a.txt'), 'putz'), { languageId: 'plaintext' });
+        const untitledRig = Object.assign(fakeDocument('Untitled-1', 'putz'), {
+            uri: { scheme: 'untitled', fsPath: 'Untitled-1', toString: () => 'untitled:Untitled-1' },
+            isUntitled: true,
+        });
+        // In a trusted workspace, where a .rig file would be checked: the
+        // stand-in would report their `putz`, had they been.
+        for (const d of [notRig, untitledRig]) fire('open', d);
+        await sleep(500);
+        assert.deepStrictEqual([...live.keys()], [], 'an untitled or non-Rig document was checked');
+        // A .rig file, but in Restricted Mode.
+        stub.trusted = false;
+        fire('open', fakeDocument(path.join(dir, 'b.rig'), 'putz'));
+        await sleep(500);
+        assert.deepStrictEqual([...live.keys()], [], 'a document was checked in an untrusted workspace');
+        assert.deepStrictEqual(stub.errors, []);
+    });
+});
+
+check('a newer check ends the older one, whose output is ignored', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const doc = fakeDocument(path.join(dir, 'c.rig'), 'slow putz');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        fire('save', doc); // the slow check, with an error
+        await sleep(200);
+        doc.text = 'main :: () {}';
+        fire('save', doc); // the quick one, with none
+        await until('the quick check', () => live.has(key));
+        assert.deepStrictEqual(live.get(key), []);
+        // The slow one would have answered by now, had it not been ended.
+        await sleep(1800);
+        assert.deepStrictEqual(live.get(key), []);
+    });
+});
+
+// The build command already says where it looked; the check runs on every
+// keystroke, so it says so once, not every time.
+check('a compiler that isn\'t there is said once, and nothing is checked', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        stub.compilerPath = path.join(dir, 'no-such-rig');
+        const doc = fakeDocument(path.join(dir, 'd.rig'), 'putz');
+        stub.document = doc;
+        fire('open', doc);
+        fire('save', doc);
+        await sleep(300);
+        fire('save', doc);
+        await sleep(300);
+        assert.strictEqual(stub.errors.length, 1, stub.errors.join('\n'));
+        assert.match(stub.errors[0], /rig\.compilerPath/);
+        assert.ok(!live.has(doc.uri.toString()) || live.get(doc.uri.toString()).length === 0);
+    });
+});
+
+// A compiler that's there but that Node can't start, and which it says so
+// about by throwing from spawn at once rather than with the 'error' event
+// later. On Windows that's a .cmd or .bat file (rig.cmd, a common wrapper),
+// which needs a shell; findCompiler accepts it, since on Windows it can only
+// ask whether a file exists. Elsewhere spawn throws only for rarer reasons
+// (ELOOP, E2BIG), so there the check makes spawn throw for that one file
+// itself. `fn` gets the file's path; afterwards no promise may have been
+// left rejected with nobody to handle it.
+async function withUnstartable(dir, fn) {
+    const windows = process.platform === 'win32';
+    const program = path.join(dir, windows ? 'rig.cmd' : 'rig');
+    fs.writeFileSync(program, windows ? '@echo off\r\n' : '#!/bin/sh\n', { mode: 0o755 });
+    const child_process = require('child_process');
+    const spawn = child_process.spawn;
+    if (!windows) {
+        child_process.spawn = (file, ...rest) => {
+            if (file !== program) return spawn.call(child_process, file, ...rest);
+            throw Object.assign(new Error('spawn ELOOP'), { code: 'ELOOP' });
+        };
+    }
+    const rejections = [];
+    const rejected = (e) => rejections.push(String(e));
+    process.on('unhandledRejection', rejected);
+    try {
+        await fn(program);
+        await sleep(50); // Node reports an unhandled rejection after the current task
+        assert.deepStrictEqual(rejections, [], 'a promise was rejected and nothing handled it');
+    } finally {
+        child_process.spawn = spawn;
+        process.off('unhandledRejection', rejected);
+    }
+}
+
+check('a compiler Node can\'t start is said once, and the old diagnostics go', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const doc = fakeDocument(path.join(dir, 'e.rig'), 'putz');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        fire('open', doc);
+        await until('the first check', () => live.has(key) && live.get(key).length === 1);
+        await withUnstartable(dir, async (program) => {
+            // Setting another compiler checks again, and may say so again.
+            stub.compilerPath = program;
+            fire('configuration', { affectsConfiguration: (section) => section === 'rig.compilerPath' || section === 'rig' });
+            fire('save', doc);
+            await sleep(300);
+            fire('save', doc);
+            await sleep(100);
+            assert.ok(!live.has(key), 'the last check\'s diagnostics stayed');
+            assert.strictEqual(stub.errors.length, 1, stub.errors.join('\n'));
+            assert.ok(stub.errors[0].includes(`couldn't run ${program}`), stub.errors[0]);
+            if (process.platform === 'win32') assert.match(stub.errors[0], /\.cmd file needs a shell/);
+        });
+    });
+});
+
+check('a build whose compiler Node can\'t start says so and fails', async () => {
+    const { RigTerminal } = loadExtension().forTests;
+    await withStandIn(async (dir) => {
+        await withUnstartable(dir, async (program) => {
+            const terminal = new RigTerminal({ type: 'rig', command: 'build' }, undefined);
+            let text = '';
+            terminal.onDidWrite((t) => (text += t));
+            assert.strictEqual(await terminal.spawn(program, ['build', 'a.rig'], dir), 1);
+            assert.ok(text.includes(`Couldn't run ${program}`), text);
+            assert.strictEqual(terminal.child, null);
+        });
+    });
 });
 
 // --- Running them ----------------------------------------------------------

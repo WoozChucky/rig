@@ -1,7 +1,7 @@
 {
     "name": "rig-language",
     "displayName": "Rig",
-    "description": "The Rig programming language: syntax highlighting, snippets, build errors in the Problems panel, build and run commands",
+    "description": "The Rig programming language: syntax highlighting, snippets, errors as you type, build and run commands",
     "version": "0.1.0",
     "publisher": "woozchucky",
     "license": "MIT",
@@ -23,7 +23,7 @@
     "capabilities": {
         "untrustedWorkspaces": {
             "supported": "limited",
-            "description": "Building and running need a trusted workspace: they run rig and the program it builds. The grammar and snippets work everywhere.",
+            "description": "Building, running and checking as you type need a trusted workspace: they run rig and the program it builds. The grammar and snippets work everywhere.",
             "restrictedConfigurations": [
                 "rig.compilerPath"
             ]
@@ -101,6 +101,21 @@
                     "default": "",
                     "scope": "machine-overridable",
                     "markdownDescription": "The Rig compiler to build with: a path (`~` and `${workspaceFolder}` work; a relative one is from the workspace folder; on Windows the `.exe` may be left off) or a name on the `PATH`. Empty: `bin/rig.exe` (Windows) or `bin/rig` in a workspace folder, as this repository builds it, then `rig` on the `PATH`."
+                },
+                "rig.check": {
+                    "type": "string",
+                    "enum": [
+                        "onType",
+                        "onSave",
+                        "off"
+                    ],
+                    "enumDescriptions": [
+                        "Check the file as you type (after a pause), and when it opens and is saved.",
+                        "Check the file when it opens and when it's saved.",
+                        "Don't check: errors show when you build, as the build's problem matcher reads them."
+                    ],
+                    "default": "onType",
+                    "markdownDescription": "When to run `rig check` on an open `.rig` file and show its errors in the editor and the Problems panel, without building. While it's on, the build and run tasks list only a program's runtime errors, since the compile errors are already there."
                 }
             }
         },
@@ -134,7 +149,7 @@
             {
                 "name": "rig",
                 "label": "Rig compiler diagnostics",
-                "owner": "rig",
+                "owner": "rig-build",
                 "source": "rig",
                 "fileLocation": [
                     "autoDetect",
@@ -142,6 +157,24 @@
                 ],
                 "pattern": {
                     "regexp": "^(.+?):(\\d+):(\\d+): (?:runtime )?(error|warning): (.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            },
+            {
+                "name": "rig-runtime",
+                "label": "Rig programs' runtime errors",
+                "owner": "rig-runtime",
+                "source": "rig",
+                "fileLocation": [
+                    "autoDetect",
+                    "${workspaceFolder}"
+                ],
+                "pattern": {
+                    "regexp": "^(.+?):(\\d+):(\\d+): runtime (error|warning): (.*)$",
                     "file": 1,
                     "line": 2,
                     "column": 3,
