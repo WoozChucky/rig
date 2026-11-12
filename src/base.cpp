@@ -203,12 +203,17 @@ static bool is_separator(u8 c, bool windows) {
     return c == '/' || (windows && c == '\\');
 }
 
+// Whether p starts with a drive letter and its colon, "C:".
+static bool starts_with_drive(String p) {
+    u8 c = p.count > 0 ? p.data[0] : 0;
+    bool letter = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+    return p.count >= 2 && letter && p.data[1] == ':';
+}
+
 // How many of p's first bytes are a Windows root: 2 for a drive's "C:", all
 // of "\\server\share" for a network share (either slash), 0 for none.
 static s64 windows_root_length(String p) {
-    u8 c = p.count > 0 ? p.data[0] : 0;
-    bool letter = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
-    if (p.count >= 2 && letter && p.data[1] == ':') return 2;
+    if (starts_with_drive(p)) return 2;
     if (p.count >= 2 && is_separator(p.data[0], true) && is_separator(p.data[1], true)) {
         // Two names after the two separators: the server's, then the share's.
         s64 i = 2;
@@ -247,11 +252,25 @@ String path_absolute(Arena *a, String directory, String path, bool windows) {
     Array<String> segments = {};
     if (windows) {
         s64 own_root = windows_root_length(path);
-        if (own_root > 0) {
+        s64 directory_root = windows_root_length(directory);
+        // "C:x.rig", a drive with no separator after it, is x.rig in that
+        // drive's current directory. When the directory is on the same drive
+        // (its letter in either case), that's the directory itself: the path
+        // after its "C:" is relative to it.
+        bool drive_relative = starts_with_drive(path) && (path.count == 2 || !is_separator(path.data[2], true));
+        bool same_drive = starts_with_drive(directory) && (path.data[0] | 0x20) == (directory.data[0] | 0x20);
+        if (drive_relative && same_drive) {
+            root = string_slice(directory, 0, directory_root);
+            add_segments(&segments, string_slice(directory, directory_root, directory.count - directory_root), true);
+            add_segments(&segments, string_slice(path, own_root, path.count - own_root), true);
+        } else if (own_root > 0) {
+            // A path with a root of its own. Another drive's current
+            // directory (a drive-relative path on another drive) isn't known
+            // to the process, so that drive's root stands for it: "D:x.rig"
+            // is taken as "D:\x.rig".
             root = string_slice(path, 0, own_root);
             add_segments(&segments, string_slice(path, own_root, path.count - own_root), true);
         } else {
-            s64 directory_root = windows_root_length(directory);
             root = string_slice(directory, 0, directory_root);
             // "\x.rig" starts at the root of directory's drive; "x.rig" in
             // the directory itself.
