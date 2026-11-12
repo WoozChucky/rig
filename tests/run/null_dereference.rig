@@ -1,0 +1,11 @@
+// A dereference of a null pointer stops the program with a runtime error,
+// at the '.' of p.*, and status 101 (spec 6.5). What it printed before
+// still comes out, and first.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    puts("before");
+    p : *int;
+    x := p.*;
+    puts("after");
+}
