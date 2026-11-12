@@ -1651,10 +1651,10 @@ TEST(types_nest_at_most_max_depth) {
     arena_free(&a);
 }
 
-// Writes an else-if chain of `arms` arms at `at`, one a line, arm i taken
-// when x == i and doing `body` (a printf format, its %lld the arm's
-// number): `if x == 0 { ... }`, then `else if x == 1 { ... }` and so on.
-// Returns the end of what it wrote.
+// Writes an else-if chain of `arms` arms at `at`, one a line after
+// `indent`, arm i taken when x == i and doing `body` (a printf format, its
+// %lld the arm's number): `if x == 0 { ... }`, then `else if x == 1 { ... }`
+// and so on. Returns the end of what it wrote.
 static char *else_if_arms(char *at, s64 arms, const char *indent, const char *body) {
     for (s64 i = 0; i < arms; i++) {
         at += sprintf(at, "%s%sif x == %lld { ", indent, i ? "else " : "", (long long)i);
