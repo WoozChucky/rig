@@ -337,17 +337,21 @@ static void look_at_stack(void *data) {
 
 TEST(os_run_on_stack_gives_the_stack_asked_for) {
     // The stack is the size asked for, whatever the main thread's is: the
-    // compiler's, and a smaller one, less than any system's default for a
-    // new thread (Linux's is `ulimit -s`, usually 8 MB), so a thread made
-    // without asking couldn't pass. Measured, not recursed through: a
-    // recursion an optimiser can shrink passes for the wrong reason.
+    // compiler's, and 1.5 MB, neither system's default for a new thread
+    // (Windows' 1 MB, Linux's `ulimit -s`, usually 8 MB), so a thread made
+    // without asking couldn't pass. Not 2 MB: glibc hands a new thread a
+    // stack it kept from an ended one when that's at most four times the
+    // size asked for, so 2 MB can get the 8 MB just used. Measured, not
+    // recursed through: a recursion an optimiser can shrink passes for the
+    // wrong reason.
     Stack_Seen seen = {0, true};
     CHECK(os_run_on_stack(RIG_STACK_SIZE, look_at_stack, &seen));
     CHECK(seen.size >= RIG_STACK_SIZE && seen.size < 2 * RIG_STACK_SIZE);
     CHECK(!seen.on_main_thread);
+    const u64 SMALL = 3 * 512 * 1024;
     seen = {0, true};
-    CHECK(os_run_on_stack(2 * 1024 * 1024, look_at_stack, &seen));
-    CHECK(seen.size >= 2 * 1024 * 1024 && seen.size < 4 * 1024 * 1024);
+    CHECK(os_run_on_stack(SMALL, look_at_stack, &seen));
+    CHECK(seen.size >= SMALL && seen.size < 2 * SMALL);
     // The main thread's own (this one's, once unit.cpp is undone, or rig's
     // main) is the system's.
     CHECK(os_stack_size() > 0);
