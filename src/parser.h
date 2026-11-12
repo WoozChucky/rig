@@ -48,6 +48,15 @@
 // and inside a body `helper :: () {` is "procedures can only be declared at
 // the top level, for now".
 //
+// Expressions and blocks nest at most 1000 levels deep (spec 6.1, a limit
+// of the compiler; parser.cpp's MAX_DEPTH): each parenthesis, prefix
+// operator, cast, call and binary operator is a level above what it holds,
+// so a chain of 1001 '+' is too deep too, and a procedure's body is the
+// first block. Deeper is "this expression is nested too deeply (more than
+// 1000 levels)", at the start of the outermost expression, or "blocks are
+// nested too deeply (more than 1000 levels)", at the '{' one too many; the
+// declaration is then given up, as after any other error below.
+//
 // Several results (spec 6.7) are a list of types after '->', with no
 // parentheses: `divmod :: (a: int, b: int) -> int, int { ... }`; a return
 // gives a list of values, `return q, r;`. Which counts must agree is the

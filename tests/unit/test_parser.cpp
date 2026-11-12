@@ -880,3 +880,101 @@ TEST(parses_float_literals) {
     CHECK_STR(errors, "");
     arena_free(&a);
 }
+
+// Milestone 2a's final review (issue #52).
+
+// before, then `open` n times, middle, `close` n times, and after: a nested
+// program, as a C string in the arena.
+static const char *nested_source(Arena *a, const char *before, const char *open, s64 n, const char *middle,
+                                 const char *close, const char *after) {
+    s64 open_count = (s64)strlen(open), close_count = (s64)strlen(close);
+    s64 count = (s64)strlen(before) + n * (open_count + close_count) + (s64)strlen(middle) + (s64)strlen(after);
+    char *text = (char *)arena_alloc(a, count + 1, 1);
+    char *at = text;
+    at += sprintf(at, "%s", before);
+    for (s64 i = 0; i < n; i++) at += sprintf(at, "%s", open);
+    at += sprintf(at, "%s", middle);
+    for (s64 i = 0; i < n; i++) at += sprintf(at, "%s", close);
+    sprintf(at, "%s", after);
+    return text;
+}
+
+// Whether `text` goes through every stage that walks the tree recursively
+// without a message: the parser, the checker, lowering, and LLVM's module
+// (built and verified, for the host). At MAX_DEPTH levels none of them may
+// run out of stack, on either system.
+static bool builds(Arena *a, const char *text) {
+    String errors = check_source(a, text);
+    if (errors.count) {
+        fprintf(stderr, "builds: " STR_FMT, STR_ARG(errors));
+        return false;
+    }
+    Ir_Module *m = lower_source(a, text);
+    String ir = {}, error = {};
+    return llvm_ir_text(a, m, target_host(), &ir, &error);
+}
+
+// The program `x := ` + open * n + middle + close * n + `;` in main, after
+// `y := 1;`, so the expression starts at 3:10. id is a procedure to call.
+static const char *nested_expression(Arena *a, const char *open, s64 n, const char *middle, const char *close) {
+    return nested_source(a, "main :: () {\n    y := 1;\n    x := ", open, n, middle, close,
+                         ";\n}\nid :: (n: int) -> int { return n; }\n");
+}
+
+static const char *TOO_DEEP = "3:10: this expression is nested too deeply (more than 1000 levels)\n";
+
+TEST(expressions_nest_up_to_a_thousand_levels) {
+    // Each parenthesis, prefix operator, cast, call and binary operator is
+    // a level above what it holds. 1000 levels build, through every stage;
+    // 1001 are one message, at the expression's start, and nothing more for
+    // the rest of it. Values are variables, so lowering walks every level
+    // (a constant would be one folded value).
+    Arena a = arena_make();
+    CHECK(builds(&a, nested_expression(&a, "(", 1000, "y", ")")));
+    CHECK_STR(check_source(&a, nested_expression(&a, "(", 1001, "y", ")")), TOO_DEEP);
+    CHECK(builds(&a, nested_expression(&a, "- ", 1000, "y", "")));
+    CHECK_STR(check_source(&a, nested_expression(&a, "- ", 1001, "y", "")), TOO_DEEP);
+    CHECK(builds(&a, nested_expression(&a, "cast(int) ", 1000, "y", "")));
+    CHECK_STR(check_source(&a, nested_expression(&a, "cast(int) ", 1001, "y", "")), TOO_DEEP);
+    CHECK(builds(&a, nested_expression(&a, "id(", 1000, "y", ")")));
+    CHECK_STR(check_source(&a, nested_expression(&a, "id(", 1001, "y", ")")), TOO_DEEP);
+    // A chain of 1000 + is 1000 levels: (y + y) + y ... leans left, one
+    // level per operator, though the parser builds it in a loop.
+    CHECK(builds(&a, nested_source(&a, "main :: () {\n    y := 1;\n    x := y", " + y", 1000, "", "", ";\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n    x := y", " + y", 1001, "", "", ";\n}\n")),
+              TOO_DEEP);
+    // && too, which lowering turns into branches.
+    CHECK(builds(&a, nested_source(&a, "main :: () {\n    y := 1;\n    x := y == 1", " && y == 1", 999, "", "", ";\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n    x := y == 1", " && y == 1", 1000, "", "",
+                                             ";\n}\n")),
+              TOO_DEEP);
+    // Mixed: 500 parentheses around a chain of 500 operators is 1000, one
+    // more of either is 1001.
+    const char *chain = nested_source(&a, "y", " + y", 500, "", "", "");
+    CHECK(builds(&a, nested_expression(&a, "(", 500, chain, ")")));
+    CHECK_STR(check_source(&a, nested_expression(&a, "(", 501, chain, ")")), TOO_DEEP);
+    // After the message the declaration is given up as after any syntax
+    // error, and the rest of the file is still read and checked.
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n    x := ", "(", 1001, "y", ")",
+                                             ";\n}\nf :: () { z := w; }\n")),
+              "3:10: this expression is nested too deeply (more than 1000 levels)\n"
+              "5:16: unknown identifier 'w'\n");
+    arena_free(&a);
+}
+
+TEST(blocks_nest_up_to_a_thousand_levels) {
+    // A procedure's body is the first level: with 999 ifs inside it,
+    // blocks nest 1000 deep, and build; one more is one message, at the
+    // '{' of the 1001st.
+    Arena a = arena_make();
+    CHECK(builds(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "if y == 1 {", 999, "y = 2;", "}", "\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "if y == 1 {", 1000, "y = 2;", "}",
+                                             "\n}\n")),
+              "3:11000: blocks are nested too deeply (more than 1000 levels)\n");
+    // Plain blocks and loops count the same.
+    CHECK(builds(&a, nested_source(&a, "main :: () {\n", "{", 999, "", "}", "\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n", "{", 1000, "", "}", "\n}\n")),
+              "2:1000: blocks are nested too deeply (more than 1000 levels)\n");
+    CHECK(builds(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "while y == 1 {", 999, "y = 2;", "}", "\n}\n")));
+    arena_free(&a);
+}
