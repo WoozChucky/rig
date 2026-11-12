@@ -1,7 +1,7 @@
 // types.h: Rig's types, as the checker sees them.
 //
-// The integer types, pointers, string and void, and the type of an untyped
-// integer constant. Each type exists once, so two types are the same
+// The integer types, bool, pointers, string and void, and the type of an
+// untyped integer constant. Each type exists once, so two types are the same
 // exactly when their pointers are equal (type_pointer_to keeps one *T per
 // T).
 
@@ -12,6 +12,7 @@
 enum Type_Kind : u8 {
     TYPE_VOID,     // what a procedure without -> returns
     TYPE_INTEGER,  // s8 ... u64, int
+    TYPE_BOOL,     // bool: true or false
     TYPE_POINTER,  // *T
     TYPE_STRING,   // string: a pointer and a length (spec 6.5)
 };
@@ -25,8 +26,8 @@ struct Type {
     Type *pointer;   // the type *this, once asked for
 };
 
-// The type a built-in name means (s8 s16 s32 s64 u8 u16 u32 u64 int), or
-// null. int is s64's size and sign, but its own type, so messages say int
+// The type a built-in name means (s8 s16 s32 s64 u8 u16 u32 u64 int bool),
+// or null. int is s64's size and sign, but its own type, so messages say int
 // where the program did (spec 6.4: int is s64).
 Type *type_from_name(String name);
 
@@ -39,6 +40,13 @@ String type_name(Arena *a, Type *t);
 extern Type type_void;
 extern Type type_string;
 extern Type type_int;
+
+// bool, one byte: a comparison's result, what && || ! take and give, and
+// what if and while test. It isn't an integer: no arithmetic, no order, and
+// no implicit conversion either way (spec 6.1: an integer isn't a
+// condition). In memory and in C's calling convention it's C's _Bool, 0 or
+// 1.
+extern Type type_bool;
 
 // The type of an untyped integer constant (spec 6.4): a literal, or
 // arithmetic on literals and on constants that are themselves untyped. It
