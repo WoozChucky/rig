@@ -59,7 +59,7 @@ With a `.rig` file open:
 - **Rig: Build Current File** (command palette, `Ctrl+Shift+P`) runs `rig build FILE`.
 - **Rig: Run Current File**, or the ▷ button at the top right of the editor, builds it and, if that worked, runs the program.
 
-The file is saved first if it has changes. `rig` runs in the file's workspace folder, so the program (`NAME.exe` on Windows, `NAME` on Linux) and `.build/` land there. The output shows in a terminal panel, and what you type there goes to the program, a line at a time (`Ctrl+C` stops it).
+The file is saved first if it has changes. `rig` runs in the file's workspace folder, so the program (`NAME.exe` on Windows, `NAME` on Linux) and `.build/` land there. The output shows in a terminal panel, and what you type there goes to the program, a line at a time (`Ctrl+C` stops it). That panel isn't a real terminal to the program: its output goes through a pipe, which C's stdio (`puts`, `printf`) fills before it writes, so what the program prints shows when it flushes or exits. A program that prints a prompt and then waits for input looks stuck until then; in a real terminal (`rig build` and run it there) it doesn't.
 
 Both are tasks too, of type `rig`: **Terminal > Run Task... > rig** lists "build current file" and "run current file", and `Ctrl+Shift+B` (Run Build Task) offers the build. The commands run those same tasks, so the output and the errors go through one path. A task in `.vscode/tasks.json` can name the file:
 
@@ -72,7 +72,9 @@ Both are tasks too, of type `rig`: **Terminal > Run Task... > rig** lists "build
 }
 ```
 
-`command` is `build` or `run`; `file`, relative to the workspace folder, is optional (by default, the active editor's file).
+`command` is `build` or `run`; `file`, relative to the workspace folder, is optional (by default, the active editor's file). A task with no workspace folder (one in a `.code-workspace` file) needs a full path there, such as `${workspaceFolder:NAME}/hello.rig`.
+
+An untitled file (`Ctrl+N`) has to be saved before `rig` can build it: the commands offer Save As, then go on. In Restricted Mode, when VS Code doesn't trust the folder, the grammar and snippets work but nothing builds or runs, since that runs `rig` and the program it builds; VS Code also ignores the folder's own `rig.compilerPath` then.
 
 There's no `rig run` yet: running is `rig build` and then the program. The extension starts both processes itself rather than through a shell, so it works whatever your terminal's shell is (Windows PowerShell 5.1 has no `&&` to chain them).
 
@@ -80,7 +82,7 @@ There's no `rig run` yet: running is `rig build` and then the program. The exten
 
 The extension looks for `rig` in this order:
 
-1. The setting `rig.compilerPath` (File > Preferences > Settings, search "rig"), when it isn't empty: a path to the compiler (`~` and `${workspaceFolder}` work, and a relative path is from the workspace folder) or a name to look for on the `PATH`. When it's set, it's the only place looked at.
+1. The setting `rig.compilerPath` (File > Preferences > Settings, search "rig"), when it isn't empty: a path to the compiler (`~` and `${workspaceFolder}` work, and a relative path is from the workspace folder; on Windows the `.exe` may be left off, so `C:\tools\rig` finds `C:\tools\rig.exe`) or a name to look for on the `PATH`. A path that uses the folder is an error for a file outside every workspace folder. When it's set, it's the only place looked at.
 2. `bin/rig.exe` (Windows) or `bin/rig` in a workspace folder: where `build.bat` and `build.sh` put it, so this repository needs no setting.
 3. `rig` on the `PATH`.
 
@@ -92,7 +94,7 @@ If none is there, an error says what was tried, with a button that opens the set
 node editors/vscode/test/check.js
 ```
 
-checks the extension without starting VS Code: every JSON file parses; the commands and the task type in `package.json` are registered by `extension.js`, which requires nothing but `vscode` and Node's own modules, and which `node --check` parses; the problem matcher's regular expression, taken from `package.json`, reads every diagnostic in `tests/errors/*.err` (file, line and column, never the source and caret lines under it), a Windows path with a drive letter and a runtime error; the snippets are the expected ones; and both install scripts pack the same files, every one `package.json` needs. It's a check of the extension, not part of the compiler's tests, and needs no packages: plain Node and its `assert`. CI runs it.
+checks the extension without starting VS Code: every JSON file parses; the commands and the task type in `package.json` are registered by `extension.js`, which requires nothing but `vscode` and Node's own modules, and which `node --check` parses; the problem matcher's regular expression, taken from `package.json`, reads every diagnostic in `tests/errors/*.err` (file, line and column, never the source and caret lines under it), a Windows path with a drive letter and a runtime error; the snippets are the expected ones; both install scripts pack the same files, every one `package.json` needs; and `extension.js`, loaded with a stand-in for VS Code's API, behaves: where it looks for the compiler, which file a task builds, what typed input reaches the program, an untitled file and an untrusted workspace. It's a check of the extension, not part of the compiler's tests, and needs no packages: plain Node and its `assert`. CI runs it.
 
 ## Changing it
 

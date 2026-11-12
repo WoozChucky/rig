@@ -20,6 +20,15 @@
         "Programming Languages"
     ],
     "main": "./extension.js",
+    "capabilities": {
+        "untrustedWorkspaces": {
+            "supported": "limited",
+            "description": "Building and running need a trusted workspace: they run rig and the program it builds. The grammar and snippets work everywhere.",
+            "restrictedConfigurations": [
+                "rig.compilerPath"
+            ]
+        }
+    },
     "activationEvents": [
         "onLanguage:rig",
         "onTaskType:rig"
@@ -91,7 +100,7 @@
                     "type": "string",
                     "default": "",
                     "scope": "machine-overridable",
-                    "markdownDescription": "The Rig compiler to build with: a path (`~` and `${workspaceFolder}` work; a relative one is from the workspace folder) or a name on the `PATH`. Empty: `bin/rig.exe` (Windows) or `bin/rig` in a workspace folder, as this repository builds it, then `rig` on the `PATH`."
+                    "markdownDescription": "The Rig compiler to build with: a path (`~` and `${workspaceFolder}` work; a relative one is from the workspace folder; on Windows the `.exe` may be left off) or a name on the `PATH`. Empty: `bin/rig.exe` (Windows) or `bin/rig` in a workspace folder, as this repository builds it, then `rig` on the `PATH`."
                 }
             }
         },
