@@ -1352,10 +1352,10 @@ static Type *check_size_of(Checker *c, Ast_Size_Of *size_of) {
 // two names they have ("'[3]int' has no field 'size'", at the name);
 // m->index stays -1, lowering knowing them by name. A view's are its fields:
 // an int and a *T; a string's an int and a *u8. An array's .count is its N,
-// an untyped integer constant as
-// size_of is (so b : u8 = a.count; takes it), a isn't evaluated for it; its
-// .data, a *T, is the address of its first element, so a must have one, as
-// for *a[0] ("can't take the address of 'a': it's a parameter").
+// an untyped integer constant as size_of is (so b : u8 = a.count; takes it),
+// a isn't evaluated for it; its .data, a *T, is the address of its first
+// element, so a must have one, as for *a[0] ("can't take the address of 'a':
+// it's a parameter").
 static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
     m->index = -1;
     bool count = string_eq(m->name, str("count"));

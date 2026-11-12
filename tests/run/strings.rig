@@ -105,6 +105,17 @@ main :: () {
     s.data += 1;
     println(s);
 
+    // A count set below 0 has no bytes to compare: two strings with the
+    // same such count are equal whatever their data, and different counts
+    // are unequal.
+    x := "ab";
+    y := "cd";
+    x.count = -1;
+    y.count = -1;
+    println_bool(x == y);
+    y.count = -2;
+    println_bool(x == y);
+
     // A string in a struct is copied with it.
     p := Person.{"Ada", 36};
     q := p;
