@@ -970,7 +970,12 @@ static Ast_Block *parse_block(Parser *p) {
 // it. The checker resolves a written type, and lays it out, by recursing
 // into what it's made of, and the stages after it walk written types the
 // same way, so ten thousand '*' would overflow the stack; counting here
-// means none of them ever sees a deeper one.
+// means none of them ever sees a deeper one. The limit is on the types a
+// program writes. One the checker infers has none (each `p2 := *p1;` is a
+// pointer a level deeper than the last), and nothing recurses through it:
+// the checker builds it a level at a time, and the one stage that walks
+// all of its levels, naming it in a message, does so in a loop
+// (type_name).
 static Ast_Type *parse_type_level(Parser *p);
 
 static Ast_Type *parse_type(Parser *p) {
