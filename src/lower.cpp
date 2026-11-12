@@ -23,6 +23,11 @@
 //   by the width or more undefined; Rig wraps the amount, as x86 does).
 // - A bool is an i1, 0 or 1; a comparison is an IR_CMP at the type its
 //   operands meet at, signed or unsigned by that type's sign.
+// - What Rig defines and LLVM doesn't is checked at run time (spec 6.4): a
+//   divisor not known while compiling is compared with 0, and a signed one
+//   with -1 (lower_division); a cast checks that the number survives
+//   (lower_cast). A check that fails is a runtime error: a block of its own
+//   panics with "PATH:LINE:COL: runtime error: MESSAGE" (emit_runtime_check).
 //
 // Blocks are numbered in the order they're made, and made in the order
 // their code comes in the source, so the printed IR reads like the program.
@@ -53,6 +58,7 @@ struct Loop {
 
 struct Lowering {
     Arena *arena;
+    Diagnostics *diag;      // only for the source files' paths, which runtime errors name
     Ir_Module *module;
     Table<s32> proc_index;  // a Rig or foreign procedure's index in module->procs, by name
     Ir_Proc *proc;          // the procedure whose body is being lowered
@@ -140,6 +146,30 @@ static s32 emit_compare(Lowering *l, Ir_Pred pred, Ir_Type t, s32 a, s32 b) {
     return cmp->result;
 }
 
+// %if_true when the i1 %condition is 1, else %if_false, both of IR type t;
+// no branch, so both are computed first.
+static s32 emit_select(Lowering *l, Ir_Type t, s32 condition, s32 if_true, s32 if_false) {
+    Ir_Instr *select = emit(l, IR_SELECT, t);
+    select->c = condition;
+    select->a = if_true;
+    select->b = if_false;
+    return select->result;
+}
+
+// A constant global holding `bytes` and a zero after them; its index. A
+// string literal's (C reads it through a *u8, up to the zero) or a panic's
+// message (written without the zero).
+static s32 add_bytes(Lowering *l, String bytes) {
+    Ir_Global g = {};
+    g.name = string_printf(l->arena, "str.%lld", (long long)l->module->globals.count);
+    g.type = IR_VOID;
+    u8 *copy = (u8 *)arena_alloc(l->arena, bytes.count + 1, 1);
+    memcpy(copy, bytes.data, (size_t)bytes.count);  // arena memory is zeroed: the last byte is 0
+    g.bytes = {copy, bytes.count + 1};
+    array_add(&l->module->globals, g);
+    return (s32)(l->module->globals.count - 1);
+}
+
 // Ends block `from` with a jump to block `to` (-1: not made yet, filled in
 // later through terminator_of).
 static void emit_jump(Lowering *l, s32 from, s32 to) {
@@ -225,12 +255,125 @@ static Ir_Op ir_op_of(Token_Kind op, Type *t) {
     }
 }
 
+// A runtime check (spec 6.4). The current block ends with a branch on the
+// i1 %fails: when it's 1, to a block that stops the program with the
+// runtime error `message` at `at`; otherwise to a new block, where the code
+// after the check goes on (it becomes the current block):
+//
+//     branch %fails, fail, ok
+//   fail:
+//     panic @str.N        "PATH:LINE:COL: runtime error: MESSAGE\n"
+//   ok:
+//     ...
+//
+// The panic writes the message to stderr and exits with status 101
+// (llvm_backend.cpp's __rig_panic). PATH is the source file's path as rig
+// build was given it. Each check has a message of its own, since each names
+// its own position.
+static void emit_runtime_check(Lowering *l, s32 fails, Position at, String message) {
+    String path = l->diag->files[at.file].path;
+    String text = string_printf(l->arena, STR_FMT ":%d:%d: runtime error: " STR_FMT "\n", STR_ARG(path), at.line,
+                                at.col, STR_ARG(message));
+    s32 fail = new_block(l);
+    s32 ok = new_block(l);
+    emit_branch(l, fails, fail, ok);
+    ir_emit(l->proc, fail, IR_PANIC, IR_VOID)->target = add_bytes(l, text);
+    l->block = ok;
+}
+
+// left / right or left % right (op), both of type t: %left is the left
+// operand's value, `right` the divisor, `at` the operator's position. C's
+// division, which truncates toward zero, is Rig's, but LLVM leaves two
+// cases undefined (and x86's idiv traps on both), which Rig defines (spec
+// 6.4):
+// - A divisor of 0 is a runtime error. A constant divisor isn't 0 (the
+//   checker reported that); any other is compared with 0 first.
+// - Signed, the most negative value divided by -1: the quotient is one
+//   past the type's largest value, so it wraps to the most negative value
+//   itself, and the remainder is 0. By -1, x / -1 is the negation, 0 - x,
+//   which wraps just so, and x % -1 is 0 for every x. So a divisor that
+//   may be -1 is replaced by 1, which can't trap (x / 1 is x, x % 1 is 0),
+//   and the quotient by 0 - x:
+//
+//     %zero = cmp eq %b, 0
+//     branch %zero, fail, ok         (emit_runtime_check)
+//   ok:
+//     %m1 = cmp eq %b, -1
+//     %safe = select %m1, 1, %b
+//     %q = sdiv %a, %safe            (srem for %: x % 1 is already the 0 wanted)
+//     %neg = sub 0, %a
+//     %result = select %m1, %neg, %q
+//
+//   selects, not branches: no new blocks, and LLVM turns them into
+//   conditional moves. A constant divisor needs neither check: -1 is the
+//   negation or 0 directly, and any other is safe as it is. Unsigned
+//   division has no -1.
+static s32 lower_division(Lowering *l, Token_Kind op, Type *t, s32 left, Ast *right, Position at) {
+    Ir_Type type = ir_type_of(t);
+    bool quotient = op == TOKEN_SLASH;
+    Ir_Op divide = quotient ? (t->is_signed ? IR_SDIV : IR_UDIV) : (t->is_signed ? IR_SREM : IR_UREM);
+    if (right->is_constant) {
+        if (t->is_signed && right->constant == ~(u64)0) {  // -1, sign-extended
+            if (!quotient) return emit_constant(l, type, 0);
+            return emit_binary(l, IR_SUB, type, emit_constant(l, type, 0), left);
+        }
+        return emit_binary(l, divide, type, left, emit_constant(l, type, right->constant));
+    }
+    s32 divisor = lower_value(l, right, t);
+    s32 zero = emit_compare(l, IR_EQ, type, divisor, emit_constant(l, type, 0));
+    emit_runtime_check(l, zero, at, str("division by zero"));
+    if (!t->is_signed) return emit_binary(l, divide, type, left, divisor);
+    s32 minus_one = emit_compare(l, IR_EQ, type, divisor, emit_constant(l, type, ~(u64)0));
+    s32 safe = emit_select(l, type, minus_one, emit_constant(l, type, 1), divisor);
+    s32 result = emit_binary(l, divide, type, left, safe);
+    if (!quotient) return result;
+    s32 negated = emit_binary(l, IR_SUB, type, emit_constant(l, type, 0), left);
+    return emit_select(l, type, minus_one, negated, result);
+}
+
 // `left op right` where both are of type t (the right, for a shift, the
-// amount, of any integer type); left's value is %left.
-static s32 lower_operation(Lowering *l, Token_Kind op, Type *t, s32 left, Ast *right) {
+// amount, of any integer type); left's value is %left, and `at` is the
+// operator's position, where a division's runtime error points.
+static s32 lower_operation(Lowering *l, Token_Kind op, Type *t, s32 left, Ast *right, Position at) {
+    if (op == TOKEN_SLASH || op == TOKEN_PERCENT) return lower_division(l, op, t, left, right, at);
     s32 r = op == TOKEN_SHIFT_LEFT || op == TOKEN_SHIFT_RIGHT ? lower_shift_amount(l, right, t)
                                                                : lower_value(l, right, t);
     return emit_binary(l, ir_op_of(op, t), ir_type_of(t), left, r);
+}
+
+// cast(T) e and cast,trunc(T) e, e not a constant (a constant cast is a
+// constant, made where it's used, as every constant is).
+// - cast,trunc is C's conversion: trunc to narrow, sext or zext by the
+//   source's sign to widen (resize), and nothing between types of one
+//   width: the bits stay, only their meaning changes.
+// - cast converts the same way, but the number must survive, or it's a
+//   runtime error at the cast (spec 6.4: "the value doesn't fit in 'T'"):
+//   - narrowing: truncated, then extended back by T's sign, the value must
+//     come back unchanged (300 as a u8 is 44, which comes back as 44);
+//   - the same width, the other sign: the sign bit must be clear (a u8's
+//     200 isn't an s8, an s8's -1 isn't a u8);
+//   - widening from signed to unsigned: the value mustn't be negative;
+//   - widening otherwise (by the same sign, or unsigned to signed) always
+//     keeps the number: no check.
+// - From a bool, the i1 widens to 0 or 1 (zext); a cast to the same type,
+//   or of a string literal to *u8, is the value as it is.
+static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
+    Type *from = cast->value->type, *to = cast->type;
+    Ir_Type have = ir_type_of(from), want = ir_type_of(to);
+    s32 v = lower_expr(l, cast->value);
+    if (cast->is_trunc || from->kind != TYPE_INTEGER || to->kind != TYPE_INTEGER) return resize(l, v, from, want);
+    String message = string_printf(l->arena, "the value doesn't fit in '" STR_FMT "'", STR_ARG(type_name(l->arena, to)));
+    if (ir_bits(want) < ir_bits(have)) {
+        s32 narrow = resize(l, v, from, want);
+        s32 back = resize(l, narrow, to, have);
+        emit_runtime_check(l, emit_compare(l, IR_NE, have, back, v), cast->pos, message);
+        return narrow;
+    }
+    if (from->is_signed != to->is_signed && (ir_bits(want) == ir_bits(have) || from->is_signed)) {
+        s32 negative = emit_compare(l, IR_SLT, have, v, emit_constant(l, have, 0));
+        emit_runtime_check(l, negative, cast->pos, message);
+    }
+    return resize(l, v, from, want);
 }
 
 // The predicate of a comparison operator, for operands compared as a `t`:
@@ -301,18 +444,11 @@ static s32 lower_call(Lowering *l, Ast_Call *call);
 static s32 lower_expr(Lowering *l, Ast *e) {
     switch (e->kind) {
     case AST_STRING: {
-        Ast_String *s = (Ast_String *)e;
-        Ir_Global g = {};
-        g.name = string_printf(l->arena, "str.%lld", (long long)l->module->globals.count);
-        g.type = IR_VOID;
-        u8 *bytes = (u8 *)arena_alloc(l->arena, s->value.count + 1, 1);
-        memcpy(bytes, s->value.data, (size_t)s->value.count);  // arena memory is zeroed: the last byte is 0
-        g.bytes = {bytes, s->value.count + 1};
-        array_add(&l->module->globals, g);
         Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
-        addr->target = (s32)(l->module->globals.count - 1);
+        addr->target = add_bytes(l, ((Ast_String *)e)->value);
         return addr->result;
     }
+    case AST_CAST: return lower_cast(l, (Ast_Cast *)e);
     case AST_CALL: return lower_call(l, (Ast_Call *)e);
     case AST_NAME: {
         Ast *decl = ((Ast_Name *)e)->decl;
@@ -343,7 +479,7 @@ static s32 lower_expr(Lowering *l, Ast *e) {
             s32 right = lower_value(l, b->right, t);
             return emit_compare(l, ir_pred_of(b->op, t), ir_type_of(t), left, right);
         }
-        return lower_operation(l, b->op, e->type, lower_value(l, b->left, e->type), b->right);
+        return lower_operation(l, b->op, e->type, lower_value(l, b->left, e->type), b->right, b->pos);
     }
     default: RIG_ASSERT(!"not a value"); return -1;
     }
@@ -565,7 +701,7 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
             // x op= e is x = x op e, x read once.
             Ir_Instr *load = emit(l, IR_LOAD, t);
             load->a = slot;
-            value = lower_operation(l, compound_operator(assign->op), type, load->result, assign->value);
+            value = lower_operation(l, compound_operator(assign->op), type, load->result, assign->value, assign->pos);
         }
         emit_store(l, t, value, slot);
         break;
@@ -599,10 +735,11 @@ static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source) {
     }
 }
 
-Ir_Module *ir_lower(Ast_File *f, Arena *a) {
+Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
     Ir_Module *m = arena_new<Ir_Module>(a);
     Lowering l = {};
     l.arena = a;
+    l.diag = d;
     l.module = m;
     l.block = -1;
 

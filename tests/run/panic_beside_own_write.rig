@@ -1,0 +1,13 @@
+// The runtime's panic calls C's write (_write on Windows) and exit. This
+// program has a procedure of its own called write, and declares exit
+// itself, as exit_code.rig does; a division by zero must still print the
+// runtime's message and exit with 101.
+exit :: (status: s32) #foreign libc;
+
+write :: (n: int) -> int { return n; }
+
+main :: () {
+    zero := write(0);
+    if zero != 0 { exit(3); }
+    x := 1 / zero;
+}

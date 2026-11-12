@@ -1,6 +1,6 @@
 // test_ir.cpp: lowering checked trees to Rig's IR (issue #10, with tokens
-// by hand; issues #33 and #34, from real source), and the IR's builders and
-// printing (issue #32), with IR by hand (helpers.cpp).
+// by hand; issues #33, #34 and #35, from real source), and the IR's
+// builders and printing (issue #32), with IR by hand (helpers.cpp).
 
 #include "test.h"
 
@@ -770,5 +770,258 @@ TEST(lowering_makes_the_hand_built_max) {
                                                "max :: (a: int, b: int) -> int { if a > b { return a; } return b; }\n"
                                                "main :: () { }\n"));
     CHECK_STR(proc_ir(lowered, "max"), string_cstr(&a, proc_ir(ir_print(&a, max_module(&a)), "max")));
+    arena_free(&a);
+}
+
+// Lowering division, remainder and casts (issue #35): the runtime checks
+// and the panics they lead to.
+
+// The bytes of the module's global `index`, without the zero that ends
+// them: a panic's message.
+static String message_of(Ir_Module *m, s64 index) {
+    if (index >= m->globals.count) return str("(no such global)");
+    String bytes = m->globals[index].bytes;
+    if (bytes.count == 0 || bytes.data[bytes.count - 1] != 0) return str("(not zero-terminated)");
+    return string_slice(bytes, 0, bytes.count - 1);
+}
+
+TEST(division_is_checked) {
+    // A divisor not known while compiling is compared with 0 first: when it
+    // is 0, a block of its own panics with the message, which names the
+    // operator's position; otherwise the division goes on in the next
+    // block. Unsigned, nothing else is needed.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "f :: (a: u32, b: u32) -> u32 {\n"
+                                "    return a % b;\n"
+                                "}\n"
+                                "g :: (x: u8, y: u8) -> u8 {\n"
+                                "    z := x; z /= y;\n"
+                                "    return z;\n"
+                                "}\n"
+                                "main :: () { }\n");
+    String ir = ir_print(&a, m);
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(i32, i32) -> i32 {\n"
+              "b0:\n"
+              "  %2 = const i32 0\n"
+              "  %3 = cmp eq i32 %1, %2\n"
+              "  branch %3, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  %4 = urem i32 %0, %1\n"
+              "  ret %4\n"
+              "}\n");
+    CHECK_STR(message_of(m, 0), "test.rig:2:14: runtime error: division by zero\n");
+    // A compound assignment is checked the same way, at its operator.
+    CHECK_STR(proc_ir(ir, "g"),
+              "proc @g(i8 zeroext, i8 zeroext) -> i8 zeroext {\n"
+              "b0:\n"
+              "  %2 = local i8\n"
+              "  store i8 %0, %2\n"
+              "  %3 = load i8 %2\n"
+              "  %4 = const i8 0\n"
+              "  %5 = cmp eq i8 %1, %4\n"
+              "  branch %5, b1, b2\n"
+              "b1:\n"
+              "  panic @str.1\n"
+              "b2:\n"
+              "  %6 = udiv i8 %3, %1\n"
+              "  store i8 %6, %2\n"
+              "  %7 = load i8 %2\n"
+              "  ret %7\n"
+              "}\n");
+    CHECK_STR(message_of(m, 1), "test.rig:5:15: runtime error: division by zero\n");
+    arena_free(&a);
+}
+
+TEST(division_by_a_constant_isnt_checked) {
+    // A constant divisor isn't 0 (the checker made sure), and one that isn't
+    // -1 either needs no select: sdiv and srem are defined for it. By the
+    // constant -1, / is the negation and % is 0, with no division at all.
+    // An unsigned 255 is no -1.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: (a: int) -> int { return a / 10 + a % -3; }\n"
+                                          "g :: (a: s8) -> s8 { return a / -1; }\n"
+                                          "h :: (a: s8) -> s8 { return a % -1; }\n"
+                                          "u :: (a: u8) -> u8 { return a / 255; }\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(i64) -> i64 {\n"
+              "b0:\n"
+              "  %1 = const i64 10\n"
+              "  %2 = sdiv i64 %0, %1\n"
+              "  %3 = const i64 18446744073709551613\n"
+              "  %4 = srem i64 %0, %3\n"
+              "  %5 = add i64 %2, %4\n"
+              "  ret %5\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "g"),
+              "proc @g(i8 signext) -> i8 signext {\n"
+              "b0:\n"
+              "  %1 = const i8 0\n"
+              "  %2 = sub i8 %1, %0\n"
+              "  ret %2\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "h"),
+              "proc @h(i8 signext) -> i8 signext {\n"
+              "b0:\n"
+              "  %1 = const i8 0\n"
+              "  ret %1\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "u"),
+              "proc @u(i8 zeroext) -> i8 zeroext {\n"
+              "b0:\n"
+              "  %1 = const i8 255\n"
+              "  %2 = udiv i8 %0, %1\n"
+              "  ret %2\n"
+              "}\n");
+    CHECK(!contains(ir, "panic"));
+    arena_free(&a);
+}
+
+TEST(signed_division_by_minus_one_selects) {
+    // x86's idiv traps on the most negative value divided by -1, and LLVM's
+    // sdiv and srem leave it undefined. So a signed divisor not known while
+    // compiling is replaced by 1 when it's -1 (a select, no branch), and
+    // the quotient by 0 - x, which wraps: the most negative value's is
+    // itself. x % 1 is 0, the remainder by -1 too, so % needs no second
+    // select.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: (a: s32, b: s32) -> s32 { return a / b; }\n"
+                                          "g :: (a: s32, b: s32) -> s32 { return a % b; }\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(i32, i32) -> i32 {\n"
+              "b0:\n"
+              "  %2 = const i32 0\n"
+              "  %3 = cmp eq i32 %1, %2\n"
+              "  branch %3, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  %4 = const i32 4294967295\n"
+              "  %5 = cmp eq i32 %1, %4\n"
+              "  %6 = const i32 1\n"
+              "  %7 = select i32 %5, %6, %1\n"
+              "  %8 = sdiv i32 %0, %7\n"
+              "  %9 = const i32 0\n"
+              "  %10 = sub i32 %9, %0\n"
+              "  %11 = select i32 %5, %10, %8\n"
+              "  ret %11\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "g"),
+              "proc @g(i32, i32) -> i32 {\n"
+              "b0:\n"
+              "  %2 = const i32 0\n"
+              "  %3 = cmp eq i32 %1, %2\n"
+              "  branch %3, b1, b2\n"
+              "b1:\n"
+              "  panic @str.1\n"
+              "b2:\n"
+              "  %4 = const i32 4294967295\n"
+              "  %5 = cmp eq i32 %1, %4\n"
+              "  %6 = const i32 1\n"
+              "  %7 = select i32 %5, %6, %1\n"
+              "  %8 = srem i32 %0, %7\n"
+              "  ret %8\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(narrowing_cast_is_checked) {
+    // cast keeps the number, or stops the program. Narrowing: the value
+    // truncated and extended back by the new type's sign must be the value
+    // again. Between types of one width but different signs, and widening
+    // from signed to unsigned: the value mustn't be negative. Widening
+    // otherwise always keeps the number, and needs no check.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "f :: (x: int) -> u8 { return cast(u8) x; }\n"
+                                "g :: (x: s32) -> u32 { return cast(u32) x; }\n"
+                                "h :: (x: s8) -> u64 { return cast(u64) x; }\n"
+                                "k :: (x: u8, y: s8) -> int { return cast(s16) x + cast(int) y; }\n"
+                                "main :: () { }\n");
+    String ir = ir_print(&a, m);
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(i64) -> i8 zeroext {\n"
+              "b0:\n"
+              "  %1 = trunc i64 %0 to i8\n"
+              "  %2 = zext i8 %1 to i64\n"
+              "  %3 = cmp ne i64 %2, %0\n"
+              "  branch %3, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  ret %1\n"
+              "}\n");
+    CHECK_STR(message_of(m, 0), "test.rig:1:30: runtime error: the value doesn't fit in 'u8'\n");
+    CHECK_STR(proc_ir(ir, "g"),
+              "proc @g(i32) -> i32 {\n"
+              "b0:\n"
+              "  %1 = const i32 0\n"
+              "  %2 = cmp slt i32 %0, %1\n"
+              "  branch %2, b1, b2\n"
+              "b1:\n"
+              "  panic @str.1\n"
+              "b2:\n"
+              "  ret %0\n"
+              "}\n");
+    CHECK_STR(message_of(m, 1), "test.rig:2:31: runtime error: the value doesn't fit in 'u32'\n");
+    CHECK_STR(proc_ir(ir, "h"),
+              "proc @h(i8 signext) -> i64 {\n"
+              "b0:\n"
+              "  %1 = const i8 0\n"
+              "  %2 = cmp slt i8 %0, %1\n"
+              "  branch %2, b1, b2\n"
+              "b1:\n"
+              "  panic @str.2\n"
+              "b2:\n"
+              "  %3 = sext i8 %0 to i64\n"
+              "  ret %3\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "k"),
+              "proc @k(i8 zeroext, i8 signext) -> i64 {\n"
+              "b0:\n"
+              "  %2 = zext i8 %0 to i16\n"
+              "  %3 = sext i16 %2 to i64\n"
+              "  %4 = sext i8 %1 to i64\n"
+              "  %5 = add i64 %3, %4\n"
+              "  ret %5\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(cast_trunc_isnt) {
+    // cast,trunc is C's conversion, never checked: trunc to narrow, sext or
+    // zext by the source's sign to widen. A bool casts to 0 or 1.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: (x: int) -> u8 { return cast,trunc(u8) x; }\n"
+                                          "g :: (x: s8) -> u32 { return cast,trunc(u32) x; }\n"
+                                          "h :: (b: bool) -> int { return cast(int) b; }\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(i64) -> i8 zeroext {\n"
+              "b0:\n"
+              "  %1 = trunc i64 %0 to i8\n"
+              "  ret %1\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "g"),
+              "proc @g(i8 signext) -> i32 {\n"
+              "b0:\n"
+              "  %1 = sext i8 %0 to i32\n"
+              "  ret %1\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "h"),
+              "proc @h(i1) -> i64 {\n"
+              "b0:\n"
+              "  %1 = zext i1 %0 to i64\n"
+              "  ret %1\n"
+              "}\n");
+    CHECK(!contains(ir, "panic"));
     arena_free(&a);
 }
