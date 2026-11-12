@@ -1838,6 +1838,36 @@ TEST(float_constant_too_large_for_float32) {
     arena_free(&a);
 }
 
+TEST(untyped_float_constant_overflow) {
+    // Untyped float arithmetic whose finite operands give an infinity
+    // overflows a double, as untyped integer arithmetic overflows int:
+    // 1e300 * 1e300 is an error, not an infinity that float32 would then
+    // take. A division by zero is still the way to write one, an infinite
+    // operand gives one without a message, and typed constants fold as at
+    // run time.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    x : float32 = 1e300 * 1e300;\n"
+                           "    y := -1e308 - 1e308;\n"
+                           "    z : float64 = 1e308 + 1e308;\n"
+                           "    w := 1e200 / 1e-200;\n"
+                           "    v := 1.0 / 0.0;\n"
+                           "    u := (1.0 / 0.0) * 2.0;\n"
+                           "    t := cast(float64) 1e300 * 1e300;\n"
+                           "    s : float32 = 1e300 / 1e300;\n"
+                           "}\n"),
+              "2:25: constant overflows 'float64'\n"
+              "3:17: constant overflows 'float64'\n"
+              "4:25: constant overflows 'float64'\n"
+              "5:16: constant overflows 'float64'\n");
+    Checked c = check_src(&a, "main :: () { t := cast(float64) 1e300 * 1e300; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(__builtin_isinf(float_value(((Ast_Var *)local_named(&c, "t"))->value)));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
 TEST(float_casts) {
     // Float to float rounds to nearest, integer to float too; float to
     // integer truncates toward zero and saturates at the type's limits, NaN
