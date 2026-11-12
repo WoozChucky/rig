@@ -59,11 +59,11 @@ It prints `9 7 5 3 1 done`.
 
 **Tech Stack:** C++23 with clang (no STL, no exceptions, no RTTI), LLVM 23.1.4's C API, GitHub Actions on Ubuntu.
 
-**Spec:** `docs/superpowers/specs/2026-11-11-rig-language-design.md` (sections 5, 6.1, 6.4, 6.5, 7, 11). The language decisions this plan makes are recorded in spec 6.5 as Claude's calls, in the same pull request as this plan.
+**Spec:** `docs/superpowers/specs/2026-11-11-rig-language-design.md` (sections 5, 6.1, 6.4, 6.5, 7, 11). The language decisions this plan makes are recorded in spec 6.5 as design choices, in the same pull request as this plan.
 
 ## Global Constraints
 
-- **Milestone 1's and 2a's rules hold:** C-style C++23 built by `build.bat`/`build.sh` as a unity build (`src/all.cpp`, `tests/unit/unit.cpp`), no STL, LLVM 23.1.4 through `llvm-c/*.h` only, `-Wall -Wextra` with no warnings, own code throughout, no AI attribution in commits, pull requests, issues or code.
+- **Milestone 1's and 2a's rules hold:** C-style C++23 built by `build.bat`/`build.sh` as a unity build (`src/all.cpp`, `tests/unit/unit.cpp`), no STL, LLVM 23.1.4 through `llvm-c/*.h` only, `-Wall -Wextra` with no warnings, own code throughout; commits a short imperative summary, no trailers.
 - **Rig never borrows LLVM's undefined behaviour** (spec 6.4), now for memory too: no `inbounds` on any `getelementptr`; copies use `llvm.memmove`, never `llvm.memcpy` (two values may overlap); no `nonnull`, `dereferenceable` or `noalias` attributes. The release milestone may add them where proven.
 - **A bool in memory is one byte**, as C's `_Bool`: stored as 0 or 1, and read as `byte != 0`, so any byte C or a pointer cast left there is a defined bool (never LLVM's `load i1`, which is undefined for a byte an `i1` store didn't write).
 - **The C library's memory functions are the runtime's:** LLVM turns `llvm.memmove` and `llvm.memset` into calls to C's `memmove` and `memset` (and `memcpy` where it proves no overlap), so the backend declares those three before the program's own functions, as 2a does with `write`, `fflush` and `exit`: a program's own `memset` becomes `memset.1` and keeps working.
@@ -73,7 +73,7 @@ It prints `9 7 5 3 1 done`.
 - **Diagnostics:** `path:line:col: error: message`; every message in this plan is exact text, with `'` quotes as shown. A message this plan doesn't give is the implementer's ruling, in the style of the ones it does, recorded in the pull request. After an error, an expression of unknown type reports nothing more.
 - **Tests:** unit tests in `tests/unit/`, named as given, built from source with `src()`/`check_source()`/`lower_source()`; end-to-end tests in `tests/run/NAME.rig` (with `.out`, optional `.exit`, `.err`, and from Task 4 optional `.flags`), error tests in `tests/errors/NAME.rig` with `.err`. Earlier tests keep passing; a test whose expected text changes says why in the commit.
 - **Both hosts:** before each push, Windows (`build.bat`, `bin\unit-tests.exe`, `bin\run-tests.exe`) and Linux through WSL (`./build.sh`, `bin/unit-tests`, `bin/run-tests`), all passing with no warnings. The VS Code extension's checks run only when a task changes `editors/vscode/`: Task 2 (`void` becomes a named type) and Task 5 (`string`), through the grammar test, which says how to re-bless it.
-- **Work flow:** each task is an issue labelled `mine` in the GitHub milestone `2b: Structs, pointers, arrays, strings` (created with the issues before Task 1 is dispatched); a branch and pull request per issue, `Closes #N`; a review before the pull request is marked ready, every finding fixed; Nuno merges. Code is study material: each new piece says what it does and why (layout, the calling convention for aggregates, lvalues, the bounds check most of all).
+- **Work flow:** each task is an issue labelled `mine` in the GitHub milestone `2b: Structs, pointers, arrays, strings` (created with the issues before Task 1 is dispatched); a branch and pull request per issue, `Closes #N`; a review before the pull request is marked ready, every finding fixed; the maintainer merges. Code is study material: each new piece says what it does and why (layout, the calling convention for aggregates, lvalues, the bounds check most of all).
 
 ## Review Focus
 
@@ -191,7 +191,7 @@ struct Ast_Size_Of : Ast { Ast_Type *type_expr; };   // size_of(T)   an untyped 
 
 **Grammar** (parser.h's comment updated): `unary = ('-' | '~' | '!' | '*') unary | cast | postfix`; `postfix` gains `'.' '*'` (the lexer reads `p.*=5` as `.` then `*=`: the parser takes a `*=` right after a `.` as `.*` followed by `=`); `primary` gains `'null'` and `'size_of' '(' type ')'` (the name `size_of` followed by `(`: the built-in, whose argument is a type). A type may be `*void`.
 
-**Rules** (spec 6.5, Claude's calls recorded there):
+**Rules** (spec 6.5, recorded there):
 - `*e` gives a `*T` for an addressable `e` of type `T`. Not addressable: `can't take the address of 'a': it's a parameter` (parameters are read-only, spec 6.1; `it's a constant`, `it's the loop's iterator`, `it's a procedure` likewise), anything else `only a variable, a field or an element has an address`.
 - `p.*` is the `T` that `p : *T` points at, and is addressable (so `p.* = 5;` writes). On anything else: `'.*' needs a pointer, not 'int'`; on `*void`: `can't dereference a '*void'; cast it to a pointer to something first`. At run time `p` is checked: null fails with `runtime error: null pointer dereference`, at the `.` of `p.*`; Task 3's `p.x` (at the field's name) and Task 4's `p[i]` (at the `[`) are checked the same way. The check is made where the place is computed through the pointer, before any offset, so `*p.x` with a null `p` fails too rather than giving the address 8.
 - `null` is a constant (`is_constant`, value 0, type `type_null`), so a global may start as one (`head : *Node = null;`), and converts to any pointer type; alone (`x := null;`): `null needs a pointer type, as in p : *int = null;`. `*void` converts implicitly to and from every pointer type; no other pointer converts to another implicitly (`a value of type '*u8' doesn't convert to '*int' implicitly`).
