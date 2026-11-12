@@ -38,12 +38,25 @@
 // gives its largest or smallest value, and NaN gives 0, where LLVM's plain
 // fptosi would give poison.
 //
+// Memory. The IR knows no struct, array or string types: an aggregate is a
+// run of bytes in memory, reached through a ptr. A local of bytes (IR_LOCAL
+// of type void) or a global of bytes holds one; ptradd reaches a field or an
+// element at a byte offset, and load and store read and write the scalars
+// in it; copy and zero move or clear whole values. Nothing here lets LLVM
+// assume more than the program guarantees (spec 6.4): ptradd may leave the
+// object it started in (no inbounds), a copy's two sides may overlap (it's
+// memmove's, never memcpy's), and nothing claims a ptr is non-null. A bool in
+// memory is one byte, C's _Bool: stored as 0 or 1, and read as byte != 0, so
+// any byte a cast or C left there reads as a defined bool.
+//
 // Rig's procedures keep their names and are internal, except Rig's main,
 // which becomes __rig_main; lowering adds the C entry point, an exported
 // main() -> i32 that calls __rig_main and returns 0. Printed, a module is:
 //
 //   global @counter: i64 = 0
 //   global @str.0 = "hi\00"
+//   global @origin: 16 align 8 = zero
+//   global @greeting: 16 align 8 = "\02\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00" reloc 8 @str.0
 //   foreign proc @puts(ptr) -> i32
 //   proc @max(i64, i64) -> i64 {
 //   b0:
@@ -88,8 +101,9 @@ enum Ir_Op : u8 {
     IR_CALL,                         // [%n[, %n+1...] =] call @proc(%a, ...): one value per result
     IR_SEXT, IR_ZEXT, IR_TRUNC,      // %n = sext T %a to U   (`from` is T, `type` U)
     IR_LOCAL,                        // %n = local T          a stack slot for a T; %n is its address, a ptr
-    IR_LOAD,                         // %n = load T %a        from the slot %a
-    IR_STORE,                        // store T %a, %b        the value %a into the slot %b
+                                     // %n = local N align A  (T void) a block of N bytes, aligned to A
+    IR_LOAD,                         // %n = load T %a        from the slot %a (an i1 is a byte in memory)
+    IR_STORE,                        // store T %a, %b        the value %a into the slot %b (an i1 as a byte, 0 or 1)
     IR_ADD, IR_SUB, IR_MUL,          // %n = add T %a, %b     wrapping
     IR_SDIV, IR_UDIV, IR_SREM, IR_UREM,
     IR_AND, IR_OR, IR_XOR, IR_SHL, IR_LSHR, IR_ASHR,
@@ -102,11 +116,18 @@ enum Ir_Op : u8 {
     IR_FPEXT, IR_FPTRUNC,            // %n = fpext f32 %a to f64; fptrunc f64 %a to f32 (rounds to nearest)
     IR_SITOFP, IR_UITOFP,            // %n = sitofp T %a to U  an integer, signed or unsigned, to the nearest float
     IR_FPTOSI_SAT, IR_FPTOUI_SAT,    // %n = fptosi.sat T %a to U  toward zero, saturating; NaN gives 0
+    // Memory (see "Memory" above).
+    IR_PTRADD,                       // %n = ptradd %a, %b    the ptr %a plus %b bytes (an i64), wrapping; no inbounds
+    IR_PTRTOINT,                     // %n = ptrtoint ptr %a to i64   (`from` ptr, `type` i64)
+    IR_INTTOPTR,                     // %n = inttoptr i64 %a to ptr   (`from` i64, `type` ptr)
+    IR_COPY,                         // copy %a, %b, N        N bytes from %b to %a; the two may overlap (memmove)
+    IR_ZERO,                         // zero %a, N            the N bytes at %a set to 0 (memset)
     // Terminators: the last instruction of every block, and only there.
     IR_JUMP,                         // jump bN
     IR_BRANCH,                       // branch %c, bN, bM     to bN if the i1 %c is 1, else bM
     IR_RET,                          // ret [%a, ...]         one value per result
     IR_PANIC,                        // panic @global: writes the global's bytes but its final zero to stderr, exits 101
+                                     // panic %a, %b: the same with the %b bytes (an i64) at the ptr %a
     IR_UNREACHABLE,                  // unreachable           control never gets here
 };
 
@@ -123,17 +144,21 @@ enum Ir_Pred : u8 {
 
 struct Ir_Instr {
     Ir_Op op;
-    Ir_Type type;      // the value's type; IR_STORE, IR_CMP, IR_FCMP, IR_SELECT: the operands'; IR_LOCAL: the slot's;
-                       // IR_CALL: the first result's; IR_VOID when none
-    Ir_Type from;      // the conversions (IR_SEXT ... IR_TRUNC, IR_FPEXT ... IR_FPTOUI_SAT): the operand's type
+    Ir_Type type;      // the value's type; IR_STORE, IR_CMP, IR_FCMP, IR_SELECT: the operands'; IR_LOCAL: the slot's
+                       // (IR_VOID: bytes); IR_CALL: the first result's; IR_VOID when none
+    Ir_Type from;      // the conversions (IR_SEXT ... IR_TRUNC, IR_FPEXT ... IR_FPTOUI_SAT, IR_PTRTOINT,
+                       // IR_INTTOPTR): the operand's type
     Ir_Pred pred;      // IR_CMP, IR_FCMP
     s32 result;        // the (first) value's number, or -1
     s32 a, b, c;       // operands, value numbers (-1: none); c is IR_SELECT's and IR_BRANCH's condition
-    s32 target;        // IR_ADDR, IR_PANIC: a global; IR_CALL: a procedure; IR_JUMP, IR_BRANCH: a block (the true one)
+    s32 target;        // IR_ADDR, IR_PANIC: a global (IR_PANIC: -1 when the message is %a and %b);
+                       // IR_CALL: a procedure; IR_JUMP, IR_BRANCH: a block (the true one)
     s32 target2;       // IR_BRANCH: the false block
     u64 constant;      // IR_CONST: an integer's bits, zero-extended from the type's width; a
                        // float's value as a double's bits (f64_bits), which the backend
-                       // rounds to the nearest float for an f32
+                       // rounds to the nearest float for an f32;
+                       // IR_LOCAL of bytes, IR_COPY, IR_ZERO: the number of bytes
+    u32 align;         // IR_LOCAL of bytes: its alignment, a power of 2
     Array<s32> args;   // IR_CALL's arguments, IR_RET's values
 };
 
@@ -141,11 +166,34 @@ struct Ir_Block {
     Array<Ir_Instr> instrs;
 };
 
+// A place in a global of bytes that holds another global's address: its
+// first value, which only the linker (or the loader) knows, so the bytes
+// can't hold it. The global's bytes are zero there.
+struct Ir_Reloc {
+    s64 offset;  // where in the global's bytes the 8-byte address goes
+    s32 global;  // whose address: an index in Ir_Module.globals
+};
+
+// A global is one of three things:
+//   - a variable of a scalar type (type not IR_VOID): `initial` is its first
+//     value;
+//   - a variable of bytes (type IR_VOID, is_variable set), an aggregate's
+//     memory: `size` bytes aligned to `align`, the first of them `bytes`
+//     (the rest zero), and an address at each relocation, in increasing
+//     order of offset;
+//   - a string literal's constant bytes (type IR_VOID, is_variable not set):
+//     `bytes`, with a terminating zero, read-only.
+// So a global of type IR_VOID is constant bytes only when is_variable is
+// false; printing, the backend and IR_PANIC all ask.
 struct Ir_Global {
-    String name;      // "str.0", or a Rig global's name
-    Ir_Type type;     // IR_VOID: constant bytes; otherwise a variable of this type
-    String bytes;     // IR_VOID: the bytes, with a terminating zero
-    u64 initial;      // a variable's first value, its bits (a float's as IR_CONST keeps them)
+    String name;            // "str.0", or a Rig global's name
+    Ir_Type type;           // IR_VOID: bytes (a variable's, or a literal's); otherwise a variable of this type
+    String bytes;           // IR_VOID: a literal's bytes, with a terminating zero; a variable's first bytes
+    u64 initial;            // a scalar variable's first value, its bits (a float's as IR_CONST keeps them)
+    bool is_variable;       // IR_VOID: a variable of bytes, not a literal
+    s64 size;               // a variable of bytes: its size, bytes.count or more
+    u32 align;              // a variable of bytes: its alignment, a power of 2
+    Array<Ir_Reloc> relocs; // a variable of bytes: where it holds addresses, by increasing offset
 };
 
 // How a parameter or result narrower than 32 bits widens, by its Rig type's
@@ -200,7 +248,8 @@ s32 ir_add_param(Ir_Proc *p, Ir_Type type, Ir_Ext ext);
 s32 ir_new_block(Arena *a, Ir_Proc *p);
 
 // Appends an instruction to the block, its operands -1, and numbers its
-// value unless op is IR_STORE or a terminator, or type is IR_VOID. The block
+// value unless op is IR_STORE or a terminator, or type is IR_VOID; an
+// IR_LOCAL always gives a value, its address, whatever its type. The block
 // mustn't have ended (a terminator is last). The pointer is valid until the
 // next instruction is appended to the same block.
 Ir_Instr *ir_emit(Ir_Proc *p, s32 block, Ir_Op op, Ir_Type type);
