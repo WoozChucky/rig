@@ -717,8 +717,8 @@ TEST(local_constant_must_be_constant) {
                            "}\n"),
               "4:10: the value of constant 'N' isn't known while compiling\n"
               "6:10: the value of constant 'K' isn't known while compiling\n"
-              "7:10: a constant can only be an integer or a bool, for now\n"
-              "9:10: a constant can only be an integer or a bool, for now\n");
+              "7:10: a constant can only be a number or a bool, for now\n"
+              "9:10: a constant can only be a number or a bool, for now\n");
     arena_free(&a);
 }
 
@@ -736,11 +736,11 @@ TEST(bool_and_string_arent_integers) {
                            "    x := 1;\n"
                            "    x <<= p;\n"
                            "}\n"),
-              "2:14: '+' needs integers, not 'string'\n"
-              "3:10: '-' needs an integer, not 'string'\n"
-              "5:12: '+' needs integers, not '*u8'\n"
+              "2:14: '+' needs numbers, not 'string'\n"
+              "3:10: '-' needs a number, not 'string'\n"
+              "5:12: '+' needs numbers, not '*u8'\n"
               "6:10: '~' needs an integer, not '*u8'\n"
-              "7:7: '+=' needs integers, not '*u8'\n"
+              "7:7: '+=' needs numbers, not '*u8'\n"
               "9:7: '<<=' needs integers, not '*u8'\n");
     arena_free(&a);
 }
@@ -930,7 +930,7 @@ TEST(logic_needs_bools) {
               "3:12: '&&' needs bools, not 'int'\n"
               "4:12: '||' needs bools, not 'int'\n"
               "5:10: '!' needs a bool, not 'int'\n"
-              "7:10: '-' needs an integer, not 'bool'\n"
+              "7:10: '-' needs a number, not 'bool'\n"
               "8:10: '~' needs an integer, not 'bool'\n");
 
     // Constant operands fold.
@@ -971,12 +971,12 @@ TEST(bools_dont_order) {
                            "    k : int = a;\n"
                            "    a = 1;\n"
                            "}\n"),
-              "3:12: '<' needs integers, not 'bool'\n"
-              "4:12: '>=' needs integers, not 'bool'\n"
+              "3:12: '<' needs numbers, not 'bool'\n"
+              "4:12: '>=' needs numbers, not 'bool'\n"
               "5:12: mismatched types 'bool' and 'int' for '=='\n"
-              "6:12: '+' needs integers, not 'bool'\n"
+              "6:12: '+' needs numbers, not 'bool'\n"
               "8:12: mismatched types 'int' and 'bool' for '!='\n"
-              "9:7: '+=' needs integers, not 'bool'\n"
+              "9:7: '+=' needs numbers, not 'bool'\n"
               "10:15: a value of type 'bool' doesn't convert to 'int' implicitly\n"
               "11:9: a value of type 'int' doesn't convert to 'bool' implicitly\n");
     arena_free(&a);
@@ -1645,5 +1645,319 @@ TEST(constant_cycle) {
               "3:1: 'C' is defined in terms of itself\n"
               "4:1: 'x' is defined in terms of itself\n"
               "6:1: 'D' is defined in terms of itself\n");
+    arena_free(&a);
+}
+
+// Milestone 2a (issue #37): floats (spec 6.4).
+
+// The value of a float constant, from the double's bits Ast.constant keeps.
+static f64 float_value(Ast *e) {
+    return f64_from_bits(e->constant);
+}
+
+TEST(float_literal_defaults_to_float32) {
+    // A float literal is an untyped float constant; alone it becomes a
+    // float32, as Jai's float is. float is another name for float32, the
+    // same type, so messages call it float32.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    x := 1.5;\n"
+                          "    y : float = 2.5;\n"
+                          "    z : float32 = y;\n"
+                          "    w := x * 2.0;\n"
+                          "    N :: 0.5 * 3;\n"
+                          "    v := N;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "x"), "float32");
+    CHECK_STR(type_of(&a, &c, "y"), "float32");
+    CHECK(local_named(&c, "y")->type == local_named(&c, "z")->type);
+    CHECK_STR(type_of(&a, &c, "w"), "float32");
+    // An untyped float constant folds in double precision and stays untyped.
+    Ast *n = local_named(&c, "N");
+    CHECK(n->is_constant);
+    CHECK(type_is_untyped(n->type));
+    CHECK(float_value(n) == 1.5);
+    CHECK_STR(type_of(&a, &c, "v"), "float32");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(integer_constant_converts_to_float) {
+    // An untyped integer constant takes a float type where it meets one, as
+    // it takes an integer type: as a value, an operand, an argument.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "half :: (x: float64) -> float64 { return x / 2; }\n"
+                          "main :: () {\n"
+                          "    f : float32 = 3;\n"
+                          "    g : float64 = 1 << 40;\n"
+                          "    h := f * 2;\n"
+                          "    k := half(7);\n"
+                          "    m := 1 + 0.5;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast *f = ((Ast_Var *)local_named(&c, "f"))->value;
+    CHECK_STR(type_name(&a, f->type), "float32");
+    CHECK(float_value(f) == 3.0);
+    CHECK(float_value(((Ast_Var *)local_named(&c, "g"))->value) == 1099511627776.0);
+    CHECK_STR(type_of(&a, &c, "h"), "float32");
+    CHECK_STR(type_of(&a, &c, "k"), "float64");
+    // An untyped integer with an untyped float: an untyped float.
+    Ast *m = ((Ast_Var *)local_named(&c, "m"))->value;
+    CHECK(float_value(m) == 1.5);
+    CHECK_STR(type_of(&a, &c, "m"), "float32");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(typed_integer_doesnt_convert_to_float) {
+    // Nothing converts implicitly between integers and floats but an untyped
+    // integer constant (spec 6.4): a cast says which conversion is meant.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "takes :: (x: float32) {}\n"
+                           "main :: () {\n"
+                           "    n := 5;\n"
+                           "    f : float32 = n;\n"
+                           "    takes(n);\n"
+                           "    i : int = 1.5;\n"
+                           "    j : int = 2.0;\n"
+                           "    g := 1.5;\n"
+                           "    k := g + n;\n"
+                           "    m := n * 0.5;\n"
+                           "    g = n;\n"
+                           "    n += 1.5;\n"
+                           "}\n"),
+              "4:19: a value of type 'int' doesn't convert to 'float32' implicitly\n"
+              "5:11: argument 1 of 'takes' has type 'int', which can't be converted to 'float32'\n"
+              "6:15: a value of type 'float32' doesn't convert to 'int' implicitly\n"
+              "7:15: a value of type 'float32' doesn't convert to 'int' implicitly\n"
+              "9:12: mismatched types 'float32' and 'int' for '+'; cast one of them\n"
+              "10:12: mismatched types 'int' and 'float32' for '*'; cast one of them\n"
+              "11:9: a value of type 'int' doesn't convert to 'float32' implicitly\n"
+              "12:10: a value of type 'float32' doesn't convert to 'int' implicitly\n");
+    arena_free(&a);
+}
+
+TEST(float64_doesnt_narrow_implicitly) {
+    // float64 to float32 loses precision, so it takes a cast.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    d : float64 = 0.1;\n"
+                           "    f : float32 = d;\n"
+                           "    g : float32 = cast(float32) d;\n"
+                           "    g = d;\n"
+                           "}\n"),
+              "3:19: a value of type 'float64' doesn't convert to 'float32' implicitly\n"
+              "5:9: a value of type 'float64' doesn't convert to 'float32' implicitly\n");
+    arena_free(&a);
+}
+
+TEST(float32_widens_to_float64) {
+    // Every float32 is a float64 too, so it converts implicitly, and mixed
+    // operands meet at float64.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "twice :: (x: float64) -> float64 { return x * 2; }\n"
+                          "main :: () {\n"
+                          "    f : float32 = 0.1;\n"
+                          "    g : float64 = f;\n"
+                          "    h := f + g;\n"
+                          "    k := g < f;\n"
+                          "    m := twice(f);\n"
+                          "    g += f;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "h"), "float64");
+    Ast_Binary *less = (Ast_Binary *)((Ast_Var *)local_named(&c, "k"))->value;
+    CHECK_STR(type_name(&a, less->operand_type), "float64");
+    CHECK_STR(type_of(&a, &c, "k"), "bool");
+    CHECK_STR(type_of(&a, &c, "m"), "float64");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(percent_needs_integers) {
+    // + - * / and unary - take floats; %, the bitwise operators, shifts and
+    // ~ take integers only. A float divided by zero is infinity or NaN
+    // (IEEE 754), not an error, even when the divisor is a constant.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    f := 1.5;\n"
+                           "    a := f % 2;\n"
+                           "    b := 5 % 1.5;\n"
+                           "    c := f & 1;\n"
+                           "    d := f << 1;\n"
+                           "    e := ~f;\n"
+                           "    f %= 2;\n"
+                           "    g := f / 0;\n"
+                           "    h := 1.0 / 0.0;\n"
+                           "    f /= 0.0;\n"
+                           "    k := -f;\n"
+                           "    m := true + 1.5;\n"
+                           "    n := -true;\n"
+                           "    for 0.5..2 { }\n"
+                           "}\n"),
+              "3:12: '%' needs integers, not 'float32'\n"
+              "4:12: '%' needs integers, not 'float32'\n"
+              "5:12: '&' needs integers, not 'float32'\n"
+              "6:12: '<<' needs integers, not 'float32'\n"
+              "7:10: '~' needs an integer, not 'float32'\n"
+              "8:7: '%=' needs integers, not 'float32'\n"
+              "13:15: '+' needs numbers, not 'bool'\n"
+              "14:10: '-' needs a number, not 'bool'\n"
+              "15:12: '..' needs integers, not 'float32'\n");
+    arena_free(&a);
+}
+
+TEST(float_constant_too_large_for_float32) {
+    // Untyped float constants fold in double precision; one meeting float32
+    // must be within its range (largest about 3.4e38). Infinity, which IEEE
+    // arithmetic gives for 1.0 / 0.0, is a float32 too.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    x := 1e300;\n"
+                           "    y : float32 = -1e39;\n"
+                           "    z : float64 = 1e300;\n"
+                           "    w : float32 = 3e38;\n"
+                           "    v := 1.0 / 0.0;\n"
+                           "}\n"),
+              "2:10: 1e+300 doesn't fit in 'float32'\n"
+              "3:19: -1e+39 doesn't fit in 'float32'\n");
+    Checked c = check_src(&a, "main :: () { v := 1.0 / 0.0; u := 2.0 - 0.5 * 3; }\n");
+    Ast *v = ((Ast_Var *)local_named(&c, "v"))->value;
+    CHECK(v->is_constant);
+    CHECK(__builtin_isinf(float_value(v)) && float_value(v) > 0);
+    CHECK(float_value(((Ast_Var *)local_named(&c, "u"))->value) == 0.5);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(untyped_float_constant_overflow) {
+    // Untyped float arithmetic whose finite operands give an infinity
+    // overflows a double, as untyped integer arithmetic overflows int:
+    // 1e300 * 1e300 is an error, not an infinity that float32 would then
+    // take. A division by zero is still the way to write one, an infinite
+    // operand gives one without a message, and typed constants fold as at
+    // run time.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    x : float32 = 1e300 * 1e300;\n"
+                           "    y := -1e308 - 1e308;\n"
+                           "    z : float64 = 1e308 + 1e308;\n"
+                           "    w := 1e200 / 1e-200;\n"
+                           "    v := 1.0 / 0.0;\n"
+                           "    u := (1.0 / 0.0) * 2.0;\n"
+                           "    t := cast(float64) 1e300 * 1e300;\n"
+                           "    s : float32 = 1e300 / 1e300;\n"
+                           "}\n"),
+              "2:25: constant overflows 'float64'\n"
+              "3:17: constant overflows 'float64'\n"
+              "4:25: constant overflows 'float64'\n"
+              "5:16: constant overflows 'float64'\n");
+    Checked c = check_src(&a, "main :: () { t := cast(float64) 1e300 * 1e300; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(__builtin_isinf(float_value(((Ast_Var *)local_named(&c, "t"))->value)));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(float_casts) {
+    // Float to float rounds to nearest, integer to float too; float to
+    // integer truncates toward zero and saturates at the type's limits, NaN
+    // giving 0 (spec 6.4). A cast of a constant folds by the same rules:
+    // cast(s32) 1e30 is the constant 2147483647, not an error.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    A :: cast(s32) 1e30;\n"
+                          "    B :: cast(s32) -1e30;\n"
+                          "    C :: cast(u8) -3.5;\n"
+                          "    D :: cast(int) 2.9;\n"
+                          "    E :: cast(int) -2.9;\n"
+                          "    F :: cast(int) (0.0 / 0.0);\n"
+                          "    G :: cast(u64) 1e30;\n"
+                          "    H :: cast(float32) 0.1;\n"
+                          "    I :: cast(float64) H;\n"
+                          "    J :: cast(float64) 16777217;\n"
+                          "    K :: cast(float32) 16777217;\n"
+                          "    L :: cast(int) (1.5 * 4);\n"
+                          "    M :: cast(float32) 1e300;\n"
+                          "    N :: cast(s8) 127.9;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_EQ(local_named(&c, "A")->constant, 2147483647);
+    CHECK_STR(type_of(&a, &c, "A"), "s32");
+    CHECK_EQ((s64)local_named(&c, "B")->constant, -2147483648LL);
+    CHECK_EQ(local_named(&c, "C")->constant, 0);
+    CHECK_EQ(local_named(&c, "D")->constant, 2);
+    CHECK_EQ((s64)local_named(&c, "E")->constant, -2);
+    CHECK_EQ(local_named(&c, "F")->constant, 0);
+    CHECK(local_named(&c, "G")->constant == ~(u64)0);
+    // 0.1 rounded to the nearest float32, then widened exactly.
+    CHECK(float_value(local_named(&c, "H")) == (f64)0.1f);
+    CHECK_STR(type_of(&a, &c, "H"), "float32");
+    CHECK(float_value(local_named(&c, "I")) == (f64)0.1f);
+    CHECK_STR(type_of(&a, &c, "I"), "float64");
+    // 2^24 + 1 is a float64, but float32 has 24 bits: to nearest, ties to
+    // even, it's 2^24.
+    CHECK(float_value(local_named(&c, "J")) == 16777217.0);
+    CHECK(float_value(local_named(&c, "K")) == 16777216.0);
+    CHECK_EQ(local_named(&c, "L")->constant, 6);
+    // A cast rounds where an implicit conversion would report: 1e300 is
+    // infinity as a float32.
+    CHECK(__builtin_isinf(float_value(local_named(&c, "M"))));
+    CHECK_EQ(local_named(&c, "N")->constant, 127);
+    token_list_free(c.list);
+
+    // cast,trunc stays integers only; nothing casts to bool but a bool.
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    f := 1.5;\n"
+                           "    a := cast,trunc(int) f;\n"
+                           "    b := cast(bool) f;\n"
+                           "    c := cast,trunc(float32) 5;\n"
+                           "    d := cast(float32) true;\n"
+                           "    p : *u8;\n"
+                           "    e := cast(float64) p;\n"
+                           "}\n"),
+              "3:10: cast,trunc only takes integers\n"
+              "4:10: can't cast 'float32' to 'bool': compare instead, as in x != 0\n"
+              "5:10: cast,trunc only takes integers\n"
+              "6:10: can't cast 'bool' to 'float32'\n"
+              "8:10: can't cast '*u8' to 'float64'\n");
+    arena_free(&a);
+}
+
+TEST(float_comparisons) {
+    // Comparisons of floats give a bool and fold: ordered, so NaN is neither
+    // less, greater nor equal, but != is true for it, NaN != NaN included.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    NAN :: 0.0 / 0.0;\n"
+                          "    A :: NAN != NAN;\n"
+                          "    B :: NAN == NAN;\n"
+                          "    C :: NAN < 1.0;\n"
+                          "    D :: 1 < 1.5;\n"
+                          "    E :: -0.0 == 0.0;\n"
+                          "    F :: cast(float32) 0.1 == 0.1;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_EQ(local_named(&c, "A")->constant, 1);
+    CHECK_EQ(local_named(&c, "B")->constant, 0);
+    CHECK_EQ(local_named(&c, "C")->constant, 0);
+    CHECK_EQ(local_named(&c, "D")->constant, 1);
+    CHECK_EQ(local_named(&c, "E")->constant, 1);
+    // 0.1 meets the float32 and is rounded as it is: equal.
+    CHECK_EQ(local_named(&c, "F")->constant, 1);
+    CHECK_STR(type_of(&a, &c, "A"), "bool");
+    token_list_free(c.list);
     arena_free(&a);
 }

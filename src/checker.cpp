@@ -76,7 +76,7 @@ static bool check_var_value(Checker *c, Ast_Var *var) {
             if (!converts) report_no_conversion(c, var->value, t);
             fine = value && t && converts;
         } else if (value) {
-            check_default_type(var->value);
+            check_default_type(c, var->value);
             t = var->value->type;
             fine = true;
             // A string is a pointer and a length (spec 6.5), which the IR
@@ -110,14 +110,14 @@ static void check_global_var(Checker *c, Ast_Var *var) {
     }
 }
 
-// N :: e; the value must be an integer or a bool known while compiling, and
+// N :: e; the value must be a number or a bool known while compiling, and
 // the constant keeps it, with its type: untyped when e is, so N meets types
-// as a literal does. Only integers and bools fold so far, so a string
+// as a literal does. Only numbers and bools fold so far, so a string
 // literal, though known while compiling, can't be a constant yet.
 static void check_const_value(Checker *c, Ast_Const *constant) {
     Type *t = check_value(c, constant->value);
-    if (t && t->kind != TYPE_INTEGER && t != &type_bool) {
-        diag_error(c->diag, constant->value->start, "a constant can only be an integer or a bool, for now");
+    if (t && !type_is_number(t) && t != &type_bool) {
+        diag_error(c->diag, constant->value->start, "a constant can only be a number or a bool, for now");
         t = nullptr;
     } else if (t && !constant->value->is_constant) {
         diag_error(c->diag, constant->value->start, "the value of constant '" STR_FMT "' isn't known while compiling",
@@ -281,10 +281,12 @@ static void check_multi_assign(Checker *c, Ast_Assign *assign) {
     array_free(&targets);
 }
 
-// x = e; converts e to x's type. x op= e; is x = x op e, so x must be an
-// integer, and e converts to x's type, as an untyped constant or a
-// narrower integer does (a shift's amount: any integer). x /= 0 and
-// x %= 0 are "division by zero", as x / 0 is, at the operator.
+// x = e; converts e to x's type. x op= e; is x = x op e, so x and e must be
+// what op takes (numbers for += -= *= /=, integers for the others), and e
+// converts to x's type, as an untyped constant, a narrower integer or a
+// float32 into a float64 does (a shift's amount: any integer). For an
+// integer x, x /= 0 and x %= 0 are "division by zero", as x / 0 is, at the
+// operator.
 static void check_assign(Checker *c, Ast_Assign *assign) {
     if (assign->targets.count > 1) {
         check_multi_assign(c, assign);
@@ -298,18 +300,18 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
         if (!check_convert(c, assign->value, to)) report_no_conversion(c, assign->value, to);
         return;
     }
-    Type *not_integer = to->kind != TYPE_INTEGER ? to : value->kind != TYPE_INTEGER ? value : nullptr;
-    if (not_integer) {
-        diag_error(c->diag, assign->pos, "%s needs integers, not '" STR_FMT "'", token_kind_name(assign->op),
-                   STR_ARG(type_name(c->arena, not_integer)));
+    Token_Kind op = compound_operator(assign->op);
+    bool numbers = takes_floats(op);
+    if (numbers ? !check_both_numbers(c, to, value, assign->pos, token_kind_name(assign->op))
+                : !check_both_integers(c, to, value, assign->pos, token_kind_name(assign->op))) {
         return;
     }
-    Token_Kind op = compound_operator(assign->op);
     if (op == TOKEN_SHIFT_LEFT || op == TOKEN_SHIFT_RIGHT) {
-        check_default_type(assign->value);
+        check_default_type(c, assign->value);
     } else if (!check_convert(c, assign->value, to)) {
         report_no_conversion(c, assign->value, to);
-    } else if (is_division(op) && assign->value->is_constant && assign->value->constant == 0) {
+    } else if (to->kind == TYPE_INTEGER && is_division(op) && assign->value->is_constant &&
+               assign->value->constant == 0) {
         diag_error(c->diag, assign->pos, "division by zero");
     }
 }
@@ -409,10 +411,10 @@ static void check_for(Checker *c, Ast_For *loop) {
     Type *last = check_value(c, loop->last);
     Type *t = nullptr;
     if (first && last && check_both_integers(c, first, last, loop->dots, "'..'")) {
-        t = check_unify_integers(c, loop->first, loop->last, loop->dots, "'..'");
+        t = check_unify_numbers(c, loop->first, loop->last, loop->dots, "'..'");
         if (t && type_is_untyped(t)) {
-            check_default_type(loop->first);
-            check_default_type(loop->last);
+            check_default_type(c, loop->first);
+            check_default_type(c, loop->last);
             t = &type_int;
         }
     }

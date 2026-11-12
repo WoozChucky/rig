@@ -6,7 +6,11 @@
 // signed one sign-extended, an unsigned one zero-extended. So the 64 bits,
 // read as s64 or u64 by the type's sign, are always the constant's value as
 // a number, whatever its width: an s8 holding -1 is all ones, a u8 holding
-// 255 is 0xff. A bool constant is 1 for true, 0 for false.
+// 255 is 0xff. A bool constant is 1 for true, 0 for false. A float
+// constant's 64 bits are a double's (f64_bits): an untyped float's value is
+// any double, a float64's too, and a float32's is a double holding a float32
+// value, rounded to it where the constant took that type, so folding sees
+// the value the program would have at run time.
 
 #include "check.h"
 
@@ -42,13 +46,112 @@ static bool widens(Type *from, Type *to) {
     return !from->is_signed && to->size > from->size;
 }
 
+// Floats.
+
+// The largest float32, (2 - 2^-23) * 2^127, about 3.4e38; and the smallest
+// magnitude that rounds past it, to infinity: halfway from it to 2^128, the
+// next value a float32 would have with a wider exponent. Halfway is a tie,
+// which rounds to the even neighbour, 2^128 itself: infinity.
+static const f64 FLOAT32_MAX = 0x1.fffffep+127;
+static const f64 FLOAT32_OVERFLOW = 0x1.ffffffp+127;
+
+// d rounded to the nearest float32 (ties to even, IEEE 754's default), as
+// a double. C++ leaves converting a double far beyond float's range
+// undefined, so those are done by hand: from the overflow point on, an
+// infinity, and between it and the largest float32, that.
+static f64 round_to_float32(f64 d) {
+    if (__builtin_isnan(d)) return d;
+    f64 magnitude = __builtin_fabs(d);
+    if (magnitude >= FLOAT32_OVERFLOW) return d < 0 ? -__builtin_inf() : __builtin_inf();
+    if (magnitude > FLOAT32_MAX) return d < 0 ? -FLOAT32_MAX : FLOAT32_MAX;
+    return (f64)(f32)d;
+}
+
+// d as a value of float type t: rounded to float32's precision for a
+// float32 (a float64, or an untyped float, is a double: unchanged).
+static f64 round_to(f64 d, Type *t) {
+    return t->size == 4 ? round_to_float32(d) : d;
+}
+
+// The value of number constant e as a double: a float's as it is, an
+// integer's (read by its type's sign; an untyped one is signed) converted
+// to the nearest double.
+static f64 as_double(Ast *e) {
+    Type *t = e->type;
+    if (t->kind == TYPE_FLOAT) return f64_from_bits(e->constant);
+    return t->is_signed ? (f64)(s64)e->constant : (f64)e->constant;
+}
+
+// The bits of number constant e's value as float type `to`, rounded once,
+// to nearest: a float's rounded to to's precision, an integer's converted
+// straight to `to` (to a float32 directly, not by way of a double, which
+// would round twice and could land on the other neighbour).
+static u64 float_bits(Ast *e, Type *to) {
+    Type *t = e->type;
+    u64 bits = e->constant;
+    f64 value;
+    if (t->kind == TYPE_FLOAT) {
+        value = round_to(f64_from_bits(bits), to);
+    } else if (to->size == 4) {
+        value = t->is_signed ? (f64)(f32)(s64)bits : (f64)(f32)bits;
+    } else {
+        value = t->is_signed ? (f64)(s64)bits : (f64)bits;
+    }
+    return f64_bits(value);
+}
+
+// Whether an untyped float constant's value d can be one of float type t's:
+// every double is a float64; a float32 must not be so large that it rounds
+// to infinity. Infinity and NaN themselves, which IEEE arithmetic on
+// constants can give (1.0 / 0.0), are float32 values too.
+static bool float_fits(f64 d, Type *t) {
+    if (t->size == 8 || __builtin_isinf(d) || __builtin_isnan(d)) return true;
+    return __builtin_fabs(d) < FLOAT32_OVERFLOW;
+}
+
+// The integer of type t that the float value d converts to (spec 6.4): d
+// truncated toward zero, then held to t's range, NaN giving 0, as LLVM's
+// fptosi.sat and fptoui.sat do at run time. Kept as Ast.constant keeps an
+// integer. The limits are powers of two, which doubles hold exactly, so
+// the comparisons are exact, and a value within them converts as it is.
+static u64 saturate(f64 d, Type *t) {
+    if (__builtin_isnan(d)) return 0;
+    f64 whole = __builtin_trunc(d);
+    s32 bits = t->size * 8;
+    if (t->is_signed) {
+        f64 limit = __builtin_ldexp(1.0, bits - 1);  // t's range is -limit to limit - 1
+        s64 max = bits == 64 ? INT64_MAX : ((s64)1 << (bits - 1)) - 1;
+        if (whole >= limit) return (u64)max;
+        if (whole < -limit) return (u64)(-max - 1);
+        return (u64)(s64)whole;
+    }
+    f64 limit = __builtin_ldexp(1.0, bits);  // t's range is 0 to limit - 1
+    if (whole >= limit) return bits == 64 ? ~(u64)0 : ((u64)1 << bits) - 1;
+    if (whole < 0) return 0;
+    return (u64)whole;
+}
+
 bool check_convert(Checker *c, Ast *e, Type *to) {
     Type *from = e->type;
     if (!from || !to) return true;
     if (type_is_untyped(from)) {
-        // An untyped constant takes the integer type it meets, if its value
-        // is one of the type's.
-        if (to->kind != TYPE_INTEGER) return false;
+        // An untyped constant takes the number type it meets, if its value
+        // is one of the type's: an integer one, any integer or float type;
+        // a float one, a float type only (no float becomes an integer
+        // implicitly, spec 6.4). Its value is converted to the type's.
+        if (to->kind == TYPE_FLOAT) {
+            // Only an untyped float's constant is a double's bits; an
+            // untyped integer's is the integer, which fits any float type.
+            if (from == &type_untyped_float && !float_fits(f64_from_bits(e->constant), to)) {
+                f64 value = f64_from_bits(e->constant);
+                diag_error(c->diag, e->start, "%g doesn't fit in '" STR_FMT "'", value,
+                           STR_ARG(type_name(c->arena, to)));
+            }
+            e->constant = float_bits(e, to);
+            e->type = to;
+            return true;
+        }
+        if (from == &type_untyped_float || to->kind != TYPE_INTEGER) return false;
         if (!fits((s64)e->constant, to)) {
             diag_error(c->diag, e->start, "%lld doesn't fit in '" STR_FMT "'", (long long)e->constant,
                        STR_ARG(type_name(c->arena, to)));
@@ -66,11 +169,18 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
 
 bool type_converts(Type *from, Type *to) {
     if (!from || !to || from == to) return true;
-    return from->kind == TYPE_INTEGER && to->kind == TYPE_INTEGER && widens(from, to);
+    if (from->kind == TYPE_INTEGER && to->kind == TYPE_INTEGER) return widens(from, to);
+    // Every float32 value is a float64 one, so a float32 widens; the other
+    // way loses precision, and takes a cast.
+    return from == &type_float32 && to == &type_float64;
 }
 
-void check_default_type(Ast *e) {
-    if (e->type && type_is_untyped(e->type)) e->type = &type_int;
+void check_default_type(Checker *c, Ast *e) {
+    if (e->type == &type_untyped_int) {
+        e->type = &type_int;
+    } else if (e->type == &type_untyped_float) {
+        check_convert(c, e, &type_float32);  // reports a value too large for it
+    }
 }
 
 Type *check_value(Checker *c, Ast *e) {
@@ -92,6 +202,13 @@ static Type *check_int(Ast_Int *number) {
     number->is_constant = true;
     number->constant = number->value;
     return number->value <= (u64)INT64_MAX ? &type_untyped_int : type_from_name(str("u64"));
+}
+
+// A float literal: an untyped float constant, the double the lexer read.
+static Type *check_float(Ast_Float *number) {
+    number->is_constant = true;
+    number->constant = f64_bits(number->value);
+    return &type_untyped_float;
 }
 
 // A name used as a value: a variable's or parameter's value, or a
@@ -178,10 +295,11 @@ static Type *overflows(Checker *c, Ast *e) {
     return nullptr;
 }
 
-// - and ~ on an integer, ! on a bool. On an untyped constant, - is exact (so
-// only int's most negative value overflows) and ~ flips every bit, as on an
-// int; on a typed constant both wrap as at run time. ! on a constant flips
-// it.
+// - on a number, ~ on an integer, ! on a bool. On an untyped integer
+// constant, - is exact (so only int's most negative value overflows) and ~
+// flips every bit, as on an int; on a typed one both wrap as at run time.
+// - on a float constant flips its sign, which is exact (0.0 gives -0.0). !
+// on a constant flips it.
 static Type *check_unary(Checker *c, Ast_Unary *u) {
     Type *t = check_value(c, u->operand);
     if (!t) return nullptr;
@@ -196,13 +314,18 @@ static Type *check_unary(Checker *c, Ast_Unary *u) {
         }
         return t;
     }
-    if (t->kind != TYPE_INTEGER) {
-        diag_error(c->diag, u->pos, "%s needs an integer, not '" STR_FMT "'", token_kind_name(u->op),
-                   STR_ARG(type_name(c->arena, t)));
+    if (u->op == TOKEN_TILDE ? t->kind != TYPE_INTEGER : !type_is_number(t)) {
+        diag_error(c->diag, u->pos, "%s needs %s, not '" STR_FMT "'", token_kind_name(u->op),
+                   u->op == TOKEN_TILDE ? "an integer" : "a number", STR_ARG(type_name(c->arena, t)));
         return nullptr;
     }
     Ast *x = u->operand;
     if (!x->is_constant) return t;
+    if (t->kind == TYPE_FLOAT) {
+        u->is_constant = true;
+        u->constant = f64_bits(-f64_from_bits(x->constant));
+        return t;
+    }
     u->is_constant = true;
     // - applied directly to a literal above int's range, which on its own is
     // a u64, writes a negative number: the literal one past int's largest
@@ -238,6 +361,10 @@ static bool is_shift(Token_Kind op) {
 
 bool is_division(Token_Kind op) {
     return op == TOKEN_SLASH || op == TOKEN_PERCENT;
+}
+
+bool takes_floats(Token_Kind op) {
+    return op == TOKEN_PLUS || op == TOKEN_MINUS || op == TOKEN_STAR || op == TOKEN_SLASH;
 }
 
 // The value of an untyped constant expression `left op right`, exact, in
@@ -313,6 +440,25 @@ static u64 fold_typed(Token_Kind op, u64 left, u64 right, Type *t) {
     return wrap_to(result, t);
 }
 
+// The value of a float constant expression `left op right` (+ - * /) of
+// float type t: IEEE 754's double arithmetic, rounded to t's precision. A
+// float32's operation is done on the doubles, then rounded once: for these
+// four the result is the one float32 arithmetic gives (a double's 53 bits
+// are at least 2 * 24 + 2, enough that rounding twice gives the once-rounded
+// result for these four operations). A
+// division by zero is an infinity, or NaN for 0 / 0, as at run time.
+static u64 fold_float(Token_Kind op, f64 left, f64 right, Type *t) {
+    f64 result = 0;
+    switch (op) {
+    case TOKEN_PLUS: result = left + right; break;
+    case TOKEN_MINUS: result = left - right; break;
+    case TOKEN_STAR: result = left * right; break;
+    case TOKEN_SLASH: result = left / right; break;
+    default: RIG_ASSERT(!"not a float operator");
+    }
+    return f64_bits(round_to(result, t));
+}
+
 // << and >> (spec 6.4). The result has the left operand's type: no
 // promotion, and the right operand, the amount, may be any integer type.
 // An untyped left operand stays untyped when the amount is a constant too
@@ -325,7 +471,7 @@ static Type *check_shift(Checker *c, Ast_Binary *b, Type *left) {
         check_convert(c, b->left, &type_int);
         t = &type_int;
     }
-    check_default_type(b->right);
+    check_default_type(c, b->right);
     if (!b->left->is_constant || !b->right->is_constant) return t;
 
     b->is_constant = true;
@@ -362,19 +508,31 @@ bool check_both_integers(Checker *c, Type *left, Type *right, Position at, const
     return false;
 }
 
-Type *check_unify_integers(Checker *c, Ast *left, Ast *right, Position at, const char *op_name) {
+bool check_both_numbers(Checker *c, Type *left, Type *right, Position at, const char *op_name) {
+    Type *not_number = !type_is_number(left) ? left : !type_is_number(right) ? right : nullptr;
+    if (!not_number) return true;
+    diag_error(c->diag, at, "%s needs numbers, not '" STR_FMT "'", op_name, STR_ARG(type_name(c->arena, not_number)));
+    return false;
+}
+
+Type *check_unify_numbers(Checker *c, Ast *left, Ast *right, Position at, const char *op_name) {
     Type *l = left->type, *r = right->type;
-    if (type_is_untyped(l) && type_is_untyped(r)) return l;
+    // Two untyped constants stay untyped, a float if either is one: 1 + 0.5
+    // is the untyped float 1.5.
+    if (type_is_untyped(l) && type_is_untyped(r)) {
+        return l == &type_untyped_float || r == &type_untyped_float ? &type_untyped_float : l;
+    }
+    // One untyped: it takes the other's type, if it can (an untyped float
+    // can't become an integer).
     if (type_is_untyped(l)) {
-        check_convert(c, left, r);
-        return r;
+        if (check_convert(c, left, r)) return r;
+    } else if (type_is_untyped(r)) {
+        if (check_convert(c, right, l)) return l;
+    } else {
+        // Both typed: the type the other converts to implicitly.
+        if (type_converts(r, l)) return l;
+        if (type_converts(l, r)) return r;
     }
-    if (type_is_untyped(r)) {
-        check_convert(c, right, l);
-        return l;
-    }
-    if (widens(r, l)) return l;
-    if (widens(l, r)) return r;
     diag_error(c->diag, at, "mismatched types '" STR_FMT "' and '" STR_FMT "' for %s; cast one of them",
                STR_ARG(type_name(c->arena, l)), STR_ARG(type_name(c->arena, r)), op_name);
     return nullptr;
@@ -429,11 +587,28 @@ static bool compare(Token_Kind op, u64 left, u64 right, bool is_signed) {
     }
 }
 
-// == != < <= > >=: the result is a bool. Two integers meet at a type as an
-// arithmetic operator's operands do (check_unify_integers), and are compared
-// as numbers of that type: signed or unsigned by its sign. == and != also
-// compare two bools; a bool has no order, and isn't equal or unequal to an
-// integer, which is never one (spec 6.1).
+// Whether `left op right` holds, for two float values. C's comparisons are
+// IEEE 754's: NaN is unordered, neither less, greater nor equal to anything,
+// itself included, so every comparison with it is false but !=, which is
+// true. -0.0 == 0.0.
+static bool compare_floats(Token_Kind op, f64 left, f64 right) {
+    switch (op) {
+    case TOKEN_EQUAL_EQUAL: return left == right;
+    case TOKEN_BANG_EQUAL: return left != right;
+    case TOKEN_LESS: return left < right;
+    case TOKEN_LESS_EQUAL: return left <= right;
+    case TOKEN_GREATER: return left > right;
+    case TOKEN_GREATER_EQUAL: return left >= right;
+    default: RIG_ASSERT(!"not a comparison"); return false;
+    }
+}
+
+// == != < <= > >=: the result is a bool. Two numbers meet at a type as an
+// arithmetic operator's operands do (check_unify_numbers), and are compared
+// as numbers of that type: integers signed or unsigned by its sign, floats
+// as IEEE 754 compares them. == and != also compare two bools; a bool has no
+// order, and isn't equal or unequal to a number, which is never one (spec
+// 6.1).
 static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right) {
     const char *op = token_kind_name(b->op);
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
@@ -447,28 +622,35 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
         }
         t = &type_bool;
     } else {
-        if (!check_both_integers(c, left, right, b->pos, op)) return nullptr;
-        t = check_unify_integers(c, b->left, b->right, b->pos, op);
+        if (!check_both_numbers(c, left, right, b->pos, op)) return nullptr;
+        t = check_unify_numbers(c, b->left, b->right, b->pos, op);
         if (!t) return nullptr;
     }
     b->operand_type = t;
     if (b->left->is_constant && b->right->is_constant) {
         b->is_constant = true;
-        b->constant = compare(b->op, b->left->constant, b->right->constant, t->is_signed);
+        if (t->kind == TYPE_FLOAT) {
+            b->constant = compare_floats(b->op, as_double(b->left), as_double(b->right));
+        } else {
+            b->constant = compare(b->op, b->left->constant, b->right->constant, t->is_signed);
+        }
     }
     return &type_bool;
 }
 
 // + - * / % & | ^ << >> (spec 6.4), and the comparisons and && || (above).
-// Arithmetic takes two integers, which meet at a type (check_unify_integers)
-// that is also the result's. Untyped with untyped gives untyped; untyped
-// with typed, the typed one's type, the untyped one taking it (it must
-// fit); typed with typed, the same type, or the type the other operand
-// widens to (int with s64: the left one's). Anything else needs a cast,
-// which says which type is meant. No integer promotion: u8 + u8 is a u8,
-// wrapping at 8 bits. A divisor that is the constant 0 is an error here,
-// at the operator; any other divisor not known while compiling is checked
-// at run time (lowering's job).
+// + - * / take two numbers, the others two integers; they meet at a type
+// (check_unify_numbers) that is also the result's. Untyped with untyped
+// gives untyped (a float if either is); untyped with typed, the typed one's
+// type, the untyped one taking it (it must fit, and an untyped float can't
+// become an integer); typed with typed, the same type, or the type the
+// other operand widens to (int with s64: the left one's; float32 with
+// float64, float64). Anything else needs a cast, which says which type is
+// meant. No integer promotion: u8 + u8 is a u8, wrapping at 8 bits. An
+// integer divisor that is the constant 0 is an error here, at the operator;
+// any other divisor not known while compiling is checked at run time
+// (lowering's job). A float divided by zero is IEEE 754's: an infinity, or
+// NaN for 0 / 0, with no check.
 static Type *check_binary(Checker *c, Ast_Binary *b) {
     Type *left = check_value(c, b->left);
     Type *right = check_value(c, b->right);
@@ -477,21 +659,43 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
     if (is_comparison(b->op)) return check_comparison(c, b, left, right);
 
     const char *op = token_kind_name(b->op);
-    if (!check_both_integers(c, left, right, b->pos, op)) return nullptr;
+    if (takes_floats(b->op) ? !check_both_numbers(c, left, right, b->pos, op)
+                            : !check_both_integers(c, left, right, b->pos, op)) {
+        return nullptr;
+    }
     if (is_shift(b->op)) {
         b->operand_type = check_shift(c, b, left);
         return b->operand_type;
     }
-    Type *t = check_unify_integers(c, b->left, b->right, b->pos, op);
+    Type *t = check_unify_numbers(c, b->left, b->right, b->pos, op);
     if (!t) return nullptr;
     b->operand_type = t;
-    if (is_division(b->op) && b->right->is_constant && b->right->constant == 0) {
+    bool is_float = t->kind == TYPE_FLOAT;
+    if (!is_float && is_division(b->op) && b->right->is_constant && b->right->constant == 0) {
         diag_error(c->diag, b->pos, "division by zero");
         return nullptr;
     }
 
     if (!b->left->is_constant || !b->right->is_constant) return t;
     b->is_constant = true;
+    if (is_float) {
+        f64 left = as_double(b->left), right = as_double(b->right);
+        b->constant = fold_float(b->op, left, right, t);
+        // Untyped arithmetic overflows a double as integer arithmetic
+        // overflows int: finite operands giving an infinity is an error
+        // (1e300 * 1e300), rather than an infinity a float32 would take
+        // where 1e300 itself doesn't fit. A division by zero is how a
+        // constant infinity is written; typed constants fold as at run
+        // time.
+        bool finite = __builtin_isfinite(left) && __builtin_isfinite(right);
+        bool by_zero = b->op == TOKEN_SLASH && right == 0;
+        if (type_is_untyped(t) && finite && !by_zero && __builtin_isinf(f64_from_bits(b->constant))) {
+            diag_error(c->diag, b->pos, "constant overflows 'float64'");
+            b->is_constant = false;
+            return nullptr;
+        }
+        return t;
+    }
     if (type_is_untyped(t)) return fold_untyped(c, b);
     b->constant = fold_typed(b->op, b->left->constant, b->right->constant, t);
     return t;
@@ -506,6 +710,37 @@ static bool constant_fits(u64 bits, Type *from, Type *to) {
     return fits((s64)bits, to);
 }
 
+// cast(T) e where e or T is a float and the other a number (the float rule
+// of spec 6.4; check_cast has seen to the rest):
+// - float to float rounds to nearest (float32 to float64 is exact);
+// - integer to float rounds to nearest (a large integer may not be one of
+//   the float's values: 16777217 as a float32 is 16777216);
+// - float to integer truncates toward zero, and saturates: a value beyond
+//   T's range gives T's largest or smallest value, NaN gives 0. There's no
+//   runtime check: every float has an answer.
+// An untyped operand first takes a type: an untyped integer is an int, an
+// untyped float a float64 (the double it already is, so the cast does the
+// only rounding). A cast of a constant folds by the same rules, so
+// cast(s32) 1e30 is the s32 constant 2147483647 and cast(float32) 1e300 is
+// infinity: a cast converts, where an implicit conversion of a value that
+// doesn't fit would be reported.
+static Type *check_float_cast(Checker *c, Ast_Cast *cast, Type *to) {
+    Ast *value = cast->value;
+    if (value->type == &type_untyped_float) {
+        value->type = &type_float64;
+    } else {
+        check_default_type(c, value);
+    }
+    if (!value->is_constant) return to;
+    cast->is_constant = true;
+    if (to->kind == TYPE_FLOAT) {
+        cast->constant = float_bits(value, to);
+    } else {
+        cast->constant = saturate(as_double(value), to);
+    }
+    return to;
+}
+
 // cast(T) e and cast,trunc(T) e (spec 6.4). The result has type T.
 // - From an integer to an integer: cast keeps the number, so it's checked:
 //   a constant that isn't one of T's values is reported here ("300 doesn't
@@ -513,8 +748,9 @@ static bool constant_fits(u64 bits, Type *from, Type *to) {
 //   (lowering). cast,trunc is C's conversion, unchecked: narrowing keeps
 //   the low bits, widening extends by the source's sign. An untyped
 //   constant is an int here.
+// - Between a float and a number: check_float_cast.
 // - From a bool to an integer: 0 or 1.
-// - To a bool, from an integer: no cast; a comparison says which values
+// - To a bool, from a number: no cast; a comparison says which values
 //   are true ("can't cast 'int' to 'bool': compare instead, as in
 //   x != 0").
 // - Anything else casts only where it converts implicitly: to its own
@@ -533,8 +769,9 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
         diag_error(c->diag, cast->pos, "cast,trunc only takes integers");
         return nullptr;
     }
+    if (type_is_number(from) && type_is_number(to) && !integers) return check_float_cast(c, cast, to);
     if (integers) {
-        check_default_type(value);
+        check_default_type(c, value);
         from = value->type;
         if (!value->is_constant) return to;
         if (!cast->is_trunc && !constant_fits(value->constant, from, to)) {
@@ -550,7 +787,7 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
         cast->constant = wrap_to(value->constant, to);
         return to;
     }
-    if (to == &type_bool && from->kind == TYPE_INTEGER) {
+    if (to == &type_bool && type_is_number(from)) {
         diag_error(c->diag, cast->pos, "can't cast '" STR_FMT "' to 'bool': compare instead, as in x != 0",
                    STR_ARG(type_name(c->arena, from)));
         return nullptr;
@@ -571,6 +808,7 @@ Type *check_expression(Checker *c, Ast *e) {
     Type *t = nullptr;
     switch (e->kind) {
     case AST_INT: t = check_int((Ast_Int *)e); break;
+    case AST_FLOAT: t = check_float((Ast_Float *)e); break;
     case AST_STRING: t = &type_string; break;
     case AST_BOOL:
         e->is_constant = true;

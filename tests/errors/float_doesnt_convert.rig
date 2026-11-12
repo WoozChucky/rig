@@ -1,0 +1,6 @@
+// An integer variable doesn't become a float implicitly (spec 6.4): a
+// cast says the conversion is meant, f : float32 = cast(float32) n;.
+main :: () {
+    n := 5;
+    f : float32 = n;
+}

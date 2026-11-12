@@ -508,6 +508,64 @@ TEST(ir_prints_every_operation) {
     arena_free(&a);
 }
 
+TEST(ir_prints_float_operations) {
+    // Milestone 2a's floats (issue #37): the f32 and f64 types, a float
+    // constant printed as its value, the arithmetic, every fcmp predicate and
+    // the conversions, each in the form later tests compare against.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(m, &a, "floats", IR_F64);
+    s32 x = ir_add_param(p, IR_F64, IR_EXT_NONE);  // %0
+    s32 y = ir_add_param(p, IR_F32, IR_EXT_NONE);  // %1
+    s32 n = ir_add_param(p, IR_I64, IR_EXT_NONE);  // %2
+    s32 b = ir_new_block(&a, p);
+    s32 half = emit_const(p, b, IR_F64, f64_bits(2.5));  // %3
+    emit_const(p, b, IR_F32, f64_bits(0.1));             // %4
+    const Ir_Op binary[] = {IR_FADD, IR_FSUB, IR_FMUL, IR_FDIV};
+    for (Ir_Op op : binary) emit_binary(p, b, op, IR_F64, x, half);  // %5 ... %8
+    ir_emit(p, b, IR_FNEG, IR_F64)->a = x;                          // %9
+    const Ir_Pred preds[] = {IR_FOEQ, IR_FUNE, IR_FOLT, IR_FOLE, IR_FOGT, IR_FOGE};
+    for (Ir_Pred pred : preds) {  // %10 ... %15
+        Ir_Instr *cmp = ir_emit(p, b, IR_FCMP, IR_F64);
+        cmp->pred = pred;
+        cmp->a = x;
+        cmp->b = half;
+    }
+    emit_convert(p, b, IR_FPEXT, IR_F32, y, IR_F64);       // %16
+    emit_convert(p, b, IR_FPTRUNC, IR_F64, x, IR_F32);     // %17
+    emit_convert(p, b, IR_SITOFP, IR_I64, n, IR_F64);      // %18
+    emit_convert(p, b, IR_UITOFP, IR_I64, n, IR_F32);      // %19
+    emit_convert(p, b, IR_FPTOSI_SAT, IR_F64, x, IR_I32);  // %20
+    emit_convert(p, b, IR_FPTOUI_SAT, IR_F32, y, IR_I8);   // %21
+    emit_ret(p, b, 5);
+
+    CHECK_STR(ir_print(&a, m),
+              "proc @floats(f64, f32, i64) -> f64 {\n"
+              "b0:\n"
+              "  %3 = const f64 2.5\n"
+              "  %4 = const f32 0.1\n"
+              "  %5 = fadd f64 %0, %3\n"
+              "  %6 = fsub f64 %0, %3\n"
+              "  %7 = fmul f64 %0, %3\n"
+              "  %8 = fdiv f64 %0, %3\n"
+              "  %9 = fneg f64 %0\n"
+              "  %10 = fcmp oeq f64 %0, %3\n"
+              "  %11 = fcmp une f64 %0, %3\n"
+              "  %12 = fcmp olt f64 %0, %3\n"
+              "  %13 = fcmp ole f64 %0, %3\n"
+              "  %14 = fcmp ogt f64 %0, %3\n"
+              "  %15 = fcmp oge f64 %0, %3\n"
+              "  %16 = fpext f32 %1 to f64\n"
+              "  %17 = fptrunc f64 %0 to f32\n"
+              "  %18 = sitofp i64 %2 to f64\n"
+              "  %19 = uitofp i64 %2 to f32\n"
+              "  %20 = fptosi.sat f64 %0 to i32\n"
+              "  %21 = fptoui.sat f32 %1 to i8\n"
+              "  ret %5\n"
+              "}\n");
+    arena_free(&a);
+}
+
 TEST(ir_knows_when_a_block_has_ended) {
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
@@ -1183,6 +1241,134 @@ TEST(several_targets_can_be_globals) {
               "  %4 = addr @g\n"
               "  store i64 %2, %4\n"
               "  store i64 %3, %0\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+// Lowering milestone 2a's floats (issue #37).
+
+TEST(ir_of_float_arithmetic) {
+    // Float arithmetic is fadd, fsub, fmul, fdiv and fneg, at the type the
+    // operands meet at: x * 2 is a float32's (the 2 a float32 constant),
+    // then widened to a float64 to meet y. No division is checked: a float
+    // divided by zero is infinity or NaN.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: (x: float32, y: float64) -> float64 {\n"
+                                          "    a := x * 2 + y;\n"
+                                          "    a -= 0.5;\n"
+                                          "    return -a / y;\n"
+                                          "}\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(f32, f64) -> f64 {\n"
+              "b0:\n"
+              "  %2 = local f64\n"
+              "  %3 = const f32 2\n"
+              "  %4 = fmul f32 %0, %3\n"
+              "  %5 = fpext f32 %4 to f64\n"
+              "  %6 = fadd f64 %5, %1\n"
+              "  store f64 %6, %2\n"
+              "  %7 = load f64 %2\n"
+              "  %8 = const f64 0.5\n"
+              "  %9 = fsub f64 %7, %8\n"
+              "  store f64 %9, %2\n"
+              "  %10 = load f64 %2\n"
+              "  %11 = fneg f64 %10\n"
+              "  %12 = fdiv f64 %11, %1\n"
+              "  ret %12\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(ir_of_float_comparisons) {
+    // Ordered comparisons, but != unordered, so NaN != NaN.
+    Arena a = arena_make();
+    const char *ops[] = {"==", "!=", "<", "<=", ">", ">="};
+    const char *preds[] = {"oeq", "une", "olt", "ole", "ogt", "oge"};
+    for (int i = 0; i < 6; i++) {
+        String source = string_printf(&a,
+                                      "f :: (x: float64, y: float64) -> bool { return x %s y; }\n"
+                                      "main :: () { }\n",
+                                      ops[i]);
+        String ir = ir_print(&a, lower_source(&a, string_cstr(&a, source)));
+        String want = string_printf(&a, "  %%2 = fcmp %s f64 %%0, %%1\n", preds[i]);
+        CHECK(contains(proc_ir(ir, "f"), string_cstr(&a, want)));
+    }
+    // A float32 meeting a float64 is widened; an integer constant meeting a
+    // float32 is a float32 constant.
+    String ir = ir_print(&a, lower_source(&a,
+                                          "ne :: (x: float32, y: float64) -> bool { return x != y; }\n"
+                                          "lt :: (x: float32) -> bool { return x < 1; }\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "ne"),
+              "proc @ne(f32, f64) -> i1 {\n"
+              "b0:\n"
+              "  %2 = fpext f32 %0 to f64\n"
+              "  %3 = fcmp une f64 %2, %1\n"
+              "  ret %3\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "lt"),
+              "proc @lt(f32) -> i1 {\n"
+              "b0:\n"
+              "  %1 = const f32 1\n"
+              "  %2 = fcmp olt f32 %0, %1\n"
+              "  ret %2\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(ir_of_float_casts) {
+    // Float to integer saturates (fptosi.sat, fptoui.sat by the integer's
+    // sign), integer to float rounds (sitofp, uitofp by the integer's
+    // sign), float to float extends or rounds. None is checked at run time.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "to_int :: (x: float32) -> s32 { return cast(s32) x; }\n"
+                                          "to_byte :: (x: float64) -> u8 { return cast(u8) x; }\n"
+                                          "from_int :: (n: int) -> float32 { return cast(float32) n; }\n"
+                                          "from_byte :: (u: u8) -> float64 { return cast(float64) u; }\n"
+                                          "narrow :: (y: float64) -> float32 { return cast(float32) y; }\n"
+                                          "widen :: (x: float32) -> float64 { return cast(float64) x; }\n"
+                                          "main :: () { }\n"));
+    CHECK(contains(proc_ir(ir, "to_int"), "  %1 = fptosi.sat f32 %0 to i32\n  ret %1\n"));
+    CHECK(contains(proc_ir(ir, "to_byte"), "  %1 = fptoui.sat f64 %0 to i8\n  ret %1\n"));
+    CHECK(contains(proc_ir(ir, "from_int"), "  %1 = sitofp i64 %0 to f32\n  ret %1\n"));
+    CHECK(contains(proc_ir(ir, "from_byte"), "  %1 = uitofp i8 %0 to f64\n  ret %1\n"));
+    CHECK(contains(proc_ir(ir, "narrow"), "  %1 = fptrunc f64 %0 to f32\n  ret %1\n"));
+    CHECK(contains(proc_ir(ir, "widen"), "  %1 = fpext f32 %0 to f64\n  ret %1\n"));
+    CHECK(!contains(ir, "panic"));
+    arena_free(&a);
+}
+
+TEST(ir_of_float_variables_and_globals) {
+    // A float variable starts zeroed (0.0, its bits all zero), a float
+    // global holds its first value, and a float constant is made at the
+    // type its use wants.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "scale : float64 = 2.5;\n"
+                                          "half : float32 = 0.5;\n"
+                                          "main :: () {\n"
+                                          "    v : float32;\n"
+                                          "    scale = scale * v;\n"
+                                          "}\n"));
+    CHECK(contains(ir, "global @scale: f64 = 2.5\n"));
+    CHECK(contains(ir, "global @half: f32 = 0.5\n"));
+    CHECK_STR(proc_ir(ir, "__rig_main"),
+              "proc @__rig_main() {\n"
+              "b0:\n"
+              "  %0 = local f32\n"
+              "  %1 = const f32 0\n"
+              "  store f32 %1, %0\n"
+              "  %2 = addr @scale\n"
+              "  %3 = addr @scale\n"
+              "  %4 = load f64 %3\n"
+              "  %5 = load f32 %0\n"
+              "  %6 = fpext f32 %5 to f64\n"
+              "  %7 = fmul f64 %4, %6\n"
+              "  store f64 %7, %2\n"
               "  ret\n"
               "}\n");
     arena_free(&a);

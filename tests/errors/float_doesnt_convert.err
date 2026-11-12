@@ -1,0 +1,3 @@
+tests/errors/float_doesnt_convert.rig:5:19: error: a value of type 'int' doesn't convert to 'float32' implicitly
+        f : float32 = n;
+                      ^

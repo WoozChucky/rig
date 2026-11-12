@@ -863,3 +863,20 @@ TEST(recovery_stops_at_a_global) {
     CHECK_STR(dump, "(broken f)\n(var start _ (int 1))\n");
     arena_free(&a);
 }
+
+// Milestone 2a (issue #37): floats.
+
+TEST(parses_float_literals) {
+    // A float literal is a primary, as an integer literal is; - before one
+    // is the prefix operator. The dump prints the value as %g does.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "x := 1.5; y : float64 = 2.5e-3 * -x; z := -1e30;", &errors),
+              "(block (var x _ (float 1.5)) (var y float64 (binary * (float 0.0025) (unary - (name x)))) "
+              "(var z _ (unary - (float 1e+30))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "f : float = cast(float32) 1_000.25;", &errors),
+              "(block (var f float (cast float32 (float 1000.25))))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}

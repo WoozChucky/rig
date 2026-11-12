@@ -189,7 +189,7 @@ static const Operator_Scope OPERATOR_SCOPES[] = {
 // them here keeps them highlighted meanwhile, so a file's highlighting
 // doesn't flicker as each lands. Once the checker knows one (it's in
 // src/types.cpp's NAMED_TYPES), the test says to remove it from here.
-static const char *const RESERVED_TYPES[] = {"float", "float32", "float64", "string"};
+static const char *const RESERVED_TYPES[] = {"string"};
 
 // ---------------------------------------------------------------------------
 // Generating the grammar
@@ -680,7 +680,7 @@ TEST(vscode_grammar_fills_in_the_placeholders) {
     static const Operator_Scope operator_scopes[] = {
         {"<", OPERATORS_COMPARISON}, {"..", OPERATORS_RANGE}, {"(", OPERATORS_NONE}, {"<<", OPERATORS_BITWISE}};
     static Type *const named_types[] = {&type_int};
-    static const char *const reserved_types[] = {"float"};
+    static const char *const reserved_types[] = {"string"};
     Grammar_Tables tables = {
         keywords,    GRAMMAR_COUNT(keywords),    keyword_scopes,  GRAMMAR_COUNT(keyword_scopes),
         punctuation, GRAMMAR_COUNT(punctuation), operator_scopes, GRAMMAR_COUNT(operator_scopes),
@@ -704,7 +704,7 @@ TEST(vscode_grammar_fills_in_the_placeholders) {
     CHECK_STR(grammar,
               "{\n"
               "    \"keywords\": \"if|while true\",\n"
-              "    \"types\": \"int|float\",\n"
+              "    \"types\": \"int|string\",\n"
               "    \"operators\": {\n"
               "        \"match\": \"(\\\\.\\\\.)|(<<)|(<)\",\n"
               "        \"captures\": {\n"
@@ -786,7 +786,7 @@ TEST(vscode_grammar_needs_a_scope_for_every_operator) {
 }
 
 TEST(vscode_grammar_drops_a_reserved_type_once_built_in) {
-    static const char *const reserved[] = {"int", "float"};
+    static const char *const reserved[] = {"int", "string"};
     Grammar_Tables tables = grammar_tables();
     tables.reserved_types = reserved;
     tables.reserved_type_count = GRAMMAR_COUNT(reserved);

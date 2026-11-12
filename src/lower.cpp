@@ -32,6 +32,11 @@
 //   by the width or more undefined; Rig wraps the amount, as x86 does).
 // - A bool is an i1, 0 or 1; a comparison is an IR_CMP at the type its
 //   operands meet at, signed or unsigned by that type's sign.
+// - A float32 is an f32 and a float64 an f64. Their arithmetic is fadd,
+//   fsub, fmul, fdiv and fneg, unchecked (IEEE 754: a division by zero is
+//   an infinity or NaN), and their comparisons fcmp (lower_expr). A float32
+//   meeting a float64 widens with fpext; casts between floats and integers
+//   are lower_float_cast's.
 // - What Rig defines and LLVM doesn't is checked at run time (spec 6.4): a
 //   divisor not known while compiling is compared with 0, and a signed one
 //   with -1 (lower_division); a cast checks that the number survives
@@ -84,6 +89,7 @@ static Ir_Type ir_type_of(Type *t) {
     if (!t || t->kind == TYPE_VOID) return IR_VOID;
     if (t->kind == TYPE_BOOL) return IR_I1;
     if (t->kind == TYPE_POINTER || t->kind == TYPE_STRING) return IR_PTR;
+    if (t->kind == TYPE_FLOAT) return t->size == 4 ? IR_F32 : IR_F64;
     RIG_ASSERT(t->kind == TYPE_INTEGER);
     switch (t->size) {
     case 1: return IR_I8;
@@ -114,15 +120,16 @@ static Ir_Ext ir_ext_of(Type *t) {
 
 static Ir_Instr *emit(Lowering *l, Ir_Op op, Ir_Type type) { return ir_emit(l->proc, l->block, op, type); }
 
-// A constant of IR type t; its value's number. The checker keeps a
-// constant's bits extended to 64 (Ast.constant); an IR_CONST keeps only
-// its type's width of them. A pointer constant is only ever 0, the null
+// A constant of IR type t; its value's number. The checker keeps an
+// integer constant's bits extended to 64 (Ast.constant); an IR_CONST keeps
+// only its type's width of them. A float constant's 64 bits are a double's,
+// kept whole (0 is 0.0). A pointer constant is only ever 0, the null
 // pointer: a pointer variable zeroed.
 static s32 emit_constant(Lowering *l, Ir_Type t, u64 bits) {
     Ir_Instr *c = emit(l, IR_CONST, t);
     if (t == IR_PTR) {
         RIG_ASSERT(bits == 0);
-    } else if (ir_bits(t) < 64) {
+    } else if (!ir_is_float(t) && ir_bits(t) < 64) {
         bits &= ((u64)1 << ir_bits(t)) - 1;
     }
     c->constant = bits;
@@ -207,16 +214,29 @@ static bool has_ended(Lowering *l, s32 block) { return ir_block_has_ended(l->pro
 
 static s32 new_block(Lowering *l) { return ir_new_block(l->arena, l->proc); }
 
-// The value %v of Rig type `from`, made IR type `to`: widened by from's
-// sign, or truncated to its low bits. (Pointers stay as they are.)
+// A conversion instruction (IR_SEXT, IR_FPEXT, IR_FPTOSI_SAT, ...) of %v,
+// of IR type `from`, to IR type `to`; its value's number.
+static s32 emit_convert(Lowering *l, Ir_Op op, Ir_Type from, s32 v, Ir_Type to) {
+    Ir_Instr *instr = emit(l, op, to);
+    instr->from = from;
+    instr->a = v;
+    return instr->result;
+}
+
+// The value %v of Rig type `from`, made IR type `to`: an integer widened by
+// from's sign, or truncated to its low bits; a float32 widened to an f64
+// (fpext, exact) or a float64 rounded to an f32 (fptrunc). (Pointers stay
+// as they are.) Integers and floats never meet here: a cast converts
+// between them (lower_float_cast).
 static s32 resize(Lowering *l, s32 v, Type *from, Ir_Type to) {
     Ir_Type have = ir_type_of(from);
     if (have == to) return v;
+    if (ir_is_float(have)) {
+        RIG_ASSERT(ir_is_float(to));
+        return emit_convert(l, have == IR_F32 ? IR_FPEXT : IR_FPTRUNC, have, v, to);
+    }
     bool widen = ir_bits(to) > ir_bits(have);
-    Ir_Instr *instr = emit(l, widen ? (from->is_signed ? IR_SEXT : IR_ZEXT) : IR_TRUNC, to);
-    instr->from = have;
-    instr->a = v;
-    return instr->result;
+    return emit_convert(l, widen ? (from->is_signed ? IR_SEXT : IR_ZEXT) : IR_TRUNC, have, v, to);
 }
 
 // The variable's or parameter's Local. The checker declared it before any
@@ -265,6 +285,15 @@ static s32 lower_shift_amount(Lowering *l, Ast *amount, Type *t) {
 
 // The IR operation of an arithmetic or bitwise operator on a `t`.
 static Ir_Op ir_op_of(Token_Kind op, Type *t) {
+    if (t->kind == TYPE_FLOAT) {
+        switch (op) {
+        case TOKEN_PLUS: return IR_FADD;
+        case TOKEN_MINUS: return IR_FSUB;
+        case TOKEN_STAR: return IR_FMUL;
+        case TOKEN_SLASH: return IR_FDIV;
+        default: RIG_ASSERT(!"not a float operator"); return IR_FADD;
+        }
+    }
     switch (op) {
     case TOKEN_PLUS: return IR_ADD;
     case TOKEN_MINUS: return IR_SUB;
@@ -361,9 +390,11 @@ static s32 lower_division(Lowering *l, Token_Kind op, Type *t, s32 left, Ast *ri
 
 // `left op right` where both are of type t (the right, for a shift, the
 // amount, of any integer type); left's value is %left, and `at` is the
-// operator's position, where a division's runtime error points.
+// operator's position, where a division's runtime error points. A float
+// division is IEEE 754's, with nothing to check.
 static s32 lower_operation(Lowering *l, Token_Kind op, Type *t, s32 left, Ast *right, Position at) {
-    if (op == TOKEN_SLASH || op == TOKEN_PERCENT) return lower_division(l, op, t, left, right, at);
+    bool integer = t->kind == TYPE_INTEGER;
+    if (integer && (op == TOKEN_SLASH || op == TOKEN_PERCENT)) return lower_division(l, op, t, left, right, at);
     s32 r = op == TOKEN_SHIFT_LEFT || op == TOKEN_SHIFT_RIGHT ? lower_shift_amount(l, right, t)
                                                                : lower_value(l, right, t);
     return emit_binary(l, ir_op_of(op, t), ir_type_of(t), left, r);
@@ -378,8 +409,25 @@ static void emit_cast_check(Lowering *l, s32 fails, Ast_Cast *cast) {
     emit_runtime_check(l, fails, cast->pos, message);
 }
 
+// cast(T) e where e or T is a float (spec 6.4), from the value %v:
+// - float to float: fpext widens exactly, fptrunc rounds to nearest;
+// - integer to float: sitofp or uitofp, by the integer's sign, round to
+//   nearest (an unsigned u64 above s64's range would be negative to
+//   sitofp);
+// - float to integer: fptosi.sat or fptoui.sat, by T's sign: toward zero,
+//   held to T's range, NaN giving 0. LLVM's plain fptosi would give poison
+//   for 1e30 in an s32; the saturating ones give 2147483647. Every float
+//   has an answer, so there's no runtime check.
+static s32 lower_float_cast(Lowering *l, s32 v, Type *from, Type *to) {
+    Ir_Type have = ir_type_of(from), want = ir_type_of(to);
+    if (from->kind == TYPE_FLOAT && to->kind == TYPE_FLOAT) return resize(l, v, from, want);
+    if (to->kind == TYPE_FLOAT) return emit_convert(l, from->is_signed ? IR_SITOFP : IR_UITOFP, have, v, want);
+    return emit_convert(l, to->is_signed ? IR_FPTOSI_SAT : IR_FPTOUI_SAT, have, v, want);
+}
+
 // cast(T) e and cast,trunc(T) e, e not a constant (a constant cast is a
-// constant, made where it's used, as every constant is).
+// constant, made where it's used, as every constant is). A float on either
+// side is lower_float_cast's.
 // - cast,trunc is C's conversion: trunc to narrow, sext or zext by the
 //   source's sign to widen (resize), and nothing between types of one
 //   width: the bits stay, only their meaning changes.
@@ -398,6 +446,7 @@ static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
     Type *from = cast->value->type, *to = cast->type;
     Ir_Type have = ir_type_of(from), want = ir_type_of(to);
     s32 v = lower_expr(l, cast->value);
+    if (from->kind == TYPE_FLOAT || to->kind == TYPE_FLOAT) return lower_float_cast(l, v, from, to);
     if (cast->is_trunc || from->kind != TYPE_INTEGER || to->kind != TYPE_INTEGER) return resize(l, v, from, want);
     if (ir_bits(want) < ir_bits(have)) {
         s32 narrow = resize(l, v, from, want);
@@ -414,8 +463,21 @@ static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
 
 // The predicate of a comparison operator, for operands compared as a `t`:
 // < <= > >= compare signed or unsigned numbers by t's sign (a bool, which
-// only == and != take, is unsigned).
+// only == and != take, is unsigned). Floats compare ordered, false when
+// either operand is NaN, but for !=, which is unordered (une) so that it's
+// true then: NaN != NaN, as IEEE 754 and C have it.
 static Ir_Pred ir_pred_of(Token_Kind op, Type *t) {
+    if (t->kind == TYPE_FLOAT) {
+        switch (op) {
+        case TOKEN_EQUAL_EQUAL: return IR_FOEQ;
+        case TOKEN_BANG_EQUAL: return IR_FUNE;
+        case TOKEN_LESS: return IR_FOLT;
+        case TOKEN_LESS_EQUAL: return IR_FOLE;
+        case TOKEN_GREATER: return IR_FOGT;
+        case TOKEN_GREATER_EQUAL: return IR_FOGE;
+        default: RIG_ASSERT(!"not a comparison"); return IR_FOEQ;
+        }
+    }
     bool s = t->is_signed;
     switch (op) {
     case TOKEN_EQUAL_EQUAL: return IR_EQ;
@@ -495,8 +557,14 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         Ast_Unary *u = (Ast_Unary *)e;
         Ir_Type t = ir_type_of(e->type);
         s32 x = lower_value(l, u->operand, e->type);
-        // -x is 0 - x; ~x is x xor all ones. Both wrap. !x, on an i1, is x
-        // xor 1.
+        // -x on a float flips its sign bit (fneg; 0 - x would give 0.0 for
+        // 0.0, not -0.0). On an integer -x is 0 - x and ~x is x xor all
+        // ones; both wrap. !x, on an i1, is x xor 1.
+        if (u->op == TOKEN_MINUS && ir_is_float(t)) {
+            Ir_Instr *negate = emit(l, IR_FNEG, t);
+            negate->a = x;
+            return negate->result;
+        }
         if (u->op == TOKEN_MINUS) return emit_binary(l, IR_SUB, t, emit_constant(l, t, 0), x);
         if (u->op == TOKEN_BANG) return emit_binary(l, IR_XOR, t, x, emit_constant(l, t, 1));
         return emit_binary(l, IR_XOR, t, x, emit_constant(l, t, ~(u64)0));
@@ -506,11 +574,16 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         if (b->op == TOKEN_AMP_AMP || b->op == TOKEN_PIPE_PIPE) return lower_logical(l, b);
         if (e->type == &type_bool) {
             // A comparison: both operands at the type they meet at (the
-            // checker's operand_type), then a cmp, which gives the i1.
+            // checker's operand_type), then a cmp (an fcmp for floats),
+            // which gives the i1.
             Type *t = b->operand_type;
             s32 left = lower_value(l, b->left, t);
             s32 right = lower_value(l, b->right, t);
-            return emit_compare(l, ir_pred_of(b->op, t), ir_type_of(t), left, right);
+            Ir_Instr *cmp = emit(l, t->kind == TYPE_FLOAT ? IR_FCMP : IR_CMP, ir_type_of(t));
+            cmp->pred = ir_pred_of(b->op, t);
+            cmp->a = left;
+            cmp->b = right;
+            return cmp->result;
         }
         return lower_operation(l, b->op, e->type, lower_value(l, b->left, e->type), b->right, b->pos);
     }
@@ -823,10 +896,10 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
 
     // The global variables, in source order, each an Ir_Global of its
     // type. Its first value is the constant the checker made sure it has
-    // (its bits cut to the type's width, as an IR_CONST keeps them), or
-    // zero: without a value, or with ---, since a global isn't on the stack
-    // and nothing else was ever there. Constants are skipped: their uses
-    // are constants.
+    // (an integer's bits cut to the type's width, a float's whole, as an
+    // IR_CONST keeps them), or zero: without a value, or with ---, since a
+    // global isn't on the stack and nothing else was ever there. Constants
+    // are skipped: their uses are constants.
     for (s64 i = 0; i < f->globals.count; i++) {
         if (f->globals[i]->kind != AST_VAR) continue;
         Ast_Var *var = (Ast_Var *)f->globals[i];
@@ -836,7 +909,9 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a) {
         if (var->value) {
             RIG_ASSERT(var->value->is_constant);
             g.initial = var->value->constant;
-            if (g.type != IR_PTR && ir_bits(g.type) < 64) g.initial &= ((u64)1 << ir_bits(g.type)) - 1;
+            if (g.type != IR_PTR && !ir_is_float(g.type) && ir_bits(g.type) < 64) {
+                g.initial &= ((u64)1 << ir_bits(g.type)) - 1;
+            }
         }
         table_put(&l.global_index, var->name, (s32)m->globals.count);
         array_add(&m->globals, g);

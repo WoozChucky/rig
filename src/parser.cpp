@@ -53,7 +53,7 @@ static Ast *parse_unary(Parser *p);
 static Ast_Type *parse_type(Parser *p);
 static bool parameters_follow(Parser *p, s64 open);
 
-// primary = IDENT | INT | STRING | 'true' | 'false' | '(' expression ')'
+// primary = IDENT | INT | FLOAT | STRING | 'true' | 'false' | '(' expression ')'
 static Ast *parse_primary(Parser *p) {
     Token *t = peek(p);
     switch (t->kind) {
@@ -67,6 +67,12 @@ static Ast *parse_primary(Parser *p) {
         advance(p);
         Ast_Int *number = ast_new<Ast_Int>(p->arena, AST_INT, t->pos);
         number->value = t->int_value;
+        return number;
+    }
+    case TOKEN_FLOAT: {
+        advance(p);
+        Ast_Float *number = ast_new<Ast_Float>(p->arena, AST_FLOAT, t->pos);
+        number->value = t->float_value;
         return number;
     }
     case TOKEN_STRING: {

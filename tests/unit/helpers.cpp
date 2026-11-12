@@ -212,6 +212,15 @@ static s32 emit_cmp(Ir_Proc *p, s32 block, Ir_Pred pred, Ir_Type type, s32 a, s3
     return instr->result;
 }
 
+// A conversion (IR_SEXT, IR_FPEXT, IR_FPTOSI_SAT, ...) of %a, of IR type
+// `from`, to IR type `to`.
+static s32 emit_convert(Ir_Proc *p, s32 block, Ir_Op op, Ir_Type from, s32 a, Ir_Type to) {
+    Ir_Instr *instr = ir_emit(p, block, op, to);
+    instr->from = from;
+    instr->a = a;
+    return instr->result;
+}
+
 // ret with no value (value -1) or one.
 static void emit_ret(Ir_Proc *p, s32 block, s32 value) {
     Ir_Instr *ret = ir_emit(p, block, IR_RET, IR_VOID);
