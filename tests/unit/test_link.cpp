@@ -35,6 +35,8 @@ TEST(windows_link_command) {
         "/SUBSYSTEM:CONSOLE",
         "/MACHINE:X64",
         "/OUT:my hello.exe",
+        "/DEBUG:FULL",
+        "/PDB:my hello.pdb",
         "/LIBPATH:C:\\Program Files\\VS\\lib\\x64",
         "/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.1\\ucrt\\x64",
         "/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.1\\um\\x64",
@@ -46,6 +48,14 @@ TEST(windows_link_command) {
         "kernel32.lib",
     });
     CHECK_STR(joined(&a, argv), string_cstr(&a, joined(&a, expected)));
+    array_free(&argv);
+    // The PDB is the program's name with .pdb for its .exe (in any case),
+    // or added to a name with another extension.
+    argv = link_command_windows(&a, &tc, objects, str(".build\\tests\\lines.EXE"));
+    CHECK(contains(joined(&a, argv), "[/PDB:.build\\tests\\lines.pdb]"));
+    array_free(&argv);
+    argv = link_command_windows(&a, &tc, objects, str("lines.bin"));
+    CHECK(contains(joined(&a, argv), "[/PDB:lines.bin.pdb]"));
     array_free(&objects);
     array_free(&expected);
     array_free(&argv);
