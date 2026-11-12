@@ -1,6 +1,6 @@
 // test_parser.cpp: the parser. Milestone 1's tests (issue #8) build tokens
 // by hand with toks() (helpers.cpp), so they don't need the lexer;
-// milestone 2a's (issues #33, #34 and #35) lex real source with src().
+// milestone 2a's (issues #33 to #36) lex real source with src().
 
 #include "test.h"
 
