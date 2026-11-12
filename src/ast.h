@@ -170,7 +170,9 @@ struct Ast_Binary : Ast {
     Type *operand_type;  // filled in by the checker: the type the operands are taken at. An
                          // arithmetic operator's is its result's (a shift's, its left
                          // operand's); a comparison's, the type both are compared as (the
-                         // result is a bool); && and ||'s, bool
+                         // result is a bool); && and ||'s, bool; pointer arithmetic's, the
+                         // pointer's type (p + n, n + p, p - n: the result's too; p - q: both
+                         // operands', the result an int)
 };
 
 struct Ast_Call : Ast {

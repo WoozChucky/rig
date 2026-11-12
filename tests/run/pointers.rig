@@ -1,0 +1,74 @@
+// Pointers (issue #57): *x is x's address, p.* what p points at. Two ints
+// swapped through pointers, a global changed through a pointer to it, a
+// global *int that starts as null, p - q and the order of addresses, a
+// pointer to a pointer, a *void that takes and gives any pointer, and a
+// pointer's round trip through a u64.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+print_int :: (n: int) {
+    if n < 0 {
+        putchar(45);
+        print_int(-n);
+        return;
+    }
+    if n >= 10 { print_int(n / 10); }
+    putchar(cast(s32) (n % 10) + 48);
+}
+
+println :: (n: int) {
+    print_int(n);
+    putchar(10);
+}
+
+swap :: (a: *int, b: *int) {
+    t := a.*;
+    a.* = b.*;
+    b.* = t;
+}
+
+bump :: (p: *int) {
+    p.* += 2;
+}
+
+counter : int = 40;
+head : *int = null;
+
+main :: () {
+    x := 1;
+    y := 2;
+    swap(*x, *y);
+    println(x);
+    println(y);
+
+    bump(*counter);
+    println(counter);
+
+    if head == null { println(0); }
+    head = *counter;
+    if head != null { println(head.*); }
+    head.* = 7;
+    println(counter);
+
+    // Addresses are only compared and subtracted here, never read: p + 3 is
+    // three ints past x, wherever that is.
+    p := *x;
+    q := p + 3;
+    println(q - p);
+    println(p - q);
+    if p < q && q > p && p <= p && q >= p { println(1); }
+    if q - 3 == p { println(1); }
+
+    pp := *p;
+    pp.*.* = 5;
+    println(x);
+
+    v : *void = p;
+    w : *int = v;
+    println(w.*);
+
+    address := cast(u64) p;
+    back := cast(*int) address;
+    back.* = 99;
+    println(x);
+    println(cast(int) (cast(u64) (p + 1) - address));
+}
