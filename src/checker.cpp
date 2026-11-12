@@ -167,23 +167,39 @@ static Ast_Resolve *resolve_state(Ast *decl) {
 // the circle: a use that finds the declaration still under way reports
 // "'A' is defined in terms of itself", at its name, once. Every
 // declaration in the circle, from A to the one whose value used it (the
-// end of c->resolving), then gives no type, so nothing more is said about
-// any of them: not that a value isn't known while compiling (a global with
-// a written type, `a : int = b; b : int = a;`, would otherwise keep it, and
-// the value using it would be a typed value that isn't a constant), and not
-// by the globals that use one, in the circle or out of it. A declaration
-// that only leads into the circle (`first := a;` checked first) isn't in
-// it, and keeps its own messages, though the circle's uses say nothing.
+// end of c->resolving), is then marked RESOLVE_CYCLE, and gives no type
+// once done, so nothing more is said about any of them: not that a value
+// isn't known while compiling (a global with a written type, `a : int = b;
+// b : int = a;`, would otherwise keep it, and the value using it would be a
+// typed value that isn't a constant), and not by the globals that use one,
+// in the circle or out of it.
+//
+// A declaration can be in more than one circle. In `a : int = c + b;
+// b : int = a; c : int = a;`, a -> c -> a closes first, while a's value is
+// still under way; its value then goes on to b, whose value finds a again:
+// a second circle, a -> b -> a. A circle through a declaration already
+// found in one (marked RESOLVE_CYCLE) isn't reported, being the same
+// tangle, but its declarations are marked all the same, from that one to
+// the end of c->resolving, or b would keep its type and a global that used
+// it (`d : int = b;`) would be told b's value isn't known. RESOLVE_CYCLE only ever means under
+// way (a done declaration is RESOLVE_DONE, whatever it was), so finding one
+// is finding a circle. A declaration that only leads into a circle
+// (`first := a;` checked first) isn't in it, and keeps its own messages,
+// though the circle's uses say nothing.
 //
 // Every global is resolved before any procedure body is checked, so the
 // scopes are always empty here: a local's name can never leak into a
 // global's value.
 static void resolve_global(Checker *c, Ast *decl) {
     Ast_Resolve *state = resolve_state(decl);
-    if (*state == RESOLVE_DONE || *state == RESOLVE_CYCLE) return;
-    String name = decl->kind == AST_VAR ? ((Ast_Var *)decl)->name : ((Ast_Const *)decl)->name;
-    if (*state == RESOLVE_UNDER_WAY) {
-        diag_error(c->diag, decl->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(name));
+    if (*state == RESOLVE_DONE) return;
+    if (*state == RESOLVE_UNDER_WAY || *state == RESOLVE_CYCLE) {
+        // The first circle through decl is reported; one more through it
+        // (already RESOLVE_CYCLE) is the same tangle, said once.
+        if (*state == RESOLVE_UNDER_WAY) {
+            String name = decl->kind == AST_VAR ? ((Ast_Var *)decl)->name : ((Ast_Const *)decl)->name;
+            diag_error(c->diag, decl->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(name));
+        }
         // decl, and every declaration needed since, is in the circle.
         s64 i = c->resolving.count - 1;
         while (c->resolving[i] != decl) i--;

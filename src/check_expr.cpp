@@ -137,12 +137,23 @@ static u64 float_bits(Ast *e, Type *to) {
     return f64_bits(value);
 }
 
-// Whether an untyped float constant's value d can be one of float type t's:
+// Whether untyped float constant e's value can be one of float type t's:
 // every double is a float64; a float32 must not be so large that it rounds
 // to infinity. Infinity and NaN themselves, which IEEE arithmetic on
 // constants can give (1.0 / 0.0), are float32 values too.
-static bool float_fits(f64 d, Type *t) {
+//
+// A literal as written (literal_float32) is rounded to a float32 once,
+// from its text, so that rounding decides: it fits unless it's infinity.
+// Its double can't: a literal just below the overflow point (a tenth below
+// 0x1.ffffffp+127, say) has the overflow point itself as its nearest
+// double, which would round on to infinity, while the literal rounds down,
+// to the largest float32. Anything else, arithmetic folded in double, is
+// rounded from its double (float_bits), so its double decides.
+static bool float_fits(Ast *e, Type *t) {
+    f64 d = f64_from_bits(e->constant);
     if (t->size == 8 || __builtin_isinf(d) || __builtin_isnan(d)) return true;
+    f32 literal;
+    if (literal_float32(e, &literal)) return !__builtin_isinf(literal);
     return __builtin_fabs(d) < FLOAT32_OVERFLOW;
 }
 
@@ -179,7 +190,7 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
         if (to->kind == TYPE_FLOAT) {
             // Only an untyped float's constant is a double's bits; an
             // untyped integer's is the integer, which fits any float type.
-            if (from == &type_untyped_float && !float_fits(f64_from_bits(e->constant), to)) {
+            if (from == &type_untyped_float && !float_fits(e, to)) {
                 f64 value = f64_from_bits(e->constant);
                 diag_error(c->diag, e->start, "%g doesn't fit in '" STR_FMT "'", value,
                            STR_ARG(type_name(c->arena, to)));

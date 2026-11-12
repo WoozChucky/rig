@@ -83,7 +83,8 @@ static bool starts_global(Parser *p);
 // "this expression is nested too deeply (more than 1000 levels)", at the
 // start of the outermost expression being read. Every parse_ function then
 // returns null, so the rest of the expression reports nothing more, and the
-// declaration is given up as after any syntax error.
+// declaration is given up as after any syntax error (parser.h says why not
+// only the statement).
 static void report_too_deep(Parser *p) {
     diag_error(p->diag, p->expression_start, "this expression is nested too deeply (more than %d levels)",
                MAX_DEPTH);
@@ -887,12 +888,12 @@ static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
 // inside braces still open is passed over, unless it's a procedure's in
 // column 1 (starts_declaration), which parse_block takes for a top-level
 // declaration after a body never closed. A constant in column 1 is passed
-// over there, as an indented one is. A global variable is taken only
-// outside every brace and parameter list still open, even right where the
-// failed declaration stopped: an unindented local (`y : int;` in column 1 of a body) and a
-// parameter list over two lines (`n: s32` starting the second) look like
-// one too. A call's or a value's parentheses left open don't count (see
-// count_open): `counter : int = f(1` or `puts("a"` in a body, then a
+// over there, as an indented one is. A global variable is taken only outside
+// every brace and parameter list still open, even right where the failed
+// declaration stopped: an unindented local (`y : int;` in column 1 of a
+// body) and a parameter list over two lines (`n: s32` starting the second)
+// look like one too. A call's or a value's parentheses left open don't count
+// (see count_open): `counter : int = f(1` or `puts("a"` in a body, then a
 // global, keeps the global.
 static void skip_to_next_declaration(Parser *p, s64 start) {
     s64 depth = 0;   // braces opened and not yet closed since `start`

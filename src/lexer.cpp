@@ -314,7 +314,9 @@ static void lex_number(Lexer *l, Position pos, s64 start) {
     // And straight to the nearest float32, for when the literal becomes
     // one: strtof rounds the decimal once, where rounding the double would
     // be a second rounding. Beyond float32's range it's an infinity, which
-    // the checker reports as a value that doesn't fit, from the double.
+    // the checker reports as a value that doesn't fit (float_fits decides
+    // by this value, not the double, which can round up to the overflow
+    // point when the literal is just below it).
     token->float32_value = strtof(copy, nullptr);
 }
 
