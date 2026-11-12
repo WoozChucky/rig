@@ -1150,3 +1150,29 @@ TEST(while_true_with_break_doesnt) {
               "9:1: 'h' must return a value on every path, and this one reaches its end\n");
     arena_free(&a);
 }
+
+TEST(a_broken_condition_says_nothing_about_returns) {
+    // One mistake, one message: once a condition is an error, whether its
+    // if or while reaches its end isn't known, so only the condition is
+    // reported, not a missing return as well.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: () -> int {\n"
+                           "    while 1 { return 1; }\n"
+                           "}\n"
+                           "g :: () -> int {\n"
+                           "    while nope { }\n"
+                           "}\n"
+                           "h :: () -> int {\n"
+                           "    if 1 { return 1; }\n"
+                           "}\n"
+                           "k :: (x: int) -> int {\n"
+                           "    if x > 0 { return 1; } else if 2 { return 0; }\n"
+                           "}\n"
+                           "main :: () { }\n"),
+              "2:11: the condition of 'while' must be a bool, not 'int'\n"
+              "5:11: unknown identifier 'nope'\n"
+              "8:8: the condition of 'if' must be a bool, not 'int'\n"
+              "11:36: the condition of 'if' must be a bool, not 'int'\n");
+    arena_free(&a);
+}
