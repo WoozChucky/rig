@@ -98,9 +98,10 @@
 //   a constant that isn't one of T's values is "V doesn't fit in 'T'", at
 //   the cast, and any other value is checked at run time. From a bool to an
 //   integer: 0 or 1. An integer to a bool: "can't cast 'int' to 'bool':
-//   compare instead, as in x != 0". Anything else only to the type it
-//   converts to implicitly (its own, or a string literal's *u8); otherwise
-//   "can't cast '*u8' to 'int'".
+//   compare instead, as in x != 0". A pointer to and from a pointer or a
+//   64-bit integer (below). Anything else only to the type it converts to
+//   implicitly (its own, or a string literal's *u8); otherwise "can't cast
+//   'string' to 'int'".
 // - cast,trunc(T) e is C's conversion, unchecked: narrowing keeps the low
 //   bits, widening extends by the source's sign (cast,trunc(u8) 300 is the
 //   u8 constant 44). It takes integers only: "cast,trunc only takes
@@ -134,13 +135,17 @@
 //   implicitly" (an argument: "argument N of 'f' has type 'A', which can't
 //   be converted to 'B'"). A compound assignment x op= e converts e to x's
 //   type (a shift's amount: any integer).
-// - Only a variable can be assigned to, and only by its name. Not:
+// - Only a place in memory can be assigned to: a variable, by its name, or
+//   what a pointer points at, p.* (check_addressable, the rule *x follows
+//   too). Not:
 //   - a constant: "can't assign to 'N': it's a constant";
 //   - a parameter, read-only (spec 6.1): "can't assign to 'N': it's a
 //     parameter";
 //   - a loop's iterator or index: "can't assign to 'it': it's the loop's
 //     iterator", "can't assign to 'it_index': it's the loop's index";
-//   - a procedure: "can't assign to 'N': it's a procedure".
+//   - a procedure: "can't assign to 'N': it's a procedure";
+//   - any other expression: "only a variable, a field or an element can be
+//     assigned to".
 // - N :: e; needs e a number or a bool ("a constant can only be a number
 //   or a bool, for now": only they fold yet) known while compiling
 //   ("the value of constant 'N' isn't known while compiling").
@@ -179,6 +184,46 @@
 //   first result.
 // - A foreign procedure returns at most one value, as C does: "a foreign
 //   procedure can return at most one value", at the second.
+//
+// Pointers (spec 6.5, Jai's).
+// - *x is x's address, a *T for an x of type T that has one
+//   (check_addressable): a variable, local or global, or p.*. Parameters
+//   are read-only, so they have none: "can't take the address of 'a': it's
+//   a parameter" (or "it's a constant", "it's the loop's iterator", "it's
+//   the loop's index", "it's a procedure"); any other value, "only a
+//   variable, a field or an element has an address".
+// - p.* is the T a *T points at, a place that can be assigned to and have
+//   its address taken. On anything else: "'.*' needs a pointer, not 'int'";
+//   on a *void: "can't dereference a '*void'; cast it to a pointer to
+//   something first". Lowering checks p for null at run time.
+// - null is a constant of type_null, which converts to every pointer type
+//   and to nothing else; alone (x := null;, null == null) it's "null needs
+//   a pointer type, as in p : *int = null;". So a global can start as null.
+// - void is a type only as a pointer's target, *void: anywhere else it's
+//   "'void' is only a pointer's target, as in *void". A *void converts
+//   implicitly to and from every pointer type, as C's void * does; no other
+//   pointer converts to another without a cast ("a value of type '*u8'
+//   doesn't convert to '*int' implicitly").
+// - p + n, n + p and p - n give p's type, n any integer: p moved by n of what
+//   it points at. p - q, two pointers of the same type, gives an int, the
+//   distance in what they point at. Otherwise: "can't add two pointers",
+//   "can't subtract a pointer from an integer", "mismatched types '*int' and
+//   '*u8' for '-'; cast one of them", "'+' moves a pointer by an integer,
+//   not 'float32'". On a *void, which points at nothing with a size: "can't
+//   do arithmetic on a '*void'; cast it to a pointer to something first";
+//   p - q when what they point at has size 0: "can't subtract pointers to
+//   'T': it has no size". p += n and p -= n likewise. Every other operator
+//   keeps its message ("'*' needs numbers, not '*int'").
+// - == != < <= > >= compare two pointers that convert to one type, null
+//   included, the order as unsigned addresses; "mismatched types '*int' and
+//   '*u8' for '=='; cast one of them", or with something not a pointer,
+//   "mismatched types '*int' and 'int' for '<'".
+// - cast(T) e casts a pointer to any pointer, and to and from int, s64 and
+//   u64 (the address), unchecked; otherwise "can't cast '*int' to 'u32'; a
+//   pointer casts to another pointer or to a 64-bit integer". null casts to
+//   a pointer and stays a constant; no other pointer cast is one.
+// - size_of(T) is T's size in bytes, an untyped integer constant;
+//   size_of(void) is "'void' has no size".
 //
 // Globals and top-level constants.
 // - A global variable is declared as a local one is. Its value must be

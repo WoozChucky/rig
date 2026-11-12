@@ -557,7 +557,7 @@ TEST(assignment_targets) {
               "3:5: can't assign to 'N': it's a constant\n"
               "4:5: can't assign to 'p': it's a parameter\n"
               "5:5: can't assign to 'f': it's a procedure\n"
-              "6:5: only a variable can be assigned to\n"
+              "6:5: only a variable, a field or an element can be assigned to\n"
               "7:5: can't assign to 'p': it's a parameter\n"
               "8:5: unknown identifier 'nope'\n");
     arena_free(&a);
@@ -724,7 +724,9 @@ TEST(local_constant_must_be_constant) {
 }
 
 TEST(bool_and_string_arent_integers) {
-    // Strings and pointers; bools have bools_dont_order.
+    // Strings and pointers; bools have bools_dont_order. A pointer moves by
+    // an integer (p + 1, p += 1: pointer_arithmetic), but ~ and << take
+    // integers only.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "main :: () {\n"
@@ -739,9 +741,7 @@ TEST(bool_and_string_arent_integers) {
                            "}\n"),
               "2:14: '+' needs numbers, not 'string'\n"
               "3:10: '-' needs a number, not 'string'\n"
-              "5:12: '+' needs numbers, not '*u8'\n"
               "6:10: '~' needs an integer, not '*u8'\n"
-              "7:7: '+=' needs numbers, not '*u8'\n"
               "9:7: '<<=' needs integers, not '*u8'\n");
     arena_free(&a);
 }
@@ -1330,7 +1330,9 @@ TEST(cast_trunc_of_a_constant_wraps) {
 
 TEST(cast_rules) {
     // Integers cast to integers, and bools to integers (0 or 1). Nothing
-    // casts to a bool but a bool; anything else casts only to its own type.
+    // casts to a bool but a bool; a string only to its own type (or a
+    // literal to *u8). Pointers cast to pointers and to 64-bit integers
+    // (pointer_casts).
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "main :: () {\n"
@@ -1351,8 +1353,6 @@ TEST(cast_rules) {
                            "}\n"),
               "6:10: can't cast 'int' to 'bool': compare instead, as in x != 0\n"
               "7:10: can't cast 'string' to 'int'\n"
-              "10:10: can't cast '*u8' to '*s8'\n"
-              "12:10: can't cast '*u8' to 'int'\n"
               "13:10: can't cast 'int' to 'bool': compare instead, as in x != 0\n"
               "14:15: unknown type 'nope'\n"
               "15:20: unknown identifier 'nope'\n");
@@ -1987,7 +1987,7 @@ TEST(float_casts) {
               "4:10: can't cast 'float32' to 'bool': compare instead, as in x != 0\n"
               "5:10: cast,trunc only takes integers\n"
               "6:10: can't cast 'bool' to 'float32'\n"
-              "8:10: can't cast '*u8' to 'float64'\n");
+              "8:10: can't cast '*u8' to 'float64'; a pointer casts to another pointer or to a 64-bit integer\n");
     arena_free(&a);
 }
 
@@ -2098,5 +2098,432 @@ TEST(float_comparisons) {
     CHECK_EQ(local_named(&c, "F")->constant, 1);
     CHECK_STR(type_of(&a, &c, "A"), "bool");
     token_list_free(c.list);
+    arena_free(&a);
+}
+
+// Milestone 2b (issue #57): pointers (spec 6.5).
+
+TEST(address_of_a_variable) {
+    // *x is a *T for a variable x of type T, local or global, and *p.* is
+    // the address p.* is at, p itself. Through a pointer, even one that's a
+    // parameter, what it points at can be written.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "counter : int;\n"
+                          "two :: () -> int, int { return 1, 2; }\n"
+                          "set :: (p: *int) { p.* = 1; p.* += 2; q := *p.*; }\n"
+                          "main :: () {\n"
+                          "    x := 5;\n"
+                          "    p := *x;\n"
+                          "    q : *int = *counter;\n"
+                          "    r := *p.*;\n"
+                          "    pp := *p;\n"
+                          "    b : bool;\n"
+                          "    pb := *b;\n"
+                          "    m, n := two();\n"
+                          "    pm := *m;\n"
+                          "    p.* = 6;\n"
+                          "    p.* += 1;\n"
+                          "    pp.*.* = 7;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "p"), "*int");
+    CHECK_STR(type_of(&a, &c, "q"), "*int");
+    CHECK_STR(type_of(&a, &c, "r"), "*int");
+    CHECK_STR(type_of(&a, &c, "pp"), "**int");
+    CHECK_STR(type_of(&a, &c, "pb"), "*bool");
+    CHECK_STR(type_of(&a, &c, "pm"), "*int");
+    // An address is known only at run time (a global's, by the linker).
+    CHECK(!((Ast_Var *)local_named(&c, "q"))->value->is_constant);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(address_needs_a_variable) {
+    // Parameters are read-only (spec 6.1), so they have no address; nor do
+    // constants, a loop's iterator and index, procedures, or values that
+    // aren't variables. The same rule says what can be assigned to.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: (a: int) {\n"
+                           "    N :: 1;\n"
+                           "    p := *a;\n"
+                           "    q := *N;\n"
+                           "    r := *f;\n"
+                           "    for 0..3 { s := *it; t := *it_index; }\n"
+                           "    u := *(1 + 2);\n"
+                           "    v := *g();\n"
+                           "    w := *nope;\n"
+                           "    *a = 1;\n"
+                           "    x := 1; *x = 2;\n"
+                           "    y := **x;\n"
+                           "}\n"
+                           "g :: () -> int { return 1; }\n"
+                           "main :: () { }\n"),
+              "3:11: can't take the address of 'a': it's a parameter\n"
+              "4:11: can't take the address of 'N': it's a constant\n"
+              "5:11: can't take the address of 'f': it's a procedure\n"
+              "6:22: can't take the address of 'it': it's the loop's iterator\n"
+              "6:32: can't take the address of 'it_index': it's the loop's index\n"
+              "7:11: only a variable, a field or an element has an address\n"
+              "8:11: only a variable, a field or an element has an address\n"
+              "9:11: unknown identifier 'nope'\n"
+              "10:6: can't take the address of 'a': it's a parameter\n"
+              "11:13: only a variable, a field or an element can be assigned to\n"
+              "12:11: only a variable, a field or an element has an address\n");
+    arena_free(&a);
+}
+
+TEST(deref_rules) {
+    // p.* is the T that a *T points at; it takes a pointer, and not a *void,
+    // which points at nothing in particular.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    x := 5;\n"
+                           "    p := *x;\n"
+                           "    pp := *p;\n"
+                           "    n := x.*;\n"
+                           "    v : *void;\n"
+                           "    w := v.*;\n"
+                           "    k := null.*;\n"
+                           "    m := nope.*;\n"
+                           "    b := true.*.*;\n"
+                           "}\n"),
+              "5:11: '.*' needs a pointer, not 'int'\n"
+              "7:11: can't dereference a '*void'; cast it to a pointer to something first\n"
+              "8:14: '.*' needs a pointer, not 'null'\n"
+              "9:10: unknown identifier 'nope'\n"
+              "10:14: '.*' needs a pointer, not 'bool'\n");
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    x := 5;\n"
+                          "    p := *x;\n"
+                          "    pp := *p;\n"
+                          "    y := p.*;\n"
+                          "    z := pp.*.*;\n"
+                          "    b := false;\n"
+                          "    c := (*b).*;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "y"), "int");
+    CHECK_STR(type_of(&a, &c, "z"), "int");
+    CHECK_STR(type_of(&a, &c, "c"), "bool");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(null_converts_to_pointers) {
+    // null converts to every pointer type and to nothing else; alone it has
+    // no type to take. It's a constant, but only numbers and bools can be
+    // constants' values, for now.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "take :: (p: *u8) { }\n"
+                           "main :: () {\n"
+                           "    p : *int = null;\n"
+                           "    q : **u8 = null;\n"
+                           "    p = null;\n"
+                           "    take(null);\n"
+                           "    x := null;\n"
+                           "    n : int = null;\n"
+                           "    b := p == null;\n"
+                           "    c := null != p;\n"
+                           "    N :: null;\n"
+                           "    if null { }\n"
+                           "}\n"),
+              "7:10: null needs a pointer type, as in p : *int = null;\n"
+              "8:15: a value of type 'null' doesn't convert to 'int' implicitly\n"
+              "11:10: a constant can only be a number or a bool, for now\n"
+              "12:8: the condition of 'if' must be a bool, not 'null'\n");
+    Checked c = check_src(&a, "main :: () { p : *int = null; }\n");
+    Ast *value = ((Ast_Var *)local_named(&c, "p"))->value;
+    CHECK(value->is_constant);
+    CHECK_EQ(value->constant, 0);
+    CHECK_STR(type_name(&a, value->type), "*int");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(void_pointer_converts_both_ways) {
+    // *void converts to and from every pointer type, so malloc's result
+    // needs no cast; no other pointer converts to another, *void's own
+    // pointer **void included.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "malloc :: (size: u64) -> *void #foreign libc;\n"
+                           "free :: (p: *void) #foreign libc;\n"
+                           "main :: () {\n"
+                           "    p : *int = malloc(8);\n"
+                           "    free(p);\n"
+                           "    v : *void = p;\n"
+                           "    q : *u8 = v;\n"
+                           "    r : *u8 = p;\n"
+                           "    pp : **int = *p;\n"
+                           "    vv : *void = pp;\n"
+                           "    s : **void = pp;\n"
+                           "    b := v == p;\n"
+                           "    free(3);\n"
+                           "}\n"),
+              "8:15: a value of type '*int' doesn't convert to '*u8' implicitly\n"
+              "11:18: a value of type '**int' doesn't convert to '**void' implicitly\n"
+              "13:10: argument 1 of 'free' has type 'int', which can't be converted to '*void'\n");
+    arena_free(&a);
+}
+
+TEST(pointer_arithmetic) {
+    // p + n and p - n move by n of what p points at, n any integer (n + p
+    // too, as in C); p - q is an int, the distance between two *T. Nothing
+    // else does arithmetic on pointers.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    a : s32 = 1;\n"
+                          "    p := *a;\n"
+                          "    q := p + 1;\n"
+                          "    r := p - a;\n"
+                          "    d := q - p;\n"
+                          "    p += 2;\n"
+                          "    p -= cast(u8) 1;\n"
+                          "    e := 3 + p;\n"
+                          "    n : u64 = 2;\n"
+                          "    f := p + n;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "q"), "*s32");
+    CHECK_STR(type_of(&a, &c, "r"), "*s32");
+    CHECK_STR(type_of(&a, &c, "d"), "int");
+    CHECK_STR(type_of(&a, &c, "e"), "*s32");
+    CHECK_STR(type_of(&a, &c, "f"), "*s32");
+    // The untyped 1 meets no type there but int's.
+    CHECK_STR(type_name(&a, ((Ast_Binary *)value_of(&c, "q"))->right->type), "int");
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    a : s32 = 1;\n"
+                           "    p := *a;\n"
+                           "    q := p + 1;\n"
+                           "    f := p + q;\n"
+                           "    g := 1 - p;\n"
+                           "    h := p * 2;\n"
+                           "    v : *void;\n"
+                           "    i := v + 1;\n"
+                           "    j := v - v;\n"
+                           "    b : *u8;\n"
+                           "    k := p - b;\n"
+                           "    l := p + 1.5;\n"
+                           "    v += 1;\n"
+                           "    p *= 2;\n"
+                           "    p += q;\n"
+                           "    p -= q;\n"
+                           "    x := 1;\n"
+                           "    x += p;\n"
+                           "    m := 1 + v;\n"
+                           "    o := p + true;\n"
+                           "}\n"),
+              "5:12: can't add two pointers\n"
+              "6:12: can't subtract a pointer from an integer\n"
+              "7:12: '*' needs numbers, not '*s32'\n"
+              "9:12: can't do arithmetic on a '*void'; cast it to a pointer to something first\n"
+              "10:12: can't do arithmetic on a '*void'; cast it to a pointer to something first\n"
+              "12:12: mismatched types '*s32' and '*u8' for '-'; cast one of them\n"
+              "13:12: '+' moves a pointer by an integer, not 'float32'\n"
+              "14:7: can't do arithmetic on a '*void'; cast it to a pointer to something first\n"
+              "15:7: '*=' needs numbers, not '*s32'\n"
+              "16:7: can't add two pointers\n"
+              "17:7: '-=' moves a pointer by an integer, not '*s32'\n"
+              "19:7: '+=' needs numbers, not '*s32'\n"
+              "20:12: can't do arithmetic on a '*void'; cast it to a pointer to something first\n"
+              "21:12: '+' moves a pointer by an integer, not 'bool'\n");
+    arena_free(&a);
+}
+
+TEST(pointer_comparisons) {
+    // == != < <= > >= compare pointers that convert to one type (null
+    // included), < and the others as unsigned addresses. A pointer isn't a
+    // condition.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    a := 1; b := 2;\n"
+                          "    p := *a; q := *b;\n"
+                          "    c := p == q;\n"
+                          "    d := p < q;\n"
+                          "    e := p >= null;\n"
+                          "    v : *void;\n"
+                          "    f := v != p;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "c"), "bool");
+    CHECK_STR(type_name(&a, ((Ast_Binary *)value_of(&c, "d"))->operand_type), "*int");
+    CHECK_STR(type_name(&a, ((Ast_Binary *)value_of(&c, "e"))->operand_type), "*int");
+    CHECK_STR(type_name(&a, ((Ast_Binary *)value_of(&c, "f"))->operand_type), "*void");
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    a := 1;\n"
+                           "    p := *a;\n"
+                           "    u : *u8;\n"
+                           "    f := p == u;\n"
+                           "    g := p < 1;\n"
+                           "    h := null == null;\n"
+                           "    if p { }\n"
+                           "    j := p == true;\n"
+                           "    k := 1.5 > p;\n"
+                           "}\n"),
+              "5:12: mismatched types '*int' and '*u8' for '=='; cast one of them\n"
+              "6:12: mismatched types '*int' and 'int' for '<'\n"
+              "7:10: null needs a pointer type, as in p : *int = null;\n"
+              "8:8: the condition of 'if' must be a bool, not '*int'\n"
+              "9:12: mismatched types '*int' and 'bool' for '=='\n"
+              "10:14: mismatched types 'float32' and '*int' for '>'\n");
+    arena_free(&a);
+}
+
+TEST(pointer_casts) {
+    // Any pointer casts to any pointer, and to and from int, s64 and u64,
+    // its address; nothing else. A cast of null to a pointer is still null,
+    // a constant; any other pointer cast is worked out at run time.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    x := 1;\n"
+                          "    p := *x;\n"
+                          "    a := cast(*u8) p;\n"
+                          "    b := cast(int) p;\n"
+                          "    c := cast(u64) p;\n"
+                          "    d := cast(s64) p;\n"
+                          "    e := cast(*int) c;\n"
+                          "    f := cast(*int) 4096;\n"
+                          "    k := cast(*void) null;\n"
+                          "    n := cast(**s8) x;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "a"), "*u8");
+    CHECK_STR(type_of(&a, &c, "b"), "int");
+    CHECK_STR(type_of(&a, &c, "c"), "u64");
+    CHECK_STR(type_of(&a, &c, "d"), "s64");
+    CHECK_STR(type_of(&a, &c, "e"), "*int");
+    CHECK_STR(type_of(&a, &c, "f"), "*int");
+    CHECK(!value_of(&c, "f")->is_constant);
+    CHECK_STR(type_of(&a, &c, "k"), "*void");
+    CHECK(value_of(&c, "k")->is_constant);
+    CHECK_STR(type_of(&a, &c, "n"), "**s8");
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    x := 1;\n"
+                           "    p := *x;\n"
+                           "    g := cast(u32) p;\n"
+                           "    h := cast(*int) cast(s32) 1;\n"
+                           "    i := cast(bool) p;\n"
+                           "    j := cast(float64) p;\n"
+                           "    l := cast(int) null;\n"
+                           "    m := cast,trunc(u64) p;\n"
+                           "    o := cast(*int) 1.5;\n"
+                           "}\n"),
+              "4:10: can't cast '*int' to 'u32'; a pointer casts to another pointer or to a 64-bit integer\n"
+              "5:10: can't cast 's32' to '*int'; a pointer casts to another pointer or to a 64-bit integer\n"
+              "6:10: can't cast '*int' to 'bool'; a pointer casts to another pointer or to a 64-bit integer\n"
+              "7:10: can't cast '*int' to 'float64'; a pointer casts to another pointer or to a 64-bit integer\n"
+              "8:10: can't cast 'null' to 'int'\n"
+              "9:10: cast,trunc only takes integers\n"
+              "10:10: can't cast 'float32' to '*int'; a pointer casts to another pointer or to a 64-bit integer\n");
+    arena_free(&a);
+}
+
+TEST(size_of_is_a_constant) {
+    // size_of(T) is the untyped integer constant of T's size, C's sizes
+    // (spec 5): it takes the type it meets, as a literal does.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    A :: size_of(*u8);\n"
+                          "    B :: size_of(bool);\n"
+                          "    C :: size_of(float64);\n"
+                          "    D :: size_of(s16);\n"
+                          "    E :: size_of(**void);\n"
+                          "    F :: size_of(int) * 10;\n"
+                          "    G :: size_of(float);\n"
+                          "    x : u8 = size_of(u32);\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_EQ(local_named(&c, "A")->constant, 8);
+    CHECK_EQ(local_named(&c, "B")->constant, 1);
+    CHECK_EQ(local_named(&c, "C")->constant, 8);
+    CHECK_EQ(local_named(&c, "D")->constant, 2);
+    CHECK_EQ(local_named(&c, "E")->constant, 8);
+    CHECK_EQ(local_named(&c, "F")->constant, 80);
+    CHECK_EQ(local_named(&c, "G")->constant, 4);
+    CHECK_STR(type_of(&a, &c, "A"), "int");
+    CHECK(local_named(&c, "A")->type == &type_untyped_int);
+    Ast *x = value_of(&c, "x");
+    CHECK(x->is_constant);
+    CHECK_EQ(x->constant, 4);
+    CHECK_STR(type_name(&a, x->type), "u8");
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    G :: size_of(void);\n"
+                           "    H :: size_of(nope);\n"
+                           "}\n"),
+              "2:18: 'void' has no size\n"
+              "3:18: unknown type 'nope'\n");
+    // Sizes and alignments, C's.
+    CHECK_EQ(type_from_name(str("u16"))->size, 2);
+    CHECK_EQ(type_align(type_from_name(str("u16"))), 2);
+    CHECK_EQ(type_align(type_from_name(str("float64"))), 8);
+    CHECK_EQ(type_align(&type_bool), 1);
+    CHECK_EQ(type_align(type_pointer_to(&type_bool)), 8);
+    CHECK_EQ(type_pointer_to(&type_void)->size, 8);
+    arena_free(&a);
+}
+
+TEST(void_only_behind_a_pointer) {
+    // void is a type only as what a *void points at.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: (v: void) { }\n"
+                           "g :: () -> void { return; }\n"
+                           "main :: () {\n"
+                           "    x : void;\n"
+                           "    p : *void;\n"
+                           "    y := cast(void) 1;\n"
+                           "    q : **void;\n"
+                           "}\n"),
+              "1:10: 'void' is only a pointer's target, as in *void\n"
+              "2:12: 'void' is only a pointer's target, as in *void\n"
+              "4:9: 'void' is only a pointer's target, as in *void\n"
+              "6:15: 'void' is only a pointer's target, as in *void\n");
+    CHECK(type_from_name(str("void")) == &type_void);
+    CHECK(type_is_pointer(type_pointer_to(&type_void)));
+    CHECK(!type_is_pointer(&type_null));
+    CHECK(!type_is_pointer(&type_int));
+    arena_free(&a);
+}
+
+TEST(null_global) {
+    // null is a constant, so a global can start as one; a global pointer
+    // without a value starts as null too. An address isn't known while
+    // compiling.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "head : *int = null;\n"
+                          "tail : *int;\n"
+                          "v : *void = null;\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Var *head = (Ast_Var *)global_named(&c, "head");
+    CHECK_STR(type_name(&a, head->type), "*int");
+    CHECK(head->value->is_constant);
+    CHECK_EQ(head->value->constant, 0);
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "n : int;\n"
+                           "q : *int = *n;\n"
+                           "bad := null;\n"
+                           "main :: () { }\n"),
+              "2:12: a global's value must be known while compiling, for now\n"
+              "3:8: null needs a pointer type, as in p : *int = null;\n");
     arena_free(&a);
 }
