@@ -1,0 +1,6 @@
+// #c_call is written once, on a procedure or on a procedure type.
+compare :: (a: *void, b: *void) -> s32 #c_call #c_call { return 0; }
+
+main :: () {
+    f : (int) -> int #c_call #c_call;
+}
