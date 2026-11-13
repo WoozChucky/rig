@@ -12,7 +12,7 @@ Rig is early: the language will change from one release to the next.
 
 ## Download
 
-| System | File |
+| For | File |
 |---|---|
 | Windows x64 | [rig-windows-x64.zip](https://github.com/WoozChucky/rig/releases/latest/download/rig-windows-x64.zip): `rig.exe`, with LLVM's `lld-link.exe` |
 | Linux x86-64 | [rig-linux-x64.tar.gz](https://github.com/WoozChucky/rig/releases/latest/download/rig-linux-x64.tar.gz): `rig`, with LLVM's `ld.lld` |
@@ -33,7 +33,7 @@ In PowerShell (Windows PowerShell, which comes with Windows, or PowerShell 7):
    irm https://github.com/WoozChucky/rig/releases/latest/download/SHA256SUMS -OutFile SHA256SUMS
    ```
 
-2. Check the archive against `SHA256SUMS`. This prints `rig-windows-x64.zip: OK`; if it prints an error instead, the file is not the one released: download it again, and don't go on.
+2. Check the archive against `SHA256SUMS`. This prints `rig-windows-x64.zip: OK`; if it stops with `rig-windows-x64.zip: FAILED` instead, the file is not the one released: download it again, and don't go on.
 
    ```powershell
    $sum = ((Select-String -Path SHA256SUMS -Pattern ' rig-windows-x64\.zip$').Line -split ' ')[0]
@@ -94,7 +94,7 @@ In a terminal:
    mkdir -p ~/.local/share/rig && tar xzf rig-linux-x64.tar.gz -C ~/.local/share/rig
    ```
 
-4. Put `rig` on the `PATH`, as a link in `~/.local/bin` (`rig` finds `ld.lld` beside the file the link points to):
+4. Link `rig` into `~/.local/bin`, the folder for your own programs on the `PATH` (`rig` finds `ld.lld` beside the file the link points to):
 
    ```sh
    mkdir -p ~/.local/bin && ln -sf ~/.local/share/rig/rig ~/.local/bin/rig
@@ -108,7 +108,7 @@ In a terminal:
 
    It prints the version, the commit it was built from and LLVM's version, such as `rig 0.2.0 (89de631d10c7 2026-11-13) LLVM 23.1.5`.
 
-   If it says `rig: command not found`, `~/.local/bin` isn't on your `PATH` yet. Ubuntu's `~/.profile` adds it when the folder exists as you log in, so if step 4 made it, log out and in again. Otherwise add it in `~/.bashrc` and open a new terminal:
+   If the shell can't find `rig`, `~/.local/bin` isn't on your `PATH` yet. Ubuntu's `~/.profile` adds it when the folder exists as you log in, so if step 4 made it, log out and in again. Otherwise add it in `~/.bashrc` and open a new terminal:
 
    ```sh
    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
@@ -125,12 +125,12 @@ rm -f ~/.local/bin/rig
 
 ## Requirements
 
-`rig build` links a program with the platform's C runtime (section 10.6 of [the specification](/spec/implementation), "Linking"), so each system needs that runtime's files for linking:
+`rig build` links a program with the platform's C runtime, as section 10.6 of [the specification](/spec/implementation) says, so each system needs that runtime's files:
 
 - **Windows** needs Visual Studio, or its free [Build Tools](https://visualstudio.microsoft.com/downloads/), with the **Desktop development with C++** workload: it brings the C runtime, the Windows SDK and Microsoft's linker, `link.exe`. Rig links with the newest installation's `link.exe`, or with the `lld-link.exe` beside `rig.exe` when the installation has none, against the same libraries.
-- **Linux** needs glibc's development files, its start files (`crt1.o`, `crti.o`, `crtn.o`) and `libc.so`: `sudo apt install libc6-dev` on Debian and Ubuntu, `sudo dnf install glibc-devel` on Fedora; Arch's `glibc` has them. Rig links with the `ld.lld` beside it.
+- **Linux** needs glibc's development files, its start files (`crt1.o`, `crti.o`, `crtn.o`) and `libc.so` among them: `sudo apt install libc6-dev` on Debian and Ubuntu, `sudo dnf install glibc-devel` on Fedora; Arch's `glibc` has them. Rig links with the `ld.lld` beside it.
 
-Then save hello world as `hello.rig`:
+Then save hello world as `hello.rig`, in a folder of your own:
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;
@@ -167,7 +167,7 @@ or in VS Code: the Extensions view, its `...` menu, **Install from VSIX...**, an
 On Windows, double-clicking the `.vsix` file opens Visual Studio's VSIX Installer when Visual Studio is installed, which fails with "One or more extensions are for Visual Studio Code. Try installing them in Visual Studio Code." Install it from VS Code, as above.
 :::
 
-The extension runs the `rig` on your `PATH`: restart VS Code after installing Rig, so it sees the new `PATH`. Debugging also needs Microsoft's [C/C++ extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools). The extension's [README](https://github.com/WoozChucky/rig/blob/main/editors/vscode/README.md) says what it does and how to set it up.
+The extension runs the `rig` on your `PATH` (or the one its setting `rig.compilerPath` names): restart VS Code after installing Rig, so it sees the new `PATH`. Debugging also needs Microsoft's [C/C++ extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools). The extension's [README](https://github.com/WoozChucky/rig/blob/main/editors/vscode/README.md) says what it does and how to set it up.
 
 ## Build from source
 
