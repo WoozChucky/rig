@@ -4,11 +4,11 @@ This is how to build Rig's compiler, run its tests, and make a change to it.
 
 ## The compiler
 
-The compiler is written in C-style C++23 and built with clang as a unity build: each program is one translation unit (`src/rig.cpp` includes every source file), so `build.bat` and `build.sh` are the whole build system. It compiles through LLVM's C API, with the pinned LLVM release (the version in `scripts/get_llvm.sh`) linked statically; Rig's own x86-64 backend, for fast debug builds, comes later (milestone 8 of the [roadmap](https://github.com/WoozChucky/rig/issues/85)). The stages, from the lexer to the linker, are in section 10.2 of [the specification](docs/rig-spec.md#102-the-compilers-stages).
+The compiler is written in C-style C++23 and built with clang, the pinned LLVM release's own, as a unity build: each program is one translation unit (`src/rig.cpp` includes every source file), so `build.bat` and `build.sh` are the whole build system. It compiles through LLVM's C API, with the pinned LLVM release (the version in `scripts/get_llvm.sh`) linked statically; Rig's own x86-64 backend, for fast debug builds, comes later (milestone 8 of the [roadmap](https://github.com/WoozChucky/rig/issues/85)). The stages, from the lexer to the linker, are in section 10.2 of [the specification](docs/rig-spec.md#102-the-compilers-stages).
 
 ## Building
 
-**Windows** needs clang on the `PATH`, and Visual Studio or its Build Tools with the "Desktop development with C++" workload (`curl.exe` and `tar.exe`, which `get_llvm.bat` uses, ship with Windows 10 and later):
+**Windows** needs Visual Studio or its Build Tools with the "Desktop development with C++" workload, whose C and C++ runtime, Windows SDK and linker clang builds with (`curl.exe` and `tar.exe`, which `get_llvm.bat` uses, ship with Windows 10 and later):
 
 ```
 scripts\get_llvm.bat
@@ -16,7 +16,7 @@ build.bat
 bin\rig.exe version
 ```
 
-**Linux** needs clang and the C library's development files (on Debian and Ubuntu, `sudo apt install clang`):
+**Linux** needs the C library's development files, C++'s runtime library (libstdc++, which LLVM's libraries use) with GCC's startup files, and the system's linker, `ld`, which clang links with (on Debian and Ubuntu, `sudo apt install build-essential` brings them all):
 
 ```
 scripts/get_llvm.sh
@@ -28,7 +28,9 @@ bin/rig version
 
 **The version and the commit are stamped into every build.** Rig's version is the one line of the `VERSION` file at the repository's root, and nothing else in the source names it. `build.bat` and `build.sh` read it, ask git for the commit (`git rev-parse HEAD`), its date (`git log -1 --format=%cs`) and whether the checkout is dirty (`git status --porcelain --untracked-files=no` lists something: untracked files don't count), and pass all of it to the compiler as `-D` defines, which `src/version.h` reads. Every build compiles everything again (one translation unit), so a build after a commit or an edit always says which source it came from. Without git on the `PATH`, or outside a checkout (no `.git` at the root: a source archive), the commit and its date are `unknown`. Compiling `src/rig.cpp` some other way, without the defines, stops at an `#error` saying to use the build scripts. `VERSION` changes only in a release (below).
 
-`get_llvm` downloads LLVM's official release archive (about 2 GB, resuming a broken download where it stopped), checks its SHA-256 against the one pinned in the script, and keeps only what the build needs (the C API's headers, the static libraries, `llvm-config`, and `lld-link` or `lld`) in `deps/llvm-windows` or `deps/llvm-linux`; set `RIG_LLVM_DIR` to put it elsewhere, for both `get_llvm` and the build. The version is pinned on purpose: changing it is a deliberate change to both scripts and their checksums.
+`get_llvm` downloads LLVM's official release archive (about 2 GB, resuming a broken download where it stopped), checks its SHA-256 against the one pinned in the script, and keeps only what the build needs (the C API's headers, the static libraries, `llvm-config`, `lld-link` or `lld`, and the release's clang with its own headers, `lib/clang/<major>/include`) in `deps/llvm-windows` or `deps/llvm-linux`; set `RIG_LLVM_DIR` to put it elsewhere, for both `get_llvm` and the build. The version is pinned on purpose: changing it is a deliberate change to both scripts and their checksums, and it changes the compiler that builds Rig with the libraries it links.
+
+**The compiler that builds Rig is pinned too.** `build.bat` and `build.sh` compile with that clang (`deps\llvm-windows\bin\clang++.exe`, `deps/llvm-linux/bin/clang++`), not with one on the `PATH`, so every build, on any machine or on CI, is made by the same compiler, and the first line of a build says which (`build.sh: deps/llvm-linux/bin/clang++: clang version 23.1.5 ...`). To try another, name it in `CXX` (`set "CXX=C:\Program Files\LLVM\bin\clang++.exe"` before `build.bat`, `CXX=clang++-22 ./build.sh`). A `deps/` from before `get_llvm` kept clang stops the build with `clang not found in deps/llvm-linux; run scripts/get_llvm.sh again`: running `get_llvm` again extracts everything again over it, clang included.
 
 `build.bat` and `./build.sh` make a debug build (`-O0`); `build.bat release` and `./build.sh release` build with optimisations (`-O2`). Either writes three programs to `bin/`: `rig`, `unit-tests` and `run-tests`, and puts LLVM's linker beside `rig` (`lld-link.exe` on Windows, used when Visual Studio has no `link.exe`; `ld.lld` on Linux).
 
@@ -98,5 +100,5 @@ There is no CHANGELOG.md: the Releases page is the changelog.
 ## Rules for a change
 
 - **The specification moves with the compiler.** A change to what Rig accepts or does updates [docs/rig-spec.md](docs/rig-spec.md) in the same pull request: it is the source of truth. The website, [woozchucky.github.io/rig](https://woozchucky.github.io/rig/), is built from it (`site/`, see [site/README.md](site/README.md)) and published on every merge to main; a pull request that breaks one of the specification's links fails its build. The [design document](docs/superpowers/specs/2026-11-11-rig-language-design.md) is a record of the original design and isn't updated.
-- **Tests, on both systems.** Every change comes with tests, and they pass on Windows and on Linux. CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) builds and runs everything on Linux only, with gdb required; Windows is checked locally, `build.bat`, `bin\unit-tests.exe` and `bin\run-tests.exe`, before each push.
+- **Tests, on both systems.** Every change comes with tests, and they pass on Windows and on Linux. CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) builds and runs everything on Linux only, the tests twice, of a debug build and of a release build (`-O2`, as a release is built), with gdb required; Windows is checked locally, `build.bat`, `bin\unit-tests.exe` and `bin\run-tests.exe`, before each push.
 - **Commits** are a short summary in the imperative ("Link the language specification from the README"), with a body when the why isn't obvious, and no trailers.
