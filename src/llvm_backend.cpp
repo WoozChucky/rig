@@ -614,7 +614,7 @@ static void begin_debug_info(Backend *b, Ir_Module *m, Arena *a) {
     // The language is C99: a debugger evaluates the expressions it's given
     // in the unit's language, and C's are Rig's (a.count, a[i]; Rig's p.*
     // is C's *p). The producer is rig and the LLVM that made the code,
-    // "rig 0.1.0 (LLVM 23.1.5)". It once said "clang version", since cdb
+    // "rig 0.1.0 (LLVM X.Y.Z)". It once said "clang version", since cdb
     // read an aggregate parameter's record for a value at an address held
     // in memory (S_DEFRANGE_REGISTER_REL_INDIR) only from a compiler of
     // that name. That parameter is now described as the pointer it is, in
