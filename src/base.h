@@ -312,11 +312,11 @@ void table_free(Table<V> *t) {
 }
 
 // ---------------------------------------------------------------------------
-// Paths and checksums. The debug information (milestone 2c) names the
-// source file by its absolute path (path_absolute), so an editor's
-// breakpoint (which names files that way) finds it, with the MD5 of its
-// bytes, so a debugger can tell the file has changed since the program was
-// built. load_path finds the file a #load names (issue #112), and
+// Paths and checksums. The debug information (milestone 2c) names each
+// source file of the program by its absolute path (path_absolute), so an
+// editor's breakpoint (which names files that way) finds it, with the MD5
+// of its bytes, so a debugger can tell the file has changed since the
+// program was built. load_path finds the file a #load names (issue #112), and
 // is_rig_file says whether a path names a source file.
 
 // `path` made absolute: joined to `directory` (an absolute path, as
