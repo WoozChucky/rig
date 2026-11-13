@@ -435,6 +435,11 @@ TEST(source_path_is_absolute_and_normalised) {
     // A network share's \\server\share is its root, as a drive is.
     CHECK_STR(absolute(&a, "\\\\server\\share\\dev", "..\\..\\x.rig", true), "\\\\server\\share\\x.rig");
     CHECK_STR(absolute(&a, "C:\\dev", "//server/share/x.rig", true), "\\\\server\\share\\x.rig");
+    // A path with the \\?\ prefix has the drive, or the network share,
+    // after it as its root: "\\?\C:", "\\?\UNC\server\share".
+    CHECK_STR(absolute(&a, "C:\\dev", "\\\\?\\C:\\a\\..\\..\\x.rig", true), "\\\\?\\C:\\x.rig");
+    CHECK_STR(absolute(&a, "C:\\dev", "\\\\?\\UNC\\server\\share\\a\\..\\..\\x.rig", true),
+              "\\\\?\\UNC\\server\\share\\x.rig");
     // Linux: only / separates (a backslash is part of a name).
     CHECK_STR(absolute(&a, "/home/n/rig", "../x.rig", false), "/home/n/x.rig");
     CHECK_STR(absolute(&a, "/home/n/rig", "/abs/./y.rig", false), "/abs/y.rig");
@@ -481,6 +486,17 @@ TEST(load_path_joins_and_keeps_absolute) {
     // are part of a name.
     CHECK_STR(loaded(&a, "src/main.rig", "C:\\x\\a.rig", false), "src/C:\\x\\a.rig");
     CHECK_STR(loaded(&a, "src/main.rig", "\\x\\a.rig", false), "src/\\x\\a.rig");
+    // On Windows a file named with the \\?\ prefix, as some tools name
+    // files, is opened by its path as it is: '/' doesn't separate there, and
+    // ".." isn't resolved. So the path of a file it loads is resolved here,
+    // with \ only, no higher than the prefix's drive or share.
+    CHECK_STR(loaded(&a, "\\\\?\\C:\\x\\main.rig", "sub/b.rig", true), "\\\\?\\C:\\x\\sub\\b.rig");
+    CHECK_STR(loaded(&a, "\\\\?\\C:\\x\\y\\main.rig", "./../b.rig", true), "\\\\?\\C:\\x\\b.rig");
+    CHECK_STR(loaded(&a, "\\\\?\\C:\\x\\main.rig", "../../b.rig", true), "\\\\?\\C:\\b.rig");
+    CHECK_STR(loaded(&a, "\\\\?\\UNC\\server\\share\\main.rig", "../b.rig", true),
+              "\\\\?\\UNC\\server\\share\\b.rig");
+    // On Linux \\?\ is a name like any other.
+    CHECK_STR(loaded(&a, "\\\\?\\C:\\x\\main.rig", "sub/b.rig", false), "sub/b.rig");
     arena_free(&a);
 }
 

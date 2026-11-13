@@ -325,13 +325,14 @@ void table_free(Table<V> *t) {
 // link is followed, and the file needn't exist); ".." at the root stays at
 // the root. On Windows (`windows`) both / and \ separate, and the result
 // has \ only. A root there is a drive, "C:", or a network share's
-// "\\server\share": a path with one is absolute, and a path that starts
-// with a separator but has none takes directory's. A drive with no
+// "\\server\share", with the \\?\ prefix or without it ("\\?\C:",
+// "\\?\UNC\server\share"): a path with one is absolute, and a path that
+// starts with a separator but has none takes directory's. A drive with no
 // separator after it, "C:x.rig", is relative to that drive's current
 // directory: on directory's drive that's directory; another drive's the
 // process can't know, so its root stands for it ("D:x.rig" is "D:\x.rig").
-// On Linux only / separates. The result has no separator doubled, and none at its end but
-// a root's own ("C:\", "/").
+// On Linux only / separates. The result has no separator doubled, and none
+// at its end but a root's own ("C:\", "/").
 String path_absolute(Arena *a, String directory, String path, bool windows);
 
 // Where `#load "written"` in the file at `from` points (issue #112):
@@ -342,10 +343,13 @@ String path_absolute(Arena *a, String directory, String path, bool windows);
 // loaded from src/main.rig as "world/map.rig" is src/world/map.rig. On
 // Windows a `from` with a drive and no separator, "C:main.rig", is in that
 // drive's current directory, so "C:" is its directory: its "a.rig" is
-// "C:a.rig". Like path_absolute, it works on the text alone: nothing is
-// opened, and no link is followed. The result is the path messages name the
-// file by. When it's relative, it's read from the directory rig runs in, as
-// `from` is.
+// "C:a.rig". A `from` with the \\?\ prefix is a path Windows opens as it
+// is, with no '/' taken for a separator and no ".." resolved, so there the
+// joined path is resolved as path_absolute resolves one, with \ only:
+// "\\?\C:\x\main.rig"'s "../sub/a.rig" is "\\?\C:\sub\a.rig". Like
+// path_absolute, it works on the text alone: nothing is opened, and no link
+// is followed. The result is the path messages name the file by. When it's
+// relative, it's read from the directory rig runs in, as `from` is.
 String load_path(Arena *a, String from, String written, bool windows);
 
 // Whether the path ends in .rig, in any case: on Windows HELLO.RIG and
