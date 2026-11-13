@@ -5,7 +5,8 @@
 // procedures aren't declared twice. print.rig #loads this file back, a
 // cycle, which loads nothing: this file is loaded already. The references
 // go both ways: this file uses the others' declarations, shapes.rig uses
-// print.rig's print_int, and both use this file's newline.
+// print.rig's print_int, and both use this file's newline. print.rig's
+// global, base, starts as that file says and is changed here.
 #load "load/shapes.rig";
 #load "load/print.rig";
 
@@ -17,6 +18,8 @@ main :: () {
     rect.side = 2;
     print_line(area(rect) + area(Shape.{SIDES, 1}));
     puts("three files, one program");
+    base = 2;
+    print_line(5);
 }
 
 // The files this one loads use it: a loaded file sees the declarations of

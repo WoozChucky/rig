@@ -53,6 +53,21 @@ static const char *in_current_directory(Arena *a, String relative) {
     return out;
 }
 
+// dir/name's absolute path (in_current_directory) as a #load's string
+// writes it: each '\', Windows' separator, written "\\".
+static const char *absolute_in_a_string(Arena *a, String dir, const char *name) {
+    const char *absolute = in_current_directory(a, str(in_directory(a, dir, name)));
+    s64 n = (s64)strlen(absolute);
+    char *escaped = arena_new_array<char>(a, 2 * n + 1);
+    s64 k = 0;
+    for (s64 i = 0; i < n; i++) {
+        if (absolute[i] == '\\') escaped[k++] = '\\';
+        escaped[k++] = absolute[i];
+    }
+    escaped[k] = 0;
+    return escaped;
+}
+
 // The paths of d's files, in their order, one per line.
 static String file_paths(Arena *a, Diagnostics *d) {
     String all = string_printf(a, "");
@@ -139,19 +154,10 @@ TEST(load_with_backslashes) {
     Diagnostics d = {};
     String dir = load_test_directory(&a, "load_with_backslashes");
     CHECK(os_make_directory(str(in_directory(&a, dir, "sub"))));
-    // c.rig's absolute path, each '\' written "\\" in the Rig string.
-    const char *absolute = in_current_directory(&a, str(in_directory(&a, dir, "sub/c.rig")));
-    s64 n = (s64)strlen(absolute);
-    char *escaped = arena_new_array<char>(&a, 2 * n + 1);
-    s64 k = 0;
-    for (s64 i = 0; i < n; i++) {
-        if (absolute[i] == '\\') escaped[k++] = '\\';
-        escaped[k++] = absolute[i];
-    }
-    escaped[k] = 0;
+    const char *absolute = absolute_in_a_string(&a, dir, "sub/c.rig");
     write_source(&a, dir, "main.rig", "#load \"sub\\\\b.rig\";\n");
     write_source(&a, dir, "sub/b.rig",
-                 string_cstr(&a, string_printf(&a, "#load \"c.rig\";\n#load \"%s\";\n", escaped)));
+                 string_cstr(&a, string_printf(&a, "#load \"c.rig\";\n#load \"%s\";\n", absolute)));
     write_source(&a, dir, "sub/c.rig", "c :: () {}\n");
     load_main(&a, &d, dir);
     CHECK_STR(messages(&a, &d), "");
@@ -192,6 +198,27 @@ TEST(load_once_by_identity) {
     write_source(&a, dir, "main.rig",
                  "#load \"b.rig\";\n#load \"./b.rig\";\n#load \"sub/../b.rig\";\n#load \"link.rig\";\n");
 #endif
+    Ast_File *tree = load_main(&a, &d, dir);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 2);
+    if (d.files.count == 2) CHECK_STR(d.files[1].path, in_directory(&a, dir, "b.rig"));
+    CHECK(tree != nullptr);
+    if (tree) CHECK_EQ(tree->procs.count, 1);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(load_by_absolute_path) {
+    // An absolute path stays as it is, on every system: b.rig, by the path
+    // from main.rig's directory and then by its absolute path, is one file,
+    // loaded once and named as the first #load names it.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_by_absolute_path");
+    write_source(&a, dir, "b.rig", "helper :: () {}\n");
+    write_source(&a, dir, "main.rig",
+                 string_cstr(&a, string_printf(&a, "#load \"b.rig\";\n#load \"%s\";\n",
+                                               absolute_in_a_string(&a, dir, "b.rig"))));
     Ast_File *tree = load_main(&a, &d, dir);
     CHECK_STR(messages(&a, &d), "");
     CHECK_EQ(d.files.count, 2);
@@ -254,6 +281,30 @@ TEST(load_missing_file) {
     // The tree is still there, so the checker can check the rest.
     CHECK(tree != nullptr);
     if (tree) CHECK_EQ(tree->procs.count, 1);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(load_missing_file_by_absolute_path) {
+    // A missing file's path is made absolute, from the directory rig runs
+    // in, before it's compared: nope.rig by the path from main.rig's
+    // directory and by its absolute path is one file, reported once. On
+    // Windows '\' is '/' too, in .\nope.rig and sub\..\nope.rig.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_missing_file_by_absolute_path");
+    const char *absolute = absolute_in_a_string(&a, dir, "nope.rig");
+#ifdef _WIN32
+    const char *more = "#load \".\\\\nope.rig\";\n#load \"sub\\\\..\\\\nope.rig\";\n";
+#else
+    const char *more = "";
+#endif
+    write_source(&a, dir, "main.rig",
+                 string_cstr(&a, string_printf(&a, "#load \"nope.rig\";\n#load \"%s\";\n%s", absolute, more)));
+    load_main(&a, &d, dir);
+    CHECK_EQ(d.files.count, 1);
+    CHECK_EQ(d.messages.count, 1);
+    if (d.messages.count == 1) check_cannot_read(&a, &d.messages[0], 0, 1, 7, str(in_directory(&a, dir, "nope.rig")));
     diag_free(&d);
     arena_free(&a);
 }

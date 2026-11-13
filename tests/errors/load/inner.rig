@@ -1,0 +1,5 @@
+// Loaded by tests/errors/load_struct_cycle.rig: Inner holds outer.rig's
+// Outer, which holds an Inner.
+Inner :: struct {
+    outer: Outer;
+}

@@ -1,0 +1,3 @@
+// Loaded by tests/errors/load_constant_cycle.rig, whose A is defined with
+// this file's B, and B with A.
+B :: A * 2;
