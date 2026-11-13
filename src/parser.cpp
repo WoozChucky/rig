@@ -559,13 +559,16 @@ static Ast *parse_expression(Parser *p, int min_precedence) {
     return left;
 }
 
-// Whether a procedure's parameter list starts `ahead` tokens on: '(' ')' or
-// '(' IDENT ':'. Any other '(' after '::' begins a constant's value in
-// parentheses (N :: (1 + 2);).
+// Whether a procedure's parameter list starts `ahead` tokens on: '(' ')',
+// '(' IDENT ':' or '(' '..'. Any other '(' after '::' begins a constant's
+// value in parentheses (N :: (1 + 2);). No expression starts with '..', so
+// (..) is a signature, if a wrong one: parse_procedure says what's wrong
+// with it, rather than "expected an expression".
 static bool procedure_follows(Parser *p, s64 ahead) {
+    Token_Kind next = peek(p, ahead + 1)->kind;
     return peek(p, ahead)->kind == TOKEN_LPAREN &&
-           (peek(p, ahead + 1)->kind == TOKEN_RPAREN ||
-            (peek(p, ahead + 1)->kind == TOKEN_IDENT && peek(p, ahead + 2)->kind == TOKEN_COLON));
+           (next == TOKEN_RPAREN || next == TOKEN_DOT_DOT ||
+            (next == TOKEN_IDENT && peek(p, ahead + 2)->kind == TOKEN_COLON));
 }
 
 // Whether the next tokens are a procedure's or a struct's declaration with
@@ -1088,8 +1091,29 @@ static Ast_Param *parse_param(Parser *p) {
     return param->type_expr ? param : nullptr;
 }
 
-// procedure = '(' [param {',' param}] ')' ['->' type {',' type}]
+// The '..' that ends a variadic procedure's parameter list, the parser at
+// it: the list's last element, after at least one parameter (C's rule
+// before C23: va_start finds the other arguments after the last named one).
+// The checker says whether the procedure may have it: only a foreign one
+// can. False after reporting it misplaced, at the '..'.
+static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
+    Token *dots = advance(p);
+    if (proc->params.count == 0) {
+        diag_error(p->diag, dots->pos, "'..' needs a parameter before it, as in (format: *u8, ..)");
+        return false;
+    }
+    if (peek(p)->kind == TOKEN_COMMA) {
+        diag_error(p->diag, dots->pos, "'..' must be the last parameter");
+        return false;
+    }
+    proc->is_variadic = true;
+    proc->variadic_pos = dots->pos;
+    return true;
+}
+
+// procedure = '(' [params] ')' ['->' type {',' type}]
 //               (['#no_abc'] block | '#foreign' IDENT ';')
+// params    = param {',' param} [',' '..']
 //
 // Several results are written as a list after the arrow, with no
 // parentheses (spec 6.7): divmod :: (a: int, b: int) -> int, int { ... }.
@@ -1097,12 +1121,23 @@ static Ast_Param *parse_param(Parser *p) {
 // with. #no_abc (Jai's name: no array bounds checks) turns off the bounds
 // checks of the body that must follow it (spec 6.5); any directive there
 // but it and #foreign is "unknown directive '#foo'".
+//
+// Each element of the parameter list is a parameter or, last, the '..' of
+// a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign libc;).
+// The loop looks at an element's first token to tell them apart: an
+// identifier begins a parameter, whatever its type turns out to be (a
+// procedure's type, when #foreign parameters get them, is still IDENT ':'
+// and a type), and '..' is the end.
 static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     Ast_Proc *proc = ast_new<Ast_Proc>(p->arena, AST_PROC, name->pos);
     proc->name = name->text;
     if (!expect(p, TOKEN_LPAREN)) return nullptr;
     if (peek(p)->kind != TOKEN_RPAREN) {
         for (;;) {
+            if (peek(p)->kind == TOKEN_DOT_DOT) {
+                if (!parse_variadic_dots(p, proc)) return nullptr;
+                break;
+            }
             Ast_Param *param = parse_param(p);
             if (!param) return nullptr;
             array_add(&proc->params, param);
@@ -1186,8 +1221,8 @@ static Ast *parse_struct(Parser *p, Token *name) {
 //           | IDENT ':' type ['=' (expression | '---')] ';'   a global variable
 //           | IDENT ':=' expression ';'                       a global variable
 //
-// After '::', a procedure's parameters start with '(' ')' or '(' IDENT ':'.
-// Any other '(' begins a constant's value in parentheses: N :: (1 + 2); is
+// After '::', a procedure's parameters start with '(' ')', '(' IDENT ':' or
+// '(' '..'. Any other '(' begins a constant's value in parentheses: N :: (1 + 2); is
 // a constant. A global variable is written as a local one; whether its
 // value is known while compiling is the checker's to say.
 //
@@ -1233,7 +1268,7 @@ static bool starts_global(Parser *p) {
 // list holds a name followed by ':' (`n: s32`), which a line can start
 // with: a call's or a value's parentheses never do, so a global after one
 // whose ')' is missing is still the next declaration. A list starts at a
-// '(' followed by ')' or IDENT ':', as parse_declaration tells a procedure
+// '(' followed by ')', '..' or IDENT ':', as parse_declaration tells a procedure
 // from a constant (`greet (s: *u8,` too, a C habit), or by IDENT IDENT, a
 // first parameter missing its ':' (`f :: (a int,`): two names in a row
 // never begin an expression. Inside a list every '(' and ')' counts. A
@@ -1249,7 +1284,8 @@ static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
         // it, so tokens[i + 2] is read only after an IDENT.
         Token_Kind next = p->tokens[i + 1].kind;
         Token_Kind after = next == TOKEN_IDENT ? p->tokens[i + 2].kind : TOKEN_EOF;
-        bool list = next == TOKEN_RPAREN || (next == TOKEN_IDENT && (after == TOKEN_COLON || after == TOKEN_IDENT));
+        bool list = next == TOKEN_RPAREN || next == TOKEN_DOT_DOT ||
+                    (next == TOKEN_IDENT && (after == TOKEN_COLON || after == TOKEN_IDENT));
         if (*parens > 0 || list) *parens += 1;
     } else if (kind == TOKEN_RPAREN && *parens > 0) {
         *parens -= 1;
