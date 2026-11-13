@@ -467,22 +467,26 @@ Array<Ast *> ast_declarations(Ast_File *file) {
     return all;
 }
 
-// The loads, a third list in source order, are merged in by position too,
-// each printed before the first declaration that comes after it.
+// A top-level node, on a line of its own.
+static void dump_line(Array<u8> *buffer, Ast *node) {
+    dump(buffer, node);
+    out(buffer, "\n");
+}
+
+// The loads, a third list in source order, are merged in by position too:
+// before each declaration, the loads that come before it; after the last,
+// the loads left.
 String ast_dump(Arena *a, Ast_File *file) {
     Array<u8> buffer = {};
     Array<Ast *> declarations = ast_declarations(file);
     s64 l = 0;
-    for (s64 i = 0; i <= declarations.count; i++) {
-        bool last = i == declarations.count;
-        while (l < file->loads.count && (last || before(file->loads[l]->pos, declarations[i]->pos))) {
-            dump(&buffer, file->loads[l++]);
-            out(&buffer, "\n");
+    for (s64 i = 0; i < declarations.count; i++) {
+        while (l < file->loads.count && before(file->loads[l]->pos, declarations[i]->pos)) {
+            dump_line(&buffer, file->loads[l++]);
         }
-        if (last) break;
-        dump(&buffer, declarations[i]);
-        out(&buffer, "\n");
+        dump_line(&buffer, declarations[i]);
     }
+    while (l < file->loads.count) dump_line(&buffer, file->loads[l++]);
     array_free(&declarations);
     return finish(a, &buffer);
 }
