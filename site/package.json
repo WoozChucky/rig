@@ -1,0 +1,13 @@
+{
+  "name": "rig-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "docs:dev": "node scripts/spec.mjs && vitepress dev",
+    "docs:build": "node scripts/spec.mjs && vitepress build",
+    "docs:preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4"
+  }
+}

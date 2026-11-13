@@ -1,0 +1,122 @@
+/* Rig's colours: a forge's rust, darker on light backgrounds, lighter on dark. */
+:root {
+  --rig-rust-1: #a3461f;
+  --rig-rust-2: #b4532a;
+  --rig-rust-3: #b4532a;
+
+  --vp-c-brand-1: var(--rig-rust-1);
+  --vp-c-brand-2: var(--rig-rust-2);
+  --vp-c-brand-3: var(--rig-rust-3);
+  --vp-c-brand-soft: rgba(180, 83, 42, 0.14);
+
+  --vp-home-hero-name-color: var(--vp-c-brand-1);
+  --vp-home-hero-image-background-image: none;
+}
+
+.dark {
+  --rig-rust-1: #ec9068;
+  --rig-rust-2: #d9784e;
+  --rig-rust-3: #b4532a;
+
+  --vp-c-brand-soft: rgba(236, 144, 104, 0.16);
+}
+
+/* The hero's anvil. */
+.VPHero .image-src {
+  max-width: 200px;
+  max-height: 200px;
+}
+
+@media (min-width: 960px) {
+  .VPHero .image-src {
+    max-width: 280px;
+    max-height: 280px;
+  }
+}
+
+/*
+ * Examples (made by scripts/spec.mjs): a `rig` block with its kind as a
+ * label above it and its output below it, one card. The card takes the
+ * place and the corners of a code block; the blocks inside it lose theirs.
+ */
+.vp-doc .rig-example {
+  margin: 16px -24px;
+  background-color: var(--vp-code-block-bg);
+  overflow: hidden;
+  transition: background-color 0.5s;
+}
+
+@media (min-width: 640px) {
+  .vp-doc .rig-example {
+    margin: 16px 0;
+    border-radius: 8px;
+  }
+}
+
+.vp-doc .rig-example > div[class*='language-'] {
+  margin: 0;
+  border-radius: 0;
+}
+
+.vp-doc .rig-example-label,
+.vp-doc .rig-example-output {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 24px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+  letter-spacing: 0.02em;
+  color: var(--vp-c-text-2);
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.vp-doc .rig-example-label::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--vp-c-text-3);
+}
+
+.vp-doc .rig-example-error .rig-example-label {
+  color: var(--vp-c-danger-1);
+}
+.vp-doc .rig-example-error .rig-example-label::before {
+  background-color: var(--vp-c-danger-1);
+}
+
+.vp-doc .rig-example-runtime-error .rig-example-label {
+  color: var(--vp-c-warning-1);
+}
+.vp-doc .rig-example-runtime-error .rig-example-label::before {
+  background-color: var(--vp-c-warning-1);
+}
+
+.vp-doc .rig-example-exit .rig-example-label::before {
+  background-color: var(--vp-c-brand-1);
+}
+
+/* The output: a header and a slightly different background. */
+.vp-doc .rig-example-output {
+  border-top: 1px solid var(--vp-c-divider);
+  color: var(--vp-c-text-3);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.vp-doc .rig-example-detached .rig-example-output {
+  border-top: none;
+}
+
+.vp-doc .rig-example-output,
+.vp-doc .rig-example-output + div[class*='language-'] {
+  background-color: var(--vp-c-bg-soft);
+}
+
+.dark .vp-doc .rig-example-output,
+.dark .vp-doc .rig-example-output + div[class*='language-'] {
+  background-color: var(--vp-c-default-soft);
+}
