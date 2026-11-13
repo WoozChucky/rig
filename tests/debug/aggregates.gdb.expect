@@ -1,0 +1,72 @@
+make (result$=0x
+n=5) at
+aggregates.rig:16
+p := Pair.{n, n + 1};
+$1 = (struct Pair *) 0x
+main () at
+aggregates.rig:46
+q := make(5);
+$2 = {a = 5, b = 6}
+little (result$=0x
+n=7) at
+aggregates.rig:21
+main () at
+aggregates.rig:47
+l := little(7);
+name (result$=0x
+n=1) at
+aggregates.rig:26
+main () at
+aggregates.rig:48
+w := name(1);
+both (result$=0x
+n=3) at
+aggregates.rig:31
+main () at
+aggregates.rig:49
+b := both(3);
+sum (p=0x
+aggregates.rig:36
+s := p.a + p.b;
+p = 0x
+$3 = 5
+$4 = 6
+$5 = {a = 5, b = 6}
+$6 = 8
+type = void (struct Pair *, int)
+type = int (struct Pair *)
+type = void (int (*)[2], int)
+main () at
+aggregates.rig:50
+$7 = 11
+$8 = void
+$9 = {a = 7, b = 8}
+$10 = void
+$11 = {4, 8}
+words () at
+aggregates.rig:60
+total := new + this;
+$12 = 1
+$13 = 2
+$14 = 6
+main () at
+aggregates.rig:52
+$15 = void
+$16 = {a = 3, b = 4}
+$17 = {a = 6, b = 9}
+$18 = 12
+$19 = {a = 4, b = 5}
+pairs (result$1=0x
+result$2=0x
+n=2) at
+aggregates.rig:64
+#0  pairs (result$1=0x
+split (result$=0x
+n=4) at
+aggregates.rig:69
+#0  split (result$=0x
+!Value returned
+!The program being debugged
+!syntax error
+!not an aggregate
+!.debug_names not created by gdb
