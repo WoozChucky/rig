@@ -34,6 +34,15 @@ const char *target_triple(Target t);
 // when it doesn't verify.
 bool llvm_ir_text(Arena *a, Ir_Module *m, Target t, String *text, String *error);
 
+// The names of a module's source file (Ir_Module's source_path and
+// directory) as the debug information hands them to LLVM for target t: the
+// same, but on Windows for a file on a network share (a UNC path,
+// \\server\share\dir\file.rig), whose name LLVM gets with a '/' first,
+// /\server\share\dir\file.rig: a form its CodeView writer keeps as it is,
+// which Windows reads as the same path (llvm_backend.cpp says why).
+void llvm_debug_file_names(Arena *a, String source_path, String directory, Target t, String *file,
+                           String *file_directory);
+
 // Writes an object file (COFF on Windows, ELF on Linux) for the CPU x86-64.
 // False with `error` set when the module doesn't verify or LLVM can't write
 // the file.

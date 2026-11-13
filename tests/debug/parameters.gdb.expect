@@ -1,0 +1,13 @@
+choose (n=2) at
+parameters.rig:10
+if n == 1 {
+12	    } else if n == 2 {
+13	        puts("two");
+say (flag=true) at
+parameters.rig:19
+if flag {
+= true
+= false
+the flag was cleared
+!the flag was left set
+!.debug_names not created by gdb

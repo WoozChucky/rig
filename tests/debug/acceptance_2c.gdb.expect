@@ -1,7 +1,7 @@
-sort (a=...) at
+sort (a=0x
 acceptance_2c.rig:39
 a[j] = a[j - 1];
-#0  sort (a=...) at
+#0  sort (a=0x
 acceptance_2c.rig:39
 #1
 in main () at
@@ -13,6 +13,7 @@ $3 = 1
 acceptance_2c.rig:48
 sort(numbers);
 $4 = {5, 3, 9, 1, 7}
-#0  sort (a=...) at
+#0  sort (a=0x
 a[j] = a[j - 1];
 j -= 1;
+!.debug_names not created by gdb

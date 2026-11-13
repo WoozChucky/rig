@@ -368,7 +368,22 @@ Array<String> os_arguments([[maybe_unused]] Arena *a, int argc, char **argv) {
     return args;
 }
 
+// getcwd() names the directory with every symlink on the way to it
+// resolved: started in ~/work, a symlink to /data/work, it says /data/work.
+// A shell keeps the name the directory was reached by in $PWD, and that's
+// the name the user, and VS Code, know it by. So, as LLVM's current_path
+// does, $PWD is the answer when it's an absolute name of the very same
+// directory (the same device and inode: a $PWD inherited from a process
+// that ran somewhere else names another), and getcwd()'s name otherwise.
 String os_current_directory(Arena *a) {
+    const char *pwd = getenv("PWD");
+    struct stat named, here;
+    if (pwd && pwd[0] == '/' && stat(pwd, &named) == 0 && stat(".", &here) == 0 && named.st_dev == here.st_dev &&
+        named.st_ino == here.st_ino) {
+        String s = string_copy(a, str(pwd));
+        while (s.count > 1 && s.data[s.count - 1] == '/') s.count--;  // no trailing separator
+        return s;
+    }
     char *path = getcwd(nullptr, 0);
     RIG_ASSERT(path);
     String s = string_copy(a, str(path));

@@ -1,0 +1,71 @@
+// A debugger's view of procedures that take and return aggregates
+// (bin/run-tests runs it under gdb with aggregates.gdb and under cdb with
+// aggregates.cdb). Rig passes an aggregate by a pointer to the caller's copy
+// and returns one through a hidden pointer (spec 10.4), and the debug
+// information says so, alike on both systems: a parameter p of a struct is
+// a pointer to it (p->a, *p), and a procedure returning a struct takes a
+// pointer to where it goes first, result$ (result$1, result$2 for pairs's
+// two), and returns nothing (split: its int). So a debugger calls one as
+// the program does, given the addresses (sum(&q), make(&q, 7)), and shows
+// no made-up value on leaving it. words's variables are named as C++'s
+// keywords, which a debugger reading C takes as names.
+Pair :: struct { a: int; b: int; }
+Small :: struct { a: s32; b: s32; }
+
+make :: (n: int) -> Pair {
+    p := Pair.{n, n + 1};
+    return p;
+}
+
+little :: (n: s32) -> Small {
+    s := Small.{n, n + 2};
+    return s;
+}
+
+name :: (n: int) -> string {
+    if n == 1 { return "one"; }
+    return "other";
+}
+
+both :: (n: int) -> [2]int {
+    a : [2]int = .[n, n * 2];
+    return a;
+}
+
+sum :: (p: Pair) -> int {
+    s := p.a + p.b;
+    return s;
+}
+
+twice :: (n: int) -> int {
+    t := n * 2;
+    return t;
+}
+
+main :: () {
+    q := make(5);
+    l := little(7);
+    w := name(1);
+    b := both(3);
+    s := sum(q);
+    d := twice(s);
+    words();
+    x, y := pairs(2);
+    z, k := split(4);
+}
+
+words :: () {
+    new := 1;
+    this := 2;
+    total := new + this;
+}
+
+pairs :: (n: int) -> Pair, Pair {
+    p := Pair.{n, n + 1};
+    return p, Pair.{n * 2, n * 3};
+}
+
+split :: (n: int) -> Pair, int {
+    p := Pair.{n, n + 1};
+    return p, n * 3;
+}

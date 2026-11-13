@@ -92,26 +92,39 @@
 //   `for` or `while`, an if's test at its `if` and the jump out of each of
 //   its blocks at that block's '}', a runtime check's failure at the check
 //   (the place its message names), the implicit return at the end of a
-//   body at its '}'. Line 0 is no position: only the
-//   procedures the compiler makes itself (__rig_bounds_failed,
-//   __rig_string_equal) have none, and no source, so a debugger steps over
-//   them.
+//   body at its '}'. Line 0 is no position. The procedures the compiler
+//   makes itself (__rig_bounds_failed, __rig_string_equal) have none, and
+//   no source, so a debugger steps over them. In a procedure of the
+//   source, only the prologue's work has none: each scalar parameter's slot
+//   and the store into it, before the body's first line (a debugger's
+//   breakpoint on the procedure stops at the first instruction with a
+//   line, once they're done).
 // - Scopes. A lexical block is a part of a procedure where some names are
 //   visible: each Ir_Scope is one, the body scope 0, and each instruction
 //   with a position says which it runs in (Ir_Instr.scope; one without, in
 //   a procedure the compiler makes, is in none, -1). They follow the
 //   checker's scopes: an if's or else's block, or a block statement, is a
 //   scope; a for's or while's body is the loop's scope, which starts at
-//   the keyword and holds the iterator and it_index. So where an inner block
-//   declares x again, a debugger shows the inner x inside it and the outer
-//   one after.
+//   the keyword and holds the iterator and it_index. And a declaration of a
+//   local that hides a variable (a global, a parameter, an outer local)
+//   starts a scope of its own, inside its block's, from the declaration to
+//   the block's end, and the local is declared in it: a name is hidden only
+//   from the end of its declaration (spec 4.7), but a debugger shows a
+//   scope's variables over the whole scope. Its initializer is in the scope
+//   around, its store in the new one. So where an inner block declares x
+//   again, a debugger shows the outer x until the declaration, the inner one
+//   from there to the block's end, and the outer one after.
 // - Variables (Ir_Var): every parameter, local, iterator and it_index, by
-//   name, with its Rig type, its scope, and where it lives: a local in its
-//   stack slot (an IR_LOCAL), a scalar parameter in no memory at all (it's
-//   a value, which a backend spills to a slot of its own for the
-//   debugger), an aggregate parameter behind the pointer it's passed as.
-//   Temporaries and hidden result pointers aren't variables: the source
-//   has no name for them.
+//   name, with its Rig type, its scope, and where it lives: a local or a
+//   scalar parameter in its stack slot (an IR_LOCAL; a parameter's is
+//   stored on entry, and every use reads it, so a debugger that changes it
+//   changes what the program reads), an aggregate parameter as the
+//   pointer it's passed as.
+//   Temporaries and hidden result pointers aren't variables here: the
+//   source has no name for them. (The backend still describes each hidden
+//   result pointer to a debugger, from Ir_Proc.source_results, as an
+//   artificial parameter named result$: llvm_backend.cpp's
+//   declare_variables.)
 // - Globals keep their Rig type (Ir_Global.rig_type) and position; the
 //   module, the source file's absolute path, the directory rig ran in, and
 //   the file's MD5 (Ir_Module), so a debugger finds the file and can tell
@@ -274,14 +287,14 @@ struct Ir_Param {
 // inside its parent.
 struct Ir_Scope {
     s32 parent;    // the scope it's inside; -1 for scope 0
-    Position pos;  // where it starts: its '{', or a loop's `for` or `while`
+    Position pos;  // where it starts: its '{', a loop's `for` or `while`, or the
+                   // declaration that hides a variable
 };
 
 // Where a variable lives, which says what Ir_Var.value is.
 enum Ir_Var_Kind : u8 {
     IR_VAR_SLOT,     // in memory, a stack slot: value is the IR_LOCAL's result, its address
-    IR_VAR_VALUE,    // a scalar parameter, in no memory: value is its value's number (a
-                     // backend spills it to a slot of its own, where a debugger can read it)
+                     // (a local's, or a scalar parameter's)
     IR_VAR_ADDRESS,  // an aggregate parameter: value is the ptr parameter holding its address
                      // (the caller's copy)
 };
@@ -316,9 +329,9 @@ struct Ir_Proc {
     Position body;             // its body's '{'
     Array<Ir_Scope> scopes;    // scope 0 is the body; empty without a source_name
     Array<Ir_Var> vars;        // in the order they're declared, the parameters first
-    Type *source_result;       // its result's Rig type when it has exactly one (an aggregate's
-                               // too, which the IR returns through a hidden pointer); null for
-                               // none or several (Rig's main has none, though C's returns an int)
+    Array<Type *> source_results;  // its results' Rig types, in order, aggregates too (each of
+                                   // them is a hidden pointer parameter in the IR); none for Rig's
+                                   // main, though C's returns an int
 };
 
 struct Ir_Module {
@@ -394,10 +407,12 @@ String ir_print(Arena *a, Ir_Module *m);
 //   proc @sum(i64, ptr) -> i64 {
 //     ; source sum at 2:1, body 2:34
 //     ; scope 1 in 0 at 4:5                        (a scope from 1, in its parent)
-//     ; var n int value %0 arg 1 in 0 at 2:9       (KIND: slot, value or address)
+//     ; var n int slot %2 arg 1 in 0 at 2:9        (KIND: slot or address)
 //     ; var a []int address %1 arg 2 in 0 at 2:17
-//     ; var x int slot %2 in 0 at 3:5
+//     ; var x int slot %3 in 0 at 3:5
 //   b0:
-//     %2 = local i64  ; 3:5 s0                     (its statement's L:C, its scope)
+//     %2 = local i64                               (no position: none printed)
+//     store i64 %0, %2
+//     %3 = local i64  ; 3:5 s0                     (its statement's L:C, its scope)
 //   ...
 String ir_print_debug(Arena *a, Ir_Module *m);

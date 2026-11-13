@@ -1,0 +1,11 @@
+// A debugger's view of a name a declaration hides (bin/run-tests runs it
+// under gdb with hiding.gdb and under cdb with hiding.cdb): a local hides
+// a name only from its declaration on, so before `g := 10;` g is the
+// global, and after it main's own.
+g := 5;
+
+main :: () {
+    y := g;
+    g := 10;
+    y = g + y;
+}

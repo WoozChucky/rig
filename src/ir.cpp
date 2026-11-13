@@ -347,7 +347,6 @@ static void out_param(Printer *p, Ir_Param param) {
 static const char *ir_var_kind_name(Ir_Var_Kind k) {
     switch (k) {
     case IR_VAR_SLOT: return "slot";
-    case IR_VAR_VALUE: return "value";
     case IR_VAR_ADDRESS: return "address";
     }
     return "?";

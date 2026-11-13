@@ -3,7 +3,7 @@
      Publisher must match package.json's name, version and publisher. -->
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Language="en-US" Id="rig-language" Version="0.2.0" Publisher="woozchucky" />
+    <Identity Language="en-US" Id="rig-language" Version="0.2.1" Publisher="woozchucky" />
     <DisplayName>Rig</DisplayName>
     <Description xml:space="preserve">The Rig programming language: syntax highlighting, snippets, errors as you type, build and run commands, debugging</Description>
     <Tags>rig</Tags>

@@ -11,9 +11,21 @@
 // - Every local variable (Ast_Var) is a stack slot, an IR_LOCAL, in its
 //   procedure, stored to where it's declared: its value, or zero (spec 6.4:
 //   variables start zeroed), or nothing at all for ---. Reading it is an
-//   IR_LOAD, assigning it an IR_STORE. Parameters are read-only, so they
-//   need no slot: a parameter is its value, %0 to %(count-1) (after the
-//   hidden ones for struct results, below).
+//   IR_LOAD, assigning it an IR_STORE.
+// - Parameters. A scalar parameter arrives as a value, %0 to %(count-1)
+//   (after the hidden ones for struct results, below). Parameters are
+//   read-only, so the value could be used as it is; but a debugger couldn't
+//   follow it. So, as clang does at -O0, each is stored on entry into a
+//   slot of its own, before the body's first line, and every use loads it
+//   from there, at the statement using it. The slot is then the one place
+//   the parameter lives: a debugger shows it there, and a value it writes
+//   there (gdb's `set var`) is the one the program goes on with. Used as a
+//   value instead, the parameter would be in a register LLVM spills and
+//   reloads where it likes, at -O0 at the start of each block that uses it,
+//   with no line (gdb's `next` then stepped past an `else if` testing it);
+//   and a copy kept for the debugger alone wouldn't be what the program
+//   reads. An aggregate parameter is the pointer to the caller's copy, used
+//   as it is (the backend keeps the pointer in a slot for the debugger).
 // - A global variable is an Ir_Global of its type, whose first value (the
 //   constant the checker made sure it has, or zero) is in the program's
 //   file. It's read and written as a slot is, through its address, an
@@ -114,8 +126,9 @@
 //   back to its keyword for its own code (but the jumps out of an if's
 //   blocks, at their '}'), a failing check to the check.
 //   Each block that's a scope adds an Ir_Scope (lower_scoped_block, and the
-//   loops, which are one), each declaration an Ir_Var (add_local_var, and
-//   the parameters in ir_lower).
+//   loops, which are one), and so does a declaration that hides a variable,
+//   for the rest of its block (lower_statement); each declaration adds an
+//   Ir_Var (add_local_var, and the parameters in ir_lower).
 //
 // Blocks are numbered in the order they're made, and made in the order
 // their code comes in the source, so the printed IR reads like the program.
@@ -127,8 +140,9 @@
 #include "ir.h"
 #include "types.h"
 
-// Where a procedure's variable or parameter lives: a variable's slot (the
-// address an IR_LOCAL gave), or a parameter's value.
+// Where a procedure's variable or parameter lives: a variable's or a scalar
+// parameter's slot (the address an IR_LOCAL gave), or the pointer an
+// aggregate parameter is.
 struct Local {
     Ast *decl;  // the Ast_Var or Ast_Param
     s32 value;
@@ -166,8 +180,10 @@ struct Lowering {
     // Where the instructions being emitted come from (ir.h's "Debug
     // information"): every one emitted gets them. lower_statement sets pos
     // to each statement's; a loop, an if and a failing check set it to the
-    // place that stands for their own code, and a block that's a scope sets
-    // scope while its statements are lowered.
+    // place that stands for their own code, a block that's a scope sets
+    // scope while its statements are lowered, and a declaration that hides
+    // a variable (lower_statement's AST_VAR, lower_multi_var) sets it to the
+    // scope it starts, until the end of its block.
     Position pos;             // line 0 in the procedures the compiler makes
     s32 scope;                // an index in proc->scopes; -1 in the procedures the compiler makes
     bool is_entry;            // the procedure being lowered is Rig's main, C's main: its returns
@@ -252,6 +268,22 @@ static s32 new_scope(Lowering *l, Position pos) {
 // living in the stack slot %slot, declared in `scope`.
 static void add_local_var(Lowering *l, Ast_Var *decl, s32 slot, s32 scope) {
     array_add(&l->proc->vars, Ir_Var{decl->name, decl->type, decl->pos, scope, IR_VAR_SLOT, slot, 0});
+}
+
+// Whether a local named `name`, declared here, hides a variable visible
+// here: a global, a parameter, or a local of the current scope or of one
+// around it (one of a block that has ended is visible no more). Such a
+// declaration starts a scope of its own (lower_statement says why).
+static bool hides_a_variable(Lowering *l, String name) {
+    if (table_get(&l->global_index, name)) return true;
+    for (s64 i = 0; i < l->proc->vars.count; i++) {
+        Ir_Var *v = &l->proc->vars[i];
+        if (!string_eq(v->name, name)) continue;
+        for (s32 scope = l->scope; scope >= 0; scope = l->proc->scopes[scope].parent) {
+            if (scope == v->scope) return true;
+        }
+    }
+    return false;
 }
 
 // A constant of IR type t; its value's number. The checker keeps an
@@ -1187,10 +1219,14 @@ static s32 lower_expr(Lowering *l, Ast *e) {
     case AST_CAST: return lower_cast(l, (Ast_Cast *)e);
     case AST_CALL: return lower_call(l, (Ast_Call *)e);
     case AST_NAME: {
-        // A parameter is its value (an aggregate's, the caller's copy's
-        // address); a variable is read from its slot.
+        // An aggregate parameter is the caller's copy's address; a scalar
+        // parameter, as a variable, is read from its slot, here, at the
+        // statement reading it.
         Ast *decl = ((Ast_Name *)e)->decl;
-        if (decl->kind == AST_PARAM) return local_of(l, decl)->value;
+        if (decl->kind == AST_PARAM) {
+            s32 value = local_of(l, decl)->value;
+            return type_is_aggregate(decl->type) ? value : emit_get(l, decl->type, value);
+        }
         return emit_get(l, decl->type, address_of(l, decl));
     }
     case AST_DEREF: return emit_get(l, e->type, lower_address(l, e));
@@ -1340,8 +1376,9 @@ static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source);
 
 // A block that's a scope of its own (ir.h's "Debug information"): a block
 // statement, or an if's or an else's. Its statements run in a new scope
-// inside the current one, starting at its '{'; then the current scope is
-// the one around it again.
+// inside the current one, starting at its '{' (and in those its hiding
+// declarations start inside it: lower_statement); then the current scope
+// is the one around it again.
 static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) {
     s32 outer = l->scope;
     l->scope = new_scope(l, block->pos);
@@ -1361,42 +1398,37 @@ static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) 
 //
 // A branch that doesn't reach its end (it returns) doesn't jump; when
 // neither does, there's no `after` at all, and nothing that follows is
-// lowered: the current block has ended. else if is an if lowered inside the
-// else block, so a chain of them is ifs inside ifs: each arm's `after` is
-// where the arm after it ends up, and the first arm's is the whole chain's.
+// lowered: the current block has ended.
 //
-// A chain is lowered in a loop rather than by lower_if calling itself for
-// each else if (parse_if says why), in two passes that make the same blocks
-// in the same order as that recursion would. Down the chain, arm by arm:
-// the condition and its branch, the then block, and the else block that the
-// next arm (or the last else's block) is lowered into. Then back up, from
-// the last arm to the first: each arm's `after`, and the jumps to it, made
-// once everything inside the arm's else part is, as the recursion made them
-// on its way back out.
+// else if is an if inside the else part, so a chain of them is ifs inside
+// ifs, but it's lowered in a loop rather than by lower_if calling itself
+// for each else if (parse_if says why), and with one `after` for the whole
+// chain: each arm's then block, and the last else, jump straight to it.
+// (Ifs inside ifs would have an `after` each, every inner one only a jump
+// to the next one out: a block with no statement of its own, which a
+// debugger leaving the arm that ran would stop in at some line no arm
+// that ran has; see below.) Down the chain, arm by arm: the condition and
+// its branch, the then block, and the else block that the next arm (or the
+// last else's block) is lowered into. Then the `after`, if any arm gets to
+// its end, and the jumps to it.
 //
 // Each arm's own code, its condition and its branch, is at its `if` (an
 // else if's own), in the scope around the chain; its blocks are scopes of
-// their own (lower_scoped_block). The jumps to its `after` are at the '}'
-// that ends what they leave, in the scope around the chain too: the then
-// block's, and the else part's last (the_end_of). That's where clang puts
-// them: at the `if`, the jump over the else would be a step back to the
-// `if` line after the then block's last statement.
+// their own (lower_scoped_block). The jump from a block to `after` is at
+// that block's '}', in the scope around the chain too: that's where clang
+// puts it, since at the `if` it would be a step back to the `if` line after
+// the block's last statement. A jump from an else if's part, with an
+// `after` of its own, would have to be somewhere too: clang puts it at the
+// else if's `if`, a step back up the chain, and at the chain's last '}' it
+// would be at the end of an arm that didn't run. With no position at all
+// (line 0) gdb steps over it, but a CodeView line table has no line 0: the
+// jump would get the line of the code before it, the last arm's, and cdb
+// would stop there.
 struct If_Arm {
     Ast_If *branch;
     s32 test;      // the block ending in the arm's branch
     s32 then_end;  // the then branch's last block: T may have made more
 };
-
-// The '}' that ends an if's else part: its block's, or for an else if,
-// whatever ends that one's own chain.
-static Position the_end_of(Ast *else_part) {
-    while (else_part->kind == AST_IF) {
-        Ast_If *branch = (Ast_If *)else_part;
-        if (!branch->else_part) return branch->then_block->end;
-        else_part = branch->else_part;
-    }
-    return ((Ast_Block *)else_part)->end;
-}
 
 static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
     s32 outer = l->scope;
@@ -1422,25 +1454,27 @@ static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
             l->block = else_block;
         }
     }
-    if (part) lower_scoped_block(l, (Ast_Block *)part, source);  // the last else
+    Ast_Block *last_else = (Ast_Block *)part;
+    if (last_else) lower_scoped_block(l, last_else, source);
 
-    for (s64 i = arms.count - 1; i >= 0; i--) {
-        If_Arm arm = arms[i];
-        bool has_else = arm.branch->else_part != nullptr;
-        // With an else: the block its else part ended in, the last else's
-        // own or, for an else if, where the arms after this one left off.
-        s32 else_end = l->block;
-        bool then_goes_on = !has_ended(l, arm.then_end);
-        bool else_goes_on = has_else ? !has_ended(l, else_end) : true;  // no else: the false edge
-        if (!then_goes_on && !else_goes_on) continue;  // l->block is else_end, which has ended
+    // What gets past the chain: each then block that gets to its end, the
+    // last else if it does, and with no last else, the last arm's false
+    // edge. When nothing does, there's no `after`, and l->block, the last
+    // else's end, has ended.
+    s32 else_end = l->block;  // with a last else, the block it ended in
+    bool else_goes_on = !last_else || !has_ended(l, else_end);
+    bool any_goes_on = else_goes_on;
+    for (s64 i = 0; i < arms.count; i++) any_goes_on = any_goes_on || !has_ended(l, arms[i].then_end);
+    if (any_goes_on) {
         s32 after = new_block(l);
-        if (!has_else) terminator_of(l, arm.test)->target2 = after;
-        if (then_goes_on) {
-            place(l, arm.branch->then_block->end, outer);
-            emit_jump(l, arm.then_end, after);
+        if (!last_else) terminator_of(l, arms[arms.count - 1].test)->target2 = after;
+        for (s64 i = 0; i < arms.count; i++) {
+            if (has_ended(l, arms[i].then_end)) continue;
+            place(l, arms[i].branch->then_block->end, outer);
+            emit_jump(l, arms[i].then_end, after);
         }
-        if (has_else && else_goes_on) {
-            place(l, the_end_of(arm.branch->else_part), outer);
+        if (last_else && else_goes_on) {
+            place(l, last_else->end, outer);
             emit_jump(l, else_end, after);
         }
         l->block = after;
@@ -1701,17 +1735,24 @@ static void lower_jump(Lowering *l, Ast_Jump *jump) {
 //     %v, %v+1 = call @f(...)
 //     store i64 %v, %q
 //     store i64 %v+1, %r
+//
+// When one of the names hides a variable, they're all in a scope of their
+// own from the stores on, as a single declaration is (lower_statement).
 static void lower_multi_var(Lowering *l, Ast_Multi_Var *multi) {
+    Position at = l->pos;
+    bool hides = false;
+    for (s64 i = 0; i < multi->vars.count; i++) hides = hides || hides_a_variable(l, multi->vars[i]->name);
     Array<s32> slots = {};
     for (s64 i = 0; i < multi->vars.count; i++) {
         Ast_Var *var = multi->vars[i];
         s32 slot = emit_slot(l, var->type);
         array_add(&l->locals, {var, slot});
-        add_local_var(l, var, slot, l->scope);
         array_add(&slots, slot);
     }
     Array<s32> results = {};
     lower_call_results(l, (Ast_Call *)multi->value, &results);  // the checker made sure it's such a call
+    if (hides) place(l, at, new_scope(l, at));
+    for (s64 i = 0; i < multi->vars.count; i++) add_local_var(l, multi->vars[i], slots[i], l->scope);
     for (s64 i = 0; i < multi->vars.count; i++) emit_put(l, multi->vars[i]->type, results[i], slots[i]);
     array_free(&results);
     array_free(&slots);
@@ -1775,12 +1816,26 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     l->pos = statement_position(s);
     switch (s->kind) {
     case AST_VAR: {
+        // A declaration that hides a variable (a global, a parameter, an outer
+        // local) hides it only from its own end (spec 4.7), but a debugger
+        // shows a scope's variables wherever the scope is, all of it. So such
+        // a declaration starts a scope of its own inside the current one
+        // (rustc starts one at every let), made current until the end of the
+        // block (whose lowering then puts the scope around it back), and the
+        // variable is declared in it. Its initializer is lowered first, in the
+        // scope around: it may read the name it hides (x := x + 1), and before
+        // the store, a debugger shows the outer variable. A declaration hiding
+        // nothing is in the block's scope, as in C.
         Ast_Var *var = (Ast_Var *)s;
+        Position at = l->pos;
+        bool hides = hides_a_variable(l, var->name);
         s32 slot = emit_slot(l, var->type);
         array_add(&l->locals, {var, slot});
+        s32 value = var->value ? lower_value(l, var->value, var->type) : -1;
+        if (hides) place(l, at, new_scope(l, at));
         add_local_var(l, var, slot, l->scope);
         if (var->value) {
-            emit_put(l, var->type, lower_value(l, var->value, var->type), slot);
+            emit_put(l, var->type, value, slot);
         } else if (!var->is_uninitialized) {
             emit_zero(l, var->type, slot);
         }
@@ -2332,7 +2387,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
             p->source_name = source->name;
             p->pos = source->pos;
             p->body = source->body->pos;
-            if (source->results.count == 1) p->source_result = source->results[0]->type;
+            for (s64 k = 0; k < source->results.count; k++) array_add(&p->source_results, source->results[k]->type);
         }
         table_put(&l.proc_index, source->name, (s32)i);
     }
@@ -2347,26 +2402,41 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         l.checking_bounds = l.bounds_checks && !source->no_bounds_checks;
         l.is_entry = string_eq(source->name, str("main"));
         // The body is scope 0, at its '{'. Its parameters are its first
-        // variables: a scalar one is the value it's passed as, an aggregate
-        // one the pointer to the caller's copy. The hidden result pointers
-        // before them are no variable, and don't count in `arg`.
+        // variables. A scalar one is stored on entry into a slot of its own,
+        // and every use reads it from there, as clang does at -O0 (the
+        // header's "Parameters" says why). An aggregate one is the pointer
+        // to the caller's copy. The hidden result pointers before them are
+        // no variable here, and don't count in `arg` (the backend describes
+        // each to a debugger as the artificial parameter result$, from
+        // source_results: llvm_backend.cpp's declare_variables).
         l.scope = -1;
-        place(&l, source->body->pos, new_scope(&l, source->body->pos));
+        s32 body_scope = new_scope(&l, source->body->pos);
         s32 hidden = aggregate_results(source);
         for (s64 k = 0; k < source->params.count; k++) {
             Ast_Param *param = source->params[k];
-            array_add(&l.locals, {(Ast *)param, hidden + (s32)k});
-            // The k-th visible parameter is the value hidden + k.
-            Ir_Var_Kind kind = type_is_aggregate(param->type) ? IR_VAR_ADDRESS : IR_VAR_VALUE;
-            s32 value = hidden + (s32)k, arg = (s32)k + 1;
-            array_add(&l.proc->vars, Ir_Var{param->name, param->type, param->pos, 0, kind, value, arg});
+            s32 value = hidden + (s32)k, arg = (s32)k + 1;  // the k-th visible parameter is the value hidden + k
+            if (type_is_aggregate(param->type)) {
+                array_add(&l.locals, {(Ast *)param, value});
+                array_add(&l.proc->vars, Ir_Var{param->name, param->type, param->pos, 0, IR_VAR_ADDRESS, value, arg});
+                continue;
+            }
+            // No position: this is the prologue's work, before any line of
+            // the body (a debugger's breakpoint on the procedure stops after
+            // it, at the first instruction with a line).
+            place(&l, {}, -1);
+            Ir_Type type = ir_type_of(param->type);
+            s32 slot = emit(&l, IR_LOCAL, type)->result;
+            emit_store(&l, type, value, slot);
+            array_add(&l.locals, {(Ast *)param, slot});
+            array_add(&l.proc->vars, Ir_Var{param->name, param->type, param->pos, 0, IR_VAR_SLOT, slot, arg});
         }
+        place(&l, source->body->pos, body_scope);
         lower_block(&l, source->body, source);
         if (!ir_block_has_ended(l.proc, l.block)) {
             // Control reaches the '}', where its return is. The checker made
             // sure that only happens in a procedure that returns nothing;
             // anywhere else, the end can't be reached.
-            place(&l, source->body->end, 0);
+            place(&l, source->body->end, l.scope);  // the body's, or one a hiding declaration began
             if (l.is_entry) {
                 emit_entry_return(&l);
             } else {

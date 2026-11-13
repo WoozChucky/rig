@@ -1,0 +1,10 @@
+l+t
+l+s
+l+l
+bp `hiding.rig:8`
+bp `hiding.rig:10`
+g
+?? g
+g
+?? g
+q
