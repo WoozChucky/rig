@@ -2202,6 +2202,34 @@ TEST(parse_load_in_an_expression) {
     arena_free(&a);
 }
 
+TEST(parse_load_where_a_token_is_expected) {
+    // Where a ';', a ')', an operator or a field's name should come, the
+    // same message, rather than "expected ';'", and the declaration is given
+    // up. The file isn't loaded, so the program lacks it.
+    Arena a = arena_make();
+    struct Case {
+        const char *text;
+        const char *errors;
+    };
+    Case cases[] = {
+        {"main :: () {\n    x := 1 #load \"a.rig\";\n}\n", "2:12: #load can only be at the top level\n"},
+        {"main :: () {\n    f(1 #load \"a.rig\");\n}\n", "2:9: #load can only be at the top level\n"},
+        {"main :: () {\n    x := a.#load \"a.rig\";\n}\n", "2:12: #load can only be at the top level\n"},
+        {"main :: () {\n    for 0 #load \"a.rig\";\n}\n", "2:11: #load can only be at the top level\n"},
+        {"main :: () {\n    for a #load \"a.rig\";\n}\n", "2:11: #load can only be at the top level\n"},
+        {"S :: struct { a: int #load \"a.rig\"; }\n", "1:22: #load can only be at the top level\n"},
+        {"#load \"a.rig\" #load \"b.rig\";\n", "1:15: #load can only be at the top level\n"},
+    };
+    for (s64 i = 0; i < (s64)(sizeof cases / sizeof cases[0]); i++) {
+        Token_List *list = src(cases[i].text);
+        Ast_File *file = parse(list->tokens, &a, &list->diag);
+        CHECK_STR(messages(&a, &list->diag), cases[i].errors);
+        CHECK(file->lost_a_file);
+        token_list_free(list);
+    }
+    arena_free(&a);
+}
+
 TEST(parse_load_in_a_type) {
     // Where a type is expected, or a directive after a signature, the same
     // message, rather than "expected a type" or "unknown directive", and the
@@ -2333,12 +2361,12 @@ TEST(parse_load_inside_a_broken_body) {
     Arena a = arena_make();
     const char *sources[] = {
         "f :: () {\n    x := ;\n#load \"a.rig\";\n}\nmain :: () {}\n",   // passed over
-        "f :: () {\n    x := 1\n#load \"a.rig\";\n}\nmain :: () {}\n",  // where the error stopped
+        "f :: () {\n    x := 1\n#load \"a.rig\";\n}\nmain :: () {}\n",  // where the ';' should be
         "f :: () {\n    x := ;\n    #load \"a.rig\";\n}\nmain :: () {}\n",  // indented
     };
     const char *expected[] = {
         "2:10: expected an expression, found ';'\n",
-        "3:1: expected ';', found directive\n",
+        "3:1: #load can only be at the top level\n",
         "2:10: expected an expression, found ';'\n",
     };
     for (s64 i = 0; i < 3; i++) {
@@ -2354,12 +2382,14 @@ TEST(parse_load_inside_a_broken_body) {
 
 TEST(parse_load_later_on_a_line) {
     // The recovery resumes at a #load only where it starts a line: one later
-    // on the line of a declaration that failed is skipped with it.
+    // on the line of a declaration, where its ';' should be, is misplaced,
+    // and skipped with it.
     Arena a = arena_make();
     Token_List *list = src("N :: 1 #load \"a.rig\";\nmain :: () {}\n");
     Ast_File *file = parse(list->tokens, &a, &list->diag);
-    CHECK_STR(messages(&a, &list->diag), "1:8: expected ';', found directive\n");
+    CHECK_STR(messages(&a, &list->diag), "1:8: #load can only be at the top level\n");
     CHECK_EQ(file->loads.count, 0);
+    CHECK(file->lost_a_file);
     CHECK_STR(ast_dump(&a, file), "(broken N)\n(proc main (params) (block))\n");
     token_list_free(list);
     arena_free(&a);
@@ -2382,9 +2412,10 @@ TEST(parse_load_after_parentheses) {
     CHECK_STR(parse_src(&a, "foo(1)\n#load \"a.rig\";\nmain :: () {}\n", &errors),
               "(broken)\n(load \"a.rig\")\n(proc main (params) (block))\n");
     CHECK_STR(errors, "1:4: expected '::', found '('\n");
-    // or a local constant in parentheses.
+    // or a local constant in parentheses, where the load, in a body, is
+    // misplaced.
     CHECK_STR(body_dump(&a, "N :: (1)\n#load \"a.rig\";", &errors), "(broken f)\n");
-    CHECK_STR(errors, "3:1: expected ';', found directive\n");
+    CHECK_STR(errors, "3:1: #load can only be at the top level\n");
     arena_free(&a);
 }
 
