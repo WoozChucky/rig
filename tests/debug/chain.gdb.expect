@@ -2,3 +2,4 @@
 13	    } else {
 16	    putchar(10);
 !15	    }
+!.debug_names not created by gdb
