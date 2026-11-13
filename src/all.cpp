@@ -4,6 +4,8 @@
 
 #include "common.cpp"
 #include "base.cpp"
+// First, so a build without the build scripts' stamp stops at its #error.
+#include "version.cpp"
 #ifdef _WIN32
 #include "os_windows.cpp"
 #else

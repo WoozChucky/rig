@@ -8,6 +8,10 @@
 # every source file), so this script is the whole build system. LLVM comes
 # from scripts/get_llvm.sh, in deps/llvm-linux unless RIG_LLVM_DIR says
 # otherwise, and is linked statically.
+#
+# Every build is stamped with Rig's version, from the VERSION file, and the
+# commit it is built from, from git (below; `rig version` shows them).
+# build.bat does the same.
 
 set -e
 cd "$(dirname "$0")"
@@ -15,14 +19,51 @@ cd "$(dirname "$0")"
 LLVM="${RIG_LLVM_DIR:-deps/llvm-linux}"
 CXX="${CXX:-clang++}"
 OPT=-O0
-if [ "$1" = release ]; then OPT=-O2; fi
+BUILD=debug
+if [ "$1" = release ]; then OPT=-O2 BUILD=release; fi
 
 if [ ! -x "$LLVM/bin/llvm-config" ]; then
     echo "build.sh: LLVM not found in $LLVM; run scripts/get_llvm.sh first" >&2
     exit 1
 fi
 
-FLAGS="-std=c++23 -fno-exceptions -fno-rtti -g $OPT -Wall -Wextra -I$LLVM/include"
+# The stamp: the defines src/version.h reads.
+#   RIG_VERSION        VERSION's one line, three numbers: 0.1.0
+#   RIG_COMMIT         the commit's full hash, from git rev-parse HEAD
+#   RIG_COMMIT_DIRTY   1 when git status lists a changed tracked file
+#                      (untracked files don't make a build dirty), else 0
+#   RIG_COMMIT_DATE    the commit's date, not the build's, so building the
+#                      same commit again gives the same compiler: 2026-11-13
+#   RIG_BUILD          debug or release
+# Without git on the PATH, or outside a checkout (no .git here: a source
+# archive), the commit and its date are "unknown" and the build isn't dirty.
+# (.git is a directory in a clone and a file in a worktree; asking for it
+# here keeps git from finding some other repository above this one.)
+if [ ! -f VERSION ]; then
+    echo "build.sh: VERSION is missing; it holds Rig's version, such as 0.1.0" >&2
+    exit 1
+fi
+# Its first line, as build.bat reads it (a carriage return, should an editor
+# leave one, isn't part of it).
+VERSION_NUMBER=$(head -n 1 VERSION | tr -d '\r')
+if ! printf '%s\n' "$VERSION_NUMBER" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+'; then
+    echo "build.sh: VERSION holds \"$VERSION_NUMBER\", not a version such as 0.1.0" >&2
+    exit 1
+fi
+COMMIT=unknown
+COMMIT_DATE=unknown
+DIRTY=0
+if [ -e .git ] && command -v git > /dev/null 2>&1 && HEAD_HASH=$(git rev-parse --verify -q HEAD 2> /dev/null); then
+    COMMIT=$HEAD_HASH
+    COMMIT_DATE=$(git log -1 --format=%cs 2> /dev/null) || COMMIT_DATE=unknown
+    if [ -n "$(git --no-optional-locks status --porcelain --untracked-files=no 2> /dev/null)" ]; then DIRTY=1; fi
+fi
+# Each string becomes -DNAME="VALUE", a C string literal: the quotes are
+# part of the word, which the shell splits FLAGS into but doesn't unquote.
+STAMP="-DRIG_VERSION=\"$VERSION_NUMBER\" -DRIG_COMMIT=\"$COMMIT\" -DRIG_COMMIT_DIRTY=$DIRTY"
+STAMP="$STAMP -DRIG_COMMIT_DATE=\"$COMMIT_DATE\" -DRIG_BUILD=\"$BUILD\""
+
+FLAGS="-std=c++23 -fno-exceptions -fno-rtti -g $OPT -Wall -Wextra -I$LLVM/include $STAMP"
 # The LLVM components Rig uses: the IR (core), and the x86 target that turns
 # it into object files.
 LLVM_LIBS="$("$LLVM/bin/llvm-config" --link-static --libfiles core target x86codegen x86asmparser x86desc x86info)"

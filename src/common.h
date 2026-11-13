@@ -12,8 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define RIG_VERSION "0.1.0"
-
 // Integer and float names, the same as Rig's own types (spec section 6.4).
 typedef int8_t s8;
 typedef int16_t s16;
