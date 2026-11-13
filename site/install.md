@@ -40,18 +40,22 @@ In PowerShell (Windows PowerShell, which comes with Windows, or PowerShell 7):
    if ((Get-FileHash -Algorithm SHA256 rig-windows-x64.zip).Hash -eq $sum) { 'rig-windows-x64.zip: OK' } else { throw 'rig-windows-x64.zip: FAILED, its checksum is not the one in SHA256SUMS' }
    ```
 
-3. Unpack it into `%LOCALAPPDATA%\Programs\rig`, replacing what is there:
+3. Unpack it into `%LOCALAPPDATA%\Programs\rig`, overwriting the files already there, then delete the download:
 
    ```powershell
    Expand-Archive -Force rig-windows-x64.zip "$env:LOCALAPPDATA\Programs\rig"
+   cd ~; Remove-Item -Recurse "$env:TEMP\rig-download"
    ```
 
 4. Add that folder to your user `PATH`, unless it is there already:
 
    ```powershell
    $path = [Environment]::GetEnvironmentVariable('Path', 'User')
-   if (($path -split ';') -notcontains "$env:LOCALAPPDATA\Programs\rig") { [Environment]::SetEnvironmentVariable('Path', "$path;$env:LOCALAPPDATA\Programs\rig".TrimStart(';'), 'User') }
+   $rig = "$env:LOCALAPPDATA\Programs\rig"
+   if (($path -split ';') -notcontains $rig) { [Environment]::SetEnvironmentVariable('Path', ("$path".TrimEnd(';') + ";$rig").TrimStart(';'), 'User') }
    ```
+
+   `SetEnvironmentVariable` writes the whole user `PATH` back with its variables expanded: an entry such as `%USERPROFILE%\AppData\Local\Microsoft\WindowsApps` is saved as the folder it names today. The uninstall line below does the same.
 
 5. Open a new terminal (one opened before doesn't see the new `PATH`), and check:
 
@@ -61,7 +65,7 @@ In PowerShell (Windows PowerShell, which comes with Windows, or PowerShell 7):
 
    It prints the version, the commit it was built from and LLVM's version, such as `rig 0.2.0 (89de631d10c7 2026-11-13) LLVM 23.1.5`.
 
-**To upgrade**, run steps 1 to 3 again: they replace the files. The `PATH` is already set.
+**To upgrade**, run steps 1 to 3 again: they overwrite the files. The `PATH` is already set.
 
 **To uninstall**, delete the folder, and take it off your user `PATH`:
 
@@ -77,7 +81,7 @@ In a terminal:
 1. Download the archive and the checksums into a folder of their own:
 
    ```sh
-   cd "$(mktemp -d)"
+   download="$(mktemp -d)" && cd "$download"
    curl -fLO https://github.com/WoozChucky/rig/releases/latest/download/rig-linux-x64.tar.gz
    curl -fLO https://github.com/WoozChucky/rig/releases/latest/download/SHA256SUMS
    ```
@@ -88,10 +92,11 @@ In a terminal:
    sha256sum -c --ignore-missing SHA256SUMS
    ```
 
-3. Unpack it into `~/.local/share/rig`, replacing what is there:
+3. Unpack it into `~/.local/share/rig`, overwriting the files already there, then delete the download:
 
    ```sh
    mkdir -p ~/.local/share/rig && tar xzf rig-linux-x64.tar.gz -C ~/.local/share/rig
+   cd ~ && rm -rf "$download"
    ```
 
 4. Link `rig` into `~/.local/bin`, the folder for your own programs on the `PATH` (`rig` finds `ld.lld` beside the file the link points to):
@@ -114,7 +119,7 @@ In a terminal:
    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
    ```
 
-**To upgrade**, run steps 1 to 3 again: they replace the files, and the link stays.
+**To upgrade**, run steps 1 to 3 again: they overwrite the files, and the link stays.
 
 **To uninstall**, delete the folder and the link:
 
@@ -167,7 +172,7 @@ or in VS Code: the Extensions view, its `...` menu, **Install from VSIX...**, an
 On Windows, double-clicking the `.vsix` file opens Visual Studio's VSIX Installer when Visual Studio is installed, which fails with "One or more extensions are for Visual Studio Code. Try installing them in Visual Studio Code." Install it from VS Code, as above.
 :::
 
-The extension runs the `rig` on your `PATH` (or the one its setting `rig.compilerPath` names): restart VS Code after installing Rig, so it sees the new `PATH`. Debugging also needs Microsoft's [C/C++ extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools). The extension's [README](https://github.com/WoozChucky/rig/blob/main/editors/vscode/README.md) says what it does and how to set it up.
+The extension runs the `rig` on your `PATH` (or the one its setting `rig.compilerPath` names): restart VS Code after installing Rig, so it sees the new `PATH`. Debugging also needs Microsoft's [C/C++ extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools), and gdb on Linux (`sudo apt install gdb`). The extension's [README](https://github.com/WoozChucky/rig/blob/main/editors/vscode/README.md) says what it does and how to set it up.
 
 ## Build from source
 
