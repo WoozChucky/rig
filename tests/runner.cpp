@@ -24,6 +24,30 @@
 // Then rig check on every program of both directories, from a file and
 // from stdin, and its own command line (check_tests).
 //
+// Then the specification's examples (spec_tests): every ```rig block of
+// docs/rig-spec.md (its section 1.4 says so too), written to
+// .build/tests/spec/LINE/example.rig, LINE being its opening fence's, and
+// built or checked in that directory, so that its messages name
+// example.rig on every host. The words after `rig` in the fence's info
+// string give its kind:
+//   ```rig                a program, built and run: it exits with 0, writes
+//                         nothing to stderr, and its stdout is its output
+//                         block, or nothing when it has none;
+//   ```rig exit=N         the same, exiting with N (0 to 255);
+//   ```rig runtime-error  stopped by a runtime error: exit code 101 and its
+//                         output block on stderr (stdout isn't compared:
+//                         the prose says what it prints first);
+//   ```rig error          rejected: rig build exits with 1, its stderr is
+//                         the output block, and it writes no object or
+//                         program;
+//   ```rig fragment       top-level declarations: with `main :: () {}`
+//                         added, rig check exits with 0 and says nothing.
+// An example's output block is the first ```text block after it before the
+// next heading or ```rig block (a fragment has none); the two error kinds
+// need one. Any other word in the info string fails the example, as does a
+// block never closed. Each is reported as docs/rig-spec.md:LINE. The
+// specification's "\r\n"s are read as "\n", on every host.
+//
 // Last, the debugger tests: tests/debug/NAME.rig is built as a program of
 // tests/run is (to .build/tests/NAME), then run under the host's debugger
 // with a script of its commands, and what the debugger prints must hold
@@ -99,10 +123,8 @@ static const char *OBJ = ".o";
 // Seconds any one program may take. Each takes well under one.
 static const s32 TIMEOUT = 60;
 
-// Only Windows has \r\n to remove; elsewhere s comes back as it is, and the
-// arena goes unused.
-static String normalise_newlines([[maybe_unused]] Arena *a, String s) {
-#ifdef _WIN32
+// s with every "\r\n" made "\n".
+static String without_carriage_returns(Arena *a, String s) {
     u8 *out = (u8 *)arena_alloc(a, s.count ? s.count : 1, 1);
     s64 n = 0;
     for (s64 i = 0; i < s.count; i++) {
@@ -110,6 +132,13 @@ static String normalise_newlines([[maybe_unused]] Arena *a, String s) {
         out[n++] = s.data[i];
     }
     return {out, n};
+}
+
+// Only Windows has \r\n to remove; elsewhere s comes back as it is, and the
+// arena goes unused.
+static String normalise_newlines([[maybe_unused]] Arena *a, String s) {
+#ifdef _WIN32
+    return without_carriage_returns(a, s);
 #else
     return s;
 #endif
@@ -219,15 +248,16 @@ static void add_flags(Arena *a, Array<String> *argv, String name) {
     }
 }
 
-// Runs rig build's command line `argv` (which it frees), which must write
-// `program`. {} when it did, otherwise why not.
-static String build_program(Arena *a, Array<String> argv, String program) {
+// Runs rig build's command line `argv` (which it frees) in `directory` ({}
+// for this one), which must write `program` (a path from this one). {} when
+// it did, otherwise why not.
+static String build_program(Arena *a, Array<String> argv, String directory, String program) {
     // The last run's program, gone: if rig wrote this one somewhere else, it
     // mustn't be found and run in its place.
     remove(string_cstr(a, program));
     Process_Result built = {};
     String why = {};
-    bool started = run(a, argv, {}, &built, &why);
+    bool started = run(a, argv, directory, &built, &why);
     array_free(&argv);
     if (!started) return why;
     if (built.exit_code != 0) {
@@ -244,7 +274,7 @@ static String run_test(Arena *a, String rig, String name) {
     String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
     Array<String> argv = build_command(a, rig, "tests/run", name, program);
     add_flags(a, &argv, name);
-    String why = build_program(a, argv, program);
+    String why = build_program(a, argv, {}, program);
     if (why.count) return why;
 
     String expected_out = {}, exit_text = {};
@@ -742,6 +772,243 @@ static void check_tests(Arena *a, String rig, s64 *passed, s64 *failed) {
     }
 }
 
+// --- The specification's examples -------------------------------------------
+//
+// See the header: every ```rig block of docs/rig-spec.md, of the kind its
+// fence's info string names, held to its output block.
+
+static const char *SPEC = "docs/rig-spec.md";
+static const char *SPEC_DIR = ".build/tests/spec";
+
+enum Example_Kind {
+    EXAMPLE_PROGRAM,        // ```rig, or ```rig exit=N
+    EXAMPLE_RUNTIME_ERROR,  // ```rig runtime-error
+    EXAMPLE_ERROR,          // ```rig error
+    EXAMPLE_FRAGMENT,       // ```rig fragment
+};
+
+struct Example {
+    s64 line;  // the opening fence's, from 1
+    Example_Kind kind;
+    s32 exit_code;  // a program's: 0 unless exit=N
+    String source;
+    bool has_output;
+    String output;  // the output block's text, each line ending in "\n"
+    String bad;     // what's wrong with the fence or the block, or {}
+};
+
+// s without the spaces and tabs at its ends.
+static String trim(String s) {
+    while (s.count && (s.data[0] == ' ' || s.data[0] == '\t')) s = string_slice(s, 1, s.count - 1);
+    while (s.count && (s.data[s.count - 1] == ' ' || s.data[s.count - 1] == '\t')) s.count--;
+    return s;
+}
+
+// exit=N's status: N is digits and nothing else, 0 to 255. False when it
+// isn't one.
+static bool read_exit_status(String word, s32 *status) {
+    if (word.count <= 5 || word.count > 8) return false;
+    s32 value = 0;
+    for (s64 i = 5; i < word.count; i++) {
+        if (word.data[i] < '0' || word.data[i] > '9') return false;
+        value = value * 10 + (word.data[i] - '0');
+    }
+    if (value > 255) return false;
+    *status = value;
+    return true;
+}
+
+// The words after `rig` in a fence's info string: the example's kind, and a
+// program's exit status. What it doesn't know goes in ex->bad.
+static void read_info(Arena *a, String words, Example *ex) {
+    bool kind_given = false, exit_given = false;
+    s64 start = 0;
+    for (s64 i = 0; i <= words.count; i++) {
+        if (i < words.count && words.data[i] != ' ' && words.data[i] != '\t') continue;
+        String word = string_slice(words, start, i - start);
+        start = i + 1;
+        if (!word.count) continue;
+        Example_Kind kind = EXAMPLE_PROGRAM;
+        if (starts_with(word, "exit=")) {
+            if (exit_given || !read_exit_status(word, &ex->exit_code)) {
+                ex->bad = string_printf(a, "the info string's '" STR_FMT "' isn't one exit= with a status from 0 to 255",
+                                        STR_ARG(word));
+                return;
+            }
+            exit_given = true;
+            continue;
+        }
+        if (string_eq(word, str("runtime-error"))) {
+            kind = EXAMPLE_RUNTIME_ERROR;
+        } else if (string_eq(word, str("error"))) {
+            kind = EXAMPLE_ERROR;
+        } else if (string_eq(word, str("fragment"))) {
+            kind = EXAMPLE_FRAGMENT;
+        } else {
+            ex->bad = string_printf(a,
+                                    "unknown word '" STR_FMT "' in the info string (runtime-error, error, fragment and "
+                                    "exit=N are known)",
+                                    STR_ARG(word));
+            return;
+        }
+        if (kind_given) {
+            ex->bad = str("the info string names two kinds of example");
+            return;
+        }
+        ex->kind = kind;
+        kind_given = true;
+    }
+    if (exit_given && ex->kind != EXAMPLE_PROGRAM) ex->bad = str("exit=N is for a program that runs to its end");
+}
+
+// The examples of `text`, the specification with its "\r\n"s made "\n".
+// Fences start at a line's start: ``` and an info string opens a block, and
+// ``` alone closes it. A ```text block is the output of the example before
+// it when neither a heading nor another ```rig block comes between them.
+static void read_examples(Arena *a, String text, Array<Example> *examples) {
+    bool in_block = false, in_rig = false, in_text = false;
+    s64 waiting = -1;  // the example whose output block may come next
+    s64 block_start = 0;
+    s64 line_number = 0;
+    for (s64 start = 0; start < text.count;) {
+        s64 end = start;
+        while (end < text.count && text.data[end] != '\n') end++;
+        String line = string_slice(text, start, end - start);
+        s64 next = end < text.count ? end + 1 : end;
+        line_number++;
+        if (!in_block) {
+            if (starts_with(line, "```")) {
+                String info = trim(string_slice(line, 3, line.count - 3));
+                in_block = true;
+                block_start = next;
+                in_rig = string_eq(info, str("rig")) || starts_with(info, "rig ") || starts_with(info, "rig\t");
+                in_text = string_eq(info, str("text"));
+                if (in_rig) {
+                    waiting = -1;
+                    Example ex = {};
+                    ex.line = line_number;
+                    read_info(a, string_slice(info, 3, info.count - 3), &ex);
+                    array_add(examples, ex);
+                }
+            } else if (starts_with(line, "#")) {
+                waiting = -1;
+            }
+        } else if (string_eq(trim(line), str("```"))) {
+            String body = string_slice(text, block_start, start - block_start);
+            if (in_rig) {
+                Example *ex = &(*examples)[examples->count - 1];
+                ex->source = body;
+                if (ex->kind != EXAMPLE_FRAGMENT) waiting = examples->count - 1;
+            } else if (in_text && waiting >= 0) {
+                (*examples)[waiting].has_output = true;
+                (*examples)[waiting].output = body;
+                waiting = -1;
+            }
+            in_block = in_rig = in_text = false;
+        }
+        start = next;
+    }
+    if (in_block && in_rig) (*examples)[examples->count - 1].bad = str("the block is never closed");
+}
+
+// One example, written to SPEC_DIR/LINE/example.rig and built or checked
+// there, so its messages name it example.rig on every host. {} when it
+// passes, otherwise why not.
+static String spec_example_test(Arena *a, String rig, const Example *ex) {
+    if (ex->bad.count) return ex->bad;
+    if ((ex->kind == EXAMPLE_RUNTIME_ERROR || ex->kind == EXAMPLE_ERROR) && !ex->has_output) {
+        return str("no ```text block of its messages after it (before the next heading or ```rig block)");
+    }
+
+    String dir = string_printf(a, "%s/%lld", SPEC_DIR, (long long)ex->line);
+    os_make_directory(dir);
+    if (!remove_nested_build(a, dir)) return string_printf(a, "couldn't remove " STR_FMT "/.build", STR_ARG(dir));
+    String program = string_printf(a, STR_FMT "/example%s", STR_ARG(dir), EXE);
+    String object = string_printf(a, STR_FMT "/.build/example%s", STR_ARG(dir), OBJ);
+    remove(string_cstr(a, program));
+    String file = str("example.rig");
+    String source = ex->source;
+    // A fragment's declarations, made a whole program by an empty main.
+    if (ex->kind == EXAMPLE_FRAGMENT) source = string_printf(a, STR_FMT "\nmain :: () {}\n", STR_ARG(source));
+    String path = string_printf(a, STR_FMT "/" STR_FMT, STR_ARG(dir), STR_ARG(file));
+    if (!os_write_file(path, source)) return string_printf(a, "couldn't write " STR_FMT, STR_ARG(path));
+
+    Process_Result r = {};
+    String why = {};
+    if (ex->kind == EXAMPLE_FRAGMENT) {
+        if (!run_check(a, rig, file, false, {}, dir, &r, &why)) return why;
+        return check_result(a, "rig check", &r, 0, {});
+    }
+
+    Array<String> argv = {};
+    array_add(&argv, rig);
+    array_add(&argv, str("build"));
+    array_add(&argv, file);
+    if (ex->kind == EXAMPLE_ERROR) {
+        bool started = run(a, argv, dir, &r, &why);
+        array_free(&argv);
+        if (!started) return why;
+        if (r.exit_code != 1) {
+            return with_stderr(
+                a, string_printf(a, "rig build exited with " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, r.exit_code))),
+                r.err);
+        }
+        if (!string_eq(r.err, ex->output)) return first_difference(a, "stderr", ex->output, r.err);
+        if (os_file_exists(object)) return string_printf(a, "rig build failed but wrote " STR_FMT, STR_ARG(object));
+        if (os_file_exists(program)) return string_printf(a, "rig build failed but wrote " STR_FMT, STR_ARG(program));
+        return {};
+    }
+
+    why = build_program(a, argv, dir, program);
+    if (why.count) return why;
+    Array<String> command = {};
+    array_add(&command, program);
+    bool started = run(a, command, {}, &r, &why);
+    array_free(&command);
+    if (!started) return why;
+    if (ex->kind == EXAMPLE_RUNTIME_ERROR) {
+        // What it printed before the error is the prose's to say; the
+        // message and the status are the block's.
+        if (r.exit_code != 101) {
+            return with_stderr(
+                a, string_printf(a, "exit code " STR_FMT ", expected 101", STR_ARG(exit_code_text(a, r.exit_code))), r.err);
+        }
+        if (!string_eq(r.err, ex->output)) return first_difference(a, "stderr", ex->output, r.err);
+        return {};
+    }
+    String expected = ex->has_output ? ex->output : String{};
+    if (!string_eq(r.out, expected)) return with_stderr(a, first_difference(a, "stdout", expected, r.out), r.err);
+    if (r.exit_code != ex->exit_code) {
+        return with_stderr(a,
+                           string_printf(a, "exit code " STR_FMT ", expected %d", STR_ARG(exit_code_text(a, r.exit_code)),
+                                         ex->exit_code),
+                           r.err);
+    }
+    if (r.err.count) return with_stderr(a, str("the program wrote to stderr"), r.err);
+    return {};
+}
+
+// Every example of the specification.
+static void spec_tests(Arena *a, String rig, s64 *passed, s64 *failed) {
+    String text = {};
+    if (!os_read_file(a, str(SPEC), &text)) {
+        report(SPEC, string_printf(a, "can't read it: " STR_FMT, STR_ARG(os_error_message(a))), passed, failed);
+        return;
+    }
+    // "\r\n" read as "\n" on every host: a checkout with CRLF line endings
+    // holds the same examples.
+    text = without_carriage_returns(a, text);
+    Array<Example> examples = {};
+    read_examples(a, text, &examples);
+    if (!examples.count) report(SPEC, str("no ```rig blocks in it"), passed, failed);
+    os_make_directory(str(SPEC_DIR));
+    for (s64 i = 0; i < examples.count; i++) {
+        String why = spec_example_test(a, rig, &examples[i]);
+        report(string_cstr(a, string_printf(a, "%s:%lld", SPEC, (long long)examples[i].line)), why, passed, failed);
+    }
+    array_free(&examples);
+}
+
 // --- Debugger tests ----------------------------------------------------------
 //
 // See the header: tests/debug/NAME.rig run under gdb or cdb, with what the
@@ -874,7 +1141,7 @@ static String debug_test(Arena *a, String rig, String root, String name, bool *s
     expected = replace_all(a, expected, "@ROOT@", root);
 
     String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
-    String why = build_program(a, build_command(a, rig, "tests/debug", name, program), program);
+    String why = build_program(a, build_command(a, rig, "tests/debug", name, program), {}, program);
     if (why.count) return why;
 
     Array<String> argv = debugger_command(a, root, name);
@@ -950,6 +1217,7 @@ int main(int argc, char **argv) {
         report(string_cstr(&a, string_printf(&a, "rig: %s", c.what)), command_test(&a, rig, &c), &passed, &failed);
     }
     check_tests(&a, rig, &passed, &failed);
+    spec_tests(&a, rig, &passed, &failed);
     s64 skipped = 0;
     debug_tests(&a, rig, &passed, &failed, &skipped);
     printf("%lld passed, %lld failed", (long long)passed, (long long)failed);
