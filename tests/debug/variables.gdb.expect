@@ -38,11 +38,11 @@ $16 = '\000' <repeats 65535 times>
 $17 = (void *) 0x0
 $18 = 8
 $19 = 3
-greet (s=..., loud=true) at
+greet (s=0x
+loud=true) at
 variables.rig:29
 n := s.count;
-s = {count = 2, data = 0x
-"hi"}
+s = 0x
 loud = true
 $20 = {count = 2, data = 0x
 "hi"}
