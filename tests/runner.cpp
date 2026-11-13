@@ -15,8 +15,9 @@
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, and it writes neither an object file nor a program. In a .err,
-// @NO_SUCH_FILE@ stands for the system's reason a missing file can't be
-// read, which is its own, in its language (no_such_file_message).
+// @NO_SUCH_FILE@ stands for the system's reason a file that isn't there, in
+// a directory that is, can't be read, which is its own, in its language
+// (no_such_file_message).
 //
 // Only the NAME.rig files directly in tests/run and tests/errors are
 // programs: their subdirectories, load/, hold the files the programs
@@ -352,7 +353,8 @@ static String run_test(Arena *a, String rig, String name) {
 // is the system's words, in its language ("No such file or directory" on
 // Linux, "The system cannot find the file specified" on Windows in
 // English), so the runner asks the system, by reading such a file itself,
-// as rig would.
+// as rig would. If that file is there after all, the result is a note
+// saying so, which then shows in the failing test's difference.
 static String no_such_file_message(Arena *a) {
     const char *missing = "tests/errors/load/no-such-file.rig";
     String text = {};
@@ -958,20 +960,25 @@ static String check_stdin_without_a_file_test(Arena *a, String rig) {
 // the one error, where tests/run/load_files.rig checks clean. Its #load is
 // found from the name's directory, tests/run, and print.rig's #load of
 // ../load_files.rig, the name, loads nothing: that's the main file, whose
-// text is this one.
+// text is this one. Like every check, it writes nothing (check_wrote).
 static String check_stdin_of_another_text_test(Arena *a, String rig) {
     String file = str("tests/run/load_files.rig");
     if (!os_file_exists(file)) return str("tests/run/load_files.rig isn't there");
+    remove(string_cstr(a, string_printf(a, ".build/load_files%s", OBJ)));
     Process_Result r = {};
     String why = {};
     String typed = str("#load \"load/print.rig\";\n"
                        "newline :: () { putchar(10); }\n"
                        "main :: () { print_line(7); putz(\"hi\"); }\n");
     if (!run_check(a, rig, file, true, typed, {}, &r, &why)) return why;
-    return check_result(a, "rig check --stdin", &r, 1,
-                        str("tests/run/load_files.rig:3:29: error: unknown identifier 'putz'\n"
-                            "    main :: () { print_line(7); putz(\"hi\"); }\n"
-                            "                                ^\n"));
+    why = check_result(a, "rig check --stdin", &r, 1,
+                       str("tests/run/load_files.rig:3:29: error: unknown identifier 'putz'\n"
+                           "    main :: () { print_line(7); putz(\"hi\"); }\n"
+                           "                                ^\n"));
+    if (why.count) return why;
+    String wrote = check_wrote(a, str("load_files"));
+    if (wrote.count) return string_printf(a, "rig check --stdin wrote " STR_FMT, STR_ARG(wrote));
+    return {};
 }
 
 // rig check's command line, right and wrong, as COMMAND_CASES rig build's,

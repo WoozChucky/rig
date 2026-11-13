@@ -67,7 +67,8 @@ void diag_error(Diagnostics *d, Position pos, const char *fmt, ...);
 // the whole file before the parser starts); rig sorts before printing.
 void diag_sort(Diagnostics *d);
 
-// Every error, in the order reported, in the format above.
+// Every error, in the list's order (the order reported, or diag_sort's once
+// sorted), in the format above.
 String diag_render(Arena *a, Diagnostics *d);
 
 // diag_render, written to stderr.

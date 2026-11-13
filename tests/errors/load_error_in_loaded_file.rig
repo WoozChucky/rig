@@ -1,7 +1,8 @@
-// An error in a loaded file (issue #112) names that file and shows its
-// line. It comes after this file's own error, though its line, 3, is
-// before this one's, 8: errors sort by file, in load order, the main file
-// first, and only then by line.
+// Errors in a loaded file (issue #112) name that file and show their
+// lines. They come after this file's own error, though scale's is found
+// before it (the checker reports every signature before any body), and
+// their lines, 3 and 6, are before this one's, 9: errors sort by file, in
+// load order, the main file first, and only then by line.
 #load "load/bad_type.rig";
 
 main :: () {
