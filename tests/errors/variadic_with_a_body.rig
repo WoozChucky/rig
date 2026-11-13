@@ -1,0 +1,11 @@
+// '..' stands for C's '...': a Rig procedure has no way to reach the
+// arguments it doesn't name, so only a foreign one may end with it. Its
+// calls aren't reported too, whatever their extra arguments are.
+sum :: (count: int, ..) -> int { return count; }
+
+Vec2 :: struct { x: float; y: float; }
+
+main :: () {
+    v : Vec2;
+    sum(2, 3, 4, v, .{1, 2});
+}

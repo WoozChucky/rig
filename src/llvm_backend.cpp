@@ -119,10 +119,22 @@ static LLVMTypeRef return_type(LLVMContextRef c, Ir_Proc *p, Arena *a) {
     return LLVMStructTypeInContext(c, fields, (unsigned)p->results.count, 0);
 }
 
+// A procedure's LLVM function type: its parameters and what it returns. A
+// variadic one's (C's printf, declared with '..') lists its fixed
+// parameters and is marked variadic, i32 (ptr, ...): a call gives its extra
+// arguments after them, each of the type it already has (lowering promoted
+// them as C does), and LLVM passes them by the target's variadic
+// convention. That differs from a fixed parameter's: on x86-64 System V
+// the caller sets al to the number of vector registers the arguments use
+// (the callee's va_start saves those registers only when al says so); on
+// Windows x64 a double goes in its integer register as well as its xmm
+// register, since the callee reads the arguments as one array. A call
+// through a fixed-parameter type would do neither, so the function type
+// must say variadic.
 static LLVMTypeRef function_type(LLVMContextRef c, Ir_Proc *p, Arena *a) {
     LLVMTypeRef *params = arena_new_array<LLVMTypeRef>(a, p->params.count ? p->params.count : 1);
     for (s64 i = 0; i < p->params.count; i++) params[i] = llvm_type(c, p->params[i].type);
-    return LLVMFunctionType(return_type(c, p, a), params, (unsigned)p->params.count, 0);
+    return LLVMFunctionType(return_type(c, p, a), params, (unsigned)p->params.count, p->is_variadic);
 }
 
 // Widening an i1, i8 or i16 parameter or result (Ir_Ext).
