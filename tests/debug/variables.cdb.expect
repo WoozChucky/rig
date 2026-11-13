@@ -28,9 +28,9 @@ numbers          [Type: __int64 [5]]
 [3]              : 1 [Type: __int64]
 [4]              : 7 [Type: __int64]
 29:     n := s.count;
-struct string s = struct string
+struct string * s = 0x
 bool loud = true
-struct string
+struct string * 0x
 +0x000 count            : 0n2
 +0x008 data             : 0x
 "hi"

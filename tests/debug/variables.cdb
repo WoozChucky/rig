@@ -12,6 +12,6 @@ dx numbers
 g
 dv /t
 ?? s
-?? s.count
+?? s->count
 ?? loud
 q

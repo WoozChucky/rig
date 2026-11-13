@@ -1350,8 +1350,10 @@ TEST(llvm_variables_are_declared) {
     // Each variable is declared on its stack slot (#dbg_declare), in its
     // scope: a local; a scalar parameter, stored into a slot of its own; an
     // aggregate parameter, whose slot holds the pointer to the caller's copy,
-    // read through it (DW_OP_deref); a bool parameter, stored as a byte; a
-    // loop's it and it_index, in the loop's lexical block.
+    // read through it on Linux (DW_OP_deref) and on Windows a pointer to its
+    // type, the slot itself (declare_variables says why); a bool parameter,
+    // stored as a byte; a loop's it and it_index, in the loop's lexical
+    // block.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "sum :: (a: []int, k: int, b: bool) -> int {\n"
@@ -1377,7 +1379,8 @@ TEST(llvm_variables_are_declared) {
             Where scope;
         };
         Expected expected[] = {
-            {"!DILocalVariable(name: \"a\", arg: 1, ", "!DIExpression(DW_OP_deref)", IN_SUM},
+            {"!DILocalVariable(name: \"a\", arg: 1, ",
+             (Target)t == TARGET_WINDOWS_X64 ? "!DIExpression()" : "!DIExpression(DW_OP_deref)", IN_SUM},
             {"!DILocalVariable(name: \"k\", arg: 2, ", "!DIExpression()", IN_SUM},
             {"!DILocalVariable(name: \"b\", arg: 3, ", "!DIExpression()", IN_SUM},
             {"!DILocalVariable(name: \"x\", scope: ", "!DIExpression()", IN_SUM},
@@ -1402,6 +1405,20 @@ TEST(llvm_variables_are_declared) {
             } else {
                 CHECK(string_eq(scope, e.scope == IN_SUM ? sum : main));
             }
+        }
+        // a's type: the view's own on Linux, where the expression reads
+        // through the slot; a 64-bit pointer to it on Windows, where the
+        // slot is the variable.
+        String view = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"[]int\""));
+        String view_type = attached(&a, line_with(text, "!DILocalVariable(name: \"a\", arg: 1, "), "type:");
+        CHECK(view.count > 0 && view_type.count > 0);
+        if ((Target)t == TARGET_WINDOWS_X64) {
+            String pointer = node_line(&a, text, view_type);
+            CHECK(contains(pointer, "!DIDerivedType(tag: DW_TAG_pointer_type, "));
+            CHECK(contains(pointer, string_cstr(&a, string_printf(&a, "baseType: " STR_FMT ", size: 64",
+                                                                 STR_ARG(view)))));
+        } else {
+            CHECK(string_eq(view_type, view));
         }
         // b, a bool, is an i1 in LLVM: its slot is an i8, as a bool in
         // memory is, and it's stored zero-extended, so the byte a debugger
@@ -1432,7 +1449,6 @@ TEST(llvm_variables_are_declared) {
         String types = node_line(&a, text, attached(&a, type, "types:"));
         String integer = defined_node(line_with(text, "!DIBasicType(name: \"int\""));
         String boolean = defined_node(line_with(text, "!DIBasicType(name: \"bool\""));
-        String view = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"[]int\""));
         String list = string_printf(&a, " = !{" STR_FMT ", " STR_FMT ", " STR_FMT ", " STR_FMT "}", STR_ARG(integer),
                                     STR_ARG(view), STR_ARG(integer), STR_ARG(boolean));
         CHECK(contains(types, string_cstr(&a, list)));
