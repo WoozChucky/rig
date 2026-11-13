@@ -3499,3 +3499,42 @@ TEST(a_global_procedure_value_has_a_relocation) {
     CHECK(contains(text, "@one = internal global <{ ptr }> <{ ptr @neg }>, align 8"));
     arena_free(&a);
 }
+
+TEST(a_call_through_a_value_checks_for_null) {
+    // The callee is worked out first, then the arguments, left to right;
+    // then, right before the call, a null callee is a runtime error at the
+    // call's '('. A constant naming a procedure is a direct call.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "add :: (a: int, b: int) -> int { return a + b; }\n"
+                                          "ADD :: add;\n"
+                                          "main :: () {\n"
+                                          "    f := add;\n"
+                                          "    x := f(1, ADD(2, 3));\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "main"),
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  %0 = local ptr\n"
+              "  %1 = procaddr @add\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local i64\n"
+              "  %3 = load ptr %0\n"
+              "  %4 = const i64 1\n"
+              "  %5 = const i64 2\n"
+              "  %6 = const i64 3\n"
+              "  %7 = call @add(%5, %6)\n"
+              "  %8 = const ptr 0\n"
+              "  %9 = cmp eq ptr %3, %8\n"
+              "  branch %9, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  %10 = call %3(%4, %7)\n"
+              "  store i64 %10, %2\n"
+              "  %11 = const i32 0\n"
+              "  ret %11\n"
+              "}\n");
+    CHECK(contains(ir, "global @str.0 = \"test.rig:5:11: runtime error: null procedure call\0A\00\"\n"));
+    arena_free(&a);
+}

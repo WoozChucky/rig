@@ -257,6 +257,15 @@ static Ir_Instr *emit_call(Lowering *l, s32 callee, Array<s32> args) {
     return call;
 }
 
+// A call through the procedure value %callee (ir_emit_call_indirect), the
+// same way.
+static Ir_Instr *emit_call_indirect(Lowering *l, s32 callee, Ir_Proc *signature, Array<s32> args) {
+    Ir_Instr *call = ir_emit_call_indirect(l->proc, l->block, callee, signature, args);
+    call->pos = l->pos;
+    call->scope = l->scope;
+    return call;
+}
+
 // A new scope of the current procedure, inside the current one, starting
 // at `pos`; its index. It's made when lowering reaches its code, so scopes
 // are numbered in the order their code comes. (The instructions go on in
@@ -1324,9 +1333,30 @@ static Type *extra_argument_type(Ast *arg) {
     return type_c_promoted(arg->type);
 }
 
+// What a procedure of procedure type t takes and gives in the IR, for a
+// call through a value of t (IR_CALL_INDIRECT): the parameters and results
+// a procedure of that signature has (ir_lower makes the program's own the
+// same way), so the call passes what the procedure expects, whichever it
+// is. The Rig results are kept too, for the backend's sret.
+static Ir_Proc *signature_of(Lowering *l, Type *t) {
+    Ir_Proc *p = arena_new<Ir_Proc>(l->arena);  // in no module: only a call's signature
+    for (s64 k = 0; k < t->result_count; k++) {
+        if (type_is_aggregate(t->results[k])) ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    }
+    for (s64 k = 0; k < t->param_count; k++) ir_add_param(p, ir_type_of(t->params[k]), ir_ext_of(t->params[k]));
+    for (s64 k = 0; k < t->result_count; k++) {
+        Type *result = t->results[k];
+        if (!type_is_aggregate(result)) array_add(&p->results, {ir_type_of(result), ir_ext_of(result)});
+        array_add(&p->source_results, result);
+    }
+    return p;
+}
+
 // A call; `results` gets one value per result of the callee, in order: a
 // scalar's IR value, or an aggregate's address.
-// - First, a temporary for each aggregate result, passed as the hidden
+// - A call through a procedure value works the value out first, the
+//   procedure called.
+// - Then a temporary for each aggregate result, passed as the hidden
 //   parameters, before the arguments: the callee's return copies the result
 //   there. Never the place the result is going, which the callee might read
 //   (f returning g2, g1 for `g1, g2 = f();`): the caller copies the
@@ -1336,6 +1366,10 @@ static Type *extra_argument_type(Ast *arg) {
 //   and the temporary's address passed. So the callee's parameter is the
 //   value as it was then, whatever happens to the variable it came from (the
 //   callee may change the global it was given).
+// - Through a procedure value, right before the call, a null value is a
+//   runtime error at the call's '(' (spec 8.4: "null procedure call"); then
+//   the call of the value, as the procedure it holds expects to be called
+//   (signature_of).
 // - A variadic foreign procedure's arguments after its fixed parameters
 //   have none to convert to: each is passed as C's default argument
 //   promotions make its own type (extra_argument_type): an s8 or s16
@@ -1354,18 +1388,29 @@ static Type *extra_argument_type(Ast *arg) {
 //                                %2 = load i8 %0
 //                                %3 = zext i8 %2 to i32
 //                                %4 = call @printf(%1, %3)
+//
+//     f(1);                      %1 = load ptr %0          (f, in the slot %0)
+//                                %2 = const i64 1
+//                                %3 = const ptr 0
+//                                %4 = cmp eq ptr %1, %3
+//                                branch %4, fail, ok       (emit_runtime_check)
+//                              ok:
+//                                call %1(%2)
 static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results) {
-    Ast_Proc *callee = call->proc;
-    s32 *index = table_get(&l->proc_index, callee->name);
-    RIG_ASSERT(index);
+    Ast_Proc *proc = call->proc;
+    Type *callee = call->callee_type;  // through a value
+    s32 function = callee ? lower_value(l, call->callee, callee) : -1;
+    s64 params = proc ? proc->params.count : callee->param_count, count = call_result_count(call);
     Array<s32> args = {};  // the call instruction keeps it
-    for (s64 i = 0; i < callee->results.count; i++) {
-        Type *t = callee->results[i]->type;
+    for (s64 i = 0; i < count; i++) {
+        Type *t = call_result_type(call, i);
         if (type_is_aggregate(t)) array_add(&args, emit_slot(l, t));
     }
     s32 hidden = (s32)args.count;
     for (s64 i = 0; i < call->args.count; i++) {
-        Type *t = i < callee->params.count ? callee->params[i]->type : extra_argument_type(call->args[i]);
+        Type *t = i >= params ? extra_argument_type(call->args[i])
+                  : proc      ? proc->params[i]->type
+                              : callee->params[i];
         s32 value = lower_value(l, call->args[i], t);
         if (type_is_aggregate(t)) {
             s32 copy = emit_slot(l, t);
@@ -1374,10 +1419,21 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
         }
         array_add(&args, value);
     }
-    s32 next = emit_call(l, *index, args)->result;
+    s32 next;
+    if (proc) {
+        s32 *index = table_get(&l->proc_index, proc->name);
+        RIG_ASSERT(index);
+        next = emit_call(l, *index, args)->result;
+    } else {
+        // Right before the call, once the arguments are worked out: a null
+        // procedure value is a runtime error at the call's '('.
+        emit_runtime_check(l, emit_compare(l, IR_EQ, IR_PTR, function, emit_constant(l, IR_PTR, 0)), call->pos,
+                           str("null procedure call"));
+        next = emit_call_indirect(l, function, signature_of(l, callee), args)->result;
+    }
     s32 temporary = 0;
-    for (s64 i = 0; i < callee->results.count; i++) {
-        if (type_is_aggregate(callee->results[i]->type)) {
+    for (s64 i = 0; i < count; i++) {
+        if (type_is_aggregate(call_result_type(call, i))) {
             array_add(results, args[temporary++]);
         } else {
             array_add(results, next++);
@@ -1795,7 +1851,7 @@ static void lower_multi_assign(Lowering *l, Ast_Assign *assign) {
     for (s64 i = 0; i < assign->targets.count; i++) {
         Ast *target = assign->targets[i];  // a place in memory: checked
         s32 address = lower_address(l, target);
-        Type *from = call->proc->results[i]->type;
+        Type *from = call_result_type(call, i);
         // An array result going into a view: a view of a copy of it, never
         // of the call's own temporary (view_of_copy).
         s32 value = from->kind == TYPE_ARRAY && target->type->kind == TYPE_VIEW

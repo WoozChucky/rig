@@ -175,7 +175,7 @@ TEST(a_procedure_alone_is_no_statement) {
     Arena a = arena_make();
     CHECK_STR(check_errors(&a, PUTS "IDENT:main :: ( ) { IDENT:puts ; IDENT:puts ( STRING:x ) ( ) ; }"),
               "2:11: only a call can be a statement, for now\n"
-              "2:23: only a procedure's name can be called, for now\n");
+              "2:15: a value of type 's32' isn't a procedure, so it can't be called\n");
     arena_free(&a);
 }
 
@@ -629,16 +629,17 @@ TEST(only_procedures_are_called) {
               "4:5: 'puts' isn't a procedure, so it can't be called\n"
               "4:10: unknown identifier 'nope'\n");
 
-    // Calling anything but a name: the arguments are checked all the same.
+    // Calling a value that isn't a procedure: the arguments are checked all
+    // the same.
     CHECK_STR(check_source(&a,
                            "f :: () -> s32 { return 1; }\n"
                            "main :: () {\n"
                            "    5(nope);\n"
                            "    f()(other);\n"
                            "}\n"),
-              "3:6: only a procedure's name can be called, for now\n"
+              "3:5: a value of type 'int' isn't a procedure, so it can't be called\n"
               "3:7: unknown identifier 'nope'\n"
-              "4:8: only a procedure's name can be called, for now\n"
+              "4:5: a value of type 's32' isn't a procedure, so it can't be called\n"
               "4:9: unknown identifier 'other'\n");
     arena_free(&a);
 }
@@ -4514,5 +4515,65 @@ TEST(procedure_values_in_globals) {
                            "copy := one;\n"
                            "main :: () { }\n"),
               "10:9: a global's value must be known while compiling, for now\n");
+    arena_free(&a);
+}
+
+TEST(procedure_values_are_called) {
+    // A value of a procedure type is called as the procedure it holds would
+    // be: a variable, a parameter, a field, an element, a call's result. A
+    // constant naming a procedure calls it directly.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "divmod :: (a: int, b: int) -> (int, int) { return a / b, a % b; }\n"
+                           "Op :: struct { run: (int, int) -> int; }\n"
+                           "ADD :: add;\n"
+                           "apply :: (f: (int, int) -> int, a: int, b: int) -> int { return f(a, b); }\n"
+                           "pick :: () -> (int, int) -> int { return add; }\n"
+                           "main :: () {\n"
+                           "    f := add;\n"
+                           "    x := f(1, 2);\n"
+                           "    y := ADD(3, 4);\n"
+                           "    s := Op.{add};\n"
+                           "    z := s.run(x, y);\n"
+                           "    table : [1](int, int) -> int = .[add];\n"
+                           "    w := table[0](1, 2);\n"
+                           "    v : [](int, int) -> int = table;\n"
+                           "    u := v[0](1, 2) + pick()(1, 2);\n"
+                           "    g := divmod;\n"
+                           "    q, r := g(7, 2);\n"
+                           "    q, r = g(8, 3);\n"
+                           "    n := apply(f, q, r);\n"
+                           "}\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(calls_through_values_are_checked) {
+    // Checked as a direct call is: the number of arguments and their types,
+    // and a result where a value is needed. The callee is named by the
+    // variable's name, or by its type when it's no name.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "show :: (a: int) { }\n"
+                           "Op :: struct { run: (int, int) -> int; count: int; }\n"
+                           "main :: () {\n"
+                           "    f : (int, int) -> int = add;\n"
+                           "    f(1);\n"
+                           "    f(1, true);\n"
+                           "    s := Op.{add, 2};\n"
+                           "    s.run(1, 2, 3);\n"
+                           "    s.count(1);\n"
+                           "    g := show;\n"
+                           "    x := g(1);\n"
+                           "    p, q := f(1, 2);\n"
+                           "}\n"),
+              "6:5: 'f' takes 2 arguments, but 1 was given\n"
+              "7:10: argument 2 of 'f' has type 'bool', which can't be converted to 'int'\n"
+              "9:5: '(int, int) -> int' takes 2 arguments, but 3 were given\n"
+              "10:5: a value of type 'int' isn't a procedure, so it can't be called\n"
+              "12:10: 'g' returns nothing, so it has no value\n"
+              "13:13: 'f' returns 1 value, but 2 names receive them\n");
     arena_free(&a);
 }

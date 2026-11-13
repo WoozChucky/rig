@@ -364,7 +364,8 @@ Type *check_value(Checker *c, Ast *e) {
     if (t == &type_void) {
         // Only a call has type void.
         Ast_Call *call = (Ast_Call *)e;
-        diag_error(c->diag, e->start, "'" STR_FMT "' returns nothing, so it has no value", STR_ARG(call->proc->name));
+        diag_error(c->diag, e->start, "'" STR_FMT "' returns nothing, so it has no value",
+                   STR_ARG(callee_name(c, call)));
         e->type = nullptr;
         return nullptr;
     }
@@ -505,52 +506,114 @@ static void check_extra_argument(Checker *c, Ast_Proc *proc, Ast *arg, s64 index
     }
 }
 
+String callee_name(Checker *c, Ast_Call *call) {
+    if (call->proc) return call->proc->name;
+    if (call->callee->kind == AST_NAME) return ((Ast_Name *)call->callee)->name;
+    return type_name(c->arena, call->callee_type);
+}
+
+s64 call_result_count(Ast_Call *call) {
+    return call->proc ? call->proc->results.count : call->callee_type->result_count;
+}
+
+Type *call_result_type(Ast_Call *call, s64 i) {
+    return call->proc ? call->proc->results[i]->type : call->callee_type->results[i];
+}
+
+// What a call's callee is (spec 5.10), filling in call->proc or
+// call->callee_type; false when it's unknown or no procedure (reported):
+// - a procedure's name, or a constant's that names one (OP :: add;): a call
+//   of the procedure itself, call->proc;
+// - a value of a procedure type, a variable's or a parameter's (which hide
+//   a procedure of their name), a field, an element, a call's result: a
+//   call through the value, call->callee_type, checked as a call of the
+//   procedure it holds would be;
+// - anything else: "'x' isn't a procedure, so it can't be called" for a
+//   name (a struct's or a built-in type's too), "a value of type 'int'
+//   isn't a procedure, so it can't be called" for any other value, at the
+//   callee.
+static bool check_callee(Checker *c, Ast_Call *call) {
+    Ast *callee = call->callee;
+    Type *t = nullptr;
+    if (callee->kind == AST_NAME) {
+        Ast_Name *name = (Ast_Name *)callee;
+        Ast *decl = check_lookup(c, name->name);
+        if (!decl || decl->kind == AST_STRUCT) {
+            name->decl = decl;
+            if (decl) {
+                diag_error(c->diag, name->pos, "'" STR_FMT "' isn't a procedure, so it can't be called",
+                           STR_ARG(name->name));
+            } else {
+                report_undeclared(c, name, true);
+            }
+            return false;
+        }
+        if (decl->kind == AST_PROC) {
+            name->decl = decl;
+            call->proc = (Ast_Proc *)decl;
+            return true;
+        }
+        t = check_expression(c, name);  // a variable's, a parameter's or a constant's value
+        if (decl->kind == AST_CONST && ((Ast_Const *)decl)->proc) {
+            call->proc = ((Ast_Const *)decl)->proc;
+            return true;
+        }
+        if (t && t->kind != TYPE_PROC) {
+            diag_error(c->diag, name->pos, "'" STR_FMT "' isn't a procedure, so it can't be called",
+                       STR_ARG(name->name));
+            return false;
+        }
+    } else {
+        t = check_operand(c, callee);
+        if (t && t->kind != TYPE_PROC) {
+            diag_error(c->diag, callee->start, "a value of type '" STR_FMT "' isn't a procedure, so it can't be called",
+                       STR_ARG(type_name(c->arena, t)));
+            return false;
+        }
+    }
+    call->callee_type = t;
+    return t != nullptr;  // an unknown type was reported with its own mistake
+}
+
+// A call: the callee (check_callee), then the arguments, whose own mistakes
+// are reported even when the callee is wrong, after its: in source order.
+// Then the arguments against the parameters, the same for a procedure and
+// for a value of a procedure type, named in the messages by callee_name: as
+// many as there are ("'f' takes 2 arguments, but 1 was given", at the
+// callee; a variadic foreign procedure "at least" its fixed ones), each
+// converting to its parameter's type. The call's type is its first
+// result's, void when there's none.
 static Type *check_call(Checker *c, Ast_Call *call) {
-    if (call->callee->kind != AST_NAME) {
-        check_expression(c, call->callee);
-        diag_error(c->diag, call->pos, "only a procedure's name can be called, for now");
-        // The arguments' own mistakes are reported too, as below.
-        for (s64 i = 0; i < call->args.count; i++) check_value(c, call->args[i]);
+    bool known = check_callee(c, call);
+    for (s64 i = 0; i < call->args.count; i++) check_value(c, call->args[i]);
+    if (!known) return nullptr;
+    Ast_Proc *proc = call->proc;
+    // A broken callee's parameters and return type are unknown: any
+    // arguments may be right, and the call's type is unknown too. So is a
+    // signature in a circle with this call (it needs the call's value), or
+    // nested too deeply to check here: both were reported.
+    if (proc && (proc->is_broken || !check_proc_signature(c, proc))) {
+        call->proc = nullptr;
         return nullptr;
     }
-    Ast_Name *name = (Ast_Name *)call->callee;
-    Ast *decl = check_lookup(c, name->name);
-    name->decl = decl;
-    if (!decl) {
-        report_undeclared(c, name, true);
-    } else if (decl->kind != AST_PROC) {
-        // A variable, constant or parameter of that name, which hides the
-        // procedure if there is one.
-        diag_error(c->diag, name->pos, "'" STR_FMT "' isn't a procedure, so it can't be called", STR_ARG(name->name));
-    }
-    // The arguments are checked even when the callee is wrong, so their own
-    // mistakes are reported too, after the callee's: in source order.
-    for (s64 i = 0; i < call->args.count; i++) check_value(c, call->args[i]);
-    // A broken callee's parameters and return type are unknown: any
-    // arguments may be right, and the call's type is unknown too.
-    if (!decl || decl->kind != AST_PROC || ((Ast_Proc *)decl)->is_broken) return nullptr;
-    Ast_Proc *proc = (Ast_Proc *)decl;
-    // A signature in a circle with this call (it needs the call's value), or
-    // nested too deeply to check here, gives the call no type, so nothing
-    // more is said about it: both were reported.
-    if (!check_proc_signature(c, proc)) return nullptr;
-
-    call->proc = proc;
+    String name = callee_name(c, call);
+    Type *callee = call->callee_type;
     // A variadic procedure takes its fixed parameters and any number more.
-    s64 n = proc->params.count, given = call->args.count;
-    if (proc->is_variadic ? given < n : given != n) {
-        diag_error(c->diag, name->pos, "'" STR_FMT "' takes %s%lld argument%s, but %lld %s given",
-                   STR_ARG(proc->name), proc->is_variadic ? "at least " : "", (long long)n, n == 1 ? "" : "s",
-                   (long long)given, given == 1 ? "was" : "were");
+    bool variadic = proc && proc->is_variadic;
+    s64 n = proc ? proc->params.count : callee->param_count, given = call->args.count;
+    if (variadic ? given < n : given != n) {
+        diag_error(c->diag, call->callee->start, "'" STR_FMT "' takes %s%lld argument%s, but %lld %s given",
+                   STR_ARG(name), variadic ? "at least " : "", (long long)n, n == 1 ? "" : "s", (long long)given,
+                   given == 1 ? "was" : "were");
     } else {
         for (s64 i = 0; i < n; i++) {
             Ast *arg = call->args[i];
-            Type *from = arg->type, *to = proc->params[i]->type;
+            Type *from = arg->type, *to = proc ? proc->params[i]->type : callee->params[i];
             if (!check_convert(c, arg, to)) {
                 diag_error(c->diag, arg->start,
                            "argument %lld of '" STR_FMT "' has type '" STR_FMT "', which can't be converted to '" STR_FMT
                            "'%s",
-                           (long long)(i + 1), STR_ARG(proc->name), STR_ARG(type_name(c->arena, from)),
+                           (long long)(i + 1), STR_ARG(name), STR_ARG(type_name(c->arena, from)),
                            STR_ARG(type_name(c->arena, to)), conversion_hint(from, to));
             }
         }
@@ -571,7 +634,7 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     }
     // A procedure whose return type is unknown gives an unknown type, so
     // nothing is said about it again.
-    if (proc->results.count) return proc->results[0]->type;
+    if (call_result_count(call)) return call_result_type(call, 0);
     return &type_void;
 }
 
