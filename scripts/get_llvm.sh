@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 
 VERSION=23.1.5
 ARCHIVE=LLVM-$VERSION-Linux-X64.tar.xz
-SHA256=25d814fda50d5fb0084b42be09605d8b1595d49d5e2e03a3345d7e112ff6f9f3
+SHA256=f72edb0b36580ece7f52e23858f00c18fad4e87395ea7ad05d7e55c39f8fc78a
 URL=https://github.com/llvm/llvm-project/releases/download/llvmorg-$VERSION/$ARCHIVE
 DEST="${RIG_LLVM_DIR:-deps/llvm-linux}"
 

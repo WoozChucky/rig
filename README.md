@@ -4,7 +4,7 @@
 
 A compiled systems programming language for 64-bit Windows and Linux.
 
-Rig is in the spirit of Jai: no garbage collector, no virtual machine, C functions called directly, compile-time execution (planned), and one command that builds everything. A program compiles ahead of time to a native executable linked with the platform's C runtime, and manages its own memory. Rig is also a way to learn how a real language is built end to end, from the lexer to the debugger's line tables; its compiler is written in C-style C++23 over LLVM 23.1.4's C API.
+Rig is in the spirit of Jai: no garbage collector, no virtual machine, C functions called directly, compile-time execution (planned), and one command that builds everything. A program compiles ahead of time to a native executable linked with the platform's C runtime, and manages its own memory. Rig is also a way to learn how a real language is built end to end, from the lexer to the debugger's line tables; its compiler is written in C-style C++23 over the C API of a pinned LLVM release (the version in `scripts/get_llvm.sh`).
 
 ## A taste of Rig
 
