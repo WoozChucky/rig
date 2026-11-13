@@ -5,7 +5,7 @@
 // files it #loads, lexes, parses and checks them, and stops there with the
 // diagnostics on stderr if anything was wrong (exit 1). Otherwise it lowers
 // the program (without the bounds checks of a[i] with --no-bounds-checks,
-// spec 6.5), has LLVM write the object file .build/NAME.obj (Windows) or
+// spec 8.5), has LLVM write the object file .build/NAME.obj (Windows) or
 // .build/NAME.o (Linux) in the current directory, and links it into OUTPUT,
 // by default NAME.exe or NAME in the current directory, NAME being FILE.rig's
 // name (the main file's) without its directory and .rig (exit 0).
