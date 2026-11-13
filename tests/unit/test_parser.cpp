@@ -1879,3 +1879,149 @@ TEST(misplaced_dots_in_a_signature) {
     CHECK_STR(errors, "1:18: expected ')', found '->'\n");
     arena_free(&a);
 }
+
+// Issue #83: procedure types, written as signatures, and #c_call.
+
+TEST(parses_procedure_types) {
+    // A procedure type is a signature: its parameters' types, named or
+    // not (the names aren't part of it), and its results after '->', one
+    // as it is and several in parentheses. Without '->' it returns nothing.
+    // It goes wherever a type does.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "apply :: (f: (int, int) -> int, a: int) -> int { return f(a, a); }\n"
+                        "split : (int) -> (int, int);\n"
+                        "done : ();\n"
+                        "named : (a: *void, b: *void) -> s32 #c_call = ---;\n"
+                        "Ops :: struct { op: (int) -> int; ops: [2](int) -> int; }\n"
+                        "p : *(int) -> int;\n"
+                        "v : [](u8) = .[];\n"
+                        "one : (int) -> (int);\n"
+                        "main :: () {\n"
+                        "    f : (x: int) -> int = cast((int) -> int) null;\n"
+                        "    n := size_of(() -> u8);\n"
+                        "}\n",
+                        &errors),
+              "(proc apply (params (f (proc-type (params int int) (returns int))) (a int)) (returns int) "
+              "(block (return (call f (name a) (name a)))))\n"
+              "(var split (proc-type (params int) (returns int int)))\n"
+              "(var done (proc-type (params)))\n"
+              "(var named (proc-type (params (ptr void) (ptr void)) (returns s32) (c_call)) ---)\n"
+              "(struct Ops (op (proc-type (params int) (returns int))) "
+              "(ops (array (int 2) (proc-type (params int) (returns int)))))\n"
+              "(var p (ptr (proc-type (params int) (returns int))))\n"
+              "(var v (view (proc-type (params u8))) (literal-array _))\n"
+              "(var one (proc-type (params int) (returns int)))\n"
+              "(proc main (params) (block (var f (proc-type (params int) (returns int)) "
+              "(cast (proc-type (params int) (returns int)) (null))) "
+              "(var n _ (size_of (proc-type (params) (returns u8))))))\n");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(a_procedure_type_can_return_one) {
+    // After '->', parentheses followed by another '->' are a procedure
+    // type, the one result: () -> (int) -> int returns an (int) -> int.
+    // Otherwise they hold the results, so a procedure type with no results
+    // as the one result is written in parentheses of its own, ((int)). A
+    // #c_call goes with the innermost type that has room for it: after a
+    // result that's a procedure type, it's that type's.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "maker : () -> (int) -> int;\n"
+                        "deeper : () -> (int) -> (int) -> int;\n"
+                        "quiet : () -> ((int));\n"
+                        "inner : () -> (a: *void) -> s32 #c_call;\n"
+                        "outer : () -> (int) #c_call;\n"
+                        "both : () -> ((int) #c_call) #c_call;\n"
+                        "main :: () { }\n",
+                        &errors),
+              "(var maker (proc-type (params) (returns (proc-type (params int) (returns int)))))\n"
+              "(var deeper (proc-type (params) (returns (proc-type (params int) (returns (proc-type (params int) "
+              "(returns int)))))))\n"
+              "(var quiet (proc-type (params) (returns (proc-type (params int)))))\n"
+              "(var inner (proc-type (params) (returns (proc-type (params (ptr void)) (returns s32) (c_call)))))\n"
+              "(var outer (proc-type (params) (returns int) (c_call)))\n"
+              "(var both (proc-type (params) (returns (proc-type (params int) (c_call))) (c_call)))\n"
+              "(proc main (params) (block))\n");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(parses_c_call_declarations) {
+    // #c_call before a body, with #no_abc in either order; several results
+    // may be written in parentheses in a declaration too.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "compare :: (a: *void, b: *void) -> s32 #c_call { return 0; }\n"
+                        "f :: () #c_call #no_abc { }\n"
+                        "g :: () #no_abc #c_call { }\n"
+                        "divmod :: (a: int, b: int) -> (int, int) { return a / b, a % b; }\n",
+                        &errors),
+              "(proc compare (params (a (ptr void)) (b (ptr void))) (returns s32) (c_call) (block (return (int 0))))\n"
+              "(proc f (params) (c_call) (no_abc) (block))\n"
+              "(proc g (params) (c_call) (no_abc) (block))\n"
+              "(proc divmod (params (a int) (b int)) (returns int int) (block (return (binary / (name a) (name b)) "
+              "(binary % (name a) (name b)))))\n");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(misplaced_c_call_and_dots) {
+    Arena a = arena_make();
+    String errors;
+    // A foreign procedure is C's already.
+    parse_src(&a, "p :: (s: *u8) #c_call #foreign libc;\n", &errors);
+    CHECK_STR(errors, "1:15: a foreign procedure is C's already: it takes no '#c_call'\n");
+    parse_src(&a, "f :: () #c_call #c_call { }\n", &errors);
+    CHECK_STR(errors, "1:17: '#c_call' is written twice\n");
+    parse_src(&a, "f :: () #no_abc #no_abc { }\n", &errors);
+    CHECK_STR(errors, "1:17: '#no_abc' is written twice\n");
+    parse_src(&a, "t : () #c_call #c_call;\n", &errors);
+    CHECK_STR(errors, "1:16: '#c_call' is written twice\n");
+    // A procedure taking more arguments with '..' can't be a value, so no
+    // procedure type has them.
+    parse_src(&a, "t : (*u8, ..) -> s32;\n", &errors);
+    CHECK_STR(errors, "1:11: a procedure type can't take '..': a procedure that takes more arguments can't be a "
+                      "value\n");
+    // A type ends at a ',': several results take parentheses.
+    parse_src(&a, "t : (int) -> int, int;\n", &errors);
+    CHECK_STR(errors, "1:17: expected ';', found ','\n");
+    parse_src(&a, "t : () -> ();\n", &errors);
+    CHECK_STR(errors, "1:12: expected a type, found ')'\n");
+    arena_free(&a);
+}
+
+TEST(a_variable_of_a_procedure_type_isnt_a_mistyped_procedure) {
+    // `greet : () { }` is still a procedure with its '::' mistyped; a
+    // procedure type followed by '=' or ';' is a variable's.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "op : (int, int) -> int = add;\n"
+                        "hook : () #c_call;\n"
+                        "main :: () { }\n",
+                        &errors),
+              "(var op (proc-type (params int int) (returns int)) (name add))\n"
+              "(var hook (proc-type (params) (c_call)))\n"
+              "(proc main (params) (block))\n");
+    CHECK_STR(errors, "");
+    parse_src(&a, "greet : (s: *u8) -> int #c_call { }\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:7: expected '::', found ':'\n");
+    parse_src(&a, "greet : () #foreign libc;\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:7: expected '::', found ':'\n");
+    arena_free(&a);
+}
+
+TEST(procedure_types_nest_at_most_max_depth) {
+    // A procedure type's '(' is a level, as a '*' is: (((int))) is 3.
+    Arena a = arena_make();
+    const char *local = "main :: () {\n    x : ";
+    CHECK(builds(&a, nested_source(&a, local, "(", MAX_DEPTH, "int", ")", ";\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, local, "(", MAX_DEPTH + 1, "int", ")", ";\n}\n")),
+              types_too_deep(&a, 2, (s64)strlen("    x : ") + MAX_DEPTH + 1));
+    arena_free(&a);
+}

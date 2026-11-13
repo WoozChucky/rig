@@ -56,10 +56,34 @@ static void out_operator(Array<u8> *buffer, Token_Kind op) {
     out(buffer, string_slice(quoted, 1, quoted.count - 2));
 }
 
-// (ptr int), (array (int 3) int) with the count as written, (view int), or
-// a name.
+static void dump_type(Array<u8> *buffer, Ast_Type *type);
+
+// " (returns int int)", or nothing when there are no results.
+static void dump_results(Array<u8> *buffer, Array<Ast_Type *> results) {
+    if (!results.count) return;
+    out(buffer, " (returns");
+    for (s64 i = 0; i < results.count; i++) {
+        out(buffer, " ");
+        dump_type(buffer, results[i]);
+    }
+    out(buffer, ")");
+}
+
+// (ptr int), (array (int 3) int) with the count as written, (view int),
+// (proc-type (params int) (returns int) (c_call)), or a name.
 static void dump_type(Array<u8> *buffer, Ast_Type *type) {
     switch (type->kind) {
+    case AST_TYPE_PROC:
+        out(buffer, "(proc-type (params");
+        for (s64 i = 0; i < type->params.count; i++) {
+            out(buffer, " ");
+            dump_type(buffer, type->params[i]);
+        }
+        out(buffer, ")");
+        dump_results(buffer, type->results);
+        if (type->is_c_call) out(buffer, " (c_call)");
+        out(buffer, ")");
+        break;
     case AST_TYPE_POINTER:
         out(buffer, "(ptr ");
         dump_type(buffer, type->pointee);
@@ -103,14 +127,8 @@ static void dump(Array<u8> *buffer, Ast *node) {
         }
         if (proc->is_variadic) out(buffer, " ..");
         out(buffer, ")");
-        if (proc->results.count) {
-            out(buffer, " (returns");
-            for (s64 i = 0; i < proc->results.count; i++) {
-                out(buffer, " ");
-                dump_type(buffer, proc->results[i]);
-            }
-            out(buffer, ")");
-        }
+        dump_results(buffer, proc->results);
+        if (proc->is_c_call) out(buffer, " (c_call)");
         if (proc->no_bounds_checks) out(buffer, " (no_abc)");
         if (proc->is_foreign) {
             out(buffer, " (foreign ");
@@ -137,6 +155,7 @@ static void dump(Array<u8> *buffer, Ast *node) {
     case AST_TYPE_POINTER:
     case AST_TYPE_ARRAY:
     case AST_TYPE_VIEW:
+    case AST_TYPE_PROC:
         dump_type(buffer, (Ast_Type *)node);
         break;
     case AST_BLOCK: {
