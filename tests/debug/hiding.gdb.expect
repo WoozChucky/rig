@@ -1,0 +1,8 @@
+main () at
+hiding.rig:8
+y := g;
+$1 = 5
+main () at
+hiding.rig:10
+y = g + y;
+$2 = 10
