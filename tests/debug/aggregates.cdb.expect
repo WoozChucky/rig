@@ -12,8 +12,23 @@ int64[],
 int64)
 sum  int64 (
 Pair*)
+16:     p := Pair.{n, n + 1};
+struct Pair * result$ = 0x
+int64 n = 0n5
+50:     s := sum(q);
+?? q
+a                : 0n9
+b                : 0n10
+.call returns:
+int64 0n19
+?? w
+count            : 0n5
+"other"
+?? b[1]
+int64 0n14
+Too few arguments
 36:     s := p.a + p.b;
 struct Pair * p = 0x
-int64 0n6
+int64 0n10
 .call returns:
 int64 0n8
