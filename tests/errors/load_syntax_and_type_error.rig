@@ -1,0 +1,10 @@
+// A syntax error stops neither the checking of the rest of the program nor
+// that of its other files (issue #112): after counter's, the type error in
+// load/too_big.rig is reported too, though it's in another file.
+#load "load/too_big.rig";
+
+counter int = 0;
+
+main :: () {
+    too_big();
+}
