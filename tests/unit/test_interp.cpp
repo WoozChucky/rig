@@ -2755,13 +2755,16 @@ TEST(interpret_mode_command_line) {
     }
 
     // A file that can't be read: exit status 1, and why, from the system.
+    // The system's wording varies, so the line is held to its shape: the
+    // prefix, then some text, then the line break.
     String missing = str(".build/tests/interp/missing.rig");
     remove(string_cstr(&a, missing));
     r = interpret_test_run(&a, &missing, 1, false);
     const char *cannot = "unit-tests: error: cannot read '.build/tests/interp/missing.rig': ";
     s64 n = (s64)strlen(cannot);
-    CHECK(r.err.count > n);
+    CHECK(r.err.count > n + 1);
     CHECK_STR(string_slice(r.err, 0, r.err.count < n ? r.err.count : n), cannot);
+    CHECK_EQ(r.err.count ? r.err.data[r.err.count - 1] : 0, '\n');
     CHECK_STR(r.out, "");
     CHECK_EQ(r.exit_code, 1);
     arena_free(&a);
