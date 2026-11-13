@@ -6,8 +6,10 @@
 // literal); an integer's sign is is_signed. It has no arena (Type.arena):
 // it lasts the whole run, as its pointers do.
 #define BUILT_IN(kind, name, size, align, is_signed)                                       \
-    {kind, size, align, is_signed, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr, \
-     nullptr, {}, nullptr, nullptr, nullptr, 0, nullptr, nullptr, nullptr}
+    {kind,    size,    align,   is_signed, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr, \
+     nullptr, {},      nullptr, nullptr,   nullptr, 0,                                    nullptr, \
+     nullptr, nullptr, nullptr, 0,         nullptr, 0,                                    false,   \
+     nullptr, nullptr}
 // The numbers' alignment is their size, as in C on x86-64.
 #define INTEGER(name, size, is_signed) BUILT_IN(TYPE_INTEGER, name, size, size, is_signed)
 #define FLOAT(name, size) BUILT_IN(TYPE_FLOAT, name, size, size, false)
@@ -25,7 +27,7 @@ static Type integer_types[] = {
 // other.
 Type type_string = {
     TYPE_STRING, 16, 8, false, nullptr, {(const u8 *)"string", 6}, nullptr, nullptr, {}, nullptr, nullptr,
-    &integer_types[4], 0, nullptr, nullptr, nullptr,
+    &integer_types[4], 0, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, nullptr, nullptr,
 };
 
 // void's size is 0 (size_of says it has none) and its alignment 1, so a
@@ -51,7 +53,7 @@ Type type_untyped_literal = BUILT_IN(TYPE_UNTYPED_LITERAL, ".{...}", 0, 1, false
 // name.
 static Type float_name = {
     TYPE_FLOAT, 4, 4,       false,   nullptr, {(const u8 *)"float", 5}, nullptr, &type_float32, {}, nullptr, nullptr,
-    nullptr,    0, nullptr, nullptr, nullptr,
+    nullptr,    0, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, nullptr, nullptr,
 };
 
 // Every type a program can name, by its built-in name: the one list
@@ -168,6 +170,59 @@ Type *type_view_of(Type *element) {
     return element->view;
 }
 
+// The procedure types that have no parameters or results to anchor them,
+// () and () #c_call (type_proc_of). Never a type of its own.
+static Type no_components = BUILT_IN(TYPE_VOID, "", 0, 1, false);
+
+// Whether procedure type t has these parameters, results and marker.
+static bool proc_type_is(Type *t, Type **params, s64 param_count, Type **results, s64 result_count,
+                         bool is_c_call) {
+    if (t->param_count != param_count || t->result_count != result_count || t->is_c_call != is_c_call) return false;
+    for (s64 i = 0; i < param_count; i++) {
+        if (t->params[i] != params[i]) return false;
+    }
+    for (s64 i = 0; i < result_count; i++) {
+        if (t->results[i] != results[i]) return false;
+    }
+    return true;
+}
+
+static String proc_type_name(Arena *a, Type *t);
+
+// A procedure type is cached in one of the types it's made of, its anchor,
+// as *T is in T: the first of its parameters and results that lives in a
+// compilation's arena (one made from a struct) if any, since the procedure
+// type must live there too, and be freed with it; otherwise the first of
+// them, which lasts the whole run, as the procedure type then does. With
+// none, () and () #c_call hang off no_components. A list per anchor is
+// enough: a program writes few signatures.
+Type *type_proc_of(Type **params, s64 param_count, Type **results, s64 result_count, bool is_c_call) {
+    Type *anchor = nullptr;
+    for (s64 i = 0; i < param_count + result_count; i++) {
+        Type *component = i < param_count ? params[i] : results[i - param_count];
+        if (!anchor || (component->arena && !anchor->arena)) anchor = component;
+    }
+    if (!anchor) anchor = &no_components;
+    for (Type *t = anchor->procs; t; t = t->next_proc) {
+        if (proc_type_is(t, params, param_count, results, result_count, is_c_call)) return t;
+    }
+    Type *t = derived_from(anchor, TYPE_PROC);
+    Arena *arena = anchor->arena ? anchor->arena : &derived_types;
+    t->size = 8;
+    t->align = 8;
+    t->params = arena_new_array<Type *>(arena, param_count);
+    t->param_count = param_count;
+    for (s64 i = 0; i < param_count; i++) t->params[i] = params[i];
+    t->results = arena_new_array<Type *>(arena, result_count);
+    t->result_count = result_count;
+    for (s64 i = 0; i < result_count; i++) t->results[i] = results[i];
+    t->is_c_call = is_c_call;
+    t->name = proc_type_name(arena, t);
+    t->next_proc = anchor->procs;
+    anchor->procs = t;
+    return t;
+}
+
 // What a message names t after: a pointer's target, an array's or a view's
 // elements; null for any other type, named by its own name alone (a string
 // has u8 elements, but is "string").
@@ -217,4 +272,53 @@ String type_name(Arena *a, Type *t) {
     }
     if (inner->name.count > 0) memcpy(name + at, inner->name.data, (size_t)inner->name.count);
     return {(const u8 *)name, length};
+}
+
+// Appends text to a name being built.
+static void add_text(Array<u8> *name, String text) {
+    for (s64 i = 0; i < text.count; i++) array_add(name, text.data[i]);
+}
+
+// Whether type t, under any pointers, arrays and views, is a procedure type:
+// its name then ends with a signature's last part, which could take a
+// #c_call after it.
+static bool ends_with_proc_type(Type *t) {
+    while (named_after(t)) t = named_after(t);
+    return t->kind == TYPE_PROC;
+}
+
+// A procedure type's name, its signature as the parser reads it back
+// (parser.cpp's parse_proc_type): "(int, int) -> int", "(int) -> (int, int)",
+// "(*void) -> s32 #c_call", "()". A result that's a procedure type is
+// written in parentheses where it would otherwise read differently: when it
+// returns nothing (`() -> ((int))`; `() -> (int)` returns an int), and when
+// this type is #c_call and the result's name ends with a signature
+// (`() -> ((int) -> int) #c_call`; without them the #c_call would be the
+// result's). Made once, when the type is (type_proc_of), from its parts'
+// names, which are known by then. A procedure type nests only as deep as a
+// program writes it (MAX_DEPTH): none is inferred.
+static String proc_type_name(Arena *a, Type *t) {
+    Array<u8> name = {};
+    array_add(&name, (u8)'(');
+    for (s64 i = 0; i < t->param_count; i++) {
+        if (i > 0) add_text(&name, str(", "));
+        add_text(&name, type_name(a, t->params[i]));
+    }
+    array_add(&name, (u8)')');
+    if (t->result_count > 0) {
+        add_text(&name, str(" -> "));
+        Type *only = t->result_count == 1 ? t->results[0] : nullptr;
+        bool parenthesised = !only || (only->kind == TYPE_PROC && only->result_count == 0) ||
+                             (t->is_c_call && ends_with_proc_type(only));
+        if (parenthesised) array_add(&name, (u8)'(');
+        for (s64 i = 0; i < t->result_count; i++) {
+            if (i > 0) add_text(&name, str(", "));
+            add_text(&name, type_name(a, t->results[i]));
+        }
+        if (parenthesised) array_add(&name, (u8)')');
+    }
+    if (t->is_c_call) add_text(&name, str(" #c_call"));
+    String result = string_copy(a, {name.data, name.count});
+    array_free(&name);
+    return result;
 }

@@ -1,0 +1,5 @@
+// main is where the program starts, and C calls it as a function returning
+// an int, which its type, (), doesn't say: it can be called, not held.
+main :: () {
+    me := main;
+}

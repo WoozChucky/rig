@@ -678,7 +678,7 @@ static Ir_Module *table_module(Arena *a, bool string_first) {
     u8 *bytes = (u8 *)arena_alloc(a, 24, 1);  // zeroed
     bytes[0] = 3;
     m->globals[table].bytes = {bytes, 24};
-    array_add(&m->globals[table].relocs, {8, text});
+    array_add(&m->globals[table].relocs, {8, text, false});
     return m;
 }
 
@@ -712,14 +712,14 @@ TEST(llvm_byte_global_layouts) {
     Ir_Module *m = arena_new<Ir_Module>(&a);
     s32 text = add_string(m, "str.0", "abc");
     s32 pair = add_byte_global(m, "pair", 16, 8);
-    array_add(&m->globals[pair].relocs, {0, text});
-    array_add(&m->globals[pair].relocs, {8, text});
+    array_add(&m->globals[pair].relocs, {0, text, false});
+    array_add(&m->globals[pair].relocs, {8, text, false});
     s32 odd = add_byte_global(m, "odd", 12, 4);
     u8 *odd_bytes = (u8 *)arena_alloc(&a, 12, 1);  // zeroed
     odd_bytes[0] = 1;
     odd_bytes[11] = 2;
     m->globals[odd].bytes = {odd_bytes, 12};
-    array_add(&m->globals[odd].relocs, {3, text});
+    array_add(&m->globals[odd].relocs, {3, text, false});
     s32 counts = add_byte_global(m, "counts", 4, 4);
     static const u8 four[] = {1, 2, 3, 4};
     m->globals[counts].bytes = {four, 4};
@@ -1708,6 +1708,156 @@ TEST(llvm_declares_and_calls_a_variadic_function) {
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);
         CHECK(contains(text, "declare i32 @printf(ptr, ...)"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_calls_through_values_as_through_names) {
+    // A call through a procedure value is LLVM's call of a ptr, with the
+    // function type and the attributes a call of the procedure would have:
+    // the extensions (on Linux, where the caller extends; on Windows the
+    // callee does, and a bool is zeroext on both, as clang has them), sret
+    // and the several results' struct.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Pair :: struct { a: int; b: int; }\n"
+                                "make :: (n: int) -> Pair { return Pair.{n, n}; }\n"
+                                "small :: (n: s8) -> u8 { return cast(u8) n; }\n"
+                                "two :: (n: int) -> (int, int) { return n, n; }\n"
+                                "flip :: (b: bool) -> bool { return !b; }\n"
+                                "main :: () {\n"
+                                "    m := make;\n"
+                                "    p := m(1);\n"
+                                "    s := small;\n"
+                                "    x := s(2);\n"
+                                "    t := two;\n"
+                                "    q, r := t(3);\n"
+                                "    f := flip;\n"
+                                "    y := f(true);\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "call void %"));
+        CHECK(contains(text, "(ptr sret([16 x i8]) %"));
+        CHECK(contains(text, "call { i64, i64 } %"));
+        CHECK(count_of(text, "sret(") == 2);  // make's definition and the call through m
+        CHECK(contains(text, "call zeroext i1 %"));
+        CHECK(contains(text, "(i1 zeroext true)"));
+        if ((Target)t == TARGET_LINUX_X64) {
+            CHECK(contains(text, "call zeroext i8 %"));
+            CHECK(contains(text, "(i8 signext 2)"));
+        } else {
+            CHECK(contains(text, "call i8 %"));
+            CHECK(contains(text, "(i8 2)"));
+            CHECK(!contains(text, "signext") && count_of(text, "zeroext i8") == 0);
+        }
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_c_calls_procedures_given_and_held) {
+    // A #c_call procedure given to a foreign one is its address, a ptr, as
+    // a C function's is, and the foreign procedure takes a ptr for it; a
+    // foreign procedure held in a value is called through it as C's.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "qsort :: (base: *void, n: u64, size: u64, f: (*void, *void) -> s32 #c_call) "
+                                "#foreign libc;\n"
+                                "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                "compare :: (a: *void, b: *void) -> s32 #c_call { return 0; }\n"
+                                "main :: () {\n"
+                                "    qsort(null, 0, 8, compare);\n"
+                                "    say := puts;\n"
+                                "    say(\"hi\");\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "declare void @qsort(ptr, i64, i64, ptr)"));
+        CHECK(contains(text, "call void @qsort(ptr null, i64 0, i64 8, ptr @compare)"));
+        CHECK(contains(text, " i32 @compare(ptr %0, ptr %1)"));
+        CHECK(contains(text, "declare i32 @puts(ptr"));
+        CHECK(contains(line_with(text, "call i32 %"), "(ptr @str.0)"));
+    }
+    arena_free(&a);
+}
+
+// The subroutine type a procedure-typed variable named `name` points at,
+// and the list of its types: "!{!9, !9, !9}" from the variable's
+// "type: !12", whose pointer's "baseType: !11", whose "types: !10".
+static String pointed_signature(Arena *a, String text, const char *name) {
+    String variable = line_with(text, string_cstr(a, string_printf(a, "!DILocalVariable(name: \"%s\"", name)));
+    String pointer = node_line(a, text, attached(a, variable, "type:"));
+    if (!contains(pointer, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: ")) return {};
+    String signature = node_line(a, text, attached(a, pointer, "baseType:"));
+    if (!contains(signature, "!DISubroutineType(")) return {};
+    String types = node_line(a, text, attached(a, signature, "types:"));
+    s64 at = index_of(types, "!{");
+    return at < 0 ? String{} : string_slice(types, at, types.count - at);
+}
+
+TEST(llvm_procedure_values_are_function_pointers) {
+    // A procedure-typed variable, parameter or field is a pointer to the
+    // subroutine type of its signature, as a C function pointer is, so a
+    // debugger shows the procedure it holds and can call it. The signature
+    // is the one a procedure of the type has (spec 10.4, 10.7): aggregates
+    // as pointers, a hidden pointer per aggregate result first, the one
+    // scalar result or none. One type is one node, wherever it's used, and
+    // #c_call changes nothing a debugger sees.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Pair :: struct { a: int; b: int; }\n"
+                                "Ops :: struct { op: (int, int) -> int; }\n"
+                                "add :: (a: int, b: int) -> int { return a + b; }\n"
+                                "make :: (p: Pair, n: int) -> Pair { return p; }\n"
+                                "two :: (n: int) -> (int, int) { return n, n; }\n"
+                                "none :: () { }\n"
+                                "compare :: (a: *void, b: *void) -> s32 #c_call { return 0; }\n"
+                                "apply :: (g: (int, int) -> int) -> int { return g(1, 2); }\n"
+                                "main :: () {\n"
+                                "    f := add;\n"
+                                "    m := make;\n"
+                                "    t := two;\n"
+                                "    z := none;\n"
+                                "    c := compare;\n"
+                                "    o := Ops.{add};\n"
+                                "    apply(f);\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        String integer = defined_node(line_with(text, "!DIBasicType(name: \"int\""));
+        String s32 = defined_node(line_with(text, "!DIBasicType(name: \"s32\""));
+        String pair = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Pair\""));
+        String to_pair = pointer_node(&a, text, pair);
+        String to_void = defined_node(line_with(text, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: null"));
+        CHECK(integer.count > 0 && s32.count > 0 && to_pair.count > 0 && to_void.count > 0);
+        struct Expected {
+            const char *name;
+            String types;
+        };
+        Expected expected[] = {
+            {"f", string_printf(&a, "!{" STR_FMT ", " STR_FMT ", " STR_FMT "}", STR_ARG(integer), STR_ARG(integer),
+                                STR_ARG(integer))},
+            {"g", string_printf(&a, "!{" STR_FMT ", " STR_FMT ", " STR_FMT "}", STR_ARG(integer), STR_ARG(integer),
+                                STR_ARG(integer))},
+            {"m", string_printf(&a, "!{null, " STR_FMT ", " STR_FMT ", " STR_FMT "}", STR_ARG(to_pair),
+                                STR_ARG(to_pair), STR_ARG(integer))},
+            {"t", string_printf(&a, "!{null, " STR_FMT "}", STR_ARG(integer))},
+            {"z", string_printf(&a, "!{null}")},
+            {"c", string_printf(&a, "!{" STR_FMT ", " STR_FMT ", " STR_FMT "}", STR_ARG(s32), STR_ARG(to_void),
+                                STR_ARG(to_void))},
+        };
+        for (Expected &e : expected) {
+            String got = pointed_signature(&a, text, e.name);
+            if (!string_eq(got, e.types)) {
+                printf("    %s: " STR_FMT ", not " STR_FMT "\n", e.name, STR_ARG(got), STR_ARG(e.types));
+            }
+            CHECK(string_eq(got, e.types));
+        }
+        // f, apply's g and Ops' op have one type, one pointer node.
+        String f = attached(&a, line_with(text, "!DILocalVariable(name: \"f\""), "type:");
+        CHECK(string_eq(attached(&a, line_with(text, "!DILocalVariable(name: \"g\""), "type:"), f));
+        CHECK(string_eq(attached(&a, line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"op\""), "baseType:"),
+                        f));
     }
     arena_free(&a);
 }
