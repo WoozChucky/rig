@@ -111,7 +111,7 @@ bin/rig build hello.rig
 
 ## Editor support
 
-[editors/vscode](editors/vscode) is a VS Code extension for `.rig` files: syntax highlighting, the compiler's errors as you type, snippets, and commands to build, run and debug the current file, with breakpoints in the `.rig` file (debugging needs Microsoft's C/C++ extension). Its [README](editors/vscode/README.md) says how to install it.
+[editors/vscode](editors/vscode) is a VS Code extension for `.rig` files: syntax highlighting, the compiler's errors as you type, snippets, and commands to build, run and debug the current file, with breakpoints in the program's `.rig` files (debugging needs Microsoft's C/C++ extension). Its [README](editors/vscode/README.md) says how to install it.
 
 ## Contributing
 

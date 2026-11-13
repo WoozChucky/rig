@@ -164,6 +164,30 @@ TEST(load_with_backslashes) {
     diag_free(&d);
     arena_free(&a);
 }
+#else
+TEST(load_backslash_is_part_of_a_name) {
+    // On Linux '\' is no separator, but a character of a name, as any other:
+    // main.rig's #load "a\\b.rig" is the one file a\b.rig, next to it, whose
+    // #load "c.rig" is c.rig next to it too, not a\c.rig. Nor does a '\'
+    // first make a path absolute: its #load "\\x.rig" is \x.rig, next to it.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_backslash_is_part_of_a_name");
+    write_source(&a, dir, "main.rig", "#load \"a\\\\b.rig\";\n");
+    write_source(&a, dir, "a\\b.rig", "#load \"c.rig\";\n#load \"\\\\x.rig\";\n");
+    write_source(&a, dir, "c.rig", "c :: () {}\n");
+    write_source(&a, dir, "\\x.rig", "x :: () {}\n");
+    load_main(&a, &d, dir);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 4);
+    if (d.files.count == 4) {
+        CHECK_STR(d.files[1].path, in_directory(&a, dir, "a\\b.rig"));
+        CHECK_STR(d.files[2].path, in_directory(&a, dir, "c.rig"));
+        CHECK_STR(d.files[3].path, in_directory(&a, dir, "\\x.rig"));
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
 #endif
 
 TEST(load_once_by_identity) {
@@ -557,7 +581,9 @@ TEST(load_failure_loses_a_file) {
     // closed, which names no file the parser could keep; and one in a body,
     // among a struct's fields, after a signature or where a ';' should be,
     // which only the top level can have, reported or passed over with a body
-    // given up after another error, in column 1 or not. So does a loaded
+    // given up after another error, in column 1 or not; and one passed over
+    // after stray tokens, on the way to a declaration later on its line
+    // (`* #load "b.rig"; main :: ...`). So does a loaded
     // file's #load that fails. A file loaded twice, the main file loaded
     // back, a syntax error in a loaded file, a #load missing only its ';', or
     // one in column 1 at the end of a body never closed (read again at the
@@ -591,6 +617,7 @@ TEST(load_failure_loses_a_file) {
         {"N :: 1 #load \"b.rig\";\n", true},
         {"main :: () {\n    x := ;\n#load \"b.rig\";\n}\n", true},
         {"main :: () {\n    x := ;\n    #load \"b.rig\";\n}\n", true},
+        {"* #load \"b.rig\"; main :: () {}\n", true},
         {"#load \"b.rig\";\n#load \"./b.rig\";\n#load \"main.rig\";\n", false},
         {"#load \"broken.rig\";\n", false},
         {"#load \"b.rig\"\n", false},
@@ -599,6 +626,8 @@ TEST(load_failure_loses_a_file) {
     for (s64 i = 0; i < (s64)(sizeof cases / sizeof cases[0]); i++) {
         Diagnostics d = {};
         Ast_File *tree = load_program(&a, &d, str(in_directory(&a, dir, "main.rig")), str(cases[i].text));
+        // Which case failed, as a '1 != 0' alone doesn't say.
+        if (tree->lost_a_file != cases[i].lost) fprintf(stderr, "  case %lld: %s", (long long)i, cases[i].text);
         CHECK_EQ(tree->lost_a_file, cases[i].lost);
         diag_free(&d);
     }

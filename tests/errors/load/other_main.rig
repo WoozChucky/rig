@@ -1,5 +1,6 @@
 // Loaded by tests/errors/load_main_twice.rig, which declares main too; named
-// by load_in_a_body.rig's and load_in_a_broken_body.rig's unloaded #loads.
+// by load_in_a_body.rig's, load_in_a_broken_body.rig's and
+// load_after_stray_tokens.rig's unloaded #loads.
 main :: () {}
 
 greet :: () {}

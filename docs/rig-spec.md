@@ -158,7 +158,7 @@ A directive is `#` followed immediately by a name, made of letters, digits and `
 - `#c_call`, which makes a procedure one that C can call, and marks a procedure type as such a procedure's (sections 3.15, 7.6);
 - `#load`, which makes another file part of the program (section 2.13).
 
-The first three appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` is a top-level declaration of its own, and anywhere else, after a signature on its line included, it is `#load can only be at the top level` (section 2.13). Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
+The first three appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` is a top-level declaration of its own, and anywhere else it is `#load can only be at the top level`, right after a signature on the same line too (on the next line it is the next declaration, section 2.13). Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
 
 ### 2.8 Integer literals
 
@@ -591,7 +591,7 @@ main :: () {
 
 ### 4.1 Declarations
 
-A declaration binds a name to a constant, a variable, a procedure or a struct. Every declaration uses `:`; the forms are:
+A declaration of a name binds it to a constant, a variable, a procedure or a struct, and uses `:`. The top level also holds `#load`s, declarations that name no value but another file of the program (section 2.13). The forms of a declaration of a name are:
 
 | Form | Declares |
 |---|---|

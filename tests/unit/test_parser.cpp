@@ -2407,6 +2407,43 @@ TEST(parse_load_later_on_a_line) {
     arena_free(&a);
 }
 
+TEST(parse_load_before_a_declaration_on_its_line) {
+    // After stray tokens, the recovery resumes at a declaration later on the
+    // same line (declaration_after_stray_tokens). A #load it passes over on
+    // the way isn't reported, as one skip_to_next_declaration passes over
+    // isn't, but the file it names isn't loaded either, so the program lacks
+    // it: after a stray '*', after a global's value, and after a load
+    // missing its ';' (which is kept). With no #load passed over, nothing is
+    // lost.
+    Arena a = arena_make();
+    struct Case {
+        const char *text;
+        const char *errors;
+        const char *dump;
+        bool lost;
+    };
+    Case cases[] = {
+        {"* #load \"a.rig\"; main :: () {}\n", "1:1: expected identifier, found '*'\n",
+         "(proc main (params) (block))\n", true},
+        {"counter : int = 1 2 #load \"a.rig\"; main :: () {}\n", "1:19: expected ';', found integer literal\n",
+         "(broken counter)\n(proc main (params) (block))\n", true},
+        {"#load \"a.rig\" ) #load \"b.rig\"; main :: () {}\n", "1:15: expected ';', found ')'\n",
+         "(load \"a.rig\")\n(proc main (params) (block))\n", true},
+        {"* main :: () {}\n", "1:1: expected identifier, found '*'\n", "(proc main (params) (block))\n", false},
+        {"#load \"a.rig\" ) main :: () {}\n", "1:15: expected ';', found ')'\n",
+         "(load \"a.rig\")\n(proc main (params) (block))\n", false},
+    };
+    for (s64 i = 0; i < (s64)(sizeof cases / sizeof cases[0]); i++) {
+        Token_List *list = src(cases[i].text);
+        Ast_File *file = parse(list->tokens, &a, &list->diag);
+        CHECK_STR(messages(&a, &list->diag), cases[i].errors);
+        CHECK_STR(ast_dump(&a, file), cases[i].dump);
+        CHECK_EQ(file->lost_a_file, cases[i].lost);
+        token_list_free(list);
+    }
+    arena_free(&a);
+}
+
 TEST(parse_load_after_parentheses) {
     // A ')' followed by a #load isn't a signature's, as one followed by
     // #foreign is: at the top level, the load begins the next declaration.
