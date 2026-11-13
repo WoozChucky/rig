@@ -368,7 +368,7 @@ TEST(hash_string_is_fnv1a) {
     CHECK_EQ(hash_string(str("foobar")), 0x85944171f73967e8ull);
 }
 
-// --- MD5 and paths (milestone 2c's debug information; #load's paths and .rig names, issue #112) ---
+// --- MD5 and paths (milestone 2c; #load's paths, issue #112) ---
 
 // md5 of `text`, as the 32 lowercase hex digits a checksum is written in.
 static String md5_hex(Arena *a, const char *text) {
