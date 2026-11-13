@@ -16,3 +16,4 @@ it = 5
 it_index = 0
 x = 1
 y = 1
+!.debug_names not created by gdb

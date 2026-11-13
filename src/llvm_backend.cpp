@@ -7,6 +7,7 @@
 #include <llvm-c/Analysis.h>
 #include <llvm-c/Core.h>
 #include <llvm-c/DebugInfo.h>
+#include <llvm-c/Support.h>
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
 
@@ -27,15 +28,29 @@ const char *target_triple(Target t) {
     return "";
 }
 
-// LLVM's X86 target, initialised the first time it's needed. Rig is
-// single-threaded, so a flag is enough.
-static void initialise_x86() {
+// LLVM, set up the first time it's needed, before any target machine is
+// made: its X86 target, and its options. Rig is single-threaded, so a flag
+// is enough.
+//
+// One option: no DWARF name index. With DWARF 5, LLVM writes a
+// .debug_names section, an index of the program's names, unless the
+// compile unit says not to, as clang's does unless it's given -gpubnames
+// (nameTableKind: None), which LLVM's C API can't say. gdb doesn't use an
+// index it didn't make itself: it says "warning: .debug_names not created
+// by gdb; ignoring" at every start, and indexes the DWARF itself. So the
+// index is turned off for the whole process with llc's option
+// -accel-tables=Disable, which LLVM's C API takes only as a command line,
+// parsed once. It's about DWARF only: CodeView, on Windows, has no such
+// index.
+static void initialise_llvm() {
     static bool done = false;
     if (done) return;
     LLVMInitializeX86TargetInfo();
     LLVMInitializeX86Target();
     LLVMInitializeX86TargetMC();
     LLVMInitializeX86AsmPrinter();
+    const char *options[] = {"rig", "-accel-tables=Disable"};
+    LLVMParseCommandLineOptions(2, options, nullptr);
     done = true;
 }
 
@@ -1447,7 +1462,7 @@ static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Glob
 // LLVM doesn't know the target or the module doesn't verify; either way the
 // caller calls backend_free.
 static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *error) {
-    initialise_x86();
+    initialise_llvm();
     const char *triple = target_triple(t);
     b->target = t;
     b->arena = a;

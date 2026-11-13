@@ -1579,7 +1579,7 @@ When a tool is missing, or the linker fails, the compiler prints the reason or t
 
 ### 10.7 Debug information
 
-`rig build` always writes debug information. The LLVM backend writes it from the IR's positions and scopes: **CodeView** on Windows, which the linker gathers into a **PDB** beside the executable (`hello.pdb` for `hello.exe`), and **DWARF 5** on Linux, kept inside the executable. Visual Studio, WinDbg and cdb read the PDB; gdb reads the DWARF.
+`rig build` always writes debug information. The LLVM backend writes it from the IR's positions and scopes: **CodeView** on Windows, which the linker gathers into a **PDB** beside the executable (`hello.pdb` for `hello.exe`), and **DWARF 5** on Linux, kept inside the executable (with no name index, `.debug_names`: gdb doesn't use one it didn't make, and warns that it ignores it). Visual Studio, WinDbg and cdb read the PDB; gdb reads the DWARF.
 
 The debug information holds:
 
