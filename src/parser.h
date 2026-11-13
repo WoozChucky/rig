@@ -161,8 +161,10 @@
 // parser only records the load (Ast_Load), its path the string's bytes,
 // escapes decoded; the loader (load.h) reads the file and parses it into the
 // same tree (parse_into). Anything but a string after #load is "expected a
-// string after #load, as in #load "other.rig";", at what came instead. A
-// load missing only its ';' is reported as any declaration is, but kept,
+// string after #load, as in #load "other.rig";", at what came instead, and
+// the tree records that the program lacks the file it was meant to name
+// (Ast_File.lost_a_file), as the loader does for a #load it can't follow.
+// A load missing only its ';' is reported as any declaration is, but kept,
 // so the file it names is still loaded. Where a statement, a struct's
 // field, a parameter, an expression, a type or a block starts, or among the
 // directives after a signature, a #load is "#load can only be at the top

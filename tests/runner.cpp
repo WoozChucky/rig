@@ -16,8 +16,8 @@
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, and it writes neither an object file nor a program. In a .err,
 // @NO_SUCH_FILE@ stands for the system's reason a file that isn't there, in
-// a directory that is, can't be read, which is its own, in its language
-// (no_such_file_message).
+// a directory that is, can't be read, which differs between systems and
+// languages (no_such_file_message asks the system).
 //
 // Only the NAME.rig files directly in tests/run and tests/errors are
 // programs: their subdirectories, load/, hold the files the programs
@@ -872,7 +872,8 @@ static String check_wrote(Arena *a, String name) {
 // has on screen. Both must exit with `exit_code` and print `err`, and write
 // nothing. The --stdin check runs where the file is named from too, since
 // the files a program #loads are found from its name's directory
-// (tests/run/load/ for tests/run/NAME.rig). Here the text is the file's;
+// (tests/run/ for tests/run/NAME.rig, whose #load "load/x.rig" is
+// tests/run/load/x.rig). Here the text is the file's;
 // check_stdin_of_another_text_test shows that it is stdin's under the name
 // of a file that is there, and check_stdin_without_a_file_test under a name
 // that isn't.

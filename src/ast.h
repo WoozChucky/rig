@@ -404,9 +404,10 @@ struct Ast_Load : Ast {
 // globals; the loads (Ast_Load), in loads. Each list is in source order on
 // its own; ast_declarations merges procs and globals back by position.
 //
-// lost_a_file is set when a #load failed (load.h's errors): the program
-// lacks that file, so what it declares is unknown, as a broken entry's
-// name is, and the checker doesn't report a name as unknown, or main as
+// lost_a_file is set when a #load failed (load.h's errors), or had no
+// string to name a file by (parser.h): the program lacks that file, so
+// what it declares is unknown, as it is for a broken entry whose name was
+// lost, and the checker doesn't report a name as unknown, or main as
 // missing, because of it (checker.h).
 struct Ast_File {
     Array<Ast_Proc *> procs;

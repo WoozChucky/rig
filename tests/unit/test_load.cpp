@@ -448,14 +448,18 @@ TEST(load_failure_loses_a_file) {
     // Every kind of #load that fails leaves the program without a file, and
     // the tree says so (Ast_File.lost_a_file): a file that can't be read, a
     // directory, a file that isn't a .rig file, an empty path and one with a
-    // zero byte. A file loaded twice, or a syntax error in a loaded file,
-    // loses nothing.
+    // zero byte; and a #load with no string, its quotes forgotten or never
+    // closed, which names no file the parser could keep. So does a loaded
+    // file's #load that fails. A file loaded twice, the main file loaded
+    // back, or a syntax error in a loaded file loses nothing.
     Arena a = arena_make();
     String dir = load_test_directory(&a, "load_failure_loses_a_file");
     CHECK(os_make_directory(str(in_directory(&a, dir, "d.rig"))));
     write_source(&a, dir, "b.rig", "helper :: () {}\n");
     write_source(&a, dir, "b.txt", "helper :: () {}\n");
     write_source(&a, dir, "broken.rig", "x :: ;\n");
+    write_source(&a, dir, "c.rig", "#load \"nope.rig\";\n");
+    write_source(&a, dir, "e.rig", "#load nope.rig;\n");
     struct Case {
         const char *text;
         bool lost;
@@ -466,6 +470,10 @@ TEST(load_failure_loses_a_file) {
         {"#load \"b.txt\";\n", true},
         {"#load \"\";\n", true},
         {"#load \"b.rig\\0\";\n", true},
+        {"#load b.rig;\n", true},
+        {"#load \"b.rig;\n", true},
+        {"#load \"c.rig\";\n", true},
+        {"#load \"e.rig\";\n", true},
         {"#load \"b.rig\";\n#load \"./b.rig\";\n#load \"main.rig\";\n", false},
         {"#load \"broken.rig\";\n", false},
     };

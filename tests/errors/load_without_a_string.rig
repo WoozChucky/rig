@@ -1,0 +1,9 @@
+// A #load with its quotes forgotten (issue #112): the error is at what came
+// instead of the string. The program lacks the file it was meant to name,
+// as when a #load names a file that isn't there, so the name here that the
+// file would have declared isn't reported as unknown.
+#load player.rig;
+
+main :: () {
+    p := make_player();
+}

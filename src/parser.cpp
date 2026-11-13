@@ -1455,7 +1455,9 @@ static Ast *parse_struct(Parser *p, Token *name) {
 //
 // A load missing only its ';' is reported, but kept: it's whole without
 // it, and losing it would make every use of what the file declares unknown
-// too. Whatever came instead is skipped up to the next declaration, as
+// too. One with no string names no file to keep, so parse_into records
+// that the program lacks one (Ast_File.lost_a_file), and those uses aren't
+// reported either. Whatever came instead is skipped up to the next declaration, as
 // after any error, or to one later on the same line (`#load "a.rig" main
 // :: () {}`), as parse_into does after stray tokens.
 static void skip_to_next_declaration(Parser *p, s64 start);
@@ -1808,6 +1810,10 @@ void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
         s64 start = p.next;
         p.declaration = start;
         Ast *decl = parse_declaration(&p);
+        // A #load with no string (parse_load) names no file, so the program
+        // lacks the one it was meant to, as after a #load the loader can't
+        // follow (Ast_File.lost_a_file).
+        if (!decl && is_directive(&p.tokens[start], "load")) file->lost_a_file = true;
         if (!decl && p.resume >= 0) {
             // A body or a struct never closed said where the top level goes
             // on (parse_block_rest, parse_struct), inside its braces, so
