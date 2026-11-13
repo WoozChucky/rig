@@ -101,3 +101,28 @@ TEST(sorting_puts_errors_in_source_order) {
     arena_free(&a);
     diag_free(&d);
 }
+
+TEST(sorting_a_program_of_many_files) {
+    // A program's errors come stage by stage: the syntax errors of every
+    // file, then the checker's of every file. Sorted, each file's are
+    // together, in source order, and of two at the same place the one
+    // reported first stays first. 777 files: the runs merged aren't all of
+    // a power of two.
+    Diagnostics d = {};
+    const s32 FILES = 777;
+    for (s32 f = 0; f < FILES; f++) diag_add_file(&d, str("x.rig"), str("a\nb\n"));
+    for (s32 f = 0; f < FILES; f++) diag_error(&d, {f, 2, 1}, "syntax");
+    for (s32 f = FILES - 1; f >= 0; f--) {
+        diag_error(&d, {f, 2, 1}, "type");
+        diag_error(&d, {f, 1, 5}, "type");
+    }
+    diag_sort(&d);
+    CHECK_EQ(d.messages.count, (s64)FILES * 3);
+    for (s32 f = 0; f < FILES; f++) {
+        Diagnostic *m = &d.messages[(s64)f * 3];
+        CHECK(m[0].pos.file == f && m[0].pos.line == 1 && string_eq(m[0].message, str("type")));
+        CHECK(m[1].pos.file == f && m[1].pos.line == 2 && string_eq(m[1].message, str("syntax")));
+        CHECK(m[2].pos.file == f && m[2].pos.line == 2 && string_eq(m[2].message, str("type")));
+    }
+    diag_free(&d);
+}

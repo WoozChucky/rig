@@ -1,2 +1,3 @@
-// Loaded by tests/errors/load_main_twice.rig, which declares main too.
+// Loaded by tests/errors/load_main_twice.rig, which declares main too (and
+// named by load_in_a_body.rig's misplaced #load).
 main :: () {}
