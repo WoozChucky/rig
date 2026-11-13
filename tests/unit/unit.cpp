@@ -5,6 +5,9 @@
 //   bin/unit-tests              every test
 //   bin/unit-tests lex          the tests whose names, or files' names, contain "lex"
 //   bin/unit-tests --self-test  checks that the harness can fail
+//   bin/unit-tests --interpret FILE.rig [--no-bounds-checks]
+//                               runs a program interpreted (interpret_mode.cpp),
+//                               as bin/run-tests does with every tests/run program
 
 #include "../../src/all.cpp"
 #include "test.h"
@@ -249,8 +252,32 @@ static void run_tests(void *data) {
     }
 }
 
+// --interpret's command line, and its exit status: interpret_mode.cpp, at
+// the end, runs on the thread os_run_on_stack starts.
+struct Interpret_Mode {
+    int argc;
+    char **argv;
+    int status;
+};
+static void interpret_mode(void *data);
+
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "--self-test") == 0) return self_test();
+    if (argc >= 2 && strcmp(argv[1], "--interpret") == 0) {
+        // On the compiler's stack, as rig works: lexing, parsing and
+        // checking recurse. Before helper_mode, which makes stdout and
+        // stderr binary: the program writes in text mode here, as the
+        // compiled program does, so the runner compares the two alike.
+        Interpret_Mode mode = {argc, argv, 1};
+        if (!os_run_on_stack(RIG_STACK_SIZE, interpret_mode, &mode)) {
+            Arena a = arena_make();
+            fprintf(stderr, "unit-tests: can't start the interpreter's thread: " STR_FMT "\n",
+                    STR_ARG(os_error_message(&a)));
+            arena_free(&a);
+            return 1;
+        }
+        return mode.status;
+    }
     if (argc >= 2 && strncmp(argv[1], "--", 2) == 0) {
         int status = helper_mode(argc, argv);
         if (status >= 0) return status;
@@ -286,3 +313,6 @@ int main(int argc, char **argv) {
 #include "test_grammar.cpp"
 #include "test_version.cpp"
 #include "test_interp.cpp"
+
+// The --interpret mode.
+#include "interpret_mode.cpp"
