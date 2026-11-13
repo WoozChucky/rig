@@ -34,12 +34,12 @@
 // (check_tests).
 //
 // Then the specification's examples (spec_tests): every ```rig block of
-// docs/rig-spec.md (its section 1.4 says so too), written to
-// .build/tests/spec/LINE/example.rig, LINE being its opening fence's, and
-// built or checked in that directory, so that its messages name
-// example.rig on every host. The .rig files an earlier run left there are
-// removed first. The words after `rig` in the fence's info string give its
-// kind:
+// docs/rig-spec.md but a file= one (below; its section 1.4 says so too),
+// written to .build/tests/spec/LINE/example.rig, LINE being its opening
+// fence's, and built or checked in that directory, so that its messages
+// name example.rig on every host. The .rig files an earlier run left there
+// are removed first. The words after `rig` in the fence's info string give
+// its kind:
 //   ```rig                a program, built and run: it exits with 0, writes
 //                         nothing to stderr, and its stdout is its output
 //                         block, or nothing when it has none;
@@ -57,9 +57,11 @@
 //                         between): written as NAME.rig beside its
 //                         example.rig, which can #load it (spec 2.13). NAME
 //                         is ASCII letters, digits, '_', '-' and '.', and
-//                         not example; several blocks may come before one
-//                         example, each with its own NAME. One with no
-//                         example after it fails the run.
+//                         neither example nor a Windows device's (NUL);
+//                         several blocks may come before one example, each
+//                         with its own NAME. One with no example after it
+//                         fails the run, and one with another word, a file=
+//                         block still, fails alone.
 // An example's output block is the first ```text block after it before the
 // next heading or ```rig block (a fragment has none); the two error kinds
 // need one. Any other word in the info string fails the example, as does a
@@ -1102,6 +1104,13 @@ static bool read_exit_status(String word, s32 *status) {
     return true;
 }
 
+// Whether c is an ASCII letter. In ASCII a capital and its small letter
+// differ in bit 0x20 alone, so setting it makes any letter small, and only
+// a letter's byte lands in 'a' to 'z' then.
+static bool is_ascii_letter(u8 c) {
+    return (c | 0x20) >= 'a' && (c | 0x20) <= 'z';
+}
+
 // Whether two file= names are one file's on Windows, which takes a name in
 // any case: equal but for the case of their ASCII letters, the only letters
 // a file= name has (is_example_file_name).
@@ -1109,31 +1118,64 @@ static bool same_file_name(String x, String y) {
     if (x.count != y.count) return false;
     for (s64 i = 0; i < x.count; i++) {
         u8 c = x.data[i], d = y.data[i];
-        bool letter = (c | 0x20) >= 'a' && (c | 0x20) <= 'z';
-        if (letter ? (c | 0x20) != (d | 0x20) : c != d) return false;
+        if (is_ascii_letter(c) ? (c | 0x20) != (d | 0x20) : c != d) return false;
     }
     return true;
+}
+
+// Whether name, up to its first '.', is a device's on Windows, in any case:
+// CON, PRN, AUX, NUL, COM0 to COM9 or LPT0 to LPT9. Up to Windows 10 a file
+// so named, whatever its extension, is the device: NUL.rig is the null
+// device, and what's written to it is lost.
+static bool is_device_name(String name) {
+    s64 stem = 0;
+    while (stem < name.count && name.data[stem] != '.') stem++;
+    String s = string_slice(name, 0, stem);
+    const char *devices[] = {"con", "prn", "aux", "nul"};
+    for (s64 i = 0; i < (s64)(sizeof devices / sizeof devices[0]); i++) {
+        if (same_file_name(s, str(devices[i]))) return true;
+    }
+    if (stem != 4 || s.data[3] < '0' || s.data[3] > '9') return false;
+    String prefix = string_slice(s, 0, 3);
+    return same_file_name(prefix, str("com")) || same_file_name(prefix, str("lpt"));
 }
 
 // Whether file='s NAME is one an example's directory can hold beside
 // example.rig, on both systems: a .rig file's name, with something before
 // the .rig, of ASCII letters, digits, '_', '-' and '.' alone, so no
-// directory and nothing a system reads otherwise ("C:", "*"), and not
-// example.rig's, in any case (Windows takes EXAMPLE.RIG as example.rig).
+// directory and nothing a system reads otherwise ("C:", "*"), not a
+// Windows device's (is_device_name), and not example.rig's, in any case
+// (Windows takes EXAMPLE.RIG as example.rig).
 static bool is_example_file_name(String name) {
     if (name.count <= 4 || !is_rig_file(name)) return false;
     for (s64 i = 0; i < name.count; i++) {
         u8 c = name.data[i];
-        bool letter = (c | 0x20) >= 'a' && (c | 0x20) <= 'z';
-        if (!letter && !(c >= '0' && c <= '9') && c != '_' && c != '-' && c != '.') return false;
+        if (!is_ascii_letter(c) && !(c >= '0' && c <= '9') && c != '_' && c != '-' && c != '.') return false;
     }
-    return !same_file_name(name, str("example.rig"));
+    return !is_device_name(name) && !same_file_name(name, str("example.rig"));
 }
+
+// Whether one of the words of an info string starts with "file=".
+static bool has_file_word(String words) {
+    for (s64 i = 0; i < words.count; i++) {
+        bool word_start = i == 0 || words.data[i - 1] == ' ' || words.data[i - 1] == '\t';
+        if (word_start && starts_with(string_slice(words, i, words.count - i), "file=")) return true;
+    }
+    return false;
+}
+
+// What's wrong with a file= block whose info string has another word.
+static const char *FILE_TAKES_NO_OTHER_WORD ="a file= block is no example, so it takes no other word";
 
 // The words after `rig` in a fence's info string: the example's kind, a
 // program's exit status, and a file='s name. What it doesn't know goes in
-// ex->bad.
+// ex->bad. A block with a file= word is a file= block however wrong its
+// info string is, so a mistake in it is reported at it alone: taken for an
+// example, it would take the output block after it, and the example after
+// it would lose the file= blocks before it (spec_tests).
 static void read_info(Arena *a, String words, Example *ex) {
+    bool file_block = has_file_word(words);
+    if (file_block) ex->kind = EXAMPLE_FILE;
     bool kind_given = false, exit_given = false, file_given = false;
     s64 start = 0;
     for (s64 i = 0; i <= words.count; i++) {
@@ -1156,7 +1198,8 @@ static void read_info(Arena *a, String words, Example *ex) {
             if (file_given || !is_example_file_name(name)) {
                 ex->bad = string_printf(a,
                                         "the info string's '" STR_FMT "' isn't one file= with a .rig file's name "
-                                        "(ASCII letters, digits, '_', '-' and '.'; not example.rig)",
+                                        "(ASCII letters, digits, '_', '-' and '.'; not example.rig, nor a "
+                                        "Windows device's, as NUL.rig)",
                                         STR_ARG(word));
                 return;
             }
@@ -1170,6 +1213,9 @@ static void read_info(Arena *a, String words, Example *ex) {
             kind = EXAMPLE_ERROR;
         } else if (string_eq(word, str("fragment"))) {
             kind = EXAMPLE_FRAGMENT;
+        } else if (file_block) {
+            ex->bad = str(FILE_TAKES_NO_OTHER_WORD);
+            return;
         } else {
             ex->bad = string_printf(a,
                                     "unknown word '" STR_FMT "' in the info string (runtime-error, error, fragment, "
@@ -1181,13 +1227,12 @@ static void read_info(Arena *a, String words, Example *ex) {
             ex->bad = str("the info string names two kinds of example");
             return;
         }
-        ex->kind = kind;
+        if (!file_block) ex->kind = kind;
         kind_given = true;
     }
     // A file= block is no example, so it's no kind of one either.
-    if (file_given) {
-        ex->kind = EXAMPLE_FILE;
-        if (kind_given || exit_given) ex->bad = str("a file= block is no example, so it takes no other word");
+    if (file_block) {
+        if (kind_given || exit_given) ex->bad = str(FILE_TAKES_NO_OTHER_WORD);
         return;
     }
     if (exit_given && ex->kind != EXAMPLE_PROGRAM) ex->bad = str("exit=N is for a program that runs to its end");
@@ -1263,8 +1308,12 @@ static String spec_example_test(Arena *a, String rig, const Example *ex, Array<c
     Array<String> leftovers = {};
     os_list_directory(a, dir, &leftovers);
     for (s64 i = 0; i < leftovers.count; i++) {
-        if (is_rig_file(leftovers[i])) {
-            remove(string_cstr(a, string_printf(a, STR_FMT "/" STR_FMT, STR_ARG(dir), STR_ARG(leftovers[i]))));
+        if (!is_rig_file(leftovers[i])) continue;
+        String path = string_printf(a, STR_FMT "/" STR_FMT, STR_ARG(dir), STR_ARG(leftovers[i]));
+        remove(string_cstr(a, path));
+        if (os_file_exists(path)) {
+            array_free(&leftovers);
+            return string_printf(a, "couldn't remove " STR_FMT, STR_ARG(path));
         }
     }
     array_free(&leftovers);
