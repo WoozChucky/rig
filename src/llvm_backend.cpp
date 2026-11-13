@@ -46,6 +46,14 @@ static String take_message(Arena *a, char *message) {
     return s;
 }
 
+// A Rig type's debug type: its metadata node (DIType), and how many levels
+// it has, the types in its longest chain of parts, itself included (see
+// DEBUG_TYPE_LEVELS).
+struct Debug_Type {
+    LLVMMetadataRef node;
+    s32 levels;
+};
+
 // What one translation needs, freed together by backend_free.
 struct Backend {
     Target target;
@@ -63,7 +71,7 @@ struct Backend {
     // procedure or another type needs it (debug_type). The key is the
     // Type's address, as bytes: each Rig type exists once (types.h), so its
     // address names it.
-    Table<LLVMMetadataRef> debug_types;
+    Table<Debug_Type> debug_types;
     Arena *arena;             // where the build allocates: the table's keys, types' names
 };
 
@@ -571,20 +579,41 @@ static const unsigned DW_ATE_float = 0x04;
 static const unsigned DW_ATE_signed = 0x05;
 static const unsigned DW_ATE_unsigned = 0x07;
 static const unsigned DW_ATE_unsigned_char = 0x08;
-// The tag of a struct type, which a replaceable composite is made with.
+// The tag of a struct type, which a replaceable composite and a declaration
+// are made with.
 static const unsigned DW_TAG_structure_type = 0x13;
 // An operation of a location's expression: the value there is an address,
 // and the variable is at that address (see declare_variables).
 static const u64 DW_OP_deref = 0x06;
 
-// The debug type made for t, or null; a Type's address as a table's key
-// (Backend.debug_types). The key's bytes must outlive the table, so
-// remember_debug_type copies them into the arena; a lookup's needn't.
-static LLVMMetadataRef *cached_debug_type(Backend *b, Type *t) {
-    return table_get(&b->debug_types, String{(const u8 *)&t, sizeof t});
+// How many levels a debug type may have: the types in its longest chain of
+// parts (a field's type, a pointee, an element), itself included. A program
+// can nest types without a limit the checker sets: structs held by value,
+// each declared after the one it holds (the checker lays each out before
+// the next needs it), or structs each holding a pointer to the next (which
+// needs no layout at all). debug_type makes a type's parts first, a call per
+// level: a chain of 30000 structs overflowed the compiler's 8 MB stack
+// (RIG_STACK_SIZE), with no message. So that no stage overflows silently
+// (ast.h's MAX_DEPTH), a debug type has at most MAX_DEPTH levels: below
+// them, a part is its stand-in (stand_in_debug_type) instead of its own
+// debug type. That bounds debug_type's calls, and the depth of the metadata
+// LLVM's code generator walks to write CodeView or DWARF.
+static const s32 DEBUG_TYPE_LEVELS = MAX_DEPTH;
+
+// The debug type made for t, or one with a null node when there's none yet
+// (TYPE_VOID's, null, is never remembered). A Type's address is the table's
+// key (Backend.debug_types). The value is copied out: table_get's pointer
+// lasts only until a new key is put, which a call to debug_type may do.
+static Debug_Type cached_debug_type(Backend *b, Type *t) {
+    Debug_Type *made = table_get(&b->debug_types, String{(const u8 *)&t, sizeof t});
+    return made ? *made : Debug_Type{};
 }
 
-static LLVMMetadataRef remember_debug_type(Backend *b, Type *t, LLVMMetadataRef made) {
+// Remembers `made` as t's debug type, which t has none of yet. The key's
+// bytes must outlive the table, so they're copied into the arena (a
+// lookup's needn't be).
+static Debug_Type remember_debug_type(Backend *b, Type *t, Debug_Type made) {
+    RIG_ASSERT(!table_get(&b->debug_types, String{(const u8 *)&t, sizeof t}));
     Type **key = arena_new<Type *>(b->arena);
     *key = t;
     table_put(&b->debug_types, String{(const u8 *)key, sizeof *key}, made);
@@ -599,14 +628,45 @@ static LLVMMetadataRef debug_member(Backend *b, LLVMMetadataRef in, String name,
                                          (u64)size * 8, 0, (u64)offset * 8, LLVMDIFlagZero, type);
 }
 
-static LLVMMetadataRef debug_type(Backend *b, Type *t);
+// What stands for t below DEBUG_TYPE_LEVELS levels: one level, with no
+// parts. A pointer is a pointer to no type, as *void's (a debugger shows
+// the address). Anything else, a struct, a view, a string or an array, is
+// a declaration (DW_AT_declaration; LLVMDIFlagFwdDecl) of its name, as Rig
+// names it, and its size, with no members: a debugger shows it as a struct
+// it doesn't know the inside of, unless it finds a struct of that name
+// defined (gdb looks a declared struct up by name).
+static Debug_Type stand_in_debug_type(Backend *b, Type *t) {
+    if (t->kind == TYPE_POINTER) return {LLVMDIBuilderCreatePointerType(b->debug, nullptr, 64, 0, 0, nullptr, 0), 1};
+    String name = type_name(b->arena, t);
+    unsigned line = t->kind == TYPE_STRUCT ? (unsigned)t->decl->pos.line : 0;
+    return {LLVMDIBuilderCreateForwardDecl(b->debug, DW_TAG_structure_type, (const char *)name.data,
+                                           (size_t)name.count, b->file, b->file, line, 0, (u64)t->size * 8,
+                                           (u32)t->align * 8, "", 0),
+            1};
+}
+
+static Debug_Type debug_type_at(Backend *b, Type *t, s32 depth);
+
+// The debug type of `part` (a field's type, a pointee, an element) of a
+// type made `depth` levels down: part's own, or its stand-in when its own
+// has DEBUG_TYPE_LEVELS levels already (one more, the type holding it,
+// would be too many). *levels, the holding type's, becomes at least one
+// more than the part's.
+static LLVMMetadataRef part_debug_type(Backend *b, Type *part, s32 depth, s32 *levels) {
+    Debug_Type made = debug_type_at(b, part, depth + 1);
+    if (made.levels >= DEBUG_TYPE_LEVELS) made = stand_in_debug_type(b, part);
+    if (*levels < made.levels + 1) *levels = made.levels + 1;
+    return made.node;
+}
 
 // A struct type, t, named `name`, declared at `line` (0 for a view's or a
-// string's, which no line declares). A struct can hold a pointer to itself
-// (Node's next: *Node), or a view of itself, so making a member's type can
-// lead back to the struct before it's made. So it's made in three steps:
+// string's, which no line declares), made `depth` levels down. A struct can
+// hold a pointer to itself (Node's next: *Node), or a view of itself, so
+// making a member's type can lead back to the struct before it's made. So
+// it's made in three steps:
 //   1. a temporary node, a replaceable composite, stands for it: remembered
-//      as t's debug type, it's what a pointer back finds and names;
+//      as t's debug type (of one level: a part that leads back to it adds
+//      none), it's what a pointer back finds and names;
 //   2. the members are made (make_members), each scoped in the temporary;
 //   3. the real struct type is made with them, and LLVMMetadataReplaceAll-
 //      UsesWith makes every node that names the temporary (the members, the
@@ -614,39 +674,45 @@ static LLVMMetadataRef debug_type(Backend *b, Type *t);
 // LLVM's metadata nodes are uniqued, made once for each set of contents, so
 // what a node names can't change after it's made: the temporary is how a
 // node can name what doesn't exist yet.
-static LLVMMetadataRef debug_struct(Backend *b, Type *t, String name, unsigned line,
-                                    s64 (*make_members)(Backend *b, Type *t, LLVMMetadataRef in,
-                                                        LLVMMetadataRef *members)) {
+static Debug_Type debug_struct(Backend *b, Type *t, String name, unsigned line, s32 depth,
+                               s64 (*make_members)(Backend *b, Type *t, s32 depth, LLVMMetadataRef in,
+                                                   LLVMMetadataRef *members, s32 *levels)) {
     LLVMMetadataRef temporary = LLVMDIBuilderCreateReplaceableCompositeType(
         b->debug, DW_TAG_structure_type, (const char *)name.data, (size_t)name.count, b->file, b->file, line, 0,
         (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, "", 0);
-    remember_debug_type(b, t, temporary);
+    remember_debug_type(b, t, Debug_Type{temporary, 1});
     s64 most = t->kind == TYPE_STRUCT ? t->fields.count : 2;
     LLVMMetadataRef *members = arena_new_array<LLVMMetadataRef>(b->arena, most ? most : 1);
-    s64 count = make_members(b, t, temporary, members);
+    s32 levels = 1;
+    s64 count = make_members(b, t, depth, temporary, members, &levels);
     LLVMMetadataRef real =
         LLVMDIBuilderCreateStructType(b->debug, b->file, (const char *)name.data, (size_t)name.count, b->file, line,
                                       (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, nullptr, members,
                                       (unsigned)count, 0, nullptr, "", 0);
     LLVMMetadataReplaceAllUsesWith(temporary, real);
-    return remember_debug_type(b, t, real);
+    // The table's entry becomes the real type, in place: the pointer is used
+    // at once, before anything puts a key.
+    Debug_Type *entry = table_get(&b->debug_types, String{(const u8 *)&t, sizeof t});
+    RIG_ASSERT(entry);
+    *entry = Debug_Type{real, levels};
+    return *entry;
 }
 
-// A struct a program declares: its fields, in order, each at its offset.
-// A field's line is its declaration's (the first of that name: a second
-// was an error, which stops the build before this).
-static s64 struct_members(Backend *b, Type *t, LLVMMetadataRef in, LLVMMetadataRef *members) {
+// A struct a program declares: its fields, in order, each at its offset and
+// its declaration's line. The checker adds a struct's fields (Type.fields)
+// in the order its declaration has them (Ast_Struct.fields), and a second
+// field of one name is an error, which stops the build before this: so
+// field i is the declaration's field i.
+static s64 struct_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVMMetadataRef *members,
+                          s32 *levels) {
+    RIG_ASSERT(t->fields.count == t->decl->fields.count);
     for (s64 i = 0; i < t->fields.count; i++) {
         Type_Field *field = &t->fields[i];
+        Ast_Field *declared = t->decl->fields[i];
         RIG_ASSERT(field->type);  // a field's type is null only after an error
-        unsigned line = (unsigned)t->decl->pos.line;
-        for (s64 k = 0; k < t->decl->fields.count; k++) {
-            if (!string_eq(t->decl->fields[k]->name, field->name)) continue;
-            line = (unsigned)t->decl->fields[k]->pos.line;
-            break;
-        }
-        members[i] = debug_member(b, in, field->name, line, field->type->size, field->offset,
-                                  debug_type(b, field->type));
+        RIG_ASSERT(string_eq(declared->name, field->name));
+        members[i] = debug_member(b, in, field->name, (unsigned)declared->pos.line, field->type->size,
+                                  field->offset, part_debug_type(b, field->type, depth, levels));
     }
     return t->fields.count;
 }
@@ -654,16 +720,20 @@ static s64 struct_members(Backend *b, Type *t, LLVMMetadataRef in, LLVMMetadataR
 // A view, []T, or a string: the struct they're laid out as (types.h),
 // { count: int; data: *T; }. A debugger shows its fields (a.count,
 // a.data[i]), and a string's data, a pointer to u8's (unsigned chars), as
-// text.
-static s64 view_members(Backend *b, Type *t, LLVMMetadataRef in, LLVMMetadataRef *members) {
-    LLVMMetadataRef data = LLVMDIBuilderCreatePointerType(b->debug, debug_type(b, t->element), 64, 0, 0, nullptr, 0);
-    members[0] = debug_member(b, in, str("count"), 0, 8, VIEW_COUNT_OFFSET, debug_type(b, &type_int));
+// text. (The data pointer is no Rig type of its own here: T is the part.)
+static s64 view_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVMMetadataRef *members,
+                        s32 *levels) {
+    LLVMMetadataRef element = part_debug_type(b, t->element, depth, levels);
+    LLVMMetadataRef data = LLVMDIBuilderCreatePointerType(b->debug, element, 64, 0, 0, nullptr, 0);
+    LLVMMetadataRef count = part_debug_type(b, &type_int, depth, levels);
+    members[0] = debug_member(b, in, str("count"), 0, 8, VIEW_COUNT_OFFSET, count);
     members[1] = debug_member(b, in, str("data"), 0, 8, VIEW_DATA_OFFSET, data);
     return 2;
 }
 
-// The debug type of a Rig type (see "Debug information"): made the first
-// time it's asked for, then the same node every time.
+// The debug type of a Rig type, t, `depth` levels below the type a
+// variable, a procedure or a global asked for (0 for that one): made the
+// first time it's asked for, then the same node every time.
 //
 // - Integers, bool and floats are base types, named as in Rig, of their
 //   size, with their encoding: s8 ... s64 and int signed, u16 ... u64
@@ -676,18 +746,23 @@ static s64 view_members(Backend *b, Type *t, LLVMMetadataRef in, LLVMMetadataRef
 // - []T and string are the structs they're laid out as, named as Rig names
 //   them ("[]int", "string").
 //
-// It calls itself for the types t is made of, a call per level of a chain
-// of types, as LLVM's own walks over the metadata do (printing the module
-// numbers the nodes so). A chain is as long as the program makes it:
-// structs held by value, each declared after the one it holds, have no
-// limit, and neither do pointers a program infers (p2 := *p1). Both run on
-// the compiler's stack, 8 MB on every system (RIG_STACK_SIZE), which takes
-// 10000 levels (llvm_debug_types_nest_without_limit); Windows' 1 MB main
-// thread overflowed at 3000.
-static LLVMMetadataRef debug_type(Backend *b, Type *t) {
-    if (LLVMMetadataRef *made = cached_debug_type(b, t)) return *made;
+// No debug type has more than DEBUG_TYPE_LEVELS levels, wherever it's made.
+// A type made DEBUG_TYPE_LEVELS - 1 levels down, past which this would call
+// itself no deeper, is its stand-in (a declaration, or a pointer to no
+// type), as is a part whose own type has DEBUG_TYPE_LEVELS levels already
+// (part_debug_type): made first on its own, a long chain of types is cut
+// where it reaches the limit, and a type that holds the chain's head is cut
+// at the head. A cut is for good: the type remembered is the one with the
+// stand-in. So with S1 :: struct { s: S0; } ... S50000 :: struct { s: S49999; },
+// a variable v of S50000 made first has v.s ... down to S49002, 998 fields
+// down, whose s is a declared S49001, which gdb shows in full only if
+// another variable needed S49001's own definition
+// (llvm_debug_types_stop_at_a_depth).
+static Debug_Type debug_type_at(Backend *b, Type *t, s32 depth) {
+    if (t->kind == TYPE_VOID) return {nullptr, 0};  // only behind a pointer: *void
+    Debug_Type made = cached_debug_type(b, t);
+    if (made.node) return made;
     switch (t->kind) {
-    case TYPE_VOID: return nullptr;  // only behind a pointer: *void
     case TYPE_INTEGER:
     case TYPE_BOOL:
     case TYPE_FLOAT: {
@@ -696,32 +771,49 @@ static LLVMMetadataRef debug_type(Backend *b, Type *t) {
                             : t->is_signed          ? DW_ATE_signed
                             : t->size == 1          ? DW_ATE_unsigned_char
                                                     : DW_ATE_unsigned;
-        return remember_debug_type(b, t,
-                                   LLVMDIBuilderCreateBasicType(b->debug, (const char *)t->name.data,
-                                                                (size_t)t->name.count, (u64)t->size * 8, encoding,
-                                                                LLVMDIFlagZero));
+        LLVMMetadataRef base = LLVMDIBuilderCreateBasicType(b->debug, (const char *)t->name.data,
+                                                            (size_t)t->name.count, (u64)t->size * 8, encoding,
+                                                            LLVMDIFlagZero);
+        return remember_debug_type(b, t, Debug_Type{base, 1});
     }
+    default: break;
+    }
+    if (depth >= DEBUG_TYPE_LEVELS - 1) return stand_in_debug_type(b, t);
+    s32 levels = 1;
+    switch (t->kind) {
     case TYPE_POINTER: {
         // The pointee first. Making it may have made this pointer already (a
         // *S whose S holds a *S): then that one is the pointer.
-        LLVMMetadataRef pointee = debug_type(b, t->pointee);
-        if (LLVMMetadataRef *made = cached_debug_type(b, t)) return *made;
-        return remember_debug_type(b, t, LLVMDIBuilderCreatePointerType(b->debug, pointee, 64, 0, 0, nullptr, 0));
+        LLVMMetadataRef pointee = part_debug_type(b, t->pointee, depth, &levels);
+        made = cached_debug_type(b, t);
+        if (made.node) return made;
+        return remember_debug_type(
+            b, t, Debug_Type{LLVMDIBuilderCreatePointerType(b->debug, pointee, 64, 0, 0, nullptr, 0), levels});
     }
     case TYPE_ARRAY: {
-        // N of the element, indexed from 0: a subrange of N (none for [0]T).
-        // (The element first, which may have made this array, as above.)
-        LLVMMetadataRef element = debug_type(b, t->element);
-        if (LLVMMetadataRef *made = cached_debug_type(b, t)) return *made;
+        // N of the element, indexed from 0: a subrange of N elements (of 0
+        // for [0]T). (The element first, which may have made this array, as
+        // above.)
+        LLVMMetadataRef element = part_debug_type(b, t->element, depth, &levels);
+        made = cached_debug_type(b, t);
+        if (made.node) return made;
         LLVMMetadataRef range = LLVMDIBuilderGetOrCreateSubrange(b->debug, 0, t->count);
         return remember_debug_type(
-            b, t, LLVMDIBuilderCreateArrayType(b->debug, (u64)t->size * 8, (u32)t->align * 8, element, &range, 1));
+            b, t,
+            Debug_Type{LLVMDIBuilderCreateArrayType(b->debug, (u64)t->size * 8, (u32)t->align * 8, element, &range, 1),
+                       levels});
     }
     case TYPE_VIEW:
-    case TYPE_STRING: return debug_struct(b, t, type_name(b->arena, t), 0, view_members);
-    case TYPE_STRUCT: return debug_struct(b, t, t->name, (unsigned)t->decl->pos.line, struct_members);
-    default: RIG_ASSERT(!"a type no variable has"); return nullptr;
+    case TYPE_STRING: return debug_struct(b, t, type_name(b->arena, t), 0, depth, view_members);
+    case TYPE_STRUCT: return debug_struct(b, t, t->name, (unsigned)t->decl->pos.line, depth, struct_members);
+    default: RIG_ASSERT(!"a type no variable has"); return {};
     }
+}
+
+// The debug type of t, a variable's, a procedure's result or parameter's,
+// or a global's: null for none (void).
+static LLVMMetadataRef debug_type(Backend *b, Type *t) {
+    return debug_type_at(b, t, 0).node;
 }
 
 // The subprogram of procedure p, given to its LLVM function, and its
