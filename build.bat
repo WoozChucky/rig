@@ -7,7 +7,14 @@ rem
 rem Unity build: each program is one translation unit (src\rig.cpp includes
 rem every source file), so this script is the whole build system. LLVM comes
 rem from scripts\get_llvm.bat, in deps\llvm-windows unless RIG_LLVM_DIR says
-rem otherwise, and is linked statically. clang must be on the PATH.
+rem otherwise, and is linked statically. The compiler that builds Rig comes
+rem from there too: the pinned release's clang++.exe, so every build, here or
+rem on a release's runner, is made by the same clang whatever else is
+rem installed. CXX names another compiler's program to try one
+rem (set "CXX=C:\Program Files\LLVM\bin\clang++.exe"). Visual Studio, or its
+rem Build Tools, is still needed: clang compiles against its C and C++
+rem runtime's and the Windows SDK's headers and libraries and links with its
+rem link.exe (:find_msvc, below).
 rem
 rem Every build is stamped with Rig's version, from the VERSION file, and
 rem the commit it is built from, from git (:stamp, below; `rig version`
@@ -28,6 +35,28 @@ call :stamp || exit /b 1
 rem (A goto, not a ( ) block: %LLVM% may hold a parenthesis, as in
 rem "Program Files (x86)", which would end the block early.)
 if not exist "%LLVM%\bin\llvm-config.exe" goto no_llvm
+
+rem The compiler: CXX if set, else the pinned clang++.exe. A
+rem deps\llvm-windows made before get_llvm.bat kept clang has LLVM but no
+rem compiler. CXX may be given with quotes around it or without: they're
+rem taken off, and "%CXX%" below puts them back. (That line is reached
+rem only when CXX is set: %CXX:"=% of an unset CXX isn't empty.)
+if not defined CXX goto pinned_cxx
+set "CXX=%CXX:"=%"
+goto have_cxx
+:pinned_cxx
+set "CXX=%LLVM%\bin\clang++.exe"
+if not exist "%CXX%" goto no_clang
+:have_cxx
+rem Which compiler made this build, first in its log: "clang version 23.1.5
+rem ...", the first line clang prints. A compiler that doesn't answer stops
+rem here. (for /f runs its command with cmd /c, which takes the quotes off
+rem a command that starts with one and holds a parenthesis, as a path may;
+rem starting it with call keeps them.)
+set CXX_VERSION=
+for /f "delims=" %%v in ('call "%CXX%" --version 2^>nul') do if not defined CXX_VERSION set "CXX_VERSION=%%v"
+if not defined CXX_VERSION goto bad_cxx
+echo build.bat: %CXX%: %CXX_VERSION%
 
 rem clang finds Visual Studio's headers and libraries itself, but when another
 rem product of the Visual Studio installer is newer (SQL Server Management
@@ -55,12 +84,12 @@ rem so Rig's compiler is too: mixing the two fails to link (LNK2038).
 set FLAGS=-std=c++23 -fno-exceptions -fno-rtti -g %OPT% -Wall -Wextra -fms-runtime-lib=static -D_CRT_SECURE_NO_WARNINGS -I"%LLVM%\include" %STAMP%
 
 if not exist bin mkdir bin
-clang++ %FLAGS% src\rig.cpp -L"%LLVM%\lib" %LLVM_LIBS% %SYSTEM_LIBS% -o bin\rig.exe || exit /b 1
+"%CXX%" %FLAGS% src\rig.cpp -L"%LLVM%\lib" %LLVM_LIBS% %SYSTEM_LIBS% -o bin\rig.exe || exit /b 1
 rem The unit tests: the whole compiler again, with the tests and their own main.
-clang++ %FLAGS% tests\unit\unit.cpp -L"%LLVM%\lib" %LLVM_LIBS% %SYSTEM_LIBS% -o bin\unit-tests.exe || exit /b 1
+"%CXX%" %FLAGS% tests\unit\unit.cpp -L"%LLVM%\lib" %LLVM_LIBS% %SYSTEM_LIBS% -o bin\unit-tests.exe || exit /b 1
 rem The end-to-end tests' runner: no LLVM, it only runs rig and its programs
 rem (shell32: its UTF-8 arguments, os_arguments).
-clang++ %FLAGS% tests\runner.cpp -lshell32 -o bin\run-tests.exe || exit /b 1
+"%CXX%" %FLAGS% tests\runner.cpp -lshell32 -o bin\run-tests.exe || exit /b 1
 
 rem Rig falls back to LLVM's lld-link when Visual Studio has no link.exe.
 copy /y "%LLVM%\bin\lld-link.exe" bin\lld-link.exe >nul || exit /b 1
@@ -117,6 +146,14 @@ exit /b 0
 
 :no_llvm
 echo build.bat: LLVM not found in %LLVM%; run scripts\get_llvm.bat first 1>&2
+exit /b 1
+
+:no_clang
+echo build.bat: clang not found in %LLVM%; run scripts\get_llvm.bat again 1>&2
+exit /b 1
+
+:bad_cxx
+echo build.bat: "%CXX%" --version failed; CXX names the compiler, or is unset for LLVM's clang 1>&2
 exit /b 1
 
 :no_msvc
