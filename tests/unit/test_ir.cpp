@@ -1,7 +1,8 @@
 // test_ir.cpp: lowering checked trees to Rig's IR (issue #10, with tokens
 // by hand; issues #33 to #37, floats the last, and #52, from real source),
 // and the IR's builders and printing (issue #32), with IR by hand
-// (helpers.cpp).
+// (helpers.cpp). Uses test_load.cpp's load_test_directory, write_source and
+// in_directory, and test_base.cpp's md5_hex.
 
 #include "test.h"
 
@@ -3293,8 +3294,7 @@ TEST(module_knows_its_source) {
     u8 digest[16];
     md5(str(text), digest);
     CHECK(memcmp(m->sources[0].md5, digest, 16) == 0);
-    String hex = {};
-    for (int i = 0; i < 16; i++) hex = string_printf(&a, STR_FMT "%02x", STR_ARG(hex), digest[i]);
+    String hex = md5_hex(&a, text);
     String first_line = string_printf(&a, "; source " STR_FMT " md5 " STR_FMT "\n", STR_ARG(path), STR_ARG(hex));
     CHECK(index_of(ir_print_debug(&a, m), string_cstr(&a, first_line)) == 0);
     // ir_print shows none of it, and a module built by hand has no source.
@@ -3350,7 +3350,10 @@ TEST(lower_records_every_source) {
         arena_free(&a);
         return;
     }
+    // The module's directory is the one rig ran in, as for a program of one
+    // file.
     String directory = os_current_directory(&a);
+    CHECK_STR(m->directory, string_cstr(&a, directory));
     String ir = ir_print_debug(&a, m);
     s64 next = 0;  // where the next source's line must start: the lines come first, one after another
     for (int i = 0; i < 2; i++) {
@@ -3363,8 +3366,7 @@ TEST(lower_records_every_source) {
         u8 digest[16];
         md5(str(texts[i]), digest);
         CHECK(memcmp(m->sources[i].md5, digest, 16) == 0);
-        String hex = {};
-        for (int k = 0; k < 16; k++) hex = string_printf(&a, STR_FMT "%02x", STR_ARG(hex), digest[k]);
+        String hex = md5_hex(&a, texts[i]);
         String line = string_printf(&a, "; source " STR_FMT " md5 " STR_FMT "\n", STR_ARG(path), STR_ARG(hex));
         CHECK_EQ(index_of(ir, string_cstr(&a, line)), next);
         next += line.count;
@@ -3388,7 +3390,7 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
     // instruction of a procedure from the source is somewhere in it, in its
     // file (never line 0, which a debugger would show as no line at all, nor
     // another file, which a runtime error or a debugger would name) and in
-    // one of its scopes; so is each variable.
+    // one of its scopes; so is each variable, and each scope is in its file.
     // The prologue's work is the exception: each scalar parameter's slot and
     // the store into it, first in the entry block, have no position. A
     // procedure the compiler makes has no positions at all.
@@ -3456,6 +3458,7 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
                 CHECK(p->vars[v].scope >= 0 && p->vars[v].scope < p->scopes.count);
             }
             for (s64 s = 1; s < p->scopes.count; s++) {
+                CHECK_EQ(p->scopes[s].pos.file, p->pos.file);
                 CHECK(p->scopes[s].parent >= 0 && p->scopes[s].parent < s);
             }
         }

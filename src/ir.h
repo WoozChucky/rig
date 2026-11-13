@@ -100,6 +100,9 @@
 //   and the store into it, before the body's first line (a debugger's
 //   breakpoint on the procedure stops at the first instruction with a
 //   line, once they're done).
+//   Every position in a procedure, its scopes' and its variables' too, is
+//   in the procedure's own file (Ir_Proc.pos's): a backend names that file
+//   once, in the procedure's debug scope, and each line in it.
 // - Scopes. A lexical block is a part of a procedure where some names are
 //   visible: each Ir_Scope is one, the body scope 0, and each instruction
 //   with a position says which it runs in (Ir_Instr.scope; one without, in

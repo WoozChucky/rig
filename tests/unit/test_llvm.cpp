@@ -5,8 +5,9 @@
 // last, milestone 2c's line tables (#71), on modules lowered from source,
 // with the debug information of a program of several files (#112) among
 // them. Uses test_ir.cpp's HELLO, max_module and lower_program,
-// test_checker.cpp's chain_of and joined, and test_load.cpp's
-// load_test_directory, write_source and in_directory.
+// test_checker.cpp's chain_of and joined, test_load.cpp's
+// load_test_directory, write_source and in_directory, and test_base.cpp's
+// md5_hex.
 
 #include "test.h"
 
@@ -1675,11 +1676,12 @@ TEST(llvm_globals_have_debug_info) {
 }
 
 // Issue #112: a program of several files has a DIFile for each, with its
-// own checksum, and each node that names a file names the one its
-// declaration is in: a procedure's subprogram, its lexical blocks and its
-// variables (result$ too) the procedure's; a struct type, its members and
-// its stand-in below DEBUG_TYPE_LEVELS the struct's; a global its own. The
-// compile unit names the main file. Each file has a struct, a global and
+// own checksum, in the directory rig ran in, and each node that names a
+// file names the one its declaration is in: a procedure's subprogram, its
+// lexical blocks and its variables (result$ too) the procedure's; a struct
+// type, its members and its stand-in below DEBUG_TYPE_LEVELS the struct's;
+// a global its own. A subprogram and a struct type name it twice, as their
+// file and as their scope. The compile unit names the main file. Each file has a struct, a global and
 // a procedure with a block, so a node that named the wrong one, either
 // way, would show.
 TEST(debug_info_names_each_procedures_file) {
@@ -1736,21 +1738,19 @@ TEST(debug_info_names_each_procedures_file) {
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);
         CHECK_EQ(count_of(text, "!DIFile("), 2);
-        // Each file's node, found by its name (the absolute paths are
-        // drive paths or Linux ones, which llvm_debug_file_names keeps),
-        // with the MD5 of that file's text.
+        // Each file's node, found by its name and its directory (the
+        // absolute paths are drive paths or Linux ones, which
+        // llvm_debug_file_names keeps), with the MD5 of that file's text.
         String files[2];
         for (int i = 0; i < 2; i++) {
-            String name = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\"",
-                                        STR_ARG(llvm_escaped(&a, m->sources[i].path)));
+            String name = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\", directory: \"" STR_FMT "\"",
+                                        STR_ARG(llvm_escaped(&a, m->sources[i].path)),
+                                        STR_ARG(llvm_escaped(&a, m->directory)));
             String line = line_with(text, string_cstr(&a, name));
             files[i] = defined_node(line);
             CHECK(files[i].count > 0);
-            u8 digest[16];
-            md5(str(texts[i]), digest);
-            String checksum = string_printf(&a, "checksumkind: CSK_MD5, checksum: \"");
-            for (int k = 0; k < 16; k++) checksum = string_printf(&a, STR_FMT "%02x", STR_ARG(checksum), digest[k]);
-            checksum = string_printf(&a, STR_FMT "\"", STR_ARG(checksum));
+            String checksum = string_printf(&a, "checksumkind: CSK_MD5, checksum: \"" STR_FMT "\"",
+                                            STR_ARG(md5_hex(&a, texts[i])));
             CHECK(contains(line, string_cstr(&a, checksum)));
         }
         CHECK(!string_eq(files[0], files[1]));
@@ -1769,34 +1769,38 @@ TEST(debug_info_names_each_procedures_file) {
         struct Named {
             const char *node;  // the start of the node's definition
             int file;          // the source it must name
+            bool file_scope;   // whether its scope is that file too
         };
         Named nodes[] = {
-            {"!DICompileUnit(", 0},
-            {"!DISubprogram(name: \"main\"", 0},
-            {"!DILocalVariable(name: \"p\"", 0},
-            {"!DILocalVariable(name: \"q\"", 0},
-            {blocks[0], 0},
-            {"!DICompositeType(tag: DW_TAG_structure_type, name: \"Point\"", 0},
-            {"!DIDerivedType(tag: DW_TAG_member, name: \"x\"", 0},
-            {"!DIGlobalVariable(name: \"count\"", 0},
-            {"!DISubprogram(name: \"helper\"", 1},
-            {"!DILocalVariable(name: \"n\"", 1},
-            {"!DILocalVariable(name: \"doubled\"", 1},
-            {"!DILocalVariable(name: \"bigger\"", 1},
-            {blocks[1], 1},
-            {"!DILocalVariable(name: \"result$\"", 1},
-            {"!DICompositeType(tag: DW_TAG_structure_type, name: \"Pair\"", 1},
-            {"!DIDerivedType(tag: DW_TAG_member, name: \"a\"", 1},
-            {"!DIGlobalVariable(name: \"total\"", 1},
-            {"!DICompositeType(tag: DW_TAG_structure_type, name: \"D1\"", 1},
+            {"!DICompileUnit(", 0, false},
+            {"!DISubprogram(name: \"main\"", 0, true},
+            {"!DILocalVariable(name: \"p\"", 0, false},
+            {"!DILocalVariable(name: \"q\"", 0, false},
+            {blocks[0], 0, false},
+            {"!DICompositeType(tag: DW_TAG_structure_type, name: \"Point\"", 0, true},
+            {"!DIDerivedType(tag: DW_TAG_member, name: \"x\"", 0, false},
+            {"!DIGlobalVariable(name: \"count\"", 0, false},
+            {"!DISubprogram(name: \"helper\"", 1, true},
+            {"!DILocalVariable(name: \"n\"", 1, false},
+            {"!DILocalVariable(name: \"doubled\"", 1, false},
+            {"!DILocalVariable(name: \"bigger\"", 1, false},
+            {blocks[1], 1, false},
+            {"!DILocalVariable(name: \"result$\"", 1, false},
+            {"!DICompositeType(tag: DW_TAG_structure_type, name: \"Pair\"", 1, true},
+            {"!DIDerivedType(tag: DW_TAG_member, name: \"a\"", 1, false},
+            {"!DIGlobalVariable(name: \"total\"", 1, false},
+            {"!DICompositeType(tag: DW_TAG_structure_type, name: \"D1\"", 1, true},
         };
+        const char *labels[] = {"file:", "scope:"};
         for (Named &n : nodes) {
-            String file = attached(&a, line_with(text, n.node), "file:");
-            if (!string_eq(file, files[n.file])) {
-                fprintf(stderr, "  %s: %s names file " STR_FMT ", not " STR_FMT "\n", target_triple((Target)t),
-                        n.node, STR_ARG(file), STR_ARG(files[n.file]));
+            for (int k = 0; k < (n.file_scope ? 2 : 1); k++) {
+                String file = attached(&a, line_with(text, n.node), labels[k]);
+                if (!string_eq(file, files[n.file])) {
+                    fprintf(stderr, "  %s: %s has %s " STR_FMT ", not " STR_FMT "\n", target_triple((Target)t),
+                            n.node, labels[k], STR_ARG(file), STR_ARG(files[n.file]));
+                }
+                CHECK(string_eq(file, files[n.file]));
             }
-            CHECK(string_eq(file, files[n.file]));
         }
     }
     // On Windows, each file on a network share is named as
