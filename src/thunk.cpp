@@ -1,0 +1,249 @@
+// thunk.cpp: the call thunks (see thunk.h).
+//
+// Every name here is Thunk_ or starts with thunk_, but the assembly's
+// rig_thunk_call: in the unity build, the files around this one have
+// static names of their own that would collide.
+//
+// rig_thunk_call is written in assembly, as a file-scope asm statement: the
+// compiler copies its text into the object file as it is, so no build
+// script changes. It isn't a naked C++ function, since clang gives a naked
+// function no Windows unwind information, and a debugger or a crash report
+// walking the stack through the thunk needs it. So each thunk declares its
+// own: .seh_* directives on Windows, .cfi_* on Linux, saying where it saved
+// what, so an unwinder can step from the C function, through the thunk, to
+// the interpreter that called it.
+//
+// Both thunks do the same, in the same order:
+//   1. save rbp and rbx, the two callee-saved registers they use: rbx holds
+//      the Thunk_Call across the call, rbp the stack pointer to restore;
+//   2. pad the stack by 8 bytes when the stack arguments are an even
+//      number, so the stack is 16-aligned at the call, as both conventions
+//      require;
+//   3. push the stack arguments, the last first, so the first ends at the
+//      lowest address; one push at a time touches the stack in order, so a
+//      Windows guard page is never jumped over, however many there are;
+//   4. load the argument registers, call, and store rax and xmm0;
+//   5. restore the stack pointer from rbp, and rbx and rbp from the stack.
+//
+// The 16-alignment: the call that entered the thunk pushed its return
+// address, so rsp was 8 past a multiple of 16 on entry, and the two saves
+// leave it so again. An odd number of 8-byte pushes then makes it a
+// multiple of 16; an even number needs the 8 bytes of padding first.
+// (Windows' 32 bytes of shadow space keep it so.)
+
+#include "thunk.h"
+
+static_assert(offsetof(Thunk_Call, target) == 0);
+static_assert(offsetof(Thunk_Call, ints) == 8);
+static_assert(offsetof(Thunk_Call, floats) == 56);
+static_assert(offsetof(Thunk_Call, stack) == 120);
+static_assert(offsetof(Thunk_Call, stack_count) == 128);
+static_assert(offsetof(Thunk_Call, vector_count) == 136);
+static_assert(offsetof(Thunk_Call, rax) == 144);
+static_assert(offsetof(Thunk_Call, xmm0) == 152);
+
+#ifdef _WIN32
+
+// The Windows x64 thunk. On entry rcx is the Thunk_Call.
+//
+// A function with unwind information on Windows has a prologue the unwinder
+// can undo, declared with .seh_* directives right after each instruction:
+// .seh_pushreg for each register pushed, .seh_setframe for the frame
+// register (rbp, which then holds rsp as it was after the pushes, so the
+// unwinder finds them from rbp wherever rsp has gone since), and
+// .seh_endprologue. The epilogue must be the form the unwinder recognises:
+// `lea rsp, [rbp + offset]`, the pops in the reverse order, `ret`.
+asm(R"asm(
+    .text
+    .globl rig_thunk_call
+    .def rig_thunk_call; .scl 2; .type 32; .endef   # an external function, for the COFF symbol table
+    .p2align 4
+rig_thunk_call:
+    .seh_proc rig_thunk_call
+    pushq %rbp                    # save the caller's rbp
+    .seh_pushreg %rbp
+    pushq %rbx                    # and its rbx
+    .seh_pushreg %rbx
+    movq %rsp, %rbp               # rbp: the stack pointer to come back to
+    .seh_setframe %rbp, 0
+    .seh_endprologue
+    movq %rcx, %rbx               # rbx: the Thunk_Call, kept across the call
+    movq 128(%rbx), %rcx          # rcx: stack_count
+    testq $1, %rcx
+    jnz 1f                        # an odd number of stack arguments aligns the stack by itself
+    subq $8, %rsp                 # an even number needs 8 bytes of padding
+1:  movq 120(%rbx), %rax          # rax: stack, the stack arguments
+    testq %rcx, %rcx
+    jz 3f                         # none
+2:  pushq -8(%rax,%rcx,8)         # push stack[rcx - 1]: the last first
+    decq %rcx
+    jnz 2b
+3:  subq $32, %rsp                # the shadow space: the callee may save rcx, rdx, r8, r9 there
+    movq 56(%rbx), %xmm0          # floats[0..3]: the first four arguments' xmm registers
+    movq 64(%rbx), %xmm1
+    movq 72(%rbx), %xmm2
+    movq 80(%rbx), %xmm3
+    movq 8(%rbx), %rcx            # ints[0..3]: the first four arguments' integer registers
+    movq 16(%rbx), %rdx
+    movq 24(%rbx), %r8
+    movq 32(%rbx), %r9
+    callq *(%rbx)                 # call target
+    movq %rax, 144(%rbx)          # rax: an integer or pointer result
+    movq %xmm0, 152(%rbx)         # xmm0: a float result
+    leaq 0(%rbp), %rsp            # drop the shadow space, the stack arguments and the padding
+    popq %rbx                     # restore the caller's rbx
+    popq %rbp                     # and rbp
+    retq
+    .seh_endproc
+)asm");
+
+#else
+
+// The System V AMD64 thunk. On entry rdi is the Thunk_Call.
+//
+// Unwind information on Linux is DWARF call frame information, declared
+// with .cfi_* directives after each instruction that changes it: where the
+// canonical frame address (the stack pointer before the call that entered
+// the function) is now, as a register and an offset, and where each saved
+// register is, as an offset from it.
+asm(R"asm(
+    .text
+    .globl rig_thunk_call
+    .type rig_thunk_call, @function
+    .p2align 4
+rig_thunk_call:
+    .cfi_startproc                # the frame address is rsp + 8: the return address is on the stack
+    pushq %rbp                    # save the caller's rbp
+    .cfi_def_cfa_offset 16        # now rsp + 16
+    .cfi_offset %rbp, -16         # rbp is saved 16 below it
+    movq %rsp, %rbp               # rbp: the stack pointer to come back to
+    .cfi_def_cfa_register %rbp    # the frame address is rbp + 16 from here on, wherever rsp goes
+    pushq %rbx                    # save the caller's rbx
+    .cfi_offset %rbx, -24         # 24 below the frame address
+    movq %rdi, %rbx               # rbx: the Thunk_Call, kept across the call
+    movq 128(%rbx), %rcx          # rcx: stack_count
+    testq $1, %rcx
+    jnz 1f                        # an odd number of stack arguments aligns the stack by itself
+    subq $8, %rsp                 # an even number needs 8 bytes of padding
+1:  movq 120(%rbx), %rax          # rax: stack, the stack arguments
+    testq %rcx, %rcx
+    jz 3f                         # none
+2:  pushq -8(%rax,%rcx,8)         # push stack[rcx - 1]: the last first
+    decq %rcx
+    jnz 2b
+3:  movq 56(%rbx), %xmm0          # floats[0..7]: the float arguments' registers, in order
+    movq 64(%rbx), %xmm1
+    movq 72(%rbx), %xmm2
+    movq 80(%rbx), %xmm3
+    movq 88(%rbx), %xmm4
+    movq 96(%rbx), %xmm5
+    movq 104(%rbx), %xmm6
+    movq 112(%rbx), %xmm7
+    movq 8(%rbx), %rdi            # ints[0..5]: the integer arguments' registers, in order
+    movq 16(%rbx), %rsi
+    movq 24(%rbx), %rdx
+    movq 32(%rbx), %rcx
+    movq 40(%rbx), %r8
+    movq 48(%rbx), %r9
+    movq (%rbx), %r11             # r11: target (scratch, no argument's register)
+    movq 136(%rbx), %rax          # al: how many xmm registers hold arguments, for a variadic callee
+    callq *%r11                   # call target
+    movq %rax, 144(%rbx)          # rax: an integer or pointer result
+    movq %xmm0, 152(%rbx)         # xmm0: a float result
+    leaq -8(%rbp), %rsp           # drop the stack arguments and the padding, back to the saved rbx
+    popq %rbx                     # restore the caller's rbx
+    popq %rbp                     # and rbp
+    .cfi_def_cfa %rsp, 8          # the frame address is rsp + 8 again
+    retq
+    .cfi_endproc
+    .size rig_thunk_call, .-rig_thunk_call
+
+    # The code needs no executable stack. The compiler says so for its own
+    # code in this object file; an assembly file would have to, and this says
+    # it for the thunk too.
+    .pushsection .note.GNU-stack, "", @progbits
+    .popsection
+)asm");
+
+// An s8 or s16 argument sign-extended to the whole register. The backend
+// marks such a parameter signext on Linux (llvm_backend.cpp's
+// extension_attribute), as clang does, and clang-built code relies on it:
+// a callee may use the 32-bit register as it is. An unsigned one is
+// zero-extended already, being canonical. (v ^ sign) - sign copies the top
+// bit up in unsigned arithmetic, as interp.cpp's interp_signed does.
+static u64 thunk_widen(u64 v, Ir_Type type, Ir_Ext ext) {
+    if (ext != IR_EXT_SIGN || (type != IR_I8 && type != IR_I16)) return v;
+    u64 sign = type == IR_I8 ? 0x80 : 0x8000;
+    return (v ^ sign) - sign;
+}
+
+#endif
+
+void thunk_place(Thunk_Call *call, const Ir_Type *types, const Ir_Ext *exts, const u64 *values, s64 count,
+                 Array<u64> *stack) {
+    memset(call->ints, 0, sizeof call->ints);
+    memset(call->floats, 0, sizeof call->floats);
+    call->vector_count = 0;
+    stack->count = 0;
+#ifdef _WIN32
+    // By position: argument i < 4 in the i-th integer register, or the i-th
+    // xmm register for a float. A float goes in both: a variadic callee
+    // (printf) reads it from the integer register, a fixed parameter from
+    // the xmm one, and the thunk doesn't know which this is. A narrow
+    // integer's upper bits are the callee's to ignore, so canonical values
+    // go as they are.
+    (void)exts;
+    for (s64 i = 0; i < count; i++) {
+        if (i < 4) {
+            call->ints[i] = values[i];
+            if (ir_is_float(types[i])) call->floats[i] = values[i];
+        } else {
+            array_add(stack, values[i]);
+        }
+    }
+#else
+    // Integers and floats counted apart: each takes the next register of
+    // its kind while there is one, and the stack once they run out, in the
+    // order of the arguments, whatever kind went there before.
+    s64 ints = 0, floats = 0;
+    for (s64 i = 0; i < count; i++) {
+        if (ir_is_float(types[i])) {
+            if (floats < 8) {
+                call->floats[floats++] = values[i];
+            } else {
+                array_add(stack, values[i]);
+            }
+        } else {
+            u64 v = thunk_widen(values[i], types[i], exts[i]);
+            if (ints < 6) {
+                call->ints[ints++] = v;
+            } else {
+                array_add(stack, v);
+            }
+        }
+    }
+    call->vector_count = (u64)floats;
+#endif
+    call->stack = stack->data;
+    call->stack_count = (u64)stack->count;
+}
+
+u64 thunk_result(Thunk_Call *call, Ir_Type type) {
+    // The callee sets only its result's own bits: on Windows those of a
+    // narrow integer and nothing above (on Linux it widens an s8 or s16 to
+    // 32 bits, but a canonical value is zero-extended all the same); an f32
+    // only xmm0's low 32 bits. A bool is 0 or 1 in al.
+    switch (type) {
+    case IR_VOID: return 0;
+    case IR_I1: return call->rax & 1;
+    case IR_I8: return call->rax & 0xFF;
+    case IR_I16: return call->rax & 0xFFFF;
+    case IR_I32: return call->rax & 0xFFFFFFFF;
+    case IR_I64:
+    case IR_PTR: return call->rax;
+    case IR_F32: return call->xmm0 & 0xFFFFFFFF;
+    case IR_F64: return call->xmm0;
+    }
+    RIG_ASSERT(!"not an IR type");
+    return 0;
+}

@@ -6,10 +6,12 @@
 // mismatched call's effects that source hides), or that would be awkward to
 // write as source (a module growing between runs, a relocation to a C
 // function, a call of C or of a stray address, 65,537 procedures), build
-// it by hand.
+// it by hand. The last ones call C functions through the call thunks
+// (thunk.h) directly, in this process.
 
 #include "test.h"
 
+#include <math.h>  // copysignf and ldexp, for thunk_float_results
 #include <time.h>  // time, for interp_recursion_to_the_limit
 
 // The index of m's procedure `name`, which must be there.
@@ -1340,4 +1342,187 @@ TEST(interp_globals_survive_between_runs) {
     interp_test_free(&r);
     interp_free(in);
     arena_free(&a);
+}
+
+// ---------------------------------------------------------------------------
+// The call thunks (thunk.h): C functions called with canonical values laid
+// out by the host's convention, as the interpreter calls C.
+
+// A C call's arguments, added one at a time.
+struct Thunk_Test_Args {
+    Ir_Type types[24];
+    Ir_Ext exts[24];
+    u64 values[24];
+    s64 count;
+};
+
+static void thunk_test_add(Thunk_Test_Args *args, Ir_Type type, u64 value, Ir_Ext ext = IR_EXT_NONE) {
+    RIG_ASSERT(args->count < 24);
+    args->types[args->count] = type;
+    args->exts[args->count] = ext;
+    args->values[args->count] = value;
+    args->count++;
+}
+
+// `function` called with args through rig_thunk_call: its result's
+// canonical bits, as type `result`. *stack_count, when asked for, is how
+// many of the arguments went on the stack.
+static u64 thunk_test_call(void *function, Thunk_Test_Args *args, Ir_Type result, s64 *stack_count = nullptr) {
+    Thunk_Call call = {};
+    call.target = function;
+    Array<u64> stack = {};
+    thunk_place(&call, args->types, args->exts, args->values, args->count, &stack);
+    if (stack_count) *stack_count = (s64)call.stack_count;
+    rig_thunk_call(&call);
+    array_free(&stack);
+    return thunk_result(&call, result);
+}
+
+// snprintf(text, 128, format, ...)'s first three arguments, then the 12
+// values "%d %f %s %lld %f %d %f %f %f %f %f %d" takes: 8 integers and 7
+// doubles in all, past Windows' 4 registers and SysV's 6 integer ones.
+static void thunk_test_snprintf_args(Thunk_Test_Args *args, char *text, const char *format) {
+    thunk_test_add(args, IR_PTR, (u64)(uintptr_t)text);
+    thunk_test_add(args, IR_I64, 128);
+    thunk_test_add(args, IR_PTR, (u64)(uintptr_t)format);
+    thunk_test_add(args, IR_I32, 1);
+    thunk_test_add(args, IR_F64, f64_bits(2.5));
+    thunk_test_add(args, IR_PTR, (u64)(uintptr_t) "three");
+    thunk_test_add(args, IR_I64, (u64)-4000000000LL);
+    thunk_test_add(args, IR_F64, f64_bits(5.25));
+    thunk_test_add(args, IR_I32, (u32)-6);  // canonical: zero-extended from 32 bits
+    thunk_test_add(args, IR_F64, f64_bits(7.5));
+    thunk_test_add(args, IR_F64, f64_bits(8.125));
+    thunk_test_add(args, IR_F64, f64_bits(9.5));
+    thunk_test_add(args, IR_F64, f64_bits(10.75));
+    thunk_test_add(args, IR_F64, f64_bits(11.0));
+    thunk_test_add(args, IR_I32, 12);
+}
+
+// Calls snprintf with args (into `text`, as thunk_test_snprintf_args
+// started them), and checks what it wrote, what it returned and how many
+// arguments the host's convention put on the stack.
+static void thunk_test_snprintf(Thunk_Test_Args *args, char *text, const char *expected, s64 windows_stack,
+                                s64 sysv_stack) {
+    memset(text, 0, 128);
+    s64 stack_count = 0;
+    u64 written = thunk_test_call((void *)&snprintf, args, IR_I32, &stack_count);
+    CHECK_STR(text, expected);
+    CHECK_EQ(written, strlen(expected));
+#ifdef _WIN32
+    (void)sysv_stack;
+    CHECK_EQ(stack_count, windows_stack);
+#else
+    (void)windows_stack;
+    CHECK_EQ(stack_count, sysv_stack);
+#endif
+}
+
+TEST(thunk_calls_snprintf_past_the_registers) {
+    // A variadic call with integers and doubles mixed past every register.
+    // The thunk keeps the stack 16-aligned at the call by padding it when
+    // the stack arguments are an even number, so each host runs with an
+    // odd and an even number of them, and SysV runs with doubles past its
+    // 8 xmm registers too.
+    char text[128];
+    const char *twelve = "1 2.500000 three -4000000000 5.250000 -6 7.500000 8.125000 9.500000 10.750000 11.000000 12";
+
+    // The 12 values: Windows 11 on the stack, SysV 2 (integers).
+    Thunk_Test_Args args = {};
+    thunk_test_snprintf_args(&args, text, "%d %f %s %lld %f %d %f %f %f %f %f %d");
+    thunk_test_snprintf(&args, text, twelve, 11, 2);
+
+    // And one integer more: Windows 12, SysV 3.
+    args = {};
+    thunk_test_snprintf_args(&args, text, "%d %f %s %lld %f %d %f %f %f %f %f %d %d");
+    thunk_test_add(&args, IR_I32, 13);
+    thunk_test_snprintf(&args, text, "1 2.500000 three -4000000000 5.250000 -6 7.500000 8.125000 9.500000 "
+                                     "10.750000 11.000000 12 13", 12, 3);
+
+    // Two doubles more, 9 in all: Windows 13, SysV 3 (two integers, a
+    // double).
+    args = {};
+    thunk_test_snprintf_args(&args, text, "%d %f %s %lld %f %d %f %f %f %f %f %d %f %f");
+    thunk_test_add(&args, IR_F64, f64_bits(13.5));
+    thunk_test_add(&args, IR_F64, f64_bits(14.25));
+    thunk_test_snprintf(&args, text, "1 2.500000 three -4000000000 5.250000 -6 7.500000 8.125000 9.500000 "
+                                     "10.750000 11.000000 12 13.500000 14.250000", 13, 3);
+
+    // Two doubles and an integer more: Windows 14, SysV 4.
+    args = {};
+    thunk_test_snprintf_args(&args, text, "%d %f %s %lld %f %d %f %f %f %f %f %d %f %f %d");
+    thunk_test_add(&args, IR_F64, f64_bits(13.5));
+    thunk_test_add(&args, IR_F64, f64_bits(14.25));
+    thunk_test_add(&args, IR_I32, 15);
+    thunk_test_snprintf(&args, text, "1 2.500000 three -4000000000 5.250000 -6 7.500000 8.125000 9.500000 "
+                                     "10.750000 11.000000 12 13.500000 14.250000 15", 14, 4);
+}
+
+TEST(thunk_calls_strlen) {
+    Thunk_Test_Args args = {};
+    thunk_test_add(&args, IR_PTR, (u64)(uintptr_t) "hello, thunk");
+    CHECK_EQ(thunk_test_call((void *)&strlen, &args, IR_I64), 12);
+    args = {};
+    thunk_test_add(&args, IR_PTR, (u64)(uintptr_t) "");
+    CHECK_EQ(thunk_test_call((void *)&strlen, &args, IR_I64), 0);
+}
+
+TEST(thunk_float_results) {
+    // An f32 result is xmm0's low 32 bits, an f64 all 64, and an f32
+    // argument goes in an xmm register's low 32. C++'s <math.h> overloads
+    // some of these, so each is taken as the one C function it is.
+    float (*copysign_float)(float, float) = copysignf;
+    Thunk_Test_Args args = {};
+    thunk_test_add(&args, IR_F32, interp_f32_bits(3.0f));
+    thunk_test_add(&args, IR_F32, interp_f32_bits(-1.0f));
+    CHECK_EQ(thunk_test_call((void *)copysign_float, &args, IR_F32), interp_f32_bits(-3.0f));
+
+    // A double and an int: in xmm0 and the first integer register on SysV,
+    // which counts them apart; in xmm0 and rdx on Windows, by position.
+    double (*ldexp_double)(double, int) = ldexp;
+    args = {};
+    thunk_test_add(&args, IR_F64, f64_bits(1.0));
+    thunk_test_add(&args, IR_I32, 10);
+    CHECK_EQ(thunk_test_call((void *)ldexp_double, &args, IR_F64), f64_bits(1024.0));
+}
+
+// C functions of narrow types for thunk_narrow_results_and_arguments. A
+// narrow result's upper bits are whatever the callee left there, so
+// thunk_result masks them: at -O2 on SysV, thunk_test_negate leaves the
+// argument's upper bits, all ones for -5. And SysV clang-built code takes
+// a narrow argument already widened to 32 bits by the caller
+// (llvm_backend.cpp's extension_attribute): at -O2 thunk_test_widen is a
+// plain move there, so it returns what the thunk widened.
+static signed char thunk_test_negate(signed char c) {
+    return (signed char)-c;
+}
+
+static int thunk_test_widen(signed char c) {
+    return c;
+}
+
+static bool thunk_test_is_negative(int n) {
+    return n < 0;
+}
+
+TEST(thunk_narrow_results_and_arguments) {
+    // -5 as an s8 is 0xFB, canonical; negated it's 5.
+    Thunk_Test_Args args = {};
+    thunk_test_add(&args, IR_I8, 0xFB, IR_EXT_SIGN);
+    CHECK_EQ(thunk_test_call((void *)thunk_test_negate, &args, IR_I8), 5);
+    // 1 negated is -1: 0xFF as an i8, nothing above.
+    args = {};
+    thunk_test_add(&args, IR_I8, 1, IR_EXT_SIGN);
+    CHECK_EQ(thunk_test_call((void *)thunk_test_negate, &args, IR_I8), 0xFF);
+    // -5 widened by the callee to an int: 0xFFFFFFFB, canonical i32.
+    args = {};
+    thunk_test_add(&args, IR_I8, 0xFB, IR_EXT_SIGN);
+    CHECK_EQ(thunk_test_call((void *)thunk_test_widen, &args, IR_I32), 0xFFFFFFFB);
+    // A bool result is 0 or 1.
+    args = {};
+    thunk_test_add(&args, IR_I32, (u32)-3);
+    CHECK_EQ(thunk_test_call((void *)thunk_test_is_negative, &args, IR_I1), 1);
+    args = {};
+    thunk_test_add(&args, IR_I32, 4);
+    CHECK_EQ(thunk_test_call((void *)thunk_test_is_negative, &args, IR_I1), 0);
 }
