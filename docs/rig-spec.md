@@ -1535,7 +1535,12 @@ The debug information holds:
 - **Lexical blocks** following the program's scopes (section 4.7): each `if`, `else` and standalone block, and each loop's body, which starts at its `for` or `while`.
 - **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}`, a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
 
-The debug information describes no variables and no types: a debugger shows the program's procedures, lines, scopes and call stack. Frame pointers are kept (section 10.4), so the stack can be walked without unwind tables.
+- **Variables:** every local variable, parameter, loop iterator (`it`, `it_index` or a named one) and global variable, by its Rig name and with its type. A local is in the lexical block that declares it, so where an inner block hides a name, a debugger shows the inner variable. Parameters are stored in their own stack slots before the body's first line, so a breakpoint at a procedure already shows them; a parameter passed by address (a struct, array, view or string) is described through that address. Constants have no storage and are not variables: a debugger doesn't see them.
+- **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; `[N]T` as arrays of N elements; and `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`. A procedure's type lists its result and its parameters. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
+
+A debug type is made at most 1000 levels deep (the limit of section 9.4), counting each type along its longest chain of fields, pointees and elements. A program can chain types more deeply (structs held by value, each declared after the one it holds, or each holding a pointer to the next); past the limit a pointer is described as `void *` and any other type as a declared struct of its name with no fields, so the compiler's work stays bounded.
+
+Frame pointers are kept (section 10.4), so the stack can be walked without unwind tables.
 
 ## Appendix A: Grammar
 
