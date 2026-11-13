@@ -27,8 +27,9 @@ struct Parser {
     s64 resume;
     s64 declaration;  // the token the top-level declaration being read began at
     // Whether a #load named no file the parser could keep, so the program
-    // lacks it (Ast_File.lost_a_file): one with no string (parse_load), or
-    // one where only the top level can have it (error_misplaced_load).
+    // lacks it (Ast_File.lost_a_file): one with no string (parse_load), one
+    // where only the top level can have it (error_misplaced_load), or one
+    // the recovery passed over (skip_to_next_declaration).
     bool lost_a_file;
 };
 
@@ -1629,6 +1630,11 @@ static bool load_resumes_here(Parser *p) {
 // look like one too. A call's or a value's parentheses left open don't count
 // (see count_open): `counter : int = f(1` or `puts("a"` in a body, then a
 // global, keeps the global.
+//
+// A #load passed over (inside a body given up, or later on a line) isn't
+// reported: the error before it is the one mistake. But the file it names
+// isn't loaded, so the program lacks it (p->lost_a_file), as after a #load
+// reported misplaced.
 static void skip_to_next_declaration(Parser *p, s64 start) {
     s64 depth = 0;   // braces opened and not yet closed since `start`
     s64 parens = 0;  // the same for a parameter list's parentheses
@@ -1655,6 +1661,7 @@ static void skip_to_next_declaration(Parser *p, s64 start) {
         }
         if (!first && starts_line && depth <= 0 && parens <= 0 && starts_global(p)) return;
         if (!first && depth <= 0 && starts_load(p)) return;
+        if (is_directive(t, "load")) p->lost_a_file = true;
         count_open(p, p->next, &depth, &parens);
         advance(p);
     }
@@ -1859,10 +1866,10 @@ void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
             array_add(&file->globals, decl);
         }
     }
-    // A #load with no string, or where only the top level can have one,
-    // names no file the loader could follow, so the program lacks the one
-    // it was meant to, as after a #load the loader can't follow
-    // (Ast_File.lost_a_file).
+    // A #load with no string, where only the top level can have one, or
+    // passed over by the recovery names no file the loader could follow, so
+    // the program lacks the one it was meant to, as after a #load the loader
+    // can't follow (Ast_File.lost_a_file).
     if (p.lost_a_file) file->lost_a_file = true;
 }
 
