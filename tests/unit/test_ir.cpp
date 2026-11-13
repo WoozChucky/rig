@@ -808,8 +808,6 @@ TEST(ir_of_if_else_and_while) {
               "  %9 = const i64 18446744073709551615\n"
               "  ret %9\n"
               "b4:\n"
-              "  jump b5\n"
-              "b5:\n"
               "  %10 = const i64 0\n"
               "  ret %10\n"
               "}\n");
@@ -848,11 +846,11 @@ TEST(ir_of_if_else_and_while) {
 }
 
 TEST(ir_of_an_else_if_chain) {
-    // else if is an if inside the else block (b2), so the inner if's after
-    // block (b5, which its then and else jump to) comes first, then the
-    // outer's (b6, which the first arm and b5 jump to). lower_if walks the
-    // chain in a loop (issue #54) and makes these blocks as recursing into
-    // each else if did, in the same order.
+    // else if is an if inside the else block (b2), but the chain has one
+    // block after it (b5), which every arm's then block and the last else
+    // jump to: no arm has an after block of its own that only jumps on
+    // (issue #104: a debugger would stop in it). lower_if walks the chain
+    // in a loop (issue #54).
     Arena a = arena_make();
     String ir = ir_print(&a, lower_source(&a,
                                           "grade :: (x: int) -> int {\n"
@@ -876,7 +874,7 @@ TEST(ir_of_an_else_if_chain) {
               "b1:\n"
               "  %7 = const i64 1\n"
               "  store i64 %7, %2\n"
-              "  jump b6\n"
+              "  jump b5\n"
               "b2:\n"
               "  %8 = load i64 %1\n"
               "  %9 = const i64 50\n"
@@ -891,8 +889,6 @@ TEST(ir_of_an_else_if_chain) {
               "  store i64 %12, %2\n"
               "  jump b5\n"
               "b5:\n"
-              "  jump b6\n"
-              "b6:\n"
               "  %13 = load i64 %2\n"
               "  ret %13\n"
               "}\n");
@@ -3003,9 +2999,10 @@ TEST(jumps_out_of_an_if_are_at_its_braces) {
     // The jump from the end of an if's block to the code after the if is
     // at that block's '}', as clang places it: at the `if` it would be a
     // step back to the `if` line after the block's last statement, when
-    // the jump is a real one (over an else). The jump out of an else if's
-    // part is at the '}' that ends the chain. The test and its branch stay
-    // at the `if`.
+    // the jump is a real one (over an else). An else if's part has no jump
+    // of its own (issue #104): its arms jump straight past the chain, and
+    // the last arm's false edge goes there too. The test and its branch
+    // stay at the `if`.
     Arena a = arena_make();
     String ir = ir_print_debug(&a, lower_source(&a,
                                                 "main :: () {\n"
@@ -3033,7 +3030,7 @@ TEST(jumps_out_of_an_if_are_at_its_braces) {
               "b1:\n"
               "  %5 = const i64 5  ; 4:9 s1\n"
               "  store i64 %5, %0  ; 4:9 s1\n"
-              "  jump b5  ; 5:5 s0\n"
+              "  jump b4  ; 5:5 s0\n"
               "b2:\n"
               "  %6 = load i64 %0  ; 5:12 s0\n"
               "  %7 = const i64 1  ; 5:12 s0\n"
@@ -3044,8 +3041,6 @@ TEST(jumps_out_of_an_if_are_at_its_braces) {
               "  store i64 %9, %0  ; 6:9 s2\n"
               "  jump b4  ; 7:5 s0\n"
               "b4:\n"
-              "  jump b5  ; 7:5 s0\n"
-              "b5:\n"
               "  %10 = const i32 0  ; 8:1 s0\n"
               "  ret %10  ; 8:1 s0\n"
               "}\n");
