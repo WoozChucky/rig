@@ -308,7 +308,7 @@ static Interp_Record *interp_push(Interp *in, Interp_Record *caller, s32 k, Inte
 }
 
 // Whether `address` is in the range Rig procedures' values come from: if
-// not, it's native code, C's.
+// not, it's native code, C's, or null.
 static bool interp_in_proc_range(Interp *in, u64 address) {
     u64 base = (u64)in->proc_base;
     return address >= base && address - base < INTERP_PROC_RANGE;
@@ -470,6 +470,15 @@ static void interp_fail(Interp *in, Interp_Record *frame, s32 block, s32 index, 
     }
 }
 
+// Stops the run as interp_fail does, because foreign procedure k's C
+// function is nowhere. The message is made in `a`, so it isn't given to
+// interp_fail, which would copy it again.
+static void interp_fail_not_in_c(Interp *in, Interp_Record *frame, s32 block, s32 index, Arena *a,
+                                 Interp_Result *result, s32 k) {
+    interp_fail(in, frame, block, index, a, result, {});
+    result->message = interp_not_in_c(a, in->module->procs[k]->name);
+}
+
 // ---------------------------------------------------------------------------
 // The loop
 
@@ -509,10 +518,7 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
             if (m->procs.data[instr->target]->is_foreign) {
                 void *f = interp_c_function(in, instr->target);
                 if (!f) {
-                    // The message is made in `a`, so it isn't given to
-                    // interp_fail, which would copy it again.
-                    interp_fail(in, frame, block, index, a, result, {});
-                    result->message = interp_not_in_c(a, m->procs.data[instr->target]->name);
+                    interp_fail_not_in_c(in, frame, block, index, a, result, instr->target);
                     return;
                 }
                 v[instr->result] = (u64)f;
@@ -550,9 +556,7 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
             } else if (m->procs.data[callee]->is_foreign) {
                 c_function = interp_c_function(in, callee);
                 if (!c_function) {
-                    // Made in `a`, as IR_PROC_ADDR's.
-                    interp_fail(in, frame, block, index, a, result, {});
-                    result->message = interp_not_in_c(a, m->procs.data[callee]->name);
+                    interp_fail_not_in_c(in, frame, block, index, a, result, callee);
                     return;
                 }
             }
@@ -560,7 +564,7 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
                 // The arguments as the callee types them, the extra ones
                 // of a variadic call by their values' types (the running
                 // procedure's Interp_Proc, made before its frame was
-                // pushed). C gives one result at most (7.6); a call
+                // pushed). C gives one result at most (spec 7.6); a call
                 // through a value cast from another type may expect more,
                 // which are 0 here, as a Rig procedure's missing results
                 // are.
