@@ -424,6 +424,41 @@ TEST(load_goes_on_after_a_syntax_error) {
     arena_free(&a);
 }
 
+TEST(load_lexes_each_file_on_its_own) {
+    // Each file is lexed on its own (spec 2.1): b.rig, saved by an editor
+    // that starts a file with a UTF-8 byte-order mark, has it skipped as the
+    // main file's is, so its bytes aren't taken for non-ASCII text. Its
+    // block comment never closed ends with it, an error at the comment's
+    // start, and doesn't run into c.rig, whose c is declared as usual.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_lexes_each_file_on_its_own");
+    write_source(&a, dir, "main.rig", "#load \"b.rig\";\n#load \"c.rig\";\n");
+    write_source(&a, dir, "b.rig", "\xEF\xBB\xBFhelper :: () {}\n/* never closed");
+    write_source(&a, dir, "c.rig", "c :: () {}\n");
+    Ast_File *tree = load_main(&a, &d, dir);
+    CHECK_EQ(d.files.count, 3);
+    CHECK_STR(messages(&a, &d), "2:1: unterminated block comment\n");
+    if (d.messages.count == 1) CHECK_EQ(d.messages[0].pos.file, 1);
+    CHECK(tree != nullptr);
+    if (tree) {
+        // helper, at column 1 as the mark counts no column; the broken
+        // declaration the comment's error token makes, in b.rig; then c, in
+        // c.rig.
+        CHECK_EQ(tree->procs.count, 3);
+        if (tree->procs.count == 3) {
+            CHECK_STR(tree->procs[0]->name, "helper");
+            CHECK_EQ(tree->procs[0]->pos.col, 1);
+            CHECK(tree->procs[1]->is_broken);
+            CHECK_EQ(tree->procs[1]->pos.file, 1);
+            CHECK_STR(tree->procs[2]->name, "c");
+            CHECK_EQ(tree->procs[2]->pos.file, 2);
+        }
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
+
 TEST(load_empty_or_zero_byte_path) {
     // A string can hold a zero byte (\0), but a path can't: the system would
     // take the path as ending there, so "b.rig\0junk.rig", a .rig file by its
