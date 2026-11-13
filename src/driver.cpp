@@ -140,8 +140,8 @@ static int build(Arena *a, String path, String output, bool bounds_checks) {
 
 // Whether the source file's name, as given to rig build or rig check, ends
 // in .rig; when it doesn't, says so. Both commands refuse such a name (exit
-// 1, as for any other error rig names): a Rig program is a .rig file, and
-// another file given by mistake (hello.out for hello.rig) would otherwise
+// 1, as for any other error rig names): a Rig program's files are .rig
+// files, and another file given by mistake (hello.out for hello.rig) would otherwise
 // get a page of syntax errors, or with build, a program named after it.
 static bool source_named_rig(String path) {
     if (is_rig_file(path)) return true;

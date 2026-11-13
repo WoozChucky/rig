@@ -419,9 +419,9 @@ struct Ast_File {
 
 // The program's declarations (every file's: parse_into), procedures (broken
 // entries included) and globals together, in source order, file by file in
-// load order: what the checker goes through. Loads aren't
-// among them: the checker has nothing to do with them, the loader having
-// read the files they name. The caller frees the Array.
+// load order: what the checker goes through. Loads aren't among them: the
+// checker has nothing to do with them, the loader having read the files
+// they name. The caller frees the Array.
 Array<Ast *> ast_declarations(Ast_File *file);
 
 // A new, zeroed node of struct T and kind `kind`, in the arena.

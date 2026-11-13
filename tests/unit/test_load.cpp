@@ -1,7 +1,8 @@
 // test_load.cpp: the loader (issue #112): which files a program's #loads
 // read, in what order, each once, and what's reported when one can't be.
 // Each test writes its files under .build/tests/load/NAME/, NAME the
-// test's, and loads them from there. Uses test_os.cpp's SEPARATOR.
+// test's, and loads them from there. Uses test_os.cpp's SEPARATOR and
+// reason.
 
 #include "test.h"
 
@@ -83,6 +84,13 @@ static void check_cannot_read(Arena *a, Diagnostic *m, s32 file, s32 line, s32 c
     if (m->message.count > start.count) {
         CHECK_STR(string_slice(m->message, 0, start.count), string_cstr(a, start));
     }
+}
+
+// Checks that m is "cannot read 'PATH': MESSAGE", MESSAGE the system's
+// reason for `error` (an errno on Linux, a GetLastError() code on Windows).
+static void check_cannot_read_because(Arena *a, Diagnostic *m, String path, u32 error) {
+    String expected = string_printf(a, "cannot read '" STR_FMT "': %s", STR_ARG(path), reason(a, error));
+    CHECK_STR(m->message, string_cstr(a, expected));
 }
 
 TEST(load_one_file) {
@@ -265,20 +273,35 @@ TEST(load_cycle_back_to_main) {
 
 TEST(load_order_is_breadth_first) {
     // The main file, then the files it loads in the order of their #loads,
-    // then the files those load: c.rig, loaded by the main file, comes
-    // before d.rig, loaded by b.rig.
+    // then the files those load, level by level: c.rig, loaded by the main
+    // file, comes before d.rig, loaded by b.rig; and d.rig before e.rig, as
+    // b.rig comes before c.rig, and both before f.rig, loaded by d.rig. A
+    // stack of files to read would give main, b, c, e, d, f, and a walk
+    // that went down into b.rig's loads before c.rig's main, b, c, d, f, e,
+    // even with each file numbered as its #load is met. The files are parsed
+    // in that order too, so their declarations come in it.
     Arena a = arena_make();
     Diagnostics d = {};
     String dir = load_test_directory(&a, "load_order_is_breadth_first");
-    write_source(&a, dir, "main.rig", "#load \"b.rig\";\n#load \"c.rig\";\n");
-    write_source(&a, dir, "b.rig", "#load \"d.rig\";\n");
-    write_source(&a, dir, "c.rig", "");
-    write_source(&a, dir, "d.rig", "");
-    load_main(&a, &d, dir);
+    write_source(&a, dir, "main.rig", "#load \"b.rig\";\n#load \"c.rig\";\nmain :: () {}\n");
+    write_source(&a, dir, "b.rig", "#load \"d.rig\";\nb :: () {}\n");
+    write_source(&a, dir, "c.rig", "#load \"e.rig\";\nc :: () {}\n");
+    write_source(&a, dir, "d.rig", "#load \"f.rig\";\nd :: () {}\n");
+    write_source(&a, dir, "e.rig", "e :: () {}\n");
+    write_source(&a, dir, "f.rig", "f :: () {}\n");
+    Ast_File *tree = load_main(&a, &d, dir);
     CHECK_STR(messages(&a, &d), "");
-    String expected = string_printf(&a, STR_FMT "/main.rig\n" STR_FMT "/b.rig\n" STR_FMT "/c.rig\n" STR_FMT "/d.rig\n",
-                                    STR_ARG(dir), STR_ARG(dir), STR_ARG(dir), STR_ARG(dir));
+    const char *names[] = {"main", "b", "c", "d", "e", "f"};
+    String expected = string_printf(&a, "");
+    for (s64 i = 0; i < 6; i++) {
+        expected = string_printf(&a, STR_FMT STR_FMT "/%s.rig\n", STR_ARG(expected), STR_ARG(dir), names[i]);
+    }
     CHECK_STR(file_paths(&a, &d), string_cstr(&a, expected));
+    CHECK(tree != nullptr);
+    if (tree) {
+        CHECK_EQ(tree->procs.count, 6);
+        for (s64 i = 0; i < 6 && i < tree->procs.count; i++) CHECK_STR(tree->procs[i]->name, names[i]);
+    }
     diag_free(&d);
     arena_free(&a);
 }
@@ -296,7 +319,15 @@ TEST(load_missing_file) {
     Ast_File *tree = load_main(&a, &d, dir);
     CHECK_EQ(d.files.count, 1);
     CHECK_EQ(d.messages.count, 1);
-    if (d.messages.count == 1) check_cannot_read(&a, &d.messages[0], 0, 1, 7, str(in_directory(&a, dir, "nope.rig")));
+    if (d.messages.count == 1) {
+        String path = str(in_directory(&a, dir, "nope.rig"));
+        check_cannot_read(&a, &d.messages[0], 0, 1, 7, path);
+#ifdef _WIN32
+        check_cannot_read_because(&a, &d.messages[0], path, ERROR_FILE_NOT_FOUND);
+#else
+        check_cannot_read_because(&a, &d.messages[0], path, ENOENT);
+#endif
+    }
     // The tree is still there, so the checker can check the rest.
     CHECK(tree != nullptr);
     if (tree) CHECK_EQ(tree->procs.count, 1);
@@ -393,7 +424,17 @@ TEST(load_a_directory) {
     load_main(&a, &d, dir);
     CHECK_EQ(d.files.count, 1);
     CHECK_EQ(d.messages.count, 1);
-    if (d.messages.count == 1) check_cannot_read(&a, &d.messages[0], 0, 1, 7, str(in_directory(&a, dir, "d.rig")));
+    if (d.messages.count == 1) {
+        // With the reason reading it gave, not "access denied", nor another
+        // call's.
+        String path = str(in_directory(&a, dir, "d.rig"));
+        check_cannot_read(&a, &d.messages[0], 0, 1, 7, path);
+#ifdef _WIN32
+        check_cannot_read_because(&a, &d.messages[0], path, ERROR_DIRECTORY_NOT_SUPPORTED);
+#else
+        check_cannot_read_because(&a, &d.messages[0], path, EISDIR);
+#endif
+    }
     diag_free(&d);
     arena_free(&a);
 }
@@ -583,11 +624,13 @@ TEST(load_failure_loses_a_file) {
     // which only the top level can have, reported or passed over with a body
     // given up after another error, in column 1 or not; and one passed over
     // after stray tokens, on the way to a declaration later on its line
-    // (`* #load "b.rig"; main :: ...`). So does a loaded
-    // file's #load that fails. A file loaded twice, the main file loaded
-    // back, a syntax error in a loaded file, a #load missing only its ';', or
-    // one in column 1 at the end of a body never closed (read again at the
-    // top level) loses nothing.
+    // (`* #load "b.rig"; main :: ...`). So does a loaded file's #load that
+    // fails. A file loaded twice, the main file loaded back, a syntax error
+    // in a loaded file, a #load missing only its ';', one in column 1 at the
+    // end of a body or a struct never closed (read again at the top level),
+    // or one starting the line where the recovery resumes after an error
+    // (after a stray call, a constant's extra value, a load's stray token
+    // or a signature with no body) loses nothing.
     Arena a = arena_make();
     String dir = load_test_directory(&a, "load_failure_loses_a_file");
     CHECK(os_make_directory(str(in_directory(&a, dir, "d.rig"))));
@@ -622,6 +665,11 @@ TEST(load_failure_loses_a_file) {
         {"#load \"broken.rig\";\n", false},
         {"#load \"b.rig\"\n", false},
         {"main :: () {\n#load \"b.rig\";\n", false},
+        {"S :: struct {\n    x: int;\n#load \"b.rig\";\n", false},
+        {"foo(1)\n#load \"b.rig\";\n", false},
+        {"N :: 1 2\n#load \"b.rig\";\n", false},
+        {"#load \"b.rig\" x;\n#load \"./b.rig\";\n", false},
+        {"f :: ()\n#load \"b.rig\";\n", false},
     };
     for (s64 i = 0; i < (s64)(sizeof cases / sizeof cases[0]); i++) {
         Diagnostics d = {};
