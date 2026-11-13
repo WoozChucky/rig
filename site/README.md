@@ -10,6 +10,6 @@ Node.js is needed only for the site, never for building the compiler: VitePress 
 npm ci && npm run docs:dev
 ```
 
-The dev server regenerates the pages when `docs/rig-spec.md` changes. `npm run docs:build` builds the site into `.vitepress/dist`, and `npm run docs:preview` serves that build.
+The dev server regenerates the pages when `docs/rig-spec.md` changes. `npm run docs:build` builds the site into `.vitepress/dist`, then `scripts/check-anchors.mjs` checks that every link to a `#anchor` of the site names an id on its page (the build fails if one doesn't), and `npm run docs:preview` serves that build. Headings and links use GitHub's anchors on every page (`markdown.anchor.slugify` in `.vitepress/config.mts`), so `#510-calls` on the site is the same heading as on GitHub.
 
 The [docs workflow](../.github/workflows/docs.yml) builds the site for every pull request that touches it, and publishes it to GitHub Pages from `main`.
