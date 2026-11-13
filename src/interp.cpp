@@ -39,6 +39,7 @@
 // aligned, so the values look like code addresses.
 static const u64 INTERP_PROC_RANGE = 1024 * 1024;
 static const u64 INTERP_PROC_STRIDE = 16;
+static const u64 INTERP_PROC_LIMIT = INTERP_PROC_RANGE / INTERP_PROC_STRIDE;  // 65,536
 
 // A C call given a Rig procedure fails (interp.h): C would need a way back
 // into the interpreter to call it.
@@ -468,8 +469,7 @@ static void interp_fail(Interp *in, Interp_Record *frame, s32 block, s32 index, 
             named = f->proc;
         }
         Ir_Instr *at = &p->blocks[f->block]->instrs[f->index];
-        array_add(&result->frames, Interp_Frame{name, at->pos});
-    }
+        array_add(&result->frames, Interp_Frame{name, at->pos});    }
 }
 
 // Stops the run as interp_fail does, because foreign procedure k's C
@@ -494,8 +494,8 @@ static void interp_fail_not_in_c(Interp *in, Interp_Record *frame, s32 block, s3
 // .data, skipping operator[]'s bounds assertion on every instruction:
 // lowering's IR has the shape ir.h describes, each operand one of the
 // procedure's values, each jump's target one of its blocks.
-// interp_proc_info, which runs once per procedure, keeps operator[] and
-// its assertions.
+// interp_proc_info, whose work past its cache lookup runs once per
+// procedure, keeps operator[] and its assertions.
 static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Result *result) {
     Ir_Module *m = in->module;
     Ir_Proc *p = m->procs.data[frame->proc];
@@ -863,10 +863,10 @@ void interp_run(Interp *in, s32 proc, Array<u64> args, Arena *a, Interp_Result *
     // Procedure k's address is 16 x k bytes past the reserved range's
     // start, so every index, a C function's too (whose place is never
     // handed out), must fall inside it.
-    if ((u64)m->procs.count > INTERP_PROC_RANGE / INTERP_PROC_STRIDE) {
+    if ((u64)m->procs.count > INTERP_PROC_LIMIT) {
         result->message = string_printf(a, "the program has %lld procedures, more than the %llu the interpreter "
                                            "can give addresses to", (long long)m->procs.count,
-                                        (unsigned long long)(INTERP_PROC_RANGE / INTERP_PROC_STRIDE));
+                                        (unsigned long long)INTERP_PROC_LIMIT);
         return;
     }
     while (in->procs.count < m->procs.count) array_add(&in->procs, nullptr);
@@ -908,7 +908,7 @@ void interp_run(Interp *in, s32 proc, Array<u64> args, Arena *a, Interp_Result *
 
 u64 interp_proc_address(Interp *in, s32 proc) {
     RIG_ASSERT(proc >= 0 && proc < in->module->procs.count && !in->module->procs[proc]->is_foreign);
-    RIG_ASSERT((u64)proc < INTERP_PROC_RANGE / INTERP_PROC_STRIDE);
+    RIG_ASSERT((u64)proc < INTERP_PROC_LIMIT);
     return (u64)in->proc_base + (u64)proc * INTERP_PROC_STRIDE;
 }
 
