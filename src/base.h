@@ -315,7 +315,8 @@ void table_free(Table<V> *t) {
 // source file by its absolute path (path_absolute), so an editor's
 // breakpoint (which names files that way) finds it, with the MD5 of its
 // bytes, so a debugger can tell the file has changed since the program was
-// built. load_path finds the file a #load names (issue #112).
+// built. load_path finds the file a #load names (issue #112), and
+// is_rig_file says whether a path names a source file.
 
 // `path` made absolute: joined to `directory` (an absolute path, as
 // os_current_directory gives) when it's relative, its "." segments dropped
@@ -345,6 +346,11 @@ String path_absolute(Arena *a, String directory, String path, bool windows);
 // file by. When it's relative, it's read from the directory rig runs in, as
 // `from` is.
 String load_path(Arena *a, String from, String written, bool windows);
+
+// Whether the path ends in .rig, in any case: on Windows HELLO.RIG and
+// hello.rig are the same file, and on Linux .RIG is still plainly meant.
+// rig build and rig check take only such a file, and a #load only names one.
+bool is_rig_file(String path);
 
 // The MD5 digest of `bytes` (RFC 1321) in `out`, its 16 bytes in the order
 // they're written: printed as 32 hex digits from out[0], it's what md5sum

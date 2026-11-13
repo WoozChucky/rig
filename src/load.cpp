@@ -12,38 +12,52 @@ static const bool HOST_IS_WINDOWS = true;
 static const bool HOST_IS_WINDOWS = false;
 #endif
 
-bool is_rig_file(String path) {
-    if (path.count < 4) return false;
-    const u8 *end = path.data + path.count - 4;
-    return end[0] == '.' && (end[1] | 0x20) == 'r' && (end[2] | 0x20) == 'i' && (end[3] | 0x20) == 'g';
-}
+// The files loaded so far. A file is known by its id (os_file_id) when it
+// has one, in `ids`, whose keys are the ids' 24 bytes. One with none is
+// known by its path made absolute (path_absolute), in `paths`, in lower
+// case on Windows, where a name's case doesn't matter: that's a file that
+// isn't there, as the main file under rig check --stdin needn't be, or one
+// on a file system with no ids to give (os.h). Its path is the best there
+// is: ./x.rig and sub/../x.rig are x.rig, though a link to it isn't.
+struct Loaded_Files {
+    Table<bool> ids;
+    Table<bool> paths;
+};
 
-// Records the file at `path` as loaded, by its id (os_file_id), in `seen`:
-// the ids' 24 bytes, copied into the arena, are the keys. False when it was
-// loaded already. A file whose id can't be had (one that doesn't exist) is
-// taken as new: a loaded file is then read, and the read says why it
-// can't be. The main file under rig check --stdin needn't exist and isn't
-// read at all; a file loading it back reads it from disk.
-static bool first_time_seen(Arena *a, Table<bool> *seen, String path) {
+// Records the file at `path`, from the directory rig runs in, as loaded.
+// False when it was loaded already. A key is looked up where it was made,
+// and copied into the arena only when it's new, to stay in the table.
+static bool first_time_seen(Arena *a, Loaded_Files *seen, String directory, String path) {
     u64 id[3];
-    if (!os_file_id(path, id)) return true;
-    u8 *key = arena_new_array<u8>(a, sizeof id);
-    memcpy(key, id, sizeof id);
-    String k = {key, (s64)sizeof id};
-    if (table_get(seen, k)) return false;
-    table_put(seen, k, true);
-    return true;
+    if (os_file_id(path, id)) {
+        String key = {(const u8 *)id, (s64)sizeof id};
+        if (table_get(&seen->ids, key)) return false;
+        table_put(&seen->ids, string_copy(a, key), true);
+        return true;
+    }
+    Arena scratch = arena_make(1024);
+    String absolute = path_absolute(&scratch, directory, path, HOST_IS_WINDOWS);
+    u8 *lower = arena_new_array<u8>(&scratch, absolute.count);
+    for (s64 i = 0; i < absolute.count; i++) {
+        u8 c = absolute.data[i];
+        lower[i] = HOST_IS_WINDOWS && c >= 'A' && c <= 'Z' ? (u8)(c | 0x20) : c;
+    }
+    String key = {lower, absolute.count};
+    bool first = table_get(&seen->paths, key) == nullptr;
+    if (first) table_put(&seen->paths, string_copy(a, key), true);
+    arena_free(&scratch);
+    return first;
 }
 
-Loaded_Program load_program(Arena *a, Diagnostics *d, String path, String text) {
-    Loaded_Program program = {};
-    program.tree = arena_new<Ast_File>(a);
+Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text) {
+    Ast_File *tree = arena_new<Ast_File>(a);
     String directory = os_current_directory(a);
-    Table<bool> seen = {};
+    Loaded_Files seen = {};
 
-    // The main file first, its id taken before its #loads are followed, so
-    // a file that loads it back loads nothing.
-    first_time_seen(a, &seen, path);
+    // The main file first, known before its #loads are followed, so a file
+    // that loads it back loads nothing: by its id, or, when it isn't there
+    // (rig check --stdin), by its path.
+    first_time_seen(a, &seen, directory, path);
     s32 main_file = diag_add_file(d, path, text);
     diag_locate_file(d, main_file, directory, HOST_IS_WINDOWS);
 
@@ -52,12 +66,15 @@ Loaded_Program load_program(Arena *a, Diagnostics *d, String path, String text) 
     // The loads a file adds to the tree are those after the ones before it.
     for (s64 i = main_file; i < d->files.count; i++) {
         s32 file = (s32)i;
+        // The tree keeps nothing of the tokens (its names and strings point
+        // into the texts or are in the arena), so they go once it's parsed:
+        // one file's at a time.
         Array<Token> tokens = lex(d, file, a);
-        array_add(&program.tokens, tokens);
-        s64 first_load = program.tree->loads.count;
-        parse_into(program.tree, tokens, a, d);
-        for (s64 k = first_load; k < program.tree->loads.count; k++) {
-            Ast_Load *load = program.tree->loads[k];
+        s64 first_load = tree->loads.count;
+        parse_into(tree, tokens, a, d);
+        array_free(&tokens);
+        for (s64 k = first_load; k < tree->loads.count; k++) {
+            Ast_Load *load = tree->loads[k];
             // A string can hold a zero byte (\0), but the system takes a
             // path as ending at one, so "b.rig\0x.rig" would read b.rig:
             // such a path, as an empty one, names no file.
@@ -74,7 +91,9 @@ Loaded_Program load_program(Arena *a, Diagnostics *d, String path, String text) 
                 diag_error(d, load->path_pos, "'" STR_FMT "' isn't a .rig file", STR_ARG(loaded));
                 continue;
             }
-            if (!first_time_seen(a, &seen, loaded)) continue;
+            // A file that can't be read is reported at its first #load
+            // alone, as a file that can is read at its first alone.
+            if (!first_time_seen(a, &seen, directory, loaded)) continue;
             String loaded_text = {};
             if (!os_read_file(a, loaded, &loaded_text)) {
                 diag_error(d, load->path_pos, "cannot read '" STR_FMT "': " STR_FMT, STR_ARG(loaded),
@@ -85,11 +104,7 @@ Loaded_Program load_program(Arena *a, Diagnostics *d, String path, String text) 
             diag_locate_file(d, added, directory, HOST_IS_WINDOWS);
         }
     }
-    table_free(&seen);
-    return program;
-}
-
-void loaded_program_free(Loaded_Program *p) {
-    for (s64 i = 0; i < p->tokens.count; i++) array_free(&p->tokens[i]);
-    array_free(&p->tokens);
+    table_free(&seen.ids);
+    table_free(&seen.paths);
+    return tree;
 }

@@ -15,8 +15,11 @@
 // - Each file is read once, however it's named: a file is known by the
 //   system's id for it (os_file_id), not by its path's text, so ./b.rig,
 //   sub/../b.rig, a link to b.rig, and B.RIG on Windows are all b.rig. A
-//   file loading one already loaded, the main file included, loads
-//   nothing: a cycle of loads is harmless, and no error.
+//   file with no id (one that isn't there, the main file under rig check
+//   --stdin, say) is known by its path made absolute instead. A file
+//   loading one already loaded, the main file included, loads nothing: a
+//   cycle of loads is harmless, and no error. A file that can't be read is
+//   reported at its first #load alone.
 // - The order is the main file's, then each loaded file's in the order its
 //   first #load was met, the files walked in that same order: a queue, not
 //   a recursion, so a chain of loads of any length takes no more stack
@@ -33,28 +36,15 @@
 
 #include "parser.h"
 
-// Whether the path ends in .rig, in any case: on Windows HELLO.RIG and
-// hello.rig are the same file, and on Linux .RIG is still plainly meant.
-bool is_rig_file(String path);
-
-struct Loaded_Program {
-    Ast_File *tree;  // every file's declarations, broken ones included
-    // Each file's tokens, until loaded_program_free. The tree doesn't need
-    // them (its names and strings are in the arena, as the texts are), so
-    // the caller can free them as soon as load_program returns.
-    Array<Array<Token>> tokens;
-};
-
 // Lexes and parses `text`, the main file, named `path` (which need not
 // exist: rig check --stdin reads the text from standard input, and its
 // path only names it and says where its #loads are), then every file it
-// #loads, transitively, each once, in load order. Every file is registered
-// with `d` (diag_add_file) and located from the directory rig runs in
+// #loads, transitively, each once, in load order, into one tree: every
+// file's declarations, broken ones included. Every file is registered with
+// `d` (diag_add_file) and located from the directory rig runs in
 // (diag_locate_file, os_current_directory), the main file first. Errors go
-// to `d`; the tree is returned even with errors, so the checker still runs
-// and reports what it finds in the rest. The tree, the texts read and the
-// paths are in the arena; the tokens are freed by loaded_program_free.
-Loaded_Program load_program(Arena *a, Diagnostics *d, String path, String text);
-
-// Frees the tokens. The tree stays, in the arena.
-void loaded_program_free(Loaded_Program *p);
+// to `d`; the tree is returned even with errors, never null, so the checker
+// still runs and reports what it finds in the rest. The tree, the texts
+// read and the paths are in the arena; each file's tokens are freed once
+// it's parsed.
+Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text);
