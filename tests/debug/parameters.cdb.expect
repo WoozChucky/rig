@@ -1,0 +1,10 @@
+9: choose :: (n: int) {
+10:     if n == 1 {
+12:     } else if n == 2 {
+13:         puts("two");
+18: say :: (flag: bool) {
+19:     if flag {
+bool true
+bool false
+the flag was cleared
+!the flag was left set

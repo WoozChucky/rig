@@ -128,24 +128,30 @@ TEST(ir_of_locals_and_arithmetic) {
               "proc @f(i32, i8 zeroext) -> i32 {\n"
               "b0:\n"
               "  %2 = local i32\n"
-              "  %3 = const i32 6\n"
-              "  store i32 %3, %2\n"
+              "  store i32 %0, %2\n"
+              "  %3 = local i8\n"
+              "  store i8 %1, %3\n"
               "  %4 = local i32\n"
-              "  %5 = load i32 %2\n"
-              "  %6 = mul i32 %0, %5\n"
-              "  %7 = const i32 29\n"
-              "  %8 = add i32 %6, %7\n"
-              "  store i32 %8, %4\n"
-              "  %9 = load i32 %4\n"
-              "  %10 = zext i8 %1 to i32\n"
-              "  %11 = sub i32 %9, %10\n"
-              "  store i32 %11, %4\n"
-              "  %12 = local i8\n"
-              "  %13 = const i8 0\n"
-              "  store i8 %13, %12\n"
-              "  %14 = local i32\n"
-              "  %15 = load i32 %4\n"
-              "  ret %15\n"
+              "  %5 = const i32 6\n"
+              "  store i32 %5, %4\n"
+              "  %6 = local i32\n"
+              "  %7 = load i32 %2\n"
+              "  %8 = load i32 %4\n"
+              "  %9 = mul i32 %7, %8\n"
+              "  %10 = const i32 29\n"
+              "  %11 = add i32 %9, %10\n"
+              "  store i32 %11, %6\n"
+              "  %12 = load i32 %6\n"
+              "  %13 = load i8 %3\n"
+              "  %14 = zext i8 %13 to i32\n"
+              "  %15 = sub i32 %12, %14\n"
+              "  store i32 %15, %6\n"
+              "  %16 = local i8\n"
+              "  %17 = const i8 0\n"
+              "  store i8 %17, %16\n"
+              "  %18 = local i32\n"
+              "  %19 = load i32 %6\n"
+              "  ret %19\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "main"), "proc @main() -> i32 {\nb0:\n  %0 = const i32 0\n  ret %0\n}\n");
     arena_free(&a);
@@ -163,8 +169,12 @@ TEST(ir_of_calls_with_values) {
     CHECK_STR(proc_ir(ir, "square"),
               "proc @square(i32) -> i32 {\n"
               "b0:\n"
-              "  %1 = mul i32 %0, %0\n"
-              "  ret %1\n"
+              "  %1 = local i32\n"
+              "  store i32 %0, %1\n"
+              "  %2 = load i32 %1\n"
+              "  %3 = load i32 %1\n"
+              "  %4 = mul i32 %2, %3\n"
+              "  ret %4\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "main"),
               "proc @main() -> i32 {\n"
@@ -194,20 +204,26 @@ TEST(shift_amount_is_masked) {
     CHECK_STR(proc_ir(ir, "f"),
               "proc @f(i8 zeroext, i64) -> i8 zeroext {\n"
               "b0:\n"
-              "  %2 = trunc i64 %1 to i8\n"
-              "  %3 = const i8 7\n"
-              "  %4 = and i8 %2, %3\n"
-              "  %5 = shl i8 %0, %4\n"
-              "  ret %5\n"
+              "  %2 = local i8\n"
+              "  store i8 %0, %2\n"
+              "  %3 = local i64\n"
+              "  store i64 %1, %3\n"
+              "  %4 = load i8 %2\n"
+              "  %5 = load i64 %3\n"
+              "  %6 = trunc i64 %5 to i8\n"
+              "  %7 = const i8 7\n"
+              "  %8 = and i8 %6, %7\n"
+              "  %9 = shl i8 %4, %8\n"
+              "  ret %9\n"
               "}\n");
     // Signed: the amount sign-extends, the shift is arithmetic.
-    CHECK(contains(proc_ir(ir, "g"), "  %2 = sext i8 %1 to i64\n  %3 = const i64 63\n  %4 = and i64 %2, %3\n"
-                                     "  %5 = ashr i64 %0, %4\n"));
+    CHECK(contains(proc_ir(ir, "g"), "  %4 = load i64 %2\n  %5 = load i8 %3\n  %6 = sext i8 %5 to i64\n"
+                                     "  %7 = const i64 63\n  %8 = and i64 %6, %7\n  %9 = ashr i64 %4, %8\n"));
     // Unsigned: zero-extends, logical.
-    CHECK(contains(proc_ir(ir, "h"), "  %2 = zext i8 %1 to i32\n  %3 = const i32 31\n  %4 = and i32 %2, %3\n"
-                                     "  %5 = lshr i32 %0, %4\n"));
+    CHECK(contains(proc_ir(ir, "h"), "  %4 = load i32 %2\n  %5 = load i8 %3\n  %6 = zext i8 %5 to i32\n"
+                                     "  %7 = const i32 31\n  %8 = and i32 %6, %7\n  %9 = lshr i32 %4, %8\n"));
     // A constant amount is masked while compiling: 33 is 1 on an s32.
-    CHECK(contains(proc_ir(ir, "k"), "  %1 = const i32 1\n  %2 = shl i32 %0, %1\n"));
+    CHECK(contains(proc_ir(ir, "k"), "  %2 = load i32 %1\n  %3 = const i32 1\n  %4 = shl i32 %2, %3\n"));
     arena_free(&a);
 }
 
@@ -218,10 +234,11 @@ TEST(narrow_arithmetic_stays_narrow) {
                                           "f :: (a: u8, b: u8) -> u8 { return a + b; }\n"
                                           "g :: (a: s16) -> s16 { return -a ^ ~a; }\n"
                                           "main :: () { }\n"));
-    CHECK(contains(proc_ir(ir, "f"), "  %2 = add i8 %0, %1\n  ret %2\n"));
+    CHECK(contains(proc_ir(ir, "f"), "  %4 = load i8 %2\n  %5 = load i8 %3\n  %6 = add i8 %4, %5\n  ret %6\n"));
     // - is 0 - a, ~ is a xor all ones, at the operand's width.
-    CHECK(contains(proc_ir(ir, "g"), "  %1 = const i16 0\n  %2 = sub i16 %1, %0\n"
-                                     "  %3 = const i16 65535\n  %4 = xor i16 %0, %3\n  %5 = xor i16 %2, %4\n"));
+    CHECK(contains(proc_ir(ir, "g"), "  %2 = load i16 %1\n  %3 = const i16 0\n  %4 = sub i16 %3, %2\n"
+                                     "  %5 = load i16 %1\n  %6 = const i16 65535\n  %7 = xor i16 %5, %6\n"
+                                     "  %8 = xor i16 %4, %7\n"));
     arena_free(&a);
 }
 
@@ -309,8 +326,10 @@ TEST(nothing_is_lowered_after_a_return) {
 // lowering makes it.
 
 // max :: (a: int, b: int) -> int { if a > b { return a; } return b; }, as
-// lowering makes it (lowering_makes_the_hand_built_max): three blocks, a
-// comparison and a branch.
+// lowering made it before its parameters had slots (issue #104; lowering
+// makes it with them now, lowering_reads_max_s_parameters_from_slots):
+// three blocks, a comparison and a branch, the smallest module with blocks
+// the backend's tests use.
 static Ir_Module *max_module(Arena *a) {
     Ir_Module *m = arena_new<Ir_Module>(a);
     Ir_Proc *p = new_proc_returning(m, a, "max", IR_I64);
@@ -719,23 +738,32 @@ TEST(ir_of_comparisons_and_not) {
     CHECK_STR(proc_ir(ir, "f"),
               "proc @f(i8 zeroext, i16 zeroext, i32) -> i1 {\n"
               "b0:\n"
-              "  %3 = local i1\n"
-              "  %4 = zext i8 %0 to i16\n"
-              "  %5 = cmp ult i16 %4, %1\n"
-              "  %6 = const i1 1\n"
-              "  %7 = xor i1 %5, %6\n"
-              "  store i1 %7, %3\n"
-              "  branch %7, b1, b2\n"
+              "  %3 = local i8\n"
+              "  store i8 %0, %3\n"
+              "  %4 = local i16\n"
+              "  store i16 %1, %4\n"
+              "  %5 = local i32\n"
+              "  store i32 %2, %5\n"
+              "  %6 = local i1\n"
+              "  %7 = load i8 %3\n"
+              "  %8 = zext i8 %7 to i16\n"
+              "  %9 = load i16 %4\n"
+              "  %10 = cmp ult i16 %8, %9\n"
+              "  %11 = const i1 1\n"
+              "  %12 = xor i1 %10, %11\n"
+              "  store i1 %12, %6\n"
+              "  branch %12, b1, b2\n"
               "b1:\n"
-              "  %8 = const i32 4294967294\n"
-              "  %9 = cmp sge i32 %2, %8\n"
-              "  store i1 %9, %3\n"
+              "  %13 = load i32 %5\n"
+              "  %14 = const i32 4294967294\n"
+              "  %15 = cmp sge i32 %13, %14\n"
+              "  store i1 %15, %6\n"
               "  jump b2\n"
               "b2:\n"
-              "  %10 = load i1 %3\n"
-              "  ret %10\n"
+              "  %16 = load i1 %6\n"
+              "  ret %16\n"
               "}\n");
-    CHECK(contains(proc_ir(ir, "g"), "  %2 = cmp ne i1 %0, %1\n  ret %2\n"));
+    CHECK(contains(proc_ir(ir, "g"), "  %4 = load i1 %2\n  %5 = load i1 %3\n  %6 = cmp ne i1 %4, %5\n  ret %6\n"));
     arena_free(&a);
 }
 
@@ -762,62 +790,67 @@ TEST(ir_of_if_else_and_while) {
     CHECK_STR(proc_ir(ir, "sign"),
               "proc @sign(i64) -> i64 {\n"
               "b0:\n"
-              "  %1 = const i64 0\n"
-              "  %2 = cmp sgt i64 %0, %1\n"
-              "  branch %2, b1, b2\n"
+              "  %1 = local i64\n"
+              "  store i64 %0, %1\n"
+              "  %2 = load i64 %1\n"
+              "  %3 = const i64 0\n"
+              "  %4 = cmp sgt i64 %2, %3\n"
+              "  branch %4, b1, b2\n"
               "b1:\n"
-              "  %3 = const i64 1\n"
-              "  ret %3\n"
+              "  %5 = const i64 1\n"
+              "  ret %5\n"
               "b2:\n"
-              "  %4 = const i64 0\n"
-              "  %5 = cmp slt i64 %0, %4\n"
-              "  branch %5, b3, b4\n"
-              "b3:\n"
-              "  %6 = const i64 18446744073709551615\n"
-              "  ret %6\n"
-              "b4:\n"
-              "  jump b5\n"
-              "b5:\n"
+              "  %6 = load i64 %1\n"
               "  %7 = const i64 0\n"
-              "  ret %7\n"
+              "  %8 = cmp slt i64 %6, %7\n"
+              "  branch %8, b3, b4\n"
+              "b3:\n"
+              "  %9 = const i64 18446744073709551615\n"
+              "  ret %9\n"
+              "b4:\n"
+              "  %10 = const i64 0\n"
+              "  ret %10\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "count"),
               "proc @count(i64) -> i64 {\n"
               "b0:\n"
               "  %1 = local i64\n"
-              "  %2 = const i64 0\n"
-              "  store i64 %2, %1\n"
+              "  store i64 %0, %1\n"
+              "  %2 = local i64\n"
+              "  %3 = const i64 0\n"
+              "  store i64 %3, %2\n"
               "  jump b1\n"
               "b1:\n"
-              "  %3 = load i64 %1\n"
-              "  %4 = cmp slt i64 %3, %0\n"
-              "  branch %4, b2, b5\n"
-              "b2:\n"
+              "  %4 = load i64 %2\n"
               "  %5 = load i64 %1\n"
-              "  %6 = const i64 5\n"
-              "  %7 = cmp eq i64 %5, %6\n"
-              "  branch %7, b3, b4\n"
+              "  %6 = cmp slt i64 %4, %5\n"
+              "  branch %6, b2, b5\n"
+              "b2:\n"
+              "  %7 = load i64 %2\n"
+              "  %8 = const i64 5\n"
+              "  %9 = cmp eq i64 %7, %8\n"
+              "  branch %9, b3, b4\n"
               "b3:\n"
               "  jump b5\n"
               "b4:\n"
-              "  %8 = load i64 %1\n"
-              "  %9 = const i64 1\n"
-              "  %10 = add i64 %8, %9\n"
-              "  store i64 %10, %1\n"
+              "  %10 = load i64 %2\n"
+              "  %11 = const i64 1\n"
+              "  %12 = add i64 %10, %11\n"
+              "  store i64 %12, %2\n"
               "  jump b1\n"
               "b5:\n"
-              "  %11 = load i64 %1\n"
-              "  ret %11\n"
+              "  %13 = load i64 %2\n"
+              "  ret %13\n"
               "}\n");
     arena_free(&a);
 }
 
 TEST(ir_of_an_else_if_chain) {
-    // else if is an if inside the else block (b2), so the inner if's after
-    // block (b5, which its then and else jump to) comes first, then the
-    // outer's (b6, which the first arm and b5 jump to). lower_if walks the
-    // chain in a loop (issue #54) and makes these blocks as recursing into
-    // each else if did, in the same order.
+    // else if is an if inside the else block (b2), but the chain has one
+    // block after it (b5), which every arm's then block and the last else
+    // jump to: no arm has an after block of its own that only jumps on
+    // (issue #104: a debugger would stop in it). lower_if walks the chain
+    // in a loop (issue #54).
     Arena a = arena_make();
     String ir = ir_print(&a, lower_source(&a,
                                           "grade :: (x: int) -> int {\n"
@@ -830,32 +863,34 @@ TEST(ir_of_an_else_if_chain) {
               "proc @grade(i64) -> i64 {\n"
               "b0:\n"
               "  %1 = local i64\n"
-              "  %2 = const i64 0\n"
-              "  store i64 %2, %1\n"
-              "  %3 = const i64 90\n"
-              "  %4 = cmp sgt i64 %0, %3\n"
-              "  branch %4, b1, b2\n"
+              "  store i64 %0, %1\n"
+              "  %2 = local i64\n"
+              "  %3 = const i64 0\n"
+              "  store i64 %3, %2\n"
+              "  %4 = load i64 %1\n"
+              "  %5 = const i64 90\n"
+              "  %6 = cmp sgt i64 %4, %5\n"
+              "  branch %6, b1, b2\n"
               "b1:\n"
-              "  %5 = const i64 1\n"
-              "  store i64 %5, %1\n"
-              "  jump b6\n"
+              "  %7 = const i64 1\n"
+              "  store i64 %7, %2\n"
+              "  jump b5\n"
               "b2:\n"
-              "  %6 = const i64 50\n"
-              "  %7 = cmp sgt i64 %0, %6\n"
-              "  branch %7, b3, b4\n"
+              "  %8 = load i64 %1\n"
+              "  %9 = const i64 50\n"
+              "  %10 = cmp sgt i64 %8, %9\n"
+              "  branch %10, b3, b4\n"
               "b3:\n"
-              "  %8 = const i64 2\n"
-              "  store i64 %8, %1\n"
+              "  %11 = const i64 2\n"
+              "  store i64 %11, %2\n"
               "  jump b5\n"
               "b4:\n"
-              "  %9 = const i64 3\n"
-              "  store i64 %9, %1\n"
+              "  %12 = const i64 3\n"
+              "  store i64 %12, %2\n"
               "  jump b5\n"
               "b5:\n"
-              "  jump b6\n"
-              "b6:\n"
-              "  %10 = load i64 %1\n"
-              "  ret %10\n"
+              "  %13 = load i64 %2\n"
+              "  ret %13\n"
               "}\n");
     arena_free(&a);
 }
@@ -876,46 +911,49 @@ TEST(ir_of_a_for_loop) {
     CHECK_STR(proc_ir(ir, "sum"),
               "proc @sum(i8 zeroext) -> i64 {\n"
               "b0:\n"
-              "  %1 = local i64\n"
-              "  %2 = const i64 0\n"
-              "  store i64 %2, %1\n"
-              "  %3 = const i8 1\n"
-              "  %4 = local i8\n"
-              "  store i8 %3, %4\n"
-              "  %5 = local i64\n"
-              "  %6 = const i64 0\n"
-              "  store i64 %6, %5\n"
-              "  %7 = cmp ugt i8 %3, %0\n"
-              "  branch %7, b6, b1\n"
+              "  %1 = local i8\n"
+              "  store i8 %0, %1\n"
+              "  %2 = local i64\n"
+              "  %3 = const i64 0\n"
+              "  store i64 %3, %2\n"
+              "  %4 = const i8 1\n"
+              "  %5 = load i8 %1\n"
+              "  %6 = local i8\n"
+              "  store i8 %4, %6\n"
+              "  %7 = local i64\n"
+              "  %8 = const i64 0\n"
+              "  store i64 %8, %7\n"
+              "  %9 = cmp ugt i8 %4, %5\n"
+              "  branch %9, b6, b1\n"
               "b1:\n"
-              "  %8 = load i8 %4\n"
-              "  %9 = const i8 3\n"
-              "  %10 = cmp eq i8 %8, %9\n"
-              "  branch %10, b2, b3\n"
+              "  %10 = load i8 %6\n"
+              "  %11 = const i8 3\n"
+              "  %12 = cmp eq i8 %10, %11\n"
+              "  branch %12, b2, b3\n"
               "b2:\n"
               "  jump b4\n"
               "b3:\n"
-              "  %11 = load i64 %1\n"
-              "  %12 = load i64 %5\n"
-              "  %13 = add i64 %11, %12\n"
-              "  store i64 %13, %1\n"
+              "  %13 = load i64 %2\n"
+              "  %14 = load i64 %7\n"
+              "  %15 = add i64 %13, %14\n"
+              "  store i64 %15, %2\n"
               "  jump b4\n"
               "b4:\n"
-              "  %14 = load i8 %4\n"
-              "  %15 = cmp eq i8 %14, %0\n"
-              "  branch %15, b6, b5\n"
+              "  %16 = load i8 %6\n"
+              "  %17 = cmp eq i8 %16, %5\n"
+              "  branch %17, b6, b5\n"
               "b5:\n"
-              "  %16 = const i8 1\n"
-              "  %17 = add i8 %14, %16\n"
-              "  store i8 %17, %4\n"
-              "  %18 = load i64 %5\n"
-              "  %19 = const i64 1\n"
-              "  %20 = add i64 %18, %19\n"
-              "  store i64 %20, %5\n"
+              "  %18 = const i8 1\n"
+              "  %19 = add i8 %16, %18\n"
+              "  store i8 %19, %6\n"
+              "  %20 = load i64 %7\n"
+              "  %21 = const i64 1\n"
+              "  %22 = add i64 %20, %21\n"
+              "  store i64 %22, %7\n"
               "  jump b1\n"
               "b6:\n"
-              "  %21 = load i64 %1\n"
-              "  ret %21\n"
+              "  %23 = load i64 %2\n"
+              "  ret %23\n"
               "}\n");
     arena_free(&a);
 }
@@ -944,14 +982,32 @@ TEST(a_body_that_never_ends_has_no_ret) {
     arena_free(&a);
 }
 
-TEST(lowering_makes_the_hand_built_max) {
+TEST(lowering_reads_max_s_parameters_from_slots) {
     // max_module was built by hand, before lowering could make it, as
-    // lowering would: an if without an else that returns, then a return.
+    // lowering would then: an if without an else that returns, then a
+    // return. Lowering makes the same blocks, but stores each parameter
+    // into a slot on entry and reads it from there at each use.
     Arena a = arena_make();
     String lowered = ir_print(&a, lower_source(&a,
                                                "max :: (a: int, b: int) -> int { if a > b { return a; } return b; }\n"
                                                "main :: () { }\n"));
-    CHECK_STR(proc_ir(lowered, "max"), string_cstr(&a, proc_ir(ir_print(&a, max_module(&a)), "max")));
+    CHECK_STR(proc_ir(lowered, "max"), "proc @max(i64, i64) -> i64 {\n"
+                                       "b0:\n"
+                                       "  %2 = local i64\n"
+                                       "  store i64 %0, %2\n"
+                                       "  %3 = local i64\n"
+                                       "  store i64 %1, %3\n"
+                                       "  %4 = load i64 %2\n"
+                                       "  %5 = load i64 %3\n"
+                                       "  %6 = cmp sgt i64 %4, %5\n"
+                                       "  branch %6, b1, b2\n"
+                                       "b1:\n"
+                                       "  %7 = load i64 %2\n"
+                                       "  ret %7\n"
+                                       "b2:\n"
+                                       "  %8 = load i64 %3\n"
+                                       "  ret %8\n"
+                                       "}\n");
     arena_free(&a);
 }
 
@@ -986,14 +1042,20 @@ TEST(division_is_checked) {
     CHECK_STR(proc_ir(ir, "f"),
               "proc @f(i32, i32) -> i32 {\n"
               "b0:\n"
-              "  %2 = const i32 0\n"
-              "  %3 = cmp eq i32 %1, %2\n"
-              "  branch %3, b1, b2\n"
+              "  %2 = local i32\n"
+              "  store i32 %0, %2\n"
+              "  %3 = local i32\n"
+              "  store i32 %1, %3\n"
+              "  %4 = load i32 %2\n"
+              "  %5 = load i32 %3\n"
+              "  %6 = const i32 0\n"
+              "  %7 = cmp eq i32 %5, %6\n"
+              "  branch %7, b1, b2\n"
               "b1:\n"
               "  panic @str.0\n"
               "b2:\n"
-              "  %4 = urem i32 %0, %1\n"
-              "  ret %4\n"
+              "  %8 = urem i32 %4, %5\n"
+              "  ret %8\n"
               "}\n");
     CHECK_STR(message_of(m, 0), "test.rig:2:14: runtime error: division by zero\n");
     // A compound assignment is checked the same way, at its operator.
@@ -1002,17 +1064,23 @@ TEST(division_is_checked) {
               "b0:\n"
               "  %2 = local i8\n"
               "  store i8 %0, %2\n"
-              "  %3 = load i8 %2\n"
-              "  %4 = const i8 0\n"
-              "  %5 = cmp eq i8 %1, %4\n"
-              "  branch %5, b1, b2\n"
+              "  %3 = local i8\n"
+              "  store i8 %1, %3\n"
+              "  %4 = local i8\n"
+              "  %5 = load i8 %2\n"
+              "  store i8 %5, %4\n"
+              "  %6 = load i8 %4\n"
+              "  %7 = load i8 %3\n"
+              "  %8 = const i8 0\n"
+              "  %9 = cmp eq i8 %7, %8\n"
+              "  branch %9, b1, b2\n"
               "b1:\n"
               "  panic @str.1\n"
               "b2:\n"
-              "  %6 = udiv i8 %3, %1\n"
-              "  store i8 %6, %2\n"
-              "  %7 = load i8 %2\n"
-              "  ret %7\n"
+              "  %10 = udiv i8 %6, %7\n"
+              "  store i8 %10, %4\n"
+              "  %11 = load i8 %4\n"
+              "  ret %11\n"
               "}\n");
     CHECK_STR(message_of(m, 1), "test.rig:5:15: runtime error: division by zero\n");
     arena_free(&a);
@@ -1033,32 +1101,45 @@ TEST(division_by_a_constant_isnt_checked) {
     CHECK_STR(proc_ir(ir, "f"),
               "proc @f(i64) -> i64 {\n"
               "b0:\n"
-              "  %1 = const i64 10\n"
-              "  %2 = sdiv i64 %0, %1\n"
-              "  %3 = const i64 18446744073709551613\n"
-              "  %4 = srem i64 %0, %3\n"
-              "  %5 = add i64 %2, %4\n"
-              "  ret %5\n"
+              "  %1 = local i64\n"
+              "  store i64 %0, %1\n"
+              "  %2 = load i64 %1\n"
+              "  %3 = const i64 10\n"
+              "  %4 = sdiv i64 %2, %3\n"
+              "  %5 = load i64 %1\n"
+              "  %6 = const i64 18446744073709551613\n"
+              "  %7 = srem i64 %5, %6\n"
+              "  %8 = add i64 %4, %7\n"
+              "  ret %8\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "g"),
               "proc @g(i8 signext) -> i8 signext {\n"
               "b0:\n"
-              "  %1 = const i8 0\n"
-              "  %2 = sub i8 %1, %0\n"
-              "  ret %2\n"
+              "  %1 = local i8\n"
+              "  store i8 %0, %1\n"
+              "  %2 = load i8 %1\n"
+              "  %3 = const i8 0\n"
+              "  %4 = sub i8 %3, %2\n"
+              "  ret %4\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "h"),
               "proc @h(i8 signext) -> i8 signext {\n"
               "b0:\n"
-              "  %1 = const i8 0\n"
-              "  ret %1\n"
+              "  %1 = local i8\n"
+              "  store i8 %0, %1\n"
+              "  %2 = load i8 %1\n"
+              "  %3 = const i8 0\n"
+              "  ret %3\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "u"),
               "proc @u(i8 zeroext) -> i8 zeroext {\n"
               "b0:\n"
-              "  %1 = const i8 255\n"
-              "  %2 = udiv i8 %0, %1\n"
-              "  ret %2\n"
+              "  %1 = local i8\n"
+              "  store i8 %0, %1\n"
+              "  %2 = load i8 %1\n"
+              "  %3 = const i8 255\n"
+              "  %4 = udiv i8 %2, %3\n"
+              "  ret %4\n"
               "}\n");
     CHECK(!contains(ir, "panic"));
     arena_free(&a);
@@ -1079,37 +1160,49 @@ TEST(signed_division_by_minus_one_selects) {
     CHECK_STR(proc_ir(ir, "f"),
               "proc @f(i32, i32) -> i32 {\n"
               "b0:\n"
-              "  %2 = const i32 0\n"
-              "  %3 = cmp eq i32 %1, %2\n"
-              "  branch %3, b1, b2\n"
+              "  %2 = local i32\n"
+              "  store i32 %0, %2\n"
+              "  %3 = local i32\n"
+              "  store i32 %1, %3\n"
+              "  %4 = load i32 %2\n"
+              "  %5 = load i32 %3\n"
+              "  %6 = const i32 0\n"
+              "  %7 = cmp eq i32 %5, %6\n"
+              "  branch %7, b1, b2\n"
               "b1:\n"
               "  panic @str.0\n"
               "b2:\n"
-              "  %4 = const i32 4294967295\n"
-              "  %5 = cmp eq i32 %1, %4\n"
-              "  %6 = const i32 1\n"
-              "  %7 = select i32 %5, %6, %1\n"
-              "  %8 = sdiv i32 %0, %7\n"
-              "  %9 = const i32 0\n"
-              "  %10 = sub i32 %9, %0\n"
-              "  %11 = select i32 %5, %10, %8\n"
-              "  ret %11\n"
+              "  %8 = const i32 4294967295\n"
+              "  %9 = cmp eq i32 %5, %8\n"
+              "  %10 = const i32 1\n"
+              "  %11 = select i32 %9, %10, %5\n"
+              "  %12 = sdiv i32 %4, %11\n"
+              "  %13 = const i32 0\n"
+              "  %14 = sub i32 %13, %4\n"
+              "  %15 = select i32 %9, %14, %12\n"
+              "  ret %15\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "g"),
               "proc @g(i32, i32) -> i32 {\n"
               "b0:\n"
-              "  %2 = const i32 0\n"
-              "  %3 = cmp eq i32 %1, %2\n"
-              "  branch %3, b1, b2\n"
+              "  %2 = local i32\n"
+              "  store i32 %0, %2\n"
+              "  %3 = local i32\n"
+              "  store i32 %1, %3\n"
+              "  %4 = load i32 %2\n"
+              "  %5 = load i32 %3\n"
+              "  %6 = const i32 0\n"
+              "  %7 = cmp eq i32 %5, %6\n"
+              "  branch %7, b1, b2\n"
               "b1:\n"
               "  panic @str.1\n"
               "b2:\n"
-              "  %4 = const i32 4294967295\n"
-              "  %5 = cmp eq i32 %1, %4\n"
-              "  %6 = const i32 1\n"
-              "  %7 = select i32 %5, %6, %1\n"
-              "  %8 = srem i32 %0, %7\n"
-              "  ret %8\n"
+              "  %8 = const i32 4294967295\n"
+              "  %9 = cmp eq i32 %5, %8\n"
+              "  %10 = const i32 1\n"
+              "  %11 = select i32 %9, %10, %5\n"
+              "  %12 = srem i32 %4, %11\n"
+              "  ret %12\n"
               "}\n");
     arena_free(&a);
 }
@@ -1131,48 +1224,63 @@ TEST(narrowing_cast_is_checked) {
     CHECK_STR(proc_ir(ir, "f"),
               "proc @f(i64) -> i8 zeroext {\n"
               "b0:\n"
-              "  %1 = trunc i64 %0 to i8\n"
-              "  %2 = zext i8 %1 to i64\n"
-              "  %3 = cmp ne i64 %2, %0\n"
-              "  branch %3, b1, b2\n"
+              "  %1 = local i64\n"
+              "  store i64 %0, %1\n"
+              "  %2 = load i64 %1\n"
+              "  %3 = trunc i64 %2 to i8\n"
+              "  %4 = zext i8 %3 to i64\n"
+              "  %5 = cmp ne i64 %4, %2\n"
+              "  branch %5, b1, b2\n"
               "b1:\n"
               "  panic @str.0\n"
               "b2:\n"
-              "  ret %1\n"
+              "  ret %3\n"
               "}\n");
     CHECK_STR(message_of(m, 0), "test.rig:1:30: runtime error: the value doesn't fit in 'u8'\n");
     CHECK_STR(proc_ir(ir, "g"),
               "proc @g(i32) -> i32 {\n"
               "b0:\n"
-              "  %1 = const i32 0\n"
-              "  %2 = cmp slt i32 %0, %1\n"
-              "  branch %2, b1, b2\n"
+              "  %1 = local i32\n"
+              "  store i32 %0, %1\n"
+              "  %2 = load i32 %1\n"
+              "  %3 = const i32 0\n"
+              "  %4 = cmp slt i32 %2, %3\n"
+              "  branch %4, b1, b2\n"
               "b1:\n"
               "  panic @str.1\n"
               "b2:\n"
-              "  ret %0\n"
+              "  ret %2\n"
               "}\n");
     CHECK_STR(message_of(m, 1), "test.rig:2:31: runtime error: the value doesn't fit in 'u32'\n");
     CHECK_STR(proc_ir(ir, "h"),
               "proc @h(i8 signext) -> i64 {\n"
               "b0:\n"
-              "  %1 = const i8 0\n"
-              "  %2 = cmp slt i8 %0, %1\n"
-              "  branch %2, b1, b2\n"
+              "  %1 = local i8\n"
+              "  store i8 %0, %1\n"
+              "  %2 = load i8 %1\n"
+              "  %3 = const i8 0\n"
+              "  %4 = cmp slt i8 %2, %3\n"
+              "  branch %4, b1, b2\n"
               "b1:\n"
               "  panic @str.2\n"
               "b2:\n"
-              "  %3 = sext i8 %0 to i64\n"
-              "  ret %3\n"
+              "  %5 = sext i8 %2 to i64\n"
+              "  ret %5\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "k"),
               "proc @k(i8 zeroext, i8 signext) -> i64 {\n"
               "b0:\n"
-              "  %2 = zext i8 %0 to i16\n"
-              "  %3 = sext i16 %2 to i64\n"
-              "  %4 = sext i8 %1 to i64\n"
-              "  %5 = add i64 %3, %4\n"
-              "  ret %5\n"
+              "  %2 = local i8\n"
+              "  store i8 %0, %2\n"
+              "  %3 = local i8\n"
+              "  store i8 %1, %3\n"
+              "  %4 = load i8 %2\n"
+              "  %5 = zext i8 %4 to i16\n"
+              "  %6 = sext i16 %5 to i64\n"
+              "  %7 = load i8 %3\n"
+              "  %8 = sext i8 %7 to i64\n"
+              "  %9 = add i64 %6, %8\n"
+              "  ret %9\n"
               "}\n");
     arena_free(&a);
 }
@@ -1192,17 +1300,20 @@ TEST(narrowing_unsigned_to_signed_checks_the_sign) {
     CHECK_STR(proc_ir(ir, "f"),
               "proc @f(i16 zeroext) -> i8 signext {\n"
               "b0:\n"
-              "  %1 = trunc i16 %0 to i8\n"
-              "  %2 = sext i8 %1 to i16\n"
-              "  %3 = cmp ne i16 %2, %0\n"
-              "  %4 = const i8 0\n"
-              "  %5 = cmp slt i8 %1, %4\n"
-              "  %6 = or i1 %3, %5\n"
-              "  branch %6, b1, b2\n"
+              "  %1 = local i16\n"
+              "  store i16 %0, %1\n"
+              "  %2 = load i16 %1\n"
+              "  %3 = trunc i16 %2 to i8\n"
+              "  %4 = sext i8 %3 to i16\n"
+              "  %5 = cmp ne i16 %4, %2\n"
+              "  %6 = const i8 0\n"
+              "  %7 = cmp slt i8 %3, %6\n"
+              "  %8 = or i1 %5, %7\n"
+              "  branch %8, b1, b2\n"
               "b1:\n"
               "  panic @str.0\n"
               "b2:\n"
-              "  ret %1\n"
+              "  ret %3\n"
               "}\n");
     CHECK_STR(message_of(m, 0), "test.rig:1:30: runtime error: the value doesn't fit in 's8'\n");
     arena_free(&a);
@@ -1220,20 +1331,29 @@ TEST(cast_trunc_isnt) {
     CHECK_STR(proc_ir(ir, "f"),
               "proc @f(i64) -> i8 zeroext {\n"
               "b0:\n"
-              "  %1 = trunc i64 %0 to i8\n"
-              "  ret %1\n"
+              "  %1 = local i64\n"
+              "  store i64 %0, %1\n"
+              "  %2 = load i64 %1\n"
+              "  %3 = trunc i64 %2 to i8\n"
+              "  ret %3\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "g"),
               "proc @g(i8 signext) -> i32 {\n"
               "b0:\n"
-              "  %1 = sext i8 %0 to i32\n"
-              "  ret %1\n"
+              "  %1 = local i8\n"
+              "  store i8 %0, %1\n"
+              "  %2 = load i8 %1\n"
+              "  %3 = sext i8 %2 to i32\n"
+              "  ret %3\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "h"),
               "proc @h(i1) -> i64 {\n"
               "b0:\n"
-              "  %1 = zext i1 %0 to i64\n"
-              "  ret %1\n"
+              "  %1 = local i1\n"
+              "  store i1 %0, %1\n"
+              "  %2 = load i1 %1\n"
+              "  %3 = zext i1 %2 to i64\n"
+              "  ret %3\n"
               "}\n");
     CHECK(!contains(ir, "panic"));
     arena_free(&a);
@@ -1276,10 +1396,13 @@ TEST(ir_of_several_results) {
     CHECK_STR(proc_ir(ir, "pair"),
               "proc @pair(i64) -> i64, i8 zeroext {\n"
               "b0:\n"
-              "  %1 = const i64 1\n"
-              "  %2 = add i64 %0, %1\n"
-              "  %3 = const i8 7\n"
-              "  ret %2, %3\n"
+              "  %1 = local i64\n"
+              "  store i64 %0, %1\n"
+              "  %2 = load i64 %1\n"
+              "  %3 = const i64 1\n"
+              "  %4 = add i64 %2, %3\n"
+              "  %5 = const i8 7\n"
+              "  ret %4, %5\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "main"),
               "proc @main() -> i32 {\n"
@@ -1423,20 +1546,27 @@ TEST(ir_of_float_arithmetic) {
     CHECK_STR(proc_ir(ir, "f"),
               "proc @f(f32, f64) -> f64 {\n"
               "b0:\n"
-              "  %2 = local f64\n"
-              "  %3 = const f32 2\n"
-              "  %4 = fmul f32 %0, %3\n"
-              "  %5 = fpext f32 %4 to f64\n"
-              "  %6 = fadd f64 %5, %1\n"
-              "  store f64 %6, %2\n"
-              "  %7 = load f64 %2\n"
-              "  %8 = const f64 0.5\n"
-              "  %9 = fsub f64 %7, %8\n"
-              "  store f64 %9, %2\n"
-              "  %10 = load f64 %2\n"
-              "  %11 = fneg f64 %10\n"
-              "  %12 = fdiv f64 %11, %1\n"
-              "  ret %12\n"
+              "  %2 = local f32\n"
+              "  store f32 %0, %2\n"
+              "  %3 = local f64\n"
+              "  store f64 %1, %3\n"
+              "  %4 = local f64\n"
+              "  %5 = load f32 %2\n"
+              "  %6 = const f32 2\n"
+              "  %7 = fmul f32 %5, %6\n"
+              "  %8 = fpext f32 %7 to f64\n"
+              "  %9 = load f64 %3\n"
+              "  %10 = fadd f64 %8, %9\n"
+              "  store f64 %10, %4\n"
+              "  %11 = load f64 %4\n"
+              "  %12 = const f64 0.5\n"
+              "  %13 = fsub f64 %11, %12\n"
+              "  store f64 %13, %4\n"
+              "  %14 = load f64 %4\n"
+              "  %15 = fneg f64 %14\n"
+              "  %16 = load f64 %3\n"
+              "  %17 = fdiv f64 %15, %16\n"
+              "  ret %17\n"
               "}\n");
     arena_free(&a);
 }
@@ -1452,7 +1582,7 @@ TEST(ir_of_float_comparisons) {
                                       "main :: () { }\n",
                                       ops[i]);
         String ir = ir_print(&a, lower_source(&a, string_cstr(&a, source)));
-        String want = string_printf(&a, "  %%2 = fcmp %s f64 %%0, %%1\n", preds[i]);
+        String want = string_printf(&a, "  %%6 = fcmp %s f64 %%4, %%5\n", preds[i]);
         CHECK(contains(proc_ir(ir, "f"), string_cstr(&a, want)));
     }
     // A float32 meeting a float64 is widened; an integer constant meeting a
@@ -1464,16 +1594,25 @@ TEST(ir_of_float_comparisons) {
     CHECK_STR(proc_ir(ir, "ne"),
               "proc @ne(f32, f64) -> i1 {\n"
               "b0:\n"
-              "  %2 = fpext f32 %0 to f64\n"
-              "  %3 = fcmp une f64 %2, %1\n"
-              "  ret %3\n"
+              "  %2 = local f32\n"
+              "  store f32 %0, %2\n"
+              "  %3 = local f64\n"
+              "  store f64 %1, %3\n"
+              "  %4 = load f32 %2\n"
+              "  %5 = fpext f32 %4 to f64\n"
+              "  %6 = load f64 %3\n"
+              "  %7 = fcmp une f64 %5, %6\n"
+              "  ret %7\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "lt"),
               "proc @lt(f32) -> i1 {\n"
               "b0:\n"
-              "  %1 = const f32 1\n"
-              "  %2 = fcmp olt f32 %0, %1\n"
-              "  ret %2\n"
+              "  %1 = local f32\n"
+              "  store f32 %0, %1\n"
+              "  %2 = load f32 %1\n"
+              "  %3 = const f32 1\n"
+              "  %4 = fcmp olt f32 %2, %3\n"
+              "  ret %4\n"
               "}\n");
     arena_free(&a);
 }
@@ -1491,12 +1630,12 @@ TEST(ir_of_float_casts) {
                                           "narrow :: (y: float64) -> float32 { return cast(float32) y; }\n"
                                           "widen :: (x: float32) -> float64 { return cast(float64) x; }\n"
                                           "main :: () { }\n"));
-    CHECK(contains(proc_ir(ir, "to_int"), "  %1 = fptosi.sat f32 %0 to i32\n  ret %1\n"));
-    CHECK(contains(proc_ir(ir, "to_byte"), "  %1 = fptoui.sat f64 %0 to i8\n  ret %1\n"));
-    CHECK(contains(proc_ir(ir, "from_int"), "  %1 = sitofp i64 %0 to f32\n  ret %1\n"));
-    CHECK(contains(proc_ir(ir, "from_byte"), "  %1 = uitofp i8 %0 to f64\n  ret %1\n"));
-    CHECK(contains(proc_ir(ir, "narrow"), "  %1 = fptrunc f64 %0 to f32\n  ret %1\n"));
-    CHECK(contains(proc_ir(ir, "widen"), "  %1 = fpext f32 %0 to f64\n  ret %1\n"));
+    CHECK(contains(proc_ir(ir, "to_int"), "  %2 = load f32 %1\n  %3 = fptosi.sat f32 %2 to i32\n  ret %3\n"));
+    CHECK(contains(proc_ir(ir, "to_byte"), "  %2 = load f64 %1\n  %3 = fptoui.sat f64 %2 to i8\n  ret %3\n"));
+    CHECK(contains(proc_ir(ir, "from_int"), "  %2 = load i64 %1\n  %3 = sitofp i64 %2 to f32\n  ret %3\n"));
+    CHECK(contains(proc_ir(ir, "from_byte"), "  %2 = load i8 %1\n  %3 = uitofp i8 %2 to f64\n  ret %3\n"));
+    CHECK(contains(proc_ir(ir, "narrow"), "  %2 = load f64 %1\n  %3 = fptrunc f64 %2 to f32\n  ret %3\n"));
+    CHECK(contains(proc_ir(ir, "widen"), "  %2 = load f32 %1\n  %3 = fpext f32 %2 to f64\n  ret %3\n"));
     CHECK(!contains(ir, "panic"));
     arena_free(&a);
 }
@@ -1611,42 +1750,51 @@ TEST(deref_is_null_checked) {
     CHECK_STR(proc_ir(ir, "f"),
               "proc @f(ptr) -> i64 {\n"
               "b0:\n"
-              "  %1 = const ptr 0\n"
-              "  %2 = cmp eq ptr %0, %1\n"
-              "  branch %2, b1, b2\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = load ptr %1\n"
+              "  %3 = const ptr 0\n"
+              "  %4 = cmp eq ptr %2, %3\n"
+              "  branch %4, b1, b2\n"
               "b1:\n"
               "  panic @str.0\n"
               "b2:\n"
-              "  %3 = load i64 %0\n"
-              "  ret %3\n"
+              "  %5 = load i64 %2\n"
+              "  ret %5\n"
               "}\n");
     CHECK_STR(message_of(m, 0), "test.rig:2:13: runtime error: null pointer dereference\n");
     CHECK_STR(proc_ir(ir, "g"),
               "proc @g(ptr) {\n"
               "b0:\n"
-              "  %1 = const ptr 0\n"
-              "  %2 = cmp eq ptr %0, %1\n"
-              "  branch %2, b1, b2\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = load ptr %1\n"
+              "  %3 = const ptr 0\n"
+              "  %4 = cmp eq ptr %2, %3\n"
+              "  branch %4, b1, b2\n"
               "b1:\n"
               "  panic @str.1\n"
               "b2:\n"
-              "  %3 = load i32 %0\n"
-              "  %4 = const i32 2\n"
-              "  %5 = add i32 %3, %4\n"
-              "  store i32 %5, %0\n"
+              "  %5 = load i32 %2\n"
+              "  %6 = const i32 2\n"
+              "  %7 = add i32 %5, %6\n"
+              "  store i32 %7, %2\n"
               "  ret\n"
               "}\n");
     CHECK_STR(message_of(m, 1), "test.rig:5:6: runtime error: null pointer dereference\n");
     CHECK_STR(proc_ir(ir, "h"),
               "proc @h(ptr) -> ptr {\n"
               "b0:\n"
-              "  %1 = const ptr 0\n"
-              "  %2 = cmp eq ptr %0, %1\n"
-              "  branch %2, b1, b2\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = load ptr %1\n"
+              "  %3 = const ptr 0\n"
+              "  %4 = cmp eq ptr %2, %3\n"
+              "  branch %4, b1, b2\n"
               "b1:\n"
               "  panic @str.2\n"
               "b2:\n"
-              "  ret %0\n"
+              "  ret %2\n"
               "}\n");
     CHECK_STR(message_of(m, 2), "test.rig:8:14: runtime error: null pointer dereference\n");
     arena_free(&a);
@@ -1665,14 +1813,17 @@ TEST(an_assignment_through_a_pointer_finds_its_place_first) {
     CHECK_STR(proc_ir(ir_print(&a, m), "g"),
               "proc @g(ptr) {\n"
               "b0:\n"
-              "  %1 = const ptr 0\n"
-              "  %2 = cmp eq ptr %0, %1\n"
-              "  branch %2, b1, b2\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = load ptr %1\n"
+              "  %3 = const ptr 0\n"
+              "  %4 = cmp eq ptr %2, %3\n"
+              "  branch %4, b1, b2\n"
               "b1:\n"
               "  panic @str.0\n"
               "b2:\n"
-              "  %3 = call @f()\n"
-              "  store i64 %3, %0\n"
+              "  %5 = call @f()\n"
+              "  store i64 %5, %2\n"
               "  ret\n"
               "}\n");
     arena_free(&a);
@@ -1693,18 +1844,21 @@ TEST(several_targets_find_their_places_after_the_call) {
     CHECK_STR(proc_ir(ir_print(&a, m), "g"),
               "proc @g(ptr) {\n"
               "b0:\n"
-              "  %1 = local i64\n"
-              "  %2 = const i64 0\n"
-              "  store i64 %2, %1\n"
-              "  %3, %4 = call @two()\n"
-              "  %5 = const ptr 0\n"
-              "  %6 = cmp eq ptr %0, %5\n"
-              "  branch %6, b1, b2\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = local i64\n"
+              "  %3 = const i64 0\n"
+              "  store i64 %3, %2\n"
+              "  %4, %5 = call @two()\n"
+              "  %6 = load ptr %1\n"
+              "  %7 = const ptr 0\n"
+              "  %8 = cmp eq ptr %6, %7\n"
+              "  branch %8, b1, b2\n"
               "b1:\n"
               "  panic @str.0\n"
               "b2:\n"
-              "  store i64 %3, %0\n"
-              "  store i64 %4, %1\n"
+              "  store i64 %4, %6\n"
+              "  store i64 %5, %2\n"
               "  ret\n"
               "}\n");
     CHECK_STR(message_of(m, 0), "test.rig:4:6: runtime error: null pointer dereference\n");
@@ -1744,54 +1898,84 @@ TEST(pointer_plus_scales) {
     CHECK_STR(proc_ir(ir, "f"),
               "proc @f(ptr, i64) -> ptr {\n"
               "b0:\n"
-              "  %2 = const i64 4\n"
-              "  %3 = mul i64 %1, %2\n"
-              "  %4 = ptradd %0, %3\n"
-              "  ret %4\n"
+              "  %2 = local ptr\n"
+              "  store ptr %0, %2\n"
+              "  %3 = local i64\n"
+              "  store i64 %1, %3\n"
+              "  %4 = load ptr %2\n"
+              "  %5 = load i64 %3\n"
+              "  %6 = const i64 4\n"
+              "  %7 = mul i64 %5, %6\n"
+              "  %8 = ptradd %4, %7\n"
+              "  ret %8\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "g"),
               "proc @g(ptr, i8 zeroext) -> ptr {\n"
               "b0:\n"
-              "  %2 = zext i8 %1 to i64\n"
-              "  %3 = const i64 4\n"
-              "  %4 = mul i64 %2, %3\n"
-              "  %5 = const i64 0\n"
-              "  %6 = sub i64 %5, %4\n"
-              "  %7 = ptradd %0, %6\n"
-              "  ret %7\n"
+              "  %2 = local ptr\n"
+              "  store ptr %0, %2\n"
+              "  %3 = local i8\n"
+              "  store i8 %1, %3\n"
+              "  %4 = load ptr %2\n"
+              "  %5 = load i8 %3\n"
+              "  %6 = zext i8 %5 to i64\n"
+              "  %7 = const i64 4\n"
+              "  %8 = mul i64 %6, %7\n"
+              "  %9 = const i64 0\n"
+              "  %10 = sub i64 %9, %8\n"
+              "  %11 = ptradd %4, %10\n"
+              "  ret %11\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "h"),
               "proc @h(ptr, ptr) -> i64 {\n"
               "b0:\n"
-              "  %2 = ptrtoint ptr %0 to i64\n"
-              "  %3 = ptrtoint ptr %1 to i64\n"
-              "  %4 = sub i64 %2, %3\n"
-              "  %5 = const i64 4\n"
-              "  %6 = sdiv i64 %4, %5\n"
-              "  ret %6\n"
+              "  %2 = local ptr\n"
+              "  store ptr %0, %2\n"
+              "  %3 = local ptr\n"
+              "  store ptr %1, %3\n"
+              "  %4 = load ptr %2\n"
+              "  %5 = ptrtoint ptr %4 to i64\n"
+              "  %6 = load ptr %3\n"
+              "  %7 = ptrtoint ptr %6 to i64\n"
+              "  %8 = sub i64 %5, %7\n"
+              "  %9 = const i64 4\n"
+              "  %10 = sdiv i64 %8, %9\n"
+              "  ret %10\n"
               "}\n");
     // A u8 is one byte: nothing to multiply or divide by.
     CHECK_STR(proc_ir(ir, "k"),
               "proc @k(ptr) -> ptr {\n"
               "b0:\n"
-              "  %1 = const i64 2\n"
-              "  %2 = ptradd %0, %1\n"
-              "  ret %2\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = const i64 2\n"
+              "  %3 = load ptr %1\n"
+              "  %4 = ptradd %3, %2\n"
+              "  ret %4\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "m"),
               "proc @m(ptr) -> ptr {\n"
               "b0:\n"
-              "  %1 = const i64 18446744073709551608\n"
-              "  %2 = ptradd %0, %1\n"
-              "  ret %2\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = load ptr %1\n"
+              "  %3 = const i64 18446744073709551608\n"
+              "  %4 = ptradd %2, %3\n"
+              "  ret %4\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "n"),
               "proc @n(ptr, ptr) -> i64 {\n"
               "b0:\n"
-              "  %2 = ptrtoint ptr %0 to i64\n"
-              "  %3 = ptrtoint ptr %1 to i64\n"
-              "  %4 = sub i64 %2, %3\n"
-              "  ret %4\n"
+              "  %2 = local ptr\n"
+              "  store ptr %0, %2\n"
+              "  %3 = local ptr\n"
+              "  store ptr %1, %3\n"
+              "  %4 = load ptr %2\n"
+              "  %5 = ptrtoint ptr %4 to i64\n"
+              "  %6 = load ptr %3\n"
+              "  %7 = ptrtoint ptr %6 to i64\n"
+              "  %8 = sub i64 %5, %7\n"
+              "  ret %8\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "main"),
               "proc @main() -> i32 {\n"
@@ -1820,8 +2004,8 @@ TEST(pointers_compare_as_unsigned_addresses) {
                                           "    return p < q || p == null;\n"
                                           "}\n"
                                           "main :: () { }\n"));
-    CHECK(contains(ir, "  %3 = cmp ult ptr %0, %1\n"));
-    CHECK(contains(ir, "  %4 = const ptr 0\n  %5 = cmp eq ptr %0, %4\n"));
+    CHECK(contains(ir, "  %5 = load ptr %2\n  %6 = load ptr %3\n  %7 = cmp ult ptr %5, %6\n"));
+    CHECK(contains(ir, "  %8 = load ptr %2\n  %9 = const ptr 0\n  %10 = cmp eq ptr %8, %9\n"));
     arena_free(&a);
 }
 
@@ -1921,15 +2105,18 @@ TEST(struct_result_goes_through_a_hidden_pointer) {
     CHECK_STR(proc_ir(ir, "make"),
               "proc @make(ptr, i64) {\n"
               "b0:\n"
-              "  %2 = local 8 align 4\n"
-              "  zero %2, 8\n"
-              "  %3 = sitofp i64 %1 to f32\n"
-              "  store f32 %3, %2\n"
-              "  %4 = const i64 4\n"
-              "  %5 = ptradd %2, %4\n"
-              "  %6 = const f32 2\n"
-              "  store f32 %6, %5\n"
-              "  copy %0, %2, 8\n"
+              "  %2 = local i64\n"
+              "  store i64 %1, %2\n"
+              "  %3 = local 8 align 4\n"
+              "  zero %3, 8\n"
+              "  %4 = load i64 %2\n"
+              "  %5 = sitofp i64 %4 to f32\n"
+              "  store f32 %5, %3\n"
+              "  %6 = const i64 4\n"
+              "  %7 = ptradd %3, %6\n"
+              "  %8 = const f32 2\n"
+              "  store f32 %8, %7\n"
+              "  copy %0, %3, 8\n"
               "  ret\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "split"),
@@ -2019,29 +2206,35 @@ TEST(member_through_a_pointer_is_null_checked) {
     CHECK_STR(proc_ir(ir, "f"),
               "proc @f(ptr) -> f32 {\n"
               "b0:\n"
-              "  %1 = const ptr 0\n"
-              "  %2 = cmp eq ptr %0, %1\n"
-              "  branch %2, b1, b2\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = load ptr %1\n"
+              "  %3 = const ptr 0\n"
+              "  %4 = cmp eq ptr %2, %3\n"
+              "  branch %4, b1, b2\n"
               "b1:\n"
               "  panic @str.0\n"
               "b2:\n"
-              "  %3 = const i64 4\n"
-              "  %4 = ptradd %0, %3\n"
-              "  %5 = load f32 %4\n"
-              "  ret %5\n"
+              "  %5 = const i64 4\n"
+              "  %6 = ptradd %2, %5\n"
+              "  %7 = load f32 %6\n"
+              "  ret %7\n"
               "}\n");
     CHECK_STR(message_of(m, 0), "test.rig:3:14: runtime error: null pointer dereference\n");
     CHECK_STR(proc_ir(ir, "g"),
               "proc @g(ptr) {\n"
               "b0:\n"
-              "  %1 = const ptr 0\n"
-              "  %2 = cmp eq ptr %0, %1\n"
-              "  branch %2, b1, b2\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = load ptr %1\n"
+              "  %3 = const ptr 0\n"
+              "  %4 = cmp eq ptr %2, %3\n"
+              "  branch %4, b1, b2\n"
               "b1:\n"
               "  panic @str.1\n"
               "b2:\n"
-              "  %3 = const f32 1\n"
-              "  store f32 %3, %0\n"
+              "  %5 = const f32 1\n"
+              "  store f32 %5, %2\n"
               "  ret\n"
               "}\n");
     CHECK_STR(message_of(m, 1), "test.rig:6:7: runtime error: null pointer dereference\n");
@@ -2075,33 +2268,36 @@ TEST(index_is_bounds_checked) {
     CHECK_STR(proc_ir(ir, "f"),
               "proc @f(ptr, i64) -> i64 {\n"
               "b0:\n"
-              "  %2 = load i64 %0\n"
-              "  %3 = const i64 8\n"
-              "  %4 = ptradd %0, %3\n"
-              "  %5 = load ptr %4\n"
-              "  %6 = cmp uge i64 %1, %2\n"
-              "  %7 = const i64 0\n"
-              "  %8 = cmp slt i64 %2, %7\n"
-              "  %9 = or i1 %6, %8\n"
-              "  branch %9, b1, b2\n"
+              "  %2 = local i64\n"
+              "  store i64 %1, %2\n"
+              "  %3 = load i64 %0\n"
+              "  %4 = const i64 8\n"
+              "  %5 = ptradd %0, %4\n"
+              "  %6 = load ptr %5\n"
+              "  %7 = load i64 %2\n"
+              "  %8 = cmp uge i64 %7, %3\n"
+              "  %9 = const i64 0\n"
+              "  %10 = cmp slt i64 %3, %9\n"
+              "  %11 = or i1 %8, %10\n"
+              "  branch %11, b1, b2\n"
               "b1:\n"
-              "  %10 = addr @str.0\n"
-              "  %11 = const i64 30\n"
-              "  %12 = const i1 1\n"
-              "  call @__rig_bounds_failed(%10, %11, %1, %2, %12)\n"
+              "  %12 = addr @str.0\n"
+              "  %13 = const i64 30\n"
+              "  %14 = const i1 1\n"
+              "  call @__rig_bounds_failed(%12, %13, %7, %3, %14)\n"
               "  unreachable\n"
               "b2:\n"
-              "  %13 = const ptr 0\n"
-              "  %14 = cmp eq ptr %5, %13\n"
-              "  branch %14, b3, b4\n"
+              "  %15 = const ptr 0\n"
+              "  %16 = cmp eq ptr %6, %15\n"
+              "  branch %16, b3, b4\n"
               "b3:\n"
               "  panic @str.1\n"
               "b4:\n"
-              "  %15 = const i64 8\n"
-              "  %16 = mul i64 %1, %15\n"
-              "  %17 = ptradd %5, %16\n"
-              "  %18 = load i64 %17\n"
-              "  ret %18\n"
+              "  %17 = const i64 8\n"
+              "  %18 = mul i64 %7, %17\n"
+              "  %19 = ptradd %6, %18\n"
+              "  %20 = load i64 %19\n"
+              "  ret %20\n"
               "}\n");
     // The place the message names, without the rest of it, which
     // __rig_bounds_failed writes after it.
@@ -2110,7 +2306,7 @@ TEST(index_is_bounds_checked) {
     // An array's count is its constant; a u8 index widens by its sign, and
     // is unsigned in the message.
     String g = proc_ir(ir, "g");
-    CHECK(contains(g, "zext i8 %0 to i64"));
+    CHECK(contains(g, "zext i8 %3 to i64"));
     CHECK(contains(g, "= const i64 3\n"));
     CHECK(contains(g, "cmp uge i64"));
     CHECK(contains(g, "= const i1 0\n"));
@@ -2169,14 +2365,14 @@ TEST(no_abc_drops_the_check) {
     String f = proc_ir(ir, "f");
     CHECK(!contains(f, "cmp uge"));
     CHECK(!contains(f, "__rig_bounds_failed"));
-    CHECK(contains(f, "mul i64 %1, "));
+    CHECK(contains(f, "mul i64 %7, "));
     CHECK(contains(proc_ir(ir, "g"), "call @__rig_bounds_failed("));
     String off = ir_print(&a, lower_file(&a, "test.rig", source, false));
     CHECK(!contains(off, "cmp uge"));
     CHECK(!contains(off, "__rig_bounds_failed"));
-    CHECK(contains(proc_ir(off, "h"), "cmp eq ptr %0, "));
-    CHECK(contains(f, "cmp eq ptr %5, "));
-    CHECK(contains(proc_ir(off, "g"), "cmp eq ptr %5, "));
+    CHECK(contains(proc_ir(off, "h"), "cmp eq ptr %4, "));
+    CHECK(contains(f, "cmp eq ptr %6, "));
+    CHECK(contains(proc_ir(off, "g"), "cmp eq ptr %6, "));
     arena_free(&a);
 }
 
@@ -2540,19 +2736,25 @@ TEST(statements_have_positions) {
     CHECK_STR(proc_ir(ir, "add"),
               "proc @add(i64, i64) -> i64 {\n"
               "  ; source add at 1:1, body 1:32\n"
-              "  ; var a int value %0 arg 1 in 0 at 1:9\n"
-              "  ; var b int value %1 arg 2 in 0 at 1:17\n"
-              "  ; var c int slot %2 in 0 at 2:5\n"
+              "  ; var a int slot %2 arg 1 in 0 at 1:9\n"
+              "  ; var b int slot %3 arg 2 in 0 at 1:17\n"
+              "  ; var c int slot %4 in 0 at 2:5\n"
               "b0:\n"
-              "  %2 = local i64  ; 2:5 s0\n"
-              "  %3 = add i64 %0, %1  ; 2:5 s0\n"
-              "  store i64 %3, %2  ; 2:5 s0\n"
-              "  %4 = load i64 %2  ; 3:5 s0\n"
-              "  %5 = const i64 2  ; 3:5 s0\n"
-              "  %6 = mul i64 %4, %5  ; 3:5 s0\n"
-              "  store i64 %6, %2  ; 3:5 s0\n"
-              "  %7 = load i64 %2  ; 4:5 s0\n"
-              "  ret %7  ; 4:5 s0\n"
+              "  %2 = local i64\n"
+              "  store i64 %0, %2\n"
+              "  %3 = local i64\n"
+              "  store i64 %1, %3\n"
+              "  %4 = local i64  ; 2:5 s0\n"
+              "  %5 = load i64 %2  ; 2:5 s0\n"
+              "  %6 = load i64 %3  ; 2:5 s0\n"
+              "  %7 = add i64 %5, %6  ; 2:5 s0\n"
+              "  store i64 %7, %4  ; 2:5 s0\n"
+              "  %8 = load i64 %4  ; 3:5 s0\n"
+              "  %9 = const i64 2  ; 3:5 s0\n"
+              "  %10 = mul i64 %8, %9  ; 3:5 s0\n"
+              "  store i64 %10, %4  ; 3:5 s0\n"
+              "  %11 = load i64 %4  ; 4:5 s0\n"
+              "  ret %11  ; 4:5 s0\n"
               "}\n");
     arena_free(&a);
 }
@@ -2646,13 +2848,13 @@ TEST(checks_fail_at_their_place) {
                                                 "main :: () { }\n"));
     String get = proc_ir(ir, "get");
     // The bounds check: its branch at the return, its failure at the '['.
-    CHECK(contains(get, "  %10 = or i1 %7, %9  ; 2:5 s0\n"
-                        "  branch %10, b1, b2  ; 2:5 s0\n"
+    CHECK(contains(get, "  %13 = or i1 %10, %12  ; 2:5 s0\n"
+                        "  branch %13, b1, b2  ; 2:5 s0\n"
                         "b1:\n"
-                        "  %11 = addr @str.0  ; 2:13 s0\n"
-                        "  %12 = const i64 30  ; 2:13 s0\n"
-                        "  %13 = const i1 1  ; 2:13 s0\n"
-                        "  call @__rig_bounds_failed(%11, %12, %1, %3, %13)  ; 2:13 s0\n"
+                        "  %14 = addr @str.0  ; 2:13 s0\n"
+                        "  %15 = const i64 30  ; 2:13 s0\n"
+                        "  %16 = const i1 1  ; 2:13 s0\n"
+                        "  call @__rig_bounds_failed(%14, %15, %9, %5, %16)  ; 2:13 s0\n"
                         "  unreachable  ; 2:13 s0\n"
                         "b2:\n"));
     // The view's data checked for null, failing at the '[' too.
@@ -2660,12 +2862,12 @@ TEST(checks_fail_at_their_place) {
                         "  panic @str.1  ; 2:13 s0\n"));
     // The division by zero, failing at the '/'; then the code goes on at the
     // return.
-    CHECK(contains(get, "  branch %21, b5, b6  ; 2:5 s0\n"
+    CHECK(contains(get, "  branch %25, b5, b6  ; 2:5 s0\n"
                         "b5:\n"
                         "  panic @str.2  ; 2:17 s0\n"
                         "b6:\n"
-                        "  %22 = const i64 18446744073709551615  ; 2:5 s0\n"));
-    CHECK(contains(get, "  ret %29  ; 2:5 s0\n"));
+                        "  %26 = const i64 18446744073709551615  ; 2:5 s0\n"));
+    CHECK(contains(get, "  ret %33  ; 2:5 s0\n"));
     arena_free(&a);
 }
 
@@ -2737,13 +2939,143 @@ TEST(scopes_follow_blocks) {
     arena_free(&a);
 }
 
+TEST(a_declaration_that_hides_a_name_starts_a_scope) {
+    // Issue #104: a declaration hides an outer name only from its own end
+    // (spec 4.7), but a debugger shows a scope's variables over the whole
+    // scope. So a local that hides a global, a parameter or an outer local
+    // starts a scope of its own at its declaration, inside the current one,
+    // lasting to the end of the block, and is declared in it: its
+    // initializer still runs in the scope around it (it reads the outer
+    // name), its store and the statements after it in the new one. A
+    // declaration that hides nothing stays in its block's scope, as does
+    // one whose name only a block that has ended declared.
+    Arena a = arena_make();
+    String f = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                       "g := 5;\n"
+                                                       "two :: () -> int, int { return 1, 2; }\n"
+                                                       "f :: (n: int) -> int {\n"
+                                                       "    y := g;\n"
+                                                       "    g := g + 10;\n"
+                                                       "    {\n"
+                                                       "        n := g + 1;\n"
+                                                       "        x := n;\n"
+                                                       "    }\n"
+                                                       "    x := y;\n"
+                                                       "    {\n"
+                                                       "        k, g := two();\n"
+                                                       "    }\n"
+                                                       "    return g + x;\n"
+                                                       "}\n"
+                                                       "main :: () { }\n")),
+                       "f");
+    CHECK(contains(f, "  ; source f at 3:1, body 3:22\n"
+                      "  ; scope 1 in 0 at 5:5\n"
+                      "  ; scope 2 in 1 at 6:5\n"
+                      "  ; scope 3 in 2 at 7:9\n"
+                      "  ; scope 4 in 1 at 11:5\n"
+                      "  ; scope 5 in 4 at 12:9\n"
+                      "  ; var n int slot %1 arg 1 in 0 at 3:7\n"
+                      "  ; var y int slot %2 in 0 at 4:5\n"
+                      "  ; var g int slot %5 in 1 at 5:5\n"
+                      "  ; var n int slot %10 in 3 at 7:9\n"
+                      "  ; var x int slot %14 in 3 at 8:9\n"
+                      "  ; var x int slot %16 in 1 at 10:5\n"
+                      "  ; var k int slot %18 in 5 at 12:9\n"
+                      "  ; var g int slot %19 in 5 at 12:12\n"));
+    // g := g + 10: the global read and the sum in scope 0, the store in 1.
+    CHECK(contains(f, "  %5 = local i64  ; 5:5 s0\n"
+                      "  %6 = addr @g  ; 5:5 s0\n"
+                      "  %7 = load i64 %6  ; 5:5 s0\n"));
+    CHECK(contains(f, "  store i64 %9, %5  ; 5:5 s1\n"));
+    // k, g := two(): the call in scope 4, the stores in 5.
+    CHECK(contains(f, "  %20, %21 = call @two()  ; 12:9 s4\n"
+                      "  store i64 %20, %18  ; 12:9 s5\n"));
+    // The return, after the block, is in g's scope again.
+    CHECK(contains(f, "  ret %24  ; 14:5 s1\n"));
+    arena_free(&a);
+}
+
+TEST(hiding_declarations_nest_and_a_loop_body_has_them_too) {
+    // Several declarations that hide a variable in one block: each starts a
+    // scope inside the one before, from its own declaration to the block's
+    // end. One in a for's body starts inside the loop's scope, and lasts to
+    // the body's end; the loop's step, after the body, is in the loop's
+    // scope again, and so is the next iteration's test, which comes before
+    // the declaration.
+    Arena a = arena_make();
+    String f = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                       "g := 5;\n"
+                                                       "f :: (n: int, a: []int) -> int {\n"
+                                                       "    x := 1;\n"
+                                                       "    {\n"
+                                                       "        n := x;\n"
+                                                       "        g := n + 1;\n"
+                                                       "        x := g;\n"
+                                                       "    }\n"
+                                                       "    for a {\n"
+                                                       "        x := it + n;\n"
+                                                       "        x += 1;\n"
+                                                       "    }\n"
+                                                       "    return x;\n"
+                                                       "}\n"
+                                                       "main :: () { }\n")),
+                       "f");
+    CHECK(contains(f, "  ; scope 1 in 0 at 4:5\n"
+                      "  ; scope 2 in 1 at 5:9\n"
+                      "  ; scope 3 in 2 at 6:9\n"
+                      "  ; scope 4 in 3 at 7:9\n"
+                      "  ; scope 5 in 0 at 9:5\n"
+                      "  ; scope 6 in 5 at 10:9\n"
+                      "  ; var n int slot %2 arg 1 in 0 at 2:7\n"
+                      "  ; var a []int address %1 arg 2 in 0 at 2:15\n"
+                      "  ; var x int slot %3 in 0 at 3:5\n"
+                      "  ; var n int slot %5 in 2 at 5:9\n"
+                      "  ; var g int slot %7 in 3 at 6:9\n"
+                      "  ; var x int slot %11 in 4 at 7:9\n"
+                      "  ; var it int slot %22 in 5 at 9:5\n"
+                      "  ; var it_index int slot %23 in 5 at 9:5\n"
+                      "  ; var x int slot %31 in 6 at 10:9\n"));
+    // In the block: each initializer in the scope the declaration before
+    // it started, each store in its own.
+    CHECK(contains(f, "  %5 = local i64  ; 5:9 s1\n"
+                      "  %6 = load i64 %3  ; 5:9 s1\n"
+                      "  store i64 %6, %5  ; 5:9 s2\n"
+                      "  %7 = local i64  ; 6:9 s2\n"
+                      "  %8 = load i64 %5  ; 6:9 s2\n"));
+    CHECK(contains(f, "  store i64 %10, %7  ; 6:9 s3\n"
+                      "  %11 = local i64  ; 7:9 s3\n"
+                      "  %12 = load i64 %7  ; 7:9 s3\n"
+                      "  store i64 %12, %11  ; 7:9 s4\n"));
+    // In the loop's body: the iterator's store and x's initializer in the
+    // loop's scope, the store and the statement after it in x's, the jump
+    // to the step and the step in the loop's.
+    CHECK(contains(f, "  store i64 %30, %22  ; 9:5 s5\n"
+                      "  %31 = local i64  ; 10:9 s5\n"
+                      "  %32 = load i64 %22  ; 10:9 s5\n"
+                      "  %33 = load i64 %2  ; 10:9 s5\n"
+                      "  %34 = add i64 %32, %33  ; 10:9 s5\n"
+                      "  store i64 %34, %31  ; 10:9 s6\n"
+                      "  %35 = load i64 %31  ; 11:9 s6\n"));
+    CHECK(contains(f, "  store i64 %37, %31  ; 11:9 s6\n"
+                      "  jump b5  ; 9:5 s5\n"
+                      "b5:\n"
+                      "  %38 = load i64 %23  ; 9:5 s5\n"));
+    CHECK(contains(f, "b3:\n"
+                      "  %25 = load i64 %23  ; 9:5 s5\n"));
+    // After the loop, the outer x in the body's scope.
+    CHECK(contains(f, "  %41 = load i64 %3  ; 13:5 s0\n"
+                      "  ret %41  ; 13:5 s0\n"));
+    arena_free(&a);
+}
+
 TEST(jumps_out_of_an_if_are_at_its_braces) {
     // The jump from the end of an if's block to the code after the if is
     // at that block's '}', as clang places it: at the `if` it would be a
     // step back to the `if` line after the block's last statement, when
-    // the jump is a real one (over an else). The jump out of an else if's
-    // part is at the '}' that ends the chain. The test and its branch stay
-    // at the `if`.
+    // the jump is a real one (over an else). An else if's part has no jump
+    // of its own (issue #104): its arms jump straight past the chain, and
+    // the last arm's false edge goes there too. The test and its branch
+    // stay at the `if`.
     Arena a = arena_make();
     String ir = ir_print_debug(&a, lower_source(&a,
                                                 "main :: () {\n"
@@ -2771,7 +3103,7 @@ TEST(jumps_out_of_an_if_are_at_its_braces) {
               "b1:\n"
               "  %5 = const i64 5  ; 4:9 s1\n"
               "  store i64 %5, %0  ; 4:9 s1\n"
-              "  jump b5  ; 5:5 s0\n"
+              "  jump b4  ; 5:5 s0\n"
               "b2:\n"
               "  %6 = load i64 %0  ; 5:12 s0\n"
               "  %7 = const i64 1  ; 5:12 s0\n"
@@ -2782,19 +3114,61 @@ TEST(jumps_out_of_an_if_are_at_its_braces) {
               "  store i64 %9, %0  ; 6:9 s2\n"
               "  jump b4  ; 7:5 s0\n"
               "b4:\n"
-              "  jump b5  ; 7:5 s0\n"
-              "b5:\n"
               "  %10 = const i32 0  ; 8:1 s0\n"
               "  ret %10  ; 8:1 s0\n"
               "}\n");
     arena_free(&a);
 }
 
+TEST(scalar_parameters_are_read_from_their_slots) {
+    // Issue #104: each scalar parameter is stored on entry into a slot of
+    // its own, with no position (the prologue's work, done before a
+    // debugger's breakpoint on the procedure stops), and every use loads it
+    // from there at the statement using it, in that statement's scope, as
+    // a local is: an if's test, a loop's end, a return, a nested block's
+    // statement. The slot is the variable a debugger shows.
+    Arena a = arena_make();
+    String f = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                       "f :: (n: int, flag: bool) -> int {\n"
+                                                       "    if flag {\n"
+                                                       "        for 0..n { }\n"
+                                                       "    }\n"
+                                                       "    return n;\n"
+                                                       "}\n"
+                                                       "main :: () { }\n")),
+                       "f");
+    CHECK(contains(f, "  ; var n int slot %2 arg 1 in 0 at 1:7\n"
+                      "  ; var flag bool slot %3 arg 2 in 0 at 1:15\n"
+                      "  ; var it int slot %7 in 2 at 3:9\n"
+                      "  ; var it_index int slot %8 in 2 at 3:9\n"
+                      "b0:\n"
+                      "  %2 = local i64\n"
+                      "  store i64 %0, %2\n"
+                      "  %3 = local i1\n"
+                      "  store i1 %1, %3\n"
+                      "  %4 = load i1 %3  ; 2:5 s0\n"
+                      "  branch %4, b1, b6  ; 2:5 s0\n"
+                      "b1:\n"
+                      "  %5 = const i64 0  ; 3:9 s1\n"
+                      "  %6 = load i64 %2  ; 3:9 s1\n"));
+    CHECK(contains(f, "b6:\n"
+                      "  %18 = load i64 %2  ; 5:5 s0\n"
+                      "  ret %18  ; 5:5 s0\n"));
+    // Nothing reads the incoming values but the stores (an operand is
+    // followed by a comma, or ends its line).
+    CHECK_EQ(count_of(f, " %0,"), 1);
+    CHECK_EQ(count_of(f, " %1,"), 1);
+    CHECK(!contains(f, " %0 ") && !contains(f, " %1 "));
+    arena_free(&a);
+}
+
 TEST(variables_and_where_they_live) {
-    // A scalar parameter is a value, an aggregate one the address it's
-    // passed as, each with its place among the parameters; locals, it and
-    // it_index are slots; a name an inner block declares again is another
-    // variable, in that block's scope.
+    // A scalar parameter is a slot, stored on entry with no position (the
+    // prologue's work), an aggregate one the address it's passed as, each
+    // with its place among the parameters; locals, it and it_index are
+    // slots; a name an inner block declares again is another variable, in
+    // a scope of its own inside that block's, from its declaration on
+    // (a_declaration_that_hides_a_name_starts_a_scope).
     Arena a = arena_make();
     String ir = ir_print_debug(&a, lower_source(&a,
                                                 "sum :: (n: int, a: []int) -> int {\n"
@@ -2813,13 +3187,18 @@ TEST(variables_and_where_they_live) {
                                        "  ; source sum at 1:1, body 1:34\n"
                                        "  ; scope 1 in 0 at 3:5\n"
                                        "  ; scope 2 in 0 at 6:5\n"
-                                       "  ; var n int value %0 arg 1 in 0 at 1:9\n"
+                                       "  ; scope 3 in 2 at 7:9\n"
+                                       "  ; var n int slot %2 arg 1 in 0 at 1:9\n"
                                        "  ; var a []int address %1 arg 2 in 0 at 1:17\n"
-                                       "  ; var x int slot %2 in 0 at 2:5\n"
-                                       "  ; var it int slot %12 in 1 at 3:5\n"
-                                       "  ; var it_index int slot %13 in 1 at 3:5\n"
-                                       "  ; var x int slot %29 in 2 at 7:9\n"
-                                       "b0:\n"));
+                                       "  ; var x int slot %3 in 0 at 2:5\n"
+                                       "  ; var it int slot %14 in 1 at 3:5\n"
+                                       "  ; var it_index int slot %15 in 1 at 3:5\n"
+                                       "  ; var x int slot %31 in 3 at 7:9\n"
+                                       "b0:\n"
+                                       "  %2 = local i64\n"
+                                       "  store i64 %0, %2\n"
+                                       "  %3 = local i64  ; 2:5 s0\n"
+                                       "  %4 = load i64 %2  ; 2:5 s0\n"));
     // A struct result's hidden pointer comes first, and isn't a variable:
     // the visible parameters are still arg 1 and 2.
     ir = ir_print_debug(&a, lower_source(&a,
@@ -2828,9 +3207,11 @@ TEST(variables_and_where_they_live) {
                                          "main :: () { }\n"));
     CHECK(contains(proc_ir(ir, "make"), "proc @make(ptr, i64, ptr) {\n"
                                         "  ; source make at 2:1, body 2:35\n"
-                                        "  ; var x int value %1 arg 1 in 0 at 2:10\n"
+                                        "  ; var x int slot %3 arg 1 in 0 at 2:10\n"
                                         "  ; var p Pair address %2 arg 2 in 0 at 2:18\n"
-                                        "b0:\n"));
+                                        "b0:\n"
+                                        "  %3 = local i64\n"
+                                        "  store i64 %1, %3\n"));
     arena_free(&a);
 }
 
@@ -2937,7 +3318,9 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
     // Over every end-to-end program: each instruction of a procedure from
     // the source is somewhere in it (never line 0, which a debugger would
     // show as no line at all) and in one of its scopes; so is each variable.
-    // A procedure the compiler makes has no positions at all.
+    // The prologue's work is the exception: each scalar parameter's slot and
+    // the store into it, first in the entry block, have no position. A
+    // procedure the compiler makes has no positions at all.
     Arena a = arena_make();
     Array<String> names = {};
     CHECK(os_list_directory(&a, str("tests/run"), &names));
@@ -2961,14 +3344,23 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
             // lines run from its name's to its body's '}'.
             s32 first_line = p->pos.line;
             s32 last_line = from_source ? tree->procs[k]->body->end.line : 0;
+            s64 prologue = 0;  // the entry block's first instructions: a slot and a store per scalar parameter
+            for (s64 v = 0; v < p->vars.count; v++) {
+                if (p->vars[v].arg > 0 && p->vars[v].kind == IR_VAR_SLOT) prologue += 2;
+            }
             for (s64 b = 0; b < p->blocks.count; b++) {
                 Ir_Block *block = p->blocks[b];
                 for (s64 n = 0; n < block->instrs.count; n++) {
                     Ir_Instr *instr = &block->instrs[n];
-                    bool placed = from_source ? instr->pos.line >= first_line && instr->pos.line <= last_line &&
-                                                    instr->pos.line > 0 && instr->scope >= 0 &&
-                                                    instr->scope < p->scopes.count
-                                              : instr->pos.line == 0 && instr->scope == -1;
+                    bool nowhere = instr->pos.line == 0 && instr->scope == -1;
+                    bool in_prologue = b == 0 && n < prologue && (n % 2 == 0 ? instr->op == IR_LOCAL
+                                                                              : instr->op == IR_STORE);
+                    bool placed = from_source ? (in_prologue ? nowhere
+                                                             : instr->pos.line >= first_line &&
+                                                                   instr->pos.line <= last_line &&
+                                                                   instr->pos.line > 0 && instr->scope >= 0 &&
+                                                                   instr->scope < p->scopes.count)
+                                              : nowhere;
                     if (!placed) {
                         fprintf(stderr, STR_FMT ": %s: instruction %lld of b%lld is at %d:%d s%d\n", STR_ARG(path),
                                 string_cstr(&a, p->name), (long long)n, (long long)b, instr->pos.line, instr->pos.col,

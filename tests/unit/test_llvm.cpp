@@ -974,19 +974,21 @@ static String llvm_escaped(Arena *a, String s) {
 
 TEST(llvm_debug_info_has_a_compile_unit) {
     // One compile unit, as C99 (whose expression syntax a debugger then
-    // uses, and which suits Rig's), produced by "rig 0.1.0 (clang version
-    // 23.1.5)": Microsoft's debuggers read some records right only from a
-    // compiler whose name has "clang" in it. The file is the source's
-    // absolute path, in the directory rig ran in, with its MD5. Module
-    // flags say which debug information LLVM writes: CodeView on Windows,
-    // DWARF 5 on Linux.
+    // uses, and which suits Rig's), produced by "rig 0.1.0 (LLVM X.Y.Z)",
+    // the LLVM rig is linked with (issue #104: no "clang", which nothing
+    // needs). The file is the source's absolute path, in the directory rig
+    // ran in, with its MD5. Module flags say which debug information LLVM
+    // writes: CodeView on Windows, DWARF 5 on Linux.
     Arena a = arena_make();
+    unsigned major = 0, minor = 0, patch = 0;
+    LLVMGetVersion(&major, &minor, &patch);
+    String producer = string_printf(&a, "producer: \"rig %s (LLVM %u.%u.%u)\"", RIG_VERSION, major, minor, patch);
     Ir_Module *m = lower_source(&a, LINES);
     for (int t = 0; t < 2; t++) {
         Target target = (Target)t;
         String text = llvm_text(&a, m, target);
         CHECK(contains(text, "!DICompileUnit(language: DW_LANG_C99"));
-        CHECK(contains(text, "producer: \"rig 0.1.0 (clang version 23.1.5)\""));
+        CHECK(contains(text, string_cstr(&a, producer)));
         CHECK(contains(text, "isOptimized: false"));
         CHECK(contains(text, "emissionKind: FullDebug"));
         String file = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\", directory: \"" STR_FMT "\"",
@@ -1002,6 +1004,52 @@ TEST(llvm_debug_info_has_a_compile_unit) {
             CHECK(!contains(text, "CodeView"));
         }
     }
+    arena_free(&a);
+}
+
+TEST(llvm_debug_file_names_keep_a_share) {
+    // Issue #104: the names of the source file and the directory that LLVM
+    // is given, for the path given to rig build in the directory it ran in.
+    // On Windows a file on a network share (a UNC path) is named with a
+    // '/' first, /\server\share\dir\a.rig, a name LLVM's CodeView writer
+    // keeps whole (it made \\server\share\... into C:\server\share\... after
+    // the directory's drive, or the directory and the name end to end) and
+    // Windows and cdb read as the share's. A drive path, a
+    // drive-relative path, a relative one and the directory are as they
+    // are; on Linux nothing changes.
+    Arena a = arena_make();
+    struct Case {
+        const char *directory, *given;   // rig's working directory, and the path rig build is given
+        const char *file, *in_directory; // what LLVM gets on Windows
+    };
+    Case cases[] = {
+        {"C:\\work", "\\\\server\\share\\dir\\a.rig", "/\\server\\share\\dir\\a.rig", "C:\\work"},
+        {"C:\\work", "//server/share/dir/a.rig", "/\\server\\share\\dir\\a.rig", "C:\\work"},
+        {"C:\\work", "C:\\dev\\a.rig", "C:\\dev\\a.rig", "C:\\work"},
+        {"C:\\work", "C:a.rig", "C:\\work\\a.rig", "C:\\work"},
+        {"C:\\work", "a.rig", "C:\\work\\a.rig", "C:\\work"},
+        {"\\\\server\\share\\dir", "sub\\a.rig", "/\\server\\share\\dir\\sub\\a.rig", "\\\\server\\share\\dir"},
+        {"\\\\server\\share\\dir", "..\\a.rig", "/\\server\\share\\a.rig", "\\\\server\\share\\dir"},
+    };
+    for (Case &c : cases) {
+        String path = path_absolute(&a, str(c.directory), str(c.given), true);
+        String file = {}, directory = {};
+        llvm_debug_file_names(&a, path, str(c.directory), TARGET_WINDOWS_X64, &file, &directory);
+        CHECK_STR(file, c.file);
+        CHECK_STR(directory, c.in_directory);
+        llvm_debug_file_names(&a, path, str(c.directory), TARGET_LINUX_X64, &file, &directory);
+        CHECK(string_eq(file, path));
+        CHECK_STR(directory, c.directory);
+    }
+    // In the module's debug information: the file's name as LLVM got it.
+    Ir_Module *m = lower_source(&a, LINES);
+    m->source_path = str("\\\\server\\share\\dir\\lines.rig");
+    m->directory = str("\\\\server\\share\\dir");
+    String text = llvm_text(&a, m, TARGET_WINDOWS_X64);
+    String file = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\", directory: \"" STR_FMT "\"",
+                                STR_ARG(llvm_escaped(&a, str("/\\server\\share\\dir\\lines.rig"))),
+                                STR_ARG(llvm_escaped(&a, m->directory)));
+    CHECK(contains(text, string_cstr(&a, file)));
     arena_free(&a);
 }
 
@@ -1346,12 +1394,20 @@ TEST(llvm_debug_types_through_cycles_are_not_cut) {
     arena_free(&a);
 }
 
+// The node of the 64-bit pointer to debug type `node` ("!12"); {} when
+// there's none.
+static String pointer_node(Arena *a, String text, String node) {
+    return defined_node(line_with(
+        text, string_cstr(a, string_printf(a, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: " STR_FMT ", size: 64,",
+                                           STR_ARG(node)))));
+}
+
 TEST(llvm_variables_are_declared) {
     // Each variable is declared on its stack slot (#dbg_declare), in its
     // scope: a local; a scalar parameter, stored into a slot of its own; an
     // aggregate parameter, whose slot holds the pointer to the caller's copy,
-    // read through it on Linux (DW_OP_deref) and on Windows a pointer to its
-    // type, the slot itself (declare_variables says why); a bool parameter,
+    // a pointer to its type, the slot itself (declare_variables says why),
+    // on both systems; a bool parameter,
     // stored as a byte; a loop's it and it_index, in the loop's lexical
     // block.
     Arena a = arena_make();
@@ -1379,8 +1435,7 @@ TEST(llvm_variables_are_declared) {
             Where scope;
         };
         Expected expected[] = {
-            {"!DILocalVariable(name: \"a\", arg: 1, ",
-             (Target)t == TARGET_WINDOWS_X64 ? "!DIExpression()" : "!DIExpression(DW_OP_deref)", IN_SUM},
+            {"!DILocalVariable(name: \"a\", arg: 1, ", "!DIExpression()", IN_SUM},
             {"!DILocalVariable(name: \"k\", arg: 2, ", "!DIExpression()", IN_SUM},
             {"!DILocalVariable(name: \"b\", arg: 3, ", "!DIExpression()", IN_SUM},
             {"!DILocalVariable(name: \"x\", scope: ", "!DIExpression()", IN_SUM},
@@ -1406,20 +1461,16 @@ TEST(llvm_variables_are_declared) {
                 CHECK(string_eq(scope, e.scope == IN_SUM ? sum : main));
             }
         }
-        // a's type: the view's own on Linux, where the expression reads
-        // through the slot; a 64-bit pointer to it on Windows, where the
-        // slot is the variable.
+        // a's type: a 64-bit pointer to the view, the slot being the
+        // variable.
         String view = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"[]int\""));
         String view_type = attached(&a, line_with(text, "!DILocalVariable(name: \"a\", arg: 1, "), "type:");
         CHECK(view.count > 0 && view_type.count > 0);
-        if ((Target)t == TARGET_WINDOWS_X64) {
-            String pointer = node_line(&a, text, view_type);
-            CHECK(contains(pointer, "!DIDerivedType(tag: DW_TAG_pointer_type, "));
-            CHECK(contains(pointer, string_cstr(&a, string_printf(&a, "baseType: " STR_FMT ", size: 64",
-                                                                 STR_ARG(view)))));
-        } else {
-            CHECK(string_eq(view_type, view));
-        }
+        String pointer = node_line(&a, text, view_type);
+        CHECK(contains(pointer, "!DIDerivedType(tag: DW_TAG_pointer_type, "));
+        CHECK(contains(pointer, string_cstr(&a, string_printf(&a, "baseType: " STR_FMT ", size: 64",
+                                                             STR_ARG(view)))));
+        CHECK(!contains(text, "DW_OP_deref"));
         // b, a bool, is an i1 in LLVM: its slot is an i8, as a bool in
         // memory is, and it's stored zero-extended, so the byte a debugger
         // reads is 0 or 1 (an i1 stored as is leaves the other 7 bits
@@ -1443,18 +1494,149 @@ TEST(llvm_variables_are_declared) {
             CHECK(contains(text, string_cstr(&a, string_printf(&a, "\n  " STR_FMT " = zext i1 %%",
                                                                 STR_ARG(stored)))));
         }
-        // sum's type: its result's, then its parameters', int, []int, int,
-        // bool.
+        // sum's type: its result's, then its parameters', int, a pointer to
+        // []int (how the view is passed), int, bool.
         String type = node_line(&a, text, attached(&a, line_with(text, "!DISubprogram(name: \"sum\""), "type:"));
         String types = node_line(&a, text, attached(&a, type, "types:"));
         String integer = defined_node(line_with(text, "!DIBasicType(name: \"int\""));
         String boolean = defined_node(line_with(text, "!DIBasicType(name: \"bool\""));
         String list = string_printf(&a, " = !{" STR_FMT ", " STR_FMT ", " STR_FMT ", " STR_FMT "}", STR_ARG(integer),
-                                    STR_ARG(view), STR_ARG(integer), STR_ARG(boolean));
+                                    STR_ARG(pointer_node(&a, text, view)), STR_ARG(integer), STR_ARG(boolean));
         CHECK(contains(types, string_cstr(&a, list)));
         // main returns nothing in Rig, so its type's first is null.
         type = node_line(&a, text, attached(&a, line_with(text, "!DISubprogram(name: \"main\""), "type:"));
         CHECK(contains(node_line(&a, text, attached(&a, type, "types:")), "!{null}"));
+    }
+    arena_free(&a);
+}
+
+// The source of the tests of procedures taking and returning aggregates.
+static const char *AGGREGATE_CALLS = "Pair :: struct { a: int; b: int; }\n"
+                                     "make :: (n: int) -> Pair { return Pair.{n, n}; }\n"
+                                     "sum :: (p: Pair, s: string) -> int { return p.a; }\n"
+                                     "both :: (n: int) -> Pair, int { return Pair.{n, n}, n; }\n"
+                                     "twice :: (n: int) -> int, int { return n, n; }\n"
+                                     "pairs :: (n: [2]int) -> Pair, Pair { return Pair.{1, 2}, Pair.{3, 4}; }\n"
+                                     "row :: (n: int) -> [2]int { return .[n, n]; }\n"
+                                     "main :: () {\n"
+                                     "    q := make(1);\n"
+                                     "    r := row(2);\n"
+                                     "    b, i := both(3);\n"
+                                     "}\n";
+
+TEST(llvm_procedure_types_say_how_they_are_called) {
+    // A procedure's debug type is how it's called (spec 10.4), not how C
+    // would pass the same types, alike in DWARF and CodeView: an aggregate
+    // parameter is a pointer to the caller's copy, and an aggregate result
+    // a hidden pointer parameter before the visible ones, so the procedure
+    // returns its one scalar result, or nothing. With several scalar
+    // results it returns nothing a C type describes, so none either.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, AGGREGATE_CALLS);
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        String integer = defined_node(line_with(text, "!DIBasicType(name: \"int\""));
+        String pair = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Pair\""));
+        String string = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"string\""));
+        String array = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_array_type, baseType: "));
+        String to_pair = pointer_node(&a, text, pair);
+        String to_array = pointer_node(&a, text, array);
+        CHECK(integer.count > 0 && pair.count > 0 && string.count > 0 && array.count > 0 && to_pair.count > 0 &&
+              to_array.count > 0);
+        struct Expected {
+            const char *name;
+            String types;  // the list's elements
+        };
+        Expected expected[] = {
+            {"make", string_printf(&a, "null, " STR_FMT ", " STR_FMT, STR_ARG(to_pair), STR_ARG(integer))},
+            {"sum", string_printf(&a, STR_FMT ", " STR_FMT ", " STR_FMT, STR_ARG(integer), STR_ARG(to_pair),
+                                  STR_ARG(pointer_node(&a, text, string)))},
+            {"both", string_printf(&a, STR_FMT ", " STR_FMT ", " STR_FMT, STR_ARG(integer), STR_ARG(to_pair),
+                                   STR_ARG(integer))},
+            {"twice", string_printf(&a, "null, " STR_FMT, STR_ARG(integer))},
+            {"pairs", string_printf(&a, "null, " STR_FMT ", " STR_FMT ", " STR_FMT, STR_ARG(to_pair), STR_ARG(to_pair),
+                                    STR_ARG(to_array))},
+            {"row", string_printf(&a, "null, " STR_FMT ", " STR_FMT, STR_ARG(to_array), STR_ARG(integer))},
+        };
+        for (Expected &e : expected) {
+            String subprogram =
+                line_with(text, string_cstr(&a, string_printf(&a, "!DISubprogram(name: \"%s\"", e.name)));
+            String type = node_line(&a, text, attached(&a, subprogram, "type:"));
+            String types = node_line(&a, text, attached(&a, type, "types:"));
+            String list = string_printf(&a, " = !{" STR_FMT "}", STR_ARG(e.types));
+            if (!contains(types, string_cstr(&a, list))) {
+                printf("    %s: " STR_FMT ", not" STR_FMT "\n", e.name, STR_ARG(types), STR_ARG(list));
+            }
+            CHECK(contains(types, string_cstr(&a, list)));
+        }
+        // No type is marked passed by reference: the pointers say it.
+        CHECK(!contains(text, "DIFlagTypePassByReference"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_one_aggregate_result_is_returned_as_c_returns_a_struct) {
+    // The hidden pointer of a procedure whose one result is an aggregate is
+    // sret, on its definition and at every call, so LLVM returns it in rax
+    // too, as C returns a struct in memory. With several results, none is.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, AGGREGATE_CALLS);
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "define internal void @make(ptr sret([16 x i8]) %0, i64 %1)"));
+        CHECK(contains(text, "define internal void @row(ptr sret([16 x i8]) %0, i64 %1)"));
+        CHECK(contains(text, "call void @make(ptr sret([16 x i8]) %"));
+        CHECK(contains(text, "call void @row(ptr sret([16 x i8]) %"));
+        CHECK(contains(text, "define internal i64 @both(ptr %0, i64 %1)"));
+        CHECK(contains(text, "define internal void @pairs(ptr %0, ptr %1, ptr %2)"));
+        CHECK(contains(text, "call i64 @both(ptr %"));
+        CHECK(count_of(text, "sret(") == 4);
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_result_pointers_are_parameters) {
+    // Each hidden result pointer is an artificial parameter variable,
+    // result$ (result$1, result$2, ... for several), a pointer to the
+    // result's type, declared on a slot the pointer is stored into. The
+    // visible parameters come after them, and count them.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, AGGREGATE_CALLS);
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        String pair = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Pair\""));
+        String array = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_array_type, baseType: "));
+        struct Expected {
+            const char *procedure;
+            const char *name;  // the variable's
+            int arg;
+            String points_at;
+        };
+        Expected expected[] = {
+            {"make", "result$", 1, pair},   {"row", "result$", 1, array},   {"both", "result$", 1, pair},
+            {"pairs", "result$1", 1, pair}, {"pairs", "result$2", 2, pair},
+        };
+        for (Expected &e : expected) {
+            String procedure = defined_node(
+                line_with(text, string_cstr(&a, string_printf(&a, "!DISubprogram(name: \"%s\"", e.procedure))));
+            String variable = line_with(
+                text, string_cstr(&a, string_printf(&a, "!DILocalVariable(name: \"%s\", arg: %d, scope: " STR_FMT ",",
+                                                    e.name, e.arg, STR_ARG(procedure))));
+            if (variable.count == 0) printf("    no %s in %s\n", e.name, e.procedure);
+            CHECK(variable.count > 0);
+            CHECK(contains(variable, "flags: DIFlagArtificial)"));
+            CHECK(string_eq(attached(&a, variable, "type:"), pointer_node(&a, text, e.points_at)));
+            String declare = string_printf(&a, ", " STR_FMT ", !DIExpression(), !", STR_ARG(defined_node(variable)));
+            CHECK(contains(line_with(text, string_cstr(&a, declare)), "#dbg_declare(ptr %"));
+        }
+        String make = defined_node(line_with(text, "!DISubprogram(name: \"make\""));
+        String pairs = defined_node(line_with(text, "!DISubprogram(name: \"pairs\""));
+        String n_of_make =
+            string_printf(&a, "!DILocalVariable(name: \"n\", arg: 2, scope: " STR_FMT ",", STR_ARG(make));
+        String n_of_pairs =
+            string_printf(&a, "!DILocalVariable(name: \"n\", arg: 3, scope: " STR_FMT ",", STR_ARG(pairs));
+        CHECK(contains(text, string_cstr(&a, n_of_make)));
+        CHECK(contains(text, string_cstr(&a, n_of_pairs)));
     }
     arena_free(&a);
 }

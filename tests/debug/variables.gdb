@@ -23,6 +23,6 @@ print view.data[1]
 break variables.rig:29
 continue
 info args
-print s
+print *s
 print s.count
 print loud

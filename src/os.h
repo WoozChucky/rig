@@ -55,7 +55,8 @@ bool os_run(Arena *a, Array<String> argv, Process_Result *result);
 // line instead.
 Array<String> os_arguments(Arena *a, int argc, char **argv);
 
-// The current directory, without a trailing separator.
+// The current directory, without a trailing separator. On Linux, by the
+// name it was reached by, $PWD, when that names it (os_linux.cpp says why).
 String os_current_directory(Arena *a);
 
 // os_run, with the program started in `directory`. A relative path in

@@ -1,0 +1,49 @@
+l+t
+l+s
+l+l
+dt aggregates!make
+dt aggregates!little
+dt aggregates!name
+dt aggregates!both
+dt aggregates!sum
+dt aggregates!pairs
+dt aggregates!split
+bp `aggregates.rig:16`
+g
+dv /t
+?? result$
+bc *
+bp `aggregates.rig:50`
+g
+.call aggregates!make(&q, 9)
+g
+?? q
+.call aggregates!sum(&q)
+g
+.call aggregates!name(&w, 2)
+g
+?? w
+.call aggregates!both(&b, 7)
+g
+?? b[1]
+.call aggregates!make(9)
+.call aggregates!pairs(&x, &y, 3)
+g
+?? x
+?? y
+.call aggregates!split(&z, 4)
+g
+?? z
+bp `aggregates.rig:36`
+g
+dv /t
+?? p->b
+.call aggregates!twice(4)
+g
+bp `aggregates.rig:64`
+g
+dv /t
+bp `aggregates.rig:69`
+g
+dv /t
+q
