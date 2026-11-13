@@ -43,3 +43,8 @@ String version_verbose(Arena *a, Build_Stamp s, String llvm, const char *target)
                          STR_ARG(version_line(a, s, llvm)), STR_ARG(s.commit), s.dirty ? "yes" : "no",
                          STR_ARG(s.date), STR_ARG(llvm), target, STR_ARG(s.build));
 }
+
+String version_producer(Arena *a, Build_Stamp s, String llvm) {
+    return string_printf(a, "rig " STR_FMT " (" STR_FMT ") (LLVM " STR_FMT ")", STR_ARG(s.version),
+                         STR_ARG(stamp_commit_short(a, s)), STR_ARG(llvm));
+}
