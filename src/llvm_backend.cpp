@@ -1,6 +1,7 @@
 // llvm_backend.cpp: Rig's IR to LLVM (see llvm_backend.h).
 
 #include "llvm_backend.h"
+#include "version.h"  // the debug information's producer
 
 #include "ast.h"  // a struct type's declaration (Type.decl): where it and its fields are
 
@@ -643,22 +644,22 @@ static void begin_debug_info(Backend *b, Ir_Module *m, Arena *a) {
 
     // The language is C99: a debugger evaluates the expressions it's given
     // in the unit's language, and C's are Rig's (a.count, a[i]; Rig's p.*
-    // is C's *p). The producer is rig and the LLVM that made the code,
-    // "rig 0.1.0 (LLVM X.Y.Z)". It once said "clang version", since cdb
-    // read an aggregate parameter's record for a value at an address held
-    // in memory (S_DEFRANGE_REGISTER_REL_INDIR) only from a compiler of
-    // that name. That parameter is now described as the pointer it is, in
-    // its stack slot, which cdb reads whatever the compiler's name, and
-    // measured with both names, cdb shows every debugger test's variables,
-    // parameters, globals and aggregates alike (issue #104). (rustc's names
+    // is C's *p). The producer is rig, the commit it was built from and the
+    // LLVM that made the code, "rig 0.1.0 (3f9c2a1b7d4e) (LLVM X.Y.Z)"
+    // (version.h), so a program's debug information says which compiler
+    // made it. It once said "clang version", since cdb read an aggregate
+    // parameter's record for a value at an address held in memory
+    // (S_DEFRANGE_REGISTER_REL_INDIR) only from a compiler of that name.
+    // That parameter is now described as the pointer it is, in its stack
+    // slot, which cdb reads whatever the compiler's name, and measured with
+    // both names, cdb shows every debugger test's variables, parameters,
+    // globals and aggregates alike (issue #104). (rustc's names
     // clang, "clang LLVM (rustc version ...)", for gdb's sake: gdb trusts
     // the line table to find a prologue's end only for a producer that
     // starts with "clang ". Rig's needn't: gdb also reads DWARF 5's
     // prologue_end, which LLVM writes.) Not optimised; full emission (types
     // and variables too, not only lines).
-    unsigned major = 0, minor = 0, patch = 0;
-    LLVMGetVersion(&major, &minor, &patch);
-    String producer = string_printf(a, "rig %s (LLVM %u.%u.%u)", RIG_VERSION, major, minor, patch);
+    String producer = version_producer(a, build_stamp(), llvm_version(a));
     b->unit = LLVMDIBuilderCreateCompileUnit(b->debug, LLVMDWARFSourceLanguageC99, b->file,
                                              (const char *)producer.data, (size_t)producer.count, 0, "", 0, 0, "",
                                              0, LLVMDWARFEmissionFull, 0, 0, 0, "", 0, "", 0);

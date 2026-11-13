@@ -18,8 +18,9 @@
 //
 // Then a few fixed cases: rig build without -o from another directory, a
 // runtime error's order after the program's output when stdout and stderr
-// are one pipe, the command line's mistakes, and a .build/ or an object
-// file rig can't write.
+// are one pipe, the command line's mistakes, a .build/ or an object file
+// rig can't write, and rig version's output, by its shape (version_test:
+// it names the commit rig was built from).
 //
 // Then rig check on every program of both directories, from a file and
 // from stdin, and its own command line (check_tests).
@@ -511,6 +512,9 @@ static const Command_Case COMMAND_CASES[] = {
     {"-o with no name", {"build", "tests/run/hello.rig", "-o"}, 2, "usage: "},
     {"-o with an empty name", {"build", "tests/run/hello.rig", "-o", ""}, 2, "usage: "},
     {"-o twice", {"build", "tests/run/hello.rig", "-o", ".build/tests/a", "-o", ".build/tests/b"}, 2, "usage: "},
+    {"rig version with an unknown option", {"version", "--frob"}, 2, "usage: "},
+    {"rig version with a word after it", {"version", "build"}, 2, "usage: "},
+    {"rig version --verbose twice", {"version", "--verbose", "--verbose"}, 2, "usage: "},
     {"a file that isn't there", {"build", "tests/missing.rig"}, 1, "rig: error: cannot read 'tests/missing.rig': "},
     {"an output ending in .rig",
      {"build", "tests/run/hello.rig", "-o", ".build/tests/output.RIG"},
@@ -538,6 +542,181 @@ static String command_test(Arena *a, String rig, const Command_Case *c) {
         return string_printf(a, "stderr: expected \"%s...\", got \"" STR_FMT "\"", c->err_start, STR_ARG(result.err));
     }
     if (os_file_exists(str(".build/tests/output.RIG"))) return str("rig wrote .build/tests/output.RIG");
+    return {};
+}
+
+// --- rig version -------------------------------------------------------------
+//
+// What rig version prints names the commit rig was built from, its date and
+// whether the checkout was dirty, which change with every commit: it's
+// checked by its shape, piece by piece, never against a hash. The version
+// must be the VERSION file's, and the LLVM version three numbers (the unit
+// tests check it against LLVMGetVersion; the runner has no LLVM).
+
+// A place in a line being read.
+struct Cursor {
+    String s;
+    s64 at;
+};
+
+// Takes `text` if it comes next.
+static bool take(Cursor *c, String text) {
+    if (c->s.count - c->at < text.count || memcmp(c->s.data + c->at, text.data, (size_t)text.count) != 0) return false;
+    c->at += text.count;
+    return true;
+}
+
+static bool take(Cursor *c, const char *text) { return take(c, str(text)); }
+
+// Takes `n` characters that are all in `set` (n = -1: as many as there are,
+// at least one); {} without them.
+static String take_run(Cursor *c, const char *set, s64 n) {
+    s64 start = c->at;
+    while (c->at < c->s.count && c->s.data[c->at] && strchr(set, c->s.data[c->at]) && c->at - start != n) c->at++;
+    s64 count = c->at - start;
+    if (count == 0 || (n >= 0 && count != n)) {
+        c->at = start;
+        return {};
+    }
+    return string_slice(c->s, start, count);
+}
+
+static const char *HEX = "0123456789abcdef";
+static const char *DIGITS = "0123456789";
+
+// A commit's hash of `digits` hex digits, or "unknown"; {} for neither.
+static String take_hash(Cursor *c, s64 digits) {
+    if (take(c, "unknown")) return str("unknown");
+    return take_run(c, HEX, digits);
+}
+
+// "2026-11-13", or "unknown"; {} for neither.
+static String take_date(Cursor *c) {
+    if (take(c, "unknown")) return str("unknown");
+    s64 start = c->at;
+    if (take_run(c, DIGITS, 4).count && take(c, "-") && take_run(c, DIGITS, 2).count && take(c, "-") &&
+        take_run(c, DIGITS, 2).count) {
+        return string_slice(c->s, start, c->at - start);
+    }
+    c->at = start;
+    return {};
+}
+
+// "23.1.5"; {} for anything else.
+static String take_version(Cursor *c) {
+    s64 start = c->at;
+    if (take_run(c, DIGITS, -1).count && take(c, ".") && take_run(c, DIGITS, -1).count && take(c, ".") &&
+        take_run(c, DIGITS, -1).count) {
+        return string_slice(c->s, start, c->at - start);
+    }
+    c->at = start;
+    return {};
+}
+
+// rig version's line, as read by version_line_why.
+struct Version_Line {
+    String hash;  // 12 hex digits or "unknown"
+    bool dirty;
+    String date;
+    String llvm;
+};
+
+// Why `line` isn't "rig VERSION (HASH[-dirty] DATE) LLVM X.Y.Z", or {} when
+// it is, with its parts in *v.
+static String version_line_why(Arena *a, String line, String version, Version_Line *v) {
+    Cursor c = {line, 0};
+    if (!take(&c, "rig ") || !take(&c, version) || !take(&c, " (")) {
+        return string_printf(a, "doesn't start with \"rig " STR_FMT " (\"", STR_ARG(version));
+    }
+    v->hash = take_hash(&c, 12);
+    if (!v->hash.count) return str("has no commit (12 hex digits, or unknown) after \"(\"");
+    v->dirty = take(&c, "-dirty");
+    if (!take(&c, " ") || !(v->date = take_date(&c)).count) return str("has no date (YYYY-MM-DD, or unknown)");
+    if (!take(&c, ") LLVM ") || !(v->llvm = take_version(&c)).count) {
+        return str("has no \") LLVM X.Y.Z\" after the date");
+    }
+    if (c.at != line.count) return str("has more after LLVM's version");
+    if (string_eq(v->hash, str("unknown")) && (v->dirty || !string_eq(v->date, str("unknown")))) {
+        return str("has an unknown commit that is dirty or has a date");
+    }
+    return {};
+}
+
+// Takes "NAME: " and the rest of the line in `lines` from *index on, the
+// value; {} when line *index isn't one of NAME's.
+static String take_field(String lines, s64 *index, const char *name) {
+    bool exists = false;
+    String line = line_of(lines, (*index)++, &exists);
+    Cursor c = {line, 0};
+    if (!exists || !take(&c, name) || !take(&c, ": ")) return {};
+    return string_slice(line, c.at, line.count - c.at);
+}
+
+// rig version, or rig version --verbose: exit 0, nothing on stderr, and
+// stdout the line (version_line_why), then for --verbose its parts.
+static String version_test(Arena *a, String rig, bool verbose) {
+    String text = {};
+    if (!os_read_file(a, str("VERSION"), &text)) return str("can't read VERSION");
+    s64 n = 0;
+    while (n < text.count && text.data[n] != '\n' && text.data[n] != '\r') n++;
+    String version = string_slice(text, 0, n);
+
+    Array<String> argv = {};
+    array_add(&argv, rig);
+    array_add(&argv, str("version"));
+    if (verbose) array_add(&argv, str("--verbose"));
+    Process_Result result = {};
+    String why = {};
+    bool started = run(a, argv, {}, &result, &why);
+    array_free(&argv);
+    if (!started) return why;
+    if (result.exit_code != 0) {
+        return with_stderr(a, string_printf(a, "rig exited with " STR_FMT, STR_ARG(exit_code_text(a, result.exit_code))),
+                           result.err);
+    }
+    if (result.err.count) return with_stderr(a, str("rig wrote to stderr"), result.err);
+    if (!ends_with(result.out, "\n")) return str("stdout doesn't end in a newline");
+
+    bool exists = false;
+    String line = line_of(result.out, 0, &exists);
+    Version_Line v = {};
+    why = version_line_why(a, line, version, &v);
+    if (why.count) return string_printf(a, "\"" STR_FMT "\" " STR_FMT, STR_ARG(line), STR_ARG(why));
+    s64 index = 1;
+    if (verbose) {
+        // Each part again, in full, agreeing with the line.
+        String commit = take_field(result.out, &index, "commit");
+        Cursor c = {commit, 0};
+        bool known = !string_eq(v.hash, str("unknown"));
+        bool full = known ? take_run(&c, HEX, 40).count && starts_with(commit, string_cstr(a, v.hash))
+                          : take(&c, "unknown");
+        if (!full || c.at != commit.count) {
+            return str("line 2 isn't \"commit: \" and the line's commit in full (40 hex digits, or unknown)");
+        }
+        if (!string_eq(take_field(result.out, &index, "dirty"), str(v.dirty ? "yes" : "no"))) {
+            return string_printf(a, "line 3 isn't \"dirty: %s\"", v.dirty ? "yes" : "no");
+        }
+        if (!string_eq(take_field(result.out, &index, "date"), v.date)) {
+            return str("line 4 isn't \"date: \" and the line's date");
+        }
+        if (!string_eq(take_field(result.out, &index, "llvm"), v.llvm)) {
+            return str("line 5 isn't \"llvm: \" and the line's LLVM version");
+        }
+#ifdef _WIN32
+        const char *target = "x86_64-pc-windows-msvc";
+#else
+        const char *target = "x86_64-pc-linux-gnu";
+#endif
+        if (!string_eq(take_field(result.out, &index, "target"), str(target))) {
+            return string_printf(a, "line 6 isn't \"target: %s\"", target);
+        }
+        String build = take_field(result.out, &index, "build");
+        if (!string_eq(build, str("debug")) && !string_eq(build, str("release"))) {
+            return str("line 7 isn't \"build: debug\" or \"build: release\"");
+        }
+    }
+    line_of(result.out, index, &exists);
+    if (exists) return string_printf(a, "stdout has more than %lld lines", (long long)index);
     return {};
 }
 
@@ -1266,6 +1445,8 @@ int main(int argc, char **argv) {
     for (const Command_Case &c : COMMAND_CASES) {
         report(string_cstr(&a, string_printf(&a, "rig: %s", c.what)), command_test(&a, rig, &c), &passed, &failed);
     }
+    report("rig version", version_test(&a, rig, false), &passed, &failed);
+    report("rig version --verbose", version_test(&a, rig, true), &passed, &failed);
     check_tests(&a, rig, &passed, &failed);
     spec_tests(&a, rig, &passed, &failed);
     s64 skipped = 0;

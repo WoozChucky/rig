@@ -26,6 +26,8 @@ editors\vscode\install.bat
 
 Then reload VS Code's windows (command palette: "Developer: Reload Window").
 
+A release of Rig has the extension as `rig-vscode.vsix`, which `code --install-extension rig-vscode.vsix` installs the same way; `./editors/vscode/install.sh --vsix FILE` makes that file without installing it.
+
 With VS Code's WSL extension, install it on each side you use: `install.bat` for Windows windows, and `install.sh` inside WSL for WSL windows. The extension starts the compiler, so it runs where the files and `rig` are, which in a WSL window is the WSL side (`extensionKind` in `package.json` is `["workspace", "ui"]`); a copy installed only on Windows doesn't run there.
 
 Arguments to either script go to `code`, so `install.bat --profile Rig` installs into a profile. Run the script again after changing the extension: it replaces the installed copy. To remove it: `code --uninstall-extension woozchucky.rig-language`.

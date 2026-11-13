@@ -974,15 +974,20 @@ static String llvm_escaped(Arena *a, String s) {
 
 TEST(llvm_debug_info_has_a_compile_unit) {
     // One compile unit, as C99 (whose expression syntax a debugger then
-    // uses, and which suits Rig's), produced by "rig 0.1.0 (LLVM X.Y.Z)",
-    // the LLVM rig is linked with (issue #104: no "clang", which nothing
-    // needs). The file is the source's absolute path, in the directory rig
-    // ran in, with its MD5. Module flags say which debug information LLVM
-    // writes: CodeView on Windows, DWARF 5 on Linux.
+    // uses, and which suits Rig's), produced by "rig 0.1.0 (3f9c2a1b7d4e)
+    // (LLVM X.Y.Z)": this build's version and commit, from the build
+    // scripts' defines, and the LLVM rig is linked with (issue #104: no
+    // "clang", which nothing needs). The file is the source's absolute
+    // path, in the directory rig ran in, with its MD5. Module flags say
+    // which debug information LLVM writes: CodeView on Windows, DWARF 5 on
+    // Linux.
     Arena a = arena_make();
     unsigned major = 0, minor = 0, patch = 0;
     LLVMGetVersion(&major, &minor, &patch);
-    String producer = string_printf(&a, "producer: \"rig %s (LLVM %u.%u.%u)\"", RIG_VERSION, major, minor, patch);
+    String commit = str(RIG_COMMIT);
+    if (commit.count == 40) commit = string_printf(&a, "%.12s%s", RIG_COMMIT, RIG_COMMIT_DIRTY ? "-dirty" : "");
+    String producer = string_printf(&a, "producer: \"rig %s (" STR_FMT ") (LLVM %u.%u.%u)\"", RIG_VERSION,
+                                    STR_ARG(commit), major, minor, patch);
     Ir_Module *m = lower_source(&a, LINES);
     for (int t = 0; t < 2; t++) {
         Target target = (Target)t;

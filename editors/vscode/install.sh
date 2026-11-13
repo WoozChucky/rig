@@ -12,6 +12,10 @@
 # In WSL with VS Code's WSL extension, `code` installs it for WSL windows,
 # which is where it runs in them (it starts rig, which is there too);
 # install.bat installs it for Windows windows.
+#
+# ./install.sh --vsix FILE only writes the .vsix, to FILE, and installs
+# nothing (no `code` needed): how the release workflow makes the release's
+# rig-vscode.vsix.
 
 set -e
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -21,7 +25,16 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # two agree and hold every file package.json names.
 files="package.json language-configuration.json README.md extension.js debug.js diagnostics.js syntaxes/rig.tmLanguage.json snippets/rig.json"
 
-if ! command -v code >/dev/null 2>&1; then
+vsix_only=
+if [ "$1" = --vsix ]; then
+    if [ $# -ne 2 ] || [ -z "$2" ]; then
+        echo "usage: install.sh --vsix FILE" >&2
+        exit 2
+    fi
+    vsix_only=$2
+fi
+
+if [ -z "$vsix_only" ] && ! command -v code >/dev/null 2>&1; then
     echo "install.sh: 'code' isn't on the PATH; in VS Code, run \"Shell Command: Install 'code' command in PATH\"" >&2
     exit 1
 fi
@@ -52,6 +65,12 @@ with zipfile.ZipFile(os.path.join(stage, "rig-language.vsix"), "w", zipfile.ZIP_
             path = os.path.join(root, name)
             z.write(path, os.path.relpath(path, stage))
 EOF
+
+if [ -n "$vsix_only" ]; then
+    cp "$stage/rig-language.vsix" "$vsix_only"
+    echo "Wrote $vsix_only."
+    exit 0
+fi
 
 code "$@" --install-extension "$stage/rig-language.vsix" --force
 echo "Installed. Reload VS Code's windows (Developer: Reload Window) to use it."
