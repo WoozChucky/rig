@@ -85,6 +85,8 @@ Syntax is given in Extended Backus-Naur Form, explained in Appendix A, which hol
 
 Rig source is shown in blocks marked `rig`. The output of a program, and the messages of the compiler, are shown in blocks marked `text`, exactly as they are printed.
 
+**Examples.** Every `rig` block is an example that the test suite checks (`bin/run-tests`), saved as `example.rig`, the name its messages give. The word after `rig` on the block's opening line says what it is. Plain `rig` is a whole program: it is built and run, exits with status 0 (with `rig exit=N`, status N), writes nothing to standard error, and prints exactly its output, or nothing when it has none. `rig runtime-error` is a program stopped by a runtime error: status 101, with its output on standard error. `rig error` is a program the compiler rejects: `rig build` exits with status 1 and writes no file, and its output is the compiler's messages. `rig fragment` is top-level declarations alone, which `rig check` accepts once an empty `main` is added. An example's output is the first `text` block after it, before the next heading or `rig` block.
+
 A compile-time error is named by its message, in code type: an assignment to a constant is `can't assign to 'N': it's a constant`. Such a program is rejected: `rig build` writes nothing and exits with status 1 (section 9). A runtime error is a check that fails while the program runs, stopping it with a message and exit status 101 (section 8).
 
 Some terms used throughout:
@@ -313,7 +315,7 @@ A literal's bytes are read-only memory. Writing them (`s := "abc"; s[0] = 65;`) 
 
 A struct type is declared at the top level with its fields, each a name and a type (section 4.5):
 
-```rig
+```rig fragment
 Vec2 :: struct { x: float; y: float; }
 ```
 
@@ -455,7 +457,7 @@ true is 1
 
 A checked cast that loses information stops the program:
 
-```rig
+```rig runtime-error
 main :: () {
     n : int = 300;
     b := cast(u8) n;
@@ -571,7 +573,7 @@ hello from C's side
 
 A procedure is declared at the top level with its signature and either a body or `#foreign`. Section 7 describes procedures, their parameters and results, and calls.
 
-```rig
+```rig fragment
 square :: (x: int) -> int { return x * x; }
 ```
 
@@ -632,7 +634,7 @@ Top-level declarations can be in any order. Each global variable, global constan
 
 A declaration whose value needs itself, directly or through others, is an error, reported once per cycle at the declaration being worked out when the cycle closed:
 
-```rig
+```rig error
 A :: B + 1;
 B :: A * 2;
 
@@ -1176,7 +1178,7 @@ The program must have a procedure called `main` (`a procedure called 'main' is n
 
 The program starts by calling `main`, once the C runtime has started. When `main` returns, the program exits with status 0, and the C runtime flushes its output streams. A program ends with another status by calling the C library's `exit`:
 
-```rig
+```rig exit=3
 exit :: (status: s32) #foreign libc;
 
 main :: () { exit(3); }
@@ -1194,6 +1196,10 @@ Global variables hold their initial values when the program starts: the values a
 puts :: (s: *u8) -> s32 #foreign libc;
 
 main :: () { puts("hi"); }
+```
+
+```text
+hi
 ```
 
 A procedure declared with `#foreign` and a library name in place of a body is implemented outside the program, in C. The only library is `libc`, the platform's C runtime, which every program links (section 10.6): another name is `unknown library 'm'; the only one so far is 'libc'`. The procedure's name is the C function's name, and calls to it follow the platform's C calling convention (section 10.4).
@@ -1268,7 +1274,7 @@ The messages and their positions:
 | null pointer dereference (section 8.4) | `null pointer dereference` | the `.` of `p.*`, the field's name of `p.x`, the `[` of `p[i]` or `v[i]`, the sequence of a `for` (its name, the name of its field, or the `(` of a call), the `==` or `!=` of a string comparison |
 | index out of bounds (section 8.5) | `index I is out of bounds (count C)` | the `[` |
 
-```rig
+```rig runtime-error
 puts :: (s: *u8) -> s32 #foreign libc;
 
 main :: () {
@@ -1315,7 +1321,7 @@ index I is out of bounds (count C)
 
 where `I` is the index written as its type's sign reads it, and `C` the count written as a signed number.
 
-```rig
+```rig runtime-error
 main :: () {
     a := int.[1, 2, 3];
     i := 3;
@@ -1357,7 +1363,7 @@ PATH:LINE:COL: error: MESSAGE
 
 The compiler reports every error it finds in the file, not only the first, sorted by position: by line, then column. Diagnostics go to the standard error stream, and the compiler then exits with status 1 without writing any file.
 
-```rig
+```rig error
 puts :: (s: *u8) -> s32 #foreign libc;
 
 main :: () {
