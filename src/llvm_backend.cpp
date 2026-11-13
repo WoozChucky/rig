@@ -849,26 +849,65 @@ static LLVMMetadataRef debug_type(Backend *b, Type *t) {
     return debug_type_at(b, t, 0).node;
 }
 
+// A pointer to the debug type `to`, 64 bits (null for `to`: void *).
+static LLVMMetadataRef debug_pointer(Backend *b, LLVMMetadataRef to) {
+    return LLVMDIBuilderCreatePointerType(b->debug, to, 64, 0, 0, nullptr, 0);
+}
+
 // The subprogram of procedure p, given to its LLVM function, and its
 // lexical blocks, in body->scopes. Nothing for a procedure without a source
 // name (one the compiler made) or in a module without debug information.
 static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMValueRef function, Body *body) {
     if (!b->debug || p->source_name.count == 0) return;
     RIG_ASSERT(p->scopes.count > 0);
-    // The procedure's type: a list of types, its result's first (null when
-    // it returns none; a debug type has one result, so with several it's
-    // null too), then its parameters', the ones the source has (not the
-    // hidden result pointers), which are its first variables.
+    // The procedure's type: a list of types, its result's first (null for
+    // none), then its parameters'. It says how the procedure is called
+    // (spec 10.4), which isn't how C would pass the same types: an
+    // aggregate is never passed or returned in registers. A struct, array,
+    // view or string parameter is a pointer to the caller's copy, so its
+    // type here is a pointer to the aggregate. An aggregate result isn't
+    // returned at all: the caller passes a pointer to a temporary, which
+    // `return` copies the value into, a hidden parameter before the
+    // visible ones (one per aggregate result, in order). So those come
+    // first, as pointers, and the result is the one scalar result when
+    // there's exactly one, and none otherwise: no scalar result, or several,
+    // which LLVM returns together in a way no C type describes. Described
+    // as C returns a struct, the result would be read from where C leaves
+    // one (rax and rdx for 16 bytes), and gdb's `finish` out of a procedure
+    // returning a struct would show whatever those registers held.
+    //
+    // Microsoft's debuggers show the procedure as this type says (cdb's `dt
+    // make`: `void (Pair *, int64)`). gdb reads only the result from it:
+    // DWARF describes a defined function's parameters by its parameter
+    // variables (declare_variables), the visible ones, so gdb doesn't see
+    // the hidden pointers.
     s64 params = 0;
     while (params < p->vars.count && p->vars[params].arg > 0) params++;
-    LLVMMetadataRef *types = arena_new_array<LLVMMetadataRef>(a, 1 + params);
-    types[0] = p->source_result ? debug_type(b, p->source_result) : nullptr;
+    s64 hidden = 0, scalars = 0;
+    Type *scalar = nullptr;
+    for (s64 i = 0; i < p->source_results.count; i++) {
+        if (type_is_aggregate(p->source_results[i])) {
+            hidden++;
+        } else {
+            scalars++;
+            scalar = p->source_results[i];
+        }
+    }
+    LLVMMetadataRef *types = arena_new_array<LLVMMetadataRef>(a, 1 + hidden + params);
+    s64 count = 0;
+    types[count++] = scalars == 1 ? debug_type(b, scalar) : nullptr;
+    for (s64 i = 0; i < p->source_results.count; i++) {
+        Type *t = p->source_results[i];
+        if (type_is_aggregate(t)) types[count++] = debug_pointer(b, debug_type(b, t));
+    }
     for (s64 i = 0; i < params; i++) {
         RIG_ASSERT(p->vars[i].arg == i + 1);
-        types[1 + i] = debug_type(b, p->vars[i].type);
+        Type *t = p->vars[i].type;
+        LLVMMetadataRef type = debug_type(b, t);
+        types[count++] = type_is_aggregate(t) ? debug_pointer(b, type) : type;
     }
     LLVMMetadataRef type =
-        LLVMDIBuilderCreateSubroutineType(b->debug, b->file, types, (unsigned)(1 + params), LLVMDIFlagZero);
+        LLVMDIBuilderCreateSubroutineType(b->debug, b->file, types, (unsigned)count, LLVMDIFlagZero);
     // Its Rig name, and no linkage name (the symbol's): given one, gdb
     // names the procedure by it, so a Rig `write` that LLVM renamed write.1
     // (C's write was taken first) would be write.1 to `break` and `bt`.
@@ -1162,7 +1201,7 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
         LLVMMetadataRef type = debug_type(b, v->type);
         // An aggregate parameter on Windows: a pointer in its slot (see above).
         bool pointer = v->kind == IR_VAR_ADDRESS && b->target == TARGET_WINDOWS_X64;
-        if (pointer) type = LLVMDIBuilderCreatePointerType(b->debug, type, 64, 0, 0, nullptr, 0);
+        if (pointer) type = debug_pointer(b, type);
         const char *name = (const char *)v->name.data;
         unsigned line = (unsigned)v->pos.line;
         // AlwaysPreserve: kept even if LLVM finds no use of it (an optimiser
