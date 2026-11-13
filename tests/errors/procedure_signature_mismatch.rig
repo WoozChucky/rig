@@ -1,0 +1,19 @@
+// Only identical signatures convert (spec 3's "Procedure types"): a
+// procedure value of another type is refused wherever a value converts,
+// each naming both types.
+add :: (a: int, b: int) -> int { return a + b; }
+neg :: (a: int) -> int { return -a; }
+
+apply :: (op: (int, int) -> int, a: int) -> int { return a; }
+
+make :: () -> (int, int) -> int {
+    return neg;
+}
+
+main :: () {
+    f : (int) -> int = add;
+    g := neg;
+    g = add;
+    apply(neg, 1);
+    wide : (int, int) -> s64 = add;
+}

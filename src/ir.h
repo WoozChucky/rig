@@ -58,6 +58,7 @@
 //   global @str.0 = "hi\00"
 //   global @origin: 16 align 8 = zero
 //   global @greeting: 16 align 8 = "\02\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00" reloc 8 @str.0
+//   global @op: 8 align 8 = zero reloc 0 @add     (a procedure's address; zero: no other bytes)
 //   foreign proc @puts(ptr) -> i32
 //   foreign proc @printf(ptr, ...) -> i32       a variadic one, called as @printf(%0, %1, %2)
 //   proc @max(i64, i64) -> i64 {
@@ -154,6 +155,7 @@ enum Ir_Op : u8 {
     IR_CONST,                        // %n = const T bits     (const ptr 0: the null pointer, the only ptr constant;
                                      //  a float's value prints as a number, const f64 2.5)
     IR_ADDR,                         // %n = addr @global
+    IR_PROC_ADDR,                    // %n = procaddr @proc   a procedure's address: a procedure value
     IR_CALL,                         // [%n[, %n+1...] =] call @proc(%a, ...): one value per result;
                                      // one argument per parameter, and any number more to a variadic proc
     IR_SEXT, IR_ZEXT, IR_TRUNC,      // %n = sext T %a to U   (`from` is T, `type` U)
@@ -209,7 +211,7 @@ struct Ir_Instr {
     s32 result;        // the (first) value's number, or -1
     s32 a, b, c;       // operands, value numbers (-1: none); c is IR_SELECT's and IR_BRANCH's condition
     s32 target;        // IR_ADDR, IR_PANIC: a global (IR_PANIC: -1 when the message is %a and %b);
-                       // IR_CALL: a procedure; IR_JUMP, IR_BRANCH: a block (the true one)
+                       // IR_CALL, IR_PROC_ADDR: a procedure; IR_JUMP, IR_BRANCH: a block (the true one)
     s32 target2;       // IR_BRANCH: the false block
     u64 constant;      // IR_CONST: an integer's bits, zero-extended from the type's width; a
                        // float's value as a double's bits (f64_bits), which the backend
@@ -229,12 +231,13 @@ struct Ir_Block {
     Array<Ir_Instr> instrs;
 };
 
-// A place in a global of bytes that holds another global's address: its
-// first value, which only the linker (or the loader) knows, so the bytes
-// can't hold it. The global's bytes are zero there.
+// A place in a global of bytes that holds another global's address, or a
+// procedure's: its first value, which only the linker (or the loader)
+// knows, so the bytes can't hold it. The global's bytes are zero there.
 struct Ir_Reloc {
     s64 offset;  // where in the global's bytes the 8-byte address goes
-    s32 global;  // whose address: an index in Ir_Module.globals
+    s32 global;  // whose address: an index in Ir_Module.globals, or in Ir_Module.procs when is_proc
+    bool is_proc;
 };
 
 // A global is one of three things:

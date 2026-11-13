@@ -1,0 +1,3 @@
+tests/errors/variadic_procedure_value.rig:6:10: error: 'printf' can't be a value: it takes more arguments with '..', which no procedure type can say
+        p := printf;
+             ^
