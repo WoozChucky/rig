@@ -43,6 +43,8 @@ export default defineConfig({
   base: '/rig/',
   cleanUrls: true,
   lastUpdated: true,
+  // The site's own README is for the repository, not a page.
+  srcExclude: ['README.md'],
   head: [['link', { rel: 'icon', type: 'image/svg+xml', href: '/rig/logo.svg' }]],
 
   markdown: {
