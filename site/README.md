@@ -4,7 +4,7 @@ The source of https://woozchucky.github.io/rig/, the language's specification as
 
 The content comes from [`docs/rig-spec.md`](../docs/rig-spec.md), the specification, and nothing else: `scripts/spec.mjs` splits it into a page per section, rewrites its links for the site and labels its examples, before every build. The generated pages (`spec/`, `.vitepress/generated/`) are not committed; to change the specification, edit `docs/rig-spec.md`. A link in it to a heading, a section or a repository file that does not exist fails the build. Rig's code is highlighted with the VS Code extension's grammar, `editors/vscode/syntaxes/rig.tmLanguage.json`.
 
-Node.js is needed only for the site, never for building the compiler. To preview it, from this directory:
+Node.js is needed only for the site, never for building the compiler: VitePress 2 needs Node.js 22.12 or later. To preview the site, from this directory:
 
 ```sh
 npm ci && npm run docs:dev
