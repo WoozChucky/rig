@@ -1491,9 +1491,10 @@ TEST(thunk_passes_a_variadic_double_in_a_register) {
 TEST(thunk_reuses_a_call_and_its_stack) {
     // One Thunk_Call and one stack array for three calls, as a caller may
     // keep them: each thunk_place empties the stack and rewrites every
-    // argument field, so nothing the call before left remains. Windows: 14 stack arguments, then a double in floats[3] and 1
-    // on the stack, then neither. SysV: 4 on the stack and 8 xmm registers,
-    // then 1 xmm register, then none.
+    // argument field, so nothing the call before left remains. Windows: 14
+    // stack arguments, then a double in floats[3] and 1 on the stack, then
+    // neither. SysV: 4 on the stack and 8 xmm registers, then 1 xmm
+    // register, then none.
     Thunk_Call call = {};
     Array<u64> stack = {};
     char text[THUNK_TEST_TEXT_SIZE];
@@ -1574,8 +1575,12 @@ TEST(thunk_float_results) {
     CHECK_EQ(thunk_test_call((void *)ldexp_double, &args, IR_F64), f64_bits(1024.0));
 }
 
-// C functions whose fixed float parameters reach xmm2 and xmm3 on both
-// hosts, for thunk_passes_floats_in_every_register. Each weighs its
+// C functions with fixed float parameters, for
+// thunk_passes_fixed_float_parameters. thunk_test_four_doubles takes xmm0
+// to xmm3 on both hosts; thunk_test_mixed alternates integers and floats,
+// so takes xmm1 and xmm3 on Windows, by position, and xmm0 and xmm1 on
+// SysV, which counts them apart. (SysV's xmm4 to xmm7 are
+// thunk_passes_fixed_parameters_past_the_registers'.) Each weighs its
 // parameters differently, so a parameter that went to the wrong register,
 // or to none, changes the result.
 static double thunk_test_four_doubles(double a, double b, double c, double d) {
@@ -1586,7 +1591,7 @@ static double thunk_test_mixed(u64 a, float b, u64 c, double d) {
     return (double)a + 2.0 * (double)b + 4.0 * (double)c + 8.0 * d;
 }
 
-TEST(thunk_passes_floats_in_every_register) {
+TEST(thunk_passes_fixed_float_parameters) {
     // Four doubles: xmm0 to xmm3 on both hosts. On Windows snprintf, being
     // variadic, reads its doubles from the integer registers, so only a
     // fixed-parameter callee shows that xmm2 and xmm3 are loaded.
@@ -1686,6 +1691,9 @@ TEST(thunk_narrow_results_and_arguments) {
     args = {};
     thunk_test_add(&args, IR_I64, 0x123456789ABCDEFE);
     CHECK_EQ(thunk_test_call((void *)thunk_test_same, &args, IR_I1), 0);
+
+    // An f32 result is xmm0's low 32 bits (3.0f), whatever is above them
+    // (here 2.0's high half).
     args = {};
     thunk_test_add(&args, IR_F64, 0x4000000040400000);
     CHECK_EQ(thunk_test_call((void *)thunk_test_same_double, &args, IR_F32), interp_f32_bits(3.0f));
@@ -1819,10 +1827,72 @@ TEST(thunk_passes_fixed_parameters_past_the_registers) {
     CHECK_EQ(thunk_test_seen.slots[2], interp_f32_bits(-2.5f));
 }
 
+// count u64s, each weighed by its place, so one out of order changes the
+// sum: the first once, the second twice, and so on.
+static u64 thunk_test_sum(int count, ...) {
+    va_list list;
+    va_start(list, count);
+    u64 sum = 0;
+    for (int i = 0; i < count; i++) sum += (u64)(i + 1) * va_arg(list, u64);
+    va_end(list);
+    return sum;
+}
+
+// thunk_pushes_its_stack_arguments_in_order's call: thunk_test_sum with its
+// count and 4096 values, about 32 KB of them on the stack. Its arguments
+// are too many for a test's stack, so they live here.
+static const s64 THUNK_TEST_MANY_ARGS = 4097;
+
+struct Thunk_Test_Many {
+    Ir_Type types[THUNK_TEST_MANY_ARGS];
+    Ir_Ext exts[THUNK_TEST_MANY_ARGS];
+    u64 values[THUNK_TEST_MANY_ARGS];
+    u64 sum;
+};
+
+static Thunk_Test_Many thunk_test_many;
+
+// os_run_on_stack's function: the call, on a stack of its own.
+static void thunk_test_call_many(void *data) {
+    Thunk_Test_Many *many = (Thunk_Test_Many *)data;
+    Thunk_Call call = {};
+    call.target = (void *)thunk_test_sum;
+    Array<u64> stack = {};
+    thunk_place(&call, many->types, many->exts, many->values, THUNK_TEST_MANY_ARGS, &stack);
+    rig_thunk_call(&call);
+    array_free(&stack);
+    many->sum = thunk_result(&call, IR_I64);
+}
+
+TEST(thunk_pushes_its_stack_arguments_in_order) {
+    // A new thread's stack on Windows has only its top pages committed, with
+    // a guard page below them: touching the guard page commits it and puts
+    // the guard on the page below, but a write further down, past it, is an
+    // access violation. So the thunk pushes its stack arguments one at a
+    // time, from the stack's top down, and 32 KB of them, eight pages, run
+    // on a fresh RIG_STACK_SIZE thread. (On Linux the whole stack is mapped
+    // from the start, and the test simply passes.)
+    thunk_test_many.types[0] = IR_I32;
+    thunk_test_many.exts[0] = IR_EXT_SIGN;
+    thunk_test_many.values[0] = THUNK_TEST_MANY_ARGS - 1;
+    u64 expected = 0;
+    for (s64 i = 1; i < THUNK_TEST_MANY_ARGS; i++) {
+        thunk_test_many.types[i] = IR_I64;
+        thunk_test_many.exts[i] = IR_EXT_NONE;
+        thunk_test_many.values[i] = 0x100000000 + (u64)i;
+        expected += (u64)i * thunk_test_many.values[i];
+    }
+    thunk_test_many.sum = 0;
+    CHECK(os_run_on_stack(RIG_STACK_SIZE, thunk_test_call_many, &thunk_test_many));
+    CHECK_EQ(thunk_test_many.sum, expected);
+}
+
 // The most frames a trace keeps, CaptureStackBackTrace's or backtrace's:
-// far more than the stack holds here (the test, the harness and the C
-// runtime's start), as thunk_unwinds_through_the_thunk compares whole
-// traces and neither may be cut short.
+// 62, CaptureStackBackTrace's limit (FramesToSkip + FramesToCapture under
+// 63 on older Windows), and far more than the stack holds here (the test,
+// the harness and the C runtime's start), as
+// thunk_unwinds_through_the_thunk compares whole traces and neither may be
+// cut short.
 static const s64 THUNK_TEST_MAX_FRAMES = 62;
 
 // The return addresses on the stack when thunk_test_trace runs, from its
@@ -1955,14 +2025,15 @@ TEST(thunk_unwinds_the_callers_registers) {
     // at the call itself, with no code of the compiler's in between. rbx
     // gets THUNK_TEST_RBX for it, and the Thunk_Call goes in rcx and rdi,
     // the first argument's register on each host. After the call the asm
-    // copies rbx, rbp and rsp to rax, rdx and rcx, its outputs: the thunk's
-    // own epilogue must have restored them, whether or not the compiler's
-    // code around it would notice. The asm statement names every other
-    // register a call may change on either host as clobbered, and rbx, so
-    // the compiler keeps nothing in them across it (and saves this test's
-    // caller's rbx itself). (The three outputs are registers, not memory,
-    // as at -O0 clang takes a register for each memory operand's address,
-    // and the clobbers leave too few.)
+    // copies rbx, rbp and rsp to rax, rdx and rcx, the after_call outputs:
+    // the thunk's own epilogue must have restored them, whether or not the
+    // compiler's code around it would notice. The asm statement names every
+    // other register a call may change on either host as clobbered, and rbx,
+    // so the compiler keeps nothing in them across it (and saves this test's
+    // caller's rbx itself). (after_call's three outputs are registers, not
+    // memory, as at -O0 clang takes a register for each memory operand's
+    // address, and the clobbers leave too few for six.) The other
+    // callee-saved registers are thunk_keeps_the_callers_registers'.
     Thunk_Test_Registers unwound = {}, at_call = {}, after_call = {};
     Thunk_Test_Args args = {};
     thunk_test_add(&args, IR_PTR, (u64)(uintptr_t)&unwound);
@@ -1997,4 +2068,67 @@ TEST(thunk_unwinds_the_callers_registers) {
     CHECK_EQ(after_call.rbx, THUNK_TEST_RBX);
     CHECK_EQ(after_call.rbp, at_call.rbp);
     CHECK_EQ(after_call.rsp, at_call.rsp);
+}
+
+// The callee-saved registers besides rbx and rbp, which the thunk must leave
+// alone: r12 to r15 on both hosts, and rsi, rdi and xmm6 on Windows (xmm6
+// standing for xmm6 to xmm15).
+#ifdef _WIN32
+static const s64 THUNK_TEST_KEPT = 7;
+#else
+static const s64 THUNK_TEST_KEPT = 4;
+#endif
+
+TEST(thunk_keeps_the_callers_registers) {
+    // The thunk saves rbx and rbp (thunk_unwinds_the_callers_registers) and
+    // must not touch the other callee-saved registers: the interpreter's
+    // optimised code may keep its state in them across the call. The asm
+    // loads a value of its own into each from kept[], calls the thunk, and
+    // stores each back into kept[]: nothing of the compiler's runs in
+    // between. rbx holds kept's address, which the thunk restores, and the
+    // Thunk_Call goes in rcx or rdi, the first argument's register. The asm
+    // names every register it or a call may change as clobbered, but rax,
+    // which holds the Thunk_Call and the call's result.
+    u64 kept[THUNK_TEST_KEPT], expected[THUNK_TEST_KEPT];
+    for (s64 i = 0; i < THUNK_TEST_KEPT; i++) expected[i] = kept[i] = 0x1111111111111111 * (u64)(i + 1);
+    Thunk_Test_Args args = {};
+    thunk_test_add(&args, IR_PTR, (u64)(uintptr_t) "hello");
+    Thunk_Call call = {};
+    call.target = (void *)&strlen;
+    Array<u64> stack = {};
+    thunk_place(&call, args.types, args.exts, args.values, args.count, &stack);
+    Thunk_Call *call_pointer = &call;
+    asm volatile("movq 0(%%rbx), %%r12\n\t"
+                 "movq 8(%%rbx), %%r13\n\t"
+                 "movq 16(%%rbx), %%r14\n\t"
+                 "movq 24(%%rbx), %%r15\n\t"
+#ifdef _WIN32
+                 "movq 32(%%rbx), %%rsi\n\t"
+                 "movq 40(%%rbx), %%rdi\n\t"
+                 "movq 48(%%rbx), %%xmm6\n\t"
+                 "movq %%rax, %%rcx\n\t"
+#else
+                 "movq %%rax, %%rdi\n\t"
+#endif
+                 "callq rig_thunk_call\n\t"
+                 "movq %%r12, 0(%%rbx)\n\t"
+                 "movq %%r13, 8(%%rbx)\n\t"
+                 "movq %%r14, 16(%%rbx)\n\t"
+#ifdef _WIN32
+                 "movq %%r15, 24(%%rbx)\n\t"
+                 "movq %%rsi, 32(%%rbx)\n\t"
+                 "movq %%rdi, 40(%%rbx)\n\t"
+                 "movq %%xmm6, 48(%%rbx)"
+#else
+                 "movq %%r15, 24(%%rbx)"
+#endif
+                 : "+a"(call_pointer)
+                 : "b"(kept)
+                 : "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "xmm0", "xmm1",
+                   "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13",
+                   "xmm14", "xmm15", "memory", "cc");
+    array_free(&stack);
+
+    CHECK_EQ(call.rax, 5);
+    for (s64 i = 0; i < THUNK_TEST_KEPT; i++) CHECK_EQ(kept[i], expected[i]);
 }
