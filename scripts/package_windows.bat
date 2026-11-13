@@ -11,12 +11,13 @@ rem   LICENSE, README.md
 rem
 rem Then it checks the archive as someone downloading it would use it: it
 rem unpacks it into a temporary folder, builds tests\run\hello.rig with the
-rem rig.exe it holds, and runs the program, which must print hello.out's
-rem line. The zip is written and read with the tar.exe that ships with
-rem Windows 10 and later, by its full path (Git's GNU tar, which may come
-rem first on the PATH, can't write zip files). Programs are run by their
-rem paths (.\rig.exe): cmd may be set not to look for them in the current
-rem folder (NoDefaultCurrentDirectoryInExePath).
+rem rig.exe it holds, runs the program and compares what it prints with
+rem tests\run\hello.out, as package_linux.sh does. The zip is written and
+rem read with the tar.exe that ships with Windows 10 and later, by its full
+rem path (Git's GNU tar, which may come first on the PATH, can't write zip
+rem files). Programs are run by their paths (.\rig.exe): cmd may be set not
+rem to look for them in the current folder
+rem (NoDefaultCurrentDirectoryInExePath).
 
 setlocal
 cd /d "%~dp0\.."
@@ -46,9 +47,12 @@ pushd "%STAGE%\check"
 set STATUS=%ERRORLEVEL%
 popd
 if not "%STATUS%"=="0" goto failed
-rem hello.out's one line; findstr /x matches a whole line, whatever its
-rem line ending (the program's C runtime writes \r\n).
-findstr /x /c:"Hello, World!" "%STAGE%\check\hello.txt" >nul || goto failed
+rem fc /l compares the two line by line, whatever their line endings: the
+rem program's C runtime writes \r\n, and hello.out is checked out with \n.
+"%SystemRoot%\System32\fc.exe" /l "%ROOT%\tests\run\hello.out" "%STAGE%\check\hello.txt" >nul || (
+    echo package_windows.bat: the packed rig.exe's hello doesn't print tests\run\hello.out 1>&2
+    goto failed
+)
 
 rmdir /s /q "%STAGE%"
 echo package_windows.bat: wrote %ARCHIVE%
