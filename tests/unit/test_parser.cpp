@@ -2155,6 +2155,7 @@ TEST(parse_load_after_a_struct_never_closed) {
     CHECK_EQ(file->loads.count, 1);
     CHECK_STR(ast_dump(&a, file),
               "(broken S)\n(load \"a.rig\")\n(proc main (params) (block (var y _ (call helper))))\n");
+    CHECK(!file->lost_a_file);
     token_list_free(list);
 
     // Up to the end of the file too.
@@ -2292,6 +2293,7 @@ TEST(parse_load_starting_the_next_line) {
         CHECK_STR(ast_dump(&a, file),
                   string_cstr(&a, string_printf(&a, "(broken %s)\n(load \"a.rig\")\n(proc main (params) (block))\n",
                                                 broken[i])));
+        CHECK(!file->lost_a_file);
         token_list_free(list);
     }
 
@@ -2331,6 +2333,7 @@ TEST(parse_load_after_a_body_never_closed) {
     CHECK_EQ(file->loads.count, 1);
     CHECK_STR(ast_dump(&a, file),
               "(broken main)\n(const N (int 5))\n(load \"a.rig\")\n(proc helper (params) (block))\n");
+    CHECK(!file->lost_a_file);
     token_list_free(list);
 
     // Up to the end of the file too, the load first in the run.
@@ -2455,12 +2458,27 @@ TEST(parse_load_after_parentheses) {
     CHECK_STR(messages(&a, &list->diag), "2:1: expected ';', found directive\n");
     CHECK_EQ(file->loads.count, 1);
     CHECK_STR(ast_dump(&a, file), "(broken x)\n(load \"a.rig\")\n(proc main (params) (block))\n");
+    CHECK(!file->lost_a_file);
     token_list_free(list);
     // or a stray call outside any body, which keeps no name (broken_entry).
     String errors;
     CHECK_STR(parse_src(&a, "foo(1)\n#load \"a.rig\";\nmain :: () {}\n", &errors),
               "(broken)\n(load \"a.rig\")\n(proc main (params) (block))\n");
     CHECK_STR(errors, "1:4: expected '::', found '('\n");
+    // A global's procedure type isn't taken for a signature with its '::'
+    // mistyped either (variable_follows): the global is missing its ';', as
+    // one of type int would be, and the load on the next line is kept.
+    list = src("op : (int) -> int\n#load \"a.rig\";\nmain :: () {}\n");
+    file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "2:1: expected ';', found directive\n");
+    CHECK_EQ(file->loads.count, 1);
+    CHECK_STR(ast_dump(&a, file), "(broken op)\n(load \"a.rig\")\n(proc main (params) (block))\n");
+    CHECK(!file->lost_a_file);
+    token_list_free(list);
+    // On the type's line, the load is misplaced, as after `op : int`.
+    CHECK_STR(parse_src(&a, "op : (int) -> int #load \"a.rig\";\nmain :: () {}\n", &errors),
+              "(broken op)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:19: #load can only be at the top level\n");
     // In a body, a local constant in parentheses isn't taken for a procedure
     // mistyped either; the load there begins no declaration, and is
     // reported as misplaced.
@@ -2516,6 +2534,7 @@ TEST(parse_load_without_a_semicolon) {
     CHECK_STR(messages(&a, &list->diag), "2:1: expected ';', found identifier 'main'\n");
     CHECK_EQ(file->loads.count, 1);
     CHECK_STR(ast_dump(&a, file), "(load \"a.rig\")\n(proc main (params) (block))\n");
+    CHECK(!file->lost_a_file);
     token_list_free(list);
 
     String errors;
