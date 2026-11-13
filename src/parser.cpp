@@ -29,7 +29,8 @@ struct Parser {
     // Whether a #load named no file the parser could keep, so the program
     // lacks it (Ast_File.lost_a_file): one with no string (parse_load), one
     // where only the top level can have it (error_misplaced_load), or one
-    // the recovery passed over (skip_to_next_declaration).
+    // the recovery passed over (skip_to_next_declaration,
+    // resume_after_stray_tokens).
     bool lost_a_file;
 };
 
