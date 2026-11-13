@@ -11,8 +11,9 @@
 //
 //   (padding)       to Interp_Record's alignment: the frame before may end
 //                   at any byte (a bool's slot)
-//   Interp_Record   the caller's frame, the procedure, the instruction
-//                   running (in a caller: the call it waits on), the values
+//   Interp_Record   the caller's frame, the procedure, the call it waits
+//                   on (the running frame's place is kept in interp_loop
+//                   until it calls or fails), the values
 //   u64 values[]    one per IR value of the procedure, %0 first
 //   (padding)       to the locals' alignment
 //   locals          one slot per IR_LOCAL, laid out when the procedure is
@@ -59,7 +60,8 @@ struct Interp_Proc {
 struct Interp_Record {
     Interp_Record *caller;  // null for the run's first frame
     s32 proc;               // an index in Ir_Module.procs
-    s32 block, index;       // the instruction running; while a callee runs, the call it waits on
+    s32 block, index;       // a caller's: the call it waits on (written at the call); the running
+                            // frame's is in interp_loop's locals until it calls or fails
     u64 *values;            // the procedure's value_count values, right after this record
 };
 
@@ -215,11 +217,12 @@ static Interp_Proc *interp_proc_info(Interp *in, s32 k) {
     info = arena_new<Interp_Proc>(&in->memory);
     info->value_types = arena_new_array<Ir_Type>(&in->memory, p->value_count ? p->value_count : 1);
     for (s64 i = 0; i < p->params.count; i++) info->value_types[i] = p->params[i].type;
+    s64 locals = 0;  // every IR_LOCAL, for the slots' array
     for (s64 b = 0; b < p->blocks.count; b++) {
         Ir_Block *block = p->blocks[b];
         for (s64 n = 0; n < block->instrs.count; n++) {
             Ir_Instr *instr = &block->instrs[n];
-            if (instr->op == IR_LOCAL) info->slot_count++;
+            if (instr->op == IR_LOCAL) locals++;
             if (instr->result < 0) continue;
             RIG_ASSERT(instr->result < p->value_count);
             switch (instr->op) {
@@ -240,7 +243,7 @@ static Interp_Proc *interp_proc_info(Interp *in, s32 k) {
         }
     }
 
-    info->slots = arena_new_array<Interp_Slot>(&in->memory, info->slot_count ? info->slot_count : 1);
+    info->slots = arena_new_array<Interp_Slot>(&in->memory, locals ? locals : 1);
     info->locals_align = 8;
     u64 offset = 0;
     s64 count = 0;

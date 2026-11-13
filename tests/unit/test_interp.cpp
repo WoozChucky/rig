@@ -2,10 +2,11 @@
 // compiler, with the meaning the LLVM backend gives it. Most tests lower a
 // program from source (helpers.cpp's lower_source) and run one of its
 // procedures. The ones that need IR lowering never makes (operands it never
-// gives, a panic without its prefix, a relocation to a later global), or
-// that would be awkward to write as source (a module growing between runs,
-// a relocation to a C function, a call of a stray address, 65,537
-// procedures), build it by hand.
+// gives, a panic without its prefix, a relocation to a later global, a
+// mismatched call's effects that source hides), or that would be awkward to
+// write as source (a module growing between runs, a relocation to a C
+// function, a call of C or of a stray address, 65,537 procedures), build
+// it by hand.
 
 #include "test.h"
 
@@ -58,19 +59,6 @@ static u64 interp_test_value(Arena *a, Ir_Module *m, const char *name) {
     return value;
 }
 
-// For IR built by hand: addr @global, and load T %at; each its value.
-static s32 interp_test_addr(Ir_Proc *p, s32 block, s32 global) {
-    Ir_Instr *addr = ir_emit(p, block, IR_ADDR, IR_PTR);
-    addr->target = global;
-    return addr->result;
-}
-
-static s32 interp_test_load(Ir_Proc *p, s32 block, Ir_Type type, s32 at) {
-    Ir_Instr *load = ir_emit(p, block, IR_LOAD, type);
-    load->a = at;
-    return load->result;
-}
-
 TEST(interp_returns_a_constant) {
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
@@ -93,6 +81,8 @@ TEST(interp_integer_ops_wrap) {
                                 "remainder :: () -> s8 { x : s8 = -7; return x % 2; }\n"
                                 "wide_quotient :: () -> s16 { x : s16 = -30000; return x / 7; }\n"
                                 "widened :: () -> int { x : s8 = -5; return cast(int) x; }\n"
+                                "widened_32 :: () -> s32 { x : s8 = -5; return cast(s32) x; }\n"
+                                "widened_16 :: () -> s16 { x : s8 = -5; return cast(s16) x; }\n"
                                 "zero_extended :: () -> int { x : u8 = 200; return cast(int) x; }\n"
                                 "truncated :: () -> s8 { x : int = 300; return cast,trunc(s8) x; }\n"
                                 "by_minus_one :: () -> s64 { x : s64 = 5; y : s64 = -1; return x / y; }\n"
@@ -125,6 +115,9 @@ TEST(interp_integer_ops_wrap) {
     CHECK_EQ(interp_test_value(&a, m, "remainder"), 0xFF);  // -1, the dividend's sign
     CHECK_EQ(interp_test_value(&a, m, "wide_quotient"), (u16)(s16)(-30000 / 7));
     CHECK(interp_test_value(&a, m, "widened") == ~(u64)4);  // -5 sign-extended to 64 bits
+    // To a narrower type, the copies of the sign stop at its width.
+    CHECK_EQ(interp_test_value(&a, m, "widened_32"), 0xFFFFFFFB);
+    CHECK_EQ(interp_test_value(&a, m, "widened_16"), 0xFFFB);
     CHECK_EQ(interp_test_value(&a, m, "zero_extended"), 200);  // 0xC8's top bit not copied up
     CHECK_EQ(interp_test_value(&a, m, "truncated"), 0x2C);     // 0x12C cut to 8 bits
     // A divisor that is -1 when the program runs: lowering selects 1 in its
@@ -191,32 +184,38 @@ TEST(interp_signed_division_by_minus_one) {
 TEST(interp_shifts_mask_their_amount) {
     // Lowering masks every shift's amount to the width; the interpreter
     // does too, rather than shift by the width or more, which C++ leaves
-    // undefined. So shl i32 1, 33 shifts by 1.
+    // undefined. So shl i32 1, 33 shifts by 1. What a left shift carries
+    // past the width is cut off: 0x80000001's top bit goes.
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
     Ir_Proc *p = new_proc_returning(m, &a, "shifts", IR_I32);
     array_add(&p->results, {IR_I32, IR_EXT_NONE});
     array_add(&p->results, {IR_I32, IR_EXT_NONE});
+    array_add(&p->results, {IR_I32, IR_EXT_NONE});
     s32 b = ir_new_block(&a, p);
     s32 one = emit_const(p, b, IR_I32, 1);
     s32 top = emit_const(p, b, IR_I32, 0x80000000);
+    s32 top_and_one = emit_const(p, b, IR_I32, 0x80000001);
     s32 amount = emit_const(p, b, IR_I32, 33);
     s32 left = emit_binary(p, b, IR_SHL, IR_I32, one, amount);
     s32 logical = emit_binary(p, b, IR_LSHR, IR_I32, top, amount);
     s32 arithmetic = emit_binary(p, b, IR_ASHR, IR_I32, top, amount);
+    s32 carried = emit_binary(p, b, IR_SHL, IR_I32, top_and_one, amount);
     Ir_Instr *ret = ir_emit(p, b, IR_RET, IR_VOID);
     array_add(&ret->args, left);
     array_add(&ret->args, logical);
     array_add(&ret->args, arithmetic);
+    array_add(&ret->args, carried);
     Interp *in = interp_new(m);
     Interp_Result r = {};
     interp_test_run(in, m, "shifts", &a, &r);
     CHECK(r.ok);
-    CHECK_EQ(r.results.count, 3);
-    if (r.results.count == 3) {
+    CHECK_EQ(r.results.count, 4);
+    if (r.results.count == 4) {
         CHECK_EQ(r.results[0], 2);
         CHECK_EQ(r.results[1], 0x40000000);
         CHECK_EQ(r.results[2], 0xC0000000);  // the sign bit copied in, the value kept to 32 bits
+        CHECK_EQ(r.results[3], 2);           // 0x100000002 cut to 32 bits
     }
     interp_test_free(&r);
     interp_free(in);
@@ -306,6 +305,10 @@ TEST(interp_floats) {
                                 "nan_to_int :: () -> int { z := 0.0; return cast(int) (z / z); }\n"
                                 "saturated :: () -> s32 { big : float64 = 1e30; return cast(s32) big; }\n"
                                 "rounded_once :: () -> float32 { x := 9007199791611905; return cast(float32) x; }\n"
+                                "unsigned_rounded_once :: () -> float32 {\n"
+                                "    x : u64 = 0x8000_0080_0000_0001;\n"
+                                "    return cast(float32) x;\n"
+                                "}\n"
                                 "single_negated :: () -> float32 { x : float32 = 0.0; return -x; }\n"
                                 "widened :: () -> float64 { x : float32 = 0.1; return cast(float64) x; }\n"
                                 "unsigned_to_double :: () -> float64 {\n"
@@ -317,6 +320,8 @@ TEST(interp_floats) {
                                 "    return cast(float32) x;\n"
                                 "}\n"
                                 "single_to_int :: () -> int { f : float32 = -2.5; return cast(int) f; }\n"
+                                "negative_to_s32 :: () -> s32 { f : float64 = -2.5; return cast(s32) f; }\n"
+                                "single_to_s8 :: () -> s8 { f : float32 = -2.5; return cast(s8) f; }\n"
                                 "single_saturated :: () -> s32 { f : float32 = 3e9; return cast(s32) f; }\n"
                                 "low_saturated :: () -> s32 { big : float64 = -1e30; return cast(s32) big; }\n"
                                 "at_the_limit :: () -> s32 { x : float64 = 2147483648.0; return cast(s32) x; }\n"
@@ -382,6 +387,13 @@ TEST(interp_floats) {
     volatile f64 odd_double = (f64)odd;
     CHECK(interp_f32_bits((f32)odd) != interp_f32_bits((f32)odd_double));
     CHECK_EQ(interp_test_value(&a, m, "rounded_once"), interp_f32_bits((f32)odd));
+    // The same unsigned: 2^63 + 2^39 + 1 is 2^63 + 2^40 as a float, but
+    // through the nearest double, 2^63 + 2^39, a tie, it would be 2^63.
+    volatile u64 odd_unsigned = 0x8000008000000001;
+    volatile f64 odd_unsigned_double = (f64)odd_unsigned;
+    CHECK(interp_f32_bits((f32)odd_unsigned) != interp_f32_bits((f32)odd_unsigned_double));
+    CHECK_EQ(interp_f32_bits((f32)odd_unsigned), 0x5F000001);
+    CHECK_EQ(interp_test_value(&a, m, "unsigned_rounded_once"), interp_f32_bits((f32)odd_unsigned));
     // An f32's sign is its bit 31, not 63.
     CHECK_EQ(interp_test_value(&a, m, "single_negated"), 0x80000000);
     CHECK(interp_test_value(&a, m, "widened") == f64_bits((f64)single_tenth));
@@ -390,6 +402,9 @@ TEST(interp_floats) {
     CHECK_EQ(interp_test_value(&a, m, "unsigned_to_single"), 0x5F800000);  // 2^64
     // An f32 converts from its own bits, saturating as a double does.
     CHECK(interp_test_value(&a, m, "single_to_int") == ~(u64)1);  // -2
+    // A negative result in range is cut to the type's width, as any value.
+    CHECK_EQ(interp_test_value(&a, m, "negative_to_s32"), 0xFFFFFFFE);  // -2
+    CHECK_EQ(interp_test_value(&a, m, "single_to_s8"), 0xFE);
     CHECK_EQ(interp_test_value(&a, m, "single_saturated"), INT32_MAX);
     // The signed range's ends: below it the most negative, and 2^31, the
     // first value past it, the largest.
@@ -490,6 +505,11 @@ TEST(interp_locals_structs_arrays_views) {
                                 "    return cast(int) *i % 8, cast(int) *f % 8, cast(int) *v % 8, cast(int) *h % 2,\n"
                                 "           cast(int) *w % 4;\n"
                                 "}\n"
+                                "Packed :: struct { a: u8; b: u8; c: u16; d: u16; e: u32; f: u32; }\n"
+                                "widths :: () -> u8, u16, u32 {\n"
+                                "    s := Packed.{1, 2, 3, 4, 5, 6};\n"
+                                "    return s.a, s.c, s.e;\n"
+                                "}\n"
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_value(&a, m, "field"), 1078);
     // A bool in memory is any byte but 0 (ir.h's "Memory"), and reads as 1.
@@ -507,6 +527,17 @@ TEST(interp_locals_structs_arrays_views) {
     CHECK_EQ(r.results.count, 5);
     if (r.results.count == 5) {
         for (s64 k = 0; k < 5; k++) CHECK_EQ(r.results[k], 0);
+    }
+    interp_test_free(&r);
+    // A load reads its type's bytes and no more: each field here has a
+    // non-zero one right after it.
+    interp_test_run(in, m, "widths", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 3);
+    if (r.results.count == 3) {
+        CHECK_EQ(r.results[0], 1);
+        CHECK_EQ(r.results[1], 3);
+        CHECK_EQ(r.results[2], 5);
     }
     interp_test_free(&r);
     interp_free(in);
@@ -581,15 +612,18 @@ TEST(interp_calls_with_several_and_aggregate_results) {
 TEST(interp_globals_and_relocations) {
     // Globals of every kind: a string (a view whose data is a relocation to
     // a literal), a view of an array literal (a relocation to array.N), a
-    // procedure value (a relocation to a procedure), and a float32 scalar
-    // (its initial value a double's bits, rounded).
+    // procedure value (a relocation to a procedure), and scalars, a float32
+    // (its initial value a double's bits, rounded) among them.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "greeting := \"hello\";\n"
                                 "numbers : []int = int.[1, 2, 3];\n"
                                 "add :: (a: int, b: int) -> int { return a + b; }\n"
                                 "op : (int, int) -> int = add;\n"
+                                "odd := \"odd\";\n"
                                 "third : float32 = 1.1;\n"
+                                "small : u16 = 2;\n"
+                                "after_odd : float64 = 0.5;\n"
                                 "read :: () -> int {\n"
                                 "    letter := cast(int) greeting[1];\n"
                                 "    return greeting.count * 1000 + letter * 10 + numbers[2] + op(20, 30) * 100000;\n"
@@ -611,6 +645,14 @@ TEST(interp_globals_and_relocations) {
         CHECK_EQ(interp_f32_bits(bytes), interp_f32_bits((f32)one_point_one));
         memcpy(&held, interp_global(in, interp_test_global(m, "op")), sizeof held);
         CHECK(held == interp_proc_address(in, interp_test_proc(m, "add")));
+        // Each global at the alignment C expects of an address it's given,
+        // though the literal before it may end at any byte: a variable of
+        // bytes at its own, a scalar at its size.
+        for (s32 k = 0; k < (s32)m->globals.count; k++) {
+            Ir_Global *g = &m->globals[k];
+            u64 align = g->type != IR_VOID ? interp_size(g->type) : g->is_variable ? g->align : 1;
+            CHECK_EQ((u64)(uintptr_t)interp_global(in, k) % align, 0);
+        }
     }
     interp_test_free(&r);
     interp_free(in);
@@ -633,8 +675,8 @@ TEST(interp_globals_and_relocations) {
     array_add(&by_hand->globals, later);
     Ir_Proc *p = new_proc_returning(by_hand, &a, "follow", IR_I64);
     s32 b = ir_new_block(&a, p);
-    s32 slot = emit_ptradd(p, b, interp_test_addr(p, b, holder), emit_const(p, b, IR_I64, 8));
-    emit_ret(p, b, interp_test_load(p, b, IR_I64, interp_test_load(p, b, IR_PTR, slot)));
+    s32 slot = emit_ptradd(p, b, emit_addr(p, b, holder), emit_const(p, b, IR_I64, 8));
+    emit_ret(p, b, emit_load(p, b, IR_I64, emit_load(p, b, IR_PTR, slot)));
     in = interp_new(by_hand);
     interp_test_run(in, by_hand, "follow", &a, &r);
     CHECK(r.ok);
@@ -715,13 +757,16 @@ TEST(interp_procedure_values) {
     CHECK_EQ(r.results.count, 1);
     if (r.results.count == 1) CHECK(r.results[0] == interp_proc_address(in, sub));
     interp_test_free(&r);
-    // Called through a type with fewer or more parameters and results than
-    // its own (spec 3.15 says not to), a procedure writes nothing outside
-    // the frames: the run ends, the caller's locals as they were. A
-    // parameter or result given no value is 0 here, the compiled program's
-    // undefined; the ones given one are as usual. fewer(1) runs where
-    // add(40, 2) ran just before, so b would still hold 2 if it weren't
-    // given its 0.
+    // Called through a type with other parameters and results than its own
+    // (spec 3.15 says not to), a procedure writes nothing outside the
+    // frames: the run ends, the caller's locals as they were. fewer gives
+    // add fewer arguments than its parameters; more gives it more, and
+    // expects more results than it returns. A parameter or result given no
+    // value is 0 here, the compiled program's undefined; the ones given one
+    // are as usual. fewer(1) runs where add(40, 2) ran just before, so b
+    // would still hold 2 if it weren't given its 0. (A procedure returning
+    // more than its call expects, and an argument wider than its
+    // parameter, are interp_mismatched_calls_by_hand's.)
     interp_test_run(in, m, "mismatched", &a, &r);
     CHECK(r.ok);
     CHECK_EQ(r.results.count, 4);
@@ -732,9 +777,10 @@ TEST(interp_procedure_values) {
         CHECK_EQ(r.results[3], 0);  // the result add doesn't give
     }
     interp_test_free(&r);
-    // The same for a result: the one call in fewer_results' loop runs two
-    // first, which gives z its 9, then add, which gives it nothing. So z
-    // would still hold 9 if it weren't given its 0.
+    // The same for a result the call expects but the procedure doesn't
+    // return: the one call in fewer_results' loop runs two first, which
+    // gives z its 9, then add, which gives it nothing. So z would still hold
+    // 9 if it weren't given its 0.
     interp_test_run(in, m, "fewer_results", &a, &r);
     CHECK(r.ok);
     CHECK_EQ(r.results.count, 2);
@@ -837,7 +883,7 @@ TEST(interp_panic_without_a_prefix) {
     ir_emit(p, b, IR_PANIC, IR_VOID)->target = text;
     p = new_proc_returning(m, &a, "from_bytes", IR_VOID);
     b = ir_new_block(&a, p);
-    s32 at = interp_test_addr(p, b, text);
+    s32 at = emit_addr(p, b, text);
     s32 count = emit_const(p, b, IR_I64, 5);
     Ir_Instr *panic = ir_emit(p, b, IR_PANIC, IR_VOID);
     panic->a = at;
@@ -907,6 +953,158 @@ TEST(interp_call_of_an_address_that_isnt_a_procedure) {
     arena_free(&a);
 }
 
+TEST(interp_mismatched_calls_by_hand) {
+    // Two mismatched calls (spec 3.15 says not to make them) whose effects
+    // lowering's IR can't show without crashing or hiding them, built by
+    // hand:
+    // - A procedure returning more results than its call expects: the
+    //   surplus goes nowhere. surplus' call gives its last value, so the
+    //   value after it would be the first bytes of its locals, kept's 77.
+    // - An argument wider than its parameter's type, from a call or from
+    //   interp_run: it's cut to the parameter's width, all the compiled
+    //   callee reads of its register (lowering stores every scalar
+    //   parameter to a slot at its width, which would cut it anyway). 300
+    //   given to an i8 is 44.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    s32 two = (s32)m->procs.count;
+    Ir_Proc *p = new_proc_returning(m, &a, "two", IR_I64);
+    array_add(&p->results, {IR_I64, IR_EXT_NONE});
+    s32 b = ir_new_block(&a, p);
+    s32 one = emit_const(p, b, IR_I64, 1);
+    s32 second = emit_const(p, b, IR_I64, 2);
+    Ir_Instr *ret = ir_emit(p, b, IR_RET, IR_VOID);
+    array_add(&ret->args, one);
+    array_add(&ret->args, second);
+
+    s32 narrow = (s32)m->procs.count;
+    p = new_proc_returning(m, &a, "narrow", IR_I64);
+    s32 x = ir_add_param(p, IR_I8, IR_EXT_SIGN);
+    b = ir_new_block(&a, p);
+    emit_ret(p, b, emit_convert(p, b, IR_SEXT, IR_I8, x, IR_I64));
+
+    // surplus: the load of kept is in the block after the call's but
+    // numbered before it.
+    Ir_Proc *one_result = arena_new<Ir_Proc>(&a);
+    array_add(&one_result->results, {IR_I64, IR_EXT_NONE});
+    p = new_proc_returning(m, &a, "surplus", IR_I64);
+    array_add(&p->results, {IR_I64, IR_EXT_NONE});
+    s32 entry = ir_new_block(&a, p);
+    s32 after = ir_new_block(&a, p);
+    s32 kept = ir_emit(p, entry, IR_LOCAL, IR_I64)->result;
+    emit_binary(p, entry, IR_STORE, IR_I64, emit_const(p, entry, IR_I64, 77), kept);
+    Ir_Instr *address = ir_emit(p, entry, IR_PROC_ADDR, IR_PTR);
+    address->target = two;
+    s32 value = address->result;
+    s32 still = emit_load(p, after, IR_I64, kept);
+    s32 first = ir_emit_call_indirect(p, entry, value, one_result, {})->result;
+    CHECK_EQ(first, p->value_count - 1);
+    ir_emit(p, entry, IR_JUMP, IR_VOID)->target = after;
+    ret = ir_emit(p, after, IR_RET, IR_VOID);
+    array_add(&ret->args, first);
+    array_add(&ret->args, still);
+
+    // wide: narrow called through a value of type (int) -> int.
+    Ir_Proc *takes_int = arena_new<Ir_Proc>(&a);
+    ir_add_param(takes_int, IR_I64, IR_EXT_NONE);
+    array_add(&takes_int->results, {IR_I64, IR_EXT_NONE});
+    p = new_proc_returning(m, &a, "wide", IR_I64);
+    b = ir_new_block(&a, p);
+    address = ir_emit(p, b, IR_PROC_ADDR, IR_PTR);
+    address->target = narrow;
+    value = address->result;
+    Array<s32> args = {};
+    array_add(&args, emit_const(p, b, IR_I64, 300));
+    emit_ret(p, b, ir_emit_call_indirect(p, b, value, takes_int, args)->result);
+
+    Interp *in = interp_new(m);
+    Interp_Result r = {};
+    interp_test_run(in, m, "surplus", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 2);
+    if (r.results.count == 2) {
+        CHECK_EQ(r.results[0], 1);
+        CHECK_EQ(r.results[1], 77);
+    }
+    interp_test_free(&r);
+    CHECK_EQ(interp_test_value(&a, m, "wide"), 44);
+    Array<u64> wide_args = {};
+    array_add(&wide_args, 300);
+    interp_run(in, narrow, wide_args, &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 44);
+    array_free(&wide_args);
+    interp_test_free(&r);
+    interp_free(in);
+    arena_free(&a);
+}
+
+TEST(interp_calls_of_c_refused) {
+    // Until compile-time C calls come (Task 4), a run that would call C
+    // fails: taking a C function's value, calling one, or calling a native
+    // address through a value, each at its instruction (the procaddr, the
+    // call), the procedure there its frame. Run directly, a C function fails
+    // before it starts, with no frames.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    s32 puts = (s32)m->procs.count;
+    ir_new_proc(m, &a, str("puts"))->is_foreign = true;
+
+    Ir_Proc *p = new_proc_returning(m, &a, "value", IR_PTR);
+    p->source_name = str("value");
+    s32 b = ir_new_block(&a, p);
+    Ir_Instr *address = ir_emit(p, b, IR_PROC_ADDR, IR_PTR);
+    address->target = puts;
+    address->pos = {0, 2, 5};
+    emit_ret(p, b, address->result);
+
+    p = new_proc_returning(m, &a, "direct", IR_VOID);
+    p->source_name = str("direct");
+    b = ir_new_block(&a, p);
+    ir_emit_call(m, p, b, puts, {})->pos = {0, 4, 9};
+    emit_ret(p, b, -1);
+
+    Ir_Proc *signature = arena_new<Ir_Proc>(&a);
+    p = new_proc_returning(m, &a, "indirect", IR_VOID);
+    p->source_name = str("indirect");
+    s32 target = ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    b = ir_new_block(&a, p);
+    ir_emit_call_indirect(p, b, target, signature, {})->pos = {0, 6, 13};
+    emit_ret(p, b, -1);
+
+    struct Expected {
+        const char *proc;
+        s32 line, col;
+    };
+    static const Expected expected[] = {{"value", 2, 5}, {"direct", 4, 9}, {"indirect", 6, 13}};
+    Interp *in = interp_new(m);
+    Array<u64> args = {};
+    array_add(&args, (u64)(uintptr_t)&a);  // indirect's: an address of the test's own, not a procedure's
+    Interp_Result r = {};
+    for (const Expected &e : expected) {
+        s32 k = interp_test_proc(m, e.proc);
+        interp_run(in, k, string_eq(str(e.proc), str("indirect")) ? args : Array<u64>{}, &a, &r);
+        CHECK(!r.ok);
+        CHECK_STR(r.message, INTERP_NO_C);
+        CHECK_EQ(r.frames.count, 1);
+        if (r.frames.count == 1) {
+            CHECK_STR(r.frames[0].proc, e.proc);
+            CHECK_EQ(r.frames[0].pos.line, e.line);
+            CHECK_EQ(r.frames[0].pos.col, e.col);
+        }
+        interp_test_free(&r);
+    }
+    interp_run(in, puts, {}, &a, &r);
+    CHECK(!r.ok);
+    CHECK_STR(r.message, INTERP_NO_C);
+    CHECK_EQ(r.frames.count, 0);
+    interp_test_free(&r);
+    array_free(&args);
+    interp_free(in);
+    arena_free(&a);
+}
+
 TEST(interp_global_that_cant_be_mapped) {
     // A global whose relocation names a C function can't be mapped until
     // compile-time C calls come (Task 4): the run fails before it starts,
@@ -928,7 +1126,7 @@ TEST(interp_global_that_cant_be_mapped) {
     s32 answer = (s32)m->procs.count;
     Ir_Proc *p = new_proc_returning(m, &a, "answer", IR_I64);
     s32 b = ir_new_block(&a, p);
-    emit_ret(p, b, interp_test_load(p, b, IR_I64, interp_test_addr(p, b, holder + 1)));
+    emit_ret(p, b, emit_load(p, b, IR_I64, emit_addr(p, b, holder + 1)));
 
     Interp *in = interp_new(m);
     Interp_Result r = {};
@@ -1124,9 +1322,9 @@ TEST(interp_globals_survive_between_runs) {
     array_add(&m->globals[pointer].relocs, Ir_Reloc{0, counter, false});
     Ir_Proc *p = new_proc_returning(m, &a, "later", IR_I64);
     s32 b = ir_new_block(&a, p);
-    s32 from_forty = interp_test_load(p, b, IR_I64, interp_test_addr(p, b, forty_index));
-    s32 address = interp_test_load(p, b, IR_PTR, interp_test_addr(p, b, pointer));
-    s32 sum = emit_binary(p, b, IR_ADD, IR_I64, from_forty, interp_test_load(p, b, IR_I64, address));
+    s32 from_forty = emit_load(p, b, IR_I64, emit_addr(p, b, forty_index));
+    s32 address = emit_load(p, b, IR_PTR, emit_addr(p, b, pointer));
+    s32 sum = emit_binary(p, b, IR_ADD, IR_I64, from_forty, emit_load(p, b, IR_I64, address));
     Ir_Instr *call = ir_emit_call(m, p, b, interp_test_proc(m, "read"), {});
     s32 counted = call->result;
     emit_ret(p, b, emit_binary(p, b, IR_ADD, IR_I64, sum, counted));
