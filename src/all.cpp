@@ -4,7 +4,9 @@
 
 #include "common.cpp"
 #include "base.cpp"
-// First, so a build without the build scripts' stamp stops at its #error.
+// Early, right after base.cpp (whose types it needs), so a build without the
+// build scripts' stamp stops at version.h's #error before the rest of the
+// compiler is compiled.
 #include "version.cpp"
 #ifdef _WIN32
 #include "os_windows.cpp"
