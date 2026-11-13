@@ -390,7 +390,8 @@ struct Ast_Multi_Var : Ast {
 // scope. The parser only records it; the loader reads the file. pos is the
 // '#load'.
 struct Ast_Load : Ast {
-    String path;        // the string literal's bytes, escapes decoded: the path as written
+    String path;        // the string literal's bytes, escapes decoded: the path before it's resolved
+                        // against the loading file's directory
     Position path_pos;  // the string literal, where messages about the file point
 };
 
