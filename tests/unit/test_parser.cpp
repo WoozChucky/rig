@@ -2032,3 +2032,134 @@ TEST(procedure_types_nest_at_most_max_depth) {
               types_too_deep(&a, 2, (s64)strlen("    x : ") + MAX_DEPTH + 1));
     arena_free(&a);
 }
+
+// Issue #112: #load "PATH"; at the top level, which pulls another file's
+// declarations into the program. The parser only records each load; the
+// loader (load.cpp) reads the files.
+
+TEST(parse_load) {
+    // The load is kept with its path and where the path is written, which
+    // messages about the file point at; the dump shows it among the
+    // declarations, in source order.
+    Arena a = arena_make();
+    Token_List *list = src("#load \"a.rig\";\nmain :: () {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK_EQ(file->loads.count, 1);
+    CHECK_STR(file->loads[0]->path, "a.rig");
+    CHECK_EQ(file->loads[0]->pos.line, 1);
+    CHECK_EQ(file->loads[0]->pos.col, 1);
+    CHECK_EQ(file->loads[0]->path_pos.line, 1);
+    CHECK_EQ(file->loads[0]->path_pos.col, 7);
+    CHECK_STR(ast_dump(&a, file), "(load \"a.rig\")\n(proc main (params) (block))\n");
+    token_list_free(list);
+
+    String errors;
+    CHECK_STR(parse_src(&a, "main :: () {}\n#load \"b.rig\";\nN :: 1;\n#load \"c.rig\";\n", &errors),
+              "(proc main (params) (block))\n(load \"b.rig\")\n(const N (int 1))\n(load \"c.rig\")\n");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(parse_load_escapes) {
+    // The path is the string literal's bytes, its escapes decoded as any
+    // string's are: "dir\\x.rig" names dir\x.rig.
+    Arena a = arena_make();
+    Token_List *list = src("#load \"dir\\\\x.rig\";\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK_EQ(file->loads.count, 1);
+    CHECK_STR(file->loads[0]->path, "dir\\x.rig");
+    CHECK_STR(ast_dump(&a, file), "(load \"dir\\\\x.rig\")\n");
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(parse_load_in_a_body) {
+    // Loads are declarations of the top level: in a body, one is reported
+    // at its '#' and skipped up to its ';', and the body goes on.
+    Arena a = arena_make();
+    Token_List *list = src("main :: () { #load \"a.rig\"; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "1:14: #load can only be at the top level\n");
+    CHECK_EQ(file->loads.count, 0);
+    CHECK_STR(ast_dump(&a, file), "(proc main (params) (block))\n");
+    token_list_free(list);
+
+    // The statements after it are kept, and one without its ';' stops
+    // before the block's '}', so the block still closes.
+    String errors;
+    CHECK_STR(body_dump(&a, "#load \"a.rig\";\n    if true { #load \"b.rig\"; }\n    x := 1;", &errors),
+              "(block (if (bool true) (block)) (var x _ (int 1)))");
+    CHECK_STR(errors,
+              "2:5: #load can only be at the top level\n"
+              "3:15: #load can only be at the top level\n");
+    CHECK_STR(body_dump(&a, "#load \"a.rig\"", &errors), "(block)");
+    CHECK_STR(errors, "2:5: #load can only be at the top level\n");
+    arena_free(&a);
+}
+
+TEST(parse_load_without_a_string) {
+    // The path is a string literal, and nothing else: a name is reported at
+    // the name, and the parser goes on at the next declaration, keeping the
+    // failed load as a broken entry with no name, as any failed declaration.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "#load a;\nmain :: () {}\n", &errors), "(broken)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:7: expected a string after #load, as in #load \"other.rig\";\n");
+
+    // The next declaration may be a load, which is kept: losing it would
+    // make every use of what it declares unknown too.
+    Token_List *list = src("#load a;\n#load \"b.rig\";\nmain :: () {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "1:7: expected a string after #load, as in #load \"other.rig\";\n");
+    CHECK_EQ(file->loads.count, 1);
+    CHECK_STR(file->loads[0]->path, "b.rig");
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(parse_load_without_a_semicolon) {
+    // The parser's usual message, and the declaration after it is parsed
+    // whole: a procedure, or another load.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "#load \"a.rig\"\nmain :: () {}\n", &errors),
+              "(broken)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "2:1: expected ';', found identifier 'main'\n");
+    CHECK_STR(parse_src(&a, "#load \"a.rig\"\n#load \"b.rig\";\nmain :: () {}\n", &errors),
+              "(broken)\n(load \"b.rig\")\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "2:1: expected ';', found directive\n");
+    arena_free(&a);
+}
+
+TEST(parse_into_appends) {
+    // Two files' tokens parsed into one tree, as the loader parses each file
+    // a program is made of: the second file's declarations follow the
+    // first's, each at a position in its own file.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    s32 first = diag_add_file(&d, str("main.rig"), str("#load \"b.rig\";\nmain :: () { helper(); }\n"));
+    s32 second = diag_add_file(&d, str("b.rig"), str("helper :: () {}\nN :: 1;\n"));
+    Array<Token> first_tokens = lex(&d, first, &a);
+    Array<Token> second_tokens = lex(&d, second, &a);
+    Ast_File *file = arena_new<Ast_File>(&a);
+    parse_into(file, first_tokens, &a, &d);
+    parse_into(file, second_tokens, &a, &d);
+    CHECK_EQ(d.error_count, 0);
+    CHECK_EQ(file->procs.count, 2);
+    CHECK_STR(file->procs[0]->name, "main");
+    CHECK_STR(file->procs[1]->name, "helper");
+    CHECK_EQ(file->procs[1]->pos.file, second);
+    CHECK_EQ(file->globals.count, 1);
+    CHECK_EQ(file->globals[0]->pos.file, second);
+    CHECK_STR(ast_dump(&a, file),
+              "(load \"b.rig\")\n"
+              "(proc main (params) (block (call helper)))\n"
+              "(proc helper (params) (block))\n"
+              "(const N (int 1))\n");
+    array_free(&first_tokens);
+    array_free(&second_tokens);
+    diag_free(&d);
+    arena_free(&a);
+}

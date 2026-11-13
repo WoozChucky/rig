@@ -103,6 +103,11 @@ static Token *expect(Parser *p, Token_Kind kind) {
     return nullptr;
 }
 
+// Whether token t is the directive #name.
+static bool is_directive(Token *t, const char *name) {
+    return t->kind == TOKEN_DIRECTIVE && string_eq(t->text, str(name));
+}
+
 static Ast *parse_expression(Parser *p, int min_precedence);
 static Ast *parse_unary(Parser *p);
 static Ast_Type *parse_type(Parser *p);
@@ -934,6 +939,22 @@ static bool declares_in_column_1(Parser *p) {
     return starts_global(p) || (peek(p)->kind == TOKEN_IDENT && peek(p)->pos.col == 1 && after == TOKEN_COLON_COLON);
 }
 
+// A #load where a statement starts: "#load can only be at the top level", at
+// its '#'. Other mistakes in a body give the declaration up (parser.h says
+// why), but a load declares nothing the body could use, so the body loses
+// nothing by leaving it out: the parser skips it up to its ';' and goes on
+// with the body, which is then checked. Without a ';', the skipping stops
+// before a brace, a procedure's or a struct's declaration in column 1, or
+// the end: the block around it still closes at its '}', and a body never
+// closed is still found (parse_block_rest).
+static void skip_misplaced_load(Parser *p) {
+    diag_error(p->diag, advance(p)->pos, "#load can only be at the top level");
+    while (peek(p)->kind != TOKEN_EOF && peek(p)->kind != TOKEN_LBRACE && peek(p)->kind != TOKEN_RBRACE &&
+           !starts_declaration(p)) {
+        if (advance(p)->kind == TOKEN_SEMICOLON) return;
+    }
+}
+
 // The statements of the block that `open` began, and its '}'.
 //
 // The end of the file, or a procedure's declaration at the start of a line
@@ -961,6 +982,10 @@ static Ast_Block *parse_block_rest(Parser *p, Token *open) {
         }
         if (!declares_in_column_1(p)) run = -1;
         else if (run < 0) run = p->next;
+        if (is_directive(peek(p), "load")) {
+            skip_misplaced_load(p);
+            continue;
+        }
         Ast *statement = parse_statement(p);
         if (!statement) return nullptr;
         array_add(&block->statements, statement);
@@ -1028,11 +1053,6 @@ static Ast_Type *parse_type(Parser *p) {
     Ast_Type *type = parse_type_level(p);
     p->type_levels--;
     return type;
-}
-
-// Whether token t is the directive #name.
-static bool is_directive(Token *t, const char *name) {
-    return t->kind == TOKEN_DIRECTIVE && string_eq(t->text, str(name));
 }
 
 // Whether the '(' the parser is at and its ')' are a procedure type's
@@ -1323,11 +1343,36 @@ static Ast *parse_struct(Parser *p, Token *name) {
     return s;
 }
 
+// load = '#load' STRING ';'
+//
+// Another file of the program, which the loader reads (parser.h). The
+// caller saw the '#load'. The string is decoded as any string literal is,
+// by the lexer: "dir\\x.rig" names dir\x.rig.
+static Ast *parse_load(Parser *p) {
+    Token *directive = advance(p);
+    Token *path = peek(p);
+    if (path->kind != TOKEN_STRING) {
+        // A TOKEN_ERROR (a string never closed, say) was reported by the
+        // lexer already, as error_expected says.
+        if (path->kind != TOKEN_ERROR) {
+            diag_error(p->diag, path->pos, "expected a string after #load, as in #load \"other.rig\";");
+        }
+        return nullptr;
+    }
+    advance(p);
+    Ast_Load *load = ast_new<Ast_Load>(p->arena, AST_LOAD, directive->pos);
+    load->path = path->string_value;
+    load->path_pos = path->pos;
+    if (!expect(p, TOKEN_SEMICOLON)) return nullptr;
+    return load;
+}
+
 // top_level = IDENT '::' procedure
 //           | IDENT '::' struct
 //           | IDENT '::' expression ';'                       a constant
 //           | IDENT ':' type ['=' (expression | '---')] ';'   a global variable
 //           | IDENT ':=' expression ';'                       a global variable
+//           | load
 //
 // After '::', a procedure's parameters start with '(' ')', '(' IDENT ':' or
 // '(' '..'. Any other '(' begins a constant's value in parentheses:
@@ -1345,6 +1390,7 @@ static Ast *parse_struct(Parser *p, Token *name) {
 static bool variable_follows(Parser *p, s64 open);
 
 static Ast *parse_declaration(Parser *p) {
+    if (is_directive(peek(p), "load")) return parse_load(p);
     Token *name = expect(p, TOKEN_IDENT);
     if (!name) return nullptr;
     Token_Kind after = peek(p)->kind;
@@ -1406,12 +1452,20 @@ static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
     }
 }
 
+// Whether the next token is a #load that starts a line: a declaration the
+// recovery resumes at, outside any braces, so the file it names is still
+// loaded and what it declares still known.
+static bool starts_load(Parser *p) {
+    Token *t = peek(p);
+    return is_directive(t, "load") && (p->next == 0 || p->tokens[p->next - 1].pos.line != t->pos.line);
+}
+
 // After an error in a declaration that began at token `start`: skips to the
-// next token that starts a line and begins a declaration (IDENT '::', or a
-// global variable's IDENT ':' or ':=' in column 1), or to the end. A
-// declaration the failed one stopped right at (an unclosed block, a
-// missing ';') is kept; otherwise at least one token is skipped, so parse()
-// always moves on.
+// next token that starts a line and begins a declaration (IDENT '::', a
+// global variable's IDENT ':' or ':=' in column 1, or a #load outside every
+// brace, starts_load), or to the end. A declaration the failed one stopped
+// right at (an unclosed block, a missing ';') is kept; otherwise at least
+// one token is skipped, so parse() always moves on.
 //
 // Inside a body, `N :: 5;` starting a line is a local constant, not the next
 // declaration, so the skipping counts braces from `start` on: an IDENT '::'
@@ -1431,13 +1485,13 @@ static void skip_to_next_declaration(Parser *p, s64 start) {
     for (s64 i = start; i < p->next; i++) count_open(p, i, &depth, &parens);
     // Where the failed declaration stopped, the declaration there is kept:
     // a procedure's in column 1 (inside braces too: a body never closed);
-    // outside every brace, any IDENT '::' in column 1, a constant's too;
-    // and a global's outside every brace and parameter list.
+    // outside every brace, any IDENT '::' in column 1, a constant's too, and
+    // a #load; and a global's outside every brace and parameter list.
     Token *stop = peek(p);
     bool in_column_1 = stop->kind == TOKEN_IDENT && stop->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON;
     bool outside = depth <= 0;
-    if (p->next > start &&
-        (starts_declaration(p) || (outside && in_column_1) || (outside && parens <= 0 && starts_global(p)))) {
+    if (p->next > start && (starts_declaration(p) || (outside && (in_column_1 || starts_load(p))) ||
+                            (outside && parens <= 0 && starts_global(p)))) {
         return;
     }
     // At least one token is skipped, whatever it is.
@@ -1450,6 +1504,7 @@ static void skip_to_next_declaration(Parser *p, s64 start) {
             return;
         }
         if (!first && starts_line && depth <= 0 && parens <= 0 && starts_global(p)) return;
+        if (!first && depth <= 0 && starts_load(p)) return;
         count_open(p, p->next, &depth, &parens);
         advance(p);
     }
@@ -1604,10 +1659,9 @@ static Ast_Proc *broken_entry(Parser *p, s64 start) {
     return broken;
 }
 
-Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
+void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
     Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, 0, -1};
-    Ast_File *file = arena_new<Ast_File>(a);
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;
         Ast *decl = parse_declaration(&p);
@@ -1644,9 +1698,16 @@ Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
         }
         if (decl->kind == AST_PROC) {
             array_add(&file->procs, (Ast_Proc *)decl);
+        } else if (decl->kind == AST_LOAD) {
+            array_add(&file->loads, (Ast_Load *)decl);
         } else {
             array_add(&file->globals, decl);
         }
     }
+}
+
+Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {
+    Ast_File *file = arena_new<Ast_File>(a);
+    parse_into(file, tokens, a, d);
     return file;
 }

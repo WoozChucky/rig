@@ -10,6 +10,7 @@
 //               | IDENT ':' type ['=' (expression | '---')] ';'     a global variable
 //               | IDENT ':=' expression ';'                         a global variable
 //               | IDENT '::' expression ';'                         a constant
+//               | '#load' STRING ';'                                another file of the program
 //   procedure   = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
 //                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT ';')
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
@@ -154,6 +155,16 @@
 // iterator's name, as in for i: 0..9", at what came instead of the ':';
 // anything else is "expected '..' or the loop's '{'".
 //
+// A program can be several files (spec 2.13): `#load "world/map.rig";` at
+// the top level names another, whose declarations join the program's. The
+// parser only records the load (Ast_Load), its path the string's bytes,
+// escapes decoded; the loader (load.h) reads the file and parses it into the
+// same tree (parse_into). Anything but a string after #load is "expected a
+// string after #load, as in #load "other.rig";", at what came instead. In a
+// body, a #load is "#load can only be at the top level", at its '#'; the
+// parser skips it up to its ';' (or to the block's next brace, when there's
+// no ';' before one) and goes on with the body, which loses nothing by it.
+//
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;
 // the name only where the tokens still look like a declaration of it, as
@@ -161,10 +172,11 @@
 // `counter int = 0;`), skips to the next declaration (an
 // identifier at the start of a line, followed by '::', outside the braces
 // of the body it gave up in, or a procedure's, `name :: (`, in column 1;
-// or a global variable's name in column 1, followed by ':' or ':=', outside
-// any braces or parameter list) and goes on. Stray tokens in front of a
-// declaration's name (`*greet :: () {}`) are reported and skipped, and the
-// declaration after them is parsed whole; so is a declaration later on the
+// a global variable's name in column 1, followed by ':' or ':=', outside
+// any braces or parameter list; or a #load starting a line outside any
+// braces) and goes on. Stray tokens in front of a declaration's name
+// (`*greet :: () {}`) are reported and skipped, and the declaration after
+// them is parsed whole; so is a declaration later on the
 // line of a global that failed (`counter : int = 1 2; f :: () {}`), the
 // global keeping its name.
 //
@@ -189,7 +201,13 @@
 #include "ast.h"
 #include "lexer.h"
 
-// The declarations of the tokens (which end with TOKEN_EOF). Nodes are
-// allocated in the arena; errors go to d. A declaration with errors is in
-// the result as a broken entry, in its place in source order.
+// The declarations of one file's tokens (which end with TOKEN_EOF), parsed
+// into `file`, appended to its lists: the loader parses each file of a
+// program into one tree this way, a file's declarations after those of the
+// files loaded before it. Nodes are allocated in the arena; errors go to d.
+// A declaration with errors is in the result as a broken entry, in its
+// place in source order.
+void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d);
+
+// parse_into on a new Ast_File: a file on its own.
 Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d);
