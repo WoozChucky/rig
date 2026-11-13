@@ -1517,10 +1517,10 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
         if (file->procs[i]->body) check_body(&c, file->procs[i]);
     }
 
-    // A broken main, a broken declaration whose name was lost, or a file
-    // whose #load failed has nothing to say about main: what it declares is
-    // unknown. A global called main is no procedure, so it's as if there
-    // were none.
+    // A broken main, a broken declaration whose name was lost, or a file a
+    // #load failed to load (Ast_File.lost_a_file) has nothing to say about
+    // main: what it declares is unknown. A global called main is no
+    // procedure, so it's as if there were none.
     Ast **main_decl = table_get(&c.top_level, str("main"));
     if (!main_decl || (*main_decl)->kind != AST_PROC) {
         if (!lost_a_name && !c.lost_a_file) diag_error(d, {0, 1, 1}, "a procedure called 'main' is needed");

@@ -1071,11 +1071,8 @@ static Ast_Block *parse_block_rest(Parser *p, Token *open) {
 // "blocks are nested too deeply (more than 1000 levels)" at the '{' of the
 // one too many. The parser, the checker and lowering recurse into each.
 static Ast_Block *parse_block(Parser *p) {
-    if (peek(p)->kind != TOKEN_LBRACE) {
-        error_expected_or_load(p, token_kind_name(TOKEN_LBRACE));
-        return nullptr;
-    }
-    Token *open = advance(p);
+    Token *open = expect(p, TOKEN_LBRACE);
+    if (!open) return nullptr;
     if (p->blocks == MAX_DEPTH) {
         diag_error(p->diag, open->pos, "blocks are nested too deeply (more than %d levels)", MAX_DEPTH);
         return nullptr;
@@ -1266,12 +1263,8 @@ static Ast_Type *parse_whole_type(Parser *p) {
 
 // param = IDENT ':' type
 static Ast_Param *parse_param(Parser *p) {
-    if (peek(p)->kind != TOKEN_IDENT) {
-        error_expected_or_load(p, token_kind_name(TOKEN_IDENT));
-        return nullptr;
-    }
-    Token *name = advance(p);
-    if (!expect(p, TOKEN_COLON)) return nullptr;
+    Token *name = expect(p, TOKEN_IDENT);
+    if (!name || !expect(p, TOKEN_COLON)) return nullptr;
     Ast_Param *param = ast_new<Ast_Param>(p->arena, AST_PARAM, name->pos);
     param->name = name->text;
     param->type_expr = parse_whole_type(p);
