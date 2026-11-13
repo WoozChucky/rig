@@ -2943,6 +2943,62 @@ TEST(scopes_follow_blocks) {
     arena_free(&a);
 }
 
+TEST(a_declaration_that_hides_a_name_starts_a_scope) {
+    // Issue #104: a declaration hides an outer name only from its own end
+    // (spec 4.7), but a debugger shows a scope's variables over the whole
+    // scope. So a local that hides a global, a parameter or an outer local
+    // starts a scope of its own at its declaration, inside the current one,
+    // lasting to the end of the block, and is declared in it: its
+    // initializer still runs in the scope around it (it reads the outer
+    // name), its store and the statements after it in the new one. A
+    // declaration that hides nothing stays in its block's scope, as does
+    // one whose name only a block that has ended declared.
+    Arena a = arena_make();
+    String f = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                       "g := 5;\n"
+                                                       "two :: () -> int, int { return 1, 2; }\n"
+                                                       "f :: (n: int) -> int {\n"
+                                                       "    y := g;\n"
+                                                       "    g := g + 10;\n"
+                                                       "    {\n"
+                                                       "        n := g + 1;\n"
+                                                       "        x := n;\n"
+                                                       "    }\n"
+                                                       "    x := y;\n"
+                                                       "    {\n"
+                                                       "        k, g := two();\n"
+                                                       "    }\n"
+                                                       "    return g + x;\n"
+                                                       "}\n"
+                                                       "main :: () { }\n")),
+                       "f");
+    CHECK(contains(f, "  ; source f at 3:1, body 3:22\n"
+                      "  ; scope 1 in 0 at 5:5\n"
+                      "  ; scope 2 in 1 at 6:5\n"
+                      "  ; scope 3 in 2 at 7:9\n"
+                      "  ; scope 4 in 1 at 11:5\n"
+                      "  ; scope 5 in 4 at 12:9\n"
+                      "  ; var n int slot %1 arg 1 in 0 at 3:7\n"
+                      "  ; var y int slot %2 in 0 at 4:5\n"
+                      "  ; var g int slot %5 in 1 at 5:5\n"
+                      "  ; var n int slot %10 in 3 at 7:9\n"
+                      "  ; var x int slot %14 in 3 at 8:9\n"
+                      "  ; var x int slot %16 in 1 at 10:5\n"
+                      "  ; var k int slot %18 in 5 at 12:9\n"
+                      "  ; var g int slot %19 in 5 at 12:12\n"));
+    // g := g + 10: the global read and the sum in scope 0, the store in 1.
+    CHECK(contains(f, "  %5 = local i64  ; 5:5 s0\n"
+                      "  %6 = addr @g  ; 5:5 s0\n"
+                      "  %7 = load i64 %6  ; 5:5 s0\n"));
+    CHECK(contains(f, "  store i64 %9, %5  ; 5:5 s1\n"));
+    // k, g := two(): the call in scope 4, the stores in 5.
+    CHECK(contains(f, "  %20, %21 = call @two()  ; 12:9 s4\n"
+                      "  store i64 %20, %18  ; 12:9 s5\n"));
+    // The return, after the block, is in g's scope again.
+    CHECK(contains(f, "  ret %24  ; 14:5 s1\n"));
+    arena_free(&a);
+}
+
 TEST(jumps_out_of_an_if_are_at_its_braces) {
     // The jump from the end of an if's block to the code after the if is
     // at that block's '}', as clang places it: at the `if` it would be a
@@ -3043,7 +3099,8 @@ TEST(variables_and_where_they_live) {
     // prologue's work), an aggregate one the address it's passed as, each
     // with its place among the parameters; locals, it and it_index are
     // slots; a name an inner block declares again is another variable, in
-    // that block's scope.
+    // a scope of its own inside that block's, from its declaration on
+    // (a_declaration_that_hides_a_name_starts_a_scope).
     Arena a = arena_make();
     String ir = ir_print_debug(&a, lower_source(&a,
                                                 "sum :: (n: int, a: []int) -> int {\n"
@@ -3062,12 +3119,13 @@ TEST(variables_and_where_they_live) {
                                        "  ; source sum at 1:1, body 1:34\n"
                                        "  ; scope 1 in 0 at 3:5\n"
                                        "  ; scope 2 in 0 at 6:5\n"
+                                       "  ; scope 3 in 2 at 7:9\n"
                                        "  ; var n int slot %2 arg 1 in 0 at 1:9\n"
                                        "  ; var a []int address %1 arg 2 in 0 at 1:17\n"
                                        "  ; var x int slot %3 in 0 at 2:5\n"
                                        "  ; var it int slot %14 in 1 at 3:5\n"
                                        "  ; var it_index int slot %15 in 1 at 3:5\n"
-                                       "  ; var x int slot %31 in 2 at 7:9\n"
+                                       "  ; var x int slot %31 in 3 at 7:9\n"
                                        "b0:\n"
                                        "  %2 = local i64\n"
                                        "  store i64 %0, %2\n"
