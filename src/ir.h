@@ -360,7 +360,7 @@ struct Ir_Module {
                              // order first needed)
     // The source files, for a debugger. A module built by hand has none,
     // and gets no debug information.
-    Array<Ir_Source> sources;  // indexed by Position.file; empty for a module built by hand
+    Array<Ir_Source> sources;  // indexed by Position.file
     String directory;          // the directory rig ran in
 };
 
@@ -432,16 +432,16 @@ String ir_print(Arena *a, Ir_Module *m);
 //   ; source C:\dev\rig\test.rig md5 0123456789abcdef0123456789abcdef
 //   ; source C:\dev\rig\sums.rig md5 fedcba9876543210fedcba9876543210
 //   global @counter: i64 = 0
-//     ; type int at 1:1
+//     ; type int at 1:1                            (in test.rig, the first source: L:C)
 //   proc @sum(i64, ptr) -> i64 {
-//     ; source sum at 2:1, body 2:34
-//     ; scope 1 in 0 at 4:5                        (a scope from 1, in its parent)
-//     ; var n int slot %2 arg 1 in 0 at 2:9        (KIND: slot or address)
-//     ; var a []int address %1 arg 2 in 0 at 2:17
-//     ; var x int slot %3 in 0 at 3:5
+//     ; source sum at 1:2:1, body 1:2:34           (in sums.rig, the second: F:L:C)
+//     ; scope 1 in 0 at 1:4:5                      (a scope from 1, in its parent)
+//     ; var n int slot %2 arg 1 in 0 at 1:2:9      (KIND: slot or address)
+//     ; var a []int address %1 arg 2 in 0 at 1:2:17
+//     ; var x int slot %3 in 0 at 1:3:5
 //   b0:
 //     %2 = local i64                               (no position: none printed)
 //     store i64 %0, %2
-//     %3 = local i64  ; 3:5 s0                     (its statement's L:C, its scope)
+//     %3 = local i64  ; 1:3:5 s0                   (its statement's position, its scope)
 //   ...
 String ir_print_debug(Arena *a, Ir_Module *m);

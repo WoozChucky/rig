@@ -228,8 +228,8 @@ static void out_bytes(Printer *p, String bytes) {
 }
 
 // A source position, for ir_print_debug: L:C in the program's first file,
-// F:L:C in any other, F the file's index (Ir_Module.sources'), so a
-// program of one file prints as it did before it could have more.
+// F:L:C in any other, F its index in Ir_Module.sources, so a program of
+// one file, the usual case, shows the short L:C a diagnostic does.
 static void out_pos(Printer *p, Position pos) {
     if (pos.file != 0) out(p, "%d:", pos.file);
     out(p, "%d:%d", pos.line, pos.col);
