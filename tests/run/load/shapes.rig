@@ -9,10 +9,11 @@ Shape :: struct { sides: int; side: int; }
 
 area :: (s: Shape) -> int { return s.side * s.side; }
 
-// print_int is print.rig's.
+// print_int is print.rig's, newline load_files.rig's: this file uses the
+// file that loads it too.
 print_shape :: (s: Shape) {
     print_int(s.sides);
     putchar(32);
     print_int(s.side);
-    putchar(10);
+    newline();
 }

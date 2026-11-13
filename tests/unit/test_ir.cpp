@@ -3312,9 +3312,11 @@ static Ir_Module *lower_program(Arena *a, String path, Ast_File **tree) {
 }
 
 TEST(every_instruction_of_every_run_test_has_a_line) {
-    // Over every end-to-end program: each instruction of a procedure from
-    // the source is somewhere in it (never line 0, which a debugger would
-    // show as no line at all) and in one of its scopes; so is each variable.
+    // Over every end-to-end program, with the files it #loads: each
+    // instruction of a procedure from the source is somewhere in it, in its
+    // file (never line 0, which a debugger would show as no line at all, nor
+    // another file, which a runtime error or a debugger would name) and in
+    // one of its scopes; so is each variable.
     // The prologue's work is the exception: each scalar parameter's slot and
     // the store into it, first in the entry block, have no position. A
     // procedure the compiler makes has no positions at all.
@@ -3337,8 +3339,9 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
             bool compiler_made = string_eq(p->name, str("__rig_bounds_failed")) ||
                                  string_eq(p->name, str("__rig_string_equal"));
             if (!p->is_foreign) CHECK(from_source != compiler_made);
-            // A procedure of the file's is m->procs[k] for f->procs[k]: its
-            // lines run from its name's to its body's '}'.
+            // A procedure of the program's is m->procs[k] for
+            // tree->procs[k], whichever file it's in: its lines run from its
+            // name's to its body's '}', in that file.
             s32 first_line = p->pos.line;
             s32 last_line = from_source ? tree->procs[k]->body->end.line : 0;
             s64 prologue = 0;  // the entry block's first instructions: a slot and a store per scalar parameter
@@ -3353,20 +3356,22 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
                     bool in_prologue = b == 0 && n < prologue && (n % 2 == 0 ? instr->op == IR_LOCAL
                                                                               : instr->op == IR_STORE);
                     bool placed = from_source ? (in_prologue ? nowhere
-                                                             : instr->pos.line >= first_line &&
+                                                             : instr->pos.file == p->pos.file &&
+                                                                   instr->pos.line >= first_line &&
                                                                    instr->pos.line <= last_line &&
                                                                    instr->pos.line > 0 && instr->scope >= 0 &&
                                                                    instr->scope < p->scopes.count)
                                               : nowhere;
                     if (!placed) {
-                        fprintf(stderr, STR_FMT ": %s: instruction %lld of b%lld is at %d:%d s%d\n", STR_ARG(path),
-                                string_cstr(&a, p->name), (long long)n, (long long)b, instr->pos.line, instr->pos.col,
-                                instr->scope);
+                        fprintf(stderr, STR_FMT ": %s: instruction %lld of b%lld is at file %d %d:%d s%d\n",
+                                STR_ARG(path), string_cstr(&a, p->name), (long long)n, (long long)b, instr->pos.file,
+                                instr->pos.line, instr->pos.col, instr->scope);
                     }
                     CHECK(placed);
                 }
             }
             for (s64 v = 0; v < p->vars.count; v++) {
+                CHECK(p->vars[v].pos.file == p->pos.file);
                 CHECK(p->vars[v].pos.line > 0);
                 CHECK(p->vars[v].scope >= 0 && p->vars[v].scope < p->scopes.count);
             }

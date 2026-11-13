@@ -2,13 +2,13 @@
 // to the diagnostics (command_check, at the end).
 //
 // rig build FILE.rig [-o OUTPUT] [--no-bounds-checks] reads the file and the
-// files it #loads, lexes, parses and checks them, and stops there with the diagnostics on stderr if
-// anything was wrong (exit 1). Otherwise it lowers the program (without the
-// bounds checks of a[i] with --no-bounds-checks, spec 6.5), has LLVM write
-// the object file .build/NAME.obj (Windows) or .build/NAME.o (Linux) in the
-// current directory, and links it into OUTPUT, by default NAME.exe or NAME
-// in the current directory, NAME being the file's name without its
-// directory and .rig (exit 0).
+// files it #loads, lexes, parses and checks them, and stops there with the
+// diagnostics on stderr if anything was wrong (exit 1). Otherwise it lowers
+// the program (without the bounds checks of a[i] with --no-bounds-checks,
+// spec 6.5), has LLVM write the object file .build/NAME.obj (Windows) or
+// .build/NAME.o (Linux) in the current directory, and links it into OUTPUT,
+// by default NAME.exe or NAME in the current directory, NAME being the
+// file's name without its directory and .rig (exit 0).
 //
 // The checker runs even when the parser found errors, so a syntax error in
 // one procedure and a type error in another are reported in one build. A
@@ -56,11 +56,11 @@ String executable_path(Arena *a, String output, String name, Target t) {
 // build: reads the source (the file at `path`, or with from_stdin standard
 // input, named `path` all the same), lexes and parses it and every file it
 // #loads (load_program), checks the program, and prints every diagnostic to
-// stderr. Returns the checked tree, or nullptr
-// when the source couldn't be read or had errors, which it has then
-// reported. With `lowered`, as rig build asks, a program without errors is
-// also lowered into *lowered, its indexes bounds-checked when bounds_checks
-// is set; rig check passes nullptr and stops at the checker.
+// stderr. Returns the checked tree, or nullptr when the source couldn't be
+// read or had errors, which it has then reported. With `lowered`, as rig
+// build asks, a program without errors is also lowered into *lowered, its
+// indexes bounds-checked when bounds_checks is set; rig check passes
+// nullptr and stops at the checker.
 static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Module **lowered, bool bounds_checks) {
     String text = {};
     bool read = from_stdin ? os_read_stdin(a, &text) : os_read_file(a, path, &text);
@@ -204,8 +204,8 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
 // directory is written. That makes it quick and harmless to run on every
 // keystroke, which is what an editor does with it: --stdin reads the source
 // from standard input, so the editor can send what's on screen, saved or
-// not, and FILE.rig is then only the name the diagnostics give it (it
-// needn't exist).
+// not, and FILE.rig is then the name the diagnostics give it and the file
+// whose directory its #loads are found from (it needn't exist).
 int command_check(Arena *a, Array<String> words, void (*print_usage)()) {
     String path = {};
     bool have_path = false, from_stdin = false;
