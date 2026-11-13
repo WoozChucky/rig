@@ -974,19 +974,21 @@ static String llvm_escaped(Arena *a, String s) {
 
 TEST(llvm_debug_info_has_a_compile_unit) {
     // One compile unit, as C99 (whose expression syntax a debugger then
-    // uses, and which suits Rig's), produced by "rig 0.1.0 (clang version
-    // 23.1.5)": Microsoft's debuggers read some records right only from a
-    // compiler whose name has "clang" in it. The file is the source's
-    // absolute path, in the directory rig ran in, with its MD5. Module
-    // flags say which debug information LLVM writes: CodeView on Windows,
-    // DWARF 5 on Linux.
+    // uses, and which suits Rig's), produced by "rig 0.1.0 (LLVM X.Y.Z)",
+    // the LLVM rig is linked with (issue #104: no "clang", which nothing
+    // needs). The file is the source's absolute path, in the directory rig
+    // ran in, with its MD5. Module flags say which debug information LLVM
+    // writes: CodeView on Windows, DWARF 5 on Linux.
     Arena a = arena_make();
+    unsigned major = 0, minor = 0, patch = 0;
+    LLVMGetVersion(&major, &minor, &patch);
+    String producer = string_printf(&a, "producer: \"rig %s (LLVM %u.%u.%u)\"", RIG_VERSION, major, minor, patch);
     Ir_Module *m = lower_source(&a, LINES);
     for (int t = 0; t < 2; t++) {
         Target target = (Target)t;
         String text = llvm_text(&a, m, target);
         CHECK(contains(text, "!DICompileUnit(language: DW_LANG_C99"));
-        CHECK(contains(text, "producer: \"rig 0.1.0 (clang version 23.1.5)\""));
+        CHECK(contains(text, string_cstr(&a, producer)));
         CHECK(contains(text, "isOptimized: false"));
         CHECK(contains(text, "emissionKind: FullDebug"));
         String file = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\", directory: \"" STR_FMT "\"",
