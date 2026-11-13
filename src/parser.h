@@ -10,6 +10,7 @@
 //               | IDENT ':' type ['=' (expression | '---')] ';'     a global variable
 //               | IDENT ':=' expression ';'                         a global variable
 //               | IDENT '::' expression ';'                         a constant
+//               | '#load' STRING ';'                                another file of the program
 //   procedure   = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
 //                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT ';')
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
@@ -107,13 +108,14 @@
 // expression, or "blocks are nested too deeply (more than 1000 levels)", at
 // the '{' one too many; the declaration is then given up, as after any
 // other error below, not only the statement: the parser has no recovery
-// inside a body, and skipping just the statement would leave a variable it
-// declares (`x := ((...));`) undeclared, so every later use of it would be
-// one more message. Types nest at most 1000 levels too, each '*', '[]',
-// '[N]' and procedure type's '(' one, and the levels of types and
-// expressions inside each other count together: an array's count is read
-// inside its '[N]' level, size_of's and a cast's type a level down. The
-// level one too many, when it's a '*' or '[', is "types are nested too
+// inside a body (but for a misplaced #load, which declares nothing and is
+// skipped, see below), and skipping just the statement would leave a
+// variable it declares (`x := ((...));`) undeclared, so every later use of
+// it would be one more message. Types nest at most 1000 levels too, each
+// '*', '[]', '[N]' and procedure type's '(' one, and the levels of types
+// and expressions inside each other count together: an array's count is
+// read inside its '[N]' level, size_of's and a cast's type a level down.
+// The level one too many, when it's a '*' or '[', is "types are nested too
 // deeply (more than 1000 levels)", there.
 //
 // Several results (spec 6.7) are a list of types after '->', with or
@@ -140,56 +142,97 @@
 // At the top level, after '::', a procedure's parameter list starts with
 // '(' ')', '(' IDENT ':' or '(' '..'; any other '(' begins a constant's
 // value, so `N :: (1 + 2);` is a constant. A name followed by ':' or ':='
-// and then a signature with a body or a directive after it (`greet : () {`)
-// is a procedure with its '::' mistyped: "expected '::', found ':'"; a
-// name, ':' and a procedure type followed by '=' or ';' is a variable of
-// that type (`op : (int) -> int = add;`). Anything else after a top-level
-// name is "expected '::', found ...".
+// and then a signature with a body or a directive other than #load after
+// it (`greet : () {`) is a procedure with its '::' mistyped: "expected
+// '::', found ':'"; a name, ':' and a procedure type followed by '=' or
+// ';', or by a #load (which begins the next declaration, so the variable
+// is then missing its ';'), is a variable of that type:
+// `op : (int) -> int = add;`. Anything else after a top-level name is
+// "expected '::', found ...".
 //
 // The bodies of if, else, while and for are always blocks in braces (spec
 // 6.1), and a condition needs no parentheses: the body's '{' ends it. A for
 // whose first expression the body's '{' follows, not '..', goes over that
-// expression's elements; with no iterator named, a name followed by
-// anything else (`for i 0..9`, `for x in 0..9`) is "expected ':' after the
-// iterator's name, as in for i: 0..9", at what came instead of the ':';
-// anything else is "expected '..' or the loop's '{'".
+// expression's elements; with no iterator named, a name and then anything
+// else but a #load (`for i 0..9`, `for x in 0..9`) is "expected ':' after
+// the iterator's name, as in for i: 0..9", at what came instead of the ':';
+// anything else is "expected '..' or the loop's '{'", or a #load misplaced
+// (below).
+//
+// A program can be several files (spec 2.13): `#load "world/map.rig";` at
+// the top level names another, whose declarations join the program's. The
+// parser only records the load (Ast_Load), its path the string's bytes,
+// escapes decoded; the loader (load.h) reads the file and parses it into the
+// same tree (parse_into). Anything but a string after #load is "expected a
+// string after #load, as in #load "other.rig";", at what came instead, and
+// the tree records that the program lacks the file it was meant to name
+// (Ast_File.lost_a_file), as the loader does for a #load it can't follow.
+// A load missing only its ';' is reported as any declaration is, but kept,
+// so the file it names is still loaded. Where a statement, a struct's
+// field, a parameter, an expression, a type or a block starts, among the
+// directives after a signature, or wherever a token is expected (a ';', a
+// ')', a field's name after '.', a loop's '..' or '{': `x := 1 #load
+// "a.rig";`, `#load "a.rig" #load "b.rig";`), a #load is "#load can only
+// be at the top level", at its '#'; unless it starts a line outside any
+// braces after a top-level declaration that stopped short there (`N ::`,
+// then the #load on the next line): the recovery below resumes at it, so
+// it's read as the top-level load it is, and the error is the usual one
+// for what's missing before it ("expected an expression"). Where a
+// statement or a struct's field starts, the parser skips it up to its ';'
+// (or, with no ';' first, to the end of its line, a brace on it, or the
+// end of the file) and goes on with the body or the fields, which lose
+// nothing by it; anywhere else, the declaration is given up, as after any
+// error below. Either way the file it names isn't loaded, so the tree
+// records that the program lacks it, as for a #load with no string. So it
+// does for a #load the recovery passes over, unreported, with a
+// declaration given up after another error.
 //
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;
 // the name only where the tokens still look like a declaration of it, as
 // in `greet () {`, `greet := () {`, `counter : int = 1 2;` or C's
-// `counter int = 0;`), skips to the next declaration (an
-// identifier at the start of a line, followed by '::', outside the braces
-// of the body it gave up in, or a procedure's, `name :: (`, in column 1;
-// or a global variable's name in column 1, followed by ':' or ':=', outside
-// any braces or parameter list) and goes on. Stray tokens in front of a
-// declaration's name (`*greet :: () {}`) are reported and skipped, and the
-// declaration after them is parsed whole; so is a declaration later on the
-// line of a global that failed (`counter : int = 1 2; f :: () {}`), the
-// global keeping its name.
+// `counter int = 0;`), skips to the next declaration (an identifier at the
+// start of a line, followed by '::', outside the braces of the body it gave
+// up in, or a procedure's, `name :: (`, in column 1; a global variable's
+// name in column 1, followed by ':' or ':=', outside any braces or
+// parameter list; or a #load starting a line outside any braces) and goes
+// on. Stray tokens in front of a declaration's name (`*greet :: () {}`) are
+// reported and skipped, and the declaration after them is parsed whole; so
+// is a declaration later on the line of a global that failed
+// (`counter : int = 1 2; f :: () {}`), the global keeping its name.
 //
 // A body never closed ends at the end of the file or at a procedure's or a
-// struct's declaration in column 1 (`name :: (` or `Name :: struct`), the
-// only declarations a body can't hold: a constant in column 1 (`N :: 5;`)
-// is a local constant, as an indented one is. A struct's braces never
-// closed end there too, "expected '}'" said at that declaration. The body
-// is then taken to end before the column-1 declarations (IDENT ':', ':=' or
-// '::') right before that point, at its own level: "expected '}'" is
-// reported at the first of them, and the top level resumes there, so
-// they're read as the globals and constants they were meant to be (an if's
-// '}' forgotten, then globals). Without them, it's reported where the end
-// was found.
+// struct's declaration in column 1 (`name :: (` or `Name :: struct`),
+// which a body can't hold and which can only start a top-level
+// declaration: a constant in column 1 (`N :: 5;`) is a local constant, as
+// an indented one is. A struct's braces never closed end there too. The
+// body is then taken to end before the column-1 declarations (IDENT ':',
+// ':=' or '::', or a #load) right before that point, at its own level:
+// "expected '}'" is reported at the first of them, and the top level
+// resumes there, so they're read as the globals, constants and loads they
+// were meant to be (an if's '}' forgotten, then globals). A #load among
+// them isn't misplaced after all, so it isn't reported. A struct is taken
+// to end before the #loads in column 1 right before that point, the same
+// way, but not before fields in column 1: a field is written as a global
+// is, so they stay its fields. Without them, "expected '}'" is reported
+// where the end was found.
 //
 // So one mistake gives one error, and the checker can still check the rest
-// of the file: the broken declaration's name is known to be declared, so
-// its uses aren't reported as unknown.
+// of the program (every file of it): the broken declaration's name is
+// known to be declared, so its uses aren't reported as unknown.
 
 #pragma once
 
 #include "ast.h"
 #include "lexer.h"
 
-// The declarations of the tokens (which end with TOKEN_EOF). Nodes are
-// allocated in the arena; errors go to d. A declaration with errors is in
-// the result as a broken entry, in its place in source order.
+// The declarations of one file's tokens (which end with TOKEN_EOF), parsed
+// into `file`, appended to its lists: the loader parses each file of a
+// program into one tree this way, a file's declarations after those of the
+// files loaded before it. Nodes are allocated in the arena; errors go to d.
+// A declaration with errors is appended to `file` as a broken entry, in its
+// place in source order.
+void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d);
+
+// parse_into on a new Ast_File: a file on its own.
 Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d);

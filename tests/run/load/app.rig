@@ -1,0 +1,7 @@
+// Loaded by tests/run/load_main_elsewhere.rig, which declares nothing: the
+// program's main is this file's.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    puts("main is in a loaded file");
+}

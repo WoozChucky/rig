@@ -7,7 +7,8 @@
 // expressions; expressions made of calls, names, strings, integers,
 // floats, bools, null, operators, casts, addresses and dereferences,
 // size_of, fields (e.x), struct literals (Vec2.{1, 2}), elements (a[i])
-// and array literals (int.[1, 2]). And structs, declared at the top level.
+// and array literals (int.[1, 2]). And structs, declared at the top level,
+// and the files a program loads (#load "PATH";), named there too.
 // Each node kind is a struct that starts with Ast, so a pointer to any node
 // is also an Ast *, and `kind` says which it is.
 //
@@ -64,6 +65,7 @@ enum Ast_Kind : u8 {
     AST_MEMBER,        // Ast_Member: e.x
     AST_LITERAL,       // Ast_Literal: Vec2.{1, 2}  Vec2.{y = 2}  .{1, 2}  int.[1, 2]  .[1, 2]
     AST_INDEX,         // Ast_Index: a[i]
+    AST_LOAD,          // Ast_Load: #load "PATH";
 };
 
 struct Ast {
@@ -383,18 +385,43 @@ struct Ast_Multi_Var : Ast {
     Ast *value;  // the call
 };
 
-// A parsed file: its declarations, in source order, broken ones included.
-// Procedures (and broken entries, which are Ast_Procs) are in procs; the
-// globals, top-level variables (Ast_Var, is_global set), constants
-// (Ast_Const) and structs (Ast_Struct), in globals. Each list is in source
-// order on its own; ast_declarations merges them back by position.
+// `#load "PATH";`, a top-level declaration: the file at PATH is part of the
+// program too, its top-level declarations in the program's one top-level
+// scope. The parser only records it; the loader reads the file. pos is the
+// '#load'.
+struct Ast_Load : Ast {
+    String path;        // the string literal's bytes, escapes decoded: the path before it's resolved
+                        // against the loading file's directory
+    Position path_pos;  // the string literal, where messages about the file point
+};
+
+// A parsed file, or the files of a program parsed into one (parse_into):
+// their declarations, in source order, broken ones included; a file's
+// declarations come after those of the files loaded before it
+// (Position.file's order). Procedures (and broken entries, which are
+// Ast_Procs) are in procs; the globals, top-level variables (Ast_Var,
+// is_global set), constants (Ast_Const) and structs (Ast_Struct), in
+// globals; the loads (Ast_Load), in loads. Each list is in source order on
+// its own; ast_declarations merges procs and globals back by position.
+//
+// lost_a_file is set when a #load failed (load.h's errors), had no string
+// to name a file by, wasn't at the top level, or was passed over by the
+// recovery after another error (parser.h): the program lacks that file, so
+// what it declares is unknown, as it is for a broken entry whose name was
+// lost, and the checker doesn't report a name as unknown, or main as
+// missing, because of it (checker.h).
 struct Ast_File {
     Array<Ast_Proc *> procs;
     Array<Ast *> globals;
+    Array<Ast_Load *> loads;
+    bool lost_a_file;
 };
 
-// The file's declarations, procedures (broken entries included) and globals
-// together, in source order. The caller frees the Array.
+// The program's declarations (every file's: parse_into), procedures (broken
+// entries included) and globals together, in source order, file by file in
+// load order: what the checker goes through. Loads aren't among them: the
+// checker has nothing to do with them, the loader having read the files
+// they name. The caller frees the Array.
 Array<Ast *> ast_declarations(Ast_File *file);
 
 // A new, zeroed node of struct T and kind `kind`, in the arena.
@@ -451,6 +478,7 @@ Token_Kind compound_operator(Token_Kind op);
 // A struct prints as (struct Vec2 (x float32) (y float32)), each field's
 // type as written ((x float) for x: float).
 // Globals print as locals do, (var counter int) and (const LIMIT (int 100)),
-// among the procedures in source order.
+// and a load as (load "world/map.rig"), among the procedures in source
+// order.
 String ast_dump(Arena *a, Ast_File *file);
 String ast_dump_node(Arena *a, Ast *node);

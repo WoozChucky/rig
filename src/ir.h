@@ -100,6 +100,9 @@
 //   and the store into it, before the body's first line (a debugger's
 //   breakpoint on the procedure stops at the first instruction with a
 //   line, once they're done).
+//   Every position in a procedure, its scopes' and its variables' too, is
+//   in the procedure's own file (Ir_Proc.pos's): a backend names that file
+//   once, in the procedure's debug scope, and each line in it.
 // - Scopes. A lexical block is a part of a procedure where some names are
 //   visible: each Ir_Scope is one, the body scope 0, and each instruction
 //   with a position says which it runs in (Ir_Instr.scope; one without, in
@@ -127,9 +130,9 @@
 //   artificial parameter named result$: llvm_backend.cpp's
 //   declare_variables.)
 // - Globals keep their Rig type (Ir_Global.rig_type) and position; the
-//   module, the source file's absolute path, the directory rig ran in, and
-//   the file's MD5 (Ir_Module), so a debugger finds the file and can tell
-//   it has changed since.
+//   module, each source file's absolute path and MD5 (Ir_Module.sources,
+//   indexed by Position.file) and the directory rig ran in, so a debugger
+//   finds each file and can tell it has changed since.
 // ir_print leaves all of this out; ir_print_debug adds it as comments.
 
 #pragma once
@@ -345,16 +348,23 @@ struct Ir_Proc {
                                    // main, though C's returns an int
 };
 
+// A file of the program, for a debugger: how to find it, and whether the
+// file it finds is the one the program was built from.
+struct Ir_Source {
+    String path;  // absolute, normalised (path_absolute): how an editor names it
+    u8 md5[16];   // the MD5 of its bytes
+};
+
 struct Ir_Module {
     Array<Ir_Global> globals;
-    Array<Ir_Proc *> procs;  // the file's, in order, then __rig_bounds_failed when a bounds check
-                             // calls it and __rig_string_equal when == on strings does (lower.cpp,
-                             // in the order first needed)
-    // The source file, for a debugger: empty for a module built by hand,
-    // which gets no debug information.
-    String source_path;      // absolute, normalised (path_absolute): how an editor names it
-    String directory;        // the directory rig ran in
-    u8 source_md5[16];       // the MD5 of the file's bytes
+    Array<Ir_Proc *> procs;  // the program's, in order (every file's, in load order), then
+                             // __rig_bounds_failed when a bounds check calls it and
+                             // __rig_string_equal when == on strings does (lower.cpp, in the
+                             // order first needed)
+    // The source files, for a debugger. A module built by hand has none,
+    // and gets no debug information.
+    Array<Ir_Source> sources;  // indexed by Position.file
+    String directory;          // the directory rig ran in
 };
 
 // Whether t is f32 or f64.
@@ -396,39 +406,45 @@ Ir_Instr *ir_emit_call_indirect(Ir_Proc *p, s32 block, s32 callee, Ir_Proc *sign
 // emitted into it.
 bool ir_block_has_ended(Ir_Proc *p, s32 block);
 
-// The module for a file that checked without errors (lower.cpp). `d` holds
-// the paths of the files the tree's positions refer to: a runtime error's
-// message names its place in the source as PATH:LINE:COL, PATH as given to
-// rig build (spec 6.4). The module's source_path and directory are the
-// first file's absolute_path and directory (empty when they are), and its
-// source_md5 that file's text's. With bounds_checks, as rig build has it
-// unless told --no-bounds-checks, every a[i] of a view or a string, and of
-// an array but where i is a constant (which the checker made sure is
-// inside), is checked at run time, but in a procedure marked #no_abc (spec
-// 6.5).
+// The module for a program that checked without errors (lower.cpp). `d`
+// holds the paths of the files the tree's positions refer to: a runtime
+// error's message names its place in the source as PATH:LINE:COL, PATH the
+// file's Source_File.path: the main file's as given to rig build, a loaded
+// file's as its #load made it (load.h; spec 8.1). The module has a source
+// for each of d's files, in their order, Position.file's: its absolute_path
+// and the MD5 of its text. Its directory is the first file's (the loader
+// gives every file the same one: the directory rig runs in). With
+// bounds_checks, as rig build has it unless told --no-bounds-checks, every
+// a[i] of a view or a string, and of an array but where i is a constant
+// (which the checker made sure is inside), is checked at run time, but in a
+// procedure marked #no_abc (spec 7.7).
 Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks);
 
 // The module as text, in the format above.
 String ir_print(Arena *a, Ir_Module *m);
 
-// ir_print's text with the debug information as comments: first the source
-// file (when the module has one), then a global's Rig type after its line,
-// a procedure's source, scopes and variables after its own (none for a
-// procedure the compiler makes), and each instruction's position and scope
-// at the end of its line (none at line 0). Lines and columns as L:C:
+// ir_print's text with the debug information as comments: first a line for
+// each source file, in order (none for a module built by hand), then a
+// global's Rig type after its line, a procedure's source, scopes and
+// variables after its own (none for a procedure the compiler makes), and
+// each instruction's position and scope at the end of its line (none at
+// line 0). A position in the first file is L:C, its line and column, and
+// one in any other F:L:C, F the file's index (1:3:5 is line 3, column 5 of
+// the second source):
 //
 //   ; source C:\dev\rig\test.rig md5 0123456789abcdef0123456789abcdef
+//   ; source C:\dev\rig\sums.rig md5 fedcba9876543210fedcba9876543210
 //   global @counter: i64 = 0
-//     ; type int at 1:1
+//     ; type int at 1:1                            (in test.rig, the first source: L:C)
 //   proc @sum(i64, ptr) -> i64 {
-//     ; source sum at 2:1, body 2:34
-//     ; scope 1 in 0 at 4:5                        (a scope from 1, in its parent)
-//     ; var n int slot %2 arg 1 in 0 at 2:9        (KIND: slot or address)
-//     ; var a []int address %1 arg 2 in 0 at 2:17
-//     ; var x int slot %3 in 0 at 3:5
+//     ; source sum at 1:2:1, body 1:2:34           (in sums.rig, the second: F:L:C)
+//     ; scope 1 in 0 at 1:4:5                      (a scope from 1, in its parent)
+//     ; var n int slot %2 arg 1 in 0 at 1:2:9      (KIND: slot or address)
+//     ; var a []int address %1 arg 2 in 0 at 1:2:17
+//     ; var x int slot %3 in 0 at 1:3:5
 //   b0:
 //     %2 = local i64                               (no position: none printed)
 //     store i64 %0, %2
-//     %3 = local i64  ; 3:5 s0                     (its statement's L:C, its scope)
+//     %3 = local i64  ; 1:3:5 s0                   (its statement's position, its scope)
 //   ...
 String ir_print_debug(Arena *a, Ir_Module *m);

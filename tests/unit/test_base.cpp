@@ -1,5 +1,6 @@
 // test_base.cpp: the containers' tests (issue #3), most written before the
-// containers from the contract in base.h.
+// containers from the contract in base.h, then the tests of the helpers at
+// its end: MD5's and the paths' (path_absolute, load_path, is_rig_file).
 
 #include "test.h"
 
@@ -367,7 +368,7 @@ TEST(hash_string_is_fnv1a) {
     CHECK_EQ(hash_string(str("foobar")), 0x85944171f73967e8ull);
 }
 
-// --- MD5 and paths (milestone 2c: the source file in the debug information) ---
+// --- MD5 and paths (milestone 2c; #load's paths, issue #112) ---
 
 // md5 of `text`, as the 32 lowercase hex digits a checksum is written in.
 static String md5_hex(Arena *a, const char *text) {
@@ -434,6 +435,14 @@ TEST(source_path_is_absolute_and_normalised) {
     // A network share's \\server\share is its root, as a drive is.
     CHECK_STR(absolute(&a, "\\\\server\\share\\dev", "..\\..\\x.rig", true), "\\\\server\\share\\x.rig");
     CHECK_STR(absolute(&a, "C:\\dev", "//server/share/x.rig", true), "\\\\server\\share\\x.rig");
+    // A path with the \\?\ prefix has the drive, or the network share,
+    // after it as its root: "\\?\C:", "\\?\UNC\server\share".
+    CHECK_STR(absolute(&a, "C:\\dev", "\\\\?\\C:\\a\\..\\..\\x.rig", true), "\\\\?\\C:\\x.rig");
+    CHECK_STR(absolute(&a, "C:\\dev", "\\\\?\\UNC\\server\\share\\a\\..\\..\\x.rig", true),
+              "\\\\?\\UNC\\server\\share\\x.rig");
+    // UNC in any case.
+    CHECK_STR(absolute(&a, "C:\\dev", "\\\\?\\unc\\server\\share\\a\\..\\..\\x.rig", true),
+              "\\\\?\\unc\\server\\share\\x.rig");
     // Linux: only / separates (a backslash is part of a name).
     CHECK_STR(absolute(&a, "/home/n/rig", "../x.rig", false), "/home/n/x.rig");
     CHECK_STR(absolute(&a, "/home/n/rig", "/abs/./y.rig", false), "/abs/y.rig");
@@ -442,4 +451,68 @@ TEST(source_path_is_absolute_and_normalised) {
     CHECK_STR(absolute(&a, "/home", "../../x.rig", false), "/x.rig");
     CHECK_STR(absolute(&a, "/home", "a\\b.rig", false), "/home/a\\b.rig");
     arena_free(&a);
+}
+
+// load_path on Windows (`windows` true) or Linux: `written`, the path of a
+// #load, from the file at `from`.
+static String loaded(Arena *a, const char *from, const char *written, bool windows) {
+    return load_path(a, str(from), str(written), windows);
+}
+
+TEST(load_path_joins_and_keeps_absolute) {
+    Arena a = arena_make();
+    // A relative path is the loading file's directory, as its path names
+    // it, followed by the path as written.
+    CHECK_STR(loaded(&a, "src/main.rig", "world/map.rig", false), "src/world/map.rig");
+    CHECK_STR(loaded(&a, "main.rig", "a.rig", false), "a.rig");
+    CHECK_STR(loaded(&a, "src\\main.rig", "a.rig", true), "src\\a.rig");
+    // On Windows either separator ends the directory, whichever comes last,
+    // and the path keeps the ones it had.
+    CHECK_STR(loaded(&a, "src/main.rig", "a.rig", true), "src/a.rig");
+    CHECK_STR(loaded(&a, "src\\sub/main.rig", "a.rig", true), "src\\sub/a.rig");
+    CHECK_STR(loaded(&a, "src/sub\\main.rig", "a.rig", true), "src/sub\\a.rig");
+    // On Linux a backslash is part of a name, so src\main.rig is a file in
+    // the current directory.
+    CHECK_STR(loaded(&a, "src\\main.rig", "a.rig", false), "a.rig");
+    // On Windows a drive with no separator after it, C:main.rig, is a file
+    // in that drive's current directory, so the files it loads are too: the
+    // drive is its directory. On Linux C: is a name like any other.
+    CHECK_STR(loaded(&a, "C:main.rig", "a.rig", true), "C:a.rig");
+    CHECK_STR(loaded(&a, "C:main.rig", "a.rig", false), "a.rig");
+    // An absolute path stays as it is: on Linux one starting with '/'; on
+    // Windows one with a drive, or starting with either separator.
+    CHECK_STR(loaded(&a, "src/main.rig", "/x/a.rig", false), "/x/a.rig");
+    CHECK_STR(loaded(&a, "src/main.rig", "/x/a.rig", true), "/x/a.rig");
+    CHECK_STR(loaded(&a, "src/main.rig", "C:\\x\\a.rig", true), "C:\\x\\a.rig");
+    CHECK_STR(loaded(&a, "src/main.rig", "\\x\\a.rig", true), "\\x\\a.rig");
+    // A drive alone is enough, with no separator after it: C:a.rig is a
+    // file in that drive's current directory, not in src.
+    CHECK_STR(loaded(&a, "src/main.rig", "C:a.rig", true), "C:a.rig");
+    // On Linux neither a drive nor a backslash makes a path absolute: both
+    // are part of a name.
+    CHECK_STR(loaded(&a, "src/main.rig", "C:\\x\\a.rig", false), "src/C:\\x\\a.rig");
+    CHECK_STR(loaded(&a, "src/main.rig", "C:a.rig", false), "src/C:a.rig");
+    CHECK_STR(loaded(&a, "src/main.rig", "\\x\\a.rig", false), "src/\\x\\a.rig");
+    // On Windows a file named with the \\?\ prefix, as some tools name
+    // files, is opened by its path as it is: '/' doesn't separate there, and
+    // ".." isn't resolved. So the path of a file it loads is resolved here,
+    // with \ only, no higher than the prefix's drive or share.
+    CHECK_STR(loaded(&a, "\\\\?\\C:\\x\\main.rig", "sub/b.rig", true), "\\\\?\\C:\\x\\sub\\b.rig");
+    CHECK_STR(loaded(&a, "\\\\?\\C:\\x\\y\\main.rig", "./../b.rig", true), "\\\\?\\C:\\x\\b.rig");
+    CHECK_STR(loaded(&a, "\\\\?\\C:\\x\\main.rig", "../../b.rig", true), "\\\\?\\C:\\b.rig");
+    CHECK_STR(loaded(&a, "\\\\?\\UNC\\server\\share\\main.rig", "../b.rig", true),
+              "\\\\?\\UNC\\server\\share\\b.rig");
+    CHECK_STR(loaded(&a, "\\\\?\\unc\\server\\share\\main.rig", "../b.rig", true),
+              "\\\\?\\unc\\server\\share\\b.rig");
+    // On Linux \\?\ is a name like any other.
+    CHECK_STR(loaded(&a, "\\\\?\\C:\\x\\main.rig", "sub/b.rig", false), "sub/b.rig");
+    arena_free(&a);
+}
+
+TEST(only_rig_files_end_in_rig) {
+    CHECK(is_rig_file(str("hello.rig")));
+    CHECK(is_rig_file(str("out/HELLO.RIG")));
+    CHECK(!is_rig_file(str("hello.rig.exe")));
+    CHECK(!is_rig_file(str("rig")));
+    CHECK(!is_rig_file(str("hellorig")));
 }

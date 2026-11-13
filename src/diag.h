@@ -8,8 +8,9 @@
 //                    ^
 //
 // Errors are collected, not printed at once: the compiler keeps going after
-// one (the language server needs that, spec section 3) and prints them all
-// at the end, in the order they were found.
+// one (an editor's live check needs that: rig check --stdin, spec 10.1)
+// and prints them all at the end, sorted by file (in load order), then
+// line and column (diag_sort).
 
 #pragma once
 
@@ -24,7 +25,10 @@ struct Position {
 };
 
 struct Source_File {
-    String path;           // as given on the command line: what messages name
+    // What messages name the file by: the main file's path as given on the
+    // command line, a loaded file's as load_path (base.h) makes it, by the
+    // rules in load.h.
+    String path;
     String text;
     // Where the file is, for the debug information (diag_locate_file);
     // empty until then.
@@ -63,7 +67,8 @@ void diag_error(Diagnostics *d, Position pos, const char *fmt, ...);
 // the whole file before the parser starts); rig sorts before printing.
 void diag_sort(Diagnostics *d);
 
-// Every error, in the order reported, in the format above.
+// Every error, in the list's order (the order reported, or diag_sort's once
+// sorted), in the format above.
 String diag_render(Arena *a, Diagnostics *d);
 
 // diag_render, written to stderr.

@@ -1,0 +1,9 @@
+tests/errors/load_missing.rig:7:7: error: cannot read 'tests/errors/load/nope.rig': @NO_SUCH_FILE@
+    #load "load/nope.rig";
+          ^
+tests/errors/load_missing.rig:13:14: error: 256 doesn't fit in 'u8'
+        y : u8 = 256;
+                 ^
+tests/errors/load_missing.rig:14:5: error: 's64' isn't a procedure, so it can't be called
+        s64(1);
+        ^

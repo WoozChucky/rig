@@ -34,10 +34,28 @@ static String from_wide(Arena *a, const wchar_t *w, int length = -1) {
     return {s, n};
 }
 
+// Opened sharing every access, as os_file_id opens it, so a file another
+// program holds open (an editor's) can be read as it can be identified; one
+// that shrinks while it's read is read to its new end. Without
+// FILE_FLAG_BACKUP_SEMANTICS CreateFileW refuses a directory, so a
+// directory isn't read as a file (os.h); its reason, access denied, would
+// send the user to the file's permissions, so a directory's is
+// ERROR_DIRECTORY_NOT_SUPPORTED instead, as Linux's is EISDIR.
 bool os_read_file(Arena *a, String path, String *out) {
-    HANDLE file = CreateFileW(to_wide(a, path), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                              FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return os_fail();
+    wchar_t *wpath = to_wide(a, path);
+    HANDLE file = CreateFileW(wpath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();
+        if (error == ERROR_ACCESS_DENIED) {
+            DWORD attributes = GetFileAttributesW(wpath);
+            if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                error = ERROR_DIRECTORY_NOT_SUPPORTED;
+            }
+        }
+        os_last_error = error;
+        return false;
+    }
     LARGE_INTEGER size;
     if (!GetFileSizeEx(file, &size)) {
         os_fail();
@@ -119,6 +137,71 @@ bool os_file_exists(String path) {
     if (!exists) os_fail();
     arena_free(&scratch);
     return exists;
+}
+
+// The file is opened for its attributes alone, sharing every access, so a
+// file another program holds open (an editor's) can still be identified;
+// FILE_FLAG_BACKUP_SEMANTICS lets the open succeed on a directory too, as
+// stat does on Linux. The volume's serial number and the file's id on it,
+// which the file system keeps for as long as the file exists, are its
+// identity. The id is FILE_ID_INFO's 128 bits, not the 64-bit index
+// GetFileInformationByHandle gives: ReFS (a Dev Drive's file system) has
+// 128-bit ids, and their 64-bit index can be the same for two files. On
+// NTFS the 128-bit id is the index, its high half 0. A file system without
+// 128-bit ids fails FileIdInfo, and its 64-bit index is the id, with 0
+// above it. Every name of the file opens that same file, so gives the same
+// id: Windows takes "." and ".." out of a path by its text before opening
+// it, names in another case are the same name, and opening follows links.
+// Which ids a file system gives is its own affair, though, and some (a
+// network share's, a virtual machine's shared folder's) give every file 0:
+// such an id would make every file the first one, so it counts as none.
+bool os_file_id(String path, u64 id[3]) {
+    Arena scratch = arena_make(1024);
+    HANDLE file = CreateFileW(to_wide(&scratch, path), FILE_READ_ATTRIBUTES,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                              FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (file == INVALID_HANDLE_VALUE) os_fail();
+    arena_free(&scratch);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    FILE_ID_INFO info;
+    bool ok = GetFileInformationByHandleEx(file, FileIdInfo, &info, sizeof info) != 0;
+    if (ok) {
+        id[0] = info.VolumeSerialNumber;
+        memcpy(&id[1], info.FileId.Identifier, sizeof info.FileId.Identifier);
+    } else {
+        BY_HANDLE_FILE_INFORMATION old;
+        ok = GetFileInformationByHandle(file, &old) != 0;
+        if (ok) {
+            id[0] = old.dwVolumeSerialNumber;
+            id[1] = ((u64)old.nFileIndexHigh << 32) | old.nFileIndexLow;
+            id[2] = 0;
+        }
+    }
+    if (!ok) os_fail();
+    CloseHandle(file);
+    if (ok && id[1] == 0 && id[2] == 0) {
+        os_last_error = ERROR_NOT_SUPPORTED;
+        return false;
+    }
+    return ok;
+}
+
+// LCMapStringEx's upper case in the invariant locale: the same on every
+// machine, whatever language its user chose (on a Turkish user's machine
+// too, i is taken as I, not as İ as Turkish has it), and one UTF-16 unit
+// for each, so the result is as long as the path. Should it fail, the path
+// stays as it is: its names in another case would then count as other
+// files, which is no worse than not folding.
+String os_fold_case(Arena *a, String path) {
+    if (path.count == 0) return path;
+    Arena scratch = arena_make(1024);
+    wchar_t *wide = to_wide(&scratch, path);
+    int n = (int)wcslen(wide);
+    wchar_t *upper = arena_new_array<wchar_t>(&scratch, n);
+    int done = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, wide, n, upper, n, nullptr, nullptr, 0);
+    String folded = done > 0 ? from_wide(a, upper, done) : path;
+    arena_free(&scratch);
+    return folded;
 }
 
 bool os_make_directory(String path) {
