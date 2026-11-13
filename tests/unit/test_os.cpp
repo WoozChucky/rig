@@ -374,6 +374,41 @@ TEST(os_files_round_trip) {
     arena_free(&a);
 }
 
+TEST(os_file_id_sees_one_file_under_two_names) {
+    // #load reads each file once, however it's named (issue #112): a file's
+    // id is the same whatever path reaches it, and another file's differs.
+    Arena a = arena_make();
+    os_make_directory(str(".build"));
+    os_make_directory(str(".build/tests"));
+    CHECK(os_make_directory(str(".build/tests/file_id")));
+    CHECK(os_write_file(str(".build/tests/file_id/a.rig"), str("main :: () {}\n")));
+    CHECK(os_write_file(str(".build/tests/file_id/b.rig"), str("main :: () {}\n")));
+    u64 id[2] = {}, same[2] = {}, other[2] = {};
+    CHECK(os_file_id(str(".build/tests/file_id/a.rig"), id));
+    CHECK(os_file_id(str(".build/tests/file_id/../file_id/a.rig"), same));
+    CHECK(id[0] == same[0] && id[1] == same[1]);
+    // b.rig has the same bytes, but it's another file.
+    CHECK(os_file_id(str(".build/tests/file_id/b.rig"), other));
+    CHECK(id[0] != other[0] || id[1] != other[1]);
+    CHECK(!os_file_id(str(".build/tests/file_id/missing.rig"), other));
+    CHECK(os_error_message(&a).count > 0);
+#ifdef _WIN32
+    // Windows' names ignore case: A.RIG is a.rig.
+    same[0] = same[1] = 0;
+    CHECK(os_file_id(str(".build/tests/file_id/A.RIG"), same));
+    CHECK(id[0] == same[0] && id[1] == same[1]);
+#else
+    // A symbolic link is the file it points at.
+    unlink(".build/tests/file_id/link.rig");
+    CHECK(symlink("a.rig", ".build/tests/file_id/link.rig") == 0);
+    same[0] = same[1] = 0;
+    CHECK(os_file_id(str(".build/tests/file_id/link.rig"), same));
+    CHECK(id[0] == same[0] && id[1] == same[1]);
+    unlink(".build/tests/file_id/link.rig");
+#endif
+    arena_free(&a);
+}
+
 TEST(os_read_missing_file_fails) {
     Arena a = arena_make();
     String text = {};

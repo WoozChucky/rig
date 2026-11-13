@@ -443,3 +443,27 @@ TEST(source_path_is_absolute_and_normalised) {
     CHECK_STR(absolute(&a, "/home", "a\\b.rig", false), "/home/a\\b.rig");
     arena_free(&a);
 }
+
+// load_path on Windows (`windows` true) or Linux: `written`, the path of a
+// #load, from the file at `from`.
+static String loaded(Arena *a, const char *from, const char *written, bool windows) {
+    return load_path(a, str(from), str(written), windows);
+}
+
+TEST(load_path_joins_and_keeps_absolute) {
+    Arena a = arena_make();
+    // A relative path is the loading file's directory, as its path names
+    // it, followed by the path as written.
+    CHECK_STR(loaded(&a, "src/main.rig", "world/map.rig", false), "src/world/map.rig");
+    CHECK_STR(loaded(&a, "main.rig", "a.rig", false), "a.rig");
+    CHECK_STR(loaded(&a, "src\\main.rig", "a.rig", true), "src\\a.rig");
+    // On Linux a backslash is part of a name, so src\main.rig is a file in
+    // the current directory.
+    CHECK_STR(loaded(&a, "src\\main.rig", "a.rig", false), "a.rig");
+    // An absolute path stays as it is: on Linux one starting with '/'; on
+    // Windows one with a drive, or starting with either separator.
+    CHECK_STR(loaded(&a, "src/main.rig", "/x/a.rig", false), "/x/a.rig");
+    CHECK_STR(loaded(&a, "src/main.rig", "C:\\x\\a.rig", true), "C:\\x\\a.rig");
+    CHECK_STR(loaded(&a, "src/main.rig", "\\x\\a.rig", true), "\\x\\a.rig");
+    arena_free(&a);
+}

@@ -303,6 +303,21 @@ String path_absolute(Arena *a, String directory, String path, bool windows) {
     return result;
 }
 
+String load_path(Arena *a, String from, String written, bool windows) {
+    bool absolute = written.count > 0 && is_separator(written.data[0], windows);
+    if (windows && starts_with_drive(written)) absolute = true;
+    // from's directory: everything up to its last separator, that included.
+    // A file in the current directory has none, and the path stays as
+    // written.
+    s64 directory = from.count;
+    while (directory > 0 && !is_separator(from.data[directory - 1], windows)) directory--;
+    if (absolute || directory == 0) return string_copy(a, written);
+    u8 *out = arena_new_array<u8>(a, directory + written.count);
+    memcpy(out, from.data, (size_t)directory);
+    if (written.count) memcpy(out + directory, written.data, (size_t)written.count);
+    return {out, directory + written.count};
+}
+
 // ---------------------------------------------------------------------------
 // MD5 (RFC 1321)
 //

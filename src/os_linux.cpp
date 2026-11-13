@@ -102,6 +102,21 @@ bool os_file_exists(String path) {
     return exists;
 }
 
+// The device the file is on and its inode there: stat follows every
+// symbolic link on the way, and the kernel resolves "..", so every name of
+// the file reaches the same pair.
+bool os_file_id(String path, u64 id[2]) {
+    Arena scratch = arena_make(1024);
+    struct stat st;
+    bool ok = stat(string_cstr(&scratch, path), &st) == 0;
+    if (!ok) os_fail();
+    arena_free(&scratch);
+    if (!ok) return false;
+    id[0] = (u64)st.st_dev;
+    id[1] = (u64)st.st_ino;
+    return true;
+}
+
 bool os_make_directory(String path) {
     Arena scratch = arena_make(1024);
     const char *cpath = string_cstr(&scratch, path);

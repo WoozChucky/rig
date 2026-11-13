@@ -121,6 +121,32 @@ bool os_file_exists(String path) {
     return exists;
 }
 
+// The file is opened for its attributes alone, sharing every access, so a
+// file another program holds open (an editor's) can still be identified;
+// FILE_FLAG_BACKUP_SEMANTICS lets the open succeed on a directory too, as
+// stat does on Linux. The volume's serial number and the file's index on
+// it, which NTFS keeps for as long as the file exists, are its identity.
+// Every name of the file opens that same file, so gives the same pair:
+// Windows takes "." and ".." out of a path by its text before opening it,
+// names in another case are the same name, and opening follows links.
+bool os_file_id(String path, u64 id[2]) {
+    Arena scratch = arena_make(1024);
+    HANDLE file = CreateFileW(to_wide(&scratch, path), FILE_READ_ATTRIBUTES,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                              FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (file == INVALID_HANDLE_VALUE) os_fail();
+    arena_free(&scratch);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    BY_HANDLE_FILE_INFORMATION info;
+    bool ok = GetFileInformationByHandle(file, &info) != 0;
+    if (!ok) os_fail();
+    CloseHandle(file);
+    if (!ok) return false;
+    id[0] = info.dwVolumeSerialNumber;
+    id[1] = ((u64)info.nFileIndexHigh << 32) | info.nFileIndexLow;
+    return true;
+}
+
 bool os_make_directory(String path) {
     Arena scratch = arena_make(1024);
     wchar_t *wpath = to_wide(&scratch, path);

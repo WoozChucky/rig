@@ -24,6 +24,14 @@ bool os_write_file(String path, String data);
 
 bool os_file_exists(String path);
 
+// The file's identity, in id: the same for one file whatever path names it
+// (through a symbolic link, with "." and "..", in another case on Windows),
+// and different for another file, so the loader reads each file of a
+// program once (load.h). Linux: stat's st_dev and st_ino; Windows:
+// GetFileInformationByHandle's volume serial number and file index. False
+// when the file can't be opened.
+bool os_file_id(String path, u64 id[2]);
+
 // Creates one directory (not its parents). True if it exists already.
 bool os_make_directory(String path);
 

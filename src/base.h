@@ -10,8 +10,9 @@
 // file and base.cpp looks inside them. Array's and String's fields are
 // public, because the rest of the compiler reads them directly.
 //
-// At the end, two helpers on bytes that need nothing else: making a path
-// absolute, and MD5 (milestone 2c's debug information).
+// At the end, helpers on bytes that need nothing else: making a path
+// absolute and MD5 (milestone 2c's debug information), and the path a
+// #load names (issue #112).
 
 #pragma once
 
@@ -329,6 +330,18 @@ void table_free(Table<V> *t) {
 // On Linux only / separates. The result has no separator doubled, and none at its end but
 // a root's own ("C:\", "/").
 String path_absolute(Arena *a, String directory, String path, bool windows);
+
+// Where `#load "written"` in the file at `from` points (issue #112):
+// `written` itself when it's absolute (on Linux, `windows` false, when it
+// starts with '/'; on Windows when it starts with a drive, "C:", or with
+// either separator); otherwise from's text up to and including its last
+// separator (\ counts only on Windows), followed by `written`, so a file
+// loaded from src/main.rig as "world/map.rig" is src/world/map.rig. By the
+// text alone, as path_absolute is: the result is the path messages name the
+// file by, the loading file's directory as its path names it and the rest
+// as written, and it's read relative to the directory rig runs in, as
+// `from` is.
+String load_path(Arena *a, String from, String written, bool windows);
 
 // The MD5 digest of `bytes` (RFC 1321) in `out`, its 16 bytes in the order
 // they're written: printed as 32 hex digits from out[0], it's what md5sum
