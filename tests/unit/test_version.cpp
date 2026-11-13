@@ -134,3 +134,14 @@ TEST(version_line_of_this_build_has_its_shape) {
     CHECK(string_eq(s.date, str("unknown")) || is_date(s.date));
     arena_free(&a);
 }
+
+TEST(version_producer_names_the_commit_and_llvm) {
+    // The debug information's producer (spec 10.7): the commit without its
+    // date, and LLVM's version in parentheses of its own.
+    Arena a = arena_make();
+    String llvm = str("23.1.5");
+    CHECK_STR(version_producer(&a, known_stamp(false), llvm), "rig 0.1.0 (3f9c2a1b7d4e) (LLVM 23.1.5)");
+    CHECK_STR(version_producer(&a, known_stamp(true), llvm), "rig 0.1.0 (3f9c2a1b7d4e-dirty) (LLVM 23.1.5)");
+    CHECK_STR(version_producer(&a, unknown_stamp(), llvm), "rig 0.1.0 (unknown) (LLVM 23.1.5)");
+    arena_free(&a);
+}

@@ -49,3 +49,7 @@ String version_line(Arena *a, Build_Stamp s, String llvm);
 // full commit, whether it was dirty, its date, LLVM's version, the target
 // triple rig compiles for and the kind of build. Every line ends in "\n".
 String version_verbose(Arena *a, Build_Stamp s, String llvm, const char *target);
+
+// The debug information's producer (spec 10.7): "rig 0.1.0 (3f9c2a1b7d4e)
+// (LLVM 23.1.5)", the commit as stamp_commit_short gives it.
+String version_producer(Arena *a, Build_Stamp s, String llvm);
