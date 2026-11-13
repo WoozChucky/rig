@@ -164,11 +164,12 @@
 // string after #load, as in #load "other.rig";", at what came instead. A
 // load missing only its ';' is reported as any declaration is, but kept,
 // so the file it names is still loaded. Anywhere else, a #load is "#load
-// can only be at the top level", at its '#'. In a body or among a struct's
-// fields, the parser skips it up to its ';' (or, with no ';' first, to the
-// end of its line, a brace on it, or the end of the file) and goes on with
-// the body, which loses nothing by it; in an expression, the declaration
-// is given up, as after any error below.
+// can only be at the top level", at its '#': where a statement, a struct's
+// field, an expression or a type starts, or a directive after a signature.
+// In a body or among a struct's fields, the parser skips it up to its ';'
+// (or, with no ';' first, to the end of its line, a brace on it, or the end
+// of the file) and goes on with the body, which loses nothing by it;
+// anywhere else, the declaration is given up, as after any error below.
 //
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;
@@ -189,15 +190,17 @@
 // struct's declaration in column 1 (`name :: (` or `Name :: struct`),
 // which a body can't hold and which can only start a top-level
 // declaration: a constant in column 1 (`N :: 5;`) is a local constant, as
-// an indented one is. A struct's braces never closed end there too,
-// "expected '}'" said at that declaration. The body is then taken to end
-// before the column-1 declarations (IDENT ':', ':=' or '::', or a #load)
-// right before that point, at its own level: "expected '}'" is reported at
-// the first of them, and the top level resumes there, so they're read as
-// the globals, constants and loads they were meant to be (an if's '}'
-// forgotten, then globals). A #load among them isn't misplaced after all,
-// so it isn't reported. Without them, it's reported where the end was
-// found.
+// an indented one is. A struct's braces never closed end there too. The
+// body is then taken to end before the column-1 declarations (IDENT ':',
+// ':=' or '::', or a #load) right before that point, at its own level:
+// "expected '}'" is reported at the first of them, and the top level
+// resumes there, so they're read as the globals, constants and loads they
+// were meant to be (an if's '}' forgotten, then globals). A #load among
+// them isn't misplaced after all, so it isn't reported. A struct is taken
+// to end before the #loads in column 1 right before that point, the same
+// way, but not before fields in column 1: a field is written as a global
+// is, so they stay its fields. Without them, "expected '}'" is reported
+// where the end was found.
 //
 // So one mistake gives one error, and the checker can still check the rest
 // of the file: the broken declaration's name is known to be declared, so
