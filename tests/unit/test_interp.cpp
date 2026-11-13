@@ -653,8 +653,10 @@ TEST(interp_globals_and_relocations) {
     // a literal), a view of an array literal (a relocation to array.N), a
     // procedure value (a relocation to a procedure), and scalars, a float32
     // (its initial value a double's bits, rounded) among them. A literal's
-    // bytes are writable, as section 10.8 says, though compiled they're
-    // read-only: what poke writes into greeting's, a later run reads.
+    // bytes are writable, as spec 10.8 says, though compiled they're
+    // read-only: what poke writes into greeting's, a later run reads. The
+    // write is into the interpreter's copy, not the module's bytes, so a
+    // new interpreter starts again from "hello".
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "greeting := \"hello\";\n"
@@ -670,7 +672,7 @@ TEST(interp_globals_and_relocations) {
                                 "    return greeting.count * 1000 + letter * 10 + numbers[2] + op(20, 30) * 100000;\n"
                                 "}\n"
                                 "single :: () -> float32 { return third; }\n"
-                                "poke :: () { p := greeting.data; p.* = 106; }\n"
+                                "poke :: () { p := greeting.data; p.* = 106; }\n"  // 'j'
                                 "first :: () -> int { return cast(int) greeting[0]; }\n"
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_value(&a, m, "read"), 5 * 1000 + 'e' * 10 + 3 + 50 * 100000);
@@ -704,7 +706,14 @@ TEST(interp_globals_and_relocations) {
     interp_test_run(in, m, "first", &a, &r);
     CHECK(r.ok);
     CHECK_EQ(r.results.count, 1);
-    if (r.results.count == 1) CHECK_EQ(r.results[0], 106);  // 'j'
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 'j');
+    interp_test_free(&r);
+    interp_free(in);
+    in = interp_new(m);
+    interp_test_run(in, m, "first", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 'h');
     interp_test_free(&r);
     interp_free(in);
 
@@ -840,7 +849,7 @@ TEST(interp_procedure_values) {
         CHECK_EQ(r.results[1], 0);
     }
     interp_test_free(&r);
-    // Each Rig procedure's address is where section 10.8 puts it, procedure
+    // Each Rig procedure's address is where spec 10.8 puts it, procedure
     // k at 16 x k bytes past the reserved range's start (16 written out, the
     // spec's number, not INTERP_PROC_STRIDE), and maps back to it, and
     // nothing else does: not null, not an address between two, not one past
@@ -1362,10 +1371,13 @@ TEST(interp_recursion_to_the_limit) {
 
     // One frame whose locals alone are past the stack never fits: called,
     // the run fails at the call, the caller its only frame; run directly,
-    // it fails before it starts, with no frames.
+    // it fails before it starts, with no frames. One whose locals nearly
+    // fill the 8 MB (8,388,608 bytes) fits, so the two pin the stack's size
+    // from both sides.
     m = lower_source(&a,
                      "huge :: () -> int { b : [9_000_000]u8; return 1; }\n"
                      "calls_huge :: () -> int { return huge(); }\n"
+                     "big :: () -> int { b : [8_000_000]u8; b[7_999_999] = 1; return cast(int) b[7_999_999]; }\n"
                      "main :: () { }\n");
     in = interp_new(m);
     interp_run(in, interp_test_proc(m, "calls_huge"), {}, &a, &r);
@@ -1382,6 +1394,11 @@ TEST(interp_recursion_to_the_limit) {
     CHECK(!r.ok);
     CHECK_STR(r.message, "stack overflow");
     CHECK_EQ(r.frames.count, 0);
+    interp_test_free(&r);
+    interp_run(in, interp_test_proc(m, "big"), {}, &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 1);
     interp_test_free(&r);
     interp_free(in);
     arena_free(&a);
@@ -2590,11 +2607,12 @@ TEST(interp_finds_c_functions_by_name) {
     // library's from the compiler's own table, which has no
     // aligned_alloc (UCRT has none) and no function of Windows'; those
     // from kernel32.dll, and the C runtime's extras from ucrtbase.dll. The
-    // table holds a function of each header section 10.8 names: <time.h>'s
-    // too, which UCRT has only as inline functions (ucrtbase.dll exports
-    // _time64, not time), and <ctype.h>'s, which ucrtbase.dll would answer
-    // with a second C runtime's locale.
-    // Linux: everything from libc but what libc_nonshared.a links in
+    // table holds a function of each header spec 10.8 names: <time.h>'s
+    // too, much of which UCRT has only as inline functions (ucrtbase.dll
+    // exports _time64, not time), and <ctype.h>'s, which ucrtbase.dll would
+    // answer with a second C runtime's locale.
+    // Linux: everything from libc and the dynamic loader it depends on
+    // (__tls_get_addr is the loader's), but what libc_nonshared.a links in
     // statically (atexit, at_quick_exit, pthread_atfork), which libc.so.6
     // doesn't export, the compiler's own from its table; and libm-only
     // functions (sqrt) not at all, as a program links libc alone (spec
@@ -2620,6 +2638,7 @@ TEST(interp_finds_c_functions_by_name) {
 #else
     CHECK(interp_c_library_function(str("printf")) == nullptr);
     CHECK(os_find_c_function(str("printf")) != nullptr);
+    CHECK(os_find_c_function(str("__tls_get_addr")) != nullptr);
     CHECK(interp_test_c_function("atexit") == (void *)&atexit);
     CHECK(interp_test_c_function("at_quick_exit") == (void *)&at_quick_exit);
     CHECK(interp_test_c_function("pthread_atfork") == (void *)&pthread_atfork);
