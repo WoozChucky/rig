@@ -27,7 +27,7 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
 - **Repository rules:**
   - C-style C++23, no STL, `-Wall -Wextra` with no warnings at `-O0` and `-O2` (`build.bat release`, `./build.sh release`).
   - Unity builds: new sources go in `src/all.cpp` only; new tests at the end of `tests/unit/unit.cpp`.
-  - Every name in the new files starts with `interp_`/`Interp_` or `thunk_`/`Thunk_`, since earlier files' `static` names such as `value`, `emit`, `divide` and `saturate` are in scope.
+  - Every name in the new `src` files is `Interp` or starts with `interp_`/`Interp_` or `thunk_`/`Thunk_` (and the thunk's assembly symbol, `rig_thunk_call`), since earlier files' `static` names such as `value`, `emit`, `divide` and `saturate` are in scope.
   - Code is study material: each piece says what it does and why. The thunks get a commented line-by-line account of the convention.
 - **Both hosts before every push:** Windows (`build.bat`, `bin\unit-tests.exe`, `bin\run-tests.exe`) and Linux in WSL (`./build.sh`, `bin/unit-tests`, `bin/run-tests`). All must pass with no warnings, debugger tests not skipped. Run the `release` build's tests too before the final review.
 - **Messages, verbatim:**
@@ -45,7 +45,7 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
   - Commits are a short imperative summary, pushed after each commit.
   - Before the PR is marked ready, an independent review, with every finding fixed, minors included.
 
-## Facts (from the survey; file:line on `main` at 56225bd)
+## Facts (from the survey; file:line on `main` at 56225bd, the same at this branch's base 309f012: `src` and `tests` didn't change between them)
 
 1. **`IR_LOCAL` is hoisted.** The backend allocates every `IR_LOCAL` once, at the entry, whatever block it is in (`llvm_backend.cpp:1443-1479`; `build_instr`'s `case IR_LOCAL: return;`).
    - Loops declare locals (`tests/run/loop_locals.rig`, 10⁷ iterations).
@@ -71,6 +71,8 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
    - `IR_PANIC` with `target ≥ 0` writes the global's bytes without the final zero. Otherwise it writes `%b` bytes at `%a`, which `__rig_bounds_failed` builds in a local.
    - Either way the text is `PATH:L:C: runtime error: MESSAGE\n`.
    - `__rig_bounds_failed` and `__rig_string_equal` are compiler-made: empty `source_name`, line-0 positions. The bounds failure's caller calls it at the `[` (`lower.cpp:1089-1111`).
+   - Any other `IR_CALL`/`IR_CALL_INDIRECT` has its statement's position, the statement's first token (`statement_position`, `lower.cpp:1865-1884`; `emit_call` copies `l->pos`), not the call's `(`: `qsort(...);` is at `qsort`, `n := f(x);` at `n`. So a frame waiting on a call, and a failing C call, are at that token.
+   - `ir_emit` zeroes `constant`, so a hand-built `IR_PANIC` has `constant` 0 and `c` -1 unless Task 1 changes the default.
 6. **Calls inside Rig.**
    - Aggregate results are leading `IR_PTR` parameters (hidden pointers), and aggregate arguments are pointers to the caller's copies. Several scalar results come back as consecutive values from `result`.
    - Rig's `main` has an extra `IR_I32` result, always 0.
@@ -83,11 +85,11 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
    - `Ir_Reloc{offset, global, is_proc}` may name a **foreign** procedure, whose native address is then needed when globals are mapped.
    - The backend makes every global before initialising any, and the interpreter must do the same.
 8. **C calls.**
-   - Only the program's own `#foreign` procedures are called. `memmove`, `memset`, `exit` and `__rig_panic` never appear in the IR (`IR_COPY` is memmove, `IR_ZERO` is memset).
+   - Only the program's own `#foreign` procedures are called. The backend's own C calls never appear in the IR: `IR_COPY` is memmove, `IR_ZERO` is memset, and `IR_PANIC` is `__rig_panic` (fflush, write, exit). A program's own `exit` is one of its `#foreign` procedures (`tests/run/exit_code.rig`).
    - On Windows a narrow C result's upper bits are garbage: mask by the result's type, and i1 is `rax & 1`. On SysV an `IR_EXT_SIGN` i8/i16 argument must be sign-extended.
    - The compiler links the C runtime statically on Windows, so `(void *)&printf` is the compiler's own inline `printf`, sharing its `stdout`.
    - C++ overloads (`<math.h>`, `strchr`, `abs`…) need a cast to one signature. `aligned_alloc` doesn't exist in UCRT.
-   - On Linux the compiler is linked dynamically with glibc; `dlopen("libc.so.6", RTLD_LAZY | RTLD_NOLOAD)` gives libc alone, matching 10.6's "libm's functions are not available". `<dlfcn.h>` is needed; `-ldl` is already linked.
+   - On Linux the compiler is linked dynamically with glibc; `dlopen("libc.so.6", RTLD_LAZY | RTLD_NOLOAD)` gives libc alone, matching 10.6's "libm's functions are not available". `<dlfcn.h>` is needed (and `<sys/mman.h>` for Task 1's `mmap`). `-ldl` is already linked into `rig` and `unit-tests`; `run-tests` includes `os_linux.cpp` too but links no `-ldl`, which is fine since glibc 2.34 has `dlopen` in libc itself (WSL and CI have 2.43).
 9. **Thunks:**
    - File-scope `asm(R"(...)")` in a `.cpp` assembles with the pinned clang on both targets, needs no build-script change, and can carry `.seh_*` (Windows) and `.cfi_*` (Linux) unwind directives. Naked functions get no Windows unwind information.
    - A prototype passing printf with 12 mixed arguments, 11 doubles past SysV's registers, a 10-parameter function returning `float`, narrow arguments and `strlen` is in the scratchpad (`thunk/thunk.cpp`), for reference, not for copying blindly.
@@ -114,11 +116,11 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
 - **Rig procedures given to C.**
   - A call of a foreign procedure, or of a native address, with any argument, fixed or variadic, whose value lies in the reserved Rig-procedure range is refused: `a Rig procedure can't be passed to C at compile time, for now`, at the call.
   - That covers a procedure-typed parameter as #114 asks, and a direct `cast(*void)` too, since the IR keeps no Rig types to tell them apart.
-  - A Rig procedure stored in memory that C reads faults, because the range is never accessible.
+  - A Rig procedure stored in memory that C reads and calls faults, because the range is never accessible.
 - **C lookup:**
   - Windows: the C17 table first, then `GetProcAddress` in `kernel32.dll`, then in `ucrtbase.dll`.
   - Linux: `dlsym` on the `libc.so.6` handle.
-  - A name found nowhere fails the run, with frames, at the call. When a global's relocation needs it, the run fails before it starts, with no frames.
+  - A name found nowhere fails the run, with frames, at the call (or at the `procaddr` taking the procedure's value). When a global's relocation needs it, the run fails before it starts, with no frames.
 - **Failure output in the conformance mode:**
   - A panic writes its exact text, as the compiled program does, after `fflush(NULL)`. Any other failure writes `PATH:L:C: runtime error: MESSAGE\n` for the innermost frame. Then the mode exits with 101.
   - So the existing `.out`, `.err` and `.exit` files compare unchanged.
@@ -127,8 +129,8 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
 
 ## Review Focus
 
-1. **f32 everywhere:** constants, globals, `fptrunc`, `sitofp` from i64 straight to float, C results in xmm0's low 32 bits, f32 arguments, NaN through saturating casts. Each is an assertion in Task 2's or Task 4's tests.
-2. **Narrow integers across C:** a `signed char` result with garbage upper bits on Windows, an `s8` argument on SysV, a `bool` result. Task 4's tests use a C function returning `-1` as `signed char`.
+1. **f32 everywhere:** constants, globals, `fptrunc`, `sitofp` from i64 straight to float, C results in xmm0's low 32 bits, f32 arguments, NaN through saturating casts. Each is an assertion in Task 2's, Task 3's or Task 4's tests.
+2. **Narrow integers across C:** a `signed char` result with garbage upper bits on Windows, an `s8` argument on SysV, a `bool` result. Task 3's `thunk_narrow_results_and_arguments` uses a C function returning `-1` as `signed char`.
 3. **The same `IR_LOCAL` in a loop** keeps its address and doesn't grow the stack: Task 2's `interp_local_in_a_loop_reuses_its_slot`.
 4. **Procedure values** compare equal from `IR_PROC_ADDR`, from a global's relocation, and after `cast(*void)` and back: Task 2's test runs `tests/run/procedure_values.rig`'s shape.
 5. **Output order:** compile-time `printf` output, then the failure, in one merged stream. That is Task 5's `interpret_mode_flushes_before_failing`, through `os_run_merged`.
@@ -138,7 +140,7 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
 ### Task 1: Panic messages know their prefix; addresses nothing can touch
 
 **Files:**
-- Modify: `src/lower.cpp` (`emit_runtime_check`, `lower_bounds_failed`), `src/ir.h` (`IR_PANIC`'s comment and `Ir_Instr.constant`/`c`'s comments)
+- Modify: `src/lower.cpp` (`emit_runtime_check`, `lower_bounds_failed`), `src/ir.h` (`IR_PANIC`'s comment and `Ir_Instr.constant`/`c`'s comments), `src/ir.cpp` (`ir_emit` starts an `IR_PANIC`'s `constant` at all ones, so a module built by hand reads as unknown)
 - Modify: `src/os.h`, `src/os_windows.cpp`, `src/os_linux.cpp` (a new section at the end: "Compile-time execution")
 - Test: `tests/unit/test_ir.cpp`, `tests/unit/test_os.cpp`
 
@@ -163,13 +165,13 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
   - Windows: `VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_NOACCESS)` / `VirtualFree(p, 0, MEM_RELEASE)`.
   - Linux: `mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0)` / `munmap`.
 - [ ] **Step 4: Run all tests** on both hosts. Every test must PASS: no IR text changed.
-- [ ] **Step 5: Commit** `Record a panic message's prefix, and reserve addresses nothing can touch`. Push, and open the draft PR.
+- [ ] **Step 5: Commit** `Record a panic message's prefix, and reserve addresses nothing can touch`. Push (the draft PR, #120, is already open).
 
 ### Task 2: The interpreter: Rig code
 
 **Files:**
 - Create: `src/interp.h`, `src/interp.cpp` (in `src/all.cpp` after `lower.cpp`)
-- Test: create `tests/unit/test_interp.cpp` (in `unit.cpp` after `test_link.cpp`)
+- Test: create `tests/unit/test_interp.cpp` (at the end of `unit.cpp`'s list, after `test_version.cpp`, as the repository rule says)
 
 **Interfaces:**
 - Consumes: Task 1's prefix fields and `os_reserve_inaccessible`.
@@ -189,8 +191,9 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
   // Runs m->procs[proc] with args (one per IR param, hidden result pointers
   // first) to its return or its failure. Globals and procedures the module
   // gained since the last run are mapped first. What results point into
-  // (globals, the data stack) stays until the next run. Strings and arrays
-  // of *result live in `a`.
+  // (globals, the data stack) stays until the next run. The Strings of
+  // *result live in `a`; its Arrays are on the heap, as every Array is
+  // (base.h), and the caller frees them with array_free.
   void interp_run(Interp *in, s32 proc, Array<u64> args, Arena *a, Interp_Result *result);
   u64 interp_proc_address(Interp *in, s32 proc);   // a Rig procedure's compile-time value
   s32 interp_proc_at(Interp *in, u64 address);     // the Rig procedure there, or -1
@@ -210,20 +213,21 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
   - `interp_comparisons_signed_and_unsigned`;
   - `interp_floats`:
     - `0.1 + 0.2` as f64 bits;
-    - an f32 constant `3.4028235e38 * 2` gives +inf;
+    - a hand-built `const f32` of `f64_bits(3.4028235e38 * 2)` gives +inf (the checker refuses that constant in source: `float_fits`), and so does an f32 variable holding `3.4028235e38`, times 2;
+    - `fptrunc` of an f64 variable holding `1.1` gives `(float)1.1`;
     - `fneg 0.0` gives −0.0;
     - NaN compared with `!=` is true;
     - `fptosi.sat` of NaN gives 0 and of 1e30 to s32 gives `INT32_MAX`;
     - `sitofp` of `2^53 + 1` (i64) to f32 equals `(float)(s64)` in C++;
   - `interp_locals_structs_arrays_views`: a program sums an array through a view and returns a struct field;
-  - `interp_local_in_a_loop_reuses_its_slot`: a loop of 1,000,000 iterations declaring a 1 KB local finishes, and the data stack in use after the run equals the use before it;
+  - `interp_local_in_a_loop_reuses_its_slot`: a loop of 1,000,000 iterations declaring a 1 KB local finishes `ok` (a slot per iteration would need 1 GB, far past the 8 MB stack, and fail with `stack overflow`), and the local's address (`*buffer`, compared with the first iteration's) never changes. (interp.h has no stack-use query to compare before and after.)
   - `interp_calls_with_several_and_aggregate_results`: a procedure returning `(int, Vec2)`, called and destructured;
   - `interp_globals_and_relocations`: a global string, a global view of an array literal, a global holding a procedure value, and a scalar f32 global initialised to `1.1` (equal to `(float)1.1`);
   - `interp_procedure_values`: values from `IR_PROC_ADDR`, from a global and after `cast(*void)` and back compare equal; a call through each works; `interp_proc_at(interp_proc_address(k)) == k`;
   - `interp_panic_gives_message_and_frames`:
     - `lower_file(a, "tables.rig", ...)` where `make_table` indexes past an array, called from `main`;
     - `message` is `index 10 is out of bounds (count 10)` and `panic_text` the full line;
-    - `frames` are `make_table` at the `[`, then `main` at the call, with no `__rig_bounds_failed`;
+    - `frames` are `make_table` at the `[`, then `main` at the call (its statement's first token, Fact 5), with no `__rig_bounds_failed`;
     - `interp_frames_text` gives `    in make_table (tables.rig:L:C)\n    in main (tables.rig:L:C)\n`;
   - `interp_division_by_zero_message`: `division by zero`;
   - `interp_recursion_to_the_limit`:
@@ -274,7 +278,7 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
   - `thunk_calls_snprintf_past_the_registers`: `snprintf(buf, 128, "%d %f %s %lld %f %d %f %f %f %f %f %d", ...)` with 12 values mixed past every register, and the text checked. Run with an odd and an even number of stack arguments.
   - `thunk_calls_strlen`;
   - `thunk_float_results` (`copysignf(3.0f, -1.0f)` is `-3.0f`, `ldexp(1.0, 10)` is `1024.0`);
-  - `thunk_narrow_results_and_arguments`: a `static signed char thunk_test_negate(signed char)` in the test file, called with −5, gives 5 masked as i8, and a C function returning `bool` gives 0 or 1.
+  - `thunk_narrow_results_and_arguments`: a `static signed char thunk_test_negate(signed char)` in the test file, called with −5, gives 5, and called with 1 gives −1, `0xFF` masked as i8; and a C function returning `bool` gives 0 or 1.
 - [ ] **Step 2: Run `bin\unit-tests.exe thunk`** and check they FAIL.
 - [ ] **Step 3: Implement** both thunks:
   - Use file-scope `asm` under `#ifdef _WIN32` and `#else`, with `.seh_proc`/`.seh_pushreg`/`.seh_setframe`/`.seh_endprologue`/`.seh_endproc` on Windows, and `.cfi_*`, `.type`/`.size` and `.section .note.GNU-stack` on Linux.
@@ -286,7 +290,7 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
 ### Task 4: Calling C from interpreted code
 
 **Files:**
-- Modify: `src/interp.cpp` (foreign calls, native indirect calls, foreign relocations, the refusal)
+- Modify: `src/interp.cpp` (foreign calls, native indirect calls, foreign procedure values from `IR_PROC_ADDR`, foreign relocations, the refusal)
 - Create: `src/interp_c_functions.cpp` (the Windows C17 table; in `all.cpp` before `interp.cpp`)
 - Modify: `src/os.h`, `src/os_windows.cpp`, `src/os_linux.cpp` (`os_find_c_function`, in Task 1's section)
 - Test: `tests/unit/test_interp.cpp`
@@ -317,7 +321,7 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
   - `interp_calls_c_through_a_value`: `say : (s: *u8) -> s32 #c_call = strlen; n := say("four");` gives 4.
   - `interp_c_relocation`: a global struct holding a foreign procedure value is called through.
   - `interp_refuses_a_rig_procedure_to_c`:
-    - `qsort` given a Rig `#c_call` comparison fails with `a Rig procedure can't be passed to C at compile time, for now`, its frame at the `qsort(` call;
+    - `qsort` given a Rig `#c_call` comparison fails with `a Rig procedure can't be passed to C at compile time, for now`, its frame at the `qsort(...)` statement's first token, `qsort` (Fact 5);
     - and so does `cast(*void) compare` passed to a `*void` parameter.
   - `interp_missing_c_function`: `nope_not_a_function :: () #foreign libc;` called fails with `'nope_not_a_function' isn't in the C library at compile time`.
   - `interp_windows_uses_the_compilers_own_printf` (Windows only): `interp_c_library_function("printf") == (void *)&printf`.
@@ -345,7 +349,7 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
     1. `fflush(NULL)`;
     2. write `panic_text`, or `PATH:L:C: runtime error: MESSAGE\n` for the innermost frame;
     3. exit 101.
-- The runner's interpreted pass runs `bin/unit-tests[.exe] --interpret tests/run/NAME.rig` plus `NAME.flags`, with a 300 s timeout, and compares as `run_test` does.
+- The runner's interpreted pass runs `bin/unit-tests[.exe] --interpret tests/run/NAME.rig` plus `NAME.flags` (`add_flags`), with a 300 s timeout, and compares as `run_test` does. The runner's `run` always gives `TIMEOUT` (60 s), so it gains the seconds as a parameter, or the pass calls `os_run_for` itself and normalises newlines as `run` does.
   - With `NAME.interp.err` present: stderr must equal it, the exit status must be 101, and stdout must be a prefix of `NAME.out`.
   - It is reported as `interpreted tests/run/NAME`.
 
@@ -353,7 +357,7 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
   - `interpret_mode_runs_a_program`: write `.build/tests/interp/hello.rig` (puts), run the mode with `os_run_for`; stdout is `Hello\n` and the exit status 0.
   - `interpret_mode_exit`: `exit(7)` gives status 7, with earlier `printf` output present.
   - `interpret_mode_flushes_before_failing`: `printf("before\n")` then a division by zero, through `os_run_merged`. The output is `before\n` and then the runtime-error line, status 101.
-  - `tests/run/qsort_callback.interp.err`: `tests/run/qsort_callback.rig:L:C: runtime error: a Rig procedure can't be passed to C at compile time, for now`, with L:C the first `qsort` call's `(` (read the file for the exact position).
+  - `tests/run/qsort_callback.interp.err`: `tests/run/qsort_callback.rig:25:5: runtime error: a Rig procedure can't be passed to C at compile time, for now`, 25:5 being the first `qsort(...)` statement's first token, `qsort`, the position its call instruction has (Fact 5; check it against the file).
 - [ ] **Step 2: Run them** and check they FAIL (an unknown mode, no pass).
 - [ ] **Step 3: Implement** the mode, the runner pass, the marker and the docs.
 - [ ] **Step 4: Run the tests.** Run `bin\run-tests.exe`: every `interpreted tests/run/NAME` must PASS.
