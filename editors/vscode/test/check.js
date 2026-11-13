@@ -284,6 +284,30 @@ check('diagnostics.js takes an absolute name, and on Windows any case', () => {
     assert.strictEqual(parseDiagnostics(`${file}:1:1: warning: w\n`, file, '.')[0].severity, 'warning');
 });
 
+// The errors rig check finds in the files a program #loads are counted in
+// one error on the checked file's first line, which names the first.
+check('diagnostics.js counts the errors in the other files of the program', () => {
+    const { otherFilesError } = diagnostics();
+    const text = fs.readFileSync(path.join(root, 'tests', 'errors', 'load_error_in_loaded_file.err'), 'utf8');
+    const main = path.join(root, 'tests', 'errors', 'load_error_in_loaded_file.rig');
+    assert.deepStrictEqual(otherFilesError(text, main, root), {
+        line: 1,
+        column: 1,
+        severity: 'error',
+        message: "2 errors in the program's other files, the first: tests/errors/load/bad_type.rig:3:14: 300 doesn't fit in 'u8'",
+    });
+    // From the loaded file, the main file's is the other one.
+    const loaded = path.join(root, 'tests', 'errors', 'load', 'bad_type.rig');
+    assert.strictEqual(
+        otherFilesError(text.replace(/\r?\n/g, '\r\n'), loaded, root).message,
+        "an error in another file of the program: tests/errors/load_error_in_loaded_file.rig:9:14: 256 doesn't fit in 'u8'",
+    );
+    // None elsewhere, or only warnings and rig's own errors: none to count.
+    const own = `${main}:9:14: error: x\n    y : u8 = 256;\n             ^\nrig: error: linking failed\n`;
+    assert.strictEqual(otherFilesError(own, main, root), null);
+    assert.strictEqual(otherFilesError(`other.rig:1:1: warning: w\n`, main, root), null);
+});
+
 // rig counts a column in bytes of UTF-8 (src/diag.h: a tab is one, and so is
 // each byte of a character); VS Code in UTF-16 code units.
 check('diagnostics.js turns rig\'s byte columns into VS Code\'s characters', () => {
@@ -1070,7 +1094,8 @@ check('the tasks use $rig-runtime while rig.check is on, $rig when it is off', (
 // `node check FILE --stdin` in the workspace folder, and Node runs the
 // script check.js there (written by the check, below): a stand-in for
 // `rig check` that reads stdin and reports each `putz` in it as rig would,
-// slowly if the text says `slow`. The documents are stand-ins too, never
+// slowly if the text says `slow`, with a warning about another file, and
+// an error in broken.rig if the text #loads it. The documents are stand-ins too, never
 // saved: what's checked is their text.
 
 const STAND_IN = `
@@ -1089,7 +1114,11 @@ process.stdin.on('end', () => {
             process.stderr.write(file + ':' + (i + 1) + ':' + column + ": error: unknown identifier 'putz'\\n");
             process.stderr.write('    ' + line + '\\n');
         });
-        process.stderr.write('other.rig:1:1: error: not this file\\n');
+        process.stderr.write('other.rig:1:1: warning: not this file\\n');
+        if (text.includes('#load "broken.rig"')) {
+            process.stderr.write("broken.rig:2:5: error: unknown identifier 'x'\\n");
+            errors++;
+        }
         process.exitCode = errors ? 1 : 0;
     }, text.includes('slow') ? 1500 : 0);
 });
@@ -1205,6 +1234,30 @@ check('a document is checked when it opens, as you type, and forgotten when it c
         fire('open', doc);
         await sleep(300);
         assert.ok(!live.has(key), 'rig.check off still checked');
+    });
+});
+
+check('an error in a file the document loads is counted on its first line', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const doc = fakeDocument(path.join(dir, 'm.rig'), '#load "broken.rig";\nmain :: () { putz(); }\n');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        fire('open', doc);
+        await until('the check', () => live.has(key));
+        // The document's own, then the one for broken.rig, at its first word.
+        const [own, elsewhere, ...rest] = live.get(key);
+        assert.deepStrictEqual(rest, []);
+        assert.strictEqual(own.message, "unknown identifier 'putz'");
+        assert.strictEqual(
+            elsewhere.message,
+            "an error in another file of the program: broken.rig:2:5: unknown identifier 'x'",
+        );
+        assert.strictEqual(elsewhere.severity, vscodeStub.DiagnosticSeverity.Error);
+        assert.deepStrictEqual([elsewhere.range.start.line, elsewhere.range.start.character, elsewhere.range.end.character], [0, 0, 1]);
+        // broken.rig itself gets nothing: it isn't open.
+        assert.deepStrictEqual([...live.keys()], [key]);
     });
 });
 
