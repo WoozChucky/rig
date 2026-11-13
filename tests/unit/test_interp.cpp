@@ -6,12 +6,12 @@
 // mismatched call's effects that source hides), or that would be awkward to
 // write as source (a module growing between runs, a relocation to a C
 // function that isn't there, a call of a stray address or of a native one
-// of the test's own, 65,537 procedures), build it by hand. Then the call thunks' tests (thunk.h) call
-// C functions through them directly, in this process, and the next ones
-// have interpreted code call C, as a program does. The last run
-// bin/unit-tests --interpret (interpret_mode.cpp), which interprets a
-// whole program as bin/run-tests does each of tests/run, as a child
-// process.
+// of the test's own, 65,537 procedures), build it by hand. Then the call
+// thunks' tests (thunk.h) call C functions through them directly, in this
+// process, and the next ones have interpreted code call C, as a program
+// does. The last ones run bin/unit-tests --interpret (interpret_mode.cpp)
+// as a child process, which interprets a whole program as bin/run-tests
+// does each of tests/run.
 
 #include "test.h"
 
@@ -2660,34 +2660,30 @@ static String interpret_test_file(Arena *a, const char *name, const char *text) 
     return path;
 }
 
-// bin/unit-tests --interpret PATH, with a minute to finish, its stdout and
-// stderr one pipe when `merged`. The interpreted program writes as a
-// compiled one does, in text mode, so on Windows each "\r\n" is read as
-// "\n", as the test runner reads them.
-static Process_Result interpret_test_run(Arena *a, String path, bool merged) {
+// bin/unit-tests --interpret followed by the `count` words of `words`, with
+// a minute to finish, its stdout and stderr one pipe when `merged`: what it
+// wrote, byte for byte.
+static Process_Result interpret_test_raw(Arena *a, const String *words, s64 count, bool merged) {
     Array<String> argv = {};
     array_add(&argv, unit_tests_path(a));
     array_add(&argv, str("--interpret"));
-    array_add(&argv, path);
+    for (s64 i = 0; i < count; i++) array_add(&argv, words[i]);
     Process_Result r = {};
     bool ran = merged ? os_run_merged(a, argv, {}, 60, &r) : os_run_for(a, argv, {}, 60, &r);
     CHECK(ran);
     CHECK(!r.timed_out);
     array_free(&argv);
-#ifdef _WIN32
-    String streams[2] = {r.out, r.err};
-    for (String &s : streams) {
-        u8 *text = (u8 *)arena_alloc(a, s.count ? s.count : 1, 1);
-        s64 n = 0;
-        for (s64 i = 0; i < s.count; i++) {
-            if (s.data[i] == '\r' && i + 1 < s.count && s.data[i + 1] == '\n') continue;
-            text[n++] = s.data[i];
-        }
-        s = {text, n};
-    }
-    r.out = streams[0];
-    r.err = streams[1];
-#endif
+    return r;
+}
+
+// interpret_test_raw's run, read as the test runner reads it. The
+// interpreted program writes as a compiled one does, in text mode, so on
+// Windows each "\n" comes out "\r\n", read as "\n" (test_link.cpp's
+// without_cr).
+static Process_Result interpret_test_run(Arena *a, const String *words, s64 count, bool merged) {
+    Process_Result r = interpret_test_raw(a, words, count, merged);
+    r.out = without_cr(a, r.out);
+    r.err = without_cr(a, r.err);
     return r;
 }
 
@@ -2696,10 +2692,79 @@ TEST(interpret_mode_runs_a_program) {
     String path = interpret_test_file(&a, "hello",
                                       "puts :: (s: *u8) -> s32 #foreign libc;\n"
                                       "main :: () { puts(\"Hello\"); }\n");
-    Process_Result r = interpret_test_run(&a, path, false);
+    // Byte for byte: stdout is in text mode, as a compiled program's is, so
+    // on Windows its "\n" is "\r\n" (unit.cpp's main starts the mode before
+    // helper_mode would make it binary).
+    Process_Result r = interpret_test_raw(&a, &path, 1, false);
+#ifdef _WIN32
+    CHECK_STR(r.out, "Hello\r\n");
+#else
     CHECK_STR(r.out, "Hello\n");
+#endif
     CHECK_STR(r.err, "");
     CHECK_EQ(r.exit_code, 0);
+    arena_free(&a);
+}
+
+TEST(interpret_mode_command_line) {
+    // The words after --interpret are FILE.rig and --no-bounds-checks, in
+    // either order, each once; anything else is the usage, with exit status
+    // 2. The program reads one past the end of a struct's array, which
+    // without the bounds check is the field after it, 42, its exit status.
+    Arena a = arena_make();
+    String path = interpret_test_file(&a, "unchecked",
+                                      "exit :: (status: s32) #foreign libc;\n"
+                                      "Holder :: struct { a: [4]int; b: int; }\n"
+                                      "main :: () {\n"
+                                      "    h : Holder;\n"
+                                      "    h.b = 42;\n"
+                                      "    i := 4;\n"
+                                      "    exit(cast(s32) h.a[i]);\n"
+                                      "}\n");
+    String flag = str("--no-bounds-checks");
+    const char *usage = "usage: unit-tests --interpret FILE.rig [--no-bounds-checks]\n";
+
+    String checked[] = {path};
+    Process_Result r = interpret_test_run(&a, checked, 1, false);
+    CHECK_STR(r.out, "");
+    CHECK_STR(r.err, ".build/tests/interp/unchecked.rig:7:23: runtime error: index 4 is out of bounds (count 4)\n");
+    CHECK_EQ(r.exit_code, 101);
+
+    String file_first[] = {path, flag};
+    r = interpret_test_run(&a, file_first, 2, false);
+    CHECK_STR(r.err, "");
+    CHECK_EQ(r.exit_code, 42);
+    String flag_first[] = {flag, path};
+    r = interpret_test_run(&a, flag_first, 2, false);
+    CHECK_STR(r.err, "");
+    CHECK_EQ(r.exit_code, 42);
+
+    String no_file[] = {flag};
+    String unknown[] = {path, str("--bogus")};
+    String flag_twice[] = {path, flag, flag};
+    String two_files[] = {path, str(".build/tests/interp/other.rig")};
+    struct Words {
+        const String *words;
+        s64 count;
+    };
+    Words malformed[] = {{nullptr, 0}, {no_file, 1}, {unknown, 2}, {flag_twice, 3}, {two_files, 2}};
+    for (const Words &w : malformed) {
+        r = interpret_test_run(&a, w.words, w.count, false);
+        CHECK_STR(r.out, "");
+        CHECK_STR(r.err, usage);
+        CHECK_EQ(r.exit_code, 2);
+    }
+
+    // A file that can't be read: exit status 1, and why, from the system.
+    String missing = str(".build/tests/interp/missing.rig");
+    remove(string_cstr(&a, missing));
+    r = interpret_test_run(&a, &missing, 1, false);
+    const char *cannot = "unit-tests: error: cannot read '.build/tests/interp/missing.rig': ";
+    s64 n = (s64)strlen(cannot);
+    CHECK(r.err.count > n);
+    CHECK_STR(string_slice(r.err, 0, r.err.count < n ? r.err.count : n), cannot);
+    CHECK_STR(r.out, "");
+    CHECK_EQ(r.exit_code, 1);
     arena_free(&a);
 }
 
@@ -2715,7 +2780,7 @@ TEST(interpret_mode_exit) {
                                       "    exit(7);\n"
                                       "    printf(\"after\\n\");\n"
                                       "}\n");
-    Process_Result r = interpret_test_run(&a, path, false);
+    Process_Result r = interpret_test_run(&a, &path, 1, false);
     CHECK_STR(r.out, "before 7\n");
     CHECK_STR(r.err, "");
     CHECK_EQ(r.exit_code, 7);
@@ -2734,7 +2799,7 @@ TEST(interpret_mode_flushes_before_failing) {
                                       "    zero := 0;\n"
                                       "    n := 1 / zero;\n"
                                       "}\n");
-    Process_Result r = interpret_test_run(&a, path, true);
+    Process_Result r = interpret_test_run(&a, &path, 1, true);
     CHECK_STR(r.out, "before\n.build/tests/interp/fail.rig:5:12: runtime error: division by zero\n");
     CHECK_EQ(r.exit_code, 101);
     arena_free(&a);
@@ -2750,9 +2815,26 @@ TEST(interpret_mode_failure_without_a_panic) {
                                       "    return down(n + 1) + 1;\n"
                                       "}\n"
                                       "main :: () { down(0); }\n");
-    Process_Result r = interpret_test_run(&a, path, false);
+    Process_Result r = interpret_test_run(&a, &path, 1, false);
     CHECK_STR(r.out, "");
     CHECK_STR(r.err, ".build/tests/interp/overflow.rig:2:5: runtime error: stack overflow\n");
+    CHECK_EQ(r.exit_code, 101);
+    arena_free(&a);
+}
+
+TEST(interpret_mode_failure_before_main) {
+    // A failure before main starts, a global's relocation to a C function
+    // the C library doesn't have, has no frame: it names the file alone.
+    Arena a = arena_make();
+    String path = interpret_test_file(&a, "nowhere",
+                                      "nowhere_at_all :: () #foreign libc;\n"
+                                      "f : () #c_call = nowhere_at_all;\n"
+                                      "main :: () { }\n");
+    Process_Result r = interpret_test_run(&a, &path, 1, false);
+    CHECK_STR(r.out, "");
+    CHECK_STR(r.err,
+              ".build/tests/interp/nowhere.rig: runtime error: 'nowhere_at_all' isn't in the C library at compile "
+              "time\n");
     CHECK_EQ(r.exit_code, 101);
     arena_free(&a);
 }
@@ -2762,7 +2844,7 @@ TEST(interpret_mode_reports_a_programs_errors) {
     // build prints them, and exit status 1.
     Arena a = arena_make();
     String path = interpret_test_file(&a, "broken", "main :: () { putz(\"hi\"); }\n");
-    Process_Result r = interpret_test_run(&a, path, false);
+    Process_Result r = interpret_test_run(&a, &path, 1, false);
     CHECK_STR(r.out, "");
     CHECK_STR(r.err,
               ".build/tests/interp/broken.rig:1:14: error: unknown identifier 'putz'\n"

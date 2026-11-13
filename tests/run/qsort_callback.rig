@@ -22,6 +22,7 @@ show :: (numbers: []int) {
 
 main :: () {
     numbers := int.[42, 7, -3, 19, 0, 7, 100, -50];
+    show(numbers);
     qsort(numbers.data, cast(u64) numbers.count, size_of(int), ascending);
     show(numbers);
     order : (*void, *void) -> s32 #c_call = descending;
