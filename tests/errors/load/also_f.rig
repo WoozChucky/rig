@@ -1,0 +1,2 @@
+// Loaded by tests/errors/load_declared_twice.rig, which declares f too.
+f :: () {}

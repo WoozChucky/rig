@@ -100,9 +100,10 @@ check('no problem matcher shares its owner with the live check\'s collection', (
 // tests/errors/NAME.err is what `rig build tests/errors/NAME.rig` prints,
 // run from the repository root: for each error a line
 // `FILE:LINE:COLUMN: error: MESSAGE`, then the source line and a caret under
-// the column, both indented by four spaces. The matcher must take each
-// first line, with the file, line and column the source and caret lines
-// confirm, and no indented line.
+// the column, both indented by four spaces. FILE is NAME.rig, or a file it
+// #loads, in tests/errors/load/. The matcher must take each first line,
+// with the file, line and column the source and caret lines confirm, and no
+// indented line.
 check('the problem matcher reads every diagnostic of tests/errors', () => {
     const dir = path.join(root, 'tests', 'errors');
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.err'));
@@ -123,7 +124,8 @@ check('the problem matcher reads every diagnostic of tests/errors', () => {
             const d = match(first);
             assert.ok(d, `${where}: the matcher misses ${JSON.stringify(first)}`);
             assert.strictEqual(d.severity, 'error', where);
-            assert.strictEqual(d.file, `tests/errors/${name.replace(/\.err$/, '.rig')}`, where);
+            const own = `tests/errors/${name.replace(/\.err$/, '.rig')}`;
+            assert.ok(d.file === own || /^tests\/errors\/load\/[^/]+\.rig$/.test(d.file), `${where}: ${d.file}`);
             assert.ok(d.message.length > 0, where);
 
             // When the source and caret lines follow (they do in every file
@@ -233,28 +235,37 @@ check('diagnostics.js reads with the same regular expression as $rig', () => {
     assert.strictEqual(runtimeMatcher().pattern.regexp, matcher().pattern.regexp.replace('(?:runtime )?', 'runtime '));
 });
 
-// What `rig check tests/errors/NAME.rig` prints is NAME.err: each of its
-// diagnostics, and only those, comes out, at the line and column it names,
+// What `rig check tests/errors/NAME.rig` prints is NAME.err: each file's
+// diagnostics, and only those, come out for that file (NAME.rig, or a file
+// it #loads, in tests/errors/load/), at the line and column each names,
 // with its severity and message, and none of the source and caret lines.
 check('diagnostics.js reads every diagnostic of tests/errors', () => {
     const { parseDiagnostics } = diagnostics();
     const dir = path.join(root, 'tests', 'errors');
     for (const name of fs.readdirSync(dir).filter((f) => f.endsWith('.err'))) {
         const text = fs.readFileSync(path.join(dir, name), 'utf8');
-        const file = path.join(dir, name.replace(/\.err$/, '.rig'));
-        const expected = text
-            .split(/\r?\n/)
-            .filter((l) => l && !/^\s/.test(l))
-            .map((l) => {
-                const m = /^[^:]+:(\d+):(\d+): (error|warning): (.*)$/.exec(l);
-                assert.ok(m, `${name}: ${l}`);
-                return { line: Number(m[1]), column: Number(m[2]), severity: m[3], message: m[4] };
-            });
-        assert.ok(expected.length > 0, name);
+        // Each file's diagnostics, under its name as the .err gives it.
+        // NAME.rig is there even with none of its own: a name declared again
+        // in a file it loads is that file's error alone.
+        const own = `tests/errors/${name.replace(/\.err$/, '.rig')}`;
+        const expected = new Map([[own, []]]);
+        let count = 0;
+        for (const l of text.split(/\r?\n/).filter((l) => l && !/^\s/.test(l))) {
+            const m = /^([^:]+):(\d+):(\d+): (error|warning): (.*)$/.exec(l);
+            assert.ok(m, `${name}: ${l}`);
+            if (!expected.has(m[1])) expected.set(m[1], []);
+            expected.get(m[1]).push({ line: Number(m[2]), column: Number(m[3]), severity: m[4], message: m[5] });
+            count++;
+        }
+        assert.ok(count > 0, name);
         // The names in the .err are relative to the repository's root,
         // where rig ran; Windows' \r\n reads the same.
-        assert.deepStrictEqual(parseDiagnostics(text, file, root), expected, name);
-        assert.deepStrictEqual(parseDiagnostics(text.replace(/\r?\n/g, '\r\n'), file, root), expected, `${name}, \\r\\n`);
+        for (const [relative, list] of expected) {
+            const file = path.join(root, ...relative.split('/'));
+            const where = `${name}, ${relative}`;
+            assert.deepStrictEqual(parseDiagnostics(text, file, root), list, where);
+            assert.deepStrictEqual(parseDiagnostics(text.replace(/\r?\n/g, '\r\n'), file, root), list, `${where}, \\r\\n`);
+        }
         // Another file's diagnostics aren't this one's.
         assert.deepStrictEqual(parseDiagnostics(text, path.join(dir, 'other.rig'), root), [], `${name}, another file`);
     }
@@ -271,6 +282,44 @@ check('diagnostics.js takes an absolute name, and on Windows any case', () => {
     assert.strictEqual(upper.length, process.platform === 'win32' ? 1 : 0);
     // A warning stays a warning.
     assert.strictEqual(parseDiagnostics(`${file}:1:1: warning: w\n`, file, '.')[0].severity, 'warning');
+});
+
+// The errors rig check finds in the files a program #loads are counted in
+// one error on the checked file's first line, which names the first.
+check('diagnostics.js counts the errors in the other files of the program', () => {
+    const { otherFilesError } = diagnostics();
+    const text = fs.readFileSync(path.join(root, 'tests', 'errors', 'load_error_in_loaded_file.err'), 'utf8');
+    const main = path.join(root, 'tests', 'errors', 'load_error_in_loaded_file.rig');
+    assert.deepStrictEqual(otherFilesError(text, main, root), {
+        line: 1,
+        column: 1,
+        severity: 'error',
+        message: "2 errors in the program's other files, the first: load/bad_type.rig:3:14: 300 doesn't fit in 'u8'",
+    });
+    // From the loaded file, the main file's is the other one.
+    const loaded = path.join(root, 'tests', 'errors', 'load', 'bad_type.rig');
+    assert.strictEqual(
+        otherFilesError(text.replace(/\r?\n/g, '\r\n'), loaded, root).message,
+        "an error in another file of the program: ../load_error_in_loaded_file.rig:9:14: 256 doesn't fit in 'u8'",
+    );
+    // The live check gives rig the document's full path, so rig names a
+    // file it loads by an absolute path: on Windows the directory's '\',
+    // then the #load's '/'. It's named from the document's directory, with
+    // '/', as a #load there would name it.
+    const src = path.resolve('w', 'src');
+    const absolute = `${path.join(src, 'world')}/MAP.rig:1:20: error: 300 doesn't fit in 'u8'\n`;
+    assert.strictEqual(
+        otherFilesError(absolute, path.join(src, 'main.rig'), path.resolve('elsewhere')).message,
+        "an error in another file of the program: world/MAP.rig:1:20: 300 doesn't fit in 'u8'",
+    );
+    // None elsewhere, or only warnings and rig's own errors: none to count.
+    const own = `${main}:9:14: error: x\n    y : u8 = 256;\n             ^\nrig: error: linking failed\n`;
+    assert.strictEqual(otherFilesError(own, main, root), null);
+    assert.strictEqual(otherFilesError(`other.rig:1:1: warning: w\n`, main, root), null);
+    // A source line quoted under an error is indented, and isn't an error
+    // of its own, even when its text reads like one.
+    const quoted = `${main}:1:6: error: x\n    puts("other.rig:1:1: error: y");\n         ^\n`;
+    assert.strictEqual(otherFilesError(quoted, main, root), null);
 });
 
 // rig counts a column in bytes of UTF-8 (src/diag.h: a tab is one, and so is
@@ -1059,8 +1108,9 @@ check('the tasks use $rig-runtime while rig.check is on, $rig when it is off', (
 // `node check FILE --stdin` in the workspace folder, and Node runs the
 // script check.js there (written by the check, below): a stand-in for
 // `rig check` that reads stdin and reports each `putz` in it as rig would,
-// slowly if the text says `slow`. The documents are stand-ins too, never
-// saved: what's checked is their text.
+// slowly if the text says `slow`, with a warning about another file, and
+// an error in broken.rig if the text #loads it. The documents are
+// stand-ins too, never saved: what's checked is their text.
 
 const STAND_IN = `
 const file = process.argv[2];
@@ -1078,7 +1128,11 @@ process.stdin.on('end', () => {
             process.stderr.write(file + ':' + (i + 1) + ':' + column + ": error: unknown identifier 'putz'\\n");
             process.stderr.write('    ' + line + '\\n');
         });
-        process.stderr.write('other.rig:1:1: error: not this file\\n');
+        process.stderr.write('other.rig:1:1: warning: not this file\\n');
+        if (text.includes('#load "broken.rig"')) {
+            process.stderr.write("broken.rig:2:5: error: unknown identifier 'x'\\n");
+            errors++;
+        }
         process.exitCode = errors ? 1 : 0;
     }, text.includes('slow') ? 1500 : 0);
 });
@@ -1194,6 +1248,31 @@ check('a document is checked when it opens, as you type, and forgotten when it c
         fire('open', doc);
         await sleep(300);
         assert.ok(!live.has(key), 'rig.check off still checked');
+    });
+});
+
+check('an error in a file the document loads is counted on its first line', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const doc = fakeDocument(path.join(dir, 'm.rig'), '#load "broken.rig";\nmain :: () { putz(); }\n');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        fire('open', doc);
+        await until('the check', () => live.has(key));
+        // The document's own, then the one for broken.rig, on the first line's
+        // first character (the '#', no word).
+        const [own, elsewhere, ...rest] = live.get(key);
+        assert.deepStrictEqual(rest, []);
+        assert.strictEqual(own.message, "unknown identifier 'putz'");
+        assert.strictEqual(
+            elsewhere.message,
+            "an error in another file of the program: broken.rig:2:5: unknown identifier 'x'",
+        );
+        assert.strictEqual(elsewhere.severity, vscodeStub.DiagnosticSeverity.Error);
+        assert.deepStrictEqual([elsewhere.range.start.line, elsewhere.range.start.character, elsewhere.range.end.character], [0, 0, 1]);
+        // broken.rig itself gets nothing: it isn't open.
+        assert.deepStrictEqual([...live.keys()], [key]);
     });
 });
 

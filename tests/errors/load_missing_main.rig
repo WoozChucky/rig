@@ -1,0 +1,4 @@
+// A program whose one file loads a file that isn't there (issue #112): that
+// file may have declared main, so main isn't reported as missing, and the
+// #load's error is the one there is.
+#load "load/nope.rig";

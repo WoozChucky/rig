@@ -1,0 +1,6 @@
+// Loaded by tests/run/load_index_error.rig, whose main passes an index one
+// past the end. In a directory of its own, so that its path is longer than
+// the main file's.
+element :: (v: []int, i: int) -> int {
+    return v[i];
+}

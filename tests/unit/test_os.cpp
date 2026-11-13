@@ -7,8 +7,10 @@
 
 #include <time.h>  // time(), for the timeouts
 #ifndef _WIN32
-#include <stdlib.h>  // realpath, setenv, unsetenv
-#include <unistd.h>  // symlink, unlink
+#include <errno.h>     // EISDIR, EINVAL, ENOENT, ENOTDIR
+#include <stdlib.h>    // realpath, setenv, unsetenv
+#include <sys/stat.h>  // mkfifo
+#include <unistd.h>    // symlink, unlink
 #endif
 
 #ifdef _WIN32
@@ -16,6 +18,28 @@
 #else
 #define SEPARATOR '/'
 #endif
+
+// The system's reason for an error (an errno on Linux, a GetLastError()
+// code on Windows) as os_error_message gives it, to check that a failing
+// os_ function remembered its own: strerror's text on Linux; on Windows the
+// system's message, in the user's language, without the ".\r\n" it ends
+// with.
+static const char *reason(Arena *a, u32 error) {
+#ifdef _WIN32
+    wchar_t message[512];
+    DWORD n = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, error, 0, message,
+                             512, nullptr);
+    while (n > 0 && (message[n - 1] == L'\r' || message[n - 1] == L'\n' || message[n - 1] == L'.')) n--;
+    int count = n ? WideCharToMultiByte(CP_UTF8, 0, message, (int)n, nullptr, 0, nullptr, nullptr) : 0;
+    char *text = arena_new_array<char>(a, count + 1);
+    if (count) WideCharToMultiByte(CP_UTF8, 0, message, (int)n, text, count, nullptr, nullptr);
+    text[count] = 0;
+    return text;
+#else
+    (void)a;
+    return strerror((int)error);
+#endif
+}
 
 static String unit_tests_path(Arena *a) {
 #ifdef _WIN32
@@ -374,12 +398,149 @@ TEST(os_files_round_trip) {
     arena_free(&a);
 }
 
+// Whether two of os_file_id's ids are one file's.
+static bool same_file_id(const u64 x[3], const u64 y[3]) {
+    return x[0] == y[0] && x[1] == y[1] && x[2] == y[2];
+}
+
+TEST(os_file_id_sees_one_file_under_two_names) {
+    // #load reads each file once, however it's named (issue #112): a file's
+    // id is the same whatever path reaches it, and another file's differs.
+    Arena a = arena_make();
+    os_make_directory(str(".build"));
+    os_make_directory(str(".build/tests"));
+    CHECK(os_make_directory(str(".build/tests/file_id")));
+    CHECK(os_write_file(str(".build/tests/file_id/a.rig"), str("main :: () {}\n")));
+    CHECK(os_write_file(str(".build/tests/file_id/b.rig"), str("main :: () {}\n")));
+    u64 id[3] = {}, same[3] = {}, other[3] = {};
+    CHECK(os_file_id(str(".build/tests/file_id/a.rig"), id));
+    CHECK(os_file_id(str(".build/tests/file_id/../file_id/a.rig"), same));
+    CHECK(same_file_id(id, same));
+    // b.rig has the same bytes, but it's another file.
+    CHECK(os_file_id(str(".build/tests/file_id/b.rig"), other));
+    CHECK(!same_file_id(id, other));
+    // Each failure's own reason: a.rig/x.rig's, where a.rig isn't a
+    // directory, then missing.rig's, so the first's can't pass for it.
+#ifdef _WIN32
+    const u32 NOT_A_DIRECTORY = ERROR_PATH_NOT_FOUND, NOT_FOUND = ERROR_FILE_NOT_FOUND;
+#else
+    const u32 NOT_A_DIRECTORY = ENOTDIR, NOT_FOUND = ENOENT;
+#endif
+    CHECK(!os_file_id(str(".build/tests/file_id/a.rig/x.rig"), other));
+    CHECK_STR(os_error_message(&a), reason(&a, NOT_A_DIRECTORY));
+    CHECK(!os_file_id(str(".build/tests/file_id/missing.rig"), other));
+    CHECK_STR(os_error_message(&a), reason(&a, NOT_FOUND));
+    // A directory has an id too, on both systems, the same under its two
+    // names; so a #load naming one is reported once, however it's named.
+    u64 directory[3] = {}, directory_too[3] = {};
+    CHECK(os_file_id(str(".build/tests/file_id"), directory));
+    CHECK(os_file_id(str(".build/tests/file_id/."), directory_too));
+    CHECK(same_file_id(directory, directory_too));
+    CHECK(!same_file_id(directory, id));
+#ifdef _WIN32
+    // Windows' names ignore case: A.RIG is a.rig.
+    same[0] = same[1] = same[2] = 0;
+    CHECK(os_file_id(str(".build/tests/file_id/A.RIG"), same));
+    CHECK(same_file_id(id, same));
+#else
+    // A symbolic link is the file it points at.
+    unlink(".build/tests/file_id/link.rig");
+    CHECK(symlink("a.rig", ".build/tests/file_id/link.rig") == 0);
+    same[0] = same[1] = same[2] = 0;
+    CHECK(os_file_id(str(".build/tests/file_id/link.rig"), same));
+    CHECK(same_file_id(id, same));
+    unlink(".build/tests/file_id/link.rig");
+#endif
+    arena_free(&a);
+}
+
 TEST(os_read_missing_file_fails) {
     Arena a = arena_make();
     String text = {};
     CHECK(!os_read_file(&a, str(".build/no-such-file.rig"), &text));
-    CHECK(os_error_message(&a).count > 0);
+#ifdef _WIN32
+    CHECK_STR(os_error_message(&a), reason(&a, ERROR_FILE_NOT_FOUND));
+#else
+    CHECK_STR(os_error_message(&a), reason(&a, ENOENT));
+#endif
     CHECK(!os_file_exists(str(".build/no-such-file.rig")));
+    arena_free(&a);
+}
+
+TEST(os_read_file_reads_only_files) {
+    // A #load can name what isn't a file (issue #112). A directory isn't
+    // read, on every file system: not as the empty file its size says it
+    // is on one where an empty directory's size is 0 (btrfs), and with a
+    // reason that says it's a directory, not that access is denied. On
+    // Linux, a pipe isn't either, nor waited on: opening one to read waits
+    // for a writer, so this would hang.
+    Arena a = arena_make();
+    os_make_directory(str(".build"));
+    os_make_directory(str(".build/tests"));
+    CHECK(os_make_directory(str(".build/tests/read_only_files")));
+    CHECK(os_make_directory(str(".build/tests/read_only_files/d.rig")));
+    String text = {};
+    CHECK(!os_read_file(&a, str(".build/tests/read_only_files/d.rig"), &text));
+#ifdef _WIN32
+    CHECK_STR(os_error_message(&a), reason(&a, ERROR_DIRECTORY_NOT_SUPPORTED));
+#else
+    CHECK_STR(os_error_message(&a), reason(&a, EISDIR));
+    unlink(".build/tests/read_only_files/p.rig");
+    CHECK(mkfifo(".build/tests/read_only_files/p.rig", 0644) == 0);
+    CHECK(!os_read_file(&a, str(".build/tests/read_only_files/p.rig"), &text));
+    CHECK_STR(os_error_message(&a), reason(&a, EINVAL));
+    unlink(".build/tests/read_only_files/p.rig");
+#endif
+    arena_free(&a);
+}
+
+#ifdef _WIN32
+TEST(os_read_file_reads_a_file_open_for_writing) {
+    // A file another program holds open for writing, as an editor can, is
+    // read all the same, and os_file_id identifies it, as it did before:
+    // both opens share writing, and deleting, with that program.
+    Arena a = arena_make();
+    os_make_directory(str(".build"));
+    os_make_directory(str(".build/tests"));
+    CHECK(os_write_file(str(".build/tests/open_for_writing.rig"), str("main :: () {}\n")));
+    u64 before[3] = {}, during[3] = {};
+    CHECK(os_file_id(str(".build/tests/open_for_writing.rig"), before));
+    // DELETE too, as some editors' saves hold it: Windows then refuses an
+    // open that doesn't share deleting.
+    HANDLE writer = CreateFileW(L".build\\tests\\open_for_writing.rig", GENERIC_WRITE | DELETE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+    CHECK(writer != INVALID_HANDLE_VALUE);
+    String text = {};
+    CHECK(os_read_file(&a, str(".build/tests/open_for_writing.rig"), &text));
+    CHECK_STR(text, "main :: () {}\n");
+    CHECK(os_file_id(str(".build/tests/open_for_writing.rig"), during));
+    CHECK(same_file_id(before, during));
+    if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
+    arena_free(&a);
+}
+#endif
+
+TEST(os_fold_case_folds_as_the_system_does) {
+    // On Windows every letter's case, not only ASCII's: Ä.rig is ä.rig. On
+    // Linux, none: they're two files.
+    Arena a = arena_make();
+    String upper = os_fold_case(&a, str("C:/Sub/\xC3\x84.RIG"));
+    String lower = os_fold_case(&a, str("c:/sub/\xC3\xA4.rig"));
+#ifdef _WIN32
+    CHECK_STR(upper, "C:/SUB/\xC3\x84.RIG");
+    CHECK_STR(lower, "C:/SUB/\xC3\x84.RIG");
+#else
+    CHECK_STR(upper, "C:/Sub/\xC3\x84.RIG");
+    CHECK_STR(lower, "c:/sub/\xC3\xA4.rig");
+#endif
+    // Neither changes anything but case.
+#ifdef _WIN32
+    CHECK_STR(os_fold_case(&a, str("a/b.rig")), "A/B.RIG");
+#else
+    CHECK_STR(os_fold_case(&a, str("a/b.rig")), "a/b.rig");
+#endif
+    CHECK_EQ(os_fold_case(&a, str("")).count, 0);
     arena_free(&a);
 }
 

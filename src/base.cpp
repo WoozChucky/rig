@@ -1,6 +1,7 @@
-// base.cpp: the containers that aren't templates (issue #3), and making a
-// path absolute and MD5 (milestone 2c). The templates' bodies are in
-// base.h, where C++ needs them.
+// base.cpp: the containers that aren't templates (issue #3), making a path
+// absolute (milestone 2c), the path a #load names and whether a path names
+// a .rig file (issue #112), and MD5 (milestone 2c). The templates' bodies
+// are in base.h, where C++ needs them.
 
 #include "base.h"
 
@@ -210,13 +211,29 @@ static bool starts_with_drive(String p) {
     return p.count >= 2 && letter && p.data[1] == ':';
 }
 
+// Whether p starts with \\?\, which has Windows open the path as it is:
+// '/' doesn't separate in it, and "." and ".." aren't resolved. Only with
+// backslashes: //?/ is normalised as any path is.
+static bool starts_verbatim(String p) {
+    return p.count >= 4 && p.data[0] == '\\' && p.data[1] == '\\' && p.data[2] == '?' && p.data[3] == '\\';
+}
+
 // How many of p's first bytes are a Windows root: 2 for a drive's "C:", all
-// of "\\server\share" for a network share (either slash), 0 for none.
+// of "\\server\share" for a network share (either slash), 0 for none. After
+// the \\?\ prefix the root is the drive, "\\?\C:", or the network share,
+// "\\?\UNC\server\share".
 static s64 windows_root_length(String p) {
     if (starts_with_drive(p)) return 2;
     if (p.count >= 2 && is_separator(p.data[0], true) && is_separator(p.data[1], true)) {
         // Two names after the two separators: the server's, then the share's.
+        // In \\?\C: they're "?" and "C:", which ends the root where the
+        // drive's does; in \\?\UNC\server\share (UNC in any case) they come
+        // after the UNC.
         s64 i = 2;
+        if (starts_verbatim(p) && p.count >= 8 && (p.data[4] | 0x20) == 'u' && (p.data[5] | 0x20) == 'n' &&
+            (p.data[6] | 0x20) == 'c' && p.data[7] == '\\') {
+            i = 8;
+        }
         while (i < p.count && !is_separator(p.data[i], true)) i++;
         if (i < p.count) i++;
         while (i < p.count && !is_separator(p.data[i], true)) i++;
@@ -301,6 +318,35 @@ String path_absolute(Arena *a, String directory, String path, bool windows) {
     array_free(&out);
     array_free(&segments);
     return result;
+}
+
+String load_path(Arena *a, String from, String written, bool windows) {
+    bool absolute = written.count > 0 && is_separator(written.data[0], windows);
+    if (windows && starts_with_drive(written)) absolute = true;
+    // from's directory: everything up to its last separator, that included.
+    // On Windows, a file with a drive and no separator after it, C:main.rig,
+    // is in that drive's current directory, which its "C:" names. A file in
+    // the current directory has none, and the path stays as written.
+    s64 directory = from.count;
+    while (directory > 0 && !is_separator(from.data[directory - 1], windows)) directory--;
+    if (windows && directory == 0 && starts_with_drive(from)) directory = 2;
+    if (absolute || directory == 0) return string_copy(a, written);
+    u8 *out = arena_new_array<u8>(a, directory + written.count);
+    memcpy(out, from.data, (size_t)directory);
+    if (written.count) memcpy(out + directory, written.data, (size_t)written.count);
+    String joined = {out, directory + written.count};
+    // Windows opens a path with the \\?\ prefix as it is, so the joined
+    // path is resolved here, as Windows resolves any other: its '/' made
+    // '\', and its "." and ".." taken away. Its root is \\?\ and the drive
+    // or share after it, so path_absolute needs no directory.
+    if (windows && starts_verbatim(from)) return path_absolute(a, String{}, joined, true);
+    return joined;
+}
+
+bool is_rig_file(String path) {
+    if (path.count < 4) return false;
+    const u8 *end = path.data + path.count - 4;
+    return end[0] == '.' && (end[1] | 0x20) == 'r' && (end[2] | 0x20) == 'i' && (end[3] | 0x20) == 'g';
 }
 
 // ---------------------------------------------------------------------------

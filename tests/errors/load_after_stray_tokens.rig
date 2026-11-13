@@ -1,0 +1,6 @@
+// A #load the recovery passes over after stray tokens, on the way to a
+// declaration later on the same line (issue #112), isn't reported, and the
+// file it names isn't loaded. It has still failed: the program lacks that
+// file, so greet, which it declares, isn't reported as unknown. The one
+// mistake, the stray '*', is said once.
+* #load "load/other_main.rig"; main :: () { greet(); }

@@ -1,0 +1,6 @@
+// Loaded by tests/errors/load_error_in_loaded_file.rig.
+convert :: () {
+    x : u8 = 300;
+}
+
+scale :: (by: Factor) {}

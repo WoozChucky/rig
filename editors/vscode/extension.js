@@ -41,7 +41,7 @@ const {
     debugConfiguration,
     launchConfiguration,
 } = require('./debug');
-const { samePath, parseDiagnostics, characterOfByteColumn } = require('./diagnostics');
+const { samePath, parseDiagnostics, otherFilesError, characterOfByteColumn } = require('./diagnostics');
 
 const windows = process.platform === 'win32';
 
@@ -782,11 +782,13 @@ function checkSetting(uri) {
 }
 
 // One rig diagnostic ({ line, column, severity, message }, from
-// parseDiagnostics) as VS Code's, in `document`. rig's column counts bytes,
-// VS Code's characters, hence characterOfByteColumn. The range runs from
-// the column to the end of the word there (`putz` in `putz("x")`), or is
-// one character when there's no word (a stray `;`). The document may have
-// changed since rig read it, so the line is kept within it.
+// parseDiagnostics, or otherFilesError's count of the other files' errors,
+// at line 1, column 1) as VS Code's, in `document`. rig's column counts
+// bytes, VS Code's characters, hence characterOfByteColumn. The range runs
+// from the column to the end of the word there (`putz` in `putz("x")`), or
+// is one character when there's no word (a stray `;`, or the '#' of a
+// first line's #load). The document may have changed since rig read it, so
+// the line is kept within it.
 function toDiagnostic(document, d) {
     const line = Math.max(0, Math.min(d.line - 1, document.lineCount - 1));
     const text = document.lineAt(line).text;
@@ -807,7 +809,9 @@ function toDiagnostic(document, d) {
 // document's text on its standard input, so what's checked is what's on
 // screen, saved or not, and puts the errors in a diagnostic collection, the
 // extension's own list of problems, which VS Code shows as squiggles and in
-// the Problems panel. Each check replaces the document's list.
+// the Problems panel. Each check replaces the document's list. rig also
+// checks the files the document #loads; their errors aren't listed under
+// their own names, but counted in one error on the document's first line.
 //
 // One check per document at a time: a newer one ends the older's process,
 // and the older's output, if any comes, is ignored. Checking writes no file,
@@ -883,8 +887,9 @@ class LiveCheck {
 
         // rig runs where a build would, the file's workspace folder (or its
         // directory), and gets the file's full path, which its diagnostics
-        // then name. The file needn't exist: with --stdin the name is only a
-        // name.
+        // then name. The file needn't exist: with --stdin the text is
+        // stdin's, and the name is what the diagnostics call it and the
+        // file whose directory its #loads are found from.
         const cwd = buildDirectory(file, folder);
         return new Promise((resolve) => {
             // The compiler couldn't be started (it was deleted, or isn't a
@@ -920,8 +925,12 @@ class LiveCheck {
             child.on('close', () => {
                 if (this.running.get(key) === child) {
                     this.running.delete(key);
-                    const diagnostics = parseDiagnostics(output, file, cwd).map((d) => toDiagnostic(document, d));
-                    this.collection.set(document.uri, diagnostics);
+                    // The document's own, then one for the errors rig found
+                    // in the files it #loads, if any (otherFilesError).
+                    const found = parseDiagnostics(output, file, cwd);
+                    const elsewhere = otherFilesError(output, file, cwd);
+                    if (elsewhere) found.push(elsewhere);
+                    this.collection.set(document.uri, found.map((d) => toDiagnostic(document, d)));
                 }
                 resolve();
             });

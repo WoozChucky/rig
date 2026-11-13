@@ -1,0 +1,4 @@
+// Loaded by tests/errors/load_syntax_and_type_error.rig.
+too_big :: () {
+    x : u8 = 300;
+}

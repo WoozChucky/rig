@@ -1,0 +1,9 @@
+// A syntax error in a loaded file stops no checking either (issue #112):
+// this file's type error is reported, and then load/syntax_error.rig's
+// error, as errors sort by file in load order, the main file first.
+#load "load/syntax_error.rig";
+
+main :: () {
+    y : u8 = 256;
+    helper();
+}

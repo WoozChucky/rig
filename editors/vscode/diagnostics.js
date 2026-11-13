@@ -34,22 +34,67 @@ function samePath(a, b) {
     return windows ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
-// rig's output (all of its stderr) as a list of { line, column, severity,
-// message }, line and column counted from 1 as rig counts them, for the
-// diagnostics about `file` alone. rig ran in the directory `cwd`, so a
-// relative name in its output is from there. Lines that aren't a
-// diagnostic's first line (the source and caret lines, which are indented,
-// and rig's own `rig: error: ...`) are skipped, and so is a diagnostic
-// about another file. Windows' "\r\n" reads as "\n".
-function parseDiagnostics(output, file, cwd) {
-    const found = [];
+// Each diagnostic's first line in rig's output (all of its stderr), as
+// { file, line, column, severity, message }: `file` the file as rig named
+// it, resolved from `cwd`, the directory rig ran in, and line and column
+// counted from 1 as rig counts them. Lines that aren't a diagnostic's first
+// line (the source and caret lines, which are indented, and rig's own
+// `rig: error: ...`) are skipped. Windows' "\r\n" reads as "\n".
+// parseDiagnostics and otherFilesError both read rig's output through it,
+// so they agree on what a diagnostic is.
+function* diagnosticLines(output, cwd) {
     for (const line of output.split(/\r?\n/)) {
         if (/^\s/.test(line)) continue;
         const m = DIAGNOSTIC.exec(line);
-        if (!m || !samePath(path.resolve(cwd, m[1]), file)) continue;
-        found.push({ line: Number(m[2]), column: Number(m[3]), severity: m[4], message: m[5] });
+        if (!m) continue;
+        yield { file: path.resolve(cwd, m[1]), line: Number(m[2]), column: Number(m[3]), severity: m[4], message: m[5] };
+    }
+}
+
+// rig's output as a list of { line, column, severity, message }, for the
+// diagnostics about `file` alone (diagnosticLines): one about another file
+// is left out.
+function parseDiagnostics(output, file, cwd) {
+    const found = [];
+    for (const d of diagnosticLines(output, cwd)) {
+        if (samePath(d.file, file)) found.push({ line: d.line, column: d.column, severity: d.severity, message: d.message });
     }
     return found;
+}
+
+// rig check reads the files `file` #loads too, and reports their errors
+// under their names, which parseDiagnostics leaves out: they aren't the
+// document's. But a program that won't build should say so where it's
+// being edited, so they come back as one error of the document's, on its
+// first line, that counts them and names the first, by its path from the
+// document's directory:
+//
+//     an error in another file of the program: load/shapes.rig:3:14: 300 doesn't fit in 'u8'
+//     2 errors in the program's other files, the first: load/shapes.rig:3:14: ...
+//
+// null when there are none. A warning elsewhere doesn't stop the build,
+// and isn't counted.
+function otherFilesError(output, file, cwd) {
+    const errors = [];
+    for (const d of diagnosticLines(output, cwd)) {
+        if (d.severity === 'error' && !samePath(d.file, file)) errors.push(d);
+    }
+    if (errors.length === 0) return null;
+    const { file: other, line, column, message } = errors[0];
+    const count =
+        errors.length === 1 ? 'an error in another file of the program' : `${errors.length} errors in the program's other files, the first`;
+    return { line: 1, column: 1, severity: 'error', message: `${count}: ${nameFrom(file, other)}:${line}:${column}: ${message}` };
+}
+
+// The file at `other`, an absolute path (diagnosticLines), as a #load in
+// `file` would name it: its path from file's directory, with '/' between
+// the names. rig's own name for it can be long and, on Windows, mixed: the
+// live check gives rig the document's full path, so a file it loads is
+// named by the directory's path, with '\', then the #load's, with '/'
+// (C:\x\src\world/map.rig).
+function nameFrom(file, other) {
+    const relative = path.relative(path.dirname(file), other);
+    return windows ? relative.replace(/\\/g, '/') : relative;
 }
 
 // rig counts a column in bytes of the line's UTF-8 (a tab is one column, and
@@ -71,4 +116,4 @@ function characterOfByteColumn(text, column) {
     return index;
 }
 
-module.exports = { DIAGNOSTIC, samePath, parseDiagnostics, characterOfByteColumn };
+module.exports = { DIAGNOSTIC, samePath, parseDiagnostics, otherFilesError, characterOfByteColumn };

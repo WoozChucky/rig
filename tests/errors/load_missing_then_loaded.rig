@@ -1,0 +1,10 @@
+// A #load of a file that isn't there, then one of a file that is (issue
+// #112): the program still lacks the first file after the second loads
+// cleanly, so a name it may have declared isn't reported as unknown.
+#load "load/nope.rig";
+#load "load/helper.rig";
+
+main :: () {
+    helper();
+    thing();
+}
