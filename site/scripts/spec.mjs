@@ -278,11 +278,19 @@ function exampleLabel(kind, where, errors) {
   if (kindLabels[kind]) return { cls: kind, text: kindLabels[kind] }
   const exit = /^exit=(\d+)$/.exec(kind)
   if (exit) return { cls: 'exit', text: `Exits with status ${exit[1]}` }
-  // Another file of the next example's program, which it #loads; its name
-  // is the one the test runner takes (tests/runner.cpp), so it needs no
-  // escaping in the label.
-  const file = /^file=([A-Za-z0-9_.-]+\.rig)$/i.exec(kind)
-  if (file) return { cls: 'file', text: `File ${file[1]}` }
+  // Another file of the next example's program, which it #loads. Its name
+  // is held to the test runner's rule (tests/runner.cpp's
+  // is_example_file_name), so it needs no escaping in the label: `file=` as
+  // written, ASCII letters, digits, '_', '-' and '.', ending in .rig in any
+  // case, and neither example.rig nor a Windows device's (NUL.rig), in any
+  // case.
+  const file = /^file=([A-Za-z0-9_.-]+\.[Rr][Ii][Gg])$/.exec(kind)
+  if (file) {
+    const stem = file[1].split('.')[0]
+    if (!/^example\.rig$/i.test(file[1]) && !/^(con|prn|aux|nul|com\d|lpt\d)$/i.test(stem)) {
+      return { cls: 'file', text: `File ${file[1]}` }
+    }
+  }
   errors.push(`${where}: unknown kind of rig block '${kind}'`)
   return null
 }
@@ -309,11 +317,12 @@ function renderPage(spec, page, lastUpdated, errors) {
   const byStart = new Map(fenced.map((b) => [b.start, b]))
   const isHeading = (i) => !spec.inFence[i] && /^#{1,6}\s/.test(spec.lines[i])
 
-  // Pair each rig block with its output.
+  // Pair each rig block with its output. A file= block is no example, so it
+  // has none, as the test runner takes it.
   const outputs = new Set() // the starts of text blocks that are outputs
   const exampleOf = new Map() // rig block start -> output block
   for (const [k, b] of fenced.entries()) {
-    if (b.lang !== 'rig') continue
+    if (b.lang !== 'rig' || /(^|\s)file=/.test(b.info)) continue
     for (let n = k + 1; n < fenced.length; n++) {
       const next = fenced[n]
       if (next.lang === 'rig') break
