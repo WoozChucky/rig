@@ -9,7 +9,8 @@
 //
 // Errors are collected, not printed at once: the compiler keeps going after
 // one (the language server needs that, spec section 3) and prints them all
-// at the end, in the order they were found.
+// at the end, sorted by file (in load order), then line and column
+// (diag_sort).
 
 #pragma once
 

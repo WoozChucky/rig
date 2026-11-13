@@ -800,7 +800,8 @@ static void run_directory(Arena *a, String rig, const char *dir, String (*test)(
 // about a program in tests/errors, nothing about one in tests/run, and
 // write nothing, neither an object, a program nor a .build directory. With
 // --stdin it reads the source from its standard input (what an editor has
-// on screen, unsaved) and names it FILE.rig, which needn't exist.
+// on screen, unsaved) and names it FILE.rig, which needn't exist, and whose
+// directory the source's #loads are found from.
 
 // The directory where rig check is shown to write nothing, not even a
 // .build (check_writes_nothing_test).
@@ -869,8 +870,10 @@ static String check_wrote(Arena *a, String name) {
 // has on screen. Both must exit with `exit_code` and print `err`, and write
 // nothing. The --stdin check runs where the file is named from too, since
 // the files a program #loads are found from its name's directory
-// (tests/run/load/ for tests/run/NAME.rig); check_stdin_without_a_file_test
-// shows that the text is stdin's, under a name that needn't exist.
+// (tests/run/load/ for tests/run/NAME.rig). Here the text is the file's;
+// check_stdin_of_another_text_test shows that it is stdin's under the name
+// of a file that is there, and check_stdin_without_a_file_test under a name
+// that isn't.
 static String check_both_ways(Arena *a, String rig, const char *dir, String name, s32 exit_code, String err) {
     String file = string_printf(a, "%s/" STR_FMT ".rig", dir, STR_ARG(name));
     String source = {};
@@ -948,6 +951,29 @@ static String check_stdin_without_a_file_test(Arena *a, String rig) {
                             "                 ^\n"));
 }
 
+// --stdin under the name of a file that is there, from the repository's
+// root, with a text of its own: what an editor sends when the file on
+// screen has changed since it was saved. The text is stdin's, not the
+// file's: it declares newline, which load/print.rig uses, and calls putz,
+// the one error, where tests/run/load_files.rig checks clean. Its #load is
+// found from the name's directory, tests/run, and print.rig's #load of
+// ../load_files.rig, the name, loads nothing: that's the main file, whose
+// text is this one.
+static String check_stdin_of_another_text_test(Arena *a, String rig) {
+    String file = str("tests/run/load_files.rig");
+    if (!os_file_exists(file)) return str("tests/run/load_files.rig isn't there");
+    Process_Result r = {};
+    String why = {};
+    String typed = str("#load \"load/print.rig\";\n"
+                       "newline :: () { putchar(10); }\n"
+                       "main :: () { print_line(7); putz(\"hi\"); }\n");
+    if (!run_check(a, rig, file, true, typed, {}, &r, &why)) return why;
+    return check_result(a, "rig check --stdin", &r, 1,
+                        str("tests/run/load_files.rig:3:29: error: unknown identifier 'putz'\n"
+                            "    main :: () { print_line(7); putz(\"hi\"); }\n"
+                            "                                ^\n"));
+}
+
 // rig check's command line, right and wrong, as COMMAND_CASES rig build's,
 // and the rule the two share: the source file's name ends in .rig.
 static const Command_Case CHECK_CASES[] = {
@@ -1001,6 +1027,8 @@ static void check_tests(Arena *a, String rig, s64 *passed, s64 *failed) {
         }
         array_free(&names);
     }
+    report("rig check --stdin of another text than the file's", check_stdin_of_another_text_test(a, rig), passed,
+           failed);
     report("rig check --stdin of a file that isn't there", check_stdin_without_a_file_test(a, rig), passed, failed);
     report("rig check writes nothing, not even .build", check_writes_nothing_test(a, rig), passed, failed);
     for (const Command_Case &c : CHECK_CASES) {

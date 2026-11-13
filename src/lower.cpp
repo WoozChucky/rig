@@ -666,9 +666,10 @@ static Ir_Op ir_op_of(Token_Kind op, Type *t) {
 //     ...
 //
 // The panic writes the message to stderr and exits with status 101
-// (llvm_backend.cpp's __rig_panic). PATH is the source file's path as rig
-// build was given it. Each check has a message of its own, since each names
-// its own position. The branch is the statement's code, at its position; the
+// (llvm_backend.cpp's __rig_panic). PATH is the path messages name the
+// check's file by (Source_File.path): the main file's as rig build was given
+// it, a loaded file's as its #load made it (load.h). Each check has a
+// message of its own, since each names its own position. The branch is the statement's code, at its position; the
 // panic is at `at`, the place the message names, so a debugger stopped there
 // shows the same place.
 static void emit_runtime_check(Lowering *l, s32 fails, Position at, String message) {
