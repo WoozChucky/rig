@@ -1,48 +1,54 @@
-make (n=5) at
+make (result$=0x
+n=5) at
 aggregates.rig:16
 p := Pair.{n, n + 1};
 main () at
 aggregates.rig:46
 q := make(5);
-Value returned is $1 = {a = 5, b = 6}
-little (n=7) at
+little (result$=0x
+n=7) at
 aggregates.rig:21
 main () at
 aggregates.rig:47
 l := little(7);
-Value returned is $2 = {a = 7, b = 9}
-name (n=1) at
+name (result$=0x
+n=1) at
 aggregates.rig:26
 main () at
 aggregates.rig:48
 w := name(1);
-Value returned is $3 = {count = 3, data = 
-"one"}
 both (result$=0x
 n=3) at
 aggregates.rig:31
 main () at
 aggregates.rig:49
 b := both(3);
-sum (p=...) at
+sum (p=0x
 aggregates.rig:36
 s := p.a + p.b;
-p = {a = 5, b = 6}
-$4 = 6
-$5 = 8
-type = struct Pair {
-} (int)
-type = int (Pair)
+p = 0x
+$1 = 5
+$2 = 6
+$3 = {a = 5, b = 6}
+$4 = 8
+type = void (struct Pair *, int)
+type = int (struct Pair *)
 type = void (int (*)[2], int)
 main () at
 aggregates.rig:50
-$6 = 11
+$5 = 11
+$6 = void
 $7 = {a = 7, b = 8}
-$8 = {a = 1, b = 3}
-$9 = {count = 5, data = 
-"other"}
-$10 = void
-$11 = {4, 8}
-!Value returned is $4
+$8 = void
+$9 = {4, 8}
+words () at
+aggregates.rig:58
+total := new + this;
+$10 = 1
+$11 = 2
+$12 = 6
+!Value returned
 !The program being debugged
+!syntax error
+!not an aggregate
 !.debug_names not created by gdb

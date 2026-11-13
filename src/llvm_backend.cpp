@@ -220,10 +220,13 @@ static void mark_extensions(Backend *b, Ir_Proc *p, LLVMValueRef function_or_cal
 // bytes as the aggregate has. On both targets LLVM then returns the
 // pointer as well, in rax, as the C conventions say a function returning a
 // struct in memory does (the caller ignores it: it has the pointer
-// already). That's what a debugger reads to find a returned struct: gdb's
-// `finish` out of make shows the Pair rax points at. A procedure with
-// several results has none marked: only one parameter can be sret, and a
-// scalar result is returned in rax itself.
+// already). So the code is what C's convention makes of a function
+// returning a struct of the same size in memory, whatever reads it: a
+// profiler, a debugger, a C caller. (The debug information doesn't rely on
+// it: it says the procedure returns nothing and takes the pointer,
+// result$, begin_procedure_debug_info.) A procedure with several results
+// has none marked: only one parameter can be sret, and a scalar result is
+// returned in rax itself.
 static void mark_result_pointer(Backend *b, Ir_Proc *p, LLVMValueRef function_or_call, bool is_call) {
     if (p->source_results.count != 1 || !type_is_aggregate(p->source_results[0])) return;
     RIG_ASSERT(p->results.count == 0 && p->params.count > 0 && p->params[0].type == IR_PTR);
@@ -636,31 +639,13 @@ static void begin_debug_info(Backend *b, Ir_Module *m, Arena *a) {
                                                   (const char *)directory.data, (size_t)directory.count, CSK_MD5,
                                                   checksum, 32, nullptr, 0);
 
-    // The language: a debugger evaluates the expressions it's given in the
-    // unit's language, and C's are Rig's (a.count, a[i]; Rig's p.* is C's
-    // *p). On Windows it's C99. In DWARF it's C++14, whose expressions are
-    // C's too, for one thing C lacks: a type passed by reference
-    // (DW_AT_calling_convention, debug_struct), which is how Rig passes
-    // and returns a struct, a view or a string (spec 10.4). gdb honours it
-    // only in C++ (its language_pass_by_reference, which only C++ answers
-    // with anything but "by value"), measured: with the unit in C99 and the
-    // types marked, `print sum(q)` still passed q by value and `finish`
-    // out of make read rax and rdx. In C++, gdb calls sum(q) with q's
-    // address, make(7) with a result pointer of its own, and shows what a
-    // `finish` returns. The cost is C++'s keywords: gdb parses `new`,
-    // `class`, `delete`, `template` (and the rest) as keywords, so a
-    // variable of that name is shown by `info locals` and `info args` but
-    // not taken by `print`, unless after `set language c`; and in a scope
-    // that has a variable named `this`, gdb looks every other name up as a
-    // member of `this` first, and fails ("`this' is not an aggregate") for
-    // a name that isn't a variable there, a procedure's or a global's
-    // (spec 10.7).
-    //
-    // The producer is rig and the LLVM that made the code, "rig 0.1.0
-    // (LLVM X.Y.Z)". It once said "clang version", since cdb read an
-    // aggregate parameter's record for a value at an address held in memory
-    // (S_DEFRANGE_REGISTER_REL_INDIR) only from a compiler of that name.
-    // That parameter is now described as the pointer it is, in
+    // The language is C99: a debugger evaluates the expressions it's given
+    // in the unit's language, and C's are Rig's (a.count, a[i]; Rig's p.*
+    // is C's *p). The producer is rig and the LLVM that made the code,
+    // "rig 0.1.0 (LLVM X.Y.Z)". It once said "clang version", since cdb
+    // read an aggregate parameter's record for a value at an address held
+    // in memory (S_DEFRANGE_REGISTER_REL_INDIR) only from a compiler of
+    // that name. That parameter is now described as the pointer it is, in
     // its stack slot, which cdb reads whatever the compiler's name, and
     // measured with both names, cdb shows every debugger test's variables,
     // parameters, globals and aggregates alike (issue #104). (rustc's names
@@ -672,9 +657,7 @@ static void begin_debug_info(Backend *b, Ir_Module *m, Arena *a) {
     unsigned major = 0, minor = 0, patch = 0;
     LLVMGetVersion(&major, &minor, &patch);
     String producer = string_printf(a, "rig %s (LLVM %u.%u.%u)", RIG_VERSION, major, minor, patch);
-    LLVMDWARFSourceLanguage language =
-        b->target == TARGET_WINDOWS_X64 ? LLVMDWARFSourceLanguageC99 : LLVMDWARFSourceLanguageC_plus_plus_14;
-    b->unit = LLVMDIBuilderCreateCompileUnit(b->debug, language, b->file,
+    b->unit = LLVMDIBuilderCreateCompileUnit(b->debug, LLVMDWARFSourceLanguageC99, b->file,
                                              (const char *)producer.data, (size_t)producer.count, 0, "", 0, 0, "",
                                              0, LLVMDWARFEmissionFull, 0, 0, 0, "", 0, "", 0);
 
@@ -708,9 +691,6 @@ static const unsigned DW_ATE_unsigned_char = 0x08;
 // The tag of a struct type, which a replaceable composite and a declaration
 // are made with.
 static const unsigned DW_TAG_structure_type = 0x13;
-// An operation of a location's expression: the value there is an address,
-// and the variable is at that address (see declare_variables; Linux only).
-static const u64 DW_OP_deref = 0x06;
 
 // How many levels a debug type may have, as debug_type counts them: the
 // types in its longest chain of parts (a field's type, a pointee, an
@@ -819,17 +799,6 @@ static LLVMMetadataRef part_debug_type(Backend *b, Type *part, s32 depth, s32 *l
 // LLVM's metadata nodes are uniqued, made once for each set of contents, so
 // what a node names can't change after it's made: the temporary is how a
 // node can name what doesn't exist yet.
-//
-// The real type is marked passed by reference (LLVMDIFlagTypePassByReference;
-// in DWARF, DW_AT_calling_convention DW_CC_pass_by_reference, as clang marks
-// a C++ class with a copy constructor of its own): passed as a pointer to a
-// copy the caller makes, and returned through a pointer the caller passes,
-// which is how Rig passes and returns a struct, a view or a string (spec
-// 10.4) whatever its size. So gdb calls a procedure taking or returning one
-// as the code expects (the unit's language says why it's C++ for that), and
-// finds a returned one where the hidden pointer points (mark_result_pointer).
-// CodeView has no such mark: there the procedure's type says it all
-// (begin_procedure_debug_info).
 static Debug_Type debug_struct(Backend *b, Type *t, String name, unsigned line, s32 depth,
                                s64 (*make_members)(Backend *b, Type *t, s32 depth, LLVMMetadataRef in,
                                                    LLVMMetadataRef *members, s32 *levels)) {
@@ -843,8 +812,8 @@ static Debug_Type debug_struct(Backend *b, Type *t, String name, unsigned line, 
     s64 count = make_members(b, t, depth, temporary, members, &levels);
     LLVMMetadataRef real =
         LLVMDIBuilderCreateStructType(b->debug, b->file, (const char *)name.data, (size_t)name.count, b->file, line,
-                                      (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagTypePassByReference, nullptr,
-                                      members, (unsigned)count, 0, nullptr, "", 0);
+                                      (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, nullptr, members,
+                                      (unsigned)count, 0, nullptr, "", 0);
     LLVMMetadataReplaceAllUsesWith(temporary, real);
     // The table's entry becomes the real type, in place: the pointer is used
     // at once, before anything puts a key.
@@ -979,26 +948,9 @@ static LLVMMetadataRef debug_pointer(Backend *b, LLVMMetadataRef to) {
     return LLVMDIBuilderCreatePointerType(b->debug, to, 64, 0, 0, nullptr, 0);
 }
 
-// Whether procedure p's debug information says it returns its result as C
-// returns a struct passed by reference: in DWARF, when its one result is a
-// struct, a view or a string (debug_struct marks those types). An array
-// can't be marked so (DWARF gives a calling convention to a structure, a
-// class or a union only), and C returns no array: gdb takes an array
-// result of 16 bytes or fewer to be in rax and rdx, as C's struct of the
-// same bytes would be, measured (both(3) crashed in the call, writing
-// through the 3 it passed for the result pointer). CodeView has no
-// calling convention at all.
-static bool returns_by_reference(Backend *b, Ir_Proc *p) {
-    if (b->target == TARGET_WINDOWS_X64 || p->source_results.count != 1) return false;
-    Type *t = p->source_results[0];
-    return type_is_aggregate(t) && t->kind != TYPE_ARRAY;
-}
-
-// How many hidden result pointers procedure p's debug information shows as
-// parameters, before the visible ones: one per aggregate result, unless it
-// returns by reference (none then).
-static s64 result_pointers(Backend *b, Ir_Proc *p) {
-    if (returns_by_reference(b, p)) return 0;
+// How many hidden result pointers procedure p has: one per aggregate
+// result (spec 10.4), its first parameters.
+static s64 result_pointers(Ir_Proc *p) {
     s64 count = 0;
     for (s64 i = 0; i < p->source_results.count; i++) count += type_is_aggregate(p->source_results[i]);
     return count;
@@ -1012,83 +964,76 @@ static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMVal
     RIG_ASSERT(p->scopes.count > 0);
     // The procedure's type: a list of types, its result's first (null for
     // none), then its parameters'. It says how the procedure is called
-    // (spec 10.4): a debugger calling it from an expression (gdb's `print
-    // make(7)`, cdb's `.call make(&q, 9)`) passes what this says, and finds
-    // the result where this says it is. Each format says it its own way.
+    // (spec 10.4), the same in DWARF and CodeView, which isn't how C would
+    // pass the same types: an aggregate is never passed or returned in
+    // registers. A struct, array, view or string parameter is a pointer to
+    // the caller's copy, so its type here is a pointer to the aggregate. An
+    // aggregate result isn't returned at all: the caller passes a pointer
+    // to a temporary, which `return` copies the value into, a hidden
+    // parameter before the visible ones (one per aggregate result, in
+    // order). So those come first, as pointers, and the result is the one
+    // scalar result when there's exactly one, and none otherwise: no scalar
+    // result, or several, which LLVM returns together in a way no C type
+    // describes.
     //
-    // In DWARF, as C++ says it. A struct, view or string parameter is of
-    // its own type, a type passed by reference (debug_struct): a debugger
-    // passes a pointer to a copy of the argument, as the procedure expects.
-    // An array parameter is an array, which C passes as a pointer to its
-    // first element: a debugger passes the array's address. A procedure
-    // returning one struct, view or string returns that type, which a
-    // debugger takes to be returned by reference: it passes a pointer to a
-    // temporary of its own first, and finds the value there (or, leaving
-    // the procedure with gdb's `finish`, where rax points: mark_result_-
-    // pointer). gdb takes only the result from this type: DWARF describes
-    // a defined function's parameters by its parameter variables
-    // (declare_variables), which say the same.
+    // A debugger calling a procedure from an expression passes the
+    // parameters its debug information shows, as C passes them, and takes
+    // the result from where C leaves one. Described so, that is what the
+    // procedure expects: gdb's `print sum(&q)` and cdb's `.call sum(&q)`
+    // pass q's address, and gdb's `print make(&q, 7)` and cdb's `.call
+    // make(&q, 7)` the address make writes its Pair to, and a `finish`
+    // out of make shows no value. Described as C would pass the types, a
+    // debugger would pass a struct by value where sum expects its address,
+    // leave make's result pointer out (crashing the program), and read a
+    // returned struct from rax and rdx, as C returns 16 bytes, showing
+    // whatever those registers held (measured with gdb). DWARF can mark
+    // a struct type as passed by reference (DW_CC_pass_by_reference), but
+    // gdb honours that only in a C++ unit (measured: in a C unit, sum(q)
+    // still passed q by value), and C++'s expressions take C++'s keywords,
+    // so a Rig variable named `new` or `class` couldn't be printed; nor can
+    // the mark be put on an array.
     //
-    // Every other aggregate result is said as it's passed: a pointer to a
-    // temporary of the caller's, which `return` copies the value into, a
-    // hidden parameter before the visible ones (one per aggregate result,
-    // in order), each with a parameter variable of its own, result$
-    // (declare_variables): an array result in DWARF (returns_by_reference
-    // says why), and in CodeView, which has no calling conventions, every
-    // one; there an aggregate parameter is a pointer to its type too. So
-    // cdb shows make as `void (Pair*, int64)`, and calls it with the
-    // result's address, `.call make(&q, 9)`, and gdb both, `print both(&b,
-    // 4)`. The result is then the one scalar result when there's exactly
-    // one, and none otherwise: no scalar result, or several, which LLVM
-    // returns together in a way no C type describes. (Described as C
-    // returns a struct, without the pointer, a result would be read from
-    // where C leaves one, rax and rdx for 16 bytes, and a `finish` out of
-    // the procedure would show whatever those registers held.)
-    bool dwarf = b->target != TARGET_WINDOWS_X64;
+    // gdb takes only the result from this type: DWARF describes a defined
+    // function's parameters by its parameter variables, and cdb counts
+    // those to check a call's arguments (measured: without the result
+    // pointer's, `.call make(9)` was taken, 9 put where the pointer goes).
+    // So declare_variables makes the same parameters variables: each
+    // result pointer, then each visible parameter, an aggregate one as the
+    // pointer it is.
     s64 params = 0;
     while (params < p->vars.count && p->vars[params].arg > 0) params++;
-    s64 pointers = result_pointers(b, p);
+    s64 pointers = result_pointers(p);
     LLVMMetadataRef *types = arena_new_array<LLVMMetadataRef>(a, 1 + pointers + params);
     s64 count = 0;
-    if (returns_by_reference(b, p)) {
-        types[count++] = debug_type(b, p->source_results[0]);
-    } else {
-        s64 scalars = 0;
-        Type *scalar = nullptr;
-        for (s64 i = 0; i < p->source_results.count; i++) {
-            if (!type_is_aggregate(p->source_results[i])) {
-                scalars++;
-                scalar = p->source_results[i];
-            }
+    s64 scalars = 0;
+    Type *scalar = nullptr;
+    for (s64 i = 0; i < p->source_results.count; i++) {
+        if (!type_is_aggregate(p->source_results[i])) {
+            scalars++;
+            scalar = p->source_results[i];
         }
-        types[count++] = scalars == 1 ? debug_type(b, scalar) : nullptr;
-        for (s64 i = 0; i < p->source_results.count; i++) {
-            Type *t = p->source_results[i];
-            if (type_is_aggregate(t)) types[count++] = debug_pointer(b, debug_type(b, t));
-        }
+    }
+    types[count++] = scalars == 1 ? debug_type(b, scalar) : nullptr;
+    for (s64 i = 0; i < p->source_results.count; i++) {
+        Type *t = p->source_results[i];
+        if (type_is_aggregate(t)) types[count++] = debug_pointer(b, debug_type(b, t));
     }
     RIG_ASSERT(count == 1 + pointers);
     for (s64 i = 0; i < params; i++) {
         RIG_ASSERT(p->vars[i].arg == i + 1);
         Type *t = p->vars[i].type;
         LLVMMetadataRef type = debug_type(b, t);
-        types[count++] = type_is_aggregate(t) && !dwarf ? debug_pointer(b, type) : type;
+        types[count++] = type_is_aggregate(t) ? debug_pointer(b, type) : type;
     }
     LLVMMetadataRef type =
         LLVMDIBuilderCreateSubroutineType(b->debug, b->file, types, (unsigned)count, LLVMDIFlagZero);
-    // Its Rig name, and never the symbol's as its linkage name: given that,
-    // gdb names the procedure by it, so a Rig `write` that LLVM renamed
-    // write.1 (C's write was taken first) would be write.1 to `break` and
-    // `bt`. In DWARF the linkage name is the Rig name too: in a C++ unit
-    // gdb names a function that has none by its name and its parameters'
-    // types, sort([]int), and shows that whole in a frame when it can't
-    // parse it as C++ ([]int isn't C++), where it shows sort(int) as sort;
-    // a linkage name that isn't a mangled C++ name gdb takes as it is.
+    // Its Rig name, and no linkage name (the symbol's): given one, gdb
+    // names the procedure by it, so a Rig `write` that LLVM renamed write.1
+    // (C's write was taken first) would be write.1 to `break` and `bt`.
     // Local to the unit unless exported, as its symbol is; a definition;
     // prototyped, as a C function with a parameter list is.
     LLVMMetadataRef subprogram = LLVMDIBuilderCreateFunction(
-        b->debug, b->file, (const char *)p->source_name.data, (size_t)p->source_name.count,
-        dwarf ? (const char *)p->source_name.data : nullptr, dwarf ? (size_t)p->source_name.count : 0, b->file,
+        b->debug, b->file, (const char *)p->source_name.data, (size_t)p->source_name.count, nullptr, 0, b->file,
         (unsigned)p->pos.line, type, !p->is_export, 1, (unsigned)p->body.line, LLVMDIFlagPrototyped, 0);
     LLVMSetSubprogram(function, subprogram);
 
@@ -1322,36 +1267,36 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
 // - An aggregate parameter (IR_VAR_ADDRESS) is the address of the caller's
 //   copy, which arrives in a register, and a register is soon used for
 //   something else (gdb would say <optimized out>). So the address is
-//   stored into a slot of its own here; the variable is then at the
-//   address the slot holds: the declare's expression is DW_OP_deref, "read
-//   the slot, and the variable is where that points", as clang declares an
-//   argument passed by its address. (Declared on the register's value
-//   itself, the location would last only while the register held it.)
-//   That is how it's described on Linux, and gdb reads it. On Windows,
-//   LLVM writes a deref'd slot as CodeView's S_DEFRANGE_REGISTER_REL_INDIR
-//   ("at the address held at this offset from the frame pointer"), which
-//   cdb reads but Visual Studio's debugger, VS Code's on Windows, doesn't:
-//   the parameter would be missing from its Variables view, and a watch of
-//   it "undefined". So on Windows the variable is the slot itself, typed as
-//   a pointer to the aggregate (`[]int *`), and Visual Studio shows it with
-//   its fields and takes `a.count`, as it does any pointer to a struct.
-//   (A C++ reference, `[]int &`, would be closer to a parameter, but
-//   LLVM-C makes a reference type without a size, and CodeView would then
-//   call it a 32-bit pointer.) cdb sees a pointer too: `a->count`.
-// - A hidden result pointer the procedure's type shows (result_pointers:
-//   every aggregate result's in CodeView, an array result's in DWARF) is a
-//   parameter variable too, the first ones, so a debugger shows it and
-//   calls the procedure with it (gdb takes a function's parameters from
-//   these variables, and cdb counts them to check a call's arguments,
-//   measured: without it `.call make(9)` was taken, 9 put where the
-//   pointer goes). It's stored into a slot of its own like an aggregate
-//   parameter's address, and the variable is the slot: a pointer to the
-//   result's type. It's named result$ (result$1, result$2, ... for
-//   several), which can't be a Rig name (Rig's names are C's: letters,
-//   digits and '_'), but which both debuggers take in an expression (gdb's
-//   `print *result$`, cdb's `?? result$`), where gdb would take $result
-//   for one of its own convenience variables. It's artificial
-//   (DW_AT_artificial): made by the compiler, not declared in the source.
+//   stored into a slot of its own here, and the variable is the slot,
+//   typed as the pointer it holds, a pointer to the aggregate (`[]int *`):
+//   what the procedure takes, as its type says (begin_procedure_debug_-
+//   info), so a debugger calls it with an address (gdb's `print
+//   sum(&q)`). gdb shows the address and takes `p->a`, `*p` and `p.a`
+//   (it reads `.` through a pointer too); cdb takes `p->a`; Visual
+//   Studio's debugger, VS Code's on Windows, shows the fields and takes
+//   `a.count`, as it does for any pointer to a struct. (The variable could
+//   be the value at the address the slot holds instead, the declare's
+//   expression DW_OP_deref, as clang declares an argument passed by its
+//   address: gdb would show the struct, but call the procedure with it by
+//   value. And on Windows LLVM writes a deref'd slot as CodeView's
+//   S_DEFRANGE_REGISTER_REL_INDIR, "at the address held at this offset
+//   from the frame pointer", which cdb reads but Visual Studio's debugger
+//   doesn't: the parameter would be missing from its Variables view. A C++
+//   reference, `[]int &`, would be closer to a parameter, but LLVM-C makes
+//   a reference type without a size, and CodeView would then call it a
+//   32-bit pointer.)
+// - Each hidden result pointer (one per aggregate result, the IR's first
+//   parameters) is a parameter variable too, the first ones, so a debugger
+//   shows it and calls the procedure with it: gdb's `print make(&q, 7)`,
+//   cdb's `.call make(&q, 7)`. It's stored into a slot of its own like an
+//   aggregate parameter's address, and the variable is the slot: a
+//   pointer to the result's type. It's named result$ (result$1, result$2,
+//   ... for several), which can't be a Rig name (Rig's names are C's:
+//   letters, digits and '_'), but which both debuggers take in an
+//   expression (gdb's `print *result$`, cdb's `?? result$`), where gdb
+//   would take $result for one of its own convenience variables. It's
+//   artificial (DW_AT_artificial): made by the compiler, not declared in
+//   the source.
 //
 // Those stores run before the body, with no location (the builder has
 // none yet), as lowering's stores of the scalar parameters have none: the
@@ -1376,7 +1321,7 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
             storage[i] = LLVMBuildAlloca(builder, llvm_type(c, IR_PTR), "");
         }
     }
-    s64 pointers = result_pointers(b, p);
+    s64 pointers = result_pointers(p);
     LLVMValueRef *pointer_slots = arena_new_array<LLVMValueRef>(a, pointers ? pointers : 1);
     for (s64 i = 0; i < pointers; i++) {
         RIG_ASSERT(i < p->params.count && p->params[i].type == IR_PTR);
@@ -1388,8 +1333,6 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
     for (s64 i = 0; i < pointers; i++) LLVMBuildStore(builder, value(body, (s32)i), pointer_slots[i]);
 
     LLVMMetadataRef plain = LLVMDIBuilderCreateExpression(b->debug, nullptr, 0);
-    u64 deref = DW_OP_deref;
-    LLVMMetadataRef through = LLVMDIBuilderCreateExpression(b->debug, &deref, 1);
     // The result pointers, parameters 1 to `pointers` (the visible ones
     // come after them), at the procedure's own line: the i-th points at the
     // i-th aggregate result.
@@ -1412,10 +1355,9 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
         RIG_ASSERT(v->scope >= 0 && v->scope < body->scope_count);
         LLVMMetadataRef scope = body->scopes[v->scope];
         LLVMMetadataRef type = debug_type(b, v->type);
-        // An aggregate parameter on Windows: a pointer in its slot (see above).
-        // A visible parameter's ArgNo counts the result pointers before it.
-        bool pointer = v->kind == IR_VAR_ADDRESS && b->target == TARGET_WINDOWS_X64;
-        if (pointer) type = debug_pointer(b, type);
+        // An aggregate parameter: a pointer in its slot (see above). A
+        // visible parameter's ArgNo counts the result pointers before it.
+        if (v->kind == IR_VAR_ADDRESS) type = debug_pointer(b, type);
         const char *name = (const char *)v->name.data;
         unsigned line = (unsigned)v->pos.line;
         // AlwaysPreserve: kept even if LLVM finds no use of it (an optimiser
@@ -1431,9 +1373,7 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
         // (column 0 on Windows, as every location there: set_location).
         unsigned column = b->target == TARGET_WINDOWS_X64 ? 0 : (unsigned)v->pos.col;
         LLVMMetadataRef location = LLVMDIBuilderCreateDebugLocation(c, line, column, scope, nullptr);
-        LLVMDIBuilderInsertDeclareRecordAtEnd(b->debug, storage[i], variable,
-                                              v->kind == IR_VAR_ADDRESS && !pointer ? through : plain, location,
-                                              body->blocks[0]);
+        LLVMDIBuilderInsertDeclareRecordAtEnd(b->debug, storage[i], variable, plain, location, body->blocks[0]);
     }
 }
 
