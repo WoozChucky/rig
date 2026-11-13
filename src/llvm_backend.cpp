@@ -517,6 +517,7 @@ struct Body {
     // location.
     LLVMMetadataRef *scopes;
     s64 scope_count;
+    s32 file;  // the procedure's, which every position in it is in (ir.h's "Positions")
 };
 
 // The LLVM value of %n. Blocks are translated in order, so a value used
@@ -1097,9 +1098,9 @@ static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMVal
     // Local to the unit unless exported, as its symbol is; a definition;
     // prototyped, as a C function with a parameter list is. In the file
     // it's declared in, which is where its scopes, its variables and so
-    // every line of its body are: a location names no file, its scope's is
-    // its own, so a breakpoint on a line of a loaded file, and a stop or a
-    // backtrace there, finds that file.
+    // every line of its body are (ir.h's "Positions"): a location names no
+    // file of its own, and takes its scope's, so a breakpoint on a line of
+    // a loaded file, and a stop or a backtrace there, finds that file.
     LLVMMetadataRef file = debug_file(b, p->pos);
     LLVMMetadataRef subprogram = LLVMDIBuilderCreateFunction(
         b->debug, file, (const char *)p->source_name.data, (size_t)p->source_name.count, nullptr, 0, file,
@@ -1112,9 +1113,11 @@ static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMVal
     body->scopes = arena_new_array<LLVMMetadataRef>(a, p->scopes.count);
     body->scope_count = p->scopes.count;
     body->scopes[0] = subprogram;
+    body->file = p->pos.file;
     for (s64 i = 1; i < p->scopes.count; i++) {
         Ir_Scope *s = &p->scopes[i];
         RIG_ASSERT(s->parent >= 0 && s->parent < i);
+        RIG_ASSERT(s->pos.file == p->pos.file);
         body->scopes[i] = LLVMDIBuilderCreateLexicalBlock(b->debug, body->scopes[s->parent], file,
                                                           (unsigned)s->pos.line, (unsigned)s->pos.col);
     }
@@ -1134,6 +1137,7 @@ static void set_location(Backend *b, Body *body, Ir_Instr *instr) {
     LLVMMetadataRef location = nullptr;
     if (instr->pos.line > 0) {
         RIG_ASSERT(instr->scope >= 0 && instr->scope < body->scope_count);
+        RIG_ASSERT(instr->pos.file == body->file);
         unsigned column = b->target == TARGET_WINDOWS_X64 ? 0 : (unsigned)instr->pos.col;
         location = LLVMDIBuilderCreateDebugLocation(b->context, (unsigned)instr->pos.line, column,
                                                     body->scopes[instr->scope], nullptr);
@@ -1434,6 +1438,7 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
     for (s64 i = 0; i < p->vars.count; i++) {
         Ir_Var *v = &p->vars[i];
         RIG_ASSERT(v->scope >= 0 && v->scope < body->scope_count);
+        RIG_ASSERT(v->pos.file == p->pos.file);
         LLVMMetadataRef scope = body->scopes[v->scope];
         LLVMMetadataRef type = debug_type(b, v->type);
         // An aggregate parameter: a pointer in its slot (see above). A

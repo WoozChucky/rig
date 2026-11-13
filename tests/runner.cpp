@@ -19,9 +19,9 @@
 // a directory that is, can't be read, which differs between systems and
 // languages (no_such_file_message asks the system).
 //
-// Only the NAME.rig files directly in tests/run, tests/errors and
-// tests/debug are programs: their subdirectories, load/, hold the files
-// the programs #load, which aren't built on their own.
+// Only the NAME.rig files directly in tests/run and tests/errors are
+// programs: their subdirectories, load/, hold the files the programs
+// #load, which aren't built on their own.
 //
 // Then a few fixed cases: rig build without -o from another directory, a
 // runtime error's order after the program's output when stdout and stderr
@@ -58,8 +58,8 @@
 // specification's "\r\n"s are read as "\n", on every host.
 //
 // Last, the debugger tests: tests/debug/NAME.rig is built as a program of
-// tests/run is (to .build/tests/NAME; the files it #loads in
-// tests/debug/load/), then run under the host's debugger with a script of
+// tests/run is (to .build/tests/NAME; the files it #loads are in
+// tests/debug/load/, and aren't built on their own), then run under the host's debugger with a script of
 // its commands, and what the debugger prints must hold the expectations,
 // NAME.gdb.expect or NAME.cdb.expect (debug_test):
 //   Linux:   gdb -batch -nx -x tests/debug/NAME.gdb .build/tests/NAME
