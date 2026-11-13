@@ -4,7 +4,8 @@
 // (the Setup Configuration COM API) with the Windows SDK's libraries (the
 // registry), or LLVM's lld-link.exe, copied beside rig.exe by build.bat, when
 // the installation has none. Programs use the C runtime's DLLs (msvcrt.lib,
-// vcruntime.lib, ucrt.lib).
+// vcruntime.lib, ucrt.lib), and legacy_stdio_definitions.lib's printf
+// family, which the DLLs don't export.
 //
 // Linux: LLVM's ld.lld, copied beside rig by build.sh, with glibc's C runtime
 // files (crt1.o, crti.o, crtn.o) and libc, dynamically linked.
@@ -20,7 +21,8 @@
 
 struct Windows_Toolchain {
     String link_exe;  // link.exe, or lld-link.exe beside rig.exe
-    String msvc_lib;  // VC\Tools\MSVC\VER\lib\x64: msvcrt.lib, vcruntime.lib
+    String msvc_lib;  // VC\Tools\MSVC\VER\lib\x64: msvcrt.lib, vcruntime.lib,
+                      // legacy_stdio_definitions.lib
     String ucrt_lib;  // Windows Kits\10\Lib\VER\ucrt\x64: ucrt.lib
     String um_lib;    // Windows Kits\10\Lib\VER\um\x64: kernel32.lib
 };
@@ -42,7 +44,7 @@ bool choose_windows_linker(Arena *a, String link_exe, String lld_link, String *c
 //   LINK /NOLOGO /INCREMENTAL:NO /SUBSYSTEM:CONSOLE /MACHINE:X64 /OUT:OUTPUT
 //        /DEBUG:FULL /PDB:OUTPUT_WITHOUT_EXE.pdb
 //        /LIBPATH:MSVC /LIBPATH:UCRT /LIBPATH:UM OBJECTS...
-//        msvcrt.lib vcruntime.lib ucrt.lib kernel32.lib
+//        legacy_stdio_definitions.lib msvcrt.lib vcruntime.lib ucrt.lib kernel32.lib
 // The PDB, the program's debug information, is written beside it:
 // hello.exe's is hello.pdb.
 Array<String> link_command_windows(Arena *a, Windows_Toolchain *tc, Array<String> objects, String output);

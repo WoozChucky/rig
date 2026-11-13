@@ -88,6 +88,13 @@ Array<String> link_command_windows(Arena *a, Windows_Toolchain *tc, Array<String
     array_add(&argv, string_printf(a, "/LIBPATH:" STR_FMT, STR_ARG(tc->ucrt_lib)));
     array_add(&argv, string_printf(a, "/LIBPATH:" STR_FMT, STR_ARG(tc->um_lib)));
     for (s64 i = 0; i < objects.count; i++) array_add(&argv, objects[i]);
+    // The C runtime's printf family as functions: the Universal CRT exports
+    // no printf, sprintf, snprintf, fprintf, scanf and the like, only
+    // __stdio_common_vfprintf and its kind, which its headers wrap in inline
+    // functions for C code to call. This static library holds those
+    // wrappers compiled, so a Rig program's #foreign printf finds one
+    // (spec 7.6). It comes first: its functions call into ucrt.lib.
+    array_add(&argv, str("legacy_stdio_definitions.lib"));
     // The C runtime, as DLLs: its startup code and imports, the compiler's
     // support routines, the Universal CRT (puts and friends), and Windows.
     array_add(&argv, str("msvcrt.lib"));

@@ -1,0 +1,48 @@
+// C's variadic functions through #foreign (issue #82): printf and snprintf
+// given each kind of extra argument, which C receives after its default
+// argument promotions. The values are read from variables, so the
+// promotions run in the program: a u8 of 200 printed as -56 would be
+// sign-extended, a float32 read as a double without its fpext would print
+// garbage.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+snprintf :: (buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;
+
+main :: () {
+    // An int is C's long long: %lld. An s32 is C's int: %d.
+    n := 1234567890123;
+    printf("int %lld\n", n);
+    w : s32 = -42;
+    printf("s32 %d\n", w);
+
+    // Narrower integers and bools become C's int: by their sign.
+    b : u8 = 200;
+    t := true;
+    printf("u8 %d, bool %d\n", b, t);
+    sb : s8 = -5;
+    ss : s16 = -300;
+    us : u16 = 65535;
+    printf("s8 %d, s16 %d, u16 %d\n", sb, ss, us);
+
+    // A float32 becomes a double, as a float64 is.
+    f : float32 = 2.5;
+    d : float64 = 3.14159;
+    printf("float32 %.2f, float64 %.2f\n", f, d);
+
+    // Untyped constants take Rig's default types: an integer an int (so
+    // %lld), a float a float64, never rounded to a float32 on the way.
+    printf("constants %lld %.10f %d\n", 7, 0.1, cast(s32) 5);
+
+    // A string's bytes go as its .data; C reads its count with %.*s, as an
+    // int, so the bytes needn't end with a zero.
+    s := "a string's bytes, and more";
+    printf("%.*s\n", cast(s32) 16, s.data);
+    printf("[%.*s]\n", cast(s32) s.count, s.data);
+    // A literal goes as a C string, as it does to a *u8.
+    printf("%s, %c\n", "a literal", "Rig"[0]);
+
+    // snprintf writes into an array through its .data, and says how many
+    // bytes it wrote.
+    buffer : [64]u8;
+    written := snprintf(buffer.data, 64, "%lld + %lld = %lld", 2, 3, 2 + 3);
+    printf("%s (%d bytes)\n", buffer.data, written);
+}

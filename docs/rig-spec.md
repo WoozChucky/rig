@@ -1507,10 +1507,10 @@ Every program links the platform's C runtime, dynamically.
 link /NOLOGO /INCREMENTAL:NO /SUBSYSTEM:CONSOLE /MACHINE:X64 /OUT:OUTPUT
      /DEBUG:FULL /PDB:PDB
      /LIBPATH:MSVC /LIBPATH:UCRT /LIBPATH:UM OBJECTS...
-     msvcrt.lib vcruntime.lib ucrt.lib kernel32.lib
+     legacy_stdio_definitions.lib msvcrt.lib vcruntime.lib ucrt.lib kernel32.lib
 ```
 
-where `PDB` is the PDB's path (section 10.1), so a program uses the C runtime's DLLs (the Universal C Runtime and the Visual C++ runtime).
+where `PDB` is the PDB's path (section 10.1), so a program uses the C runtime's DLLs (the Universal C Runtime and the Visual C++ runtime). The Universal C Runtime exports no `printf`, `sprintf`, `snprintf`, `fprintf`, `scanf` or the rest of their family: its headers define them as inline functions over its own entry points. `legacy_stdio_definitions.lib`, a static library of Visual Studio's, holds them as functions, so a foreign procedure of that name links (section 7.6).
 
 **Linux.** The linker is LLVM's `ld.lld`, from the compiler's own directory, with glibc's start files `crt1.o`, `crti.o` and `crtn.o` from the first of `/usr/lib/x86_64-linux-gnu`, `/usr/lib64` and `/usr/lib` that has them:
 
