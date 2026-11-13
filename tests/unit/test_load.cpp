@@ -37,6 +37,22 @@ static Loaded_Program load_main(Arena *a, Diagnostics *d, String dir) {
     return load_program(a, d, path, text);
 }
 
+// `relative`, a path from the directory rig runs in with '/' between its
+// names, made absolute by hand, as the debug information names the file:
+// the directory, then the names, each after the host's separator.
+static const char *in_current_directory(Arena *a, String relative) {
+#ifdef _WIN32
+    const char HOST_SEPARATOR = '\\';
+#else
+    const char HOST_SEPARATOR = '/';
+#endif
+    String path = string_printf(a, STR_FMT "/" STR_FMT, STR_ARG(os_current_directory(a)), STR_ARG(relative));
+    char *out = arena_new_array<char>(a, path.count + 1);
+    for (s64 i = 0; i < path.count; i++) out[i] = path.data[i] == '/' ? HOST_SEPARATOR : (char)path.data[i];
+    out[path.count] = 0;
+    return out;
+}
+
 // The paths of d's files, in their order, one per line.
 static String file_paths(Arena *a, Diagnostics *d) {
     String all = string_printf(a, "");
@@ -57,10 +73,15 @@ TEST(load_one_file) {
     CHECK_EQ(d.files.count, 2);
     if (d.files.count == 2) {
         // Named from the loading file's directory, and located, as the main
-        // file is, for the debug information.
+        // file is, for the debug information: from the directory rig runs
+        // in.
         CHECK_STR(d.files[1].path, in_directory(&a, dir, "b.rig"));
-        CHECK(d.files[0].absolute_path.count > 0);
-        CHECK(d.files[1].absolute_path.count > 0);
+        const char *names[2] = {"main.rig", "b.rig"};
+        const char *directory = string_cstr(&a, os_current_directory(&a));
+        for (s64 i = 0; i < 2; i++) {
+            CHECK_STR(d.files[i].directory, directory);
+            CHECK_STR(d.files[i].absolute_path, in_current_directory(&a, str(in_directory(&a, dir, names[i]))));
+        }
     }
     // One tree with both files' procedures, the main file's first, and each
     // file's tokens kept.
@@ -122,6 +143,7 @@ TEST(load_once_by_identity) {
     Loaded_Program p = load_main(&a, &d, dir);
     CHECK_STR(messages(&a, &d), "");
     CHECK_EQ(d.files.count, 2);
+    CHECK(p.tree != nullptr);
     if (p.tree) CHECK_EQ(p.tree->procs.count, 1);
     loaded_program_free(&p);
     diag_free(&d);
@@ -211,6 +233,95 @@ TEST(load_not_a_rig_file) {
     arena_free(&a);
 }
 
+TEST(load_error_in_a_loaded_file) {
+    // A #load in sub/b.rig that can't be read is reported in sub/b.rig, at
+    // its string, and names the path found from sub/b.rig's directory.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_error_in_a_loaded_file");
+    CHECK(os_make_directory(str(in_directory(&a, dir, "sub"))));
+    write_source(&a, dir, "main.rig", "#load \"sub/b.rig\";\n");
+    write_source(&a, dir, "sub/b.rig", "helper :: () {}\n#load \"nope.rig\";\n");
+    Loaded_Program p = load_main(&a, &d, dir);
+    CHECK_EQ(d.files.count, 2);
+    CHECK_EQ(d.messages.count, 1);
+    if (d.messages.count == 1) {
+        Diagnostic *m = &d.messages[0];
+        CHECK_EQ(m->pos.file, 1);
+        CHECK_EQ(m->pos.line, 2);
+        CHECK_EQ(m->pos.col, 7);
+        String start = string_printf(&a, "cannot read '" STR_FMT "/sub/nope.rig': ", STR_ARG(dir));
+        CHECK(m->message.count > start.count);
+        if (m->message.count > start.count) {
+            CHECK_STR(string_slice(m->message, 0, start.count), string_cstr(&a, start));
+        }
+    }
+    loaded_program_free(&p);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(load_goes_on_after_an_error) {
+    // A #load that fails stops nothing: the main file's next #load is still
+    // followed, and b.rig, loaded after the failure, is read and parsed, its
+    // own failing #load reported in it, at its string.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_goes_on_after_an_error");
+    CHECK(os_make_directory(str(in_directory(&a, dir, "sub"))));
+    write_source(&a, dir, "main.rig", "#load \"nope.rig\";\n#load \"b.rig\";\n");
+    write_source(&a, dir, "b.rig", "#load \"sub/x.txt\";\nhelper :: () {}\n");
+    Loaded_Program p = load_main(&a, &d, dir);
+    CHECK_EQ(d.files.count, 2);
+    CHECK(p.tree != nullptr);
+    if (p.tree) {
+        CHECK_EQ(p.tree->procs.count, 1);
+        if (p.tree->procs.count == 1) CHECK_STR(p.tree->procs[0]->name, "helper");
+    }
+    CHECK_EQ(d.messages.count, 2);
+    if (d.messages.count == 2) {
+        Diagnostic *m = &d.messages[0];
+        CHECK_EQ(m->pos.file, 0);
+        CHECK_EQ(m->pos.line, 1);
+        CHECK_EQ(m->pos.col, 7);
+        String start = string_printf(&a, "cannot read '" STR_FMT "/nope.rig': ", STR_ARG(dir));
+        CHECK(m->message.count > start.count);
+        if (m->message.count > start.count) {
+            CHECK_STR(string_slice(m->message, 0, start.count), string_cstr(&a, start));
+        }
+        m = &d.messages[1];
+        CHECK_EQ(m->pos.file, 1);
+        CHECK_EQ(m->pos.line, 1);
+        CHECK_EQ(m->pos.col, 7);
+        String expected = string_printf(&a, "'" STR_FMT "/sub/x.txt' isn't a .rig file", STR_ARG(dir));
+        CHECK_STR(m->message, string_cstr(&a, expected));
+    }
+    loaded_program_free(&p);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(load_path_empty_or_with_a_zero_byte) {
+    // A string can hold a zero byte (\0), but a path can't: the system would
+    // take the path as ending there, so "b.rig\0junk.rig", a .rig file by its
+    // bytes, would read b.rig. Neither it nor an empty path names a file, so
+    // each is reported, at its string, and nothing is read.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_path_empty_or_with_a_zero_byte");
+    write_source(&a, dir, "main.rig", "#load \"b.rig\\0junk.rig\";\n#load \"b.rig\\0\";\n#load \"\";\n");
+    write_source(&a, dir, "b.rig", "helper :: () {}\n");
+    Loaded_Program p = load_main(&a, &d, dir);
+    CHECK_STR(messages(&a, &d),
+              "1:7: a #load path can't contain a zero byte\n"
+              "2:7: a #load path can't contain a zero byte\n"
+              "3:7: a #load path can't be empty\n");
+    CHECK_EQ(d.files.count, 1);
+    loaded_program_free(&p);
+    diag_free(&d);
+    arena_free(&a);
+}
+
 TEST(load_with_stdin_path) {
     // rig check --stdin: the text comes from elsewhere, and its path names
     // a file that needn't exist, but its #loads are found from that path's
@@ -233,10 +344,31 @@ TEST(load_with_stdin_path) {
     arena_free(&a);
 }
 
+// What load_on_small_stack loads, and what it finds.
+struct Small_Stack_Load {
+    Arena *a;
+    Diagnostics *d;
+    String dir;
+    Loaded_Program p;
+    u64 stack_size;  // the stack it ran on, as the system reports it
+};
+
+static void load_on_small_stack(void *data) {
+    Small_Stack_Load *load = (Small_Stack_Load *)data;
+    load->stack_size = os_stack_size();
+    load->p = load_main(load->a, load->d, load->dir);
+}
+
 TEST(load_long_chain) {
-    // 2000 files, each loading the next: the files are a queue, walked in a
-    // loop, so a chain of any length takes no more stack than one file.
+    // 2000 files, each loading the next, loaded on a 64 KB stack. One
+    // file's lexing and parsing fit in it, but 2000 nested calls don't, as
+    // a loader that called itself for each file loaded would make (each
+    // call's frame holding at least its locals, a hundred bytes and more):
+    // the stack would overflow. The files are a queue, walked in a loop, so
+    // a chain of any length takes no more stack than one file. (The queue's
+    // order is load_order_is_breadth_first's.)
     const int COUNT = 2000;
+    const u64 SMALL_STACK = 64 * 1024;
     Arena a = arena_make();
     Diagnostics d = {};
     String dir = load_test_directory(&a, "load_long_chain");
@@ -247,9 +379,15 @@ TEST(load_long_chain) {
                                          : string_cstr(&a, string_printf(&a, "f%d :: () {}\n", i));
         write_source(&a, dir, name, text);
     }
-    Loaded_Program p = load_main(&a, &d, dir);
+    Small_Stack_Load load = {&a, &d, dir, {}, 0};
+    CHECK(os_run_on_stack(SMALL_STACK, load_on_small_stack, &load));
+    // The stack was small: glibc can hand a new thread a stack an ended one
+    // left, but only one at most four times the size asked for.
+    CHECK(load.stack_size > 0 && load.stack_size < 4 * SMALL_STACK);
+    Loaded_Program p = load.p;
     CHECK_STR(messages(&a, &d), "");
     CHECK_EQ(d.files.count, COUNT);
+    CHECK(p.tree != nullptr);
     if (p.tree) CHECK_EQ(p.tree->procs.count, COUNT);
     loaded_program_free(&p);
     diag_free(&d);

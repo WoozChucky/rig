@@ -1656,10 +1656,11 @@ The compiler is a single program written in C++, with LLVM linked into it. It co
 
 1. **Lexer** (`src/lexer.cpp`): the source's bytes into tokens (section 2).
 2. **Parser** (`src/parser.cpp`): the tokens into a syntax tree, by recursive descent, with expressions read by precedence climbing (Appendix A).
-3. **Checker** (`src/checker.cpp`, `src/check_expr.cpp`): resolves every name, works out every type and every struct's layout, folds the constant expressions, and checks the rules of sections 3 to 7. The checker runs even after syntax errors, so both kinds are reported together.
-4. **Lowering** (`src/lower.cpp`): the checked tree into Rig's intermediate representation (`src/ir.h`), a list of procedures made of basic blocks of instructions on numbered values. Lowering adds the runtime checks of section 8 and the source positions and scopes that the debug information is made from.
-5. **LLVM** (`src/llvm_backend.cpp`): the IR into an LLVM module through LLVM's C API, which LLVM verifies and compiles into an object file for x86-64: COFF on Windows (target `x86_64-pc-windows-msvc`), ELF on Linux (`x86_64-pc-linux-gnu`), position-independent on Linux. The code is not optimised, and targets the baseline x86-64 processor.
-6. **Linker** (`src/link.cpp`): the object file into an executable with the platform's linker (section 10.6).
+3. **Loader** (`src/load.cpp`): the main file and every file it `#load`s, each once, in load order (section 2.13), each through the lexer and the parser into the same tree, so the checker sees one program.
+4. **Checker** (`src/checker.cpp`, `src/check_expr.cpp`): resolves every name, works out every type and every struct's layout, folds the constant expressions, and checks the rules of sections 3 to 7. The checker runs even after syntax errors, so both kinds are reported together.
+5. **Lowering** (`src/lower.cpp`): the checked tree into Rig's intermediate representation (`src/ir.h`), a list of procedures made of basic blocks of instructions on numbered values. Lowering adds the runtime checks of section 8 and the source positions and scopes that the debug information is made from.
+6. **LLVM** (`src/llvm_backend.cpp`): the IR into an LLVM module through LLVM's C API, which LLVM verifies and compiles into an object file for x86-64: COFF on Windows (target `x86_64-pc-windows-msvc`), ELF on Linux (`x86_64-pc-linux-gnu`), position-independent on Linux. The code is not optimised, and targets the baseline x86-64 processor.
+7. **Linker** (`src/link.cpp`): the object file into an executable with the platform's linker (section 10.6).
 
 No integer instruction carries LLVM's `nsw`, `nuw` or `exact` flags, and no float instruction carries fast-math flags: Rig's integers wrap and its floats are IEEE 754's. No pointer arithmetic is marked `inbounds`, copies are `memmove`s (the two sides may overlap), and no pointer is assumed non-null.
 

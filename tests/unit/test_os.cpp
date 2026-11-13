@@ -374,6 +374,11 @@ TEST(os_files_round_trip) {
     arena_free(&a);
 }
 
+// Whether two of os_file_id's ids are one file's.
+static bool same_file_id(const u64 x[3], const u64 y[3]) {
+    return x[0] == y[0] && x[1] == y[1] && x[2] == y[2];
+}
+
 TEST(os_file_id_sees_one_file_under_two_names) {
     // #load reads each file once, however it's named (issue #112): a file's
     // id is the same whatever path reaches it, and another file's differs.
@@ -383,27 +388,34 @@ TEST(os_file_id_sees_one_file_under_two_names) {
     CHECK(os_make_directory(str(".build/tests/file_id")));
     CHECK(os_write_file(str(".build/tests/file_id/a.rig"), str("main :: () {}\n")));
     CHECK(os_write_file(str(".build/tests/file_id/b.rig"), str("main :: () {}\n")));
-    u64 id[2] = {}, same[2] = {}, other[2] = {};
+    u64 id[3] = {}, same[3] = {}, other[3] = {};
     CHECK(os_file_id(str(".build/tests/file_id/a.rig"), id));
     CHECK(os_file_id(str(".build/tests/file_id/../file_id/a.rig"), same));
-    CHECK(id[0] == same[0] && id[1] == same[1]);
+    CHECK(same_file_id(id, same));
     // b.rig has the same bytes, but it's another file.
     CHECK(os_file_id(str(".build/tests/file_id/b.rig"), other));
-    CHECK(id[0] != other[0] || id[1] != other[1]);
+    CHECK(!same_file_id(id, other));
     CHECK(!os_file_id(str(".build/tests/file_id/missing.rig"), other));
     CHECK(os_error_message(&a).count > 0);
+    // A directory has an id too, on both systems, the same under its two
+    // names; so a #load naming one is reported once, however it's named.
+    u64 directory[3] = {}, directory_too[3] = {};
+    CHECK(os_file_id(str(".build/tests/file_id"), directory));
+    CHECK(os_file_id(str(".build/tests/file_id/."), directory_too));
+    CHECK(same_file_id(directory, directory_too));
+    CHECK(!same_file_id(directory, id));
 #ifdef _WIN32
     // Windows' names ignore case: A.RIG is a.rig.
-    same[0] = same[1] = 0;
+    same[0] = same[1] = same[2] = 0;
     CHECK(os_file_id(str(".build/tests/file_id/A.RIG"), same));
-    CHECK(id[0] == same[0] && id[1] == same[1]);
+    CHECK(same_file_id(id, same));
 #else
     // A symbolic link is the file it points at.
     unlink(".build/tests/file_id/link.rig");
     CHECK(symlink("a.rig", ".build/tests/file_id/link.rig") == 0);
-    same[0] = same[1] = 0;
+    same[0] = same[1] = same[2] = 0;
     CHECK(os_file_id(str(".build/tests/file_id/link.rig"), same));
-    CHECK(id[0] == same[0] && id[1] == same[1]);
+    CHECK(same_file_id(id, same));
     unlink(".build/tests/file_id/link.rig");
 #endif
     arena_free(&a);
