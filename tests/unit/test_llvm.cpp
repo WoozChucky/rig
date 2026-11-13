@@ -1467,3 +1467,43 @@ TEST(llvm_globals_have_debug_info) {
     }
     arena_free(&a);
 }
+
+// Issue #82: a variadic foreign procedure is a variadic LLVM function,
+// declared with its fixed parameters; a call gives the extra arguments
+// after them, already promoted as C promotes them. LLVM then follows each
+// target's variadic convention: on x86-64 System V, al holds the number of
+// vector registers the call uses; on Windows x64, a double is passed in its
+// integer register too.
+static const char *PRINTF_CALLS =
+    "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+    "main :: () {\n"
+    "    b : u8 = 7;\n"
+    "    s : s16 = -2;\n"
+    "    t := true;\n"
+    "    f : float32 = 1.5;\n"
+    "    printf(\"%d %d %d %.2f %lld %.2f\", b, s, t, f, 5, 2.5);\n"
+    "}\n";
+
+TEST(llvm_declares_and_calls_a_variadic_function) {
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, PRINTF_CALLS);
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "declare i32 @printf(ptr, ...)"));
+        CHECK(contains(text, "zext i8 %"));
+        CHECK(contains(text, "sext i16 %"));
+        CHECK(contains(text, "zext i1 %"));
+        CHECK(contains(text, "fpext float %"));
+        CHECK(contains(text, "call i32 (ptr, ...) @printf(ptr @str.0, i32 %"));
+        CHECK(contains(text, ", double %"));
+        CHECK(contains(text, ", i64 5, double 2.500000e+00)"));
+    }
+    // With debug information too: a foreign procedure has none of its own,
+    // variadic or not.
+    m = lower_file(&a, "printf.rig", PRINTF_CALLS, true);
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "declare i32 @printf(ptr, ...)"));
+    }
+    arena_free(&a);
+}
