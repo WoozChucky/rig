@@ -135,7 +135,7 @@ rm -f ~/.local/bin/rig
 
 ## Requirements
 
-`rig build` links a program with the platform's C runtime, as section 10.6 of [the specification](/spec/implementation) says, so each system needs that runtime's files:
+`rig build` links a program with the platform's C runtime, as section 10.6 of [the specification](/spec/implementation#106-linking) says, so each system needs that runtime's files:
 
 - **Windows** needs Visual Studio, or its free [Build Tools](https://visualstudio.microsoft.com/downloads/), with the **Desktop development with C++** workload: it brings the C runtime, the Windows SDK and Microsoft's linker, `link.exe`. Rig links with the newest installation's `link.exe`, or with the `lld-link.exe` beside `rig.exe` when the installation has none, against the same libraries.
 - **Linux** needs glibc's development files, its start files (`crt1.o`, `crti.o`, `crtn.o`) and `libc.so` among them: `sudo apt install libc6-dev` on Debian and Ubuntu, `sudo dnf install glibc-devel` on Fedora; Arch's `glibc` has them. Rig links with the `ld.lld` beside it.
