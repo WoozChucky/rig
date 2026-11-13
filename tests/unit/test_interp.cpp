@@ -652,7 +652,9 @@ TEST(interp_globals_and_relocations) {
     // Globals of every kind: a string (a view whose data is a relocation to
     // a literal), a view of an array literal (a relocation to array.N), a
     // procedure value (a relocation to a procedure), and scalars, a float32
-    // (its initial value a double's bits, rounded) among them.
+    // (its initial value a double's bits, rounded) among them. A literal's
+    // bytes are writable, as section 10.8 says, though compiled they're
+    // read-only: what poke writes into greeting's, a later run reads.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "greeting := \"hello\";\n"
@@ -668,6 +670,8 @@ TEST(interp_globals_and_relocations) {
                                 "    return greeting.count * 1000 + letter * 10 + numbers[2] + op(20, 30) * 100000;\n"
                                 "}\n"
                                 "single :: () -> float32 { return third; }\n"
+                                "poke :: () { p := greeting.data; p.* = 106; }\n"
+                                "first :: () -> int { return cast(int) greeting[0]; }\n"
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_value(&a, m, "read"), 5 * 1000 + 'e' * 10 + 3 + 50 * 100000);
     volatile f64 one_point_one = 1.1;
@@ -693,6 +697,14 @@ TEST(interp_globals_and_relocations) {
             CHECK_EQ((u64)(uintptr_t)interp_global(in, k) % align, 0);
         }
     }
+    interp_test_free(&r);
+    interp_test_run(in, m, "poke", &a, &r);
+    CHECK(r.ok);
+    interp_test_free(&r);
+    interp_test_run(in, m, "first", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 106);  // 'j'
     interp_test_free(&r);
     interp_free(in);
 
@@ -828,11 +840,11 @@ TEST(interp_procedure_values) {
         CHECK_EQ(r.results[1], 0);
     }
     interp_test_free(&r);
-    // Each Rig procedure's address is where section 10.8 puts it, the k-th
-    // 16 x k bytes past the reserved range's start, and maps back to it, and
+    // Each Rig procedure's address is where section 10.8 puts it, procedure
+    // k at 16 x k bytes past the reserved range's start (16 written out, the
+    // spec's number, not INTERP_PROC_STRIDE), and maps back to it, and
     // nothing else does: not null, not an address between two, not one past
     // the module's procedures, not a native one.
-    CHECK_EQ(interp_proc_address(in, 0), (u64)in->proc_base);
     for (s32 k = 0; k < (s32)m->procs.count; k++) {
         u64 address = interp_proc_address(in, k);
         CHECK(address != 0);
@@ -2577,7 +2589,11 @@ TEST(interp_finds_c_functions_by_name) {
     // Where each host's C functions come from. Windows: the standard C
     // library's from the compiler's own table, which has no
     // aligned_alloc (UCRT has none) and no function of Windows'; those
-    // from kernel32.dll, and the C runtime's extras from ucrtbase.dll.
+    // from kernel32.dll, and the C runtime's extras from ucrtbase.dll. The
+    // table holds a function of each header section 10.8 names: <time.h>'s
+    // too, which UCRT has only as inline functions (ucrtbase.dll exports
+    // _time64, not time), and <ctype.h>'s, which ucrtbase.dll would answer
+    // with a second C runtime's locale.
     // Linux: everything from libc but what libc_nonshared.a links in
     // statically (atexit, at_quick_exit, pthread_atfork), which libc.so.6
     // doesn't export, the compiler's own from its table; and libm-only
@@ -2588,6 +2604,15 @@ TEST(interp_finds_c_functions_by_name) {
     CHECK(interp_c_library_function(str("sqrt")) == (void *)static_cast<double (*)(double)>(&sqrt));
     CHECK(interp_c_library_function(str("sqrtf")) == (void *)&sqrtf);
     CHECK(interp_c_library_function(str("sqrtl")) == (void *)static_cast<long double (*)(long double)>(&sqrtl));
+    CHECK(interp_c_library_function(str("memchr")) ==
+          (void *)static_cast<const void *(*)(const void *, int, size_t)>(&memchr));
+    CHECK(interp_c_library_function(str("strtol")) == (void *)&strtol);
+    CHECK(interp_c_library_function(str("fopen")) == (void *)&fopen);
+    CHECK(interp_c_library_function(str("toupper")) == (void *)&toupper);
+    CHECK(interp_c_library_function(str("isalpha")) == (void *)&isalpha);
+    CHECK(interp_c_library_function(str("time")) == (void *)&time);
+    CHECK(interp_c_library_function(str("localtime")) == (void *)&localtime);
+    CHECK(interp_c_library_function(str("difftime")) == (void *)&difftime);
     CHECK(interp_c_library_function(str("aligned_alloc")) == nullptr);
     CHECK(interp_c_library_function(str("GetCurrentProcessId")) == nullptr);
     CHECK(os_find_c_function(str("GetCurrentProcessId")) != nullptr);

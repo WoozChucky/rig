@@ -73,8 +73,8 @@ struct Interp_Result {
     String message;              // failed: "division by zero", "stack overflow", ...
     String panic_text;           // failed by IR_PANIC: its bytes as the program writes them; empty otherwise
     Array<Interp_Frame> frames;  // failed: innermost first, compiler-made procedures left out; none when
-                                 // the run failed before it started (a global that can't be mapped,
-                                 // a C function run by itself, a first frame that doesn't fit, ...)
+                                 // the run failed before it started (a program that can't run at all,
+                                 // a C function run by itself, a first frame that doesn't fit)
 };
 
 // One compile-time world: a module's globals, its procedures' addresses, a
