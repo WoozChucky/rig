@@ -19,7 +19,8 @@ struct Parser {
     s32 height;                 // the levels of the expression the last parse_ function returned
     Position expression_start;  // where the outermost expression being read starts
     s32 blocks;                 // the blocks open around the next token
-    s32 type_levels;            // the type levels (*, [] and [N]) open around the next token
+    s32 type_levels;            // the type levels (*, [], [N] and a procedure type's '(') open around
+                                // the next token
     s32 deepest;                // the most levels reached since take_deepest last restarted it
     // After a body found never closed: the token where the top level
     // resumes (parse_block_rest), or -1.
@@ -47,8 +48,8 @@ struct Parser {
 // operator, though the parser itself doesn't recurse to build it (the
 // checker does, to check it).
 //
-// A type's levels are each '*', '[]' and '[N]' in it (parse_type): ***int is
-// 3, [][4]*u8 is 3, a name none.
+// A type's levels are each '*', '[]', '[N]' and procedure type's '(' in it
+// (parse_type): ***int is 3, [][4]*u8 is 3, (*int) -> int 2, a name none.
 //
 // Types and expressions nest inside each other: an array's count is an
 // expression inside its '[N]' level, and size_of(T) and cast(T) read their
@@ -986,7 +987,7 @@ static Ast_Block *parse_block(Parser *p) {
     return block;
 }
 
-// type = '*' type | '[' expression ']' type | '[' ']' type | IDENT
+// type = '*' type | '[' expression ']' type | '[' ']' type | proc_type | IDENT
 //
 // [N]T is an array of N T's, N any expression (the checker needs it to be
 // a constant); []T a view of T's. [..]T, a growable array, needs the
@@ -995,7 +996,7 @@ static Ast_Block *parse_block(Parser *p) {
 // height kept for the expression around a type, if any, stays as it was: a
 // count's isn't part of it.
 //
-// A type's '*', '[]' and '[N]' are a level each of the compiler's limit
+// A type's '*', '[]', '[N]' and a procedure type's '(' are a level each of the compiler's limit
 // (MAX_DEPTH), counted with the levels of the types and expressions the
 // type is inside: the one level too many is "types are nested too deeply
 // (more than 1000 levels)", at its '*' or '['. That
@@ -1017,7 +1018,7 @@ static Ast_Type *parse_type_level(Parser *p);
 
 static Ast_Type *parse_type(Parser *p) {
     Token *t = peek(p);
-    if (t->kind != TOKEN_STAR && t->kind != TOKEN_LBRACKET) return parse_type_level(p);
+    if (t->kind != TOKEN_STAR && t->kind != TOKEN_LBRACKET && t->kind != TOKEN_LPAREN) return parse_type_level(p);
     if (open_levels(p) >= MAX_DEPTH) {
         diag_error(p->diag, t->pos, "types are nested too deeply (more than %d levels)", MAX_DEPTH);
         return nullptr;
@@ -1029,8 +1030,95 @@ static Ast_Type *parse_type(Parser *p) {
     return type;
 }
 
-// The type rule's alternatives: '*' type, '[' [expression] ']' type (a
-// level each, which parse_type counted) or a name. The type after a '*' or
+// Whether token t is the directive #name.
+static bool is_directive(Token *t, const char *name) {
+    return t->kind == TOKEN_DIRECTIVE && string_eq(t->text, str(name));
+}
+
+// Whether the '(' the parser is at and its ')' are a procedure type's
+// parameters: the ')' is followed by '->'. After a '->', that's what tells
+// a procedure type as the one result, `-> (int) -> int`, from the results
+// in parentheses, `-> (int, int)` (parse_results). A '(' never closed before
+// a ';' or the end isn't one.
+static bool proc_type_follows(Parser *p) {
+    s64 depth = 0;
+    for (s64 i = p->next; p->tokens[i].kind != TOKEN_EOF && p->tokens[i].kind != TOKEN_SEMICOLON; i++) {
+        Token_Kind kind = p->tokens[i].kind;
+        if (kind == TOKEN_LPAREN) depth++;
+        // A token follows: the last one is TOKEN_EOF.
+        if (kind == TOKEN_RPAREN && --depth == 0) return p->tokens[i + 1].kind == TOKEN_ARROW;
+    }
+    return false;
+}
+
+static Ast_Type *parse_whole_type(Parser *p);
+
+// The results after a '->' (the parser past it), into `results`:
+//   results = type | '(' type {',' type} ')'
+// A procedure type is one type (proc_type_follows), so only other
+// parentheses hold a list; *listed says whether they did. A declaration's
+// results are each a whole type (`whole`: parse_whole_type), a procedure
+// type's are part of it. False after reporting an error.
+static bool parse_results(Parser *p, Array<Ast_Type *> *results, bool whole, bool *listed) {
+    *listed = peek(p)->kind == TOKEN_LPAREN && !proc_type_follows(p);
+    if (*listed) advance(p);
+    for (;;) {
+        Ast_Type *result = whole ? parse_whole_type(p) : parse_type(p);
+        if (!result) return false;
+        array_add(results, result);
+        if (!*listed || peek(p)->kind != TOKEN_COMMA) break;
+        advance(p);
+    }
+    return !*listed || expect(p, TOKEN_RPAREN);
+}
+
+// proc_type = '(' [[IDENT ':'] type {',' [IDENT ':'] type}] ')'
+//               ['->' results] ['#c_call']
+//
+// A procedure's type, written as its signature: (int, int) -> int, (a:
+// *void, b: *void) -> s32 #c_call, (). The parameters' names are only a
+// reader's help: dropped, as they aren't part of the type. '..' has no place
+// in one, since a procedure taking more arguments with it can't be a value
+// (spec 7.6). A '#c_call' after it is this type's, unless the result is a
+// procedure type written without parentheses, which took it first: the
+// innermost type with room for it.
+static Ast_Type *parse_proc_type(Parser *p) {
+    Token *open = advance(p);
+    Ast_Type *type = ast_new<Ast_Type>(p->arena, AST_TYPE_PROC, open->pos);
+    if (peek(p)->kind != TOKEN_RPAREN) {
+        for (;;) {
+            if (peek(p)->kind == TOKEN_DOT_DOT) {
+                diag_error(p->diag, peek(p)->pos,
+                           "a procedure type can't take '..': a procedure that takes more arguments can't be a value");
+                return nullptr;
+            }
+            if (peek(p)->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON) p->next += 2;  // a name
+            Ast_Type *param = parse_type(p);
+            if (!param) return nullptr;
+            array_add(&type->params, param);
+            if (peek(p)->kind != TOKEN_COMMA) break;
+            advance(p);
+        }
+    }
+    if (!expect(p, TOKEN_RPAREN)) return nullptr;
+    if (peek(p)->kind == TOKEN_ARROW) {
+        advance(p);
+        bool listed;
+        if (!parse_results(p, &type->results, false, &listed)) return nullptr;
+    }
+    if (is_directive(peek(p), "c_call")) {
+        advance(p);
+        type->is_c_call = true;
+        if (is_directive(peek(p), "c_call")) {
+            diag_error(p->diag, peek(p)->pos, "'#c_call' is written twice");
+            return nullptr;
+        }
+    }
+    return type;
+}
+
+// The type rule's alternatives: '*' type, '[' [expression] ']' type, a
+// procedure type (a level each, which parse_type counted) or a name. The type after a '*' or
 // ']' goes back through parse_type, so its levels are counted too; a
 // count is read inside the level its '[N]' opened, and no other, so its
 // expression levels are counted from there.
@@ -1060,6 +1148,7 @@ static Ast_Type *parse_type_level(Parser *p) {
         type->element = parse_type(p);
         return type->element ? type : nullptr;
     }
+    if (t->kind == TOKEN_LPAREN) return parse_proc_type(p);
     if (t->kind == TOKEN_IDENT) {
         advance(p);
         Ast_Type *named = ast_new<Ast_Type>(p->arena, AST_TYPE_NAME, t->pos);
@@ -1111,16 +1200,21 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
     return true;
 }
 
-// procedure = '(' [params] ')' ['->' type {',' type}]
-//               (['#no_abc'] block | '#foreign' IDENT ';')
+// procedure = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
+//               ({'#c_call' | '#no_abc'} block | '#foreign' IDENT ';')
 // params    = param {',' param} [',' '..']
 //
-// Several results are written as a list after the arrow, with no
-// parentheses (spec 6.7): divmod :: (a: int, b: int) -> int, int { ... }.
-// The list ends at the body's '{' or the directive, which no type goes on
-// with. #no_abc (Jai's name: no array bounds checks) turns off the bounds
-// checks of the body that must follow it (spec 6.5); any directive there
-// but it and #foreign is "unknown directive '#foo'".
+// Several results are written as a list after the arrow, with or without
+// parentheses (spec 6.7): divmod :: (a: int, b: int) -> int, int { ... }, or
+// -> (int, int), as a procedure type writes them. The list ends at the
+// body's '{' or the directive, which no type goes on with. #no_abc (Jai's
+// name: no array bounds checks) turns off the bounds checks of the body
+// that must follow it (spec 6.5); #c_call makes the procedure one C can
+// call (spec 7.6). Each is written once, in either order ("'#c_call' is
+// written twice"). A foreign procedure is C's already, and takes neither:
+// #c_call before #foreign is "a foreign procedure is C's already: it takes
+// no '#c_call'", #no_abc "expected '{'". Any directive there but these is
+// "unknown directive '#foo'".
 //
 // Each element of the parameter list is a parameter or, last, the '..' of
 // a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign libc;).
@@ -1148,25 +1242,39 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     if (!expect(p, TOKEN_RPAREN)) return nullptr;
     if (peek(p)->kind == TOKEN_ARROW) {
         advance(p);
-        for (;;) {
+        bool listed;
+        if (!parse_results(p, &proc->results, true, &listed)) return nullptr;
+        while (!listed && peek(p)->kind == TOKEN_COMMA) {
+            advance(p);
             Ast_Type *result = parse_whole_type(p);
             if (!result) return nullptr;
             array_add(&proc->results, result);
-            if (peek(p)->kind != TOKEN_COMMA) break;
-            advance(p);
         }
     }
 
-    Token *t = peek(p);
-    if (t->kind == TOKEN_DIRECTIVE && string_eq(t->text, str("no_abc"))) {
-        advance(p);
-        proc->no_bounds_checks = true;
-        proc->body = parse_block(p);
-        return proc->body ? proc : nullptr;
-    }
-    if (t->kind == TOKEN_DIRECTIVE) {
+    for (Token *t = peek(p); t->kind == TOKEN_DIRECTIVE; t = peek(p)) {
+        bool c_call = is_directive(t, "c_call");
+        if (c_call || is_directive(t, "no_abc")) {
+            bool *marked = c_call ? &proc->is_c_call : &proc->no_bounds_checks;
+            if (*marked) {
+                diag_error(p->diag, t->pos, "'#" STR_FMT "' is written twice", STR_ARG(t->text));
+                return nullptr;
+            }
+            *marked = true;
+            if (c_call) proc->c_call_pos = t->pos;
+            advance(p);
+            continue;
+        }
         if (!string_eq(t->text, str("foreign"))) {
             diag_error(p->diag, t->pos, "unknown directive '#" STR_FMT "'", STR_ARG(t->text));
+            return nullptr;
+        }
+        if (proc->no_bounds_checks) {
+            error_expected(p, token_kind_name(TOKEN_LBRACE));
+            return nullptr;
+        }
+        if (proc->is_c_call) {
+            diag_error(p->diag, proc->c_call_pos, "a foreign procedure is C's already: it takes no '#c_call'");
             return nullptr;
         }
         advance(p);
@@ -1229,15 +1337,21 @@ static Ast *parse_struct(Parser *p, Token *name) {
 // ':' or ':=' followed by a signature (`greet : () {`, `greet := () {`) is
 // a procedure's declaration with its '::' mistyped, so it's reported as
 // milestone 1 did, "expected '::', found ':'", rather than as a type or a
-// value that can't begin with '('. Anything else after the name is
-// "expected '::'": procedures are what's most often declared.
+// value that can't begin with '('. After ':', a procedure type is a
+// variable's (`op : (int) -> int = add;`) when its '=' or ';' comes before
+// any body or directive (variable_follows); otherwise it's a signature.
+// Anything else after the name is "expected '::'": procedures are what's
+// most often declared.
+static bool variable_follows(Parser *p, s64 open);
+
 static Ast *parse_declaration(Parser *p) {
     Token *name = expect(p, TOKEN_IDENT);
     if (!name) return nullptr;
     Token_Kind after = peek(p)->kind;
     bool signature_follows =
         peek(p, 1)->kind == TOKEN_LPAREN &&
-        (after == TOKEN_COLON || (after == TOKEN_COLON_EQUAL && parameters_follow(p, p->next + 1)));
+        (after == TOKEN_COLON ? !variable_follows(p, p->next + 1)
+                              : after == TOKEN_COLON_EQUAL && parameters_follow(p, p->next + 1));
     if (signature_follows) {
         error_expected(p, token_kind_name(TOKEN_COLON_COLON));
         return nullptr;
@@ -1393,6 +1507,43 @@ static bool parameters_follow(Parser *p, s64 open) {
         if (t->kind == TOKEN_RPAREN && --depth == 0) {
             Token_Kind next = p->tokens[i + 1].kind;  // a token follows: the last is TOKEN_EOF
             return next == TOKEN_LBRACE || next == TOKEN_ARROW || next == TOKEN_DIRECTIVE;
+        }
+    }
+    return false;
+}
+
+// Whether the type that starts at token `open`, a '(' after a top-level
+// name and ':', is a variable's procedure type (`op : (int) -> int = add;`),
+// not a procedure's signature with its '::' mistyped (`greet : () {`):
+// outside every parenthesis and bracket, its '=' or ';' comes before a
+// body's '{' or a directive other than #c_call (`#foreign`, `#no_abc`).
+// Reaching neither before the next declaration (an identifier starting a
+// line, followed by '::') or the end, it's taken for a signature, as
+// milestone 1 took any '(' there: procedures are declared more often.
+static bool variable_follows(Parser *p, s64 open) {
+    s64 depth = 0;
+    for (s64 i = open; p->tokens[i].kind != TOKEN_EOF; i++) {
+        Token *t = &p->tokens[i];
+        bool starts_line = p->tokens[i - 1].pos.line != t->pos.line;  // open >= 2: a name and ':' came before
+        if (i > open && starts_line && t->kind == TOKEN_IDENT && p->tokens[i + 1].kind == TOKEN_COLON_COLON) {
+            return false;
+        }
+        switch (t->kind) {
+        case TOKEN_LPAREN:
+        case TOKEN_LBRACKET: depth++; break;
+        case TOKEN_RPAREN:
+        case TOKEN_RBRACKET: depth--; break;
+        case TOKEN_LBRACE:
+            if (depth <= 0) return false;
+            break;
+        case TOKEN_DIRECTIVE:
+            if (depth <= 0 && !is_directive(t, "c_call")) return false;
+            break;
+        case TOKEN_EQUAL:
+        case TOKEN_SEMICOLON:
+            if (depth <= 0) return true;
+            break;
+        default: break;
         }
     }
     return false;

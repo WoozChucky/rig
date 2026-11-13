@@ -79,6 +79,29 @@ static Type *resolve_element(Checker *c, Ast_Type *written, bool behind_pointer)
     return t;
 }
 
+// A written procedure type, (params) -> results, its parts resolved in
+// order: each is one a value can have, void none. A procedure value is an
+// address, so they lie behind it, as a pointer's target does: a struct
+// among them is named before its layout is known (behind_pointer). Null when
+// any part is an error, reported.
+static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
+    Array<Type *> parts = {};
+    bool fine = true;
+    for (s64 i = 0; i < written->params.count + written->results.count; i++) {
+        Ast_Type *part = i < written->params.count ? written->params[i] : written->results[i - written->params.count];
+        Type *t = resolve_element(c, part, true);
+        fine = fine && t;
+        array_add(&parts, t);
+    }
+    Type *t = nullptr;
+    if (fine) {
+        s64 n = written->params.count;
+        t = type_proc_of(parts.data, n, parts.data + n, written->results.count, written->is_c_call);
+    }
+    array_free(&parts);
+    return t;
+}
+
 // A written type. A name is a built-in type, or a struct's, whose layout is
 // worked out here if it isn't yet (resolve_struct). Any other name declared
 // where the type is written isn't a type ("'foo' is not a type"), and a name
@@ -111,6 +134,7 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
         if (!counted || !element) return nullptr;
         return check_array_type(c, element, count, written->pos);
     }
+    case AST_TYPE_PROC: return resolve_proc_type(c, written);
     default: break;
     }
     Type *t = type_from_name(written->name);
@@ -491,17 +515,19 @@ static s64 align_up(s64 offset, s32 align) {
     return (offset + align - 1) & ~(s64)(align - 1);
 }
 
-// Whether a written type holds a pointer or a view: is one, or is an array
-// of what holds one. Such a field is a late field.
+// Whether a written type holds a pointer or a view: is one, or a procedure
+// type (its value, the address of code, is a pointer), or is an array of
+// what holds one. Such a field is a late field.
 static bool holds_pointer_or_view(Ast_Type *written) {
-    if (written->kind == AST_TYPE_POINTER || written->kind == AST_TYPE_VIEW) return true;
+    Ast_Kind kind = written->kind;
+    if (kind == AST_TYPE_POINTER || kind == AST_TYPE_VIEW || kind == AST_TYPE_PROC) return true;
     if (written->kind == AST_TYPE_ARRAY) return holds_pointer_or_view(written->element);
     return false;
 }
 
 // The size and alignment of a type that holds a pointer or a view
 // (holds_pointer_or_view), from what's written, before the type is made: a
-// pointer is 8 bytes, a view 16 (both aligned to 8), and an array N times
+// pointer or a procedure value is 8 bytes, a view 16 (all aligned to 8), and an array N times
 // its element's, at its element's alignment. Nothing behind a pointer or in
 // a view is looked at, so no struct is laid out here. An array's count is
 // checked (array_count), and kept for the type; one that's wrong, or makes
@@ -509,8 +535,9 @@ static bool holds_pointer_or_view(Ast_Type *written) {
 // big).
 static void late_layout(Checker *c, Ast_Type *written, s64 *size, s32 *align) {
     if (written->kind != AST_TYPE_ARRAY) {
-        RIG_ASSERT(written->kind == AST_TYPE_POINTER || written->kind == AST_TYPE_VIEW);
-        *size = written->kind == AST_TYPE_POINTER ? 8 : 16;
+        RIG_ASSERT(written->kind == AST_TYPE_POINTER || written->kind == AST_TYPE_VIEW ||
+                   written->kind == AST_TYPE_PROC);
+        *size = written->kind == AST_TYPE_VIEW ? 16 : 8;
         *align = 8;
         return;
     }
@@ -696,13 +723,35 @@ void check_late_field(Checker *c, Type *t, s32 index) {
     }
 }
 
+static Type *made_again(Type *t);
+
+// Procedure type t, made again (made_again): the same signature of its
+// parts made again, so null if any of them has no type now. A procedure
+// type is never inferred, only written, so its parts nest only as deep as
+// the program wrote them (MAX_DEPTH), and recursing through them is safe.
+static Type *proc_made_again(Type *t) {
+    Array<Type *> parts = {};
+    bool fine = true;
+    for (s64 i = 0; i < t->param_count + t->result_count; i++) {
+        Type *part = made_again(i < t->param_count ? t->params[i] : t->results[i - t->param_count]);
+        fine = fine && part;
+        array_add(&parts, part);
+    }
+    Type *again = fine ? type_proc_of(parts.data, t->param_count, parts.data + t->param_count, t->result_count,
+                                      t->is_c_call)
+                       : nullptr;
+    array_free(&parts);
+    return again;
+}
+
 // Type t, made before every struct was laid out, made again now that they
-// are: the same pointers, views and arrays (the same counts: nothing is
-// checked or said twice) of what the struct at its end has become, so
-// null if that has no type now. A struct taken behind a pointer or in a
-// view before its layout (resolve_written's behind_pointer) may since have
-// been found in a circle, or too big. Nothing else changes. In a loop: a
-// type the checker infers has no limit to its levels (6.1).
+// are: the same pointers, views, arrays (the same counts: nothing is
+// checked or said twice) and procedure types of what the structs in it
+// have become, so null if one of those has no type now. A struct taken
+// behind a pointer or in a view before its layout (resolve_written's
+// behind_pointer) may since have been found in a circle, or too big.
+// Nothing else changes. In a loop: a type the checker infers has no limit
+// to its levels (6.1).
 static Type *made_again(Type *t) {
     Array<Type *> levels = {};  // t's pointers, views and arrays, outermost first
     Type *inner = t;
@@ -711,6 +760,7 @@ static Type *made_again(Type *t) {
         inner = inner->kind == TYPE_POINTER ? inner->pointee : inner->element;
     }
     if (inner && inner->kind == TYPE_STRUCT && inner->decl) inner = inner->decl->declared;
+    if (inner && inner->kind == TYPE_PROC) inner = proc_made_again(inner);
     for (s64 i = levels.count - 1; i >= 0 && inner; i--) {
         Type *level = levels[i];
         if (level->kind == TYPE_POINTER) {
