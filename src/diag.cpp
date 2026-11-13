@@ -53,9 +53,10 @@ static bool comes_before(Position x, Position y) {
 // from one buffer into the other, until one run holds them all. It's stable
 // (of two messages at the same place, the left run's goes first), and it
 // takes n log n steps however the messages came. An insertion sort would be
-// shorter, but slow on a program of many files: each stage reports every
-// file before the next stage starts, so a checker error in the first file
-// would be moved back past every later file's syntax errors.
+// shorter, but slow on a program of many files: the checker reports after
+// every file has been lexed and parsed, so a checker error in the first
+// file would be moved back past every later file's syntax and #load
+// errors.
 void diag_sort(Diagnostics *d) {
     s64 n = d->messages.count;
     Array<Diagnostic> other = {};
