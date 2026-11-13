@@ -517,7 +517,10 @@ struct Body {
     // location.
     LLVMMetadataRef *scopes;
     s64 scope_count;
-    s32 file;  // the procedure's, which every position in it is in (ir.h's "Positions")
+    // The procedure's file, its Position.file, set when scopes is: every
+    // position in it, its scopes', instructions' and variables', is in that
+    // file (ir.h's "Positions").
+    s32 file;
 };
 
 // The LLVM value of %n. Blocks are translated in order, so a value used
@@ -817,26 +820,29 @@ static LLVMMetadataRef part_debug_type(Backend *b, Type *part, s32 depth, s32 *l
     return made.node;
 }
 
-// A struct type, t, named `name`, declared at `line` (0 for a view's or a
-// string's, which no line declares) of its file (type_debug_file), made
-// `depth` levels down. A struct can hold a pointer to itself (Node's next:
-// *Node), or a view of itself, so making a member's type can lead back to
-// the struct before it's made. So it's made in three steps:
+// A struct type, t, named `name`, made `depth` levels down, in its file
+// (type_debug_file) at its declaration's line (0 for a view's or a
+// string's, which no line declares). A struct can hold a pointer to itself
+// (Node's next: *Node), or a view of itself, so making a member's type can
+// lead back to the struct before it's made. So it's made in three steps:
 //   1. a temporary node, a replaceable composite, stands for it: remembered
 //      as t's debug type (of one level: a part that leads back to it adds
 //      none, then and after, see DEBUG_TYPE_LEVELS), it's what a pointer
 //      back finds and names;
-//   2. the members are made (make_members), each scoped in the temporary;
+//   2. the members are made (make_members), each scoped in the temporary
+//      and in the struct's file;
 //   3. the real struct type is made with them, and LLVMMetadataReplaceAll-
 //      UsesWith makes every node that names the temporary (the members, the
 //      pointer back) name the real one instead, and frees the temporary.
 // LLVM's metadata nodes are uniqued, made once for each set of contents, so
 // what a node names can't change after it's made: the temporary is how a
 // node can name what doesn't exist yet.
-static Debug_Type debug_struct(Backend *b, Type *t, String name, unsigned line, s32 depth,
+static Debug_Type debug_struct(Backend *b, Type *t, String name, s32 depth,
                                s64 (*make_members)(Backend *b, Type *t, s32 depth, LLVMMetadataRef in,
-                                                   LLVMMetadataRef *members, s32 *levels)) {
+                                                   LLVMMetadataRef file, LLVMMetadataRef *members,
+                                                   s32 *levels)) {
     LLVMMetadataRef file = type_debug_file(b, t);
+    unsigned line = t->kind == TYPE_STRUCT ? (unsigned)t->decl->pos.line : 0;
     LLVMMetadataRef temporary = LLVMDIBuilderCreateReplaceableCompositeType(
         b->debug, DW_TAG_structure_type, (const char *)name.data, (size_t)name.count, file, file, line, 0,
         (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, "", 0);
@@ -844,7 +850,7 @@ static Debug_Type debug_struct(Backend *b, Type *t, String name, unsigned line, 
     s64 most = t->kind == TYPE_STRUCT ? t->fields.count : 2;
     LLVMMetadataRef *members = arena_new_array<LLVMMetadataRef>(b->arena, most ? most : 1);
     s32 levels = 1;
-    s64 count = make_members(b, t, depth, temporary, members, &levels);
+    s64 count = make_members(b, t, depth, temporary, file, members, &levels);
     LLVMMetadataRef real =
         LLVMDIBuilderCreateStructType(b->debug, file, (const char *)name.data, (size_t)name.count, file, line,
                                       (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, nullptr, members,
@@ -863,10 +869,9 @@ static Debug_Type debug_struct(Backend *b, Type *t, String name, unsigned line, 
 // in the order its declaration has them (Ast_Struct.fields), and a second
 // field of one name is an error, which stops the build before this: so
 // field i is the declaration's field i.
-static s64 struct_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVMMetadataRef *members,
-                          s32 *levels) {
+static s64 struct_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVMMetadataRef file,
+                          LLVMMetadataRef *members, s32 *levels) {
     RIG_ASSERT(t->fields.count == t->decl->fields.count);
-    LLVMMetadataRef file = type_debug_file(b, t);
     for (s64 i = 0; i < t->fields.count; i++) {
         Type_Field *field = &t->fields[i];
         Ast_Field *declared = t->decl->fields[i];
@@ -882,12 +887,11 @@ static s64 struct_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LL
 // { count: int; data: *T; }. A debugger shows its fields (a.count,
 // a.data[i]), and a string's data, a pointer to u8's (unsigned chars), as
 // text. (The data pointer is no Rig type of its own here: T is the part.)
-static s64 view_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVMMetadataRef *members,
-                        s32 *levels) {
+static s64 view_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVMMetadataRef file,
+                        LLVMMetadataRef *members, s32 *levels) {
     LLVMMetadataRef element = part_debug_type(b, t->element, depth, levels);
     LLVMMetadataRef data = LLVMDIBuilderCreatePointerType(b->debug, element, 64, 0, 0, nullptr, 0);
     LLVMMetadataRef count = part_debug_type(b, &type_int, depth, levels);
-    LLVMMetadataRef file = type_debug_file(b, t);
     members[0] = debug_member(b, in, file, str("count"), 0, 8, VIEW_COUNT_OFFSET, count);
     members[1] = debug_member(b, in, file, str("data"), 0, 8, VIEW_DATA_OFFSET, data);
     return 2;
@@ -1028,8 +1032,8 @@ static Debug_Type debug_type_at(Backend *b, Type *t, s32 depth) {
         return remember_debug_type(b, t, Debug_Type{debug_pointer(b, signature), levels});
     }
     case TYPE_VIEW:
-    case TYPE_STRING: return debug_struct(b, t, type_name(b->arena, t), 0, depth, view_members);
-    case TYPE_STRUCT: return debug_struct(b, t, t->name, (unsigned)t->decl->pos.line, depth, struct_members);
+    case TYPE_STRING: return debug_struct(b, t, type_name(b->arena, t), depth, view_members);
+    case TYPE_STRUCT: return debug_struct(b, t, t->name, depth, struct_members);
     default: RIG_ASSERT(!"a type no variable has"); return {};
     }
 }
@@ -1117,7 +1121,7 @@ static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMVal
     for (s64 i = 1; i < p->scopes.count; i++) {
         Ir_Scope *s = &p->scopes[i];
         RIG_ASSERT(s->parent >= 0 && s->parent < i);
-        RIG_ASSERT(s->pos.file == p->pos.file);
+        RIG_ASSERT(s->pos.file == body->file);
         body->scopes[i] = LLVMDIBuilderCreateLexicalBlock(b->debug, body->scopes[s->parent], file,
                                                           (unsigned)s->pos.line, (unsigned)s->pos.col);
     }
@@ -1417,7 +1421,7 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
 
     LLVMMetadataRef plain = LLVMDIBuilderCreateExpression(b->debug, nullptr, 0);
     // Each variable is in the procedure's file, as its scopes are.
-    LLVMMetadataRef file = debug_file(b, p->pos);
+    LLVMMetadataRef file = b->files[body->file];
     // The result pointers, parameters 1 to `pointers` (the visible ones
     // come after them), at the procedure's own line: the i-th points at the
     // i-th aggregate result.
@@ -1438,7 +1442,7 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
     for (s64 i = 0; i < p->vars.count; i++) {
         Ir_Var *v = &p->vars[i];
         RIG_ASSERT(v->scope >= 0 && v->scope < body->scope_count);
-        RIG_ASSERT(v->pos.file == p->pos.file);
+        RIG_ASSERT(v->pos.file == body->file);
         LLVMMetadataRef scope = body->scopes[v->scope];
         LLVMMetadataRef type = debug_type(b, v->type);
         // An aggregate parameter: a pointer in its slot (see above). A

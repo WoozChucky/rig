@@ -1001,7 +1001,8 @@ TEST(llvm_debug_info_has_a_compile_unit) {
         CHECK(contains(text, "isOptimized: false"));
         CHECK(contains(text, "emissionKind: FullDebug"));
         String file = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\", directory: \"" STR_FMT "\"",
-                                    STR_ARG(llvm_escaped(&a, m->sources[0].path)), STR_ARG(llvm_escaped(&a, m->directory)));
+                                    STR_ARG(llvm_escaped(&a, m->sources[0].path)),
+                                    STR_ARG(llvm_escaped(&a, m->directory)));
         CHECK(contains(text, string_cstr(&a, file)));
         CHECK(contains(text, "checksumkind: CSK_MD5, checksum: \"2d6d83719e184598cb6b6bd6505ea090\""));
         CHECK(contains(text, "!\"Debug Info Version\", i32 3}"));
@@ -1681,9 +1682,10 @@ TEST(llvm_globals_have_debug_info) {
 // lexical blocks and its variables (result$ too) the procedure's; a struct
 // type, its members and its stand-in below DEBUG_TYPE_LEVELS the struct's;
 // a global its own. A subprogram and a struct type name it twice, as their
-// file and as their scope. The compile unit names the main file. Each file has a struct, a global and
-// a procedure with a block, so a node that named the wrong one, either
-// way, would show.
+// file and as their scope. The compile unit names the main file, and so do
+// a view type and its members, which no line declares, though only the
+// loaded file uses it. Each file has a struct, a global and a procedure
+// with a block, so a node that named the wrong one, either way, would show.
 TEST(debug_info_names_each_procedures_file) {
     Arena a = arena_make();
     String dir = load_test_directory(&a, "debug_info_names_each_procedures_file");
@@ -1711,6 +1713,7 @@ TEST(debug_info_names_each_procedures_file) {
                "total := 0;\n"
                "helper :: (n: int) -> int {\n"
                "    doubled := n * 2;\n"
+               "    pairs : []Pair;\n"
                "    if doubled > 40 {\n"
                "        bigger := doubled + 1;\n"
                "    }\n"
@@ -1779,6 +1782,8 @@ TEST(debug_info_names_each_procedures_file) {
             {blocks[0], 0, false},
             {"!DICompositeType(tag: DW_TAG_structure_type, name: \"Point\"", 0, true},
             {"!DIDerivedType(tag: DW_TAG_member, name: \"x\"", 0, false},
+            {"!DICompositeType(tag: DW_TAG_structure_type, name: \"[]Pair\"", 0, true},
+            {"!DIDerivedType(tag: DW_TAG_member, name: \"count\"", 0, false},
             {"!DIGlobalVariable(name: \"count\"", 0, false},
             {"!DISubprogram(name: \"helper\"", 1, true},
             {"!DILocalVariable(name: \"n\"", 1, false},
