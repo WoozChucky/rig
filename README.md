@@ -82,7 +82,7 @@ puts :: (s: *u8) -> s32 #foreign libc;
 main :: () { puts("Hello, World!"); }
 ```
 
-**Windows** needs clang on the `PATH`, and Visual Studio or its Build Tools with the "Desktop development with C++" workload:
+**Windows** needs Visual Studio or its Build Tools with the "Desktop development with C++" workload:
 
 ```
 scripts\get_llvm.bat
@@ -91,7 +91,7 @@ bin\rig build hello.rig
 hello.exe
 ```
 
-**Linux** needs clang and the C library's development files (`sudo apt install clang` on Debian and Ubuntu):
+**Linux** needs the C and C++ libraries' development files and the system's linker (`sudo apt install build-essential` on Debian and Ubuntu):
 
 ```
 scripts/get_llvm.sh
@@ -100,7 +100,7 @@ bin/rig build hello.rig
 ./hello
 ```
 
-`get_llvm` downloads the pinned LLVM release into `deps/`, once. [CONTRIBUTING.md](CONTRIBUTING.md) has the details, and the tests.
+`get_llvm` downloads the pinned LLVM release into `deps/`, once, with the clang that builds Rig: no other clang needs to be installed. [CONTRIBUTING.md](CONTRIBUTING.md) has the details, and the tests.
 
 ## Documentation
 

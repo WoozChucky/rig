@@ -3,7 +3,9 @@
     // (src/rig.cpp includes everything), so every file sees the same flags.
     // On Windows no compilerPath is given on purpose: the extension then finds
     // Visual Studio's headers itself, which clang can fail to do when another
-    // Visual Studio installer product is newer (see build.bat). The RIG_
+    // Visual Studio installer product is newer (see build.bat). On Linux it's
+    // the clang that builds Rig, the pinned release's, which
+    // scripts/get_llvm.sh keeps in deps/llvm-linux (build.sh). The RIG_
     // defines stand in for the stamp the build scripts pass (src/version.h),
     // without which every file would show its #error.
     "configurations": [
@@ -18,7 +20,7 @@
         {
             "name": "Linux",
             "includePath": ["${workspaceFolder}/src", "${workspaceFolder}/deps/llvm-linux/include"],
-            "compilerPath": "/usr/bin/clang++",
+            "compilerPath": "${workspaceFolder}/deps/llvm-linux/bin/clang++",
             "defines": ["RIG_VERSION=\"0.0.0\"", "RIG_COMMIT=\"unknown\"", "RIG_COMMIT_DIRTY=0", "RIG_COMMIT_DATE=\"unknown\"", "RIG_BUILD=\"debug\""],
             "cppStandard": "c++23",
             "cStandard": "c17",

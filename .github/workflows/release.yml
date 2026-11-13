@@ -129,15 +129,8 @@ jobs:
           git checkout -q --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$COMMIT"
 
-      # As ci.yml: clang if the image has none, and LLVM from its cache
-      # (the same key, so a release reuses what CI downloaded).
-      - name: Clang
-        run: |
-          if ! command -v clang++ > /dev/null; then
-            sudo apt-get update && sudo apt-get install -y clang
-          fi
-          clang++ --version
-
+      # As ci.yml: LLVM, with the clang that builds Rig, from its cache (the
+      # same key, so a release reuses what CI downloaded).
       - name: Cache LLVM
         id: llvm
         uses: actions/cache@v6
@@ -184,8 +177,9 @@ jobs:
   windows:
     needs: prepare
     # The release is the only workflow that runs on Windows; CI is Linux
-    # only. The image has clang (LLVM's installer, on the PATH) and Visual
-    # Studio with the C++ tools, which build.bat finds through vswhere.
+    # only. The image has Visual Studio with the C++ tools, which build.bat
+    # finds through vswhere; the clang that builds Rig is LLVM's, from
+    # get_llvm.bat, not the image's.
     runs-on: windows-latest
     timeout-minutes: 60
     defaults:
@@ -212,11 +206,8 @@ jobs:
           git checkout -q --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$COMMIT"
 
-      - name: Clang
-        run: clang++ --version
-
       # Keyed as ci.yml keys Linux's: the version, and the script that
-      # downloads it.
+      # downloads it (and says what it keeps).
       - name: Cache LLVM
         id: llvm
         uses: actions/cache@v6
