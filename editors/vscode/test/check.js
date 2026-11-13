@@ -346,7 +346,7 @@ check('package.json runs extension.js', () => {
 check('every command in package.json is registered by extension.js', () => {
     const contributes = readJson('package.json').contributes;
     const commands = (contributes.commands || []).map((c) => c.command);
-    assert.deepStrictEqual(commands.sort(), ['rig.buildFile', 'rig.runFile']);
+    assert.deepStrictEqual(commands.sort(), ['rig.buildFile', 'rig.debugFile', 'rig.runFile']);
     assert.deepStrictEqual(registered('registerCommand').sort(), commands);
     // Menus may only name declared commands; each shows on .rig files only.
     for (const [menu, items] of Object.entries(contributes.menus || {})) {
@@ -400,39 +400,137 @@ check('the setting rig.compilerPath is declared and read', () => {
     assert.ok(read('extension.js').includes("'compilerPath'"), "extension.js never reads 'compilerPath'");
 });
 
+// --- Debugging: package.json ------------------------------------------------
+
+// VS Code lets the editor's gutter set breakpoints only in the languages
+// some extension lists under `breakpoints`; Microsoft's C/C++ extension
+// lists C, C++ and a few others, not Rig.
+check('breakpoints are enabled for rig', () => {
+    assert.deepStrictEqual(readJson('package.json').contributes.breakpoints, [{ language: 'rig' }]);
+});
+
+// The debug type `rig`: what launch.json may say about it, and what VS Code
+// writes into a new launch.json (initialConfigurations) or offers when one
+// is edited (configurationSnippets). Every configuration needs a type, a
+// request and a name, or VS Code refuses it.
+check('the rig debugger is declared', () => {
+    const debuggers = readJson('package.json').contributes.debuggers || [];
+    assert.strictEqual(debuggers.length, 1, 'package.json declares one debugger');
+    const rig = debuggers[0];
+    assert.strictEqual(rig.type, 'rig');
+    assert.strictEqual(rig.label, 'Rig');
+    assert.deepStrictEqual(rig.languages, ['rig']);
+    const properties = rig.configurationAttributes.launch.properties;
+    assert.deepStrictEqual(Object.keys(properties).sort(), ['args', 'file']);
+    assert.strictEqual(properties.file.type, 'string');
+    assert.strictEqual(properties.args.type, 'array');
+    for (const p of Object.values(properties)) assert.ok(p.description, 'a launch attribute has no description');
+    const configurations = [...rig.initialConfigurations, ...rig.configurationSnippets.map((s) => s.body)];
+    assert.ok(rig.initialConfigurations.length > 0 && rig.configurationSnippets.length > 0);
+    for (const c of configurations) {
+        assert.strictEqual(c.type, 'rig', JSON.stringify(c));
+        assert.strictEqual(c.request, 'launch', JSON.stringify(c));
+        assert.ok(typeof c.name === 'string' && c.name, JSON.stringify(c));
+    }
+    for (const s of rig.configurationSnippets) assert.ok(s.label && s.description, `a snippet has no label or description`);
+});
+
+check('registered debug configuration providers', () => {
+    assert.deepStrictEqual(registered('registerDebugConfigurationProvider'), ['rig']);
+});
+
+// VS Code starts the extension when it needs the `rig` type resolved (F5,
+// a launch.json entry), when it writes a new launch.json, and for the
+// command.
+check('activation events cover debugging', () => {
+    const events = readJson('package.json').activationEvents;
+    for (const event of ['onDebugResolve:rig', 'onDebugInitialConfigurations', 'onCommand:rig.debugFile']) {
+        assert.ok(events.includes(event), `no activation event ${event}`);
+    }
+});
+
+// --- Debugging: debug.js ----------------------------------------------------
+
+// The part of debugging that needs no VS Code: where the program is, and the
+// launch configuration of Microsoft's C/C++ extension that debugs it. It
+// takes the platform as an argument, so both are checked on either.
+function debugModule() {
+    return require(path.join(extension, 'debug.js'));
+}
+
+check('programPath and debugConfiguration for win32', () => {
+    const { programPath, debugConfiguration } = debugModule();
+    const dir = 'C:\\work\\rig';
+    const program = path.win32.join(dir, 'x.exe');
+    assert.strictEqual(programPath('win32', 'C:\\work\\rig\\tests\\x.rig', dir), program);
+    assert.strictEqual(programPath('win32', 'C:\\work\\rig\\X.RIG', dir), path.win32.join(dir, 'X.exe'));
+    assert.deepStrictEqual(debugConfiguration('win32', 'C:\\work\\rig\\tests\\x.rig', dir, ['a', 'b']), {
+        type: 'cppvsdbg',
+        request: 'launch',
+        name: 'Rig: debug x',
+        program,
+        args: ['a', 'b'],
+        cwd: dir,
+        console: 'integratedTerminal',
+    });
+});
+
+check('programPath and debugConfiguration for linux', () => {
+    const { programPath, debugConfiguration } = debugModule();
+    const dir = '/home/me/rig';
+    const program = path.posix.join(dir, 'x');
+    assert.strictEqual(programPath('linux', '/home/me/rig/tests/x.rig', dir), program);
+    // A name that's only `.rig` keeps it, as rig does.
+    assert.strictEqual(programPath('linux', '/home/me/.rig', dir), path.posix.join(dir, '.rig'));
+    assert.deepStrictEqual(debugConfiguration('linux', '/home/me/rig/tests/x.rig', dir, []), {
+        type: 'cppdbg',
+        request: 'launch',
+        name: 'Rig: debug x',
+        program,
+        args: [],
+        cwd: dir,
+        MIMode: 'gdb',
+        setupCommands: [{ text: '-enable-pretty-printing', ignoreFailures: true }],
+        externalConsole: false,
+    });
+});
+
 // What a file passes to require().
 function requires(file) {
     return [...read(file).matchAll(/\brequire\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
 }
 
 // The extension's own modules extension.js requires ('./diagnostics'), as
-// files of this folder ('diagnostics.js').
+// files of this folder ('diagnostics.js'), in alphabetical order.
 function ownModules() {
     return requires('extension.js')
         .filter((name) => name.startsWith('./'))
-        .map((name) => path.posix.normalize(name.endsWith('.js') ? name : `${name}.js`));
+        .map((name) => path.posix.normalize(name.endsWith('.js') ? name : `${name}.js`))
+        .sort();
 }
 
 // No npm packages: VS Code's API, Node's own modules and the extension's own
-// files only. diagnostics.js doesn't need VS Code at all, so this file can
-// test it as it is.
+// files only. debug.js and diagnostics.js don't need VS Code at all, so this
+// file can test them as they are.
 check('extension.js requires only vscode, Node\'s built-in modules and its own', () => {
     const builtIn = ['child_process', 'path', 'fs', 'os'];
     const required = requires('extension.js');
     assert.ok(required.includes('vscode'), 'extension.js never requires vscode');
-    assert.deepStrictEqual(ownModules(), ['diagnostics.js']);
+    assert.deepStrictEqual(ownModules(), ['debug.js', 'diagnostics.js']);
     for (const name of required) {
         assert.ok(name === 'vscode' || name.startsWith('./') || builtIn.includes(name), `extension.js requires '${name}'`);
     }
-    for (const name of requires('diagnostics.js')) {
-        assert.ok(builtIn.includes(name), `diagnostics.js requires '${name}'`);
+    for (const file of ['debug.js', 'diagnostics.js']) {
+        for (const name of requires(file)) {
+            assert.ok(builtIn.includes(name), `${file} requires '${name}'`);
+        }
     }
 });
 
 // Node parses the files without running them: a syntax error shows here
 // rather than when VS Code loads the extension.
-check('node --check extension.js and diagnostics.js', () => {
-    for (const file of ['extension.js', 'diagnostics.js']) {
+check('node --check extension.js, debug.js and diagnostics.js', () => {
+    for (const file of ['extension.js', 'debug.js', 'diagnostics.js']) {
         const result = require('child_process').spawnSync(process.execPath, ['--check', path.join(extension, file)], {
             encoding: 'utf8',
         });
@@ -549,20 +647,32 @@ function reset() {
         commands: [],            // executeCommand's calls
         onCommand: () => {},     // what a command does
         executed: [],            // tasks started
+        runTasks: false,         // whether executeTask runs them, or only records them
+        taskOutput: '',          // what the tasks it ran wrote to their terminals
+        extensions: ['ms-vscode.cpptools'], // the extensions installed
+        debugged: [],            // startDebugging's calls: { folder, config }
+        launched: [],            // what each resolved to, as VS Code would launch it
     });
 }
 reset();
 
 // What activate() set up once, for every check: the listeners it gave each
-// of VS Code's events, by the event's name, the task provider, and the
-// diagnostic collections it made, by name, each a Map from a document's
-// uri (as a string) to its diagnostics.
-const activated = { listeners: {}, taskProvider: null, collections: {} };
+// of VS Code's events, by the event's name, the task provider, the debug
+// configuration providers, by debug type, and the diagnostic collections it
+// made, by name, each a Map from a document's uri (as a string) to its
+// diagnostics.
+const activated = { listeners: {}, taskProvider: null, debugProviders: {}, collections: {} };
 
 function listen(event) {
     return (listener) => {
-        (activated.listeners[event] = activated.listeners[event] || []).push(listener);
-        return { dispose() {} };
+        const listeners = (activated.listeners[event] = activated.listeners[event] || []);
+        listeners.push(listener);
+        return {
+            dispose() {
+                const at = listeners.indexOf(listener);
+                if (at >= 0) listeners.splice(at, 1);
+            },
+        };
     };
 }
 
@@ -660,10 +770,45 @@ const vscodeStub = {
             activated.taskProvider = provider;
             return { dispose() {} };
         },
-        executeTask: (task) => {
+        // As VS Code does with a CustomExecution task, when stub.runTasks
+        // is set: makes its pseudoterminal from the definition, opens it, and
+        // when it closes, fires onDidEndTaskProcess with the execution this
+        // returned and the status it closed with.
+        executeTask: async (task) => {
             stub.executed.push(task);
-            return Promise.resolve();
+            const execution = { task };
+            if (!stub.runTasks) return execution;
+            const terminal = await task.execution.callback(task.definition);
+            terminal.onDidWrite((text) => (stub.taskOutput += text));
+            terminal.onDidClose((exitCode) => fire('endTaskProcess', { execution, exitCode }));
+            terminal.open();
+            return execution;
         },
+        onDidEndTaskProcess: listen('endTaskProcess'),
+    },
+    debug: {
+        registerDebugConfigurationProvider: (type, provider) => {
+            activated.debugProviders[type] = provider;
+            return { dispose() {} };
+        },
+        // As VS Code starts a session: the configuration goes to the
+        // provider of its type, and again while the type changes; what's
+        // left is launched by its type's debugger (recorded here), unless a
+        // provider returned undefined, which cancels it.
+        startDebugging: async (folder, config) => {
+            stub.debugged.push({ folder, config });
+            let resolved = config;
+            for (let seen = new Set(); resolved && activated.debugProviders[resolved.type] && !seen.has(resolved.type); ) {
+                seen.add(resolved.type);
+                resolved = await activated.debugProviders[resolved.type].resolveDebugConfiguration(folder, resolved);
+            }
+            if (!resolved) return false;
+            stub.launched.push(resolved);
+            return true;
+        },
+    },
+    extensions: {
+        getExtension: (id) => (stub.extensions.includes(id) ? { id } : undefined),
     },
 };
 
@@ -1119,6 +1264,166 @@ check('a build whose compiler Node can\'t start says so and fails', async () => 
             assert.ok(text.includes(`Couldn't run ${program}`), text);
             assert.strictEqual(terminal.child, null);
         });
+    });
+});
+
+// --- Debugging, with a stand-in compiler ------------------------------------
+//
+// The `rig` debug type: its provider builds the file with the build task and
+// returns the launch configuration of Microsoft's C/C++ extension for the
+// program. As for the live check, Node stands in for rig: the extension runs
+// `node build FILE` in the workspace folder, and Node runs build.js there, a
+// stand-in for `rig build` that writes an empty "program" where rig would,
+// or fails as rig does when the file says `fail`. The stub's executeTask
+// runs the task's terminal (stub.runTasks) and fires onDidEndTaskProcess
+// with its status.
+
+const BUILD_STAND_IN = `
+const fs = require('fs');
+const path = require('path');
+const file = process.argv[2];
+const text = fs.readFileSync(file, 'utf8');
+if (text.includes('fail')) {
+    process.stderr.write(file + ":1:1: error: unknown identifier 'fail'\\n");
+    process.exit(1);
+}
+let name = path.basename(file).slice(0, -4);
+fs.writeFileSync(name + (process.platform === 'win32' ? '.exe' : ''), '');
+`;
+
+// A .rig file on disk with no unsaved changes, as an editor's document.
+function savedDocument(file) {
+    return { uri: fileUri(file), languageId: 'rig', isUntitled: false, isDirty: false };
+}
+
+// `fn(dir, folder, file)` with the stand-in set up: dir is a workspace
+// folder (named "work") holding build.js and sort.rig, which is open in the
+// editor; rig.compilerPath is Node; tasks run.
+async function withDebugging(fn) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-vscode-check-'));
+    try {
+        fs.writeFileSync(path.join(dir, 'build.js'), BUILD_STAND_IN);
+        const file = path.join(dir, 'sort.rig');
+        fs.writeFileSync(file, 'main :: () {}\n');
+        reset();
+        const folder = Object.assign(fakeFolder(dir), { name: 'work' });
+        stub.folders = [folder];
+        stub.compilerPath = process.execPath;
+        stub.runTasks = true;
+        stub.document = savedDocument(file);
+        await fn(dir, folder, file);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+function debugProvider() {
+    loadExtension();
+    const provider = activated.debugProviders.rig;
+    assert.ok(provider && provider.resolveDebugConfiguration, 'no debug configuration provider for rig');
+    return provider;
+}
+
+// F5 in a folder with no launch.json asks the provider to resolve `{}`:
+// the active editor's file, built, then debugged where the build put it.
+check('resolving {} builds the open .rig file and debugs its program', async () => {
+    const provider = debugProvider();
+    const { debugConfiguration, programPath } = debugModule();
+    await withDebugging(async (dir, folder, file) => {
+        const resolved = await provider.resolveDebugConfiguration(folder, {});
+        assert.deepStrictEqual(stub.errors, []);
+        assert.deepStrictEqual(resolved, debugConfiguration(process.platform, file, dir, []));
+        assert.strictEqual(stub.executed.length, 1);
+        assert.strictEqual(stub.executed[0].definition.command, 'build');
+        assert.strictEqual(stub.executed[0].name, 'build current file');
+        assert.ok(fs.existsSync(programPath(process.platform, file, dir)), `no program; the task said:\n${stub.taskOutput}`);
+    });
+});
+
+// A launch.json entry's file, with the variables VS Code would replace
+// only after the provider has run, and its args.
+check('a configuration\'s file may use ${file} and ${workspaceFolder}; args go to the program', async () => {
+    const provider = debugProvider();
+    const { debugConfiguration } = debugModule();
+    await withDebugging(async (dir, folder, file) => {
+        const other = path.join(dir, 'other.rig');
+        fs.writeFileSync(other, 'main :: () {}\n');
+        const cases = [
+            ['${file}', file],
+            ['other.rig', other],
+            ['${workspaceFolder}/other.rig', other],
+            ['${workspaceFolder:work}/other.rig', other],
+            [other, other],
+        ];
+        for (const [given, expected] of cases) {
+            stub.executed = [];
+            const config = { type: 'rig', request: 'launch', name: 'x', file: given, args: ['1', 'two'] };
+            const resolved = await provider.resolveDebugConfiguration(folder, config);
+            assert.deepStrictEqual(stub.errors, [], given);
+            assert.deepStrictEqual(resolved, debugConfiguration(process.platform, expected, dir, ['1', 'two']), given);
+            assert.deepStrictEqual(stub.executed[0].definition.file, expected, given);
+        }
+    });
+});
+
+check('a configuration\'s file with another variable is refused', async () => {
+    const provider = debugProvider();
+    await withDebugging(async (dir, folder) => {
+        for (const given of ['${env:X}/a.rig', '${workspaceFolder:nowhere}/a.rig']) {
+            stub.errors = [];
+            const resolved = await provider.resolveDebugConfiguration(folder, { type: 'rig', request: 'launch', name: 'x', file: given });
+            assert.strictEqual(resolved, undefined, given);
+            assert.strictEqual(stub.errors.length, 1, given);
+            assert.ok(stub.errors[0].includes(given.slice(0, given.indexOf('}') + 1)), stub.errors[0]);
+        }
+        assert.strictEqual(stub.executed.length, 0);
+    });
+});
+
+// Each case cancels the launch (undefined) and says why, with a button.
+check('untrusted, untitled, no compiler, no C/C++ extension and a failed build cancel with a reason', async () => {
+    const provider = debugProvider();
+    const cases = [
+        ['untrusted', () => (stub.trusted = false), /trust/i],
+        ['untitled', () => (stub.document = untitled), /save the file first/],
+        ['no compiler', (dir) => (stub.compilerPath = path.join(dir, 'no-such-rig')), /rig\.compilerPath/],
+        ['no C/C++ extension', () => (stub.extensions = []), /C\/C\+\+ extension/],
+        ['a failed build', (dir, file) => fs.writeFileSync(file, 'main :: () { fail(); }\n'), /^Rig: the build failed; see the terminal and the Problems panel\.$/],
+    ];
+    for (const [what, set, message] of cases) {
+        await withDebugging(async (dir, folder, file) => {
+            set(dir, file);
+            const resolved = await provider.resolveDebugConfiguration(folder, {});
+            assert.strictEqual(resolved, undefined, what);
+            assert.strictEqual(stub.errors.length, 1, `${what}: ${stub.errors.join(' | ')}`);
+            assert.match(stub.errors[0], message, what);
+            assert.strictEqual(stub.executed.length, what === 'a failed build' ? 1 : 0, what);
+        });
+    }
+});
+
+// The editor title's button and the command palette: a `rig`
+// configuration for the file, which VS Code resolves through the provider.
+check('rig.debugFile starts the rig configuration, which resolves to the platform\'s', async () => {
+    const provider = debugProvider();
+    const { debugConfiguration } = debugModule();
+    assert.ok(provider);
+    await withDebugging(async (dir, folder, file) => {
+        // From the command palette: the active editor's file.
+        await stub.registered['rig.debugFile']();
+        assert.strictEqual(stub.debugged.length, 1);
+        assert.strictEqual(stub.debugged[0].folder, folder);
+        assert.deepStrictEqual(stub.debugged[0].config, { type: 'rig', request: 'launch', name: 'Debug the current .rig file', file });
+        assert.deepStrictEqual(stub.launched, [debugConfiguration(process.platform, file, dir, [])]);
+
+        // From the editor title's button: the file it was pressed on.
+        const other = path.join(dir, 'other.rig');
+        fs.writeFileSync(other, 'main :: () {}\n');
+        stub.debugged = [];
+        stub.launched = [];
+        await stub.registered['rig.debugFile'](fileUri(other));
+        assert.strictEqual(stub.debugged[0].config.file, other);
+        assert.deepStrictEqual(stub.launched, [debugConfiguration(process.platform, other, dir, [])]);
     });
 });
 
