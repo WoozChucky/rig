@@ -1,0 +1,13 @@
+// A #load in a body given up after another error (issue #112) is passed
+// over with the rest of the body, unreported, and the file it names isn't
+// loaded. It has still failed, as any #load in a body does: the program
+// lacks that file, so greet, which it declares, isn't reported as unknown.
+// The one mistake is said once.
+f :: () {
+    x := ;
+    #load "load/other_main.rig";
+}
+
+main :: () {
+    greet();
+}
