@@ -1,0 +1,11 @@
+// A runtime error in a loaded file (issue #112) names that file, at the
+// operator: load/divide.rig's division by the zero main passes it.
+#load "load/divide.rig";
+
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    puts("before");
+    divide(10, 0);
+    puts("after");
+}

@@ -1,0 +1,3 @@
+tests/errors/load_missing_main.rig:4:7: error: cannot read 'tests/errors/load/nope.rig': @NO_SUCH_FILE@
+    #load "load/nope.rig";
+          ^

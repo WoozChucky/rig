@@ -1,5 +1,5 @@
-// helpers.cpp: test helpers shared by the parser's, checker's, IR's, LLVM
-// backend's, linker's and interpreter's tests.
+// helpers.cpp: test helpers shared by the parser's, loader's, checker's,
+// IR's, LLVM backend's, linker's and interpreter's tests.
 //
 // Two ways to get tokens. src() lexes real source text, the way rig build
 // does; milestone 2's tests use it, since the lexer is complete and source
@@ -35,9 +35,10 @@ static bool starts_with(String s, const char *prefix) {
     return s.count >= n && memcmp(s.data, prefix, (size_t)n) == 0;
 }
 
-// Records where the file is, as rig build does (driver.cpp): in the
-// directory the tests run in, its absolute path made from its name, so a
-// module lowered from it knows its source as one rig builds does.
+// Records where the file is, as rig build does for each file of a program
+// (load.cpp's load_program): in the directory the tests run in, its
+// absolute path made from its name, so a module lowered from it knows its
+// source as one rig builds does.
 static void locate_file(Diagnostics *d, s32 file) {
     Arena a = arena_make();
     diag_locate_file(d, file, os_current_directory(&a), target_host() == TARGET_WINDOWS_X64);

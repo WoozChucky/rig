@@ -1,0 +1,4 @@
+// Loaded by tests/errors/load_syntax_error_in_loaded_file.rig.
+counter int = 0;
+
+helper :: () {}

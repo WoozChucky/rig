@@ -1,0 +1,8 @@
+// #load is a declaration of the program's (issue #112): not in a body. The
+// file it names isn't loaded: it declares main, which would be declared
+// twice if it were. The program then lacks that file, so greet, which it
+// declares, isn't reported as unknown too: the one mistake is said once.
+main :: () {
+    #load "load/other_main.rig";
+    greet();
+}

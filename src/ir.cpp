@@ -230,6 +230,14 @@ static void out_bytes(Printer *p, String bytes) {
     }
 }
 
+// A source position, for ir_print_debug: L:C in the program's first file,
+// F:L:C in any other, F its index in Ir_Module.sources, so a program of
+// one file, the usual case, prints as it did before #load: L:C.
+static void out_pos(Printer *p, Position pos) {
+    if (pos.file != 0) out(p, "%d:", pos.file);
+    out(p, "%d:%d", pos.line, pos.col);
+}
+
 // A list of values, "%a, %b, ...".
 static void out_values(Printer *p, Array<s32> values) {
     for (s64 i = 0; i < values.count; i++) out(p, "%s%%%d", i ? ", " : "", values[i]);
@@ -335,7 +343,11 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr, bool debug) {
         break;
     case IR_UNREACHABLE: out(p, "%s", op); break;
     }
-    if (debug && instr->pos.line > 0) out(p, "  ; %d:%d s%d", instr->pos.line, instr->pos.col, instr->scope);
+    if (debug && instr->pos.line > 0) {
+        out(p, "  ; ");
+        out_pos(p, instr->pos);
+        out(p, " s%d", instr->scope);
+    }
     out(p, "\n");
 }
 
@@ -385,18 +397,25 @@ static const char *ir_var_kind_name(Ir_Var_Kind k) {
 // and its variables. Nothing for a procedure the compiler made.
 static void out_proc_debug(Printer *p, Arena *a, Ir_Proc *proc) {
     if (!proc->source_name.count) return;
-    out(p, "  ; source " STR_FMT " at %d:%d, body %d:%d\n", STR_ARG(proc->source_name), proc->pos.line, proc->pos.col,
-        proc->body.line, proc->body.col);
+    out(p, "  ; source " STR_FMT " at ", STR_ARG(proc->source_name));
+    out_pos(p, proc->pos);
+    out(p, ", body ");
+    out_pos(p, proc->body);
+    out(p, "\n");
     for (s64 i = 1; i < proc->scopes.count; i++) {
         Ir_Scope *s = &proc->scopes[i];
-        out(p, "  ; scope %lld in %d at %d:%d\n", (long long)i, s->parent, s->pos.line, s->pos.col);
+        out(p, "  ; scope %lld in %d at ", (long long)i, s->parent);
+        out_pos(p, s->pos);
+        out(p, "\n");
     }
     for (s64 i = 0; i < proc->vars.count; i++) {
         Ir_Var *v = &proc->vars[i];
         out(p, "  ; var " STR_FMT " " STR_FMT " %s %%%d", STR_ARG(v->name), STR_ARG(type_name(a, v->type)),
             ir_var_kind_name(v->kind), v->value);
         if (v->arg) out(p, " arg %d", v->arg);
-        out(p, " in %d at %d:%d\n", v->scope, v->pos.line, v->pos.col);
+        out(p, " in %d at ", v->scope);
+        out_pos(p, v->pos);
+        out(p, "\n");
     }
 }
 
@@ -404,9 +423,10 @@ static void out_proc_debug(Printer *p, Arena *a, Ir_Proc *proc) {
 // (ir_print_debug).
 static String print_module(Arena *a, Ir_Module *m, bool debug) {
     Printer p = {};
-    if (debug && m->source_path.count) {
-        out(&p, "; source " STR_FMT " md5 ", STR_ARG(m->source_path));
-        for (int i = 0; i < 16; i++) out(&p, "%02x", m->source_md5[i]);
+    for (s64 i = 0; debug && i < m->sources.count; i++) {
+        Ir_Source *s = &m->sources[i];
+        out(&p, "; source " STR_FMT " md5 ", STR_ARG(s->path));
+        for (int k = 0; k < 16; k++) out(&p, "%02x", s->md5[k]);
         out(&p, "\n");
     }
     for (s64 i = 0; i < m->globals.count; i++) {
@@ -427,7 +447,9 @@ static String print_module(Arena *a, Ir_Module *m, bool debug) {
             }
         }
         if (debug && g->rig_type) {
-            out(&p, "  ; type " STR_FMT " at %d:%d\n", STR_ARG(type_name(a, g->rig_type)), g->pos.line, g->pos.col);
+            out(&p, "  ; type " STR_FMT " at ", STR_ARG(type_name(a, g->rig_type)));
+            out_pos(&p, g->pos);
+            out(&p, "\n");
         }
     }
     for (s64 i = 0; i < m->procs.count; i++) {

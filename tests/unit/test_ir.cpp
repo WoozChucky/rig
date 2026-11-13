@@ -1,7 +1,8 @@
 // test_ir.cpp: lowering checked trees to Rig's IR (issue #10, with tokens
 // by hand; issues #33 to #37, floats the last, and #52, from real source),
 // and the IR's builders and printing (issue #32), with IR by hand
-// (helpers.cpp).
+// (helpers.cpp). Uses test_load.cpp's load_test_directory, write_source and
+// in_directory, and test_base.cpp's md5_hex.
 
 #include "test.h"
 
@@ -3275,20 +3276,25 @@ TEST(compiler_made_procedures_have_no_source) {
 TEST(module_knows_its_source) {
     // The source file's absolute path (the helpers' test.rig, in the
     // directory the tests run in, as rig build has it), that directory, and
-    // the MD5 of the file's bytes.
+    // the MD5 of the file's bytes: the module's one source, the program
+    // being that file alone.
     Arena a = arena_make();
     const char *text = "main :: () { }\n";
     Ir_Module *m = lower_source(&a, text);
     String directory = os_current_directory(&a);
     String path = path_absolute(&a, directory, str("test.rig"), target_host() == TARGET_WINDOWS_X64);
     CHECK(path.count > (s64)strlen("test.rig"));
-    CHECK_STR(m->source_path, string_cstr(&a, path));
+    CHECK_EQ(m->sources.count, 1);
+    if (m->sources.count != 1) {
+        arena_free(&a);
+        return;
+    }
+    CHECK_STR(m->sources[0].path, string_cstr(&a, path));
     CHECK_STR(m->directory, string_cstr(&a, directory));
     u8 digest[16];
     md5(str(text), digest);
-    CHECK(memcmp(m->source_md5, digest, 16) == 0);
-    String hex = {};
-    for (int i = 0; i < 16; i++) hex = string_printf(&a, STR_FMT "%02x", STR_ARG(hex), digest[i]);
+    CHECK(memcmp(m->sources[0].md5, digest, 16) == 0);
+    String hex = md5_hex(&a, text);
     String first_line = string_printf(&a, "; source " STR_FMT " md5 " STR_FMT "\n", STR_ARG(path), STR_ARG(hex));
     CHECK(index_of(ir_print_debug(&a, m), string_cstr(&a, first_line)) == 0);
     // ir_print shows none of it, and a module built by hand has no source.
@@ -3297,27 +3303,94 @@ TEST(module_knows_its_source) {
     arena_free(&a);
 }
 
-// The program at `path`, lowered as rig build lowers it, or null when it
-// doesn't check; its tree in *tree. Both live in the arena.
+// The program at `path`, with the files it #loads, lowered as rig build
+// lowers it, or null when it doesn't check; its tree in *tree. Both live in
+// the arena.
 static Ir_Module *lower_program(Arena *a, String path, Ast_File **tree) {
     String text = {};
     if (!os_read_file(a, path, &text)) return nullptr;
     Diagnostics d = {};
-    s32 file = diag_add_file(&d, path, text);
-    locate_file(&d, file);
-    Array<Token> tokens = lex(&d, file, a);
-    *tree = d.error_count ? nullptr : parse(tokens, a, &d);
+    *tree = load_program(a, &d, path, text);
     Ir_Module *m = nullptr;
-    if (*tree && check(*tree, a, &d)) m = ir_lower(*tree, &d, a, true);
-    array_free(&tokens);
+    if (d.error_count == 0 && check(*tree, a, &d)) m = ir_lower(*tree, &d, a, true);
     diag_free(&d);
     return m;
 }
 
+TEST(lower_records_every_source) {
+    // Issue #112: a program of several files has a source for each, in
+    // load order, Position.file's numbering: its absolute path and the MD5
+    // of its bytes. ir_print_debug writes a line for each, in that order,
+    // and a position in any file but the first as F:L:C, F its index; one
+    // in the first is L:C, as for a program of one file. (The files are
+    // written where the loader's tests write theirs: test_load.cpp.)
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "lower_records_every_source");
+    const char *texts[] = {
+        "#load \"helper.rig\";\n"
+        "main :: () { helper(21); }\n",
+        "helper :: (n: int) -> int {\n"
+        "    doubled := n * 2;\n"
+        "    if doubled > 40 { doubled += 1; }\n"
+        "    return doubled;\n"
+        "}\n"
+        "calls := 0;\n",
+    };
+    const char *names[] = {"main.rig", "helper.rig"};
+    for (int i = 0; i < 2; i++) write_source(&a, dir, names[i], texts[i]);
+    Ast_File *tree = nullptr;
+    Ir_Module *m = lower_program(&a, str(in_directory(&a, dir, "main.rig")), &tree);
+    CHECK(m != nullptr);
+    if (!m) {
+        arena_free(&a);
+        return;
+    }
+    CHECK_EQ(m->sources.count, 2);
+    if (m->sources.count != 2) {
+        arena_free(&a);
+        return;
+    }
+    // The module's directory is the one rig ran in, as for a program of one
+    // file.
+    String directory = os_current_directory(&a);
+    CHECK_STR(m->directory, string_cstr(&a, directory));
+    String ir = ir_print_debug(&a, m);
+    s64 next = 0;  // where the next source's line must start: the lines come first, one after another
+    for (int i = 0; i < 2; i++) {
+        // Absolute: the directory the tests run in, then the file's path
+        // from there.
+        String path = path_absolute(&a, directory, str(in_directory(&a, dir, names[i])),
+                                    target_host() == TARGET_WINDOWS_X64);
+        CHECK(path.count > directory.count);
+        CHECK_STR(m->sources[i].path, string_cstr(&a, path));
+        u8 digest[16];
+        md5(str(texts[i]), digest);
+        CHECK(memcmp(m->sources[i].md5, digest, 16) == 0);
+        String hex = md5_hex(&a, texts[i]);
+        String line = string_printf(&a, "; source " STR_FMT " md5 " STR_FMT "\n", STR_ARG(path), STR_ARG(hex));
+        CHECK_EQ(index_of(ir, string_cstr(&a, line)), next);
+        next += line.count;
+    }
+    // helper's, its block's, its variables', its instructions' and the
+    // global's positions are in file 1; main's in file 0.
+    CHECK(contains(ir, "  ; source helper at 1:1:1, body 1:1:27\n"));
+    CHECK(contains(ir, "  ; scope 1 in 0 at 1:3:21\n"));
+    CHECK(contains(ir, " arg 1 in 0 at 1:1:12\n"));
+    CHECK(contains(ir, " in 0 at 1:2:5\n"));
+    CHECK(contains(ir, "  ; type int at 1:6:1\n"));
+    CHECK(contains(ir, "  ; source main at 2:1, body 2:12\n"));
+    String helper = proc_ir(ir, "helper");
+    CHECK(contains(helper, "  ; 1:3:"));
+    CHECK(!contains(helper, "  ; 3:"));
+    arena_free(&a);
+}
+
 TEST(every_instruction_of_every_run_test_has_a_line) {
-    // Over every end-to-end program: each instruction of a procedure from
-    // the source is somewhere in it (never line 0, which a debugger would
-    // show as no line at all) and in one of its scopes; so is each variable.
+    // Over every end-to-end program, with the files it #loads: each
+    // instruction of a procedure from the source is somewhere in it, in its
+    // file (never line 0, which a debugger would show as no line at all, nor
+    // another file, which a runtime error or a debugger would name) and in
+    // one of its scopes; so is each variable, and each scope is in its file.
     // The prologue's work is the exception: each scalar parameter's slot and
     // the store into it, first in the entry block, have no position. A
     // procedure the compiler makes has no positions at all.
@@ -3325,6 +3398,7 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
     Array<String> names = {};
     CHECK(os_list_directory(&a, str("tests/run"), &names));
     s64 programs = 0, lowered = 0;
+    s64 in_loaded_files = 0;  // the procedures from a file the program #loads
     for (s64 i = 0; i < names.count; i++) {
         String name = names[i];
         if (name.count < 4 || !string_eq(string_slice(name, name.count - 4, 4), str(".rig"))) continue;
@@ -3340,8 +3414,16 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
             bool compiler_made = string_eq(p->name, str("__rig_bounds_failed")) ||
                                  string_eq(p->name, str("__rig_string_equal"));
             if (!p->is_foreign) CHECK(from_source != compiler_made);
-            // A procedure of the file's is m->procs[k] for f->procs[k]: its
-            // lines run from its name's to its body's '}'.
+            // A procedure of the program's is m->procs[k] for
+            // tree->procs[k], whichever file it's in: its lines run from its
+            // name's to its body's '}', in that file. Its position is the
+            // tree's procedure's, so the file every instruction and variable
+            // is checked against below is the one it was parsed from.
+            if (from_source) {
+                CHECK_EQ(p->pos.file, tree->procs[k]->pos.file);
+                CHECK_EQ(p->pos.line, tree->procs[k]->pos.line);
+                if (p->pos.file > 0) in_loaded_files++;
+            }
             s32 first_line = p->pos.line;
             s32 last_line = from_source ? tree->procs[k]->body->end.line : 0;
             s64 prologue = 0;  // the entry block's first instructions: a slot and a store per scalar parameter
@@ -3356,31 +3438,36 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
                     bool in_prologue = b == 0 && n < prologue && (n % 2 == 0 ? instr->op == IR_LOCAL
                                                                               : instr->op == IR_STORE);
                     bool placed = from_source ? (in_prologue ? nowhere
-                                                             : instr->pos.line >= first_line &&
+                                                             : instr->pos.file == p->pos.file &&
+                                                                   instr->pos.line >= first_line &&
                                                                    instr->pos.line <= last_line &&
                                                                    instr->pos.line > 0 && instr->scope >= 0 &&
                                                                    instr->scope < p->scopes.count)
                                               : nowhere;
                     if (!placed) {
-                        fprintf(stderr, STR_FMT ": %s: instruction %lld of b%lld is at %d:%d s%d\n", STR_ARG(path),
-                                string_cstr(&a, p->name), (long long)n, (long long)b, instr->pos.line, instr->pos.col,
-                                instr->scope);
+                        fprintf(stderr, STR_FMT ": %s: instruction %lld of b%lld is at file %d %d:%d s%d\n",
+                                STR_ARG(path), string_cstr(&a, p->name), (long long)n, (long long)b, instr->pos.file,
+                                instr->pos.line, instr->pos.col, instr->scope);
                     }
                     CHECK(placed);
                 }
             }
             for (s64 v = 0; v < p->vars.count; v++) {
+                CHECK_EQ(p->vars[v].pos.file, p->pos.file);
                 CHECK(p->vars[v].pos.line > 0);
                 CHECK(p->vars[v].scope >= 0 && p->vars[v].scope < p->scopes.count);
             }
             for (s64 s = 1; s < p->scopes.count; s++) {
+                CHECK_EQ(p->scopes[s].pos.file, p->pos.file);
                 CHECK(p->scopes[s].parent >= 0 && p->scopes[s].parent < s);
             }
         }
     }
-    // Every end-to-end program builds, so every one is lowered here.
+    // Every end-to-end program builds, so every one is lowered here; some
+    // (load_files, load_runtime_error) have procedures in loaded files.
     CHECK(programs > 50);
     CHECK_EQ(lowered, programs);
+    CHECK(in_loaded_files > 0);
     array_free(&names);
     arena_free(&a);
 }

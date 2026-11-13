@@ -1,0 +1,27 @@
+// A program of three files (issue #112, spec 2.13): this one #loads
+// load/shapes.rig and load/print.rig, whose declarations join its own in
+// the program's one top-level scope. shapes.rig #loads print.rig too, by
+// the path from its own directory, and print.rig is read once, so its
+// procedures aren't declared twice. print.rig #loads this file back, a
+// cycle, which loads nothing: this file is loaded already. The references
+// go both ways: this file uses the others' declarations, shapes.rig uses
+// print.rig's print_int, and both use this file's newline. print.rig's
+// global, base, starts as that file says and is changed here.
+#load "load/shapes.rig";
+#load "load/print.rig";
+
+main :: () {
+    square := Shape.{SIDES, 3};
+    print_shape(square);
+    print_line(area(square));
+    rect := Shape.{SIDES, 5};
+    rect.side = 2;
+    print_line(area(rect) + area(Shape.{SIDES, 1}));
+    puts("three files, one program");
+    base = 2;
+    print_line(5);
+}
+
+// The files this one loads use it: a loaded file sees the declarations of
+// the file that loads it, as that file sees its.
+newline :: () { putchar(10); }

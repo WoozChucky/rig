@@ -1,0 +1,5 @@
+// A #load of a file whose name doesn't end in .rig (issue #112): the file
+// isn't read, whether it's there or not.
+#load "load_not_rig.err";
+
+main :: () {}

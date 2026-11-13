@@ -1,0 +1,9 @@
+helper (n=21) at @ROOT@/tests/debug/load/helper.rig:5
+return doubled;
+#0  helper (n=21) at
+helper.rig:5
+#1
+in main () at
+loaded.rig:11
+$1 = 42
+!.debug_names not created by gdb

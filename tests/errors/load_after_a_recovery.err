@@ -1,0 +1,6 @@
+tests/errors/load_after_a_recovery.rig:6:19: error: expected ';', found integer literal
+    counter : int = 1 2
+                      ^
+tests/errors/load_after_a_recovery.rig:11:5: error: unknown identifier 'helpr'
+        helpr();
+        ^

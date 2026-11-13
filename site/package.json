@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "docs:dev": "node scripts/spec.mjs && vitepress dev",
-    "docs:build": "node scripts/spec.mjs && vitepress build",
+    "docs:build": "node scripts/spec.mjs && vitepress build && node scripts/check-anchors.mjs",
     "docs:preview": "vitepress preview"
   },
   "devDependencies": {

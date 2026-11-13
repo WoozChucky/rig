@@ -2,8 +2,12 @@
 // tokens (issue #10), then IR built by hand for issues #32 to #37 (integer
 // widths, blocks and branches, the runtime's panic, several results,
 // globals and floats), #52 (the panic flushing first) and #56 (memory);
-// last, milestone 2c's line tables (#71), on modules lowered from source.
-// Uses test_ir.cpp's HELLO and max_module.
+// last, milestone 2c's line tables (#71), on modules lowered from source,
+// with the debug information of a program of several files (#112) among
+// them. Uses test_ir.cpp's HELLO, max_module and lower_program,
+// test_checker.cpp's chain_of and joined, test_load.cpp's
+// load_test_directory, write_source and in_directory, and test_base.cpp's
+// md5_hex.
 
 #include "test.h"
 
@@ -997,7 +1001,8 @@ TEST(llvm_debug_info_has_a_compile_unit) {
         CHECK(contains(text, "isOptimized: false"));
         CHECK(contains(text, "emissionKind: FullDebug"));
         String file = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\", directory: \"" STR_FMT "\"",
-                                    STR_ARG(llvm_escaped(&a, m->source_path)), STR_ARG(llvm_escaped(&a, m->directory)));
+                                    STR_ARG(llvm_escaped(&a, m->sources[0].path)),
+                                    STR_ARG(llvm_escaped(&a, m->directory)));
         CHECK(contains(text, string_cstr(&a, file)));
         CHECK(contains(text, "checksumkind: CSK_MD5, checksum: \"2d6d83719e184598cb6b6bd6505ea090\""));
         CHECK(contains(text, "!\"Debug Info Version\", i32 3}"));
@@ -1048,7 +1053,7 @@ TEST(llvm_debug_file_names_keep_a_share) {
     }
     // In the module's debug information: the file's name as LLVM got it.
     Ir_Module *m = lower_source(&a, LINES);
-    m->source_path = str("\\\\server\\share\\dir\\lines.rig");
+    m->sources[0].path = str("\\\\server\\share\\dir\\lines.rig");
     m->directory = str("\\\\server\\share\\dir");
     String text = llvm_text(&a, m, TARGET_WINDOWS_X64);
     String file = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\", directory: \"" STR_FMT "\"",
@@ -1667,6 +1672,153 @@ TEST(llvm_globals_have_debug_info) {
         CHECK(literal.count > 0);
         CHECK(!contains(literal, "!dbg"));
         CHECK(count_of(text, "!DIGlobalVariable(") == 1);
+    }
+    arena_free(&a);
+}
+
+// Issue #112: a program of several files has a DIFile for each, with its
+// own checksum, in the directory rig ran in, and each node that names a
+// file names the one its declaration is in: a procedure's subprogram, its
+// lexical blocks and its variables (result$ too) the procedure's; a struct
+// type, its members and its stand-in below DEBUG_TYPE_LEVELS the struct's;
+// a global its own. A subprogram and a struct type name it twice, as their
+// file and as their scope. The compile unit names the main file, and so do
+// a view type and its members, which no line declares, though only the
+// loaded file uses it. Each file has a struct, a global and a procedure
+// with a block, so a node that named the wrong one, either way, would show.
+TEST(debug_info_names_each_procedures_file) {
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "debug_info_names_each_procedures_file");
+    const char *names[] = {"main.rig", "helper.rig"};
+    const char *texts[] = {
+        string_cstr(&a, string_printf(&a,
+                                      "#load \"helper.rig\";\n"
+                                      "Point :: struct { x: int; }\n"
+                                      "count := 0;\n"
+                                      "main :: () {\n"
+                                      "    p := Pair.{1, 2};\n"
+                                      "    q := Point.{3};\n"
+                                      "    if p.a > 0 {\n"
+                                      "        count = q.x;\n"
+                                      "    }\n"
+                                      "    total = helper(p.a);\n"
+                                      "    deep : D%d;\n"
+                                      "}\n",
+                                      MAX_DEPTH)),
+        // D0 to D<MAX_DEPTH>, each holding the one before: main's deep, a
+        // D<MAX_DEPTH>, is a level deeper than a debug type may be
+        // (DEBUG_TYPE_LEVELS), so D1 is a stand-in, a declaration.
+        joined(&a,
+               "Pair :: struct { a: int; b: int; }\n"
+               "total := 0;\n"
+               "helper :: (n: int) -> int {\n"
+               "    doubled := n * 2;\n"
+               "    pairs : []Pair;\n"
+               "    if doubled > 40 {\n"
+               "        bigger := doubled + 1;\n"
+               "    }\n"
+               "    return doubled;\n"
+               "}\n"
+               "pair_of :: (n: int) -> Pair {\n"
+               "    return Pair.{n, n};\n"
+               "}\n"
+               "D0 :: struct { d: int; }\n",
+               chain_of(&a, "D%lld :: struct { inner: D%lld; }\n", 1, MAX_DEPTH, -1)),
+    };
+    for (int i = 0; i < 2; i++) write_source(&a, dir, names[i], texts[i]);
+    Ast_File *tree = nullptr;
+    Ir_Module *m = lower_program(&a, str(in_directory(&a, dir, "main.rig")), &tree);
+    CHECK(m != nullptr);
+    if (!m) {
+        arena_free(&a);
+        return;
+    }
+    CHECK_EQ(m->sources.count, 2);
+    if (m->sources.count != 2) {
+        arena_free(&a);
+        return;
+    }
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK_EQ(count_of(text, "!DIFile("), 2);
+        // Each file's node, found by its name and its directory (the
+        // absolute paths are drive paths or Linux ones, which
+        // llvm_debug_file_names keeps), with the MD5 of that file's text.
+        String files[2];
+        for (int i = 0; i < 2; i++) {
+            String name = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\", directory: \"" STR_FMT "\"",
+                                        STR_ARG(llvm_escaped(&a, m->sources[i].path)),
+                                        STR_ARG(llvm_escaped(&a, m->directory)));
+            String line = line_with(text, string_cstr(&a, name));
+            files[i] = defined_node(line);
+            CHECK(files[i].count > 0);
+            String checksum = string_printf(&a, "checksumkind: CSK_MD5, checksum: \"" STR_FMT "\"",
+                                            STR_ARG(md5_hex(&a, texts[i])));
+            CHECK(contains(line, string_cstr(&a, checksum)));
+        }
+        CHECK(!string_eq(files[0], files[1]));
+        // A procedure's block, found by its scope: the procedure's
+        // subprogram.
+        const char *blocks[2];
+        const char *procs[] = {"main", "helper"};
+        for (int i = 0; i < 2; i++) {
+            String subprogram = defined_node(
+                line_with(text, string_cstr(&a, string_printf(&a, "!DISubprogram(name: \"%s\"", procs[i]))));
+            CHECK(subprogram.count > 0);
+            blocks[i] = string_cstr(&a, string_printf(&a, "!DILexicalBlock(scope: " STR_FMT ",", STR_ARG(subprogram)));
+        }
+        // D1 is the stand-in, a declaration.
+        CHECK(contains(struct_line(&a, text, "D1"), ", flags: DIFlagFwdDecl)"));
+        struct Named {
+            const char *node;  // the start of the node's definition
+            int file;          // the source it must name
+            bool file_scope;   // whether its scope is that file too
+        };
+        Named nodes[] = {
+            {"!DICompileUnit(", 0, false},
+            {"!DISubprogram(name: \"main\"", 0, true},
+            {"!DILocalVariable(name: \"p\"", 0, false},
+            {"!DILocalVariable(name: \"q\"", 0, false},
+            {blocks[0], 0, false},
+            {"!DICompositeType(tag: DW_TAG_structure_type, name: \"Point\"", 0, true},
+            {"!DIDerivedType(tag: DW_TAG_member, name: \"x\"", 0, false},
+            {"!DICompositeType(tag: DW_TAG_structure_type, name: \"[]Pair\"", 0, true},
+            {"!DIDerivedType(tag: DW_TAG_member, name: \"count\"", 0, false},
+            {"!DIGlobalVariable(name: \"count\"", 0, false},
+            {"!DISubprogram(name: \"helper\"", 1, true},
+            {"!DILocalVariable(name: \"n\"", 1, false},
+            {"!DILocalVariable(name: \"doubled\"", 1, false},
+            {"!DILocalVariable(name: \"bigger\"", 1, false},
+            {blocks[1], 1, false},
+            {"!DILocalVariable(name: \"result$\"", 1, false},
+            {"!DICompositeType(tag: DW_TAG_structure_type, name: \"Pair\"", 1, true},
+            {"!DIDerivedType(tag: DW_TAG_member, name: \"a\"", 1, false},
+            {"!DIGlobalVariable(name: \"total\"", 1, false},
+            {"!DICompositeType(tag: DW_TAG_structure_type, name: \"D1\"", 1, true},
+        };
+        const char *labels[] = {"file:", "scope:"};
+        for (Named &n : nodes) {
+            for (int k = 0; k < (n.file_scope ? 2 : 1); k++) {
+                String file = attached(&a, line_with(text, n.node), labels[k]);
+                if (!string_eq(file, files[n.file])) {
+                    fprintf(stderr, "  %s: %s has %s " STR_FMT ", not " STR_FMT "\n", target_triple((Target)t),
+                            n.node, labels[k], STR_ARG(file), STR_ARG(files[n.file]));
+                }
+                CHECK(string_eq(file, files[n.file]));
+            }
+        }
+    }
+    // On Windows, each file on a network share is named as
+    // llvm_debug_file_names makes it, with a '/' first: the loaded file as
+    // well as the main one.
+    m->directory = str("\\\\server\\share\\dir");
+    for (int i = 0; i < 2; i++) m->sources[i].path = string_printf(&a, "\\\\server\\share\\dir\\%s", names[i]);
+    String text = llvm_text(&a, m, TARGET_WINDOWS_X64);
+    for (int i = 0; i < 2; i++) {
+        String name = string_printf(&a, "/\\server\\share\\dir\\%s", names[i]);
+        String file = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\", directory: \"" STR_FMT "\"",
+                                    STR_ARG(llvm_escaped(&a, name)), STR_ARG(llvm_escaped(&a, m->directory)));
+        CHECK(contains(text, string_cstr(&a, file)));
     }
     arena_free(&a);
 }

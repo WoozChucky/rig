@@ -2981,6 +2981,40 @@ TEST(interpret_mode_failure_before_main) {
     arena_free(&a);
 }
 
+TEST(interpret_mode_runs_a_program_of_several_files) {
+    // A program that #loads another file runs as rig build would build it,
+    // the loaded file's declarations with the main file's (load_program),
+    // and a failure in the loaded file names it by its path from the main
+    // file's: the division's panic, whose text the lowering wrote, and the
+    // stack running out, whose message names the innermost frame's file by
+    // the mode's copy of the files' paths.
+    Arena a = arena_make();
+    interpret_test_file(&a, "loaded_helper",
+                        "divide :: (n: int) -> int {\n"
+                        "    zero := 0;\n"
+                        "    return n / zero;\n"
+                        "}\n"
+                        "down :: (n: int) -> int {\n"
+                        "    return down(n + 1) + 1;\n"
+                        "}\n");
+    String divides = interpret_test_file(&a, "loads_divide",
+                                         "#load \"loaded_helper.rig\";\n"
+                                         "main :: () { divide(1); }\n");
+    Process_Result r = interpret_test_run(&a, &divides, 1, false);
+    CHECK_STR(r.out, "");
+    CHECK_STR(r.err, ".build/tests/interp/loaded_helper.rig:3:14: runtime error: division by zero\n");
+    CHECK_EQ(r.exit_code, 101);
+
+    String overflows = interpret_test_file(&a, "loads_down",
+                                           "#load \"loaded_helper.rig\";\n"
+                                           "main :: () { down(0); }\n");
+    r = interpret_test_run(&a, &overflows, 1, false);
+    CHECK_STR(r.out, "");
+    CHECK_STR(r.err, ".build/tests/interp/loaded_helper.rig:6:5: runtime error: stack overflow\n");
+    CHECK_EQ(r.exit_code, 101);
+    arena_free(&a);
+}
+
 TEST(interpret_mode_reports_a_programs_errors) {
     // A program that doesn't check isn't run: its diagnostics, as rig
     // build prints them, and exit status 1.

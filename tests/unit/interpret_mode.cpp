@@ -7,13 +7,13 @@
 // runner has no compiler in it, and it is a process of its own because a
 // program's exit really exits.
 //
-// It reads, lexes, parses, checks and lowers FILE as rig build does, without
-// the bounds checks of a[i] with --no-bounds-checks; a program with errors
-// gets its diagnostics on stderr, as rig build prints them, and exit status
-// 1, and isn't run. Otherwise it interprets main, and exits with main's
-// status, 0, unless the program calls C's exit, which ends the process with
-// its own. A run that fails exits with 101, as a compiled program's runtime
-// error does, after:
+// It reads, lexes, parses, checks and lowers FILE, and every file it #loads,
+// as rig build does, without the bounds checks of a[i] with
+// --no-bounds-checks; a program with errors gets its diagnostics on stderr,
+// as rig build prints them, and exit status 1, and isn't run. Otherwise it
+// interprets main, and exits with main's status, 0, unless the program
+// calls C's exit, which ends the process with its own. A run that fails
+// exits with 101, as a compiled program's runtime error does, after:
 // 1. fflush(NULL), so what the program printf'd comes out first, as the
 //    runtime flushes its streams before writing the message;
 // 2. the message on stderr: a panic's own text, exactly as the compiled
@@ -74,22 +74,19 @@ static void interpret_mode(void *data) {
     }
 
     // A copy of rig build's read_and_check (driver.cpp), which must follow
-    // its changes: when #load comes (#112), this reads the files a program
-    // loads too, through load_program, as read_and_check will. It can't call
+    // its changes: the loader reads, lexes and parses FILE and every file
+    // it #loads into the one tree (load_program). It can't call
     // read_and_check, which frees the diagnostics, and with them the paths
-    // of the program's files, which a failure's frames name by index; so it
-    // has one more step: the paths are copied before the diagnostics go.
+    // of the program's files, which a failure's frames name by index (a
+    // loaded file's as its #load made it); so it has one more step: the
+    // paths are copied before the diagnostics go.
     Diagnostics d = {};
-    s32 source = diag_add_file(&d, path, text);
-    diag_locate_file(&d, source, os_current_directory(&a), target_host() == TARGET_WINDOWS_X64);
-    Array<Token> tokens = lex(&d, source, &a);
-    Ast_File *tree = parse(tokens, &a, &d);
+    Ast_File *tree = load_program(&a, &d, path, text);
     check(tree, &a, &d);
     if (d.error_count) {
         diag_sort(&d);
         diag_print(&d);
         diag_free(&d);
-        array_free(&tokens);
         arena_free(&a);
         mode->status = 1;
         return;
@@ -98,7 +95,6 @@ static void interpret_mode(void *data) {
     Array<String> paths = {};
     for (s64 i = 0; i < d.files.count; i++) array_add(&paths, string_copy(&a, d.files[i].path));
     diag_free(&d);
-    array_free(&tokens);
 
     // main, which the checker made sure is there: no arguments, and one
     // result, the i32 C's main returns (always 0).

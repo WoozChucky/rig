@@ -1,0 +1,11 @@
+// A struct that holds itself through another file (issue #112, spec 4.8):
+// load/outer.rig's Outer holds load/inner.rig's Inner, which holds an
+// Outer back. Neither struct is this file's, and the message is in the
+// file of the one being worked out when the circle closed, Outer, at its
+// name, once.
+#load "load/outer.rig";
+#load "load/inner.rig";
+
+main :: () {
+    o : Outer;
+}

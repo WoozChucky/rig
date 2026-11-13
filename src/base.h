@@ -10,8 +10,10 @@
 // file and base.cpp looks inside them. Array's and String's fields are
 // public, because the rest of the compiler reads them directly.
 //
-// At the end, two helpers on bytes that need nothing else: making a path
-// absolute, and MD5 (milestone 2c's debug information).
+// At the end, helpers on bytes that need nothing else: making a path
+// absolute (milestone 2c's debug information), the path a #load names and
+// whether a path names a .rig file (issue #112), and MD5 (the debug
+// information's too).
 
 #pragma once
 
@@ -310,10 +312,12 @@ void table_free(Table<V> *t) {
 }
 
 // ---------------------------------------------------------------------------
-// Paths and checksums, for the debug information (milestone 2c): it names
-// the source file by its absolute path, so an editor's breakpoint (which
-// names files that way) finds it, with the MD5 of its bytes, so a debugger
-// can tell the file has changed since the program was built.
+// Paths and checksums. The debug information (milestone 2c) names each
+// source file of the program by its absolute path (path_absolute), so an
+// editor's breakpoint (which names files that way) finds it, with the MD5
+// of its bytes, so a debugger can tell the file has changed since the
+// program was built. load_path finds the file a #load names (issue #112), and
+// is_rig_file says whether a path names a source file.
 
 // `path` made absolute: joined to `directory` (an absolute path, as
 // os_current_directory gives) when it's relative, its "." segments dropped
@@ -321,14 +325,37 @@ void table_free(Table<V> *t) {
 // link is followed, and the file needn't exist); ".." at the root stays at
 // the root. On Windows (`windows`) both / and \ separate, and the result
 // has \ only. A root there is a drive, "C:", or a network share's
-// "\\server\share": a path with one is absolute, and a path that starts
-// with a separator but has none takes directory's. A drive with no
+// "\\server\share", with the \\?\ prefix or without it ("\\?\C:",
+// "\\?\UNC\server\share"): a path with one is absolute, and a path that
+// starts with a separator but has none takes directory's. A drive with no
 // separator after it, "C:x.rig", is relative to that drive's current
 // directory: on directory's drive that's directory; another drive's the
 // process can't know, so its root stands for it ("D:x.rig" is "D:\x.rig").
-// On Linux only / separates. The result has no separator doubled, and none at its end but
-// a root's own ("C:\", "/").
+// On Linux only / separates. The result has no separator doubled, and none
+// at its end but a root's own ("C:\", "/").
 String path_absolute(Arena *a, String directory, String path, bool windows);
+
+// Where `#load "written"` in the file at `from` points (issue #112):
+// `written` itself when it's absolute (on Linux, `windows` false, when it
+// starts with '/'; on Windows when it starts with a drive, "C:", or with
+// either separator); otherwise from's text up to and including its last
+// separator (\ counts only on Windows), followed by `written`, so a file
+// loaded from src/main.rig as "world/map.rig" is src/world/map.rig. On
+// Windows a `from` with a drive and no separator, "C:main.rig", is in that
+// drive's current directory, so "C:" is its directory: its "a.rig" is
+// "C:a.rig". A `from` with the \\?\ prefix is a path Windows opens as it
+// is, with no '/' taken for a separator and no ".." resolved, so there the
+// joined path is resolved as path_absolute resolves one, with \ only:
+// "\\?\C:\x\main.rig"'s "../sub/a.rig" is "\\?\C:\sub\a.rig". Like
+// path_absolute, it works on the text alone: nothing is opened, and no link
+// is followed. The result is the path messages name the file by. When it's
+// relative, it's read from the directory rig runs in, as `from` is.
+String load_path(Arena *a, String from, String written, bool windows);
+
+// Whether the path ends in .rig, in any case: on Windows HELLO.RIG and
+// hello.rig are the same file, and on Linux .RIG is still plainly meant.
+// rig build and rig check take only such a file, and a #load only names one.
+bool is_rig_file(String path);
 
 // The MD5 digest of `bytes` (RFC 1321) in `out`, its 16 bytes in the order
 // they're written: printed as 32 hex digits from out[0], it's what md5sum
