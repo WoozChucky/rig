@@ -1,0 +1,36 @@
+31:     printf("%lld\n", apply(f, 2, 3));
+<function> * f = 0x
+<function> * none = 0x00000000`00000000
+f                : 0x
+procedure_values!add+0x0 [Type: __int64 (__cdecl*)(__int64,__int64)]
+ops              [Type: Ops]
+op               : 0x
+procedure_values!mul+0x0 [Type: __int64 (__cdecl*)(__int64,__int64)]
+table            [Type: __int64 (__cdecl* [2])(__int64,__int64)]
+[0]              : 0x
+procedure_values!add+0x0
+[1]              : 0x
+procedure_values!mul+0x0
+none             : 0x0 : 0x0 [Type: __int64 (__cdecl*)(__int64,__int64)]
+s                : 0x
+procedure_values!swap+0x0 [Type: void (__cdecl*)(Pair *,Pair *,__int64)]
+c                : 0x
+procedure_values!compare+0x0 [Type: int (__cdecl*)(void *,void *)]
+.call returns:
+int64 0n30
+.call returns:
+int64 0n42
+.call returns:
+int64 0n12
+21:     return f(a, b);
+<function> * f = 0x
+int64 a = 0n2
+f                : 0x
+procedure_values!add+0x0
+.call returns:
+int64 0n3
+21:     return f(a, b);
+f                : 0x
+procedure_values!mul+0x0
+!Couldn't resolve
+!not callable
