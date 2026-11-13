@@ -463,13 +463,15 @@ TEST(os_reserve_inaccessible_gives_untouchable_addresses) {
         // Released, the addresses are free again, or every Interp torn down
         // would leak its range. Reserving more wouldn't show it: a second
         // range would be found elsewhere, in so large an address space.
+        // The first page and the last are asked about, so releasing only
+        // part of the range doesn't pass.
 #ifdef _WIN32
         MEMORY_BASIC_INFORMATION info = {};
         CHECK(VirtualQuery(first, &info, sizeof info) == sizeof info);
         CHECK_EQ(info.State, MEM_FREE);
+        CHECK(VirtualQuery(first + SIZE - 1, &info, sizeof info) == sizeof info);
+        CHECK_EQ(info.State, MEM_FREE);
 #else
-        // The first page and the last are asked about, so releasing only
-        // part of the range doesn't pass.
         CHECK(mincore(first, 1, &resident) == -1 && errno == ENOMEM);
         CHECK(mincore(last_page, 1, &resident) == -1 && errno == ENOMEM);
 #endif

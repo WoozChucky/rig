@@ -195,8 +195,8 @@ static u64 thunk_widen(u64 v, Ir_Type type, Ir_Ext ext) {
 
 #endif
 
-void thunk_place(Thunk_Call *call, const Ir_Type *types, const Ir_Ext *exts, const u64 *values, s64 count,
-                 Array<u64> *stack) {
+void thunk_place(Thunk_Call *call, const Ir_Type *types, [[maybe_unused]] const Ir_Ext *exts, const u64 *values,
+                 s64 count, Array<u64> *stack) {
     memset(call->ints, 0, sizeof call->ints);
     memset(call->floats, 0, sizeof call->floats);
     call->vector_count = 0;
@@ -208,7 +208,6 @@ void thunk_place(Thunk_Call *call, const Ir_Type *types, const Ir_Ext *exts, con
     // the xmm one, and the thunk doesn't know which this is. A narrow
     // integer's upper bits are the callee's to ignore, so canonical values
     // go as they are.
-    (void)exts;
     for (s64 i = 0; i < count; i++) {
         if (i < 4) {
             call->ints[i] = values[i];
