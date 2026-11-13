@@ -585,3 +585,34 @@ static const DWORD main_thread_id = GetCurrentThreadId();
 bool os_on_main_thread() {
     return GetCurrentThreadId() == main_thread_id;
 }
+
+// Compile-time execution.
+
+// MEM_RESERVE without MEM_COMMIT takes the addresses and no memory; a
+// reservation has no access anyway, and PAGE_NOACCESS says so.
+void *os_reserve_inaccessible(u64 size) {
+    void *p = VirtualAlloc(nullptr, (SIZE_T)size, MEM_RESERVE, PAGE_NOACCESS);
+    if (!p) os_fail();
+    return p;
+}
+
+// MEM_RELEASE frees the whole reservation, and takes a size of 0.
+void os_release_inaccessible(void *p, [[maybe_unused]] u64 size) {
+    VirtualFree(p, 0, MEM_RELEASE);
+}
+
+// kernel32.dll is in every process. ucrtbase.dll isn't the compiler's (its
+// C runtime is linked in statically), though the system DLLs it uses
+// usually load it; LoadLibraryW makes sure, once, and the handle is kept
+// for the process's life. A function ucrtbase.dll has shares no state with
+// the compiler's own C runtime: its errno, its heap and its FILEs are
+// another runtime's (interp_c_functions.cpp says why that matters).
+void *os_find_c_function(String name) {
+    static HMODULE ucrtbase = LoadLibraryW(L"ucrtbase.dll");
+    Arena scratch = arena_make(1024);
+    const char *c_name = string_cstr(&scratch, name);
+    void *f = (void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), c_name);
+    if (!f && ucrtbase) f = (void *)GetProcAddress(ucrtbase, c_name);
+    arena_free(&scratch);
+    return f;
+}

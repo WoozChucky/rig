@@ -654,6 +654,17 @@ static Ir_Op ir_op_of(Token_Kind op, Type *t) {
     }
 }
 
+// "PATH:L:C: runtime error: ", the start of every runtime error's message
+// at `at`: a runtime check's (emit_runtime_check) and a bounds check's
+// (emit_bounds_check) are built here, so the two can't drift apart. PATH
+// is the path messages name `at`'s file by (Source_File.path): the main
+// file's as rig build was given it, a loaded file's as its #load made it
+// (load.h).
+static String runtime_error_prefix(Lowering *l, Position at) {
+    String path = l->diag->files[at.file].path;
+    return string_printf(l->arena, STR_FMT ":%d:%d: runtime error: ", STR_ARG(path), at.line, at.col);
+}
+
 // A runtime check (spec 6.4). The current block ends with a branch on the
 // i1 %fails: when it's 1, to a block that stops the program with the
 // runtime error `message` at `at`; otherwise to a new block, where the code
@@ -666,22 +677,24 @@ static Ir_Op ir_op_of(Token_Kind op, Type *t) {
 //     ...
 //
 // The panic writes the message to stderr and exits with status 101
-// (llvm_backend.cpp's __rig_panic). PATH is the path messages name the
-// check's file by (Source_File.path): the main file's as rig build was
-// given it, a loaded file's as its #load made it (load.h). Each check has a
-// message of its own, since each names its own position. The branch is the
-// statement's code, at its position; the panic is at `at`, the place the
-// message names, so a debugger stopped there shows the same place.
+// (llvm_backend.cpp's __rig_panic). "PATH:LINE:COL: runtime error: " is
+// runtime_error_prefix's. Each check has a message of its own, since each
+// names its own position. The branch is the statement's code, at its
+// position; the panic is at `at`, the place the message names, so a
+// debugger stopped there shows the same place. The panic's `constant` is
+// the prefix's length, all of the text before MESSAGE, which the
+// interpreter leaves out (ir.h).
 static void emit_runtime_check(Lowering *l, s32 fails, Position at, String message) {
-    String path = l->diag->files[at.file].path;
-    String text = string_printf(l->arena, STR_FMT ":%d:%d: runtime error: " STR_FMT "\n", STR_ARG(path), at.line,
-                                at.col, STR_ARG(message));
+    String prefix = runtime_error_prefix(l, at);
+    String text = string_printf(l->arena, STR_FMT STR_FMT "\n", STR_ARG(prefix), STR_ARG(message));
     s32 fail = new_block(l);
     s32 ok = new_block(l);
     emit_branch(l, fails, fail, ok);
     Position statement = l->pos;
     l->pos = at;
-    emit_in(l, fail, IR_PANIC, IR_VOID)->target = add_bytes(l, text);
+    Ir_Instr *panic = emit_in(l, fail, IR_PANIC, IR_VOID);
+    panic->target = add_bytes(l, text);
+    panic->constant = (u64)prefix.count;
     l->pos = statement;
     l->block = ok;
 }
@@ -1088,8 +1101,7 @@ static s32 bounds_failed_proc(Lowering *l);
 // any check passes it, which is kept here. The fail block is at `at`, as a
 // runtime check's panic is (emit_runtime_check).
 static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s32 count, bool is_signed) {
-    String path = l->diag->files[at.file].path;
-    String where = string_printf(l->arena, STR_FMT ":%d:%d: runtime error: ", STR_ARG(path), at.line, at.col);
+    String where = runtime_error_prefix(l, at);
     if (where.count > l->longest_where) l->longest_where = where.count;
     s32 fail = new_block(l);
     s32 ok = new_block(l);
@@ -2271,6 +2283,7 @@ static void append_number(Lowering *l, s32 buffer, s32 length, s32 value, s32 is
 // view's may have been set below 0). The buffer is a local of the longest
 // WHERE any check passes plus 73 bytes: the fixed text is 33 ("index ", 6,
 // " is out of bounds (count ", 25, ")\n", 2), and each number at most 20.
+// WHERE is the message's prefix, so the panic's c is where_length (ir.h).
 static void lower_bounds_failed(Lowering *l) {
     l->proc = l->module->procs[l->bounds_failed];
     l->block = ir_new_block(l->arena, l->proc);
@@ -2291,6 +2304,7 @@ static void lower_bounds_failed(Lowering *l) {
     Ir_Instr *panic = emit(l, IR_PANIC, IR_VOID);
     panic->a = buffer;
     panic->b = total;
+    panic->c = where_length;
 }
 
 // __rig_string_equal(i64 count_a, ptr data_a, i64 count_b, ptr data_b) ->

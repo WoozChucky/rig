@@ -13,6 +13,19 @@
 // stderr becomes \n (normalise_newlines). The rest is compared byte for
 // byte. .out and .err aren't normalised; .gitattributes keeps them LF.
 //
+// Then every program of tests/run again, interpreted: `bin/unit-tests
+// --interpret tests/run/NAME.rig`, with the words of NAME.flags after it,
+// runs it on the compiler's IR interpreter (tests/unit/interpret_mode.cpp;
+// the runner has no compiler in it), which must give what the compiled
+// program gives, held to the same NAME.out, NAME.exit and NAME.err (or
+// nothing on stderr), its newlines normalised alike (interpreted_test). It
+// is reported as `interpreted tests/run/NAME`. A program the interpreter
+// can't run, one that hands C a Rig procedure (qsort_callback), has a
+// NAME.interp.err instead: its stderr must be that, its exit code 101, and
+// its stdout what it printed before it stopped, the first lines of
+// NAME.out, whole, and one at least (its NAME.exit is the compiled run's).
+// The interpreter is always bin/unit-tests's, whatever RIG is given.
+//
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, and it writes neither an object file nor a program. In a .err,
 // @NO_SUCH_FILE@ stands for the system's reason a file that isn't there, in
@@ -118,11 +131,12 @@
 // and `l+l` (show the source line at each stop), and ends with `q`; it
 // never uses `.lines`, which with -lines turns the line information off.
 //
-// Every program, rig included, gets TIMEOUT seconds; one that takes longer
-// is killed and its test fails, so a hang can't stall the run. (On Linux
-// that puts each program in a process group of its own, which Ctrl-C in
-// the terminal doesn't reach: stopping the runner leaves the program it was
-// running to end by itself.)
+// Every program, rig included, gets TIMEOUT seconds, an interpreted one
+// INTERPRETED_TIMEOUT; one that takes longer is killed and its test fails,
+// so a hang can't stall the run. (On Linux that puts each program in a
+// process group of its own, which Ctrl-C in the terminal doesn't reach:
+// stopping the runner leaves the program it was running to end by
+// itself.)
 //
 // On Windows the C runtime writes "\r\n" for "\n" on text-mode stdout and
 // stderr, rig's own and the programs', so the runner reads "\r\n" as "\n"
@@ -148,8 +162,16 @@ static const char *EXE = "";
 static const char *OBJ = ".o";
 #endif
 
-// Seconds any one program may take. Each takes well under one.
+// Seconds any one program may take, but an interpreted one
+// (INTERPRETED_TIMEOUT). Each takes well under one.
 static const s32 TIMEOUT = 60;
+
+// Seconds a program of tests/run may take interpreted. An interpreted
+// program runs many times slower than a compiled one, and the loops of
+// loop_aggregates and loop_locals run 10 million times; in an -O0 build of
+// bin/unit-tests the slower, loop_aggregates, takes about 7 seconds (under 3
+// at -O2).
+static const s32 INTERPRETED_TIMEOUT = 300;
 
 // s with every "\r\n" made "\n".
 static String without_carriage_returns(Arena *a, String s) {
@@ -250,21 +272,28 @@ static String with_stderr(Arena *a, String why, String err) {
     return string_printf(a, STR_FMT "; its stderr:\n" STR_FMT, STR_ARG(why), STR_ARG(err));
 }
 
-// Runs argv in `directory` ({} for this one); false with `why` set when it
-// couldn't start or took longer than TIMEOUT.
-static bool run(Arena *a, Array<String> argv, String directory, Process_Result *result, String *why) {
-    if (!os_run_for(a, argv, directory, TIMEOUT, result)) {
+// Runs argv in `directory` ({} for this one), with its newlines normalised;
+// false with `why` set when it couldn't start or took longer than
+// `seconds`.
+static bool run_within(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result,
+                       String *why) {
+    if (!os_run_for(a, argv, directory, seconds, result)) {
         *why = string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(argv[0]), STR_ARG(os_error_message(a)));
         return false;
     }
     result->out = normalise_newlines(a, result->out);
     result->err = normalise_newlines(a, result->err);
     if (result->timed_out) {
-        *why = with_stderr(a, string_printf(a, STR_FMT " took longer than %d seconds", STR_ARG(argv[0]), TIMEOUT),
+        *why = with_stderr(a, string_printf(a, STR_FMT " took longer than %d seconds", STR_ARG(argv[0]), seconds),
                            result->err);
         return false;
     }
     return true;
+}
+
+// run_within TIMEOUT seconds, as every program but an interpreted one.
+static bool run(Arena *a, Array<String> argv, String directory, Process_Result *result, String *why) {
+    return run_within(a, argv, directory, TIMEOUT, result, why);
 }
 
 // rig build DIR/NAME.rig -o .build/tests/NAME[.exe]
@@ -278,9 +307,9 @@ static Array<String> build_command(Arena *a, String rig, const char *dir, String
     return argv;
 }
 
-// The words of tests/run/NAME.flags, added to rig build's command line:
-// split at spaces, tabs and line breaks (a \r\n's \r too). No file, no
-// words.
+// The words of tests/run/NAME.flags, added to a command line: rig build's,
+// or bin/unit-tests --interpret's for the interpreted pass. Split at spaces,
+// tabs and line breaks (a \r\n's \r too). No file, no words.
 static void add_flags(Arena *a, Array<String> *argv, String name) {
     String text = {};
     if (!os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".flags", STR_ARG(name)), &text)) return;
@@ -314,6 +343,53 @@ static String build_program(Arena *a, Array<String> argv, String directory, Stri
     return {};
 }
 
+// tests/run/NAME's .out, and the number in its .exit (0 when there's
+// none). {} when they're read, otherwise what's wrong.
+static String read_expected(Arena *a, String name, String *expected_out, s32 *expected_exit) {
+    if (!os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".out", STR_ARG(name)), expected_out)) {
+        return str("no .out file");
+    }
+    *expected_exit = 0;
+    String exit_text = {};
+    if (os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".exit", STR_ARG(name)), &exit_text)) {
+        // A number and nothing else but the line break: "three" isn't 0.
+        const char *text = string_cstr(a, exit_text);
+        char *end = nullptr;
+        long value = strtol(text, &end, 10);
+        while (*end == '\r' || *end == '\n') end++;
+        if (end == text || *end) return str("the .exit file doesn't hold a number");
+        *expected_exit = (s32)value;
+    }
+    return {};
+}
+
+// A run of tests/run/NAME, compiled or interpreted, held to its .out, .exit
+// and .err. {} when it passes, otherwise why not.
+static String held_to_expected(Arena *a, String name, Process_Result *ran) {
+    String expected_out = {};
+    s32 expected_exit = 0;
+    String why = read_expected(a, name, &expected_out, &expected_exit);
+    if (why.count) return why;
+    if (!string_eq(ran->out, expected_out)) {
+        return with_stderr(a, first_difference(a, "stdout", expected_out, ran->out), ran->err);
+    }
+    if (ran->exit_code != expected_exit) {
+        return with_stderr(a,
+                           string_printf(a, "exit code " STR_FMT ", expected %d",
+                                         STR_ARG(exit_code_text(a, ran->exit_code)), expected_exit),
+                           ran->err);
+    }
+    // A program's .err, when it has one, is what it must write to stderr: a
+    // runtime error's message, say. Without one it must write nothing.
+    String expected_err = {};
+    if (os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".err", STR_ARG(name)), &expected_err)) {
+        if (!string_eq(ran->err, expected_err)) return first_difference(a, "stderr", expected_err, ran->err);
+    } else if (ran->err.count) {
+        return with_stderr(a, str("the program wrote to stderr"), ran->err);
+    }
+    return {};
+}
+
 // A program that must build, run and print its .out. {} when it passes,
 // otherwise why not.
 static String run_test(Arena *a, String rig, String name) {
@@ -323,43 +399,60 @@ static String run_test(Arena *a, String rig, String name) {
     String why = build_program(a, argv, {}, program);
     if (why.count) return why;
 
-    String expected_out = {}, exit_text = {};
-    if (!os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".out", STR_ARG(name)), &expected_out)) {
-        return str("no .out file");
-    }
-    s32 expected_exit = 0;
-    if (os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".exit", STR_ARG(name)), &exit_text)) {
-        // A number and nothing else but the line break: "three" isn't 0.
-        const char *text = string_cstr(a, exit_text);
-        char *end = nullptr;
-        long value = strtol(text, &end, 10);
-        while (*end == '\r' || *end == '\n') end++;
-        if (end == text || *end) return str("the .exit file doesn't hold a number");
-        expected_exit = (s32)value;
-    }
-
     Array<String> command = {};
     array_add(&command, program);
     Process_Result ran = {};
     bool started = run(a, command, {}, &ran, &why);
     array_free(&command);
     if (!started) return why;
-    if (!string_eq(ran.out, expected_out)) {
-        return with_stderr(a, first_difference(a, "stdout", expected_out, ran.out), ran.err);
+    return held_to_expected(a, name, &ran);
+}
+
+// A program of tests/run interpreted by `unit_tests`, bin/unit-tests
+// --interpret, which must give what the compiled program gives; or, with a
+// NAME.interp.err, stop with that on stderr and 101, having printed the
+// first lines of its .out, one at least. {} when it passes, otherwise why
+// not.
+static String interpreted_test(Arena *a, String unit_tests, String name) {
+    Array<String> argv = {};
+    array_add(&argv, unit_tests);
+    array_add(&argv, str("--interpret"));
+    array_add(&argv, string_printf(a, "tests/run/" STR_FMT ".rig", STR_ARG(name)));
+    add_flags(a, &argv, name);
+    Process_Result ran = {};
+    String why = {};
+    bool started = run_within(a, argv, {}, INTERPRETED_TIMEOUT, &ran, &why);
+    array_free(&argv);
+    if (!started) return why;
+
+    String refusal = {};
+    if (!os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".interp.err", STR_ARG(name)), &refusal)) {
+        return held_to_expected(a, name, &ran);
     }
-    if (ran.exit_code != expected_exit) {
-        return with_stderr(a, string_printf(a, "exit code " STR_FMT ", expected %d", STR_ARG(exit_code_text(a, ran.exit_code)),
-                                            expected_exit),
-                           ran.err);
+    if (!string_eq(ran.err, refusal)) return first_difference(a, "stderr", refusal, ran.err);
+    if (ran.exit_code != 101) {
+        return string_printf(a, "exit code " STR_FMT ", expected 101", STR_ARG(exit_code_text(a, ran.exit_code)));
     }
-    // A program's .err, when it has one, is what it must write to stderr: a
-    // runtime error's message, say. Without one it must write nothing.
-    String expected_err = {};
-    if (os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".err", STR_ARG(name)), &expected_err)) {
-        if (!string_eq(ran.err, expected_err)) return first_difference(a, "stderr", expected_err, ran.err);
-    } else if (ran.err.count) {
-        return with_stderr(a, str("the program wrote to stderr"), ran.err);
-    }
+    // The .out alone: the .exit read with it is the compiled run's, and the
+    // refusal's status is always 101.
+    String expected_out = {};
+    s32 unused_exit = 0;
+    String unread = read_expected(a, name, &expected_out, &unused_exit);
+    if (unread.count) return unread;
+    // A program that prints nothing compiled would leave the check below
+    // nothing to hold its stdout to.
+    if (!expected_out.count) return str("its .out is empty: a program with a .interp.err must print a line first");
+    // What it printed before it stopped: the .out's whole lines, from its
+    // first, through the one stdout ends in. So a stdout that's empty, that
+    // ends inside a line, or that goes on past the whole .out, differs
+    // from them: the program's output before the refusal must come out.
+    // One byte at least, so an empty stdout is held to the whole first
+    // line.
+    s64 end = ran.out.count > 0 ? ran.out.count : 1;
+    if (end > expected_out.count) end = expected_out.count;
+    while (end < expected_out.count && expected_out.data[end - 1] != '\n') end++;
+    String start = string_slice(expected_out, 0, end);
+    if (!string_eq(ran.out, start)) return first_difference(a, "stdout (the start of the .out)", start, ran.out);
     return {};
 }
 
@@ -793,19 +886,22 @@ static void report(const char *name, String why, s64 *passed, s64 *failed) {
     fflush(stdout);
 }
 
-// Runs one directory's tests.
-static void run_directory(Arena *a, String rig, const char *dir, String (*test)(Arena *, String, String), s64 *passed,
-                          s64 *failed) {
+// Runs one directory's tests, with `program` (rig, or bin/unit-tests for
+// the interpreted pass), each reported as `how` (empty, or "interpreted ")
+// and DIR/NAME.
+static void run_directory(Arena *a, String program, const char *how, const char *dir,
+                          String (*test)(Arena *, String, String), s64 *passed, s64 *failed) {
     Array<String> names = {};
     if (!os_list_directory(a, str(dir), &names)) {
-        report(dir, string_printf(a, "can't list it: " STR_FMT, STR_ARG(os_error_message(a))), passed, failed);
+        report(string_cstr(a, string_printf(a, "%s%s", how, dir)),
+               string_printf(a, "can't list it: " STR_FMT, STR_ARG(os_error_message(a))), passed, failed);
         return;
     }
     for (s64 i = 0; i < names.count; i++) {
         if (!ends_with(names[i], ".rig")) continue;
         String name = string_slice(names[i], 0, names[i].count - 4);
-        String why = test(a, rig, name);
-        report(string_cstr(a, string_printf(a, "%s/" STR_FMT, dir, STR_ARG(name))), why, passed, failed);
+        String why = test(a, program, name);
+        report(string_cstr(a, string_printf(a, "%s%s/" STR_FMT, how, dir, STR_ARG(name))), why, passed, failed);
     }
     array_free(&names);
 }
@@ -1669,11 +1765,13 @@ int main(int argc, char **argv) {
     os_make_directory(str(".build"));
     os_make_directory(str(".build/tests"));
     s64 passed = 0, failed = 0;
-    run_directory(&a, rig, "tests/run", run_test, &passed, &failed);
+    run_directory(&a, rig, "", "tests/run", run_test, &passed, &failed);
+    String unit_tests = string_printf(&a, "bin/unit-tests%s", EXE);
+    run_directory(&a, unit_tests, "interpreted ", "tests/run", interpreted_test, &passed, &failed);
     report("rig build without -o, from another directory", default_output_test(&a, rig), &passed, &failed);
     report("a runtime error after the program's output, both in one pipe", merged_output_test(&a, rig), &passed,
            &failed);
-    run_directory(&a, rig, "tests/errors", error_test, &passed, &failed);
+    run_directory(&a, rig, "", "tests/errors", error_test, &passed, &failed);
     report("rig build where .build is a file", unwritable_test(&a, rig, false), &passed, &failed);
     report("rig build where the object file's name is a directory", unwritable_test(&a, rig, true), &passed, &failed);
     for (const Command_Case &c : COMMAND_CASES) {

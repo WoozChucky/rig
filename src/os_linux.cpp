@@ -3,11 +3,13 @@
 #include "os.h"
 
 #include <dirent.h>
+#include <dlfcn.h>  // dlopen and dlsym, for os_find_c_function
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
 #include <spawn.h>
+#include <sys/mman.h>  // mmap, for os_reserve_inaccessible
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <signal.h>  // kill
@@ -474,4 +476,41 @@ u64 os_stack_size() {
 
 bool os_on_main_thread() {
     return gettid() == getpid();  // the main thread's id is the process's
+}
+
+// Compile-time execution.
+
+// PROT_NONE pages can't be read, written or run; MAP_NORESERVE asks for no
+// swap to back them, since nothing is ever stored there.
+void *os_reserve_inaccessible(u64 size) {
+    void *p = mmap(nullptr, (size_t)size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (p == MAP_FAILED) {
+        os_fail();
+        return nullptr;
+    }
+    return p;
+}
+
+void os_release_inaccessible(void *p, u64 size) {
+    munmap(p, (size_t)size);
+}
+
+// The compiler is linked with libc dynamically, so libc is loaded already:
+// RTLD_NOLOAD takes a handle to it without loading anything, kept for the
+// process's life. dlsym on that handle searches libc and the dynamic
+// loader it depends on, as the link line's -lc provides them, where
+// RTLD_DEFAULT would search every library the compiler loaded, libm and
+// libstdc++ among them, and find functions a program can't call (10.6
+// links libc alone). It doesn't find what -lc links in statically, from
+// libc_nonshared.a (atexit, at_quick_exit, pthread_atfork), which
+// interp_c_functions.cpp gives instead. dlsym finds data too (stdout,
+// environ): the interpreter calls what a #foreign declaration names, as the
+// linker would link it.
+void *os_find_c_function(String name) {
+    static void *libc = dlopen("libc.so.6", RTLD_LAZY | RTLD_NOLOAD);
+    if (!libc) return nullptr;
+    Arena scratch = arena_make(1024);
+    void *f = dlsym(libc, string_cstr(&scratch, name));
+    arena_free(&scratch);
+    return f;
 }
