@@ -95,6 +95,8 @@ The release's files have fixed names, so `https://github.com/WoozChucky/rig/rele
 - `rig-vscode.vsix`: the VS Code extension (`code --install-extension rig-vscode.vsix`), made by `editors/vscode/install.sh --vsix FILE`. The extension keeps its own version, in its `package.json`, apart from Rig's.
 - `SHA256SUMS`: the SHA-256 of each of the three, as `sha256sum` writes them (`sha256sum -c SHA256SUMS` checks the downloads).
 
+The website's Install page ([site/install.md](site/install.md)) links these fixed "latest" URLs, so the names must not change: the release workflow's names are a contract.
+
 There is no CHANGELOG.md: the Releases page is the changelog.
 
 ## Rules for a change
