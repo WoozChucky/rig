@@ -3275,18 +3275,24 @@ TEST(compiler_made_procedures_have_no_source) {
 TEST(module_knows_its_source) {
     // The source file's absolute path (the helpers' test.rig, in the
     // directory the tests run in, as rig build has it), that directory, and
-    // the MD5 of the file's bytes.
+    // the MD5 of the file's bytes: the module's one source, the program
+    // being that file alone.
     Arena a = arena_make();
     const char *text = "main :: () { }\n";
     Ir_Module *m = lower_source(&a, text);
     String directory = os_current_directory(&a);
     String path = path_absolute(&a, directory, str("test.rig"), target_host() == TARGET_WINDOWS_X64);
     CHECK(path.count > (s64)strlen("test.rig"));
-    CHECK_STR(m->source_path, string_cstr(&a, path));
+    CHECK_EQ(m->sources.count, 1);
+    if (m->sources.count != 1) {
+        arena_free(&a);
+        return;
+    }
+    CHECK_STR(m->sources[0].path, string_cstr(&a, path));
     CHECK_STR(m->directory, string_cstr(&a, directory));
     u8 digest[16];
     md5(str(text), digest);
-    CHECK(memcmp(m->source_md5, digest, 16) == 0);
+    CHECK(memcmp(m->sources[0].md5, digest, 16) == 0);
     String hex = {};
     for (int i = 0; i < 16; i++) hex = string_printf(&a, STR_FMT "%02x", STR_ARG(hex), digest[i]);
     String first_line = string_printf(&a, "; source " STR_FMT " md5 " STR_FMT "\n", STR_ARG(path), STR_ARG(hex));
@@ -3309,6 +3315,70 @@ static Ir_Module *lower_program(Arena *a, String path, Ast_File **tree) {
     if (d.error_count == 0 && check(*tree, a, &d)) m = ir_lower(*tree, &d, a, true);
     diag_free(&d);
     return m;
+}
+
+TEST(lower_records_every_source) {
+    // Issue #112: a program of several files has a source for each, in
+    // load order, Position.file's numbering: its absolute path and the MD5
+    // of its bytes. ir_print_debug writes a line for each, in that order,
+    // and a position in any file but the first as F:L:C, F its index; one
+    // in the first is L:C, as for a program of one file. (The files are
+    // written where the loader's tests write theirs: test_load.cpp.)
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "lower_records_every_source");
+    const char *texts[] = {
+        "#load \"helper.rig\";\n"
+        "main :: () { helper(21); }\n",
+        "helper :: (n: int) -> int {\n"
+        "    doubled := n * 2;\n"
+        "    return doubled;\n"
+        "}\n"
+        "calls := 0;\n",
+    };
+    const char *names[] = {"main.rig", "helper.rig"};
+    for (int i = 0; i < 2; i++) write_source(&a, dir, names[i], texts[i]);
+    Ast_File *tree = nullptr;
+    Ir_Module *m = lower_program(&a, str(in_directory(&a, dir, "main.rig")), &tree);
+    CHECK(m != nullptr);
+    if (!m) {
+        arena_free(&a);
+        return;
+    }
+    CHECK_EQ(m->sources.count, 2);
+    if (m->sources.count != 2) {
+        arena_free(&a);
+        return;
+    }
+    String directory = os_current_directory(&a);
+    String ir = ir_print_debug(&a, m);
+    s64 next = 0;  // where the next source's line must start: the lines come first, one after another
+    for (int i = 0; i < 2; i++) {
+        // Absolute: the directory the tests run in, then the file's path
+        // from there.
+        String path = path_absolute(&a, directory, str(in_directory(&a, dir, names[i])),
+                                    target_host() == TARGET_WINDOWS_X64);
+        CHECK(path.count > directory.count);
+        CHECK_STR(m->sources[i].path, string_cstr(&a, path));
+        u8 digest[16];
+        md5(str(texts[i]), digest);
+        CHECK(memcmp(m->sources[i].md5, digest, 16) == 0);
+        String hex = {};
+        for (int k = 0; k < 16; k++) hex = string_printf(&a, STR_FMT "%02x", STR_ARG(hex), digest[k]);
+        String line = string_printf(&a, "; source " STR_FMT " md5 " STR_FMT "\n", STR_ARG(path), STR_ARG(hex));
+        CHECK_EQ(index_of(ir, string_cstr(&a, line)), next);
+        next += line.count;
+    }
+    // helper's, its variables', its instructions' and the global's
+    // positions are in file 1; main's in file 0.
+    CHECK(contains(ir, "  ; source helper at 1:1:1, body 1:1:27\n"));
+    CHECK(contains(ir, " arg 1 in 0 at 1:1:12\n"));
+    CHECK(contains(ir, " in 0 at 1:2:5\n"));
+    CHECK(contains(ir, "  ; type int at 1:5:1\n"));
+    CHECK(contains(ir, "  ; source main at 2:1, body 2:12\n"));
+    String helper = proc_ir(ir, "helper");
+    CHECK(contains(helper, "  ; 1:3:"));
+    CHECK(!contains(helper, "  ; 3:"));
+    arena_free(&a);
 }
 
 TEST(every_instruction_of_every_run_test_has_a_line) {

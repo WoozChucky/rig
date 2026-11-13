@@ -2387,14 +2387,18 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     l.module = m;
     l.block = -1;
 
-    // The source file, for a debugger (ir.h): copied, since d is freed
-    // before the module is.
-    if (d->files.count > 0) {
-        Source_File *file = &d->files[0];
-        m->source_path = string_copy(a, file->absolute_path);
-        m->directory = string_copy(a, file->directory);
-        md5(file->text, m->source_md5);
+    // The source files, for a debugger (ir.h), every one the program was
+    // loaded from, in its order, so a position's file indexes them: the
+    // paths copied, since d is freed before the module is. The directory
+    // rig ran in is every file's; the first's says it.
+    for (s64 i = 0; i < d->files.count; i++) {
+        Source_File *file = &d->files[i];
+        Ir_Source source = {};
+        source.path = string_copy(a, file->absolute_path);
+        md5(file->text, source.md5);
+        array_add(&m->sources, source);
     }
+    if (d->files.count > 0) m->directory = string_copy(a, d->files[0].directory);
 
     // The global variables, in source order, each an Ir_Global of its
     // type. Its first value is the constant the checker made sure it has

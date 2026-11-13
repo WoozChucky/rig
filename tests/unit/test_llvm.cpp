@@ -997,7 +997,7 @@ TEST(llvm_debug_info_has_a_compile_unit) {
         CHECK(contains(text, "isOptimized: false"));
         CHECK(contains(text, "emissionKind: FullDebug"));
         String file = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\", directory: \"" STR_FMT "\"",
-                                    STR_ARG(llvm_escaped(&a, m->source_path)), STR_ARG(llvm_escaped(&a, m->directory)));
+                                    STR_ARG(llvm_escaped(&a, m->sources[0].path)), STR_ARG(llvm_escaped(&a, m->directory)));
         CHECK(contains(text, string_cstr(&a, file)));
         CHECK(contains(text, "checksumkind: CSK_MD5, checksum: \"2d6d83719e184598cb6b6bd6505ea090\""));
         CHECK(contains(text, "!\"Debug Info Version\", i32 3}"));
@@ -1048,7 +1048,7 @@ TEST(llvm_debug_file_names_keep_a_share) {
     }
     // In the module's debug information: the file's name as LLVM got it.
     Ir_Module *m = lower_source(&a, LINES);
-    m->source_path = str("\\\\server\\share\\dir\\lines.rig");
+    m->sources[0].path = str("\\\\server\\share\\dir\\lines.rig");
     m->directory = str("\\\\server\\share\\dir");
     String text = llvm_text(&a, m, TARGET_WINDOWS_X64);
     String file = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\", directory: \"" STR_FMT "\"",
@@ -1667,6 +1667,80 @@ TEST(llvm_globals_have_debug_info) {
         CHECK(literal.count > 0);
         CHECK(!contains(literal, "!dbg"));
         CHECK(count_of(text, "!DIGlobalVariable(") == 1);
+    }
+    arena_free(&a);
+}
+
+// Issue #112: a program of several files has a DIFile for each, and each
+// node that names a file names the one its declaration is in: a
+// procedure's subprogram, its lexical blocks and its variables the
+// procedure's; a struct type and its members the struct's; a global its
+// own. The compile unit names the main file.
+TEST(debug_info_names_each_procedures_file) {
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "debug_info_names_each_procedures_file");
+    write_source(&a, dir, "main.rig",
+                 "#load \"helper.rig\";\n"
+                 "main :: () {\n"
+                 "    p := Pair.{1, 2};\n"
+                 "    total = helper(p.a);\n"
+                 "}\n");
+    write_source(&a, dir, "helper.rig",
+                 "Pair :: struct { a: int; b: int; }\n"
+                 "total := 0;\n"
+                 "helper :: (n: int) -> int {\n"
+                 "    doubled := n * 2;\n"
+                 "    if doubled > 40 {\n"
+                 "        bigger := doubled + 1;\n"
+                 "    }\n"
+                 "    return doubled;\n"
+                 "}\n");
+    Ast_File *tree = nullptr;
+    Ir_Module *m = lower_program(&a, str(in_directory(&a, dir, "main.rig")), &tree);
+    CHECK(m != nullptr);
+    if (!m || m->sources.count != 2) {
+        CHECK(m && m->sources.count == 2);
+        arena_free(&a);
+        return;
+    }
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK_EQ(count_of(text, "!DIFile("), 2);
+        // Each file's node, found by its name (the absolute paths are
+        // drive paths or Linux ones, which llvm_debug_file_names keeps).
+        String files[2];
+        for (int i = 0; i < 2; i++) {
+            String name = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\"",
+                                        STR_ARG(llvm_escaped(&a, m->sources[i].path)));
+            files[i] = defined_node(line_with(text, string_cstr(&a, name)));
+            CHECK(files[i].count > 0);
+        }
+        CHECK(!string_eq(files[0], files[1]));
+        struct Named {
+            const char *node;  // the start of the node's definition
+            int file;          // the source it must name
+        };
+        Named nodes[] = {
+            {"!DICompileUnit(", 0},
+            {"!DISubprogram(name: \"main\"", 0},
+            {"!DILocalVariable(name: \"p\"", 0},
+            {"!DISubprogram(name: \"helper\"", 1},
+            {"!DILocalVariable(name: \"n\"", 1},
+            {"!DILocalVariable(name: \"doubled\"", 1},
+            {"!DILocalVariable(name: \"bigger\"", 1},
+            {"!DILexicalBlock(", 1},
+            {"!DICompositeType(tag: DW_TAG_structure_type, name: \"Pair\"", 1},
+            {"!DIDerivedType(tag: DW_TAG_member, name: \"a\"", 1},
+            {"!DIGlobalVariable(name: \"total\"", 1},
+        };
+        for (Named &n : nodes) {
+            String file = attached(&a, line_with(text, n.node), "file:");
+            if (!string_eq(file, files[n.file])) {
+                fprintf(stderr, "  %s names file " STR_FMT ", not " STR_FMT "\n", n.node, STR_ARG(file),
+                        STR_ARG(files[n.file]));
+            }
+            CHECK(string_eq(file, files[n.file]));
+        }
     }
     arena_free(&a);
 }
