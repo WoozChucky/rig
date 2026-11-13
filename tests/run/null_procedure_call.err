@@ -1,0 +1,1 @@
+tests/run/null_procedure_call.rig:12:11: runtime error: null procedure call

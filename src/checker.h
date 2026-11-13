@@ -4,10 +4,10 @@
 // every expression, folds the constants, and checks each call, declaration,
 // assignment and return against the types involved. It fills in the tree as
 // it goes (Ast.type, Ast.is_constant and Ast.constant, Ast_Name.decl,
-// Ast_Call.proc, Ast_Member.index (-1 for an array's, a view's or a
-// string's .count and .data), and each struct's type and layout,
-// Ast_Struct.declared), so the stages after it never look anything up
-// again.
+// Ast_Call.proc or Ast_Call.callee_type, Ast_Member.index (-1 for an
+// array's, a view's or a string's .count and .data), and each struct's type
+// and layout, Ast_Struct.declared), so the stages after it never look
+// anything up again.
 // checker.cpp checks declarations and statements, check_expr.cpp
 // expressions; check.h is what they share.
 //
@@ -33,11 +33,14 @@
 //   The iterator can't take it_index's name: `for it_index: 0..9` is "a
 //   loop's iterator can't be called 'it_index'", said at the name, and
 //   it_index is then the loop's index.
-// - A procedure's name used as a value: "procedures can only be called,
-//   for now". A call of one that returns nothing, used as a value: "'greet'
-//   returns nothing, so it has no value". A call of anything else (a local
-//   hiding the procedure, say): "'x' isn't a procedure, so it can't be
-//   called".
+// - A procedure's name used as a value is the procedure, of its procedure
+//   type (issue #83, spec 3's "Procedure types"). A call of one that
+//   returns nothing, used as a value: "'greet' returns nothing, so it has
+//   no value". A call of a value of a procedure type (a variable, a field,
+//   an element, a call's result) is checked as a call of the procedure it
+//   holds. A call of anything else: "'x' isn't a procedure, so it can't be
+//   called" for a name (a local hiding the procedure, say), "a value of
+//   type 'int' isn't a procedure, so it can't be called" otherwise.
 //
 // Constants and types.
 // - An integer literal up to int's largest value is an untyped constant
@@ -131,9 +134,9 @@
 //   type: integers signed or unsigned, floats as IEEE 754 does. == and !=
 //   also compare two bools; ordering a bool is "'<' needs numbers, not
 //   'bool'", and a bool with anything else is "mismatched types 'bool' and
-//   'int' for '=='". == and != take nothing but numbers, bools, pointers
-//   and strings: "'==' needs numbers, bools, pointers or strings, not
-//   'Vec2'".
+//   'int' for '=='". == and != take nothing but numbers, bools, pointers,
+//   procedure values and strings: "'==' needs numbers, bools, pointers,
+//   procedure values or strings, not 'Vec2'".
 // - && || ! take bools and give one: "'&&' needs bools, not 'int'", "'!'
 //   needs a bool, not 'int'". && and || don't evaluate their right operand
 //   when the left one decides.
@@ -157,9 +160,11 @@
 //   - a procedure: "can't assign to 'N': it's a procedure";
 //   - any other expression: "only a variable, a field or an element can be
 //     assigned to".
-// - N :: e; needs e a number or a bool ("a constant can only be a number
-//   or a bool, for now": only they fold yet) known while compiling
-//   ("the value of constant 'N' isn't known while compiling").
+// - N :: e; needs e a number or a bool ("a constant can only be a number,
+//   a bool or a procedure, for now": only they fold yet) known while
+//   compiling ("the value of constant 'N' isn't known while compiling"),
+//   or a procedure (OP :: add;), as its own type: "'add' is a
+//   '(int, int) -> int', so a constant can't name it as a '(int) -> int'".
 // - The condition of if and while is a bool: "the condition of 'if' must
 //   be a bool, not 'int'".
 // - for a..b: the ends are integers meeting as an arithmetic operator's
@@ -317,8 +322,8 @@
 // - [N]T converts implicitly to []T, a view of its N elements, wherever a
 //   value converts (a declaration, an assignment, an argument, a return, a
 //   cast); nothing else converts to or from either but its own type. No
-//   operator takes them ("'==' needs numbers, bools, pointers or strings,
-//   not '[3]int'").
+//   operator takes them ("'==' needs numbers, bools, pointers, procedure
+//   values or strings, not '[3]int'").
 // - T.[a, b] is a [2]T, each value converting to T; .[a, b] takes its type
 //   where it's used, as .{...} does: an array type, whose count it must
 //   give ("'[3]int' has 3 elements, but this literal gives 2"), or a view
@@ -369,8 +374,8 @@
 //   an element of one): its address is put in the global's bytes by the
 //   linker (literal_address).
 // - A top-level constant follows a local one's rules: a number or a bool,
-//   so not a struct (`N :: Vec2.{1, 2};` is "a constant can only be a
-//   number or a bool, for now").
+//   or a procedure, so not a struct (`N :: Vec2.{1, 2};` is "a constant
+//   can only be a number, a bool or a procedure, for now").
 // - Both are checked where they're first needed (in another's value, or in
 //   source order), so their order doesn't matter: in `A :: B + 1; B :: 2;`
 //   A is 3. A value that needs itself, directly or through others, is "'A'
@@ -417,7 +422,8 @@
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - main must exist as a procedure, have a body, take nothing and return
-//   nothing.
+//   nothing. It can be called, but isn't a value: "'main' can't be a
+//   value: it's where the program starts" (it returns C's int to C).
 //
 // After an error, an expression whose type is unknown (null) reports
 // nothing more, so one mistake gives one message.
@@ -454,3 +460,17 @@ bool expr_is_place(Ast *e);
 // written there by the linker: the checker asks this to allow it, and
 // lowering to write it (constant_bytes).
 Ast_String *literal_address(Ast *e);
+
+// A call's results, whatever it calls: the procedure's (Ast_Call.proc), or
+// those of the procedure value's type (Ast_Call.callee_type). For a call
+// that checked with a type.
+s64 call_result_count(Ast_Call *call);
+Type *call_result_type(Ast_Call *call, s64 i);
+
+// The procedure whose address e, checked, is: a procedure's name, a
+// constant that names one (OP :: add;), or a cast of either that keeps the
+// address, to *void or to a procedure type (cast(*void) add); null for
+// anything else. A global may hold one, its address written there by the
+// linker, as a string literal's is: the checker asks this to allow it,
+// and lowering to write it (constant_bytes).
+Ast_Proc *procedure_address(Ast *e);

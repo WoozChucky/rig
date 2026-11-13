@@ -169,11 +169,13 @@ TEST(main_has_a_body) {
     arena_free(&a);
 }
 
-TEST(procedures_are_only_called) {
+TEST(a_procedure_alone_is_no_statement) {
+    // A procedure's name is a value (issue #83), which on its own does
+    // nothing.
     Arena a = arena_make();
     CHECK_STR(check_errors(&a, PUTS "IDENT:main :: ( ) { IDENT:puts ; IDENT:puts ( STRING:x ) ( ) ; }"),
-              "2:11: procedures can only be called, for now\n"
-              "2:23: only a procedure's name can be called, for now\n");
+              "2:11: only a call can be a statement, for now\n"
+              "2:15: a value of type 's32' isn't a procedure, so it can't be called\n");
     arena_free(&a);
 }
 
@@ -627,16 +629,17 @@ TEST(only_procedures_are_called) {
               "4:5: 'puts' isn't a procedure, so it can't be called\n"
               "4:10: unknown identifier 'nope'\n");
 
-    // Calling anything but a name: the arguments are checked all the same.
+    // Calling a value that isn't a procedure: the arguments are checked all
+    // the same.
     CHECK_STR(check_source(&a,
                            "f :: () -> s32 { return 1; }\n"
                            "main :: () {\n"
                            "    5(nope);\n"
                            "    f()(other);\n"
                            "}\n"),
-              "3:6: only a procedure's name can be called, for now\n"
+              "3:5: a value of type 'int' isn't a procedure, so it can't be called\n"
               "3:7: unknown identifier 'nope'\n"
-              "4:8: only a procedure's name can be called, for now\n"
+              "4:5: a value of type 's32' isn't a procedure, so it can't be called\n"
               "4:9: unknown identifier 'other'\n");
     arena_free(&a);
 }
@@ -718,8 +721,8 @@ TEST(local_constant_must_be_constant) {
                            "}\n"),
               "4:10: the value of constant 'N' isn't known while compiling\n"
               "6:10: the value of constant 'K' isn't known while compiling\n"
-              "7:10: a constant can only be a number or a bool, for now\n"
-              "9:10: a constant can only be a number or a bool, for now\n");
+              "7:10: a constant can only be a number, a bool or a procedure, for now\n"
+              "9:10: a constant can only be a number, a bool or a procedure, for now\n");
     arena_free(&a);
 }
 
@@ -2258,7 +2261,7 @@ TEST(null_converts_to_pointers) {
                            "}\n"),
               "7:10: null needs a pointer type, as in p : *int = null;\n"
               "8:15: a value of type 'null' doesn't convert to 'int' implicitly\n"
-              "11:10: a constant can only be a number or a bool, for now\n"
+              "11:10: a constant can only be a number, a bool or a procedure, for now\n"
               "12:8: the condition of 'if' must be a bool, not 'null'\n");
     Checked c = check_src(&a, "main :: () { p : *int = null; }\n");
     Ast *value = ((Ast_Var *)local_named(&c, "p"))->value;
@@ -2958,14 +2961,14 @@ TEST(structs_arent_compared) {
                            "    a += b;\n"
                            "    while b { }\n"
                            "}\n"),
-              "5:12: '==' needs numbers, bools, pointers or strings, not 'Vec2'\n"
-              "6:12: '!=' needs numbers, bools, pointers or strings, not 'Vec2'\n"
+              "5:12: '==' needs numbers, bools, pointers, procedure values or strings, not 'Vec2'\n"
+              "6:12: '!=' needs numbers, bools, pointers, procedure values or strings, not 'Vec2'\n"
               "7:12: '<' needs numbers, not 'Vec2'\n"
               "8:12: '+' needs numbers, not 'Vec2'\n"
               "9:8: the condition of 'if' must be a bool, not 'Vec2'\n"
               "10:10: '-' needs a number, not 'Vec2'\n"
               "11:10: '!' needs a bool, not 'Vec2'\n"
-              "12:12: '==' needs numbers, bools, pointers or strings, not 'Vec2'\n"
+              "12:12: '==' needs numbers, bools, pointers, procedure values or strings, not 'Vec2'\n"
               "13:7: '+=' needs numbers, not 'Vec2'\n"
               "14:11: the condition of 'while' must be a bool, not 'Vec2'\n");
     arena_free(&a);
@@ -3033,7 +3036,7 @@ TEST(global_struct_literal_must_be_constant) {
                            "main :: () { }\n"),
               "5:14: a global's value must be known while compiling, for now\n"
               "6:9: a global's value must be known while compiling, for now\n"
-              "8:6: a constant can only be a number or a bool, for now\n"
+              "8:6: a constant can only be a number, a bool or a procedure, for now\n"
               "9:6: this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}\n");
     arena_free(&a);
 }
@@ -3614,7 +3617,7 @@ TEST(array_converts_to_view) {
               "6:18: a value of type '[3]int' doesn't convert to '[4]int' implicitly\n"
               "7:17: a value of type '[3]u8' doesn't convert to '[]int' implicitly\n"
               "8:16: a value of type '[3]int' doesn't convert to '*int' implicitly\n"
-              "9:15: '==' needs numbers, bools, pointers or strings, not '[3]int'\n"
+              "9:15: '==' needs numbers, bools, pointers, procedure values or strings, not '[3]int'\n"
               "10:10: can't cast '[3]u8' to '[]int'\n");
     arena_free(&a);
 }
@@ -4336,5 +4339,371 @@ TEST(extra_arguments_c_cant_take) {
     text = string_printf(&a, "%smain :: () { printf(5); }\n", PRINTF);
     CHECK_STR(check_source(&a, string_cstr(&a, text)),
               "2:21: argument 1 of 'printf' has type 'int', which can't be converted to '*u8'\n");
+    arena_free(&a);
+}
+
+// Issue #83: procedure types and values.
+
+TEST(procedure_types_are_their_signatures) {
+    // Two procedure types are the same exactly when their parameters'
+    // types, their results' types and their #c_call are: the names written
+    // for the parameters don't count. Messages name one as it's written.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Node :: struct { visit: (Node, *Node) -> int; next: *Node; }\n"
+                           "a : (int, int) -> int;\n"
+                           "b : (x: int, y: int) -> int;\n"
+                           "main :: () {\n"
+                           "    a = b;\n"
+                           "    n : int = a;\n"
+                           "    s : (int) -> (int, int);\n"
+                           "    n = s;\n"
+                           "    e : ();\n"
+                           "    n = e;\n"
+                           "    c : (*void, *void) -> s32 #c_call;\n"
+                           "    n = c;\n"
+                           "    r : () -> ((int));\n"
+                           "    n = r;\n"
+                           "    q : () -> ((int) -> int) #c_call;\n"
+                           "    n = q;\n"
+                           "    t : () -> (int) -> int #c_call;\n"
+                           "    n = t;\n"
+                           "    v : Node;\n"
+                           "    n = v.visit;\n"
+                           "    p : *[2](u8) -> bool;\n"
+                           "    n = p;\n"
+                           "}\n"),
+              "6:15: a value of type '(int, int) -> int' doesn't convert to 'int' implicitly\n"
+              "8:9: a value of type '(int) -> (int, int)' doesn't convert to 'int' implicitly\n"
+              "10:9: a value of type '()' doesn't convert to 'int' implicitly\n"
+              "12:9: a value of type '(*void, *void) -> s32 #c_call' doesn't convert to 'int' implicitly\n"
+              "14:9: a value of type '() -> ((int))' doesn't convert to 'int' implicitly\n"
+              "15:16: a #c_call procedure can't return a '(int) -> int', which isn't #c_call; C can call a "
+              "'(int) -> int #c_call'\n"
+              "16:9: a value of type '() -> ((int) -> int) #c_call' doesn't convert to 'int' implicitly\n"
+              "18:9: a value of type '() -> (int) -> int #c_call' doesn't convert to 'int' implicitly\n"
+              "20:9: a value of type '(Node, *Node) -> int' doesn't convert to 'int' implicitly\n"
+              "22:9: a value of type '*[2](u8) -> bool' doesn't convert to 'int' implicitly\n");
+    // Its parts are types a value can have; void isn't one.
+    CHECK_STR(check_source(&a,
+                           "f : (void) -> int;\n"
+                           "g : () -> nothing;\n"
+                           "main :: () { }\n"),
+              "1:6: 'void' is only a pointer's target, as in *void\n"
+              "2:11: unknown type 'nothing'\n");
+    // A procedure value is 8 bytes, aligned as a pointer.
+    CHECK_STR(check_source(&a,
+                           "S :: struct { f: (int) -> int; b: u8; }\n"
+                           "N :: size_of((int) -> int) + size_of(S) * 50;\n"
+                           "main :: () { x : [N]u8; y : [808]u8 = x; }\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(a_procedures_name_is_a_value) {
+    // A procedure's name used as a value is the procedure, of its procedure
+    // type: a foreign one's is #c_call, as C calls it. A constant can name
+    // one. Only identical signatures convert.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "add :: (a: int, b: int) -> int { return a + b; }\n"
+                          "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                          "compare :: (a: *void, b: *void) -> s32 #c_call { return 0; }\n"
+                          "OP :: add;\n"
+                          "g : (int, int) -> int = OP;\n"
+                          "main :: () {\n"
+                          "    f := add;\n"
+                          "    h := OP;\n"
+                          "    p := puts;\n"
+                          "    q := compare;\n"
+                          "    LOCAL :: compare;\n"
+                          "    f = g;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_name(&a, c.file->procs[0]->type), "(int, int) -> int");
+    CHECK_STR(type_name(&a, c.file->procs[1]->type), "(*u8) -> s32 #c_call");
+    CHECK_STR(type_name(&a, c.file->procs[2]->type), "(*void, *void) -> s32 #c_call");
+    CHECK(c.file->globals[1]->type == c.file->procs[0]->type);
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                           "f : (int) -> int = add;\n"
+                           "main :: () {\n"
+                           "    p := printf;\n"
+                           "    g : (int, int) -> s64 = add;\n"
+                           "    h : (int, int) -> int = 5;\n"
+                           "    x := 1;\n"
+                           "    X :: x;\n"
+                           "}\n"),
+              "3:20: a value of type '(int, int) -> int' doesn't convert to '(int) -> int' implicitly\n"
+              "5:10: 'printf' can't be a value: it takes more arguments with '..', which no procedure type can "
+              "say\n"
+              "6:29: a value of type '(int, int) -> int' doesn't convert to '(int, int) -> s64' implicitly\n"
+              "7:29: a value of type 'int' doesn't convert to '(int, int) -> int' implicitly\n"
+              "9:10: the value of constant 'X' isn't known while compiling\n");
+    arena_free(&a);
+}
+
+TEST(procedure_values_and_null) {
+    // A procedure value may be null: null converts to every procedure type,
+    // and == and != compare two of one type, or one with null. Nothing else
+    // takes them: no order, no arithmetic.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "neg :: (a: int) -> int { return -a; }\n"
+                           "main :: () {\n"
+                           "    f : (int, int) -> int = null;\n"
+                           "    f = add;\n"
+                           "    same := f == add;\n"
+                           "    none := null != f;\n"
+                           "    mixed := f == neg;\n"
+                           "    before := f < add;\n"
+                           "    sum := f + 1;\n"
+                           "    p : *void;\n"
+                           "    pointer := f == p;\n"
+                           "    negated := -f;\n"
+                           "    if f { }\n"
+                           "}\n"),
+              "8:16: mismatched types '(int, int) -> int' and '(int) -> int' for '=='\n"
+              "9:17: '<' needs numbers, not '(int, int) -> int'\n"
+              "10:14: '+' needs numbers, not '(int, int) -> int'\n"
+              "12:18: mismatched types '(int, int) -> int' and '*void' for '=='\n"
+              "13:16: '-' needs a number, not '(int, int) -> int'\n"
+              "14:8: the condition of 'if' must be a bool, not '(int, int) -> int'\n");
+    arena_free(&a);
+}
+
+TEST(procedure_values_cast_only_to_and_from_void_pointers) {
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "main :: () {\n"
+                           "    p := cast(*void) add;\n"
+                           "    f := cast((int, int) -> int) p;\n"
+                           "    g := cast((int, int) -> int) add;\n"
+                           "    h := cast((int, int) -> int) null;\n"
+                           "    k := cast((int) -> int) add;\n"
+                           "    b := cast(*u8) add;\n"
+                           "    n := cast(int) add;\n"
+                           "    m := cast((int) -> int) 5;\n"
+                           "    t := cast,trunc(*void) add;\n"
+                           "}\n"),
+              "7:10: can't cast '(int, int) -> int' to '(int) -> int'; a procedure value casts only to and from "
+              "*void\n"
+              "8:10: can't cast '(int, int) -> int' to '*u8'; a procedure value casts only to and from *void\n"
+              "9:10: can't cast '(int, int) -> int' to 'int'; a procedure value casts only to and from *void\n"
+              "10:10: can't cast 'int' to '(int) -> int'; a procedure value casts only to and from *void\n"
+              "11:10: cast,trunc only takes integers\n");
+    arena_free(&a);
+}
+
+TEST(procedure_values_in_globals) {
+    // A global may hold a procedure: its address is known while compiling
+    // (the linker writes it), as a string literal's is. So may a field or an
+    // element of one, and a cast that keeps the address.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "sub :: (a: int, b: int) -> int { return a - b; }\n"
+                           "Ops :: struct { name: *u8; op: (int, int) -> int; }\n"
+                           "OP :: sub;\n"
+                           "one : (int, int) -> int = add;\n"
+                           "table : [3](int, int) -> int = .[add, OP, null];\n"
+                           "named := Ops.{\"add\", add};\n"
+                           "address : *void = cast(*void) add;\n"
+                           "back := cast((int, int) -> int) cast(*void) sub;\n"
+                           "copy := one;\n"
+                           "main :: () { }\n"),
+              "10:9: a global's value must be known while compiling, for now\n");
+    arena_free(&a);
+}
+
+TEST(procedure_values_are_called) {
+    // A value of a procedure type is called as the procedure it holds would
+    // be: a variable, a parameter, a field, an element, a call's result. A
+    // constant naming a procedure calls it directly.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "divmod :: (a: int, b: int) -> (int, int) { return a / b, a % b; }\n"
+                           "Op :: struct { run: (int, int) -> int; }\n"
+                           "ADD :: add;\n"
+                           "apply :: (f: (int, int) -> int, a: int, b: int) -> int { return f(a, b); }\n"
+                           "pick :: () -> (int, int) -> int { return add; }\n"
+                           "main :: () {\n"
+                           "    f := add;\n"
+                           "    x := f(1, 2);\n"
+                           "    y := ADD(3, 4);\n"
+                           "    s := Op.{add};\n"
+                           "    z := s.run(x, y);\n"
+                           "    table : [1](int, int) -> int = .[add];\n"
+                           "    w := table[0](1, 2);\n"
+                           "    v : [](int, int) -> int = table;\n"
+                           "    u := v[0](1, 2) + pick()(1, 2);\n"
+                           "    g := divmod;\n"
+                           "    q, r := g(7, 2);\n"
+                           "    q, r = g(8, 3);\n"
+                           "    n := apply(f, q, r);\n"
+                           "}\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(calls_through_values_are_checked) {
+    // Checked as a direct call is: the number of arguments and their types,
+    // and a result where a value is needed. The callee is named by the
+    // variable's name, or by its type when it's no name.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "show :: (a: int) { }\n"
+                           "Op :: struct { run: (int, int) -> int; count: int; }\n"
+                           "main :: () {\n"
+                           "    f : (int, int) -> int = add;\n"
+                           "    f(1);\n"
+                           "    f(1, true);\n"
+                           "    s := Op.{add, 2};\n"
+                           "    s.run(1, 2, 3);\n"
+                           "    s.count(1);\n"
+                           "    g := show;\n"
+                           "    x := g(1);\n"
+                           "    p, q := f(1, 2);\n"
+                           "}\n"),
+              "6:5: 'f' takes 2 arguments, but 1 was given\n"
+              "7:10: argument 2 of 'f' has type 'bool', which can't be converted to 'int'\n"
+              "9:5: '(int, int) -> int' takes 2 arguments, but 3 were given\n"
+              "10:5: a value of type 'int' isn't a procedure, so it can't be called\n"
+              "12:10: 'g' returns nothing, so it has no value\n"
+              "13:13: 'f' returns 1 value, but 2 names receive them\n");
+    arena_free(&a);
+}
+
+TEST(c_call_procedures_take_what_c_takes) {
+    // A #c_call procedure, and a #c_call type, take and give what a foreign
+    // procedure does (spec 7.6): numbers, bools, pointers and #c_call
+    // procedures, at most one result. A foreign procedure takes a procedure
+    // only if it's #c_call.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: int; y: int; }\n"
+                           "qsort :: (base: *void, n: u64, size: u64, f: (*void, *void) -> s32 #c_call) #foreign libc;\n"
+                           "fine :: (a: *void, b: *void) -> s32 #c_call { return 0; }\n"
+                           "each :: (f: (int) -> int) #foreign libc;\n"
+                           "pair :: (v: Vec2, s: string) -> Vec2 #c_call { return v; }\n"
+                           "two :: (a: int) -> (int, int) #c_call { return a, a; }\n"
+                           "rig :: (f: (int) -> int) #c_call { }\n"
+                           "main :: () {\n"
+                           "    g : (v: [2]int) -> []int #c_call;\n"
+                           "    h : (int) -> (int, bool) #c_call;\n"
+                           "    k : (int) -> ((int) -> int) #c_call;\n"
+                           "}\n"),
+              "4:13: a foreign procedure can't take a '(int) -> int', which isn't #c_call; C can call a "
+              "'(int) -> int #c_call'\n"
+              "5:13: a #c_call procedure can't take a 'Vec2' yet; pass a pointer to it\n"
+              "5:22: a #c_call procedure can't take a 'string'; pass its .data, which may not end with a zero, or a "
+              "literal\n"
+              "5:33: a #c_call procedure can't return a 'Vec2' yet\n"
+              "6:26: a #c_call procedure can return at most one value\n"
+              "7:12: a #c_call procedure can't take a '(int) -> int', which isn't #c_call; C can call a "
+              "'(int) -> int #c_call'\n"
+              "9:13: a #c_call procedure can't take a '[2]int'; pass its .data\n"
+              "9:24: a #c_call procedure can't return a '[]int' yet\n"
+              "10:24: a #c_call procedure can return at most one value\n"
+              "11:19: a #c_call procedure can't return a '(int) -> int', which isn't #c_call; C can call a "
+              "'(int) -> int #c_call'\n");
+    arena_free(&a);
+}
+
+TEST(c_call_is_part_of_the_type) {
+    // A #c_call type and the same signature without it are two types:
+    // neither converts to the other. The message says what to mark.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                           "compare :: (a: *void, b: *void) -> s32 { return 0; }\n"
+                           "marked :: (a: *void, b: *void) -> s32 #c_call { return 0; }\n"
+                           "main :: () {\n"
+                           "    c : (*void, *void) -> s32 #c_call = compare;\n"
+                           "    rig := compare;\n"
+                           "    c = rig;\n"
+                           "    r : (*void, *void) -> s32 = marked;\n"
+                           "    p : (*u8) -> s32 = puts;\n"
+                           "    q : (*u8) -> s32 #c_call = puts;\n"
+                           "    c = marked;\n"
+                           "}\n"),
+              "5:41: a value of type '(*void, *void) -> s32' doesn't convert to '(*void, *void) -> s32 #c_call' "
+              "implicitly; mark 'compare' #c_call for C to call it\n"
+              "7:9: a value of type '(*void, *void) -> s32' doesn't convert to '(*void, *void) -> s32 #c_call' "
+              "implicitly; only a procedure marked #c_call has a #c_call type\n"
+              "8:33: a value of type '(*void, *void) -> s32 #c_call' doesn't convert to '(*void, *void) -> s32' "
+              "implicitly; #c_call is part of the type, as in '(*void, *void) -> s32 #c_call'\n"
+              "9:24: a value of type '(*u8) -> s32 #c_call' doesn't convert to '(*u8) -> s32' implicitly; #c_call is "
+              "part of the type, as in '(*u8) -> s32 #c_call'\n");
+    arena_free(&a);
+}
+
+TEST(a_constant_names_a_procedure_only_as_its_own_type) {
+    // A constant naming a procedure stands for it, calls included, so its
+    // type must be the procedure's: casts that end at that type are fine,
+    // and casts that reach it from another one are refused, or the constant
+    // and a call of it would disagree on what it takes.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add2 :: (a: int, b: int) -> int { return a + b; }\n"
+                           "SAME :: cast((int, int) -> int) cast(*void) add2;\n"
+                           "OP :: cast((int) -> int) cast(*void) add2;\n"
+                           "AGAIN :: OP;\n"
+                           "main :: () {\n"
+                           "    x := SAME(1, 2);\n"
+                           "    y := OP(1, 2);\n"
+                           "    z := OP(1);\n"
+                           "    f : (int) -> int = OP;\n"
+                           "    LOCAL :: cast((int) -> int) cast(*void) add2;\n"
+                           "}\n"),
+              "3:7: 'add2' is a '(int, int) -> int', so a constant can't name it as a '(int) -> int'\n"
+              "10:14: 'add2' is a '(int, int) -> int', so a constant can't name it as a '(int) -> int'\n");
+    arena_free(&a);
+}
+
+TEST(main_is_no_value) {
+    // main is where the program starts, and returns C's int to the C
+    // runtime (lower.cpp), which its Rig type, (), doesn't say: so a value
+    // of it would be called as the wrong function. It can't be one.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "START :: main;\n"
+                           "main :: () {\n"
+                           "    me := main;\n"
+                           "    f : () = main;\n"
+                           "    main();\n"
+                           "}\n"),
+              "1:10: 'main' can't be a value: it's where the program starts\n"
+              "3:11: 'main' can't be a value: it's where the program starts\n"
+              "4:14: 'main' can't be a value: it's where the program starts\n");
+    arena_free(&a);
+}
+
+TEST(procedure_values_and_void_pointers_say_to_cast) {
+    // A procedure value and a *void convert to each other only with a cast,
+    // which the message says to write: a C API taking a callback as void *.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "take :: (p: *void) { }\n"
+                           "main :: () {\n"
+                           "    p : *void = add;\n"
+                           "    take(add);\n"
+                           "    f : (int, int) -> int = p;\n"
+                           "    q : *u8 = add;\n"
+                           "}\n"),
+              "4:17: a value of type '(int, int) -> int' doesn't convert to '*void' implicitly; cast it with "
+              "cast(*void)\n"
+              "5:10: argument 1 of 'take' has type '(int, int) -> int', which can't be converted to '*void'; cast "
+              "it with cast(*void)\n"
+              "6:29: a value of type '*void' doesn't convert to '(int, int) -> int' implicitly; cast it with "
+              "cast((int, int) -> int)\n"
+              "7:15: a value of type '(int, int) -> int' doesn't convert to '*u8' implicitly\n");
     arena_free(&a);
 }

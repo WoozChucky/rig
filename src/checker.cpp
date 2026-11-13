@@ -79,6 +79,72 @@ static Type *resolve_element(Checker *c, Ast_Type *written, bool behind_pointer)
     return t;
 }
 
+// A parameter's or, with `result`, a result's type t, at `at`, of `who`, "a
+// foreign procedure" or "a #c_call procedure", which C calls or is called by
+// (spec 7.6): what C can't take is reported.
+// - A struct, an array, a view or a string: C passes a struct by value by
+//   rules of its own on each platform, which come with milestone 6's
+//   bindings ("a foreign procedure can't take a 'Vec2' yet; pass a pointer
+//   to it", "... can't return a 'Vec2' yet"). A pointer to one is a C
+//   pointer to a C struct of the same layout, which passes. C has no views,
+//   and takes an array as a pointer to its first element: "a foreign
+//   procedure can't take a '[3]int'; pass its .data" (or a view's .data,
+//   with its count if C needs it). A C string is a pointer to bytes ending
+//   with a zero, which a literal converts to, but another string's bytes
+//   needn't end with one: "a foreign procedure can't take a 'string'; pass
+//   its .data, which may not end with a zero, or a literal".
+// - A procedure value that isn't #c_call: a Rig procedure, which C would
+//   call as it calls its own, but which may come to expect more (#84's
+//   context): "a foreign procedure can't take a '(int) -> int', which isn't
+//   #c_call; C can call a '(int) -> int #c_call'".
+static void check_c_part(Checker *c, Type *t, Position at, const char *who, bool result) {
+    if (!t) return;  // its own mistake, reported
+    const char *verb = result ? "return" : "take";
+    if (t->kind == TYPE_PROC && !t->is_c_call) {
+        Type *marked = type_proc_of(t->params, t->param_count, t->results, t->result_count, true);
+        diag_error(c->diag, at, "%s can't %s a '" STR_FMT "', which isn't #c_call; C can call a '" STR_FMT "'", who,
+                   verb, STR_ARG(type_name(c->arena, t)), STR_ARG(type_name(c->arena, marked)));
+        return;
+    }
+    if (!type_is_aggregate(t)) return;
+    const char *hint = result                   ? " yet"
+                       : t->kind == TYPE_STRUCT ? " yet; pass a pointer to it"
+                       : t->kind == TYPE_STRING ? "; pass its .data, which may not end with a zero, or a literal"
+                                                : "; pass its .data";
+    diag_error(c->diag, at, "%s can't %s a '" STR_FMT "'%s", who, verb, STR_ARG(type_name(c->arena, t)), hint);
+}
+
+// A written procedure type, (params) -> results, its parts resolved in
+// order: each is one a value can have, void none. A procedure value is an
+// address, so they lie behind it, as a pointer's target does: a struct
+// among them is named before its layout is known (behind_pointer). Null when
+// any part is an error, reported. A #c_call type's parts are what C takes
+// (check_c_part), one result at most, as a #c_call procedure's are
+// (check_signature).
+static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
+    Array<Type *> parts = {};
+    bool fine = true;
+    for (s64 i = 0; i < written->params.count + written->results.count; i++) {
+        Ast_Type *part = i < written->params.count ? written->params[i] : written->results[i - written->params.count];
+        Type *t = resolve_element(c, part, true);
+        fine = fine && t;
+        array_add(&parts, t);
+    }
+    s64 n = written->params.count;
+    if (written->is_c_call) {
+        for (s64 i = 0; i < parts.count; i++) {
+            Ast_Type *part = i < n ? written->params[i] : written->results[i - n];
+            check_c_part(c, parts[i], part->pos, "a #c_call procedure", i >= n);
+        }
+        if (written->results.count > 1) {
+            diag_error(c->diag, written->results[1]->pos, "a #c_call procedure can return at most one value");
+        }
+    }
+    Type *t = fine ? type_proc_of(parts.data, n, parts.data + n, written->results.count, written->is_c_call) : nullptr;
+    array_free(&parts);
+    return t;
+}
+
 // A written type. A name is a built-in type, or a struct's, whose layout is
 // worked out here if it isn't yet (resolve_struct). Any other name declared
 // where the type is written isn't a type ("'foo' is not a type"), and a name
@@ -111,6 +177,7 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
         if (!counted || !element) return nullptr;
         return check_array_type(c, element, count, written->pos);
     }
+    case AST_TYPE_PROC: return resolve_proc_type(c, written);
     default: break;
     }
     Type *t = type_from_name(written->name);
@@ -248,7 +315,9 @@ static void check_var(Checker *c, Ast_Var *var) {
 // address, as cast([]u8) "abc" or cast(*void) cast(*u8) "x" do
 // (literal_address); not as an integer (cast(int) cast(*u8) "hi"), which
 // would need the linker to write a number, nor a string that isn't a
-// literal.
+// literal. A procedure's address is the same (procedure_address): a
+// global, a field or an element may hold a procedure, or a constant naming
+// one, as it is or cast to *void.
 static bool check_global_value(Checker *c, Ast *value) {
     if (value->is_constant) return true;
     if (!value->type) return false;  // a value inside a literal whose own error was reported
@@ -259,7 +328,7 @@ static bool check_global_value(Checker *c, Ast *value) {
         }
         return true;
     }
-    if (literal_address(value)) return true;
+    if (literal_address(value) || procedure_address(value)) return true;
     diag_error(c->diag, value->start, "a global's value must be known while compiling, for now");
     return false;
 }
@@ -272,22 +341,40 @@ static void check_global_var(Checker *c, Ast_Var *var) {
 // the constant keeps it, with its type: untyped when e is, so N meets types
 // as a literal does. Only numbers and bools fold so far, so a string
 // literal, though known while compiling, can't be a constant yet, nor a
-// struct literal (whose type must be written: .{1, 2} meets none here).
+// struct literal (whose type must be written: .{1, 2} meets none here). A
+// constant may also name a procedure (OP :: add;, procedure_address), of
+// its procedure type: it keeps the procedure, and a use of it is that
+// procedure, as the procedure's own name is, a call of it included. So
+// its type must be the procedure's own: casts may end there, as
+// cast((int, int) -> int) cast(*void) add does, but not reach it from
+// another type, or OP(1, 2) would call add as add, while OP's value would
+// say it takes one int: "'add' is a '(int, int) -> int', so a constant
+// can't name it as a '(int) -> int'".
 static void check_const_value(Checker *c, Ast_Const *constant) {
     Type *t = check_value(c, constant->value);
     if (t == &type_untyped_literal) {
         check_default_type(c, constant->value);
         t = nullptr;
     }
-    if (t && !type_is_number(t) && t != &type_bool) {
-        diag_error(c->diag, constant->value->start, "a constant can only be a number or a bool, for now");
+    bool procedure = t && t->kind == TYPE_PROC;
+    Ast_Proc *named = procedure ? procedure_address(constant->value) : nullptr;
+    if (named && named->type != t) {
+        diag_error(c->diag, constant->value->start,
+                   "'" STR_FMT "' is a '" STR_FMT "', so a constant can't name it as a '" STR_FMT "'",
+                   STR_ARG(named->name), STR_ARG(type_name(c->arena, named->type)), STR_ARG(type_name(c->arena, t)));
+        constant->type = nullptr;
+        return;
+    }
+    constant->proc = named;
+    if (t && !type_is_number(t) && t != &type_bool && !procedure) {
+        diag_error(c->diag, constant->value->start, "a constant can only be a number, a bool or a procedure, for now");
         t = nullptr;
-    } else if (t && !constant->value->is_constant) {
+    } else if (t && !constant->value->is_constant && !constant->proc) {
         diag_error(c->diag, constant->value->start, "the value of constant '" STR_FMT "' isn't known while compiling",
                    STR_ARG(constant->name));
         t = nullptr;
     }
-    if (t) {
+    if (t && !constant->proc) {
         constant->is_constant = true;
         constant->constant = constant->value->constant;
     }
@@ -491,17 +578,19 @@ static s64 align_up(s64 offset, s32 align) {
     return (offset + align - 1) & ~(s64)(align - 1);
 }
 
-// Whether a written type holds a pointer or a view: is one, or is an array
-// of what holds one. Such a field is a late field.
+// Whether a written type holds a pointer or a view: is one, or a procedure
+// type (its value, the address of code, is a pointer), or is an array of
+// what holds one. Such a field is a late field.
 static bool holds_pointer_or_view(Ast_Type *written) {
-    if (written->kind == AST_TYPE_POINTER || written->kind == AST_TYPE_VIEW) return true;
+    Ast_Kind kind = written->kind;
+    if (kind == AST_TYPE_POINTER || kind == AST_TYPE_VIEW || kind == AST_TYPE_PROC) return true;
     if (written->kind == AST_TYPE_ARRAY) return holds_pointer_or_view(written->element);
     return false;
 }
 
 // The size and alignment of a type that holds a pointer or a view
 // (holds_pointer_or_view), from what's written, before the type is made: a
-// pointer is 8 bytes, a view 16 (both aligned to 8), and an array N times
+// pointer or a procedure value is 8 bytes, a view 16 (all aligned to 8), and an array N times
 // its element's, at its element's alignment. Nothing behind a pointer or in
 // a view is looked at, so no struct is laid out here. An array's count is
 // checked (array_count), and kept for the type; one that's wrong, or makes
@@ -509,8 +598,9 @@ static bool holds_pointer_or_view(Ast_Type *written) {
 // big).
 static void late_layout(Checker *c, Ast_Type *written, s64 *size, s32 *align) {
     if (written->kind != AST_TYPE_ARRAY) {
-        RIG_ASSERT(written->kind == AST_TYPE_POINTER || written->kind == AST_TYPE_VIEW);
-        *size = written->kind == AST_TYPE_POINTER ? 8 : 16;
+        RIG_ASSERT(written->kind == AST_TYPE_POINTER || written->kind == AST_TYPE_VIEW ||
+                   written->kind == AST_TYPE_PROC);
+        *size = written->kind == AST_TYPE_VIEW ? 16 : 8;
         *align = 8;
         return;
     }
@@ -696,13 +786,35 @@ void check_late_field(Checker *c, Type *t, s32 index) {
     }
 }
 
+static Type *made_again(Type *t);
+
+// Procedure type t, made again (made_again): the same signature of its
+// parts made again, so null if any of them has no type now. A procedure
+// type is never inferred, only written, so its parts nest only as deep as
+// the program wrote them (MAX_DEPTH), and recursing through them is safe.
+static Type *proc_made_again(Type *t) {
+    Array<Type *> parts = {};
+    bool fine = true;
+    for (s64 i = 0; i < t->param_count + t->result_count; i++) {
+        Type *part = made_again(i < t->param_count ? t->params[i] : t->results[i - t->param_count]);
+        fine = fine && part;
+        array_add(&parts, part);
+    }
+    Type *again = fine ? type_proc_of(parts.data, t->param_count, parts.data + t->param_count, t->result_count,
+                                      t->is_c_call)
+                       : nullptr;
+    array_free(&parts);
+    return again;
+}
+
 // Type t, made before every struct was laid out, made again now that they
-// are: the same pointers, views and arrays (the same counts: nothing is
-// checked or said twice) of what the struct at its end has become, so
-// null if that has no type now. A struct taken behind a pointer or in a
-// view before its layout (resolve_written's behind_pointer) may since have
-// been found in a circle, or too big. Nothing else changes. In a loop: a
-// type the checker infers has no limit to its levels (6.1).
+// are: the same pointers, views, arrays (the same counts: nothing is
+// checked or said twice) and procedure types of what the structs in it
+// have become, so null if one of those has no type now. A struct taken
+// behind a pointer or in a view before its layout (resolve_written's
+// behind_pointer) may since have been found in a circle, or too big.
+// Nothing else changes. In a loop: a type the checker infers has no limit
+// to its levels (6.1).
 static Type *made_again(Type *t) {
     Array<Type *> levels = {};  // t's pointers, views and arrays, outermost first
     Type *inner = t;
@@ -711,6 +823,7 @@ static Type *made_again(Type *t) {
         inner = inner->kind == TYPE_POINTER ? inner->pointee : inner->element;
     }
     if (inner && inner->kind == TYPE_STRUCT && inner->decl) inner = inner->decl->declared;
+    if (inner && inner->kind == TYPE_PROC) inner = proc_made_again(inner);
     for (s64 i = levels.count - 1; i >= 0 && inner; i--) {
         Type *level = levels[i];
         if (level->kind == TYPE_POINTER) {
@@ -757,9 +870,9 @@ static String count_of_values(Checker *c, s64 n) {
     return string_printf(c->arena, "%lld value%s", (long long)n, n == 1 ? "" : "s");
 }
 
-// The value that `count` names or targets receive (spec 6.7): a call of a
-// procedure with exactly that many results, which is returned; or null
-// after reporting what it is instead:
+// The value that `count` names or targets receive (spec 6.7): a call with
+// exactly that many results, of a procedure or through a procedure value,
+// which is returned; or null after reporting what it is instead:
 // - not a call: "only a call can give several values, as in q, r :=
 //   divmod(7, 2);";
 // - a call of one that returns nothing: "'greet' returns nothing, so it has
@@ -768,30 +881,31 @@ static String count_of_values(Checker *c, s64 n) {
 //   3 names receive them".
 // Each is said at the value. A value whose type is unknown says nothing
 // more.
-static Ast_Proc *check_several_values(Checker *c, Ast *value, s64 count) {
+static Ast_Call *check_several_values(Checker *c, Ast *value, s64 count) {
     Type *t = check_value(c, value);
     if (!t) return nullptr;
     if (value->kind != AST_CALL) {
         diag_error(c->diag, value->start, "only a call can give several values, as in q, r := divmod(7, 2);");
         return nullptr;
     }
-    Ast_Proc *proc = ((Ast_Call *)value)->proc;  // a known type means a procedure was called
-    if (proc->results.count != count) {
+    Ast_Call *call = (Ast_Call *)value;  // a known type means its callee is known
+    s64 results = call_result_count(call);
+    if (results != count) {
         diag_error(c->diag, value->start, "'" STR_FMT "' returns " STR_FMT ", but %lld names receive them",
-                   STR_ARG(proc->name), STR_ARG(count_of_values(c, proc->results.count)), (long long)count);
+                   STR_ARG(callee_name(c, call)), STR_ARG(count_of_values(c, results)), (long long)count);
         return nullptr;
     }
-    return proc;
+    return call;
 }
 
 // q, r := divmod(7, 2); declares a variable per result, each of the type of
 // the result it receives, in order. After an error each is still
 // declared, with an unknown type, so its uses aren't reported too.
 static void check_multi_var(Checker *c, Ast_Multi_Var *multi) {
-    Ast_Proc *proc = check_several_values(c, multi->value, multi->vars.count);
+    Ast_Call *call = check_several_values(c, multi->value, multi->vars.count);
     for (s64 i = 0; i < multi->vars.count; i++) {
         Ast_Var *var = multi->vars[i];
-        var->type = proc ? proc->results[i]->type : nullptr;
+        var->type = call ? call_result_type(call, i) : nullptr;
         declare(c, var->name, var);
     }
 }
@@ -803,9 +917,9 @@ static void check_multi_var(Checker *c, Ast_Multi_Var *multi) {
 static void check_multi_assign(Checker *c, Ast_Assign *assign) {
     Array<Type *> targets = {};
     for (s64 i = 0; i < assign->targets.count; i++) array_add(&targets, check_target(c, assign->targets[i]));
-    Ast_Proc *proc = check_several_values(c, assign->value, assign->targets.count);
-    for (s64 i = 0; proc && i < targets.count; i++) {
-        Type *from = proc->results[i]->type, *to = targets[i];
+    Ast_Call *call = check_several_values(c, assign->value, assign->targets.count);
+    for (s64 i = 0; call && i < targets.count; i++) {
+        Type *from = call_result_type(call, i), *to = targets[i];
         if (!type_converts(from, to)) {
             diag_error(c->diag, assign->targets[i]->start,
                        "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly",
@@ -1172,19 +1286,33 @@ static void check_body(Checker *c, Ast_Proc *proc) {
     c->proc = nullptr;
 }
 
+// The procedure type of proc's checked signature (check_signature says
+// which); null when it has none.
+static Type *proc_type_of_signature(Ast_Proc *proc) {
+    if (proc->is_variadic) return nullptr;
+    Array<Type *> parts = {};
+    bool fine = true;
+    for (s64 i = 0; i < proc->params.count; i++) {
+        fine = fine && proc->params[i]->type;
+        array_add(&parts, proc->params[i]->type);
+    }
+    for (s64 i = 0; i < proc->results.count; i++) {
+        fine = fine && proc->results[i]->type;
+        array_add(&parts, proc->results[i]->type);
+    }
+    s64 n = proc->params.count;
+    Type *t = fine ? type_proc_of(parts.data, n, parts.data + n, proc->results.count,
+                                  proc->is_c_call || proc->is_foreign)
+                   : nullptr;
+    array_free(&parts);
+    return t;
+}
+
 // A procedure's signature: its parameters' types and its results' types,
 // each stored on its node (Ast_Param.type, Ast_Type.type), and its library.
-// A foreign procedure takes and returns no aggregate: C passes a struct by
-// value by rules of its own on each platform, which come with milestone 6's
-// bindings ("a foreign procedure can't take a 'Vec2' yet; pass a pointer to
-// it", "... can't return a 'Vec2' yet"). A pointer to one is a C pointer to
-// a C struct of the same layout, which passes. C has no views, and takes an
-// array as a pointer to its first element: "a foreign procedure can't take a
-// '[3]int'; pass its .data" (or a view's .data, with its count if C needs
-// it). A C string is a pointer to bytes ending with a zero, which a literal
-// converts to, but another string's bytes needn't end with one: "a foreign
-// procedure can't take a 'string'; pass its .data, which may not end with a
-// zero, or a literal".
+// A foreign procedure, which C implements, and a #c_call one, which C may
+// call, take and return only what C does (check_c_part), and one result at
+// most.
 //
 // Only a foreign procedure may end its parameters with '..': a Rig
 // procedure would have no way to reach the arguments it doesn't name (Rig
@@ -1193,33 +1321,29 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 // Each type starts where the signature does, at `base`: a global it needs
 // (an array's count) starts a level below its own levels (Ast_Type.levels,
 // open_declaration).
+//
+// The procedure's type (Ast.type) is its signature's procedure type: #c_call
+// when it's marked so, or foreign (C's own). A variadic one has none: no
+// procedure type takes '..', so it can only be called (check_name).
 static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
+    bool c_side = proc->is_foreign || proc->is_c_call;
+    const char *who = proc->is_foreign ? "a foreign procedure" : "a #c_call procedure";
     for (s64 i = 0; i < proc->params.count; i++) {
         Ast_Param *param = proc->params[i];
         c->levels = base + param->type_expr->levels + 1;
         param->type = resolve_type(c, param->type_expr);
-        if (proc->is_foreign && param->type && type_is_aggregate(param->type)) {
-            Type_Kind kind = param->type->kind;
-            const char *hint = kind == TYPE_STRUCT   ? " yet; pass a pointer to it"
-                               : kind == TYPE_STRING ? "; pass its .data, which may not end with a zero, or a literal"
-                                                     : "; pass its .data";
-            diag_error(c->diag, param->type_expr->pos, "a foreign procedure can't take a '" STR_FMT "'%s",
-                       STR_ARG(type_name(c->arena, param->type)), hint);
-        }
+        if (c_side) check_c_part(c, param->type, param->type_expr->pos, who, false);
     }
     for (s64 i = 0; i < proc->results.count; i++) {
         c->levels = base + proc->results[i]->levels + 1;
         Type *t = resolve_type(c, proc->results[i]);
         proc->results[i]->type = t;
-        if (proc->is_foreign && t && type_is_aggregate(t)) {
-            diag_error(c->diag, proc->results[i]->pos, "a foreign procedure can't return a '" STR_FMT "' yet",
-                       STR_ARG(type_name(c->arena, t)));
-        }
+        if (c_side) check_c_part(c, t, proc->results[i]->pos, who, true);
     }
     // C returns one value; several are Rig's own (spec 6.7), made in a way
     // only Rig's procedures agree on.
-    if (proc->is_foreign && proc->results.count > 1) {
-        diag_error(c->diag, proc->results[1]->pos, "a foreign procedure can return at most one value");
+    if (c_side && proc->results.count > 1) {
+        diag_error(c->diag, proc->results[1]->pos, "%s can return at most one value", who);
     }
     if (proc->is_variadic && !proc->is_foreign) {
         diag_error(c->diag, proc->variadic_pos,
@@ -1230,6 +1354,7 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
         diag_error(c->diag, proc->library_pos, "unknown library '" STR_FMT "'; the only one so far is 'libc'",
                    STR_ARG(proc->foreign_library));
     }
+    proc->type = proc_type_of_signature(proc);
 }
 
 // A procedure's signature, checked the first time it's needed: in its turn
@@ -1375,12 +1500,13 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
     }
     for (s64 i = 0; i < declarations.count; i++) {
         Ast *decl = declarations[i];
-        if (decl->kind == AST_VAR) decl->type = made_again(decl->type);
+        if (decl->kind == AST_VAR || decl->kind == AST_CONST) decl->type = made_again(decl->type);
         if (decl->kind != AST_PROC) continue;
         Ast_Proc *proc = (Ast_Proc *)decl;
         if (proc->is_broken) continue;
         for (s64 j = 0; j < proc->params.count; j++) proc->params[j]->type = made_again(proc->params[j]->type);
         for (s64 j = 0; j < proc->results.count; j++) proc->results[j]->type = made_again(proc->results[j]->type);
+        proc->type = made_again(proc->type);
     }
     array_free(&declarations);
 

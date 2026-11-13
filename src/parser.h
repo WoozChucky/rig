@@ -10,12 +10,14 @@
 //               | IDENT ':' type ['=' (expression | '---')] ';'     a global variable
 //               | IDENT ':=' expression ';'                         a global variable
 //               | IDENT '::' expression ';'                         a constant
-//   procedure   = '(' [params] ')' ['->' type {',' type}]
-//                   (['#no_abc'] block | '#foreign' IDENT ';')
+//   procedure   = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
+//                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT ';')
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
 //   param       = IDENT ':' type
-//   type        = '*' type | '[' expression ']' type | '[' ']' type | IDENT
+//   type        = '*' type | '[' expression ']' type | '[' ']' type | proc_type | IDENT
 //                                                                  (*void: a pointer to anything)
+//   proc_type   = '(' [[IDENT ':'] type {',' [IDENT ':'] type}] ')'
+//                   ['->' (type | '(' type {',' type} ')')] ['#c_call']
 //   block       = '{' statement* '}'
 //   statement   = declaration | multi_var | assignment | return | block
 //               | if | while | for | 'break' ';' | 'continue' ';' | expression ';'
@@ -107,23 +109,41 @@
 // other error below, not only the statement: the parser has no recovery
 // inside a body, and skipping just the statement would leave a variable it
 // declares (`x := ((...));`) undeclared, so every later use of it would be
-// one more message. Types nest at most
-// 1000 levels too, each '*', '[]' and '[N]' one, and the levels of types and
+// one more message. Types nest at most 1000 levels too, each '*', '[]',
+// '[N]' and procedure type's '(' one, and the levels of types and
 // expressions inside each other count together: an array's count is read
 // inside its '[N]' level, size_of's and a cast's type a level down. The
 // level one too many, when it's a '*' or '[', is "types are nested too
 // deeply (more than 1000 levels)", there.
 //
-// Several results (spec 6.7) are a list of types after '->', with no
-// parentheses: `divmod :: (a: int, b: int) -> int, int { ... }`; a return
-// gives a list of values, `return q, r;`. Which counts must agree is the
-// checker's business.
+// Several results (spec 6.7) are a list of types after '->', with or
+// without parentheses: `divmod :: (a: int, b: int) -> int, int { ... }` or
+// `-> (int, int)`; a return gives a list of values, `return q, r;`. Which
+// counts must agree is the checker's business. #c_call and #no_abc go
+// before the body, in either order, each at most once ("'#c_call' is
+// written twice"); a foreign procedure is C's already, so `#c_call
+// #foreign` is "a foreign procedure is C's already: it takes no
+// '#c_call'".
+//
+// A procedure's type (spec 3) is written as its signature: `(int, int) ->
+// int`, `(a: *void, b: *void) -> s32 #c_call`, `()`. The parameters' names
+// are optional, and not part of the type. A type ends at a ',', so several
+// results are in parentheses, `(int) -> (int, int)`; and after '->',
+// parentheses followed by another '->' are a procedure type, the one
+// result (`() -> (int) -> int`), while any others hold the results
+// (`() -> (int)` returns an int, `() -> ((int))` an (int)). A #c_call goes
+// with the innermost procedure type that has room for it, the result's
+// when that's one written without parentheses. No procedure type takes
+// '..': "a procedure type can't take '..': a procedure that takes more
+// arguments can't be a value". Its '(' is a type level, as a '*' is.
 //
 // At the top level, after '::', a procedure's parameter list starts with
 // '(' ')', '(' IDENT ':' or '(' '..'; any other '(' begins a constant's
 // value, so `N :: (1 + 2);` is a constant. A name followed by ':' or ':='
-// and then a signature (`greet : () {`) is a procedure with its '::'
-// mistyped: "expected '::', found ':'". Anything else after a top-level
+// and then a signature with a body or a directive after it (`greet : () {`)
+// is a procedure with its '::' mistyped: "expected '::', found ':'"; a
+// name, ':' and a procedure type followed by '=' or ';' is a variable of
+// that type (`op : (int) -> int = add;`). Anything else after a top-level
 // name is "expected '::', found ...".
 //
 // The bodies of if, else, while and for are always blocks in braces (spec

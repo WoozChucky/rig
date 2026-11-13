@@ -859,6 +859,51 @@ static s64 view_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVM
     return 2;
 }
 
+// A pointer to the debug type `to`, 64 bits (null for `to`: void *).
+static LLVMMetadataRef debug_pointer(Backend *b, LLVMMetadataRef to) {
+    return LLVMDIBuilderCreatePointerType(b->debug, to, 64, 0, 0, nullptr, 0);
+}
+
+// The subroutine type of a signature: its parameters' types and its
+// results' (spec 10.4). How a procedure of it is called, which isn't how C
+// would pass the same types: an aggregate is never passed or returned in
+// registers. A struct, array, view or string parameter is a pointer to the
+// caller's copy, so its type here is a pointer to the aggregate. An
+// aggregate result isn't returned at all: the caller passes a pointer to a
+// temporary, which `return` copies the value into, a hidden parameter
+// before the visible ones (one per aggregate result, in order). So the
+// list is the result's type first, the one scalar result when there's
+// exactly one, and none (null) otherwise: no scalar result, or several,
+// which LLVM returns together in a way no C type describes; then those
+// pointers, then the visible parameters. Its parts are made `depth` levels
+// down (part_debug_type, which raises *levels), or, with depth -1, as a
+// procedure's own (debug_type: begin_procedure_debug_info).
+static LLVMMetadataRef debug_signature(Backend *b, Type **params, s64 param_count, Type **results,
+                                       s64 result_count, s32 depth, s32 *levels) {
+    s64 pointers = 0, scalars = 0;
+    Type *scalar = nullptr;
+    for (s64 i = 0; i < result_count; i++) {
+        if (type_is_aggregate(results[i])) {
+            pointers++;
+        } else {
+            scalars++;
+            scalar = results[i];
+        }
+    }
+    LLVMMetadataRef *types = arena_new_array<LLVMMetadataRef>(b->arena, 1 + pointers + param_count);
+    s64 count = 0;
+    types[count++] = scalars == 1 ? (depth < 0 ? debug_type_at(b, scalar, 0).node
+                                               : part_debug_type(b, scalar, depth, levels))
+                                  : nullptr;
+    for (s64 i = 0; i < result_count + param_count; i++) {
+        Type *t = i < result_count ? results[i] : params[i - result_count];
+        if (i < result_count && !type_is_aggregate(t)) continue;
+        LLVMMetadataRef type = depth < 0 ? debug_type_at(b, t, 0).node : part_debug_type(b, t, depth, levels);
+        types[count++] = type_is_aggregate(t) ? debug_pointer(b, type) : type;
+    }
+    return LLVMDIBuilderCreateSubroutineType(b->debug, b->file, types, (unsigned)count, LLVMDIFlagZero);
+}
+
 // The debug type of a Rig type, t, `depth` levels below the type a
 // variable, a procedure or a global asked for (0 for that one): made the
 // first time it's asked for, then the same node every time.
@@ -873,6 +918,10 @@ static s64 view_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVM
 // - [N]T is an array of N T's.
 // - []T and string are the structs they're laid out as, named as Rig names
 //   them ("[]int", "string").
+// - A procedure type is a pointer to the subroutine type of its signature
+//   (debug_signature), as a C function pointer is: a debugger shows a
+//   value as the address and the procedure there (gdb: `(int (*)(int,
+//   int)) 0x401136 <add>`), and can call through it.
 //
 // This calls itself at most DEBUG_TYPE_LEVELS - 1 levels down, and no
 // count it keeps is more than DEBUG_TYPE_LEVELS, wherever the type is made
@@ -933,6 +982,15 @@ static Debug_Type debug_type_at(Backend *b, Type *t, s32 depth) {
             Debug_Type{LLVMDIBuilderCreateArrayType(b->debug, (u64)t->size * 8, (u32)t->align * 8, element, &range, 1),
                        levels});
     }
+    case TYPE_PROC: {
+        // Its parts first, which may have made this type already (a
+        // procedure type taking a struct that holds one): then that one is it.
+        LLVMMetadataRef signature =
+            debug_signature(b, t->params, t->param_count, t->results, t->result_count, depth, &levels);
+        made = cached_debug_type(b, t);
+        if (made.node) return made;
+        return remember_debug_type(b, t, Debug_Type{debug_pointer(b, signature), levels});
+    }
     case TYPE_VIEW:
     case TYPE_STRING: return debug_struct(b, t, type_name(b->arena, t), 0, depth, view_members);
     case TYPE_STRUCT: return debug_struct(b, t, t->name, (unsigned)t->decl->pos.line, depth, struct_members);
@@ -944,11 +1002,6 @@ static Debug_Type debug_type_at(Backend *b, Type *t, s32 depth) {
 // or a global's: null for none (void).
 static LLVMMetadataRef debug_type(Backend *b, Type *t) {
     return debug_type_at(b, t, 0).node;
-}
-
-// A pointer to the debug type `to`, 64 bits (null for `to`: void *).
-static LLVMMetadataRef debug_pointer(Backend *b, LLVMMetadataRef to) {
-    return LLVMDIBuilderCreatePointerType(b->debug, to, 64, 0, 0, nullptr, 0);
 }
 
 // How many hidden result pointers procedure p has: one per aggregate
@@ -966,18 +1019,9 @@ static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMVal
     if (!b->debug || p->source_name.count == 0) return;
     RIG_ASSERT(p->scopes.count > 0);
     // The procedure's type: a list of types, its result's first (null for
-    // none), then its parameters'. It says how the procedure is called
-    // (spec 10.4), the same in DWARF and CodeView, which isn't how C would
-    // pass the same types: an aggregate is never passed or returned in
-    // registers. A struct, array, view or string parameter is a pointer to
-    // the caller's copy, so its type here is a pointer to the aggregate. An
-    // aggregate result isn't returned at all: the caller passes a pointer
-    // to a temporary, which `return` copies the value into, a hidden
-    // parameter before the visible ones (one per aggregate result, in
-    // order). So those come first, as pointers, and the result is the one
-    // scalar result when there's exactly one, and none otherwise: no scalar
-    // result, or several, which LLVM returns together in a way no C type
-    // describes.
+    // none), then its parameters' (debug_signature). It says how the
+    // procedure is called (spec 10.4), the same in DWARF and CodeView, the
+    // same as a value of its procedure type says.
     //
     // A debugger calling a procedure from an expression passes the
     // parameters its debug information shows, as C passes them, and takes
@@ -1005,31 +1049,13 @@ static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMVal
     // pointer it is.
     s64 params = 0;
     while (params < p->vars.count && p->vars[params].arg > 0) params++;
-    s64 pointers = result_pointers(p);
-    LLVMMetadataRef *types = arena_new_array<LLVMMetadataRef>(a, 1 + pointers + params);
-    s64 count = 0;
-    s64 scalars = 0;
-    Type *scalar = nullptr;
-    for (s64 i = 0; i < p->source_results.count; i++) {
-        if (!type_is_aggregate(p->source_results[i])) {
-            scalars++;
-            scalar = p->source_results[i];
-        }
-    }
-    types[count++] = scalars == 1 ? debug_type(b, scalar) : nullptr;
-    for (s64 i = 0; i < p->source_results.count; i++) {
-        Type *t = p->source_results[i];
-        if (type_is_aggregate(t)) types[count++] = debug_pointer(b, debug_type(b, t));
-    }
-    RIG_ASSERT(count == 1 + pointers);
+    Type **param_types = arena_new_array<Type *>(a, params);
     for (s64 i = 0; i < params; i++) {
         RIG_ASSERT(p->vars[i].arg == i + 1);
-        Type *t = p->vars[i].type;
-        LLVMMetadataRef type = debug_type(b, t);
-        types[count++] = type_is_aggregate(t) ? debug_pointer(b, type) : type;
+        param_types[i] = p->vars[i].type;
     }
     LLVMMetadataRef type =
-        LLVMDIBuilderCreateSubroutineType(b->debug, b->file, types, (unsigned)count, LLVMDIFlagZero);
+        debug_signature(b, param_types, params, p->source_results.data, p->source_results.count, -1, nullptr);
     // Its Rig name, and no linkage name (the symbol's): given one, gdb
     // names the procedure by it, so a Rig `write` that LLVM renamed write.1
     // (C's write was taken first) would be write.1 to `break` and `bt`.
@@ -1096,12 +1122,19 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
         }
         break;
     case IR_ADDR: v = llvm_global(body, instr->target); break;
-    case IR_CALL: {
-        Ir_Proc *callee = m->procs[instr->target];
+    case IR_PROC_ADDR: v = llvm_function(body, instr->target); break;
+    case IR_CALL:
+    case IR_CALL_INDIRECT: {
+        // A call through a procedure value is a call of the ptr, with the
+        // function type and attributes a call of the procedure itself has:
+        // its signature's.
+        bool direct = instr->op == IR_CALL;
+        Ir_Proc *callee = direct ? m->procs[instr->target] : instr->signature;
+        LLVMValueRef function = direct ? llvm_function(body, instr->target) : value(body, instr->a);
         LLVMValueRef *args = arena_new_array<LLVMValueRef>(a, instr->args.count ? instr->args.count : 1);
         for (s64 k = 0; k < instr->args.count; k++) args[k] = value(body, instr->args[k]);
-        LLVMValueRef call = LLVMBuildCall2(builder, function_type(c, callee, a), llvm_function(body, instr->target),
-                                           args, (unsigned)instr->args.count, "");
+        LLVMValueRef call = LLVMBuildCall2(builder, function_type(c, callee, a), function, args,
+                                           (unsigned)instr->args.count, "");
         mark_extensions(b, callee, call, true);
         mark_result_pointer(b, callee, call, true);
         if (callee->results.count == 1) {
@@ -1508,9 +1541,9 @@ static void add_byte_run(LLVMContextRef c, Arena *a, Global_Pieces *p, Ir_Global
     }
 }
 
-// A variable of bytes as LLVM has it: its type, and, given `globals` (every
-// global's LLVM value, by IR index, m->globals.count of them), its first
-// value in *init.
+// A variable of bytes as LLVM has it: its type, and, given `globals` and
+// `functions` (every global's and procedure's LLVM value, by IR index,
+// m->globals.count and m->procs.count of them), its first value in *init.
 //
 // When it's one run of bytes it's an array of them, [N x i8]
 // (zeroinitializer when they're all 0, as a global given no value is,
@@ -1523,8 +1556,10 @@ static void add_byte_run(LLVMContextRef c, Arena *a, Global_Pieces *p, Ir_Global
 //
 //   @table = internal global <{ [8 x i8], ptr, [8 x i8] }>
 //            <{ [8 x i8] c"\03\00\00\00\00\00\00\00", ptr @str.0, [8 x i8] zeroinitializer }>, align 8
+//
+// A procedure's address is the same: ptr @add.
 static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Global *g, LLVMValueRef *globals,
-                               LLVMValueRef *init) {
+                               LLVMValueRef *functions, LLVMValueRef *init) {
     RIG_ASSERT(g->bytes.count <= g->size);
     // At most two pieces for a run of bytes before each address, the
     // address, and two for the run after the last.
@@ -1542,12 +1577,14 @@ static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Glob
         // each inside the global and naming one: checked before any byte is
         // read.
         RIG_ASSERT(end >= at && end <= g->size);
-        RIG_ASSERT(last || (r.offset + 8 <= g->size && r.global >= 0 && r.global < m->globals.count));
+        s64 targets = r.is_proc ? m->procs.count : m->globals.count;
+        RIG_ASSERT(last || (r.offset + 8 <= g->size && r.global >= 0 && r.global < targets));
         add_byte_run(c, a, &p, g, at, end);
         if (last) break;
         // The address, 8 bytes, which the IR's bytes leave zero.
         for (s64 k = 0; k < 8 && r.offset + k < g->bytes.count; k++) RIG_ASSERT(g->bytes.data[r.offset + k] == 0);
-        add_piece(&p, LLVMPointerTypeInContext(c, 0), globals ? globals[r.global] : nullptr);
+        LLVMValueRef address = !globals ? nullptr : r.is_proc ? functions[r.global] : globals[r.global];
+        add_piece(&p, LLVMPointerTypeInContext(c, 0), address);
         at = r.offset + 8;
     }
     if (p.count == 0) {
@@ -1596,10 +1633,11 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     if (module_has(m, IR_COPY) || module_has(m, IR_ZERO)) declare_memory_functions(b);
     declare_stack_probe(b);
 
-    // The globals in two passes: every one made first, with its type, then
-    // each given its first value. A variable of bytes may hold the address
-    // of any global (a relocation), a later one too, and that address is the
-    // LLVM global itself, which must exist by then.
+    // The globals in two passes: every one made first, with its type, then,
+    // once the functions are made too, each given its first value. A
+    // variable of bytes may hold the address of any global (a relocation),
+    // a later one too, or of a procedure, and that address is the LLVM
+    // global or function itself, which must exist by then.
     LLVMContextRef c = b->context;
     LLVMValueRef *globals = arena_new_array<LLVMValueRef>(a, m->globals.count ? m->globals.count : 1);
     for (s64 i = 0; i < m->globals.count; i++) {
@@ -1616,7 +1654,8 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
             // A variable of bytes, writable and internal like the program's
             // procedures, aligned as the IR says.
             RIG_ASSERT(g->align > 0 && (g->align & (g->align - 1)) == 0);
-            global = LLVMAddGlobal(b->module, byte_global(c, a, m, g, nullptr, nullptr), string_cstr(a, g->name));
+            global = LLVMAddGlobal(b->module, byte_global(c, a, m, g, nullptr, nullptr, nullptr),
+                                   string_cstr(a, g->name));
             LLVMSetLinkage(global, LLVMInternalLinkage);
             LLVMSetAlignment(global, g->align);
         } else {
@@ -1625,25 +1664,6 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
             LLVMSetLinkage(global, LLVMInternalLinkage);
         }
         globals[i] = global;
-    }
-    for (s64 i = 0; i < m->globals.count; i++) {
-        Ir_Global *g = &m->globals[i];
-        LLVMValueRef init = nullptr;
-        if (g->type == IR_VOID && !g->is_variable) {
-            // The bytes already end with their zero, so LLVM mustn't add
-            // another.
-            init = LLVMConstStringInContext2(c, (const char *)g->bytes.data, (size_t)g->bytes.count, 1);
-        } else if (g->type == IR_VOID) {
-            byte_global(c, a, m, g, globals, &init);
-        } else if (g->type == IR_PTR) {
-            RIG_ASSERT(g->initial == 0);
-            init = LLVMConstNull(llvm_type(c, IR_PTR));
-        } else if (ir_is_float(g->type)) {
-            init = float_constant(c, g->type, g->initial);
-        } else {
-            init = LLVMConstInt(memory_type(c, g->type), g->initial, 0);
-        }
-        LLVMSetInitializer(globals[i], init);
     }
     // Each Rig global a debugger can show: a DIGlobalVariable of its type,
     // named as in the source (LLVM may have renamed the symbol, as it does a
@@ -1679,6 +1699,25 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
         }
         mark_extensions(b, p, functions[i], false);
         mark_result_pointer(b, p, functions[i], false);
+    }
+    for (s64 i = 0; i < m->globals.count; i++) {
+        Ir_Global *g = &m->globals[i];
+        LLVMValueRef init = nullptr;
+        if (g->type == IR_VOID && !g->is_variable) {
+            // The bytes already end with their zero, so LLVM mustn't add
+            // another.
+            init = LLVMConstStringInContext2(c, (const char *)g->bytes.data, (size_t)g->bytes.count, 1);
+        } else if (g->type == IR_VOID) {
+            byte_global(c, a, m, g, globals, functions, &init);
+        } else if (g->type == IR_PTR) {
+            RIG_ASSERT(g->initial == 0);
+            init = LLVMConstNull(llvm_type(c, IR_PTR));
+        } else if (ir_is_float(g->type)) {
+            init = float_constant(c, g->type, g->initial);
+        } else {
+            init = LLVMConstInt(memory_type(c, g->type), g->initial, 0);
+        }
+        LLVMSetInitializer(globals[i], init);
     }
     for (s64 i = 0; i < m->procs.count; i++) {
         if (!m->procs[i]->is_foreign) build_body(b, a, m, m->procs[i], functions[i], functions, globals);

@@ -1,0 +1,3 @@
+tests/errors/constant_procedure_type.rig:6:7: error: 'add' is a '(int, int) -> int', so a constant can't name it as a '(int) -> int'
+    OP :: cast((int) -> int) cast(*void) add;
+          ^

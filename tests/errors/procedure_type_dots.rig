@@ -1,0 +1,5 @@
+// A procedure that takes more arguments with '..' can't be a value, so no
+// procedure type takes them.
+log : (format: *u8, ..) -> s32;
+
+main :: () { }

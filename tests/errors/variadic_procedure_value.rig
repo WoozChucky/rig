@@ -1,0 +1,8 @@
+// A foreign procedure taking more arguments with '..' can only be called:
+// no procedure type says it takes them.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+main :: () {
+    p := printf;
+    printf("fine\n");
+}

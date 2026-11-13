@@ -1,0 +1,9 @@
+tests/errors/procedure_cast.rig:6:15: error: can't cast '(int) -> int' to '(s32) -> s32'; a procedure value casts only to and from *void
+        as_s32 := cast((s32) -> s32) neg;
+                  ^
+tests/errors/procedure_cast.rig:7:14: error: can't cast '(int) -> int' to '*u8'; a procedure value casts only to and from *void
+        bytes := cast(*u8) neg;
+                 ^
+tests/errors/procedure_cast.rig:8:15: error: can't cast '(int) -> int' to 'int'; a procedure value casts only to and from *void
+        number := cast(int) neg;
+                  ^
