@@ -2,9 +2,10 @@
 // a program run by the IR interpreter (interp.h) instead of being compiled.
 // bin/run-tests runs every tests/run program this way too, and holds it to
 // the same .out, .err and .exit as the compiled program: the interpreter
-// must give the same results. It lives in bin/unit-tests because the runner
-// has no compiler in it, and it is a process of its own because a program's
-// exit really exits.
+// must give the same results (but for one with a NAME.interp.err, which the
+// interpreter refuses: runner.cpp). It lives in bin/unit-tests because the
+// runner has no compiler in it, and it is a process of its own because a
+// program's exit really exits.
 //
 // It reads, lexes, parses, checks and lowers FILE as rig build does, without
 // the bounds checks of a[i] with --no-bounds-checks; a program with errors

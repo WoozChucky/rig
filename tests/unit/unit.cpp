@@ -252,8 +252,8 @@ static void run_tests(void *data) {
     }
 }
 
-// --interpret's command line, and its exit status: interpret_mode.cpp, at
-// the end, runs on the thread os_run_on_stack starts.
+// --interpret's command line, and its exit status: interpret_mode.cpp,
+// after main, runs on the thread os_run_on_stack starts.
 struct Interpret_Mode {
     int argc;
     char **argv;
@@ -295,6 +295,9 @@ int main(int argc, char **argv) {
     return run.failed ? 1 : 0;
 }
 
+// The --interpret mode.
+#include "interpret_mode.cpp"
+
 // The test files.
 #include "test_harness.cpp"
 #include "test_base.cpp"
@@ -313,6 +316,3 @@ int main(int argc, char **argv) {
 #include "test_grammar.cpp"
 #include "test_version.cpp"
 #include "test_interp.cpp"
-
-// The --interpret mode.
-#include "interpret_mode.cpp"

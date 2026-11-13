@@ -109,10 +109,10 @@
 //
 // Every program, rig included, gets TIMEOUT seconds, an interpreted one
 // INTERPRETED_TIMEOUT; one that takes longer is killed and its test fails,
-// so a hang can't stall the run. (On Linux
-// that puts each program in a process group of its own, which Ctrl-C in
-// the terminal doesn't reach: stopping the runner leaves the program it was
-// running to end by itself.)
+// so a hang can't stall the run. (On Linux that puts each program in a
+// process group of its own, which Ctrl-C in the terminal doesn't reach:
+// stopping the runner leaves the program it was running to end by
+// itself.)
 //
 // On Windows the C runtime writes "\r\n" for "\n" on text-mode stdout and
 // stderr, rig's own and the programs', so the runner reads "\r\n" as "\n"
@@ -138,7 +138,8 @@ static const char *EXE = "";
 static const char *OBJ = ".o";
 #endif
 
-// Seconds any one program may take. Each takes well under one.
+// Seconds any one program may take, but an interpreted one
+// (INTERPRETED_TIMEOUT). Each takes well under one.
 static const s32 TIMEOUT = 60;
 
 // Seconds a program of tests/run may take interpreted. An interpreted
@@ -263,9 +264,9 @@ static Array<String> build_command(Arena *a, String rig, const char *dir, String
     return argv;
 }
 
-// The words of tests/run/NAME.flags, added to rig build's command line:
-// split at spaces, tabs and line breaks (a \r\n's \r too). No file, no
-// words.
+// The words of tests/run/NAME.flags, added to a command line: rig build's,
+// or bin/unit-tests --interpret's for the interpreted pass. Split at spaces,
+// tabs and line breaks (a \r\n's \r too). No file, no words.
 static void add_flags(Arena *a, Array<String> *argv, String name) {
     String text = {};
     if (!os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".flags", STR_ARG(name)), &text)) return;
