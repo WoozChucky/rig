@@ -1,12 +1,12 @@
 // thunk.cpp: the call thunks (see thunk.h).
 //
-// Every name here is Thunk_ or starts with thunk_, but the assembly's
+// Every name here starts with Thunk_ or thunk_, but the assembly's
 // rig_thunk_call: in the unity build, the files around this one have
 // static names of their own that would collide.
 //
 // rig_thunk_call is written in assembly, as a file-scope asm statement: the
-// compiler copies its text into the object file as it is, so no build
-// script changes. It isn't a naked C++ function, since clang gives a naked
+// compiler passes its text to its assembler as it is, into the same object
+// file, so no build script changes. It isn't a naked C++ function, since clang gives a naked
 // function no Windows unwind information, and a debugger or a crash report
 // walking the stack through the thunk needs it. So each thunk declares its
 // own: .seh_* directives on Windows, .cfi_* on Linux, saying where it saved
@@ -26,10 +26,15 @@
 //   4. on Windows, leave the 32 bytes of shadow space below them;
 //   5. load the argument registers, call, and store rax and xmm0;
 //   6. restore the stack pointer from rbp, and rbx and rbp from the stack.
-// They differ in step 1's order, as each one's unwind information asks:
-// Windows pushes both and then sets rbp, so rbp is the stack pointer to
-// restore; SysV sets rbp between the two pushes, so the stack pointer to
-// restore is rbp - 8, where rbx was saved.
+// They differ in step 1's order. Windows' unwind codes ask for the frame
+// register to be set after the pushes, so the unwinder can find them from
+// it: Windows pushes both and then sets rbp, so rbp is the stack pointer to
+// restore. SysV's call frame information could describe either order, and
+// it uses the usual frame-pointer chain: it sets rbp between the two
+// pushes, so rbp points at the caller's saved rbp with the return address
+// above it, and a tool that walks the stack by frame pointers, not by the
+// call frame information, steps through the thunk too. The stack pointer
+// to restore is then rbp - 8, where rbx was saved.
 //
 // The 16-alignment: the call that entered the thunk pushed its return
 // address, so rsp was 8 past a multiple of 16 on entry, and the two saves
@@ -151,9 +156,8 @@ rig_thunk_call:
     movq 32(%rbx), %rcx
     movq 40(%rbx), %r8
     movq 48(%rbx), %r9
-    movq (%rbx), %r11             # r11: target (scratch, no argument's register)
     movq 136(%rbx), %rax          # al: how many xmm registers hold arguments, for a variadic callee
-    callq *%r11                   # call target
+    callq *(%rbx)                 # call target
     movq %rax, 144(%rbx)          # rax: an integer or pointer result
     movq %xmm0, 152(%rbx)         # xmm0: a float result
     leaq -8(%rbp), %rsp           # drop the stack arguments and the padding, back to the saved rbx
@@ -164,9 +168,11 @@ rig_thunk_call:
     .cfi_endproc
     .size rig_thunk_call, .-rig_thunk_call
 
-    # The code needs no executable stack. The compiler says so for its own
-    # code in this object file; an assembly file would have to, and this says
-    # it for the thunk too.
+    # The code needs no executable stack. The linker makes the stack
+    # executable when an object file lacks a .note.GNU-stack section. clang
+    # emits one for every object file it compiles, this thunk's included;
+    # the thunk says it as well, as an assembly file must, so it stays
+    # right if it is ever moved into one.
     .pushsection .note.GNU-stack, "", @progbits
     .popsection
 )asm");
