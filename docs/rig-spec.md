@@ -158,7 +158,7 @@ A directive is `#` followed immediately by a name, made of letters, digits and `
 - `#c_call`, which makes a procedure one that C can call, and marks a procedure type as such a procedure's (sections 3.15, 7.6);
 - `#load`, which makes another file part of the program (section 2.13).
 
-The first three appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` is a top-level declaration of its own, and anywhere else, after a signature included, it is `#load can only be at the top level`. Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
+The first three appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` is a top-level declaration of its own, and anywhere else, after a signature on its line included, it is `#load can only be at the top level` (section 2.13). Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
 
 ### 2.8 Integer literals
 
@@ -237,26 +237,33 @@ LoadDecl = "#load" string_lit ";" .
 A program is the file given to `rig build` or `rig check` (section 10.1), its **main file**, and every file it loads. `#load "PATH";` makes the file at `PATH` part of the program: its top-level declarations join the program's one top level, as if they were written in the file that loads it (section 4.6). So each file may use what the others declare, in both directions and in any order, as declarations in one file do. A loaded file's own `#load`s are followed in turn, so the program is every file reached from the main file.
 
 ```rig file=shapes.rig
+#load "print.rig";
+
 Square :: struct { side: int; }
 
 area :: (s: Square) -> int { return s.side * s.side; }
 
-// print_int is declared in the file that loads this one.
+// print_int is declared in print.rig, and newline in the file that loads
+// this one.
 show :: (s: Square) {
     print_int(area(s));
-    putchar(10);
+    newline();
 }
 ```
 
-```rig
-#load "shapes.rig";
-
+```rig file=print.rig
 putchar :: (c: s32) -> s32 #foreign libc;
 
 print_int :: (n: int) {
     if n >= 10 { print_int(n / 10); }
     putchar(cast(s32) (n % 10) + 48);
 }
+```
+
+```rig
+#load "shapes.rig";
+
+newline :: () { putchar(10); }
 
 main :: () {
     show(Square.{7});
@@ -269,13 +276,13 @@ The program prints:
 49
 ```
 
-The main file, `example.rig`, uses `Square` and `show` from `shapes.rig`, and `shapes.rig` uses `print_int` and `putchar` from the main file.
+The main file, `example.rig`, uses `Square` and `show` from `shapes.rig`, and `putchar` from `print.rig`, which `shapes.rig` loads; `shapes.rig` uses `print_int` from `print.rig` and `newline` from the main file. The load order (below) is `example.rig`, `shapes.rig`, `print.rig`.
 
 - `PATH` is a string literal (section 2.10), its escapes decoded. Unless it is absolute (on Linux, starting with `/`; on Windows, starting with a drive, `C:`, or a separator), it is relative to the directory of the file holding the `#load`: `src/main.rig`'s `#load "world/map.rig";` loads `src/world/map.rig`. `/` separates directories on both systems, and so does `\` on Windows; on Linux `\` is a character of a name like any other.
-- The file must be named as a source file is, ending in `.rig` (section 2.1): otherwise `'PATH' isn't a .rig file`, and it isn't read. A file that can't be read is `cannot read 'PATH': MESSAGE`, with the system's reason, at its first `#load` in load order alone: its later `#load`s, however they write its path, add nothing. An empty path is `a #load path can't be empty`, and a path holding a zero byte (`\0`) is `a #load path can't contain a zero byte`, since the system's paths end at one. Each of these is reported at the `#load`'s string, and `PATH` in it names the file as diagnostics do (section 9.1). A `#load` followed by anything but a string is `expected a string after #load, as in #load "other.rig";`.
+- The file must be named as a source file is, ending in `.rig` (section 2.1): otherwise `'PATH' isn't a .rig file`, and it isn't read. A file that can't be read is `cannot read 'PATH': MESSAGE`, with the system's reason, at its first `#load` in load order alone: its later `#load`s add nothing where they write its path differently only by `.`, `..`, doubled separators or, on Windows, case. A file that can't be read has no identity but its path, so one reached through a link, under another name, is reported again. An empty path is `a #load path can't be empty`, and a path holding a zero byte (`\0`) is `a #load path can't contain a zero byte`, since the system's paths end at one. Each of these is reported at the `#load`'s string, and `PATH` in it names the file as diagnostics do (section 9.1). A `#load` followed by anything but a string is `expected a string after #load, as in #load "other.rig";`.
 - Each file is loaded once, however its path is written: `b.rig`, `./b.rig` and `sub/../b.rig` are the same file, and so are a link to it and, on Windows, `B.RIG`. A `#load` of a file already loaded, the main file included, loads nothing more, so files may load each other, in a cycle or not, without error.
 - The program's files are in **load order**: the main file first, then each file in the order its first `#load` is met, the files being read in that same order. When `main.rig` loads `b.rig` and then `c.rig`, and `b.rig` loads `d.rig`, the order is `main.rig`, `b.rig`, `c.rig`, `d.rig`. Diagnostics are sorted file by file in it (section 9.1).
-- `#load` is a top-level declaration: anywhere else, in a body, a struct or an expression, it is `#load can only be at the top level`, at its `#`, and it loads no file.
+- `#load` is a top-level declaration: anywhere else, in a body, a struct or an expression, it is `#load can only be at the top level`, at its `#`, and it loads no file. A `#load` that starts a line right after a top-level declaration left unfinished (a signature with no body, `N ::` with no value, a body or a struct never closed) is the next top-level declaration instead: the unfinished one is given up there (section 9.2), reported for what it lacks (`expected '{'`, `expected '}'`), and the file is loaded.
 
 A `#load` fails when it has one of the errors above, has no string, or isn't at the top level, and it then leaves the program without the file it names. The names that file might have declared are then not reported as unknown: while a `#load` has failed, no name anywhere in the program is `unknown identifier` or `unknown type`, nor is `main` reported as missing, so one mistake gives one message (section 9.2).
 
