@@ -1445,7 +1445,7 @@ rig version
 
 **`rig check`** reads and checks the program as `rig build` does, prints the same diagnostics, and stops: it writes no file. With `--stdin` it reads the program from standard input, and `FILE.rig` is only the name its diagnostics give it (the file need not exist), which lets an editor check text that is not saved.
 
-**`rig version`** prints the compiler's version and the version of the LLVM it is built with: `rig 0.1.0 (LLVM 23.1.4)`.
+**`rig version`** prints the compiler's version and the version of the LLVM it is built with: `rig 0.1.0 (LLVM 23.1.5)`.
 
 Both `build` and `check` take only a source file whose name ends in `.rig`, in any case: `rig: error: 'hello.txt' isn't a .rig file`. A file that cannot be read is `rig: error: cannot read 'hello.rig': MESSAGE`, with the system's reason (`rig: error: cannot read standard input: MESSAGE` with `--stdin`).
 
@@ -1530,7 +1530,7 @@ When a tool is missing, or the linker fails, the compiler prints the reason or t
 
 The debug information holds:
 
-- **A compile unit** for the source file, named by its absolute path (made from the path given to `rig build` and the directory the compiler ran in), with that directory and the MD5 checksum of the file's bytes, so a debugger finds the file and can tell when it has changed. The unit's language is C (C99), whose expression syntax a debugger then uses (`a.count`, `a[i]`; Rig's `p.*` is C's `*p`), and its producer is `rig 0.1.0 (clang version 23.1.4)`.
+- **A compile unit** for the source file, named by its absolute path (made from the path given to `rig build` and the directory the compiler ran in), with that directory and the MD5 checksum of the file's bytes, so a debugger finds the file and can tell when it has changed. The unit's language is C (C99), whose expression syntax a debugger then uses (`a.count`, `a[i]`; Rig's `p.*` is C's `*p`), and its producer is `rig 0.1.0 (clang version 23.1.5)`.
 - **A subprogram for each procedure with a body**, by its Rig name, with its line and the line its body starts on, so `break main` or `break sort` stops at the procedure and a backtrace names each frame. The internal procedures of section 10.5 have none, and a debugger steps over them.
 - **Lexical blocks** following the program's scopes (section 4.7): each `if`, `else` and standalone block, and each loop's body, which starts at its `for` or `while`.
 - **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}`, a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
