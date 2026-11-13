@@ -2995,6 +2995,79 @@ TEST(a_declaration_that_hides_a_name_starts_a_scope) {
     arena_free(&a);
 }
 
+TEST(hiding_declarations_nest_and_a_loop_body_has_them_too) {
+    // Several declarations that hide a variable in one block: each starts a
+    // scope inside the one before, from its own declaration to the block's
+    // end. One in a for's body starts inside the loop's scope, and lasts to
+    // the body's end; the loop's step, after the body, is in the loop's
+    // scope again, and so is the next iteration's test, which comes before
+    // the declaration.
+    Arena a = arena_make();
+    String f = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                       "g := 5;\n"
+                                                       "f :: (n: int, a: []int) -> int {\n"
+                                                       "    x := 1;\n"
+                                                       "    {\n"
+                                                       "        n := x;\n"
+                                                       "        g := n + 1;\n"
+                                                       "        x := g;\n"
+                                                       "    }\n"
+                                                       "    for a {\n"
+                                                       "        x := it + n;\n"
+                                                       "        x += 1;\n"
+                                                       "    }\n"
+                                                       "    return x;\n"
+                                                       "}\n"
+                                                       "main :: () { }\n")),
+                       "f");
+    CHECK(contains(f, "  ; scope 1 in 0 at 4:5\n"
+                      "  ; scope 2 in 1 at 5:9\n"
+                      "  ; scope 3 in 2 at 6:9\n"
+                      "  ; scope 4 in 3 at 7:9\n"
+                      "  ; scope 5 in 0 at 9:5\n"
+                      "  ; scope 6 in 5 at 10:9\n"
+                      "  ; var n int slot %2 arg 1 in 0 at 2:7\n"
+                      "  ; var a []int address %1 arg 2 in 0 at 2:15\n"
+                      "  ; var x int slot %3 in 0 at 3:5\n"
+                      "  ; var n int slot %5 in 2 at 5:9\n"
+                      "  ; var g int slot %7 in 3 at 6:9\n"
+                      "  ; var x int slot %11 in 4 at 7:9\n"
+                      "  ; var it int slot %22 in 5 at 9:5\n"
+                      "  ; var it_index int slot %23 in 5 at 9:5\n"
+                      "  ; var x int slot %31 in 6 at 10:9\n"));
+    // In the block: each initializer in the scope the declaration before
+    // it started, each store in its own.
+    CHECK(contains(f, "  %5 = local i64  ; 5:9 s1\n"
+                      "  %6 = load i64 %3  ; 5:9 s1\n"
+                      "  store i64 %6, %5  ; 5:9 s2\n"
+                      "  %7 = local i64  ; 6:9 s2\n"
+                      "  %8 = load i64 %5  ; 6:9 s2\n"));
+    CHECK(contains(f, "  store i64 %10, %7  ; 6:9 s3\n"
+                      "  %11 = local i64  ; 7:9 s3\n"
+                      "  %12 = load i64 %7  ; 7:9 s3\n"
+                      "  store i64 %12, %11  ; 7:9 s4\n"));
+    // In the loop's body: the iterator's store and x's initializer in the
+    // loop's scope, the store and the statement after it in x's, the jump
+    // to the step and the step in the loop's.
+    CHECK(contains(f, "  store i64 %30, %22  ; 9:5 s5\n"
+                      "  %31 = local i64  ; 10:9 s5\n"
+                      "  %32 = load i64 %22  ; 10:9 s5\n"
+                      "  %33 = load i64 %2  ; 10:9 s5\n"
+                      "  %34 = add i64 %32, %33  ; 10:9 s5\n"
+                      "  store i64 %34, %31  ; 10:9 s6\n"
+                      "  %35 = load i64 %31  ; 11:9 s6\n"));
+    CHECK(contains(f, "  store i64 %37, %31  ; 11:9 s6\n"
+                      "  jump b5  ; 9:5 s5\n"
+                      "b5:\n"
+                      "  %38 = load i64 %23  ; 9:5 s5\n"));
+    CHECK(contains(f, "b3:\n"
+                      "  %25 = load i64 %23  ; 9:5 s5\n"));
+    // After the loop, the outer x in the body's scope.
+    CHECK(contains(f, "  %41 = load i64 %3  ; 13:5 s0\n"
+                      "  ret %41  ; 13:5 s0\n"));
+    arena_free(&a);
+}
+
 TEST(jumps_out_of_an_if_are_at_its_braces) {
     // The jump from the end of an if's block to the code after the if is
     // at that block's '}', as clang places it: at the `if` it would be a
