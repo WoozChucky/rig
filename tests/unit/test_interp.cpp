@@ -14,6 +14,9 @@
 
 #include <math.h>  // copysignf and ldexp, for thunk_float_results
 #include <time.h>  // time, for interp_recursion_to_the_limit
+#ifdef _WIN32
+#include <process.h>  // _getpid, for interp_calls_a_windows_function
+#endif
 #ifndef _WIN32
 #include <execinfo.h>  // backtrace, for thunk_unwinds_through_the_thunk
 #include <unwind.h>    // _Unwind_Backtrace, for thunk_unwinds_the_callers_registers
@@ -64,6 +67,23 @@ static u64 interp_test_value(Arena *a, Ir_Module *m, const char *name) {
     interp_test_free(&r);
     interp_free(in);
     return value;
+}
+
+// Runs m's procedure `name`, which takes no arguments, and checks that it
+// fails with `message`, its one frame `name` itself at line:col.
+static void interp_test_fails_at(Interp *in, Ir_Module *m, const char *name, Arena *a, const char *message,
+                                 s32 line, s32 col) {
+    Interp_Result r = {};
+    interp_run(in, interp_test_proc(m, name), {}, a, &r);
+    CHECK(!r.ok);
+    CHECK_STR(r.message, message);
+    CHECK_EQ(r.frames.count, 1);
+    if (r.frames.count == 1) {
+        CHECK_STR(r.frames[0].proc, name);
+        CHECK_EQ(r.frames[0].pos.line, line);
+        CHECK_EQ(r.frames[0].pos.col, col);
+    }
+    interp_test_free(&r);
 }
 
 TEST(interp_returns_a_constant) {
@@ -914,7 +934,10 @@ TEST(interp_call_of_an_address_that_isnt_a_procedure) {
     // A call through an address in the range procedures' values come from,
     // but no Rig procedure's: between two, one past the module's last, or
     // a foreign procedure's place, which stands for nothing. The run fails
-    // at the call; through a procedure's own address, it runs.
+    // at the call; through a procedure's own address, it runs. A null
+    // address, outside the range, isn't C's either: the call fails as the
+    // compiled program's check does (lowering makes that check before every
+    // indirect call, so only IR made by hand gets here).
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
     Ir_Proc *answer = new_proc_returning(m, &a, "answer", IR_I64);
@@ -955,6 +978,17 @@ TEST(interp_call_of_an_address_that_isnt_a_procedure) {
         }
         interp_test_free(&r);
     }
+    args[0] = 0;
+    interp_run(in, interp_test_proc(m, "caller"), args, &a, &r);
+    CHECK(!r.ok);
+    CHECK_STR(r.message, "null procedure call");
+    CHECK_EQ(r.frames.count, 1);
+    if (r.frames.count == 1) {
+        CHECK_STR(r.frames[0].proc, "caller");
+        CHECK_EQ(r.frames[0].pos.line, 3);
+        CHECK_EQ(r.frames[0].pos.col, 9);
+    }
+    interp_test_free(&r);
     array_free(&args);
     interp_free(in);
     arena_free(&a);
@@ -1056,7 +1090,11 @@ TEST(interp_c_functions_by_hand) {
     // procaddr, the call), the procedure there its frame. Run directly, it
     // fails before it starts, with no frames. One the library has runs
     // directly too, given its arguments as its parameters type them:
-    // strlen, called with a string.
+    // strlen, called with a string, and refused, with no frames, a Rig
+    // procedure's value. C gives one result at most: a call, or a direct
+    // run, that expects two gets 0 for the second. dirty runs first and
+    // leaves its values on the stack where pair's frame goes, so a result
+    // left unwritten would show.
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
     s32 nope = (s32)m->procs.count;
@@ -1065,6 +1103,12 @@ TEST(interp_c_functions_by_hand) {
     Ir_Proc *p = ir_new_proc(m, &a, str("strlen"));
     p->is_foreign = true;
     ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    array_add(&p->results, {IR_I64, IR_EXT_NONE});
+    s32 strlen_twice = (s32)m->procs.count;
+    p = ir_new_proc(m, &a, str("strlen"));
+    p->is_foreign = true;
+    ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    array_add(&p->results, {IR_I64, IR_EXT_NONE});
     array_add(&p->results, {IR_I64, IR_EXT_NONE});
 
     p = new_proc_returning(m, &a, "value", IR_PTR);
@@ -1081,25 +1125,34 @@ TEST(interp_c_functions_by_hand) {
     ir_emit_call(m, p, b, nope, {})->pos = {0, 4, 9};
     emit_ret(p, b, -1);
 
-    struct Expected {
-        const char *proc;
-        s32 line, col;
-    };
-    static const Expected expected[] = {{"value", 2, 5}, {"direct", 4, 9}};
+    p = new_proc_returning(m, &a, "dirty", IR_I64);
+    b = ir_new_block(&a, p);
+    s32 last = -1;
+    for (s32 i = 0; i < 8; i++) last = emit_const(p, b, IR_I64, 0x5A5A);
+    emit_ret(p, b, last);
+
+    // pair: strlen called through its value as (s: *u8) -> u64, u64.
+    Ir_Proc *two_results = arena_new<Ir_Proc>(&a);
+    ir_add_param(two_results, IR_PTR, IR_EXT_NONE);
+    array_add(&two_results->results, {IR_I64, IR_EXT_NONE});
+    array_add(&two_results->results, {IR_I64, IR_EXT_NONE});
+    p = new_proc_returning(m, &a, "pair", IR_I64);
+    array_add(&p->results, {IR_I64, IR_EXT_NONE});
+    s32 text = ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    b = ir_new_block(&a, p);
+    address = ir_emit(p, b, IR_PROC_ADDR, IR_PTR);
+    address->target = strlen_proc;
+    Array<s32> call_args = {};
+    array_add(&call_args, text);
+    s32 first = ir_emit_call_indirect(p, b, address->result, two_results, call_args)->result;
+    Ir_Instr *ret = ir_emit(p, b, IR_RET, IR_VOID);
+    array_add(&ret->args, first);
+    array_add(&ret->args, first + 1);
+
     Interp *in = interp_new(m);
+    interp_test_fails_at(in, m, "value", &a, INTERP_TEST_NOPE, 2, 5);
+    interp_test_fails_at(in, m, "direct", &a, INTERP_TEST_NOPE, 4, 9);
     Interp_Result r = {};
-    for (const Expected &e : expected) {
-        interp_run(in, interp_test_proc(m, e.proc), {}, &a, &r);
-        CHECK(!r.ok);
-        CHECK_STR(r.message, INTERP_TEST_NOPE);
-        CHECK_EQ(r.frames.count, 1);
-        if (r.frames.count == 1) {
-            CHECK_STR(r.frames[0].proc, e.proc);
-            CHECK_EQ(r.frames[0].pos.line, e.line);
-            CHECK_EQ(r.frames[0].pos.col, e.col);
-        }
-        interp_test_free(&r);
-    }
     interp_run(in, nope, {}, &a, &r);
     CHECK(!r.ok);
     CHECK_STR(r.message, INTERP_TEST_NOPE);
@@ -1112,6 +1165,32 @@ TEST(interp_c_functions_by_hand) {
     CHECK_EQ(r.results.count, 1);
     if (r.results.count == 1) CHECK_EQ(r.results[0], 5);
     interp_test_free(&r);
+    interp_run(in, strlen_twice, args, &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 2);
+    if (r.results.count == 2) {
+        CHECK_EQ(r.results[0], 5);
+        CHECK_EQ(r.results[1], 0);
+    }
+    interp_test_free(&r);
+    interp_test_run(in, m, "dirty", &a, &r);
+    CHECK(r.ok);
+    interp_test_free(&r);
+    interp_run(in, interp_test_proc(m, "pair"), args, &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 2);
+    if (r.results.count == 2) {
+        CHECK_EQ(r.results[0], 5);
+        CHECK_EQ(r.results[1], 0);
+    }
+    interp_test_free(&r);
+    args[0] = interp_proc_address(in, interp_test_proc(m, "value"));
+    interp_run(in, strlen_proc, args, &a, &r);
+    CHECK(!r.ok);
+    CHECK_STR(r.message, "a Rig procedure can't be passed to C at compile time, for now");
+    CHECK_EQ(r.frames.count, 0);
+    interp_test_free(&r);
+    array_free(&call_args);
     array_free(&args);
     interp_free(in);
     arena_free(&a);
@@ -2149,33 +2228,18 @@ static void *interp_test_c_function(const char *name) {
     return f ? f : os_find_c_function(str(name));
 }
 
-// Runs m's procedure `name`, which takes no arguments, and checks that it
-// fails with `message`, its one frame `name` itself at line:col.
-static void interp_test_fails_at(Interp *in, Ir_Module *m, const char *name, Arena *a, const char *message,
-                                 s32 line, s32 col) {
-    Interp_Result r = {};
-    interp_run(in, interp_test_proc(m, name), {}, a, &r);
-    CHECK(!r.ok);
-    CHECK_STR(r.message, message);
-    CHECK_EQ(r.frames.count, 1);
-    if (r.frames.count == 1) {
-        CHECK_STR(r.frames[0].proc, name);
-        CHECK_EQ(r.frames[0].pos.line, line);
-        CHECK_EQ(r.frames[0].pos.col, col);
-    }
-    interp_test_free(&r);
-}
-
 TEST(interp_calls_c) {
     // C's functions, called as a program calls them:
-    // - snprintf, given 13 values of each kind lowering promotes (an s32,
-    //   an int, a u8 made an s32, a float32 made a float64, float64s), 4
-    //   integers and 9 floats past every integer and float register of
-    //   either convention, into a local buffer, which strlen measures and
-    //   the global `written` keeps;
+    // - snprintf, given 13 variadic values, at least one of each kind
+    //   lowering promotes (an s32, an int, a u8 made an s32, a float32
+    //   made a float64, float64s), 4 integers and 9 floats past every
+    //   integer and float register of either convention, into a local
+    //   buffer, which strlen measures and the global `written` keeps;
     // - malloc's memory, which memset sets and free frees;
     // - float32 arguments and results, a float32 beside an s32, and a
-    //   float64 result.
+    //   float64 result. copysignf and scalbnf are <math.h>'s, but glibc's
+    //   libc exports them too (unlike sqrt, which only libm has), so they
+    //   work on Linux, interpreted and compiled alike.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "snprintf :: (buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;\n"
@@ -2245,6 +2309,36 @@ TEST(interp_calls_c) {
     arena_free(&a);
 }
 
+TEST(interp_calls_c_with_narrow_types) {
+    // A C function's narrow result and argument, typed by the foreign
+    // procedure's declaration:
+    // - atoi declared to return an s8: the result is the low byte of the
+    //   int C leaves in eax, as the compiled program reads al, so "511"
+    //   (0x1FF) is -1;
+    // - abs given an s8: on Linux the caller sign-extends it to 32 bits
+    //   (spec 10.4), so -5 reaches abs as an int -5. On Windows the callee
+    //   extends it, and abs, which takes an int, doesn't, so its result
+    //   isn't checked there.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "atoi :: (s: *u8) -> s8 #foreign libc;\n"
+                                "abs :: (x: s8) -> s32 #foreign libc;\n"
+                                "narrow_result :: () -> s8 { return atoi(\"511\"); }\n"
+                                "narrow_argument :: () -> s32 {\n"
+                                "    x : s8 = -5;\n"
+                                "    return abs(x);\n"
+                                "}\n"
+                                "main :: () { }\n");
+    CHECK_EQ(interp_test_value(&a, m, "narrow_result"), 0xFF);
+    u64 absolute = interp_test_value(&a, m, "narrow_argument");
+#ifdef _WIN32
+    (void)absolute;
+#else
+    CHECK_EQ(absolute, 5);
+#endif
+    arena_free(&a);
+}
+
 TEST(interp_calls_c_through_a_value) {
     // A C function's value is its native address, the one the interpreter
     // looks up by name, and a call through it goes to C.
@@ -2302,7 +2396,10 @@ TEST(interp_refuses_a_rig_procedure_to_c) {
     // C can't call a Rig procedure at compile time, so a C call given one is
     // refused before C runs, at the call (its statement's first token):
     // given to qsort as its comparison, to free as a *void, to printf as a
-    // variadic argument, and to free through a value of its own.
+    // variadic argument, and to free through a value of its own. Only
+    // pointers are looked at, as an integer may lie in the range by
+    // chance: a procedure's value cast to an s64 reaches C, here llabs,
+    // which gives back the address standing for it.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "qsort :: (base: *void, count: u64, size: u64,\n"
@@ -2324,6 +2421,10 @@ TEST(interp_refuses_a_rig_procedure_to_c) {
                                 "    release : (p: *void) #c_call = free;\n"
                                 "    release(cast(*void) compare);\n"
                                 "}\n"
+                                "llabs :: (x: s64) -> s64 #foreign libc;\n"
+                                "as_integer :: () -> s64 {\n"
+                                "    return llabs(cast(s64) cast(*void) compare);\n"
+                                "}\n"
                                 "main :: () { }\n");
     static const char *refused = "a Rig procedure can't be passed to C at compile time, for now";
     Interp *in = interp_new(m);
@@ -2331,6 +2432,12 @@ TEST(interp_refuses_a_rig_procedure_to_c) {
     interp_test_fails_at(in, m, "as_pointer", &a, refused, 11, 5);
     interp_test_fails_at(in, m, "as_variadic", &a, refused, 14, 5);
     interp_test_fails_at(in, m, "through_a_value", &a, refused, 18, 5);
+    Interp_Result r = {};
+    interp_test_run(in, m, "as_integer", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK(r.results[0] == interp_proc_address(in, interp_test_proc(m, "compare")));
+    interp_test_free(&r);
     interp_free(in);
     arena_free(&a);
 }
@@ -2360,9 +2467,10 @@ TEST(interp_finds_c_functions_by_name) {
     // library's from the compiler's own table, which has no
     // aligned_alloc (UCRT has none) and no function of Windows'; those
     // from kernel32.dll, and the C runtime's extras from ucrtbase.dll.
-    // Linux: no table, everything from libc, and libm's functions not at
-    // all, as a program links libc alone (spec 10.6). Neither finds a name
-    // nothing has.
+    // Linux: everything from libc but atexit and at_quick_exit, which
+    // libc.so.6 doesn't export, the compiler's own from its table; and
+    // libm-only functions (sqrt) not at all, as a program links libc alone
+    // (spec 10.6). Neither finds a name nothing has.
 #ifdef _WIN32
     CHECK(interp_c_library_function(str("strlen")) == (void *)&strlen);
     CHECK(interp_c_library_function(str("sqrt")) != nullptr);
@@ -2373,6 +2481,8 @@ TEST(interp_finds_c_functions_by_name) {
 #else
     CHECK(interp_c_library_function(str("printf")) == nullptr);
     CHECK(os_find_c_function(str("printf")) != nullptr);
+    CHECK(interp_test_c_function("atexit") == (void *)&atexit);
+    CHECK(interp_test_c_function("at_quick_exit") == (void *)&at_quick_exit);
     CHECK(os_find_c_function(str("sqrt")) == nullptr);
 #endif
     CHECK(interp_test_c_function("nope_not_a_function") == nullptr);
@@ -2384,5 +2494,17 @@ TEST(interp_windows_uses_the_compilers_own_printf) {
     // interpreted code calls is the compiler's own, writing into the same
     // stdout buffer, not a second C runtime's.
     CHECK(interp_c_library_function(str("printf")) == (void *)&printf);
+}
+
+TEST(interp_calls_a_windows_function) {
+    // A function the compiler's table doesn't have, found in kernel32.dll
+    // and called from interpreted code.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "GetCurrentProcessId :: () -> u32 #foreign libc;\n"
+                                "pid :: () -> u32 { return GetCurrentProcessId(); }\n"
+                                "main :: () { }\n");
+    CHECK_EQ(interp_test_value(&a, m, "pid"), (u64)_getpid());
+    arena_free(&a);
 }
 #endif
