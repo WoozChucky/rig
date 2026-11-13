@@ -4,10 +4,10 @@
 // and returns one through a hidden pointer (spec 10.4), and the debug
 // information says so, alike on both systems: a parameter p of a struct is
 // a pointer to it (p->a, *p), and a procedure returning a struct takes a
-// pointer to where it goes first, a parameter named result$, and returns
-// nothing. So a debugger calls one as the program does, given the
-// addresses (gdb's sum(&q) and make(&q, 7), cdb's the same), and shows no
-// made-up value on leaving it. words's variables are named as C++'s
+// pointer to where it goes first, result$ (result$1, result$2 for pairs's
+// two), and returns nothing (split: its int). So a debugger calls one as
+// the program does, given the addresses (sum(&q), make(&q, 7)), and shows
+// no made-up value on leaving it. words's variables are named as C++'s
 // keywords, which a debugger reading C takes as names.
 Pair :: struct { a: int; b: int; }
 Small :: struct { a: s32; b: s32; }
@@ -50,10 +50,22 @@ main :: () {
     s := sum(q);
     d := twice(s);
     words();
+    x, y := pairs(2);
+    z, k := split(4);
 }
 
 words :: () {
     new := 1;
     this := 2;
     total := new + this;
+}
+
+pairs :: (n: int) -> Pair, Pair {
+    p := Pair.{n, n + 1};
+    return p, Pair.{n * 2, n * 3};
+}
+
+split :: (n: int) -> Pair, int {
+    p := Pair.{n, n + 1};
+    return p, n * 3;
 }
