@@ -34,7 +34,7 @@ const child_process = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { programPath, debugConfiguration } = require('./debug');
+const { programPath, debugConfiguration, launchConfiguration } = require('./debug');
 const { samePath, parseDiagnostics, characterOfByteColumn } = require('./diagnostics');
 
 const windows = process.platform === 'win32';
@@ -643,7 +643,8 @@ function errorWithAction(message, button, command, arg) {
 // launch instead, or undefined to launch nothing, after saying why.
 //
 // The configuration's own attributes are `file` (by default the active
-// editor's) and `args`, the program's command line.
+// editor's) and `args`, the program's command line; the others are kept
+// (launchConfiguration).
 const debugProvider = {
     async resolveDebugConfiguration(folder, config) {
         // Debugging runs rig and the program; VS Code has no debugging in
@@ -711,11 +712,11 @@ const debugProvider = {
             vscode.window.showErrorMessage('Rig: the build failed; see the terminal and the Problems panel.');
             return undefined;
         }
-        const resolved = debugConfiguration(process.platform, file, buildDirectory(file, buildIn), config.args || []);
-        // Run Without Debugging (Ctrl+F5) marks the configuration noDebug;
-        // the C/C++ extension's debuggers then just run the program.
-        if (config.noDebug) resolved.noDebug = true;
-        return resolved;
+        // With the configuration's other attributes (launchConfiguration):
+        // noDebug among them, which Run Without Debugging (Ctrl+F5) sets,
+        // and the C/C++ extension's debuggers then just run the program.
+        const generated = debugConfiguration(process.platform, file, buildDirectory(file, buildIn), config.args || []);
+        return launchConfiguration(config, generated);
     },
 };
 

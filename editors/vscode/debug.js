@@ -76,4 +76,18 @@ function debugConfiguration(platform, file, directory, args) {
     };
 }
 
-module.exports = { programPath, debugConfiguration };
+// The configuration to launch in place of `config`, the `rig` one VS Code
+// gave the extension, given the one debugConfiguration made: that one's
+// attributes over a copy of config's. The extension owns what it sets (the
+// type, the name, the program, its arguments and directory...); every other
+// attribute is VS Code's (preLaunchTask, postDebugTask, presentation,
+// internalConsoleOptions, noDebug for Run Without Debugging) or the C/C++
+// extension's (environment, stopAtEntry...), and is kept as it was given.
+// Only `file`, which is Rig's and the C/C++ extension doesn't know, goes.
+function launchConfiguration(config, generated) {
+    const launched = { ...config, ...generated };
+    delete launched.file;
+    return launched;
+}
+
+module.exports = { programPath, debugConfiguration, launchConfiguration };

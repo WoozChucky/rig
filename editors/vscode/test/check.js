@@ -495,6 +495,17 @@ check('programPath and debugConfiguration for linux', () => {
     });
 });
 
+// The configuration launched: debugConfiguration's attributes over the
+// given configuration's, which keeps the rest, all but its `file`; the
+// given one is left as it was.
+check('launchConfiguration keeps what the extension doesn\'t set', () => {
+    const { debugConfiguration, launchConfiguration } = debugModule();
+    const generated = debugConfiguration('linux', '/home/me/x.rig', '/home/me', ['a']);
+    const config = { type: 'rig', name: 'mine', file: 'x.rig', args: ['b'], preLaunchTask: 'p', noDebug: true };
+    assert.deepStrictEqual(launchConfiguration(config, generated), { ...generated, preLaunchTask: 'p', noDebug: true });
+    assert.deepStrictEqual(Object.keys(config), ['type', 'name', 'file', 'args', 'preLaunchTask', 'noDebug']);
+});
+
 // What a file passes to require().
 function requires(file) {
     return [...read(file).matchAll(/\brequire\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
@@ -1493,6 +1504,31 @@ check('noDebug is kept', async () => {
         const resolved = await provider.resolveDebugConfiguration(folder, { noDebug: true });
         assert.deepStrictEqual(stub.errors, []);
         assert.deepStrictEqual(resolved, Object.assign(debugConfiguration(process.platform, file, dir, []), { noDebug: true }));
+    });
+});
+
+// Issue #104: the attributes of a `rig` configuration that the extension
+// doesn't set itself are VS Code's (preLaunchTask, postDebugTask,
+// presentation, internalConsoleOptions...) or the C/C++ extension's
+// (environment, stopAtEntry...), and the configuration launched keeps
+// them. Those it sets are its own; `file`, Rig's, goes.
+check('a configuration\'s other attributes are kept', async () => {
+    const provider = debugProvider();
+    const { debugConfiguration } = debugModule();
+    await withDebugging(async (dir, folder, file) => {
+        const others = {
+            preLaunchTask: 'prepare',
+            postDebugTask: 'clean up',
+            presentation: { group: 'rig', order: 2 },
+            internalConsoleOptions: 'neverOpen',
+            environment: [{ name: 'X', value: '1' }],
+            stopAtEntry: true,
+        };
+        const config = { type: 'rig', request: 'launch', name: 'Debug sort', file: 'sort.rig', args: ['1'], ...others };
+        const resolved = await provider.resolveDebugConfiguration(folder, config);
+        assert.deepStrictEqual(stub.errors, []);
+        assert.deepStrictEqual(resolved, { ...others, ...debugConfiguration(process.platform, file, dir, ['1']) });
+        assert.strictEqual(config.file, 'sort.rig', 'the configuration given was changed');
     });
 });
 
