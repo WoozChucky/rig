@@ -272,7 +272,9 @@ static void check_var(Checker *c, Ast_Var *var) {
 // address, as cast([]u8) "abc" or cast(*void) cast(*u8) "x" do
 // (literal_address); not as an integer (cast(int) cast(*u8) "hi"), which
 // would need the linker to write a number, nor a string that isn't a
-// literal.
+// literal. A procedure's address is the same (procedure_address): a
+// global, a field or an element may hold a procedure, or a constant naming
+// one, as it is or cast to *void.
 static bool check_global_value(Checker *c, Ast *value) {
     if (value->is_constant) return true;
     if (!value->type) return false;  // a value inside a literal whose own error was reported
@@ -283,7 +285,7 @@ static bool check_global_value(Checker *c, Ast *value) {
         }
         return true;
     }
-    if (literal_address(value)) return true;
+    if (literal_address(value) || procedure_address(value)) return true;
     diag_error(c->diag, value->start, "a global's value must be known while compiling, for now");
     return false;
 }
@@ -296,22 +298,27 @@ static void check_global_var(Checker *c, Ast_Var *var) {
 // the constant keeps it, with its type: untyped when e is, so N meets types
 // as a literal does. Only numbers and bools fold so far, so a string
 // literal, though known while compiling, can't be a constant yet, nor a
-// struct literal (whose type must be written: .{1, 2} meets none here).
+// struct literal (whose type must be written: .{1, 2} meets none here). A
+// constant may also name a procedure (OP :: add;, procedure_address), of
+// its procedure type: it keeps the procedure, and a use of it is that
+// procedure, as the procedure's own name is.
 static void check_const_value(Checker *c, Ast_Const *constant) {
     Type *t = check_value(c, constant->value);
     if (t == &type_untyped_literal) {
         check_default_type(c, constant->value);
         t = nullptr;
     }
-    if (t && !type_is_number(t) && t != &type_bool) {
-        diag_error(c->diag, constant->value->start, "a constant can only be a number or a bool, for now");
+    bool procedure = t && t->kind == TYPE_PROC;
+    if (procedure) constant->proc = procedure_address(constant->value);
+    if (t && !type_is_number(t) && t != &type_bool && !procedure) {
+        diag_error(c->diag, constant->value->start, "a constant can only be a number, a bool or a procedure, for now");
         t = nullptr;
-    } else if (t && !constant->value->is_constant) {
+    } else if (t && !constant->value->is_constant && !constant->proc) {
         diag_error(c->diag, constant->value->start, "the value of constant '" STR_FMT "' isn't known while compiling",
                    STR_ARG(constant->name));
         t = nullptr;
     }
-    if (t) {
+    if (t && !constant->proc) {
         constant->is_constant = true;
         constant->constant = constant->value->constant;
     }
@@ -1222,6 +1229,28 @@ static void check_body(Checker *c, Ast_Proc *proc) {
     c->proc = nullptr;
 }
 
+// The procedure type of proc's checked signature (check_signature says
+// which); null when it has none.
+static Type *proc_type_of_signature(Ast_Proc *proc) {
+    if (proc->is_variadic) return nullptr;
+    Array<Type *> parts = {};
+    bool fine = true;
+    for (s64 i = 0; i < proc->params.count; i++) {
+        fine = fine && proc->params[i]->type;
+        array_add(&parts, proc->params[i]->type);
+    }
+    for (s64 i = 0; i < proc->results.count; i++) {
+        fine = fine && proc->results[i]->type;
+        array_add(&parts, proc->results[i]->type);
+    }
+    s64 n = proc->params.count;
+    Type *t = fine ? type_proc_of(parts.data, n, parts.data + n, proc->results.count,
+                                  proc->is_c_call || proc->is_foreign)
+                   : nullptr;
+    array_free(&parts);
+    return t;
+}
+
 // A procedure's signature: its parameters' types and its results' types,
 // each stored on its node (Ast_Param.type, Ast_Type.type), and its library.
 // A foreign procedure takes and returns no aggregate: C passes a struct by
@@ -1243,6 +1272,10 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 // Each type starts where the signature does, at `base`: a global it needs
 // (an array's count) starts a level below its own levels (Ast_Type.levels,
 // open_declaration).
+//
+// The procedure's type (Ast.type) is its signature's procedure type: #c_call
+// when it's marked so, or foreign (C's own). A variadic one has none: no
+// procedure type takes '..', so it can only be called (check_name).
 static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
     for (s64 i = 0; i < proc->params.count; i++) {
         Ast_Param *param = proc->params[i];
@@ -1280,6 +1313,7 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
         diag_error(c->diag, proc->library_pos, "unknown library '" STR_FMT "'; the only one so far is 'libc'",
                    STR_ARG(proc->foreign_library));
     }
+    proc->type = proc_type_of_signature(proc);
 }
 
 // A procedure's signature, checked the first time it's needed: in its turn
@@ -1425,12 +1459,13 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
     }
     for (s64 i = 0; i < declarations.count; i++) {
         Ast *decl = declarations[i];
-        if (decl->kind == AST_VAR) decl->type = made_again(decl->type);
+        if (decl->kind == AST_VAR || decl->kind == AST_CONST) decl->type = made_again(decl->type);
         if (decl->kind != AST_PROC) continue;
         Ast_Proc *proc = (Ast_Proc *)decl;
         if (proc->is_broken) continue;
         for (s64 j = 0; j < proc->params.count; j++) proc->params[j]->type = made_again(proc->params[j]->type);
         for (s64 j = 0; j < proc->results.count; j++) proc->results[j]->type = made_again(proc->results[j]->type);
+        proc->type = made_again(proc->type);
     }
     array_free(&declarations);
 

@@ -431,6 +431,23 @@ static s32 address_of(Lowering *l, Ast *decl) {
     return addr->result;
 }
 
+// The index in module->procs of procedure `proc`, a Rig or foreign one of
+// the file: its name's (the checker allowed no other top-level declaration
+// of it).
+static s32 proc_index_of(Lowering *l, Ast_Proc *proc) {
+    s32 *index = table_get(&l->proc_index, proc->name);
+    RIG_ASSERT(index);
+    return *index;
+}
+
+// The value of procedure `proc` (its name, or a constant naming it, used as
+// a value): its address, a procaddr.
+static s32 emit_proc_address(Lowering *l, Ast_Proc *proc) {
+    Ir_Instr *addr = emit(l, IR_PROC_ADDR, IR_PTR);
+    addr->target = proc_index_of(l, proc);
+    return addr->result;
+}
+
 // A new stack slot for a value of type t; its address. A scalar's is a slot
 // of its IR type; an aggregate's a block of its bytes, at its alignment:
 //
@@ -868,6 +885,8 @@ static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
     // to a []u8 and back: the same bytes.
     if (type_is_aggregate(from)) return v;
     if (type_is_pointer(from) && type_is_pointer(to)) return v;
+    // A procedure value to or from *void: the same address.
+    if (from->kind == TYPE_PROC || to->kind == TYPE_PROC) return v;
     if (type_is_pointer(from)) return emit_convert(l, IR_PTRTOINT, IR_PTR, v, IR_I64);
     if (type_is_pointer(to) && from->kind == TYPE_INTEGER) return emit_convert(l, IR_INTTOPTR, IR_I64, v, IR_PTR);
     if (from->kind == TYPE_FLOAT || to->kind == TYPE_FLOAT) return lower_float_cast(l, v, from, to);
@@ -1224,11 +1243,14 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         // An aggregate parameter is the caller's copy's address; a scalar
         // parameter, as a variable, is read from its slot, here, at the
         // statement reading it.
+        // A procedure, or a constant naming one, is its address.
         Ast *decl = ((Ast_Name *)e)->decl;
         if (decl->kind == AST_PARAM) {
             s32 value = local_of(l, decl)->value;
             return type_is_aggregate(decl->type) ? value : emit_get(l, decl->type, value);
         }
+        if (decl->kind == AST_PROC) return emit_proc_address(l, (Ast_Proc *)decl);
+        if (decl->kind == AST_CONST) return emit_proc_address(l, ((Ast_Const *)decl)->proc);
         return emit_get(l, decl->type, address_of(l, decl));
     }
     case AST_DEREF: return emit_get(l, e->type, lower_address(l, e));
@@ -1937,25 +1959,32 @@ static s32 add_global_array(Lowering *l, Type *array, Ast *literal);
 // backend wants `relocs` in increasing order of offset, so the values are
 // written in that order: an array's in turn, and a struct's by its fields,
 // in the order they are laid out, not the order a literal with names gives
-// them. The checker made sure every value is a constant, a string literal,
-// or a literal of them (check_global_value).
+// them. A procedure's address (procedure_address) is a relocation too, to
+// the procedure. The checker made sure every value is a constant, a string
+// literal, a procedure, or a literal of them (check_global_value).
 static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *relocs, Type *t, Ast *value) {
     Ast_String *literal = literal_address(value);
     if (literal) {
         s32 global = add_bytes(l, literal->value);
         if (!type_is_view_or_string(t)) {
-            array_add(relocs, Ir_Reloc{offset, global});  // a pointer, *u8 or what a cast made it
+            array_add(relocs, Ir_Reloc{offset, global, false});  // a pointer, *u8 or what a cast made it
             return;
         }
         write_bits(bytes + offset + VIEW_COUNT_OFFSET, (u64)literal->value.count, 8);
-        array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, global});
+        array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, global, false});
+        return;
+    }
+    // A procedure's address (a procedure value, or a *void cast from one).
+    Ast_Proc *proc = procedure_address(value);
+    if (proc) {
+        array_add(relocs, Ir_Reloc{offset, proc_index_of(l, proc), true});
         return;
     }
     if (t->kind == TYPE_VIEW) {
         Type *array = value->type;  // the literal's [N]T
         s32 global = add_global_array(l, array, value);
         write_bits(bytes + offset + VIEW_COUNT_OFFSET, (u64)array->count, 8);
-        array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, global});
+        array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, global, false});
         return;
     }
     if (type_is_aggregate(t)) {
@@ -2320,9 +2349,13 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     // so is an array, and a view, whose literal's array is a global of its
     // own, and a string. A pointer holding a string literal's address is a
     // global of bytes too, 8 of them: an address the linker writes is a
-    // relocation, which only a global of bytes has. Constants and structs'
-    // declarations are skipped: a constant's uses are constants, and a
-    // struct is only a type.
+    // relocation, which only a global of bytes has; and so is one holding a
+    // procedure's address, a procedure value or a *void. Constants and
+    // structs' declarations are skipped: a constant's uses are constants
+    // (or, naming a procedure, its address), and a struct is only a type.
+    // The procedures are numbered first (proc_index), so a relocation can
+    // name one.
+    for (s64 i = 0; i < f->procs.count; i++) table_put(&l.proc_index, f->procs[i]->name, (s32)i);
     for (s64 i = 0; i < f->globals.count; i++) {
         if (f->globals[i]->kind != AST_VAR) continue;
         Ast_Var *var = (Ast_Var *)f->globals[i];
@@ -2330,7 +2363,8 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         g.name = var->name;
         g.rig_type = var->type;
         g.pos = var->pos;
-        if (type_is_aggregate(var->type) || (var->value && literal_address(var->value))) {
+        bool address = var->value && (literal_address(var->value) || procedure_address(var->value));
+        if (type_is_aggregate(var->type) || address) {
             g.type = IR_VOID;
             g.is_variable = true;
             g.size = var->type->size;
@@ -2391,7 +2425,6 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
             p->body = source->body->pos;
             for (s64 k = 0; k < source->results.count; k++) array_add(&p->source_results, source->results[k]->type);
         }
-        table_put(&l.proc_index, source->name, (s32)i);
     }
 
     // Then the bodies.

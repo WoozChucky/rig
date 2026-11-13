@@ -169,10 +169,12 @@ TEST(main_has_a_body) {
     arena_free(&a);
 }
 
-TEST(procedures_are_only_called) {
+TEST(a_procedure_alone_is_no_statement) {
+    // A procedure's name is a value (issue #83), which on its own does
+    // nothing.
     Arena a = arena_make();
     CHECK_STR(check_errors(&a, PUTS "IDENT:main :: ( ) { IDENT:puts ; IDENT:puts ( STRING:x ) ( ) ; }"),
-              "2:11: procedures can only be called, for now\n"
+              "2:11: only a call can be a statement, for now\n"
               "2:23: only a procedure's name can be called, for now\n");
     arena_free(&a);
 }
@@ -718,8 +720,8 @@ TEST(local_constant_must_be_constant) {
                            "}\n"),
               "4:10: the value of constant 'N' isn't known while compiling\n"
               "6:10: the value of constant 'K' isn't known while compiling\n"
-              "7:10: a constant can only be a number or a bool, for now\n"
-              "9:10: a constant can only be a number or a bool, for now\n");
+              "7:10: a constant can only be a number, a bool or a procedure, for now\n"
+              "9:10: a constant can only be a number, a bool or a procedure, for now\n");
     arena_free(&a);
 }
 
@@ -2258,7 +2260,7 @@ TEST(null_converts_to_pointers) {
                            "}\n"),
               "7:10: null needs a pointer type, as in p : *int = null;\n"
               "8:15: a value of type 'null' doesn't convert to 'int' implicitly\n"
-              "11:10: a constant can only be a number or a bool, for now\n"
+              "11:10: a constant can only be a number, a bool or a procedure, for now\n"
               "12:8: the condition of 'if' must be a bool, not 'null'\n");
     Checked c = check_src(&a, "main :: () { p : *int = null; }\n");
     Ast *value = ((Ast_Var *)local_named(&c, "p"))->value;
@@ -3033,7 +3035,7 @@ TEST(global_struct_literal_must_be_constant) {
                            "main :: () { }\n"),
               "5:14: a global's value must be known while compiling, for now\n"
               "6:9: a global's value must be known while compiling, for now\n"
-              "8:6: a constant can only be a number or a bool, for now\n"
+              "8:6: a constant can only be a number, a bool or a procedure, for now\n"
               "9:6: this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}\n");
     arena_free(&a);
 }
@@ -4392,5 +4394,125 @@ TEST(procedure_types_are_their_signatures) {
                            "N :: size_of((int) -> int) + size_of(S) * 50;\n"
                            "main :: () { x : [N]u8; y : [808]u8 = x; }\n"),
               "");
+    arena_free(&a);
+}
+
+TEST(a_procedures_name_is_a_value) {
+    // A procedure's name used as a value is the procedure, of its procedure
+    // type: a foreign one's is #c_call, as C calls it. A constant can name
+    // one. Only identical signatures convert.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "add :: (a: int, b: int) -> int { return a + b; }\n"
+                          "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                          "compare :: (a: *void, b: *void) -> s32 #c_call { return 0; }\n"
+                          "OP :: add;\n"
+                          "g : (int, int) -> int = OP;\n"
+                          "main :: () {\n"
+                          "    f := add;\n"
+                          "    h := OP;\n"
+                          "    p := puts;\n"
+                          "    q := compare;\n"
+                          "    LOCAL :: compare;\n"
+                          "    f = g;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_name(&a, c.file->procs[0]->type), "(int, int) -> int");
+    CHECK_STR(type_name(&a, c.file->procs[1]->type), "(*u8) -> s32 #c_call");
+    CHECK_STR(type_name(&a, c.file->procs[2]->type), "(*void, *void) -> s32 #c_call");
+    CHECK(c.file->globals[1]->type == c.file->procs[0]->type);
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                           "f : (int) -> int = add;\n"
+                           "main :: () {\n"
+                           "    p := printf;\n"
+                           "    g : (int, int) -> s64 = add;\n"
+                           "    h : (int, int) -> int = 5;\n"
+                           "    x := 1;\n"
+                           "    X :: x;\n"
+                           "}\n"),
+              "3:20: a value of type '(int, int) -> int' doesn't convert to '(int) -> int' implicitly\n"
+              "5:10: 'printf' can't be a value: it takes more arguments with '..', which no procedure type can "
+              "say\n"
+              "6:29: a value of type '(int, int) -> int' doesn't convert to '(int, int) -> s64' implicitly\n"
+              "7:29: a value of type 'int' doesn't convert to '(int, int) -> int' implicitly\n"
+              "9:10: the value of constant 'X' isn't known while compiling\n");
+    arena_free(&a);
+}
+
+TEST(procedure_values_and_null) {
+    // A procedure value may be null: null converts to every procedure type,
+    // and == and != compare two of one type, or one with null. Nothing else
+    // takes them: no order, no arithmetic.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "neg :: (a: int) -> int { return -a; }\n"
+                           "main :: () {\n"
+                           "    f : (int, int) -> int = null;\n"
+                           "    f = add;\n"
+                           "    same := f == add;\n"
+                           "    none := null != f;\n"
+                           "    mixed := f == neg;\n"
+                           "    before := f < add;\n"
+                           "    sum := f + 1;\n"
+                           "    p : *void;\n"
+                           "    pointer := f == p;\n"
+                           "    negated := -f;\n"
+                           "    if f { }\n"
+                           "}\n"),
+              "8:16: mismatched types '(int, int) -> int' and '(int) -> int' for '=='\n"
+              "9:17: '<' needs numbers, not '(int, int) -> int'\n"
+              "10:14: '+' needs numbers, not '(int, int) -> int'\n"
+              "12:18: mismatched types '(int, int) -> int' and '*void' for '=='\n"
+              "13:16: '-' needs a number, not '(int, int) -> int'\n"
+              "14:8: the condition of 'if' must be a bool, not '(int, int) -> int'\n");
+    arena_free(&a);
+}
+
+TEST(procedure_values_cast_only_to_and_from_void_pointers) {
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "main :: () {\n"
+                           "    p := cast(*void) add;\n"
+                           "    f := cast((int, int) -> int) p;\n"
+                           "    g := cast((int, int) -> int) add;\n"
+                           "    h := cast((int, int) -> int) null;\n"
+                           "    k := cast((int) -> int) add;\n"
+                           "    b := cast(*u8) add;\n"
+                           "    n := cast(int) add;\n"
+                           "    m := cast((int) -> int) 5;\n"
+                           "    t := cast,trunc(*void) add;\n"
+                           "}\n"),
+              "7:10: can't cast '(int, int) -> int' to '(int) -> int'; a procedure value casts only to and from "
+              "*void\n"
+              "8:10: can't cast '(int, int) -> int' to '*u8'; a procedure value casts only to and from *void\n"
+              "9:10: can't cast '(int, int) -> int' to 'int'; a procedure value casts only to and from *void\n"
+              "10:10: can't cast 'int' to '(int) -> int'; a procedure value casts only to and from *void\n"
+              "11:10: cast,trunc only takes integers\n");
+    arena_free(&a);
+}
+
+TEST(procedure_values_in_globals) {
+    // A global may hold a procedure: its address is known while compiling
+    // (the linker writes it), as a string literal's is. So may a field or an
+    // element of one, and a cast that keeps the address.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "sub :: (a: int, b: int) -> int { return a - b; }\n"
+                           "Ops :: struct { name: *u8; op: (int, int) -> int; }\n"
+                           "OP :: sub;\n"
+                           "one : (int, int) -> int = add;\n"
+                           "table : [3](int, int) -> int = .[add, OP, null];\n"
+                           "named := Ops.{\"add\", add};\n"
+                           "address : *void = cast(*void) add;\n"
+                           "back := cast((int, int) -> int) cast(*void) sub;\n"
+                           "copy := one;\n"
+                           "main :: () { }\n"),
+              "10:9: a global's value must be known while compiling, for now\n");
     arena_free(&a);
 }

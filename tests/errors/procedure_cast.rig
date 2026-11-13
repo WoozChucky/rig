@@ -1,0 +1,10 @@
+// A procedure value casts only to its own type and to and from *void: a
+// cast never makes it a procedure of another signature in one step.
+neg :: (a: int) -> int { return -a; }
+
+main :: () {
+    as_s32 := cast((s32) -> s32) neg;
+    bytes := cast(*u8) neg;
+    number := cast(int) neg;
+    fine := cast((int) -> int) cast(*void) neg;
+}

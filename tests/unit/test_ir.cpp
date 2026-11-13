@@ -650,7 +650,7 @@ TEST(ir_prints_byte_globals) {
     u8 *bytes = (u8 *)arena_alloc(&a, 24, 1);  // zeroed
     bytes[0] = 3;
     m->globals[table].bytes = {bytes, 24};
-    array_add(&m->globals[table].relocs, {8, text});
+    array_add(&m->globals[table].relocs, {8, text, false});
     CHECK_STR(ir_print(&a, m),
               "global @origin: 16 align 8 = zero\n"
               "global @table: 24 align 8 = "
@@ -3426,5 +3426,76 @@ TEST(ir_of_a_variadic_call) {
                        "  %27 = const i32 4294967295\n"
                        "  %28 = const i32 0\n"
                        "  %29 = call @printf(%12, %14, %16, %18, %20, %21, %22, %23, %24, %25, %26, %27, %28)\n"));
+    arena_free(&a);
+}
+
+// Issue #83: procedure values.
+
+TEST(a_procedure_value_is_its_address) {
+    // A procedure's name used as a value, or a constant naming one, is its
+    // address, a procaddr; null is a ptr's 0; == compares the addresses; a
+    // cast to *void and back keeps them.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "add :: (a: int, b: int) -> int { return a + b; }\n"
+                                          "OP :: add;\n"
+                                          "main :: () {\n"
+                                          "    f := add;\n"
+                                          "    g : (int, int) -> int = null;\n"
+                                          "    same := f == OP;\n"
+                                          "    p := cast(*void) f;\n"
+                                          "    g = cast((int, int) -> int) p;\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "main"),
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  %0 = local ptr\n"
+              "  %1 = procaddr @add\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local ptr\n"
+              "  %3 = const ptr 0\n"
+              "  store ptr %3, %2\n"
+              "  %4 = local i1\n"
+              "  %5 = load ptr %0\n"
+              "  %6 = procaddr @add\n"
+              "  %7 = cmp eq ptr %5, %6\n"
+              "  store i1 %7, %4\n"
+              "  %8 = local ptr\n"
+              "  %9 = load ptr %0\n"
+              "  store ptr %9, %8\n"
+              "  %10 = load ptr %8\n"
+              "  store ptr %10, %2\n"
+              "  %11 = const i32 0\n"
+              "  ret %11\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(a_global_procedure_value_has_a_relocation) {
+    // A global holding a procedure is bytes with the procedure's address in
+    // them, which the linker writes, as it writes a string literal's.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "Ops :: struct { name: *u8; op: (int) -> int; }\n"
+                                          "neg :: (a: int) -> int { return -a; }\n"
+                                          "one : (int) -> int = neg;\n"
+                                          "ops := Ops.{\"neg\", neg};\n"
+                                          "table : [2](int) -> int = .[null, neg];\n"
+                                          "address : *void = cast(*void) neg;\n"
+                                          "main :: () { }\n"));
+    CHECK(contains(ir,
+                   "global @one: 8 align 8 = zero reloc 0 @neg\n"
+                   "global @str.0 = \"neg\\00\"\n"
+                   "global @ops: 16 align 8 = "
+                   "\"\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 0 @str.0 reloc 8 @neg\n"
+                   "global @table: 16 align 8 = zero reloc 8 @neg\n"
+                   "global @address: 8 align 8 = zero reloc 0 @neg\n"));
+    String error = {}, text = {};
+    CHECK(llvm_ir_text(&a, lower_source(&a,
+                                        "neg :: (a: int) -> int { return -a; }\n"
+                                        "one : (int) -> int = neg;\n"
+                                        "main :: () { }\n"),
+                       target_host(), &text, &error));
+    CHECK(contains(text, "@one = internal global <{ ptr }> <{ ptr @neg }>, align 8"));
     arena_free(&a);
 }

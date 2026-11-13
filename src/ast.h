@@ -144,6 +144,9 @@ struct Ast_Proc : Ast {
     Position c_call_pos;        // where that #c_call is written
     bool is_broken;             // the parser gave up on it
     String foreign_library;     // #foreign's library name
+                                // (Ast.type is the procedure's type, TYPE_PROC, once its signature is
+                                // checked: null for a variadic one, which no procedure type can say,
+                                // and when a parameter's or a result's type was an error)
     Position library_pos;       // where that name is written
     Ast_Resolve resolve;        // its signature's: checked in source order, or earlier by a call
                                 // in a global's value (checker.cpp's resolve_signature)
@@ -169,6 +172,9 @@ struct Ast_Var : Ast {
 struct Ast_Const : Ast {
     String name;
     Ast *value;
+    Ast_Proc *proc;       // a constant that names a procedure (OP :: add;): that procedure. It's
+                          // no number, so is_constant isn't set: a use of it is the procedure's
+                          // address, as its name's is (check_expr.cpp's procedure_address)
     Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it
     s32 levels;           // the deepest levels of its value (MAX_DEPTH), as Ast_Var's
 };
