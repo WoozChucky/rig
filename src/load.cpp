@@ -14,11 +14,12 @@ static const bool HOST_IS_WINDOWS = false;
 
 // The files loaded so far. A file is known by its id (os_file_id) when it
 // has one, in `ids`, whose keys are the ids' 24 bytes. One with none is
-// known by its path made absolute (path_absolute), in `paths`, in lower
-// case on Windows, where a name's case doesn't matter: that's a file that
-// isn't there, as the main file under rig check --stdin needn't be, or one
-// on a file system with no ids to give (os.h). Its path is the best there
-// is: ./x.rig and sub/../x.rig are x.rig, though a link to it isn't.
+// known by its path made absolute (path_absolute), in `paths`, its case
+// folded as the system folds names' (os_fold_case: on Windows, where a
+// name's case doesn't matter, Ä.rig is ä.rig): that's a file that isn't
+// there, as the main file under rig check --stdin needn't be, or one on a
+// file system with no ids to give (os.h). Its path is the best there is:
+// ./x.rig and sub/../x.rig are x.rig, though a link to it isn't.
 struct Loaded_Files {
     Table<bool> ids;
     Table<bool> paths;
@@ -26,38 +27,37 @@ struct Loaded_Files {
 
 // Records the file at `path`, from the directory rig runs in, as loaded.
 // False when it was loaded already. A key is looked up where it was made,
-// and copied into the arena only when it's new, to stay in the table.
-static bool first_time_seen(Arena *a, Loaded_Files *seen, String directory, String path) {
+// and copied into `keys` only when it's new, to stay in the table.
+static bool first_time_seen(Arena *keys, Loaded_Files *seen, String directory, String path) {
     u64 id[3];
     if (os_file_id(path, id)) {
         String key = {(const u8 *)id, (s64)sizeof id};
         if (table_get(&seen->ids, key)) return false;
-        table_put(&seen->ids, string_copy(a, key), true);
+        table_put(&seen->ids, string_copy(keys, key), true);
         return true;
     }
     Arena scratch = arena_make(1024);
-    String absolute = path_absolute(&scratch, directory, path, HOST_IS_WINDOWS);
-    u8 *lower = arena_new_array<u8>(&scratch, absolute.count);
-    for (s64 i = 0; i < absolute.count; i++) {
-        u8 c = absolute.data[i];
-        lower[i] = HOST_IS_WINDOWS && c >= 'A' && c <= 'Z' ? (u8)(c | 0x20) : c;
-    }
-    String key = {lower, absolute.count};
+    String key = os_fold_case(&scratch, path_absolute(&scratch, directory, path, HOST_IS_WINDOWS));
     bool first = table_get(&seen->paths, key) == nullptr;
-    if (first) table_put(&seen->paths, string_copy(a, key), true);
+    if (first) table_put(&seen->paths, string_copy(keys, key), true);
     arena_free(&scratch);
     return first;
 }
 
 Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text) {
     Ast_File *tree = arena_new<Ast_File>(a);
-    String directory = os_current_directory(a);
+    // What the loading alone needs is in an arena of its own, freed at its
+    // end: the tables' keys, the directory rig runs in, each #load's path
+    // and the system's reasons for failing. d keeps copies of what it needs
+    // of them (diag_add_file, diag_locate_file, diag_error).
+    Arena loading = arena_make();
+    String directory = os_current_directory(&loading);
     Loaded_Files seen = {};
 
     // The main file first, known before its #loads are followed, so a file
     // that loads it back loads nothing: by its id, or, when it isn't there
     // (rig check --stdin), by its path.
-    first_time_seen(a, &seen, directory, path);
+    first_time_seen(&loading, &seen, directory, path);
     s32 main_file = diag_add_file(d, path, text);
     diag_locate_file(d, main_file, directory, HOST_IS_WINDOWS);
 
@@ -86,18 +86,18 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text) {
                 diag_error(d, load->path_pos, "a #load path can't contain a zero byte");
                 continue;
             }
-            String loaded = load_path(a, d->files[file].path, load->path, HOST_IS_WINDOWS);
+            String loaded = load_path(&loading, d->files[file].path, load->path, HOST_IS_WINDOWS);
             if (!is_rig_file(loaded)) {
                 diag_error(d, load->path_pos, "'" STR_FMT "' isn't a .rig file", STR_ARG(loaded));
                 continue;
             }
             // A file that can't be read is reported at its first #load
             // alone, as a file that can is read at its first alone.
-            if (!first_time_seen(a, &seen, directory, loaded)) continue;
+            if (!first_time_seen(&loading, &seen, directory, loaded)) continue;
             String loaded_text = {};
             if (!os_read_file(a, loaded, &loaded_text)) {
                 diag_error(d, load->path_pos, "cannot read '" STR_FMT "': " STR_FMT, STR_ARG(loaded),
-                           STR_ARG(os_error_message(a)));
+                           STR_ARG(os_error_message(&loading)));
                 continue;
             }
             s32 added = diag_add_file(d, loaded, loaded_text);
@@ -106,5 +106,6 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text) {
     }
     table_free(&seen.ids);
     table_free(&seen.paths);
+    arena_free(&loading);
     return tree;
 }

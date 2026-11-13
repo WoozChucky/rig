@@ -1,5 +1,6 @@
 // test_base.cpp: the containers' tests (issue #3), most written before the
-// containers from the contract in base.h.
+// containers from the contract in base.h, then the tests of the helpers at
+// its end: MD5's and the paths' (path_absolute, load_path, is_rig_file).
 
 #include "test.h"
 
