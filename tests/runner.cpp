@@ -37,8 +37,9 @@
 // docs/rig-spec.md (its section 1.4 says so too), written to
 // .build/tests/spec/LINE/example.rig, LINE being its opening fence's, and
 // built or checked in that directory, so that its messages name
-// example.rig on every host. The words after `rig` in the fence's info
-// string give its kind:
+// example.rig on every host. The .rig files an earlier run left there are
+// removed first. The words after `rig` in the fence's info string give its
+// kind:
 //   ```rig                a program, built and run: it exits with 0, writes
 //                         nothing to stderr, and its stdout is its output
 //                         block, or nothing when it has none;
@@ -50,12 +51,21 @@
 //                         the output block, and it writes no object or
 //                         program;
 //   ```rig fragment       top-level declarations: with `main :: () {}`
-//                         added, rig check exits with 0 and says nothing.
+//                         added, rig check exits with 0 and says nothing;
+//   ```rig file=NAME.rig  no example, but a file of the next one's program
+//                         (a ```rig block of any other kind, whatever comes
+//                         between): written as NAME.rig beside its
+//                         example.rig, which can #load it (spec 2.13). NAME
+//                         is ASCII letters, digits, '_', '-' and '.', and
+//                         not example; several blocks may come before one
+//                         example, each with its own NAME. One with no
+//                         example after it fails the run.
 // An example's output block is the first ```text block after it before the
 // next heading or ```rig block (a fragment has none); the two error kinds
 // need one. Any other word in the info string fails the example, as does a
-// block never closed. Each is reported as docs/rig-spec.md:LINE. The
-// specification's "\r\n"s are read as "\n", on every host.
+// block never closed. Each is reported as docs/rig-spec.md:LINE; a file=
+// block only when it's wrong. The specification's "\r\n"s are read as
+// "\n", on every host.
 //
 // Last, the debugger tests: tests/debug/NAME.rig is built as a program of
 // tests/run is (to .build/tests/NAME), then run under the host's debugger
@@ -1057,12 +1067,14 @@ enum Example_Kind {
     EXAMPLE_RUNTIME_ERROR,  // ```rig runtime-error
     EXAMPLE_ERROR,          // ```rig error
     EXAMPLE_FRAGMENT,       // ```rig fragment
+    EXAMPLE_FILE,           // ```rig file=NAME.rig: no example, a file the next one can #load
 };
 
 struct Example {
     s64 line;  // the opening fence's, from 1
     Example_Kind kind;
-    s32 exit_code;  // a program's: 0 unless exit=N
+    s32 exit_code;     // a program's: 0 unless exit=N
+    String file_name;  // a file='s NAME.rig
     String source;
     bool has_output;
     String output;  // the output block's text, each line ending in "\n"
@@ -1090,10 +1102,39 @@ static bool read_exit_status(String word, s32 *status) {
     return true;
 }
 
-// The words after `rig` in a fence's info string: the example's kind, and a
-// program's exit status. What it doesn't know goes in ex->bad.
+// Whether two file= names are one file's on Windows, which takes a name in
+// any case: equal but for the case of their ASCII letters, the only letters
+// a file= name has (is_example_file_name).
+static bool same_file_name(String x, String y) {
+    if (x.count != y.count) return false;
+    for (s64 i = 0; i < x.count; i++) {
+        u8 c = x.data[i], d = y.data[i];
+        bool letter = (c | 0x20) >= 'a' && (c | 0x20) <= 'z';
+        if (letter ? (c | 0x20) != (d | 0x20) : c != d) return false;
+    }
+    return true;
+}
+
+// Whether file='s NAME is one an example's directory can hold beside
+// example.rig, on both systems: a .rig file's name, with something before
+// the .rig, of ASCII letters, digits, '_', '-' and '.' alone, so no
+// directory and nothing a system reads otherwise ("C:", "*"), and not
+// example.rig's, in any case (Windows takes EXAMPLE.RIG as example.rig).
+static bool is_example_file_name(String name) {
+    if (name.count <= 4 || !is_rig_file(name)) return false;
+    for (s64 i = 0; i < name.count; i++) {
+        u8 c = name.data[i];
+        bool letter = (c | 0x20) >= 'a' && (c | 0x20) <= 'z';
+        if (!letter && !(c >= '0' && c <= '9') && c != '_' && c != '-' && c != '.') return false;
+    }
+    return !same_file_name(name, str("example.rig"));
+}
+
+// The words after `rig` in a fence's info string: the example's kind, a
+// program's exit status, and a file='s name. What it doesn't know goes in
+// ex->bad.
 static void read_info(Arena *a, String words, Example *ex) {
-    bool kind_given = false, exit_given = false;
+    bool kind_given = false, exit_given = false, file_given = false;
     s64 start = 0;
     for (s64 i = 0; i <= words.count; i++) {
         if (i < words.count && words.data[i] != ' ' && words.data[i] != '\t') continue;
@@ -1110,6 +1151,19 @@ static void read_info(Arena *a, String words, Example *ex) {
             exit_given = true;
             continue;
         }
+        if (starts_with(word, "file=")) {
+            String name = string_slice(word, 5, word.count - 5);
+            if (file_given || !is_example_file_name(name)) {
+                ex->bad = string_printf(a,
+                                        "the info string's '" STR_FMT "' isn't one file= with a .rig file's name "
+                                        "(ASCII letters, digits, '_', '-' and '.'; not example.rig)",
+                                        STR_ARG(word));
+                return;
+            }
+            ex->file_name = name;
+            file_given = true;
+            continue;
+        }
         if (string_eq(word, str("runtime-error"))) {
             kind = EXAMPLE_RUNTIME_ERROR;
         } else if (string_eq(word, str("error"))) {
@@ -1118,8 +1172,8 @@ static void read_info(Arena *a, String words, Example *ex) {
             kind = EXAMPLE_FRAGMENT;
         } else {
             ex->bad = string_printf(a,
-                                    "unknown word '" STR_FMT "' in the info string (runtime-error, error, fragment and "
-                                    "exit=N are known)",
+                                    "unknown word '" STR_FMT "' in the info string (runtime-error, error, fragment, "
+                                    "exit=N and file=NAME.rig are known)",
                                     STR_ARG(word));
             return;
         }
@@ -1129,6 +1183,12 @@ static void read_info(Arena *a, String words, Example *ex) {
         }
         ex->kind = kind;
         kind_given = true;
+    }
+    // A file= block is no example, so it's no kind of one either.
+    if (file_given) {
+        ex->kind = EXAMPLE_FILE;
+        if (kind_given || exit_given) ex->bad = str("a file= block is no example, so it takes no other word");
+        return;
     }
     if (exit_given && ex->kind != EXAMPLE_PROGRAM) ex->bad = str("exit=N is for a program that runs to its end");
 }
@@ -1170,7 +1230,8 @@ static void read_examples(Arena *a, String text, Array<Example> *examples) {
             if (in_rig) {
                 Example *ex = &(*examples)[examples->count - 1];
                 ex->source = body;
-                if (ex->kind != EXAMPLE_FRAGMENT) waiting = examples->count - 1;
+                // A fragment has no output, and a file= block is no example.
+                if (ex->kind != EXAMPLE_FRAGMENT && ex->kind != EXAMPLE_FILE) waiting = examples->count - 1;
             } else if (in_text && waiting >= 0) {
                 (*examples)[waiting].has_output = true;
                 (*examples)[waiting].output = body;
@@ -1184,9 +1245,10 @@ static void read_examples(Arena *a, String text, Array<Example> *examples) {
 }
 
 // One example, written to SPEC_DIR/LINE/example.rig and built or checked
-// there, so its messages name it example.rig on every host. {} when it
-// passes, otherwise why not.
-static String spec_example_test(Arena *a, String rig, const Example *ex) {
+// there, so its messages name it example.rig on every host, with `files`,
+// the file= blocks right before it, written beside it for it to #load. {}
+// when it passes, otherwise why not.
+static String spec_example_test(Arena *a, String rig, const Example *ex, Array<const Example *> files) {
     if (ex->bad.count) return ex->bad;
     if ((ex->kind == EXAMPLE_RUNTIME_ERROR || ex->kind == EXAMPLE_ERROR) && !ex->has_output) {
         return str("no ```text block of its messages after it (before the next heading or ```rig block)");
@@ -1195,6 +1257,21 @@ static String spec_example_test(Arena *a, String rig, const Example *ex) {
     String dir = string_printf(a, "%s/%lld", SPEC_DIR, (long long)ex->line);
     os_make_directory(dir);
     if (!remove_nested_build(a, dir)) return string_printf(a, "couldn't remove " STR_FMT "/.build", STR_ARG(dir));
+    // The .rig files an earlier run left go: the example at this line may
+    // have had other file= blocks then, and it mustn't #load a file the
+    // specification doesn't give it.
+    Array<String> leftovers = {};
+    os_list_directory(a, dir, &leftovers);
+    for (s64 i = 0; i < leftovers.count; i++) {
+        if (is_rig_file(leftovers[i])) {
+            remove(string_cstr(a, string_printf(a, STR_FMT "/" STR_FMT, STR_ARG(dir), STR_ARG(leftovers[i]))));
+        }
+    }
+    array_free(&leftovers);
+    for (s64 i = 0; i < files.count; i++) {
+        String path = string_printf(a, STR_FMT "/" STR_FMT, STR_ARG(dir), STR_ARG(files[i]->file_name));
+        if (!os_write_file(path, files[i]->source)) return string_printf(a, "couldn't write " STR_FMT, STR_ARG(path));
+    }
     String program = string_printf(a, STR_FMT "/example%s", STR_ARG(dir), EXE);
     String object = string_printf(a, STR_FMT "/.build/example%s", STR_ARG(dir), OBJ);
     remove(string_cstr(a, program));
@@ -1274,10 +1351,37 @@ static void spec_tests(Arena *a, String rig, s64 *passed, s64 *failed) {
     read_examples(a, text, &examples);
     if (!examples.count) report(SPEC, str("no ```rig blocks in it"), passed, failed);
     os_make_directory(str(SPEC_DIR));
+    // The file= blocks since the last example, for the next one. A file=
+    // block is no test of its own: the example that #loads it is. It's
+    // reported only when it's wrong: its info string, a name given twice
+    // to one example, or no example after it.
+    Array<const Example *> files = {};
     for (s64 i = 0; i < examples.count; i++) {
-        String why = spec_example_test(a, rig, &examples[i]);
-        report(string_cstr(a, string_printf(a, "%s:%lld", SPEC, (long long)examples[i].line)), why, passed, failed);
+        const Example *ex = &examples[i];
+        const char *where = string_cstr(a, string_printf(a, "%s:%lld", SPEC, (long long)ex->line));
+        if (ex->kind == EXAMPLE_FILE) {
+            String why = ex->bad;
+            for (s64 k = 0; k < files.count && !why.count; k++) {
+                if (same_file_name(files[k]->file_name, ex->file_name)) {
+                    why = string_printf(a, "the file= block at line %lld names " STR_FMT " for the same example",
+                                        (long long)files[k]->line, STR_ARG(files[k]->file_name));
+                }
+            }
+            if (why.count) {
+                report(where, why, passed, failed);
+            } else {
+                array_add(&files, ex);
+            }
+            continue;
+        }
+        report(where, spec_example_test(a, rig, ex, files), passed, failed);
+        files.count = 0;
     }
+    for (s64 k = 0; k < files.count; k++) {
+        report(string_cstr(a, string_printf(a, "%s:%lld", SPEC, (long long)files[k]->line)),
+               str("a file= block with no example after it to #load it"), passed, failed);
+    }
+    array_free(&files);
     array_free(&examples);
 }
 

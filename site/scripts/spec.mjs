@@ -270,12 +270,19 @@ function rewriteSectionColumn(spec, line, where, errors) {
 // Turns a `rig` block of a kind into the markup of a labelled example, and
 // its output, the first `text` block after it before the next heading or
 // `rig` block (spec section 1.4), into an "Output" block, attached to the
-// example when nothing but blank lines lies between them.
+// example when nothing but blank lines lies between them. A `rig
+// file=NAME.rig` block, a file the next example loads, is labelled with its
+// name.
 function exampleLabel(kind, where, errors) {
   if (kind === '') return null
   if (kindLabels[kind]) return { cls: kind, text: kindLabels[kind] }
   const exit = /^exit=(\d+)$/.exec(kind)
   if (exit) return { cls: 'exit', text: `Exits with status ${exit[1]}` }
+  // Another file of the next example's program, which it #loads; its name
+  // is the one the test runner takes (tests/runner.cpp), so it needs no
+  // escaping in the label.
+  const file = /^file=([A-Za-z0-9_.-]+\.rig)$/i.exec(kind)
+  if (file) return { cls: 'file', text: `File ${file[1]}` }
   errors.push(`${where}: unknown kind of rig block '${kind}'`)
   return null
 }
