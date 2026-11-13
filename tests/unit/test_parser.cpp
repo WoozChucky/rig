@@ -1826,3 +1826,56 @@ TEST(else_if_chains_of_10000_arms) {
     }
     arena_free(&a);
 }
+
+// Issue #82: a C function that takes more arguments than it names, declared
+// with '..' as its last parameter.
+
+TEST(parses_a_variadic_signature) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                        "f :: (a: int, b: *void, ..) #foreign libc;\n",
+                        &errors),
+              "(proc printf (params (format (ptr u8)) ..) (returns s32) (foreign libc))\n"
+              "(proc f (params (a int) (b (ptr void)) ..) (foreign libc))\n");
+    CHECK_STR(errors, "");
+    Token_List *list = src("printf :: (format: *u8, ..) -> s32 #foreign libc;\nputs :: (s: *u8) #foreign libc;\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK(file->procs[0]->is_variadic);
+    CHECK_EQ(file->procs[0]->params.count, 1);
+    CHECK_EQ(file->procs[0]->variadic_pos.col, 25);
+    CHECK(!file->procs[1]->is_variadic);
+    token_list_free(list);
+    // With a body it parses too: only a foreign procedure may have one,
+    // which is the checker's to say, so the body is still checked.
+    CHECK_STR(parse_src(&a, "g :: (a: int, ..) { }\n", &errors), "(proc g (params (a int) ..) (block))\n");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(misplaced_dots_in_a_signature) {
+    Arena a = arena_make();
+    String errors;
+    // '..' ends the list: what C's '...' stands for comes after every
+    // named parameter.
+    CHECK_STR(parse_src(&a,
+                        "f :: (a: int, .., b: int) -> s32 #foreign libc;\n"
+                        "main :: () { }\n",
+                        &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:15: '..' must be the last parameter\n");
+    // C needs a named parameter before its '...' (before C23), to find
+    // where the others start: so does Rig. The parentheses are still a
+    // signature's, not a constant's value.
+    CHECK_STR(parse_src(&a,
+                        "f :: (..) -> s32 #foreign libc;\n"
+                        "main :: () { }\n",
+                        &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:7: '..' needs a parameter before it, as in (format: *u8, ..)\n");
+    // A list that doesn't close after it is any missing ')'.
+    parse_src(&a, "f :: (a: int, .. -> s32 #foreign libc;\n", &errors);
+    CHECK_STR(errors, "1:18: expected ')', found '->'\n");
+    arena_free(&a);
+}

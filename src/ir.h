@@ -59,6 +59,7 @@
 //   global @origin: 16 align 8 = zero
 //   global @greeting: 16 align 8 = "\02\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00" reloc 8 @str.0
 //   foreign proc @puts(ptr) -> i32
+//   foreign proc @printf(ptr, ...) -> i32       a variadic one, called as @printf(%0, %1, %2)
 //   proc @max(i64, i64) -> i64 {
 //   b0:
 //     %2 = cmp sgt i64 %0, %1
@@ -140,7 +141,8 @@ enum Ir_Op : u8 {
     IR_CONST,                        // %n = const T bits     (const ptr 0: the null pointer, the only ptr constant;
                                      //  a float's value prints as a number, const f64 2.5)
     IR_ADDR,                         // %n = addr @global
-    IR_CALL,                         // [%n[, %n+1...] =] call @proc(%a, ...): one value per result
+    IR_CALL,                         // [%n[, %n+1...] =] call @proc(%a, ...): one value per result;
+                                     // one argument per parameter, and any number more to a variadic proc
     IR_SEXT, IR_ZEXT, IR_TRUNC,      // %n = sext T %a to U   (`from` is T, `type` U)
     IR_LOCAL,                        // %n = local T          a stack slot for a T; %n is its address, a ptr
                                      // %n = local N align A  (T void) a block of N bytes, aligned to A
@@ -302,6 +304,9 @@ struct Ir_Proc {
     Array<Ir_Param> params;    // the parameters are the values %0 ... %(count-1) (ir_add_param)
     Array<Ir_Param> results;   // none, one, or several (several only for Rig procedures)
     bool is_foreign;           // declared, defined elsewhere (libc); no blocks
+    bool is_variadic;          // a foreign one declared with '..', C's '...': a call passes
+                               // more arguments after params, each already widened by C's
+                               // default argument promotions (types.h's type_c_promoted)
     bool is_export;            // visible to the linker; otherwise internal
     Array<Ir_Block *> blocks;  // blocks[0] is the entry
     s32 value_count;           // the values numbered so far

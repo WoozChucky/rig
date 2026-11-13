@@ -2992,3 +2992,47 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
     array_free(&names);
     arena_free(&a);
 }
+
+// Issue #82: a variadic foreign procedure is declared with its fixed
+// parameters and '...'; a call passes the extra arguments after them, each
+// as C's default argument promotions make it: an integer narrower than C's
+// int, or a bool, widened to an i32 by its sign (a bool and the unsigned
+// ones zero-extended), a float32 to a double, the rest as they are.
+TEST(ir_of_a_variadic_call) {
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                          "main :: () {\n"
+                                          "    b : u8 = 7;\n"
+                                          "    s : s16 = -2;\n"
+                                          "    t := true;\n"
+                                          "    f : float32 = 1.5;\n"
+                                          "    w : s32 = 3;\n"
+                                          "    p : *int = null;\n"
+                                          "    printf(\"x\", b, s, t, f, w, p, 5, 2.5, null, \"y\", cast(s8) -1, false);\n"
+                                          "}\n"));
+    CHECK(contains(ir, "foreign proc @printf(ptr, ...) -> i32\n"));
+    // The fixed argument, then each extra one: the u8, the s16 and the bool
+    // widened to an i32, the float32 to an f64, the s32 and the pointer as
+    // they are; 5 an int, 2.5 a float64, null a ptr, "y" its bytes' address,
+    // cast(s8) -1 an i32 with every bit set (sign-extended) and false a 0.
+    CHECK(contains(ir, "  %12 = addr @str.0\n"
+                       "  %13 = load i8 %0\n"
+                       "  %14 = zext i8 %13 to i32\n"
+                       "  %15 = load i16 %2\n"
+                       "  %16 = sext i16 %15 to i32\n"
+                       "  %17 = load i1 %4\n"
+                       "  %18 = zext i1 %17 to i32\n"
+                       "  %19 = load f32 %6\n"
+                       "  %20 = fpext f32 %19 to f64\n"
+                       "  %21 = load i32 %8\n"
+                       "  %22 = load ptr %10\n"
+                       "  %23 = const i64 5\n"
+                       "  %24 = const f64 2.5\n"
+                       "  %25 = const ptr 0\n"
+                       "  %26 = addr @str.1\n"
+                       "  %27 = const i32 4294967295\n"
+                       "  %28 = const i32 0\n"
+                       "  %29 = call @printf(%12, %14, %16, %18, %20, %21, %22, %23, %24, %25, %26, %27, %28)\n"));
+    arena_free(&a);
+}

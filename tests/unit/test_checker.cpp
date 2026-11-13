@@ -4245,3 +4245,96 @@ TEST(a_name_read_a_level_down_is_at_that_level) {
               needed_too_deeply(&a, 3, "S"));
     arena_free(&a);
 }
+
+// Issue #82: variadic foreign procedures, C's printf and friends.
+
+static const char *PRINTF = "printf :: (format: *u8, ..) -> s32 #foreign libc;\n";
+
+TEST(only_a_foreign_procedure_is_variadic) {
+    // A Rig procedure has no way to reach arguments it doesn't name: '..'
+    // stands for C's '...'. The procedure is still variadic for its calls,
+    // whose extra arguments no C function receives, so the one mistake
+    // gives one message, whatever they are.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: (a: int, ..) { }\n"
+                           "Vec2 :: struct { x: float; y: float; }\n"
+                           "main :: () {\n"
+                           "    v : Vec2;\n"
+                           "    s := \"hi\";\n"
+                           "    f(1, 2, 2.5, null, v, s, .{1, 2}, .[3]);\n"
+                           "}\n"),
+              "1:15: only a foreign procedure can take more arguments with '..'; "
+              "a Rig procedure can take a view, as in (values: []int)\n");
+    arena_free(&a);
+}
+
+TEST(extra_arguments_of_a_variadic_procedure) {
+    // The fixed parameters are checked as always; after them, any number of
+    // numbers, bools and pointers. An untyped constant takes Rig's default
+    // type for an integer, int, and float64 for a float, which C's double
+    // is anyway; null is a *void; a string literal stays a string, passed
+    // as its bytes' address (a C string), as it is to a *u8.
+    Arena a = arena_make();
+    String text = string_printf(&a,
+                                "%s"
+                                "main :: () {\n"
+                                "    b : u8 = 7;\n"
+                                "    s : s16 = -2;\n"
+                                "    f : float32 = 1.5;\n"
+                                "    p : *int = null;\n"
+                                "    printf(\"%%d %%d %%d %%f %%p %%p %%lld %%f %%s\", b, s, true, f, p, null, 5, 2.5, \"x\");\n"
+                                "    printf(\"no more\");\n"
+                                "}\n",
+                                PRINTF);
+    Checked c = check_src(&a, string_cstr(&a, text));
+    CHECK(c.ok);
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Call *call = (Ast_Call *)c.file->procs[1]->body->statements[4];
+    CHECK_EQ(call->args.count, 10);
+    const char *types[] = {"string", "u8", "s16", "bool", "float32", "*int", "*void", "int", "float64", "string"};
+    for (s64 i = 0; i < call->args.count && i < 10; i++) {
+        CHECK_STR(type_name(&a, call->args[i]->type), types[i]);
+    }
+    CHECK_STR(type_name(&a, call->type), "s32");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(extra_arguments_c_cant_take) {
+    // C passes a struct through '...' by its own rules, which Rig doesn't
+    // follow, and has no views or strings: each refusal says what to pass
+    // instead, once, at the argument.
+    Arena a = arena_make();
+    String text = string_printf(&a,
+                                "%s"
+                                "Vec2 :: struct { x: float; y: float; }\n"
+                                "nothing :: () { }\n"
+                                "main :: () {\n"
+                                "    v : Vec2;\n"
+                                "    a : [4]int;\n"
+                                "    w : []int = a;\n"
+                                "    s := \"hi\";\n"
+                                "    printf(\"%%d\", v, a, w, s);\n"
+                                "    printf();\n"
+                                "    printf(\"%%d\", .{1, 2}, .[3], nothing());\n"
+                                "}\n",
+                                PRINTF);
+    CHECK_STR(check_source(&a, string_cstr(&a, text)),
+              "9:18: argument 2 of 'printf' has type 'Vec2', which C's '...' can't take; pass a pointer to it\n"
+              "9:21: argument 3 of 'printf' has type '[4]int', which C's '...' can't take; pass its .data\n"
+              "9:24: argument 4 of 'printf' has type '[]int', which C's '...' can't take; pass its .data\n"
+              "9:27: argument 5 of 'printf' has type 'string', which C's '...' can't take; "
+              "pass its .data, which may not end with a zero, or a literal\n"
+              "10:5: 'printf' takes at least 1 argument, but 0 were given\n"
+              "11:18: argument 2 of 'printf' is a struct literal, which C's '...' can't take; "
+              "pass a pointer to a variable that holds it\n"
+              "11:27: argument 3 of 'printf' is an array literal, which C's '...' can't take; "
+              "pass the .data of a variable that holds it\n"
+              "11:33: 'nothing' returns nothing, so it has no value\n");
+    // The fixed parameters convert as any procedure's do.
+    text = string_printf(&a, "%smain :: () { printf(5); }\n", PRINTF);
+    CHECK_STR(check_source(&a, string_cstr(&a, text)),
+              "2:21: argument 1 of 'printf' has type 'int', which can't be converted to '*u8'\n");
+    arena_free(&a);
+}

@@ -394,6 +394,26 @@
 //   A signature is one of them: one whose array count needs a global whose
 //   value calls it is a circle, "'f' is defined in terms of itself".
 //
+// Variadic foreign procedures (issue #82, spec 7.6).
+// - A parameter list ending with '..' (the parser makes sure it's last,
+//   after a parameter) takes more arguments, as a C function declared with
+//   '...' does. Only a foreign procedure may: "only a foreign procedure can
+//   take more arguments with '..'; a Rig procedure can take a view, as in
+//   (values: []int)", at the '..'.
+// - A call gives at least the fixed parameters ("'printf' takes at least 1
+//   argument, but 0 were given"), each converted as any argument is. Each
+//   argument after them keeps its own type: a number, a bool or a pointer,
+//   which C receives after its default argument promotions (lowering
+//   applies them: types.h's type_c_promoted). An untyped integer becomes
+//   an int, an untyped float a float64 (C's double, which a float32 would
+//   become anyway, so it isn't rounded to a float32 first), null a *void,
+//   and a string literal is passed as a C string, its bytes' address, as
+//   it is to a *u8 parameter. A struct, an array, a view or any other
+//   string is "argument 2 of 'printf' has type 'Vec2', which C's '...'
+//   can't take; pass a pointer to it" (an array's or a view's: "pass its
+//   .data"; a string's: "pass its .data, which may not end with a zero, or
+//   a literal").
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - main must exist as a procedure, have a body, take nothing and return

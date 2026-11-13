@@ -1186,6 +1186,10 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 // procedure can't take a 'string'; pass its .data, which may not end with a
 // zero, or a literal".
 //
+// Only a foreign procedure may end its parameters with '..': a Rig
+// procedure would have no way to reach the arguments it doesn't name (Rig
+// has no va_list), and takes a view of them instead.
+//
 // Each type starts where the signature does, at `base`: a global it needs
 // (an array's count) starts a level below its own levels (Ast_Type.levels,
 // open_declaration).
@@ -1216,6 +1220,11 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
     // only Rig's procedures agree on.
     if (proc->is_foreign && proc->results.count > 1) {
         diag_error(c->diag, proc->results[1]->pos, "a foreign procedure can return at most one value");
+    }
+    if (proc->is_variadic && !proc->is_foreign) {
+        diag_error(c->diag, proc->variadic_pos,
+                   "only a foreign procedure can take more arguments with '..'; a Rig procedure can take a view, "
+                   "as in (values: []int)");
     }
     if (proc->is_foreign && !string_eq(proc->foreign_library, str("libc"))) {
         diag_error(c->diag, proc->library_pos, "unknown library '" STR_FMT "'; the only one so far is 'libc'",

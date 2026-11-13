@@ -123,6 +123,16 @@ bool type_is_aggregate(Type *t);
 // with for does the same with a string.
 bool type_is_view_or_string(Type *t);
 
+// The type a value of type t is passed as through a variadic C function's
+// '...', after C's default argument promotions (C17 6.5.2.2): C gives such
+// an argument no parameter type, so the caller widens what's narrower than
+// C's int and float. s8, s16, u8, u16 and bool become an s32, C's int, every
+// value kept (a signed one sign-extended, the others zero-extended), and a
+// float32 a float64, C's double. s32, u32, s64, u64, int, float64 and
+// pointers stay as they are. For the numbers, bools and pointers the
+// checker lets a variadic call pass (checker.h).
+Type *type_c_promoted(Type *t);
+
 // The index in struct type t's fields of the one called `name`, or -1.
 s32 type_field_index(Type *t, String name);
 
