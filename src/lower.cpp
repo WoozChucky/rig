@@ -126,8 +126,9 @@
 //   back to its keyword for its own code (but the jumps out of an if's
 //   blocks, at their '}'), a failing check to the check.
 //   Each block that's a scope adds an Ir_Scope (lower_scoped_block, and the
-//   loops, which are one), each declaration an Ir_Var (add_local_var, and
-//   the parameters in ir_lower).
+//   loops, which are one), and so does a declaration that hides a variable,
+//   for the rest of its block (lower_statement); each declaration adds an
+//   Ir_Var (add_local_var, and the parameters in ir_lower).
 //
 // Blocks are numbered in the order they're made, and made in the order
 // their code comes in the source, so the printed IR reads like the program.
@@ -265,6 +266,22 @@ static s32 new_scope(Lowering *l, Position pos) {
 // living in the stack slot %slot, declared in `scope`.
 static void add_local_var(Lowering *l, Ast_Var *decl, s32 slot, s32 scope) {
     array_add(&l->proc->vars, Ir_Var{decl->name, decl->type, decl->pos, scope, IR_VAR_SLOT, slot, 0});
+}
+
+// Whether a local named `name`, declared here, hides a variable visible
+// here: a global, a parameter, or a local of the current scope or of one
+// around it (one of a block that has ended is visible no more). Such a
+// declaration starts a scope of its own (lower_statement says why).
+static bool hides_a_variable(Lowering *l, String name) {
+    if (table_get(&l->global_index, name)) return true;
+    for (s64 i = 0; i < l->proc->vars.count; i++) {
+        Ir_Var *v = &l->proc->vars[i];
+        if (!string_eq(v->name, name)) continue;
+        for (s32 scope = l->scope; scope >= 0; scope = l->proc->scopes[scope].parent) {
+            if (scope == v->scope) return true;
+        }
+    }
+    return false;
 }
 
 // A constant of IR type t; its value's number. The checker keeps an
@@ -1357,8 +1374,9 @@ static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source);
 
 // A block that's a scope of its own (ir.h's "Debug information"): a block
 // statement, or an if's or an else's. Its statements run in a new scope
-// inside the current one, starting at its '{'; then the current scope is
-// the one around it again.
+// inside the current one, starting at its '{' (and in those its hiding
+// declarations start inside it: lower_statement); then the current scope
+// is the one around it again.
 static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) {
     s32 outer = l->scope;
     l->scope = new_scope(l, block->pos);
@@ -1718,17 +1736,24 @@ static void lower_jump(Lowering *l, Ast_Jump *jump) {
 //     %v, %v+1 = call @f(...)
 //     store i64 %v, %q
 //     store i64 %v+1, %r
+//
+// When one of the names hides a variable, they're all in a scope of their
+// own from the stores on, as a single declaration is (lower_statement).
 static void lower_multi_var(Lowering *l, Ast_Multi_Var *multi) {
+    Position at = l->pos;
+    bool hides = false;
+    for (s64 i = 0; i < multi->vars.count; i++) hides = hides || hides_a_variable(l, multi->vars[i]->name);
     Array<s32> slots = {};
     for (s64 i = 0; i < multi->vars.count; i++) {
         Ast_Var *var = multi->vars[i];
         s32 slot = emit_slot(l, var->type);
         array_add(&l->locals, {var, slot});
-        add_local_var(l, var, slot, l->scope);
         array_add(&slots, slot);
     }
     Array<s32> results = {};
     lower_call_results(l, (Ast_Call *)multi->value, &results);  // the checker made sure it's such a call
+    if (hides) place(l, at, new_scope(l, at));
+    for (s64 i = 0; i < multi->vars.count; i++) add_local_var(l, multi->vars[i], slots[i], l->scope);
     for (s64 i = 0; i < multi->vars.count; i++) emit_put(l, multi->vars[i]->type, results[i], slots[i]);
     array_free(&results);
     array_free(&slots);
@@ -1792,12 +1817,26 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     l->pos = statement_position(s);
     switch (s->kind) {
     case AST_VAR: {
+        // A declaration that hides a variable (a global, a parameter, an
+        // outer local) hides it only from its own end (spec 4.7), but a
+        // debugger shows a scope's variables wherever the scope is, all of
+        // it. So, as rustc does, such a declaration starts a scope of its
+        // own inside the current one, made current until the end of the
+        // block (whose lowering then puts the scope around it back), and
+        // the variable is declared in it. Its initializer is lowered first,
+        // in the scope around: it may read the name it hides (x := x + 1),
+        // and before the store, a debugger shows the outer variable. A
+        // declaration hiding nothing is in the block's scope, as in C.
         Ast_Var *var = (Ast_Var *)s;
+        Position at = l->pos;
+        bool hides = hides_a_variable(l, var->name);
         s32 slot = emit_slot(l, var->type);
         array_add(&l->locals, {var, slot});
+        s32 value = var->value ? lower_value(l, var->value, var->type) : -1;
+        if (hides) place(l, at, new_scope(l, at));
         add_local_var(l, var, slot, l->scope);
         if (var->value) {
-            emit_put(l, var->type, lower_value(l, var->value, var->type), slot);
+            emit_put(l, var->type, value, slot);
         } else if (!var->is_uninitialized) {
             emit_zero(l, var->type, slot);
         }
@@ -2396,7 +2435,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
             // Control reaches the '}', where its return is. The checker made
             // sure that only happens in a procedure that returns nothing;
             // anywhere else, the end can't be reached.
-            place(&l, source->body->end, 0);
+            place(&l, source->body->end, l.scope);  // the body's, or one a hiding declaration began
             if (l.is_entry) {
                 emit_entry_return(&l);
             } else {
