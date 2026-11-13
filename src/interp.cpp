@@ -1,0 +1,767 @@
+// interp.cpp: the IR interpreter (see interp.h).
+//
+// Every name here is Interp or starts with interp_, Interp_ or INTERP_: in
+// the unity build, the files before this one have static names of their
+// own (lower.cpp's emit and resize, llvm_backend.cpp's value, ...) that
+// would collide.
+//
+// The data stack. A run pushes a frame for each call and pops it at the
+// return, on a stack of RIG_STACK_SIZE bytes of the interpreter's own. A
+// frame is:
+//
+//   Interp_Record   the caller's frame, the procedure, the instruction
+//                   running (in a caller: the call it waits on), the values
+//   u64 values[]    one per IR value of the procedure, %0 first
+//   (padding)       to the locals' alignment
+//   locals          one slot per IR_LOCAL, laid out when the procedure is
+//                   first called (interp_proc_info)
+//
+// All of it counts against the stack, so endless recursion runs out of it,
+// however small its frames. A value is kept canonical (interp.h): each
+// operation masks its result to its type's width, and reads a signed
+// operand by sign-extending it from there.
+
+#include "interp.h"
+#include "os.h"
+
+// The range Rig procedures' values come from: 1 MB of addresses reserved
+// and never accessible, procedure k's value at its start plus 16k, so
+// 65,536 procedures. 16 bytes apart, as functions' code is aligned, so the
+// values look like code addresses.
+static const u64 INTERP_PROC_RANGE = 1024 * 1024;
+static const u64 INTERP_PROC_STRIDE = 16;
+
+// Until compile-time C calls come (Task 4), a call of C fails the run.
+static const char *INTERP_NO_C = "calling C at compile time comes with Task 4";
+
+// An IR_LOCAL of a procedure: its value, and its slot's offset from the
+// start of the frame's locals.
+struct Interp_Slot {
+    s32 value;
+    u64 offset;
+};
+
+// What a procedure's frames need, worked out once, on its first call.
+struct Interp_Proc {
+    Ir_Type *value_types;  // each value's type, value_count of them
+    Interp_Slot *slots;    // every IR_LOCAL, whichever block it's in
+    s64 slot_count;
+    u64 locals_size;   // the slots' bytes, aligned; more than RIG_STACK_SIZE when they can't fit
+    u64 locals_align;  // the largest slot alignment, 8 at least (the values' before them)
+};
+
+// A frame's start on the data stack (above).
+struct Interp_Record {
+    Interp_Record *caller;  // null for the run's first frame
+    s32 proc;               // an index in Ir_Module.procs
+    s32 block, index;       // the instruction running; while a callee runs, the call it waits on
+    u64 *values;            // the procedure's value_count values, right after this record
+};
+
+struct Interp {
+    Ir_Module *module;
+    Arena memory;                // the globals' bytes, and each procedure's Interp_Proc
+    Array<u8 *> globals;         // by Ir_Module.globals index, the ones mapped so far
+    Array<Interp_Proc *> procs;  // by Ir_Module.procs index, null until first called
+    u8 *proc_base;               // INTERP_PROC_RANGE reserved bytes (os_reserve_inaccessible)
+    u8 *stack, *stack_end;       // the data stack, RIG_STACK_SIZE bytes
+    u8 *top;                     // its first free byte
+};
+
+// ---------------------------------------------------------------------------
+// Values
+
+// An IR type's width in bits: a float's too, and a ptr's 64.
+static s32 interp_bits(Ir_Type t) {
+    switch (t) {
+    case IR_I1: return 1;
+    case IR_I8: return 8;
+    case IR_I16: return 16;
+    case IR_I32:
+    case IR_F32: return 32;
+    case IR_I64:
+    case IR_PTR:
+    case IR_F64: return 64;
+    case IR_VOID: break;
+    }
+    RIG_ASSERT(!"a value of type void");
+    return 0;
+}
+
+// The bytes a value of type t takes in memory, which is also its
+// alignment: a bool is a byte (C's _Bool), anything else its width.
+static u64 interp_size(Ir_Type t) {
+    return t == IR_I1 ? 1 : (u64)interp_bits(t) / 8;
+}
+
+// v cut to t's width: the canonical bits of a result that may have carried
+// past it (an add, a shift, a sign-extension).
+static u64 interp_truncate(u64 v, Ir_Type t) {
+    s32 bits = interp_bits(t);
+    return bits == 64 ? v : v & (((u64)1 << bits) - 1);
+}
+
+// The canonical v of type t read as a signed number: its top bit, at t's
+// width, copied up. (v ^ sign) - sign does that in unsigned arithmetic,
+// which wraps, rather than shifting a negative number.
+static s64 interp_signed(u64 v, Ir_Type t) {
+    s32 bits = interp_bits(t);
+    if (bits == 64) return (s64)v;
+    u64 sign = (u64)1 << (bits - 1);
+    return (s64)((v ^ sign) - sign);
+}
+
+// An f32's bits, in the low 32 of a value, and back.
+static f32 interp_f32(u64 v) {
+    u32 bits = (u32)v;
+    f32 f;
+    memcpy(&f, &bits, sizeof f);
+    return f;
+}
+
+static u64 interp_f32_bits(f32 f) {
+    u32 bits;
+    memcpy(&bits, &f, sizeof bits);
+    return bits;
+}
+
+// A float value of type t as a double: an f32 widens exactly, so comparing
+// or converting the double is the same as the float.
+static f64 interp_float(u64 v, Ir_Type t) {
+    return t == IR_F32 ? (f64)interp_f32(v) : f64_from_bits(v);
+}
+
+// d rounded to the nearest f32, as fptrunc and an f32 constant do: beyond
+// float's range it's an infinity, which a C++ cast leaves undefined, so
+// check_expr.cpp's round_to_float32 does it (it gives a double a float
+// holds exactly).
+static u64 interp_round_to_f32(f64 d) {
+    return interp_f32_bits((f32)round_to_float32(d));
+}
+
+// The integer of type `to` that d converts to, as LLVM's fptosi.sat
+// (signed) and fptoui.sat do: toward zero, held to the type's range, NaN
+// giving 0. check_expr.cpp's saturate, on an IR type. The limits are powers
+// of two, which a double holds exactly, so the comparisons are exact.
+static u64 interp_saturate(f64 d, Ir_Type to, bool is_signed) {
+    if (__builtin_isnan(d)) return 0;
+    f64 whole = __builtin_trunc(d);
+    s32 bits = interp_bits(to);
+    if (is_signed) {
+        f64 limit = __builtin_ldexp(1.0, bits - 1);  // the range is -limit to limit - 1
+        if (whole >= limit) return (u64)INT64_MAX >> (64 - bits);
+        if (whole < -limit) return (u64)1 << (bits - 1);  // the most negative: the sign bit alone
+        return interp_truncate((u64)(s64)whole, to);
+    }
+    f64 limit = __builtin_ldexp(1.0, bits);  // the range is 0 to limit - 1
+    if (whole >= limit) return interp_truncate(~(u64)0, to);
+    if (whole < 0) return 0;
+    return (u64)whole;
+}
+
+// The value of type t at `at` in memory. A bool is any byte but 0
+// (ir.h's "Memory").
+static u64 interp_load(const u8 *at, Ir_Type t) {
+    switch (t) {
+    case IR_I1: return *at != 0;
+    case IR_I8: return *at;
+    case IR_I16: {
+        u16 x;
+        memcpy(&x, at, sizeof x);
+        return x;
+    }
+    case IR_I32:
+    case IR_F32: {
+        u32 x;
+        memcpy(&x, at, sizeof x);
+        return x;
+    }
+    default: {
+        u64 x;
+        memcpy(&x, at, sizeof x);
+        return x;
+    }
+    }
+}
+
+// Stores the canonical v of type t at `at`: its interp_size bytes, little
+// endian as the value is, a bool as the byte 0 or 1.
+static void interp_store(u8 *at, u64 v, Ir_Type t) {
+    if (t == IR_I1) {
+        *at = (u8)(v & 1);
+    } else {
+        memcpy(at, &v, (size_t)interp_size(t));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Procedures and globals
+
+static u64 interp_align_up(u64 x, u64 align) {
+    return (x + align - 1) & ~(align - 1);
+}
+
+// Procedure k's Interp_Proc, made on its first call:
+// - each value's type (the IR keeps only some: ir.h's Ir_Instr.type), for
+//   C calls' variadic arguments (Task 4): a parameter's, a comparison's i1,
+//   a local's ptr, a call's results' from its callee or signature, and
+//   otherwise the instruction's type;
+// - its locals' layout, every IR_LOCAL a slot in order, each at its
+//   alignment: a scalar's size, or a block's `constant` bytes at `align`.
+//   A slot too big for the stack, or slots that add up past it, can never
+//   be pushed: locals_size says so by exceeding RIG_STACK_SIZE.
+static Interp_Proc *interp_proc_info(Interp *in, s32 k) {
+    Interp_Proc *info = in->procs.data[k];
+    if (info) return info;
+    Ir_Proc *p = in->module->procs[k];
+    RIG_ASSERT(!p->is_foreign && p->blocks.count > 0);
+    info = arena_new<Interp_Proc>(&in->memory);
+    info->value_types = arena_new_array<Ir_Type>(&in->memory, p->value_count ? p->value_count : 1);
+    for (s64 i = 0; i < p->params.count; i++) info->value_types[i] = p->params[i].type;
+    for (s64 b = 0; b < p->blocks.count; b++) {
+        Ir_Block *block = p->blocks[b];
+        for (s64 n = 0; n < block->instrs.count; n++) {
+            Ir_Instr *instr = &block->instrs[n];
+            if (instr->op == IR_LOCAL) info->slot_count++;
+            if (instr->result < 0) continue;
+            RIG_ASSERT(instr->result < p->value_count);
+            switch (instr->op) {
+            case IR_CMP:
+            case IR_FCMP: info->value_types[instr->result] = IR_I1; break;
+            case IR_LOCAL: info->value_types[instr->result] = IR_PTR; break;
+            case IR_CALL:
+            case IR_CALL_INDIRECT: {
+                Ir_Proc *callee = instr->op == IR_CALL ? in->module->procs[instr->target] : instr->signature;
+                for (s64 r = 0; r < callee->results.count; r++) {
+                    RIG_ASSERT(instr->result + r < p->value_count);
+                    info->value_types[instr->result + r] = callee->results[r].type;
+                }
+                break;
+            }
+            default: info->value_types[instr->result] = instr->type; break;
+            }
+        }
+    }
+
+    info->slots = arena_new_array<Interp_Slot>(&in->memory, info->slot_count ? info->slot_count : 1);
+    info->locals_align = 8;
+    u64 offset = 0;
+    s64 count = 0;
+    for (s64 b = 0; b < p->blocks.count; b++) {
+        Ir_Block *block = p->blocks[b];
+        for (s64 n = 0; n < block->instrs.count; n++) {
+            Ir_Instr *instr = &block->instrs[n];
+            if (instr->op != IR_LOCAL) continue;
+            RIG_ASSERT(instr->result >= 0);  // ir_emit numbers every local
+            u64 size = instr->type == IR_VOID ? instr->constant : interp_size(instr->type);
+            u64 align = instr->type == IR_VOID ? instr->align : size;
+            RIG_ASSERT(align > 0 && (align & (align - 1)) == 0);
+            // Past the stack's size, nothing more is laid out: the frame
+            // never fits (interp_push checks locals_size first), and the
+            // sums stay far from wrapping.
+            if (size > RIG_STACK_SIZE || align > RIG_STACK_SIZE || offset > RIG_STACK_SIZE) {
+                offset = RIG_STACK_SIZE + 1;
+                break;
+            }
+            offset = interp_align_up(offset, align);
+            info->slots[count++] = {instr->result, offset};
+            offset += size;
+            if (align > info->locals_align) info->locals_align = align;
+        }
+    }
+    info->slot_count = count;
+    info->locals_size = offset;
+    in->procs.data[k] = info;
+    return info;
+}
+
+// Pushes a frame for procedure k above the stack's top, its locals' slots
+// in place, so executing an IR_LOCAL needs nothing: the values hold their
+// addresses already. Neither the values nor the slots are zeroed, as an
+// alloca's aren't: lowering zeroes whatever the program reads before
+// writing. Null, and nothing pushed, when the frame doesn't fit.
+static Interp_Record *interp_push(Interp *in, Interp_Record *caller, s32 k, Interp_Proc *info) {
+    Ir_Proc *p = in->module->procs.data[k];
+    u64 start = interp_align_up((u64)in->top, 16);
+    u64 values = start + sizeof(Interp_Record);
+    u64 locals = interp_align_up(values + sizeof(u64) * (u64)p->value_count, info->locals_align);
+    if (info->locals_size > RIG_STACK_SIZE || locals + info->locals_size > (u64)in->stack_end) return nullptr;
+    Interp_Record *frame = (Interp_Record *)start;
+    frame->caller = caller;
+    frame->proc = k;
+    frame->block = 0;
+    frame->index = 0;
+    frame->values = (u64 *)values;
+    for (s64 i = 0; i < info->slot_count; i++) frame->values[info->slots[i].value] = locals + info->slots[i].offset;
+    in->top = (u8 *)(locals + info->locals_size);
+    return frame;
+}
+
+// Whether `address` is in the range Rig procedures' values come from: if
+// not, it's native code, C's.
+static bool interp_in_proc_range(Interp *in, u64 address) {
+    u64 base = (u64)in->proc_base;
+    return address >= base && address - base < INTERP_PROC_RANGE;
+}
+
+// Maps the globals the module gained since the last run, in two passes as
+// the backend makes them: each allocated first, then the relocations
+// written, since one may name any global, a later one too. Every global is
+// writable here, a string literal's too, which the compiled program keeps
+// read-only. False, with nothing mapped, when a relocation can't be
+// written: its message in *error.
+static bool interp_map_globals(Interp *in, String *error) {
+    Ir_Module *m = in->module;
+    s64 first = in->globals.count;
+    for (s64 i = first; i < m->globals.count; i++) {
+        Ir_Global *g = &m->globals[i];
+        u8 *bytes;
+        if (g->type == IR_VOID) {
+            // Bytes, a literal's (align 1) or a variable's: the first ones
+            // given, the rest zero (arena_alloc zeroes).
+            u64 size = g->is_variable ? (u64)g->size : (u64)g->bytes.count;
+            u64 align = g->is_variable ? g->align : 1;
+            RIG_ASSERT(g->bytes.count <= (s64)size);
+            bytes = (u8 *)arena_alloc(&in->memory, size ? size : 1, align);
+            if (g->bytes.count) memcpy(bytes, g->bytes.data, (size_t)g->bytes.count);
+        } else {
+            // A scalar, at its natural alignment. A float's initial value
+            // is a double's bits, as an IR_CONST's.
+            u64 initial = g->type == IR_F32 ? interp_round_to_f32(f64_from_bits(g->initial)) : g->initial;
+            bytes = (u8 *)arena_alloc(&in->memory, interp_size(g->type), interp_size(g->type));
+            interp_store(bytes, interp_truncate(initial, g->type), g->type);
+        }
+        array_add(&in->globals, bytes);
+    }
+    for (s64 i = first; i < m->globals.count; i++) {
+        Ir_Global *g = &m->globals[i];
+        for (s64 r = 0; r < g->relocs.count; r++) {
+            Ir_Reloc *reloc = &g->relocs[r];
+            RIG_ASSERT(reloc->offset >= 0 && reloc->offset + 8 <= g->size);
+            u64 address;
+            if (!reloc->is_proc) {
+                address = (u64)in->globals[reloc->global];
+            } else if (m->procs[reloc->global]->is_foreign) {
+                *error = str(INTERP_NO_C);
+                in->globals.count = first;  // the arena keeps their bytes until interp_free
+                return false;
+            } else {
+                address = interp_proc_address(in, reloc->global);
+            }
+            memcpy(in->globals[i] + reloc->offset, &address, sizeof address);
+        }
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Failing
+
+// Stops the run at instruction `index` of block `block` in `frame`: the
+// message, and the frames from there out, innermost first, but the
+// procedures the compiler makes, which the source doesn't have. The names
+// are copied into `a`, once for a run of frames of the same procedure (a
+// recursion that ran out of stack).
+static void interp_fail(Interp *in, Interp_Record *frame, s32 block, s32 index, Arena *a, Interp_Result *result,
+                        String message) {
+    result->ok = false;
+    result->message = string_copy(a, message);
+    frame->block = block;
+    frame->index = index;
+    String name = {};
+    s32 named = -1;
+    for (Interp_Record *f = frame; f; f = f->caller) {
+        Ir_Proc *p = in->module->procs[f->proc];
+        if (p->source_name.count == 0) continue;
+        if (f->proc != named) {
+            name = string_copy(a, p->source_name);
+            named = f->proc;
+        }
+        Ir_Instr *at = &p->blocks[f->block]->instrs[f->index];
+        array_add(&result->frames, Interp_Frame{name, at->pos});
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The loop
+
+// Runs from `frame`'s first instruction until the first frame returns or
+// something fails. Each instruction does what llvm_backend.cpp's build_instr
+// makes it do; the state of the frame running is kept in locals (its
+// values, its block's instructions, where it is), and written into its
+// record only when it calls, so the callee's return can come back to it.
+static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Result *result) {
+    Ir_Module *m = in->module;
+    Ir_Proc *p = m->procs.data[frame->proc];
+    u64 *v = frame->values;
+    s32 block = 0, index = 0;
+    Ir_Instr *code = p->blocks.data[0]->instrs.data;
+    for (;;) {
+        Ir_Instr *i = &code[index];
+        Ir_Type t = i->type;
+        switch (i->op) {
+        case IR_CONST:
+            // A float's constant is a double's bits, rounded for an f32; a
+            // ptr's is null, the only one.
+            RIG_ASSERT(t != IR_PTR || i->constant == 0);
+            v[i->result] = t == IR_F32 ? interp_round_to_f32(f64_from_bits(i->constant))
+                                       : interp_truncate(i->constant, t);
+            break;
+        case IR_ADDR: v[i->result] = (u64)in->globals.data[i->target]; break;
+        case IR_PROC_ADDR:
+            if (m->procs.data[i->target]->is_foreign) {
+                interp_fail(in, frame, block, index, a, result, str(INTERP_NO_C));
+                return;
+            }
+            v[i->result] = interp_proc_address(in, i->target);
+            break;
+        case IR_CALL:
+        case IR_CALL_INDIRECT: {
+            // A Rig procedure, called directly or through its value: a new
+            // frame, its parameters the arguments, and its first
+            // instruction next. Anything else is C.
+            s32 callee = i->target;
+            if (i->op == IR_CALL_INDIRECT) {
+                u64 address = v[i->a];
+                if (!interp_in_proc_range(in, address)) {
+                    interp_fail(in, frame, block, index, a, result, str(INTERP_NO_C));
+                    return;
+                }
+                callee = interp_proc_at(in, address);
+                if (callee < 0) {
+                    interp_fail(in, frame, block, index, a, result, str("call of an address that isn't a procedure"));
+                    return;
+                }
+            } else if (m->procs.data[callee]->is_foreign) {
+                interp_fail(in, frame, block, index, a, result, str(INTERP_NO_C));
+                return;
+            }
+            Interp_Record *next = interp_push(in, frame, callee, interp_proc_info(in, callee));
+            if (!next) {
+                interp_fail(in, frame, block, index, a, result, str("stack overflow"));
+                return;
+            }
+            frame->block = block;
+            frame->index = index;
+            // One argument per parameter. A procedure value cast through
+            // *void to another type may give more or fewer (spec 3.15
+            // says not to): the extra ones go nowhere, and a parameter
+            // given none is whatever its value held, as a native call's
+            // would be, but nothing is written outside the frame.
+            Ir_Proc *q = m->procs.data[callee];
+            s64 count = i->args.count < q->params.count ? i->args.count : q->params.count;
+            for (s64 k = 0; k < count; k++) {
+                next->values[k] = interp_truncate(v[i->args.data[k]], q->params.data[k].type);
+            }
+            frame = next;
+            p = q;
+            v = next->values;
+            block = 0;
+            index = 0;
+            code = p->blocks.data[0]->instrs.data;
+            continue;
+        }
+        case IR_SEXT: v[i->result] = interp_truncate((u64)interp_signed(v[i->a], i->from), t); break;
+        case IR_ZEXT: v[i->result] = v[i->a]; break;
+        case IR_TRUNC: v[i->result] = interp_truncate(v[i->a], t); break;
+        case IR_FPEXT: v[i->result] = f64_bits((f64)interp_f32(v[i->a])); break;
+        case IR_FPTRUNC: v[i->result] = interp_round_to_f32(f64_from_bits(v[i->a])); break;
+        case IR_SITOFP: {
+            // Straight to the type: an i64 to an f32 through a double
+            // would round twice.
+            s64 x = interp_signed(v[i->a], i->from);
+            v[i->result] = t == IR_F32 ? interp_f32_bits((f32)x) : f64_bits((f64)x);
+            break;
+        }
+        case IR_UITOFP: {
+            u64 x = v[i->a];
+            v[i->result] = t == IR_F32 ? interp_f32_bits((f32)x) : f64_bits((f64)x);
+            break;
+        }
+        case IR_FPTOSI_SAT:
+        case IR_FPTOUI_SAT:
+            v[i->result] = interp_saturate(interp_float(v[i->a], i->from), t, i->op == IR_FPTOSI_SAT);
+            break;
+        case IR_LOCAL: break;  // its slot is the frame's already (interp_push)
+        case IR_LOAD: v[i->result] = interp_load((const u8 *)v[i->a], t); break;
+        case IR_STORE: interp_store((u8 *)v[i->b], v[i->a], t); break;
+        case IR_ADD: v[i->result] = interp_truncate(v[i->a] + v[i->b], t); break;
+        case IR_SUB: v[i->result] = interp_truncate(v[i->a] - v[i->b], t); break;
+        case IR_MUL: v[i->result] = interp_truncate(v[i->a] * v[i->b], t); break;
+        case IR_SDIV:
+        case IR_SREM: {
+            // Lowering never divides by 0 (it checks first), but -1 it may
+            // in IR built by hand: the most negative value by -1 is LLVM's
+            // wrap, itself, with remainder 0, where C++'s / traps.
+            s64 x = interp_signed(v[i->a], t), y = interp_signed(v[i->b], t);
+            RIG_ASSERT(y != 0);
+            u64 r;
+            if (y == -1) {
+                r = i->op == IR_SDIV ? 0 - (u64)x : 0;
+            } else {
+                r = (u64)(i->op == IR_SDIV ? x / y : x % y);
+            }
+            v[i->result] = interp_truncate(r, t);
+            break;
+        }
+        case IR_UDIV:
+        case IR_UREM:
+            RIG_ASSERT(v[i->b] != 0);
+            v[i->result] = i->op == IR_UDIV ? v[i->a] / v[i->b] : v[i->a] % v[i->b];
+            break;
+        case IR_AND: v[i->result] = v[i->a] & v[i->b]; break;
+        case IR_OR: v[i->result] = v[i->a] | v[i->b]; break;
+        case IR_XOR: v[i->result] = v[i->a] ^ v[i->b]; break;
+        case IR_SHL:
+        case IR_LSHR:
+        case IR_ASHR: {
+            // The amount masked to the width, as lowering masks it already
+            // and as x86 does: a shift by the width or more is undefined in
+            // C++ as in LLVM.
+            u64 amount = v[i->b] & (u64)(interp_bits(t) - 1);
+            u64 r;
+            if (i->op == IR_SHL) {
+                r = v[i->a] << amount;
+            } else if (i->op == IR_LSHR) {
+                r = v[i->a] >> amount;
+            } else {
+                r = (u64)(interp_signed(v[i->a], t) >> amount);  // C++20's >> of a negative number copies the sign
+            }
+            v[i->result] = interp_truncate(r, t);
+            break;
+        }
+        case IR_CMP: {
+            u64 x = v[i->a], y = v[i->b];
+            s64 sx = interp_signed(x, t), sy = interp_signed(y, t);
+            bool r = false;
+            switch (i->pred) {
+            case IR_EQ: r = x == y; break;
+            case IR_NE: r = x != y; break;
+            case IR_SLT: r = sx < sy; break;
+            case IR_SLE: r = sx <= sy; break;
+            case IR_SGT: r = sx > sy; break;
+            case IR_SGE: r = sx >= sy; break;
+            case IR_ULT: r = x < y; break;
+            case IR_ULE: r = x <= y; break;
+            case IR_UGT: r = x > y; break;
+            case IR_UGE: r = x >= y; break;
+            default: RIG_ASSERT(!"a float predicate in cmp");
+            }
+            v[i->result] = r;
+            break;
+        }
+        case IR_FCMP: {
+            // C++'s comparisons are IEEE 754's: <, <=, >, >= and == are
+            // ordered, false with a NaN; != is unordered, true with one.
+            f64 x = interp_float(v[i->a], t), y = interp_float(v[i->b], t);
+            bool r = false;
+            switch (i->pred) {
+            case IR_FOEQ: r = x == y; break;
+            case IR_FUNE: r = x != y; break;
+            case IR_FOLT: r = x < y; break;
+            case IR_FOLE: r = x <= y; break;
+            case IR_FOGT: r = x > y; break;
+            case IR_FOGE: r = x >= y; break;
+            default: RIG_ASSERT(!"an integer predicate in fcmp");
+            }
+            v[i->result] = r;
+            break;
+        }
+        case IR_SELECT: v[i->result] = (v[i->c] & 1) ? v[i->a] : v[i->b]; break;
+        case IR_FADD:
+        case IR_FSUB:
+        case IR_FMUL:
+        case IR_FDIV: {
+            // In the type's own precision: an f32's in float, so each
+            // operation rounds once, to float, as the compiled one does.
+            u64 r;
+            if (t == IR_F32) {
+                f32 x = interp_f32(v[i->a]), y = interp_f32(v[i->b]);
+                f32 z = i->op == IR_FADD ? x + y : i->op == IR_FSUB ? x - y : i->op == IR_FMUL ? x * y : x / y;
+                r = interp_f32_bits(z);
+            } else {
+                f64 x = f64_from_bits(v[i->a]), y = f64_from_bits(v[i->b]);
+                f64 z = i->op == IR_FADD ? x + y : i->op == IR_FSUB ? x - y : i->op == IR_FMUL ? x * y : x / y;
+                r = f64_bits(z);
+            }
+            v[i->result] = r;
+            break;
+        }
+        case IR_FNEG: v[i->result] = v[i->a] ^ ((u64)1 << (interp_bits(t) - 1)); break;  // the sign bit flipped
+        case IR_PTRADD: v[i->result] = v[i->a] + v[i->b]; break;  // wraps, as getelementptr without inbounds
+        case IR_PTRTOINT:
+        case IR_INTTOPTR: v[i->result] = v[i->a]; break;
+        case IR_COPY:
+            if (i->constant) memmove((void *)v[i->a], (const void *)v[i->b], (size_t)i->constant);
+            break;
+        case IR_ZERO:
+            if (i->constant) memset((void *)v[i->a], 0, (size_t)i->constant);
+            break;
+        case IR_JUMP:
+        case IR_BRANCH:
+            block = (i->op == IR_JUMP || (v[i->c] & 1)) ? i->target : i->target2;
+            index = 0;
+            code = p->blocks.data[block]->instrs.data;
+            continue;
+        case IR_RET: {
+            Interp_Record *caller = frame->caller;
+            if (!caller) {
+                for (s64 k = 0; k < i->args.count; k++) array_add(&result->results, v[i->args.data[k]]);
+                result->ok = true;
+                return;
+            }
+            // The values go to the caller's call, one per result it
+            // expects, as its callee or its signature says (no more, if a
+            // value cast through *void returned more), and its next
+            // instruction runs.
+            Ir_Proc *q = m->procs.data[caller->proc];
+            Ir_Instr *call = &q->blocks.data[caller->block]->instrs.data[caller->index];
+            Ir_Proc *callee = call->op == IR_CALL ? m->procs.data[call->target] : call->signature;
+            s64 count = i->args.count < callee->results.count ? i->args.count : callee->results.count;
+            for (s64 k = 0; k < count; k++) {
+                caller->values[call->result + k] = interp_truncate(v[i->args.data[k]], callee->results.data[k].type);
+            }
+            in->top = (u8 *)frame;
+            frame = caller;
+            p = q;
+            v = caller->values;
+            block = caller->block;
+            index = caller->index + 1;
+            code = p->blocks.data[block]->instrs.data;
+            continue;
+        }
+        case IR_PANIC: {
+            // The text the program would write: a literal's bytes but its
+            // zero, or %b bytes at %a. Its message is what follows the
+            // prefix lowering recorded (ir.h), without the final newline;
+            // the whole text when the prefix isn't known.
+            const u8 *text;
+            u64 count, prefix;
+            if (i->target >= 0) {
+                Ir_Global *g = &m->globals.data[i->target];
+                RIG_ASSERT(g->type == IR_VOID && !g->is_variable && g->bytes.count > 0);
+                text = g->bytes.data;
+                count = (u64)g->bytes.count - 1;
+                prefix = i->constant;
+            } else {
+                text = (const u8 *)v[i->a];
+                count = v[i->b];
+                prefix = i->c >= 0 ? v[i->c] : ~(u64)0;
+            }
+            String all = string_copy(a, {text, (s64)count});
+            s64 start = prefix <= count ? (s64)prefix : 0, end = all.count;
+            if (end > start && all.data[end - 1] == '\n') end--;
+            interp_fail(in, frame, block, index, a, result, string_slice(all, start, end - start));
+            result->panic_text = all;
+            return;
+        }
+        case IR_UNREACHABLE: RIG_ASSERT(!"reached an unreachable"); return;
+        }
+        index++;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The interface
+
+Interp *interp_new(Ir_Module *m) {
+    Interp *in = (Interp *)heap_realloc(nullptr, sizeof(Interp));
+    *in = {};
+    in->module = m;
+    // Reserving addresses fails only when the address space is used up,
+    // which is running out of memory.
+    in->proc_base = (u8 *)os_reserve_inaccessible(INTERP_PROC_RANGE);
+    if (!in->proc_base) out_of_memory();
+    in->stack = (u8 *)heap_realloc(nullptr, RIG_STACK_SIZE);
+    in->stack_end = in->stack + RIG_STACK_SIZE;
+    in->top = in->stack;
+    return in;
+}
+
+void interp_free(Interp *in) {
+    arena_free(&in->memory);
+    array_free(&in->globals);
+    array_free(&in->procs);
+    os_release_inaccessible(in->proc_base, INTERP_PROC_RANGE);
+    free(in->stack);
+    free(in);
+}
+
+void interp_run(Interp *in, s32 proc, Array<u64> args, Arena *a, Interp_Result *result) {
+    *result = {};
+    Ir_Module *m = in->module;
+    RIG_ASSERT(proc >= 0 && proc < m->procs.count);
+    // Every procedure needs an address in the reserved range.
+    if ((u64)m->procs.count > INTERP_PROC_RANGE / INTERP_PROC_STRIDE) {
+        result->message = string_printf(a, "the program has %lld procedures, more than the %llu the interpreter "
+                                           "can give addresses to", (long long)m->procs.count,
+                                        (unsigned long long)(INTERP_PROC_RANGE / INTERP_PROC_STRIDE));
+        return;
+    }
+    while (in->procs.count < m->procs.count) array_add(&in->procs, nullptr);
+    String error = {};
+    if (!interp_map_globals(in, &error)) {
+        result->message = string_copy(a, error);
+        return;
+    }
+    Ir_Proc *p = m->procs[proc];
+    if (p->is_foreign) {
+        result->message = string_copy(a, str(INTERP_NO_C));
+        return;
+    }
+    RIG_ASSERT(args.count == p->params.count);
+    // Each run starts on an empty stack: what the last one's results
+    // pointed into is gone now.
+    in->top = in->stack;
+    Interp_Record *frame = interp_push(in, nullptr, proc, interp_proc_info(in, proc));
+    if (!frame) {
+        result->message = string_copy(a, str("stack overflow"));
+        return;
+    }
+    for (s64 k = 0; k < args.count; k++) frame->values[k] = interp_truncate(args[k], p->params[k].type);
+    interp_loop(in, frame, a, result);
+}
+
+u64 interp_proc_address(Interp *in, s32 proc) {
+    RIG_ASSERT(proc >= 0 && proc < in->module->procs.count && !in->module->procs[proc]->is_foreign);
+    RIG_ASSERT((u64)proc < INTERP_PROC_RANGE / INTERP_PROC_STRIDE);
+    return (u64)in->proc_base + (u64)proc * INTERP_PROC_STRIDE;
+}
+
+s32 interp_proc_at(Interp *in, u64 address) {
+    if (!interp_in_proc_range(in, address)) return -1;
+    u64 offset = address - (u64)in->proc_base;
+    if (offset % INTERP_PROC_STRIDE != 0) return -1;
+    u64 k = offset / INTERP_PROC_STRIDE;
+    if (k >= (u64)in->module->procs.count || in->module->procs[(s64)k]->is_foreign) return -1;
+    return (s32)k;
+}
+
+u8 *interp_global(Interp *in, s32 global) {
+    RIG_ASSERT(global >= 0 && global < in->globals.count);
+    return in->globals[global];
+}
+
+String interp_frames_text(Arena *a, Array<Interp_Frame> frames, Array<String> paths) {
+    // Each line in the arena, then all of them joined once: adding each to
+    // the text so far would copy it again for every line, and a stack
+    // overflow has tens of thousands.
+    Array<String> lines = {};
+    s64 total = 0;
+    for (s64 k = 0; k < frames.count; k++) {
+        Interp_Frame *f = &frames[k];
+        String path = paths[f->pos.file];
+        String line = string_printf(a, "    in " STR_FMT " (" STR_FMT ":%d:%d)\n", STR_ARG(f->proc), STR_ARG(path),
+                                    f->pos.line, f->pos.col);
+        array_add(&lines, line);
+        total += line.count;
+    }
+    u8 *text = (u8 *)arena_alloc(a, (u64)total + 1, 1);
+    s64 at = 0;
+    for (s64 k = 0; k < lines.count; k++) {
+        memcpy(text + at, lines[k].data, (size_t)lines[k].count);
+        at += lines[k].count;
+    }
+    array_free(&lines);
+    return {text, total};
+}
