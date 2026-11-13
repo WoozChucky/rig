@@ -24,6 +24,7 @@
 
 'use strict';
 
+const crypto = require('crypto');
 const path = require('path');
 
 // Path arithmetic as the platform does it: `\` and drive letters on Windows.
@@ -46,9 +47,31 @@ function programPath(platform, file, directory) {
     return paths(platform).join(directory, platform === 'win32' ? `${name}.exe` : name);
 }
 
-// The launch configuration that debugs the program built from `file` in
-// `directory`, with `args` on its command line, run in `directory` as the
-// extension's "run" task runs it.
+// Where the extension builds a program to debug it, for the files of
+// workspace folder `directory` (the file's own directory when it's in no
+// folder), `tmp` being the system's temporary directory (os.tmpdir()):
+// TMP/rig-debug/NAME-HASH, NAME the folder's name and HASH the first 12 hex
+// digits of the SHA-256 of its path. Built in the folder, the program (and
+// .build/) would be left in it (issue #104), where nobody asked for one: a
+// Linux program has no extension that a .gitignore could leave out. The
+// directory is the folder's own, so two folders' programs of one name don't
+// meet, and the same each time, so a build replaces the last one rather
+// than leaving another. On Windows a path names the same folder in any
+// case and with either slash, so its hash is of the path as resolve gives
+// it (with backslashes), in lower case.
+function debugBuildDirectory(platform, directory, tmp) {
+    const p = paths(platform);
+    const resolved = p.resolve(directory);
+    const key = platform === 'win32' ? resolved.toLowerCase() : resolved;
+    const hash = crypto.createHash('sha256').update(key, 'utf8').digest('hex').slice(0, 12);
+    const name = p.basename(resolved);
+    return p.join(tmp, 'rig-debug', name ? `${name}-${hash}` : hash);
+}
+
+// The launch configuration that debugs the program built from `file` into
+// `built` (debugBuildDirectory), with `args` on its command line, run in
+// `cwd`, the workspace folder, where the extension's "run" task runs a
+// program.
 //
 // On Windows: Visual Studio's debugger, with the program in VS Code's
 // integrated terminal, where it can read what's typed (its default, the
@@ -58,13 +81,13 @@ function programPath(platform, file, directory) {
 // is what the C/C++ extension's own configurations do, and it fails
 // harmlessly where gdb has none. externalConsole false keeps the program's
 // output in VS Code.
-function debugConfiguration(platform, file, directory, args) {
+function debugConfiguration(platform, file, built, cwd, args) {
     const common = {
         request: 'launch',
         name: `Rig: debug ${programName(platform, file)}`,
-        program: programPath(platform, file, directory),
+        program: programPath(platform, file, built),
         args: args || [],
-        cwd: directory,
+        cwd,
     };
     if (platform === 'win32') return { type: 'cppvsdbg', ...common, console: 'integratedTerminal' };
     return {
@@ -90,4 +113,4 @@ function launchConfiguration(config, generated) {
     return launched;
 }
 
-module.exports = { programPath, debugConfiguration, launchConfiguration };
+module.exports = { programPath, debugBuildDirectory, debugConfiguration, launchConfiguration };

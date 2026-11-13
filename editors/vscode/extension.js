@@ -34,7 +34,7 @@ const child_process = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { programPath, debugConfiguration, launchConfiguration } = require('./debug');
+const { programPath, debugBuildDirectory, debugConfiguration, launchConfiguration } = require('./debug');
 const { samePath, parseDiagnostics, characterOfByteColumn } = require('./diagnostics');
 
 const windows = process.platform === 'win32';
@@ -347,12 +347,26 @@ class RigTerminal {
 
         // rig runs in the workspace folder (the file's directory when there's
         // none), where it writes the program and .build/ with the object
-        // file. Its diagnostics name the file as it was given. The problem
-        // matcher takes a relative name from the task's workspace folder
-        // (${workspaceFolder}), and an absolute one as it is, so rig gets a
-        // relative name only when the task's folder is the one rig runs in
-        // and the file is inside it: usually so, and the shorter output.
-        const cwd = buildDirectory(file, folder);
+        // file; or, for a build to debug, in the task's `directory`
+        // (debugBuildDirectory), made if need be. Its diagnostics name the
+        // file as it was given. The problem matcher takes a relative name
+        // from the task's workspace folder (${workspaceFolder}), and an
+        // absolute one as it is, so rig gets a relative name only when the
+        // task's folder is the one rig runs in and the file is inside it:
+        // usually so, and the shorter output. A build to debug gets the
+        // file's absolute path as VS Code names it, which the debug
+        // information then names it by, so a breakpoint VS Code sets in the
+        // file finds it; on Linux a directory rig works out from a relative
+        // one could be named another way (by its real path, for a folder
+        // opened through a symlink).
+        const cwd = this.definition.directory || buildDirectory(file, folder);
+        if (this.definition.directory) {
+            try {
+                fs.mkdirSync(cwd, { recursive: true });
+            } catch (e) {
+                return this.fail(`Couldn't make the directory ${cwd}: ${e && e.message ? e.message : e}`);
+            }
+        }
         const relative = this.scope && samePath(this.scope.uri.fsPath, cwd) && isInside(file, cwd);
         const argument = relative ? path.relative(cwd, file) : file;
 
@@ -577,10 +591,10 @@ function expandFile(given, folder) {
     return error ? { error: `the launch configuration's file "${given}" ${error}` } : { file };
 }
 
-// Runs the build task for `file` (the same task "Rig: Build Current File"
-// runs, its output in a terminal and its errors in the Problems panel) and
-// resolves with its exit status: 0 when it built, undefined if the task was
-// stopped.
+// Runs the build task for `file` (the task "Rig: Build Current File" runs,
+// its output in a terminal and its errors in the Problems panel), with rig
+// run in `directory`, where it writes the program, and resolves with its
+// exit status: 0 when it built, undefined if the task was stopped.
 //
 // VS Code says a task's process has ended with onDidEndTaskProcess, with
 // its exit status, and then that the task has ended with onDidEndTask;
@@ -591,7 +605,7 @@ function expandFile(given, folder) {
 // for good. The listeners are in place before the task starts, so its end
 // can't be missed; events that come before executeTask has said which
 // execution is the build's are kept until it has.
-function build(file, scope) {
+function build(file, scope, directory) {
     return new Promise((resolve, reject) => {
         let execution;    // the build's, once executeTask resolves
         let early = [];   // events that came before then, in order: { ended, status }
@@ -610,7 +624,7 @@ function build(file, scope) {
         };
         subscriptions.push(vscode.tasks.onDidEndTaskProcess((event) => heard(event, false)));
         subscriptions.push(vscode.tasks.onDidEndTask((event) => heard(event, true)));
-        const task = makeTask({ type: 'rig', command: 'build', file }, scope, TASK_NAMES.build);
+        const task = makeTask({ type: 'rig', command: 'build', file, directory }, scope, TASK_NAMES.build);
         vscode.tasks.executeTask(task).then(
             (started) => {
                 if (!started) {
@@ -695,9 +709,14 @@ const debugProvider = {
             return undefined;
         }
 
+        // The program is built outside the workspace, in a directory of
+        // its own (debugBuildDirectory), and runs in the workspace folder
+        // as the run task's does.
+        const cwd = buildDirectory(file, buildIn);
+        const built = debugBuildDirectory(process.platform, cwd, os.tmpdir());
         let status;
         try {
-            status = await build(file, scope);
+            status = await build(file, scope, built);
         } catch (e) {
             vscode.window.showErrorMessage(`Rig: couldn't start the build: ${e && e.message ? e.message : e}`);
             return undefined;
@@ -715,7 +734,7 @@ const debugProvider = {
         // With the configuration's other attributes (launchConfiguration):
         // noDebug among them, which Run Without Debugging (Ctrl+F5) sets,
         // and the C/C++ extension's debuggers then just run the program.
-        const generated = debugConfiguration(process.platform, file, buildDirectory(file, buildIn), config.args || []);
+        const generated = debugConfiguration(process.platform, file, built, cwd, config.args || []);
         return launchConfiguration(config, generated);
     },
 };
