@@ -11,8 +11,9 @@
 // public, because the rest of the compiler reads them directly.
 //
 // At the end, helpers on bytes that need nothing else: making a path
-// absolute (milestone 2c's debug information), the path a #load names
-// (issue #112), and MD5 (the debug information's too).
+// absolute (milestone 2c's debug information), the path a #load names and
+// whether a path names a .rig file (issue #112), and MD5 (the debug
+// information's too).
 
 #pragma once
 

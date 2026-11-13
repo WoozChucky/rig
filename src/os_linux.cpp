@@ -24,12 +24,24 @@ static bool os_fail() {
     return false;
 }
 
+// open() takes a directory, and fstat gives its size, which on some file
+// systems is 0 for an empty one (btrfs): the loop below would read nothing
+// and take it for an empty file. So whatever isn't a regular file is
+// refused, after the fstat: a directory with EISDIR, the reason read()
+// gives where it refuses one, anything else (a pipe, a device) with
+// EINVAL. O_NONBLOCK so a pipe's open doesn't wait for a writer; on a
+// regular file it changes nothing.
 bool os_read_file(Arena *a, String path, String *out) {
-    int fd = open(string_cstr(a, path), O_RDONLY | O_CLOEXEC);
+    int fd = open(string_cstr(a, path), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
     if (fd < 0) return os_fail();
     struct stat st;
     if (fstat(fd, &st) < 0) {
         os_fail();
+        close(fd);
+        return false;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        os_last_error = S_ISDIR(st.st_mode) ? EISDIR : EINVAL;
         close(fd);
         return false;
     }
@@ -123,6 +135,12 @@ bool os_file_id(String path, u64 id[3]) {
     id[1] = (u64)st.st_ino;
     id[2] = 0;
     return true;
+}
+
+// Linux's names are bytes, compared as they are: nothing to fold, so the
+// path itself, with nothing put in the arena.
+String os_fold_case([[maybe_unused]] Arena *a, String path) {
+    return path;
 }
 
 bool os_make_directory(String path) {

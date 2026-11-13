@@ -1,7 +1,7 @@
 // base.cpp: the containers that aren't templates (issue #3), making a path
-// absolute (milestone 2c), the path a #load names (issue #112), and MD5
-// (milestone 2c). The templates' bodies are in base.h, where C++ needs
-// them.
+// absolute (milestone 2c), the path a #load names and whether a path names
+// a .rig file (issue #112), and MD5 (milestone 2c). The templates' bodies
+// are in base.h, where C++ needs them.
 
 #include "base.h"
 
