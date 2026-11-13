@@ -50,12 +50,15 @@ In PowerShell (Windows PowerShell, which comes with Windows, or PowerShell 7):
 4. Add that folder to your user `PATH`, unless it is there already:
 
    ```powershell
-   $path = [Environment]::GetEnvironmentVariable('Path', 'User')
    $rig = "$env:LOCALAPPDATA\Programs\rig"
-   if (($path -split ';') -notcontains $rig) { [Environment]::SetEnvironmentVariable('Path', ("$path".TrimEnd(';') + ";$rig").TrimStart(';'), 'User') }
+   $path = (Get-Item HKCU:\Environment).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+   if (($path -split ';') -notcontains $rig) {
+       New-ItemProperty HKCU:\Environment Path -PropertyType ExpandString -Force -Value ("$path".TrimEnd(';') + ";$rig").TrimStart(';') > $null
+       [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', '1', 'User'); [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', $null, 'User')
+   }
    ```
 
-   `SetEnvironmentVariable` writes the whole user `PATH` back with its variables expanded: an entry such as `%USERPROFILE%\AppData\Local\Microsoft\WindowsApps` is saved as the folder it names today. The uninstall line below does the same.
+   This edits the user `PATH` as stored, so its other entries stay exactly as they are: one written with a variable, such as `%USERPROFILE%\.dotnet\tools`, keeps the variable. The last line only tells Windows that the environment changed (setting and removing a variable broadcasts that), so the terminals you open next see the new `PATH`.
 
 5. Open a new terminal (one opened before doesn't see the new `PATH`), and check:
 
@@ -71,7 +74,9 @@ In PowerShell (Windows PowerShell, which comes with Windows, or PowerShell 7):
 
 ```powershell
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\rig"
-[Environment]::SetEnvironmentVariable('Path', (([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') -ne "$env:LOCALAPPDATA\Programs\rig") -join ';', 'User')
+$path = (Get-Item HKCU:\Environment).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+New-ItemProperty HKCU:\Environment Path -PropertyType ExpandString -Force -Value ((($path -split ';') -ne "$env:LOCALAPPDATA\Programs\rig") -join ';') > $null
+[Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', '1', 'User'); [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', $null, 'User')
 ```
 
 ## Linux
