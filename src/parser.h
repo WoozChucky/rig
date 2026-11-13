@@ -164,17 +164,17 @@
 // string after #load, as in #load "other.rig";", at what came instead. A
 // load missing only its ';' is reported as any declaration is, but kept,
 // so the file it names is still loaded. Where a statement, a struct's
-// field, an expression or a type starts, or among the directives after a
-// signature, a #load is "#load can only be at the top level", at its '#';
-// unless it starts a line outside any braces after a top-level declaration
-// that stopped short there (`N ::`, then the #load on the next line): the
-// recovery below resumes at it, so it's read as the top-level load it is,
-// and the error is the usual one for what's missing before it ("expected
-// an expression"). In a body or among a struct's fields, the parser skips
-// it up to its ';' (or, with no ';' first, to the end of its line, a brace
-// on it, or the end of the file) and goes on with the body, which loses
-// nothing by it; anywhere else, the declaration is given up, as after any
-// error below.
+// field, a parameter, an expression, a type or a block starts, or among the
+// directives after a signature, a #load is "#load can only be at the top
+// level", at its '#'; unless it starts a line outside any braces after a
+// top-level declaration that stopped short there (`N ::`, then the #load
+// on the next line): the recovery below resumes at it, so it's read as the
+// top-level load it is, and the error is the usual one for what's missing
+// before it ("expected an expression"). In a body or among a struct's
+// fields, the parser skips it up to its ';' (or, with no ';' first, to the
+// end of its line, a brace on it, or the end of the file) and goes on with
+// the body or the fields, which lose nothing by it; anywhere else, the
+// declaration is given up, as after any error below.
 //
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;
