@@ -204,6 +204,8 @@ static Ir_Type ir_type_of(Type *t) {
     // null always meets a pointer type before lowering (the checker reports
     // one that doesn't), but it's a pointer's 0 wherever it is.
     if (t->kind == TYPE_POINTER || t->kind == TYPE_NULL) return IR_PTR;
+    // A procedure value is the address of the procedure's code.
+    if (t->kind == TYPE_PROC) return IR_PTR;
     if (type_is_aggregate(t)) return IR_PTR;
     if (t->kind == TYPE_FLOAT) return t->size == 4 ? IR_F32 : IR_F64;
     RIG_ASSERT(t->kind == TYPE_INTEGER);

@@ -4338,3 +4338,59 @@ TEST(extra_arguments_c_cant_take) {
               "2:21: argument 1 of 'printf' has type 'int', which can't be converted to '*u8'\n");
     arena_free(&a);
 }
+
+// Issue #83: procedure types and values.
+
+TEST(procedure_types_are_their_signatures) {
+    // Two procedure types are the same exactly when their parameters'
+    // types, their results' types and their #c_call are: the names written
+    // for the parameters don't count. Messages name one as it's written.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Node :: struct { visit: (Node, *Node) -> int; next: *Node; }\n"
+                           "a : (int, int) -> int;\n"
+                           "b : (x: int, y: int) -> int;\n"
+                           "main :: () {\n"
+                           "    a = b;\n"
+                           "    n : int = a;\n"
+                           "    s : (int) -> (int, int);\n"
+                           "    n = s;\n"
+                           "    e : ();\n"
+                           "    n = e;\n"
+                           "    c : (*void, *void) -> s32 #c_call;\n"
+                           "    n = c;\n"
+                           "    r : () -> ((int));\n"
+                           "    n = r;\n"
+                           "    q : () -> ((int) -> int) #c_call;\n"
+                           "    n = q;\n"
+                           "    t : () -> (int) -> int #c_call;\n"
+                           "    n = t;\n"
+                           "    v : Node;\n"
+                           "    n = v.visit;\n"
+                           "    p : *[2](u8) -> bool;\n"
+                           "    n = p;\n"
+                           "}\n"),
+              "6:15: a value of type '(int, int) -> int' doesn't convert to 'int' implicitly\n"
+              "8:9: a value of type '(int) -> (int, int)' doesn't convert to 'int' implicitly\n"
+              "10:9: a value of type '()' doesn't convert to 'int' implicitly\n"
+              "12:9: a value of type '(*void, *void) -> s32 #c_call' doesn't convert to 'int' implicitly\n"
+              "14:9: a value of type '() -> ((int))' doesn't convert to 'int' implicitly\n"
+              "16:9: a value of type '() -> ((int) -> int) #c_call' doesn't convert to 'int' implicitly\n"
+              "18:9: a value of type '() -> (int) -> int #c_call' doesn't convert to 'int' implicitly\n"
+              "20:9: a value of type '(Node, *Node) -> int' doesn't convert to 'int' implicitly\n"
+              "22:9: a value of type '*[2](u8) -> bool' doesn't convert to 'int' implicitly\n");
+    // Its parts are types a value can have; void isn't one.
+    CHECK_STR(check_source(&a,
+                           "f : (void) -> int;\n"
+                           "g : () -> nothing;\n"
+                           "main :: () { }\n"),
+              "1:6: 'void' is only a pointer's target, as in *void\n"
+              "2:11: unknown type 'nothing'\n");
+    // A procedure value is 8 bytes, aligned as a pointer.
+    CHECK_STR(check_source(&a,
+                           "S :: struct { f: (int) -> int; b: u8; }\n"
+                           "N :: size_of((int) -> int) + size_of(S) * 50;\n"
+                           "main :: () { x : [N]u8; y : [808]u8 = x; }\n"),
+              "");
+    arena_free(&a);
+}

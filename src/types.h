@@ -1,15 +1,17 @@
 // types.h: Rig's types, as the checker sees them.
 //
 // The integer types, the float types, bool, pointers, structs, arrays,
-// views, string and void, and the types of untyped integer and float
-// constants, of null and of a literal without its type written (.{1, 2},
-// .[1, 2]). Each type exists once, so two types are the same exactly when
-// their pointers are equal (type_pointer_to keeps one *T per T, and
-// type_array_of and type_view_of one [N]T and one []T; a struct's type is
-// its declaration's, Ast_Struct.declared).
+// views, procedure types, string and void, and the types of untyped integer
+// and float constants, of null and of a literal without its type written
+// (.{1, 2}, .[1, 2]). Each type exists once, so two types are the same
+// exactly when their pointers are equal (type_pointer_to keeps one *T per T,
+// type_array_of and type_view_of one [N]T and one []T, and type_proc_of one
+// procedure type per signature; a struct's type is its declaration's,
+// Ast_Struct.declared).
 //
 // Every type has a size and an alignment, C's (spec 5): s8 u8 bool 1, s16
-// u16 2, s32 u32 float32 4, s64 u64 int float64 and pointers 8. A value of
+// u16 2, s32 u32 float32 4, s64 u64 int float64, pointers and procedure
+// types 8 (a procedure value is the address of its code). A value of
 // the type sits in memory at an address that is a multiple of its alignment,
 // and takes its size in bytes. A struct's are worked out from its fields as
 // C does (checker.cpp's lay_out): each field at the next offset that is a
@@ -37,6 +39,8 @@ enum Type_Kind : u8 {
                            // (type_untyped_literal)
     TYPE_ARRAY,    // [N]T: N T's one after another, N known while compiling
     TYPE_VIEW,     // []T: a count and a pointer to that many T's that lie somewhere else
+    TYPE_PROC,     // (params) -> results: a procedure's type; a value of it is the address of a
+                   // procedure's code, or null (spec 3's "Procedure types")
 };
 
 struct Ast_Struct;  // ast.h: a struct's declaration
@@ -68,6 +72,14 @@ struct Type {
     Type *arrays;    // the array types of this element asked for so far ([N]this), linked
                      // through next_array: each N made once
     Type *next_array;
+    Type **params;       // TYPE_PROC: the parameters' types, param_count of them, in order
+    s64 param_count;
+    Type **results;      // TYPE_PROC: the results' types, result_count of them, in order
+    s64 result_count;
+    bool is_c_call;      // TYPE_PROC: #c_call, called as C calls (spec 7.6): a type of its own
+    Type *procs;         // the procedure types this type anchors (type_proc_of), linked through
+                         // next_proc: each signature made once
+    Type *next_proc;
 };
 
 // The largest size a type may have, 2^40 bytes (a terabyte): an array over
@@ -102,7 +114,16 @@ Type *type_array_of(Type *element, s64 count);
 // []element, the same Type every time, made as type_pointer_to makes *T.
 Type *type_view_of(Type *element);
 
-// How a message names t: "s32", "*u8", "string", "[3]int", "[]*u8".
+// The procedure type of these parameters and results, #c_call or not: the
+// same Type every time for the same ones (each array's types are copied, so
+// the caller keeps its own). Its size and alignment are a pointer's: a
+// value of it is the address of a procedure's code. Its name is its
+// signature as a program writes it (type_name).
+Type *type_proc_of(Type **params, s64 param_count, Type **results, s64 result_count, bool is_c_call);
+
+// How a message names t: "s32", "*u8", "string", "[3]int", "[]*u8", and a
+// procedure type as its signature is written: "(int, int) -> int",
+// "(int) -> (int, int)", "(*void, *void) -> s32 #c_call", "()".
 String type_name(Arena *a, Type *t);
 
 // t's alignment, in bytes: where in memory a value of type t may start.
