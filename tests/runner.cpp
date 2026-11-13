@@ -1168,9 +1168,6 @@ static bool has_file_word(String words) {
     return false;
 }
 
-// What's wrong with a file= block whose info string has another word.
-static const char *FILE_TAKES_NO_OTHER_WORD = "a file= block is no example, so it takes no other word";
-
 // The words after `rig` in a fence's info string: the example's kind, a
 // program's exit status, and a file='s name. What it doesn't know goes in
 // ex->bad. A block with a file= word is a file= block however wrong its
@@ -1204,7 +1201,7 @@ static void read_info(Arena *a, String words, Example *ex) {
         }
         // A file= block is no example, so it has no kind nor exit status.
         if (file_block) {
-            ex->bad = str(FILE_TAKES_NO_OTHER_WORD);
+            ex->bad = str("a file= block is no example, so it takes no other word");
             return;
         }
         Example_Kind kind = EXAMPLE_PROGRAM;
@@ -1293,8 +1290,8 @@ static void read_examples(Arena *a, String text, Array<Example> *examples) {
 
 // One example, written to SPEC_DIR/LINE/example.rig and built or checked
 // there, so its messages name it example.rig on every host, with `files`,
-// the file= blocks right before it, written beside it for it to #load. {}
-// when it passes, otherwise why not.
+// the file= blocks since the example before it (spec_tests), written beside
+// it for it to #load. {} when it passes, otherwise why not.
 static String spec_example_test(Arena *a, String rig, const Example *ex, Array<const Example *> files) {
     if (ex->bad.count) return ex->bad;
     if ((ex->kind == EXAMPLE_RUNTIME_ERROR || ex->kind == EXAMPLE_ERROR) && !ex->has_output) {
