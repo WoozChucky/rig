@@ -146,7 +146,8 @@ static const s32 TIMEOUT = 60;
 // Seconds a program of tests/run may take interpreted. An interpreted
 // program runs many times slower than a compiled one, and the loops of
 // loop_aggregates and loop_locals run 10 million times; in an -O0 build of
-// bin/unit-tests the slower takes about 10 seconds.
+// bin/unit-tests the slower, loop_aggregates, takes about 7 seconds (under 3
+// at -O2).
 static const s32 INTERPRETED_TIMEOUT = 300;
 
 // s with every "\r\n" made "\n".
@@ -391,12 +392,12 @@ static String interpreted_test(Arena *a, String unit_tests, String name) {
     if (ran.exit_code != 101) {
         return string_printf(a, "exit code " STR_FMT ", expected 101", STR_ARG(exit_code_text(a, ran.exit_code)));
     }
-    // The .out alone: the .exit is the compiled run's, and the refusal's
-    // status is always 101.
+    // The .out alone: the .exit read with it is the compiled run's, and the
+    // refusal's status is always 101.
     String expected_out = {};
-    if (!os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".out", STR_ARG(name)), &expected_out)) {
-        return str("no .out file");
-    }
+    s32 unused_exit = 0;
+    String unread = read_expected(a, name, &expected_out, &unused_exit);
+    if (unread.count) return unread;
     // A program that prints nothing compiled would leave the check below
     // nothing to hold its stdout to.
     if (!expected_out.count) return str("its .out is empty: a program with a .interp.err must print a line first");
@@ -831,7 +832,8 @@ static void run_directory(Arena *a, String program, const char *how, const char 
                           String (*test)(Arena *, String, String), s64 *passed, s64 *failed) {
     Array<String> names = {};
     if (!os_list_directory(a, str(dir), &names)) {
-        report(dir, string_printf(a, "can't list it: " STR_FMT, STR_ARG(os_error_message(a))), passed, failed);
+        report(string_cstr(a, string_printf(a, "%s%s", how, dir)),
+               string_printf(a, "can't list it: " STR_FMT, STR_ARG(os_error_message(a))), passed, failed);
         return;
     }
     for (s64 i = 0; i < names.count; i++) {
