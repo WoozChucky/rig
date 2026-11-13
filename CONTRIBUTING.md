@@ -89,7 +89,7 @@ A release is made by the **Release** workflow ([.github/workflows/release.yml](.
 
 The release's files have fixed names, so `https://github.com/WoozChucky/rig/releases/latest/download/NAME` always gets the latest:
 
-- `rig-linux-x64.tar.gz` and `rig-windows-x64.zip`: the compiler, an optimised build, with LLVM's linker beside it (`ld.lld`, `lld-link.exe`), `LICENSE` and `README.md`, at the archive's top level. `scripts/package_linux.sh` and `scripts\package_windows.bat` make them in `dist/`, and try each by building and running hello with the `rig` it holds; either can be run locally.
+- `rig-linux-x64.tar.gz` and `rig-windows-x64.zip`: the compiler, an optimised build, with LLVM's linker beside it (`ld.lld`, `lld-link.exe`), `LICENSE` and `README.md`, and `LICENSE-LLVM.txt` and `LICENSE-LLD.txt`, the licences of LLVM, which the compiler links statically, and of its linker (copied from [third_party](third_party/README.md)), at the archive's top level. `scripts/package_linux.sh` and `scripts\package_windows.bat` make them in `dist/`, and try each by building and running hello with the `rig` it holds; either can be run locally.
 - `rig-vscode.vsix`: the VS Code extension (`code --install-extension rig-vscode.vsix`), made by `editors/vscode/install.sh --vsix FILE`. The extension keeps its own version, in its `package.json`, apart from Rig's.
 - `SHA256SUMS`: the SHA-256 of each of the three, as `sha256sum` writes them (`sha256sum -c SHA256SUMS` checks the downloads).
 
