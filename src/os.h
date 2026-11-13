@@ -11,7 +11,10 @@
 
 #include "base.h"
 
-// The whole file into the arena. False if it can't be read.
+// The whole file into the arena. False if it can't be read, and for what
+// isn't a file: a directory, whose size says nothing of its contents (an
+// empty one's is 0 on some file systems, btrfs's), or, on Linux, a pipe or
+// a device, which could make the reading wait forever.
 bool os_read_file(Arena *a, String path, String *out);
 
 // Everything on standard input, to its end, into the arena: the bytes as
@@ -35,6 +38,14 @@ bool os_file_exists(String path);
 // share's, say) give every file 0, which would make every file the same
 // one, so 0 is taken as no id at all (os_error_message says why).
 bool os_file_id(String path, u64 id[3]);
+
+// `path` with its letters' case folded as the system folds names': on
+// Windows, where a name's case doesn't matter, every letter in upper case
+// (Ä as ä, not only A as a), as the invariant locale has it, close to the
+// table NTFS compares names by; on Linux, where case does matter, `path`
+// itself. For knowing a file with no id (os_file_id) by its path: two
+// names of one file that differ in case alone fold to one.
+String os_fold_case(Arena *a, String path);
 
 // Creates one directory (not its parents). True if it exists already.
 bool os_make_directory(String path);

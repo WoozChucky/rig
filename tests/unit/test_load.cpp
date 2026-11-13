@@ -129,6 +129,42 @@ TEST(load_relative_to_the_loading_file) {
     arena_free(&a);
 }
 
+#ifdef _WIN32
+TEST(load_with_backslashes) {
+    // On Windows '\' is a separator, as '/' is: main.rig's #load "sub\b.rig"
+    // is sub\b.rig, in sub, and b.rig's #load "c.rig" is sub\c.rig, next to
+    // it. An absolute path, C:\..., stays as it is: the same c.rig, loaded
+    // once.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_with_backslashes");
+    CHECK(os_make_directory(str(in_directory(&a, dir, "sub"))));
+    // c.rig's absolute path, each '\' written "\\" in the Rig string.
+    const char *absolute = in_current_directory(&a, str(in_directory(&a, dir, "sub/c.rig")));
+    s64 n = (s64)strlen(absolute);
+    char *escaped = arena_new_array<char>(&a, 2 * n + 1);
+    s64 k = 0;
+    for (s64 i = 0; i < n; i++) {
+        if (absolute[i] == '\\') escaped[k++] = '\\';
+        escaped[k++] = absolute[i];
+    }
+    escaped[k] = 0;
+    write_source(&a, dir, "main.rig", "#load \"sub\\\\b.rig\";\n");
+    write_source(&a, dir, "sub/b.rig",
+                 string_cstr(&a, string_printf(&a, "#load \"c.rig\";\n#load \"%s\";\n", escaped)));
+    write_source(&a, dir, "sub/c.rig", "c :: () {}\n");
+    load_main(&a, &d, dir);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 3);
+    if (d.files.count == 3) {
+        CHECK_STR(d.files[1].path, in_directory(&a, dir, "sub\\b.rig"));
+        CHECK_STR(d.files[2].path, in_directory(&a, dir, "sub\\c.rig"));
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
+#endif
+
 TEST(load_once_by_identity) {
     // One file named several ways is loaded once, so its declarations
     // aren't declared twice: by the system's file id, not by the path's
@@ -209,6 +245,37 @@ TEST(load_missing_file) {
     // The tree is still there, so the checker can check the rest.
     CHECK(tree != nullptr);
     if (tree) CHECK_EQ(tree->procs.count, 1);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(load_missing_file_in_another_case) {
+    // A missing file, known by its path, is one file under names that differ
+    // in case alone on Windows, where a name's case doesn't matter, whatever
+    // the letters: NOPE.RIG is nope.rig, and Ä.rig is ä.rig. On Linux, where
+    // it does, they're four files, each reported.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_missing_file_in_another_case");
+    write_source(&a, dir, "main.rig",
+                 "#load \"nope.rig\";\n#load \"NOPE.RIG\";\n#load \"\xC3\x84.rig\";\n#load \"\xC3\xA4.rig\";\n");
+    load_main(&a, &d, dir);
+    CHECK_EQ(d.files.count, 1);
+#ifdef _WIN32
+    CHECK_EQ(d.messages.count, 2);
+    if (d.messages.count == 2) {
+        check_cannot_read(&a, &d.messages[0], 0, 1, 7, str(in_directory(&a, dir, "nope.rig")));
+        check_cannot_read(&a, &d.messages[1], 0, 3, 7, str(in_directory(&a, dir, "\xC3\x84.rig")));
+    }
+#else
+    CHECK_EQ(d.messages.count, 4);
+    if (d.messages.count == 4) {
+        check_cannot_read(&a, &d.messages[0], 0, 1, 7, str(in_directory(&a, dir, "nope.rig")));
+        check_cannot_read(&a, &d.messages[1], 0, 2, 7, str(in_directory(&a, dir, "NOPE.RIG")));
+        check_cannot_read(&a, &d.messages[2], 0, 3, 7, str(in_directory(&a, dir, "\xC3\x84.rig")));
+        check_cannot_read(&a, &d.messages[3], 0, 4, 7, str(in_directory(&a, dir, "\xC3\xA4.rig")));
+    }
+#endif
     diag_free(&d);
     arena_free(&a);
 }
@@ -311,14 +378,14 @@ TEST(load_goes_on_after_an_error) {
     arena_free(&a);
 }
 
-TEST(load_path_empty_or_with_a_zero_byte) {
+TEST(load_empty_or_zero_byte_path) {
     // A string can hold a zero byte (\0), but a path can't: the system would
     // take the path as ending there, so "b.rig\0junk.rig", a .rig file by its
     // bytes, would read b.rig. Neither it nor an empty path names a file, so
     // each is reported, at its string, and nothing is read.
     Arena a = arena_make();
     Diagnostics d = {};
-    String dir = load_test_directory(&a, "load_path_empty_or_with_a_zero_byte");
+    String dir = load_test_directory(&a, "load_empty_or_zero_byte_path");
     write_source(&a, dir, "main.rig", "#load \"b.rig\\0junk.rig\";\n#load \"b.rig\\0\";\n#load \"\";\n");
     write_source(&a, dir, "b.rig", "helper :: () {}\n");
     load_main(&a, &d, dir);
@@ -336,11 +403,16 @@ TEST(load_with_stdin_path) {
     // a file that needn't exist, but its #loads are found from that path's
     // directory all the same. b.rig loading the main file back loads
     // nothing, as when it exists: with no id to know it by, it's known by
-    // its path, ./absent.rig as absent.rig.
+    // its path, ./absent.rig as absent.rig, and on Windows ABSENT.RIG too.
     Arena a = arena_make();
     Diagnostics d = {};
     String dir = load_test_directory(&a, "load_with_stdin_path");
+#ifdef _WIN32
+    write_source(&a, dir, "b.rig",
+                 "#load \"absent.rig\";\n#load \"./absent.rig\";\n#load \"ABSENT.RIG\";\nhelper :: () {}\n");
+#else
     write_source(&a, dir, "b.rig", "#load \"absent.rig\";\n#load \"./absent.rig\";\nhelper :: () {}\n");
+#endif
     String path = str(in_directory(&a, dir, "absent.rig"));
     CHECK(!os_file_exists(path));
     load_program(&a, &d, path, str("#load \"b.rig\";\nmain :: () { helper(); }\n"));

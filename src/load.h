@@ -16,7 +16,8 @@
 //   system's id for it (os_file_id), not by its path's text, so ./b.rig,
 //   sub/../b.rig, a link to b.rig, and B.RIG on Windows are all b.rig. A
 //   file with no id (one that isn't there, the main file under rig check
-//   --stdin, say) is known by its path made absolute instead. A file
+//   --stdin, say) is known by its path made absolute instead, its case
+//   folded on Windows (os_fold_case): Ä.RIG is ä.rig there too. A file
 //   loading one already loaded, the main file included, loads nothing: a
 //   cycle of loads is harmless, and no error. A file that can't be read is
 //   reported at its first #load alone.
@@ -44,7 +45,8 @@
 // `d` (diag_add_file) and located from the directory rig runs in
 // (diag_locate_file, os_current_directory), the main file first. Errors go
 // to `d`; the tree is returned even with errors, never null, so the checker
-// still runs and reports what it finds in the rest. The tree, the texts
-// read and the paths are in the arena; each file's tokens are freed once
-// it's parsed.
+// still runs and reports what it finds in the rest. The tree and the texts
+// read are in the arena; the files' paths are copied into `d`
+// (diag_add_file), so they last as long as it does; each file's tokens are
+// freed once it's parsed.
 Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text);

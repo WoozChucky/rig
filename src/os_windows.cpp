@@ -168,6 +168,24 @@ bool os_file_id(String path, u64 id[3]) {
     return ok;
 }
 
+// LCMapStringEx's upper case in the invariant locale: the same on every
+// machine, whatever language its user chose (a Turkish one's i isn't
+// another letter's lower case), and one UTF-16 unit for each, so the
+// result is as long as the path. Should it fail, the path stays as it is:
+// its names in another case would then count as other files, which is no
+// worse than not folding.
+String os_fold_case(Arena *a, String path) {
+    if (path.count == 0) return path;
+    Arena scratch = arena_make(1024);
+    wchar_t *wide = to_wide(&scratch, path);
+    int n = (int)wcslen(wide);
+    wchar_t *upper = arena_new_array<wchar_t>(&scratch, n);
+    int done = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, wide, n, upper, n, nullptr, nullptr, 0);
+    String folded = done > 0 ? from_wide(a, upper, done) : path;
+    arena_free(&scratch);
+    return folded;
+}
+
 bool os_make_directory(String path) {
     Arena scratch = arena_make(1024);
     wchar_t *wpath = to_wide(&scratch, path);

@@ -7,8 +7,10 @@
 
 #include <time.h>  // time(), for the timeouts
 #ifndef _WIN32
-#include <stdlib.h>  // realpath, setenv, unsetenv
-#include <unistd.h>  // symlink, unlink
+#include <errno.h>     // EISDIR
+#include <stdlib.h>    // realpath, setenv, unsetenv
+#include <sys/stat.h>  // mkfifo
+#include <unistd.h>    // symlink, unlink
 #endif
 
 #ifdef _WIN32
@@ -427,6 +429,50 @@ TEST(os_read_missing_file_fails) {
     CHECK(!os_read_file(&a, str(".build/no-such-file.rig"), &text));
     CHECK(os_error_message(&a).count > 0);
     CHECK(!os_file_exists(str(".build/no-such-file.rig")));
+    arena_free(&a);
+}
+
+TEST(os_read_file_reads_only_files) {
+    // A #load can name what isn't a file (issue #112). A directory isn't
+    // read, on every file system: not as the empty file its size says it
+    // is on one where an empty directory's size is 0 (btrfs). On Linux, a
+    // pipe isn't either, nor waited on: opening one to read waits for a
+    // writer, so this would hang.
+    Arena a = arena_make();
+    os_make_directory(str(".build"));
+    os_make_directory(str(".build/tests"));
+    CHECK(os_make_directory(str(".build/tests/read_only_files")));
+    CHECK(os_make_directory(str(".build/tests/read_only_files/d.rig")));
+    String text = {};
+    CHECK(!os_read_file(&a, str(".build/tests/read_only_files/d.rig"), &text));
+    CHECK(os_error_message(&a).count > 0);
+#ifndef _WIN32
+    CHECK_STR(os_error_message(&a), strerror(EISDIR));
+    unlink(".build/tests/read_only_files/p.rig");
+    CHECK(mkfifo(".build/tests/read_only_files/p.rig", 0644) == 0);
+    CHECK(!os_read_file(&a, str(".build/tests/read_only_files/p.rig"), &text));
+    CHECK(os_error_message(&a).count > 0);
+    unlink(".build/tests/read_only_files/p.rig");
+#endif
+    arena_free(&a);
+}
+
+TEST(os_fold_case_folds_as_the_system_does) {
+    // On Windows every letter's case, not only ASCII's: Ä.rig is ä.rig. On
+    // Linux, none: they're two files.
+    Arena a = arena_make();
+    String upper = os_fold_case(&a, str("C:/Sub/\xC3\x84.RIG"));
+    String lower = os_fold_case(&a, str("c:/sub/\xC3\xA4.rig"));
+#ifdef _WIN32
+    CHECK_STR(upper, "C:/SUB/\xC3\x84.RIG");
+    CHECK_STR(lower, "C:/SUB/\xC3\x84.RIG");
+#else
+    CHECK_STR(upper, "C:/Sub/\xC3\x84.RIG");
+    CHECK_STR(lower, "c:/sub/\xC3\xA4.rig");
+#endif
+    // Neither changes anything but case.
+    CHECK_EQ(os_fold_case(&a, str("a/b.rig")).count, 7);
+    CHECK_EQ(os_fold_case(&a, str("")).count, 0);
     arena_free(&a);
 }
 
