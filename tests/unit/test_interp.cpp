@@ -205,7 +205,7 @@ TEST(interp_integer_ops_wrap) {
 TEST(interp_signed_division_by_minus_one) {
     // Lowering never divides by -1 (LLVM leaves the most negative value by
     // -1 undefined; it computes 0 - a instead), but IR built by hand may:
-    // the interpreter gives Rig's answer (spec 6.4), the most negative value
+    // the interpreter gives Rig's answer (spec 5.4), the most negative value
     // itself, remainder 0, where C++'s / would trap.
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
@@ -1174,10 +1174,10 @@ TEST(interp_c_functions_by_hand) {
     // fails before it starts, with no frames. One the library has runs
     // directly too, given its arguments as its parameters type them:
     // strlen, called with a string, and refused, with no frames, a Rig
-    // procedure's value or any other address in their range. C gives one result at most: a call, or a direct
-    // run, that expects two gets 0 for the second. dirty runs first and
-    // leaves its values on the stack where pair's frame goes, so a result
-    // left unwritten would show.
+    // procedure's value or any other address in the Rig procedures' range.
+    // C gives one result at most: a call, or a direct run, that expects two
+    // gets 0 for the second. dirty runs first and leaves its values on the
+    // stack where pair's frame goes, so a result left unwritten would show.
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
     s32 nope = (s32)m->procs.count;

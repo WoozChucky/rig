@@ -369,11 +369,12 @@ static void interp_c_argument(Interp *in, Ir_Proc *callee, s64 k, u64 value, Ir_
 
 // Calls the C function at `target` with the arguments gathered, through the
 // thunk, and gives its result's canonical bits in *out, as type `result`
-// (0 for IR_VOID). False, with nothing called, when an argument is a Rig
-// procedure's value, which C would call and fault on, or keep and call
-// later (interp.h). A procedure value is a ptr, through a procedure type or
-// a *void alike, so only pointers are looked at: an integer, a count or a
-// size, may lie in the range by chance.
+// (0 for IR_VOID). False, with nothing called, when a pointer argument lies
+// in the Rig procedures' range (a procedure's value, or any other address
+// there, all of which C would fault on, at once or when it keeps one and
+// calls it later: interp.h). A procedure value is a ptr, through a
+// procedure type or a *void alike, so only pointers are looked at: an
+// integer, a count or a size, may lie in the range by chance.
 static bool interp_call_c(Interp *in, void *target, Ir_Type result, u64 *out) {
     for (s64 k = 0; k < in->c_values.count; k++) {
         if (in->c_types[k] == IR_PTR && interp_in_proc_range(in, in->c_values[k])) return false;
@@ -644,7 +645,7 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
             // Lowering never divides by 0 (it checks first) or by -1 (it
             // computes 0 - a), since LLVM leaves both undefined. IR built
             // by hand may still divide by -1, and gets what lowering would
-            // give, Rig's definition (spec 6.4): the most negative value
+            // give, Rig's definition (spec 5.4): the most negative value
             // wraps to itself, with remainder 0, where C++'s / would trap.
             s64 x = interp_signed(v[instr->a], t), y = interp_signed(v[instr->b], t);
             RIG_ASSERT(y != 0);
