@@ -1463,6 +1463,7 @@ static Ast *parse_struct(Parser *p, Token *name) {
 // (`#load "a.rig" main :: () {}`), as parse_into does after stray tokens.
 static void skip_to_next_declaration(Parser *p, s64 start);
 static s64 declaration_after_stray_tokens(Parser *p, s64 start);
+static void resume_after_stray_tokens(Parser *p, s64 from, s64 resume);
 
 static Ast *parse_load(Parser *p) {
     s64 start = p->next;
@@ -1484,7 +1485,7 @@ static Ast *parse_load(Parser *p) {
     if (!expect(p, TOKEN_SEMICOLON)) {
         s64 resume = declaration_after_stray_tokens(p, start);
         if (resume >= 0) {
-            p->next = resume;
+            resume_after_stray_tokens(p, p->next, resume);
         } else {
             skip_to_next_declaration(p, start);
         }
@@ -1680,6 +1681,18 @@ static s64 declaration_after_stray_tokens(Parser *p, s64 start) {
     return -1;
 }
 
+// Resumes at token `resume`, the declaration declaration_after_stray_tokens
+// found, passing over the tokens from index `from` on. A #load among them
+// isn't reported, as one skip_to_next_declaration passes over isn't, but
+// the file it names isn't loaded either, so the program lacks it
+// (p->lost_a_file), whether the next declaration shares the line or not.
+static void resume_after_stray_tokens(Parser *p, s64 from, s64 resume) {
+    for (s64 i = from; i < resume; i++) {
+        if (is_directive(&p->tokens[i], "load")) p->lost_a_file = true;
+    }
+    p->next = resume;
+}
+
 // The first token from index `from` on, still on the line of token `start`,
 // whose kind is one of `kinds` (`count` of them); TOKEN_EOF when the line
 // ends without one.
@@ -1841,7 +1854,7 @@ void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
                 if (p.tokens[start].kind == TOKEN_IDENT && (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL)) {
                     array_add(&file->procs, broken_entry(&p, start));
                 }
-                p.next = resume;
+                resume_after_stray_tokens(&p, start, resume);
                 continue;
             }
             // Whatever the declaration was meant to be, a procedure, a

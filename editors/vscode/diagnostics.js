@@ -34,20 +34,30 @@ function samePath(a, b) {
     return windows ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
-// rig's output (all of its stderr) as a list of { line, column, severity,
-// message }, line and column counted from 1 as rig counts them, for the
-// diagnostics about `file` alone. rig ran in the directory `cwd`, so a
-// relative name in its output is from there. Lines that aren't a
-// diagnostic's first line (the source and caret lines, which are indented,
-// and rig's own `rig: error: ...`) are skipped, and so is a diagnostic
-// about another file. Windows' "\r\n" reads as "\n".
-function parseDiagnostics(output, file, cwd) {
-    const found = [];
+// Each diagnostic's first line in rig's output (all of its stderr), as
+// { file, name, line, column, severity, message }: `name` the file as rig
+// named it, `file` that name resolved from `cwd`, the directory rig ran in,
+// and line and column counted from 1 as rig counts them. Lines that aren't
+// a diagnostic's first line (the source and caret lines, which are
+// indented, and rig's own `rig: error: ...`) are skipped. Windows' "\r\n"
+// reads as "\n". parseDiagnostics and otherFilesError both read rig's
+// output through it, so they agree on what a diagnostic is.
+function* diagnosticLines(output, cwd) {
     for (const line of output.split(/\r?\n/)) {
         if (/^\s/.test(line)) continue;
         const m = DIAGNOSTIC.exec(line);
-        if (!m || !samePath(path.resolve(cwd, m[1]), file)) continue;
-        found.push({ line: Number(m[2]), column: Number(m[3]), severity: m[4], message: m[5] });
+        if (!m) continue;
+        yield { file: path.resolve(cwd, m[1]), name: m[1], line: Number(m[2]), column: Number(m[3]), severity: m[4], message: m[5] };
+    }
+}
+
+// rig's output as a list of { line, column, severity, message }, for the
+// diagnostics about `file` alone (diagnosticLines): one about another file
+// is left out.
+function parseDiagnostics(output, file, cwd) {
+    const found = [];
+    for (const d of diagnosticLines(output, cwd)) {
+        if (samePath(d.file, file)) found.push({ line: d.line, column: d.column, severity: d.severity, message: d.message });
     }
     return found;
 }
@@ -66,13 +76,11 @@ function parseDiagnostics(output, file, cwd) {
 // and isn't counted.
 function otherFilesError(output, file, cwd) {
     const errors = [];
-    for (const line of output.split(/\r?\n/)) {
-        if (/^\s/.test(line)) continue;
-        const m = DIAGNOSTIC.exec(line);
-        if (m && m[4] === 'error' && !samePath(path.resolve(cwd, m[1]), file)) errors.push(m);
+    for (const d of diagnosticLines(output, cwd)) {
+        if (d.severity === 'error' && !samePath(d.file, file)) errors.push(d);
     }
     if (errors.length === 0) return null;
-    const [, name, line, column, , message] = errors[0];
+    const { name, line, column, message } = errors[0];
     const count =
         errors.length === 1 ? 'an error in another file of the program' : `${errors.length} errors in the program's other files, the first`;
     return { line: 1, column: 1, severity: 'error', message: `${count}: ${nameFrom(file, name, cwd)}:${line}:${column}: ${message}` };

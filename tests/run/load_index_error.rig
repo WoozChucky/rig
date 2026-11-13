@@ -1,0 +1,14 @@
+// A bounds check failing in a loaded file (issue #112) names that file, at
+// the index, as a division by zero there does (load_runtime_error.rig). The
+// file's path is longer than this one's, so the whole message shows that
+// it's written for the longest of the program's paths, not the main file's.
+#load "load/bounds_checked/index_past_the_end.rig";
+
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    puts("before");
+    a : [3]int;
+    element(a, 3);
+    puts("after");
+}
