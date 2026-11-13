@@ -149,7 +149,7 @@ if        null      return    struct    true      union     using     while
 
 ### 2.7 Directives
 
-A directive is `#` followed immediately by a name, formed as an identifier is. Rig has two:
+A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has two:
 
 - `#foreign`, which declares a procedure implemented in C (section 7.6);
 - `#no_abc`, which turns off bounds checks in one procedure (section 7.7).
@@ -180,7 +180,7 @@ float_lit = decimal_lit "." digit { digit | "_" } [ exponent ]
 exponent  = ( "e" | "E" ) [ "+" | "-" ] digit { digit | "_" } .
 ```
 
-A float literal is a decimal integer part followed by a fraction, an exponent, or both: `1.5`, `1e9`, `2.5e-3`, `6.022E23`. The `.` must be followed by a digit, and the exponent's `e` (after its sign, if any) by a digit. So `0..9` is `0`, `..`, `9`; `1.e5` is `1`, `.`, `e5`; and `1._5` is `1`, `.`, `_5`. An exponent without digits (`1e`, `1e+`, `1e_5`) is `float literal has no digits in its exponent`. There are no hexadecimal float literals.
+A float literal is a decimal integer part followed by a fraction, an exponent, or both: `1.5`, `1e9`, `2.5e-3`, `6.022E23`. The `.` must be followed by a digit, and the exponent's `e` (after its sign, if any) by a digit. So `0..9` is `0`, `..`, `9`; `1.e5` is `1`, `.`, `e5`; and `1._5` is `1`, `.`, `_5`. An exponent without digits (`1e`, `1e+`) is `float literal has no digits in its exponent`; `1e_5` is `invalid character '_' in number literal`. There are no hexadecimal float literals.
 
 A float literal's value is the nearest double-precision value to the decimal number written. A literal too large for a double, such as `1e999`, is `float literal too large for 64 bits`; one too small for a double becomes zero, or the nearest value a double has. Where the literal becomes a `float32` (section 3.12), it is rounded to `float32` once, from the decimal text, not by way of the double.
 
@@ -362,7 +362,7 @@ No type may be larger than 2^40 bytes. A larger array type is `'[1099511627777]u
 
 Numeric literals and arithmetic on them have no fixed type until they meet one.
 
-- An **integer literal** whose value is at most 9223372036854775807 (the largest `int`) is an untyped integer constant. A larger literal has type `u64`. The one exception is `-9223372036854775808`: `-` applied directly to the literal `9223372036854775808` is the untyped constant for `int`'s most negative value; `-` applied directly to any larger literal is `constant overflows 'int'`.
+- An **integer literal** whose value is at most 9223372036854775807 (the largest `int`) is an untyped integer constant. A larger literal has type `u64`. The one exception is `-9223372036854775808`: `-` applied directly to the literal `9223372036854775808` (parentheses around the literal allowed) is the untyped constant for `int`'s most negative value; `-` applied directly to any larger literal is `constant overflows 'int'`.
 - A **float literal** is an untyped float constant, whose value is a double.
 - **Arithmetic on untyped constants** is exact and stays untyped. Untyped integer arithmetic must stay within `int`'s range, or it is `constant overflows 'int'`. When an untyped float takes part, the result is an untyped float, computed in double precision with any untyped integer converted to a double (`1 + 0.5` is the untyped float 1.5). An operation on finite untyped floats whose result is infinite is `constant overflows 'float64'`, except a division by zero, which gives an infinity or NaN.
 - A **constant declared from an untyped constant** (`N :: 5;`) is untyped too, and meets types as a literal does.
@@ -377,7 +377,7 @@ Where it meets no type, as in `x := 5;`, an untyped integer becomes an `int` and
 Two other kinds of value take their type from where they are used:
 
 - `null` takes the pointer type it meets (section 3.5);
-- a compound literal written without its type, `.{...}` or `.[...]`, takes the struct, array or view type it meets (section 5.17).
+- a compound literal written without its type, `.{...}` or `.[...]`, takes the struct, array or view type it meets, or the type of a cast around it (section 5.17).
 
 Neither has a default type: with nothing to take a type from, each is an error.
 
@@ -410,7 +410,7 @@ Cast = "cast" [ "," "trunc" ] "(" Type ")" Unary .
 
 | From | To | Result |
 |---|---|---|
-| any type | a type it converts to implicitly (its own included) | the implicit conversion (section 3.13) |
+| any type | a type it converts to implicitly (its own included) | the implicit conversion (section 3.13), except for an untyped float (below) |
 | integer | integer | the same number. If `e` is a constant, a value outside `T`'s range is the compile-time error `300 doesn't fit in 'u8'`, at the cast; otherwise the value is checked at run time (section 8.3). |
 | `bool` | integer | 1 for `true`, 0 for `false` |
 | integer or float | float | the nearest value of `T`, ties to even (`float32` to `float64` is exact) |
@@ -424,12 +424,12 @@ Cast = "cast" [ "," "trunc" ] "(" Type ")" Unary .
 Any other cast is an error:
 
 - a number to `bool`: `can't cast 'int' to 'bool': compare instead, as in x != 0`;
-- a pointer to or from any other type: `can't cast '*int' to 'u32'; a pointer casts to another pointer or to a 64-bit integer`;
+- a pointer to any type but a pointer or a 64-bit integer, or a number or `bool` to a pointer: `can't cast '*int' to 'u32'; a pointer casts to another pointer or to a 64-bit integer`;
 - anything else: `can't cast 'string' to 'int'`.
 
 `cast,trunc(T) e` takes an integer and gives an integer, and nothing else (`cast,trunc only takes integers`). It never fails: narrowing keeps the low bits, widening extends by the sign of `e`'s type (sign extension from a signed type, zero extension from an unsigned one), and between types of the same width the bits are kept and read by `T`'s sign. So `cast,trunc(u8) 300` is 44 and `cast,trunc(s8) 200` is -56.
 
-A cast of a constant is a constant of type `T`, folded by the same rules: `cast(s32) 1e30` is 2147483647. In a cast, an untyped integer operand is an `int` first, and an untyped float operand a `float64`.
+A cast of a constant is a constant of type `T`, folded by the same rules: `cast(s32) 1e30` is 2147483647. In a cast, an untyped integer operand is an `int` first, and an untyped float operand a `float64`. So a cast of an untyped float to `float32` rounds from the double, and a value beyond `float32`'s range becomes an infinity: `cast(float32) 1e300` is infinity, where the implicit conversion in `x : float32 = 1e300;` is an error.
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;
@@ -482,7 +482,7 @@ A declaration binds a name to a constant, a variable, a procedure or a struct. E
 | `name : Type;` | a variable, zeroed |
 | `name : Type = ---;` | a variable, not initialised |
 | `name := expression;` | a variable whose type is its value's |
-| `a, b := call;` | several variables, from a call's results (section 6.2) |
+| `a, b := call;` | several local variables, from a call's results (section 6.2); not at the top level |
 
 Procedures and structs are declared only at the top level: inside a body, `helper :: () { ... }` is `procedures can only be declared at the top level, for now`, and `Vec2 :: struct { ... }` is `structs can only be declared at the top level, for now`. Constants and variables are declared at the top level (as global constants and global variables) or inside a body (as local ones).
 
@@ -534,12 +534,12 @@ The **zero value** of a type is all bytes zero: 0 for numbers, `false`, `null`, 
 
 A local variable is declared after its value is worked out, so `x := x + 1;` in an inner block reads the outer `x` (section 4.7).
 
-**Global variables** are declared at the top level in the same forms. A global lives in the program's file, not on the stack, so its initial value must be known while compiling: `a global's value must be known while compiling, for now`. That allows:
+**Global variables** are declared at the top level in the same forms, one name at a time. A global lives in the program's file, not on the stack, so its initial value must be known while compiling: `a global's value must be known while compiling, for now`. That allows:
 
 - a constant (section 5.9);
 - a struct or array literal whose values are all known while compiling, nested literals included;
 - for a view, an array literal: the compiler makes a global array of its own for the literal, and the view points at it;
-- a string literal, as a `string`, a `*u8` or a `[]u8`, or as a field or element of one: the linker writes the literal's address into the global.
+- a string literal, as a `string`, a `*u8` or a `[]u8`, or through casts that keep its address (`cast(*void) cast(*u8) "x"`), or as a field or element of one: the linker writes the literal's address into the global. A literal's address cast to an integer is not allowed.
 
 A global with no value, or with `---`, starts at zero.
 
@@ -732,7 +732,7 @@ A divisor that is the constant 0 is the compile-time error `division by zero`, a
 
 `&`, `|` and `^` (and, or, exclusive or) take two integers that meet at a type as arithmetic operands do (section 5.3), and give that type. The prefix `~` gives the bitwise complement of an integer: `'~' needs an integer, not 'bool'` otherwise.
 
-`<<` and `>>` shift their left operand by the number of bits their right operand gives. The result has the left operand's type; the amount may be of any integer type and need not match. When the left operand is an untyped constant and the amount is not a constant, the left operand becomes an `int`. The amount is taken modulo the left operand's width in bits (only its low bits are used: for a 32-bit type, `x << 33` shifts by 1), so every shift is defined, as on x86. `>>` is an arithmetic shift for a signed type, bringing in copies of the sign bit, and a logical shift for an unsigned type, bringing in zeros. `<<` on an untyped constant must not push bits past `int`'s range (`constant overflows 'int'`).
+`<<` and `>>` shift their left operand by the number of bits their right operand gives. The result has the left operand's type; the amount may be of any integer type and need not match. When the left operand is an untyped constant and the amount is not a constant, the left operand becomes an `int`. The amount is taken modulo the left operand's width in bits, 64 for an untyped constant (only its low bits are used: for a 32-bit type, `x << 33` shifts by 1, and `1 << 64` is 1), so every shift is defined, as on x86. `>>` is an arithmetic shift for a signed type, bringing in copies of the sign bit, and a logical shift for an unsigned type, bringing in zeros. `<<` on an untyped constant must not push bits past `int`'s range (`constant overflows 'int'`).
 
 ### 5.6 Comparison operators
 
@@ -740,7 +740,7 @@ A divisor that is the constant 0 is the compile-time error `division by zero`, a
 
 - **Numbers** meet at a type as arithmetic operands do (section 5.3) and are compared as numbers of that type: signed or unsigned integers by the type's sign, floats as IEEE 754 compares them. NaN is unordered: every comparison with it is false except `!=`, which is true, so `nan != nan`. `-0.0 == 0.0`.
 - **Bools** are compared with `==` and `!=` only. A bool has no order (`'<' needs numbers, not 'bool'`) and is equal to nothing but a bool (`mismatched types 'bool' and 'int' for '=='`).
-- **Pointers** meet at a pointer type, as an implicit conversion allows (`null` and `*void` meet any pointer type), and compare as unsigned addresses: `mismatched types '*int' and '*u8' for '=='; cast one of them` otherwise.
+- **Pointers** meet at a pointer type, as an implicit conversion allows (`null` and `*void` meet any pointer type), and compare as unsigned addresses. Two pointers that do not meet are `mismatched types '*int' and '*u8' for '=='; cast one of them`; a pointer and something else, `mismatched types '*int' and 'int' for '<'`.
 - **Strings** are compared with `==` and `!=` only: two strings are equal when their counts are equal and so is each byte. A string meets no other type (`mismatched types 'string' and '*u8' for '=='`) and has no order (`'<' needs numbers, not 'string'`).
 
 Nothing else is compared: `'==' needs numbers, bools, pointers or strings, not 'Vec2'`.
@@ -767,7 +767,7 @@ A constant expression is one whose value is known while compiling. The compiler 
 - integer and float literals, `true` and `false`, `null`;
 - the name of a constant;
 - `size_of(T)` and an array's `.count`;
-- a unary, arithmetic, bitwise, shift, comparison or logical operator applied to constant operands;
+- `-`, `~` or `!`, or an arithmetic, bitwise, shift, comparison or logical operator, applied to constant operands (an address, `*x`, is never a constant);
 - a cast of a constant to a number type or `bool`, and a cast of `null` to a pointer type.
 
 A string literal, a compound literal, a variable and a call are not constants. Where a constant is required (a constant's value, an array's count) anything else is an error (sections 4.2, 3.6). A global variable's initial value accepts more than constants (section 4.3).
@@ -871,7 +871,7 @@ ArrayLiteral  = [ identifier ] "." "[" [ Expression { "," Expression } [ "," ] ]
 
 The type before the `.` is a name written directly before it, never a name in parentheses: `(Vec2).{1}` is not a literal. A comma may follow the last value.
 
-**Literals without a type.** `.{1, 2}` and `.[1, 2]` take their type from where they are used: a variable's declared type, an assignment's target, a parameter, a result, or a field or element of an enclosing literal. `.{...}` must meet a struct type. `.[...]` must meet an array type, whose count it must give exactly (`'[3]int' has 3 elements, but this literal gives 2`), or a view type `[]T`, for which it makes a `[N]T` of its `N` values, and the view is of that array. Meeting anything else is `a '.[' literal needs an array or a view type, not 'int'`. With nothing to take a type from, as in `x := .{1, 2};` or an operator's operand, a literal is `this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}` (`int.[1, 2]` for an array literal).
+**Literals without a type.** `.{1, 2}` and `.[1, 2]` take their type from where they are used: a variable's declared type, an assignment's target, a parameter, a result, a field or element of an enclosing literal, or a cast (`cast([]int) .[1, 2]`). `.{...}` must meet a struct type. `.[...]` must meet an array type, whose count it must give exactly (`'[3]int' has 3 elements, but this literal gives 2`), or a view type `[]T`, for which it makes a `[N]T` of its `N` values, and the view is of that array. Meeting anything else is `a '.[' literal needs an array or a view type, not 'int'`. With nothing to take a type from, as in `x := .{1, 2};` or an operator's operand, a literal is `this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}` (`int.[1, 2]` for an array literal).
 
 A literal's values are all evaluated, in the order written, before the literal is stored anywhere, so `v = Vec2.{v.y, v.x};` swaps `v`'s fields.
 
@@ -1146,7 +1146,7 @@ Procedures may be declared in any order, and may call themselves and each other.
 
 Each argument's value is converted to its parameter's type and passed **by value**: the procedure receives its own copy, and nothing it does changes the caller's value. A struct or an array is copied whole; a view or a string is copied as its count and pointer, so its elements are shared with the caller.
 
-Parameters are **read-only**: a parameter cannot be assigned to (`can't assign to 'a': it's a parameter`), nor can its fields or elements, and it has no address. To change a value, copy it into a variable first. Memory reached through a parameter is not read-only: the elements of a view and what a pointer points at can be changed, which is how a procedure changes its caller's data.
+Parameters are **read-only**: a parameter cannot be assigned to (`can't assign to 'a': it's a parameter`), nor can the fields or elements of a struct or array parameter, nor a view or string parameter's `.count` and `.data`, and a parameter has no address. To change a value, copy it into a variable first. Memory reached through a parameter is not read-only: the elements of a view and what a pointer points at can be changed, which is how a procedure changes its caller's data.
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;
@@ -1210,7 +1210,7 @@ A foreign procedure's parameters and result are numbers, bools and pointers, whi
 | `bool` | `_Bool` |
 | `*T`, `*void` | a pointer, `void *` |
 
-It returns at most one value (`a foreign procedure can return at most one value`). Structs, arrays, views and strings are not passed to or returned from C: `a foreign procedure can't take a 'Vec2' yet; pass a pointer to it`, `a foreign procedure can't take a '[3]int'; pass its .data`, `a foreign procedure can't take a 'string'; pass its .data, which may not end with a zero, or a literal`, and `a foreign procedure can't return a 'Vec2' yet`. A pointer to a struct is passed as a pointer to a C struct of the same layout (section 3.9). A foreign procedure has a fixed list of parameters: C's variadic functions, such as `printf`, cannot be declared.
+It returns at most one value (`a foreign procedure can return at most one value`). Structs, arrays, views and strings are not passed to or returned from C: `a foreign procedure can't take a 'Vec2' yet; pass a pointer to it`, `a foreign procedure can't take a '[3]int'; pass its .data`, `a foreign procedure can't take a 'string'; pass its .data, which may not end with a zero, or a literal`, and `a foreign procedure can't return a 'Vec2' yet`. A pointer to a struct is passed as a pointer to a C struct of the same layout (section 3.9). Rig has no variadic parameter lists, and a call of a foreign procedure follows the convention for a C function with fixed parameters, so C's variadic functions, such as `printf`, are not supported: a declaration of one with fixed parameters is not refused, but its calls do not follow C's convention for it (and on Windows `printf` does not link).
 
 ```rig
 malloc :: (size: u64) -> *void #foreign libc;
@@ -1265,7 +1265,7 @@ The messages and their positions:
 |---|---|---|
 | integer division by zero (section 8.2) | `division by zero` | the `/` or `%` (or `/=`, `%=`) |
 | checked integer cast (section 8.3) | `the value doesn't fit in 'T'` | the `cast` |
-| null pointer dereference (section 8.4) | `null pointer dereference` | the `.` of `p.*`, the field's name of `p.x`, the `[` of `p[i]` or `v[i]`, the sequence of a `for`, the `==` or `!=` of a string comparison |
+| null pointer dereference (section 8.4) | `null pointer dereference` | the `.` of `p.*`, the field's name of `p.x`, the `[` of `p[i]` or `v[i]`, the sequence of a `for` (its name, the name of its field, or the `(` of a call), the `==` or `!=` of a string comparison |
 | index out of bounds (section 8.5) | `index I is out of bounds (count C)` | the `[` |
 
 ```rig
@@ -1435,15 +1435,15 @@ rig version
 - `-o OUTPUT` names the executable otherwise. On Windows a name whose file name has no extension gets `.exe`. An output ending in `.rig` is refused: `rig: error: the output 'hello.rig' ends in .rig; is it the source file?`.
 - `--no-bounds-checks` leaves out every bounds check (section 8.5).
 - The object file is written to a directory `.build` in the current directory, made if needed: `.build/hello.obj` on Windows, `.build/hello.o` on Linux.
-- On Windows the program's debug information is written beside it, `hello.pdb` for `hello.exe` (section 10.7).
+- On Windows the program's debug information is written beside it: the executable's name with `.pdb` for its `.exe` (in any case), `hello.pdb` for `hello.exe`, or with `.pdb` added to a name with another extension, `out.bin.pdb` for `out.bin` (section 10.7).
 
 **`rig check`** reads and checks the program as `rig build` does, prints the same diagnostics, and stops: it writes no file. With `--stdin` it reads the program from standard input, and `FILE.rig` is only the name its diagnostics give it (the file need not exist), which lets an editor check text that is not saved.
 
 **`rig version`** prints the compiler's version and the version of the LLVM it is built with: `rig 0.1.0 (LLVM 23.1.4)`.
 
-Both `build` and `check` take only a source file whose name ends in `.rig`, in any case: `rig: error: 'hello.txt' isn't a .rig file`. A file that cannot be read is `rig: error: cannot read 'hello.rig': MESSAGE`, with the system's reason.
+Both `build` and `check` take only a source file whose name ends in `.rig`, in any case: `rig: error: 'hello.txt' isn't a .rig file`. A file that cannot be read is `rig: error: cannot read 'hello.rig': MESSAGE`, with the system's reason (`rig: error: cannot read standard input: MESSAGE` with `--stdin`).
 
-The exit status is 0 on success; 1 when the program has errors, cannot be read, or cannot be built or linked; and 2 when the command line is malformed (no file, two files, an option given twice, `-o` without a name, or `-o` or `--no-bounds-checks` given to `rig check`), in which case the usage is printed.
+The exit status is 0 on success; 1 when the program has errors, cannot be read, or cannot be built or linked; and 2 when the command line is malformed (no command or an unknown one, no file, two files, an option given twice, `-o` without a name or with an empty one, or `-o` or `--no-bounds-checks` given to `rig check`), in which case the usage is printed. A word that is not an option is taken as the file's name: an unknown option alone is a file that isn't a `.rig` file, and beside the file it is a second file.
 
 ### 10.2 The compiler's stages
 
@@ -1477,7 +1477,7 @@ Rig follows the platform's C calling convention, as clang implements it: the Mic
 - **Procedures** are local to the program (internal linkage), except `main`, which is exported as the C program's `main`, returning the C `int` 0. A debugger's `main` is therefore the Rig procedure itself. **Foreign procedures** are external symbols, resolved by the linker against the C runtime.
 - **Scalar parameters and results** (integers, floats, bools, pointers) are passed as C passes values of the C types in section 7.6. On Linux an `s8`, `u8`, `s16` or `u16` argument or result is extended to 32 bits by the side that passes it, sign-extended if its type is signed and zero-extended if not, as clang does; on Windows the receiving side extends it. A `bool` is passed as a whole byte or more, 0 or 1 with every other bit zero, on both. Rig's own procedures follow the same rules as foreign ones, so a call and its callee always agree.
 - **Aggregates** (structs, arrays, views and strings) are never passed in registers. An aggregate argument is passed as a pointer to a copy the caller makes; the callee only reads it. An aggregate result is returned through a hidden pointer parameter: there is one per aggregate result, in result order, before the visible parameters, each pointing at a temporary of the caller's that `return` copies the value into, and that the caller copies to its destination after the call.
-- **Several results**: the scalar results of a procedure that has more than one are returned together as one LLVM structure value, whose passing LLVM decides. Only Rig's own procedures have several results, so no C code sees it.
+- **Several results**: when a procedure has more than one scalar result, they are returned together as one LLVM structure value, whose passing LLVM decides; a single scalar result is returned as itself. Only Rig's own procedures have several results, so no C code sees it.
 - **Frame pointers** are kept in every procedure (LLVM's `"frame-pointer"="all"`): each frame begins by saving the caller's `rbp` and pointing `rbp` at it, so debuggers and profilers can walk the stack through the chain of frames.
 - **Stack probes**: a frame larger than a page touches each of its pages in order, so the guard page below the stack is always hit first. On Windows this is the C runtime's `__chkstk`; on Linux, inline probes (`"probe-stack"="inline-asm"`).
 
@@ -1499,12 +1499,12 @@ Every program links the platform's C runtime, dynamically.
 
 ```text
 link /NOLOGO /INCREMENTAL:NO /SUBSYSTEM:CONSOLE /MACHINE:X64 /OUT:OUTPUT
-     /DEBUG:FULL /PDB:NAME.pdb
+     /DEBUG:FULL /PDB:PDB
      /LIBPATH:MSVC /LIBPATH:UCRT /LIBPATH:UM OBJECTS...
      msvcrt.lib vcruntime.lib ucrt.lib kernel32.lib
 ```
 
-so a program uses the C runtime's DLLs (the Universal C Runtime and the Visual C++ runtime).
+where `PDB` is the PDB's path (section 10.1), so a program uses the C runtime's DLLs (the Universal C Runtime and the Visual C++ runtime).
 
 **Linux.** The linker is LLVM's `ld.lld`, from the compiler's own directory, with glibc's start files `crt1.o`, `crti.o` and `crtn.o` from the first of `/usr/lib/x86_64-linux-gnu`, `/usr/lib64` and `/usr/lib` that has them:
 
@@ -1514,7 +1514,7 @@ ld.lld -o OUTPUT --eh-frame-hdr -m elf_x86_64
        CRT/crt1.o CRT/crti.o OBJECTS... -LCRT -lc CRT/crtn.o
 ```
 
-Only `libc` is linked: functions of other libraries, such as `libm`'s `sqrt` on Linux, are not available.
+The library named by `#foreign` is checked to be `libc`, and a foreign procedure resolves against whatever the link line provides. On Linux that is glibc's `libc` alone: functions of other libraries, such as `libm`'s `sqrt`, are not available. On Windows it is the libraries above, so the C runtime's math functions and `kernel32`'s functions resolve too.
 
 When a tool is missing, or the linker fails, the compiler prints the reason or the linker's own output, then `rig: error: linking failed`, and exits with status 1.
 
@@ -1525,7 +1525,7 @@ When a tool is missing, or the linker fails, the compiler prints the reason or t
 The debug information holds:
 
 - **A compile unit** for the source file, named by its absolute path (made from the path given to `rig build` and the directory the compiler ran in), with that directory and the MD5 checksum of the file's bytes, so a debugger finds the file and can tell when it has changed. The unit's language is C (C99), whose expression syntax a debugger then uses (`a.count`, `a[i]`; Rig's `p.*` is C's `*p`), and its producer is `rig 0.1.0 (clang version 23.1.4)`.
-- **A subprogram for each procedure**, by its Rig name, with its line and the line its body starts on, so `break main` or `break sort` stops at the procedure and a backtrace names each frame. The internal procedures of section 10.5 have none, and a debugger steps over them.
+- **A subprogram for each procedure with a body**, by its Rig name, with its line and the line its body starts on, so `break main` or `break sort` stops at the procedure and a backtrace names each frame. The internal procedures of section 10.5 have none, and a debugger steps over them.
 - **Lexical blocks** following the program's scopes (section 4.7): each `if`, `else` and standalone block, and each loop's body, which starts at its `for` or `while`.
 - **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}`, a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
 
