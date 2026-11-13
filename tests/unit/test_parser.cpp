@@ -1952,20 +1952,27 @@ TEST(a_procedure_type_can_return_one) {
 
 TEST(parses_c_call_declarations) {
     // #c_call before a body, with #no_abc in either order; several results
-    // may be written in parentheses in a declaration too.
+    // may be written in parentheses in a declaration too. A #c_call after a
+    // result that is a procedure type written without parentheses is the
+    // result's, the innermost type with room for it, as in a type; after
+    // parenthesized results it is the procedure's.
     Arena a = arena_make();
     String errors;
     CHECK_STR(parse_src(&a,
                         "compare :: (a: *void, b: *void) -> s32 #c_call { return 0; }\n"
                         "f :: () #c_call #no_abc { }\n"
                         "g :: () #no_abc #c_call { }\n"
-                        "divmod :: (a: int, b: int) -> (int, int) { return a / b, a % b; }\n",
+                        "divmod :: (a: int, b: int) -> (int, int) { return a / b, a % b; }\n"
+                        "make :: () -> (int) -> int #c_call { }\n"
+                        "made :: () -> ((int) -> int) #c_call { }\n",
                         &errors),
               "(proc compare (params (a (ptr void)) (b (ptr void))) (returns s32) (c_call) (block (return (int 0))))\n"
               "(proc f (params) (c_call) (no_abc) (block))\n"
               "(proc g (params) (c_call) (no_abc) (block))\n"
               "(proc divmod (params (a int) (b int)) (returns int int) (block (return (binary / (name a) (name b)) "
-              "(binary % (name a) (name b)))))\n");
+              "(binary % (name a) (name b)))))\n"
+              "(proc make (params) (returns (proc-type (params int) (returns int) (c_call))) (block))\n"
+              "(proc made (params) (returns (proc-type (params int) (returns int))) (c_call) (block))\n");
     CHECK_STR(errors, "");
     arena_free(&a);
 }

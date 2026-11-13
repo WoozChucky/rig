@@ -2961,14 +2961,14 @@ TEST(structs_arent_compared) {
                            "    a += b;\n"
                            "    while b { }\n"
                            "}\n"),
-              "5:12: '==' needs numbers, bools, pointers or strings, not 'Vec2'\n"
-              "6:12: '!=' needs numbers, bools, pointers or strings, not 'Vec2'\n"
+              "5:12: '==' needs numbers, bools, pointers, procedure values or strings, not 'Vec2'\n"
+              "6:12: '!=' needs numbers, bools, pointers, procedure values or strings, not 'Vec2'\n"
               "7:12: '<' needs numbers, not 'Vec2'\n"
               "8:12: '+' needs numbers, not 'Vec2'\n"
               "9:8: the condition of 'if' must be a bool, not 'Vec2'\n"
               "10:10: '-' needs a number, not 'Vec2'\n"
               "11:10: '!' needs a bool, not 'Vec2'\n"
-              "12:12: '==' needs numbers, bools, pointers or strings, not 'Vec2'\n"
+              "12:12: '==' needs numbers, bools, pointers, procedure values or strings, not 'Vec2'\n"
               "13:7: '+=' needs numbers, not 'Vec2'\n"
               "14:11: the condition of 'while' must be a bool, not 'Vec2'\n");
     arena_free(&a);
@@ -3617,7 +3617,7 @@ TEST(array_converts_to_view) {
               "6:18: a value of type '[3]int' doesn't convert to '[4]int' implicitly\n"
               "7:17: a value of type '[3]u8' doesn't convert to '[]int' implicitly\n"
               "8:16: a value of type '[3]int' doesn't convert to '*int' implicitly\n"
-              "9:15: '==' needs numbers, bools, pointers or strings, not '[3]int'\n"
+              "9:15: '==' needs numbers, bools, pointers, procedure values or strings, not '[3]int'\n"
               "10:10: can't cast '[3]u8' to '[]int'\n");
     arena_free(&a);
 }
@@ -4641,5 +4641,69 @@ TEST(c_call_is_part_of_the_type) {
               "implicitly; #c_call is part of the type, as in '(*void, *void) -> s32 #c_call'\n"
               "9:24: a value of type '(*u8) -> s32 #c_call' doesn't convert to '(*u8) -> s32' implicitly; #c_call is "
               "part of the type, as in '(*u8) -> s32 #c_call'\n");
+    arena_free(&a);
+}
+
+TEST(a_constant_names_a_procedure_only_as_its_own_type) {
+    // A constant naming a procedure stands for it, calls included, so its
+    // type must be the procedure's: casts that end at that type are fine,
+    // and casts that reach it from another one are refused, or the constant
+    // and a call of it would disagree on what it takes.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add2 :: (a: int, b: int) -> int { return a + b; }\n"
+                           "SAME :: cast((int, int) -> int) cast(*void) add2;\n"
+                           "OP :: cast((int) -> int) cast(*void) add2;\n"
+                           "AGAIN :: OP;\n"
+                           "main :: () {\n"
+                           "    x := SAME(1, 2);\n"
+                           "    y := OP(1, 2);\n"
+                           "    z := OP(1);\n"
+                           "    f : (int) -> int = OP;\n"
+                           "    LOCAL :: cast((int) -> int) cast(*void) add2;\n"
+                           "}\n"),
+              "3:7: 'add2' is a '(int, int) -> int', so a constant can't name it as a '(int) -> int'\n"
+              "10:14: 'add2' is a '(int, int) -> int', so a constant can't name it as a '(int) -> int'\n");
+    arena_free(&a);
+}
+
+TEST(main_is_no_value) {
+    // main is where the program starts, and returns C's int to the C
+    // runtime (lower.cpp), which its Rig type, (), doesn't say: so a value
+    // of it would be called as the wrong function. It can't be one.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "START :: main;\n"
+                           "main :: () {\n"
+                           "    me := main;\n"
+                           "    f : () = main;\n"
+                           "    main();\n"
+                           "}\n"),
+              "1:10: 'main' can't be a value: it's where the program starts\n"
+              "3:11: 'main' can't be a value: it's where the program starts\n"
+              "4:14: 'main' can't be a value: it's where the program starts\n");
+    arena_free(&a);
+}
+
+TEST(procedure_values_and_void_pointers_say_to_cast) {
+    // A procedure value and a *void convert to each other only with a cast,
+    // which the message says to write: a C API taking a callback as void *.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "take :: (p: *void) { }\n"
+                           "main :: () {\n"
+                           "    p : *void = add;\n"
+                           "    take(add);\n"
+                           "    f : (int, int) -> int = p;\n"
+                           "    q : *u8 = add;\n"
+                           "}\n"),
+              "4:17: a value of type '(int, int) -> int' doesn't convert to '*void' implicitly; cast it with "
+              "cast(*void)\n"
+              "5:10: argument 1 of 'take' has type '(int, int) -> int', which can't be converted to '*void'; cast "
+              "it with cast(*void)\n"
+              "6:29: a value of type '*void' doesn't convert to '(int, int) -> int' implicitly; cast it with "
+              "cast((int, int) -> int)\n"
+              "7:15: a value of type '(int, int) -> int' doesn't convert to '*u8' implicitly\n");
     arena_free(&a);
 }

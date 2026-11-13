@@ -489,13 +489,13 @@ A procedure type goes wherever a type goes: a variable's, a constant's, a parame
 
 **Identity.** Two procedure types are the same type when their parameter types are the same, in order, their result types are the same, in order, and both are marked `#c_call` or neither is. Messages write a procedure type in that form, with no names: `(int, int) -> int`, `(int) -> (int, int)`, `(*void, *void) -> s32 #c_call`, `()`.
 
-**Values.** A procedure value is the address of a procedure's code: 8 bytes, aligned to 8, as a pointer is (section 3.11). A procedure's name used other than in a call is its value, whose type is its signature's: with `add :: (a: int, b: int) -> int { ... }`, `f := add;` gives `f` the type `(int, int) -> int`. A constant may name a procedure, `OP :: add;`, and then stands for it wherever it is used, calls included (section 4.2). A global variable may hold one (section 4.3). A foreign procedure's value has a `#c_call` type (section 7.6), and a variadic foreign procedure, declared with `..`, cannot be a value, since no procedure type can say `..`: `'printf' can't be a value: it takes more arguments with '..', which no procedure type can say`.
+**Values.** A procedure value is the address of a procedure's code: 8 bytes, aligned to 8, as a pointer is (section 3.11). A procedure's name used other than in a call is its value, whose type is its signature's: with `add :: (a: int, b: int) -> int { ... }`, `f := add;` gives `f` the type `(int, int) -> int`. A constant may name a procedure, `OP :: add;`, and then stands for it wherever it is used, calls included (section 4.2). A global variable may hold one (section 4.3). A foreign procedure's value has a `#c_call` type (section 7.6), and a variadic foreign procedure, declared with `..`, cannot be a value, since no procedure type can say `..`: `'printf' can't be a value: it takes more arguments with '..', which no procedure type can say`. Nor can `main` (section 7.4): `'main' can't be a value: it's where the program starts`.
 
 A procedure value may be **null**, naming no procedure: `null` converts to every procedure type, and a procedure-typed variable or field that is zeroed is null (section 4.3). Calling a null procedure value is a runtime error (section 8.4).
 
 **Comparisons.** `==` and `!=` compare two procedure values of the same type, or one with `null`, as addresses: a procedure's value is equal to itself and to no other procedure's (section 5.6). Values of two different types are not compared (`mismatched types '(int, int) -> int' and '(int) -> int' for '=='`). A procedure value has no order (`'<' needs numbers, not '(int, int) -> int'`) and takes no arithmetic (`'+' needs numbers, not '(int, int) -> int'`).
 
-**Conversions.** A procedure value converts implicitly only to its own type (section 3.13). A value of another signature is `a value of type '(int, int) -> int' doesn't convert to '(int) -> int' implicitly`, and as an argument `argument 1 of 'apply' has type '(int) -> int', which can't be converted to '(int, int) -> int'`: a procedure is only ever called as its own signature says. The one explicit conversion is to and from `*void`, the address as C stores a callback: `cast(*void) f` and `cast((int) -> int) p` (section 3.14). Every other cast with a procedure type is an error, between two procedure types included: `can't cast '(int) -> int' to '(s32) -> s32'; a procedure value casts only to and from *void`. Through `*void`, the program must cast back to the procedure's own type before calling it.
+**Conversions.** A procedure value converts implicitly only to its own type (section 3.13). A value of another signature is `a value of type '(int, int) -> int' doesn't convert to '(int) -> int' implicitly`, and as an argument `argument 1 of 'apply' has type '(int) -> int', which can't be converted to '(int, int) -> int'`: a procedure is only ever called as its own signature says. The one explicit conversion is to and from `*void`, the address as C stores a callback: `cast(*void) f` and `cast((int) -> int) p` (section 3.14). Without the cast, the message says to write it: `a value of type '(int, int) -> int' doesn't convert to '*void' implicitly; cast it with cast(*void)`, and the other way `...; cast it with cast((int, int) -> int)`. Every other cast with a procedure type is an error, between two procedure types included: `can't cast '(int) -> int' to '(s32) -> s32'; a procedure value casts only to and from *void`. Through `*void`, the program must cast back to the procedure's own type before calling it.
 
 **`#c_call`.** A procedure declared with `#c_call` is one that C can call (section 7.6), and its type is marked `#c_call` too: `compare :: (a: *void, b: *void) -> s32 #c_call { ... }` has the type `(*void, *void) -> s32 #c_call`. That type is not the type without the mark, and neither converts to the other: `a value of type '(*u8) -> s32 #c_call' doesn't convert to '(*u8) -> s32' implicitly; #c_call is part of the type, as in '(*u8) -> s32 #c_call'`, and, the other way, a Rig procedure passed where C expects a callback is `argument 4 of 'qsort' has type '(*void, *void) -> s32', which can't be converted to '(*void, *void) -> s32 #c_call'; mark 'compare' #c_call for C to call it`. A `#c_call` type's parameters and result are what C takes, as a foreign procedure's are (section 7.6).
 
@@ -559,7 +559,7 @@ After `::`, a `(` followed by `)` or by an identifier and `:` begins a procedure
 ConstDecl = identifier "::" Expression ";" .
 ```
 
-`N :: e;` declares the constant `N` with the value of `e`, which must be known while compiling (section 5.9): otherwise `the value of constant 'N' isn't known while compiling`. A constant is a number, a `bool` or a procedure: any other value is `a constant can only be a number, a bool or a procedure, for now`, so a string, a struct or an array cannot be a constant. A constant that names a procedure, `OP :: add;` (or `OP :: OTHER;`, where `OTHER` names one), stands for that procedure: its type is the procedure's type (section 3.15), and `OP(1, 2)` calls `add` as `add(1, 2)` does.
+`N :: e;` declares the constant `N` with the value of `e`, which must be known while compiling (section 5.9): otherwise `the value of constant 'N' isn't known while compiling`. A constant is a number, a `bool` or a procedure: any other value is `a constant can only be a number, a bool or a procedure, for now`, so a string, a struct or an array cannot be a constant. A constant that names a procedure, `OP :: add;` (or `OP :: OTHER;`, where `OTHER` names one), stands for that procedure: its type is the procedure's type (section 3.15), and `OP(1, 2)` calls `add` as `add(1, 2)` does. Casts may be written around the name when they end at the procedure's own type, as `cast((int, int) -> int) cast(*void) add` does; a constant that would name a procedure as another type is refused, since a call of it calls the procedure: `'add' is a '(int, int) -> int', so a constant can't name it as a '(int) -> int'`. A constant cannot name `main`, which is no value (section 7.4).
 
 A constant has the type of its value: untyped when the value is an untyped constant, so `LIMIT :: 100;` meets types as the literal `100` does, and typed otherwise (`MASK :: cast(u8) 0xF0;` is a `u8`). A constant occupies no storage and cannot be assigned to (`can't assign to 'N': it's a constant`) or have its address taken.
 
@@ -810,7 +810,7 @@ A divisor that is the constant 0 is the compile-time error `division by zero`, a
 - **Procedure values** are compared with `==` and `!=` only, two of the same procedure type or one with `null`, as addresses (section 3.15). Two of different types are `mismatched types '(int, int) -> int' and '(int) -> int' for '=='`; a procedure value has no order (`'<' needs numbers, not '(int, int) -> int'`).
 - **Strings** are compared with `==` and `!=` only: two strings are equal when their counts are equal and so is each byte. A string meets no other type (`mismatched types 'string' and '*u8' for '=='`) and has no order (`'<' needs numbers, not 'string'`).
 
-Nothing else is compared: `'==' needs numbers, bools, pointers or strings, not 'Vec2'`.
+Nothing else is compared: `'==' needs numbers, bools, pointers, procedure values or strings, not 'Vec2'`.
 
 ### 5.7 Logical operators
 
@@ -837,7 +837,7 @@ A constant expression is one whose value is known while compiling. The compiler 
 - `-`, `~` or `!`, or an arithmetic, bitwise, shift, comparison or logical operator, applied to constant operands (an address, `*x`, is never a constant);
 - a cast of a constant to a number type or `bool`, and a cast of `null` to a pointer type.
 
-A string literal, a compound literal, a variable and a call are not constants. Where a constant is required (a constant's value, an array's count) anything else is an error (sections 4.2, 3.6). A global variable's initial value accepts more than constants (section 4.3).
+A string literal, a compound literal, a variable and a call are not constants. Where a constant is required (a constant's value, an array's count) anything else is an error (sections 4.2, 3.6), with one exception: a constant's value may also name a procedure, as it is or through casts that end at its own type, since its address is known when the program is linked (section 4.2). A global variable's initial value accepts more than constants (section 4.3).
 
 Untyped constant expressions are exact (section 3.12). Typed constant expressions wrap as at run time; a division by the constant 0 is an error while compiling.
 
@@ -1246,7 +1246,7 @@ A procedure returns zero, one or several results, given by `return` (section 6.1
 
 ### 7.4 main and the program's exit
 
-The program must have a procedure called `main` (`a procedure called 'main' is needed`), with a body (`'main' must have a body: it's where the program starts`), taking no parameters and returning nothing (`'main' must take no arguments and return nothing`).
+The program must have a procedure called `main` (`a procedure called 'main' is needed`), with a body (`'main' must have a body: it's where the program starts`), taking no parameters and returning nothing (`'main' must take no arguments and return nothing`). `main` can be called, but it is not a procedure value (section 3.15): `me := main;` is `'main' can't be a value: it's where the program starts`, since C calls it as a function returning an `int` (section 10.4), which its type does not say.
 
 The program starts by calling `main`, once the C runtime has started. When `main` returns, the program exits with status 0, and the C runtime flushes its output streams. A program ends with another status by calling the C library's `exit`:
 
@@ -1521,9 +1521,10 @@ These are memory errors, which the program must avoid and no check catches:
 - writing the bytes of a string literal, which are read-only;
 - using a misaligned pointer made by a cast;
 - calling a procedure value made by a cast from a `*void` that doesn't hold the address of a procedure of that type (section 3.15);
+- calling a procedure value read from a variable declared with `---` before it is assigned: it holds no procedure, and is not null either, so the null check (section 8.4) passes it;
 - an index outside its sequence with bounds checks off.
 
-Reading a variable declared with `---` before assigning it gives an unspecified value, not a memory error.
+Reading a variable declared with `---` before assigning it gives an unspecified value, not a memory error, though using that value may be one: as a pointer or a procedure value, it points nowhere in particular.
 
 ## 9. Compile-time errors
 
@@ -1678,7 +1679,7 @@ No integer instruction carries LLVM's `nsw`, `nuw` or `exact` flags, and no floa
 
 Rig follows the platform's C calling convention, as clang implements it: the Microsoft x64 convention on Windows and the System V AMD64 convention on Linux.
 
-- **Procedures** are local to the program (internal linkage), except `main`, which is exported as the C program's `main`, returning the C `int` 0. A debugger's `main` is therefore the Rig procedure itself. **Foreign procedures** are external symbols, resolved by the linker against the C runtime.
+- **Procedures** are local to the program (internal linkage), except `main`, which is exported as the C program's `main`, returning the C `int` 0, which its Rig type does not say, so it is no procedure value (section 7.4). A debugger's `main` is therefore the Rig procedure itself. **Foreign procedures** are external symbols, resolved by the linker against the C runtime.
 - **Scalar parameters and results** (integers, floats, bools, pointers) are passed as C passes values of the C types in section 7.6. On Linux an `s8`, `u8`, `s16` or `u16` argument or result is extended to 32 bits by the side that passes it, sign-extended if its type is signed and zero-extended if not, as clang does; on Windows the receiving side extends it. A `bool` is passed as a whole byte or more, 0 or 1 with every other bit zero, on both. Rig's own procedures follow the same rules as foreign ones, so a call and its callee always agree.
 - **Variadic calls**, of a foreign procedure declared with `..` (section 7.6), follow C's convention for a call of a function declared with `...`, as clang makes it: the arguments after the named ones are passed after C's default argument promotions, as an `int`, a `long long`, a `double` or a pointer, so none is narrower than 32 bits. On Linux the caller also sets `al` to the number of vector registers the arguments use (at most 8), which the callee's `va_start` reads to know which to save. On Windows a `double` among the first four arguments goes in its integer register as well as its vector register, since the callee reads its arguments from the integer registers and the stack, as one list.
 - **Aggregates** (structs, arrays, views and strings) are never passed in registers. An aggregate argument is passed as a pointer to a copy the caller makes; the callee only reads it. An aggregate result is returned through a hidden pointer parameter: there is one per aggregate result, in result order, before the visible parameters, each pointing at a temporary of the caller's that `return` copies the value into, and that the caller copies to its destination after the call. When the aggregate is the procedure's only result, its pointer is the one C passes for a struct returned in memory (LLVM's `sret`), so the procedure also returns it, in `rax`, as C's convention says such a function does.
@@ -1817,7 +1818,7 @@ ProcResults   = Type | "(" Type { "," Type } ")" .
 
 After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. `ProcDecl` and `StructDecl` appear only at the top level. In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'`.
 
-In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{` or a directive other than `#c_call`; otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
+In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{`, a directive other than `#c_call`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file; otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
 
 ### A.3 Statements
 

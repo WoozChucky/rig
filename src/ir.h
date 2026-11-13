@@ -156,9 +156,9 @@ enum Ir_Op : u8 {
                                      //  a float's value prints as a number, const f64 2.5)
     IR_ADDR,                         // %n = addr @global
     IR_PROC_ADDR,                    // %n = procaddr @proc   a procedure's address: a procedure value
-    IR_CALL,                         // [%n[, %n+1...] =] call @proc(%a, ...): one value per result;
+    IR_CALL,                         // [%n[, %n+1...] =] call @proc(args): one value per result;
                                      // one argument per parameter, and any number more to a variadic proc
-    IR_CALL_INDIRECT,                // [%n[, %n+1...] =] call %a(%b, ...): a call of the procedure whose
+    IR_CALL_INDIRECT,                // [%n[, %n+1...] =] call %a(args): a call of the procedure whose
                                      // address is the ptr %a, a procedure value; its parameters and results
                                      // are `signature`'s
     IR_SEXT, IR_ZEXT, IR_TRUNC,      // %n = sext T %a to U   (`from` is T, `type` U)
@@ -209,7 +209,8 @@ struct Ir_Proc;
 struct Ir_Instr {
     Ir_Op op;
     Ir_Type type;      // the value's type; IR_STORE, IR_CMP, IR_FCMP, IR_SELECT: the operands'; IR_LOCAL: the slot's
-                       // (IR_VOID: bytes); IR_CALL: the first result's; IR_VOID when none
+                       // (IR_VOID: bytes); IR_CALL, IR_CALL_INDIRECT: the first result's;
+                       // IR_VOID when none
     Ir_Type from;      // the conversions (IR_SEXT ... IR_TRUNC, IR_FPEXT ... IR_FPTOUI_SAT, IR_PTRTOINT,
                        // IR_INTTOPTR): the operand's type
     Ir_Pred pred;      // IR_CMP, IR_FCMP

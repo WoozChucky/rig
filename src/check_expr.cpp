@@ -194,9 +194,17 @@ static bool is_c_string(Type *t) {
 //   procedure's name ("; only a procedure marked #c_call has a #c_call
 //   type" for another value), and the other way, "; #c_call is part of the
 //   type, as in '(*u8) -> s32 #c_call'";
+// - between a procedure value and a *void, the cast that converts it (spec
+//   3.15), as a C API taking a callback as a void * needs: "; cast it with
+//   cast(*void)", "; cast it with cast((int) -> int)";
 // - nothing for anything else.
 static String conversion_hint(Checker *c, Ast *value, Type *from, Type *to) {
     if (from == &type_string && is_c_string(to)) return str("; its .data may not end with a zero");
+    Type *void_pointer = type_pointer_to(&type_void);
+    if (from && to &&
+        ((from->kind == TYPE_PROC && to == void_pointer) || (from == void_pointer && to->kind == TYPE_PROC))) {
+        return string_printf(c->arena, "; cast it with cast(" STR_FMT ")", STR_ARG(type_name(c->arena, to)));
+    }
     if (!from || !to || from->kind != TYPE_PROC || to->kind != TYPE_PROC || from->is_c_call == to->is_c_call ||
         type_proc_of(from->params, from->param_count, from->results, from->result_count, to->is_c_call) != to) {
         return {};
@@ -437,7 +445,8 @@ static void report_undeclared(Checker *c, Ast_Name *name, bool called) {
 // constant's, which is known while compiling, or a procedure, of its
 // procedure type (a constant naming one too). A variadic procedure has no
 // procedure type: "'printf' can't be a value: it takes more arguments
-// with '..', which no procedure type can say".
+// with '..', which no procedure type can say". Nor is main a value: "'main'
+// can't be a value: it's where the program starts".
 static Type *check_name(Checker *c, Ast_Name *name) {
     Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
@@ -458,6 +467,13 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         // Nor is there about a signature in a circle, said already.
         Ast_Proc *proc = (Ast_Proc *)decl;
         if (proc->is_broken || !check_proc_signature(c, proc)) return nullptr;
+        // main is C's main, returning C's int to the C runtime (lower.cpp),
+        // which its type, (), doesn't say: a call through a value of it
+        // would call it as the wrong function. A direct call knows.
+        if (string_eq(proc->name, str("main"))) {
+            diag_error(c->diag, name->pos, "'main' can't be a value: it's where the program starts");
+            return nullptr;
+        }
         if (proc->is_variadic) {
             diag_error(c->diag, name->pos,
                        "'" STR_FMT "' can't be a value: it takes more arguments with '..', which no procedure type "
@@ -1121,15 +1137,16 @@ static Type *check_unify_procs(Checker *c, Ast_Binary *b, Type *left, Type *righ
 // procedure values of one type, or one and null, compare as addresses
 // (check_unify_procs), with == and != only: they have no order ("'<' needs
 // numbers, not '(int) -> int'"). Anything else isn't compared: "'==' needs
-// numbers, bools, pointers or strings, not 'Vec2'", "'<' needs numbers, not
-// 'Vec2'".
+// numbers, bools, pointers, procedure values or strings, not 'Vec2'", "'<'
+// needs numbers, not 'Vec2'".
 static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right) {
     const char *op = token_kind_name(b->op);
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
     Type *t;
     Type *not_equatable = !takes_equality(left) ? left : !takes_equality(right) ? right : nullptr;
     if (equality && not_equatable) {
-        diag_error(c->diag, b->pos, "%s needs numbers, bools, pointers or strings, not '" STR_FMT "'", op,
+        diag_error(c->diag, b->pos,
+                   "%s needs numbers, bools, pointers, procedure values or strings, not '" STR_FMT "'", op,
                    STR_ARG(type_name(c->arena, not_equatable)));
         return nullptr;
     }
@@ -1502,8 +1519,9 @@ bool is_place(Checker *c, Ast *e, bool for_writing) {
 bool check_addressable(Checker *c, Ast *e, bool for_writing) {
     if (e->kind == AST_NAME) {
         // Looked up here rather than checked as a value, so a procedure's
-        // name is "can't assign to 'f': it's a procedure", not "procedures
-        // can only be called".
+        // name is "can't assign to 'f': it's a procedure" (name_is_place),
+        // said of the name itself, not a mistake found in the procedure's
+        // value, such as a variadic one's "'printf' can't be a value".
         Ast_Name *name = (Ast_Name *)e;
         Ast *decl = check_lookup(c, name->name);
         name->decl = decl;

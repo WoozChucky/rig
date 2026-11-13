@@ -638,8 +638,8 @@ TEST(copy_and_zero_never_give_a_value) {
 
 TEST(ir_prints_byte_globals) {
     // A variable of bytes prints its size and alignment, then `zero` when
-    // every byte is 0 and it holds no address; otherwise its bytes, as a
-    // string literal's print, and where each address goes. Here @table is
+    // every byte is 0, whatever addresses it holds; otherwise its bytes, as
+    // a string literal's print. Then where each address goes. Here @table is
     // 24 bytes: a count (3) in the first 8, the address of @str.0 (a later
     // global) at offset 8, then 8 zero bytes.
     Arena a = arena_make();
@@ -2663,7 +2663,7 @@ TEST(string_global_has_a_relocation) {
                    "global @greeting: 16 align 8 = "
                    "\"\\02\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @str.0\n"
                    "global @str.1 = \"hey\\00\"\n"
-                   "global @g: 8 align 8 = \"\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 0 @str.1\n"
+                   "global @g: 8 align 8 = zero reloc 0 @str.1\n"
                    "global @str.2 = \"abc\\00\"\n"
                    "global @n: 24 align 8 = "
                    "\"\\03\\00\\00\\00\\00\\00\\00\\00\\03\\00\\00\\00\\00\\00\\00\\00"
@@ -3486,8 +3486,7 @@ TEST(a_global_procedure_value_has_a_relocation) {
     CHECK(contains(ir,
                    "global @one: 8 align 8 = zero reloc 0 @neg\n"
                    "global @str.0 = \"neg\\00\"\n"
-                   "global @ops: 16 align 8 = "
-                   "\"\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 0 @str.0 reloc 8 @neg\n"
+                   "global @ops: 16 align 8 = zero reloc 0 @str.0 reloc 8 @neg\n"
                    "global @table: 16 align 8 = zero reloc 8 @neg\n"
                    "global @address: 8 align 8 = zero reloc 0 @neg\n"));
     String error = {}, text = {};
