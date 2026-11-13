@@ -73,14 +73,14 @@ asm(R"asm(
     .def rig_thunk_call; .scl 2; .type 32; .endef   # an external function, for the COFF symbol table
     .p2align 4
 rig_thunk_call:
-    .seh_proc rig_thunk_call
+    .seh_proc rig_thunk_call      # the function starts: its unwind information follows
     pushq %rbp                    # save the caller's rbp
-    .seh_pushreg %rbp
+    .seh_pushreg %rbp             # unwind: rbp was pushed here
     pushq %rbx                    # and its rbx
-    .seh_pushreg %rbx
+    .seh_pushreg %rbx             # unwind: rbx was pushed here
     movq %rsp, %rbp               # rbp: the stack pointer to come back to
-    .seh_setframe %rbp, 0
-    .seh_endprologue
+    .seh_setframe %rbp, 0         # unwind: rbp holds rsp as it was after the pushes
+    .seh_endprologue              # the prologue ends: the unwinder undoes everything above
     movq %rcx, %rbx               # rbx: the Thunk_Call, kept across the call
     movq 128(%rbx), %rcx          # rcx: stack_count
     testq $1, %rcx
@@ -107,8 +107,8 @@ rig_thunk_call:
     leaq 0(%rbp), %rsp            # drop the shadow space, the stack arguments and the padding
     popq %rbx                     # restore the caller's rbx
     popq %rbp                     # and rbp
-    retq
-    .seh_endproc
+    retq                          # back to the caller, rsp as on entry
+    .seh_endproc                  # the function ends
 )asm");
 
 #else
@@ -130,7 +130,7 @@ rig_thunk_call:
     pushq %rbp                    # save the caller's rbp
     .cfi_def_cfa_offset 16        # now rsp + 16
     .cfi_offset %rbp, -16         # rbp is saved 16 below it
-    movq %rsp, %rbp               # rbp: the stack pointer to come back to
+    movq %rsp, %rbp               # rbp: the frame, at the saved rbp, the return address above it
     .cfi_def_cfa_register %rbp    # the frame address is rbp + 16 from here on, wherever rsp goes
     pushq %rbx                    # save the caller's rbx
     .cfi_offset %rbx, -24         # 24 below the frame address
@@ -167,8 +167,8 @@ rig_thunk_call:
     popq %rbx                     # restore the caller's rbx
     popq %rbp                     # and rbp
     .cfi_def_cfa %rsp, 8          # the frame address is rsp + 8 again
-    retq
-    .cfi_endproc
+    retq                          # back to the caller, rsp as on entry
+    .cfi_endproc                  # the function ends
     .size rig_thunk_call, .-rig_thunk_call
 
     # The code needs no executable stack. The linker makes the stack
@@ -180,12 +180,13 @@ rig_thunk_call:
     .popsection
 )asm");
 
-// An s8 or s16 argument sign-extended to the whole register. The backend
-// marks such a parameter signext on Linux (llvm_backend.cpp's
-// extension_attribute), as clang does, and clang-built code relies on it:
-// a callee may use the 32-bit register as it is. An unsigned one is
-// zero-extended already, being canonical. (v ^ sign) - sign copies the top
-// bit up in unsigned arithmetic, as interp.cpp's interp_signed does.
+// An s8 or s16 argument sign-extended to the whole register or 8-byte
+// stack slot. The backend marks such a parameter signext on Linux
+// (llvm_backend.cpp's extension_attribute), as clang does, and clang-built
+// code relies on it: a callee may use the 32-bit register as it is. An
+// unsigned one is zero-extended already, being canonical. (v ^ sign) - sign
+// copies the top bit up in unsigned arithmetic, as interp.cpp's
+// interp_signed does.
 static u64 thunk_widen(u64 v, Ir_Type type, Ir_Ext ext) {
     if (ext != IR_EXT_SIGN || (type != IR_I8 && type != IR_I16)) return v;
     u64 sign = type == IR_I8 ? 0x80 : 0x8000;
