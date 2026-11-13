@@ -75,7 +75,7 @@ Rig is early. Milestones 1 (hello world) and 2 (the core language) of 8 are done
 
 ## Quick start
 
-The [releases](https://github.com/WoozChucky/rig/releases) have the compiler built for Windows and Linux, with the VS Code extension; their notes say what each system needs. To build it yourself instead, build the compiler, then save hello world as `hello.rig`:
+The [releases](https://github.com/WoozChucky/rig/releases) have the compiler built for Windows and Linux, with the VS Code extension; the website's [Install page](https://woozchucky.github.io/rig/install) says how to install them and what each system needs. To build it yourself instead, build the compiler, then save hello world as `hello.rig`:
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;
