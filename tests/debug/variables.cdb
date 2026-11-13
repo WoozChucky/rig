@@ -1,0 +1,17 @@
+l+t
+l+s
+l+l
+bp `variables.rig:54`
+bp `variables.rig:29`
+g
+dv /t
+?? counter
+?? s
+?? node.next->value
+dx numbers
+g
+dv /t
+?? s
+?? s.count
+?? loud
+q

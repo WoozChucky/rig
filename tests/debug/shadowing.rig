@@ -1,0 +1,17 @@
+// A debugger's view of names an inner block hides (bin/run-tests runs it
+// under gdb with shadowing.gdb and under cdb with shadowing.cdb): inside
+// the block, x is the block's own; after it, the procedure's again; in a
+// loop inside a loop, it is the inner loop's.
+main :: () {
+    x := 1;
+    {
+        x := 2;
+        z := x + 1;
+    }
+    y := x;
+    for 5..6 {
+        for 0..1 {
+            w := it + 10;
+        }
+    }
+}

@@ -1,0 +1,18 @@
+main () at
+shadowing.rig:9
+z := x + 1;
+$1 = 2
+main () at
+shadowing.rig:11
+y := x;
+$2 = 1
+main () at
+shadowing.rig:14
+w := it + 10;
+$3 = 0
+it = 0
+it_index = 0
+it = 5
+it_index = 0
+x = 1
+y = 1
