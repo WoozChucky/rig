@@ -92,6 +92,14 @@ bool type_is_view_or_string(Type *t) {
     return t->kind == TYPE_VIEW || t->kind == TYPE_STRING;
 }
 
+Type *type_c_promoted(Type *t) {
+    // C's int, which every narrower integer and _Bool becomes: s32.
+    Type *c_int = &integer_types[2];
+    if (t == &type_bool || (t->kind == TYPE_INTEGER && t->size < c_int->size)) return c_int;
+    if (t == &type_float32) return &type_float64;
+    return t;
+}
+
 s32 type_field_index(Type *t, String name) {
     for (s64 i = 0; i < t->fields.count; i++) {
         if (string_eq(t->fields[i].name, name)) return (s32)i;
