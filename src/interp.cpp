@@ -32,7 +32,8 @@
 #include "thunk.h"
 
 // The range Rig procedures' values come from: 1 MB of addresses reserved
-// and never accessible, procedure k's value at its start plus 16k, so
+// and never accessible, the k-th procedure's value (counting from 0, the
+// compiler's and foreign ones included) 16 x k bytes past its start, so
 // 65,536 procedures. 16 bytes apart, as functions' code is aligned, so the
 // values look like code addresses.
 static const u64 INTERP_PROC_RANGE = 1024 * 1024;
@@ -858,9 +859,9 @@ void interp_run(Interp *in, s32 proc, Array<u64> args, Arena *a, Interp_Result *
     *result = {};
     Ir_Module *m = in->module;
     RIG_ASSERT(proc >= 0 && proc < m->procs.count);
-    // Procedure k's address is the reserved range's start plus 16k, so
-    // every index, a C function's too (whose place is never handed out),
-    // must fall inside it.
+    // Procedure k's address is 16 x k bytes past the reserved range's
+    // start, so every index, a C function's too (whose place is never
+    // handed out), must fall inside it.
     if ((u64)m->procs.count > INTERP_PROC_RANGE / INTERP_PROC_STRIDE) {
         result->message = string_printf(a, "the program has %lld procedures, more than the %llu the interpreter "
                                            "can give addresses to", (long long)m->procs.count,

@@ -2,9 +2,9 @@
 // inside the compiler: #run (#115) and build.rig (#116) build on it.
 //
 // It runs the IR lowering makes (ir.h), the same the LLVM backend compiles,
-// with the same meaning (spec 10.2 to 10.4): wrapping integers, IEEE 754
-// floats, saturating float-to-int casts, memmove copies. A program gives the
-// same results interpreted as compiled.
+// with the same meaning (spec 10.8, and 10.2 to 10.4): wrapping integers,
+// IEEE 754 floats, saturating float-to-int casts, memmove copies. A program
+// gives the same results interpreted as compiled.
 //
 // Its memory is native, laid out as the target's (10.3): a pointer is a
 // plain address, so C's functions work on interpreted data directly.
