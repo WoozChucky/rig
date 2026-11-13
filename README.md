@@ -1,6 +1,6 @@
 # Rig
 
-[![ci](https://github.com/WoozChucky/rig/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WoozChucky/rig/actions/workflows/ci.yml) [![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
+[![ci](https://github.com/WoozChucky/rig/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WoozChucky/rig/actions/workflows/ci.yml) [![docs](https://github.com/WoozChucky/rig/actions/workflows/docs.yml/badge.svg?branch=main)](https://woozchucky.github.io/rig/) [![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 
 A compiled systems programming language for 64-bit Windows and Linux.
 
@@ -102,6 +102,7 @@ bin/rig build hello.rig
 
 ## Documentation
 
+- [The specification website](https://woozchucky.github.io/rig/): the specification to read, with search, built from docs/rig-spec.md.
 - [docs/rig-spec.md](docs/rig-spec.md): the language specification, Rig as the compiler implements it. It is the source of truth.
 - [The roadmap](https://github.com/WoozChucky/rig/issues/85): the milestones, in order.
 
