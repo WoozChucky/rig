@@ -4,7 +4,7 @@ This is how to build Rig's compiler, run its tests, and make a change to it.
 
 ## The compiler
 
-The compiler is written in C-style C++23 and built with clang as a unity build: each program is one translation unit (`src/rig.cpp` includes every source file), so `build.bat` and `build.sh` are the whole build system. It compiles through LLVM's C API, with the pinned LLVM release (23.1.4) linked statically; Rig's own x86-64 backend, for fast debug builds, comes later (milestone 8 of the [roadmap](https://github.com/WoozChucky/rig/issues/85)). The stages, from the lexer to the linker, are in section 10.2 of [the specification](docs/rig-spec.md#102-the-compilers-stages).
+The compiler is written in C-style C++23 and built with clang as a unity build: each program is one translation unit (`src/rig.cpp` includes every source file), so `build.bat` and `build.sh` are the whole build system. It compiles through LLVM's C API, with the pinned LLVM release (the version in `scripts/get_llvm.sh`) linked statically; Rig's own x86-64 backend, for fast debug builds, comes later (milestone 8 of the [roadmap](https://github.com/WoozChucky/rig/issues/85)). The stages, from the lexer to the linker, are in section 10.2 of [the specification](docs/rig-spec.md#102-the-compilers-stages).
 
 ## Building
 
@@ -24,7 +24,7 @@ scripts/get_llvm.sh
 bin/rig version
 ```
 
-`rig version` prints `rig 0.1.0 (LLVM 23.1.4)`.
+`rig version` prints `rig 0.1.0 (LLVM VERSION)`, VERSION being the pinned release's (section 10.1 of [the specification](docs/rig-spec.md#101-the-rig-command)).
 
 `get_llvm` downloads LLVM's official release archive (about 2 GB, resuming a broken download where it stopped), checks its SHA-256 against the one pinned in the script, and keeps only what the build needs (the C API's headers, the static libraries, `llvm-config`, and `lld-link` or `lld`) in `deps/llvm-windows` or `deps/llvm-linux`; set `RIG_LLVM_DIR` to put it elsewhere, for both `get_llvm` and the build. The version is pinned on purpose: changing it is a deliberate change to both scripts and their checksums.
 

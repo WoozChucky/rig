@@ -31,7 +31,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: deps/llvm-linux
-          key: llvm-23.1.4-linux-${{ hashFiles('scripts/get_llvm.sh') }}
+          key: llvm-23.1.5-linux-${{ hashFiles('scripts/get_llvm.sh') }}
 
       - name: Get LLVM
         if: steps.llvm.outputs.cache-hit != 'true'
