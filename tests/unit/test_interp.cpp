@@ -15,6 +15,7 @@
 #include <time.h>  // time, for interp_recursion_to_the_limit
 #ifndef _WIN32
 #include <execinfo.h>  // backtrace, for thunk_unwinds_through_the_thunk
+#include <unwind.h>    // _Unwind_Backtrace, for thunk_unwinds_the_callers_registers
 #endif
 
 // The index of m's procedure `name`, which must be there.
@@ -1637,6 +1638,10 @@ TEST(thunk_narrow_results_and_arguments) {
     CHECK_EQ(thunk_test_call((void *)thunk_test_same, &args, IR_I16), 0xDE01);
     CHECK_EQ(thunk_test_call((void *)thunk_test_same, &args, IR_I32), 0x9ABCDE01);
     CHECK_EQ(thunk_test_call((void *)thunk_test_same, &args, IR_I64), 0x123456789ABCDE01);
+    // A bool with al's other bits set is still bit 0 alone.
+    args = {};
+    thunk_test_add(&args, IR_I64, 0x123456789ABCDEFE);
+    CHECK_EQ(thunk_test_call((void *)thunk_test_same, &args, IR_I1), 0);
     args = {};
     thunk_test_add(&args, IR_F64, 0x4000000040400000);
     CHECK_EQ(thunk_test_call((void *)thunk_test_same_double, &args, IR_F32), interp_f32_bits(3.0f));
@@ -1652,6 +1657,12 @@ TEST(thunk_narrow_results_and_arguments) {
     args = {};
     thunk_test_add(&args, IR_I8, 0xFB, IR_EXT_SIGN);
     CHECK_EQ(thunk_test_call((void *)thunk_test_same, &args, IR_I64), s8_widened);
+    args = {};
+    thunk_test_add(&args, IR_I8, 0x05, IR_EXT_SIGN);
+    CHECK_EQ(thunk_test_call((void *)thunk_test_same, &args, IR_I64), 0x05);
+    args = {};
+    thunk_test_add(&args, IR_I8, 0x7F, IR_EXT_SIGN);
+    CHECK_EQ(thunk_test_call((void *)thunk_test_same, &args, IR_I64), 0x7F);
     args = {};
     thunk_test_add(&args, IR_I16, 0x8001, IR_EXT_SIGN);
     CHECK_EQ(thunk_test_call((void *)thunk_test_same, &args, IR_I64), s16_widened);
@@ -1684,24 +1695,113 @@ TEST(thunk_result_masks_what_the_callee_left) {
     CHECK_EQ(thunk_result(&call, IR_PTR), 0xDEADBEEF12345601);
     CHECK_EQ(thunk_result(&call, IR_F32), 0x40400000);
     CHECK_EQ(thunk_result(&call, IR_F64), 0xFFFFFFFF40400000);
-    // A bool is bit 0 alone: 0 however many bits above it are set.
+    // A bool is bit 0 alone: 0 however many bits above it are set, in al
+    // too, and 1 whatever is above it.
     call.rax = 0xDEADBEEF12345600;
     CHECK_EQ(thunk_result(&call, IR_I1), 0);
+    call.rax = 0xDEADBEEF123456FE;
+    CHECK_EQ(thunk_result(&call, IR_I1), 0);
+    CHECK_EQ(thunk_result(&call, IR_I8), 0xFE);
+    call.rax = 0xDEADBEEF12345603;
+    CHECK_EQ(thunk_result(&call, IR_I1), 1);
 }
+
+// C functions with fixed parameters past every register, for
+// thunk_passes_fixed_parameters_past_the_registers: 7 integers and 9
+// doubles, which fill SysV's 6 integer and 8 xmm registers with one of each
+// left over, then an s8, an s16 and an f32, on the stack on both hosts.
+// thunk_test_past_the_registers takes them as C declares them and keeps
+// what it got in thunk_test_seen. thunk_test_past_the_registers_whole reads
+// the last three as whole 8-byte stack slots instead, to show how the thunk
+// widened them: clang-built SysV code may load a signext parameter's slot
+// at 32 bits, as it may use its register.
+struct Thunk_Test_Seen {
+    u64 ints[7];
+    double doubles[9];
+    int narrow[2];  // the s8 and the s16, widened by C to int
+    float single;
+    u64 slots[3];  // the last three stack slots, whole
+};
+
+static Thunk_Test_Seen thunk_test_seen;
+
+static float thunk_test_past_the_registers(u64 i0, u64 i1, u64 i2, u64 i3, u64 i4, u64 i5, u64 i6, double d0,
+                                           double d1, double d2, double d3, double d4, double d5, double d6,
+                                           double d7, double d8, signed char c, short s, float f) {
+    u64 ints[7] = {i0, i1, i2, i3, i4, i5, i6};
+    double doubles[9] = {d0, d1, d2, d3, d4, d5, d6, d7, d8};
+    memcpy(thunk_test_seen.ints, ints, sizeof ints);
+    memcpy(thunk_test_seen.doubles, doubles, sizeof doubles);
+    thunk_test_seen.narrow[0] = c;
+    thunk_test_seen.narrow[1] = s;
+    thunk_test_seen.single = f;
+    return f * 2.0f;
+}
+
+static void thunk_test_past_the_registers_whole(u64, u64, u64, u64, u64, u64, u64, double, double, double, double,
+                                                double, double, double, double, double, u64 c, u64 s, u64 f) {
+    thunk_test_seen.slots[0] = c;
+    thunk_test_seen.slots[1] = s;
+    thunk_test_seen.slots[2] = f;
+}
+
+TEST(thunk_passes_fixed_parameters_past_the_registers) {
+    // A fixed-parameter (not variadic) callee reads each stack argument as
+    // its own type: SysV's 7th integer and 9th double, and the s8, s16 and
+    // f32 after them. Windows: 15 on the stack, every one past the 4th;
+    // SysV: those 5.
+    Thunk_Test_Args args = {};
+    for (s64 i = 0; i < 7; i++) thunk_test_add(&args, IR_I64, 0x1000000000000000 + (u64)i);
+    for (s64 i = 0; i < 9; i++) thunk_test_add(&args, IR_F64, f64_bits(0.5 + (f64)i));
+    thunk_test_add(&args, IR_I8, 0xFB, IR_EXT_SIGN);
+    thunk_test_add(&args, IR_I16, 0x8001, IR_EXT_SIGN);
+    thunk_test_add(&args, IR_F32, interp_f32_bits(-2.5f));
+    thunk_test_seen = {};
+    s64 stack_count = 0;
+    CHECK_EQ(thunk_test_call((void *)thunk_test_past_the_registers, &args, IR_F32, &stack_count),
+             interp_f32_bits(-5.0f));
+#ifdef _WIN32
+    CHECK_EQ(stack_count, 15);
+#else
+    CHECK_EQ(stack_count, 5);
+#endif
+    for (s64 i = 0; i < 7; i++) CHECK_EQ(thunk_test_seen.ints[i], 0x1000000000000000 + (u64)i);
+    for (s64 i = 0; i < 9; i++) CHECK(thunk_test_seen.doubles[i] == 0.5 + (f64)i);
+    CHECK_EQ(thunk_test_seen.narrow[0], -5);
+    CHECK_EQ(thunk_test_seen.narrow[1], -32767);
+    CHECK(thunk_test_seen.single == -2.5f);
+
+    // The same slots read whole: on SysV the s8 and the s16 sign-extended
+    // to all 64 bits, like a register argument; on Windows as they are,
+    // canonical. The f32 is its canonical bits, nothing above them.
+#ifdef _WIN32
+    u64 s8_widened = 0xFB, s16_widened = 0x8001;
+#else
+    u64 s8_widened = 0xFFFFFFFFFFFFFFFB, s16_widened = 0xFFFFFFFFFFFF8001;
+#endif
+    thunk_test_call((void *)thunk_test_past_the_registers_whole, &args, IR_VOID);
+    CHECK_EQ(thunk_test_seen.slots[0], s8_widened);
+    CHECK_EQ(thunk_test_seen.slots[1], s16_widened);
+    CHECK_EQ(thunk_test_seen.slots[2], interp_f32_bits(-2.5f));
+}
+
+// The most frames a trace takes: RtlCaptureStackBackTrace's skip and count
+// must add up to less than 63 on Windows XP and Server 2003.
+static const s64 THUNK_TEST_MAX_FRAMES = 62;
 
 // The return addresses on the stack when thunk_test_trace runs, from its
 // own outwards, as the host's unwinder finds them: from Windows' unwind
 // information (.pdata and .xdata) or Linux's (.eh_frame).
 struct Thunk_Test_Trace {
-    void *frames[62];  // RtlCaptureStackBackTrace takes fewer than 63 on older Windows
+    void *frames[THUNK_TEST_MAX_FRAMES];
     s64 count;
 };
 
 static void thunk_test_trace(Thunk_Test_Trace *trace) {
 #ifdef _WIN32
-    trace->count = CaptureStackBackTrace(0, 62, trace->frames, nullptr);
+    trace->count = CaptureStackBackTrace(0, (DWORD)THUNK_TEST_MAX_FRAMES, trace->frames, nullptr);
 #else
-    trace->count = backtrace(trace->frames, 62);
+    trace->count = backtrace(trace->frames, (int)THUNK_TEST_MAX_FRAMES);
 #endif
 }
 
@@ -1733,4 +1833,120 @@ TEST(thunk_unwinds_through_the_thunk) {
     if (through.count == direct.count + 1) {
         for (s64 i = 2; i < direct.count; i++) CHECK(through.frames[i + 1] == direct.frames[i]);
     }
+}
+
+// The thunk's caller's registers, as the caller had them at the call or as
+// an unwinder recovers them from inside the callee: the thunk's caller's
+// rbx and rbp, which the thunk saved, and its stack pointer and return
+// address, which the thunk's frame gives.
+struct Thunk_Test_Registers {
+    u64 rbx, rbp, rsp, rip;
+};
+
+// The value thunk_unwinds_the_callers_registers gives rbx for the call: one
+// of its own, so rbx and rbp can't hold the same.
+static const u64 THUNK_TEST_RBX = 0x0123456789ABCDEF;
+
+#ifdef _WIN32
+
+// Called through the thunk: the thunk's caller's registers, unwound from
+// here with Windows' unwind information, a step out of this function and a
+// step out of the thunk. They stay 0 if a function has none.
+static void thunk_test_unwind(Thunk_Test_Registers *out) {
+    CONTEXT context;
+    RtlCaptureContext(&context);
+    for (s64 i = 0; i < 2; i++) {
+        DWORD64 image_base = 0;
+        RUNTIME_FUNCTION *function = RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
+        if (!function) return;
+        void *handler_data = nullptr;
+        DWORD64 establisher_frame = 0;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, context.Rip, function, &context, &handler_data,
+                         &establisher_frame, nullptr);
+    }
+    out->rbx = context.Rbx;
+    out->rbp = context.Rbp;
+    out->rsp = context.Rsp;
+    out->rip = context.Rip;
+}
+
+#else
+
+// thunk_test_unwind's walk through the frames.
+struct Thunk_Test_Unwind {
+    Thunk_Test_Registers *out;
+    bool past_the_thunk;  // the thunk's frame is behind: this one is its caller's
+};
+
+// _Unwind_Backtrace's callback, once for each frame from the innermost out:
+// past the thunk's frame, its caller's registers, in DWARF's numbering (3
+// is rbx, 6 rbp). _Unwind_GetCFA gives a frame's stack pointer, which for
+// the caller is the thunk's frame address.
+static _Unwind_Reason_Code thunk_test_unwind_frame(_Unwind_Context *context, void *data) {
+    Thunk_Test_Unwind *unwind = (Thunk_Test_Unwind *)data;
+    if (unwind->past_the_thunk) {
+        unwind->out->rbx = _Unwind_GetGR(context, 3);
+        unwind->out->rbp = _Unwind_GetGR(context, 6);
+        unwind->out->rsp = _Unwind_GetCFA(context);
+        unwind->out->rip = _Unwind_GetIP(context);
+        return _URC_END_OF_STACK;  // done: stop the walk
+    }
+    if (_Unwind_FindEnclosingFunction((void *)_Unwind_GetIP(context)) == (void *)rig_thunk_call) {
+        unwind->past_the_thunk = true;
+    }
+    return _URC_NO_REASON;
+}
+
+// Called through the thunk: the thunk's caller's registers, unwound from
+// here with Linux's unwind information. They stay 0 if the walk doesn't
+// reach the thunk's caller.
+static void thunk_test_unwind(Thunk_Test_Registers *out) {
+    Thunk_Test_Unwind unwind = {out, false};
+    _Unwind_Backtrace(thunk_test_unwind_frame, &unwind);
+}
+
+#endif
+
+TEST(thunk_unwinds_the_callers_registers) {
+    // The thunk's unwind information says where it saved rbx and rbp, so an
+    // unwinder stepping out of it recovers the caller's, not each other's,
+    // with the caller's stack pointer and return address: a debugger shows
+    // them, and an exception unwinding through the thunk restores them.
+    // thunk_unwinds_through_the_thunk's return addresses would come out
+    // right with the two saves swapped.
+    //
+    // The call is made from assembly, so the registers noted are the ones
+    // at the call itself, with no code of the compiler's in between. rbx
+    // gets THUNK_TEST_RBX for it, and the Thunk_Call goes in rcx and rdi,
+    // the first argument's register on each host. The asm statement names
+    // as clobbered every register a call may change on either host, and
+    // rbx, so the compiler keeps nothing in them across it (and saves this
+    // test's caller's rbx itself).
+    Thunk_Test_Registers unwound = {}, at_call = {};
+    Thunk_Test_Args args = {};
+    thunk_test_add(&args, IR_PTR, (u64)(uintptr_t)&unwound);
+    Thunk_Call call = {};
+    call.target = (void *)thunk_test_unwind;
+    Array<u64> stack = {};
+    thunk_place(&call, args.types, args.exts, args.values, args.count, &stack);
+    asm volatile("movabsq %3, %%rbx\n\t"
+                 "movq %%rbp, %0\n\t"
+                 "movq %%rsp, %1\n\t"
+                 "leaq 1f(%%rip), %%rax\n\t"  // the return address: the label after the call
+                 "movq %%rax, %2\n\t"
+                 "movq %4, %%rcx\n\t"
+                 "movq %4, %%rdi\n\t"
+                 "callq rig_thunk_call\n"
+                 "1:"
+                 : "=m"(at_call.rbp), "=m"(at_call.rsp), "=m"(at_call.rip)
+                 : "i"(THUNK_TEST_RBX), "r"(&call)
+                 : "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "xmm0", "xmm1", "xmm2",
+                   "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13",
+                   "xmm14", "xmm15", "memory", "cc");
+    array_free(&stack);
+
+    CHECK_EQ(unwound.rbx, THUNK_TEST_RBX);
+    CHECK_EQ(unwound.rbp, at_call.rbp);
+    CHECK_EQ(unwound.rsp, at_call.rsp);
+    CHECK_EQ(unwound.rip, at_call.rip);
 }
