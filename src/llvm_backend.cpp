@@ -529,19 +529,60 @@ static LLVMValueRef llvm_global(Body *body, s32 n) {
 // modules with a source file get any; the procedures the compiler makes
 // have no source name and get none.
 
+// A source file's name in CodeView. LLVM's CodeView writer makes the full
+// path of each file it names (CodeViewDebug's getFullFilepath) from the
+// DIFile's name and directory, as clang hands them over (often a relative
+// name and its directory), and it does so by text:
+// - a name that starts with '/' it takes as a Unix path and keeps as it is;
+// - a name with a drive (':' second, C:\dev\x.rig) it keeps, then tidies;
+// - any other name it puts after the directory and a '\' first.
+// Tidying turns every '/' into '\', drops "\.\" and "\..\" with what they
+// cancel, and makes every doubled '\' single. Rig's names are absolute
+// already, and a drive path comes through unchanged. A UNC path, a file on
+// a network share (\\server\share\dir\x.rig, where a VS Code workspace on
+// a share puts it), doesn't: it has no drive, so it went after the
+// directory, and its leading "\\" was made "\": built from C:\, it was
+// C:\localhost\C$\dir\x.rig, a file nobody has, so a debugger couldn't
+// show the source. So it's named with a '/' first, /\server\share\dir\x.rig:
+// to LLVM a Unix path, kept whole; to Windows, which takes either slash as
+// a separator, the same UNC path. Measured with cdb, which takes a
+// breakpoint on a file by any of its names, the share's (`bp
+// \`\\server\share\dir\x.rig:6\``), the file's alone, or a drive path ending
+// the same, and shows the source from the share. All forward slashes,
+// //server/share/dir/x.rig, is kept too, but cdb then takes no breakpoint
+// in the file at all: it reads a name's directories by its backslashes.
+// (Linux has no UNC paths: there a name starting "\\" is a relative name
+// like any other, and nothing changes.)
+void llvm_debug_file_names(Arena *a, String source_path, String directory, Target t, String *file,
+                           String *file_directory) {
+    *file = source_path;
+    *file_directory = directory;
+    bool unc = source_path.count >= 2 && (source_path.data[0] == '\\' || source_path.data[0] == '/') &&
+               (source_path.data[1] == '\\' || source_path.data[1] == '/');
+    if (t != TARGET_WINDOWS_X64 || !unc) return;
+    *file = string_copy(a, source_path);
+    ((u8 *)file->data)[0] = '/';
+    for (s64 i = 1; i < file->count; i++) {
+        if (file->data[i] == '/') ((u8 *)file->data)[i] = '\\';
+    }
+}
+
 // Starts the module's debug information: the builder, the file, the compile
 // unit, and the module flags that say which format LLVM writes.
 static void begin_debug_info(Backend *b, Ir_Module *m, Arena *a) {
     b->debug = LLVMCreateDIBuilder(b->module);
 
-    // The file by its absolute path (an editor's breakpoints name it so),
-    // with the directory rig ran in, and the MD5 of its bytes, in hex, so a
-    // debugger can tell the file it shows has changed since the build.
+    // The file by its absolute path (an editor's breakpoints name it so;
+    // a UNC path as llvm_debug_file_names says), with the directory rig ran
+    // in, and the MD5 of its bytes, in hex, so a debugger can tell the file
+    // it shows has changed since the build.
     char checksum[33];
     for (int i = 0; i < 16; i++) snprintf(checksum + 2 * i, 3, "%02x", m->source_md5[i]);
-    b->file = LLVMDIBuilderCreateFileWithChecksum(b->debug, (const char *)m->source_path.data,
-                                                  (size_t)m->source_path.count, (const char *)m->directory.data,
-                                                  (size_t)m->directory.count, CSK_MD5, checksum, 32, nullptr, 0);
+    String name = {}, directory = {};
+    llvm_debug_file_names(a, m->source_path, m->directory, b->target, &name, &directory);
+    b->file = LLVMDIBuilderCreateFileWithChecksum(b->debug, (const char *)name.data, (size_t)name.count,
+                                                  (const char *)directory.data, (size_t)directory.count, CSK_MD5,
+                                                  checksum, 32, nullptr, 0);
 
     // The language is C99: a debugger evaluates the expressions it's given
     // in the unit's language, and C's are Rig's (a.count, a[i]; Rig's p.*
