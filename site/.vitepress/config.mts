@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { defineConfig, type Plugin } from 'vitepress'
-import { generate, repoDir, repoUrl, specPath } from '../scripts/spec.mjs'
+import { generate, githubSlug, repoDir, repoUrl, specPath } from '../scripts/spec.mjs'
 // Written by scripts/spec.mjs from the specification's headings. Importing it
 // makes it one of the config's dependencies, so the dev server restarts with
 // the new sidebar when a heading changes.
@@ -48,6 +48,12 @@ export default defineConfig({
   head: [['link', { rel: 'icon', type: 'image/svg+xml', href: '/rig/logo.svg' }]],
 
   markdown: {
+    // Headings' ids and links' '#anchors' are made the way GitHub makes them,
+    // as scripts/spec.mjs makes the specification's. VitePress rewrites every
+    // link's anchor with this function, and its own default puts '_' before
+    // an anchor that starts with a digit (every numbered section's), so a
+    // link to '#510-calls' would point at '#_510-calls', which no heading has.
+    anchor: { slugify: githubSlug },
     languages: [
       { ...rigGrammar, name: 'rig', displayName: 'Rig' },
       // Shiki has no EBNF grammar: Appendix A's productions are shown plain,
