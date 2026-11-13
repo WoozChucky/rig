@@ -425,6 +425,38 @@ static Type *check_name(Checker *c, Ast_Name *name) {
     }
 }
 
+// Argument `index` (from 0) of a call of the variadic foreign procedure
+// `proc`, one after its fixed parameters, checked already (check_value):
+// what C's '...' receives. No parameter gives it a type, so it keeps its
+// own, which must be one C can take: a number, a bool or a pointer, which
+// lowering passes after C's default argument promotions (type_c_promoted).
+// What has no type of its own yet takes Rig's default, as where it meets no
+// type: an untyped integer an int; an untyped float a float64, though a
+// float32 is the default elsewhere, since C receives a double either way
+// and rounding it to a float32 first would only lose digits; null a *void,
+// C's NULL. A string literal goes as a C string, its bytes' address, as it
+// does to a *u8 (lowering looks at the literal, whose type stays string).
+// C passes structs by rules Rig doesn't follow, and has no views or Rig
+// strings: each is refused, with what to pass instead.
+static void check_extra_argument(Checker *c, Ast_Proc *proc, Ast *arg, s64 index) {
+    Type *t = arg->type;
+    if (!t) return;  // its own mistake, reported already
+    if (t == &type_untyped_int || t == &type_untyped_literal) {
+        check_default_type(c, arg);  // an int; a literal without its type is reported
+    } else if (t == &type_untyped_float) {
+        check_convert(c, arg, &type_float64);
+    } else if (t == &type_null) {
+        check_convert(c, arg, type_pointer_to(&type_void));
+    } else if (type_is_aggregate(t) && arg->kind != AST_STRING) {
+        const char *hint = t->kind == TYPE_STRUCT   ? "pass a pointer to it"
+                           : t->kind == TYPE_STRING ? "pass its .data, which may not end with a zero, or a literal"
+                                                    : "pass its .data";
+        diag_error(c->diag, arg->start,
+                   "argument %lld of '" STR_FMT "' has type '" STR_FMT "', which C's '...' can't take; %s",
+                   (long long)(index + 1), STR_ARG(proc->name), STR_ARG(type_name(c->arena, t)), hint);
+    }
+}
+
 static Type *check_call(Checker *c, Ast_Call *call) {
     if (call->callee->kind != AST_NAME) {
         check_expression(c, call->callee);
@@ -456,13 +488,14 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     if (!check_proc_signature(c, proc)) return nullptr;
 
     call->proc = proc;
-    if (call->args.count != proc->params.count) {
-        s64 n = proc->params.count, given = call->args.count;
-        diag_error(c->diag, name->pos, "'" STR_FMT "' takes %lld argument%s, but %lld %s given",
-                   STR_ARG(proc->name), (long long)n, n == 1 ? "" : "s", (long long)given,
-                   given == 1 ? "was" : "were");
+    // A variadic procedure takes its fixed parameters and any number more.
+    s64 n = proc->params.count, given = call->args.count;
+    if (proc->is_variadic ? given < n : given != n) {
+        diag_error(c->diag, name->pos, "'" STR_FMT "' takes %s%lld argument%s, but %lld %s given",
+                   STR_ARG(proc->name), proc->is_variadic ? "at least " : "", (long long)n, n == 1 ? "" : "s",
+                   (long long)given, given == 1 ? "was" : "were");
     } else {
-        for (s64 i = 0; i < call->args.count; i++) {
+        for (s64 i = 0; i < n; i++) {
             Ast *arg = call->args[i];
             Type *from = arg->type, *to = proc->params[i]->type;
             if (!check_convert(c, arg, to)) {
@@ -473,6 +506,7 @@ static Type *check_call(Checker *c, Ast_Call *call) {
                            STR_ARG(type_name(c->arena, to)), conversion_hint(from, to));
             }
         }
+        for (s64 i = n; i < given; i++) check_extra_argument(c, proc, call->args[i], i);
     }
     // A procedure whose return type is unknown gives an unknown type, so
     // nothing is said about it again.
