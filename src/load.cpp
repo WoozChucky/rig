@@ -26,7 +26,7 @@ static const bool HOST_IS_WINDOWS = false;
 // the main file under rig check --stdin needn't be, or one on a file
 // system with no ids to give (os.h). Its path is the best there is: ./x.rig
 // and sub/../x.rig are x.rig, though a link to it isn't.
-struct Loaded_Files {
+struct Seen_Files {
     Table<bool> ids;
     Table<bool> paths;
 };
@@ -34,7 +34,7 @@ struct Loaded_Files {
 // Records the file at `path`, from the directory rig runs in, as seen.
 // False when it was named already. A key is looked up where it was made,
 // and copied into `keys` only when it's new, to stay in the table.
-static bool first_time_seen(Arena *keys, Loaded_Files *seen, String directory, String path) {
+static bool first_time_seen(Arena *keys, Seen_Files *seen, String directory, String path) {
     u64 id[3];
     if (os_file_id(path, id)) {
         String key = {(const u8 *)id, (s64)sizeof id};
@@ -58,7 +58,7 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text) {
     // of them (diag_add_file, diag_locate_file, diag_error).
     Arena loading = arena_make();
     String directory = os_current_directory(&loading);
-    Loaded_Files seen = {};
+    Seen_Files seen = {};
 
     // The main file first, known before its #loads are followed, so a file
     // that loads it back loads nothing: by its id, or, when it isn't there

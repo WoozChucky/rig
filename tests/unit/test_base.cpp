@@ -440,6 +440,9 @@ TEST(source_path_is_absolute_and_normalised) {
     CHECK_STR(absolute(&a, "C:\\dev", "\\\\?\\C:\\a\\..\\..\\x.rig", true), "\\\\?\\C:\\x.rig");
     CHECK_STR(absolute(&a, "C:\\dev", "\\\\?\\UNC\\server\\share\\a\\..\\..\\x.rig", true),
               "\\\\?\\UNC\\server\\share\\x.rig");
+    // UNC in any case.
+    CHECK_STR(absolute(&a, "C:\\dev", "\\\\?\\unc\\server\\share\\a\\..\\..\\x.rig", true),
+              "\\\\?\\unc\\server\\share\\x.rig");
     // Linux: only / separates (a backslash is part of a name).
     CHECK_STR(absolute(&a, "/home/n/rig", "../x.rig", false), "/home/n/x.rig");
     CHECK_STR(absolute(&a, "/home/n/rig", "/abs/./y.rig", false), "/abs/y.rig");
@@ -482,9 +485,13 @@ TEST(load_path_joins_and_keeps_absolute) {
     CHECK_STR(loaded(&a, "src/main.rig", "/x/a.rig", true), "/x/a.rig");
     CHECK_STR(loaded(&a, "src/main.rig", "C:\\x\\a.rig", true), "C:\\x\\a.rig");
     CHECK_STR(loaded(&a, "src/main.rig", "\\x\\a.rig", true), "\\x\\a.rig");
+    // A drive alone is enough, with no separator after it: C:a.rig is a
+    // file in that drive's current directory, not in src.
+    CHECK_STR(loaded(&a, "src/main.rig", "C:a.rig", true), "C:a.rig");
     // On Linux neither a drive nor a backslash makes a path absolute: both
     // are part of a name.
     CHECK_STR(loaded(&a, "src/main.rig", "C:\\x\\a.rig", false), "src/C:\\x\\a.rig");
+    CHECK_STR(loaded(&a, "src/main.rig", "C:a.rig", false), "src/C:a.rig");
     CHECK_STR(loaded(&a, "src/main.rig", "\\x\\a.rig", false), "src/\\x\\a.rig");
     // On Windows a file named with the \\?\ prefix, as some tools name
     // files, is opened by its path as it is: '/' doesn't separate there, and
@@ -495,6 +502,8 @@ TEST(load_path_joins_and_keeps_absolute) {
     CHECK_STR(loaded(&a, "\\\\?\\C:\\x\\main.rig", "../../b.rig", true), "\\\\?\\C:\\b.rig");
     CHECK_STR(loaded(&a, "\\\\?\\UNC\\server\\share\\main.rig", "../b.rig", true),
               "\\\\?\\UNC\\server\\share\\b.rig");
+    CHECK_STR(loaded(&a, "\\\\?\\unc\\server\\share\\main.rig", "../b.rig", true),
+              "\\\\?\\unc\\server\\share\\b.rig");
     // On Linux \\?\ is a name like any other.
     CHECK_STR(loaded(&a, "\\\\?\\C:\\x\\main.rig", "sub/b.rig", false), "sub/b.rig");
     arena_free(&a);
