@@ -1604,7 +1604,7 @@ An `else if` chain may have any number of arms.
 
 ## 10. Implementation
 
-This section describes how the compiler in this repository compiles a Rig program: its command line, its stages, and the machine-level conventions of the programs it makes.
+This section describes how the compiler in this repository compiles a Rig program: its command line, its stages, and the machine-level conventions of the programs it makes; and the interpreter that runs a program's code inside the compiler.
 
 ### 10.1 The rig command
 
@@ -1662,6 +1662,8 @@ The compiler is a single program written in C++, with LLVM linked into it. It co
 6. **Linker** (`src/link.cpp`): the object file into an executable with the platform's linker (section 10.6).
 
 No integer instruction carries LLVM's `nsw`, `nuw` or `exact` flags, and no float instruction carries fast-math flags: Rig's integers wrap and its floats are IEEE 754's. No pointer arithmetic is marked `inbounds`, copies are `memmove`s (the two sides may overlap), and no pointer is assumed non-null.
+
+In place of stages 5 and 6, a stage can run the IR rather than compile it: the **interpreter** (`src/interp.cpp`, calling C through `src/thunk.cpp`) runs a lowered program's procedures inside the compiler, for code run while compiling (section 10.8). No construct of the language uses it yet; `#run` will. It runs the IR lowering makes, the same the LLVM backend compiles, with the same meaning, and, as the compiled code isn't optimised, it optimises nothing away: every instruction runs, even one whose result is never used, so a division by zero into a variable nothing reads still fails, interpreted as compiled.
 
 ### 10.3 Data representation
 
@@ -1742,6 +1744,38 @@ The debug information holds:
 A debug type is made at most 1000 levels deep (the limit of section 9.4), counting each type along its longest chain of fields, pointees and elements. A program can chain types more deeply (structs held by value, each declared after the one it holds, or each holding a pointer to the next); past the limit a pointer is described as `void *` and any other type as a declared struct of its name with no fields, so the compiler's work stays bounded.
 
 Frame pointers are kept (section 10.4), so the stack can be walked without unwind tables.
+
+### 10.8 The interpreter
+
+The compiler can run a program's code itself, while compiling, on its interpreter (`src/interp.cpp`, section 10.2). No construct of the language uses it yet: it is what code run at compile time (`#run`) will run on. It runs the IR that lowering makes, the same the LLVM backend compiles, not the source and not a translation of it, and each instruction means what it means compiled: integers wrap, floats are IEEE 754's (a `float32` computed as one, never as a `float64`), a float converted to an integer saturates, copies are `memmove`s, and the runtime checks of section 8 are lowering's, so they are the same checks. A program gives the same results interpreted as compiled. The test suite holds it to that: every program of `tests/run` is run interpreted too, and must print the same output, exit with the same status and fail with the same runtime error as compiled (`CONTRIBUTING.md` has the details).
+
+**Memory.** The interpreter's memory is native memory of the compiler's own, laid out as the target's (section 10.3), so a pointer is a plain address, and C's functions (`malloc`, `memcpy`, `strlen`) work on interpreted data directly.
+
+- **Globals** are made in memory from their bytes, and the addresses they hold (a string literal's, another global's, a procedure's) are written into them as real addresses. They are all writable, a string literal's bytes too, which a compiled program keeps read-only (writing them is a memory error no check catches, section 1.2). They last as long as the interpreter: what one run leaves in a global, the next run sees.
+- **Locals** live on the interpreter's own data stack, of 8 MB, as large as the compiler's own thread's. Each call of a procedure gives it one slot per local, at its start, however often the block that declares it runs, as the compiled program's frame does (section 10.3): a loop that declares a local uses the same slot on every turn.
+- **Calls** keep their bookkeeping (each frame's values and the call it came from) on that stack too, so recursion that never ends runs out of it, however small its frames, and fails with the runtime error `stack overflow` (below), where the compiled program would crash. The interpreter keeps its frames there and never recurses itself, so deep recursion in Rig can't overflow the compiler's own stack.
+
+**Procedure values.** A Rig procedure has no machine code to point at, so its value at compile time is an address standing for it: one of a range of 1 MB that the interpreter reserves and never makes accessible, procedure k's 16k bytes past its start, which a call through the value maps back to the procedure. These values behave as the compiled program's do (section 3.15): each procedure's is distinct, never null, and the same however it is taken, from the procedure's name, from a global holding it, or cast to `*void` and back. A call through an address of the range that is no procedure's (made from an integer) is the runtime error `call of an address that isn't a procedure`. The range limits an interpreted program to 65,536 procedures, its foreign ones included; a larger one doesn't run: `the program has N procedures, more than the 65536 the interpreter can give addresses to`. A foreign procedure's value is its C function's real address.
+
+C can't call into the interpreter, so a Rig procedure can't be given to C at compile time. A call of C given one as any pointer argument, fixed or variadic, is the runtime error `a Rig procedure can't be passed to C at compile time, for now`, at the call: a `#c_call` procedure given to `qsort` as its comparison (section 7.6), and a procedure's value cast to `*void` too, since the IR doesn't tell a procedure value from any other pointer. An integer argument isn't checked, since a count or a size may lie in the range by chance. A Rig procedure that reaches C some other way, stored in memory or cast to an integer, can't run there: its address is never accessible, so a call of it by C faults and stops the compiler, rather than running anything else.
+
+**Calling C.** A foreign procedure's C function is found by its name the first time it is needed: called, its value taken, or written into a global. It is called through a thunk, hand-written assembly for the platform's C calling convention (`src/thunk.cpp`), which passes the arguments and takes the result back as section 10.4 says, variadic calls included. The functions come from:
+
+- **Windows:** the compiler's own C library first. The compiler is linked with the C runtime statically, so it holds its own copy of the C library, with its own state: `stdout`'s buffer, the heap, `errno`. Each function of C17's `<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<math.h>`, `<ctype.h>` and `<time.h>` (all but `aligned_alloc`, which the Universal C Runtime doesn't have; `printf` and its family included, which the Universal C Runtime has only as inline functions, section 10.6), and the three the runtime's `stdout`, `errno` and `MB_CUR_MAX` call (`__acrt_iob_func`, `_errno`, `___mb_cur_max_func`), is the compiler's own copy. So a `printf` at compile time writes into the buffer the compiler's own output goes through, in order with it, and memory `malloc` gives, `free` takes back. Any other name is looked up in `kernel32.dll` (Windows' own functions, such as `GetCurrentProcessId`), then in `ucrtbase.dll` (the C runtime's extras, such as `_getpid`), whose functions are a second C runtime's and share no state with the compiler's.
+- **Linux:** libc, the one the compiler is linked with dynamically, and the dynamic loader it depends on, as section 10.6's `-lc` provides them. `atexit`, `at_quick_exit` and `pthread_atfork`, which `-lc` links into each program statically and `libc.so.6` doesn't export, are the compiler's own copies. A function only libm has, such as `sqrt`, isn't found, as it isn't available to a compiled program.
+
+A name found nowhere is the runtime error `'NAME' isn't in the C library at compile time`, at the call, or where the procedure's value is taken. When a global holds its value, the run fails before it starts, with no frames.
+
+What C writes at compile time goes to the compiler's own standard output and error. `exit` really exits the compiler, with its status, after the C runtime flushes its streams.
+
+**Failures.** When interpreted code fails a runtime check (section 8.1), runs out of its stack, or calls C as the interpreter can't, the run stops, but the compiler doesn't. The interpreter gives the failure to its caller: the message, without the `PATH:LINE:COL: runtime error: ` that a compiled program writes before it (`index 10 is out of bounds (count 10)`), and the chain of calls that led there, innermost first. Each frame is a procedure of the source and a position: the innermost's is the failing check's, the one section 8.1's message names, or, when a call of C fails or a C function's value can't be taken, the first token of the statement it is in; each other's is the call it was waiting on, at its statement's first token, where the line table puts it (section 10.7). The procedures the compiler adds (section 10.5) are left out. The frames are written one per line, indented by four spaces, `in NAME (PATH:LINE:COL)`:
+
+```text
+    in make_table (tables.rig:40:17)
+    in main (tables.rig:52:5)
+```
+
+**No step limit.** The interpreter counts no steps: an endless loop runs until the compiler is stopped (Ctrl-C), as the compiled program would.
 
 ## Appendix A: Grammar
 
