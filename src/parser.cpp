@@ -1736,10 +1736,13 @@ static bool parameters_follow(Parser *p, s64 open) {
 // name and ':', is a variable's procedure type (`op : (int) -> int = add;`),
 // not a procedure's signature with its '::' mistyped (`greet : () {`):
 // outside every parenthesis and bracket, its '=' or ';' comes before a
-// body's '{' or a directive other than #c_call (`#foreign`, `#no_abc`).
-// Reaching neither before the next declaration (an identifier starting a
-// line, followed by '::') or the end, it's taken for a signature, as
-// milestone 1 took any '(' there: procedures are declared more often.
+// body's '{' or a directive other than #c_call (`#foreign`, `#no_abc`), or
+// a #load comes first: that begins the next declaration, as
+// parameters_follow takes it, and the variable is missing its ';' or its
+// value. Reaching none of them before the next declaration (an identifier
+// starting a line, followed by '::') or the end, it's taken for a
+// signature, as milestone 1 took any '(' there: procedures are declared
+// more often.
 static bool variable_follows(Parser *p, s64 open) {
     s64 depth = 0;
     for (s64 i = open; p->tokens[i].kind != TOKEN_EOF; i++) {
@@ -1757,6 +1760,7 @@ static bool variable_follows(Parser *p, s64 open) {
             if (depth <= 0) return false;
             break;
         case TOKEN_DIRECTIVE:
+            if (depth <= 0 && is_directive(t, "load")) return true;
             if (depth <= 0 && !is_directive(t, "c_call")) return false;
             break;
         case TOKEN_EQUAL:

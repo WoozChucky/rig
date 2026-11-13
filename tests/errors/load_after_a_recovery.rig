@@ -1,0 +1,12 @@
+// A #load starting the line after a declaration that failed (issue #112) is
+// where the recovery resumes: it's kept, and the file it names is loaded.
+// So the program lacks no file, and a name nothing declares is still
+// reported: helper, which load/helper.rig declares, is known, and helpr
+// isn't.
+counter : int = 1 2
+#load "load/helper.rig";
+
+main :: () {
+    helper();
+    helpr();
+}
