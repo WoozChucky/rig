@@ -4,7 +4,7 @@ Rig is a compiled systems programming language for 64-bit Windows and Linux, in 
 
 The compiler is written in C-style C++23 and built with clang as a unity build (`build.bat`, `build.sh`). It compiles through LLVM first; its own x86-64 backend for fast debug builds comes later.
 
-Status: milestones 2a (the core language) and 2b (structs, pointers, arrays, strings) done; milestone 2c (debug info) is next. The design is [docs/superpowers/specs/2026-11-11-rig-language-design.md](docs/superpowers/specs/2026-11-11-rig-language-design.md); the language as the compiler implements it is specified in [docs/rig-spec.md](docs/rig-spec.md).
+Status: milestones 2a (the core language) and 2b (structs, pointers, arrays, strings) done; milestone 2c (debug information) is in progress: line tables and the PDB are in, variables and types are being added. The language is specified in [docs/rig-spec.md](docs/rig-spec.md), the source of truth, which changes with the compiler and whose examples the test suite runs; [docs/superpowers/specs/2026-11-11-rig-language-design.md](docs/superpowers/specs/2026-11-11-rig-language-design.md) records the original design.
 
 ## Hello world
 

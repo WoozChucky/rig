@@ -1,5 +1,7 @@
 # Rig: language and toolchain design
 
+This is the original design document, kept as a record. The language as implemented is specified in [docs/rig-spec.md](../../rig-spec.md), which is the source of truth and is the document that changes with the compiler; this one is no longer updated.
+
 Status: approved, 2026-11-11.
 
 Rig is a new compiled programming language, built as a learning project that follows the path a real language takes, modelled on Jonathan Blow's Jai. This document records what was decided while designing it. A decision marked **(design choice)** is a default proposed while designing and not objected to, which may still change; the rest are the project's own requirements.
