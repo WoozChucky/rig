@@ -121,10 +121,10 @@
 //
 // At the top level, after '::', a procedure's parameter list starts with
 // '(' ')', '(' IDENT ':' or '(' '..'; any other '(' begins a constant's
-// value, so `N :: (1 + 2);` is a constant. A name followed by ':' or ':=' and then a
-// signature (`greet : () {`) is a procedure with its '::' mistyped:
-// "expected '::', found ':'". Anything else after a top-level name is
-// "expected '::', found ...".
+// value, so `N :: (1 + 2);` is a constant. A name followed by ':' or ':='
+// and then a signature (`greet : () {`) is a procedure with its '::'
+// mistyped: "expected '::', found ':'". Anything else after a top-level
+// name is "expected '::', found ...".
 //
 // The bodies of if, else, while and for are always blocks in braces (spec
 // 6.1), and a condition needs no parentheses: the body's '{' ends it. A for

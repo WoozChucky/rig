@@ -4253,11 +4253,17 @@ static const char *PRINTF = "printf :: (format: *u8, ..) -> s32 #foreign libc;\n
 TEST(only_a_foreign_procedure_is_variadic) {
     // A Rig procedure has no way to reach arguments it doesn't name: '..'
     // stands for C's '...'. The procedure is still variadic for its calls,
-    // so the one mistake gives one message.
+    // whose extra arguments no C function receives, so the one mistake
+    // gives one message, whatever they are.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "f :: (a: int, ..) { }\n"
-                           "main :: () { f(1, 2); }\n"),
+                           "Vec2 :: struct { x: float; y: float; }\n"
+                           "main :: () {\n"
+                           "    v : Vec2;\n"
+                           "    s := \"hi\";\n"
+                           "    f(1, 2, 2.5, null, v, s, .{1, 2}, .[3]);\n"
+                           "}\n"),
               "1:15: only a foreign procedure can take more arguments with '..'; "
               "a Rig procedure can take a view, as in (values: []int)\n");
     arena_free(&a);
@@ -4311,7 +4317,7 @@ TEST(extra_arguments_c_cant_take) {
                                 "    s := \"hi\";\n"
                                 "    printf(\"%%d\", v, a, w, s);\n"
                                 "    printf();\n"
-                                "    printf(\"%%d\", .{1, 2}, nothing());\n"
+                                "    printf(\"%%d\", .{1, 2}, .[3], nothing());\n"
                                 "}\n",
                                 PRINTF);
     CHECK_STR(check_source(&a, string_cstr(&a, text)),
@@ -4321,8 +4327,11 @@ TEST(extra_arguments_c_cant_take) {
               "9:27: argument 5 of 'printf' has type 'string', which C's '...' can't take; "
               "pass its .data, which may not end with a zero, or a literal\n"
               "10:5: 'printf' takes at least 1 argument, but 0 were given\n"
-              "11:18: this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}\n"
-              "11:27: 'nothing' returns nothing, so it has no value\n");
+              "11:18: argument 2 of 'printf' is a struct literal, which C's '...' can't take; "
+              "pass a pointer to a variable that holds it\n"
+              "11:27: argument 3 of 'printf' is an array literal, which C's '...' can't take; "
+              "pass the .data of a variable that holds it\n"
+              "11:33: 'nothing' returns nothing, so it has no value\n");
     // The fixed parameters convert as any procedure's do.
     text = string_printf(&a, "%smain :: () { printf(5); }\n", PRINTF);
     CHECK_STR(check_source(&a, string_cstr(&a, text)),

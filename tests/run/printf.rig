@@ -14,7 +14,8 @@ main :: () {
     w : s32 = -42;
     printf("s32 %d\n", w);
 
-    // Narrower integers and bools become C's int: by their sign.
+    // Narrower integers and bools become C's int: sign-extended if signed,
+    // zero-extended if unsigned or a bool.
     b : u8 = 200;
     t := true;
     printf("u8 %d, bool %d\n", b, t);

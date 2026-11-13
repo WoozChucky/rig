@@ -1490,10 +1490,11 @@ TEST(llvm_declares_and_calls_a_variadic_function) {
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);
         CHECK(contains(text, "declare i32 @printf(ptr, ...)"));
-        CHECK(contains(text, "zext i8 %"));
-        CHECK(contains(text, "sext i16 %"));
-        CHECK(contains(text, "zext i1 %"));
-        CHECK(contains(text, "fpext float %"));
+        // Each to the width C's '...' receives: an int, a double.
+        CHECK(contains(line_with(text, "zext i8 %"), " to i32"));
+        CHECK(contains(line_with(text, "sext i16 %"), " to i32"));
+        CHECK(contains(line_with(text, "zext i1 %"), " to i32"));
+        CHECK(contains(line_with(text, "fpext float %"), " to double"));
         CHECK(contains(text, "call i32 (ptr, ...) @printf(ptr @str.0, i32 %"));
         CHECK(contains(text, ", double %"));
         CHECK(contains(text, ", i64 5, double 2.500000e+00)"));

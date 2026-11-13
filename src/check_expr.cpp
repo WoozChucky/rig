@@ -425,29 +425,50 @@ static Type *check_name(Checker *c, Ast_Name *name) {
     }
 }
 
-// Argument `index` (from 0) of a call of the variadic foreign procedure
-// `proc`, one after its fixed parameters, checked already (check_value):
-// what C's '...' receives. No parameter gives it a type, so it keeps its
-// own, which must be one C can take: a number, a bool or a pointer, which
-// lowering passes after C's default argument promotions (type_c_promoted).
-// What has no type of its own yet takes Rig's default, as where it meets no
-// type: an untyped integer an int; an untyped float a float64, though a
+// An extra argument (one after a variadic procedure's fixed parameters)
+// that has no type of its own yet takes Rig's default, as where it meets
+// no type: an untyped integer an int; an untyped float a float64, though a
 // float32 is the default elsewhere, since C receives a double either way
 // and rounding it to a float32 first would only lose digits; null a *void,
-// C's NULL. A string literal goes as a C string, its bytes' address, as it
-// does to a *u8 (lowering looks at the literal, whose type stays string).
-// C passes structs by rules Rig doesn't follow, and has no views or Rig
-// strings: each is refused, with what to pass instead.
-static void check_extra_argument(Checker *c, Ast_Proc *proc, Ast *arg, s64 index) {
+// C's NULL. Anything else keeps its type.
+static void give_extra_argument_a_type(Checker *c, Ast *arg) {
     Type *t = arg->type;
-    if (!t) return;  // its own mistake, reported already
-    if (t == &type_untyped_int || t == &type_untyped_literal) {
-        check_default_type(c, arg);  // an int; a literal without its type is reported
+    if (t == &type_untyped_int) {
+        check_default_type(c, arg);
     } else if (t == &type_untyped_float) {
         check_convert(c, arg, &type_float64);
     } else if (t == &type_null) {
         check_convert(c, arg, type_pointer_to(&type_void));
-    } else if (type_is_aggregate(t) && arg->kind != AST_STRING) {
+    }
+}
+
+// Argument `index` (from 0) of a call of the variadic foreign procedure
+// `proc`, one after its fixed parameters, checked already (check_value):
+// what C's '...' receives. No parameter gives it a type, so it keeps its
+// own, or takes a default (give_extra_argument_a_type), which must be one
+// C can take: a number, a bool or a pointer, which lowering passes after
+// C's default argument promotions (type_c_promoted). A string literal goes
+// as a C string, its bytes' address, as it does to a *u8 (lowering looks
+// at the literal, whose type stays string). C passes structs by rules Rig
+// doesn't follow, and has no views or Rig strings: each is refused, with
+// what to pass instead. So is a compound literal without its type: being
+// told to write its type would only lead to the same refusal.
+static void check_extra_argument(Checker *c, Ast_Proc *proc, Ast *arg, s64 index) {
+    Type *t = arg->type;
+    if (!t) return;  // its own mistake, reported already
+    if (t == &type_untyped_literal) {
+        bool is_array = ((Ast_Literal *)arg)->is_array;
+        diag_error(c->diag, arg->start,
+                   "argument %lld of '" STR_FMT "' is %s literal, which C's '...' can't take; pass %s a variable that "
+                   "holds it",
+                   (long long)(index + 1), STR_ARG(proc->name), is_array ? "an array" : "a struct",
+                   is_array ? "the .data of" : "a pointer to");
+        arg->type = nullptr;
+        return;
+    }
+    give_extra_argument_a_type(c, arg);
+    t = arg->type;
+    if (t && type_is_aggregate(t) && arg->kind != AST_STRING) {
         const char *hint = t->kind == TYPE_STRUCT   ? "pass a pointer to it"
                            : t->kind == TYPE_STRING ? "pass its .data, which may not end with a zero, or a literal"
                                                     : "pass its .data";
@@ -506,7 +527,20 @@ static Type *check_call(Checker *c, Ast_Call *call) {
                            STR_ARG(type_name(c->arena, to)), conversion_hint(from, to));
             }
         }
-        for (s64 i = n; i < given; i++) check_extra_argument(c, proc, call->args[i], i);
+        // A Rig procedure with '..' was reported, and is variadic only so
+        // its calls say nothing more: what C would refuse is no mistake of
+        // theirs, since no C function receives it. Its extra arguments just
+        // take their default types, and a literal without one stays unknown.
+        for (s64 i = n; i < given; i++) {
+            Ast *arg = call->args[i];
+            if (proc->is_foreign) {
+                check_extra_argument(c, proc, arg, i);
+            } else if (arg->type == &type_untyped_literal) {
+                arg->type = nullptr;
+            } else {
+                give_extra_argument_a_type(c, arg);
+            }
+        }
     }
     // A procedure whose return type is unknown gives an unknown type, so
     // nothing is said about it again.
