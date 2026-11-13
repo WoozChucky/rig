@@ -42,6 +42,7 @@ TEST(windows_link_command) {
         "/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.1\\um\\x64",
         ".build\\hello world.obj",
         "extra.obj",
+        "legacy_stdio_definitions.lib",
         "msvcrt.lib",
         "vcruntime.lib",
         "ucrt.lib",
@@ -155,6 +156,7 @@ TEST(finds_this_machines_toolchain) {
     if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
     CHECK(os_file_exists(tc.link_exe));
     CHECK(os_file_exists(string_printf(&a, STR_FMT "\\msvcrt.lib", STR_ARG(tc.msvc_lib))));
+    CHECK(os_file_exists(string_printf(&a, STR_FMT "\\legacy_stdio_definitions.lib", STR_ARG(tc.msvc_lib))));
     CHECK(os_file_exists(string_printf(&a, STR_FMT "\\ucrt.lib", STR_ARG(tc.ucrt_lib))));
     CHECK(os_file_exists(string_printf(&a, STR_FMT "\\kernel32.lib", STR_ARG(tc.um_lib))));
 #else

@@ -1255,6 +1255,15 @@ static s32 lower_expr(Lowering *l, Ast *e) {
     }
 }
 
+// The type an argument after a variadic procedure's fixed parameters is
+// passed as: a string literal as a C string, a *u8 (lower_value then gives
+// its bytes' address), anything else as C's default argument promotions
+// make its type.
+static Type *extra_argument_type(Ast *arg) {
+    if (arg->kind == AST_STRING) return type_pointer_to(type_from_name(str("u8")));
+    return type_c_promoted(arg->type);
+}
+
 // A call; `results` gets one value per result of the callee, in order: a
 // scalar's IR value, or an aggregate's address.
 // - First, a temporary for each aggregate result, passed as the hidden
@@ -1267,6 +1276,12 @@ static s32 lower_expr(Lowering *l, Ast *e) {
 //   and the temporary's address passed. So the callee's parameter is the
 //   value as it was then, whatever happens to the variable it came from (the
 //   callee may change the global it was given).
+// - A variadic foreign procedure's arguments after its fixed parameters
+//   have none to convert to: each is passed as C's default argument
+//   promotions make its own type (extra_argument_type): an s8 or s16
+//   sign-extended to an i32, a u8, u16 or bool zero-extended, a float32
+//   widened to an f64; a string literal as its bytes' address, a C string
+//   (the checker allows no other aggregate there).
 // - The scalar results are the call's values, consecutive (ir_emit_call).
 //
 //     v := make(3);              %0 = local 8 align 4      (v)
@@ -1274,6 +1289,11 @@ static s32 lower_expr(Lowering *l, Ast *e) {
 //                                %2 = const i64 3
 //                                call @make(%1, %2)
 //                                copy %0, %1, 8
+//
+//     printf("%d", b);           %1 = addr @str.0          (b, a u8, in the slot %0)
+//                                %2 = load i8 %0
+//                                %3 = zext i8 %2 to i32
+//                                %4 = call @printf(%1, %3)
 static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results) {
     Ast_Proc *callee = call->proc;
     s32 *index = table_get(&l->proc_index, callee->name);
@@ -1285,7 +1305,7 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
     }
     s32 hidden = (s32)args.count;
     for (s64 i = 0; i < call->args.count; i++) {
-        Type *t = callee->params[i]->type;
+        Type *t = i < callee->params.count ? callee->params[i]->type : extra_argument_type(call->args[i]);
         s32 value = lower_value(l, call->args[i], t);
         if (type_is_aggregate(t)) {
             s32 copy = emit_slot(l, t);
@@ -2282,6 +2302,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         RIG_ASSERT(!source->is_broken);
         Ir_Proc *p = ir_new_proc(m, a, source->name);
         p->is_foreign = source->is_foreign;
+        p->is_variadic = source->is_variadic;  // a foreign one: the checker made sure
         // An aggregate result is a hidden ptr parameter, before the visible
         // ones; an aggregate parameter a ptr to the caller's copy. The IR's
         // results are the scalar results only. (A foreign procedure has

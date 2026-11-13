@@ -126,7 +126,10 @@ enum Ast_Resolve : u8 {
 // broken_entry), and empty otherwise.
 struct Ast_Proc : Ast {
     String name;
-    Array<Ast_Param *> params;
+    Array<Ast_Param *> params;  // the named parameters (a variadic one's fixed parameters)
+    bool is_variadic;           // its list ends with '..': it takes more arguments after
+                                // params, as a C function declared with '...' does (spec 7.6)
+    Position variadic_pos;      // where that '..' is written
     Array<Ast_Type *> results;  // what it returns: none, one or several (-> int, int)
     Ast_Block *body;            // null for a foreign procedure
     bool is_foreign;
@@ -417,6 +420,8 @@ Token_Kind compound_operator(Token_Kind op);
 //   (for it (name a) (block ...))      for a { ... }      (for x (name a) ...)  for x: a { ... }
 //   (for * it (name a) (block ...))    for * a { ... }
 //   (proc f (params) (no_abc) (block ...))   f :: () #no_abc { ... }
+//   (proc printf (params (format (ptr u8)) ..) (returns s32) (foreign libc))
+//                                            printf :: (format: *u8, ..) -> s32 #foreign libc;
 // An array's count prints as written: (array (name N) int) for [N]int.
 // A struct prints as (struct Vec2 (x float32) (y float32)), each field's
 // type as written ((x float) for x: float).

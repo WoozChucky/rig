@@ -10,8 +10,9 @@
 //               | IDENT ':' type ['=' (expression | '---')] ';'     a global variable
 //               | IDENT ':=' expression ';'                         a global variable
 //               | IDENT '::' expression ';'                         a constant
-//   procedure   = '(' [param {',' param}] ')' ['->' type {',' type}]
+//   procedure   = '(' [params] ')' ['->' type {',' type}]
 //                   (['#no_abc'] block | '#foreign' IDENT ';')
+//   params      = param {',' param} [',' '..']                    '..': a variadic C function's
 //   param       = IDENT ':' type
 //   type        = '*' type | '[' expression ']' type | '[' ']' type | IDENT
 //                                                                  (*void: a pointer to anything)
@@ -119,11 +120,11 @@
 // checker's business.
 //
 // At the top level, after '::', a procedure's parameter list starts with
-// '(' ')' or '(' IDENT ':'; any other '(' begins a constant's value, so
-// `N :: (1 + 2);` is a constant. A name followed by ':' or ':=' and then a
-// signature (`greet : () {`) is a procedure with its '::' mistyped:
-// "expected '::', found ':'". Anything else after a top-level name is
-// "expected '::', found ...".
+// '(' ')', '(' IDENT ':' or '(' '..'; any other '(' begins a constant's
+// value, so `N :: (1 + 2);` is a constant. A name followed by ':' or ':='
+// and then a signature (`greet : () {`) is a procedure with its '::'
+// mistyped: "expected '::', found ':'". Anything else after a top-level
+// name is "expected '::', found ...".
 //
 // The bodies of if, else, while and for are always blocks in braces (spec
 // 6.1), and a condition needs no parentheses: the body's '{' ends it. A for

@@ -101,6 +101,7 @@ static void dump(Array<u8> *buffer, Ast *node) {
             out(buffer, " ");
             dump(buffer, proc->params[i]);
         }
+        if (proc->is_variadic) out(buffer, " ..");
         out(buffer, ")");
         if (proc->results.count) {
             out(buffer, " (returns");
