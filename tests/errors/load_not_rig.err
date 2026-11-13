@@ -1,0 +1,3 @@
+tests/errors/load_not_rig.rig:3:7: error: 'tests/errors/load_not_rig.err' isn't a .rig file
+    #load "load_not_rig.err";
+          ^

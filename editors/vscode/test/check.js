@@ -100,9 +100,10 @@ check('no problem matcher shares its owner with the live check\'s collection', (
 // tests/errors/NAME.err is what `rig build tests/errors/NAME.rig` prints,
 // run from the repository root: for each error a line
 // `FILE:LINE:COLUMN: error: MESSAGE`, then the source line and a caret under
-// the column, both indented by four spaces. The matcher must take each
-// first line, with the file, line and column the source and caret lines
-// confirm, and no indented line.
+// the column, both indented by four spaces. FILE is NAME.rig, or a file it
+// #loads, in tests/errors/load/. The matcher must take each first line,
+// with the file, line and column the source and caret lines confirm, and no
+// indented line.
 check('the problem matcher reads every diagnostic of tests/errors', () => {
     const dir = path.join(root, 'tests', 'errors');
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.err'));
@@ -123,7 +124,8 @@ check('the problem matcher reads every diagnostic of tests/errors', () => {
             const d = match(first);
             assert.ok(d, `${where}: the matcher misses ${JSON.stringify(first)}`);
             assert.strictEqual(d.severity, 'error', where);
-            assert.strictEqual(d.file, `tests/errors/${name.replace(/\.err$/, '.rig')}`, where);
+            const own = `tests/errors/${name.replace(/\.err$/, '.rig')}`;
+            assert.ok(d.file === own || /^tests\/errors\/load\/[^/]+\.rig$/.test(d.file), `${where}: ${d.file}`);
             assert.ok(d.message.length > 0, where);
 
             // When the source and caret lines follow (they do in every file
@@ -233,28 +235,37 @@ check('diagnostics.js reads with the same regular expression as $rig', () => {
     assert.strictEqual(runtimeMatcher().pattern.regexp, matcher().pattern.regexp.replace('(?:runtime )?', 'runtime '));
 });
 
-// What `rig check tests/errors/NAME.rig` prints is NAME.err: each of its
-// diagnostics, and only those, comes out, at the line and column it names,
+// What `rig check tests/errors/NAME.rig` prints is NAME.err: each file's
+// diagnostics, and only those, come out for that file (NAME.rig, or a file
+// it #loads, in tests/errors/load/), at the line and column each names,
 // with its severity and message, and none of the source and caret lines.
 check('diagnostics.js reads every diagnostic of tests/errors', () => {
     const { parseDiagnostics } = diagnostics();
     const dir = path.join(root, 'tests', 'errors');
     for (const name of fs.readdirSync(dir).filter((f) => f.endsWith('.err'))) {
         const text = fs.readFileSync(path.join(dir, name), 'utf8');
-        const file = path.join(dir, name.replace(/\.err$/, '.rig'));
-        const expected = text
-            .split(/\r?\n/)
-            .filter((l) => l && !/^\s/.test(l))
-            .map((l) => {
-                const m = /^[^:]+:(\d+):(\d+): (error|warning): (.*)$/.exec(l);
-                assert.ok(m, `${name}: ${l}`);
-                return { line: Number(m[1]), column: Number(m[2]), severity: m[3], message: m[4] };
-            });
-        assert.ok(expected.length > 0, name);
+        // Each file's diagnostics, under its name as the .err gives it.
+        // NAME.rig is there even with none of its own: a name declared again
+        // in a file it loads is that file's error alone.
+        const own = `tests/errors/${name.replace(/\.err$/, '.rig')}`;
+        const expected = new Map([[own, []]]);
+        let count = 0;
+        for (const l of text.split(/\r?\n/).filter((l) => l && !/^\s/.test(l))) {
+            const m = /^([^:]+):(\d+):(\d+): (error|warning): (.*)$/.exec(l);
+            assert.ok(m, `${name}: ${l}`);
+            if (!expected.has(m[1])) expected.set(m[1], []);
+            expected.get(m[1]).push({ line: Number(m[2]), column: Number(m[3]), severity: m[4], message: m[5] });
+            count++;
+        }
+        assert.ok(count > 0, name);
         // The names in the .err are relative to the repository's root,
         // where rig ran; Windows' \r\n reads the same.
-        assert.deepStrictEqual(parseDiagnostics(text, file, root), expected, name);
-        assert.deepStrictEqual(parseDiagnostics(text.replace(/\r?\n/g, '\r\n'), file, root), expected, `${name}, \\r\\n`);
+        for (const [relative, list] of expected) {
+            const file = path.join(root, ...relative.split('/'));
+            const where = `${name}, ${relative}`;
+            assert.deepStrictEqual(parseDiagnostics(text, file, root), list, where);
+            assert.deepStrictEqual(parseDiagnostics(text.replace(/\r?\n/g, '\r\n'), file, root), list, `${where}, \\r\\n`);
+        }
         // Another file's diagnostics aren't this one's.
         assert.deepStrictEqual(parseDiagnostics(text, path.join(dir, 'other.rig'), root), [], `${name}, another file`);
     }

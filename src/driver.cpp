@@ -1,8 +1,8 @@
 // driver.cpp: rig build, every stage in order, and rig check, the stages up
 // to the diagnostics (command_check, at the end).
 //
-// rig build FILE.rig [-o OUTPUT] [--no-bounds-checks] reads the file, lexes,
-// parses and checks it, and stops there with the diagnostics on stderr if
+// rig build FILE.rig [-o OUTPUT] [--no-bounds-checks] reads the file and the
+// files it #loads, lexes, parses and checks them, and stops there with the diagnostics on stderr if
 // anything was wrong (exit 1). Otherwise it lowers the program (without the
 // bounds checks of a[i] with --no-bounds-checks, spec 6.5), has LLVM write
 // the object file .build/NAME.obj (Windows) or .build/NAME.o (Linux) in the
@@ -23,6 +23,7 @@
 // fine; at the same time, one could link the other's object.
 
 #include "link.h"
+#include "load.h"
 
 // "src/hello.rig" -> "hello"; either slash. A name that is only ".rig" stays
 // as it is, rather than becoming nothing.
@@ -53,8 +54,9 @@ String executable_path(Arena *a, String output, String name, Target t) {
 
 // The front half of the compiler, all of rig check and the start of rig
 // build: reads the source (the file at `path`, or with from_stdin standard
-// input, named `path` all the same), lexes, parses and checks it, and
-// prints every diagnostic to stderr. Returns the checked tree, or nullptr
+// input, named `path` all the same), lexes and parses it and every file it
+// #loads (load_program), checks the program, and prints every diagnostic to
+// stderr. Returns the checked tree, or nullptr
 // when the source couldn't be read or had errors, which it has then
 // reported. With `lowered`, as rig build asks, a program without errors is
 // also lowered into *lowered, its indexes bounds-checked when bounds_checks
@@ -72,30 +74,30 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Modul
         return nullptr;
     }
 
-    // The tokens and the diagnostics are freed here, the tree and the module
-    // kept: they live in the arena.
+    // The diagnostics are freed here, the tree and the module kept: they
+    // live in the arena. The loader lexes and parses this file and every
+    // file it #loads into the one tree, and registers each with d: messages
+    // name a file by its path as given (a loaded one's from the file that
+    // loads it, load.h), the debug information by its absolute path, from
+    // the directory rig runs in (ir_lower).
     Diagnostics d = {};
-    s32 file = diag_add_file(&d, path, text);
-    // Messages name the file by its path as given; the debug information
-    // by its absolute path, from the directory rig runs in (ir_lower).
-    diag_locate_file(&d, file, os_current_directory(a), target_host() == TARGET_WINDOWS_X64);
-    Array<Token> tokens = lex(&d, file, a);
-    Ast_File *tree = parse(tokens, a, &d);
+    Ast_File *tree = load_program(a, &d, path, text);
     check(tree, a, &d);
     bool ok = d.error_count == 0;
     if (!ok) {
-        // Into source order: the lexer reported the whole file before the
-        // parser began, the parser the whole file before the checker, and
-        // the checker reports every signature before any body.
+        // Into source order, file by file in load order: for each file the
+        // lexer reported the whole file before the parser began, and the
+        // parser before the loader's errors about its #loads; the checker
+        // came after every file, and reports every signature before any
+        // body.
         diag_sort(&d);
         diag_print(&d);
     }
-    // Lowered while d still holds the file's path, which a runtime error's
-    // message names, and its absolute path and directory, which the debug
-    // information does; the module keeps its own copies.
+    // Lowered while d still holds the files' paths, which a runtime error's
+    // message names, and their absolute paths and directories, which the
+    // debug information does; the module keeps its own copies.
     if (ok && lowered) *lowered = ir_lower(tree, &d, a, bounds_checks);
     diag_free(&d);
-    array_free(&tokens);
     return ok ? tree : nullptr;
 }
 

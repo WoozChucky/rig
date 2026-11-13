@@ -1,0 +1,10 @@
+// An error in a loaded file (issue #112) names that file and shows its
+// line. It comes after this file's own error, though its line, 3, is
+// before this one's, 8: errors sort by file, in load order, the main file
+// first, and only then by line.
+#load "load/bad_type.rig";
+
+main :: () {
+    y : u8 = 256;
+    convert();
+}

@@ -1,0 +1,3 @@
+tests/errors/load_in_a_body.rig:3:5: error: #load can only be at the top level
+        #load "load/also_f.rig";
+        ^

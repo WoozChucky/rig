@@ -1,0 +1,20 @@
+// A program of three files (issue #112, spec 2.13): this one #loads
+// load/shapes.rig and load/print.rig, whose declarations join its own in
+// the program's one top-level scope. shapes.rig #loads print.rig too, by
+// the path from its own directory, and calls print_int: the files use each
+// other's declarations, whichever loads which, and print.rig is read once,
+// so its procedures aren't declared twice.
+#load "load/shapes.rig";
+#load "load/print.rig";
+
+main :: () {
+    square := Shape.{SIDES, 3};
+    print_shape(square);
+    print_int(area(square));
+    putchar(10);
+    rect := Shape.{SIDES, 5};
+    rect.side = 2;
+    print_int(area(rect) + area(Shape.{SIDES, 1}));
+    putchar(10);
+    puts("three files, one program");
+}

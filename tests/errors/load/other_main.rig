@@ -1,0 +1,2 @@
+// Loaded by tests/errors/load_main_twice.rig, which declares main too.
+main :: () {}

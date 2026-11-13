@@ -1,0 +1,6 @@
+tests/errors/load_error_in_loaded_file.rig:8:14: error: 256 doesn't fit in 'u8'
+        y : u8 = 256;
+                 ^
+tests/errors/load/bad_type.rig:3:14: error: 300 doesn't fit in 'u8'
+        x : u8 = 300;
+                 ^

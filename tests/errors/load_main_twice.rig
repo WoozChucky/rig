@@ -1,0 +1,5 @@
+// A program has one main, whichever file declares it (issue #112): a
+// loaded file's main is main declared twice.
+#load "load/other_main.rig";
+
+main :: () {}

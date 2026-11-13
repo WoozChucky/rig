@@ -1,0 +1,5 @@
+// A #load of a file that isn't there (issue #112): the error is at the
+// path, which it names as the loader made it, from this file's directory.
+#load "load/nope.rig";
+
+main :: () {}
