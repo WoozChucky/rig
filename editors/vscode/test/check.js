@@ -294,13 +294,23 @@ check('diagnostics.js counts the errors in the other files of the program', () =
         line: 1,
         column: 1,
         severity: 'error',
-        message: "2 errors in the program's other files, the first: tests/errors/load/bad_type.rig:3:14: 300 doesn't fit in 'u8'",
+        message: "2 errors in the program's other files, the first: load/bad_type.rig:3:14: 300 doesn't fit in 'u8'",
     });
     // From the loaded file, the main file's is the other one.
     const loaded = path.join(root, 'tests', 'errors', 'load', 'bad_type.rig');
     assert.strictEqual(
         otherFilesError(text.replace(/\r?\n/g, '\r\n'), loaded, root).message,
-        "an error in another file of the program: tests/errors/load_error_in_loaded_file.rig:9:14: 256 doesn't fit in 'u8'",
+        "an error in another file of the program: ../load_error_in_loaded_file.rig:9:14: 256 doesn't fit in 'u8'",
+    );
+    // The live check gives rig the document's full path, so rig names a
+    // file it loads by an absolute path: on Windows the directory's '\',
+    // then the #load's '/'. It's named from the document's directory, with
+    // '/', as a #load there would name it.
+    const src = path.resolve('w', 'src');
+    const absolute = `${path.join(src, 'world')}/MAP.rig:1:20: error: 300 doesn't fit in 'u8'\n`;
+    assert.strictEqual(
+        otherFilesError(absolute, path.join(src, 'main.rig'), path.resolve('elsewhere')).message,
+        "an error in another file of the program: world/MAP.rig:1:20: 300 doesn't fit in 'u8'",
     );
     // None elsewhere, or only warnings and rig's own errors: none to count.
     const own = `${main}:9:14: error: x\n    y : u8 = 256;\n             ^\nrig: error: linking failed\n`;

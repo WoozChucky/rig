@@ -56,7 +56,8 @@ function parseDiagnostics(output, file, cwd) {
 // under their names, which parseDiagnostics leaves out: they aren't the
 // document's. But a program that won't build should say so where it's
 // being edited, so they come back as one error of the document's, on its
-// first line, that counts them and names the first as rig did:
+// first line, that counts them and names the first, by its path from the
+// document's directory:
 //
 //     an error in another file of the program: load/shapes.rig:3:14: 300 doesn't fit in 'u8'
 //     2 errors in the program's other files, the first: load/shapes.rig:3:14: ...
@@ -74,7 +75,17 @@ function otherFilesError(output, file, cwd) {
     const [, name, line, column, , message] = errors[0];
     const count =
         errors.length === 1 ? 'an error in another file of the program' : `${errors.length} errors in the program's other files, the first`;
-    return { line: 1, column: 1, severity: 'error', message: `${count}: ${name}:${line}:${column}: ${message}` };
+    return { line: 1, column: 1, severity: 'error', message: `${count}: ${nameFrom(file, name, cwd)}:${line}:${column}: ${message}` };
+}
+
+// The file rig named `name` (from `cwd`), as a #load in `file` would name
+// it: its path from file's directory, with '/' between the names. rig's own
+// name can be long and, on Windows, mixed: the live check gives rig the
+// document's full path, so a file it loads is named by the directory's
+// path, with '\', then the #load's, with '/' (C:\x\src\world/map.rig).
+function nameFrom(file, name, cwd) {
+    const relative = path.relative(path.dirname(file), path.resolve(cwd, name));
+    return windows ? relative.replace(/\\/g, '/') : relative;
 }
 
 // rig counts a column in bytes of the line's UTF-8 (a tab is one column, and
