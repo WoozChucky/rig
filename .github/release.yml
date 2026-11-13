@@ -1,0 +1,18 @@
+# How GitHub groups a release's generated notes (the release workflow's
+# --generate-notes): by the labels of the pull requests merged since the
+# last release. A pull request goes under the first category one of its
+# labels names; one with none of them, under "Other".
+changelog:
+  categories:
+    - title: Language
+      labels: [language]
+    - title: Compiler
+      labels: [compiler, bug]
+    - title: Tooling and editor
+      labels: [tooling, editor]
+    - title: Documentation
+      labels: [documentation]
+    - title: Dependencies
+      labels: [dependencies]
+    - title: Other
+      labels: ['*']
