@@ -1,0 +1,9 @@
+9:         z := x + 1;
+int64 x = 0n2
+int64 x = 0n1
+Ambiguous symbol error at 'x'
+11:     y := x;
+int64 0n1
+14:             w := it + 10;
+int64 it = 0n0
+int64 it = 0n5
