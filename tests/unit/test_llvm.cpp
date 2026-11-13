@@ -1005,6 +1005,52 @@ TEST(llvm_debug_info_has_a_compile_unit) {
     arena_free(&a);
 }
 
+TEST(llvm_debug_file_names_keep_a_share) {
+    // Issue #104: the names of the source file and the directory that LLVM
+    // is given, for the path given to rig build in the directory it ran in.
+    // On Windows a file on a network share (a UNC path) is named with a
+    // '/' first, /\server\share\dir\a.rig, a name LLVM's CodeView writer
+    // keeps whole (it made \\server\share\... into C:\server\share\... after
+    // the directory's drive, or the directory and the name end to end) and
+    // Windows and cdb read as the share's. A drive path, a
+    // drive-relative path, a relative one and the directory are as they
+    // are; on Linux nothing changes.
+    Arena a = arena_make();
+    struct Case {
+        const char *directory, *given;   // rig's working directory, and the path rig build is given
+        const char *file, *in_directory; // what LLVM gets on Windows
+    };
+    Case cases[] = {
+        {"C:\\work", "\\\\server\\share\\dir\\a.rig", "/\\server\\share\\dir\\a.rig", "C:\\work"},
+        {"C:\\work", "//server/share/dir/a.rig", "/\\server\\share\\dir\\a.rig", "C:\\work"},
+        {"C:\\work", "C:\\dev\\a.rig", "C:\\dev\\a.rig", "C:\\work"},
+        {"C:\\work", "C:a.rig", "C:\\work\\a.rig", "C:\\work"},
+        {"C:\\work", "a.rig", "C:\\work\\a.rig", "C:\\work"},
+        {"\\\\server\\share\\dir", "sub\\a.rig", "/\\server\\share\\dir\\sub\\a.rig", "\\\\server\\share\\dir"},
+        {"\\\\server\\share\\dir", "..\\a.rig", "/\\server\\share\\a.rig", "\\\\server\\share\\dir"},
+    };
+    for (Case &c : cases) {
+        String path = path_absolute(&a, str(c.directory), str(c.given), true);
+        String file = {}, directory = {};
+        llvm_debug_file_names(&a, path, str(c.directory), TARGET_WINDOWS_X64, &file, &directory);
+        CHECK_STR(file, c.file);
+        CHECK_STR(directory, c.in_directory);
+        llvm_debug_file_names(&a, path, str(c.directory), TARGET_LINUX_X64, &file, &directory);
+        CHECK(string_eq(file, path));
+        CHECK_STR(directory, c.directory);
+    }
+    // In the module's debug information: the file's name as LLVM got it.
+    Ir_Module *m = lower_source(&a, LINES);
+    m->source_path = str("\\\\server\\share\\dir\\lines.rig");
+    m->directory = str("\\\\server\\share\\dir");
+    String text = llvm_text(&a, m, TARGET_WINDOWS_X64);
+    String file = string_printf(&a, "!DIFile(filename: \"" STR_FMT "\", directory: \"" STR_FMT "\"",
+                                STR_ARG(llvm_escaped(&a, str("/\\server\\share\\dir\\lines.rig"))),
+                                STR_ARG(llvm_escaped(&a, m->directory)));
+    CHECK(contains(text, string_cstr(&a, file)));
+    arena_free(&a);
+}
+
 TEST(llvm_procedures_have_subprograms) {
     // Each Rig procedure is a subprogram named as in the source, with no
     // linkage name: LLVM renamed the Rig memset memset.1 (C's memset was
