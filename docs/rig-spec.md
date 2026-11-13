@@ -374,7 +374,7 @@ Where an untyped constant meets a type, in a declaration with a type, an assignm
 - An untyped integer takes any integer type whose range holds its value, or any float type (it is converted to the nearest value of that type). A value outside the range is `300 doesn't fit in 'u8'`.
 - An untyped float takes any float type. Taking `float32`, its value must be within `float32`'s range (`1e+300 doesn't fit in 'float32'`, the value written as C's `%g` writes it) and is rounded to it. An untyped float never becomes an integer implicitly: `x : int = 1.5;` is `a value of type 'float32' doesn't convert to 'int' implicitly`.
 
-Where it meets no type, as in `x := 5;`, an untyped integer becomes an `int` and an untyped float a `float32`. For that reason messages name an untyped integer `int` and an untyped float `float32`.
+Where it meets no type, as in `x := 5;`, an untyped integer becomes an `int` and an untyped float a `float32`. For that reason messages name an untyped integer `int` and an untyped float `float32`. One place differs: passed to a variadic foreign procedure after its parameters, where C receives a `double`, an untyped float becomes a `float64` (section 7.6).
 
 Two other kinds of value take their type from where they are used:
 
@@ -784,7 +784,7 @@ Call = Postfix "(" [ Expression { "," Expression } ] ")" .
 
 `f(a, b)` calls the procedure named `f` with the arguments `a` and `b`. The callee must be the name of a procedure: a call of anything else is `only a procedure's name can be called, for now`, and a call of a name declared as something else is `'x' isn't a procedure, so it can't be called`.
 
-There must be one argument per parameter (`'puts' takes 1 argument, but 2 were given`), and each argument's value converts implicitly to its parameter's type (`argument 1 of 'f' has type 'int', which can't be converted to 'u8'`). The arguments are evaluated left to right, then the procedure runs; section 7 describes parameters and results.
+There must be one argument per parameter (`'puts' takes 1 argument, but 2 were given`), and each argument's value converts implicitly to its parameter's type (`argument 1 of 'f' has type 'int', which can't be converted to 'u8'`). A variadic foreign procedure, declared with `..`, takes at least one argument per parameter (`'printf' takes at least 1 argument, but 0 were given`) and any number more, each passed as section 7.6 says. The arguments are evaluated left to right, then the procedure runs; section 7 describes parameters and results.
 
 A call is an expression whose value is the procedure's first result. A call of a procedure with no results has no value: it may only be a statement (section 6.3), and used as a value it is `'greet' returns nothing, so it has no value`. All the results of a call are received by several names or targets (sections 6.2, 6.4).
 
@@ -1126,11 +1126,12 @@ main :: () {}
 
 ```ebnf
 ProcDecl  = identifier "::" Signature ( [ "#no_abc" ] Block | "#foreign" identifier ";" ) .
-Signature = "(" [ Param { "," Param } ] ")" [ "->" Type { "," Type } ] .
+Signature = "(" [ Params ] ")" [ "->" Type { "," Type } ] .
+Params    = Param { "," Param } [ "," ".." ] .
 Param     = identifier ":" Type .
 ```
 
-A procedure is declared at the top level with its name, its signature and its body. The signature lists the parameters in parentheses, each a name and a type, and after `->` the types of its results, separated by commas, with no parentheses around them. A procedure with no `->` returns nothing.
+A procedure is declared at the top level with its name, its signature and its body. The signature lists the parameters in parentheses, each a name and a type, and after `->` the types of its results, separated by commas, with no parentheses around them. A procedure with no `->` returns nothing. A foreign procedure's list may end with `..`, after at least one parameter: it takes more arguments, as a C function declared with `...` does (section 7.6).
 
 ```rig
 divmod :: (a: int, b: int) -> int, int {
@@ -1216,7 +1217,7 @@ A foreign procedure's parameters and result are numbers, bools and pointers, whi
 | `bool` | `_Bool` |
 | `*T`, `*void` | a pointer, `void *` |
 
-It returns at most one value (`a foreign procedure can return at most one value`). Structs, arrays, views and strings are not passed to or returned from C: `a foreign procedure can't take a 'Vec2' yet; pass a pointer to it`, `a foreign procedure can't take a '[3]int'; pass its .data`, `a foreign procedure can't take a 'string'; pass its .data, which may not end with a zero, or a literal`, and `a foreign procedure can't return a 'Vec2' yet`. A pointer to a struct is passed as a pointer to a C struct of the same layout (section 3.9). Rig has no variadic parameter lists, and a call of a foreign procedure follows the convention for a C function with fixed parameters, so C's variadic functions, such as `printf`, are not supported: a declaration of one with fixed parameters is not refused, but its calls do not follow C's convention for it (and on Windows `printf` does not link).
+It returns at most one value (`a foreign procedure can return at most one value`). Structs, arrays, views and strings are not passed to or returned from C: `a foreign procedure can't take a 'Vec2' yet; pass a pointer to it`, `a foreign procedure can't take a '[3]int'; pass its .data`, `a foreign procedure can't take a 'string'; pass its .data, which may not end with a zero, or a literal`, and `a foreign procedure can't return a 'Vec2' yet`. A pointer to a struct is passed as a pointer to a C struct of the same layout (section 3.9). A C function that takes a variable number of arguments is declared with `..` (below).
 
 ```rig
 malloc :: (size: u64) -> *void #foreign libc;
@@ -1236,6 +1237,58 @@ from the heap
 ```
 
 `malloc`'s `*void` converts to `*int` without a cast, and `free` takes the `*int` back as a `*void` (section 3.5).
+
+**Variadic foreign procedures.** A C function declared with `...`, such as `printf`, takes arguments beyond its named parameters. Its foreign procedure says so with `..` as the last element of its parameter list, after at least one parameter, as C requires one before its `...`:
+
+```rig
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+snprintf :: (buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;
+
+main :: () {
+    count : s32 = 3;
+    ratio : float32 = 0.75;
+    small : u8 = 200;
+    printf("%d items, %.2f full, %d, %lld\n", count, ratio, small, 1234567890123);
+
+    name := "Excalibur, the sword";
+    printf("[%.*s]\n", cast(s32) 9, name.data);
+
+    buffer : [32]u8;
+    written := snprintf(buffer.data, 32, "%s %.1f", "pi is", 3.14159);
+    printf("%s (%d bytes)\n", buffer.data, written);
+}
+```
+
+```text
+3 items, 0.75 full, 200, 1234567890123
+[Excalibur]
+pi is 3.1 (9 bytes)
+```
+
+Only a foreign procedure may take `..`: on a procedure with a body it is `only a foreign procedure can take more arguments with '..'; a Rig procedure can take a view, as in (values: []int)`. A call passes at least one argument per named parameter (`'printf' takes at least 1 argument, but 0 were given`), each converted to its parameter's type as in any call (section 5.10). The arguments after them have no parameter, so each keeps its own type, which must be a number, a `bool` or a pointer. C receives each after its *default argument promotions*, which the caller applies:
+
+| Rig | C receives |
+|---|---|
+| `s8`, `s16` | `int`, sign-extended |
+| `u8`, `u16`, `bool` | `int`, zero-extended (a `bool` is 0 or 1) |
+| `s32`, `u32` | `int`, `unsigned int` |
+| `s64` or `int`, `u64` | `long long`, `unsigned long long` |
+| `float32` | `double`, of the same value |
+| `float64` | `double` |
+| `*T`, `*void` | a pointer |
+
+So `%d` prints an `s8`, `u8`, `s16`, `u16`, `bool` or `s32`, `%u` a `u32`, `%lld` an `int` or `s64`, `%llu` a `u64`, and `%f` either float type. What the format says must match what is passed, as in C: the compiler does not read the format, and a mismatch is undefined behaviour in C.
+
+An argument with no type of its own takes one as where it meets no type (section 3.12), but for an untyped float:
+
+- an untyped integer is an `int`, a `long long` to C: `printf("%lld", 5)`, not `%d`, which reads a C `int`; pass `cast(s32) 5` for `%d`;
+- an untyped float is a `float64`, C's `double`, not rounded to a `float32` first: `printf("%.10f", 0.1)` prints `0.1000000000`;
+- `null` is a `*void`, C's `NULL`;
+- a string literal is passed as its bytes' address, a C string, as where it converts to a `*u8` (section 3.8): `printf("%s", "hi")`.
+
+C cannot take Rig's aggregates through `...`. A struct, an array, a view or a string other than a literal is refused, with what to pass instead: `argument 2 of 'printf' has type 'Vec2', which C's '...' can't take; pass a pointer to it`, `argument 2 of 'printf' has type '[32]u8', which C's '...' can't take; pass its .data` (a view's too), and `argument 2 of 'printf' has type 'string', which C's '...' can't take; pass its .data, which may not end with a zero, or a literal`. Since a string's bytes need not end with a zero, `%s` may read past them; `%.*s` takes the count first, as a C `int`: `printf("%.*s", cast(s32) s.count, s.data)`.
+
+A call of a variadic foreign procedure follows the platform's convention for C's variadic functions (section 10.4). On Windows, the C runtime's DLLs export no `printf` or the rest of its family: a program links them from Visual Studio's `legacy_stdio_definitions.lib` (section 10.6).
 
 ### 7.7 Turning off bounds checks
 
@@ -1482,6 +1535,7 @@ Rig follows the platform's C calling convention, as clang implements it: the Mic
 
 - **Procedures** are local to the program (internal linkage), except `main`, which is exported as the C program's `main`, returning the C `int` 0. A debugger's `main` is therefore the Rig procedure itself. **Foreign procedures** are external symbols, resolved by the linker against the C runtime.
 - **Scalar parameters and results** (integers, floats, bools, pointers) are passed as C passes values of the C types in section 7.6. On Linux an `s8`, `u8`, `s16` or `u16` argument or result is extended to 32 bits by the side that passes it, sign-extended if its type is signed and zero-extended if not, as clang does; on Windows the receiving side extends it. A `bool` is passed as a whole byte or more, 0 or 1 with every other bit zero, on both. Rig's own procedures follow the same rules as foreign ones, so a call and its callee always agree.
+- **Variadic calls**, of a foreign procedure declared with `..` (section 7.6), follow C's convention for a call of a function declared with `...`, as clang makes it: the arguments after the named ones are passed after C's default argument promotions, as an `int`, a `long long`, a `double` or a pointer, so none is narrower than 32 bits. On Linux the caller also sets `al` to the number of vector registers the arguments use (at most 8), which the callee's `va_start` reads to know which to save. On Windows a `double` among the first four arguments goes in its integer register as well as its vector register, since the callee reads its arguments from the integer registers and the stack, as one list.
 - **Aggregates** (structs, arrays, views and strings) are never passed in registers. An aggregate argument is passed as a pointer to a copy the caller makes; the callee only reads it. An aggregate result is returned through a hidden pointer parameter: there is one per aggregate result, in result order, before the visible parameters, each pointing at a temporary of the caller's that `return` copies the value into, and that the caller copies to its destination after the call.
 - **Several results**: when a procedure has more than one scalar result, they are returned together as one LLVM structure value, whose passing LLVM decides; a single scalar result is returned as itself. Only Rig's own procedures have several results, so no C code sees it.
 - **Frame pointers** are kept in every procedure (LLVM's `"frame-pointer"="all"`): each frame begins by saving the caller's `rbp` and pointing `rbp` at it, so debuggers and profilers can walk the stack through the chain of frames.
@@ -1592,7 +1646,8 @@ File          = { TopLevel } .
 TopLevel      = ProcDecl | StructDecl | ConstDecl | VarDecl .
 
 ProcDecl      = identifier "::" Signature ( [ "#no_abc" ] Block | "#foreign" identifier ";" ) .
-Signature     = "(" [ Param { "," Param } ] ")" [ "->" Type { "," Type } ] .
+Signature     = "(" [ Params ] ")" [ "->" Type { "," Type } ] .
+Params        = Param { "," Param } [ "," ".." ] .
 Param         = identifier ":" Type .
 
 StructDecl    = identifier "::" "struct" "{" { FieldDecl } "}" .
@@ -1609,7 +1664,7 @@ Type          = "*" Type
               | identifier .
 ```
 
-After `::`, a `(` followed by `)`, or by an identifier and `:`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. `ProcDecl` and `StructDecl` appear only at the top level.
+After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. `ProcDecl` and `StructDecl` appear only at the top level.
 
 ### A.3 Statements
 
@@ -1709,7 +1764,7 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `::` | constant, procedure or struct declaration | 4.1 |
 | `:=` | variable declaration with its value's type | 4.3, 6.2 |
 | `->` | results of a procedure | 7.1 |
-| `..` | range | 6.7 |
+| `..` | range; a variadic foreign procedure's other arguments | 6.7, 7.6 |
 | `---` | uninitialised variable | 4.3 |
 | `,` | separator; `cast,trunc` | 3.14, 5.10 |
 | `;` | end of a statement or declaration | 6 |
