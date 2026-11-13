@@ -12,9 +12,18 @@ int64[],
 int64)
 sum  int64 (
 Pair*)
+pairs  void (
+Pair*,
+Pair*,
+int64)
+split  int64 (
+Pair*,
+int64)
 16:     p := Pair.{n, n + 1};
 struct Pair * result$ = 0x
 int64 n = 0n5
+?? result$
+struct Pair * 0x
 50:     s := sum(q);
 ?? q
 a                : 0n9
@@ -27,8 +36,26 @@ count            : 0n5
 ?? b[1]
 int64 0n14
 Too few arguments
+?? x
+a                : 0n3
+b                : 0n4
+?? y
+a                : 0n6
+b                : 0n9
+.call returns:
+int64 0n12
+?? z
+a                : 0n4
+b                : 0n5
 36:     s := p.a + p.b;
 struct Pair * p = 0x
 int64 0n10
 .call returns:
 int64 0n8
+64:     p := Pair.{n, n + 1};
+struct Pair * result$1 = 0x
+struct Pair * result$2 = 0x
+int64 n = 0n2
+69:     p := Pair.{n, n + 1};
+struct Pair * result$ = 0x
+int64 n = 0n4

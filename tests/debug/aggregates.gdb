@@ -1,6 +1,8 @@
 break make
 run
+print result$
 finish
+print *$1
 break little
 continue
 finish
@@ -27,8 +29,20 @@ print make(&q, 7)
 print q
 print both(&b, 4)
 print b
-break aggregates.rig:58
+break aggregates.rig:60
 continue
 print new
 print this
 print twice(3)
+up
+print pairs(&x, &y, 3)
+print x
+print y
+print split(&z, 4)
+print z
+break pairs
+break split
+continue
+bt 1
+continue
+bt 1
