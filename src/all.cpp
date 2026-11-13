@@ -23,6 +23,7 @@
 #include "check_expr.cpp"
 #include "ir.cpp"
 #include "lower.cpp"
+#include "interp.cpp"
 #include "llvm_backend.cpp"
 #include "llvm_compression_stubs.cpp"
 #include "link.cpp"
