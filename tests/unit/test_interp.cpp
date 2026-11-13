@@ -22,8 +22,10 @@
 #include <errno.h>    // ERANGE, for interp_windows_shares_the_compilers_streams_and_errno
 #include <process.h>  // _getpid, for interp_calls_a_windows_function
 #else
+#include <errno.h>     // errno, ENOMEM, for interp_procedure_values
 #include <execinfo.h>  // backtrace, for thunk_unwinds_through_the_thunk
 #include <pthread.h>   // pthread_atfork, for interp_finds_c_functions_by_name
+#include <sys/mman.h>  // mincore, for interp_procedure_values
 #include <unwind.h>    // _Unwind_Backtrace, for thunk_unwinds_the_callers_registers
 #endif
 
@@ -114,6 +116,9 @@ TEST(interp_integer_ops_wrap) {
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "up :: () -> s8 { x : s8 = 127; return x + 1; }\n"
+                                "carried :: () -> u8 { x : u8 = 200; return x + 100; }\n"
+                                "carried_to_zero :: () -> bool { x : u8 = 255; return x + 1 == 0; }\n"
+                                "carried_negative :: () -> bool { x : s16 = 32767; return x + 1 < 0; }\n"
                                 "down :: () -> u64 { x : u64 = 0; return x - 1; }\n"
                                 "times :: () -> u32 { x : u32 = 65536; return x * x + 3; }\n"
                                 "negative :: () -> s16 { x : s16 = 300; return x * -200; }\n"
@@ -146,6 +151,12 @@ TEST(interp_integer_ops_wrap) {
                                 "}\n"
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_value(&a, m, "up"), 0x80);  // -128 as an i8's bits
+    // A sum that carries past its width is cut back to it at once, before
+    // anything uses it: 300 is 0x12C, 256 is 0x100, and 32768 is 0x8000,
+    // -32768 as an i16's bits.
+    CHECK_EQ(interp_test_value(&a, m, "carried"), 0x2C);
+    CHECK_EQ(interp_test_value(&a, m, "carried_to_zero"), 1);
+    CHECK_EQ(interp_test_value(&a, m, "carried_negative"), 1);
     CHECK(interp_test_value(&a, m, "down") == ~(u64)0);
     CHECK_EQ(interp_test_value(&a, m, "times"), 3);  // 2^32 wraps to 0
     CHECK_EQ(interp_test_value(&a, m, "negative"), (u16)(s16)(300 * -200));  // -60000 wraps to 5536
@@ -192,9 +203,10 @@ TEST(interp_integer_ops_wrap) {
 }
 
 TEST(interp_signed_division_by_minus_one) {
-    // Lowering never divides by -1 (it computes 0 - a instead), but sdiv
-    // means LLVM's: the most negative value by -1 wraps back to itself, and
-    // its remainder is 0. C++'s / would trap.
+    // Lowering never divides by -1 (LLVM leaves the most negative value by
+    // -1 undefined; it computes 0 - a instead), but IR built by hand may:
+    // the interpreter gives Rig's answer (spec 6.4), the most negative value
+    // itself, remainder 0, where C++'s / would trap.
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
     Ir_Proc *p = new_proc_returning(m, &a, "divide", IR_I64);
@@ -1162,7 +1174,7 @@ TEST(interp_c_functions_by_hand) {
     // fails before it starts, with no frames. One the library has runs
     // directly too, given its arguments as its parameters type them:
     // strlen, called with a string, and refused, with no frames, a Rig
-    // procedure's value. C gives one result at most: a call, or a direct
+    // procedure's value or any other address in their range. C gives one result at most: a call, or a direct
     // run, that expects two gets 0 for the second. dirty runs first and
     // leaves its values on the stack where pair's frame goes, so a result
     // left unwritten would show.
@@ -1255,12 +1267,22 @@ TEST(interp_c_functions_by_hand) {
         CHECK_EQ(r.results[1], 0);
     }
     interp_test_free(&r);
-    args[0] = interp_proc_address(in, interp_test_proc(m, "value"));
-    interp_run(in, strlen_proc, args, &a, &r);
-    CHECK(!r.ok);
-    CHECK_STR(r.message, INTERP_TEST_REFUSED);
-    CHECK_EQ(r.frames.count, 0);
-    interp_test_free(&r);
+    // Not only a procedure's own address is refused: any address in the
+    // reserved range is, halfway into one (+ 8) or at the range's last
+    // byte, as C would fault on every one of them. (Procedure 0 is foreign,
+    // with no address of its own; the range starts there all the same.)
+    s32 value = interp_test_proc(m, "value");
+    u64 value_address = interp_proc_address(in, value);
+    u64 base = value_address - INTERP_PROC_STRIDE * (u64)value;
+    u64 refused[] = {value_address, value_address + 8, base + INTERP_PROC_RANGE - 1};
+    for (u64 stray : refused) {
+        args[0] = stray;
+        interp_run(in, strlen_proc, args, &a, &r);
+        CHECK(!r.ok);
+        CHECK_STR(r.message, INTERP_TEST_REFUSED);
+        CHECK_EQ(r.frames.count, 0);
+        interp_test_free(&r);
+    }
     array_free(&call_args);
     array_free(&args);
     interp_free(in);
@@ -1927,6 +1949,14 @@ TEST(thunk_narrow_results_and_arguments) {
     args = {};
     thunk_test_add(&args, IR_I32, 0xFFFFFFFB);
     CHECK_EQ(thunk_test_call((void *)thunk_test_same, &args, IR_I64), 0xFFFFFFFB);
+    // A bool argument goes in an integer register as it is, 0 or 1 and
+    // nothing above, on both hosts.
+    args = {};
+    thunk_test_add(&args, IR_I1, 1);
+    CHECK_EQ(thunk_test_call((void *)thunk_test_same, &args, IR_I64), 1);
+    args = {};
+    thunk_test_add(&args, IR_I1, 0);
+    CHECK_EQ(thunk_test_call((void *)thunk_test_same, &args, IR_I64), 0);
 }
 
 TEST(thunk_result_masks_what_the_callee_left) {

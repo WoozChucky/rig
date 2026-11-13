@@ -642,9 +642,10 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
         case IR_SDIV:
         case IR_SREM: {
             // Lowering never divides by 0 (it checks first) or by -1 (it
-            // computes 0 - a), but IR built by hand may divide by -1: the
-            // most negative value by -1 is LLVM's wrap, itself, with
-            // remainder 0, where C++'s / traps.
+            // computes 0 - a), since LLVM leaves both undefined. IR built
+            // by hand may still divide by -1, and gets what lowering would
+            // give, Rig's definition (spec 6.4): the most negative value
+            // wraps to itself, with remainder 0, where C++'s / would trap.
             s64 x = interp_signed(v[instr->a], t), y = interp_signed(v[instr->b], t);
             RIG_ASSERT(y != 0);
             u64 r;
