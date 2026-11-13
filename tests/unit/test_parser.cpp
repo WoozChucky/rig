@@ -2046,11 +2046,13 @@ TEST(parse_load) {
     Ast_File *file = parse(list->tokens, &a, &list->diag);
     CHECK_STR(messages(&a, &list->diag), "");
     CHECK_EQ(file->loads.count, 1);
-    CHECK_STR(file->loads[0]->path, "a.rig");
-    CHECK_EQ(file->loads[0]->pos.line, 1);
-    CHECK_EQ(file->loads[0]->pos.col, 1);
-    CHECK_EQ(file->loads[0]->path_pos.line, 1);
-    CHECK_EQ(file->loads[0]->path_pos.col, 7);
+    if (file->loads.count == 1) {
+        CHECK_STR(file->loads[0]->path, "a.rig");
+        CHECK_EQ(file->loads[0]->pos.line, 1);
+        CHECK_EQ(file->loads[0]->pos.col, 1);
+        CHECK_EQ(file->loads[0]->path_pos.line, 1);
+        CHECK_EQ(file->loads[0]->path_pos.col, 7);
+    }
     CHECK_STR(ast_dump(&a, file), "(load \"a.rig\")\n(proc main (params) (block))\n");
     token_list_free(list);
 
@@ -2069,7 +2071,7 @@ TEST(parse_load_escapes) {
     Ast_File *file = parse(list->tokens, &a, &list->diag);
     CHECK_STR(messages(&a, &list->diag), "");
     CHECK_EQ(file->loads.count, 1);
-    CHECK_STR(file->loads[0]->path, "dir\\x.rig");
+    if (file->loads.count == 1) CHECK_STR(file->loads[0]->path, "dir\\x.rig");
     CHECK_STR(ast_dump(&a, file), "(load \"dir\\\\x.rig\")\n");
     token_list_free(list);
     arena_free(&a);
@@ -2508,7 +2510,7 @@ TEST(parse_load_without_a_string) {
     Ast_File *file = parse(list->tokens, &a, &list->diag);
     CHECK_STR(messages(&a, &list->diag), "1:7: expected a string after #load, as in #load \"other.rig\";\n");
     CHECK_EQ(file->loads.count, 1);
-    CHECK_STR(file->loads[0]->path, "b.rig");
+    if (file->loads.count == 1) CHECK_STR(file->loads[0]->path, "b.rig");
     token_list_free(list);
 
     // A string never closed was reported by the lexer, and isn't again.
@@ -2568,17 +2570,21 @@ TEST(parse_into_appends) {
     parse_into(file, second_tokens, &a, &d);
     CHECK_STR(messages(&a, &d), "");
     CHECK_EQ(file->procs.count, 2);
-    CHECK_STR(file->procs[0]->name, "main");
-    CHECK_EQ(file->procs[0]->pos.file, first);
-    CHECK_STR(file->procs[1]->name, "helper");
-    CHECK_EQ(file->procs[1]->pos.file, second);
+    if (file->procs.count == 2) {
+        CHECK_STR(file->procs[0]->name, "main");
+        CHECK_EQ(file->procs[0]->pos.file, first);
+        CHECK_STR(file->procs[1]->name, "helper");
+        CHECK_EQ(file->procs[1]->pos.file, second);
+    }
     CHECK_EQ(file->globals.count, 1);
-    CHECK_EQ(file->globals[0]->pos.file, second);
+    if (file->globals.count == 1) CHECK_EQ(file->globals[0]->pos.file, second);
     CHECK_EQ(file->loads.count, 2);
-    CHECK_STR(file->loads[0]->path, "b.rig");
-    CHECK_EQ(file->loads[0]->pos.file, first);
-    CHECK_STR(file->loads[1]->path, "c.rig");
-    CHECK_EQ(file->loads[1]->pos.file, second);
+    if (file->loads.count == 2) {
+        CHECK_STR(file->loads[0]->path, "b.rig");
+        CHECK_EQ(file->loads[0]->pos.file, first);
+        CHECK_STR(file->loads[1]->path, "c.rig");
+        CHECK_EQ(file->loads[1]->pos.file, second);
+    }
     // The dump goes file by file, in load order: the second file's load, at
     // line 1, comes after the first file's main, at line 2, and before the
     // second file's other declarations.
