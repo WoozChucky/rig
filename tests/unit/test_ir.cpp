@@ -3572,12 +3572,14 @@ TEST(panic_knows_its_prefix) {
         CHECK(panic->target >= 0);
         CHECK_EQ(panic->c, -1);
         CHECK_EQ(panic->constant, strlen("test.rig:3:13: runtime error: "));
-        String message = message_of(m, panic->target);
-        CHECK(panic->constant <= (u64)message.count);
-        if (panic->constant <= (u64)message.count) {
-            s64 prefix = (s64)panic->constant;
-            CHECK_STR(string_slice(message, 0, prefix), "test.rig:3:13: runtime error: ");
-            CHECK_STR(string_slice(message, prefix, message.count - prefix), "division by zero\n");
+        if (panic->target >= 0) {
+            String message = message_of(m, panic->target);
+            CHECK(panic->constant <= (u64)message.count);
+            if (panic->constant <= (u64)message.count) {
+                s64 prefix = (s64)panic->constant;
+                CHECK_STR(string_slice(message, 0, prefix), "test.rig:3:13: runtime error: ");
+                CHECK_STR(string_slice(message, prefix, message.count - prefix), "division by zero\n");
+            }
         }
     }
     // A panic built by hand doesn't know: its constant is all ones (-1)
@@ -3586,7 +3588,7 @@ TEST(panic_knows_its_prefix) {
     Ir_Proc *p = new_proc_returning(by_hand, &a, "f", IR_VOID);
     s32 b = ir_new_block(&a, p);
     Ir_Instr *unknown = ir_emit(p, b, IR_PANIC, IR_VOID);
-    CHECK(unknown->constant == ~(u64)0);
+    CHECK_EQ(unknown->constant, -1);
     CHECK_EQ(unknown->c, -1);
     arena_free(&a);
 }

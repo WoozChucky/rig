@@ -159,7 +159,7 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
 - [ ] **Step 1: Write the failing tests.**
   - `test_ir.cpp`, `panic_knows_its_prefix`: `lower_source` of a division by a variable zero, at 3:13 in `test.rig`. The `IR_PANIC`'s `constant` is `strlen("test.rig:3:13: runtime error: ")`, and its global's bytes from that offset are `division by zero\n\0`.
   - `test_ir.cpp`, `bounds_panic_knows_its_prefix`: in `__rig_bounds_failed`, the `IR_PANIC`'s `c` is value 1, `where_length`.
-  - `test_os.cpp`, `os_reserve_inaccessible_gives_untouchable_addresses`: 1 MB reserved is non-null, its first and last addresses differ, it is released, and a second reservation succeeds. Faulting isn't tested in-process.
+  - `test_os.cpp`, `os_reserve_inaccessible_gives_untouchable_addresses`: 1 MB reserved is non-null, and while held its last page is part of the reservation (Windows: `VirtualQuery` of the last address gives `State == MEM_RESERVE`, uncommitted, and `AllocationBase` the first; Linux: `mincore` of the last page succeeds, so it is mapped). After `os_release_inaccessible`, the first and last pages are free (Windows: `VirtualQuery` gives `State == MEM_FREE`; Linux: `mincore` fails with `ENOMEM`). Faulting isn't tested in-process: `touching_reserved_addresses_faults` runs `bin/unit-tests --touch-reserved` (a helper flag in `unit.cpp`), a child that reads a reserved byte, and checks it dies of an access violation (Windows) or `128 + SIGSEGV` (Linux), with empty stdout and stderr.
 - [ ] **Step 2: Run `bin\unit-tests.exe panic`** and check the tests FAIL.
 - [ ] **Step 3: Implement.**
   - Windows: `VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_NOACCESS)` / `VirtualFree(p, 0, MEM_RELEASE)`.

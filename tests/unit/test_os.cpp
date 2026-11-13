@@ -8,6 +8,7 @@
 #include <time.h>  // time(), for the timeouts
 #ifndef _WIN32
 #include <errno.h>     // errno, ENOMEM (mincore's answer for an unmapped page)
+#include <signal.h>    // SIGSEGV, the touched reservation's death
 #include <stdlib.h>    // realpath, setenv, unsetenv
 #include <sys/mman.h>  // mincore
 #include <unistd.h>    // symlink, unlink, sysconf
@@ -441,8 +442,23 @@ TEST(os_reserve_inaccessible_gives_untouchable_addresses) {
     u8 *first = (u8 *)os_reserve_inaccessible(SIZE);
     CHECK(first != nullptr);
     if (first) {
-        u8 *last = first + SIZE - 1;
-        CHECK(first != last);
+        // Held, the whole range is the reservation's, its last address as
+        // much as its first, so reserving only a page doesn't pass. On
+        // Windows none of it is committed either: reserving and committing
+        // it, PAGE_NOACCESS, would fault as well, but charge the system
+        // for every page. Linux's MAP_NORESERVE has nothing to ask about.
+#ifdef _WIN32
+        MEMORY_BASIC_INFORMATION held = {};
+        CHECK(VirtualQuery(first + SIZE - 1, &held, sizeof held) == sizeof held);
+        CHECK_EQ(held.State, MEM_RESERVE);
+        CHECK(held.AllocationBase == first);
+#else
+        // mincore fails with ENOMEM on a page that isn't mapped, and
+        // answers for one that is, even one nothing can touch.
+        u8 *last_page = first + SIZE - (u64)sysconf(_SC_PAGESIZE);
+        unsigned char resident;
+        CHECK_EQ(mincore(last_page, 1, &resident), 0);
+#endif
         os_release_inaccessible(first, SIZE);
         // Released, the addresses are free again, or every Interp torn down
         // would leak its range. Reserving more wouldn't show it: a second
@@ -452,11 +468,8 @@ TEST(os_reserve_inaccessible_gives_untouchable_addresses) {
         CHECK(VirtualQuery(first, &info, sizeof info) == sizeof info);
         CHECK_EQ(info.State, MEM_FREE);
 #else
-        // mincore fails with ENOMEM on a page that isn't mapped. The first
-        // page and the last are asked about, so releasing only part of the
-        // range doesn't pass.
-        u8 *last_page = first + SIZE - (u64)sysconf(_SC_PAGESIZE);
-        unsigned char resident;
+        // The first page and the last are asked about, so releasing only
+        // part of the range doesn't pass.
         CHECK(mincore(first, 1, &resident) == -1 && errno == ENOMEM);
         CHECK(mincore(last_page, 1, &resident) == -1 && errno == ENOMEM);
 #endif
