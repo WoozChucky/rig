@@ -2768,10 +2768,11 @@ TEST(interpret_mode_command_line) {
 }
 
 TEST(interpret_mode_reads_a_utf8_path) {
-    // FILE as rig build reads it, in UTF-8 (os_arguments): on Windows,
-    // main's own argv is in the ANSI code page, which can't name every
-    // file, nor ação 日本 in UTF-8 (os_arguments_are_utf8). Its runtime
-    // error names it as given.
+    // FILE is read as rig build reads it, in UTF-8 (os_arguments): on
+    // Windows, main's own argv is in the ANSI code page, which can't name
+    // every file and isn't UTF-8 (test_os.cpp's os_arguments_are_utf8).
+    // This file's name, ação 日本, is one it can't name: 日本 is in no
+    // Western code page. Its runtime error names the file as given.
     Arena a = arena_make();
     String path = interpret_test_file(&a, "a\xC3\xA7\xC3\xA3o \xE6\x97\xA5\xE6\x9C\xAC",  // ação 日本
                                       "main :: () {\n"

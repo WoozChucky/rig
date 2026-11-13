@@ -397,11 +397,16 @@ static String interpreted_test(Arena *a, String unit_tests, String name) {
     if (!os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".out", STR_ARG(name)), &expected_out)) {
         return str("no .out file");
     }
+    // A program that prints nothing compiled would leave the check below
+    // nothing to hold its stdout to.
+    if (!expected_out.count) return str("its .out is empty: a program with a .interp.err must print a line first");
     // What it printed before it stopped: the .out's whole lines, from its
     // first, through the one stdout ends in. So a stdout that's empty, that
     // ends inside a line, or that goes on past the whole .out, differs
     // from them: the program's output before the refusal must come out.
-    s64 end = ran.out.count > 1 ? ran.out.count : 1;
+    // One byte at least, so an empty stdout is held to the whole first
+    // line.
+    s64 end = ran.out.count > 0 ? ran.out.count : 1;
     if (end > expected_out.count) end = expected_out.count;
     while (end < expected_out.count && expected_out.data[end - 1] != '\n') end++;
     String start = string_slice(expected_out, 0, end);
