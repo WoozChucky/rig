@@ -34,10 +34,22 @@ const child_process = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { programPath, debugBuildDirectory, debugConfiguration, launchConfiguration } = require('./debug');
+const {
+    programPath,
+    debugBuildDirectory,
+    makeDebugBuildDirectory,
+    debugConfiguration,
+    launchConfiguration,
+} = require('./debug');
 const { samePath, parseDiagnostics, characterOfByteColumn } = require('./diagnostics');
 
 const windows = process.platform === 'win32';
+
+// The user's uid, which names their directory of debug builds on Linux
+// (debugBuildDirectory); -1 on Windows, which has none.
+function uid() {
+    return typeof process.getuid === 'function' ? process.getuid() : -1;
+}
 
 // The task names VS Code lists ("rig: build current file").
 const TASK_NAMES = { build: 'build current file', run: 'run current file' };
@@ -275,8 +287,11 @@ const UNTRUSTED =
 // doesn't matter (Windows PowerShell 5.1 has no `&&` to chain the build and
 // the run), and file names need no quoting.
 class RigTerminal {
-    constructor(definition, scope) {
+    // `directory`: where rig runs for a build to debug (debugBuildDirectory),
+    // or undefined for the workspace folder (buildDirectory).
+    constructor(definition, scope, directory) {
         this.definition = definition;
+        this.directory = directory;
         // The workspace folder the task belongs to, or undefined.
         this.scope = scope && scope.uri ? scope : undefined;
         this.writeEmitter = new vscode.EventEmitter();
@@ -346,23 +361,23 @@ class RigTerminal {
         }
 
         // rig runs in the workspace folder (the file's directory when there's
-        // none), where it writes the program and .build/ with the object
-        // file; or, for a build to debug, in the task's `directory`
-        // (debugBuildDirectory), made if need be. Its diagnostics name the
-        // file as it was given. The problem matcher takes a relative name
-        // from the task's workspace folder (${workspaceFolder}), and an
-        // absolute one as it is, so rig gets a relative name only when the
-        // task's folder is the one rig runs in and the file is inside it:
-        // usually so, and the shorter output. A build to debug gets the
-        // file's absolute path as VS Code names it, which the debug
-        // information then names it by, so a breakpoint VS Code sets in the
-        // file finds it; on Linux a directory rig works out from a relative
-        // one could be named another way (by its real path, for a folder
-        // opened through a symlink).
-        const cwd = this.definition.directory || buildDirectory(file, folder);
-        if (this.definition.directory) {
+        // none), where it writes the program and .build/ with the object file;
+        // or, for a build to debug, in the directory the debug provider gave
+        // the task (debugBuildDirectory), made if need be, and on Linux only
+        // if it's safe (makeDebugBuildDirectory). Its diagnostics name the
+        // file as it was given. The problem matcher takes a relative name from
+        // the task's workspace folder (${workspaceFolder}), and an absolute
+        // one as it is, so rig gets a relative name only when the task's
+        // folder is the one rig runs in and the file is inside it: usually so,
+        // and the shorter output. A build to debug gets the file's absolute
+        // path as VS Code names it, which the debug information then names it
+        // by, so a breakpoint VS Code sets in the file finds it; on Linux a
+        // directory rig works out from a relative one could be named another
+        // way (by its real path, for a folder opened through a symlink).
+        const cwd = this.directory || buildDirectory(file, folder);
+        if (this.directory) {
             try {
-                fs.mkdirSync(cwd, { recursive: true });
+                makeDebugBuildDirectory(process.platform, cwd, uid());
             } catch (e) {
                 return this.fail(`Couldn't make the directory ${cwd}: ${e && e.message ? e.message : e}`);
             }
@@ -454,15 +469,18 @@ class RigTerminal {
 
 // A task of type rig: `definition` is { type: 'rig', command: 'build' or
 // 'run', file? }. Its terminal is made when it runs, from the definition
-// with VS Code's variables replaced.
+// with VS Code's variables replaced. `directory` is where rig runs for a
+// build to debug (debugBuildDirectory), which only the debug provider
+// gives: it's the task's execution's, not part of the definition, which
+// tasks.json can set, so a task there can't build somewhere else.
 //
 // Its problem matcher: `$rig`, every diagnostic, when the live check is off
 // (the build is the only place the compile errors come from); otherwise
 // `$rig-runtime`, a program's runtime errors alone, since the live check
 // already shows the compile errors and the Problems panel would list each
 // one twice. The setting is the task's workspace folder's.
-function makeTask(definition, scope, name) {
-    const execution = new vscode.CustomExecution(async (resolved) => new RigTerminal(resolved, scope));
+function makeTask(definition, scope, name, directory) {
+    const execution = new vscode.CustomExecution(async (resolved) => new RigTerminal(resolved, scope, directory));
     const matcher = checkSetting(scope && scope.uri) === 'off' ? '$rig' : '$rig-runtime';
     const task = new vscode.Task(definition, scope, name, 'rig', execution, matcher);
     if (definition.command === 'build') task.group = vscode.TaskGroup.Build;
@@ -624,7 +642,7 @@ function build(file, scope, directory) {
         };
         subscriptions.push(vscode.tasks.onDidEndTaskProcess((event) => heard(event, false)));
         subscriptions.push(vscode.tasks.onDidEndTask((event) => heard(event, true)));
-        const task = makeTask({ type: 'rig', command: 'build', file, directory }, scope, TASK_NAMES.build);
+        const task = makeTask({ type: 'rig', command: 'build', file }, scope, TASK_NAMES.build, directory);
         vscode.tasks.executeTask(task).then(
             (started) => {
                 if (!started) {
@@ -713,7 +731,7 @@ const debugProvider = {
         // its own (debugBuildDirectory), and runs in the workspace folder
         // as the run task's does.
         const cwd = buildDirectory(file, buildIn);
-        const built = debugBuildDirectory(process.platform, cwd, os.tmpdir());
+        const built = debugBuildDirectory(process.platform, cwd, os.tmpdir(), uid());
         let status;
         try {
             status = await build(file, scope, built);
