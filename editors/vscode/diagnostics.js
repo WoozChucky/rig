@@ -52,6 +52,31 @@ function parseDiagnostics(output, file, cwd) {
     return found;
 }
 
+// rig check reads the files `file` #loads too, and reports their errors
+// under their names, which parseDiagnostics leaves out: they aren't the
+// document's. But a program that won't build should say so where it's
+// being edited, so they come back as one error of the document's, on its
+// first line, that counts them and names the first as rig did:
+//
+//     an error in another file of the program: load/shapes.rig:3:14: 300 doesn't fit in 'u8'
+//     2 errors in the program's other files, the first: load/shapes.rig:3:14: ...
+//
+// null when there are none. A warning elsewhere doesn't stop the build,
+// and isn't counted.
+function otherFilesError(output, file, cwd) {
+    const errors = [];
+    for (const line of output.split(/\r?\n/)) {
+        if (/^\s/.test(line)) continue;
+        const m = DIAGNOSTIC.exec(line);
+        if (m && m[4] === 'error' && !samePath(path.resolve(cwd, m[1]), file)) errors.push(m);
+    }
+    if (errors.length === 0) return null;
+    const [, name, line, column, , message] = errors[0];
+    const count =
+        errors.length === 1 ? 'an error in another file of the program' : `${errors.length} errors in the program's other files, the first`;
+    return { line: 1, column: 1, severity: 'error', message: `${count}: ${name}:${line}:${column}: ${message}` };
+}
+
 // rig counts a column in bytes of the line's UTF-8 (a tab is one column, and
 // so is each byte of a character, src/diag.h); VS Code counts a position in
 // UTF-16 code units, as JavaScript's strings do. Most characters are one
@@ -71,4 +96,4 @@ function characterOfByteColumn(text, column) {
     return index;
 }
 
-module.exports = { DIAGNOSTIC, samePath, parseDiagnostics, characterOfByteColumn };
+module.exports = { DIAGNOSTIC, samePath, parseDiagnostics, otherFilesError, characterOfByteColumn };

@@ -41,7 +41,7 @@ const {
     debugConfiguration,
     launchConfiguration,
 } = require('./debug');
-const { samePath, parseDiagnostics, characterOfByteColumn } = require('./diagnostics');
+const { samePath, parseDiagnostics, otherFilesError, characterOfByteColumn } = require('./diagnostics');
 
 const windows = process.platform === 'win32';
 
@@ -807,7 +807,9 @@ function toDiagnostic(document, d) {
 // document's text on its standard input, so what's checked is what's on
 // screen, saved or not, and puts the errors in a diagnostic collection, the
 // extension's own list of problems, which VS Code shows as squiggles and in
-// the Problems panel. Each check replaces the document's list.
+// the Problems panel. Each check replaces the document's list. rig also
+// checks the files the document #loads; their errors aren't listed under
+// their own names, but counted in one error on the document's first line.
 //
 // One check per document at a time: a newer one ends the older's process,
 // and the older's output, if any comes, is ignored. Checking writes no file,
@@ -921,8 +923,12 @@ class LiveCheck {
             child.on('close', () => {
                 if (this.running.get(key) === child) {
                     this.running.delete(key);
-                    const diagnostics = parseDiagnostics(output, file, cwd).map((d) => toDiagnostic(document, d));
-                    this.collection.set(document.uri, diagnostics);
+                    // The document's own, then one for the errors rig found
+                    // in the files it #loads, if any (otherFilesError).
+                    const found = parseDiagnostics(output, file, cwd);
+                    const elsewhere = otherFilesError(output, file, cwd);
+                    if (elsewhere) found.push(elsewhere);
+                    this.collection.set(document.uri, found.map((d) => toDiagnostic(document, d)));
                 }
                 resolve();
             });
