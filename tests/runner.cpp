@@ -61,20 +61,21 @@
 // program only (never on Microsoft's symbol server). The debugger's stdout
 // and stderr are one stream, the program's output mixed in.
 //
-// An expectation file holds one piece of text a line, which must appear,
-// in the order given, inside lines of the output: each piece after the one
-// before it, later in the same line or in a line after. A piece never
-// spans lines. A line starting with '!' is a piece the debugger must not
-// print at all: the rest of the line must appear nowhere in the output (a
-// warning that mustn't come back, a value that mustn't be shown). Empty
-// lines are ignored (a file of nothing else, or of only '!' lines, which
-// would pass whatever the debugger printed, is an error), and @ROOT@
-// stands for the repository's root, absolute, with the host's separators
-// (C:\dev\rig, /home/me/rig). The first piece missing, or forbidden and
-// there, fails the test, which prints it and the whole output. Expectations name procedures, the
-// file's name with line numbers, and source text, never addresses or
-// offsets, which change with the code; nor breakpoint numbers (gdb says
-// "Breakpoint 2.1," for the first place of a breakpoint that has two).
+// An expectation file holds one piece of text a line, which must appear, in
+// the order given, inside lines of the output: each piece after the one before
+// it, later in the same line or in a line after. A piece never spans lines. A
+// line starting with '!' is a piece the debugger must not print at all: the
+// rest of the line must appear nowhere in the output (a warning that mustn't
+// come back, a value that mustn't be shown). Empty lines are ignored (a file
+// of nothing else, or of only '!' lines, which would pass whatever the
+// debugger printed, is an error, and so is a '!' with nothing after it but
+// blanks, which would forbid nothing), and @ROOT@ stands for the repository's
+// root, absolute, with the host's separators (C:\dev\rig, /home/me/rig). The
+// first piece missing, or forbidden and there, fails the test, which prints it
+// and the whole output. Expectations name procedures, the file's name with
+// line numbers, and source text, never addresses or offsets, which change with
+// the code; nor breakpoint numbers (gdb says "Breakpoint 2.1," for the first
+// place of a breakpoint that has two).
 //
 // A test needs a script for the host's debugger; one without is an error.
 // A debugger that can't be started (not installed) skips each test, SKIP
@@ -1112,6 +1113,25 @@ static bool has_a_wanted_piece(String expected) {
     return false;
 }
 
+// The number of the first line of `expected` that is a '!' with nothing
+// after it but blanks (a '\r' among them), counting from 1; 0 when there's
+// none. Such a line forbids nothing, or a blank, which is a mistake either
+// way: the test would pass without checking what the line meant to.
+static s64 empty_forbidden_line(String expected) {
+    s64 line = 1;
+    for (s64 i = 0; i < expected.count; line++) {
+        s64 end = i;
+        while (end < expected.count && expected.data[end] != '\n') end++;
+        if (expected.data[i] == '!') {
+            s64 j = i + 1;
+            while (j < end && (expected.data[j] == ' ' || expected.data[j] == '\t' || expected.data[j] == '\r')) j++;
+            if (j == end) return line;
+        }
+        i = end + 1;
+    }
+    return 0;
+}
+
 // The debugger's command line for the program built from tests/debug/NAME.
 static Array<String> debugger_command(Arena *a, String root, String name) {
     Array<String> argv = {};
@@ -1158,6 +1178,10 @@ static String debug_test(Arena *a, String rig, String root, String name, bool *s
     if (!has_a_wanted_piece(expected)) {
         return string_printf(a, STR_FMT ".expect expects nothing: a debugger test needs a piece of text to find",
                              STR_ARG(script));
+    }
+    if (s64 line = empty_forbidden_line(expected)) {
+        return string_printf(a, STR_FMT ".expect:%lld is a '!' with nothing after it: say what the debugger mustn't print",
+                             STR_ARG(script), (long long)line);
     }
     expected = replace_all(a, expected, "@ROOT@", root);
 
