@@ -457,6 +457,11 @@ TEST(load_path_joins_and_keeps_absolute) {
     CHECK_STR(loaded(&a, "src/main.rig", "world/map.rig", false), "src/world/map.rig");
     CHECK_STR(loaded(&a, "main.rig", "a.rig", false), "a.rig");
     CHECK_STR(loaded(&a, "src\\main.rig", "a.rig", true), "src\\a.rig");
+    // On Windows either separator ends the directory, whichever comes last,
+    // and the path keeps the ones it had.
+    CHECK_STR(loaded(&a, "src/main.rig", "a.rig", true), "src/a.rig");
+    CHECK_STR(loaded(&a, "src\\sub/main.rig", "a.rig", true), "src\\sub/a.rig");
+    CHECK_STR(loaded(&a, "src/sub\\main.rig", "a.rig", true), "src/sub\\a.rig");
     // On Linux a backslash is part of a name, so src\main.rig is a file in
     // the current directory.
     CHECK_STR(loaded(&a, "src\\main.rig", "a.rig", false), "a.rig");
@@ -476,4 +481,12 @@ TEST(load_path_joins_and_keeps_absolute) {
     CHECK_STR(loaded(&a, "src/main.rig", "C:\\x\\a.rig", false), "src/C:\\x\\a.rig");
     CHECK_STR(loaded(&a, "src/main.rig", "\\x\\a.rig", false), "src/\\x\\a.rig");
     arena_free(&a);
+}
+
+TEST(only_rig_files_end_in_rig) {
+    CHECK(is_rig_file(str("hello.rig")));
+    CHECK(is_rig_file(str("out/HELLO.RIG")));
+    CHECK(!is_rig_file(str("hello.rig.exe")));
+    CHECK(!is_rig_file(str("rig")));
+    CHECK(!is_rig_file(str("hellorig")));
 }

@@ -106,6 +106,8 @@ bool os_file_exists(String path) {
 // symbolic link on the way, and the kernel resolves "..", so every name of
 // the file reaches the same pair. The id's third u64 is 0: an inode number
 // fits in one, where Windows' 128-bit file ids take two (os_windows.cpp).
+// No file has inode 0, so a file system that reports it has no inodes to
+// give (as a Windows one can have no ids), and it counts as none.
 bool os_file_id(String path, u64 id[3]) {
     Arena scratch = arena_make(1024);
     struct stat st;
@@ -113,6 +115,10 @@ bool os_file_id(String path, u64 id[3]) {
     if (!ok) os_fail();
     arena_free(&scratch);
     if (!ok) return false;
+    if (st.st_ino == 0) {
+        os_last_error = ENOTSUP;
+        return false;
+    }
     id[0] = (u64)st.st_dev;
     id[1] = (u64)st.st_ino;
     id[2] = 0;

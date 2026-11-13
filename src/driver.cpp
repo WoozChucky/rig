@@ -23,7 +23,6 @@
 // fine; at the same time, one could link the other's object.
 
 #include "link.h"
-#include "load.h"  // is_rig_file: load.cpp, earlier in the unity build, uses it too, so it lives there
 
 // "src/hello.rig" -> "hello"; either slash. A name that is only ".rig" stays
 // as it is, rather than becoming nothing.
