@@ -1,0 +1,347 @@
+# Makes a release of Rig (CONTRIBUTING.md, "Releasing"). Run by hand, from
+# main, with the bump: minor when a milestone is finished, patch for fixes
+# between milestones (scripts/next_version.sh).
+#
+#   prepare   computes the version, writes VERSION and makes the commit
+#             "Release X.Y.Z", which it hands to the build jobs as a git
+#             bundle: nothing is pushed yet
+#   linux     builds that commit, tests it, and packs rig-linux-x64.tar.gz
+#             and rig-vscode.vsix
+#   windows   builds that commit, tests it, and packs rig-windows-x64.zip
+#   publish   writes SHA256SUMS, checks both builds name the release commit,
+#             then pushes the commit to main and the tag vX.Y.Z, and drafts
+#             the GitHub release with the four files and generated notes
+#
+# Every build is of the committed release, so `rig version` names its hash,
+# never "-dirty" (building with VERSION changed but not committed would
+# stamp the commit before it, dirty). A dry run, the default, does it all
+# but publish's pushing and drafting: the files are kept as the run's
+# artifact and the notes GitHub would write go to the run's summary. When a
+# build or a test fails, publish doesn't run, and nothing is pushed.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'minor (a milestone is finished) or patch (fixes between milestones)'
+        required: true
+        type: choice
+        options: [minor, patch]
+      dry_run:
+        description: 'Dry run: build, test and pack, but push and create nothing'
+        required: true
+        type: boolean
+        default: true
+
+# Read only, but for publish's job.
+permissions:
+  contents: read
+
+# One release at a time: a second run waits for the first.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      base: ${{ steps.commit.outputs.base }}
+      commit: ${{ steps.commit.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::A release is made from main, not $GITHUB_REF"
+            exit 1
+          fi
+          version=$(scripts/next_version.sh "$BUMP")
+          # ls-remote --exit-code fails (2) when no such tag exists.
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then
+            echo "::error::The tag v$version already exists"
+            exit 1
+          fi
+          echo "Rig $version: $(cat VERSION) with a $BUMP bump"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # One date for the author and the committer, taken here. The commit is
+      # made once, and every job builds this same commit from the bundle.
+      # The bundle holds what the commit adds to the one the run started
+      # from (base), which every job checks out first.
+      - name: Release commit
+        id: commit
+        env:
+          VERSION_NUMBER: ${{ steps.version.outputs.version }}
+        run: |
+          base=$(git rev-parse HEAD)
+          printf '%s\n' "$VERSION_NUMBER" > VERSION
+          git add VERSION
+          GIT_AUTHOR_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          export GIT_AUTHOR_DATE GIT_COMMITTER_DATE="$GIT_AUTHOR_DATE"
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -q -m "Release $VERSION_NUMBER"
+          git branch release
+          git bundle create release.bundle "$base..release"
+          git bundle verify release.bundle
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git show --stat HEAD
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-bundle
+          path: release.bundle
+          if-no-files-found: error
+
+  linux:
+    needs: prepare
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.base }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-bundle
+          path: ${{ runner.temp }}/bundle
+
+      - name: Check out the release commit
+        env:
+          BUNDLE: ${{ runner.temp }}/bundle/release.bundle
+          COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: |
+          git fetch -q "$BUNDLE" release
+          git checkout -q --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+
+      # As ci.yml: clang if the image has none, and LLVM from its cache
+      # (the same key, so a release reuses what CI downloaded).
+      - name: Clang
+        run: |
+          if ! command -v clang++ > /dev/null; then
+            sudo apt-get update && sudo apt-get install -y clang
+          fi
+          clang++ --version
+
+      - name: Cache LLVM
+        id: llvm
+        uses: actions/cache@v6
+        with:
+          path: deps/llvm-linux
+          key: llvm-23.1.5-linux-${{ hashFiles('scripts/get_llvm.sh') }}
+
+      - name: Get LLVM
+        if: steps.llvm.outputs.cache-hit != 'true'
+        run: scripts/get_llvm.sh
+
+      # The release build, packed, and the archive's rig tried.
+      - name: Pack rig-linux-x64.tar.gz
+        run: scripts/package_linux.sh
+
+      # The tests, of the same release build (bin/), as ci.yml runs them.
+      - name: Unit tests
+        run: bin/unit-tests --self-test && bin/unit-tests
+
+      - name: gdb
+        run: sudo apt-get update && sudo apt-get install -y gdb && gdb --version | head -1
+
+      - name: End-to-end tests
+        env:
+          RIG_DEBUGGER_TESTS: required
+        run: bin/run-tests
+
+      - name: Pack rig-vscode.vsix
+        run: node editors/vscode/test/check.js && editors/vscode/install.sh --vsix dist/rig-vscode.vsix
+
+      # What the release's rig says it is, for publish to check.
+      - name: rig version
+        run: mkdir -p stamp && bin/rig version | tee stamp/linux.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux
+          path: |
+            dist/rig-linux-x64.tar.gz
+            dist/rig-vscode.vsix
+            stamp/linux.txt
+          if-no-files-found: error
+
+  windows:
+    needs: prepare
+    # The release is the only workflow that runs on Windows; CI is Linux
+    # only. The image has clang (LLVM's installer, on the PATH) and Visual
+    # Studio with the C++ tools, which build.bat finds through vswhere.
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: cmd
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.base }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-bundle
+          path: ${{ runner.temp }}/bundle
+
+      - name: Check out the release commit
+        shell: bash
+        env:
+          BUNDLE: ${{ runner.temp }}/bundle/release.bundle
+          COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: |
+          git fetch -q "$BUNDLE" release
+          git checkout -q --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+
+      - name: Clang
+        run: clang++ --version
+
+      # Keyed as ci.yml keys Linux's: the version, and the script that
+      # downloads it.
+      - name: Cache LLVM
+        id: llvm
+        uses: actions/cache@v6
+        with:
+          path: deps/llvm-windows
+          key: llvm-23.1.5-windows-${{ hashFiles('scripts/get_llvm.bat') }}
+
+      # Windows' own tar.exe first on the PATH: get_llvm.bat's tar.exe
+      # must be it, not Git's GNU tar, which can't read its paths.
+      - name: Get LLVM
+        if: steps.llvm.outputs.cache-hit != 'true'
+        run: |
+          set "PATH=%SystemRoot%\System32;%PATH%"
+          call scripts\get_llvm.bat
+
+      - name: Pack rig-windows-x64.zip
+        run: call scripts\package_windows.bat
+
+      # The debugger tests run if the image has cdb, and are skipped if
+      # not: RIG_DEBUGGER_TESTS isn't "required" here, since Windows'
+      # are checked locally before each push (CONTRIBUTING.md).
+      - name: Unit tests
+        run: bin\unit-tests.exe --self-test && bin\unit-tests.exe
+
+      - name: End-to-end tests
+        run: bin\run-tests.exe
+
+      - name: rig version
+        run: |
+          if not exist stamp mkdir stamp
+          bin\rig.exe version > stamp\windows.txt && type stamp\windows.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: |
+            dist/rig-windows-x64.zip
+            stamp/windows.txt
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, linux, windows]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    # The one job that writes: the commit, the tag and the release.
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION_NUMBER: ${{ needs.prepare.outputs.version }}
+      BASE: ${{ needs.prepare.outputs.base }}
+      COMMIT: ${{ needs.prepare.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.base }}
+
+      # Every artifact of the run, each in a directory of its name
+      # ($RUNNER_TEMP/artifacts/linux, ...).
+      - uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/artifacts
+
+      # sha256sum's own format, "HASH  NAME", with the files' names alone,
+      # so `sha256sum -c SHA256SUMS` checks them where they're downloaded.
+      - name: SHA256SUMS
+        run: |
+          mkdir dist
+          cp "$RUNNER_TEMP/artifacts/linux/dist/rig-linux-x64.tar.gz" "$RUNNER_TEMP/artifacts/linux/dist/rig-vscode.vsix" \
+             "$RUNNER_TEMP/artifacts/windows/dist/rig-windows-x64.zip" dist/
+          cd dist
+          sha256sum rig-linux-x64.tar.gz rig-windows-x64.zip rig-vscode.vsix > SHA256SUMS
+          cat SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      # Both programs must say they are this version, built from the release
+      # commit, clean: "rig X.Y.Z (HASH DATE) LLVM ...", HASH its first 12
+      # hex digits with no "-dirty".
+      - name: Both builds are the release commit's
+        run: |
+          expected="rig $VERSION_NUMBER (${COMMIT:0:12} "
+          for os in linux windows; do
+            line=$(tr -d '\r' < "$RUNNER_TEMP/artifacts/$os/stamp/$os.txt")
+            echo "$os: $line"
+            case "$line" in
+              "$expected"*) ;;
+              *) echo "::error::The $os build says \"$line\", not \"$expected...\""; exit 1 ;;
+            esac
+          done
+
+      - name: Keep the files (dry run)
+        if: inputs.dry_run
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-dry-run
+          path: dist/
+          if-no-files-found: error
+
+      - name: The notes GitHub would write (dry run)
+        if: inputs.dry_run
+        run: |
+          {
+            echo "# Rig $VERSION_NUMBER, a dry run: nothing was pushed or created"
+            echo
+            gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="v$VERSION_NUMBER" -f target_commitish=main --jq .body
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # main must still be the commit the run started from: the release
+      # commit is its child, and the push only moves main forward. Branch
+      # and tag go in one atomic push, both or neither.
+      - name: Push the release commit and its tag
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git fetch -q "$RUNNER_TEMP/artifacts/release-bundle/release.bundle" release
+          test "$(git rev-parse FETCH_HEAD)" = "$COMMIT"
+          now=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$now" != "$BASE" ]; then
+            echo "::error::main moved since the run started (from $BASE to $now): run the Release workflow again"
+            exit 1
+          fi
+          git tag "v$VERSION_NUMBER" "$COMMIT"
+          git push --atomic origin "$COMMIT:refs/heads/main" "refs/tags/v$VERSION_NUMBER"
+
+      - name: Draft the release
+        if: ${{ !inputs.dry_run }}
+        run: |
+          gh release create "v$VERSION_NUMBER" --draft --verify-tag --generate-notes --title "Rig $VERSION_NUMBER" \
+            dist/rig-linux-x64.tar.gz dist/rig-windows-x64.zip dist/rig-vscode.vsix dist/SHA256SUMS
