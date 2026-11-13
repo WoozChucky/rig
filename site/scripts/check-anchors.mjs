@@ -19,13 +19,27 @@ function htmlFiles(dir) {
   })
 }
 
+// Where the site is published; an absolute link to it is checked like a
+// relative one.
+const siteOrigin = 'https://woozchucky.github.io'
+
 // The built file a site path is served from, with clean URLs:
-// /rig/spec/types -> spec/types.html, /rig/spec/ -> spec/index.html.
+// /rig/spec/types -> spec/types.html, /rig/spec/ and /rig/spec -> spec/index.html.
 function fileFor(sitePath) {
-  let rel = decodeURI(sitePath.slice(base.length))
+  let rel = decodeURI(sitePath.slice(base.length)).replace(/\.html$/, '')
   if (rel === '' || rel.endsWith('/')) rel += 'index'
-  rel = rel.replace(/\.html$/, '')
-  return path.join(dist, `${rel}.html`)
+  const file = path.join(dist, `${rel}.html`)
+  const index = path.join(dist, rel, 'index.html')
+  return !existsSync(file) && existsSync(index) ? index : file
+}
+
+// The site path a built file is served at: spec/types.html -> /rig/spec/types,
+// spec/index.html -> /rig/spec/. Relative links are resolved against it.
+function urlFor(file) {
+  const rel = path.relative(dist, file).split(path.sep).join('/').replace(/\.html$/, '')
+  if (rel === 'index') return base
+  if (rel.endsWith('/index')) return base + rel.slice(0, -'index'.length)
+  return base + rel
 }
 
 const idsCache = new Map()
@@ -47,14 +61,27 @@ let checked = 0
 for (const file of htmlFiles(dist)) {
   const html = readFileSync(file, 'utf8')
   const page = '/' + path.relative(dist, file).split(path.sep).join('/')
-  for (const [, href] of html.matchAll(/\shref="([^"]*#[^"]*)"/g)) {
-    const [target, fragment] = href.split('#', 2)
+  const pageUrl = new URL(urlFor(file), siteOrigin)
+  for (const [, raw] of html.matchAll(/\shref="([^"]*#[^"]*)"/g)) {
+    // The href as the browser reads it: entities decoded, then resolved
+    // against the page, so relative links and '?query' are handled too.
+    const href = raw.replace(/&amp;/g, '&')
+    let url
+    try {
+      url = new URL(href, pageUrl)
+    } catch {
+      dangling.push(`${page}: ${href}: not a valid URL`)
+      continue
+    }
+    const fragment = url.hash.slice(1)
     if (fragment === '' || fragment.startsWith(':~:')) continue
-    let targetFile
-    if (target === '') targetFile = file
-    else if (target.startsWith(base)) targetFile = fileFor(target)
-    else continue // another site, or a path outside the site
+    if (url.origin !== siteOrigin) continue // another site
     checked++
+    if (!url.pathname.startsWith(base)) {
+      dangling.push(`${page}: ${href}: outside the site, which is served under ${base}`)
+      continue
+    }
+    const targetFile = fileFor(url.pathname)
     const id = decodeURIComponent(fragment)
     if (!existsSync(targetFile)) dangling.push(`${page}: ${href}: no page ${path.relative(dist, targetFile)}`)
     else if (!idsOf(targetFile).has(id)) dangling.push(`${page}: ${href}: no id "${id}" on that page`)
