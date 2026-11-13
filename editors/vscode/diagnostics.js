@@ -35,9 +35,9 @@ function samePath(a, b) {
 }
 
 // Each diagnostic's first line in rig's output (all of its stderr), as
-// { file, name, line, column, severity, message }: `name` the file as rig
-// named it, `file` that name resolved from `cwd`, the directory rig ran in,
-// and line and column counted from 1 as rig counts them. Lines that aren't
+// { file, line, column, severity, message }: `file` the file as rig named
+// it, resolved from `cwd`, the directory rig ran in, and line and column
+// counted from 1 as rig counts them. Lines that aren't
 // a diagnostic's first line (the source and caret lines, which are
 // indented, and rig's own `rig: error: ...`) are skipped. Windows' "\r\n"
 // reads as "\n". parseDiagnostics and otherFilesError both read rig's
@@ -47,7 +47,7 @@ function* diagnosticLines(output, cwd) {
         if (/^\s/.test(line)) continue;
         const m = DIAGNOSTIC.exec(line);
         if (!m) continue;
-        yield { file: path.resolve(cwd, m[1]), name: m[1], line: Number(m[2]), column: Number(m[3]), severity: m[4], message: m[5] };
+        yield { file: path.resolve(cwd, m[1]), line: Number(m[2]), column: Number(m[3]), severity: m[4], message: m[5] };
     }
 }
 
@@ -80,19 +80,20 @@ function otherFilesError(output, file, cwd) {
         if (d.severity === 'error' && !samePath(d.file, file)) errors.push(d);
     }
     if (errors.length === 0) return null;
-    const { name, line, column, message } = errors[0];
+    const { file: other, line, column, message } = errors[0];
     const count =
         errors.length === 1 ? 'an error in another file of the program' : `${errors.length} errors in the program's other files, the first`;
-    return { line: 1, column: 1, severity: 'error', message: `${count}: ${nameFrom(file, name, cwd)}:${line}:${column}: ${message}` };
+    return { line: 1, column: 1, severity: 'error', message: `${count}: ${nameFrom(file, other)}:${line}:${column}: ${message}` };
 }
 
-// The file rig named `name` (from `cwd`), as a #load in `file` would name
-// it: its path from file's directory, with '/' between the names. rig's own
-// name can be long and, on Windows, mixed: the live check gives rig the
-// document's full path, so a file it loads is named by the directory's
-// path, with '\', then the #load's, with '/' (C:\x\src\world/map.rig).
-function nameFrom(file, name, cwd) {
-    const relative = path.relative(path.dirname(file), path.resolve(cwd, name));
+// The file at `other`, an absolute path (diagnosticLines), as a #load in
+// `file` would name it: its path from file's directory, with '/' between
+// the names. rig's own name for it can be long and, on Windows, mixed: the
+// live check gives rig the document's full path, so a file it loads is
+// named by the directory's path, with '\', then the #load's, with '/'
+// (C:\x\src\world/map.rig).
+function nameFrom(file, other) {
+    const relative = path.relative(path.dirname(file), other);
     return windows ? relative.replace(/\\/g, '/') : relative;
 }
 
