@@ -27,11 +27,12 @@
 //
 // On Linux the compiler is linked with the system's C library,
 // dynamically, so os_find_c_function finds its functions, the same the
-// compiler itself calls, but two: atexit and at_quick_exit. glibc keeps
-// them in libc_nonshared.a, which libc.so's linker script links into each
-// program, so libc.so.6 doesn't export them and dlsym can't find them. The
-// table on Linux is those two, the compiler's own copies, which taking
-// their addresses here links in, as a compiled program's -lc links its.
+// compiler itself calls, but what libc_nonshared.a links in statically:
+// atexit, at_quick_exit and pthread_atfork. libc.so's linker script links
+// that archive into each program, so libc.so.6 doesn't export them and
+// dlsym can't find them. The table on Linux is those three, the compiler's
+// own copies, which taking their addresses here links in, as a compiled
+// program's -lc links its.
 
 #include "interp.h"
 
@@ -144,10 +145,14 @@ static const Interp_C_Function INTERP_C_FUNCTIONS[] = {
 
 #else
 
-// The two C17 functions libc.so.6 doesn't export (see the top).
+#include <pthread.h>
+
+// What libc_nonshared.a links in statically, which libc.so.6 doesn't
+// export (see the top): two C17 functions and one of POSIX's.
 static const Interp_C_Function INTERP_C_FUNCTIONS[] = {
     INTERP_C(atexit),
     INTERP_C(at_quick_exit),
+    INTERP_C(pthread_atfork),
 };
 
 #endif
@@ -173,8 +178,9 @@ static const Interp_C_Function INTERP_C_FUNCTIONS[] = {
 #undef INTERP_C_LLONG_T
 #endif
 
-// A scan of a few hundred names (two on Linux): the interpreter looks each foreign
-// procedure up once and keeps what it found.
+// A scan of a few hundred names (three on Linux): the interpreter keeps a
+// function it found, and looks a name found nowhere up again when it's next
+// needed.
 void *interp_c_library_function(String name) {
     for (const Interp_C_Function &f : INTERP_C_FUNCTIONS) {
         if (string_eq(str(f.name), name)) return f.address;

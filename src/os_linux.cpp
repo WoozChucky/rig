@@ -461,9 +461,10 @@ void os_release_inaccessible(void *p, u64 size) {
 // RTLD_DEFAULT would search every library the compiler loaded, libm and
 // libstdc++ among them, and find functions a program can't call (10.6
 // links libc alone). It doesn't find what -lc links in statically, from
-// libc_nonshared.a (atexit, at_quick_exit), which interp_c_functions.cpp
-// gives instead. dlsym finds data too (stdout, environ): the interpreter
-// calls what a #foreign declaration names, as the linker would link it.
+// libc_nonshared.a (atexit, at_quick_exit, pthread_atfork), which
+// interp_c_functions.cpp gives instead. dlsym finds data too (stdout,
+// environ): the interpreter calls what a #foreign declaration names, as the
+// linker would link it.
 void *os_find_c_function(String name) {
     static void *libc = dlopen("libc.so.6", RTLD_LAZY | RTLD_NOLOAD);
     if (!libc) return nullptr;
