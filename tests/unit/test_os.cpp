@@ -497,12 +497,14 @@ TEST(os_read_file_reads_only_files) {
 #ifdef _WIN32
 TEST(os_read_file_reads_a_file_open_for_writing) {
     // A file another program holds open for writing, as an editor can, is
-    // read all the same, as os_file_id identifies it: the open shares
-    // writing, and deleting, with that program.
+    // read all the same, and os_file_id identifies it, as it did before:
+    // both opens share writing, and deleting, with that program.
     Arena a = arena_make();
     os_make_directory(str(".build"));
     os_make_directory(str(".build/tests"));
     CHECK(os_write_file(str(".build/tests/open_for_writing.rig"), str("main :: () {}\n")));
+    u64 before[3] = {}, during[3] = {};
+    CHECK(os_file_id(str(".build/tests/open_for_writing.rig"), before));
     // DELETE too, as some editors' saves hold it: Windows then refuses an
     // open that doesn't share deleting.
     HANDLE writer = CreateFileW(L".build\\tests\\open_for_writing.rig", GENERIC_WRITE | DELETE,
@@ -512,6 +514,8 @@ TEST(os_read_file_reads_a_file_open_for_writing) {
     String text = {};
     CHECK(os_read_file(&a, str(".build/tests/open_for_writing.rig"), &text));
     CHECK_STR(text, "main :: () {}\n");
+    CHECK(os_file_id(str(".build/tests/open_for_writing.rig"), during));
+    CHECK(same_file_id(before, during));
     if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
     arena_free(&a);
 }

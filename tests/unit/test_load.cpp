@@ -172,6 +172,38 @@ TEST(load_with_backslashes) {
     diag_free(&d);
     arena_free(&a);
 }
+
+TEST(load_from_a_verbatim_main_path) {
+    // A main file named with Windows' \\?\ prefix has its #loads resolved
+    // all the same: '/' made '\', '.' and '..' taken out, as the system
+    // won't under that prefix. main.rig's #load "sub/b.rig" is
+    // \\?\...\sub\b.rig, whose #load "./c.rig" is \\?\...\sub\c.rig, and
+    // whose #load "../main.rig" is the main file, loaded once.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_from_a_verbatim_main_path");
+    CHECK(os_make_directory(str(in_directory(&a, dir, "sub"))));
+    write_source(&a, dir, "main.rig", "#load \"sub/b.rig\";\nmain :: () {}\n");
+    write_source(&a, dir, "sub/b.rig", "#load \"../main.rig\";\n#load \"./c.rig\";\nb :: () {}\n");
+    write_source(&a, dir, "sub/c.rig", "c :: () {}\n");
+    String verbatim = string_printf(&a, "\\\\?\\%s", in_current_directory(&a, str(in_directory(&a, dir, "main.rig"))));
+    String text = {};
+    CHECK(os_read_file(&a, verbatim, &text));
+    Ast_File *tree = load_program(&a, &d, verbatim, text);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 3);
+    if (d.files.count == 3) {
+        const char *names[3] = {"main.rig", "sub/b.rig", "sub/c.rig"};
+        for (s64 i = 0; i < 3; i++) {
+            const char *absolute = in_current_directory(&a, str(in_directory(&a, dir, names[i])));
+            CHECK_STR(d.files[i].path, string_cstr(&a, string_printf(&a, "\\\\?\\%s", absolute)));
+        }
+    }
+    CHECK(tree != nullptr);
+    if (tree) CHECK_EQ(tree->procs.count, 3);
+    diag_free(&d);
+    arena_free(&a);
+}
 #else
 TEST(load_backslash_is_part_of_a_name) {
     // On Linux '\' is no separator, but a character of a name, as any other:
