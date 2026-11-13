@@ -31,14 +31,18 @@ main :: () {
     // Untyped constants take Rig's default types: an integer an int (so
     // %lld), a float a float64, never rounded to a float32 on the way.
     printf("constants %lld %.10f %d\n", 7, 0.1, cast(s32) 5);
+    // A float32 constant is the float32 nearest 0.1, widened exactly.
+    printf("float32 constant %.10f\n", cast(float32) 0.1);
 
     // A string's bytes go as its .data; C reads its count with %.*s, as an
     // int, so the bytes needn't end with a zero.
     s := "a string's bytes, and more";
     printf("%.*s\n", cast(s32) 16, s.data);
     printf("[%.*s]\n", cast(s32) s.count, s.data);
-    // A literal goes as a C string, as it does to a *u8.
+    // A literal goes as a C string, as it does to a *u8; a pointer as it is.
     printf("%s, %c\n", "a literal", "Rig"[0]);
+    c_string : *u8 = "through a pointer";
+    printf("%s\n", c_string);
 
     // snprintf writes into an array through its .data, and says how many
     // bytes it wrote.

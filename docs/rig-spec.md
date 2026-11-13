@@ -381,7 +381,7 @@ Two other kinds of value take their type from where they are used:
 - `null` takes the pointer type it meets (section 3.5);
 - a compound literal written without its type, `.{...}` or `.[...]`, takes the struct, array or view type it meets, or the type of a cast around it (section 5.17).
 
-Neither has a default type: with nothing to take a type from, each is an error.
+Neither has a default type: with nothing to take a type from, each is an error. The one exception is `null` passed to a variadic foreign procedure after its parameters, which is a `*void`, C's `NULL` (section 7.6).
 
 ### 3.13 Implicit conversions
 
@@ -1265,7 +1265,7 @@ main :: () {
 pi is 3.1 (9 bytes)
 ```
 
-Only a foreign procedure may take `..`: on a procedure with a body it is `only a foreign procedure can take more arguments with '..'; a Rig procedure can take a view, as in (values: []int)`. A call passes at least one argument per named parameter (`'printf' takes at least 1 argument, but 0 were given`), each converted to its parameter's type as in any call (section 5.10). The arguments after them have no parameter, so each keeps its own type, which must be a number, a `bool` or a pointer. C receives each after its *default argument promotions*, which the caller applies:
+Only a foreign procedure may take `..`: on a procedure with a body it is `only a foreign procedure can take more arguments with '..'; a Rig procedure can take a view, as in (values: []int)`. A call passes at least one argument per named parameter (`'printf' takes at least 1 argument, but 0 were given`), each converted to its parameter's type as in any call (section 5.10). The arguments after them have no parameter, so each keeps its own type, which must be a number, a `bool` or a pointer (or a string literal, below). C receives each after its *default argument promotions*, which the caller applies:
 
 | Rig | C receives |
 |---|---|
@@ -1279,14 +1279,13 @@ Only a foreign procedure may take `..`: on a procedure with a body it is `only a
 
 So `%d` prints an `s8`, `u8`, `s16`, `u16`, `bool` or `s32`, `%u` a `u32`, `%lld` an `int` or `s64`, `%llu` a `u64`, and `%f` either float type. What the format says must match what is passed, as in C: the compiler does not read the format, and a mismatch is undefined behaviour in C.
 
-An argument with no type of its own takes one as where it meets no type (section 3.12), but for an untyped float:
+An argument with no type of its own takes Rig's default type (section 3.12), except an untyped float and `null`:
 
 - an untyped integer is an `int`, a `long long` to C: `printf("%lld", 5)`, not `%d`, which reads a C `int`; pass `cast(s32) 5` for `%d`;
 - an untyped float is a `float64`, C's `double`, not rounded to a `float32` first: `printf("%.10f", 0.1)` prints `0.1000000000`;
-- `null` is a `*void`, C's `NULL`;
-- a string literal is passed as its bytes' address, a C string, as where it converts to a `*u8` (section 3.8): `printf("%s", "hi")`.
+- `null` is a `*void`, C's `NULL`.
 
-C cannot take Rig's aggregates through `...`. A struct, an array, a view or a string other than a literal is refused, with what to pass instead: `argument 2 of 'printf' has type 'Vec2', which C's '...' can't take; pass a pointer to it`, `argument 2 of 'printf' has type '[32]u8', which C's '...' can't take; pass its .data` (a view's too), and `argument 2 of 'printf' has type 'string', which C's '...' can't take; pass its .data, which may not end with a zero, or a literal`. Since a string's bytes need not end with a zero, `%s` may read past them; `%.*s` takes the count first, as a C `int`: `printf("%.*s", cast(s32) s.count, s.data)`.
+A string literal is passed as its bytes' address, a C string ending with a zero, as where it converts to a `*u8` (section 3.13): `printf("%s", "hi")`. C cannot take Rig's aggregates through `...`: a struct, an array, a view or any other string is refused, with what to pass instead: `argument 2 of 'printf' has type 'Vec2', which C's '...' can't take; pass a pointer to it`, `argument 2 of 'printf' has type '[32]u8', which C's '...' can't take; pass its .data` (a view's too), and `argument 2 of 'printf' has type 'string', which C's '...' can't take; pass its .data, which may not end with a zero, or a literal`. Since a string's bytes need not end with a zero, `%s` may read past them; `%.*s` takes the count first, as a C `int`: `printf("%.*s", cast(s32) s.count, s.data)`.
 
 A call of a variadic foreign procedure follows the platform's convention for C's variadic functions (section 10.4). On Windows, the C runtime's DLLs export no `printf` or the rest of its family: a program links them from Visual Studio's `legacy_stdio_definitions.lib` (section 10.6).
 
