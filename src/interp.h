@@ -27,7 +27,8 @@
 // - on Windows, a standard C function is the compiler's own copy
 //   (interp_c_library_function): the compiler's C runtime is linked in
 //   statically, and compile-time printf must write into its stdout buffer,
-//   memory malloc gives must be the heap free takes back;
+//   memory malloc gives must be the heap free takes back; on Linux, only
+//   atexit and at_quick_exit are, which libc.so.6 doesn't export;
 // - anything else is the system's (os_find_c_function): kernel32.dll's or
 //   ucrtbase.dll's on Windows, libc's on Linux;
 // - a name found nowhere fails, "'NAME' isn't in the C library at compile
@@ -108,8 +109,10 @@ u8 *interp_global(Interp *in, s32 global);
 // "    in NAME (PATH:L:C)\n" for each frame, PATH from paths[pos.file].
 String interp_frames_text(Arena *a, Array<Interp_Frame> frames, Array<String> paths);
 
-// interp_c_functions.cpp (Windows only; empty on Linux): the C17
-// functions of <stdio.h>, <stdlib.h>, <string.h>, <math.h>, <ctype.h>,
-// <time.h> that are functions (not macros), each as the compiler's own,
-// overloads cast to C's signature, aligned_alloc left out.
+// interp_c_functions.cpp: on Windows, the C17 functions of <stdio.h>,
+// <stdlib.h>, <string.h>, <math.h>, <ctype.h>, <time.h> that are functions
+// (not macros), each as the compiler's own, overloads cast to C's
+// signature, aligned_alloc left out; on Linux, the compiler's own atexit
+// and at_quick_exit, which libc.so.6 doesn't export. Null for any other
+// name.
 void *interp_c_library_function(String name);

@@ -89,7 +89,7 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
    - On Windows a narrow C result's upper bits are garbage: mask by the result's type, and i1 is `rax & 1`. On SysV an `IR_EXT_SIGN` i8/i16 argument must be sign-extended.
    - The compiler links the C runtime statically on Windows, so `(void *)&printf` is the compiler's own inline `printf`, sharing its `stdout`.
    - C++ overloads (`<math.h>`, `strchr`, `abs`…) need a cast to one signature. `aligned_alloc` doesn't exist in UCRT.
-   - On Linux the compiler is linked dynamically with glibc; `dlopen("libc.so.6", RTLD_LAZY | RTLD_NOLOAD)` gives libc alone, matching 10.6's "libm's functions are not available". `<dlfcn.h>` is needed (and `<sys/mman.h>` for Task 1's `mmap`). `-ldl` is already linked into `rig` and `unit-tests`; `run-tests` includes `os_linux.cpp` too but links no `-ldl`, which is fine since glibc 2.34 has `dlopen` in libc itself (WSL and CI have 2.43).
+   - On Linux the compiler is linked dynamically with glibc; `dlopen("libc.so.6", RTLD_LAZY | RTLD_NOLOAD)` gives libc and the dynamic loader it depends on, not libm, matching 10.6's "libm's functions are not available" (glibc's libc exports a few math functions too, copysignf, scalbnf, frexp, ldexp, modf; libm-only ones such as sqrt aren't found). dlsym on it doesn't find `atexit` and `at_quick_exit`: glibc keeps them in `libc_nonshared.a`, which libc.so's linker script links into each program, so the interpreter takes the compiler's own copies. `<dlfcn.h>` is needed (and `<sys/mman.h>` for Task 1's `mmap`). `-ldl` is already linked into `rig` and `unit-tests`; `run-tests` includes `os_linux.cpp` too but links no `-ldl`, which is fine since glibc 2.34 has `dlopen` in libc itself (WSL and CI have 2.43).
 9. **Thunks:**
    - File-scope `asm(R"(...)")` in a `.cpp` assembles with the pinned clang on both targets, needs no build-script change, and can carry `.seh_*` (Windows) and `.cfi_*` (Linux) unwind directives. Naked functions get no Windows unwind information.
    - A prototype passing printf with 12 mixed arguments, 11 doubles past SysV's registers, a 10-parameter function returning `float`, narrow arguments and `strlen` is in the scratchpad (`thunk/thunk.cpp`), for reference, not for copying blindly.
@@ -114,12 +114,13 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
   - `-1` means unknown, as in hand-built modules.
   - `ir_print` doesn't print it, so no IR text expectation changes.
 - **Rig procedures given to C.**
-  - A call of a foreign procedure, or of a native address, with any argument, fixed or variadic, whose value lies in the reserved Rig-procedure range is refused: `a Rig procedure can't be passed to C at compile time, for now`, at the call.
-  - That covers a procedure-typed parameter as #114 asks, and a direct `cast(*void)` too, since the IR keeps no Rig types to tell them apart.
-  - A Rig procedure stored in memory that C reads and calls faults, because the range is never accessible.
+  - A call of a foreign procedure, or of a native address, with any pointer argument, fixed or variadic, whose value lies in the reserved Rig-procedure range is refused: `a Rig procedure can't be passed to C at compile time, for now`, at the call.
+  - That covers a procedure-typed parameter as #114 asks, and a direct `cast(*void)` too, since the IR keeps no Rig types to tell them apart: both are pointers in the IR.
+  - Integer arguments are not checked: a count or a size may lie in the range by chance. A procedure's value cast to an integer reaches C as the address standing for it.
+  - A Rig procedure stored in memory, or passed as an integer, that C reads and calls faults, because the range is never accessible.
 - **C lookup:**
   - Windows: the C17 table first, then `GetProcAddress` in `kernel32.dll`, then in `ucrtbase.dll`.
-  - Linux: `dlsym` on the `libc.so.6` handle.
+  - Linux: a two-entry table first, the compiler's own `atexit` and `at_quick_exit` (glibc keeps them in `libc_nonshared.a`, which `-lc` links in statically, so `libc.so.6` doesn't export them), then `dlsym` on the `libc.so.6` handle, which searches libc and the dynamic loader it depends on.
   - A name found nowhere fails the run, with frames, at the call (or at the `procaddr` taking the procedure's value). When a global's relocation needs it, the run fails before it starts, with no frames.
 - **Failure output in the conformance mode:**
   - A panic writes its exact text, as the compiled program does, after `fflush(NULL)`. Any other failure writes `PATH:L:C: runtime error: MESSAGE\n` for the innermost frame. Then the mode exits with 101.
@@ -300,18 +301,22 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
   ```cpp
   // os.h: a function of the system's C library or of the OS, by name, for
   // compile-time C calls, or null. Linux: dlsym on dlopen("libc.so.6",
-  // RTLD_LAZY | RTLD_NOLOAD) (libc alone, as 10.6 links). Windows:
-  // GetProcAddress in kernel32.dll, then in ucrtbase.dll (LoadLibraryW
-  // once); the standard C library's functions are looked up before this,
-  // in the compiler's own table.
+  // RTLD_LAZY | RTLD_NOLOAD) (libc and the dynamic loader it depends on, as
+  // 10.6's -lc provides them); atexit and at_quick_exit, which -lc links in
+  // statically, are looked up before this, in the compiler's own table.
+  // Windows: GetProcAddress in kernel32.dll, then in ucrtbase.dll
+  // (LoadLibraryW once); the standard C library's functions are looked up
+  // before this, in the compiler's own table.
   void *os_find_c_function(String name);
-  // interp_c_functions.cpp (Windows only; empty on Linux): the C17
-  // functions of <stdio.h>, <stdlib.h>, <string.h>, <math.h>, <ctype.h>,
-  // <time.h> that are functions (not macros), each as the compiler's own,
-  // overloads cast to C's signature, aligned_alloc left out.
+  // interp_c_functions.cpp: on Windows, the C17 functions of <stdio.h>,
+  // <stdlib.h>, <string.h>, <math.h>, <ctype.h>, <time.h> that are functions
+  // (not macros), each as the compiler's own, overloads cast to C's
+  // signature, aligned_alloc left out; on Linux, the compiler's own atexit
+  // and at_quick_exit, which libc.so.6 doesn't export. Null for any other
+  // name.
   void *interp_c_library_function(String name);
   ```
-- Lookup order: `interp_c_library_function` (Windows), then `os_find_c_function`. The address is cached per foreign procedure.
+- Lookup order: `interp_c_library_function`, then `os_find_c_function`. The address is cached per foreign procedure.
 - Variadic extras are classified by the precomputed value types (Fact 2).
 
 - [ ] **Step 1: Write the failing tests** through `lower_source`:
@@ -373,10 +378,10 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
 - [ ] **Step 1: Write 10.8.** Write it in the spec's style, covering:
   - what the interpreter runs (the IR lowering makes, not the source), and that it gives the same results as the compiled program;
   - memory: native, with the target's layouts, one slot per `IR_LOCAL`, an 8 MB data stack, and `stack overflow`;
-  - procedure values: reserved addresses; Rig procedures can't be given to C, with the message, and a value hidden in memory faults;
+  - procedure values: reserved addresses; Rig procedures can't be given to C as any pointer argument, fixed or variadic, with the message (integers aren't checked, as one may lie in the range by chance), and a value hidden in memory or in an integer faults;
   - C calls:
     - Windows: the compiler's own standard C library, then `kernel32.dll`, then `ucrtbase.dll`, whose extras share no state with the compiler's;
-    - Linux: libc alone;
+    - Linux: libc (and the dynamic loader it depends on), with the compiler's own `atexit` and `at_quick_exit`, which libc.so.6 doesn't export; libm-only functions aren't found;
     - the missing-function message;
   - failures: the message without its prefix, and frames innermost first, compiler-made procedures left out, formatted as `    in NAME (PATH:L:C)`;
   - `exit` exits the compiler;

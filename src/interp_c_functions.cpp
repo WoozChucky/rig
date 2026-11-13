@@ -1,7 +1,11 @@
 // interp_c_functions.cpp: the standard C library's functions, as the
-// compiler's own, for compile-time C calls on Windows (see interp.h).
+// compiler's own, for compile-time C calls (see interp.h).
 //
-// The compiler is built with the static C runtime (build.bat's
+// Every name here starts with Interp_, interp_ or INTERP_: in the unity
+// build, the files around this one have static names of their own that
+// would collide.
+//
+// The compiler is built with the static C runtime on Windows (build.bat's
 // -fms-runtime-lib=static), so it carries its own copy of every C function
 // it uses, with its own state: stdout's buffer, the heap, errno. Interpreted
 // code must call those copies, not ucrtbase.dll's, which is a second C
@@ -15,23 +19,21 @@
 //
 // The table is C17's list, written once from the standard, not generated:
 // every function of <stdio.h>, <stdlib.h>, <string.h>, <math.h>, <ctype.h>
-// and <time.h> (7.21, 7.22, 7.24, 7.12, 7.4, 7.27), but the ones C lets be
-// macros alone (math.h's isnan and signbit, ...), which have no address,
+// and <time.h> (7.21, 7.22, 7.24, 7.12, 7.4, 7.27), but the ones C defines
+// only as macros (math.h's isnan and signbit, ...), which have no address,
 // and aligned_alloc, which UCRT doesn't have. gets is gone since C11. A few
-// can't be declared in Rig (div returns a struct, the v... functions take a
-// va_list), but they are C's, so they're here.
+// can't be used from Rig (div returns a struct; the v... functions need a
+// va_list, which Rig can't make), but they are C's, so they're here.
 //
-// On Linux the table is empty: the compiler is linked with the system's C
-// library, dynamically, so os_find_c_function finds its functions, the
-// same the compiler itself calls.
+// On Linux the compiler is linked with the system's C library,
+// dynamically, so os_find_c_function finds its functions, the same the
+// compiler itself calls, but two: atexit and at_quick_exit. glibc keeps
+// them in libc_nonshared.a, which libc.so's linker script links into each
+// program, so libc.so.6 doesn't export them and dlsym can't find them. The
+// table on Linux is those two, the compiler's own copies, which taking
+// their addresses here links in, as a compiled program's -lc links its.
 
 #include "interp.h"
-
-#ifdef _WIN32
-
-#include <ctype.h>
-#include <math.h>
-#include <time.h>
 
 // A function of the table, by its C name.
 struct Interp_C_Function {
@@ -41,6 +43,12 @@ struct Interp_C_Function {
 
 // A function taken by its address as it is.
 #define INTERP_C(name) {#name, (void *)&name}
+
+#ifdef _WIN32
+
+#include <ctype.h>
+#include <math.h>
+#include <time.h>
 
 // A function C++ overloads (<math.h>'s for float and long double; abs and
 // div for long; memchr and strchr, ..., for const), taken with C's own
@@ -134,9 +142,20 @@ static const Interp_C_Function INTERP_C_FUNCTIONS[] = {
     INTERP_C(ctime), INTERP_C(gmtime), INTERP_C(localtime), INTERP_C(strftime),
 };
 
+#else
+
+// The two C17 functions libc.so.6 doesn't export (see the top).
+static const Interp_C_Function INTERP_C_FUNCTIONS[] = {
+    INTERP_C(atexit),
+    INTERP_C(at_quick_exit),
+};
+
+#endif
+
 // The macros are this file's: in the unity build, the files after it would
 // see them otherwise.
 #undef INTERP_C
+#ifdef _WIN32
 #undef INTERP_C_AS
 #undef INTERP_C_MATH
 #undef INTERP_C_T_T
@@ -152,8 +171,9 @@ static const Interp_C_Function INTERP_C_FUNCTIONS[] = {
 #undef INTERP_C_INT_T
 #undef INTERP_C_LONG_T
 #undef INTERP_C_LLONG_T
+#endif
 
-// A scan of a few hundred names: the interpreter looks each foreign
+// A scan of a few hundred names (two on Linux): the interpreter looks each foreign
 // procedure up once and keeps what it found.
 void *interp_c_library_function(String name) {
     for (const Interp_C_Function &f : INTERP_C_FUNCTIONS) {
@@ -161,11 +181,3 @@ void *interp_c_library_function(String name) {
     }
     return nullptr;
 }
-
-#else
-
-void *interp_c_library_function([[maybe_unused]] String name) {
-    return nullptr;
-}
-
-#endif

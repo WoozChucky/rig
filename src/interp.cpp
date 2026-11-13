@@ -5,9 +5,9 @@
 // own (check_expr.cpp's saturate and divide, lower.cpp's emit and resize,
 // ...) that would collide.
 //
-// The data stack. A run pushes a frame for each call and pops it at the
-// return, on a stack of RIG_STACK_SIZE bytes of the interpreter's own. A
-// frame is:
+// The data stack. A run pushes a frame for each call of a Rig procedure (a
+// C call runs in its caller's frame) and pops it at the return, on a stack
+// of RIG_STACK_SIZE bytes of the interpreter's own. A frame is:
 //
 //   (padding)       to Interp_Record's alignment: the frame before may end
 //                   at any byte (a bool's slot)
@@ -319,8 +319,8 @@ static bool interp_in_proc_range(Interp *in, u64 address) {
 
 // Foreign procedure k's C function, found by its name the first time it's
 // needed and kept: the compiler's own copy of a standard C function
-// (interp_c_library_function, on Windows), or else the system's
-// (os_find_c_function). Null when neither has it, which isn't kept, so a
+// (interp_c_library_function: any of them on Windows, atexit and
+// at_quick_exit on Linux), or else the system's (os_find_c_function). Null when neither has it, which isn't kept, so a
 // later run looks again.
 static void *interp_c_function(Interp *in, s32 k) {
     void *f = in->c_functions[k];
@@ -521,13 +521,19 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
         case IR_CALL_INDIRECT: {
             // A Rig procedure, called directly or through its value: a new
             // frame, its parameters the arguments, and its first
-            // instruction next. A foreign procedure, or an address outside
-            // the Rig procedures' range, is C: called through the thunk,
-            // in this frame.
+            // instruction next. A foreign procedure, or a non-null address
+            // outside the Rig procedures' range, is C: called through the
+            // thunk, in this frame. A null address fails as the compiled
+            // program's check does (lowering checks before every indirect
+            // call, so only IR made some other way gets here).
             s32 callee = instr->target;
             void *c_function = nullptr;
             if (instr->op == IR_CALL_INDIRECT) {
                 u64 address = v[instr->a];
+                if (address == 0) {
+                    interp_fail(in, frame, block, index, a, result, str("null procedure call"));
+                    return;
+                }
                 if (!interp_in_proc_range(in, address)) {
                     c_function = (void *)address;
                 } else {
