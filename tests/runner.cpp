@@ -64,11 +64,14 @@
 // An expectation file holds one piece of text a line, which must appear,
 // in the order given, inside lines of the output: each piece after the one
 // before it, later in the same line or in a line after. A piece never
-// spans lines. Empty lines are ignored (a file of nothing else, which
+// spans lines. A line starting with '!' is a piece the debugger must not
+// print at all: the rest of the line must appear nowhere in the output (a
+// warning that mustn't come back, a value that mustn't be shown). Empty
+// lines are ignored (a file of nothing else, or of only '!' lines, which
 // would pass whatever the debugger printed, is an error), and @ROOT@
 // stands for the repository's root, absolute, with the host's separators
-// (C:\dev\rig, /home/me/rig). The first piece missing fails the test,
-// which prints it and the whole output. Expectations name procedures, the
+// (C:\dev\rig, /home/me/rig). The first piece missing, or forbidden and
+// there, fails the test, which prints it and the whole output. Expectations name procedures, the
 // file's name with line numbers, and source text, never addresses or
 // offsets, which change with the code; nor breakpoint numbers (gdb says
 // "Breakpoint 2.1," for the first place of a breakpoint that has two).
@@ -1063,9 +1066,12 @@ static s64 find_from(String haystack, s64 from, String needle) {
 }
 
 // The first piece of `expected` (one a line, empty lines ignored) that
-// isn't in `output` after the piece before it; {} when every one is. A
-// piece has no line break, so each is found inside one line.
-static String first_missing(String expected, String output) {
+// `output` doesn't hold as it should; {} when it holds every one as it
+// should. A piece wanted must be found after the wanted piece before it; a
+// piece forbidden (its line starts with '!', which isn't part of it) must
+// be found nowhere, and *forbidden says which kind the piece returned is.
+// A piece has no line break, so each is found inside one line.
+static String first_unmet(String expected, String output, bool *forbidden) {
     s64 at = 0;
     for (s64 i = 0; i < expected.count;) {
         s64 end = i;
@@ -1074,6 +1080,12 @@ static String first_missing(String expected, String output) {
         if (piece.count && piece.data[piece.count - 1] == '\r') piece.count--;
         i = end + 1;
         if (!piece.count) continue;
+        *forbidden = piece.data[0] == '!';
+        if (*forbidden) {
+            piece = string_slice(piece, 1, piece.count - 1);
+            if (piece.count && find_from(output, 0, piece) >= 0) return piece;
+            continue;
+        }
         s64 found = find_from(output, at, piece);
         if (found < 0) return piece;
         at = found + piece.count;
@@ -1081,12 +1093,21 @@ static String first_missing(String expected, String output) {
     return {};
 }
 
-// Whether `expected` holds a piece at all: a line with something besides
-// blanks. Expectations without one would pass whatever the debugger did.
-static bool has_a_piece(String expected) {
+// Whether `expected` holds a piece the debugger must print: a line with
+// something besides blanks that doesn't start with '!'. Expectations
+// without one would pass whatever the debugger did, even nothing at all.
+static bool has_a_wanted_piece(String expected) {
+    bool line_start = true, forbidden = false;
     for (s64 i = 0; i < expected.count; i++) {
         u8 c = expected.data[i];
-        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') return true;
+        if (c == '\n') {
+            line_start = true;
+            forbidden = false;
+            continue;
+        }
+        if (line_start && c == '!') forbidden = true;
+        line_start = false;
+        if (!forbidden && c != ' ' && c != '\t' && c != '\r') return true;
     }
     return false;
 }
@@ -1134,7 +1155,7 @@ static String debug_test(Arena *a, String rig, String root, String name, bool *s
     if (!os_read_file(a, string_printf(a, STR_FMT ".expect", STR_ARG(script)), &expected)) {
         return string_printf(a, "no " STR_FMT ".expect", STR_ARG(script));
     }
-    if (!has_a_piece(expected)) {
+    if (!has_a_wanted_piece(expected)) {
         return string_printf(a, STR_FMT ".expect expects nothing: a debugger test needs a piece of text to find",
                              STR_ARG(script));
     }
@@ -1160,10 +1181,15 @@ static String debug_test(Arena *a, String rig, String root, String name, bool *s
         return string_printf(a, STR_FMT " took longer than %d seconds; its output:\n" STR_FMT, STR_ARG(debugger), TIMEOUT,
                              STR_ARG(output));
     }
-    String missing = first_missing(expected, output);
-    if (missing.count) {
+    bool forbidden = false;
+    String unmet = first_unmet(expected, output, &forbidden);
+    if (unmet.count && forbidden) {
+        return string_printf(a, "%s printed \"" STR_FMT "\", which it mustn't; its output:\n" STR_FMT, DEBUGGER,
+                             STR_ARG(unmet), STR_ARG(output));
+    }
+    if (unmet.count) {
         return string_printf(a, "%s didn't print \"" STR_FMT "\" (after the expectations before it); its output:\n" STR_FMT,
-                             DEBUGGER, STR_ARG(missing), STR_ARG(output));
+                             DEBUGGER, STR_ARG(unmet), STR_ARG(output));
     }
     return {};
 }
