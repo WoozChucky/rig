@@ -396,12 +396,13 @@ struct Ast_Load : Ast {
 };
 
 // A parsed file, or the files of a program parsed into one (parse_into):
-// their declarations, in source order, broken ones included, a file's after
-// the file's before it. Procedures (and broken entries, which are Ast_Procs)
-// are in procs; the globals, top-level variables (Ast_Var, is_global set),
-// constants (Ast_Const) and structs (Ast_Struct), in globals; the loads
-// (Ast_Load), in loads. Each list is in source order on its own;
-// ast_declarations merges procs and globals back by position.
+// their declarations, in source order, broken ones included; a file's
+// declarations come after those of the files loaded before it
+// (Position.file's order). Procedures (and broken entries, which are
+// Ast_Procs) are in procs; the globals, top-level variables (Ast_Var,
+// is_global set), constants (Ast_Const) and structs (Ast_Struct), in
+// globals; the loads (Ast_Load), in loads. Each list is in source order on
+// its own; ast_declarations merges procs and globals back by position.
 struct Ast_File {
     Array<Ast_Proc *> procs;
     Array<Ast *> globals;
