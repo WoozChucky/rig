@@ -101,13 +101,6 @@ static void error_expected(Parser *p, const char *expected) {
     }
 }
 
-// Reads a token of this kind, or reports an error and returns null.
-static Token *expect(Parser *p, Token_Kind kind) {
-    if (peek(p)->kind == kind) return advance(p);
-    error_expected(p, token_kind_name(kind));
-    return nullptr;
-}
-
 // Whether token t is the directive #name.
 static bool is_directive(Token *t, const char *name) {
     return t->kind == TOKEN_DIRECTIVE && string_eq(t->text, str(name));
@@ -124,8 +117,8 @@ static bool load_resumes_here(Parser *p);
 
 // "expected X" at the next token, as error_expected says; but a #load there
 // is "#load can only be at the top level" instead, as anywhere but a
-// top-level declaration: where an expression, a type, a parameter or a
-// block should start. Unless the recovery resumes at it
+// top-level declaration: where an expression, a type, a parameter, a block,
+// a ';', a ')' or an operator should be. Unless the recovery resumes at it
 // (load_resumes_here), which reads it as the top-level load it is: what
 // was expected before it is then what's missing.
 static void error_expected_or_load(Parser *p, const char *expected) {
@@ -135,6 +128,13 @@ static void error_expected_or_load(Parser *p, const char *expected) {
     } else {
         error_expected(p, expected);
     }
+}
+
+// Reads a token of this kind, or reports an error and returns null.
+static Token *expect(Parser *p, Token_Kind kind) {
+    if (peek(p)->kind == kind) return advance(p);
+    error_expected_or_load(p, token_kind_name(kind));
+    return nullptr;
 }
 
 static Ast *parse_expression(Parser *p, int min_precedence);
@@ -418,7 +418,7 @@ static Ast *parse_postfix(Parser *p) {
                 type->name = ((Ast_Name *)e)->name;
                 e = parse_literal(p, type, dot, e->start);
             } else {
-                error_expected(p, "a field's name");
+                error_expected_or_load(p, "a field's name");
                 return nullptr;
             }
             continue;
@@ -840,11 +840,12 @@ static Ast_Var *loop_variable(Parser *p, String name, Position pos) {
 // - '..': a range, whose last end follows;
 // - the body's '{': what the loop goes over, its sequence (an array, a
 //   view or a string; the checker says whether it is one);
-// - with no iterator named, a name and then anything else (`for i 0..9`,
-//   `for x in 0..9`): the name was meant as the iterator's, and its ':' is
-//   missing: "expected ':' after the iterator's name, as in for i: 0..9",
-//   at what came instead;
-// - otherwise, "expected '..' or the loop's '{'".
+// - with no iterator named, a name and then anything else but a #load
+//   (`for i 0..9`, `for x in 0..9`): the name was meant as the iterator's,
+//   and its ':' is missing: "expected ':' after the iterator's name, as in
+//   for i: 0..9", at what came instead;
+// - otherwise, "expected '..' or the loop's '{'", or a #load misplaced
+//   (error_expected_or_load).
 // A '*' right after 'for' makes the iterator a pointer to each element
 // (`for * a`); a range takes none, which the checker says.
 static Ast *parse_for(Parser *p) {
@@ -874,10 +875,10 @@ static Ast *parse_for(Parser *p) {
     }
     if (after->kind != TOKEN_DOT_DOT) {
         if (after->kind == TOKEN_ERROR) return nullptr;  // the lexer said what's wrong
-        if (!named_iterator && loop->first->kind == AST_NAME) {
+        if (!named_iterator && loop->first->kind == AST_NAME && !is_directive(after, "load")) {
             diag_error(p->diag, after->pos, "expected ':' after the iterator's name, as in for i: 0..9");
         } else {
-            error_expected(p, "'..' or the loop's '{'");
+            error_expected_or_load(p, "'..' or the loop's '{'");
         }
         return nullptr;
     }

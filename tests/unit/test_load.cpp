@@ -485,8 +485,9 @@ TEST(load_failure_loses_a_file) {
     // directory, a file that isn't a .rig file, an empty path and one with a
     // zero byte; a #load with no string, its quotes forgotten or never
     // closed, which names no file the parser could keep; and one in a body,
-    // among a struct's fields or after a signature, which only the top
-    // level can have. So does a loaded file's #load that fails. A file
+    // among a struct's fields, after a signature or where a ';' should be,
+    // which only the top level can have. So does a loaded file's #load that
+    // fails. A file
     // loaded twice, the main file loaded back, a syntax error in a loaded
     // file, a #load missing only its ';', or one in column 1 at the end of a
     // body never closed (read again at the top level) loses nothing.
@@ -515,6 +516,8 @@ TEST(load_failure_loses_a_file) {
         {"main :: () { #load \"b.rig\"; }\n", true},
         {"V :: struct {\n    #load \"b.rig\";\n}\n", true},
         {"f :: () #load \"b.rig\"; {}\n", true},
+        {"main :: () {\n    x := 1 #load \"b.rig\";\n}\n", true},
+        {"N :: 1 #load \"b.rig\";\n", true},
         {"#load \"b.rig\";\n#load \"./b.rig\";\n#load \"main.rig\";\n", false},
         {"#load \"broken.rig\";\n", false},
         {"#load \"b.rig\"\n", false},
