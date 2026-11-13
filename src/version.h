@@ -31,3 +31,21 @@ struct Build_Stamp {
 
 // This compiler's own stamp, from the defines.
 Build_Stamp build_stamp();
+
+// The commit as rig version and the debug producer show it: the hash's
+// first 12 hex digits, with "-dirty" after them when the tree was dirty
+// ("3f9c2a1b7d4e", "3f9c2a1b7d4e-dirty"), or "unknown".
+String stamp_commit_short(Arena *a, Build_Stamp s);
+
+// The version of the LLVM linked into rig, "23.1.5", asked of LLVM itself
+// (LLVMGetVersion) so it can't drift from the libraries really linked.
+String llvm_version(Arena *a);
+
+// rig version's line: "rig 0.1.0 (3f9c2a1b7d4e 2026-11-13) LLVM 23.1.5",
+// no newline.
+String version_line(Arena *a, Build_Stamp s, String llvm);
+
+// rig version --verbose: the line, then one "name: value" line each for the
+// full commit, whether it was dirty, its date, LLVM's version, the target
+// triple rig compiles for and the kind of build. Every line ends in "\n".
+String version_verbose(Arena *a, Build_Stamp s, String llvm, const char *target);
