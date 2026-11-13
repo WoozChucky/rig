@@ -16,21 +16,23 @@ static const bool HOST_IS_WINDOWS = true;
 static const bool HOST_IS_WINDOWS = false;
 #endif
 
-// The files loaded so far. A file is known by its id (os_file_id) when it
-// has one, in `ids`, whose keys are the ids' 24 bytes. One with none is
-// known by its path made absolute (path_absolute), in `paths`, its case
-// folded as the system folds names' (os_fold_case: on Windows, where a
-// name's case doesn't matter, Ä.rig is ä.rig): that's a file that isn't
-// there, as the main file under rig check --stdin needn't be, or one on a
-// file system with no ids to give (os.h). Its path is the best there is:
-// ./x.rig and sub/../x.rig are x.rig, though a link to it isn't.
+// The files named so far, the main file and every #load's, read or not: a
+// file that can't be read is recorded too, so it's reported at its first
+// #load alone (load.h). A file is known by its id (os_file_id) when it has
+// one, in `ids`, whose keys are the ids' 24 bytes. One with none is known
+// by its path made absolute (path_absolute), in `paths`, its case folded
+// as the system folds names' (os_fold_case: on Windows, where a name's
+// case doesn't matter, Ä.rig is ä.rig): that's a file that isn't there, as
+// the main file under rig check --stdin needn't be, or one on a file
+// system with no ids to give (os.h). Its path is the best there is: ./x.rig
+// and sub/../x.rig are x.rig, though a link to it isn't.
 struct Loaded_Files {
     Table<bool> ids;
     Table<bool> paths;
 };
 
-// Records the file at `path`, from the directory rig runs in, as loaded.
-// False when it was loaded already. A key is looked up where it was made,
+// Records the file at `path`, from the directory rig runs in, as seen.
+// False when it was named already. A key is looked up where it was made,
 // and copied into `keys` only when it's new, to stay in the table.
 static bool first_time_seen(Arena *keys, Loaded_Files *seen, String directory, String path) {
     u64 id[3];
