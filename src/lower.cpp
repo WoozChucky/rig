@@ -11,9 +11,21 @@
 // - Every local variable (Ast_Var) is a stack slot, an IR_LOCAL, in its
 //   procedure, stored to where it's declared: its value, or zero (spec 6.4:
 //   variables start zeroed), or nothing at all for ---. Reading it is an
-//   IR_LOAD, assigning it an IR_STORE. Parameters are read-only, so they
-//   need no slot: a parameter is its value, %0 to %(count-1) (after the
-//   hidden ones for struct results, below).
+//   IR_LOAD, assigning it an IR_STORE.
+// - Parameters. A scalar parameter arrives as a value, %0 to %(count-1)
+//   (after the hidden ones for struct results, below). Parameters are
+//   read-only, so the value could be used as it is; but a debugger couldn't
+//   follow it. So, as clang does at -O0, each is stored on entry into a
+//   slot of its own, before the body's first line, and every use loads it
+//   from there, at the statement using it. The slot is then the one place
+//   the parameter lives: a debugger shows it there, and a value it writes
+//   there (gdb's `set var`) is the one the program goes on with. Used as a
+//   value instead, the parameter would be in a register LLVM spills and
+//   reloads where it likes, at -O0 at the start of each block that uses it,
+//   with no line (gdb's `next` then stepped past an `else if` testing it);
+//   and a copy kept for the debugger alone wouldn't be what the program
+//   reads. An aggregate parameter is the pointer to the caller's copy, used
+//   as it is (the backend keeps the pointer in a slot for the debugger).
 // - A global variable is an Ir_Global of its type, whose first value (the
 //   constant the checker made sure it has, or zero) is in the program's
 //   file. It's read and written as a slot is, through its address, an
@@ -127,8 +139,9 @@
 #include "ir.h"
 #include "types.h"
 
-// Where a procedure's variable or parameter lives: a variable's slot (the
-// address an IR_LOCAL gave), or a parameter's value.
+// Where a procedure's variable or parameter lives: a variable's or a scalar
+// parameter's slot (the address an IR_LOCAL gave), or the pointer an
+// aggregate parameter is.
 struct Local {
     Ast *decl;  // the Ast_Var or Ast_Param
     s32 value;
@@ -1187,10 +1200,14 @@ static s32 lower_expr(Lowering *l, Ast *e) {
     case AST_CAST: return lower_cast(l, (Ast_Cast *)e);
     case AST_CALL: return lower_call(l, (Ast_Call *)e);
     case AST_NAME: {
-        // A parameter is its value (an aggregate's, the caller's copy's
-        // address); a variable is read from its slot.
+        // An aggregate parameter is the caller's copy's address; a scalar
+        // parameter, as a variable, is read from its slot, here, at the
+        // statement reading it.
         Ast *decl = ((Ast_Name *)e)->decl;
-        if (decl->kind == AST_PARAM) return local_of(l, decl)->value;
+        if (decl->kind == AST_PARAM) {
+            s32 value = local_of(l, decl)->value;
+            return type_is_aggregate(decl->type) ? value : emit_get(l, decl->type, value);
+        }
         return emit_get(l, decl->type, address_of(l, decl));
     }
     case AST_DEREF: return emit_get(l, e->type, lower_address(l, e));
@@ -2347,20 +2364,33 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         l.checking_bounds = l.bounds_checks && !source->no_bounds_checks;
         l.is_entry = string_eq(source->name, str("main"));
         // The body is scope 0, at its '{'. Its parameters are its first
-        // variables: a scalar one is the value it's passed as, an aggregate
-        // one the pointer to the caller's copy. The hidden result pointers
-        // before them are no variable, and don't count in `arg`.
+        // variables. A scalar one is stored on entry into a slot of its own,
+        // and every use reads it from there, as clang does at -O0 (the
+        // header's "Parameters" says why). An aggregate one is the pointer
+        // to the caller's copy. The hidden result pointers before them are
+        // no variable, and don't count in `arg`.
         l.scope = -1;
-        place(&l, source->body->pos, new_scope(&l, source->body->pos));
+        s32 body_scope = new_scope(&l, source->body->pos);
         s32 hidden = aggregate_results(source);
         for (s64 k = 0; k < source->params.count; k++) {
             Ast_Param *param = source->params[k];
-            array_add(&l.locals, {(Ast *)param, hidden + (s32)k});
-            // The k-th visible parameter is the value hidden + k.
-            Ir_Var_Kind kind = type_is_aggregate(param->type) ? IR_VAR_ADDRESS : IR_VAR_VALUE;
-            s32 value = hidden + (s32)k, arg = (s32)k + 1;
-            array_add(&l.proc->vars, Ir_Var{param->name, param->type, param->pos, 0, kind, value, arg});
+            s32 value = hidden + (s32)k, arg = (s32)k + 1;  // the k-th visible parameter is the value hidden + k
+            if (type_is_aggregate(param->type)) {
+                array_add(&l.locals, {(Ast *)param, value});
+                array_add(&l.proc->vars, Ir_Var{param->name, param->type, param->pos, 0, IR_VAR_ADDRESS, value, arg});
+                continue;
+            }
+            // No position: this is the prologue's work, before any line of
+            // the body (a debugger's breakpoint on the procedure stops after
+            // it, at the first instruction with a line).
+            place(&l, {}, -1);
+            Ir_Type type = ir_type_of(param->type);
+            s32 slot = emit(&l, IR_LOCAL, type)->result;
+            emit_store(&l, type, value, slot);
+            array_add(&l.locals, {(Ast *)param, slot});
+            array_add(&l.proc->vars, Ir_Var{param->name, param->type, param->pos, 0, IR_VAR_SLOT, slot, arg});
         }
+        place(&l, source->body->pos, body_scope);
         lower_block(&l, source->body, source);
         if (!ir_block_has_ended(l.proc, l.block)) {
             // Control reaches the '}', where its return is. The checker made
