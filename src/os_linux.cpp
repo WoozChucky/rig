@@ -3,6 +3,7 @@
 #include "os.h"
 
 #include <dirent.h>
+#include <dlfcn.h>  // dlopen and dlsym, for os_find_c_function
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -451,4 +452,21 @@ void *os_reserve_inaccessible(u64 size) {
 
 void os_release_inaccessible(void *p, u64 size) {
     munmap(p, (size_t)size);
+}
+
+// The compiler is linked with libc dynamically, so libc is loaded already:
+// RTLD_NOLOAD takes a handle to it without loading anything, kept for the
+// process's life. dlsym on that handle searches libc alone, where
+// RTLD_DEFAULT would search every library the compiler loaded, libm and
+// libstdc++ among them, and find functions a program can't call (10.6
+// links libc alone). dlsym finds data too (stdout, environ): the
+// interpreter calls what a #foreign declaration names, as the linker
+// would link it.
+void *os_find_c_function(String name) {
+    static void *libc = dlopen("libc.so.6", RTLD_LAZY | RTLD_NOLOAD);
+    if (!libc) return nullptr;
+    Arena scratch = arena_make(1024);
+    void *f = dlsym(libc, string_cstr(&scratch, name));
+    arena_free(&scratch);
+    return f;
 }

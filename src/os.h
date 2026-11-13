@@ -122,3 +122,11 @@ void *os_reserve_inaccessible(u64 size);
 // Gives back what os_reserve_inaccessible reserved: `p` as it returned it,
 // and the same size.
 void os_release_inaccessible(void *p, u64 size);
+
+// A function of the system's C library or of the OS, by name, for
+// compile-time C calls, or null. Linux: dlsym on dlopen("libc.so.6",
+// RTLD_LAZY | RTLD_NOLOAD) (libc alone, as 10.6 links). Windows:
+// GetProcAddress in kernel32.dll, then in ucrtbase.dll (LoadLibraryW
+// once); the standard C library's functions are looked up before this,
+// in the compiler's own table.
+void *os_find_c_function(String name);

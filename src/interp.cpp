@@ -29,6 +29,7 @@
 
 #include "interp.h"
 #include "os.h"
+#include "thunk.h"
 
 // The range Rig procedures' values come from: 1 MB of addresses reserved
 // and never accessible, procedure k's value at its start plus 16k, so
@@ -37,8 +38,9 @@
 static const u64 INTERP_PROC_RANGE = 1024 * 1024;
 static const u64 INTERP_PROC_STRIDE = 16;
 
-// Until compile-time C calls come (Task 4), a call of C fails the run.
-static const char *INTERP_NO_C = "calling C at compile time comes with Task 4";
+// A C call given a Rig procedure fails (interp.h): C would need a way back
+// into the interpreter to call it.
+static const char *INTERP_RIG_TO_C = "a Rig procedure can't be passed to C at compile time, for now";
 
 // An IR_LOCAL of a procedure: its value, and its slot's offset from the
 // start of the frame's locals.
@@ -70,9 +72,16 @@ struct Interp {
     Arena memory;                // the globals' bytes, and each procedure's Interp_Proc
     Array<u8 *> globals;         // by Ir_Module.globals index, the ones mapped so far
     Array<Interp_Proc *> procs;  // by Ir_Module.procs index, null until first called
+    Array<void *> c_functions;   // by Ir_Module.procs index: a foreign one's C function, null until found
     u8 *proc_base;               // INTERP_PROC_RANGE reserved bytes (os_reserve_inaccessible)
     u8 *stack, *stack_end;       // the data stack, RIG_STACK_SIZE bytes
     u8 *top;                     // its first free byte
+    // A C call's arguments, gathered afresh for each call (interp_c_argument)
+    // in arrays kept from one to the next, and the thunk's stack arguments.
+    Array<Ir_Type> c_types;
+    Array<Ir_Ext> c_exts;
+    Array<u64> c_values;
+    Array<u64> c_stack;
 };
 
 // ---------------------------------------------------------------------------
@@ -193,7 +202,7 @@ static void interp_store(u8 *at, u64 v, Ir_Type t) {
 }
 
 // ---------------------------------------------------------------------------
-// Procedures and globals
+// Procedures
 
 static u64 interp_align_up(u64 x, u64 align) {
     return (x + align - 1) & ~(align - 1);
@@ -305,13 +314,85 @@ static bool interp_in_proc_range(Interp *in, u64 address) {
     return address >= base && address - base < INTERP_PROC_RANGE;
 }
 
+// ---------------------------------------------------------------------------
+// Calling C
+
+// Foreign procedure k's C function, found by its name the first time it's
+// needed and kept: the compiler's own copy of a standard C function
+// (interp_c_library_function, on Windows), or else the system's
+// (os_find_c_function). Null when neither has it, which isn't kept, so a
+// later run looks again.
+static void *interp_c_function(Interp *in, s32 k) {
+    void *f = in->c_functions[k];
+    if (f) return f;
+    Ir_Proc *p = in->module->procs[k];
+    RIG_ASSERT(p->is_foreign);
+    f = interp_c_library_function(p->name);
+    if (!f) f = os_find_c_function(p->name);
+    in->c_functions[k] = f;
+    return f;
+}
+
+// The failure of a foreign procedure whose C function is nowhere, in `a`.
+static String interp_not_in_c(Arena *a, String name) {
+    return string_printf(a, "'" STR_FMT "' isn't in the C library at compile time", STR_ARG(name));
+}
+
+// Starts gathering a C call's arguments.
+static void interp_c_start(Interp *in) {
+    in->c_types.count = 0;
+    in->c_exts.count = 0;
+    in->c_values.count = 0;
+}
+
+// Adds argument k of a C call of `callee` (a foreign procedure, or an
+// indirect call's signature), whose value has type value_type. An argument
+// of a fixed parameter goes as the parameter types it, with its extension
+// (which thunk_place applies on SysV); one past them, a variadic call's,
+// goes as its value's type says, one of C's promoted types already
+// (lowering converts it): i32, i64, f64 or ptr.
+static void interp_c_argument(Interp *in, Ir_Proc *callee, s64 k, u64 value, Ir_Type value_type) {
+    Ir_Type type = value_type;
+    Ir_Ext ext = IR_EXT_NONE;
+    if (k < callee->params.count) {
+        type = callee->params[k].type;
+        ext = callee->params[k].ext;
+    }
+    array_add(&in->c_types, type);
+    array_add(&in->c_exts, ext);
+    array_add(&in->c_values, interp_truncate(value, type));
+}
+
+// Calls the C function at `target` with the arguments gathered, through the
+// thunk, and gives its result's canonical bits in *out, as type `result`
+// (0 for IR_VOID). False, with nothing called, when an argument is a Rig
+// procedure's value, which C would call and fault on, or keep and call
+// later (interp.h). A procedure value is a ptr, through a procedure type or
+// a *void alike, so only pointers are looked at: an integer, a count or a
+// size, may lie in the range by chance.
+static bool interp_call_c(Interp *in, void *target, Ir_Type result, u64 *out) {
+    for (s64 k = 0; k < in->c_values.count; k++) {
+        if (in->c_types[k] == IR_PTR && interp_in_proc_range(in, in->c_values[k])) return false;
+    }
+    Thunk_Call call = {};
+    call.target = target;
+    thunk_place(&call, in->c_types.data, in->c_exts.data, in->c_values.data, in->c_values.count, &in->c_stack);
+    rig_thunk_call(&call);
+    *out = thunk_result(&call, result);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Globals
+
 // Maps the globals the module gained since the last run, in two passes as
 // the backend makes them: each allocated first, then the relocations
 // written, since one may name any global, a later one too. Every global is
 // writable here, a string literal's too, which the compiled program keeps
 // read-only. False, with nothing mapped, when a relocation can't be
-// written: its message in *error.
-static bool interp_map_globals(Interp *in, String *error) {
+// written, as it names a C function that is nowhere: its message in *error,
+// in `a`.
+static bool interp_map_globals(Interp *in, Arena *a, String *error) {
     Ir_Module *m = in->module;
     s64 first = in->globals.count;
     for (s64 i = first; i < m->globals.count; i++) {
@@ -343,9 +424,14 @@ static bool interp_map_globals(Interp *in, String *error) {
             if (!reloc->is_proc) {
                 address = (u64)in->globals[reloc->global];
             } else if (m->procs[reloc->global]->is_foreign) {
-                *error = str(INTERP_NO_C);
-                in->globals.count = first;  // the arena keeps their bytes until interp_free
-                return false;
+                // A C function's value is its native address.
+                void *f = interp_c_function(in, reloc->global);
+                if (!f) {
+                    *error = interp_not_in_c(a, m->procs[reloc->global]->name);
+                    in->globals.count = first;  // the arena keeps their bytes until interp_free
+                    return false;
+                }
+                address = (u64)f;
             } else {
                 address = interp_proc_address(in, reloc->global);
             }
@@ -417,32 +503,70 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
             break;
         case IR_ADDR: v[instr->result] = (u64)in->globals.data[instr->target]; break;
         case IR_PROC_ADDR:
+            // A C function's value is its native address, a Rig
+            // procedure's the address standing for it.
             if (m->procs.data[instr->target]->is_foreign) {
-                interp_fail(in, frame, block, index, a, result, str(INTERP_NO_C));
-                return;
+                void *f = interp_c_function(in, instr->target);
+                if (!f) {
+                    interp_fail(in, frame, block, index, a, result,
+                                interp_not_in_c(a, m->procs.data[instr->target]->name));
+                    return;
+                }
+                v[instr->result] = (u64)f;
+            } else {
+                v[instr->result] = interp_proc_address(in, instr->target);
             }
-            v[instr->result] = interp_proc_address(in, instr->target);
             break;
         case IR_CALL:
         case IR_CALL_INDIRECT: {
             // A Rig procedure, called directly or through its value: a new
             // frame, its parameters the arguments, and its first
-            // instruction next. Anything else is C.
+            // instruction next. A foreign procedure, or an address outside
+            // the Rig procedures' range, is C: called through the thunk,
+            // in this frame.
             s32 callee = instr->target;
+            void *c_function = nullptr;
             if (instr->op == IR_CALL_INDIRECT) {
                 u64 address = v[instr->a];
                 if (!interp_in_proc_range(in, address)) {
-                    interp_fail(in, frame, block, index, a, result, str(INTERP_NO_C));
-                    return;
-                }
-                callee = interp_proc_at(in, address);
-                if (callee < 0) {
-                    interp_fail(in, frame, block, index, a, result, str("call of an address that isn't a procedure"));
-                    return;
+                    c_function = (void *)address;
+                } else {
+                    callee = interp_proc_at(in, address);
+                    if (callee < 0) {
+                        interp_fail(in, frame, block, index, a, result,
+                                    str("call of an address that isn't a procedure"));
+                        return;
+                    }
                 }
             } else if (m->procs.data[callee]->is_foreign) {
-                interp_fail(in, frame, block, index, a, result, str(INTERP_NO_C));
-                return;
+                c_function = interp_c_function(in, callee);
+                if (!c_function) {
+                    interp_fail(in, frame, block, index, a, result, interp_not_in_c(a, m->procs.data[callee]->name));
+                    return;
+                }
+            }
+            if (c_function) {
+                // The arguments as the callee types them, the extra ones
+                // of a variadic call by their values' types (the running
+                // procedure's Interp_Proc, made before its frame was
+                // pushed). C gives one result at most (7.6); a call
+                // through a value cast from another type may expect more,
+                // which are 0 here, as a Rig procedure's missing results
+                // are.
+                Ir_Proc *q = instr->op == IR_CALL ? m->procs.data[callee] : instr->signature;
+                Ir_Type *types = in->procs.data[frame->proc]->value_types;
+                interp_c_start(in);
+                for (s64 k = 0; k < instr->args.count; k++) {
+                    s32 arg = instr->args.data[k];
+                    interp_c_argument(in, q, k, v[arg], types[arg]);
+                }
+                u64 r;
+                if (!interp_call_c(in, c_function, q->results.count ? q->results.data[0].type : IR_VOID, &r)) {
+                    interp_fail(in, frame, block, index, a, result, str(INTERP_RIG_TO_C));
+                    return;
+                }
+                for (s64 k = 0; k < q->results.count; k++) v[instr->result + k] = k == 0 ? r : 0;
+                break;
             }
             Interp_Record *next = interp_push(in, frame, callee, interp_proc_info(in, callee));
             if (!next) {
@@ -705,6 +829,11 @@ void interp_free(Interp *in) {
     arena_free(&in->memory);
     array_free(&in->globals);
     array_free(&in->procs);
+    array_free(&in->c_functions);
+    array_free(&in->c_types);
+    array_free(&in->c_exts);
+    array_free(&in->c_values);
+    array_free(&in->c_stack);
     os_release_inaccessible(in->proc_base, INTERP_PROC_RANGE);
     free(in->stack);
     free(in);
@@ -724,17 +853,30 @@ void interp_run(Interp *in, s32 proc, Array<u64> args, Arena *a, Interp_Result *
         return;
     }
     while (in->procs.count < m->procs.count) array_add(&in->procs, nullptr);
-    String error = {};
-    if (!interp_map_globals(in, &error)) {
-        result->message = string_copy(a, error);
-        return;
-    }
+    while (in->c_functions.count < m->procs.count) array_add(&in->c_functions, nullptr);
+    if (!interp_map_globals(in, a, &result->message)) return;
     Ir_Proc *p = m->procs[proc];
+    RIG_ASSERT(args.count == p->params.count);
     if (p->is_foreign) {
-        result->message = string_copy(a, str(INTERP_NO_C));
+        // A C function run by itself: called with the arguments as its
+        // parameters type them, and no frames to fail in, as there's no
+        // Rig procedure around it.
+        void *f = interp_c_function(in, proc);
+        if (!f) {
+            result->message = interp_not_in_c(a, p->name);
+            return;
+        }
+        interp_c_start(in);
+        for (s64 k = 0; k < args.count; k++) interp_c_argument(in, p, k, args[k], p->params[k].type);
+        u64 r;
+        if (!interp_call_c(in, f, p->results.count ? p->results[0].type : IR_VOID, &r)) {
+            result->message = string_copy(a, str(INTERP_RIG_TO_C));
+            return;
+        }
+        for (s64 k = 0; k < p->results.count; k++) array_add(&result->results, k == 0 ? r : 0);
+        result->ok = true;
         return;
     }
-    RIG_ASSERT(args.count == p->params.count);
     // Each run starts on an empty stack: what the last one's results
     // pointed into is gone now.
     in->top = in->stack;
