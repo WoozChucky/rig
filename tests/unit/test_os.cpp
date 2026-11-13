@@ -1,7 +1,7 @@
 // test_os.cpp: the operating system layer (issue #4). The process tests run
 // this same program, bin/unit-tests, with the helper flags of unit.cpp
 // (--echo-args, --echo-stdin, --cwd, --fail-with, --interleave, --spam,
-// --sleep, --close-and-sleep, --spawn-sleeper).
+// --sleep, --close-and-sleep, --spawn-sleeper, --touch-reserved).
 
 #include "test.h"
 
@@ -434,7 +434,7 @@ TEST(the_tests_run_on_the_compilers_stack) {
 TEST(os_reserve_inaccessible_gives_untouchable_addresses) {
     // Addresses reserved and never made accessible (issue #114: the range
     // the interpreter takes a Rig procedure's value from). That touching
-    // them faults isn't tested: it would end this process.
+    // them faults is the next test's: it would end this process.
     const u64 SIZE = 1024 * 1024;
     u8 *first = (u8 *)os_reserve_inaccessible(SIZE);
     CHECK(first != nullptr);
@@ -447,4 +447,26 @@ TEST(os_reserve_inaccessible_gives_untouchable_addresses) {
     void *second = os_reserve_inaccessible(SIZE);
     CHECK(second != nullptr);
     if (second) os_release_inaccessible(second, SIZE);
+}
+
+TEST(touching_reserved_addresses_faults) {
+    // A child reads a byte of a reservation and dies of it: an access
+    // violation on Windows, SIGSEGV on Linux (os_run's 128 + the signal). A
+    // reservation that could be read, plain memory, would print "survived"
+    // and exit 0; then a Rig procedure's value C read through would give
+    // bytes instead of stopping it.
+    Arena a = arena_make();
+    Array<String> argv = {};
+    array_add(&argv, unit_tests_path(&a));
+    array_add(&argv, str("--touch-reserved"));
+    Process_Result result = {};
+    CHECK(os_run(&a, argv, &result));
+#ifdef _WIN32
+    CHECK_EQ(result.exit_code, (s32)EXCEPTION_ACCESS_VIOLATION);
+#else
+    CHECK_EQ(result.exit_code, 128 + SIGSEGV);
+#endif
+    CHECK_STR(result.out, "");
+    array_free(&argv);
+    arena_free(&a);
 }

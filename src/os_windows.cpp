@@ -514,7 +514,6 @@ void *os_reserve_inaccessible(u64 size) {
 }
 
 // MEM_RELEASE frees the whole reservation, and takes a size of 0.
-void os_release_inaccessible(void *p, u64 size) {
-    (void)size;
+void os_release_inaccessible(void *p, [[maybe_unused]] u64 size) {
     VirtualFree(p, 0, MEM_RELEASE);
 }

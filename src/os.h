@@ -1,10 +1,11 @@
-// os.h: what Rig needs from the operating system: files, directories, and
-// running other programs (the linker, the tests' programs). One interface,
-// two implementations: os_windows.cpp and os_linux.cpp; all.cpp includes the
+// os.h: what Rig needs from the operating system: files, directories,
+// running other programs (the linker, the tests' programs), the compiler's
+// stack, and address space for compile-time execution. One interface, two
+// implementations: os_windows.cpp and os_linux.cpp; all.cpp includes the
 // host's.
 //
 // Paths are UTF-8 Strings on both systems; on Windows either slash works.
-// A function that fails returns false and remembers why, for
+// A function that fails returns false (or null) and remembers why, for
 // os_error_message.
 
 #pragma once
