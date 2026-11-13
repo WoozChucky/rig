@@ -5,6 +5,7 @@
     "version": "0.2.0",
     "publisher": "woozchucky",
     "license": "MIT",
+    "homepage": "https://woozchucky.github.io/rig/",
     "repository": {
         "type": "git",
         "url": "https://github.com/WoozChucky/rig"
