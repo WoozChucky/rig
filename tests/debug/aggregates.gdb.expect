@@ -4,17 +4,22 @@ p := Pair.{n, n + 1};
 main () at
 aggregates.rig:46
 q := make(5);
+Value returned is $1 = {a = 5, b = 6}
 little (n=7) at
 aggregates.rig:21
 main () at
 aggregates.rig:47
 l := little(7);
+Value returned is $2 = {a = 7, b = 9}
 name (n=1) at
 aggregates.rig:26
 main () at
 aggregates.rig:48
 w := name(1);
-both (n=3) at
+Value returned is $3 = {count = 3, data = 
+"one"}
+both (result$=0x
+n=3) at
 aggregates.rig:31
 main () at
 aggregates.rig:49
@@ -23,7 +28,21 @@ sum (p=...) at
 aggregates.rig:36
 s := p.a + p.b;
 p = {a = 5, b = 6}
-= 6
-= 8
-!Value returned
+$4 = 6
+$5 = 8
+type = struct Pair {
+} (int)
+type = int (Pair)
+type = void (int (*)[2], int)
+main () at
+aggregates.rig:50
+$6 = 11
+$7 = {a = 7, b = 8}
+$8 = {a = 1, b = 3}
+$9 = {count = 5, data = 
+"other"}
+$10 = void
+$11 = {4, 8}
+!Value returned is $4
+!The program being debugged
 !.debug_names not created by gdb

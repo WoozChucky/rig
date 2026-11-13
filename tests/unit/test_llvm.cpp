@@ -973,8 +973,9 @@ static String llvm_escaped(Arena *a, String s) {
 }
 
 TEST(llvm_debug_info_has_a_compile_unit) {
-    // One compile unit, as C99 (whose expression syntax a debugger then
-    // uses, and which suits Rig's), produced by "rig 0.1.0 (LLVM X.Y.Z)",
+    // One compile unit, as C99 on Windows and C++14 in DWARF (whose
+    // expression syntax a debugger then uses, and which suits Rig's; C++ for
+    // gdb to honour a type passed by reference), produced by "rig 0.1.0 (LLVM X.Y.Z)",
     // the LLVM rig is linked with (issue #104: no "clang", which nothing
     // needs). The file is the source's absolute path, in the directory rig
     // ran in, with its MD5. Module flags say which debug information LLVM
@@ -987,7 +988,8 @@ TEST(llvm_debug_info_has_a_compile_unit) {
     for (int t = 0; t < 2; t++) {
         Target target = (Target)t;
         String text = llvm_text(&a, m, target);
-        CHECK(contains(text, "!DICompileUnit(language: DW_LANG_C99"));
+        CHECK(contains(text, target == TARGET_WINDOWS_X64 ? "!DICompileUnit(language: DW_LANG_C99"
+                                                          : "!DICompileUnit(language: DW_LANG_C_plus_plus_14"));
         CHECK(contains(text, string_cstr(&a, producer)));
         CHECK(contains(text, "isOptimized: false"));
         CHECK(contains(text, "emissionKind: FullDebug"));
@@ -1054,10 +1056,12 @@ TEST(llvm_debug_file_names_keep_a_share) {
 }
 
 TEST(llvm_procedures_have_subprograms) {
-    // Each Rig procedure is a subprogram named as in the source, with no
-    // linkage name: LLVM renamed the Rig memset memset.1 (C's memset was
-    // declared first, for the struct's zeroing), and a debugger must still
-    // call it memset. The procedures the compiler makes have none.
+    // Each Rig procedure is a subprogram named as in the source, and its
+    // linkage name, in DWARF, is that name too, never the symbol's: LLVM
+    // renamed the Rig memset memset.1 (C's memset was declared first, for
+    // the struct's zeroing), and a debugger must still call it memset. In
+    // CodeView none has a linkage name. The procedures the compiler makes
+    // have no subprogram.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "Point :: struct { x: int; y: int; }\n"
@@ -1072,9 +1076,15 @@ TEST(llvm_procedures_have_subprograms) {
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);
         CHECK(contains(text, "define internal void @memset.1() #"));
-        CHECK(contains(text, "!DISubprogram(name: \"memset\", scope: "));
-        CHECK(contains(text, "!DISubprogram(name: \"get\", scope: "));
-        CHECK(!contains(text, "linkageName"));
+        if ((Target)t == TARGET_WINDOWS_X64) {
+            CHECK(contains(text, "!DISubprogram(name: \"memset\", scope: "));
+            CHECK(contains(text, "!DISubprogram(name: \"get\", scope: "));
+            CHECK(!contains(text, "linkageName"));
+        } else {
+            CHECK(contains(text, "!DISubprogram(name: \"memset\", linkageName: \"memset\", scope: "));
+            CHECK(contains(text, "!DISubprogram(name: \"get\", linkageName: \"get\", scope: "));
+            CHECK(!contains(text, "linkageName: \"memset.1\""));
+        }
         // main: exported, so not local to the unit; its line and its body's.
         String main = line_with(text, "!DISubprogram(name: \"main\"");
         CHECK(contains(main, "line: 6, "));
@@ -1499,14 +1509,16 @@ TEST(llvm_variables_are_declared) {
             CHECK(contains(text, string_cstr(&a, string_printf(&a, "\n  " STR_FMT " = zext i1 %%",
                                                                 STR_ARG(stored)))));
         }
-        // sum's type: its result's, then its parameters', int, a pointer to
-        // []int (how the view is passed), int, bool.
+        // sum's type: its result's, then its parameters', int, []int (a type
+        // passed by reference in DWARF; a pointer to it in CodeView), int,
+        // bool.
         String type = node_line(&a, text, attached(&a, line_with(text, "!DISubprogram(name: \"sum\""), "type:"));
         String types = node_line(&a, text, attached(&a, type, "types:"));
         String integer = defined_node(line_with(text, "!DIBasicType(name: \"int\""));
         String boolean = defined_node(line_with(text, "!DIBasicType(name: \"bool\""));
+        String passed = (Target)t == TARGET_WINDOWS_X64 ? pointer_node(&a, text, view) : view;
         String list = string_printf(&a, " = !{" STR_FMT ", " STR_FMT ", " STR_FMT ", " STR_FMT "}", STR_ARG(integer),
-                                    STR_ARG(pointer_node(&a, text, view)), STR_ARG(integer), STR_ARG(boolean));
+                                    STR_ARG(passed), STR_ARG(integer), STR_ARG(boolean));
         CHECK(contains(types, string_cstr(&a, list)));
         // main returns nothing in Rig, so its type's first is null.
         type = node_line(&a, text, attached(&a, line_with(text, "!DISubprogram(name: \"main\""), "type:"));
@@ -1515,43 +1527,60 @@ TEST(llvm_variables_are_declared) {
     arena_free(&a);
 }
 
+// The source of the tests of procedures taking and returning aggregates.
+static const char *AGGREGATE_CALLS = "Pair :: struct { a: int; b: int; }\n"
+                                     "make :: (n: int) -> Pair { return Pair.{n, n}; }\n"
+                                     "sum :: (p: Pair, s: string) -> int { return p.a; }\n"
+                                     "both :: (n: int) -> Pair, int { return Pair.{n, n}, n; }\n"
+                                     "twice :: (n: int) -> int, int { return n, n; }\n"
+                                     "pairs :: (n: [2]int) -> Pair, Pair { return Pair.{1, 2}, Pair.{3, 4}; }\n"
+                                     "row :: (n: int) -> [2]int { return .[n, n]; }\n"
+                                     "main :: () {\n"
+                                     "    q := make(1);\n"
+                                     "    r := row(2);\n"
+                                     "    b, i := both(3);\n"
+                                     "}\n";
+
 TEST(llvm_procedure_types_say_how_they_are_called) {
-    // A procedure's debug type is how it's called (spec 10.4), not how C
-    // would pass the same types: an aggregate parameter is a pointer to the
-    // caller's copy, and an aggregate result a hidden pointer parameter
-    // before the visible ones, so the procedure returns its one scalar
-    // result, or nothing. With several scalar results it returns nothing a
-    // C type describes, so none either.
+    // A procedure's debug type is how it's called (spec 10.4), each format
+    // its own way (begin_procedure_debug_info). In DWARF a struct or a
+    // string parameter is of its own type, passed by reference, and so is
+    // the result when it's the only one; an array parameter is the array
+    // (which C passes by its address). In CodeView an aggregate parameter
+    // is a pointer to the caller's copy. Every other aggregate result, in
+    // DWARF an array result or one of several, and in CodeView every one,
+    // is a hidden pointer parameter before the visible ones, and the
+    // procedure returns its one scalar result, or nothing. With several
+    // scalar results it returns nothing a C type describes, so none either.
     Arena a = arena_make();
-    Ir_Module *m = lower_source(&a,
-                                "Pair :: struct { a: int; b: int; }\n"
-                                "make :: (n: int) -> Pair { return Pair.{n, n}; }\n"
-                                "sum :: (p: Pair, s: string) -> int { return p.a; }\n"
-                                "both :: (n: int) -> Pair, int { return Pair.{n, n}, n; }\n"
-                                "twice :: (n: int) -> int, int { return n, n; }\n"
-                                "pairs :: (n: [2]int) -> Pair, Pair { return Pair.{1, 2}, Pair.{3, 4}; }\n"
-                                "main :: () { }\n");
+    Ir_Module *m = lower_source(&a, AGGREGATE_CALLS);
     for (int t = 0; t < 2; t++) {
+        bool windows = (Target)t == TARGET_WINDOWS_X64;
         String text = llvm_text(&a, m, (Target)t);
         String integer = defined_node(line_with(text, "!DIBasicType(name: \"int\""));
         String pair = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Pair\""));
         String string = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"string\""));
         String array = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_array_type, baseType: "));
         String to_pair = pointer_node(&a, text, pair);
-        CHECK(integer.count > 0 && pair.count > 0 && string.count > 0 && array.count > 0 && to_pair.count > 0);
+        String to_array = pointer_node(&a, text, array);
+        CHECK(integer.count > 0 && pair.count > 0 && string.count > 0 && array.count > 0 && to_pair.count > 0 &&
+              to_array.count > 0);
         struct Expected {
             const char *name;
             String types;  // the list's elements
         };
         Expected expected[] = {
-            {"make", string_printf(&a, "null, " STR_FMT ", " STR_FMT, STR_ARG(to_pair), STR_ARG(integer))},
-            {"sum", string_printf(&a, STR_FMT ", " STR_FMT ", " STR_FMT, STR_ARG(integer), STR_ARG(to_pair),
-                                  STR_ARG(pointer_node(&a, text, string)))},
+            {"make", windows ? string_printf(&a, "null, " STR_FMT ", " STR_FMT, STR_ARG(to_pair), STR_ARG(integer))
+                             : string_printf(&a, STR_FMT ", " STR_FMT, STR_ARG(pair), STR_ARG(integer))},
+            {"sum", string_printf(&a, STR_FMT ", " STR_FMT ", " STR_FMT, STR_ARG(integer),
+                                  STR_ARG(windows ? to_pair : pair),
+                                  STR_ARG(windows ? pointer_node(&a, text, string) : string))},
             {"both", string_printf(&a, STR_FMT ", " STR_FMT ", " STR_FMT, STR_ARG(integer), STR_ARG(to_pair),
                                    STR_ARG(integer))},
             {"twice", string_printf(&a, "null, " STR_FMT, STR_ARG(integer))},
             {"pairs", string_printf(&a, "null, " STR_FMT ", " STR_FMT ", " STR_FMT, STR_ARG(to_pair), STR_ARG(to_pair),
-                                    STR_ARG(pointer_node(&a, text, array)))},
+                                    STR_ARG(windows ? to_array : array))},
+            {"row", string_printf(&a, "null, " STR_FMT ", " STR_FMT, STR_ARG(to_array), STR_ARG(integer))},
         };
         for (Expected &e : expected) {
             String subprogram =
@@ -1564,6 +1593,111 @@ TEST(llvm_procedure_types_say_how_they_are_called) {
             }
             CHECK(contains(types, string_cstr(&a, list)));
         }
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_structs_views_and_strings_are_passed_by_reference) {
+    // A struct, a view and a string are debug types passed by reference
+    // (DW_CC_pass_by_reference in DWARF), as Rig passes and returns them; an
+    // array, which DWARF gives no calling convention, isn't marked.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Pair :: struct { a: int; b: int; }\n"
+                                "main :: () {\n"
+                                "    p: Pair;\n"
+                                "    v: []int;\n"
+                                "    s := \"hi\";\n"
+                                "    r: [2]int;\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        const char *names[] = {"Pair", "[]int", "string"};
+        for (const char *name : names) {
+            String type = line_with(
+                text,
+                string_cstr(&a, string_printf(&a, "!DICompositeType(tag: DW_TAG_structure_type, name: \"%s\"", name)));
+            if (!contains(type, "flags: DIFlagTypePassByReference")) printf("    " STR_FMT "\n", STR_ARG(type));
+            CHECK(contains(type, "flags: DIFlagTypePassByReference"));
+        }
+        String array = line_with(text, "!DICompositeType(tag: DW_TAG_array_type, ");
+        CHECK(array.count > 0);
+        CHECK(!contains(array, "flags:"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_one_aggregate_result_is_returned_as_c_returns_a_struct) {
+    // The hidden pointer of a procedure whose one result is an aggregate is
+    // sret, on its definition and at every call, so LLVM returns it in rax
+    // too, as C returns a struct in memory, where gdb's `finish` finds the
+    // value. With several results, none is.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, AGGREGATE_CALLS);
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "define internal void @make(ptr sret([16 x i8]) %0, i64 %1)"));
+        CHECK(contains(text, "define internal void @row(ptr sret([16 x i8]) %0, i64 %1)"));
+        CHECK(contains(text, "call void @make(ptr sret([16 x i8]) %"));
+        CHECK(contains(text, "call void @row(ptr sret([16 x i8]) %"));
+        CHECK(contains(text, "define internal i64 @both(ptr %0, i64 %1)"));
+        CHECK(contains(text, "define internal void @pairs(ptr %0, ptr %1, ptr %2)"));
+        CHECK(contains(text, "call i64 @both(ptr %"));
+        CHECK(count_of(text, "sret(") == 4);
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_result_pointers_are_parameters) {
+    // A hidden result pointer the procedure's type shows (in CodeView every
+    // one, in DWARF an array result's and each of several results') is an
+    // artificial parameter variable, result$ (result$1, result$2, ... for
+    // several), a pointer to the result's type, declared on a slot the
+    // pointer is stored into. The visible parameters come after them, and
+    // count them.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, AGGREGATE_CALLS);
+    for (int t = 0; t < 2; t++) {
+        bool windows = (Target)t == TARGET_WINDOWS_X64;
+        String text = llvm_text(&a, m, (Target)t);
+        String pair = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Pair\""));
+        String array = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_array_type, baseType: "));
+        struct Expected {
+            const char *procedure;
+            const char *name;  // the variable's
+            int arg;
+            String points_at;
+        };
+        Expected expected[] = {
+            {"make", "result$", 1, pair},   {"row", "result$", 1, array},   {"both", "result$", 1, pair},
+            {"pairs", "result$1", 1, pair}, {"pairs", "result$2", 2, pair},
+        };
+        for (Expected &e : expected) {
+            String procedure = defined_node(
+                line_with(text, string_cstr(&a, string_printf(&a, "!DISubprogram(name: \"%s\"", e.procedure))));
+            String variable = line_with(
+                text, string_cstr(&a, string_printf(&a, "!DILocalVariable(name: \"%s\", arg: %d, scope: " STR_FMT ",",
+                                                    e.name, e.arg, STR_ARG(procedure))));
+            if (!windows && strcmp(e.procedure, "make") == 0) {
+                // make returns its Pair by reference in DWARF: no pointer.
+                CHECK(variable.count == 0);
+                continue;
+            }
+            if (variable.count == 0) printf("    no %s in %s\n", e.name, e.procedure);
+            CHECK(variable.count > 0);
+            CHECK(contains(variable, "flags: DIFlagArtificial)"));
+            CHECK(string_eq(attached(&a, variable, "type:"), pointer_node(&a, text, e.points_at)));
+            String declare = string_printf(&a, ", " STR_FMT ", !DIExpression(), !", STR_ARG(defined_node(variable)));
+            CHECK(contains(line_with(text, string_cstr(&a, declare)), "#dbg_declare(ptr %"));
+        }
+        String make = defined_node(line_with(text, "!DISubprogram(name: \"make\""));
+        String pairs = defined_node(line_with(text, "!DISubprogram(name: \"pairs\""));
+        String n_of_make = string_printf(&a, "!DILocalVariable(name: \"n\", arg: %d, scope: " STR_FMT ",",
+                                         windows ? 2 : 1, STR_ARG(make));
+        String n_of_pairs =
+            string_printf(&a, "!DILocalVariable(name: \"n\", arg: 3, scope: " STR_FMT ",", STR_ARG(pairs));
+        CHECK(contains(text, string_cstr(&a, n_of_make)));
+        CHECK(contains(text, string_cstr(&a, n_of_pairs)));
     }
     arena_free(&a);
 }
