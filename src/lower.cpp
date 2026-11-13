@@ -1817,10 +1817,10 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
         // A declaration that hides a variable (a global, a parameter, an
         // outer local) hides it only from its own end (spec 4.7), but a
         // debugger shows a scope's variables wherever the scope is, all of
-        // it. So, as rustc does, such a declaration starts a scope of its
-        // own inside the current one, made current until the end of the
-        // block (whose lowering then puts the scope around it back), and
-        // the variable is declared in it. Its initializer is lowered first,
+        // it. So such a declaration starts a scope of its own inside the
+        // current one (rustc starts one at every let), made current until
+        // the end of the block (whose lowering then puts the scope around
+        // it back), and the variable is declared in it. Its initializer is lowered first,
         // in the scope around: it may read the name it hides (x := x + 1),
         // and before the store, a debugger shows the outer variable. A
         // declaration hiding nothing is in the block's scope, as in C.
