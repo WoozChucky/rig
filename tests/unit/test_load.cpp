@@ -239,12 +239,14 @@ TEST(load_order_is_breadth_first) {
 
 TEST(load_missing_file) {
     // At the #load's string, in the file holding it, with the system's
-    // reason. Once: the second #load names the same file, known by its
-    // path, as it has no id.
+    // reason. Once: the later #loads name the same file, known by its path,
+    // as it has no id, written with a '.', a '..' or a doubled separator.
     Arena a = arena_make();
     Diagnostics d = {};
     String dir = load_test_directory(&a, "load_missing_file");
-    write_source(&a, dir, "main.rig", "#load \"nope.rig\";\nmain :: () {}\n#load \"./nope.rig\";\n");
+    write_source(&a, dir, "main.rig",
+                 "#load \"nope.rig\";\nmain :: () {}\n#load \"./nope.rig\";\n#load \"sub/../nope.rig\";\n"
+                 "#load \".//nope.rig\";\n");
     Ast_File *tree = load_main(&a, &d, dir);
     CHECK_EQ(d.files.count, 1);
     CHECK_EQ(d.messages.count, 1);
@@ -286,6 +288,29 @@ TEST(load_missing_file_in_another_case) {
     diag_free(&d);
     arena_free(&a);
 }
+
+#ifndef _WIN32
+TEST(load_missing_file_through_a_link) {
+    // A file that isn't there has no id, so it's known by its path alone: a
+    // link to it, gone.rig, is another file, reported again.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_missing_file_through_a_link");
+    String link = str(in_directory(&a, dir, "gone.rig"));
+    unlink(string_cstr(&a, link));
+    CHECK(symlink("nope.rig", string_cstr(&a, link)) == 0);
+    write_source(&a, dir, "main.rig", "#load \"nope.rig\";\n#load \"gone.rig\";\n");
+    load_main(&a, &d, dir);
+    CHECK_EQ(d.files.count, 1);
+    CHECK_EQ(d.messages.count, 2);
+    if (d.messages.count == 2) {
+        check_cannot_read(&a, &d.messages[0], 0, 1, 7, str(in_directory(&a, dir, "nope.rig")));
+        check_cannot_read(&a, &d.messages[1], 0, 2, 7, link);
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
+#endif
 
 TEST(load_a_directory) {
     // d.rig is a directory: a .rig file by its name, with an id as any file
@@ -486,11 +511,12 @@ TEST(load_failure_loses_a_file) {
     // zero byte; a #load with no string, its quotes forgotten or never
     // closed, which names no file the parser could keep; and one in a body,
     // among a struct's fields, after a signature or where a ';' should be,
-    // which only the top level can have. So does a loaded file's #load that
-    // fails. A file
-    // loaded twice, the main file loaded back, a syntax error in a loaded
-    // file, a #load missing only its ';', or one in column 1 at the end of a
-    // body never closed (read again at the top level) loses nothing.
+    // which only the top level can have, reported or passed over with a body
+    // given up after another error, in column 1 or not. So does a loaded
+    // file's #load that fails. A file loaded twice, the main file loaded
+    // back, a syntax error in a loaded file, a #load missing only its ';', or
+    // one in column 1 at the end of a body never closed (read again at the
+    // top level) loses nothing.
     Arena a = arena_make();
     String dir = load_test_directory(&a, "load_failure_loses_a_file");
     CHECK(os_make_directory(str(in_directory(&a, dir, "d.rig"))));
@@ -518,6 +544,8 @@ TEST(load_failure_loses_a_file) {
         {"f :: () #load \"b.rig\"; {}\n", true},
         {"main :: () {\n    x := 1 #load \"b.rig\";\n}\n", true},
         {"N :: 1 #load \"b.rig\";\n", true},
+        {"main :: () {\n    x := ;\n#load \"b.rig\";\n}\n", true},
+        {"main :: () {\n    x := ;\n    #load \"b.rig\";\n}\n", true},
         {"#load \"b.rig\";\n#load \"./b.rig\";\n#load \"main.rig\";\n", false},
         {"#load \"broken.rig\";\n", false},
         {"#load \"b.rig\"\n", false},
