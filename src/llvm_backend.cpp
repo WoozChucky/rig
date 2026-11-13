@@ -1138,19 +1138,19 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
 // The records go at the end of the entry block, before any of its code:
 // the builder is there, after the hoisted allocas (build_body).
 //
-// - A local, an iterator or it_index (IR_VAR_SLOT) lives in its own slot.
-// - A scalar parameter (IR_VAR_VALUE) is a value, which arrives in a
-//   register, and a register is soon used for something else (gdb would
-//   say <optimized out>). So, as clang does at -O0, it's stored into a slot
-//   of its own (a bool as its byte, memory_type), and declared there, a
-//   parameter variable with its place among the parameters (ArgNo).
+// - A local, an iterator, it_index or a scalar parameter (IR_VAR_SLOT)
+//   lives in its own slot: lowering stores a parameter there on entry and
+//   reads it from there, as clang does at -O0, so the slot is where the
+//   program itself keeps it. A parameter's is a parameter variable, with
+//   its place among the parameters (ArgNo).
 // - An aggregate parameter (IR_VAR_ADDRESS) is the address of the caller's
-//   copy, which arrives in a register too, so the address is stored into a
-//   slot the same way; the variable is then at the address the slot holds:
-//   the declare's expression is DW_OP_deref, "read the slot, and the
-//   variable is where that points", as clang declares an argument passed
-//   by its address. (Declared on the register's value itself, the location
-//   would last only while the register held it.)
+//   copy, which arrives in a register, and a register is soon used for
+//   something else (gdb would say <optimized out>). So the address is
+//   stored into a slot of its own here; the variable is then at the
+//   address the slot holds: the declare's expression is DW_OP_deref, "read
+//   the slot, and the variable is where that points", as clang declares an
+//   argument passed by its address. (Declared on the register's value
+//   itself, the location would last only while the register held it.)
 //   That is how it's described on Linux, and gdb reads it. On Windows,
 //   LLVM writes a deref'd slot as CodeView's S_DEFRANGE_REGISTER_REL_INDIR
 //   ("at the address held at this offset from the frame pointer"), which
@@ -1163,32 +1163,29 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
 //   LLVM-C makes a reference type without a size, and CodeView would then
 //   call it a 32-bit pointer.) cdb sees a pointer too: `a->count`.
 //
-// The stores run before the body, with no location (the builder has none
-// yet): the prologue ends at the first instruction with a location, and a
-// breakpoint on the procedure stops there, so with the stores before it the
+// Those stores run before the body, with no location (the builder has
+// none yet), as lowering's stores of the scalar parameters have none: the
+// prologue ends at the first instruction with a location, and a breakpoint
+// on the procedure stops there, so with the stores before it the
 // parameters are in their slots when it does.
 static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
     if (!body->scopes) return;
     LLVMContextRef c = b->context;
     LLVMBuilderRef builder = body->builder;
-    // The parameters' slots first, every alloca together at the top, then
-    // the stores into them.
+    // The aggregate parameters' slots first, every alloca together at the
+    // top, then the stores into them.
     LLVMValueRef *storage = arena_new_array<LLVMValueRef>(a, p->vars.count ? p->vars.count : 1);
     for (s64 i = 0; i < p->vars.count; i++) {
         Ir_Var *v = &p->vars[i];
         if (v->kind == IR_VAR_SLOT) {
             storage[i] = value(body, v->value);
         } else {
-            RIG_ASSERT(v->value >= 0 && v->value < p->params.count);
-            storage[i] = LLVMBuildAlloca(builder, memory_type(c, p->params[v->value].type), "");
+            RIG_ASSERT(v->value >= 0 && v->value < p->params.count && p->params[v->value].type == IR_PTR);
+            storage[i] = LLVMBuildAlloca(builder, llvm_type(c, IR_PTR), "");
         }
     }
     for (s64 i = 0; i < p->vars.count; i++) {
-        Ir_Var *v = &p->vars[i];
-        if (v->kind == IR_VAR_SLOT) continue;
-        LLVMValueRef param = value(body, v->value);
-        if (p->params[v->value].type == IR_I1) param = LLVMBuildZExt(builder, param, memory_type(c, IR_I1), "");
-        LLVMBuildStore(builder, param, storage[i]);
+        if (p->vars[i].kind == IR_VAR_ADDRESS) LLVMBuildStore(builder, value(body, p->vars[i].value), storage[i]);
     }
 
     LLVMMetadataRef plain = LLVMDIBuilderCreateExpression(b->debug, nullptr, 0);
