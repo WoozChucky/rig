@@ -782,11 +782,13 @@ function checkSetting(uri) {
 }
 
 // One rig diagnostic ({ line, column, severity, message }, from
-// parseDiagnostics) as VS Code's, in `document`. rig's column counts bytes,
-// VS Code's characters, hence characterOfByteColumn. The range runs from
-// the column to the end of the word there (`putz` in `putz("x")`), or is
-// one character when there's no word (a stray `;`). The document may have
-// changed since rig read it, so the line is kept within it.
+// parseDiagnostics, or otherFilesError's count of the other files' errors,
+// at line 1, column 1) as VS Code's, in `document`. rig's column counts
+// bytes, VS Code's characters, hence characterOfByteColumn. The range runs
+// from the column to the end of the word there (`putz` in `putz("x")`), or
+// is one character when there's no word (a stray `;`, or the '#' of a
+// first line's #load). The document may have changed since rig read it, so
+// the line is kept within it.
 function toDiagnostic(document, d) {
     const line = Math.max(0, Math.min(d.line - 1, document.lineCount - 1));
     const text = document.lineAt(line).text;

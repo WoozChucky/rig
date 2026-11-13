@@ -433,10 +433,11 @@
 // gave up on is a broken entry (parser.h): its name is declared, with an
 // unknown type, and nothing is reported about it or about its uses (a call
 // to it may pass anything). Its body isn't checked: there is none. The
-// checker runs after a #load failed too (load.h): the program then lacks a file, whose
-// declarations are unknown, so a name declared nowhere isn't reported as
-// unknown ("unknown identifier", "unknown type"), nor main as missing
-// (Ast_File.lost_a_file).
+// checker runs after a #load failed too (load.h), or one that named no
+// file or wasn't at the top level (parser.h): the program then lacks a
+// file, whose declarations are unknown, so a name declared nowhere isn't
+// reported as unknown ("unknown identifier", "unknown type"), nor main as
+// missing (Ast_File.lost_a_file).
 
 #pragma once
 
