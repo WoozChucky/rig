@@ -797,6 +797,11 @@ TEST(interp_procedure_values) {
                                 "    }\n"
                                 "    return last_y, last_z;\n"
                                 "}\n"
+                                "wide :: (x: int) -> int { return x + 0x1_0000_0000; }\n"
+                                "narrowed :: () -> s32, bool {\n"
+                                "    f := cast((int) -> s32) cast(*void) wide;\n"
+                                "    return f(5), f(5) == 5;\n"
+                                "}\n"
                                 "main :: () { }\n");
     Interp *in = interp_new(m);
     Interp_Result r = {};
@@ -850,15 +855,28 @@ TEST(interp_procedure_values) {
         CHECK_EQ(r.results[1], 0);
     }
     interp_test_free(&r);
+    // And for a result narrower in the call's type than in the procedure's:
+    // it's cut to the call's width, all the compiled caller reads of its
+    // register, so it's the s32 5, and equal to 5, not 0x1_0000_0005.
+    interp_test_run(in, m, "narrowed", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 2);
+    if (r.results.count == 2) {
+        CHECK_EQ(r.results[0], 5);
+        CHECK_EQ(r.results[1], 1);
+    }
+    interp_test_free(&r);
     // Each Rig procedure's address is where spec 10.8 puts it, procedure
     // k at 16 x k bytes past the reserved range's start (16 written out, the
     // spec's number, not INTERP_PROC_STRIDE), and maps back to it, and
     // nothing else does: not null, not an address between two, not one past
-    // the module's procedures, not a native one.
+    // the module's procedures, not a native one. The range starts at
+    // procedure 0's address, add's.
+    u64 base = interp_proc_address(in, 0);
     for (s32 k = 0; k < (s32)m->procs.count; k++) {
         u64 address = interp_proc_address(in, k);
         CHECK(address != 0);
-        CHECK_EQ(address, (u64)in->proc_base + 16 * (u64)k);
+        CHECK_EQ(address, base + 16 * (u64)k);
         CHECK_EQ(address % 16, 0);
         CHECK_EQ(interp_proc_at(in, address), k);
         CHECK_EQ(interp_proc_at(in, address + 1), -1);
@@ -867,7 +885,19 @@ TEST(interp_procedure_values) {
     CHECK_EQ(interp_proc_at(in, interp_proc_address(in, 0) + INTERP_PROC_STRIDE * (u64)m->procs.count), -1);
     CHECK_EQ(interp_proc_at(in, 0), -1);
     CHECK_EQ(interp_proc_at(in, (u64)(uintptr_t)&r), -1);
+    // Torn down, the interpreter gives its range back, or each Interp would
+    // leak its addresses (#115's #run will make them per compile). Asked as
+    // os_reserve_inaccessible_gives_untouchable_addresses asks.
     interp_free(in);
+    u8 *range = (u8 *)(uintptr_t)base;
+#ifdef _WIN32
+    MEMORY_BASIC_INFORMATION info = {};
+    CHECK(VirtualQuery(range, &info, sizeof info) == sizeof info);
+    CHECK_EQ(info.State, MEM_FREE);
+#else
+    unsigned char resident;
+    CHECK(mincore(range, 1, &resident) == -1 && errno == ENOMEM);
+#endif
     arena_free(&a);
 }
 

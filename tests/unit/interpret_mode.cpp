@@ -73,9 +73,12 @@ static void interpret_mode(void *data) {
         return;
     }
 
-    // As rig build's read_and_check (driver.cpp), with one more step: the
-    // diagnostics are freed once the program is lowered, so the paths of
-    // its files, which a failure's frames name by index, are copied first.
+    // A copy of rig build's read_and_check (driver.cpp), which must follow
+    // its changes: when #load comes (#112), this reads the files a program
+    // loads too, through load_program, as read_and_check will. It can't call
+    // read_and_check, which frees the diagnostics, and with them the paths
+    // of the program's files, which a failure's frames name by index; so it
+    // has one more step: the paths are copied before the diagnostics go.
     Diagnostics d = {};
     s32 source = diag_add_file(&d, path, text);
     diag_locate_file(&d, source, os_current_directory(&a), target_host() == TARGET_WINDOWS_X64);
