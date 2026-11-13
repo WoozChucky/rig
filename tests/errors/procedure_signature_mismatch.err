@@ -1,0 +1,15 @@
+tests/errors/procedure_signature_mismatch.rig:10:12: error: a value of type '(int) -> int' doesn't convert to '(int, int) -> int' implicitly
+        return neg;
+               ^
+tests/errors/procedure_signature_mismatch.rig:14:24: error: a value of type '(int, int) -> int' doesn't convert to '(int) -> int' implicitly
+        f : (int) -> int = add;
+                           ^
+tests/errors/procedure_signature_mismatch.rig:16:9: error: a value of type '(int, int) -> int' doesn't convert to '(int) -> int' implicitly
+        g = add;
+            ^
+tests/errors/procedure_signature_mismatch.rig:17:11: error: argument 1 of 'apply' has type '(int) -> int', which can't be converted to '(int, int) -> int'
+        apply(neg, 1);
+              ^
+tests/errors/procedure_signature_mismatch.rig:18:32: error: a value of type '(int, int) -> int' doesn't convert to '(int, int) -> s64' implicitly
+        wide : (int, int) -> s64 = add;
+                                   ^

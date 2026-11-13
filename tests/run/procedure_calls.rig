@@ -1,0 +1,70 @@
+// Calls through procedure values (spec 5.10): a variable, a global, a
+// parameter, a result, a struct's field, an element of an array or a view,
+// each called as the procedure it holds would be, structs and strings
+// passed and returned as a direct call passes and returns them, and several
+// results too. A procedure calls itself through a value as well.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Vec2 :: struct { x: int; y: int; }
+Shape :: struct {
+    name: string;
+    area: (s: *Shape) -> int;
+    w: int;
+    h: int;
+}
+
+add :: (a: int, b: int) -> int { return a + b; }
+mul :: (a: int, b: int) -> int { return a * b; }
+scale :: (v: Vec2, k: int) -> Vec2 { return Vec2.{v.x * k, v.y * k}; }
+greet :: (name: string) -> string { return name; }
+divmod :: (a: int, b: int) -> (int, int) { return a / b, a % b; }
+rectangle :: (s: *Shape) -> int { return s.w * s.h; }
+triangle :: (s: *Shape) -> int { return s.w * s.h / 2; }
+
+current : (int, int) -> int = mul;
+
+apply :: (f: (int, int) -> int, a: int, b: int) -> int { return f(a, b); }
+choose :: (sum: bool) -> (int, int) -> int {
+    if sum { return add; }
+    return mul;
+}
+
+factorial : (n: int) -> int;
+fact :: (n: int) -> int {
+    if n <= 1 { return 1; }
+    return n * factorial(n - 1);
+}
+
+main :: () {
+    f := add;
+    printf("%lld\n", f(2, 3));
+    printf("%lld\n", current(4, 5));
+    current = add;
+    printf("%lld\n", current(4, 5));
+    printf("%lld %lld\n", apply(mul, 6, 7), apply(f, 6, 7));
+    printf("%lld %lld\n", choose(true)(8, 9), choose(false)(8, 9));
+
+    shapes := Shape.[.{"rectangle", rectangle, 3, 4}, .{"triangle", triangle, 3, 4}];
+    for * shapes {
+        printf("%.*s %lld\n", cast(s32) it.name.count, it.name.data, it.area(it));
+    }
+
+    table : [2](int, int) -> int = .[add, mul];
+    v : [](int, int) -> int = table;
+    for i: 0..1 { printf("%lld %lld\n", table[i](10, 3), v[i](10, 3)); }
+
+    s := scale;
+    p := s(Vec2.{1, 2}, 3);
+    printf("%lld %lld\n", p.x, p.y);
+    g := greet;
+    name := g("rig");
+    printf("%.*s\n", cast(s32) name.count, name.data);
+    d := divmod;
+    q, r := d(17, 5);
+    printf("%lld %lld\n", q, r);
+    q, r = d(23, 7);
+    printf("%lld %lld\n", q, r);
+
+    factorial = fact;
+    printf("%lld\n", factorial(10));
+}
