@@ -740,19 +740,23 @@ TEST(load_long_chain) {
     // asked for, 256 KB, so whatever the stack is, it's checked to be too
     // small for them. The files are a queue, walked in a loop, so a chain
     // of any length takes no more stack than one file. (The queue's order
-    // is load_order_is_breadth_first's.)
+    // is load_order_is_breadth_first's.) Their text never changes, so a file
+    // an earlier run left is kept: writing 5000 files takes seconds on
+    // Windows, reading them back far less.
     const int COUNT = 5000;
     const u64 SMALL_STACK = 64 * 1024;
     const u64 SMALLEST_FRAME = 64;
     Arena a = arena_make();
     Diagnostics d = {};
     String dir = load_test_directory(&a, "load_long_chain");
-    write_source(&a, dir, "main.rig", "#load \"f1.rig\";\nmain :: () {}\n");
-    for (int i = 1; i < COUNT; i++) {
-        const char *name = string_cstr(&a, string_printf(&a, "f%d.rig", i));
-        const char *text = i + 1 < COUNT ? string_cstr(&a, string_printf(&a, "#load \"f%d.rig\";\nf%d :: () {}\n", i + 1, i))
-                                         : string_cstr(&a, string_printf(&a, "f%d :: () {}\n", i));
-        write_source(&a, dir, name, text);
+    for (int i = 0; i < COUNT; i++) {
+        const char *name = i == 0 ? "main.rig" : string_cstr(&a, string_printf(&a, "f%d.rig", i));
+        String text = i == 0          ? str("#load \"f1.rig\";\nmain :: () {}\n")
+                      : i + 1 < COUNT ? string_printf(&a, "#load \"f%d.rig\";\nf%d :: () {}\n", i + 1, i)
+                                      : string_printf(&a, "f%d :: () {}\n", i);
+        String there = {};
+        if (os_read_file(&a, str(in_directory(&a, dir, name)), &there) && string_eq(there, text)) continue;
+        write_source(&a, dir, name, string_cstr(&a, text));
     }
     Small_Stack_Load load = {&a, &d, dir, nullptr, 0};
     CHECK(os_run_on_stack(SMALL_STACK, load_on_small_stack, &load));

@@ -980,6 +980,8 @@ static String check_stdin_without_a_file_test(Arena *a, String rig) {
 static String check_stdin_of_another_text_test(Arena *a, String rig) {
     String file = str("tests/run/load_files.rig");
     if (!os_file_exists(file)) return str("tests/run/load_files.rig isn't there");
+    // rig build put an object here earlier (tests/run/load_files.rig); rig
+    // check mustn't make one.
     remove(string_cstr(a, string_printf(a, ".build/load_files%s", OBJ)));
     Process_Result r = {};
     String why = {};
