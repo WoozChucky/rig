@@ -258,3 +258,4 @@ int main(int argc, char **argv) {
 #include "test_link.cpp"
 #include "test_driver.cpp"
 #include "test_grammar.cpp"
+#include "test_version.cpp"
