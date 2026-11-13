@@ -41,7 +41,13 @@ const char *target_triple(Target t) {
 // index is turned off for the whole process with llc's option
 // -accel-tables=Disable, which LLVM's C API takes only as a command line,
 // parsed once. It's about DWARF only: CodeView, on Windows, has no such
-// index.
+// index. An option LLVM doesn't know doesn't end the process: the C API
+// parses with its errors sent nowhere (llvm::nulls()), so it ignores one,
+// without a word (measured with this one misspelt: `rig build` built, and
+// on Linux wrote .debug_names again). So an LLVM that dropped or renamed
+// it would bring the index back unnoticed but for the tests: every gdb
+// debugger test (tests/debug/*.gdb.expect) says gdb mustn't print its
+// warning.
 static void initialise_llvm() {
     static bool done = false;
     if (done) return;
