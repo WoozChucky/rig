@@ -430,3 +430,21 @@ TEST(the_tests_run_on_the_compilers_stack) {
     CHECK(os_stack_size() >= RIG_STACK_SIZE);
     CHECK(!os_on_main_thread());
 }
+
+TEST(os_reserve_inaccessible_gives_untouchable_addresses) {
+    // Addresses reserved and never made accessible (issue #114: the range
+    // the interpreter takes a Rig procedure's value from). That touching
+    // them faults isn't tested: it would end this process.
+    const u64 SIZE = 1024 * 1024;
+    u8 *first = (u8 *)os_reserve_inaccessible(SIZE);
+    CHECK(first != nullptr);
+    if (first) {
+        u8 *last = first + SIZE - 1;
+        CHECK(first != last);
+        os_release_inaccessible(first, SIZE);
+    }
+    // Released, they can be reserved again.
+    void *second = os_reserve_inaccessible(SIZE);
+    CHECK(second != nullptr);
+    if (second) os_release_inaccessible(second, SIZE);
+}

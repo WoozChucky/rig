@@ -108,3 +108,16 @@ u64 os_stack_size();
 // Whether the calling thread is the program's main thread, the one main()
 // started on.
 bool os_on_main_thread();
+
+// Compile-time execution (issue #114).
+
+// `size` bytes of addresses reserved and never made accessible: reading,
+// writing or calling any of them faults, and nothing else the process maps
+// can land there while they're held. The interpreter gives each Rig
+// procedure an address there as its value: distinct, stable, and of no use
+// to C by mistake. Null on failure.
+void *os_reserve_inaccessible(u64 size);
+
+// Gives back what os_reserve_inaccessible reserved: `p` as it returned it,
+// and the same size.
+void os_release_inaccessible(void *p, u64 size);

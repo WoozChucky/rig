@@ -190,6 +190,9 @@ enum Ir_Op : u8 {
     IR_RET,                          // ret [%a, ...]         one value per result
     IR_PANIC,                        // panic @global: writes the global's bytes but its final zero to stderr, exits 101
                                      // panic %a, %b: the same with the %b bytes (an i64) at the ptr %a
+                                     // Either way the text is "PATH:L:C: runtime error: MESSAGE\n", and
+                                     // the panic knows how long that prefix is (`constant`, `c`), so the
+                                     // interpreter can give MESSAGE alone; printing doesn't show it
     IR_UNREACHABLE,                  // unreachable           control never gets here
 };
 
@@ -215,14 +218,19 @@ struct Ir_Instr {
                        // IR_INTTOPTR): the operand's type
     Ir_Pred pred;      // IR_CMP, IR_FCMP
     s32 result;        // the (first) value's number, or -1
-    s32 a, b, c;       // operands, value numbers (-1: none); c is IR_SELECT's and IR_BRANCH's condition
+    s32 a, b, c;       // operands, value numbers (-1: none); c is IR_SELECT's and IR_BRANCH's condition,
+                       // and IR_PANIC's prefix length (an i64) when the message is %a and %b (see `constant`)
     s32 target;        // IR_ADDR, IR_PANIC: a global (IR_PANIC: -1 when the message is %a and %b);
                        // IR_CALL, IR_PROC_ADDR: a procedure; IR_JUMP, IR_BRANCH: a block (the true one)
     s32 target2;       // IR_BRANCH: the false block
     u64 constant;      // IR_CONST: an integer's bits, zero-extended from the type's width; a
                        // float's value as a double's bits (f64_bits), which the backend
                        // rounds to the nearest float for an f32;
-                       // IR_LOCAL of bytes, IR_COPY, IR_ZERO: the number of bytes
+                       // IR_LOCAL of bytes, IR_COPY, IR_ZERO: the number of bytes;
+                       // IR_PANIC: the length of the message's prefix, "PATH:L:C: runtime
+                       // error: ", when `target` names its global; c is the value holding
+                       // that length when the message is %a and %b; -1 (as constant: all
+                       // ones) when unknown, as in a module built by hand (ir_emit)
     u32 align;         // IR_LOCAL of bytes: its alignment, a power of 2
     Array<s32> args;   // IR_CALL's and IR_CALL_INDIRECT's arguments, IR_RET's values
     Ir_Proc *signature;  // IR_CALL_INDIRECT: what the procedure called takes and gives, an Ir_Proc
