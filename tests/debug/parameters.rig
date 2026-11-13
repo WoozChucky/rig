@@ -1,0 +1,29 @@
+// A debugger's view of scalar parameters (bin/run-tests runs it under gdb
+// with parameters.gdb and under cdb with parameters.cdb). Each lives in a
+// stack slot, stored once on entry and read from there wherever it's used,
+// as clang does at -O0: stepping through an else if that tests one stops
+// on its line, and a parameter the debugger changes is the one the program
+// goes on with.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+choose :: (n: int) {
+    if n == 1 {
+        puts("one");
+    } else if n == 2 {
+        puts("two");
+    }
+    puts("chosen");
+}
+
+say :: (flag: bool) {
+    if flag {
+        puts("the flag was left set");
+    } else {
+        puts("the flag was cleared");
+    }
+}
+
+main :: () {
+    choose(2);
+    say(true);
+}
