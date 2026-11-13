@@ -4,10 +4,10 @@
 // every expression, folds the constants, and checks each call, declaration,
 // assignment and return against the types involved. It fills in the tree as
 // it goes (Ast.type, Ast.is_constant and Ast.constant, Ast_Name.decl,
-// Ast_Call.proc, Ast_Member.index (-1 for an array's, a view's or a
-// string's .count and .data), and each struct's type and layout,
-// Ast_Struct.declared), so the stages after it never look anything up
-// again.
+// Ast_Call.proc or Ast_Call.callee_type, Ast_Member.index (-1 for an
+// array's, a view's or a string's .count and .data), and each struct's type
+// and layout, Ast_Struct.declared), so the stages after it never look
+// anything up again.
 // checker.cpp checks declarations and statements, check_expr.cpp
 // expressions; check.h is what they share.
 //
@@ -33,11 +33,14 @@
 //   The iterator can't take it_index's name: `for it_index: 0..9` is "a
 //   loop's iterator can't be called 'it_index'", said at the name, and
 //   it_index is then the loop's index.
-// - A procedure's name used as a value: "procedures can only be called,
-//   for now". A call of one that returns nothing, used as a value: "'greet'
-//   returns nothing, so it has no value". A call of anything else (a local
-//   hiding the procedure, say): "'x' isn't a procedure, so it can't be
-//   called".
+// - A procedure's name used as a value is the procedure, of its procedure
+//   type (issue #83, spec 3's "Procedure types"). A call of one that
+//   returns nothing, used as a value: "'greet' returns nothing, so it has
+//   no value". A call of a value of a procedure type (a variable, a field,
+//   an element, a call's result) is checked as a call of the procedure it
+//   holds. A call of anything else: "'x' isn't a procedure, so it can't be
+//   called" for a name (a local hiding the procedure, say), "a value of
+//   type 'int' isn't a procedure, so it can't be called" otherwise.
 //
 // Constants and types.
 // - An integer literal up to int's largest value is an untyped constant
@@ -454,6 +457,12 @@ bool expr_is_place(Ast *e);
 // written there by the linker: the checker asks this to allow it, and
 // lowering to write it (constant_bytes).
 Ast_String *literal_address(Ast *e);
+
+// A call's results, whatever it calls: the procedure's (Ast_Call.proc), or
+// those of the procedure value's type (Ast_Call.callee_type). For a call
+// that checked with a type.
+s64 call_result_count(Ast_Call *call);
+Type *call_result_type(Ast_Call *call, s64 i);
 
 // The procedure whose address e, checked, is: a procedure's name, a
 // constant that names one (OP :: add;), or a cast of either that keeps the

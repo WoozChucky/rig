@@ -814,9 +814,9 @@ static String count_of_values(Checker *c, s64 n) {
     return string_printf(c->arena, "%lld value%s", (long long)n, n == 1 ? "" : "s");
 }
 
-// The value that `count` names or targets receive (spec 6.7): a call of a
-// procedure with exactly that many results, which is returned; or null
-// after reporting what it is instead:
+// The value that `count` names or targets receive (spec 6.7): a call with
+// exactly that many results, of a procedure or through a procedure value,
+// which is returned; or null after reporting what it is instead:
 // - not a call: "only a call can give several values, as in q, r :=
 //   divmod(7, 2);";
 // - a call of one that returns nothing: "'greet' returns nothing, so it has
@@ -825,30 +825,31 @@ static String count_of_values(Checker *c, s64 n) {
 //   3 names receive them".
 // Each is said at the value. A value whose type is unknown says nothing
 // more.
-static Ast_Proc *check_several_values(Checker *c, Ast *value, s64 count) {
+static Ast_Call *check_several_values(Checker *c, Ast *value, s64 count) {
     Type *t = check_value(c, value);
     if (!t) return nullptr;
     if (value->kind != AST_CALL) {
         diag_error(c->diag, value->start, "only a call can give several values, as in q, r := divmod(7, 2);");
         return nullptr;
     }
-    Ast_Proc *proc = ((Ast_Call *)value)->proc;  // a known type means a procedure was called
-    if (proc->results.count != count) {
+    Ast_Call *call = (Ast_Call *)value;  // a known type means its callee is known
+    s64 results = call_result_count(call);
+    if (results != count) {
         diag_error(c->diag, value->start, "'" STR_FMT "' returns " STR_FMT ", but %lld names receive them",
-                   STR_ARG(proc->name), STR_ARG(count_of_values(c, proc->results.count)), (long long)count);
+                   STR_ARG(callee_name(c, call)), STR_ARG(count_of_values(c, results)), (long long)count);
         return nullptr;
     }
-    return proc;
+    return call;
 }
 
 // q, r := divmod(7, 2); declares a variable per result, each of the type of
 // the result it receives, in order. After an error each is still
 // declared, with an unknown type, so its uses aren't reported too.
 static void check_multi_var(Checker *c, Ast_Multi_Var *multi) {
-    Ast_Proc *proc = check_several_values(c, multi->value, multi->vars.count);
+    Ast_Call *call = check_several_values(c, multi->value, multi->vars.count);
     for (s64 i = 0; i < multi->vars.count; i++) {
         Ast_Var *var = multi->vars[i];
-        var->type = proc ? proc->results[i]->type : nullptr;
+        var->type = call ? call_result_type(call, i) : nullptr;
         declare(c, var->name, var);
     }
 }
@@ -860,9 +861,9 @@ static void check_multi_var(Checker *c, Ast_Multi_Var *multi) {
 static void check_multi_assign(Checker *c, Ast_Assign *assign) {
     Array<Type *> targets = {};
     for (s64 i = 0; i < assign->targets.count; i++) array_add(&targets, check_target(c, assign->targets[i]));
-    Ast_Proc *proc = check_several_values(c, assign->value, assign->targets.count);
-    for (s64 i = 0; proc && i < targets.count; i++) {
-        Type *from = proc->results[i]->type, *to = targets[i];
+    Ast_Call *call = check_several_values(c, assign->value, assign->targets.count);
+    for (s64 i = 0; call && i < targets.count; i++) {
+        Type *from = call_result_type(call, i), *to = targets[i];
         if (!type_converts(from, to)) {
             diag_error(c->diag, assign->targets[i]->start,
                        "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly",

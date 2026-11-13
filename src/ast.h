@@ -287,7 +287,11 @@ struct Ast_Binary : Ast {
 struct Ast_Call : Ast {
     Ast *callee;
     Array<Ast *> args;
-    Ast_Proc *proc;  // the procedure called, found by the checker
+    Ast_Proc *proc;     // the procedure called, found by the checker: a procedure's name, or a
+                        // constant naming one (OP :: add;), is a call of the procedure itself
+    Type *callee_type;  // a call through a procedure value (a variable, a field, an element, a
+                        // call's result): the value's procedure type, found by the checker;
+                        // null when `proc` is the procedure called
 };
 
 struct Ast_Name : Ast {
