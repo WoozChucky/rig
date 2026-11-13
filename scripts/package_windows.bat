@@ -8,6 +8,9 @@ rem   rig.exe        the compiler, an optimised build (build.bat release)
 rem   lld-link.exe   LLVM's linker, which rig uses when Visual Studio has no
 rem                  link.exe (spec 10.6)
 rem   LICENSE, README.md
+rem   LICENSE-LLVM.txt, LICENSE-LLD.txt
+rem                  the licences of LLVM, which rig.exe links statically,
+rem                  and of lld-link.exe (third_party\README.md)
 rem
 rem Then it checks the archive as someone downloading it would use it: it
 rem unpacks it into a temporary folder, builds tests\run\hello.rig with the
@@ -36,10 +39,12 @@ bin\rig.exe version || exit /b 1
 
 mkdir "%STAGE%\pack" "%STAGE%\check" || exit /b 1
 for %%f in (bin\rig.exe bin\lld-link.exe LICENSE README.md) do copy /y "%%f" "%STAGE%\pack\" >nul || goto failed
+copy /y third_party\llvm\LICENSE.TXT "%STAGE%\pack\LICENSE-LLVM.txt" >nul || goto failed
+copy /y third_party\lld\LICENSE.TXT "%STAGE%\pack\LICENSE-LLD.txt" >nul || goto failed
 
 if not exist dist mkdir dist
 if exist "%ARCHIVE%" del "%ARCHIVE%"
-"%TAR%" --format zip -cf "%ARCHIVE%" -C "%STAGE%\pack" rig.exe lld-link.exe LICENSE README.md || goto failed
+"%TAR%" --format zip -cf "%ARCHIVE%" -C "%STAGE%\pack" rig.exe lld-link.exe LICENSE README.md LICENSE-LLVM.txt LICENSE-LLD.txt || goto failed
 
 "%TAR%" -xf "%ARCHIVE%" -C "%STAGE%\check" || goto failed
 pushd "%STAGE%\check"
