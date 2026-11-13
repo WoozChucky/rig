@@ -5,12 +5,31 @@
 // information says so: a procedure returning a Pair returns nothing and
 // takes a *Pair first, so gdb's `finish` out of it shows no made-up value,
 // and one taking a Pair takes a *Pair, while the parameter itself still
-// shows as the struct, with its fields.
+// shows as the struct, with its fields. The same goes for a struct of 8
+// bytes, which C would return in a register (where the made-up value of
+// a `finish` would come from), a string and an array. A procedure of
+// scalars, a debugger calls correctly from an expression.
 Pair :: struct { a: int; b: int; }
+Small :: struct { a: s32; b: s32; }
 
 make :: (n: int) -> Pair {
     p := Pair.{n, n + 1};
     return p;
+}
+
+little :: (n: s32) -> Small {
+    s := Small.{n, n + 2};
+    return s;
+}
+
+name :: (n: int) -> string {
+    if n == 1 { return "one"; }
+    return "other";
+}
+
+both :: (n: int) -> [2]int {
+    a : [2]int = .[n, n * 2];
+    return a;
 }
 
 sum :: (p: Pair) -> int {
@@ -18,7 +37,16 @@ sum :: (p: Pair) -> int {
     return s;
 }
 
+twice :: (n: int) -> int {
+    t := n * 2;
+    return t;
+}
+
 main :: () {
     q := make(5);
+    l := little(7);
+    w := name(1);
+    b := both(3);
     s := sum(q);
+    d := twice(s);
 }

@@ -949,7 +949,13 @@ static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMVal
     // make`: `void (Pair *, int64)`). gdb reads only the result from it:
     // DWARF describes a defined function's parameters by its parameter
     // variables (declare_variables), the visible ones, so gdb doesn't see
-    // the hidden pointers.
+    // the hidden pointers. A debugger calling a procedure from an expression
+    // passes the parameters it shows, measured: gdb's `print sum(q)` passes
+    // the struct by value, as C would, where sum expects its address, and
+    // neither gdb's `print make(5)` nor cdb's `.call make(5)` passes a result
+    // pointer, so those crash the program (cdb's `.call sum(&q)` is right:
+    // on Windows the parameter is the pointer). Calls of procedures whose
+    // parameters and results are scalars are right in both (spec 10.7).
     s64 params = 0;
     while (params < p->vars.count && p->vars[params].arg > 0) params++;
     s64 hidden = 0, scalars = 0;

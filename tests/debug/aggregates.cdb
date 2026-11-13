@@ -2,9 +2,14 @@ l+t
 l+s
 l+l
 dt aggregates!make
+dt aggregates!little
+dt aggregates!name
+dt aggregates!both
 dt aggregates!sum
-bp `aggregates.rig:17`
+bp `aggregates.rig:36`
 g
 dv /t
 ?? p->b
+.call aggregates!twice(4)
+g
 q
