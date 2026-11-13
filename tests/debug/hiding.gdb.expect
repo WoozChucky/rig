@@ -6,3 +6,4 @@ main () at
 hiding.rig:10
 y = g + y;
 $2 = 10
+!.debug_names not created by gdb

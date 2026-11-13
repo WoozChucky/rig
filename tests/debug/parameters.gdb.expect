@@ -10,3 +10,4 @@ if flag {
 = false
 the flag was cleared
 !the flag was left set
+!.debug_names not created by gdb

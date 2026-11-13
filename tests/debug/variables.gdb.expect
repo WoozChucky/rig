@@ -48,3 +48,4 @@ $20 = {count = 2, data = 0x
 "hi"}
 $21 = 2
 $22 = true
+!.debug_names not created by gdb

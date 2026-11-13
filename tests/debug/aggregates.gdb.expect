@@ -10,3 +10,4 @@ aggregates.rig:17
 s := p.a + p.b;
 p = {a = 5, b = 6}
 = 6
+!.debug_names not created by gdb
