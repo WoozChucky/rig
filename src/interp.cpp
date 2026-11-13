@@ -469,7 +469,8 @@ static void interp_fail(Interp *in, Interp_Record *frame, s32 block, s32 index, 
             named = f->proc;
         }
         Ir_Instr *at = &p->blocks[f->block]->instrs[f->index];
-        array_add(&result->frames, Interp_Frame{name, at->pos});    }
+        array_add(&result->frames, Interp_Frame{name, at->pos});
+    }
 }
 
 // Stops the run as interp_fail does, because foreign procedure k's C

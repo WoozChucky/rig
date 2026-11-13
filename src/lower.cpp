@@ -677,10 +677,11 @@ static String runtime_error_prefix(Lowering *l, Position at) {
 // The panic writes the message to stderr and exits with status 101
 // (llvm_backend.cpp's __rig_panic). "PATH:LINE:COL: runtime error: " is
 // runtime_error_prefix's. Each check has a message of its own, since each
-// names its own position. The branch is the statement's code, at its position; the
-// panic is at `at`, the place the message names, so a debugger stopped there
-// shows the same place. The panic's `constant` is the prefix's length, all
-// of the text before MESSAGE, which the interpreter leaves out (ir.h).
+// names its own position. The branch is the statement's code, at its
+// position; the panic is at `at`, the place the message names, so a
+// debugger stopped there shows the same place. The panic's `constant` is
+// the prefix's length, all of the text before MESSAGE, which the
+// interpreter leaves out (ir.h).
 static void emit_runtime_check(Lowering *l, s32 fails, Position at, String message) {
     String prefix = runtime_error_prefix(l, at);
     String text = string_printf(l->arena, STR_FMT STR_FMT "\n", STR_ARG(prefix), STR_ARG(message));

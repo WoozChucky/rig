@@ -40,6 +40,7 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
   - Keep #114's edits to those files in other hunks. New `os.h` declarations go in a new section at the end of the file.
   - Don't touch `driver.cpp`.
   - Whichever branch merges second merges `main` in and resolves the include lists.
+  - `tests/unit/interpret_mode.cpp` copies `driver.cpp`'s `read_and_check` (lex, parse and check of the one file), and the merge gives no conflict in it: whichever branch merges second makes it call `load_program`, as #112's `read_and_check` does, or `interpreted tests/run/load_*` fails.
 - **Work flow:**
   - Branch `issue/114-interpreter`, and a draft PR `Closes #114` with labels `compiler` and `enhancement`, on milestone `3: Compile-time execution`.
   - Commits are a short imperative summary, pushed after each commit.
