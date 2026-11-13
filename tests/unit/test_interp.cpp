@@ -16,8 +16,9 @@
 #include "test.h"
 
 #include <math.h>  // copysignf, ldexp, sqrt, sqrtf and sqrtl, for thunk_float_results and interp_finds_c_functions_by_name
-#include <time.h>  // time, for interp_recursion_to_the_limit
+#include <time.h>  // time, for interp_recursion_to_the_limit; time, localtime and difftime, for interp_finds_c_functions_by_name
 #ifdef _WIN32
+#include <ctype.h>    // toupper, isalpha, for interp_finds_c_functions_by_name
 #include <errno.h>    // ERANGE, for interp_windows_shares_the_compilers_streams_and_errno
 #include <process.h>  // _getpid, for interp_calls_a_windows_function
 #else
@@ -1333,11 +1334,12 @@ TEST(interp_division_by_zero_message) {
 
 TEST(interp_recursion_to_the_limit) {
     // Endless recursion ends at the 8 MB data stack, every frame's
-    // bookkeeping counted, with the chain of calls; a deep recursion of
-    // small frames fits.
+    // bookkeeping counted, with the whole chain of calls, out to the
+    // procedure that started it; a deep recursion of small frames fits.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "forever :: (n: int) -> int { return forever(n + 1) + 1; }\n"
+                                "outer :: () -> int { return forever(0); }\n"
                                 "deep :: (n: int) -> int {\n"
                                 "    if n == 0 { return 0; }\n"
                                 "    return deep(n - 1) + 1;\n"
@@ -1345,10 +1347,9 @@ TEST(interp_recursion_to_the_limit) {
                                 "main :: () { }\n");
     Interp *in = interp_new(m);
     Array<u64> args = {};
-    array_add(&args, 0);
     Interp_Result r = {};
     time_t start = time(nullptr);
-    interp_run(in, interp_test_proc(m, "forever"), args, &a, &r);
+    interp_run(in, interp_test_proc(m, "outer"), args, &a, &r);
     CHECK(time(nullptr) - start < 10);
     CHECK(!r.ok);
     CHECK_STR(r.message, "stack overflow");
@@ -1358,9 +1359,20 @@ TEST(interp_recursion_to_the_limit) {
         CHECK_STR(r.frames[0].proc, "forever");
         CHECK_EQ(r.frames[0].pos.line, 1);
         CHECK_EQ(r.frames[0].pos.col, 30);  // the return statement waiting on the call
+        // Every frame but the last is forever's; the last, outer's, so a
+        // chain cut short of its outermost frame fails here.
+        s64 last = r.frames.count - 1;
+        s64 forevers = 0;
+        for (s64 i = 0; i < last; i++) {
+            if (string_eq(r.frames[i].proc, str("forever"))) forevers++;
+        }
+        CHECK_EQ(forevers, last);
+        CHECK_STR(r.frames[last].proc, "outer");
+        CHECK_EQ(r.frames[last].pos.line, 2);
+        CHECK_EQ(r.frames[last].pos.col, 22);
     }
     interp_test_free(&r);
-    args[0] = 10000;
+    array_add(&args, 10000);
     interp_run(in, interp_test_proc(m, "deep"), args, &a, &r);
     CHECK(r.ok);
     CHECK_EQ(r.results.count, 1);
