@@ -180,8 +180,10 @@ struct Lowering {
     // Where the instructions being emitted come from (ir.h's "Debug
     // information"): every one emitted gets them. lower_statement sets pos
     // to each statement's; a loop, an if and a failing check set it to the
-    // place that stands for their own code, and a block that's a scope sets
-    // scope while its statements are lowered.
+    // place that stands for their own code, a block that's a scope sets
+    // scope while its statements are lowered, and a declaration that hides
+    // a variable (lower_statement's AST_VAR, lower_multi_var) sets it to the
+    // scope it starts, until the end of its block.
     Position pos;             // line 0 in the procedures the compiler makes
     s32 scope;                // an index in proc->scopes; -1 in the procedures the compiler makes
     bool is_entry;            // the procedure being lowered is Rig's main, C's main: its returns
@@ -1814,16 +1816,16 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     l->pos = statement_position(s);
     switch (s->kind) {
     case AST_VAR: {
-        // A declaration that hides a variable (a global, a parameter, an
-        // outer local) hides it only from its own end (spec 4.7), but a
-        // debugger shows a scope's variables wherever the scope is, all of
-        // it. So such a declaration starts a scope of its own inside the
-        // current one (rustc starts one at every let), made current until
-        // the end of the block (whose lowering then puts the scope around
-        // it back), and the variable is declared in it. Its initializer is lowered first,
-        // in the scope around: it may read the name it hides (x := x + 1),
-        // and before the store, a debugger shows the outer variable. A
-        // declaration hiding nothing is in the block's scope, as in C.
+        // A declaration that hides a variable (a global, a parameter, an outer
+        // local) hides it only from its own end (spec 4.7), but a debugger
+        // shows a scope's variables wherever the scope is, all of it. So such
+        // a declaration starts a scope of its own inside the current one
+        // (rustc starts one at every let), made current until the end of the
+        // block (whose lowering then puts the scope around it back), and the
+        // variable is declared in it. Its initializer is lowered first, in the
+        // scope around: it may read the name it hides (x := x + 1), and before
+        // the store, a debugger shows the outer variable. A declaration hiding
+        // nothing is in the block's scope, as in C.
         Ast_Var *var = (Ast_Var *)s;
         Position at = l->pos;
         bool hides = hides_a_variable(l, var->name);
