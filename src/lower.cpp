@@ -654,6 +654,15 @@ static Ir_Op ir_op_of(Token_Kind op, Type *t) {
     }
 }
 
+// "PATH:L:C: runtime error: ", the start of every runtime error's message
+// at `at`: a runtime check's (emit_runtime_check) and a bounds check's
+// (emit_bounds_check) are built here, so the two can't drift apart. PATH
+// is the source file's path as rig build was given it.
+static String runtime_error_prefix(Lowering *l, Position at) {
+    String path = l->diag->files[at.file].path;
+    return string_printf(l->arena, STR_FMT ":%d:%d: runtime error: ", STR_ARG(path), at.line, at.col);
+}
+
 // A runtime check (spec 6.4). The current block ends with a branch on the
 // i1 %fails: when it's 1, to a block that stops the program with the
 // runtime error `message` at `at`; otherwise to a new block, where the code
@@ -673,8 +682,7 @@ static Ir_Op ir_op_of(Token_Kind op, Type *t) {
 // shows the same place. The panic's `constant` is the prefix's length, all
 // of the text before MESSAGE, which the interpreter leaves out (ir.h).
 static void emit_runtime_check(Lowering *l, s32 fails, Position at, String message) {
-    String path = l->diag->files[at.file].path;
-    String prefix = string_printf(l->arena, STR_FMT ":%d:%d: runtime error: ", STR_ARG(path), at.line, at.col);
+    String prefix = runtime_error_prefix(l, at);
     String text = string_printf(l->arena, STR_FMT STR_FMT "\n", STR_ARG(prefix), STR_ARG(message));
     s32 fail = new_block(l);
     s32 ok = new_block(l);
@@ -1090,8 +1098,7 @@ static s32 bounds_failed_proc(Lowering *l);
 // any check passes it, which is kept here. The fail block is at `at`, as a
 // runtime check's panic is (emit_runtime_check).
 static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s32 count, bool is_signed) {
-    String path = l->diag->files[at.file].path;
-    String where = string_printf(l->arena, STR_FMT ":%d:%d: runtime error: ", STR_ARG(path), at.line, at.col);
+    String where = runtime_error_prefix(l, at);
     if (where.count > l->longest_where) l->longest_where = where.count;
     s32 fail = new_block(l);
     s32 ok = new_block(l);
