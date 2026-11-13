@@ -79,11 +79,48 @@ static Type *resolve_element(Checker *c, Ast_Type *written, bool behind_pointer)
     return t;
 }
 
+// A parameter's or, with `result`, a result's type t, at `at`, of `who`, "a
+// foreign procedure" or "a #c_call procedure", which C calls or is called by
+// (spec 7.6): what C can't take is reported.
+// - A struct, an array, a view or a string: C passes a struct by value by
+//   rules of its own on each platform, which come with milestone 6's
+//   bindings ("a foreign procedure can't take a 'Vec2' yet; pass a pointer
+//   to it", "... can't return a 'Vec2' yet"). A pointer to one is a C
+//   pointer to a C struct of the same layout, which passes. C has no views,
+//   and takes an array as a pointer to its first element: "a foreign
+//   procedure can't take a '[3]int'; pass its .data" (or a view's .data,
+//   with its count if C needs it). A C string is a pointer to bytes ending
+//   with a zero, which a literal converts to, but another string's bytes
+//   needn't end with one: "a foreign procedure can't take a 'string'; pass
+//   its .data, which may not end with a zero, or a literal".
+// - A procedure value that isn't #c_call: a Rig procedure, which C would
+//   call as it calls its own, but which may come to expect more (#84's
+//   context): "a foreign procedure can't take a '(int) -> int', which isn't
+//   #c_call; C can call a '(int) -> int #c_call'".
+static void check_c_part(Checker *c, Type *t, Position at, const char *who, bool result) {
+    if (!t) return;  // its own mistake, reported
+    const char *verb = result ? "return" : "take";
+    if (t->kind == TYPE_PROC && !t->is_c_call) {
+        Type *marked = type_proc_of(t->params, t->param_count, t->results, t->result_count, true);
+        diag_error(c->diag, at, "%s can't %s a '" STR_FMT "', which isn't #c_call; C can call a '" STR_FMT "'", who,
+                   verb, STR_ARG(type_name(c->arena, t)), STR_ARG(type_name(c->arena, marked)));
+        return;
+    }
+    if (!type_is_aggregate(t)) return;
+    const char *hint = result                   ? " yet"
+                       : t->kind == TYPE_STRUCT ? " yet; pass a pointer to it"
+                       : t->kind == TYPE_STRING ? "; pass its .data, which may not end with a zero, or a literal"
+                                                : "; pass its .data";
+    diag_error(c->diag, at, "%s can't %s a '" STR_FMT "'%s", who, verb, STR_ARG(type_name(c->arena, t)), hint);
+}
+
 // A written procedure type, (params) -> results, its parts resolved in
 // order: each is one a value can have, void none. A procedure value is an
 // address, so they lie behind it, as a pointer's target does: a struct
 // among them is named before its layout is known (behind_pointer). Null when
-// any part is an error, reported.
+// any part is an error, reported. A #c_call type's parts are what C takes
+// (check_c_part), one result at most, as a #c_call procedure's are
+// (check_signature).
 static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
     Array<Type *> parts = {};
     bool fine = true;
@@ -93,11 +130,17 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
         fine = fine && t;
         array_add(&parts, t);
     }
-    Type *t = nullptr;
-    if (fine) {
-        s64 n = written->params.count;
-        t = type_proc_of(parts.data, n, parts.data + n, written->results.count, written->is_c_call);
+    s64 n = written->params.count;
+    if (written->is_c_call) {
+        for (s64 i = 0; i < parts.count; i++) {
+            Ast_Type *part = i < n ? written->params[i] : written->results[i - n];
+            check_c_part(c, parts[i], part->pos, "a #c_call procedure", i >= n);
+        }
+        if (written->results.count > 1) {
+            diag_error(c->diag, written->results[1]->pos, "a #c_call procedure can return at most one value");
+        }
     }
+    Type *t = fine ? type_proc_of(parts.data, n, parts.data + n, written->results.count, written->is_c_call) : nullptr;
     array_free(&parts);
     return t;
 }
@@ -1254,17 +1297,9 @@ static Type *proc_type_of_signature(Ast_Proc *proc) {
 
 // A procedure's signature: its parameters' types and its results' types,
 // each stored on its node (Ast_Param.type, Ast_Type.type), and its library.
-// A foreign procedure takes and returns no aggregate: C passes a struct by
-// value by rules of its own on each platform, which come with milestone 6's
-// bindings ("a foreign procedure can't take a 'Vec2' yet; pass a pointer to
-// it", "... can't return a 'Vec2' yet"). A pointer to one is a C pointer to
-// a C struct of the same layout, which passes. C has no views, and takes an
-// array as a pointer to its first element: "a foreign procedure can't take a
-// '[3]int'; pass its .data" (or a view's .data, with its count if C needs
-// it). A C string is a pointer to bytes ending with a zero, which a literal
-// converts to, but another string's bytes needn't end with one: "a foreign
-// procedure can't take a 'string'; pass its .data, which may not end with a
-// zero, or a literal".
+// A foreign procedure, which C implements, and a #c_call one, which C may
+// call, take and return only what C does (check_c_part), and one result at
+// most.
 //
 // Only a foreign procedure may end its parameters with '..': a Rig
 // procedure would have no way to reach the arguments it doesn't name (Rig
@@ -1278,32 +1313,24 @@ static Type *proc_type_of_signature(Ast_Proc *proc) {
 // when it's marked so, or foreign (C's own). A variadic one has none: no
 // procedure type takes '..', so it can only be called (check_name).
 static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
+    bool c_side = proc->is_foreign || proc->is_c_call;
+    const char *who = proc->is_foreign ? "a foreign procedure" : "a #c_call procedure";
     for (s64 i = 0; i < proc->params.count; i++) {
         Ast_Param *param = proc->params[i];
         c->levels = base + param->type_expr->levels + 1;
         param->type = resolve_type(c, param->type_expr);
-        if (proc->is_foreign && param->type && type_is_aggregate(param->type)) {
-            Type_Kind kind = param->type->kind;
-            const char *hint = kind == TYPE_STRUCT   ? " yet; pass a pointer to it"
-                               : kind == TYPE_STRING ? "; pass its .data, which may not end with a zero, or a literal"
-                                                     : "; pass its .data";
-            diag_error(c->diag, param->type_expr->pos, "a foreign procedure can't take a '" STR_FMT "'%s",
-                       STR_ARG(type_name(c->arena, param->type)), hint);
-        }
+        if (c_side) check_c_part(c, param->type, param->type_expr->pos, who, false);
     }
     for (s64 i = 0; i < proc->results.count; i++) {
         c->levels = base + proc->results[i]->levels + 1;
         Type *t = resolve_type(c, proc->results[i]);
         proc->results[i]->type = t;
-        if (proc->is_foreign && t && type_is_aggregate(t)) {
-            diag_error(c->diag, proc->results[i]->pos, "a foreign procedure can't return a '" STR_FMT "' yet",
-                       STR_ARG(type_name(c->arena, t)));
-        }
+        if (c_side) check_c_part(c, t, proc->results[i]->pos, who, true);
     }
     // C returns one value; several are Rig's own (spec 6.7), made in a way
     // only Rig's procedures agree on.
-    if (proc->is_foreign && proc->results.count > 1) {
-        diag_error(c->diag, proc->results[1]->pos, "a foreign procedure can return at most one value");
+    if (c_side && proc->results.count > 1) {
+        diag_error(c->diag, proc->results[1]->pos, "%s can return at most one value", who);
     }
     if (proc->is_variadic && !proc->is_foreign) {
         diag_error(c->diag, proc->variadic_pos,

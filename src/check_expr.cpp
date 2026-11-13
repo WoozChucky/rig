@@ -185,18 +185,36 @@ static bool is_c_string(Type *t) {
     return type_is_pointer(t) && t->pointee == type_from_name(str("u8"));
 }
 
-// What a message about a value of type `from` that doesn't convert to `to`
-// adds, after the message: why a string doesn't become a *u8 when a literal
-// does (only a literal's bytes are known to end with a zero, which C reads
-// up to), and nothing for anything else.
-static const char *conversion_hint(Type *from, Type *to) {
-    return from == &type_string && is_c_string(to) ? "; its .data may not end with a zero" : "";
+// What a message about `value`, of type `from`, that doesn't convert to
+// `to` adds, after the message:
+// - why a string doesn't become a *u8 when a literal does (only a
+//   literal's bytes are known to end with a zero, which C reads up to);
+// - between two procedure types that differ only in #c_call (spec 7.6),
+//   what to mark: "; mark 'compare' #c_call for C to call it" for a
+//   procedure's name ("; only a procedure marked #c_call has a #c_call
+//   type" for another value), and the other way, "; #c_call is part of the
+//   type, as in '(*u8) -> s32 #c_call'";
+// - nothing for anything else.
+static String conversion_hint(Checker *c, Ast *value, Type *from, Type *to) {
+    if (from == &type_string && is_c_string(to)) return str("; its .data may not end with a zero");
+    if (!from || !to || from->kind != TYPE_PROC || to->kind != TYPE_PROC || from->is_c_call == to->is_c_call ||
+        type_proc_of(from->params, from->param_count, from->results, from->result_count, to->is_c_call) != to) {
+        return {};
+    }
+    if (from->is_c_call) {
+        return string_printf(c->arena, "; #c_call is part of the type, as in '" STR_FMT "'",
+                             STR_ARG(type_name(c->arena, from)));
+    }
+    Ast_Proc *proc = procedure_address(value);
+    if (!proc) return str("; only a procedure marked #c_call has a #c_call type");
+    return string_printf(c->arena, "; mark '" STR_FMT "' #c_call for C to call it", STR_ARG(proc->name));
 }
 
 void report_no_conversion(Checker *c, Ast *value, Type *to) {
-    diag_error(c->diag, value->start, "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly%s",
+    diag_error(c->diag, value->start,
+               "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly" STR_FMT,
                STR_ARG(type_name(c->arena, value->type)), STR_ARG(type_name(c->arena, to)),
-               conversion_hint(value->type, to));
+               STR_ARG(conversion_hint(c, value, value->type, to)));
 }
 
 Ast_Proc *procedure_address(Ast *e) {
@@ -612,9 +630,9 @@ static Type *check_call(Checker *c, Ast_Call *call) {
             if (!check_convert(c, arg, to)) {
                 diag_error(c->diag, arg->start,
                            "argument %lld of '" STR_FMT "' has type '" STR_FMT "', which can't be converted to '" STR_FMT
-                           "'%s",
+                           "'" STR_FMT,
                            (long long)(i + 1), STR_ARG(name), STR_ARG(type_name(c->arena, from)),
-                           STR_ARG(type_name(c->arena, to)), conversion_hint(from, to));
+                           STR_ARG(type_name(c->arena, to)), STR_ARG(conversion_hint(c, arg, from, to)));
             }
         }
         // A Rig procedure with '..' was reported, and is variadic only so
@@ -1375,8 +1393,9 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
     if ((from == &type_string && to == bytes) || (from == bytes && to == &type_string)) return to;
     bool bool_to_integer = from == &type_bool && to->kind == TYPE_INTEGER;
     if (!bool_to_integer && !check_convert(c, value, to)) {
-        diag_error(c->diag, cast->pos, "can't cast '" STR_FMT "' to '" STR_FMT "'%s", STR_ARG(type_name(c->arena, from)),
-                   STR_ARG(type_name(c->arena, to)), conversion_hint(from, to));
+        diag_error(c->diag, cast->pos, "can't cast '" STR_FMT "' to '" STR_FMT "'" STR_FMT,
+                   STR_ARG(type_name(c->arena, from)), STR_ARG(type_name(c->arena, to)),
+                   STR_ARG(conversion_hint(c, value, from, to)));
         return nullptr;
     }
     // A bool constant's 1 or 0 is the integer's value too.
