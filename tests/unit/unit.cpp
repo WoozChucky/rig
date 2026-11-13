@@ -12,6 +12,8 @@
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#else
+#include <sys/resource.h>  // setrlimit, for --touch-reserved
 #endif
 
 static const int MAX_TESTS = 4096;
@@ -200,13 +202,24 @@ static int helper_mode(int argc, char **argv) {
     }
     if (strcmp(argv[1], "--touch-reserved") == 0) {
         // Reads a byte of what os_reserve_inaccessible reserved, which must
-        // fault and end this process; "survived" on stdout if it doesn't.
-        // The read is volatile, so the compiler can't drop it.
+        // fault and end this process; "survived" on stdout if it doesn't,
+        // and "can't reserve" on stderr, exiting 1, if there's nothing to
+        // read. The read is volatile, so the compiler can't drop it.
 #ifdef _WIN32
         SetErrorMode(SEM_NOGPFAULTERRORBOX);  // the crash ends it, with no dialog box waiting for a click
+#else
+        // The crash ends it with no core file: where cores are allowed
+        // (`ulimit -c`), the kernel would write one to the current
+        // directory, the repository's, on every run.
+        struct rlimit no_core = {0, 0};
+        setrlimit(RLIMIT_CORE, &no_core);
 #endif
         volatile u8 *p = (volatile u8 *)os_reserve_inaccessible(1024 * 1024);
-        if (!p) return 2;
+        if (!p) {
+            Arena a = arena_make();
+            fprintf(stderr, "can't reserve: " STR_FMT "\n", STR_ARG(os_error_message(&a)));
+            return 1;
+        }
         u8 byte = p[0];
         printf("survived %d\n", byte);
         return 0;

@@ -193,7 +193,7 @@ enum Ir_Op : u8 {
                                      // From lowering, the text is "PATH:L:C: runtime error: MESSAGE\n",
                                      // and the panic knows how long that prefix is (`constant`, `c`;
                                      // unknown, -1, when built by hand), so the interpreter can give
-                                     // MESSAGE alone; printing doesn't show it
+                                     // MESSAGE alone; ir_print doesn't show the length
     IR_UNREACHABLE,                  // unreachable           control never gets here
 };
 
