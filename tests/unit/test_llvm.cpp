@@ -1253,8 +1253,9 @@ TEST(llvm_debug_types_stop_at_a_depth) {
     // S49002 are defined, and S49001, MAX_DEPTH - 1 levels below S50000, is
     // a declaration. b's S1500 is made after a's S1000, which has MAX_DEPTH
     // levels of its own (S1000 down to S2, and S1 declared): so S1001 holds
-    // a declaration of S1000, and no type has more levels than MAX_DEPTH,
-    // wherever it's made. In the second, P0's next is a pointer to P1, a
+    // a declaration of S1000, and no chain has more levels than MAX_DEPTH,
+    // wherever it's made (with no cycles to pass through: see
+    // llvm_debug_types_through_cycles_are_not_cut). In the second, P0's next is a pointer to P1, a
     // level each, down to P499, whose next is a pointer to no type.
     Arena a = arena_make();
     os_make_directory(str(".build"));
@@ -1293,6 +1294,54 @@ TEST(llvm_debug_types_stop_at_a_depth) {
             CHECK(ok);
             if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
         }
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_debug_types_through_cycles_are_not_cut) {
+    // A debug type's count of levels takes a struct still being made, which
+    // a part leads back to, as one level, then and after (debug_type): so
+    // what MAX_DEPTH bounds is debug_type's recursion, not every chain in
+    // the metadata. Here Ak holds a *Bk, and Bk a *Ak back and, by value, a
+    // chain of MAX_DEPTH - 10 structs Ck_i down to Ck_0, which holds a
+    // *A(k-1). Made a variable at a time, v0 : A0 first, each Ak finds
+    // A(k-1) made already, and every count stays under MAX_DEPTH: nothing
+    // is cut (no declaration, no pointer to no type), though the chain from
+    // A20 down to A0 is about 20 * MAX_DEPTH types long. The module
+    // verifies, and an object is written for both targets.
+    const s64 links = 20;
+    const s64 between = MAX_DEPTH - 10;
+    Arena a = arena_make();
+    os_make_directory(str(".build"));
+    const char *program = "A0 :: struct { p: *B0; }\nB0 :: struct { back: *A0; x: int; }\n";
+    for (s64 k = 1; k <= links; k++) {
+        const char *chain = string_cstr(&a, string_printf(&a, "C%lld_%%lld :: struct { c: C%lld_%%lld; }\n",
+                                                           (long long)k, (long long)k));
+        program = joined(&a, program,
+                         string_cstr(&a, string_printf(&a, "C%lld_0 :: struct { q: *A%lld; }\n", (long long)k,
+                                                       (long long)(k - 1))),
+                         chain_of(&a, chain, 1, between, -1),
+                         string_cstr(&a, string_printf(&a,
+                                                       "A%lld :: struct { p: *B%lld; }\n"
+                                                       "B%lld :: struct { back: *A%lld; c: C%lld_%lld; }\n",
+                                                       (long long)k, (long long)k, (long long)k, (long long)k,
+                                                       (long long)k, (long long)between)));
+    }
+    program = joined(&a, program, "main :: () {\n", chain_of(&a, "    v%lld : A%lld;\n", 0, links, 0), "}\n");
+    CHECK(check_source(&a, program).count == 0);
+    Ir_Module *m = lower_source(&a, program);
+    const char *paths[] = {".build/cycle-types-windows.obj", ".build/cycle-types-linux.o"};
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        const char *last = string_cstr(&a, string_printf(&a, "A%lld", (long long)links));
+        CHECK(contains(struct_line(&a, text, last), ", elements: !"));
+        CHECK(contains(struct_line(&a, text, "C1_0"), ", elements: !"));
+        CHECK(count_of(text, "DIFlagFwdDecl") == 0);
+        CHECK(count_of(text, "baseType: null") == 0);
+        String error = {};
+        bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), &a, &error);
+        CHECK(ok);
+        if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
     }
     arena_free(&a);
 }

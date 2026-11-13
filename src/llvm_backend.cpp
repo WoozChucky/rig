@@ -47,8 +47,8 @@ static String take_message(Arena *a, char *message) {
 }
 
 // A Rig type's debug type: its metadata node (DIType), and how many levels
-// it has, the types in its longest chain of parts, itself included (see
-// DEBUG_TYPE_LEVELS).
+// it has, the types in its longest chain of parts, itself included, as
+// debug_type counts them (see DEBUG_TYPE_LEVELS).
 struct Debug_Type {
     LLVMMetadataRef node;
     s32 levels;
@@ -586,18 +586,36 @@ static const unsigned DW_TAG_structure_type = 0x13;
 // and the variable is at that address (see declare_variables).
 static const u64 DW_OP_deref = 0x06;
 
-// How many levels a debug type may have: the types in its longest chain of
-// parts (a field's type, a pointee, an element), itself included. A program
-// can nest types without a limit the checker sets: structs held by value,
-// each declared after the one it holds (the checker lays each out before
-// the next needs it), or structs each holding a pointer to the next (which
-// needs no layout at all). debug_type makes a type's parts first, a call per
-// level: a chain of 30000 structs overflowed the compiler's 8 MB stack
-// (RIG_STACK_SIZE), with no message. So that no stage overflows silently
-// (ast.h's MAX_DEPTH), a debug type has at most MAX_DEPTH levels: below
-// them, a part is its stand-in (stand_in_debug_type) instead of its own
-// debug type. That bounds debug_type's calls, and the depth of the metadata
-// LLVM's code generator walks to write CodeView or DWARF.
+// How many levels a debug type may have, as debug_type counts them: the
+// types in its longest chain of parts (a field's type, a pointee, an
+// element), itself included. A program can nest types without a limit the
+// checker sets: structs held by value, each declared after the one it holds
+// (the checker lays each out before the next needs it), or structs each
+// holding a pointer to the next (which needs no layout at all). debug_type
+// makes a type's parts first, a call per level: a chain of 30000 structs
+// overflowed the compiler's 8 MB stack (RIG_STACK_SIZE), with no message. So
+// that no stage overflows silently (ast.h's MAX_DEPTH), debug_type goes at
+// most MAX_DEPTH calls deep: a type it would make below that is its stand-in
+// (stand_in_debug_type) instead of its own debug type, and so is a part
+// whose count is MAX_DEPTH already.
+//
+// What this bounds is debug_type's recursion, not every chain in the
+// metadata. A part that leads back to a struct still being made (B's back:
+// *A, made while A's members are) counts the struct as one level, the
+// temporary it finds (debug_struct), and keeps that count once the struct is
+// done: so a chain that passes through such cycles can be longer than
+// MAX_DEPTH and isn't cut. With A0 :: struct { p: *B0; } and B0 :: struct {
+// back: *A0; x: int; }, and each Ak and Bk the same but for Bk also holding,
+// by value, a chain of 990 structs down to one that holds a *A(k-1), every
+// count stays under MAX_DEPTH, yet the chain from A20 is 20 such links
+// long (llvm_debug_types_through_cycles_are_not_cut). debug_type's own
+// recursion is bounded all the same, by its depth (here it finds A(k-1)
+// made already when it makes Ak, a link at a time). LLVM's walks over the
+// metadata (the verifier's, and the code generator's writing DWARF or
+// CodeView) cope with such chains too, as measured: with 600 links, a chain
+// of about 600000 types, and globals g0 : A0 ... g600 : A600 (whose types
+// are made first, A0 first) and a local w : A600 in main, `rig build`
+// succeeds on both systems in about 10 s.
 static const s32 DEBUG_TYPE_LEVELS = MAX_DEPTH;
 
 // The debug type made for t, or one with a null node when there's none yet
@@ -666,7 +684,8 @@ static LLVMMetadataRef part_debug_type(Backend *b, Type *part, s32 depth, s32 *l
 // it's made in three steps:
 //   1. a temporary node, a replaceable composite, stands for it: remembered
 //      as t's debug type (of one level: a part that leads back to it adds
-//      none), it's what a pointer back finds and names;
+//      none, then and after, see DEBUG_TYPE_LEVELS), it's what a pointer
+//      back finds and names;
 //   2. the members are made (make_members), each scoped in the temporary;
 //   3. the real struct type is made with them, and LLVMMetadataReplaceAll-
 //      UsesWith makes every node that names the temporary (the members, the
@@ -746,14 +765,16 @@ static s64 view_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVM
 // - []T and string are the structs they're laid out as, named as Rig names
 //   them ("[]int", "string").
 //
-// No debug type has more than DEBUG_TYPE_LEVELS levels, wherever it's made.
-// A type made DEBUG_TYPE_LEVELS - 1 levels down, past which this would call
-// itself no deeper, is its stand-in (a declaration, or a pointer to no
-// type), as is a part whose own type has DEBUG_TYPE_LEVELS levels already
-// (part_debug_type): made first on its own, a long chain of types is cut
-// where it reaches the limit, and a type that holds the chain's head is cut
-// at the head. A cut is for good: the type remembered is the one with the
-// stand-in. So with S1 :: struct { s: S0; } ... S50000 :: struct { s: S49999; },
+// This calls itself at most DEBUG_TYPE_LEVELS - 1 levels down, and no
+// count it keeps is more than DEBUG_TYPE_LEVELS, wherever the type is made
+// (though a chain through cycles can be longer than its count says: see
+// DEBUG_TYPE_LEVELS). A type made DEBUG_TYPE_LEVELS - 1 levels down is its
+// stand-in (a declaration, or a pointer to no type), as is a part whose own
+// count is DEBUG_TYPE_LEVELS already (part_debug_type): made first on its
+// own, a long chain of types is cut where it reaches the limit, and a type
+// that holds the chain's head is cut at the head. A cut is for good: the
+// type remembered is the one with the stand-in. So with
+// S1 :: struct { s: S0; } ... S50000 :: struct { s: S49999; },
 // a variable v of S50000 made first has v.s ... down to S49002, 998 fields
 // down, whose s is a declared S49001, which gdb shows in full only if
 // another variable needed S49001's own definition
