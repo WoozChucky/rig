@@ -1,0 +1,12 @@
+// A cycle of constants across files (issue #112, spec 4.8): the top level
+// spans the program's files, and so does a cycle. A is this file's, and
+// is defined with load/cycle.rig's B, which is defined with A. It's
+// reported once, at A, the constant being worked out when the cycle
+// closed, and nothing more is said about B.
+#load "load/cycle.rig";
+
+A :: B + 1;
+
+main :: () {
+    x := A;
+}
