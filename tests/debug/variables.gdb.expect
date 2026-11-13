@@ -18,14 +18,33 @@ empty = {<No data fields>}
 none = 0x
 big = '\000' <repeats 65535 times>
 nothing = 0x0
-$1 = 8
-$2 = {value = 42, next = 0x
-$3 = 3
-greet (s=...) at
+$1 = 3
+$2 = -3 '\375'
+$3 = 65000
+$4 = true
+$5 = 1.5
+$6 = 2.25
+$7 = {count = 2, data = 0x
+"hi"}
+$8 = {x = 1, y = 2}
+$9 = {5, 3, 9, 1, 7}
+$10 = {count = 5, data = 0x
+$11 = {value = 42, next = 0x
+$12 = {value = 42, next = 0x
+$13 = {label = 9, children = {count = 0, data = 0x0}}
+$14 = {<No data fields>}
+$15 = 0x
+$16 = '\000' <repeats 65535 times>
+$17 = (void *) 0x0
+$18 = 8
+$19 = 3
+greet (s=..., loud=true) at
 variables.rig:29
 n := s.count;
 s = {count = 2, data = 0x
 "hi"}
-$4 = {count = 2, data = 0x
+loud = true
+$20 = {count = 2, data = 0x
 "hi"}
-$5 = 2
+$21 = 2
+$22 = true

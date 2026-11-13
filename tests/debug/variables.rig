@@ -1,7 +1,7 @@
 // A debugger's view of variables (bin/run-tests runs it under gdb with
 // variables.gdb and under cdb with variables.cdb): a local of each kind of
-// type, a global, and a string parameter shown after its procedure has
-// called something.
+// type, a global, and a string parameter and a bool one shown after their
+// procedure has called something.
 putchar :: (c: s32) -> s32 #foreign libc;
 
 Node :: struct {
@@ -24,7 +24,7 @@ say :: (s: string) {
     for s { putchar(it); }
 }
 
-greet :: (s: string) -> int {
+greet :: (s: string, loud: bool) -> int {
     say(s);
     n := s.count;
     return n;
@@ -52,6 +52,6 @@ main :: () {
     nothing : *void = null;
     counter += 1;
     putchar(10);
-    greet(s);
+    greet(s, true);
     putchar(10);
 }
