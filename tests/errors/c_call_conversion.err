@@ -1,0 +1,6 @@
+tests/errors/c_call_conversion.rig:11:31: error: argument 4 of 'qsort' has type '(*void, *void) -> s32', which can't be converted to '(*void, *void) -> s32 #c_call'; mark 'compare' #c_call for C to call it
+        qsort(numbers.data, 3, 8, compare);
+                                  ^
+tests/errors/c_call_conversion.rig:12:26: error: a value of type '(*u8) -> s32 #c_call' doesn't convert to '(*u8) -> s32' implicitly; #c_call is part of the type, as in '(*u8) -> s32 #c_call'
+        say : (*u8) -> s32 = puts;
+                             ^

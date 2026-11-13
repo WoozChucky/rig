@@ -1,0 +1,12 @@
+// A #c_call procedure takes and gives only what C can (spec 7.6), as a
+// foreign procedure does, and so does a #c_call type.
+Vec2 :: struct { x: int; y: int; }
+
+scale :: (v: Vec2, k: int) -> Vec2 #c_call { return v; }
+name :: (s: string) #c_call { }
+two :: () -> (int, int) #c_call { return 1, 2; }
+apply :: (f: (int) -> int) #c_call { }
+
+main :: () {
+    callback : (values: []int) -> int #c_call;
+}

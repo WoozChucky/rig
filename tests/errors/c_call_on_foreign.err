@@ -1,0 +1,3 @@
+tests/errors/c_call_on_foreign.rig:2:25: error: a foreign procedure is C's already: it takes no '#c_call'
+    puts :: (s: *u8) -> s32 #c_call #foreign libc;
+                            ^

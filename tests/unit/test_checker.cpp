@@ -4378,6 +4378,8 @@ TEST(procedure_types_are_their_signatures) {
               "10:9: a value of type '()' doesn't convert to 'int' implicitly\n"
               "12:9: a value of type '(*void, *void) -> s32 #c_call' doesn't convert to 'int' implicitly\n"
               "14:9: a value of type '() -> ((int))' doesn't convert to 'int' implicitly\n"
+              "15:16: a #c_call procedure can't return a '(int) -> int', which isn't #c_call; C can call a "
+              "'(int) -> int #c_call'\n"
               "16:9: a value of type '() -> ((int) -> int) #c_call' doesn't convert to 'int' implicitly\n"
               "18:9: a value of type '() -> (int) -> int #c_call' doesn't convert to 'int' implicitly\n"
               "20:9: a value of type '(Node, *Node) -> int' doesn't convert to 'int' implicitly\n"
@@ -4575,5 +4577,69 @@ TEST(calls_through_values_are_checked) {
               "10:5: a value of type 'int' isn't a procedure, so it can't be called\n"
               "12:10: 'g' returns nothing, so it has no value\n"
               "13:13: 'f' returns 1 value, but 2 names receive them\n");
+    arena_free(&a);
+}
+
+TEST(c_call_procedures_take_what_c_takes) {
+    // A #c_call procedure, and a #c_call type, take and give what a foreign
+    // procedure does (spec 7.6): numbers, bools, pointers and #c_call
+    // procedures, at most one result. A foreign procedure takes a procedure
+    // only if it's #c_call.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: int; y: int; }\n"
+                           "qsort :: (base: *void, n: u64, size: u64, f: (*void, *void) -> s32 #c_call) #foreign libc;\n"
+                           "fine :: (a: *void, b: *void) -> s32 #c_call { return 0; }\n"
+                           "each :: (f: (int) -> int) #foreign libc;\n"
+                           "pair :: (v: Vec2, s: string) -> Vec2 #c_call { return v; }\n"
+                           "two :: (a: int) -> (int, int) #c_call { return a, a; }\n"
+                           "rig :: (f: (int) -> int) #c_call { }\n"
+                           "main :: () {\n"
+                           "    g : (v: [2]int) -> []int #c_call;\n"
+                           "    h : (int) -> (int, bool) #c_call;\n"
+                           "    k : (int) -> ((int) -> int) #c_call;\n"
+                           "}\n"),
+              "4:13: a foreign procedure can't take a '(int) -> int', which isn't #c_call; C can call a "
+              "'(int) -> int #c_call'\n"
+              "5:13: a #c_call procedure can't take a 'Vec2' yet; pass a pointer to it\n"
+              "5:22: a #c_call procedure can't take a 'string'; pass its .data, which may not end with a zero, or a "
+              "literal\n"
+              "5:33: a #c_call procedure can't return a 'Vec2' yet\n"
+              "6:26: a #c_call procedure can return at most one value\n"
+              "7:12: a #c_call procedure can't take a '(int) -> int', which isn't #c_call; C can call a "
+              "'(int) -> int #c_call'\n"
+              "9:13: a #c_call procedure can't take a '[2]int'; pass its .data\n"
+              "9:24: a #c_call procedure can't return a '[]int' yet\n"
+              "10:24: a #c_call procedure can return at most one value\n"
+              "11:19: a #c_call procedure can't return a '(int) -> int', which isn't #c_call; C can call a "
+              "'(int) -> int #c_call'\n");
+    arena_free(&a);
+}
+
+TEST(c_call_is_part_of_the_type) {
+    // A #c_call type and the same signature without it are two types:
+    // neither converts to the other. The message says what to mark.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                           "compare :: (a: *void, b: *void) -> s32 { return 0; }\n"
+                           "marked :: (a: *void, b: *void) -> s32 #c_call { return 0; }\n"
+                           "main :: () {\n"
+                           "    c : (*void, *void) -> s32 #c_call = compare;\n"
+                           "    rig := compare;\n"
+                           "    c = rig;\n"
+                           "    r : (*void, *void) -> s32 = marked;\n"
+                           "    p : (*u8) -> s32 = puts;\n"
+                           "    q : (*u8) -> s32 #c_call = puts;\n"
+                           "    c = marked;\n"
+                           "}\n"),
+              "5:41: a value of type '(*void, *void) -> s32' doesn't convert to '(*void, *void) -> s32 #c_call' "
+              "implicitly; mark 'compare' #c_call for C to call it\n"
+              "7:9: a value of type '(*void, *void) -> s32' doesn't convert to '(*void, *void) -> s32 #c_call' "
+              "implicitly; only a procedure marked #c_call has a #c_call type\n"
+              "8:33: a value of type '(*void, *void) -> s32 #c_call' doesn't convert to '(*void, *void) -> s32' "
+              "implicitly; #c_call is part of the type, as in '(*void, *void) -> s32 #c_call'\n"
+              "9:24: a value of type '(*u8) -> s32 #c_call' doesn't convert to '(*u8) -> s32' implicitly; #c_call is "
+              "part of the type, as in '(*u8) -> s32 #c_call'\n");
     arena_free(&a);
 }

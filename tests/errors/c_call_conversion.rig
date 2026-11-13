@@ -1,0 +1,13 @@
+// #c_call is part of a procedure's type (spec 7.6): a Rig procedure isn't
+// one C can call until it's marked, and a #c_call procedure, a foreign one
+// too, is no Rig procedure's type.
+puts :: (s: *u8) -> s32 #foreign libc;
+qsort :: (base: *void, count: u64, size: u64, compare: (*void, *void) -> s32 #c_call) #foreign libc;
+
+compare :: (a: *void, b: *void) -> s32 { return 0; }
+
+main :: () {
+    numbers := int.[3, 1, 2];
+    qsort(numbers.data, 3, 8, compare);
+    say : (*u8) -> s32 = puts;
+}
