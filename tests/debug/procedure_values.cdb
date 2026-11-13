@@ -1,0 +1,28 @@
+l+t
+l+s
+l+l
+bp `procedure_values.rig:31`
+g
+dv /t
+dx f
+dx ops
+dx table
+dx none
+dx s
+dx c
+.call @@c++(f)(10, 20)
+g
+.call @@c++(ops.op)(6, 7)
+g
+.call @@c++(table[1])(3, 4)
+g
+bc *
+bp `procedure_values.rig:21`
+g
+dv /t
+dx f
+.call @@c++(f)(1, 2)
+g
+g
+dx f
+q

@@ -88,6 +88,12 @@ Type *check_expression(Checker *c, Ast *e);
 // reports it.
 Type *check_value(Checker *c, Ast *e);
 
+// What a call calls, as its messages name it: the procedure's name, the
+// name of the variable or parameter holding the procedure value, or else
+// the value's type ("'(int, int) -> int' takes 2 arguments, but 3 were
+// given"). For a call whose callee checked.
+String callee_name(Checker *c, Ast_Call *call);
+
 // check_value for an operand of an operator, a condition, a loop's range, a
 // dereference or a field: where no type is met, so .{...} is reported
 // (check_default_type) and gives null.

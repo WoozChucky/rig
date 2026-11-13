@@ -1,0 +1,32 @@
+procedure_values.rig:31
+= (int (*)(int, int)) 0x
+<add>
+= {op = 0x
+<mul>}
+= (int (*)(int, int)) 0x
+<mul>
+= {0x
+<add>, 0x
+<mul>}
+= (int (*)(int, int)) 0x0
+= (void (*)(struct Pair *, struct Pair *, int)) 0x
+<swap>
+= (s32 (*)(void *, void *)) 0x
+<compare>
+= 30
+= 42
+= 12
+type = int (*)(int, int)
+type = void (*)(struct Pair *, struct Pair *, int)
+type = s32 (*)(void *, void *)
+apply (f=0x
+<add>, a=2, b=3)
+return f(a, b);
+f = 0x
+<add>
+= 3
+apply (f=0x
+<mul>, a=4, b=5)
+f = 0x
+<mul>
+!.debug_names not created by gdb

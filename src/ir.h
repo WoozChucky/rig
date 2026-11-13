@@ -58,6 +58,7 @@
 //   global @str.0 = "hi\00"
 //   global @origin: 16 align 8 = zero
 //   global @greeting: 16 align 8 = "\02\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00" reloc 8 @str.0
+//   global @op: 8 align 8 = zero reloc 0 @add     (a procedure's address; zero: no other bytes)
 //   foreign proc @puts(ptr) -> i32
 //   foreign proc @printf(ptr, ...) -> i32       a variadic one, called as @printf(%0, %1, %2)
 //   proc @max(i64, i64) -> i64 {
@@ -154,8 +155,12 @@ enum Ir_Op : u8 {
     IR_CONST,                        // %n = const T bits     (const ptr 0: the null pointer, the only ptr constant;
                                      //  a float's value prints as a number, const f64 2.5)
     IR_ADDR,                         // %n = addr @global
-    IR_CALL,                         // [%n[, %n+1...] =] call @proc(%a, ...): one value per result;
+    IR_PROC_ADDR,                    // %n = procaddr @proc   a procedure's address: a procedure value
+    IR_CALL,                         // [%n[, %n+1...] =] call @proc(args): one value per result;
                                      // one argument per parameter, and any number more to a variadic proc
+    IR_CALL_INDIRECT,                // [%n[, %n+1...] =] call %a(args): a call of the procedure whose
+                                     // address is the ptr %a, a procedure value; its parameters and results
+                                     // are `signature`'s
     IR_SEXT, IR_ZEXT, IR_TRUNC,      // %n = sext T %a to U   (`from` is T, `type` U)
     IR_LOCAL,                        // %n = local T          a stack slot for a T; %n is its address, a ptr
                                      // %n = local N align A  (T void) a block of N bytes, aligned to A
@@ -199,24 +204,29 @@ enum Ir_Pred : u8 {
     IR_FOEQ, IR_FUNE, IR_FOLT, IR_FOLE, IR_FOGT, IR_FOGE,
 };
 
+struct Ir_Proc;
+
 struct Ir_Instr {
     Ir_Op op;
     Ir_Type type;      // the value's type; IR_STORE, IR_CMP, IR_FCMP, IR_SELECT: the operands'; IR_LOCAL: the slot's
-                       // (IR_VOID: bytes); IR_CALL: the first result's; IR_VOID when none
+                       // (IR_VOID: bytes); IR_CALL, IR_CALL_INDIRECT: the first result's;
+                       // IR_VOID when none
     Ir_Type from;      // the conversions (IR_SEXT ... IR_TRUNC, IR_FPEXT ... IR_FPTOUI_SAT, IR_PTRTOINT,
                        // IR_INTTOPTR): the operand's type
     Ir_Pred pred;      // IR_CMP, IR_FCMP
     s32 result;        // the (first) value's number, or -1
     s32 a, b, c;       // operands, value numbers (-1: none); c is IR_SELECT's and IR_BRANCH's condition
     s32 target;        // IR_ADDR, IR_PANIC: a global (IR_PANIC: -1 when the message is %a and %b);
-                       // IR_CALL: a procedure; IR_JUMP, IR_BRANCH: a block (the true one)
+                       // IR_CALL, IR_PROC_ADDR: a procedure; IR_JUMP, IR_BRANCH: a block (the true one)
     s32 target2;       // IR_BRANCH: the false block
     u64 constant;      // IR_CONST: an integer's bits, zero-extended from the type's width; a
                        // float's value as a double's bits (f64_bits), which the backend
                        // rounds to the nearest float for an f32;
                        // IR_LOCAL of bytes, IR_COPY, IR_ZERO: the number of bytes
     u32 align;         // IR_LOCAL of bytes: its alignment, a power of 2
-    Array<s32> args;   // IR_CALL's arguments, IR_RET's values
+    Array<s32> args;   // IR_CALL's and IR_CALL_INDIRECT's arguments, IR_RET's values
+    Ir_Proc *signature;  // IR_CALL_INDIRECT: what the procedure called takes and gives, an Ir_Proc
+                         // of params, results and source_results only, in no module
     Position pos;      // where it comes from: the statement it was lowered from, or the place
                        // standing for it (see "Debug information" above); line 0: none, which
                        // only the procedures the compiler makes have
@@ -229,12 +239,13 @@ struct Ir_Block {
     Array<Ir_Instr> instrs;
 };
 
-// A place in a global of bytes that holds another global's address: its
-// first value, which only the linker (or the loader) knows, so the bytes
-// can't hold it. The global's bytes are zero there.
+// A place in a global of bytes that holds another global's address, or a
+// procedure's: its first value, which only the linker (or the loader)
+// knows, so the bytes can't hold it. The global's bytes are zero there.
 struct Ir_Reloc {
     s64 offset;  // where in the global's bytes the 8-byte address goes
-    s32 global;  // whose address: an index in Ir_Module.globals
+    s32 global;  // whose address: an index in Ir_Module.globals, or in Ir_Module.procs when is_proc
+    bool is_proc;
 };
 
 // A global is one of three things:
@@ -375,6 +386,11 @@ Ir_Instr *ir_emit(Ir_Proc *p, s32 block, Ir_Op op, Ir_Type type);
 // A call to m->procs[callee], numbering one value per result of the callee
 // (none, one, or several, consecutive).
 Ir_Instr *ir_emit_call(Ir_Module *m, Ir_Proc *p, s32 block, s32 callee, Array<s32> args);
+
+// A call through the procedure value %callee, a ptr, of a procedure that
+// takes and gives what `signature` does, numbering one value per result
+// as ir_emit_call does.
+Ir_Instr *ir_emit_call_indirect(Ir_Proc *p, s32 block, s32 callee, Ir_Proc *signature, Array<s32> args);
 
 // Whether the block's last instruction is a terminator: nothing more may be
 // emitted into it.

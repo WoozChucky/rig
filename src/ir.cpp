@@ -60,17 +60,29 @@ Ir_Instr *ir_emit(Ir_Proc *p, s32 block, Ir_Op op, Ir_Type type) {
     return &b->instrs[b->instrs.count - 1];
 }
 
-Ir_Instr *ir_emit_call(Ir_Module *m, Ir_Proc *p, s32 block, s32 callee, Array<s32> args) {
-    Ir_Proc *c = m->procs[callee];
-    // Emitted as giving nothing, then numbered here: one value per result.
-    Ir_Instr *call = ir_emit(p, block, IR_CALL, IR_VOID);
-    call->target = callee;
+// A call of a procedure that gives what `c` gives: emitted as giving
+// nothing, then numbered here, one value per result.
+static Ir_Instr *emit_call_of(Ir_Proc *p, s32 block, Ir_Op op, Ir_Proc *c, Array<s32> args) {
+    Ir_Instr *call = ir_emit(p, block, op, IR_VOID);
     call->args = args;
     if (c->results.count > 0) {
         call->type = c->results[0].type;
         call->result = p->value_count;
         p->value_count += (s32)c->results.count;
     }
+    return call;
+}
+
+Ir_Instr *ir_emit_call(Ir_Module *m, Ir_Proc *p, s32 block, s32 callee, Array<s32> args) {
+    Ir_Instr *call = emit_call_of(p, block, IR_CALL, m->procs[callee], args);
+    call->target = callee;
+    return call;
+}
+
+Ir_Instr *ir_emit_call_indirect(Ir_Proc *p, s32 block, s32 callee, Ir_Proc *signature, Array<s32> args) {
+    Ir_Instr *call = emit_call_of(p, block, IR_CALL_INDIRECT, signature, args);
+    call->a = callee;
+    call->signature = signature;
     return call;
 }
 
@@ -106,7 +118,9 @@ static const char *ir_op_name(Ir_Op op) {
     switch (op) {
     case IR_CONST: return "const";
     case IR_ADDR: return "addr";
-    case IR_CALL: return "call";
+    case IR_PROC_ADDR: return "procaddr";
+    case IR_CALL:
+    case IR_CALL_INDIRECT: return "call";
     case IR_SEXT: return "sext";
     case IR_ZEXT: return "zext";
     case IR_TRUNC: return "trunc";
@@ -224,7 +238,9 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr, bool debug) {
     out(p, "  ");
     if (instr->result >= 0) {
         // A call defines one value per result, numbered from `result` on.
-        s64 count = instr->op == IR_CALL ? m->procs[instr->target]->results.count : 1;
+        s64 count = instr->op == IR_CALL            ? m->procs[instr->target]->results.count
+                    : instr->op == IR_CALL_INDIRECT ? instr->signature->results.count
+                                                    : 1;
         for (s64 i = 0; i < count; i++) out(p, "%s%%%d", i ? ", " : "", instr->result + (s32)i);
         out(p, " = ");
     }
@@ -241,8 +257,14 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr, bool debug) {
         }
         break;
     case IR_ADDR: out(p, "%s @" STR_FMT, op, STR_ARG(m->globals[instr->target].name)); break;
+    case IR_PROC_ADDR: out(p, "%s @" STR_FMT, op, STR_ARG(m->procs[instr->target]->name)); break;
     case IR_CALL:
         out(p, "%s @" STR_FMT "(", op, STR_ARG(m->procs[instr->target]->name));
+        out_values(p, instr->args);
+        out(p, ")");
+        break;
+    case IR_CALL_INDIRECT:
+        out(p, "%s %%%d(", op, instr->a);
         out_values(p, instr->args);
         out(p, ")");
         break;
@@ -314,27 +336,30 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr, bool debug) {
     out(p, "\n");
 }
 
-// A variable of bytes: its size and alignment, then `zero` when it's all
-// zeros, or else its `size` bytes (the ones it was given, then zeros) and
-// where each address goes:
+// A variable of bytes: its size and alignment, then `zero` when its bytes
+// are all zeros, or else its `size` bytes (the ones it was given, then
+// zeros), and where each address goes (a global's, or a procedure's),
+// which the linker writes over the bytes there:
 //   global @origin: 16 align 8 = zero
 //   global @greeting: 16 align 8 = "\02\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00" reloc 8 @str.0
+//   global @op: 8 align 8 = zero reloc 0 @add
 static void out_byte_global(Printer *p, Ir_Module *m, Ir_Global *g) {
     RIG_ASSERT(g->bytes.count <= g->size);
     out(p, "global @" STR_FMT ": %lld align %u = ", STR_ARG(g->name), (long long)g->size, g->align);
-    bool all_zero = g->relocs.count == 0;
+    bool all_zero = true;
     for (s64 i = 0; i < g->bytes.count && all_zero; i++) all_zero = g->bytes.data[i] == 0;
     if (all_zero) {
-        out(p, "zero\n");
-        return;
+        out(p, "zero");
+    } else {
+        out(p, "\"");
+        out_bytes(p, g->bytes);
+        for (s64 i = g->bytes.count; i < g->size; i++) out(p, "\\00");
+        out(p, "\"");
     }
-    out(p, "\"");
-    out_bytes(p, g->bytes);
-    for (s64 i = g->bytes.count; i < g->size; i++) out(p, "\\00");
-    out(p, "\"");
     for (s64 i = 0; i < g->relocs.count; i++) {
         Ir_Reloc r = g->relocs[i];
-        out(p, " reloc %lld @" STR_FMT, (long long)r.offset, STR_ARG(m->globals[r.global].name));
+        String name = r.is_proc ? m->procs[r.global]->name : m->globals[r.global].name;
+        out(p, " reloc %lld @" STR_FMT, (long long)r.offset, STR_ARG(name));
     }
     out(p, "\n");
 }

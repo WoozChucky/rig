@@ -1,0 +1,10 @@
+// A constant is a number, a bool or a procedure: a string, a struct or a
+// pointer isn't one yet.
+Vec2 :: struct { x: int; y: int; }
+
+GREETING :: "hi";
+ORIGIN :: Vec2.{0, 0};
+NOWHERE :: cast(*void) null;
+LIMIT :: 10;
+
+main :: () { }

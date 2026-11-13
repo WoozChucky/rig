@@ -1,0 +1,32 @@
+// A Rig procedure passed to C as a callback (spec 7.6): libc's qsort calls
+// a #c_call comparison, on Linux and on Windows alike. A foreign procedure
+// is a #c_call value too, and is called through one as Rig calls it.
+qsort :: (base: *void, count: u64, size: u64, compare: (a: *void, b: *void) -> s32 #c_call) #foreign libc;
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+puts :: (s: *u8) -> s32 #foreign libc;
+
+ascending :: (a: *void, b: *void) -> s32 #c_call {
+    x := (cast(*int) a).*;
+    y := (cast(*int) b).*;
+    if x < y { return -1; }
+    if x > y { return 1; }
+    return 0;
+}
+
+descending :: (a: *void, b: *void) -> s32 #c_call { return ascending(b, a); }
+
+show :: (numbers: []int) {
+    for numbers { printf("%lld ", it); }
+    printf("\n");
+}
+
+main :: () {
+    numbers := int.[42, 7, -3, 19, 0, 7, 100, -50];
+    qsort(numbers.data, cast(u64) numbers.count, size_of(int), ascending);
+    show(numbers);
+    order : (*void, *void) -> s32 #c_call = descending;
+    qsort(numbers.data, cast(u64) numbers.count, size_of(int), order);
+    show(numbers);
+    say : (s: *u8) -> s32 #c_call = puts;
+    say("through a value");
+}
