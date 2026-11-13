@@ -37,11 +37,11 @@ function samePath(a, b) {
 // Each diagnostic's first line in rig's output (all of its stderr), as
 // { file, line, column, severity, message }: `file` the file as rig named
 // it, resolved from `cwd`, the directory rig ran in, and line and column
-// counted from 1 as rig counts them. Lines that aren't
-// a diagnostic's first line (the source and caret lines, which are
-// indented, and rig's own `rig: error: ...`) are skipped. Windows' "\r\n"
-// reads as "\n". parseDiagnostics and otherFilesError both read rig's
-// output through it, so they agree on what a diagnostic is.
+// counted from 1 as rig counts them. Lines that aren't a diagnostic's first
+// line (the source and caret lines, which are indented, and rig's own
+// `rig: error: ...`) are skipped. Windows' "\r\n" reads as "\n".
+// parseDiagnostics and otherFilesError both read rig's output through it,
+// so they agree on what a diagnostic is.
 function* diagnosticLines(output, cwd) {
     for (const line of output.split(/\r?\n/)) {
         if (/^\s/.test(line)) continue;
