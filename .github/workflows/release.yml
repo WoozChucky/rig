@@ -16,8 +16,9 @@
 # never "-dirty" (building with VERSION changed but not committed would
 # stamp the commit before it, dirty). A dry run, the default, does it all
 # but publish's pushing and drafting: the files are kept as the run's
-# artifact and the notes GitHub would write go to the run's summary. When a
-# build or a test fails, publish doesn't run, and nothing is pushed.
+# artifact (as in a real run) and the notes GitHub would write go to the
+# run's summary. When a build or a test fails, publish doesn't run, and
+# nothing is pushed.
 name: release
 
 on:
@@ -306,11 +307,12 @@ jobs:
             esac
           done
 
-      - name: Keep the files (dry run)
-        if: inputs.dry_run
+      # Kept in a real run too: should drafting the release fail after the
+      # push, the files are here to attach by hand.
+      - name: Keep the files
         uses: actions/upload-artifact@v7
         with:
-          name: release-dry-run
+          name: release-files
           path: dist/
           if-no-files-found: error
 
