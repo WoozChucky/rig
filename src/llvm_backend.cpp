@@ -595,7 +595,7 @@ static const unsigned DW_ATE_unsigned_char = 0x08;
 // are made with.
 static const unsigned DW_TAG_structure_type = 0x13;
 // An operation of a location's expression: the value there is an address,
-// and the variable is at that address (see declare_variables).
+// and the variable is at that address (see declare_variables; Linux only).
 static const u64 DW_OP_deref = 0x06;
 
 // How many levels a debug type may have, as debug_type counts them: the
@@ -1112,6 +1112,17 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
 //   variable is where that points", as clang declares an argument passed
 //   by its address. (Declared on the register's value itself, the location
 //   would last only while the register held it.)
+//   That is how it's described on Linux, and gdb reads it. On Windows,
+//   LLVM writes a deref'd slot as CodeView's S_DEFRANGE_REGISTER_REL_INDIR
+//   ("at the address held at this offset from the frame pointer"), which
+//   cdb reads but Visual Studio's debugger, VS Code's on Windows, doesn't:
+//   the parameter would be missing from its Variables view, and a watch of
+//   it "undefined". So on Windows the variable is the slot itself, typed as
+//   a pointer to the aggregate (`[]int *`), and Visual Studio shows it with
+//   its fields and takes `a.count`, as it does any pointer to a struct.
+//   (A C++ reference, `[]int &`, would be closer to a parameter, but
+//   LLVM-C makes a reference type without a size, and CodeView would then
+//   call it a 32-bit pointer.) cdb sees a pointer too: `a->count`.
 //
 // The stores run before the body, with no location (the builder has none
 // yet): the prologue ends at the first instruction with a location, and a
@@ -1149,6 +1160,9 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
         RIG_ASSERT(v->scope >= 0 && v->scope < body->scope_count);
         LLVMMetadataRef scope = body->scopes[v->scope];
         LLVMMetadataRef type = debug_type(b, v->type);
+        // An aggregate parameter on Windows: a pointer in its slot (see above).
+        bool pointer = v->kind == IR_VAR_ADDRESS && b->target == TARGET_WINDOWS_X64;
+        if (pointer) type = LLVMDIBuilderCreatePointerType(b->debug, type, 64, 0, 0, nullptr, 0);
         const char *name = (const char *)v->name.data;
         unsigned line = (unsigned)v->pos.line;
         // AlwaysPreserve: kept even if LLVM finds no use of it (an optimiser
@@ -1165,7 +1179,7 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
         unsigned column = b->target == TARGET_WINDOWS_X64 ? 0 : (unsigned)v->pos.col;
         LLVMMetadataRef location = LLVMDIBuilderCreateDebugLocation(c, line, column, scope, nullptr);
         LLVMDIBuilderInsertDeclareRecordAtEnd(b->debug, storage[i], variable,
-                                              v->kind == IR_VAR_ADDRESS ? through : plain, location,
+                                              v->kind == IR_VAR_ADDRESS && !pointer ? through : plain, location,
                                               body->blocks[0]);
     }
 }

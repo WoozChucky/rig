@@ -1,6 +1,6 @@
 # The Rig Programming Language Specification
 
-Status: This document describes Rig as implemented by the compiler in this repository. When the compiler changes what Rig accepts or does, this document changes in the same pull request.
+Status: This document describes Rig as implemented by the compiler in this repository. When the compiler changes what Rig accepts or does, this document changes in the same pull request. It is published, with search, at [woozchucky.github.io/rig](https://woozchucky.github.io/rig/).
 
 ## Contents
 
@@ -1497,7 +1497,7 @@ rig version
 
 **`rig check`** reads and checks the program as `rig build` does, prints the same diagnostics, and stops: it writes no file. With `--stdin` it reads the program from standard input, and `FILE.rig` is only the name its diagnostics give it (the file need not exist), which lets an editor check text that is not saved.
 
-**`rig version`** prints the compiler's version and the version of the LLVM it is built with: `rig 0.1.0 (LLVM 23.1.4)`.
+**`rig version`** prints the compiler's version and the version of the LLVM it is built with: `rig 0.1.0 (LLVM 23.1.5)`.
 
 Both `build` and `check` take only a source file whose name ends in `.rig`, in any case: `rig: error: 'hello.txt' isn't a .rig file`. A file that cannot be read is `rig: error: cannot read 'hello.rig': MESSAGE`, with the system's reason (`rig: error: cannot read standard input: MESSAGE` with `--stdin`).
 
@@ -1583,12 +1583,12 @@ When a tool is missing, or the linker fails, the compiler prints the reason or t
 
 The debug information holds:
 
-- **A compile unit** for the source file, named by its absolute path (made from the path given to `rig build` and the directory the compiler ran in), with that directory and the MD5 checksum of the file's bytes, so a debugger finds the file and can tell when it has changed. The unit's language is C (C99), whose expression syntax a debugger then uses (`a.count`, `a[i]`; Rig's `p.*` is C's `*p`), and its producer is `rig 0.1.0 (clang version 23.1.4)`.
+- **A compile unit** for the source file, named by its absolute path (made from the path given to `rig build` and the directory the compiler ran in), with that directory and the MD5 checksum of the file's bytes, so a debugger finds the file and can tell when it has changed. The unit's language is C (C99), whose expression syntax a debugger then uses (`a.count`, `a[i]`; Rig's `p.*` is C's `*p`), and its producer is `rig 0.1.0 (clang version 23.1.5)`.
 - **A subprogram for each procedure with a body**, by its Rig name, with its line and the line its body starts on, so `break main` or `break sort` stops at the procedure and a backtrace names each frame. The internal procedures of section 10.5 have none, and a debugger steps over them.
 - **Lexical blocks** following the program's scopes (section 4.7): each `if`, `else` and standalone block, and each loop's body, which starts at its `for` or `while`.
 - **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}`, a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
 
-- **Variables:** every local variable, parameter, loop iterator (`it`, `it_index` or a named one) and global variable, by its Rig name and with its type. A local is in the lexical block that declares it, so where an inner block hides a name, a debugger shows the inner variable. Parameters are stored in their own stack slots before the body's first line, so a breakpoint at a procedure already shows them; a parameter passed by address (a struct, array, view or string) is described through that address. Constants have no storage and are not variables: a debugger doesn't see them.
+- **Variables:** every local variable, parameter, loop iterator (`it`, `it_index` or a named one) and global variable, by its Rig name and with its type. A local is in the lexical block that declares it, so where an inner block hides a name, a debugger shows the inner variable. Parameters are stored in their own stack slots before the body's first line, so a breakpoint at a procedure already shows them; a parameter passed by address (a struct, array, view or string) is described through that address: in DWARF as the value at the address its slot holds, and in CodeView as a pointer to the value, its slot (Visual Studio's debugger doesn't read CodeView's record for a value at an address held in memory), so cdb names its fields `a->count`. Constants have no storage and are not variables: a debugger doesn't see them.
 - **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; `[N]T` as arrays of N elements; and `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`. A procedure's type lists its result and its parameters. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
 
 A debug type is made at most 1000 levels deep (the limit of section 9.4), counting each type along its longest chain of fields, pointees and elements. A program can chain types more deeply (structs held by value, each declared after the one it holds, or each holding a pointer to the next); past the limit a pointer is described as `void *` and any other type as a declared struct of its name with no fields, so the compiler's work stays bounded.

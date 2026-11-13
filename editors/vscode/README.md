@@ -2,9 +2,11 @@
 
 Syntax highlighting for `.rig` files: keywords, built-in types, directives (`#foreign libc`), numbers in every form the lexer reads (with bad ones like `0X10` or `12ab` marked), strings with their escapes (unknown ones like `\q` marked), nested block comments, procedure, type and constant declarations, calls, `cast,trunc`, `it`/`it_index`, `---` and the operators. Brackets, comments (`Ctrl+/`), auto-closing quotes and indentation work too.
 
-It also shows the compiler's errors as you type, has snippets, and builds and runs the current file from a command, a button or a task.
+It also shows the compiler's errors as you type, has snippets, builds and runs the current file from a command, a button or a task, and debugs it: breakpoints in `.rig` files, the call stack and the variables, with the debuggers of Microsoft's C/C++ extension.
 
-It's JSON and two JavaScript files: a TextMate grammar (`syntaxes/rig.tmLanguage.json`), a language configuration, the snippets (`snippets/rig.json`), the extension's `package.json`, `extension.js`, the commands, tasks and live check, and `diagnostics.js`, which reads the compiler's errors; they use only VS Code's API and Node's built-in modules. No npm, no packages, no build step. The colours come from your theme; the grammar only names what each piece of text is.
+The language itself is documented at [woozchucky.github.io/rig](https://woozchucky.github.io/rig/), its specification.
+
+It's JSON and three JavaScript files: a TextMate grammar (`syntaxes/rig.tmLanguage.json`), a language configuration, the snippets (`snippets/rig.json`), the extension's `package.json`, `extension.js`, the commands, tasks, debugging and live check, `debug.js`, the launch configuration that debugs a program, and `diagnostics.js`, which reads the compiler's errors; they use only VS Code's API and Node's built-in modules. No npm, no packages, no build step. The colours come from your theme; the grammar only names what each piece of text is.
 
 ## Installing
 
@@ -92,6 +94,37 @@ An untitled file (`Ctrl+N`) has to be saved before `rig` can build it: the comma
 
 There's no `rig run` yet: running is `rig build` and then the program. The extension starts both processes itself rather than through a shell, so it works whatever your terminal's shell is (Windows PowerShell 5.1 has no `&&` to chain them).
 
+## Debugging
+
+`rig build` puts debug information in every program it builds (a PDB beside it on Windows, DWARF inside it on Linux; section 10.7 of [the specification](../../docs/rig-spec.md#107-debug-information)), the kind a C debugger reads. So a Rig program is debugged with a C debugger, through **Microsoft's C/C++ extension** (`ms-vscode.cpptools`), which must be installed: Visual Studio's debugger on Windows, and gdb on Linux (`sudo apt install gdb`). In a WSL window it must be installed in WSL, where this extension and the program run.
+
+With a `.rig` file open:
+
+1. Set breakpoints: click left of a line number, or press `F9` on the line.
+2. Start: **Rig: Debug Current File**, the bug button at the top right of the editor (beside ▷) or from the command palette; or `F5` in a folder with no `.vscode/launch.json`, where VS Code picks Rig's debugger for a `.rig` file.
+3. The file is saved and built with the build task (as **Rig: Build Current File** builds it: the output in a terminal, the errors in the Problems panel), and the program starts under the debugger (on Windows in the terminal panel, where what you type goes to it). If the build fails or is stopped, nothing starts, and a message says so.
+
+At a breakpoint the **Variables** view shows the procedure's variables with their values: its locals, a loop's `it`, `it_index` or named iterator, and its parameters. A struct shows its fields, an array its elements, and a view or a string its `count` and `data`; on Windows a parameter that's a struct, an array, a view or a string is described as what's passed, a pointer to the caller's copy, and shows its fields all the same. The **Call Stack** shows each procedure by its Rig name with its file and line (`sort`, called from `main`); clicking a frame shows that frame's variables. `F10` steps over a line, `F11` into a call, `Shift+F11` out of the procedure, and `F5` goes on. Watch expressions, the Debug Console and hovering use C's syntax: `a.count`, `a.data[1]`, and `p->x` and `*p` for Rig's `p.x` through a pointer and `p.*`. [CONTRIBUTING.md](../../CONTRIBUTING.md#debugging-a-rig-program) says how Rig's types look to each debugger: on Windows, a number by C's name (`s32` is `int`, and `int` is `__int64`, which cdb spells `int64`).
+
+A breakpoint binds because `rig` names the file in the debug information by its absolute path, and VS Code sends the debugger that path and the line. On Windows the debugger also checks, by the MD5 checksum the PDB holds, that the file is the one the program was built from: a program built before the file changed shows no source until it's rebuilt, which starting the debugger again does.
+
+A launch configuration of type `rig` in `.vscode/launch.json` does what the button does. **Run > Add Configuration...** offers one ("Rig: Debug a .rig file"), and a `launch.json` that VS Code creates for Rig (the Run view's "create a launch.json file", with a `.rig` file open) starts with one:
+
+```json
+{
+    "version": "0.2.0",
+    "configurations": [
+        { "type": "rig", "request": "launch", "name": "Debug the current .rig file" },
+        { "type": "rig", "request": "launch", "name": "Debug sort", "file": "sort.rig", "args": ["10", "20"] }
+    ]
+}
+```
+
+- `file` is the `.rig` file to build and debug, relative to the workspace folder; by default, the active editor's file. It may use `${file}`, `${workspaceFolder}` and `${workspaceFolder:NAME}`, and no other variable: VS Code replaces variables only after the extension has built the file, so the extension replaces these three itself, and says so if there's another.
+- `args` are the program's command-line arguments.
+
+The extension turns the configuration into one of the C/C++ extension's for the program it built, named "Rig: debug NAME": type `cppvsdbg` on Windows, or `cppdbg` with gdb on Linux. Debugging runs `rig` and the program, so it doesn't happen in Restricted Mode. An untitled file is offered Save As, and once it's saved, `F5` debugs it. With no compiler or no C/C++ extension, a message says so, with a button to the setting or to install the extension.
+
 ## The compiler: `rig.compilerPath`
 
 The extension looks for `rig` in this order:
@@ -108,7 +141,7 @@ If none is there, an error says what was tried, with a button that opens the set
 node editors/vscode/test/check.js
 ```
 
-checks the extension without starting VS Code: every JSON file parses; the commands and the task type in `package.json` are registered by `extension.js`, which requires nothing but `vscode`, Node's own modules and `diagnostics.js`, and which `node --check` parses; the problem matcher's regular expression, taken from `package.json`, reads every diagnostic in `tests/errors/*.err` (file, line and column, never the source and caret lines under it), a Windows path with a drive letter and a runtime error, and `$rig-runtime` reads the runtime error and nothing in `tests/errors`, and neither shares an owner with the other or the live check; `diagnostics.js` uses the same regular expression, reads every `.err` file into the diagnostics it holds, and turns rig's byte columns into VS Code's characters; the setting `rig.check` is declared; the snippets are the expected ones; both install scripts pack the same files, every one `package.json` and `extension.js` need; and `extension.js`, loaded with a stand-in for VS Code's API, behaves: where it looks for the compiler, which file a task builds, which problem matcher the tasks use, what typed input reaches the program, a build whose compiler Node can't start (on Windows, a `.cmd` file), an untitled file and an untrusted workspace, and the live check, with Node itself standing in for `rig` (when it checks, what it shows where, a newer check ending an older one, a missing compiler or one Node can't start said once). It's a check of the extension, not part of the compiler's tests, and needs no packages: plain Node and its `assert`. CI runs it.
+checks the extension without starting VS Code: every JSON file parses; the commands, the task type and the debug type in `package.json` are registered by `extension.js`, which requires nothing but `vscode`, Node's own modules, `debug.js` and `diagnostics.js`, and which `node --check` parses; breakpoints are enabled for Rig, the `rig` debugger and its configurations are declared, and the extension starts when debugging needs it; the problem matcher's regular expression, taken from `package.json`, reads every diagnostic in `tests/errors/*.err` (file, line and column, never the source and caret lines under it), a Windows path with a drive letter and a runtime error, and `$rig-runtime` reads the runtime error and nothing in `tests/errors`, and neither shares an owner with the other or the live check; `diagnostics.js` uses the same regular expression, reads every `.err` file into the diagnostics it holds, and turns rig's byte columns into VS Code's characters; `debug.js` gives the program's path and the C/C++ extension's launch configuration for Windows and Linux alike; the setting `rig.check` is declared; the snippets are the expected ones; both install scripts pack the same files, every one `package.json` and `extension.js` need; and `extension.js`, loaded with a stand-in for VS Code's API, behaves: where it looks for the compiler, which file a task builds, which problem matcher the tasks use, what typed input reaches the program, a build whose compiler Node can't start (on Windows, a `.cmd` file), an untitled file and an untrusted workspace, and the live check, with Node itself standing in for `rig` (when it checks, what it shows where, a newer check ending an older one, a missing compiler or one Node can't start said once), and debugging, with Node standing in for `rig build` and the stand-in's `executeTask` running the task's terminal: a `rig` configuration resolved by building the file and returning the platform's configuration, its `file` with `${file}` and the folder variables, another variable refused, the launch cancelled with its reason and its message's button in an untrusted workspace, for an untitled file, with no compiler, with no C/C++ extension, and with its reason when the build fails, is stopped, ends with no process or doesn't start, a relative `file` with no workspace folder refused as a launch configuration's, Run Without Debugging kept, and **Rig: Debug Current File** starting the `rig` configuration. It's a check of the extension, not part of the compiler's tests, and needs no packages: plain Node and its `assert`. CI runs it.
 
 ## Changing it
 
@@ -124,5 +157,7 @@ The grammar is generated: a unit test, `tests/unit/test_grammar.cpp`, makes `syn
   ```
 
   In PowerShell: `$env:RIG_BLESS='1'; .\bin\unit-tests.exe vscode_grammar; Remove-Item Env:RIG_BLESS`.
-- `vsix/extension.vsixmanifest`'s `Id`, `Version` and `Publisher` must match `package.json`'s `name`, `version` and `publisher`.
+- `vsix/extension.vsixmanifest`'s `Id`, `Version` and `Publisher` must match `package.json`'s `name`, `version` and `publisher`. A change to what the extension does raises the version in both (0.2.0 added debugging).
+- A new file of the extension goes into both install scripts' lists (`files` in `install.sh`, `FILES` in `install.bat`); `check.js` says when one is missing.
+- `check.js` can't check what VS Code itself does with the extension. After a change to debugging, install it and try it: a breakpoint in `tests/debug/acceptance_2c.rig` at `a[j] = a[j - 1];`, then **Rig: Debug Current File**, the repository's "Rig: debug the open .rig file" (in `.vscode/launch.json`), and `F5` in a folder with no `launch.json`. Each stops there, with `sort` and `main` in the Call Stack, `x` 3 and `j` 1 in the Variables view (and on Linux `a`, its `count` 5), and `main`'s `numbers` 5, 3, 9, 1, 7.
 - To check a change, install it again and open a file with "Developer: Inspect Editor Tokens and Scopes", which shows the scope each piece of text gets.

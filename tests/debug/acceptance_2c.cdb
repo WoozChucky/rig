@@ -4,7 +4,7 @@ l+l
 bp `acceptance_2c.rig:40`
 g
 k
-?? a.count
+?? a->count
 ?? x
 ?? j
 .frame 1
