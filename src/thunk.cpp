@@ -2,16 +2,19 @@
 //
 // Every name here starts with Thunk_ or thunk_, but the assembly's
 // rig_thunk_call: in the unity build, the files around this one have
-// static names of their own that would collide.
+// static names of their own that would collide. rig_thunk_call isn't
+// static but a global symbol of the executable, which the linker sees
+// beside the C library's and LLVM's, so it carries rig_ to stay clear of
+// theirs.
 //
 // rig_thunk_call is written in assembly, as a file-scope asm statement: the
 // compiler passes its text to its assembler as it is, into the same object
-// file, so no build script changes. It isn't a naked C++ function, since clang gives a naked
-// function no Windows unwind information, and a debugger or a crash report
-// walking the stack through the thunk needs it. So each thunk declares its
-// own: .seh_* directives on Windows, .cfi_* on Linux, saying where it saved
-// what, so an unwinder can step from the C function, through the thunk, to
-// the interpreter that called it.
+// file, so no build script changes. It isn't a naked C++ function, since
+// clang gives a naked function no Windows unwind information, and a
+// debugger or a crash report walking the stack through the thunk needs it.
+// So each thunk declares its own: .seh_* directives on Windows, .cfi_* on
+// Linux, saying where it saved what, so an unwinder can step from the C
+// function, through the thunk, to the interpreter that called it.
 //
 // Both thunks do much the same, in the same order:
 //   1. save rbp and rbx, the two callee-saved registers they use, and set
@@ -63,7 +66,7 @@ static_assert(offsetof(Thunk_Call, xmm0) == 152);
 // register (rbp, which then holds rsp as it was after the pushes, so the
 // unwinder finds them from rbp wherever rsp has gone since), and
 // .seh_endprologue. The epilogue must be the form the unwinder recognises:
-// `lea rsp, [rbp + offset]`, the pops in the reverse order, `ret`.
+// `leaq offset(%rbp), %rsp`, the pops in the reverse order, `retq`.
 asm(R"asm(
     .text
     .globl rig_thunk_call
