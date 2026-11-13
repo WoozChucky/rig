@@ -1,0 +1,3 @@
+tests/errors/load_no_main.rig:1:1: error: a procedure called 'main' is needed
+    // A program whose files all load, none of them declaring main (issue #112):
+    ^

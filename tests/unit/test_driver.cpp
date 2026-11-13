@@ -15,14 +15,6 @@ TEST(program_name_is_the_file_name_without_rig) {
     CHECK_STR(program_name(str(".rig")), ".rig");
 }
 
-TEST(only_rig_files_end_in_rig) {
-    CHECK(is_rig_file(str("hello.rig")));
-    CHECK(is_rig_file(str("out/HELLO.RIG")));
-    CHECK(!is_rig_file(str("hello.rig.exe")));
-    CHECK(!is_rig_file(str("rig")));
-    CHECK(!is_rig_file(str("hellorig")));
-}
-
 TEST(executable_path_defaults_and_gets_exe_on_windows) {
     Arena a = arena_make();
     CHECK_STR(executable_path(&a, {}, str("hello"), TARGET_WINDOWS_X64), "hello.exe");

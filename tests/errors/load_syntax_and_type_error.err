@@ -1,0 +1,6 @@
+tests/errors/load_syntax_and_type_error.rig:6:9: error: expected '::', found identifier 'int'
+    counter int = 0;
+            ^
+tests/errors/load/too_big.rig:3:14: error: 300 doesn't fit in 'u8'
+        x : u8 = 300;
+                 ^

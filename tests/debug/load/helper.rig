@@ -1,0 +1,6 @@
+// Loaded by tests/debug/loaded.rig: its breakpoint is on this file's
+// return, where doubled holds 42.
+helper :: (n: int) -> int {
+    doubled := n * 2;
+    return doubled;
+}

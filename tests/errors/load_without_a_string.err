@@ -1,0 +1,3 @@
+tests/errors/load_without_a_string.rig:5:7: error: expected a string after #load, as in #load "other.rig";
+    #load player.rig;
+          ^

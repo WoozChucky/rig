@@ -427,6 +427,11 @@ static void dump(Array<u8> *buffer, Ast *node) {
     }
     case AST_BREAK: out(buffer, "(break)"); break;
     case AST_CONTINUE: out(buffer, "(continue)"); break;
+    case AST_LOAD:
+        out(buffer, "(load ");
+        out_quoted(buffer, ((Ast_Load *)node)->path);
+        out(buffer, ")");
+        break;
     }
 }
 
@@ -450,7 +455,8 @@ static bool before(Position a, Position b) {
 }
 
 // The procedures and the globals are two lists, each in source order:
-// merged by position, they're the file's declarations in its order.
+// merged by position, they're the declarations in source order, file by
+// file in load order (Position.file).
 Array<Ast *> ast_declarations(Ast_File *file) {
     Array<Ast *> all = {};
     s64 p = 0, g = 0;
@@ -462,13 +468,26 @@ Array<Ast *> ast_declarations(Ast_File *file) {
     return all;
 }
 
+// A top-level node, on a line of its own.
+static void dump_line(Array<u8> *buffer, Ast *node) {
+    dump(buffer, node);
+    out(buffer, "\n");
+}
+
+// The loads, a third list in source order, are merged in by position too:
+// before each declaration, the loads that come before it; after the last,
+// the loads left.
 String ast_dump(Arena *a, Ast_File *file) {
     Array<u8> buffer = {};
     Array<Ast *> declarations = ast_declarations(file);
+    s64 l = 0;
     for (s64 i = 0; i < declarations.count; i++) {
-        dump(&buffer, declarations[i]);
-        out(&buffer, "\n");
+        while (l < file->loads.count && before(file->loads[l]->pos, declarations[i]->pos)) {
+            dump_line(&buffer, file->loads[l++]);
+        }
+        dump_line(&buffer, declarations[i]);
     }
+    while (l < file->loads.count) dump_line(&buffer, file->loads[l++]);
     array_free(&declarations);
     return finish(a, &buffer);
 }

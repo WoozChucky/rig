@@ -441,8 +441,8 @@ static s32 address_of(Lowering *l, Ast *decl) {
 }
 
 // The index in module->procs of procedure `proc`, a Rig or foreign one of
-// the file: its name's (the checker allowed no other top-level declaration
-// of it).
+// the program, from any of its files: its name's (the checker allowed no
+// other top-level declaration of it, in any file).
 static s32 proc_index_of(Lowering *l, Ast_Proc *proc) {
     s32 *index = table_get(&l->proc_index, proc->name);
     RIG_ASSERT(index);
@@ -657,7 +657,9 @@ static Ir_Op ir_op_of(Token_Kind op, Type *t) {
 // "PATH:L:C: runtime error: ", the start of every runtime error's message
 // at `at`: a runtime check's (emit_runtime_check) and a bounds check's
 // (emit_bounds_check) are built here, so the two can't drift apart. PATH
-// is the source file's path as rig build was given it.
+// is the path messages name `at`'s file by (Source_File.path): the main
+// file's as rig build was given it, a loaded file's as its #load made it
+// (load.h).
 static String runtime_error_prefix(Lowering *l, Position at) {
     String path = l->diag->files[at.file].path;
     return string_printf(l->arena, STR_FMT ":%d:%d: runtime error: ", STR_ARG(path), at.line, at.col);
@@ -2145,7 +2147,7 @@ static s32 add_global_array(Lowering *l, Type *array, Ast *literal) {
 // i1 index_is_signed): what a failing bounds check calls (emit_bounds_check).
 // Made the first time a check needs it, with no body yet: its body is made
 // once every procedure's is (lower_bounds_failed), when the longest `where`
-// is known. Its index in the module's procedures, after the file's.
+// is known. Its index in the module's procedures, after the program's.
 static s32 bounds_failed_proc(Lowering *l) {
     if (l->bounds_failed < 0) {
         Ir_Proc *p = ir_new_proc(l->module, l->arena, str("__rig_bounds_failed"));
@@ -2309,7 +2311,7 @@ static void lower_bounds_failed(Lowering *l) {
 // i1: what == on strings calls (lower_string_comparison). Made the first
 // time a comparison needs it, with no body yet (lower_string_equal makes
 // it, once every procedure's is); its index in the module's procedures,
-// after the file's.
+// after the program's.
 static s32 string_equal_proc(Lowering *l) {
     if (l->string_equal < 0) {
         Ir_Proc *p = ir_new_proc(l->module, l->arena, str("__rig_string_equal"));
@@ -2399,14 +2401,18 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     l.module = m;
     l.block = -1;
 
-    // The source file, for a debugger (ir.h): copied, since d is freed
-    // before the module is.
-    if (d->files.count > 0) {
-        Source_File *file = &d->files[0];
-        m->source_path = string_copy(a, file->absolute_path);
-        m->directory = string_copy(a, file->directory);
-        md5(file->text, m->source_md5);
+    // The source files, for a debugger (ir.h), every one the program was
+    // loaded from, in its order, so a position's file indexes them: the
+    // paths copied, since d is freed before the module is. The directory
+    // rig ran in is every file's; the first's says it.
+    for (s64 i = 0; i < d->files.count; i++) {
+        Source_File *file = &d->files[i];
+        Ir_Source source = {};
+        source.path = string_copy(a, file->absolute_path);
+        md5(file->text, source.md5);
+        array_add(&m->sources, source);
     }
+    if (d->files.count > 0) m->directory = string_copy(a, d->files[0].directory);
 
     // The global variables, in source order, each an Ir_Global of its
     // type. Its first value is the constant the checker made sure it has
@@ -2458,7 +2464,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         Ast_Proc *source = f->procs[i];
         // A broken entry comes with an error (the parser's, or the lexer's
         // for a TOKEN_ERROR the parser stopped at), and rig build stops
-        // before lowering a file with errors.
+        // before lowering a program with errors.
         RIG_ASSERT(!source->is_broken);
         Ir_Proc *p = ir_new_proc(m, a, source->name);
         p->is_foreign = source->is_foreign;

@@ -1,0 +1,3 @@
+// Loaded by tests/errors/load_no_main.rig, load_after_a_recovery.rig and
+// load_missing_then_loaded.rig: a helper, and no main.
+helper :: () {}

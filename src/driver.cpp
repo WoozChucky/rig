@@ -1,36 +1,31 @@
 // driver.cpp: rig build, every stage in order, and rig check, the stages up
 // to the diagnostics (command_check, at the end).
 //
-// rig build FILE.rig [-o OUTPUT] [--no-bounds-checks] reads the file, lexes,
-// parses and checks it, and stops there with the diagnostics on stderr if
-// anything was wrong (exit 1). Otherwise it lowers the program (without the
-// bounds checks of a[i] with --no-bounds-checks, spec 6.5), has LLVM write
-// the object file .build/NAME.obj (Windows) or .build/NAME.o (Linux) in the
-// current directory, and links it into OUTPUT, by default NAME.exe or NAME
-// in the current directory, NAME being the file's name without its
-// directory and .rig (exit 0).
+// rig build FILE.rig [-o OUTPUT] [--no-bounds-checks] reads the file and the
+// files it #loads, lexes, parses and checks them, and stops there with the
+// diagnostics on stderr if anything was wrong (exit 1). Otherwise it lowers
+// the program (without the bounds checks of a[i] with --no-bounds-checks,
+// spec 8.5), has LLVM write the object file .build/NAME.obj (Windows) or
+// .build/NAME.o (Linux) in the current directory, and links it into OUTPUT,
+// by default NAME.exe or NAME in the current directory, NAME being FILE.rig's
+// name (the main file's) without its directory and .rig (exit 0).
 //
 // The checker runs even when the parser found errors, so a syntax error in
 // one procedure and a type error in another are reported in one build. A
 // declaration the parser gave up on stays in the tree as a broken entry, its
 // name alone, which the checker takes as declared and says nothing about
 // (checker.h): so it doesn't report the name as unknown, or main as
-// missing, because of the syntax error.
+// missing, because of the syntax error. A #load that failed is the same:
+// the tree records that a file is missing (Ast_File.lost_a_file), and the
+// checker reports no name as unknown, nor main as missing, because of it.
 //
-// The object file is named after the source file alone, so two builds in
-// one directory of files with the same name in different directories
+// The object file is named after the main source file alone, so two builds
+// in one directory of files with the same name in different directories
 // (a/hello.rig, b/hello.rig) share .build/hello.o: one at a time, they're
 // fine; at the same time, one could link the other's object.
 
 #include "link.h"
-
-// Whether the path ends in .rig, in any case: on Windows HELLO.RIG and
-// hello.rig are the same file, and on Linux .RIG is still plainly meant.
-bool is_rig_file(String path) {
-    if (path.count < 4) return false;
-    const u8 *end = path.data + path.count - 4;
-    return end[0] == '.' && (end[1] | 0x20) == 'r' && (end[2] | 0x20) == 'i' && (end[3] | 0x20) == 'g';
-}
+#include "load.h"
 
 // "src/hello.rig" -> "hello"; either slash. A name that is only ".rig" stays
 // as it is, rather than becoming nothing.
@@ -61,12 +56,13 @@ String executable_path(Arena *a, String output, String name, Target t) {
 
 // The front half of the compiler, all of rig check and the start of rig
 // build: reads the source (the file at `path`, or with from_stdin standard
-// input, named `path` all the same), lexes, parses and checks it, and
-// prints every diagnostic to stderr. Returns the checked tree, or nullptr
-// when the source couldn't be read or had errors, which it has then
-// reported. With `lowered`, as rig build asks, a program without errors is
-// also lowered into *lowered, its indexes bounds-checked when bounds_checks
-// is set; rig check passes nullptr and stops at the checker.
+// input, named `path` all the same), lexes and parses it and every file it
+// #loads (load_program), checks the program, and prints every diagnostic to
+// stderr. Returns the checked tree, or nullptr when the source couldn't be
+// read or had errors, which it has then reported. With `lowered`, as rig
+// build asks, a program without errors is also lowered into *lowered, its
+// indexes bounds-checked when bounds_checks is set; rig check passes
+// nullptr and stops at the checker.
 static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Module **lowered, bool bounds_checks) {
     String text = {};
     bool read = from_stdin ? os_read_stdin(a, &text) : os_read_file(a, path, &text);
@@ -80,30 +76,30 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Modul
         return nullptr;
     }
 
-    // The tokens and the diagnostics are freed here, the tree and the module
-    // kept: they live in the arena.
+    // The diagnostics are freed here, the tree and the module kept: they
+    // live in the arena. The loader lexes and parses this file and every
+    // file it #loads into the one tree, and registers each with d: messages
+    // name a file by its path as given (a loaded one's from the file that
+    // loads it, load.h), the debug information by its absolute path, from
+    // the directory rig runs in (ir_lower).
     Diagnostics d = {};
-    s32 file = diag_add_file(&d, path, text);
-    // Messages name the file by its path as given; the debug information
-    // by its absolute path, from the directory rig runs in (ir_lower).
-    diag_locate_file(&d, file, os_current_directory(a), target_host() == TARGET_WINDOWS_X64);
-    Array<Token> tokens = lex(&d, file, a);
-    Ast_File *tree = parse(tokens, a, &d);
+    Ast_File *tree = load_program(a, &d, path, text);
     check(tree, a, &d);
     bool ok = d.error_count == 0;
     if (!ok) {
-        // Into source order: the lexer reported the whole file before the
-        // parser began, the parser the whole file before the checker, and
-        // the checker reports every signature before any body.
+        // Into source order, file by file in load order: for each file the
+        // lexer reported the whole file before the parser began, and the
+        // parser before the loader's errors about its #loads; the checker
+        // came after every file, and reports every signature before any
+        // body.
         diag_sort(&d);
         diag_print(&d);
     }
-    // Lowered while d still holds the file's path, which a runtime error's
-    // message names, and its absolute path and directory, which the debug
-    // information does; the module keeps its own copies.
+    // Lowered while d still holds the files' paths, which a runtime error's
+    // message names, and their absolute paths and directories, which the
+    // debug information does; the module keeps its own copies.
     if (ok && lowered) *lowered = ir_lower(tree, &d, a, bounds_checks);
     diag_free(&d);
-    array_free(&tokens);
     return ok ? tree : nullptr;
 }
 
@@ -144,9 +140,10 @@ static int build(Arena *a, String path, String output, bool bounds_checks) {
 
 // Whether the source file's name, as given to rig build or rig check, ends
 // in .rig; when it doesn't, says so. Both commands refuse such a name (exit
-// 1, as for any other error rig names): a Rig program is a .rig file, and
-// another file given by mistake (hello.out for hello.rig) would otherwise
-// get a page of syntax errors, or with build, a program named after it.
+// 1, as for any other error rig names): a Rig program's files are .rig
+// files, and another file given by mistake (hello.out for hello.rig) would
+// otherwise get a page of syntax errors, or with build, a program named
+// after it.
 static bool source_named_rig(String path) {
     if (is_rig_file(path)) return true;
     fprintf(stderr, "rig: error: '" STR_FMT "' isn't a .rig file\n", STR_ARG(path));
@@ -210,8 +207,8 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
 // directory is written. That makes it quick and harmless to run on every
 // keystroke, which is what an editor does with it: --stdin reads the source
 // from standard input, so the editor can send what's on screen, saved or
-// not, and FILE.rig is then only the name the diagnostics give it (it
-// needn't exist).
+// not, and FILE.rig is then the name the diagnostics give it and the file
+// whose directory its #loads are found from (it needn't exist).
 int command_check(Arena *a, Array<String> words, void (*print_usage)()) {
     String path = {};
     bool have_path = false, from_stdin = false;

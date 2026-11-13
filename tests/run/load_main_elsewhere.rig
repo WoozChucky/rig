@@ -1,0 +1,5 @@
+// A program whose main file only #loads (issue #112, spec 2.13): main is
+// declared in exactly one of the program's files, and that needn't be the
+// main file. Here it's load/app.rig's, and it's still the program's entry
+// point.
+#load "load/app.rig";

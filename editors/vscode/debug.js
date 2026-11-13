@@ -2,9 +2,9 @@
 //
 // Rig has no debugger of its own, and needs none: `rig build` writes debug
 // information a C debugger reads (a PDB on Windows, DWARF on Linux; spec
-// 10.7), naming the .rig file by its absolute path. So the extension debugs
-// a Rig program with Microsoft's C/C++ extension (ms-vscode.cpptools), whose
-// two debuggers VS Code knows by their types:
+// 10.7), naming each .rig file of the program by its absolute path. So the
+// extension debugs a Rig program with Microsoft's C/C++ extension
+// (ms-vscode.cpptools), whose two debuggers VS Code knows by their types:
 //
 // - `cppvsdbg`, Visual Studio's debugger, on Windows, which reads the PDB;
 // - `cppdbg` on Linux, which drives gdb through its machine interface (MI),

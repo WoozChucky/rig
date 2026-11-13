@@ -63,15 +63,16 @@ What works today, as [the specification](docs/rig-spec.md) describes it:
 - **Numbers and bools:** integers of every width (`s8` to `s64`, `u8` to `u64`, `int`) with arithmetic, bitwise operators and shifts, which wrap; `float32` and `float64` (`float` is `float32`), IEEE 754's; `bool`, with comparisons, `&&`, `||` and `!`. Casts are checked: `cast(u8) x` stops the program if the number would change, `cast,trunc(u8) x` keeps the low bits, and a float cast to an integer truncates and saturates.
 - **Data:** pointers (`*int`, `*x`, `p.*`, `null`, pointer arithmetic, `*void`, `size_of(T)`), structs laid out as C lays them out (`Vec2.{1, 2}`), fixed arrays (`[3]int`, `int.[1, 2, 3]`), views (`[]int`, a count and a pointer) and strings (a view of bytes: `s.count`, `s[0]`, `==`), gone over with `for a` or, to change them, `for * a`.
 - **Procedures** that return several results (`q, r := divmod(7, 2);`), and procedure values: types such as `(int, int) -> int`, procedures kept in variables, fields and arrays and called through them, and `#c_call` procedures that C can call back; variables, constants and globals, with top-level declarations in any order; `if`, `while`, and `for` over a range or a sequence with `it` and `it_index`, `break` and `continue`.
+- **Programs of several files:** `#load "world/map.rig";` makes another file part of the program, its declarations joining the program's one top level. Each file is loaded once, so files may load each other.
 - **Runtime checks, on by default:** an index out of bounds, a null pointer dereference, an integer division by zero or a checked cast that would change a number stops the program with `PATH:LINE:COL: runtime error: MESSAGE` and exit status 101. `#no_abc` or `--no-bounds-checks` turns the bounds checks off.
 - **C interop:** a C function declared once with `#foreign libc` is called like any procedure, with the platform's C calling convention.
 - **Diagnostics** that name the file, line and column and show the line.
-- **Debug information** in every build: a PDB on Windows, DWARF on Linux. gdb, cdb, WinDbg, Visual Studio and VS Code stop at a line of the `.rig` file or at a procedure by its Rig name, show the call stack, step a line at a time, and show the variables with their values.
+- **Debug information** in every build: a PDB on Windows, DWARF on Linux. gdb, cdb, WinDbg, Visual Studio and VS Code stop at a line of any of the program's `.rig` files or at a procedure by its Rig name, show the call stack, step a line at a time, and show the variables with their values.
 - **Windows x64 and Linux x86-64**, linked with each platform's own tools and C runtime.
 
 ## Status
 
-Rig is early. Milestones 1 (hello world) and 2 (the core language) of 8 are done, released as [Rig 0.2.0](https://github.com/WoozChucky/rig/releases/tag/v0.2.0), the first release; milestone 3, compile-time execution, is next. The [roadmap](https://github.com/WoozChucky/rig/issues/85) has the milestones and where each stands.
+Rig is early. Milestones 1 (hello world) and 2 (the core language) of 8 are done, released as [Rig 0.2.0](https://github.com/WoozChucky/rig/releases/tag/v0.2.0), the first release; milestone 3, compile-time execution, is under way, its first part, programs of several files (`#load`), done. The [roadmap](https://github.com/WoozChucky/rig/issues/85) has the milestones and where each stands.
 
 ## Quick start
 
@@ -110,7 +111,7 @@ bin/rig build hello.rig
 
 ## Editor support
 
-[editors/vscode](editors/vscode) is a VS Code extension for `.rig` files: syntax highlighting, the compiler's errors as you type, snippets, and commands to build, run and debug the current file, with breakpoints in the `.rig` file (debugging needs Microsoft's C/C++ extension). Its [README](editors/vscode/README.md) says how to install it.
+[editors/vscode](editors/vscode) is a VS Code extension for `.rig` files: syntax highlighting, the compiler's errors as you type, snippets, and commands to build, run and debug the current file, with breakpoints in the program's `.rig` files (debugging needs Microsoft's C/C++ extension). Its [README](editors/vscode/README.md) says how to install it.
 
 ## Contributing
 

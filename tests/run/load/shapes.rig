@@ -1,0 +1,19 @@
+// Loaded by tests/run/load_files.rig. It #loads print.rig, which the main
+// file loads too: the path is from this file's directory, load/, and the
+// file is read once.
+#load "print.rig";
+
+SIDES :: 4;
+
+Shape :: struct { sides: int; side: int; }
+
+area :: (s: Shape) -> int { return s.side * s.side; }
+
+// print_int is print.rig's, newline load_files.rig's: this file uses the
+// file that loads it too.
+print_shape :: (s: Shape) {
+    print_int(s.sides);
+    putchar(32);
+    print_int(s.side);
+    newline();
+}

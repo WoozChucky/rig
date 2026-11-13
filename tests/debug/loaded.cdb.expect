@@ -1,0 +1,7 @@
+5:     return doubled;
+loaded!helper+
+[@ROOT@\tests\debug\load\helper.rig @ 5]
+loaded!main+
+[@ROOT@\tests\debug\loaded.rig @ 11]
+n = 0n21
+doubled = 0n42
