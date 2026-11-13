@@ -1396,42 +1396,37 @@ static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) 
 //
 // A branch that doesn't reach its end (it returns) doesn't jump; when
 // neither does, there's no `after` at all, and nothing that follows is
-// lowered: the current block has ended. else if is an if lowered inside the
-// else block, so a chain of them is ifs inside ifs: each arm's `after` is
-// where the arm after it ends up, and the first arm's is the whole chain's.
+// lowered: the current block has ended.
 //
-// A chain is lowered in a loop rather than by lower_if calling itself for
-// each else if (parse_if says why), in two passes that make the same blocks
-// in the same order as that recursion would. Down the chain, arm by arm:
-// the condition and its branch, the then block, and the else block that the
-// next arm (or the last else's block) is lowered into. Then back up, from
-// the last arm to the first: each arm's `after`, and the jumps to it, made
-// once everything inside the arm's else part is, as the recursion made them
-// on its way back out.
+// else if is an if inside the else part, so a chain of them is ifs inside
+// ifs, but it's lowered in a loop rather than by lower_if calling itself
+// for each else if (parse_if says why), and with one `after` for the whole
+// chain: each arm's then block, and the last else, jump straight to it.
+// (Ifs inside ifs would have an `after` each, every inner one only a jump
+// to the next one out: a block with no statement of its own, which a
+// debugger leaving the arm that ran would stop in at some line no arm
+// that ran has; see below.) Down the chain, arm by arm: the condition and
+// its branch, the then block, and the else block that the next arm (or the
+// last else's block) is lowered into. Then the `after`, if any arm gets to
+// its end, and the jumps to it.
 //
 // Each arm's own code, its condition and its branch, is at its `if` (an
 // else if's own), in the scope around the chain; its blocks are scopes of
-// their own (lower_scoped_block). The jumps to its `after` are at the '}'
-// that ends what they leave, in the scope around the chain too: the then
-// block's, and the else part's last (the_end_of). That's where clang puts
-// them: at the `if`, the jump over the else would be a step back to the
-// `if` line after the then block's last statement.
+// their own (lower_scoped_block). The jump from a block to `after` is at
+// that block's '}', in the scope around the chain too: that's where clang
+// puts it, since at the `if` it would be a step back to the `if` line after
+// the block's last statement. A jump from an else if's part, with an
+// `after` of its own, would have to be somewhere too: clang puts it at the
+// else if's `if`, a step back up the chain, and at the chain's last '}' it
+// would be at the end of an arm that didn't run. With no position at all
+// (line 0) gdb steps over it, but a CodeView line table has no line 0: the
+// jump would get the line of the code before it, the last arm's, and cdb
+// would stop there.
 struct If_Arm {
     Ast_If *branch;
     s32 test;      // the block ending in the arm's branch
     s32 then_end;  // the then branch's last block: T may have made more
 };
-
-// The '}' that ends an if's else part: its block's, or for an else if,
-// whatever ends that one's own chain.
-static Position the_end_of(Ast *else_part) {
-    while (else_part->kind == AST_IF) {
-        Ast_If *branch = (Ast_If *)else_part;
-        if (!branch->else_part) return branch->then_block->end;
-        else_part = branch->else_part;
-    }
-    return ((Ast_Block *)else_part)->end;
-}
 
 static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
     s32 outer = l->scope;
@@ -1457,25 +1452,27 @@ static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
             l->block = else_block;
         }
     }
-    if (part) lower_scoped_block(l, (Ast_Block *)part, source);  // the last else
+    Ast_Block *last_else = (Ast_Block *)part;
+    if (last_else) lower_scoped_block(l, last_else, source);
 
-    for (s64 i = arms.count - 1; i >= 0; i--) {
-        If_Arm arm = arms[i];
-        bool has_else = arm.branch->else_part != nullptr;
-        // With an else: the block its else part ended in, the last else's
-        // own or, for an else if, where the arms after this one left off.
-        s32 else_end = l->block;
-        bool then_goes_on = !has_ended(l, arm.then_end);
-        bool else_goes_on = has_else ? !has_ended(l, else_end) : true;  // no else: the false edge
-        if (!then_goes_on && !else_goes_on) continue;  // l->block is else_end, which has ended
+    // What gets past the chain: each then block that gets to its end, the
+    // last else if it does, and with no last else, the last arm's false
+    // edge. When nothing does, there's no `after`, and l->block, the last
+    // else's end, has ended.
+    s32 else_end = l->block;  // with a last else, the block it ended in
+    bool else_goes_on = !last_else || !has_ended(l, else_end);
+    bool any_goes_on = else_goes_on;
+    for (s64 i = 0; i < arms.count; i++) any_goes_on = any_goes_on || !has_ended(l, arms[i].then_end);
+    if (any_goes_on) {
         s32 after = new_block(l);
-        if (!has_else) terminator_of(l, arm.test)->target2 = after;
-        if (then_goes_on) {
-            place(l, arm.branch->then_block->end, outer);
-            emit_jump(l, arm.then_end, after);
+        if (!last_else) terminator_of(l, arms[arms.count - 1].test)->target2 = after;
+        for (s64 i = 0; i < arms.count; i++) {
+            if (has_ended(l, arms[i].then_end)) continue;
+            place(l, arms[i].branch->then_block->end, outer);
+            emit_jump(l, arms[i].then_end, after);
         }
-        if (has_else && else_goes_on) {
-            place(l, the_end_of(arm.branch->else_part), outer);
+        if (last_else && else_goes_on) {
+            place(l, last_else->end, outer);
             emit_jump(l, else_end, after);
         }
         l->block = after;

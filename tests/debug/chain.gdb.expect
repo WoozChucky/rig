@@ -1,0 +1,4 @@
+12	        putchar(49);
+13	    } else {
+16	    putchar(10);
+!15	    }
