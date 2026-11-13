@@ -24,7 +24,9 @@ scripts/get_llvm.sh
 bin/rig version
 ```
 
-`rig version` prints `rig 0.1.0 (LLVM VERSION)`, VERSION being the pinned release's (section 10.1 of [the specification](docs/rig-spec.md#101-the-rig-command)).
+`rig version` prints which compiler it is: `rig 0.1.0 (3f9c2a1b7d4e 2026-11-13) LLVM 23.1.5`, Rig's version, the commit it was built from with the commit's date, and the pinned LLVM release's version; `rig version --verbose` adds a line for each part (section 10.1 of [the specification](docs/rig-spec.md#101-the-rig-command)).
+
+**The version and the commit are stamped into every build.** Rig's version is the one line of the `VERSION` file at the repository's root, and nothing else in the source names it. `build.bat` and `build.sh` read it, ask git for the commit (`git rev-parse HEAD`), its date (`git log -1 --format=%cs`) and whether the checkout is dirty (`git status --porcelain --untracked-files=no` lists something: untracked files don't count), and pass all of it to the compiler as `-D` defines, which `src/version.h` reads. Every build compiles everything again (one translation unit), so a build after a commit or an edit always says which source it came from. Without git on the `PATH`, or outside a checkout (no `.git` at the root: a source archive), the commit and its date are `unknown`. Compiling `src/rig.cpp` some other way, without the defines, stops at an `#error` saying to use the build scripts. `VERSION` changes only in a release (below).
 
 `get_llvm` downloads LLVM's official release archive (about 2 GB, resuming a broken download where it stopped), checks its SHA-256 against the one pinned in the script, and keeps only what the build needs (the C API's headers, the static libraries, `llvm-config`, and `lld-link` or `lld`) in `deps/llvm-windows` or `deps/llvm-linux`; set `RIG_LLVM_DIR` to put it elsewhere, for both `get_llvm` and the build. The version is pinned on purpose: changing it is a deliberate change to both scripts and their checksums.
 
@@ -35,7 +37,7 @@ bin/rig version
 ```text
 rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]
 rig check FILE.rig [--stdin]
-rig version
+rig version [--verbose]
 ```
 
 Section 10.1 of [the specification](docs/rig-spec.md#101-the-rig-command) is the whole command line. In short:
@@ -73,6 +75,25 @@ Open the repository's folder: on Windows, or in WSL through VS Code's WSL extens
 - `F5` debugs the compiler (`rig version`, or `rig build` of the open `.rig` file) or the unit tests: Visual Studio's debugger on Windows, gdb on Linux. Its list also has "Rig: debug the open .rig file", last, which debugs a Rig program instead: the open `.rig` file, built with `bin/rig` by Rig's extension (below), which must be installed for it.
 
 Rig's own extension, for `.rig` files, is in `editors/vscode`: `editors\vscode\install.bat` (Windows) or `./editors/vscode/install.sh` (Linux) installs it. Its [README](editors/vscode/README.md) says what it does, how to debug a `.rig` file with it, how to check it, and how to change its grammar. A change to the extension runs its checks, `node editors/vscode/test/check.js`, and raises its version.
+
+## Releasing
+
+Rig's versions are `0.MILESTONE.PATCH`. Finishing milestone N of the [roadmap](https://github.com/WoozChucky/rig/issues/85) releases `0.N.0` (milestone 2 gives `0.2.0`); fixes between milestones bump the patch (`0.2.1`); `1.0.0` waits until the language is stable. Closing a milestone on GitHub posts a reminder on the roadmap issue ([.github/workflows/milestone.yml](.github/workflows/milestone.yml)): "Milestone N, TITLE, is closed: run the Release workflow with `minor`."
+
+A release is made by the **Release** workflow ([.github/workflows/release.yml](.github/workflows/release.yml)), run by hand from the Actions tab on `main`, with the bump, `minor` or `patch`:
+
+1. **Run it as a dry run first** (`dry_run` is ticked by default). It computes the version (`scripts/next_version.sh`), writes `VERSION` and makes the commit "Release X.Y.Z", without pushing it; builds that commit and runs every test on a Linux and a Windows runner; packs the release's files; writes `SHA256SUMS`; and checks that both programs say they are the release commit, clean. Nothing is pushed or created: the files are kept as the run's `release-dry-run` artifact, and the notes GitHub would generate are in the run's summary.
+2. **Run it for real**, with `dry_run` unticked. It does the same, then pushes the release commit to `main` and the tag `vX.Y.Z`, and creates the release as a **draft**, with the files and notes generated from the pull requests merged since the last release. It stops before pushing if a build or a test fails, or if `main` has moved since the run started (run it again).
+3. **Edit the draft**: a few lines of highlights at the top of the generated notes, which are grouped by the pull requests' labels ([.github/release.yml](.github/release.yml): `language`, `compiler` and `bug`, `tooling` and `editor`, `documentation`, `dependencies`, and the rest under "Other"; give every pull request one).
+4. **Publish** it.
+
+The release's files have fixed names, so `https://github.com/WoozChucky/rig/releases/latest/download/NAME` always gets the latest:
+
+- `rig-linux-x64.tar.gz` and `rig-windows-x64.zip`: the compiler, an optimised build, with LLVM's linker beside it (`ld.lld`, `lld-link.exe`), `LICENSE` and `README.md`, at the archive's top level. `scripts/package_linux.sh` and `scripts\package_windows.bat` make them in `dist/`, and try each by building and running hello with the `rig` it holds; either can be run locally.
+- `rig-vscode.vsix`: the VS Code extension (`code --install-extension rig-vscode.vsix`), made by `editors/vscode/install.sh --vsix FILE`. The extension keeps its own version, in its `package.json`, apart from Rig's.
+- `SHA256SUMS`: the SHA-256 of each of the three, as `sha256sum` writes them (`sha256sum -c SHA256SUMS` checks the downloads).
+
+There is no CHANGELOG.md: the Releases page is the changelog.
 
 ## Rules for a change
 
