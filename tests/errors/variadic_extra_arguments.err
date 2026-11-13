@@ -1,0 +1,15 @@
+tests/errors/variadic_extra_arguments.rig:12:29: error: argument 2 of 'printf' has type 'Vec2', which C's '...' can't take; pass a pointer to it
+        printf("%f %s %s %s\n", v, buffer, bytes, s);
+                                ^
+tests/errors/variadic_extra_arguments.rig:12:32: error: argument 3 of 'printf' has type '[8]u8', which C's '...' can't take; pass its .data
+        printf("%f %s %s %s\n", v, buffer, bytes, s);
+                                   ^
+tests/errors/variadic_extra_arguments.rig:12:40: error: argument 4 of 'printf' has type '[]u8', which C's '...' can't take; pass its .data
+        printf("%f %s %s %s\n", v, buffer, bytes, s);
+                                           ^
+tests/errors/variadic_extra_arguments.rig:12:47: error: argument 5 of 'printf' has type 'string', which C's '...' can't take; pass its .data, which may not end with a zero, or a literal
+        printf("%f %s %s %s\n", v, buffer, bytes, s);
+                                                  ^
+tests/errors/variadic_extra_arguments.rig:13:5: error: 'printf' takes at least 1 argument, but 0 were given
+        printf();
+        ^
