@@ -1,8 +1,19 @@
 make  void (
 Pair*,
 int64)
+little  void (
+Small*,
+int)
+name  void (
+string*,
+int64)
+both  void (
+int64[],
+int64)
 sum  int64 (
 Pair*)
-17:     s := p.a + p.b;
+36:     s := p.a + p.b;
 struct Pair * p = 0x
 int64 0n6
+.call returns:
+int64 0n8
