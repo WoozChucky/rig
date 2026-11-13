@@ -118,10 +118,13 @@
 //   name, with its Rig type, its scope, and where it lives: a local or a
 //   scalar parameter in its stack slot (an IR_LOCAL; a parameter's is
 //   stored on entry, and every use reads it, so a debugger that changes it
-//   changes what the program reads), an aggregate parameter behind the
+//   changes what the program reads), an aggregate parameter as the
 //   pointer it's passed as.
-//   Temporaries and hidden result pointers aren't variables: the source
-//   has no name for them.
+//   Temporaries and hidden result pointers aren't variables here: the
+//   source has no name for them. (The backend still describes each hidden
+//   result pointer to a debugger, from Ir_Proc.source_results, as an
+//   artificial parameter named result$: llvm_backend.cpp's
+//   declare_variables.)
 // - Globals keep their Rig type (Ir_Global.rig_type) and position; the
 //   module, the source file's absolute path, the directory rig ran in, and
 //   the file's MD5 (Ir_Module), so a debugger finds the file and can tell

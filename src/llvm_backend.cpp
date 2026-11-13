@@ -220,13 +220,15 @@ static void mark_extensions(Backend *b, Ir_Proc *p, LLVMValueRef function_or_cal
 // bytes as the aggregate has. On both targets LLVM then returns the
 // pointer as well, in rax, as the C conventions say a function returning a
 // struct in memory does (the caller ignores it: it has the pointer
-// already). So the code is what C's convention makes of a function
-// returning a struct of the same size in memory, whatever reads it: a
-// profiler, a debugger, a C caller. (The debug information doesn't rely on
-// it: it says the procedure returns nothing and takes the pointer,
-// result$, begin_procedure_debug_info.) A procedure with several results
-// has none marked: only one parameter can be sret, and a scalar result is
-// returned in rax itself.
+// already). So the code is what C makes of a function returning a struct
+// in memory (as C does for one larger than 8 bytes on Windows, 16 on
+// Linux), for whatever reads it, a profiler or a debugger. (No C code
+// calls a Rig procedure: they're internal to the program. And the debug
+// information doesn't rely on it: the procedure's type says it returns
+// nothing and takes the pointer, begin_procedure_debug_info, and the
+// pointer is the parameter result$, declare_variables.) A procedure with
+// several results has none marked: only one parameter can be sret, and a
+// scalar result is returned in rax itself.
 static void mark_result_pointer(Backend *b, Ir_Proc *p, LLVMValueRef function_or_call, bool is_call) {
     if (p->source_results.count != 1 || !type_is_aggregate(p->source_results[0])) return;
     RIG_ASSERT(p->results.count == 0 && p->params.count > 0 && p->params[0].type == IR_PTR);
@@ -1269,9 +1271,9 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
 //   something else (gdb would say <optimized out>). So the address is
 //   stored into a slot of its own here, and the variable is the slot,
 //   typed as the pointer it holds, a pointer to the aggregate (`[]int *`):
-//   what the procedure takes, as its type says (begin_procedure_debug_-
-//   info), so a debugger calls it with an address (gdb's `print
-//   sum(&q)`). gdb shows the address and takes `p->a`, `*p` and `p.a`
+//   what the procedure takes, as its type says
+//   (begin_procedure_debug_info), so a debugger calls it with an address
+//   (gdb's `print sum(&q)`). gdb shows the address and takes `p->a`, `*p` and `p.a`
 //   (it reads `.` through a pointer too); cdb takes `p->a`; Visual
 //   Studio's debugger, VS Code's on Windows, shows the fields and takes
 //   `a.count`, as it does for any pointer to a struct. (The variable could
@@ -1293,8 +1295,10 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
 //   pointer to the result's type. It's named result$ (result$1, result$2,
 //   ... for several), which can't be a Rig name (Rig's names are C's:
 //   letters, digits and '_'), but which both debuggers take in an
-//   expression (gdb's `print *result$`, cdb's `?? result$`), where gdb
-//   would take $result for one of its own convenience variables. It's
+//   expression (gdb's `print result$`, cdb's `?? result$`), where gdb
+//   would take $result for one of its own convenience variables. (What it
+//   points at, the caller's temporary, holds the result once `return` has
+//   copied it there.) It's
 //   artificial (DW_AT_artificial): made by the compiler, not declared in
 //   the source.
 //
