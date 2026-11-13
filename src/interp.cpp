@@ -1,9 +1,9 @@
 // interp.cpp: the IR interpreter (see interp.h).
 //
 // Every name here is Interp or starts with interp_, Interp_ or INTERP_: in
-// the unity build, the files before this one have static names of their
-// own (lower.cpp's emit and resize, llvm_backend.cpp's value, ...) that
-// would collide.
+// the unity build, the files around this one have static names of their
+// own (check_expr.cpp's saturate and divide, lower.cpp's emit and resize,
+// ...) that would collide.
 //
 // The data stack. A run pushes a frame for each call and pops it at the
 // return, on a stack of RIG_STACK_SIZE bytes of the interpreter's own. A
@@ -45,9 +45,9 @@ struct Interp_Slot {
 struct Interp_Proc {
     Ir_Type *value_types;  // each value's type, value_count of them
     Interp_Slot *slots;    // every IR_LOCAL, whichever block it's in
-    s64 slot_count;
-    u64 locals_size;   // the slots' bytes, aligned; more than RIG_STACK_SIZE when they can't fit
-    u64 locals_align;  // the largest slot alignment, 8 at least (the values' before them)
+    s64 slot_count;        // how many of slots are laid out (none past one that can't fit)
+    u64 locals_size;       // the slots' bytes, aligned; more than RIG_STACK_SIZE when they can't fit
+    u64 locals_align;      // the largest slot alignment, 8 at least (the values' before them)
 };
 
 // A frame's start on the data stack (above).
@@ -71,21 +71,12 @@ struct Interp {
 // ---------------------------------------------------------------------------
 // Values
 
-// An IR type's width in bits: a float's too, and a ptr's 64.
+// An IR type's width in bits: lower.cpp's ir_bits, which knows only the
+// integers, and a float's and a ptr's too.
 static s32 interp_bits(Ir_Type t) {
-    switch (t) {
-    case IR_I1: return 1;
-    case IR_I8: return 8;
-    case IR_I16: return 16;
-    case IR_I32:
-    case IR_F32: return 32;
-    case IR_I64:
-    case IR_PTR:
-    case IR_F64: return 64;
-    case IR_VOID: break;
-    }
-    RIG_ASSERT(!"a value of type void");
-    return 0;
+    if (t == IR_F32) return 32;
+    if (t == IR_F64 || t == IR_PTR) return 64;
+    return ir_bits(t);
 }
 
 // The bytes a value of type t takes in memory, which is also its
@@ -203,9 +194,10 @@ static u64 interp_align_up(u64 x, u64 align) {
 
 // Procedure k's Interp_Proc, made on its first call:
 // - each value's type (the IR keeps only some: ir.h's Ir_Instr.type), for
-//   C calls' variadic arguments (Task 4): a parameter's, a comparison's i1,
-//   a local's ptr, a call's results' from its callee or signature, and
-//   otherwise the instruction's type;
+//   C calls' variadic arguments, which are classified by their value's
+//   type: a parameter's, a comparison's i1, a local's ptr, a call's
+//   results' from its callee or signature, and otherwise the instruction's
+//   type;
 // - its locals' layout, every IR_LOCAL a slot in order, each at its
 //   alignment: a scalar's size, or a block's `constant` bytes at `align`.
 //   A slot too big for the stack, or slots that add up past it, can never
@@ -490,9 +482,10 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
         case IR_MUL: v[i->result] = interp_truncate(v[i->a] * v[i->b], t); break;
         case IR_SDIV:
         case IR_SREM: {
-            // Lowering never divides by 0 (it checks first), but -1 it may
-            // in IR built by hand: the most negative value by -1 is LLVM's
-            // wrap, itself, with remainder 0, where C++'s / traps.
+            // Lowering never divides by 0 (it checks first) or by -1 (it
+            // computes 0 - a), but IR built by hand may divide by -1: the
+            // most negative value by -1 is LLVM's wrap, itself, with
+            // remainder 0, where C++'s / traps.
             s64 x = interp_signed(v[i->a], t), y = interp_signed(v[i->b], t);
             RIG_ASSERT(y != 0);
             u64 r;
@@ -515,9 +508,8 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
         case IR_SHL:
         case IR_LSHR:
         case IR_ASHR: {
-            // The amount masked to the width, as lowering masks it already
-            // and as x86 does: a shift by the width or more is undefined in
-            // C++ as in LLVM.
+            // The amount masked to the width, as lowering masks it already:
+            // a shift by the width or more is undefined in C++ as in LLVM.
             u64 amount = v[i->b] & (u64)(interp_bits(t) - 1);
             u64 r;
             if (i->op == IR_SHL) {
@@ -651,7 +643,10 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
             String all = string_copy(a, {text, (s64)count});
             s64 start = prefix <= count ? (s64)prefix : 0, end = all.count;
             if (end > start && all.data[end - 1] == '\n') end--;
-            interp_fail(in, frame, block, index, a, result, string_slice(all, start, end - start));
+            // The message is a part of the text, in `a` already, so it
+            // isn't given to interp_fail, which would copy it again.
+            interp_fail(in, frame, block, index, a, result, {});
+            result->message = string_slice(all, start, end - start);
             result->panic_text = all;
             return;
         }
@@ -756,6 +751,8 @@ String interp_frames_text(Arena *a, Array<Interp_Frame> frames, Array<String> pa
         array_add(&lines, line);
         total += line.count;
     }
+    // + 1: a zero after (arena_alloc zeroes), as string_printf's results
+    // have, for C.
     u8 *text = (u8 *)arena_alloc(a, (u64)total + 1, 1);
     s64 at = 0;
     for (s64 k = 0; k < lines.count; k++) {

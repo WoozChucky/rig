@@ -56,6 +56,19 @@ static u64 interp_test_value(Arena *a, Ir_Module *m, const char *name, s64 count
     return value;
 }
 
+// For IR built by hand: addr @global, and load T %at; each its value.
+static s32 interp_test_addr(Ir_Proc *p, s32 block, s32 global) {
+    Ir_Instr *addr = ir_emit(p, block, IR_ADDR, IR_PTR);
+    addr->target = global;
+    return addr->result;
+}
+
+static s32 interp_test_load(Ir_Proc *p, s32 block, Ir_Type type, s32 at) {
+    Ir_Instr *load = ir_emit(p, block, IR_LOAD, type);
+    load->a = at;
+    return load->result;
+}
+
 // A float's bits, canonical: in the low 32 of the u64.
 static u64 interp_test_f32_bits(f32 value) {
     u32 bits;
@@ -81,11 +94,21 @@ TEST(interp_integer_ops_wrap) {
                                 "down :: () -> u64 { x : u64 = 0; return x - 1; }\n"
                                 "times :: () -> u32 { x : u32 = 65536; return x * x + 3; }\n"
                                 "negative :: () -> s16 { x : s16 = 300; return x * -200; }\n"
+                                "quotient :: () -> s8 { x : s8 = -7; return x / 2; }\n"
+                                "remainder :: () -> s8 { x : s8 = -7; return x % 2; }\n"
+                                "wide_quotient :: () -> s16 { x : s16 = -30000; return x / 7; }\n"
+                                "widened :: () -> int { x : s8 = -5; return cast(int) x; }\n"
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_value(&a, m, "up"), 0x80);  // -128 as an i8's bits
     CHECK(interp_test_value(&a, m, "down") == ~(u64)0);
     CHECK_EQ(interp_test_value(&a, m, "times"), 3);  // 2^32 wraps to 0
     CHECK_EQ(interp_test_value(&a, m, "negative"), (u16)(s16)(300 * -200));  // -60000 wraps to 5536
+    // A signed operand narrower than 64 bits is read sign-extended: -7, not
+    // the 249 its bits are unsigned; the result is cut back to its width.
+    CHECK_EQ(interp_test_value(&a, m, "quotient"), 0xFD);   // -3
+    CHECK_EQ(interp_test_value(&a, m, "remainder"), 0xFF);  // -1, the dividend's sign
+    CHECK_EQ(interp_test_value(&a, m, "wide_quotient"), (u16)(s16)(-30000 / 7));
+    CHECK(interp_test_value(&a, m, "widened") == ~(u64)4);  // -5 sign-extended to 64 bits
     arena_free(&a);
 }
 
@@ -120,8 +143,8 @@ TEST(interp_signed_division_by_minus_one) {
 }
 
 TEST(interp_shifts_mask_their_amount) {
-    // Lowering masks every shift's amount; the interpreter does too, as x86
-    // does, rather than shift by the width or more, which C++ leaves
+    // Lowering masks every shift's amount to the width; the interpreter
+    // does too, rather than shift by the width or more, which C++ leaves
     // undefined. So shl i32 1, 33 shifts by 1.
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
@@ -159,28 +182,31 @@ TEST(interp_comparisons_signed_and_unsigned) {
     // is below 1, a u32 0xFFFFFFFF above it.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
-                                "compare :: () -> bool, bool, bool, bool, bool, bool {\n"
+                                "compare :: () -> bool, bool, bool, bool, bool, bool, bool, bool, bool {\n"
                                 "    a : s32 = -1;\n"
                                 "    b : s32 = 1;\n"
                                 "    c : u32 = 4294967295;\n"
                                 "    d : u32 = 1;\n"
                                 "    low : s8 = -128;\n"
                                 "    high : s8 = 127;\n"
-                                "    return a < b, c > d, b < a, d >= c, low < high, a == -1;\n"
+                                "    return a < b, c > d, b < a, d >= c, low < high, a == -1, a <= b, b > a, b >= a;\n"
                                 "}\n"
                                 "main :: () { }\n");
     Interp *in = interp_new(m);
     Interp_Result r = {};
     interp_test_run(in, m, "compare", &a, &r);
     CHECK(r.ok);
-    CHECK_EQ(r.results.count, 6);
-    if (r.results.count == 6) {
+    CHECK_EQ(r.results.count, 9);
+    if (r.results.count == 9) {
         CHECK_EQ(r.results[0], 1);
         CHECK_EQ(r.results[1], 1);
         CHECK_EQ(r.results[2], 0);
         CHECK_EQ(r.results[3], 0);
         CHECK_EQ(r.results[4], 1);
         CHECK_EQ(r.results[5], 1);
+        CHECK_EQ(r.results[6], 1);  // -1 <= 1, which unsigned (0xFFFFFFFF) it isn't
+        CHECK_EQ(r.results[7], 1);  // 1 > -1
+        CHECK_EQ(r.results[8], 1);  // 1 >= -1
     }
     interp_test_free(&r);
     interp_free(in);
@@ -199,7 +225,37 @@ TEST(interp_floats) {
                                 "not_a_number :: () -> bool { z := 0.0; n := z / z; return n != n; }\n"
                                 "nan_to_int :: () -> int { z := 0.0; return cast(int) (z / z); }\n"
                                 "saturated :: () -> s32 { big : float64 = 1e30; return cast(s32) big; }\n"
-                                "rounded_once :: () -> float32 { x := 9007199254740993; return cast(float32) x; }\n"
+                                "rounded_once :: () -> float32 { x := 9007199791611905; return cast(float32) x; }\n"
+                                "single_negated :: () -> float32 { x : float32 = 0.0; return -x; }\n"
+                                "widened :: () -> float64 { x : float32 = 0.1; return cast(float64) x; }\n"
+                                "unsigned_to_double :: () -> float64 {\n"
+                                "    x : u64 = 0xFFFF_FFFF_FFFF_FFFF;\n"
+                                "    return cast(float64) x;\n"
+                                "}\n"
+                                "unsigned_to_single :: () -> float32 {\n"
+                                "    x : u64 = 0xFFFF_FFFF_FFFF_FFFF;\n"
+                                "    return cast(float32) x;\n"
+                                "}\n"
+                                "single_to_int :: () -> int { f : float32 = -2.5; return cast(int) f; }\n"
+                                "single_saturated :: () -> s32 { f : float32 = 3e9; return cast(s32) f; }\n"
+                                "low_saturated :: () -> s32 { big : float64 = -1e30; return cast(s32) big; }\n"
+                                "at_the_limit :: () -> s32 { x : float64 = 2147483648.0; return cast(s32) x; }\n"
+                                "to_u8 :: () -> u8 { big : float64 = 1e30; return cast(u8) big; }\n"
+                                "to_u8_just_past :: () -> u8 { x : float64 = 300.0; return cast(u8) x; }\n"
+                                "to_u64 :: () -> u64 { big : float64 = 1e30; return cast(u64) big; }\n"
+                                "to_u64_at_the_limit :: () -> u64 {\n"
+                                "    x : float64 = 18446744073709551616.0;\n"
+                                "    return cast(u64) x;\n"
+                                "}\n"
+                                "negative_to_u32 :: () -> u32 { neg : float64 = -5.5; return cast(u32) neg; }\n"
+                                "small_negative_to_u32 :: () -> u32 { neg : float64 = -0.5; return cast(u32) neg; }\n"
+                                "nan_to_u16 :: () -> u16 { z := 0.0; return cast(u16) (z / z); }\n"
+                                "ordered :: () -> bool, bool, bool, bool, bool, bool, bool {\n"
+                                "    z := 0.0;\n"
+                                "    n := z / z;\n"
+                                "    one := 1.0;\n"
+                                "    return n < one, n <= one, n > one, n >= one, n == n, one <= one, one >= one;\n"
+                                "}\n"
                                 "main :: () { }\n");
     volatile f64 tenth = 0.1, fifth = 0.2;
     CHECK_EQ(interp_test_value(&a, m, "sum"), f64_bits(tenth + fifth));
@@ -210,10 +266,50 @@ TEST(interp_floats) {
     CHECK_EQ(interp_test_value(&a, m, "not_a_number"), 1);
     CHECK_EQ(interp_test_value(&a, m, "nan_to_int"), 0);
     CHECK_EQ(interp_test_value(&a, m, "saturated"), INT32_MAX);
-    // 2^53 + 1 straight to the nearest float, not through the nearest
-    // double (2^53), which would round twice.
-    volatile s64 odd = 9007199254740993;
+    // 2^53 + 2^29 + 1 straight to the nearest float, 2^53 + 2^30: through
+    // the nearest double, 2^53 + 2^29, it would round twice, the second
+    // time from a tie down to 2^53. The test's own conversions show the
+    // two differ.
+    volatile s64 odd = 9007199791611905;
+    volatile f64 odd_double = (f64)odd;
+    CHECK(interp_test_f32_bits((f32)odd) != interp_test_f32_bits((f32)odd_double));
     CHECK_EQ(interp_test_value(&a, m, "rounded_once"), interp_test_f32_bits((f32)odd));
+    // An f32's sign is its bit 31, not 63.
+    CHECK_EQ(interp_test_value(&a, m, "single_negated"), 0x80000000);
+    volatile f32 single_tenth = 0.1f;
+    CHECK(interp_test_value(&a, m, "widened") == f64_bits((f64)single_tenth));
+    // The largest u64 is no -1: it rounds up to 2^64.
+    CHECK(interp_test_value(&a, m, "unsigned_to_double") == f64_bits(18446744073709551616.0));
+    CHECK_EQ(interp_test_value(&a, m, "unsigned_to_single"), 0x5F800000);  // 2^64
+    // An f32 converts from its own bits, saturating as a double does.
+    CHECK(interp_test_value(&a, m, "single_to_int") == ~(u64)1);  // -2
+    CHECK_EQ(interp_test_value(&a, m, "single_saturated"), INT32_MAX);
+    // The signed range's ends: below it the most negative, and 2^31, the
+    // first value past it, the largest.
+    CHECK_EQ(interp_test_value(&a, m, "low_saturated"), 0x80000000);
+    CHECK_EQ(interp_test_value(&a, m, "at_the_limit"), INT32_MAX);
+    // Unsigned: past the range the largest, 2^64 too; below it, -0.5 (whose
+    // whole part is -0.0) included, and NaN, 0.
+    CHECK_EQ(interp_test_value(&a, m, "to_u8"), 255);
+    CHECK_EQ(interp_test_value(&a, m, "to_u8_just_past"), 255);
+    CHECK(interp_test_value(&a, m, "to_u64") == ~(u64)0);
+    CHECK(interp_test_value(&a, m, "to_u64_at_the_limit") == ~(u64)0);
+    CHECK_EQ(interp_test_value(&a, m, "negative_to_u32"), 0);
+    CHECK_EQ(interp_test_value(&a, m, "small_negative_to_u32"), 0);
+    CHECK_EQ(interp_test_value(&a, m, "nan_to_u16"), 0);
+    // <, <=, >, >= and == are ordered: false with a NaN.
+    Interp *in = interp_new(m);
+    Interp_Result r = {};
+    interp_test_run(in, m, "ordered", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 7);
+    if (r.results.count == 7) {
+        for (s64 k = 0; k < 5; k++) CHECK_EQ(r.results[k], 0);
+        CHECK_EQ(r.results[5], 1);
+        CHECK_EQ(r.results[6], 1);
+    }
+    interp_test_free(&r);
+    interp_free(in);
 
     // A float constant is a double's bits, rounded to the nearest float
     // for an f32: one twice float's largest overflows to +inf. The checker
@@ -245,8 +341,29 @@ TEST(interp_locals_structs_arrays_views) {
                                 "    q.y = 8;\n"
                                 "    return q.x * 100 + p.y * 10 + q.y;\n"
                                 "}\n"
+                                "as_bool :: () -> bool {\n"
+                                "    byte : u8 = 2;\n"
+                                "    return (cast(*bool) *byte).*;\n"
+                                "}\n"
+                                "zeroed :: () -> int {\n"
+                                "    total := 0;\n"
+                                "    n := 0;\n"
+                                "    while n < 2 {\n"
+                                "        v : Vec2;\n"
+                                "        total += v.x;\n"
+                                "        v.x = 99;\n"
+                                "        n += 1;\n"
+                                "    }\n"
+                                "    return total;\n"
+                                "}\n"
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_value(&a, m, "field"), 1078);
+    // A bool in memory is any byte but 0 (ir.h's "Memory"), and reads as 1.
+    CHECK_EQ(interp_test_value(&a, m, "as_bool"), 1);
+    // A declaration zeroes its variable each time it runs: the second
+    // iteration's v is zero again, though the first wrote 99 into the same
+    // slot.
+    CHECK_EQ(interp_test_value(&a, m, "zeroed"), 0);
     arena_free(&a);
 }
 
@@ -348,6 +465,37 @@ TEST(interp_globals_and_relocations) {
     CHECK(held == interp_proc_address(in, interp_test_proc(m, "add")));
     interp_test_free(&r);
     interp_free(in);
+
+    // Lowering's relocations all point back, to a literal made first, and
+    // sit at a global's start. By hand, one names a later global and sits
+    // at offset 8 of a 16-byte variable: every global is made before any
+    // relocation is written, and the relocation goes where it says, the
+    // bytes before it keeping their first value.
+    Ir_Module *by_hand = arena_new<Ir_Module>(&a);
+    static const u8 first_bytes[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    s32 holder = add_byte_global(by_hand, "holder", 16, 8);
+    by_hand->globals[holder].bytes = {first_bytes, 8};
+    array_add(&by_hand->globals[holder].relocs, Ir_Reloc{8, holder + 1, false});
+    Ir_Global later = {};
+    later.name = str("later");
+    later.type = IR_I64;
+    later.initial = 7;
+    array_add(&by_hand->globals, later);
+    Ir_Proc *p = new_proc_returning(by_hand, &a, "follow", IR_I64);
+    s32 b = ir_new_block(&a, p);
+    s32 slot = emit_ptradd(p, b, interp_test_addr(p, b, holder), emit_const(p, b, IR_I64, 8));
+    emit_ret(p, b, interp_test_load(p, b, IR_I64, interp_test_load(p, b, IR_PTR, slot)));
+    in = interp_new(by_hand);
+    interp_test_run(in, by_hand, "follow", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 7);
+    u8 *bytes_held = interp_global(in, holder);
+    CHECK(memcmp(bytes_held, first_bytes, sizeof first_bytes) == 0);
+    memcpy(&held, bytes_held + 8, sizeof held);
+    CHECK(held == (u64)(uintptr_t)interp_global(in, holder + 1));
+    interp_test_free(&r);
+    interp_free(in);
     arena_free(&a);
 }
 
@@ -368,6 +516,15 @@ TEST(interp_procedure_values) {
                                 "    return g == first, h == first, g != sub, g(1, 2), first(30, 4), h(500, 6);\n"
                                 "}\n"
                                 "value :: () -> *void { return cast(*void) sub; }\n"
+                                "mismatched :: () -> int, int {\n"
+                                "    p := cast(*void) add;\n"
+                                "    fewer := cast((int) -> int) p;\n"
+                                "    more := cast((int, int, int) -> (int, int)) p;\n"
+                                "    kept := 77;\n"
+                                "    x := fewer(1);\n"
+                                "    y, z := more(1, 2, 3);\n"
+                                "    return kept, y;\n"
+                                "}\n"
                                 "main :: () { }\n");
     Interp *in = interp_new(m);
     Interp_Result r = {};
@@ -386,10 +543,25 @@ TEST(interp_procedure_values) {
     interp_test_run(in, m, "value", &a, &r);
     CHECK(r.ok);
     s32 sub = interp_test_proc(m, "sub");
-    if (r.ok && r.results.count == 1) CHECK(r.results[0] == interp_proc_address(in, sub));
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK(r.results[0] == interp_proc_address(in, sub));
+    interp_test_free(&r);
+    // Called through a type with fewer or more parameters and results than
+    // its own (spec 3.15 says not to), a procedure writes nothing outside
+    // the frames: the run ends, the caller's locals as they were. What a
+    // parameter or result given no value holds isn't specified; the ones
+    // given one are as usual.
+    interp_test_run(in, m, "mismatched", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 2);
+    if (r.results.count == 2) {
+        CHECK_EQ(r.results[0], 77);
+        CHECK_EQ(r.results[1], 3);  // add(1, 2)
+    }
     interp_test_free(&r);
     // Each Rig procedure's address maps back to it, and nothing else does:
-    // not null, not an address between two, not a native one.
+    // not null, not an address between two, not one past the module's
+    // procedures, not a native one.
     for (s32 k = 0; k < (s32)m->procs.count; k++) {
         u64 address = interp_proc_address(in, k);
         CHECK(address != 0);
@@ -397,6 +569,7 @@ TEST(interp_procedure_values) {
         CHECK_EQ(interp_proc_at(in, address + 1), -1);
     }
     CHECK(interp_proc_address(in, 0) != interp_proc_address(in, 1));
+    CHECK_EQ(interp_proc_at(in, interp_proc_address(in, 0) + INTERP_PROC_STRIDE * (u64)m->procs.count), -1);
     CHECK_EQ(interp_proc_at(in, 0), -1);
     CHECK_EQ(interp_proc_at(in, (u64)(uintptr_t)&r), -1);
     interp_free(in);
@@ -441,6 +614,100 @@ TEST(interp_panic_gives_message_and_frames) {
               "    in main (tables.rig:7:5)\n");
     array_free(&paths);
     interp_test_free(&r);
+    interp_free(in);
+
+    // Frames from several files (#load's): each line names its own.
+    Array<Interp_Frame> frames = {};
+    array_add(&frames, Interp_Frame{str("inner"), Position{1, 3, 9}});
+    array_add(&frames, Interp_Frame{str("outer"), Position{0, 12, 5}});
+    array_add(&paths, str("a.rig"));
+    array_add(&paths, str("b.rig"));
+    CHECK_STR(interp_frames_text(&a, frames, paths),
+              "    in inner (b.rig:3:9)\n"
+              "    in outer (a.rig:12:5)\n");
+    array_free(&paths);
+    array_free(&frames);
+    arena_free(&a);
+}
+
+TEST(interp_panic_without_a_prefix) {
+    // Built by hand, a panic doesn't know its prefix's length (-1): its
+    // message is the whole text but the final newline. The same from a
+    // literal and from %a and %b.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    s32 text = add_string(m, "str.0", "boom\n");
+    Ir_Proc *p = new_proc_returning(m, &a, "from_literal", IR_VOID);
+    s32 b = ir_new_block(&a, p);
+    ir_emit(p, b, IR_PANIC, IR_VOID)->target = text;
+    p = new_proc_returning(m, &a, "from_bytes", IR_VOID);
+    b = ir_new_block(&a, p);
+    s32 at = interp_test_addr(p, b, text);
+    s32 count = emit_const(p, b, IR_I64, 5);
+    Ir_Instr *panic = ir_emit(p, b, IR_PANIC, IR_VOID);
+    panic->a = at;
+    panic->b = count;
+    const char *names[] = {"from_literal", "from_bytes"};
+    for (const char *name : names) {
+        Interp *in = interp_new(m);
+        Interp_Result r = {};
+        interp_run(in, interp_test_proc(m, name), {}, &a, &r);
+        CHECK(!r.ok);
+        CHECK_STR(r.message, "boom");
+        CHECK_STR(r.panic_text, "boom\n");
+        CHECK_EQ(r.frames.count, 0);  // procedures without a source_name, as the compiler's
+        interp_test_free(&r);
+        interp_free(in);
+    }
+    arena_free(&a);
+}
+
+TEST(interp_call_of_an_address_that_isnt_a_procedure) {
+    // A call through an address in the range procedures' values come from,
+    // but no Rig procedure's: between two, one past the module's last, or
+    // a foreign procedure's place, which stands for nothing. The run fails
+    // at the call; through a procedure's own address, it runs.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *answer = new_proc_returning(m, &a, "answer", IR_I64);
+    s32 b = ir_new_block(&a, answer);
+    emit_ret(answer, b, emit_const(answer, b, IR_I64, 42));
+    ir_new_proc(m, &a, str("puts"))->is_foreign = true;
+    Ir_Proc *signature = arena_new<Ir_Proc>(&a);
+    array_add(&signature->results, {IR_I64, IR_EXT_NONE});
+    Ir_Proc *caller = new_proc_returning(m, &a, "caller", IR_I64);
+    caller->source_name = str("caller");
+    s32 address = ir_add_param(caller, IR_PTR, IR_EXT_NONE);
+    b = ir_new_block(&a, caller);
+    Ir_Instr *call = ir_emit_call_indirect(caller, b, address, signature, {});
+    call->pos = {0, 3, 9};
+    emit_ret(caller, b, call->result);
+
+    Interp *in = interp_new(m);
+    u64 base = interp_proc_address(in, 0);
+    u64 not_procedures[] = {base + 8, base + INTERP_PROC_STRIDE * (u64)m->procs.count, base + INTERP_PROC_STRIDE};
+    Array<u64> args = {};
+    array_add(&args, base);
+    Interp_Result r = {};
+    interp_run(in, interp_test_proc(m, "caller"), args, &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 42);
+    interp_test_free(&r);
+    for (u64 not_procedure : not_procedures) {
+        args[0] = not_procedure;
+        interp_run(in, interp_test_proc(m, "caller"), args, &a, &r);
+        CHECK(!r.ok);
+        CHECK_STR(r.message, "call of an address that isn't a procedure");
+        CHECK_EQ(r.frames.count, 1);
+        if (r.frames.count == 1) {
+            CHECK_STR(r.frames[0].proc, "caller");
+            CHECK_EQ(r.frames[0].pos.line, 3);
+            CHECK_EQ(r.frames[0].pos.col, 9);
+        }
+        interp_test_free(&r);
+    }
+    array_free(&args);
     interp_free(in);
     arena_free(&a);
 }
@@ -502,9 +769,35 @@ TEST(interp_recursion_to_the_limit) {
     args[0] = 10000;
     interp_run(in, interp_test_proc(m, "deep"), args, &a, &r);
     CHECK(r.ok);
-    if (r.ok && r.results.count == 1) CHECK_EQ(r.results[0], 10000);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 10000);
     interp_test_free(&r);
     array_free(&args);
+    interp_free(in);
+
+    // One frame whose locals alone are past the stack never fits: called,
+    // the run fails at the call, the caller its only frame; run directly,
+    // it fails before it starts, with no frames.
+    m = lower_source(&a,
+                     "huge :: () -> int { b : [9_000_000]u8; return 1; }\n"
+                     "calls_huge :: () -> int { return huge(); }\n"
+                     "main :: () { }\n");
+    in = interp_new(m);
+    interp_run(in, interp_test_proc(m, "calls_huge"), {}, &a, &r);
+    CHECK(!r.ok);
+    CHECK_STR(r.message, "stack overflow");
+    CHECK_EQ(r.frames.count, 1);
+    if (r.frames.count == 1) {
+        CHECK_STR(r.frames[0].proc, "calls_huge");
+        CHECK_EQ(r.frames[0].pos.line, 2);
+        CHECK_EQ(r.frames[0].pos.col, 27);  // its return statement
+    }
+    interp_test_free(&r);
+    interp_run(in, interp_test_proc(m, "huge"), {}, &a, &r);
+    CHECK(!r.ok);
+    CHECK_STR(r.message, "stack overflow");
+    CHECK_EQ(r.frames.count, 0);
+    interp_test_free(&r);
     interp_free(in);
     arena_free(&a);
 }
@@ -525,10 +818,42 @@ TEST(interp_globals_survive_between_runs) {
     CHECK_EQ(r.results.count, 0);
     interp_test_free(&r);
     interp_test_run(in, m, "bump", &a, &r);
+    CHECK(r.ok);
     interp_test_free(&r);
     interp_test_run(in, m, "read", &a, &r);
     CHECK(r.ok);
-    if (r.ok && r.results.count == 1) CHECK_EQ(r.results[0], 11);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 11);
+    interp_test_free(&r);
+
+    // The module may grow between runs (#115's #run adds to it): the next
+    // run maps the globals and procedures it gained, the earlier ones kept
+    // as they were. Here a scalar global, a global of bytes holding
+    // counter's address, and a procedure reading both and calling read.
+    s32 counter = interp_test_global(m, "counter");
+    Ir_Global forty = {};
+    forty.name = str("forty");
+    forty.type = IR_I64;
+    forty.initial = 40;
+    array_add(&m->globals, forty);
+    s32 forty_index = (s32)(m->globals.count - 1);
+    s32 pointer = add_byte_global(m, "pointer", 8, 8);
+    array_add(&m->globals[pointer].relocs, Ir_Reloc{0, counter, false});
+    Ir_Proc *p = new_proc_returning(m, &a, "later", IR_I64);
+    s32 b = ir_new_block(&a, p);
+    s32 from_forty = interp_test_load(p, b, IR_I64, interp_test_addr(p, b, forty_index));
+    s32 address = interp_test_load(p, b, IR_PTR, interp_test_addr(p, b, pointer));
+    s32 sum = emit_binary(p, b, IR_ADD, IR_I64, from_forty, interp_test_load(p, b, IR_I64, address));
+    Ir_Instr *call = ir_emit_call(m, p, b, interp_test_proc(m, "read"), {});
+    s32 counted = call->result;
+    emit_ret(p, b, emit_binary(p, b, IR_ADD, IR_I64, sum, counted));
+    interp_test_run(in, m, "later", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 40 + 11 + 11);
+    u64 held = 0;
+    memcpy(&held, interp_global(in, pointer), sizeof held);
+    CHECK(held == (u64)(uintptr_t)interp_global(in, counter));
     interp_test_free(&r);
     interp_free(in);
     arena_free(&a);
