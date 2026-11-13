@@ -1,6 +1,6 @@
 # The Rig Programming Language Specification
 
-Status: This document describes Rig as implemented by the compiler in this repository. When the compiler changes what Rig accepts or does, this document changes in the same pull request.
+Status: This document describes Rig as implemented by the compiler in this repository. When the compiler changes what Rig accepts or does, this document changes in the same pull request. It is published, with search, at [woozchucky.github.io/rig](https://woozchucky.github.io/rig/).
 
 ## Contents
 

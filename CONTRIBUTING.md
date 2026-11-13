@@ -76,6 +76,6 @@ Rig's own extension, for `.rig` files, is in `editors/vscode`: `editors\vscode\i
 
 ## Rules for a change
 
-- **The specification moves with the compiler.** A change to what Rig accepts or does updates [docs/rig-spec.md](docs/rig-spec.md) in the same pull request: it is the source of truth. The [design document](docs/superpowers/specs/2026-11-11-rig-language-design.md) is a record of the original design and isn't updated.
+- **The specification moves with the compiler.** A change to what Rig accepts or does updates [docs/rig-spec.md](docs/rig-spec.md) in the same pull request: it is the source of truth. The website, [woozchucky.github.io/rig](https://woozchucky.github.io/rig/), is built from it (`site/`, see [site/README.md](site/README.md)) and published on every merge to main; a pull request that breaks one of the specification's links fails its build. The [design document](docs/superpowers/specs/2026-11-11-rig-language-design.md) is a record of the original design and isn't updated.
 - **Tests, on both systems.** Every change comes with tests, and they pass on Windows and on Linux. CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) builds and runs everything on Linux only, with gdb required; Windows is checked locally, `build.bat`, `bin\unit-tests.exe` and `bin\run-tests.exe`, before each push.
 - **Commits** are a short summary in the imperative ("Link the language specification from the README"), with a body when the why isn't obvious, and no trailers.
