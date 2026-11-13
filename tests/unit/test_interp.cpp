@@ -12,7 +12,7 @@
 
 #include "test.h"
 
-#include <math.h>  // copysignf and ldexp, for thunk_float_results
+#include <math.h>  // copysignf, ldexp and sqrt, for thunk_float_results and interp_finds_c_functions_by_name
 #include <time.h>  // time, for interp_recursion_to_the_limit
 #ifdef _WIN32
 #include <process.h>  // _getpid, for interp_calls_a_windows_function
@@ -67,6 +67,14 @@ static u64 interp_test_value(Arena *a, Ir_Module *m, const char *name) {
     interp_test_free(&r);
     interp_free(in);
     return value;
+}
+
+// The C function the interpreter finds by `name`, looked up as it does: the
+// compiler's own table first (the standard C library on Windows; what
+// libc_nonshared.a links in on Linux), then the system's.
+static void *interp_test_c_function(const char *name) {
+    void *f = interp_c_library_function(str(name));
+    return f ? f : os_find_c_function(str(name));
 }
 
 // Runs m's procedure `name`, which takes no arguments, and checks that it
@@ -956,7 +964,18 @@ TEST(interp_call_of_an_address_that_isnt_a_procedure) {
 
     Interp *in = interp_new(m);
     u64 base = interp_proc_address(in, 0);
-    u64 not_procedures[] = {base + 8, base + INTERP_PROC_STRIDE * (u64)m->procs.count, base + INTERP_PROC_STRIDE};
+    // Each address the call fails at, and how.
+    struct Stray {
+        u64 address;
+        const char *message;
+    };
+    static const char *not_a_procedure = "call of an address that isn't a procedure";
+    Stray strays[] = {
+        {base + 8, not_a_procedure},
+        {base + INTERP_PROC_STRIDE * (u64)m->procs.count, not_a_procedure},
+        {base + INTERP_PROC_STRIDE, not_a_procedure},
+        {0, "null procedure call"},
+    };
     Array<u64> args = {};
     array_add(&args, base);
     Interp_Result r = {};
@@ -965,11 +984,11 @@ TEST(interp_call_of_an_address_that_isnt_a_procedure) {
     CHECK_EQ(r.results.count, 1);
     if (r.results.count == 1) CHECK_EQ(r.results[0], 42);
     interp_test_free(&r);
-    for (u64 not_procedure : not_procedures) {
-        args[0] = not_procedure;
+    for (Stray stray : strays) {
+        args[0] = stray.address;
         interp_run(in, interp_test_proc(m, "caller"), args, &a, &r);
         CHECK(!r.ok);
-        CHECK_STR(r.message, "call of an address that isn't a procedure");
+        CHECK_STR(r.message, stray.message);
         CHECK_EQ(r.frames.count, 1);
         if (r.frames.count == 1) {
             CHECK_STR(r.frames[0].proc, "caller");
@@ -978,17 +997,6 @@ TEST(interp_call_of_an_address_that_isnt_a_procedure) {
         }
         interp_test_free(&r);
     }
-    args[0] = 0;
-    interp_run(in, interp_test_proc(m, "caller"), args, &a, &r);
-    CHECK(!r.ok);
-    CHECK_STR(r.message, "null procedure call");
-    CHECK_EQ(r.frames.count, 1);
-    if (r.frames.count == 1) {
-        CHECK_STR(r.frames[0].proc, "caller");
-        CHECK_EQ(r.frames[0].pos.line, 3);
-        CHECK_EQ(r.frames[0].pos.col, 9);
-    }
-    interp_test_free(&r);
     array_free(&args);
     interp_free(in);
     arena_free(&a);
@@ -1083,6 +1091,9 @@ TEST(interp_mismatched_calls_by_hand) {
 
 // The message of a C function that isn't there, as the tests below name it.
 static const char *INTERP_TEST_NOPE = "'nope_not_a_function' isn't in the C library at compile time";
+
+// The message of a Rig procedure given to C, refused before C runs.
+static const char *INTERP_TEST_REFUSED = "a Rig procedure can't be passed to C at compile time, for now";
 
 TEST(interp_c_functions_by_hand) {
     // A C function the C library doesn't have fails the run where it's
@@ -1187,7 +1198,7 @@ TEST(interp_c_functions_by_hand) {
     args[0] = interp_proc_address(in, interp_test_proc(m, "value"));
     interp_run(in, strlen_proc, args, &a, &r);
     CHECK(!r.ok);
-    CHECK_STR(r.message, "a Rig procedure can't be passed to C at compile time, for now");
+    CHECK_STR(r.message, INTERP_TEST_REFUSED);
     CHECK_EQ(r.frames.count, 0);
     interp_test_free(&r);
     array_free(&call_args);
@@ -1428,6 +1439,34 @@ TEST(interp_globals_survive_between_runs) {
         CHECK(held == (u64)(uintptr_t)interp_global(in, counter));
     }
     interp_test_free(&r);
+
+    // A foreign procedure it gains is C's as well: strlen, which a global
+    // gained holds the value of, and a procedure gained calls on a literal
+    // gained.
+    s32 strlen_proc = (s32)m->procs.count;
+    Ir_Proc *c = ir_new_proc(m, &a, str("strlen"));
+    c->is_foreign = true;
+    ir_add_param(c, IR_PTR, IR_EXT_NONE);
+    array_add(&c->results, {IR_I64, IR_EXT_NONE});
+    s32 text = add_string(m, "str.0", "seven!!");
+    s32 holder = add_byte_global(m, "holder", 8, 8);
+    array_add(&m->globals[holder].relocs, Ir_Reloc{0, strlen_proc, true});
+    p = new_proc_returning(m, &a, "measure", IR_I64);
+    b = ir_new_block(&a, p);
+    Array<s32> call_args = {};
+    array_add(&call_args, emit_addr(p, b, text));
+    emit_ret(p, b, ir_emit_call(m, p, b, strlen_proc, call_args)->result);
+    interp_test_run(in, m, "measure", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 7);
+    if (r.ok) {
+        u64 held = 0;
+        memcpy(&held, interp_global(in, holder), sizeof held);
+        CHECK(held == (u64)(uintptr_t)interp_test_c_function("strlen"));
+    }
+    interp_test_free(&r);
+    array_free(&call_args);
     interp_free(in);
     arena_free(&a);
 }
@@ -2221,14 +2260,6 @@ TEST(thunk_keeps_the_callers_registers) {
 // Interpreted code calling C: foreign procedures and their values, found by
 // name and called through the thunks.
 
-// The C function the interpreter finds by `name`, looked up as it does: the
-// compiler's own table first (the standard C library on Windows; what
-// libc_nonshared.a links in on Linux), then the system's.
-static void *interp_test_c_function(const char *name) {
-    void *f = interp_c_library_function(str(name));
-    return f ? f : os_find_c_function(str(name));
-}
-
 TEST(interp_calls_c) {
     // C's functions, called as a program calls them:
     // - snprintf, given 13 variadic values, at least one of each kind
@@ -2359,6 +2390,9 @@ TEST(interp_calls_c_through_a_value) {
     // A C function's value is its native address, the one the interpreter
     // looks up by name, and a call through it goes to C, float32 arguments
     // and result too (the float registers, as the signature types them).
+    // atexit's is the compiler's own on both hosts, from its table (on
+    // Linux, libc.so.6 doesn't export it), and so is pthread_atfork, which
+    // Linux calls: given no handlers, it registers nothing and gives 0.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "strlen :: (s: *u8) -> u64 #foreign libc;\n"
@@ -2375,12 +2409,20 @@ TEST(interp_calls_c_through_a_value) {
                                 "    return h(three, minus_one);\n"
                                 "}\n"
                                 "value :: () -> *void { return cast(*void) strlen; }\n"
+                                "atexit :: (f: () #c_call) -> s32 #foreign libc;\n"
+                                "exit_hook :: () -> *void { return cast(*void) atexit; }\n"
+                                "pthread_atfork :: (prepare: *void, parent: *void, child: *void) -> s32 #foreign libc;\n"
+                                "no_fork_handlers :: () -> s32 { return pthread_atfork(null, null, null); }\n"
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_value(&a, m, "measure"), 4);
     CHECK_EQ(interp_test_value(&a, m, "floats"), interp_f32_bits(-3.0f));
     void *strlen_function = interp_test_c_function("strlen");
     CHECK(strlen_function != nullptr);
     CHECK(interp_test_value(&a, m, "value") == (u64)(uintptr_t)strlen_function);
+    CHECK(interp_test_value(&a, m, "exit_hook") == (u64)(uintptr_t)&atexit);
+#ifndef _WIN32
+    CHECK_EQ(interp_test_value(&a, m, "no_fork_handlers"), 0);
+#endif
     arena_free(&a);
 }
 
@@ -2451,12 +2493,11 @@ TEST(interp_refuses_a_rig_procedure_to_c) {
                                 "    return llabs(cast(s64) cast(*void) compare);\n"
                                 "}\n"
                                 "main :: () { }\n");
-    static const char *refused = "a Rig procedure can't be passed to C at compile time, for now";
     Interp *in = interp_new(m);
-    interp_test_fails_at(in, m, "sort", &a, refused, 8, 5);
-    interp_test_fails_at(in, m, "as_pointer", &a, refused, 11, 5);
-    interp_test_fails_at(in, m, "as_variadic", &a, refused, 14, 5);
-    interp_test_fails_at(in, m, "through_a_value", &a, refused, 18, 5);
+    interp_test_fails_at(in, m, "sort", &a, INTERP_TEST_REFUSED, 8, 5);
+    interp_test_fails_at(in, m, "as_pointer", &a, INTERP_TEST_REFUSED, 11, 5);
+    interp_test_fails_at(in, m, "as_variadic", &a, INTERP_TEST_REFUSED, 14, 5);
+    interp_test_fails_at(in, m, "through_a_value", &a, INTERP_TEST_REFUSED, 18, 5);
     Interp_Result r = {};
     interp_test_run(in, m, "as_integer", &a, &r);
     CHECK(r.ok);

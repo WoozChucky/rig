@@ -292,7 +292,8 @@ It is proven by running every `tests/run` program interpreted. Nothing in the la
 
 **Files:**
 - Modify: `src/interp.cpp` (foreign calls, native indirect calls, foreign procedure values from `IR_PROC_ADDR`, foreign relocations, the refusal)
-- Create: `src/interp_c_functions.cpp` (the Windows C17 table; in `all.cpp` before `interp.cpp`)
+- Create: `src/interp_c_functions.cpp` (the C functions taken from the compiler itself: Windows' C17 table, Linux's `libc_nonshared.a` three; in `all.cpp` before `interp.cpp`)
+- Modify: `src/interp.h` (the C-call overview, `interp_c_library_function`)
 - Modify: `src/os.h`, `src/os_windows.cpp`, `src/os_linux.cpp` (`os_find_c_function`, in Task 1's section)
 - Test: `tests/unit/test_interp.cpp`
 

@@ -509,8 +509,10 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
             if (m->procs.data[instr->target]->is_foreign) {
                 void *f = interp_c_function(in, instr->target);
                 if (!f) {
-                    interp_fail(in, frame, block, index, a, result,
-                                interp_not_in_c(a, m->procs.data[instr->target]->name));
+                    // The message is made in `a`, so it isn't given to
+                    // interp_fail, which would copy it again.
+                    interp_fail(in, frame, block, index, a, result, {});
+                    result->message = interp_not_in_c(a, m->procs.data[instr->target]->name);
                     return;
                 }
                 v[instr->result] = (u64)f;
@@ -548,7 +550,9 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
             } else if (m->procs.data[callee]->is_foreign) {
                 c_function = interp_c_function(in, callee);
                 if (!c_function) {
-                    interp_fail(in, frame, block, index, a, result, interp_not_in_c(a, m->procs.data[callee]->name));
+                    // Made in `a`, as IR_PROC_ADDR's.
+                    interp_fail(in, frame, block, index, a, result, {});
+                    result->message = interp_not_in_c(a, m->procs.data[callee]->name);
                     return;
                 }
             }

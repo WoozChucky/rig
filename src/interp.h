@@ -31,7 +31,8 @@
 //   what libc_nonshared.a links in statically is (atexit, at_quick_exit,
 //   pthread_atfork), which libc.so.6 doesn't export;
 // - anything else is the system's (os_find_c_function): kernel32.dll's or
-//   ucrtbase.dll's on Windows, libc's on Linux;
+//   ucrtbase.dll's on Windows, libc's (and the dynamic loader's it depends
+//   on) on Linux;
 // - a name found nowhere fails, "'NAME' isn't in the C library at compile
 //   time".
 // A call of one, or of any non-null address outside the Rig procedures'

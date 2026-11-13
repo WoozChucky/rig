@@ -1,5 +1,6 @@
-// interp_c_functions.cpp: the standard C library's functions, as the
-// compiler's own, for compile-time C calls (see interp.h).
+// interp_c_functions.cpp: the C functions interpreted code must take from
+// the compiler itself, not the system (see interp.h): on Windows the
+// standard C library's, on Linux what libc_nonshared.a links in.
 //
 // Every name here starts with Interp_, interp_ or INTERP_: in the unity
 // build, the files around this one have static names of their own that
@@ -22,8 +23,10 @@
 // and <time.h> (7.21, 7.22, 7.24, 7.12, 7.4, 7.27), but the ones C defines
 // only as macros (math.h's isnan and signbit, ...), which have no address,
 // and aligned_alloc, which UCRT doesn't have. gets is gone since C11. A few
-// can't be used from Rig (div returns a struct; the v... functions need a
-// va_list, which Rig can't make), but they are C's, so they're here.
+// can't be used from Rig: div, ldiv and lldiv return a struct, which a
+// foreign procedure can't (Rig's spec, 7.6). They are C's, so they're here.
+// The v... functions can: their va_list is, on Windows, a pointer to 8-byte
+// argument slots, which a Rig program can build itself.
 //
 // On Linux the compiler is linked with the system's C library,
 // dynamically, so os_find_c_function finds its functions, the same the
