@@ -41,12 +41,15 @@ struct Thunk_Call {
 
 // Calls call->target with the registers and stack arguments *call holds,
 // and writes rax and xmm0 back into it. Whatever the function returns is in
-// one of those two.
+// one of those two. extern "C": the assembly defines the symbol by its
+// plain name, which a C++ declaration would mangle.
 extern "C" void rig_thunk_call(Thunk_Call *call);
 
-// Lays out C call arguments for the host's convention: types[i] is each
-// argument's IR type; values canonical; ext per argument (SysV sign-extends
-// an IR_EXT_SIGN i8/i16). `stack` is scratch storage for stack arguments.
+// Lays out C call arguments for the host's convention: argument i has IR
+// type types[i], its canonical bits values[i], and its extension exts[i].
+// SysV sign-extends an IR_EXT_SIGN i8 or i16 to the whole register or
+// stack slot; Windows passes every value as it is. `stack` is scratch
+// storage for the stack arguments.
 //
 // Every argument field of *call is written (target isn't); `stack` is
 // emptied first, and call->stack points into it, so it must outlive the
