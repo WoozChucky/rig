@@ -1,0 +1,6 @@
+tests/errors/procedure_void_pointer.rig:7:14: error: argument 1 of 'register' has type '(int, int) -> int', which can't be converted to '*void'; cast it with cast(*void)
+        register(add);
+                 ^
+tests/errors/procedure_void_pointer.rig:9:29: error: a value of type '*void' doesn't convert to '(int, int) -> int' implicitly; cast it with cast((int, int) -> int)
+        f : (int, int) -> int = p;
+                                ^

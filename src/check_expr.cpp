@@ -185,18 +185,58 @@ static bool is_c_string(Type *t) {
     return type_is_pointer(t) && t->pointee == type_from_name(str("u8"));
 }
 
-// What a message about a value of type `from` that doesn't convert to `to`
-// adds, after the message: why a string doesn't become a *u8 when a literal
-// does (only a literal's bytes are known to end with a zero, which C reads
-// up to), and nothing for anything else.
-static const char *conversion_hint(Type *from, Type *to) {
-    return from == &type_string && is_c_string(to) ? "; its .data may not end with a zero" : "";
+// What a message about `value`, of type `from`, that doesn't convert to
+// `to` adds, after the message:
+// - why a string doesn't become a *u8 when a literal does (only a
+//   literal's bytes are known to end with a zero, which C reads up to);
+// - between two procedure types that differ only in #c_call (spec 7.6),
+//   what to mark: "; mark 'compare' #c_call for C to call it" for a
+//   procedure's name ("; only a procedure marked #c_call has a #c_call
+//   type" for another value), and the other way, "; #c_call is part of the
+//   type, as in '(*u8) -> s32 #c_call'";
+// - between a procedure value and a *void, the cast that converts it (spec
+//   3.15), as a C API taking a callback as a void * needs: "; cast it with
+//   cast(*void)", "; cast it with cast((int) -> int)";
+// - nothing for anything else.
+static String conversion_hint(Checker *c, Ast *value, Type *from, Type *to) {
+    if (from == &type_string && is_c_string(to)) return str("; its .data may not end with a zero");
+    Type *void_pointer = type_pointer_to(&type_void);
+    if (from && to &&
+        ((from->kind == TYPE_PROC && to == void_pointer) || (from == void_pointer && to->kind == TYPE_PROC))) {
+        return string_printf(c->arena, "; cast it with cast(" STR_FMT ")", STR_ARG(type_name(c->arena, to)));
+    }
+    if (!from || !to || from->kind != TYPE_PROC || to->kind != TYPE_PROC || from->is_c_call == to->is_c_call ||
+        type_proc_of(from->params, from->param_count, from->results, from->result_count, to->is_c_call) != to) {
+        return {};
+    }
+    if (from->is_c_call) {
+        return string_printf(c->arena, "; #c_call is part of the type, as in '" STR_FMT "'",
+                             STR_ARG(type_name(c->arena, from)));
+    }
+    Ast_Proc *proc = procedure_address(value);
+    if (!proc) return str("; only a procedure marked #c_call has a #c_call type");
+    return string_printf(c->arena, "; mark '" STR_FMT "' #c_call for C to call it", STR_ARG(proc->name));
 }
 
 void report_no_conversion(Checker *c, Ast *value, Type *to) {
-    diag_error(c->diag, value->start, "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly%s",
+    diag_error(c->diag, value->start,
+               "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly" STR_FMT,
                STR_ARG(type_name(c->arena, value->type)), STR_ARG(type_name(c->arena, to)),
-               conversion_hint(value->type, to));
+               STR_ARG(conversion_hint(c, value, value->type, to)));
+}
+
+Ast_Proc *procedure_address(Ast *e) {
+    for (;;) {
+        Type *t = e->type;
+        if (!t || (t->kind != TYPE_PROC && !type_is_pointer(t))) return nullptr;
+        if (e->kind == AST_NAME) {
+            Ast *decl = ((Ast_Name *)e)->decl;
+            if (decl->kind == AST_PROC) return (Ast_Proc *)decl;
+            return decl->kind == AST_CONST ? ((Ast_Const *)decl)->proc : nullptr;
+        }
+        if (e->kind != AST_CAST) return nullptr;
+        e = ((Ast_Cast *)e)->value;
+    }
 }
 
 Ast_String *literal_address(Ast *e) {
@@ -270,8 +310,9 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
     }
     // null takes the pointer type it meets, as an untyped constant takes a
     // number type: p : *int = null; makes it a *int, still the constant 0.
+    // A procedure value may be null too: f : (int) -> int = null;.
     if (from == &type_null) {
-        if (!type_is_pointer(to)) return false;
+        if (!type_is_pointer(to) && to->kind != TYPE_PROC) return false;
         e->type = to;
         return true;
     }
@@ -349,7 +390,8 @@ Type *check_value(Checker *c, Ast *e) {
     if (t == &type_void) {
         // Only a call has type void.
         Ast_Call *call = (Ast_Call *)e;
-        diag_error(c->diag, e->start, "'" STR_FMT "' returns nothing, so it has no value", STR_ARG(call->proc->name));
+        diag_error(c->diag, e->start, "'" STR_FMT "' returns nothing, so it has no value",
+                   STR_ARG(callee_name(c, call)));
         e->type = nullptr;
         return nullptr;
     }
@@ -400,7 +442,11 @@ static void report_undeclared(Checker *c, Ast_Name *name, bool called) {
 }
 
 // A name used as a value: a variable's or parameter's value, or a
-// constant's, which is known while compiling.
+// constant's, which is known while compiling, or a procedure, of its
+// procedure type (a constant naming one too). A variadic procedure has no
+// procedure type: "'printf' can't be a value: it takes more arguments
+// with '..', which no procedure type can say". Nor is main a value: "'main'
+// can't be a value: it's where the program starts".
 static Type *check_name(Checker *c, Ast_Name *name) {
     Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
@@ -415,11 +461,27 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         name->is_constant = decl->is_constant;
         name->constant = decl->constant;
         return decl->type;
-    case AST_PROC:
+    case AST_PROC: {
         // A broken declaration may not even be a procedure (x :: 5 6; or
         // x : int = 1 2;): its type is unknown, so there's nothing to say.
-        if (!((Ast_Proc *)decl)->is_broken) diag_error(c->diag, name->pos, "procedures can only be called, for now");
-        return nullptr;
+        // Nor is there about a signature in a circle, said already.
+        Ast_Proc *proc = (Ast_Proc *)decl;
+        if (proc->is_broken || !check_proc_signature(c, proc)) return nullptr;
+        // main is C's main, returning C's int to the C runtime (lower.cpp),
+        // which its type, (), doesn't say: a call through a value of it
+        // would call it as the wrong function. A direct call knows.
+        if (string_eq(proc->name, str("main"))) {
+            diag_error(c->diag, name->pos, "'main' can't be a value: it's where the program starts");
+            return nullptr;
+        }
+        if (proc->is_variadic) {
+            diag_error(c->diag, name->pos,
+                       "'" STR_FMT "' can't be a value: it takes more arguments with '..', which no procedure type "
+                       "can say",
+                       STR_ARG(proc->name));
+        }
+        return proc->type;  // null when a part of its signature was an error, reported
+    }
     case AST_STRUCT: report_type_as_value(c, name); return nullptr;
     default: RIG_ASSERT(!"not a declaration"); return nullptr;
     }
@@ -478,53 +540,115 @@ static void check_extra_argument(Checker *c, Ast_Proc *proc, Ast *arg, s64 index
     }
 }
 
+String callee_name(Checker *c, Ast_Call *call) {
+    if (call->proc) return call->proc->name;
+    if (call->callee->kind == AST_NAME) return ((Ast_Name *)call->callee)->name;
+    return type_name(c->arena, call->callee_type);
+}
+
+s64 call_result_count(Ast_Call *call) {
+    return call->proc ? call->proc->results.count : call->callee_type->result_count;
+}
+
+Type *call_result_type(Ast_Call *call, s64 i) {
+    return call->proc ? call->proc->results[i]->type : call->callee_type->results[i];
+}
+
+// What a call's callee is (spec 5.10), filling in call->proc or
+// call->callee_type; false when it's unknown or no procedure (reported):
+// - a procedure's name, or a constant's that names one (OP :: add;): a call
+//   of the procedure itself, call->proc;
+// - a value of a procedure type, a variable's or a parameter's (which hide
+//   a procedure of their name), a field, an element, a call's result: a
+//   call through the value, call->callee_type, checked as a call of the
+//   procedure it holds would be;
+// - anything else: "'x' isn't a procedure, so it can't be called" for a
+//   name (a struct's or a built-in type's too), "a value of type 'int'
+//   isn't a procedure, so it can't be called" for any other value, at the
+//   callee.
+static bool check_callee(Checker *c, Ast_Call *call) {
+    Ast *callee = call->callee;
+    Type *t = nullptr;
+    if (callee->kind == AST_NAME) {
+        Ast_Name *name = (Ast_Name *)callee;
+        Ast *decl = check_lookup(c, name->name);
+        if (!decl || decl->kind == AST_STRUCT) {
+            name->decl = decl;
+            if (decl) {
+                diag_error(c->diag, name->pos, "'" STR_FMT "' isn't a procedure, so it can't be called",
+                           STR_ARG(name->name));
+            } else {
+                report_undeclared(c, name, true);
+            }
+            return false;
+        }
+        if (decl->kind == AST_PROC) {
+            name->decl = decl;
+            call->proc = (Ast_Proc *)decl;
+            return true;
+        }
+        t = check_expression(c, name);  // a variable's, a parameter's or a constant's value
+        if (decl->kind == AST_CONST && ((Ast_Const *)decl)->proc) {
+            call->proc = ((Ast_Const *)decl)->proc;
+            return true;
+        }
+        if (t && t->kind != TYPE_PROC) {
+            diag_error(c->diag, name->pos, "'" STR_FMT "' isn't a procedure, so it can't be called",
+                       STR_ARG(name->name));
+            return false;
+        }
+    } else {
+        t = check_operand(c, callee);
+        if (t && t->kind != TYPE_PROC) {
+            diag_error(c->diag, callee->start, "a value of type '" STR_FMT "' isn't a procedure, so it can't be called",
+                       STR_ARG(type_name(c->arena, t)));
+            return false;
+        }
+    }
+    call->callee_type = t;
+    return t != nullptr;  // an unknown type was reported with its own mistake
+}
+
+// A call: the callee (check_callee), then the arguments, whose own mistakes
+// are reported even when the callee is wrong, after its: in source order.
+// Then the arguments against the parameters, the same for a procedure and
+// for a value of a procedure type, named in the messages by callee_name: as
+// many as there are ("'f' takes 2 arguments, but 1 was given", at the
+// callee; a variadic foreign procedure "at least" its fixed ones), each
+// converting to its parameter's type. The call's type is its first
+// result's, void when there's none.
 static Type *check_call(Checker *c, Ast_Call *call) {
-    if (call->callee->kind != AST_NAME) {
-        check_expression(c, call->callee);
-        diag_error(c->diag, call->pos, "only a procedure's name can be called, for now");
-        // The arguments' own mistakes are reported too, as below.
-        for (s64 i = 0; i < call->args.count; i++) check_value(c, call->args[i]);
+    bool known = check_callee(c, call);
+    for (s64 i = 0; i < call->args.count; i++) check_value(c, call->args[i]);
+    if (!known) return nullptr;
+    Ast_Proc *proc = call->proc;
+    // A broken callee's parameters and return type are unknown: any
+    // arguments may be right, and the call's type is unknown too. So is a
+    // signature in a circle with this call (it needs the call's value), or
+    // nested too deeply to check here: both were reported.
+    if (proc && (proc->is_broken || !check_proc_signature(c, proc))) {
+        call->proc = nullptr;
         return nullptr;
     }
-    Ast_Name *name = (Ast_Name *)call->callee;
-    Ast *decl = check_lookup(c, name->name);
-    name->decl = decl;
-    if (!decl) {
-        report_undeclared(c, name, true);
-    } else if (decl->kind != AST_PROC) {
-        // A variable, constant or parameter of that name, which hides the
-        // procedure if there is one.
-        diag_error(c->diag, name->pos, "'" STR_FMT "' isn't a procedure, so it can't be called", STR_ARG(name->name));
-    }
-    // The arguments are checked even when the callee is wrong, so their own
-    // mistakes are reported too, after the callee's: in source order.
-    for (s64 i = 0; i < call->args.count; i++) check_value(c, call->args[i]);
-    // A broken callee's parameters and return type are unknown: any
-    // arguments may be right, and the call's type is unknown too.
-    if (!decl || decl->kind != AST_PROC || ((Ast_Proc *)decl)->is_broken) return nullptr;
-    Ast_Proc *proc = (Ast_Proc *)decl;
-    // A signature in a circle with this call (it needs the call's value), or
-    // nested too deeply to check here, gives the call no type, so nothing
-    // more is said about it: both were reported.
-    if (!check_proc_signature(c, proc)) return nullptr;
-
-    call->proc = proc;
+    String name = callee_name(c, call);
+    Type *callee = call->callee_type;
     // A variadic procedure takes its fixed parameters and any number more.
-    s64 n = proc->params.count, given = call->args.count;
-    if (proc->is_variadic ? given < n : given != n) {
-        diag_error(c->diag, name->pos, "'" STR_FMT "' takes %s%lld argument%s, but %lld %s given",
-                   STR_ARG(proc->name), proc->is_variadic ? "at least " : "", (long long)n, n == 1 ? "" : "s",
-                   (long long)given, given == 1 ? "was" : "were");
+    bool variadic = proc && proc->is_variadic;
+    s64 n = proc ? proc->params.count : callee->param_count, given = call->args.count;
+    if (variadic ? given < n : given != n) {
+        diag_error(c->diag, call->callee->start, "'" STR_FMT "' takes %s%lld argument%s, but %lld %s given",
+                   STR_ARG(name), variadic ? "at least " : "", (long long)n, n == 1 ? "" : "s", (long long)given,
+                   given == 1 ? "was" : "were");
     } else {
         for (s64 i = 0; i < n; i++) {
             Ast *arg = call->args[i];
-            Type *from = arg->type, *to = proc->params[i]->type;
+            Type *from = arg->type, *to = proc ? proc->params[i]->type : callee->params[i];
             if (!check_convert(c, arg, to)) {
                 diag_error(c->diag, arg->start,
                            "argument %lld of '" STR_FMT "' has type '" STR_FMT "', which can't be converted to '" STR_FMT
-                           "'%s",
-                           (long long)(i + 1), STR_ARG(proc->name), STR_ARG(type_name(c->arena, from)),
-                           STR_ARG(type_name(c->arena, to)), conversion_hint(from, to));
+                           "'" STR_FMT,
+                           (long long)(i + 1), STR_ARG(name), STR_ARG(type_name(c->arena, from)),
+                           STR_ARG(type_name(c->arena, to)), STR_ARG(conversion_hint(c, arg, from, to)));
             }
         }
         // A Rig procedure with '..' was reported, and is variadic only so
@@ -544,7 +668,7 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     }
     // A procedure whose return type is unknown gives an unknown type, so
     // nothing is said about it again.
-    if (proc->results.count) return proc->results[0]->type;
+    if (call_result_count(call)) return call_result_type(call, 0);
     return &type_void;
 }
 
@@ -970,12 +1094,33 @@ static bool compare_floats(Token_Kind op, f64 left, f64 right) {
 }
 
 // Whether == and != take a value of type t: a number, a bool, a pointer
-// (null too) or a string. Not a struct: two of them could differ only in
+// (null too), a procedure value or a string. Not a struct: two of them could differ only in
 // their padding, bytes no field owns, so comparing their bytes wouldn't say
 // whether their fields are equal, and comparing field by field is a
 // procedure's job (spec 6.5).
 static bool takes_equality(Type *t) {
-    return type_is_number(t) || t == &type_bool || type_is_pointer(t) || t == &type_null || t == &type_string;
+    return type_is_number(t) || t == &type_bool || type_is_pointer(t) || t == &type_null || t == &type_string ||
+           t->kind == TYPE_PROC;
+}
+
+// The procedure type two operands of == or != meet at, when either is a
+// procedure value: null takes the other's type, and two procedure values
+// must be of one type (a procedure is the same procedure only as one type).
+// Null after reporting "mismatched types '(int) -> int' and '*void' for
+// '=='": no cast is suggested, since only *void casts to a procedure type.
+static Type *check_unify_procs(Checker *c, Ast_Binary *b, Type *left, Type *right, const char *op) {
+    if (left == &type_null) {
+        check_convert(c, b->left, right);
+        return right;
+    }
+    if (right == &type_null) {
+        check_convert(c, b->right, left);
+        return left;
+    }
+    if (left == right) return left;
+    diag_error(c->diag, b->pos, "mismatched types '" STR_FMT "' and '" STR_FMT "' for %s",
+               STR_ARG(type_name(c->arena, left)), STR_ARG(type_name(c->arena, right)), op);
+    return nullptr;
 }
 
 // == != < <= > >=: the result is a bool. Two numbers meet at a type as an
@@ -988,16 +1133,20 @@ static bool takes_equality(Type *t) {
 // == and != compare two strings by their bytes (lowering): equal when their
 // counts are and so is each byte. A string meets no other type, not even a
 // *u8, whose bytes' count isn't known ("mismatched types 'string' and '*u8'
-// for '=='"), and has no order ("'<' needs numbers, not 'string'").
-// Anything else isn't compared: "'==' needs numbers, bools, pointers or
-// strings, not 'Vec2'", "'<' needs numbers, not 'Vec2'".
+// for '=='"), and has no order ("'<' needs numbers, not 'string'"). Two
+// procedure values of one type, or one and null, compare as addresses
+// (check_unify_procs), with == and != only: they have no order ("'<' needs
+// numbers, not '(int) -> int'"). Anything else isn't compared: "'==' needs
+// numbers, bools, pointers, procedure values or strings, not 'Vec2'", "'<'
+// needs numbers, not 'Vec2'".
 static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right) {
     const char *op = token_kind_name(b->op);
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
     Type *t;
     Type *not_equatable = !takes_equality(left) ? left : !takes_equality(right) ? right : nullptr;
     if (equality && not_equatable) {
-        diag_error(c->diag, b->pos, "%s needs numbers, bools, pointers or strings, not '" STR_FMT "'", op,
+        diag_error(c->diag, b->pos,
+                   "%s needs numbers, bools, pointers, procedure values or strings, not '" STR_FMT "'", op,
                    STR_ARG(type_name(c->arena, not_equatable)));
         return nullptr;
     }
@@ -1005,7 +1154,15 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
     // integer a bool, nor a pointer a string, so the message suggests none.
     bool bools = left == &type_bool || right == &type_bool;
     bool strings = left == &type_string || right == &type_string;
-    if (equality && (bools || strings)) {
+    Type *proc = left->kind == TYPE_PROC ? left : right->kind == TYPE_PROC ? right : nullptr;
+    if (proc && !equality) {
+        diag_error(c->diag, b->pos, "%s needs numbers, not '" STR_FMT "'", op, STR_ARG(type_name(c->arena, proc)));
+        return nullptr;
+    }
+    if (proc) {
+        t = check_unify_procs(c, b, left, right, op);
+        if (!t) return nullptr;
+    } else if (equality && (bools || strings)) {
         if (left != right) {
             diag_error(c->diag, b->pos, "mismatched types '" STR_FMT "' and '" STR_FMT "' for %s",
                        STR_ARG(type_name(c->arena, left)), STR_ARG(type_name(c->arena, right)), op);
@@ -1139,6 +1296,29 @@ static Type *check_float_cast(Checker *c, Ast_Cast *cast, Type *to) {
     return to;
 }
 
+// cast(T) e where e or T is a procedure type (spec 3's "Procedure
+// types"): a procedure value to its own type, or to *void and back, the
+// same address; null to a procedure type. Nothing else: "can't cast '(int)
+// -> int' to '(int) -> s32'; a procedure value casts only to and from
+// *void". The signature is what makes a call through a value right, so no
+// cast makes a procedure another type in one step (through *void it's on
+// the program).
+static Type *check_proc_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to) {
+    Type *void_pointer = type_pointer_to(&type_void);
+    bool fine = from == to || (from->kind == TYPE_PROC && to == void_pointer) ||
+                (from == void_pointer && to->kind == TYPE_PROC) || from == &type_null;
+    if (!fine) {
+        diag_error(c->diag, cast->pos,
+                   "can't cast '" STR_FMT "' to '" STR_FMT "'; a procedure value casts only to and from *void",
+                   STR_ARG(type_name(c->arena, from)), STR_ARG(type_name(c->arena, to)));
+        return nullptr;
+    }
+    check_convert(c, cast->value, from == &type_null ? to : from);
+    cast->is_constant = cast->value->is_constant;  // null
+    cast->constant = cast->value->constant;
+    return to;
+}
+
 // cast(T) e where e is a pointer and T anything, or T a pointer and e a
 // number or a bool (check_cast has seen to null and strings) (spec 6.5):
 // - a pointer to any pointer: the same address, taken to point at
@@ -1180,6 +1360,7 @@ static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to
 //   x != 0").
 // - A pointer to or from a pointer, a number or a bool:
 //   check_pointer_cast.
+// - A procedure value to or from *void: check_proc_cast.
 // - A string to a []u8 and a []u8 to a string: the same view, retyped
 //   (spec 6.5), the same bytes.
 // - Anything else casts only where it converts implicitly: to its own
@@ -1198,6 +1379,7 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
         diag_error(c->diag, cast->pos, "cast,trunc only takes integers");
         return nullptr;
     }
+    if (from->kind == TYPE_PROC || to->kind == TYPE_PROC) return check_proc_cast(c, cast, from, to);
     if (type_is_number(from) && type_is_number(to) && !integers) return check_float_cast(c, cast, to);
     if (type_is_pointer(from) || (type_is_pointer(to) && (type_is_number(from) || from == &type_bool))) {
         return check_pointer_cast(c, cast, from, to);
@@ -1228,8 +1410,9 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
     if ((from == &type_string && to == bytes) || (from == bytes && to == &type_string)) return to;
     bool bool_to_integer = from == &type_bool && to->kind == TYPE_INTEGER;
     if (!bool_to_integer && !check_convert(c, value, to)) {
-        diag_error(c->diag, cast->pos, "can't cast '" STR_FMT "' to '" STR_FMT "'%s", STR_ARG(type_name(c->arena, from)),
-                   STR_ARG(type_name(c->arena, to)), conversion_hint(from, to));
+        diag_error(c->diag, cast->pos, "can't cast '" STR_FMT "' to '" STR_FMT "'" STR_FMT,
+                   STR_ARG(type_name(c->arena, from)), STR_ARG(type_name(c->arena, to)),
+                   STR_ARG(conversion_hint(c, value, from, to)));
         return nullptr;
     }
     // A bool constant's 1 or 0 is the integer's value too.
@@ -1336,8 +1519,9 @@ bool is_place(Checker *c, Ast *e, bool for_writing) {
 bool check_addressable(Checker *c, Ast *e, bool for_writing) {
     if (e->kind == AST_NAME) {
         // Looked up here rather than checked as a value, so a procedure's
-        // name is "can't assign to 'f': it's a procedure", not "procedures
-        // can only be called".
+        // name is "can't assign to 'f': it's a procedure" (name_is_place),
+        // said of the name itself, not a mistake found in the procedure's
+        // value, such as a variadic one's "'printf' can't be a value".
         Ast_Name *name = (Ast_Name *)e;
         Ast *decl = check_lookup(c, name->name);
         name->decl = decl;
