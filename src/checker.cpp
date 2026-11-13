@@ -344,7 +344,12 @@ static void check_global_var(Checker *c, Ast_Var *var) {
 // struct literal (whose type must be written: .{1, 2} meets none here). A
 // constant may also name a procedure (OP :: add;, procedure_address), of
 // its procedure type: it keeps the procedure, and a use of it is that
-// procedure, as the procedure's own name is.
+// procedure, as the procedure's own name is, a call of it included. So
+// its type must be the procedure's own: casts may end there, as
+// cast((int, int) -> int) cast(*void) add does, but not reach it from
+// another type, or OP(1, 2) would call add as add, while OP's value would
+// say it takes one int: "'add' is a '(int, int) -> int', so a constant
+// can't name it as a '(int) -> int'".
 static void check_const_value(Checker *c, Ast_Const *constant) {
     Type *t = check_value(c, constant->value);
     if (t == &type_untyped_literal) {
@@ -352,7 +357,15 @@ static void check_const_value(Checker *c, Ast_Const *constant) {
         t = nullptr;
     }
     bool procedure = t && t->kind == TYPE_PROC;
-    if (procedure) constant->proc = procedure_address(constant->value);
+    Ast_Proc *named = procedure ? procedure_address(constant->value) : nullptr;
+    if (named && named->type != t) {
+        diag_error(c->diag, constant->value->start,
+                   "'" STR_FMT "' is a '" STR_FMT "', so a constant can't name it as a '" STR_FMT "'",
+                   STR_ARG(named->name), STR_ARG(type_name(c->arena, named->type)), STR_ARG(type_name(c->arena, t)));
+        constant->type = nullptr;
+        return;
+    }
+    constant->proc = named;
     if (t && !type_is_number(t) && t != &type_bool && !procedure) {
         diag_error(c->diag, constant->value->start, "a constant can only be a number, a bool or a procedure, for now");
         t = nullptr;

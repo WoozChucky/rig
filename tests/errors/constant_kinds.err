@@ -1,0 +1,9 @@
+tests/errors/constant_kinds.rig:5:13: error: a constant can only be a number, a bool or a procedure, for now
+    GREETING :: "hi";
+                ^
+tests/errors/constant_kinds.rig:6:11: error: a constant can only be a number, a bool or a procedure, for now
+    ORIGIN :: Vec2.{0, 0};
+              ^
+tests/errors/constant_kinds.rig:7:12: error: a constant can only be a number, a bool or a procedure, for now
+    NOWHERE :: cast(*void) null;
+               ^

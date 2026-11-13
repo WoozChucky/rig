@@ -1,0 +1,3 @@
+tests/errors/procedure_type_dots.rig:3:21: error: a procedure type can't take '..': a procedure that takes more arguments can't be a value
+    log : (format: *u8, ..) -> s32;
+                        ^

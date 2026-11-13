@@ -1715,13 +1715,16 @@ TEST(llvm_declares_and_calls_a_variadic_function) {
 TEST(llvm_calls_through_values_as_through_names) {
     // A call through a procedure value is LLVM's call of a ptr, with the
     // function type and the attributes a call of the procedure would have:
-    // the extensions, sret and the several results' struct.
+    // the extensions (on Linux, where the caller extends; on Windows the
+    // callee does, and a bool is zeroext on both, as clang has them), sret
+    // and the several results' struct.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "Pair :: struct { a: int; b: int; }\n"
                                 "make :: (n: int) -> Pair { return Pair.{n, n}; }\n"
                                 "small :: (n: s8) -> u8 { return cast(u8) n; }\n"
                                 "two :: (n: int) -> (int, int) { return n, n; }\n"
+                                "flip :: (b: bool) -> bool { return !b; }\n"
                                 "main :: () {\n"
                                 "    m := make;\n"
                                 "    p := m(1);\n"
@@ -1729,14 +1732,52 @@ TEST(llvm_calls_through_values_as_through_names) {
                                 "    x := s(2);\n"
                                 "    t := two;\n"
                                 "    q, r := t(3);\n"
+                                "    f := flip;\n"
+                                "    y := f(true);\n"
                                 "}\n");
-    String linux = llvm_text(&a, m, TARGET_LINUX_X64);
-    CHECK(contains(linux, "call void %"));
-    CHECK(contains(linux, "(ptr sret([16 x i8]) %"));
-    CHECK(contains(linux, "call zeroext i8 %"));
-    CHECK(contains(linux, "(i8 signext 2)"));
-    CHECK(contains(linux, "call { i64, i64 } %"));
-    CHECK(count_of(linux, "sret(") == 2);  // make's definition and the call through m
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "call void %"));
+        CHECK(contains(text, "(ptr sret([16 x i8]) %"));
+        CHECK(contains(text, "call { i64, i64 } %"));
+        CHECK(count_of(text, "sret(") == 2);  // make's definition and the call through m
+        CHECK(contains(text, "call zeroext i1 %"));
+        CHECK(contains(text, "(i1 zeroext true)"));
+        if ((Target)t == TARGET_LINUX_X64) {
+            CHECK(contains(text, "call zeroext i8 %"));
+            CHECK(contains(text, "(i8 signext 2)"));
+        } else {
+            CHECK(contains(text, "call i8 %"));
+            CHECK(contains(text, "(i8 2)"));
+            CHECK(!contains(text, "signext") && count_of(text, "zeroext i8") == 0);
+        }
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_c_calls_procedures_given_and_held) {
+    // A #c_call procedure given to a foreign one is its address, a ptr, as
+    // a C function's is, and the foreign procedure takes a ptr for it; a
+    // foreign procedure held in a value is called through it as C's.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "qsort :: (base: *void, n: u64, size: u64, f: (*void, *void) -> s32 #c_call) "
+                                "#foreign libc;\n"
+                                "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                "compare :: (a: *void, b: *void) -> s32 #c_call { return 0; }\n"
+                                "main :: () {\n"
+                                "    qsort(null, 0, 8, compare);\n"
+                                "    say := puts;\n"
+                                "    say(\"hi\");\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "declare void @qsort(ptr, i64, i64, ptr)"));
+        CHECK(contains(text, "call void @qsort(ptr null, i64 0, i64 8, ptr @compare)"));
+        CHECK(contains(text, " i32 @compare(ptr %0, ptr %1)"));
+        CHECK(contains(text, "declare i32 @puts(ptr"));
+        CHECK(contains(line_with(text, "call i32 %"), "(ptr @str.0)"));
+    }
     arena_free(&a);
 }
 

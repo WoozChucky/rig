@@ -1,0 +1,10 @@
+// A constant naming a procedure stands for it, calls included, so it has
+// the procedure's own type: casts can't make it name one as another type.
+add :: (a: int, b: int) -> int { return a + b; }
+
+SAME :: cast((int, int) -> int) cast(*void) add;
+OP :: cast((int) -> int) cast(*void) add;
+
+main :: () {
+    x := SAME(1, 2);
+}

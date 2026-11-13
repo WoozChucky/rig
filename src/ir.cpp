@@ -338,7 +338,8 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr, bool debug) {
 
 // A variable of bytes: its size and alignment, then `zero` when its bytes
 // are all zeros, or else its `size` bytes (the ones it was given, then
-// zeros), and where each address goes (a global's, or a procedure's):
+// zeros), and where each address goes (a global's, or a procedure's),
+// which the linker writes over the bytes there:
 //   global @origin: 16 align 8 = zero
 //   global @greeting: 16 align 8 = "\02\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00" reloc 8 @str.0
 //   global @op: 8 align 8 = zero reloc 0 @add
@@ -347,11 +348,7 @@ static void out_byte_global(Printer *p, Ir_Module *m, Ir_Global *g) {
     out(p, "global @" STR_FMT ": %lld align %u = ", STR_ARG(g->name), (long long)g->size, g->align);
     bool all_zero = true;
     for (s64 i = 0; i < g->bytes.count && all_zero; i++) all_zero = g->bytes.data[i] == 0;
-    // A global's address only ever came with bytes written (a string's
-    // count, say), so it prints as it always has.
-    bool only_procs = true;
-    for (s64 i = 0; i < g->relocs.count; i++) only_procs = only_procs && g->relocs[i].is_proc;
-    if (all_zero && only_procs) {
+    if (all_zero) {
         out(p, "zero");
     } else {
         out(p, "\"");

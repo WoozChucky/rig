@@ -1,5 +1,7 @@
-// #c_call is written once, on a procedure or on a procedure type.
+// #c_call and #no_abc are written once, on a procedure (#c_call on a
+// procedure type too).
 compare :: (a: *void, b: *void) -> s32 #c_call #c_call { return 0; }
+fast :: () #no_abc #no_abc { }
 
 main :: () {
     f : (int) -> int #c_call #c_call;
