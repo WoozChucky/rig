@@ -6,6 +6,10 @@
 #include "test.h"
 
 #include <time.h>  // time(), for the timeouts
+#ifndef _WIN32
+#include <stdlib.h>  // realpath, setenv, unsetenv
+#include <unistd.h>  // symlink, unlink
+#endif
 
 #ifdef _WIN32
 #define SEPARATOR '\\'
@@ -158,6 +162,66 @@ TEST(os_run_in_starts_the_program_in_a_directory) {
     array_free(&argv);
     arena_free(&a);
 }
+
+#ifndef _WIN32
+TEST(os_current_directory_is_named_as_it_was_reached) {
+    // Issue #104: on Linux getcwd() names the current directory with every
+    // symlink on the way resolved, but a shell, and VS Code, name it as it
+    // was reached, which a shell keeps in $PWD. So os_current_directory is
+    // $PWD when that's an absolute name of the same directory (the same
+    // device and inode), as LLVM's current_path is, and getcwd()'s name
+    // otherwise. Each case runs unit-tests --cwd in a symlink to a
+    // directory, with $PWD set for it.
+    Arena a = arena_make();
+    os_make_directory(str(".build"));
+    os_make_directory(str(".build/cwd-real"));
+    unlink(".build/cwd-link");
+    CHECK(symlink("cwd-real", ".build/cwd-link") == 0);
+    char *resolved = realpath(".build/cwd-real", nullptr);
+    CHECK(resolved != nullptr);
+    String real = string_copy(&a, str(resolved));
+    free(resolved);
+    String here = os_current_directory(&a);
+    String link = string_printf(&a, STR_FMT "/.build/cwd-link", STR_ARG(here));
+    const char *saved = getenv("PWD");
+    String old_pwd = saved ? string_copy(&a, str(saved)) : String{};
+
+    Array<String> argv = {};
+    array_add(&argv, unit_tests_path(&a));
+    array_add(&argv, str("--cwd"));
+    struct Case {
+        String pwd;     // $PWD for unit-tests; {}: none
+        String prints;  // the directory it names
+    };
+    Case cases[] = {
+        {link, link},                                         // the symlink, as reached
+        {string_printf(&a, STR_FMT "/", STR_ARG(link)), link},  // with a trailing '/'
+        {real, real},                                         // the directory itself
+        {here, real},                                         // another directory
+        {str(".build/cwd-link"), real},                       // not absolute
+        {str("/no/such/directory"), real},                    // nowhere
+        {{}, real},                                           // no $PWD
+    };
+    for (Case &c : cases) {
+        if (c.pwd.count) {
+            setenv("PWD", string_cstr(&a, c.pwd), 1);
+        } else {
+            unsetenv("PWD");
+        }
+        Process_Result result = {};
+        CHECK(os_run_in(&a, argv, link, &result));
+        CHECK_STR(result.out, string_cstr(&a, string_printf(&a, STR_FMT "\n", STR_ARG(c.prints))));
+    }
+    if (saved) {
+        setenv("PWD", string_cstr(&a, old_pwd), 1);
+    } else {
+        unsetenv("PWD");
+    }
+    unlink(".build/cwd-link");
+    array_free(&argv);
+    arena_free(&a);
+}
+#endif
 
 // os_run_for on unit-tests with a helper flag and a minute to sleep, given
 // one second: it must give up and say so well before the minute is up.
