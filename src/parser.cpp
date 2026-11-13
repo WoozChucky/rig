@@ -116,6 +116,21 @@ static void error_misplaced_load(Parser *p, Position at) {
 
 static bool load_resumes_here(Parser *p);
 
+// "expected X" at the next token, as error_expected says; but a #load there
+// is "#load can only be at the top level" instead, as anywhere but a
+// top-level declaration: where an expression, a type, a parameter or a
+// block should start. Unless the recovery resumes at it
+// (load_resumes_here), which reads it as the top-level load it is: what
+// was expected before it is then what's missing.
+static void error_expected_or_load(Parser *p, const char *expected) {
+    Token *t = peek(p);
+    if (is_directive(t, "load") && !load_resumes_here(p)) {
+        error_misplaced_load(p, t->pos);
+    } else {
+        error_expected(p, expected);
+    }
+}
+
 static Ast *parse_expression(Parser *p, int min_precedence);
 static Ast *parse_unary(Parser *p);
 static Ast_Type *parse_type(Parser *p);
@@ -232,9 +247,8 @@ static Ast *parse_size_of(Parser *p) {
 // other.
 //
 // A #load where an expression starts (`x := #load "a.rig";`) is "#load can
-// only be at the top level", as anywhere but a top-level declaration,
-// rather than "expected an expression"; unless the recovery resumes at it
-// (load_resumes_here), which reads it as the top-level load it is.
+// only be at the top level" rather than "expected an expression", unless
+// the recovery resumes at it (error_expected_or_load).
 static Ast *parse_primary(Parser *p) {
     Token *t = peek(p);
     p->height = 0;  // a name or a literal; parentheses say otherwise below
@@ -295,11 +309,7 @@ static Ast *parse_primary(Parser *p) {
         return inner;
     }
     default:
-        if (is_directive(t, "load") && !load_resumes_here(p)) {
-            error_misplaced_load(p, t->pos);
-        } else {
-            error_expected(p, "an expression");
-        }
+        error_expected_or_load(p, "an expression");
         return nullptr;
     }
 }
@@ -1005,10 +1015,11 @@ static void report_misplaced_loads(Parser *p, Array<Position> *loads) {
 //
 // A #load in the run, in column 1, is read again at the top level too, as
 // the load it was meant to be: the file it names is loaded. So it's only
-// reported as misplaced (skip_misplaced_load) once known to stay in the
-// block: when another statement ends the run, or the block closes, or a
-// statement fails and the body is given up. Diagnostics are sorted by
-// position before they're shown, so reporting it later changes nothing.
+// reported as misplaced (report_misplaced_loads) once known to stay in the
+// block: when a statement or a load not in column 1 ends the run, or the
+// block closes, or a statement fails and the body is given up. Diagnostics
+// are sorted by position before they're shown, so reporting it later
+// changes nothing.
 // One not in column 1 never starts a run, and is reported at once.
 static Ast_Block *parse_block_rest(Parser *p, Token *open) {
     Ast_Block *block = ast_new<Ast_Block>(p->arena, AST_BLOCK, open->pos);
@@ -1052,8 +1063,11 @@ static Ast_Block *parse_block_rest(Parser *p, Token *open) {
 // "blocks are nested too deeply (more than 1000 levels)" at the '{' of the
 // one too many. The parser, the checker and lowering recurse into each.
 static Ast_Block *parse_block(Parser *p) {
-    Token *open = expect(p, TOKEN_LBRACE);
-    if (!open) return nullptr;
+    if (peek(p)->kind != TOKEN_LBRACE) {
+        error_expected_or_load(p, token_kind_name(TOKEN_LBRACE));
+        return nullptr;
+    }
+    Token *open = advance(p);
     if (p->blocks == MAX_DEPTH) {
         diag_error(p->diag, open->pos, "blocks are nested too deeply (more than %d levels)", MAX_DEPTH);
         return nullptr;
@@ -1227,13 +1241,7 @@ static Ast_Type *parse_type_level(Parser *p) {
         named->name = t->text;
         return named;
     }
-    // A #load is "#load can only be at the top level", as where an
-    // expression starts (parse_primary), unless the recovery resumes at it.
-    if (is_directive(t, "load") && !load_resumes_here(p)) {
-        error_misplaced_load(p, t->pos);
-    } else {
-        error_expected(p, "a type");
-    }
+    error_expected_or_load(p, "a type");
     return nullptr;
 }
 
@@ -1250,8 +1258,12 @@ static Ast_Type *parse_whole_type(Parser *p) {
 
 // param = IDENT ':' type
 static Ast_Param *parse_param(Parser *p) {
-    Token *name = expect(p, TOKEN_IDENT);
-    if (!name || !expect(p, TOKEN_COLON)) return nullptr;
+    if (peek(p)->kind != TOKEN_IDENT) {
+        error_expected_or_load(p, token_kind_name(TOKEN_IDENT));
+        return nullptr;
+    }
+    Token *name = advance(p);
+    if (!expect(p, TOKEN_COLON)) return nullptr;
     Ast_Param *param = ast_new<Ast_Param>(p->arena, AST_PARAM, name->pos);
     param->name = name->text;
     param->type_expr = parse_whole_type(p);
@@ -1292,8 +1304,8 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // written twice"). A foreign procedure is C's already, and takes neither:
 // #c_call before #foreign is "a foreign procedure is C's already: it takes
 // no '#c_call'", #no_abc "expected '{'". A #load there is "#load can only be
-// at the top level", unless the recovery resumes at it (load_resumes_here):
-// the '{' is then what's missing. Any other directive but these is
+// at the top level", unless the recovery resumes at it: the '{' is then
+// what's missing (error_expected_or_load). Any other directive but these is
 // "unknown directive '#foo'".
 //
 // Each element of the parameter list is a parameter or, last, the '..' of
@@ -1345,11 +1357,7 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
             advance(p);
             continue;
         }
-        if (is_directive(t, "load")) {
-            if (load_resumes_here(p)) break;  // parse_block says "expected '{'"
-            error_misplaced_load(p, t->pos);
-            return nullptr;
-        }
+        if (is_directive(t, "load")) break;  // where the '{' should be: parse_block reports it
         if (!string_eq(t->text, str("foreign"))) {
             diag_error(p->diag, t->pos, "unknown directive '#" STR_FMT "'", STR_ARG(t->text));
             return nullptr;
@@ -1567,8 +1575,10 @@ static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
 
 // Whether the next token is a #load that starts a line: a declaration the
 // recovery resumes at, outside any braces, so the file it names is still
-// loaded and what it declares still known. The recovery asks only after
-// the failed declaration's first token, so a token came before it.
+// loaded and what it declares still known. It's asked only after a
+// top-level declaration's first token, by the recovery or by
+// load_resumes_here while the declaration is read, so a token came before
+// it.
 static bool starts_load(Parser *p) {
     RIG_ASSERT(p->next > 0);
     Token *t = peek(p);
@@ -1676,9 +1686,10 @@ static Token_Kind first_on_line(Parser *p, s64 start, s64 from, const Token_Kind
 // Whether the '(' at token `open` and its ')' are a signature's parameter
 // list, not a call's arguments: the ')' that closes it, on whatever line,
 // is followed by what only follows parameters, a body's '{', a return
-// type's '->' or a directive (`#foreign`). A call is followed by its ';'
-// (`foo("x");`, `foo(#run);`), or by the next line's code if the ';' is
-// missing. A '(' never closed before the next declaration (an identifier
+// type's '->' or a directive (`#foreign`) other than #load, which begins
+// the next declaration. A call is followed by its ';' (`foo("x");`,
+// `foo(#run);`), or by the next line's code if the ';' is missing, a #load
+// too. A '(' never closed before the next declaration (an identifier
 // starting a line, then '::') or the end shows no signature.
 static bool parameters_follow(Parser *p, s64 open) {
     s64 depth = 0;
@@ -1690,8 +1701,9 @@ static bool parameters_follow(Parser *p, s64 open) {
         }
         if (t->kind == TOKEN_LPAREN) depth++;
         if (t->kind == TOKEN_RPAREN && --depth == 0) {
-            Token_Kind next = p->tokens[i + 1].kind;  // a token follows: the last is TOKEN_EOF
-            return next == TOKEN_LBRACE || next == TOKEN_ARROW || next == TOKEN_DIRECTIVE;
+            Token *next = &p->tokens[i + 1];  // a token follows: the last is TOKEN_EOF
+            return next->kind == TOKEN_LBRACE || next->kind == TOKEN_ARROW ||
+                   (next->kind == TOKEN_DIRECTIVE && !is_directive(next, "load"));
         }
     }
     return false;

@@ -2113,6 +2113,12 @@ TEST(parse_load_in_a_body) {
     CHECK_STR(body_dump(&a, "if true { #load \"a.rig\" }\n    x := 1;", &errors),
               "(block (if (bool true) (block)) (var x _ (int 1)))");
     CHECK_STR(errors, "2:15: #load can only be at the top level\n");
+    // Where a block should start, after if, while, for or else, the same
+    // message, rather than "expected '{'", and the declaration is given up.
+    CHECK_STR(body_dump(&a, "if true #load \"a.rig\";", &errors), "(broken f)\n");
+    CHECK_STR(errors, "2:13: #load can only be at the top level\n");
+    CHECK_STR(body_dump(&a, "if true {} else #load \"a.rig\";", &errors), "(broken f)\n");
+    CHECK_STR(errors, "2:21: #load can only be at the top level\n");
     // Nor past the end of the file, in a body never closed.
     CHECK_STR(parse_src(&a, "main :: () {\n    #load \"a.rig\"", &errors), "(broken main)\n");
     CHECK_STR(errors,
@@ -2212,6 +2218,9 @@ TEST(parse_load_in_a_type) {
     CHECK_STR(errors, "2:8: #load can only be at the top level\n");
     CHECK_STR(parse_src(&a, "f :: (a: #load \"a.rig\") {}\n", &errors), "(broken f)\n");
     CHECK_STR(errors, "1:10: #load can only be at the top level\n");
+    // Where a parameter should start, after the first.
+    CHECK_STR(parse_src(&a, "f :: (a: int, #load \"a.rig\") {}\n", &errors), "(broken f)\n");
+    CHECK_STR(errors, "1:15: #load can only be at the top level\n");
     CHECK_STR(parse_src(&a, "main :: () #load \"a.rig\" {}\n", &errors), "(broken main)\n");
     CHECK_STR(errors, "1:12: #load can only be at the top level\n");
     arena_free(&a);
@@ -2246,6 +2255,20 @@ TEST(parse_load_starting_the_next_line) {
                                                 broken[i])));
         token_list_free(list);
     }
+
+    // Braces are counted from where the declaration that stopped short
+    // began, not from the file's start: main's '{', never closed, ended
+    // before helper, so N's load is outside every brace, and kept.
+    Token_List *unclosed = src("main :: () {\nhelper :: () {}\nN ::\n#load \"a.rig\";\nf :: () {}\n");
+    Ast_File *kept = parse(unclosed->tokens, &a, &unclosed->diag);
+    CHECK_STR(messages(&a, &unclosed->diag),
+              "2:1: expected '}', found identifier 'helper'\n"
+              "4:1: expected an expression, found directive\n");
+    CHECK_EQ(kept->loads.count, 1);
+    CHECK_STR(ast_dump(&a, kept),
+              "(broken main)\n(proc helper (params) (block))\n(broken N)\n(load \"a.rig\")\n"
+              "(proc f (params) (block))\n");
+    token_list_free(unclosed);
 
     // Inside braces, the recovery passes over it, so it's misplaced there.
     Token_List *list = src("main :: () {\n    x :=\n#load \"a.rig\";\n}\n");
@@ -2342,6 +2365,29 @@ TEST(parse_load_later_on_a_line) {
     arena_free(&a);
 }
 
+TEST(parse_load_after_parentheses) {
+    // A ')' followed by a #load isn't a signature's: the load begins the
+    // next declaration, as #foreign never does. So a statement missing its
+    // ';' before a #load line is reported as that, not as a procedure
+    // mistyped: a value in parentheses,
+    Arena a = arena_make();
+    Token_List *list = src("x := (1 + 2)\n#load \"a.rig\";\nmain :: () {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "2:1: expected ';', found directive\n");
+    CHECK_EQ(file->loads.count, 1);
+    CHECK_STR(ast_dump(&a, file), "(broken x)\n(load \"a.rig\")\n(proc main (params) (block))\n");
+    token_list_free(list);
+    // a stray call outside any body, which keeps no name (broken_entry),
+    String errors;
+    CHECK_STR(parse_src(&a, "foo(1)\n#load \"a.rig\";\nmain :: () {}\n", &errors),
+              "(broken)\n(load \"a.rig\")\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:4: expected '::', found '('\n");
+    // or a local constant in parentheses.
+    CHECK_STR(body_dump(&a, "N :: (1)\n#load \"a.rig\";", &errors), "(broken f)\n");
+    CHECK_STR(errors, "3:1: expected ';', found directive\n");
+    arena_free(&a);
+}
+
 TEST(parse_load_without_a_string) {
     // The path is a string literal, and nothing else: a name is reported at
     // the name, and the parser goes on at the next declaration, keeping the
@@ -2350,6 +2396,11 @@ TEST(parse_load_without_a_string) {
     Arena a = arena_make();
     String errors;
     CHECK_STR(parse_src(&a, "#load a;\nmain :: () {}\n", &errors), "(broken)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:7: expected a string after #load, as in #load \"other.rig\";\n");
+    // But `#load ::` reads as a stray '#' before a name, and keeps the name
+    // load (broken_entry).
+    CHECK_STR(parse_src(&a, "#load :: () {}\nmain :: () {}\n", &errors),
+              "(broken load)\n(proc main (params) (block))\n");
     CHECK_STR(errors, "1:7: expected a string after #load, as in #load \"other.rig\";\n");
 
     // The next declaration may be a load, which is kept: losing it would
@@ -2415,7 +2466,7 @@ TEST(parse_into_appends) {
     Ast_File *file = arena_new<Ast_File>(&a);
     parse_into(file, first_tokens, &a, &d);
     parse_into(file, second_tokens, &a, &d);
-    CHECK_EQ(d.error_count, 0);
+    CHECK_STR(messages(&a, &d), "");
     CHECK_EQ(file->procs.count, 2);
     CHECK_STR(file->procs[0]->name, "main");
     CHECK_EQ(file->procs[0]->pos.file, first);
