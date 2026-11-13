@@ -104,7 +104,6 @@ bin/rig build hello.rig
 
 - [docs/rig-spec.md](docs/rig-spec.md): the language specification, Rig as the compiler implements it. It is the source of truth.
 - [The roadmap](https://github.com/WoozChucky/rig/issues/85): the milestones, in order.
-- [docs/superpowers/specs/2026-11-11-rig-language-design.md](docs/superpowers/specs/2026-11-11-rig-language-design.md): the original design document, kept as a record.
 
 ## Editor support
 
