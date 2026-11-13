@@ -9,6 +9,8 @@
 // return, on a stack of RIG_STACK_SIZE bytes of the interpreter's own. A
 // frame is:
 //
+//   (padding)       to Interp_Record's alignment: the frame before may end
+//                   at any byte (a bool's slot)
 //   Interp_Record   the caller's frame, the procedure, the instruction
 //                   running (in a caller: the call it waits on), the values
 //   u64 values[]    one per IR value of the procedure, %0 first
@@ -18,8 +20,11 @@
 //
 // All of it counts against the stack, so endless recursion runs out of it,
 // however small its frames. A value is kept canonical (interp.h): each
-// operation masks its result to its type's width, and reads a signed
-// operand by sign-extending it from there.
+// operation whose result can carry past its type's width (an add, a
+// multiply, a shift, a sign-extension, ...) masks it back, and a signed
+// operand is read by sign-extending it from there. The others (and, or,
+// xor, unsigned division, zext, ...) keep canonical inputs canonical by
+// themselves.
 
 #include "interp.h"
 #include "os.h"
@@ -203,7 +208,7 @@ static u64 interp_align_up(u64 x, u64 align) {
 //   A slot too big for the stack, or slots that add up past it, can never
 //   be pushed: locals_size says so by exceeding RIG_STACK_SIZE.
 static Interp_Proc *interp_proc_info(Interp *in, s32 k) {
-    Interp_Proc *info = in->procs.data[k];
+    Interp_Proc *info = in->procs[k];
     if (info) return info;
     Ir_Proc *p = in->module->procs[k];
     RIG_ASSERT(!p->is_foreign && p->blocks.count > 0);
@@ -239,7 +244,11 @@ static Interp_Proc *interp_proc_info(Interp *in, s32 k) {
     info->locals_align = 8;
     u64 offset = 0;
     s64 count = 0;
-    for (s64 b = 0; b < p->blocks.count; b++) {
+    // Past the stack's size, nothing more is laid out, in this block (the
+    // break) or a later one (the outer loop's test): the frame never fits
+    // (interp_push checks locals_size first), and the sums stay far from
+    // wrapping.
+    for (s64 b = 0; b < p->blocks.count && offset <= RIG_STACK_SIZE; b++) {
         Ir_Block *block = p->blocks[b];
         for (s64 n = 0; n < block->instrs.count; n++) {
             Ir_Instr *instr = &block->instrs[n];
@@ -248,9 +257,6 @@ static Interp_Proc *interp_proc_info(Interp *in, s32 k) {
             u64 size = instr->type == IR_VOID ? instr->constant : interp_size(instr->type);
             u64 align = instr->type == IR_VOID ? instr->align : size;
             RIG_ASSERT(align > 0 && (align & (align - 1)) == 0);
-            // Past the stack's size, nothing more is laid out: the frame
-            // never fits (interp_push checks locals_size first), and the
-            // sums stay far from wrapping.
             if (size > RIG_STACK_SIZE || align > RIG_STACK_SIZE || offset > RIG_STACK_SIZE) {
                 offset = RIG_STACK_SIZE + 1;
                 break;
@@ -263,7 +269,7 @@ static Interp_Proc *interp_proc_info(Interp *in, s32 k) {
     }
     info->slot_count = count;
     info->locals_size = offset;
-    in->procs.data[k] = info;
+    in->procs[k] = info;
     return info;
 }
 
@@ -274,7 +280,7 @@ static Interp_Proc *interp_proc_info(Interp *in, s32 k) {
 // writing. Null, and nothing pushed, when the frame doesn't fit.
 static Interp_Record *interp_push(Interp *in, Interp_Record *caller, s32 k, Interp_Proc *info) {
     Ir_Proc *p = in->module->procs.data[k];
-    u64 start = interp_align_up((u64)in->top, 16);
+    u64 start = interp_align_up((u64)in->top, alignof(Interp_Record));
     u64 values = start + sizeof(Interp_Record);
     u64 locals = interp_align_up(values + sizeof(u64) * (u64)p->value_count, info->locals_align);
     if (info->locals_size > RIG_STACK_SIZE || locals + info->locals_size > (u64)in->stack_end) return nullptr;
@@ -382,6 +388,13 @@ static void interp_fail(Interp *in, Interp_Record *frame, s32 block, s32 index, 
 // makes it do; the state of the frame running is kept in locals (its
 // values, its block's instructions, where it is), and written into its
 // record only when it calls, so the callee's return can come back to it.
+//
+// The loop, and interp_push, which every call runs, index arrays through
+// .data, skipping operator[]'s bounds assertion on every instruction:
+// lowering's IR has the shape ir.h describes, each operand one of the
+// procedure's values, each jump's target one of its blocks.
+// interp_proc_info, which runs once per procedure, keeps operator[] and
+// its assertions.
 static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Result *result) {
     Ir_Module *m = in->module;
     Ir_Proc *p = m->procs.data[frame->proc];
@@ -698,7 +711,9 @@ void interp_run(Interp *in, s32 proc, Array<u64> args, Arena *a, Interp_Result *
     *result = {};
     Ir_Module *m = in->module;
     RIG_ASSERT(proc >= 0 && proc < m->procs.count);
-    // Every procedure needs an address in the reserved range.
+    // Procedure k's address is the reserved range's start plus 16k, so
+    // every index, a C function's too (whose place is never handed out),
+    // must fall inside it.
     if ((u64)m->procs.count > INTERP_PROC_RANGE / INTERP_PROC_STRIDE) {
         result->message = string_printf(a, "the program has %lld procedures, more than the %llu the interpreter "
                                            "can give addresses to", (long long)m->procs.count,

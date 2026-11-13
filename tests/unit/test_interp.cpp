@@ -1,9 +1,11 @@
 // test_interp.cpp: the IR interpreter (issue #114): Rig's IR run inside the
 // compiler, with the meaning the LLVM backend gives it. Most tests lower a
 // program from source (helpers.cpp's lower_source) and run one of its
-// procedures; the ones about IR that lowering never makes (operands it
-// never gives, a panic without its prefix, a module growing between runs)
-// build it by hand.
+// procedures. The ones that need IR lowering never makes (operands it never
+// gives, a panic without its prefix, a relocation to a later global), or
+// that would be awkward to write as source (a module growing between runs,
+// a relocation to a C function, a call of a stray address, 65,537
+// procedures), build it by hand.
 
 #include "test.h"
 
@@ -69,13 +71,6 @@ static s32 interp_test_load(Ir_Proc *p, s32 block, Ir_Type type, s32 at) {
     return load->result;
 }
 
-// A float's bits, canonical: in the low 32 of the u64.
-static u64 interp_test_f32_bits(f32 value) {
-    u32 bits;
-    memcpy(&bits, &value, sizeof bits);
-    return bits;
-}
-
 TEST(interp_returns_a_constant) {
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
@@ -112,6 +107,13 @@ TEST(interp_integer_ops_wrap) {
                                 "    return x % 10;\n"
                                 "}\n"
                                 "small_unsigned :: () -> u8 { x : u8 = 250; return x / 3; }\n"
+                                "bitwise :: () -> u8, u8, u8, u8, bool, bool {\n"
+                                "    x : u8 = 0b1100_1010;\n"
+                                "    y : u8 = 0b1010_0110;\n"
+                                "    yes := true;\n"
+                                "    no := false;\n"
+                                "    return x ^ y, ~x, x & y, x | y, !yes, !no;\n"
+                                "}\n"
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_value(&a, m, "up"), 0x80);  // -128 as an i8's bits
     CHECK(interp_test_value(&a, m, "down") == ~(u64)0);
@@ -136,6 +138,23 @@ TEST(interp_integer_ops_wrap) {
     CHECK_EQ(interp_test_value(&a, m, "unsigned_quotient"), 0x7FFFFFFFFFFFFFFF);
     CHECK_EQ(interp_test_value(&a, m, "unsigned_remainder"), 5);
     CHECK_EQ(interp_test_value(&a, m, "small_unsigned"), 83);
+    // The bitwise operators, ~ and ! among them: lowering makes each an xor,
+    // with all ones and with 1.
+    Interp *in = interp_new(m);
+    Interp_Result r = {};
+    interp_test_run(in, m, "bitwise", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 6);
+    if (r.results.count == 6) {
+        CHECK_EQ(r.results[0], 0x6C);  // 0b0110_1100
+        CHECK_EQ(r.results[1], 0x35);  // 0b0011_0101, kept to 8 bits
+        CHECK_EQ(r.results[2], 0x82);  // 0b1000_0010
+        CHECK_EQ(r.results[3], 0xEE);  // 0b1110_1110
+        CHECK_EQ(r.results[4], 0);
+        CHECK_EQ(r.results[5], 1);
+    }
+    interp_test_free(&r);
+    interp_free(in);
     arena_free(&a);
 }
 
@@ -220,6 +239,16 @@ TEST(interp_comparisons_signed_and_unsigned) {
                                 "    return a < b, c > d, b < a, d >= c, low < high, a == -1, a <= b, b > a, b >= a,\n"
                                 "           c < d, c <= d, d < c, d <= c;\n"
                                 "}\n"
+                                "equal :: () -> bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool {\n"
+                                "    a : s32 = -1;\n"
+                                "    same_a : s32 = -1;\n"
+                                "    b : s32 = 1;\n"
+                                "    c : u32 = 4294967295;\n"
+                                "    same_c : u32 = 4294967295;\n"
+                                "    return a <= same_a, a < same_a, a > same_a, a >= same_a,\n"
+                                "           c <= same_c, c < same_c, c > same_c, c >= same_c,\n"
+                                "           a == same_a, a != same_a, a == b, a != b;\n"
+                                "}\n"
                                 "main :: () { }\n");
     Interp *in = interp_new(m);
     Interp_Result r = {};
@@ -241,6 +270,16 @@ TEST(interp_comparisons_signed_and_unsigned) {
         CHECK_EQ(r.results[10], 0);
         CHECK_EQ(r.results[11], 1);
         CHECK_EQ(r.results[12], 1);
+    }
+    interp_test_free(&r);
+    // Equal operands tell each strict predicate from its non-strict one:
+    // <= and >= hold, < and > don't, signed and unsigned.
+    interp_test_run(in, m, "equal", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 12);
+    if (r.results.count == 12) {
+        static const u64 expected[12] = {1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1};
+        for (s64 k = 0; k < 12; k++) CHECK_EQ(r.results[k], expected[k]);
     }
     interp_test_free(&r);
     interp_free(in);
@@ -297,18 +336,40 @@ TEST(interp_floats) {
                                 "    one := 1.0;\n"
                                 "    return n < one, n <= one, n > one, n >= one, n == n, one <= one, one >= one;\n"
                                 "}\n"
+                                "single_sum :: () -> float32 { x : float32 = 0.1; y : float32 = 0.2; return x + y; }\n"
+                                "product :: () -> float64 { x : float64 = 0.1; y : float64 = 3.0; return x * y; }\n"
+                                "quotient :: () -> float64 { x : float64 = 0.1; y : float64 = 3.0; return x / y; }\n"
+                                "single_order :: () -> bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool,\n"
+                                "                      bool {\n"
+                                "    one : float32 = 1.0;\n"
+                                "    two : float32 = 2.0;\n"
+                                "    return one < two, two < one, one > two, two > one, one < one, one > one,\n"
+                                "           one <= two, two <= one, one >= two, two >= one, one == one, one != one;\n"
+                                "}\n"
+                                "double_order :: () -> bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool,\n"
+                                "                      bool {\n"
+                                "    one : float64 = 1.0;\n"
+                                "    two : float64 = 2.0;\n"
+                                "    return one < two, two < one, one > two, two > one, one < one, one > one,\n"
+                                "           one <= two, two <= one, one >= two, two >= one, one == one, one != one;\n"
+                                "}\n"
                                 "main :: () { }\n");
     volatile f64 tenth = 0.1, fifth = 0.2;
     CHECK_EQ(interp_test_value(&a, m, "sum"), f64_bits(tenth + fifth));
     volatile f64 three_tenths = 0.3;
     CHECK_EQ(interp_test_value(&a, m, "difference"), f64_bits(three_tenths - tenth));
     volatile f32 single_three_tenths = 0.3f, single_tenth = 0.1f;
-    CHECK_EQ(interp_test_value(&a, m, "single_difference"), interp_test_f32_bits(single_three_tenths - single_tenth));
+    CHECK_EQ(interp_test_value(&a, m, "single_difference"), interp_f32_bits(single_three_tenths - single_tenth));
+    volatile f32 single_fifth = 0.2f;
+    CHECK_EQ(interp_test_value(&a, m, "single_sum"), interp_f32_bits(single_tenth + single_fifth));
+    volatile f64 three = 3.0;
+    CHECK_EQ(interp_test_value(&a, m, "product"), f64_bits(tenth * three));
+    CHECK_EQ(interp_test_value(&a, m, "quotient"), f64_bits(tenth / three));
     // A narrow signed integer converts from its own width, sign and all.
     CHECK(interp_test_value(&a, m, "small_signed") == f64_bits(-1.0));
     CHECK_EQ(interp_test_value(&a, m, "doubled"), 0x7F800000);  // +inf
     volatile f64 one_point_one = 1.1;
-    CHECK_EQ(interp_test_value(&a, m, "narrowed"), interp_test_f32_bits((f32)one_point_one));
+    CHECK_EQ(interp_test_value(&a, m, "narrowed"), interp_f32_bits((f32)one_point_one));
     CHECK(interp_test_value(&a, m, "negated") == f64_bits(-0.0));
     CHECK_EQ(interp_test_value(&a, m, "not_a_number"), 1);
     CHECK_EQ(interp_test_value(&a, m, "nan_to_int"), 0);
@@ -319,8 +380,8 @@ TEST(interp_floats) {
     // two differ.
     volatile s64 odd = 9007199791611905;
     volatile f64 odd_double = (f64)odd;
-    CHECK(interp_test_f32_bits((f32)odd) != interp_test_f32_bits((f32)odd_double));
-    CHECK_EQ(interp_test_value(&a, m, "rounded_once"), interp_test_f32_bits((f32)odd));
+    CHECK(interp_f32_bits((f32)odd) != interp_f32_bits((f32)odd_double));
+    CHECK_EQ(interp_test_value(&a, m, "rounded_once"), interp_f32_bits((f32)odd));
     // An f32's sign is its bit 31, not 63.
     CHECK_EQ(interp_test_value(&a, m, "single_negated"), 0x80000000);
     CHECK(interp_test_value(&a, m, "widened") == f64_bits((f64)single_tenth));
@@ -355,6 +416,19 @@ TEST(interp_floats) {
         CHECK_EQ(r.results[6], 1);
     }
     interp_test_free(&r);
+    // Without a NaN, each comparison points its own way, and only <=, >=
+    // and == hold between equal operands; the same in either precision.
+    const char *orders[] = {"single_order", "double_order"};
+    for (const char *name : orders) {
+        interp_test_run(in, m, name, &a, &r);
+        CHECK(r.ok);
+        CHECK_EQ(r.results.count, 12);
+        if (r.results.count == 12) {
+            static const u64 expected[12] = {1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0};
+            for (s64 k = 0; k < 12; k++) CHECK_EQ(r.results[k], expected[k]);
+        }
+        interp_test_free(&r);
+    }
     interp_free(in);
 
     // A float constant is a double's bits, rounded to the nearest float
@@ -402,6 +476,20 @@ TEST(interp_locals_structs_arrays_views) {
                                 "    }\n"
                                 "    return total;\n"
                                 "}\n"
+                                "aligned :: () -> int, int, int, int, int {\n"
+                                "    b1 : u8 = 1;\n"
+                                "    i : int = 2;\n"
+                                "    b2 : u8 = 3;\n"
+                                "    f : float64 = 4.0;\n"
+                                "    b3 : u8 = 5;\n"
+                                "    v : Vec2;\n"
+                                "    b4 : u8 = 6;\n"
+                                "    h : u16 = 7;\n"
+                                "    b5 : u8 = 8;\n"
+                                "    w : u32 = 9;\n"
+                                "    return cast(int) *i % 8, cast(int) *f % 8, cast(int) *v % 8, cast(int) *h % 2,\n"
+                                "           cast(int) *w % 4;\n"
+                                "}\n"
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_value(&a, m, "field"), 1078);
     // A bool in memory is any byte but 0 (ir.h's "Memory"), and reads as 1.
@@ -410,6 +498,18 @@ TEST(interp_locals_structs_arrays_views) {
     // iteration's v is zero again, though the first wrote 99 into the same
     // slot.
     CHECK_EQ(interp_test_value(&a, m, "zeroed"), 0);
+    // Each slot is at its type's alignment, though a byte comes before it,
+    // as C expects of an address it's given (x86 itself would take any).
+    Interp *in = interp_new(m);
+    Interp_Result r = {};
+    interp_test_run(in, m, "aligned", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 5);
+    if (r.results.count == 5) {
+        for (s64 k = 0; k < 5; k++) CHECK_EQ(r.results[k], 0);
+    }
+    interp_test_free(&r);
+    interp_free(in);
     arena_free(&a);
 }
 
@@ -498,7 +598,7 @@ TEST(interp_globals_and_relocations) {
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_value(&a, m, "read"), 5 * 1000 + 'e' * 10 + 3 + 50 * 100000);
     volatile f64 one_point_one = 1.1;
-    CHECK_EQ(interp_test_value(&a, m, "single"), interp_test_f32_bits((f32)one_point_one));
+    CHECK_EQ(interp_test_value(&a, m, "single"), interp_f32_bits((f32)one_point_one));
     // The globals' own bytes, once a run has mapped them.
     Interp *in = interp_new(m);
     Interp_Result r = {};
@@ -508,7 +608,7 @@ TEST(interp_globals_and_relocations) {
     if (r.ok) {
         f32 bytes = 0;
         memcpy(&bytes, interp_global(in, interp_test_global(m, "third")), sizeof bytes);
-        CHECK_EQ(interp_test_f32_bits(bytes), interp_test_f32_bits((f32)one_point_one));
+        CHECK_EQ(interp_f32_bits(bytes), interp_f32_bits((f32)one_point_one));
         memcpy(&held, interp_global(in, interp_test_global(m, "op")), sizeof held);
         CHECK(held == interp_proc_address(in, interp_test_proc(m, "add")));
     }
@@ -578,6 +678,22 @@ TEST(interp_procedure_values) {
                                 "    y, z := more(1, 2, 3);\n"
                                 "    return kept, x, y, z;\n"
                                 "}\n"
+                                "two :: (a: int, b: int, c: int) -> int, int { return 9, 9; }\n"
+                                "fewer_results :: () -> int, int {\n"
+                                "    f : (int, int, int) -> (int, int) = two;\n"
+                                "    p := cast(*void) add;\n"
+                                "    last_y := 0;\n"
+                                "    last_z := 0;\n"
+                                "    n := 0;\n"
+                                "    while n < 2 {\n"
+                                "        y, z := f(1, 2, 3);\n"
+                                "        last_y = y;\n"
+                                "        last_z = z;\n"
+                                "        f = cast((int, int, int) -> (int, int)) p;\n"
+                                "        n += 1;\n"
+                                "    }\n"
+                                "    return last_y, last_z;\n"
+                                "}\n"
                                 "main :: () { }\n");
     Interp *in = interp_new(m);
     Interp_Result r = {};
@@ -614,6 +730,17 @@ TEST(interp_procedure_values) {
         CHECK_EQ(r.results[1], 1);  // add(1, 0)
         CHECK_EQ(r.results[2], 3);  // add(1, 2)
         CHECK_EQ(r.results[3], 0);  // the result add doesn't give
+    }
+    interp_test_free(&r);
+    // The same for a result: the one call in fewer_results' loop runs two
+    // first, which gives z its 9, then add, which gives it nothing. So z
+    // would still hold 9 if it weren't given its 0.
+    interp_test_run(in, m, "fewer_results", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 2);
+    if (r.results.count == 2) {
+        CHECK_EQ(r.results[0], 3);  // add(1, 2)
+        CHECK_EQ(r.results[1], 0);
     }
     interp_test_free(&r);
     // Each Rig procedure's address maps back to it, and nothing else does:
@@ -828,9 +955,10 @@ TEST(interp_global_that_cant_be_mapped) {
 }
 
 TEST(interp_too_many_procedures) {
-    // Every procedure, a C function's too, takes an address in the range
-    // reserved for their values, which has room for 65,536: a module of
-    // more isn't run at all, failing before it starts, with no frames.
+    // Each procedure's index, a C function's too, takes a 16-byte place in
+    // the range reserved for their values, which has room for 65,536: a
+    // module of more isn't run at all, failing before it starts, with no
+    // frames.
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
     Ir_Proc *p = new_proc_returning(m, &a, "answer", IR_I64);
