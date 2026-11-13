@@ -3,9 +3,9 @@
 // A program can be several files: `#load "world/map.rig";` at the top
 // level of one names another, whose declarations join the program's one
 // top-level scope (spec 2.13). The parser only records each #load
-// (Ast_Load); the loader reads the main file's text, then every file the
-// program loads, and parses them all into one tree (parse_into), for the
-// checker to check as it would one file.
+// (Ast_Load); the loader takes the main file's text, as the driver read it,
+// reads every file the program loads, and parses them all into one tree
+// (parse_into), for the checker to check as it would one file.
 //
 // The rules:
 // - A #load's path is relative to the directory of the file holding it, as
@@ -22,9 +22,12 @@
 //   a recursion, so a chain of loads of any length takes no more stack
 //   than one file. It's the order of the files in Diagnostics.files, which
 //   Position.file numbers, so errors sort file by file in it (diag_sort).
-// Errors, at the #load's string, in the file holding it:
-//   'src/x.txt' isn't a .rig file        (the file isn't read)
-//   cannot read 'src/x.rig': MESSAGE     (MESSAGE the system's, os_error_message)
+// Errors, at the #load's string, in the file holding it; each stops only
+// that #load, and the loading goes on:
+//   a #load path can't be empty
+//   a #load path can't contain a zero byte  (the system's paths end at one)
+//   'src/x.txt' isn't a .rig file           (the file isn't read)
+//   cannot read 'src/x.rig': MESSAGE        (MESSAGE the system's, os_error_message)
 
 #pragma once
 
@@ -35,8 +38,11 @@
 bool is_rig_file(String path);
 
 struct Loaded_Program {
-    Ast_File *tree;              // every file's declarations, broken ones included
-    Array<Array<Token>> tokens;  // each file's tokens, kept as long as the tree is used
+    Ast_File *tree;  // every file's declarations, broken ones included
+    // Each file's tokens, until loaded_program_free. The tree doesn't need
+    // them (its names and strings are in the arena, as the texts are), so
+    // the caller can free them as soon as load_program returns.
+    Array<Array<Token>> tokens;
 };
 
 // Lexes and parses `text`, the main file, named `path` (which need not

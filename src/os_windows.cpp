@@ -124,12 +124,17 @@ bool os_file_exists(String path) {
 // The file is opened for its attributes alone, sharing every access, so a
 // file another program holds open (an editor's) can still be identified;
 // FILE_FLAG_BACKUP_SEMANTICS lets the open succeed on a directory too, as
-// stat does on Linux. The volume's serial number and the file's index on
-// it, which NTFS keeps for as long as the file exists, are its identity.
-// Every name of the file opens that same file, so gives the same pair:
-// Windows takes "." and ".." out of a path by its text before opening it,
-// names in another case are the same name, and opening follows links.
-bool os_file_id(String path, u64 id[2]) {
+// stat does on Linux. The volume's serial number and the file's id on it,
+// which the file system keeps for as long as the file exists, are its
+// identity. The id is FILE_ID_INFO's 128 bits, not the 64-bit index
+// GetFileInformationByHandle gives: ReFS (a Dev Drive's file system) has
+// 128-bit ids, and their 64-bit index can be the same for two files. On
+// NTFS the 128-bit id is the index, its high half 0. A file system without
+// 128-bit ids fails FileIdInfo, and its 64-bit index is the id, with 0
+// above it. Every name of the file opens that same file, so gives the same
+// id: Windows takes "." and ".." out of a path by its text before opening
+// it, names in another case are the same name, and opening follows links.
+bool os_file_id(String path, u64 id[3]) {
     Arena scratch = arena_make(1024);
     HANDLE file = CreateFileW(to_wide(&scratch, path), FILE_READ_ATTRIBUTES,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
@@ -137,14 +142,23 @@ bool os_file_id(String path, u64 id[2]) {
     if (file == INVALID_HANDLE_VALUE) os_fail();
     arena_free(&scratch);
     if (file == INVALID_HANDLE_VALUE) return false;
-    BY_HANDLE_FILE_INFORMATION info;
-    bool ok = GetFileInformationByHandle(file, &info) != 0;
+    FILE_ID_INFO info;
+    bool ok = GetFileInformationByHandleEx(file, FileIdInfo, &info, sizeof info) != 0;
+    if (ok) {
+        id[0] = info.VolumeSerialNumber;
+        memcpy(&id[1], info.FileId.Identifier, sizeof info.FileId.Identifier);
+    } else {
+        BY_HANDLE_FILE_INFORMATION old;
+        ok = GetFileInformationByHandle(file, &old) != 0;
+        if (ok) {
+            id[0] = old.dwVolumeSerialNumber;
+            id[1] = ((u64)old.nFileIndexHigh << 32) | old.nFileIndexLow;
+            id[2] = 0;
+        }
+    }
     if (!ok) os_fail();
     CloseHandle(file);
-    if (!ok) return false;
-    id[0] = info.dwVolumeSerialNumber;
-    id[1] = ((u64)info.nFileIndexHigh << 32) | info.nFileIndexLow;
-    return true;
+    return ok;
 }
 
 bool os_make_directory(String path) {

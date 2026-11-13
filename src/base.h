@@ -11,8 +11,8 @@
 // public, because the rest of the compiler reads them directly.
 //
 // At the end, helpers on bytes that need nothing else: making a path
-// absolute and MD5 (milestone 2c's debug information), and the path a
-// #load names (issue #112).
+// absolute (milestone 2c's debug information), the path a #load names
+// (issue #112), and MD5 (the debug information's too).
 
 #pragma once
 
@@ -311,10 +311,11 @@ void table_free(Table<V> *t) {
 }
 
 // ---------------------------------------------------------------------------
-// Paths and checksums, for the debug information (milestone 2c): it names
-// the source file by its absolute path, so an editor's breakpoint (which
-// names files that way) finds it, with the MD5 of its bytes, so a debugger
-// can tell the file has changed since the program was built.
+// Paths and checksums. The debug information (milestone 2c) names the
+// source file by its absolute path (path_absolute), so an editor's
+// breakpoint (which names files that way) finds it, with the MD5 of its
+// bytes, so a debugger can tell the file has changed since the program was
+// built. load_path finds the file a #load names (issue #112).
 
 // `path` made absolute: joined to `directory` (an absolute path, as
 // os_current_directory gives) when it's relative, its "." segments dropped
@@ -336,10 +337,12 @@ String path_absolute(Arena *a, String directory, String path, bool windows);
 // starts with '/'; on Windows when it starts with a drive, "C:", or with
 // either separator); otherwise from's text up to and including its last
 // separator (\ counts only on Windows), followed by `written`, so a file
-// loaded from src/main.rig as "world/map.rig" is src/world/map.rig. By the
-// text alone, as path_absolute is: the result is the path messages name the
-// file by, the loading file's directory as its path names it and the rest
-// as written, and it's read relative to the directory rig runs in, as
+// loaded from src/main.rig as "world/map.rig" is src/world/map.rig. On
+// Windows a `from` with a drive and no separator, "C:main.rig", is in that
+// drive's current directory, so "C:" is its directory: its "a.rig" is
+// "C:a.rig". Like path_absolute, it works on the text alone: nothing is
+// opened, and no link is followed. The result is the path messages name the
+// file by. When it's relative, it's read from the directory rig runs in, as
 // `from` is.
 String load_path(Arena *a, String from, String written, bool windows);
 

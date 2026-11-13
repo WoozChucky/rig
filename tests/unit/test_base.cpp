@@ -460,10 +460,20 @@ TEST(load_path_joins_and_keeps_absolute) {
     // On Linux a backslash is part of a name, so src\main.rig is a file in
     // the current directory.
     CHECK_STR(loaded(&a, "src\\main.rig", "a.rig", false), "a.rig");
+    // On Windows a drive with no separator after it, C:main.rig, is a file
+    // in that drive's current directory, so the files it loads are too: the
+    // drive is its directory. On Linux C: is a name like any other.
+    CHECK_STR(loaded(&a, "C:main.rig", "a.rig", true), "C:a.rig");
+    CHECK_STR(loaded(&a, "C:main.rig", "a.rig", false), "a.rig");
     // An absolute path stays as it is: on Linux one starting with '/'; on
     // Windows one with a drive, or starting with either separator.
     CHECK_STR(loaded(&a, "src/main.rig", "/x/a.rig", false), "/x/a.rig");
+    CHECK_STR(loaded(&a, "src/main.rig", "/x/a.rig", true), "/x/a.rig");
     CHECK_STR(loaded(&a, "src/main.rig", "C:\\x\\a.rig", true), "C:\\x\\a.rig");
     CHECK_STR(loaded(&a, "src/main.rig", "\\x\\a.rig", true), "\\x\\a.rig");
+    // On Linux neither a drive nor a backslash makes a path absolute: both
+    // are part of a name.
+    CHECK_STR(loaded(&a, "src/main.rig", "C:\\x\\a.rig", false), "src/C:\\x\\a.rig");
+    CHECK_STR(loaded(&a, "src/main.rig", "\\x\\a.rig", false), "src/\\x\\a.rig");
     arena_free(&a);
 }

@@ -1,6 +1,7 @@
-// base.cpp: the containers that aren't templates (issue #3), and making a
-// path absolute and MD5 (milestone 2c). The templates' bodies are in
-// base.h, where C++ needs them.
+// base.cpp: the containers that aren't templates (issue #3), making a path
+// absolute (milestone 2c), the path a #load names (issue #112), and MD5
+// (milestone 2c). The templates' bodies are in base.h, where C++ needs
+// them.
 
 #include "base.h"
 
@@ -307,10 +308,12 @@ String load_path(Arena *a, String from, String written, bool windows) {
     bool absolute = written.count > 0 && is_separator(written.data[0], windows);
     if (windows && starts_with_drive(written)) absolute = true;
     // from's directory: everything up to its last separator, that included.
-    // A file in the current directory has none, and the path stays as
-    // written.
+    // On Windows, a file with a drive and no separator after it, C:main.rig,
+    // is in that drive's current directory, which its "C:" names. A file in
+    // the current directory has none, and the path stays as written.
     s64 directory = from.count;
     while (directory > 0 && !is_separator(from.data[directory - 1], windows)) directory--;
+    if (windows && directory == 0 && starts_with_drive(from)) directory = 2;
     if (absolute || directory == 0) return string_copy(a, written);
     u8 *out = arena_new_array<u8>(a, directory + written.count);
     memcpy(out, from.data, (size_t)directory);
