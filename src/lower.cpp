@@ -1255,6 +1255,15 @@ static s32 lower_expr(Lowering *l, Ast *e) {
     }
 }
 
+// The type an argument after a variadic procedure's fixed parameters is
+// passed as: a string literal as a C string, a *u8 (lower_value then gives
+// its bytes' address), anything else as C's default argument promotions
+// make its type.
+static Type *extra_argument_type(Ast *arg) {
+    if (arg->kind == AST_STRING) return type_pointer_to(type_from_name(str("u8")));
+    return type_c_promoted(arg->type);
+}
+
 // A call; `results` gets one value per result of the callee, in order: a
 // scalar's IR value, or an aggregate's address.
 // - First, a temporary for each aggregate result, passed as the hidden
@@ -1269,15 +1278,10 @@ static s32 lower_expr(Lowering *l, Ast *e) {
 //   callee may change the global it was given).
 // - A variadic foreign procedure's arguments after its fixed parameters
 //   have none to convert to: each is passed as C's default argument
-//   promotions make its own type (type_c_promoted), an s8, s16, u8, u16 or
-//   bool widened to an i32 by its sign, a float32 to an f64; a string
-//   literal as its bytes' address, a C string (the checker allows no other
-//   aggregate there).
-//
-//     printf("%d", b);           %1 = addr @str.0          (b a u8)
-//                                %2 = load i8 %0
-//                                %3 = zext i8 %2 to i32
-//                                %4 = call @printf(%1, %3)
+//   promotions make its own type (extra_argument_type): an s8 or s16
+//   sign-extended to an i32, a u8, u16 or bool zero-extended, a float32
+//   widened to an f64; a string literal as its bytes' address, a C string
+//   (the checker allows no other aggregate there).
 // - The scalar results are the call's values, consecutive (ir_emit_call).
 //
 //     v := make(3);              %0 = local 8 align 4      (v)
@@ -1285,15 +1289,11 @@ static s32 lower_expr(Lowering *l, Ast *e) {
 //                                %2 = const i64 3
 //                                call @make(%1, %2)
 //                                copy %0, %1, 8
-// The type an argument after a variadic procedure's fixed parameters is
-// passed as: a string literal as a C string, a *u8 (lower_value then gives
-// its bytes' address), anything else as C's default argument promotions
-// make its type.
-static Type *extra_argument_type(Ast *arg) {
-    if (arg->kind == AST_STRING) return type_pointer_to(type_from_name(str("u8")));
-    return type_c_promoted(arg->type);
-}
-
+//
+//     printf("%d", b);           %1 = addr @str.0          (b, a u8, in the slot %0)
+//                                %2 = load i8 %0
+//                                %3 = zext i8 %2 to i32
+//                                %4 = call @printf(%1, %3)
 static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results) {
     Ast_Proc *callee = call->proc;
     s32 *index = table_get(&l->proc_index, callee->name);

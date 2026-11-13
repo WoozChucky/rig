@@ -4,7 +4,9 @@ u8 200, bool 1
 s8 -5, s16 -300, u16 65535
 float32 2.50, float64 3.14
 constants 7 0.1000000000 5
+float32 constant 0.1000000015
 a string's bytes
 [a string's bytes, and more]
 a literal, R
+through a pointer
 2 + 3 = 5 (9 bytes)
