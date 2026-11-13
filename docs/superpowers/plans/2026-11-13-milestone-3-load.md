@@ -238,7 +238,7 @@
 - [ ] **Step 2: Implement `file=`** in the runner. Run it again: the example must PASS.
 - [ ] **Step 3: Update the sections #112 lists,** each in the language of the rest of the spec:
   - 2.1: a program's files;
-  - 2.7: `#load` is a fourth directive, at the top level;
+  - 2.7: `#load` is a fourth directive, at the top level. Fix "All three appear after a procedure's signature" (#load doesn't), and reword "Any other directive after a signature is `unknown directive '#foo'`": a `#load` there is `#load can only be at the top level`, any other directive `unknown directive '#foo'`;
   - 2.13: a program of several files, the shared scope, load order, load-once;
   - 4.6 and 4.7: the top level spans files;
   - 8.1: PATH for a loaded file;
