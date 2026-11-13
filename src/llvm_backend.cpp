@@ -84,8 +84,8 @@ struct Backend {
     LLVMTargetMachineRef machine;
     LLVMValueRef panic;       // the runtime's __rig_panic, when the module panics
     LLVMTypeRef panic_type;   // its type, void (ptr, i64)
-    // The debug information (see "Debug information" below), all null (no
-    // files) for a module with no source files (one built by hand), which
+    // The debug information (see "Debug information" below): null, and no
+    // files, for a module with no source files (one built by hand), which
     // gets none.
     LLVMDIBuilderRef debug;   // makes the metadata nodes, until finalised
     LLVMMetadataRef unit;     // the compile unit, DICompileUnit
@@ -513,7 +513,8 @@ struct Body {
     // The procedure's debug scopes, one per Ir_Scope: scopes[0] its
     // subprogram, the others its lexical blocks. Null when it has no
     // subprogram (a procedure the compiler makes, or a module with no
-    // source file), and then no instruction gets a location.
+    // source files, one built by hand), and then no instruction gets a
+    // location.
     LLVMMetadataRef *scopes;
     s64 scope_count;
 };
@@ -768,8 +769,8 @@ static LLVMMetadataRef debug_file(Backend *b, Position pos) {
 }
 
 // The DIFile a type is in, and its members: a struct's is its
-// declaration's. A view or a string, which no line declares, is in the
-// main file, the compile unit's.
+// declaration's. Any other type (a view, a string, an array's stand-in),
+// which no line declares, is in the main file, the compile unit's.
 static LLVMMetadataRef type_debug_file(Backend *b, Type *t) {
     return t->kind == TYPE_STRUCT ? debug_file(b, t->decl->pos) : b->files[0];
 }

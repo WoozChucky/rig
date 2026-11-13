@@ -66,7 +66,7 @@ What works today, as [the specification](docs/rig-spec.md) describes it:
 - **Runtime checks, on by default:** an index out of bounds, a null pointer dereference, an integer division by zero or a checked cast that would change a number stops the program with `PATH:LINE:COL: runtime error: MESSAGE` and exit status 101. `#no_abc` or `--no-bounds-checks` turns the bounds checks off.
 - **C interop:** a C function declared once with `#foreign libc` is called like any procedure, with the platform's C calling convention.
 - **Diagnostics** that name the file, line and column and show the line.
-- **Debug information** in every build: a PDB on Windows, DWARF on Linux. gdb, cdb, WinDbg, Visual Studio and VS Code stop at a line of the `.rig` file or at a procedure by its Rig name, show the call stack, step a line at a time, and show the variables with their values.
+- **Debug information** in every build: a PDB on Windows, DWARF on Linux. gdb, cdb, WinDbg, Visual Studio and VS Code stop at a line of any of the program's `.rig` files or at a procedure by its Rig name, show the call stack, step a line at a time, and show the variables with their values.
 - **Windows x64 and Linux x86-64**, linked with each platform's own tools and C runtime.
 
 ## Status
