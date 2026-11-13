@@ -46,7 +46,9 @@ struct Interp_Result {
     Array<u64> results;          // ok: one per IR result, canonical bits (below)
     String message;              // failed: "division by zero", "stack overflow", ...
     String panic_text;           // failed by IR_PANIC: its bytes as the program writes them; empty otherwise
-    Array<Interp_Frame> frames;  // failed: innermost first, compiler-made procedures left out
+    Array<Interp_Frame> frames;  // failed: innermost first, compiler-made procedures left out; none when
+                                 // the run failed before it started (a global that can't be mapped,
+                                 // a foreign procedure run, a first frame that doesn't fit, ...)
 };
 
 // One compile-time world: a module's globals, its procedures' addresses, a
@@ -62,9 +64,10 @@ void interp_free(Interp *in);
 // Runs m->procs[proc] with args (one per IR param, hidden result pointers
 // first) to its return or its failure. Globals and procedures the module
 // gained since the last run are mapped first. What results point into
-// (globals, the data stack) stays until the next run. The Strings of
-// *result live in `a`; its Arrays are on the heap, as every Array is
-// (base.h), and the caller frees them with array_free.
+// stays: the data stack until the next run, which starts it empty again;
+// the globals until interp_free, every run seeing what earlier ones left
+// there. The Strings of *result live in `a`; its Arrays are on the heap, as
+// every Array is (base.h), and the caller frees them with array_free.
 //
 // Values, arguments and results alike, are canonical: a u64 holding the
 // type's bits zero-extended from its width, an i1 0 or 1, an f32's bits in
