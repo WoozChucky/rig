@@ -1,0 +1,36 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":dependencyDashboard"],
+  "labels": ["dependencies"],
+  "schedule": ["before 6am on monday"],
+  "prHourlyLimit": 0,
+  "packageRules": [
+    {
+      "description": "One pull request for the GitHub Actions in the workflows",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "description": "The docs site's minor and patch updates together; majors on their own",
+      "matchFileNames": ["site/**"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "docs site"
+    },
+    {
+      "description": "LLVM: its archives' SHA-256s in scripts/get_llvm.* and the version the compiler reports change with it, so an update waits for approval on the dashboard",
+      "matchPackageNames": ["llvm/llvm-project"],
+      "dependencyDashboardApproval": true
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The LLVM release scripts/get_llvm.sh and get_llvm.bat download",
+      "managerFilePatterns": ["/^scripts/get_llvm\\.(sh|bat)$/"],
+      "matchStrings": ["VERSION=(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "llvm/llvm-project",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^llvmorg-(?<version>.+)$"
+    }
+  ]
+}
