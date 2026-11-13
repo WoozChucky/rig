@@ -49,17 +49,34 @@ static bool comes_before(Position x, Position y) {
     return x.col < y.col;
 }
 
+// A merge sort, bottom up: runs of 1, 2, 4... messages are merged in pairs,
+// from one buffer into the other, until one run holds them all. It's stable
+// (of two messages at the same place, the left run's goes first), and it
+// takes n log n steps however the messages came. An insertion sort would be
+// shorter, but slow on a program of many files: each stage reports every
+// file before the next stage starts, so a checker error in the first file
+// would be moved back past every later file's syntax errors.
 void diag_sort(Diagnostics *d) {
-    // Insertion sort: stable, and a file has few errors.
-    for (s64 i = 1; i < d->messages.count; i++) {
-        Diagnostic m = d->messages[i];
-        s64 k = i;
-        while (k > 0 && comes_before(m.pos, d->messages[k - 1].pos)) {
-            d->messages[k] = d->messages[k - 1];
-            k--;
+    s64 n = d->messages.count;
+    Array<Diagnostic> other = {};
+    array_reserve(&other, n);
+    Diagnostic *from = d->messages.data;
+    Diagnostic *to = other.data;
+    for (s64 width = 1; width < n; width *= 2) {
+        for (s64 left = 0; left < n; left += 2 * width) {
+            s64 middle = left + width < n ? left + width : n;
+            s64 end = middle + width < n ? middle + width : n;
+            s64 i = left, k = middle, out = left;
+            while (i < middle && k < end) to[out++] = comes_before(from[k].pos, from[i].pos) ? from[k++] : from[i++];
+            while (i < middle) to[out++] = from[i++];
+            while (k < end) to[out++] = from[k++];
         }
-        d->messages[k] = m;
+        Diagnostic *sorted = to;
+        to = from;
+        from = sorted;
     }
+    if (from != d->messages.data) memcpy(d->messages.data, from, (size_t)n * sizeof(Diagnostic));
+    array_free(&other);
 }
 
 static void append(Array<u8> *out, String s) {

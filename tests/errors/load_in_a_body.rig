@@ -1,4 +1,6 @@
-// #load is a declaration of the program's (issue #112): not in a body.
+// #load is a declaration of the program's (issue #112): not in a body. The
+// file it names isn't loaded: it declares main, which would be declared
+// twice if it were.
 main :: () {
-    #load "load/also_f.rig";
+    #load "load/other_main.rig";
 }

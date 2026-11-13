@@ -3379,7 +3379,7 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
                 }
             }
             for (s64 v = 0; v < p->vars.count; v++) {
-                CHECK(p->vars[v].pos.file == p->pos.file);
+                CHECK_EQ(p->vars[v].pos.file, p->pos.file);
                 CHECK(p->vars[v].pos.line > 0);
                 CHECK(p->vars[v].scope >= 0 && p->vars[v].scope < p->scopes.count);
             }

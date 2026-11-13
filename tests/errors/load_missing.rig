@@ -1,11 +1,15 @@
 // A #load of a file that isn't there (issue #112): the error is at the
 // path, which it names as the loader made it, from this file's directory.
 // What that file declares is unknown, so the names here that it may have
-// declared (a type, procedures, variables) aren't reported as unknown.
+// declared (a type, procedures, variables) aren't reported as unknown. Any
+// other error still is: a value that doesn't fit, and a call of a built-in
+// type, which no file can declare.
 #load "load/nope.rig";
 
 main :: () {
     v : Vec2 = make();
     show(v, scale);
     count = 2;
+    y : u8 = 256;
+    s64(1);
 }

@@ -2446,7 +2446,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         Ast_Proc *source = f->procs[i];
         // A broken entry comes with an error (the parser's, or the lexer's
         // for a TOKEN_ERROR the parser stopped at), and rig build stops
-        // before lowering a file with errors.
+        // before lowering a program with errors.
         RIG_ASSERT(!source->is_broken);
         Ir_Proc *p = ir_new_proc(m, a, source->name);
         p->is_foreign = source->is_foreign;
