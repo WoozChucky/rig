@@ -2,16 +2,12 @@
     // Debug Rig's compiler and its unit tests (F5). Each builds first.
     // Windows uses Visual Studio's debugger with the .pdb files clang writes;
     // Linux (VS Code's WSL extension) uses gdb (sudo apt install gdb).
-    // The first debugs a Rig program instead: the open .rig file, built with
+    // The last debugs a Rig program instead: the open .rig file, built with
     // bin/rig by Rig's own extension (editors/vscode, which must be
-    // installed), on either system.
+    // installed for it), on either system. It's last so that F5's default,
+    // the first, works without the extension.
     "version": "0.2.0",
     "configurations": [
-        {
-            "name": "Rig: debug the open .rig file",
-            "type": "rig",
-            "request": "launch"
-        },
         {
             "name": "unit tests (Windows)",
             "type": "cppvsdbg",
@@ -74,6 +70,11 @@
             "MIMode": "gdb",
             "setupCommands": [{ "text": "-enable-pretty-printing", "ignoreFailures": true }],
             "preLaunchTask": "build"
+        },
+        {
+            "name": "Rig: debug the open .rig file",
+            "type": "rig",
+            "request": "launch"
         }
     ],
     "inputs": [
