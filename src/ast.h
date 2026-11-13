@@ -35,6 +35,7 @@ enum Ast_Kind : u8 {
     AST_TYPE_POINTER,  // Ast_Type: *pointee
     AST_TYPE_ARRAY,    // Ast_Type: [count]element
     AST_TYPE_VIEW,     // Ast_Type: []element
+    AST_TYPE_PROC,     // Ast_Type: (params) -> results #c_call, a procedure's type
     AST_BLOCK,         // Ast_Block: { statement; ... }
     AST_CALL,          // Ast_Call: callee(args)
     AST_NAME,          // Ast_Name: an identifier used as a value
@@ -81,8 +82,8 @@ struct Ast {
                        // (f64_bits), which for a float32 is a float32's value
 };
 
-// A type as written. Its node is at its first token: the name, the '*', or
-// an array's or a view's '['.
+// A type as written. Its node is at its first token: the name, the '*', an
+// array's or a view's '[', or a procedure type's '('.
 struct Ast_Type : Ast {
     String name;        // AST_TYPE_NAME
     Ast_Type *pointee;  // AST_TYPE_POINTER
@@ -94,6 +95,10 @@ struct Ast_Type : Ast {
     u64 count_value;
     s32 levels;         // a parameter's, a result's or a field's whole type: the deepest levels
                         // in it (MAX_DEPTH), where a declaration it needs starts a level below
+    Array<Ast_Type *> params;   // AST_TYPE_PROC: the parameters' types, in order (their names, if
+                                // written, aren't part of the type, and aren't kept)
+    Array<Ast_Type *> results;  // AST_TYPE_PROC: the results' types: none, one or several
+    bool is_c_call;             // AST_TYPE_PROC: marked #c_call, C's calling convention (spec 7.6)
 };
 
 struct Ast_Param : Ast {
@@ -124,6 +129,10 @@ enum Ast_Resolve : u8 {
 // one the declaration started with, where the tokens look like a declaration
 // of it (`greet :`, `greet () {`, `greet :=`, `#greet ::`: parser.cpp's
 // broken_entry), and empty otherwise.
+//
+// Ast.type is the procedure's type, a TYPE_PROC, once its signature is
+// checked: null for a variadic one, which no procedure type can say, and
+// when a parameter's or a result's type was an error.
 struct Ast_Proc : Ast {
     String name;
     Array<Ast_Param *> params;  // the named parameters (a variadic one's fixed parameters)
@@ -134,6 +143,9 @@ struct Ast_Proc : Ast {
     Ast_Block *body;            // null for a foreign procedure
     bool is_foreign;
     bool no_bounds_checks;      // #no_abc: its indexing isn't checked against counts (spec 6.5)
+    bool is_c_call;             // #c_call: called the way C calls, so C can call it (spec 7.6); a
+                                // foreign procedure is C's, and isn't marked
+    Position c_call_pos;        // where that #c_call is written
     bool is_broken;             // the parser gave up on it
     String foreign_library;     // #foreign's library name
     Position library_pos;       // where that name is written
@@ -161,6 +173,10 @@ struct Ast_Var : Ast {
 struct Ast_Const : Ast {
     String name;
     Ast *value;
+    Ast_Proc *proc;       // a constant that names a procedure (OP :: add;), as the procedure's own
+                          // type (checker.cpp's check_const_value): that procedure. It's
+                          // no number, so is_constant isn't set: a use of it is the procedure's
+                          // address, as its name's is (check_expr.cpp's procedure_address)
     Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it
     s32 levels;           // the deepest levels of its value (MAX_DEPTH), as Ast_Var's
 };
@@ -273,7 +289,11 @@ struct Ast_Binary : Ast {
 struct Ast_Call : Ast {
     Ast *callee;
     Array<Ast *> args;
-    Ast_Proc *proc;  // the procedure called, found by the checker
+    Ast_Proc *proc;     // the procedure called, found by the checker: a procedure's name, or a
+                        // constant naming one (OP :: add;), is a call of the procedure itself
+    Type *callee_type;  // a call through a procedure value (a variable, a field, an element, a
+                        // call's result): the value's procedure type, found by the checker;
+                        // null when `proc` is the procedure called
 };
 
 struct Ast_Name : Ast {
@@ -422,6 +442,11 @@ Token_Kind compound_operator(Token_Kind op);
 //   (proc f (params) (no_abc) (block ...))   f :: () #no_abc { ... }
 //   (proc printf (params (format (ptr u8)) ..) (returns s32) (foreign libc))
 //                                            printf :: (format: *u8, ..) -> s32 #foreign libc;
+//   (proc cmp (params (a (ptr void))) (returns s32) (c_call) (block ...))
+//                                            cmp :: (a: *void) -> s32 #c_call { ... }
+//   (proc-type (params int int) (returns int))   (int, int) -> int
+//   (proc-type (params (ptr void)) (returns s32) (c_call))   (p: *void) -> s32 #c_call
+//   (proc-type (params))   ()
 // An array's count prints as written: (array (name N) int) for [N]int.
 // A struct prints as (struct Vec2 (x float32) (y float32)), each field's
 // type as written ((x float) for x: float).

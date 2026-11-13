@@ -1,0 +1,10 @@
+// A procedure value and a *void convert to each other only with a cast:
+// the message says which to write.
+add :: (a: int, b: int) -> int { return a + b; }
+register :: (callback: *void) { }
+
+main :: () {
+    register(add);
+    p := cast(*void) add;
+    f : (int, int) -> int = p;
+}

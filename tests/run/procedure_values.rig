@@ -1,0 +1,36 @@
+// Procedure values (spec 3's "Procedure types"): a procedure's name is its
+// address, which variables, globals, fields, arrays and views hold, ==
+// compares, and a cast to *void and back keeps. A procedure value starts
+// null, as a pointer does.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+add :: (a: int, b: int) -> int { return a + b; }
+sub :: (a: int, b: int) -> int { return a - b; }
+
+Op :: struct {
+    name: *u8;
+    run: (int, int) -> int;
+}
+
+ADD :: add;
+first : (int, int) -> int = ADD;
+ops := Op.[.{"add", add}, .{"sub", sub}];
+nothing : (int, int) -> int;
+
+main :: () {
+    f := add;
+    printf("%d %d\n", f == add, f == sub);
+    g : (int, int) -> int;
+    printf("%d %d\n", g == null, nothing == null);
+    g = f;
+    printf("%d\n", g != null);
+    p := cast(*void) g;
+    h := cast((int, int) -> int) p;
+    printf("%d\n", h == ADD);
+    printf("%d\n", first == add);
+    printf("%s %d\n", ops[1].name, ops[1].run == sub);
+    table : [2](int, int) -> int = .[add, sub];
+    printf("%d\n", table[0] == ops[0].run);
+    v : [](int, int) -> int = table;
+    printf("%d %d\n", v[1] == sub, v[0] == v[1]);
+}

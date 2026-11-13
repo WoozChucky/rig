@@ -1,0 +1,12 @@
+// A procedure value is equal or not to another of its type, or to null,
+// and nothing more: no order, no arithmetic.
+add :: (a: int, b: int) -> int { return a + b; }
+neg :: (a: int) -> int { return -a; }
+
+main :: () {
+    f := add;
+    same := f == neg;
+    before := f < add;
+    next := f + 1;
+    fine := f != null;
+}

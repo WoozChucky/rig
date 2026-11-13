@@ -1,0 +1,12 @@
+tests/errors/call_through_value_arguments.rig:10:5: error: 'f' takes 2 arguments, but 1 was given
+        f(1);
+        ^
+tests/errors/call_through_value_arguments.rig:11:10: error: argument 2 of 'f' has type 'bool', which can't be converted to 'int'
+        f(1, true);
+             ^
+tests/errors/call_through_value_arguments.rig:13:5: error: '(int, int) -> int' takes 2 arguments, but 3 were given
+        op.run(1, 2, 3);
+        ^
+tests/errors/call_through_value_arguments.rig:14:12: error: argument 1 of '(int, int) -> int' has type 'string', which can't be converted to 'int'
+        op.run("one", 2);
+               ^

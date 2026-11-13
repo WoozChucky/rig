@@ -638,8 +638,8 @@ TEST(copy_and_zero_never_give_a_value) {
 
 TEST(ir_prints_byte_globals) {
     // A variable of bytes prints its size and alignment, then `zero` when
-    // every byte is 0 and it holds no address; otherwise its bytes, as a
-    // string literal's print, and where each address goes. Here @table is
+    // every byte is 0, whatever addresses it holds; otherwise its bytes, as
+    // a string literal's print. Then where each address goes. Here @table is
     // 24 bytes: a count (3) in the first 8, the address of @str.0 (a later
     // global) at offset 8, then 8 zero bytes.
     Arena a = arena_make();
@@ -650,7 +650,7 @@ TEST(ir_prints_byte_globals) {
     u8 *bytes = (u8 *)arena_alloc(&a, 24, 1);  // zeroed
     bytes[0] = 3;
     m->globals[table].bytes = {bytes, 24};
-    array_add(&m->globals[table].relocs, {8, text});
+    array_add(&m->globals[table].relocs, {8, text, false});
     CHECK_STR(ir_print(&a, m),
               "global @origin: 16 align 8 = zero\n"
               "global @table: 24 align 8 = "
@@ -2663,7 +2663,7 @@ TEST(string_global_has_a_relocation) {
                    "global @greeting: 16 align 8 = "
                    "\"\\02\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @str.0\n"
                    "global @str.1 = \"hey\\00\"\n"
-                   "global @g: 8 align 8 = \"\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 0 @str.1\n"
+                   "global @g: 8 align 8 = zero reloc 0 @str.1\n"
                    "global @str.2 = \"abc\\00\"\n"
                    "global @n: 24 align 8 = "
                    "\"\\03\\00\\00\\00\\00\\00\\00\\00\\03\\00\\00\\00\\00\\00\\00\\00"
@@ -3426,5 +3426,114 @@ TEST(ir_of_a_variadic_call) {
                        "  %27 = const i32 4294967295\n"
                        "  %28 = const i32 0\n"
                        "  %29 = call @printf(%12, %14, %16, %18, %20, %21, %22, %23, %24, %25, %26, %27, %28)\n"));
+    arena_free(&a);
+}
+
+// Issue #83: procedure values.
+
+TEST(a_procedure_value_is_its_address) {
+    // A procedure's name used as a value, or a constant naming one, is its
+    // address, a procaddr; null is a ptr's 0; == compares the addresses; a
+    // cast to *void and back keeps them.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "add :: (a: int, b: int) -> int { return a + b; }\n"
+                                          "OP :: add;\n"
+                                          "main :: () {\n"
+                                          "    f := add;\n"
+                                          "    g : (int, int) -> int = null;\n"
+                                          "    same := f == OP;\n"
+                                          "    p := cast(*void) f;\n"
+                                          "    g = cast((int, int) -> int) p;\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "main"),
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  %0 = local ptr\n"
+              "  %1 = procaddr @add\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local ptr\n"
+              "  %3 = const ptr 0\n"
+              "  store ptr %3, %2\n"
+              "  %4 = local i1\n"
+              "  %5 = load ptr %0\n"
+              "  %6 = procaddr @add\n"
+              "  %7 = cmp eq ptr %5, %6\n"
+              "  store i1 %7, %4\n"
+              "  %8 = local ptr\n"
+              "  %9 = load ptr %0\n"
+              "  store ptr %9, %8\n"
+              "  %10 = load ptr %8\n"
+              "  store ptr %10, %2\n"
+              "  %11 = const i32 0\n"
+              "  ret %11\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(a_global_procedure_value_has_a_relocation) {
+    // A global holding a procedure is bytes with the procedure's address in
+    // them, which the linker writes, as it writes a string literal's.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "Ops :: struct { name: *u8; op: (int) -> int; }\n"
+                                          "neg :: (a: int) -> int { return -a; }\n"
+                                          "one : (int) -> int = neg;\n"
+                                          "ops := Ops.{\"neg\", neg};\n"
+                                          "table : [2](int) -> int = .[null, neg];\n"
+                                          "address : *void = cast(*void) neg;\n"
+                                          "main :: () { }\n"));
+    CHECK(contains(ir,
+                   "global @one: 8 align 8 = zero reloc 0 @neg\n"
+                   "global @str.0 = \"neg\\00\"\n"
+                   "global @ops: 16 align 8 = zero reloc 0 @str.0 reloc 8 @neg\n"
+                   "global @table: 16 align 8 = zero reloc 8 @neg\n"
+                   "global @address: 8 align 8 = zero reloc 0 @neg\n"));
+    String error = {}, text = {};
+    CHECK(llvm_ir_text(&a, lower_source(&a,
+                                        "neg :: (a: int) -> int { return -a; }\n"
+                                        "one : (int) -> int = neg;\n"
+                                        "main :: () { }\n"),
+                       target_host(), &text, &error));
+    CHECK(contains(text, "@one = internal global <{ ptr }> <{ ptr @neg }>, align 8"));
+    arena_free(&a);
+}
+
+TEST(a_call_through_a_value_checks_for_null) {
+    // The callee is worked out first, then the arguments, left to right;
+    // then, right before the call, a null callee is a runtime error at the
+    // call's '('. A constant naming a procedure is a direct call.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "add :: (a: int, b: int) -> int { return a + b; }\n"
+                                          "ADD :: add;\n"
+                                          "main :: () {\n"
+                                          "    f := add;\n"
+                                          "    x := f(1, ADD(2, 3));\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "main"),
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  %0 = local ptr\n"
+              "  %1 = procaddr @add\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local i64\n"
+              "  %3 = load ptr %0\n"
+              "  %4 = const i64 1\n"
+              "  %5 = const i64 2\n"
+              "  %6 = const i64 3\n"
+              "  %7 = call @add(%5, %6)\n"
+              "  %8 = const ptr 0\n"
+              "  %9 = cmp eq ptr %3, %8\n"
+              "  branch %9, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  %10 = call %3(%4, %7)\n"
+              "  store i64 %10, %2\n"
+              "  %11 = const i32 0\n"
+              "  ret %11\n"
+              "}\n");
+    CHECK(contains(ir, "global @str.0 = \"test.rig:5:11: runtime error: null procedure call\0A\00\"\n"));
     arena_free(&a);
 }

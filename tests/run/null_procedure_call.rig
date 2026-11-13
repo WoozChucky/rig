@@ -1,0 +1,14 @@
+// Calling a null procedure value stops the program with a runtime error,
+// at the call's '(', and status 101 (spec 8.4). The callee and the
+// arguments are worked out first, left to right; the check comes right
+// before the call, so what the arguments printed comes out first.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+say :: (s: *u8) -> int { puts(s); return 1; }
+
+main :: () {
+    puts("before");
+    f : (int, int) -> int;
+    x := f(say("first"), say("second"));
+    puts("after");
+}

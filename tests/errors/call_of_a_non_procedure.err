@@ -1,0 +1,9 @@
+tests/errors/call_of_a_non_procedure.rig:10:5: error: 'n' isn't a procedure, so it can't be called
+        n(1);
+        ^
+tests/errors/call_of_a_non_procedure.rig:12:5: error: a value of type 'int' isn't a procedure, so it can't be called
+        p.x();
+        ^
+tests/errors/call_of_a_non_procedure.rig:13:5: error: a value of type 'int' isn't a procedure, so it can't be called
+        one()();
+        ^

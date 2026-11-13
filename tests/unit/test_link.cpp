@@ -242,7 +242,7 @@ TEST(byte_globals_and_memory_run) {
     s32 table = add_byte_global(m, "table", 16, 8);
     s32 ok = add_string(m, "str.0", "ok");
     s32 message = add_string(m, "str.1", "x.rig:1:1: runtime error: not zeroed\n");
-    array_add(&m->globals[table].relocs, {8, ok});
+    array_add(&m->globals[table].relocs, {8, ok, false});
     Ir_Proc *puts_proc = new_proc_returning(m, &a, "puts", IR_I32);
     puts_proc->is_foreign = true;
     ir_add_param(puts_proc, IR_PTR, IR_EXT_NONE);

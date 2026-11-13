@@ -1,0 +1,18 @@
+tests/errors/c_call_signature.rig:5:14: error: a #c_call procedure can't take a 'Vec2' yet; pass a pointer to it
+    scale :: (v: Vec2, k: int) -> Vec2 #c_call { return v; }
+                 ^
+tests/errors/c_call_signature.rig:5:31: error: a #c_call procedure can't return a 'Vec2' yet
+    scale :: (v: Vec2, k: int) -> Vec2 #c_call { return v; }
+                                  ^
+tests/errors/c_call_signature.rig:6:13: error: a #c_call procedure can't take a 'string'; pass its .data, which may not end with a zero, or a literal
+    name :: (s: string) #c_call { }
+                ^
+tests/errors/c_call_signature.rig:7:20: error: a #c_call procedure can return at most one value
+    two :: () -> (int, int) #c_call { return 1, 2; }
+                       ^
+tests/errors/c_call_signature.rig:8:14: error: a #c_call procedure can't take a '(int) -> int', which isn't #c_call; C can call a '(int) -> int #c_call'
+    apply :: (f: (int) -> int) #c_call { }
+                 ^
+tests/errors/c_call_signature.rig:11:25: error: a #c_call procedure can't take a '[]int'; pass its .data
+        callback : (values: []int) -> int #c_call;
+                            ^

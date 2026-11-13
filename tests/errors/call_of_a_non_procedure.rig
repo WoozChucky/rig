@@ -1,0 +1,14 @@
+// Only a procedure, or a value of a procedure type, can be called: an int,
+// a field that holds one, or what a call returns that isn't a procedure,
+// can't be.
+Point :: struct { x: int; y: int; }
+
+one :: () -> int { return 1; }
+
+main :: () {
+    n := 5;
+    n(1);
+    p := Point.{1, 2};
+    p.x();
+    one()();
+}

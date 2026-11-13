@@ -1,0 +1,9 @@
+tests/errors/c_call_twice.rig:3:48: error: '#c_call' is written twice
+    compare :: (a: *void, b: *void) -> s32 #c_call #c_call { return 0; }
+                                                   ^
+tests/errors/c_call_twice.rig:4:20: error: '#no_abc' is written twice
+    fast :: () #no_abc #no_abc { }
+                       ^
+tests/errors/c_call_twice.rig:7:30: error: '#c_call' is written twice
+        f : (int) -> int #c_call #c_call;
+                                 ^
