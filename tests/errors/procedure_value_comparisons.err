@@ -1,0 +1,9 @@
+tests/errors/procedure_value_comparisons.rig:8:15: error: mismatched types '(int, int) -> int' and '(int) -> int' for '=='
+        same := f == neg;
+                  ^
+tests/errors/procedure_value_comparisons.rig:9:17: error: '<' needs numbers, not '(int, int) -> int'
+        before := f < add;
+                    ^
+tests/errors/procedure_value_comparisons.rig:10:15: error: '+' needs numbers, not '(int, int) -> int'
+        next := f + 1;
+                  ^

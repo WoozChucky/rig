@@ -199,6 +199,20 @@ void report_no_conversion(Checker *c, Ast *value, Type *to) {
                conversion_hint(value->type, to));
 }
 
+Ast_Proc *procedure_address(Ast *e) {
+    for (;;) {
+        Type *t = e->type;
+        if (!t || (t->kind != TYPE_PROC && !type_is_pointer(t))) return nullptr;
+        if (e->kind == AST_NAME) {
+            Ast *decl = ((Ast_Name *)e)->decl;
+            if (decl->kind == AST_PROC) return (Ast_Proc *)decl;
+            return decl->kind == AST_CONST ? ((Ast_Const *)decl)->proc : nullptr;
+        }
+        if (e->kind != AST_CAST) return nullptr;
+        e = ((Ast_Cast *)e)->value;
+    }
+}
+
 Ast_String *literal_address(Ast *e) {
     for (;;) {
         Type *t = e->type;
@@ -270,8 +284,9 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
     }
     // null takes the pointer type it meets, as an untyped constant takes a
     // number type: p : *int = null; makes it a *int, still the constant 0.
+    // A procedure value may be null too: f : (int) -> int = null;.
     if (from == &type_null) {
-        if (!type_is_pointer(to)) return false;
+        if (!type_is_pointer(to) && to->kind != TYPE_PROC) return false;
         e->type = to;
         return true;
     }
@@ -400,7 +415,10 @@ static void report_undeclared(Checker *c, Ast_Name *name, bool called) {
 }
 
 // A name used as a value: a variable's or parameter's value, or a
-// constant's, which is known while compiling.
+// constant's, which is known while compiling, or a procedure, of its
+// procedure type (a constant naming one too). A variadic procedure has no
+// procedure type: "'printf' can't be a value: it takes more arguments
+// with '..', which no procedure type can say".
 static Type *check_name(Checker *c, Ast_Name *name) {
     Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
@@ -415,11 +433,20 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         name->is_constant = decl->is_constant;
         name->constant = decl->constant;
         return decl->type;
-    case AST_PROC:
+    case AST_PROC: {
         // A broken declaration may not even be a procedure (x :: 5 6; or
         // x : int = 1 2;): its type is unknown, so there's nothing to say.
-        if (!((Ast_Proc *)decl)->is_broken) diag_error(c->diag, name->pos, "procedures can only be called, for now");
-        return nullptr;
+        // Nor is there about a signature in a circle, said already.
+        Ast_Proc *proc = (Ast_Proc *)decl;
+        if (proc->is_broken || !check_proc_signature(c, proc)) return nullptr;
+        if (proc->is_variadic) {
+            diag_error(c->diag, name->pos,
+                       "'" STR_FMT "' can't be a value: it takes more arguments with '..', which no procedure type "
+                       "can say",
+                       STR_ARG(proc->name));
+        }
+        return proc->type;  // null when a part of its signature was an error, reported
+    }
     case AST_STRUCT: report_type_as_value(c, name); return nullptr;
     default: RIG_ASSERT(!"not a declaration"); return nullptr;
     }
@@ -970,12 +997,33 @@ static bool compare_floats(Token_Kind op, f64 left, f64 right) {
 }
 
 // Whether == and != take a value of type t: a number, a bool, a pointer
-// (null too) or a string. Not a struct: two of them could differ only in
+// (null too), a procedure value or a string. Not a struct: two of them could differ only in
 // their padding, bytes no field owns, so comparing their bytes wouldn't say
 // whether their fields are equal, and comparing field by field is a
 // procedure's job (spec 6.5).
 static bool takes_equality(Type *t) {
-    return type_is_number(t) || t == &type_bool || type_is_pointer(t) || t == &type_null || t == &type_string;
+    return type_is_number(t) || t == &type_bool || type_is_pointer(t) || t == &type_null || t == &type_string ||
+           t->kind == TYPE_PROC;
+}
+
+// The procedure type two operands of == or != meet at, when either is a
+// procedure value: null takes the other's type, and two procedure values
+// must be of one type (a procedure is the same procedure only as one type).
+// Null after reporting "mismatched types '(int) -> int' and '*void' for
+// '=='": no cast is suggested, since only *void casts to a procedure type.
+static Type *check_unify_procs(Checker *c, Ast_Binary *b, Type *left, Type *right, const char *op) {
+    if (left == &type_null) {
+        check_convert(c, b->left, right);
+        return right;
+    }
+    if (right == &type_null) {
+        check_convert(c, b->right, left);
+        return left;
+    }
+    if (left == right) return left;
+    diag_error(c->diag, b->pos, "mismatched types '" STR_FMT "' and '" STR_FMT "' for %s",
+               STR_ARG(type_name(c->arena, left)), STR_ARG(type_name(c->arena, right)), op);
+    return nullptr;
 }
 
 // == != < <= > >=: the result is a bool. Two numbers meet at a type as an
@@ -988,9 +1036,12 @@ static bool takes_equality(Type *t) {
 // == and != compare two strings by their bytes (lowering): equal when their
 // counts are and so is each byte. A string meets no other type, not even a
 // *u8, whose bytes' count isn't known ("mismatched types 'string' and '*u8'
-// for '=='"), and has no order ("'<' needs numbers, not 'string'").
-// Anything else isn't compared: "'==' needs numbers, bools, pointers or
-// strings, not 'Vec2'", "'<' needs numbers, not 'Vec2'".
+// for '=='"), and has no order ("'<' needs numbers, not 'string'"). Two
+// procedure values of one type, or one and null, compare as addresses
+// (check_unify_procs), with == and != only: they have no order ("'<' needs
+// numbers, not '(int) -> int'"). Anything else isn't compared: "'==' needs
+// numbers, bools, pointers or strings, not 'Vec2'", "'<' needs numbers, not
+// 'Vec2'".
 static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right) {
     const char *op = token_kind_name(b->op);
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
@@ -1005,7 +1056,15 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
     // integer a bool, nor a pointer a string, so the message suggests none.
     bool bools = left == &type_bool || right == &type_bool;
     bool strings = left == &type_string || right == &type_string;
-    if (equality && (bools || strings)) {
+    Type *proc = left->kind == TYPE_PROC ? left : right->kind == TYPE_PROC ? right : nullptr;
+    if (proc && !equality) {
+        diag_error(c->diag, b->pos, "%s needs numbers, not '" STR_FMT "'", op, STR_ARG(type_name(c->arena, proc)));
+        return nullptr;
+    }
+    if (proc) {
+        t = check_unify_procs(c, b, left, right, op);
+        if (!t) return nullptr;
+    } else if (equality && (bools || strings)) {
         if (left != right) {
             diag_error(c->diag, b->pos, "mismatched types '" STR_FMT "' and '" STR_FMT "' for %s",
                        STR_ARG(type_name(c->arena, left)), STR_ARG(type_name(c->arena, right)), op);
@@ -1139,6 +1198,29 @@ static Type *check_float_cast(Checker *c, Ast_Cast *cast, Type *to) {
     return to;
 }
 
+// cast(T) e where e or T is a procedure type (spec 3's "Procedure
+// types"): a procedure value to its own type, or to *void and back, the
+// same address; null to a procedure type. Nothing else: "can't cast '(int)
+// -> int' to '(int) -> s32'; a procedure value casts only to and from
+// *void". The signature is what makes a call through a value right, so no
+// cast makes a procedure another type in one step (through *void it's on
+// the program).
+static Type *check_proc_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to) {
+    Type *void_pointer = type_pointer_to(&type_void);
+    bool fine = from == to || (from->kind == TYPE_PROC && to == void_pointer) ||
+                (from == void_pointer && to->kind == TYPE_PROC) || from == &type_null;
+    if (!fine) {
+        diag_error(c->diag, cast->pos,
+                   "can't cast '" STR_FMT "' to '" STR_FMT "'; a procedure value casts only to and from *void",
+                   STR_ARG(type_name(c->arena, from)), STR_ARG(type_name(c->arena, to)));
+        return nullptr;
+    }
+    check_convert(c, cast->value, from == &type_null ? to : from);
+    cast->is_constant = cast->value->is_constant;  // null
+    cast->constant = cast->value->constant;
+    return to;
+}
+
 // cast(T) e where e is a pointer and T anything, or T a pointer and e a
 // number or a bool (check_cast has seen to null and strings) (spec 6.5):
 // - a pointer to any pointer: the same address, taken to point at
@@ -1180,6 +1262,7 @@ static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to
 //   x != 0").
 // - A pointer to or from a pointer, a number or a bool:
 //   check_pointer_cast.
+// - A procedure value to or from *void: check_proc_cast.
 // - A string to a []u8 and a []u8 to a string: the same view, retyped
 //   (spec 6.5), the same bytes.
 // - Anything else casts only where it converts implicitly: to its own
@@ -1198,6 +1281,7 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
         diag_error(c->diag, cast->pos, "cast,trunc only takes integers");
         return nullptr;
     }
+    if (from->kind == TYPE_PROC || to->kind == TYPE_PROC) return check_proc_cast(c, cast, from, to);
     if (type_is_number(from) && type_is_number(to) && !integers) return check_float_cast(c, cast, to);
     if (type_is_pointer(from) || (type_is_pointer(to) && (type_is_number(from) || from == &type_bool))) {
         return check_pointer_cast(c, cast, from, to);

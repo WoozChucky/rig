@@ -106,6 +106,7 @@ static const char *ir_op_name(Ir_Op op) {
     switch (op) {
     case IR_CONST: return "const";
     case IR_ADDR: return "addr";
+    case IR_PROC_ADDR: return "procaddr";
     case IR_CALL: return "call";
     case IR_SEXT: return "sext";
     case IR_ZEXT: return "zext";
@@ -241,6 +242,7 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr, bool debug) {
         }
         break;
     case IR_ADDR: out(p, "%s @" STR_FMT, op, STR_ARG(m->globals[instr->target].name)); break;
+    case IR_PROC_ADDR: out(p, "%s @" STR_FMT, op, STR_ARG(m->procs[instr->target]->name)); break;
     case IR_CALL:
         out(p, "%s @" STR_FMT "(", op, STR_ARG(m->procs[instr->target]->name));
         out_values(p, instr->args);
@@ -314,27 +316,33 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr, bool debug) {
     out(p, "\n");
 }
 
-// A variable of bytes: its size and alignment, then `zero` when it's all
-// zeros, or else its `size` bytes (the ones it was given, then zeros) and
-// where each address goes:
+// A variable of bytes: its size and alignment, then `zero` when its bytes
+// are all zeros, or else its `size` bytes (the ones it was given, then
+// zeros), and where each address goes (a global's, or a procedure's):
 //   global @origin: 16 align 8 = zero
 //   global @greeting: 16 align 8 = "\02\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00" reloc 8 @str.0
+//   global @op: 8 align 8 = zero reloc 0 @add
 static void out_byte_global(Printer *p, Ir_Module *m, Ir_Global *g) {
     RIG_ASSERT(g->bytes.count <= g->size);
     out(p, "global @" STR_FMT ": %lld align %u = ", STR_ARG(g->name), (long long)g->size, g->align);
-    bool all_zero = g->relocs.count == 0;
+    bool all_zero = true;
     for (s64 i = 0; i < g->bytes.count && all_zero; i++) all_zero = g->bytes.data[i] == 0;
-    if (all_zero) {
-        out(p, "zero\n");
-        return;
+    // A global's address only ever came with bytes written (a string's
+    // count, say), so it prints as it always has.
+    bool only_procs = true;
+    for (s64 i = 0; i < g->relocs.count; i++) only_procs = only_procs && g->relocs[i].is_proc;
+    if (all_zero && only_procs) {
+        out(p, "zero");
+    } else {
+        out(p, "\"");
+        out_bytes(p, g->bytes);
+        for (s64 i = g->bytes.count; i < g->size; i++) out(p, "\\00");
+        out(p, "\"");
     }
-    out(p, "\"");
-    out_bytes(p, g->bytes);
-    for (s64 i = g->bytes.count; i < g->size; i++) out(p, "\\00");
-    out(p, "\"");
     for (s64 i = 0; i < g->relocs.count; i++) {
         Ir_Reloc r = g->relocs[i];
-        out(p, " reloc %lld @" STR_FMT, (long long)r.offset, STR_ARG(m->globals[r.global].name));
+        String name = r.is_proc ? m->procs[r.global]->name : m->globals[r.global].name;
+        out(p, " reloc %lld @" STR_FMT, (long long)r.offset, STR_ARG(name));
     }
     out(p, "\n");
 }

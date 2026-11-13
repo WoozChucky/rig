@@ -678,7 +678,7 @@ static Ir_Module *table_module(Arena *a, bool string_first) {
     u8 *bytes = (u8 *)arena_alloc(a, 24, 1);  // zeroed
     bytes[0] = 3;
     m->globals[table].bytes = {bytes, 24};
-    array_add(&m->globals[table].relocs, {8, text});
+    array_add(&m->globals[table].relocs, {8, text, false});
     return m;
 }
 
@@ -712,14 +712,14 @@ TEST(llvm_byte_global_layouts) {
     Ir_Module *m = arena_new<Ir_Module>(&a);
     s32 text = add_string(m, "str.0", "abc");
     s32 pair = add_byte_global(m, "pair", 16, 8);
-    array_add(&m->globals[pair].relocs, {0, text});
-    array_add(&m->globals[pair].relocs, {8, text});
+    array_add(&m->globals[pair].relocs, {0, text, false});
+    array_add(&m->globals[pair].relocs, {8, text, false});
     s32 odd = add_byte_global(m, "odd", 12, 4);
     u8 *odd_bytes = (u8 *)arena_alloc(&a, 12, 1);  // zeroed
     odd_bytes[0] = 1;
     odd_bytes[11] = 2;
     m->globals[odd].bytes = {odd_bytes, 12};
-    array_add(&m->globals[odd].relocs, {3, text});
+    array_add(&m->globals[odd].relocs, {3, text, false});
     s32 counts = add_byte_global(m, "counts", 4, 4);
     static const u8 four[] = {1, 2, 3, 4};
     m->globals[counts].bytes = {four, 4};

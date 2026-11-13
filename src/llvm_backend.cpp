@@ -1121,6 +1121,7 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
         }
         break;
     case IR_ADDR: v = llvm_global(body, instr->target); break;
+    case IR_PROC_ADDR: v = llvm_function(body, instr->target); break;
     case IR_CALL: {
         Ir_Proc *callee = m->procs[instr->target];
         LLVMValueRef *args = arena_new_array<LLVMValueRef>(a, instr->args.count ? instr->args.count : 1);
@@ -1533,9 +1534,9 @@ static void add_byte_run(LLVMContextRef c, Arena *a, Global_Pieces *p, Ir_Global
     }
 }
 
-// A variable of bytes as LLVM has it: its type, and, given `globals` (every
-// global's LLVM value, by IR index, m->globals.count of them), its first
-// value in *init.
+// A variable of bytes as LLVM has it: its type, and, given `globals` and
+// `functions` (every global's and procedure's LLVM value, by IR index,
+// m->globals.count and m->procs.count of them), its first value in *init.
 //
 // When it's one run of bytes it's an array of them, [N x i8]
 // (zeroinitializer when they're all 0, as a global given no value is,
@@ -1548,8 +1549,10 @@ static void add_byte_run(LLVMContextRef c, Arena *a, Global_Pieces *p, Ir_Global
 //
 //   @table = internal global <{ [8 x i8], ptr, [8 x i8] }>
 //            <{ [8 x i8] c"\03\00\00\00\00\00\00\00", ptr @str.0, [8 x i8] zeroinitializer }>, align 8
+//
+// A procedure's address is the same: ptr @add.
 static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Global *g, LLVMValueRef *globals,
-                               LLVMValueRef *init) {
+                               LLVMValueRef *functions, LLVMValueRef *init) {
     RIG_ASSERT(g->bytes.count <= g->size);
     // At most two pieces for a run of bytes before each address, the
     // address, and two for the run after the last.
@@ -1567,12 +1570,14 @@ static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Glob
         // each inside the global and naming one: checked before any byte is
         // read.
         RIG_ASSERT(end >= at && end <= g->size);
-        RIG_ASSERT(last || (r.offset + 8 <= g->size && r.global >= 0 && r.global < m->globals.count));
+        s64 targets = r.is_proc ? m->procs.count : m->globals.count;
+        RIG_ASSERT(last || (r.offset + 8 <= g->size && r.global >= 0 && r.global < targets));
         add_byte_run(c, a, &p, g, at, end);
         if (last) break;
         // The address, 8 bytes, which the IR's bytes leave zero.
         for (s64 k = 0; k < 8 && r.offset + k < g->bytes.count; k++) RIG_ASSERT(g->bytes.data[r.offset + k] == 0);
-        add_piece(&p, LLVMPointerTypeInContext(c, 0), globals ? globals[r.global] : nullptr);
+        LLVMValueRef address = !globals ? nullptr : r.is_proc ? functions[r.global] : globals[r.global];
+        add_piece(&p, LLVMPointerTypeInContext(c, 0), address);
         at = r.offset + 8;
     }
     if (p.count == 0) {
@@ -1621,10 +1626,11 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     if (module_has(m, IR_COPY) || module_has(m, IR_ZERO)) declare_memory_functions(b);
     declare_stack_probe(b);
 
-    // The globals in two passes: every one made first, with its type, then
-    // each given its first value. A variable of bytes may hold the address
-    // of any global (a relocation), a later one too, and that address is the
-    // LLVM global itself, which must exist by then.
+    // The globals in two passes: every one made first, with its type, then,
+    // once the functions are made too, each given its first value. A
+    // variable of bytes may hold the address of any global (a relocation),
+    // a later one too, or of a procedure, and that address is the LLVM
+    // global or function itself, which must exist by then.
     LLVMContextRef c = b->context;
     LLVMValueRef *globals = arena_new_array<LLVMValueRef>(a, m->globals.count ? m->globals.count : 1);
     for (s64 i = 0; i < m->globals.count; i++) {
@@ -1641,7 +1647,8 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
             // A variable of bytes, writable and internal like the program's
             // procedures, aligned as the IR says.
             RIG_ASSERT(g->align > 0 && (g->align & (g->align - 1)) == 0);
-            global = LLVMAddGlobal(b->module, byte_global(c, a, m, g, nullptr, nullptr), string_cstr(a, g->name));
+            global = LLVMAddGlobal(b->module, byte_global(c, a, m, g, nullptr, nullptr, nullptr),
+                                   string_cstr(a, g->name));
             LLVMSetLinkage(global, LLVMInternalLinkage);
             LLVMSetAlignment(global, g->align);
         } else {
@@ -1650,25 +1657,6 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
             LLVMSetLinkage(global, LLVMInternalLinkage);
         }
         globals[i] = global;
-    }
-    for (s64 i = 0; i < m->globals.count; i++) {
-        Ir_Global *g = &m->globals[i];
-        LLVMValueRef init = nullptr;
-        if (g->type == IR_VOID && !g->is_variable) {
-            // The bytes already end with their zero, so LLVM mustn't add
-            // another.
-            init = LLVMConstStringInContext2(c, (const char *)g->bytes.data, (size_t)g->bytes.count, 1);
-        } else if (g->type == IR_VOID) {
-            byte_global(c, a, m, g, globals, &init);
-        } else if (g->type == IR_PTR) {
-            RIG_ASSERT(g->initial == 0);
-            init = LLVMConstNull(llvm_type(c, IR_PTR));
-        } else if (ir_is_float(g->type)) {
-            init = float_constant(c, g->type, g->initial);
-        } else {
-            init = LLVMConstInt(memory_type(c, g->type), g->initial, 0);
-        }
-        LLVMSetInitializer(globals[i], init);
     }
     // Each Rig global a debugger can show: a DIGlobalVariable of its type,
     // named as in the source (LLVM may have renamed the symbol, as it does a
@@ -1704,6 +1692,25 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
         }
         mark_extensions(b, p, functions[i], false);
         mark_result_pointer(b, p, functions[i], false);
+    }
+    for (s64 i = 0; i < m->globals.count; i++) {
+        Ir_Global *g = &m->globals[i];
+        LLVMValueRef init = nullptr;
+        if (g->type == IR_VOID && !g->is_variable) {
+            // The bytes already end with their zero, so LLVM mustn't add
+            // another.
+            init = LLVMConstStringInContext2(c, (const char *)g->bytes.data, (size_t)g->bytes.count, 1);
+        } else if (g->type == IR_VOID) {
+            byte_global(c, a, m, g, globals, functions, &init);
+        } else if (g->type == IR_PTR) {
+            RIG_ASSERT(g->initial == 0);
+            init = LLVMConstNull(llvm_type(c, IR_PTR));
+        } else if (ir_is_float(g->type)) {
+            init = float_constant(c, g->type, g->initial);
+        } else {
+            init = LLVMConstInt(memory_type(c, g->type), g->initial, 0);
+        }
+        LLVMSetInitializer(globals[i], init);
     }
     for (s64 i = 0; i < m->procs.count; i++) {
         if (!m->procs[i]->is_foreign) build_body(b, a, m, m->procs[i], functions[i], functions, globals);

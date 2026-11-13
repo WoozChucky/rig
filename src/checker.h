@@ -454,3 +454,11 @@ bool expr_is_place(Ast *e);
 // written there by the linker: the checker asks this to allow it, and
 // lowering to write it (constant_bytes).
 Ast_String *literal_address(Ast *e);
+
+// The procedure whose address e, checked, is: a procedure's name, a
+// constant that names one (OP :: add;), or a cast of either that keeps the
+// address, to *void or to a procedure type (cast(*void) add); null for
+// anything else. A global may hold one, its address written there by the
+// linker, as a string literal's is: the checker asks this to allow it,
+// and lowering to write it (constant_bytes).
+Ast_Proc *procedure_address(Ast *e);
