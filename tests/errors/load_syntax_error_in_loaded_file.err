@@ -1,0 +1,6 @@
+tests/errors/load_syntax_error_in_loaded_file.rig:7:14: error: 256 doesn't fit in 'u8'
+        y : u8 = 256;
+                 ^
+tests/errors/load/syntax_error.rig:2:9: error: expected '::', found identifier 'int'
+    counter int = 0;
+            ^
