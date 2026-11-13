@@ -2,9 +2,11 @@ make (result$=0x
 n=5) at
 aggregates.rig:16
 p := Pair.{n, n + 1};
+$1 = (struct Pair *) 0x
 main () at
 aggregates.rig:46
 q := make(5);
+$2 = {a = 5, b = 6}
 little (result$=0x
 n=7) at
 aggregates.rig:21
@@ -27,26 +29,42 @@ sum (p=0x
 aggregates.rig:36
 s := p.a + p.b;
 p = 0x
-$1 = 5
-$2 = 6
-$3 = {a = 5, b = 6}
-$4 = 8
+$3 = 5
+$4 = 6
+$5 = {a = 5, b = 6}
+$6 = 8
 type = void (struct Pair *, int)
 type = int (struct Pair *)
 type = void (int (*)[2], int)
 main () at
 aggregates.rig:50
-$5 = 11
-$6 = void
-$7 = {a = 7, b = 8}
+$7 = 11
 $8 = void
-$9 = {4, 8}
+$9 = {a = 7, b = 8}
+$10 = void
+$11 = {4, 8}
 words () at
-aggregates.rig:58
+aggregates.rig:60
 total := new + this;
-$10 = 1
-$11 = 2
-$12 = 6
+$12 = 1
+$13 = 2
+$14 = 6
+main () at
+aggregates.rig:52
+$15 = void
+$16 = {a = 3, b = 4}
+$17 = {a = 6, b = 9}
+$18 = 12
+$19 = {a = 4, b = 5}
+pairs (result$1=0x
+result$2=0x
+n=2) at
+aggregates.rig:64
+#0  pairs (result$1=0x
+split (result$=0x
+n=4) at
+aggregates.rig:69
+#0  split (result$=0x
 !Value returned
 !The program being debugged
 !syntax error
