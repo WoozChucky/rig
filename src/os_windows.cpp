@@ -502,3 +502,19 @@ static const DWORD main_thread_id = GetCurrentThreadId();
 bool os_on_main_thread() {
     return GetCurrentThreadId() == main_thread_id;
 }
+
+// Compile-time execution.
+
+// MEM_RESERVE without MEM_COMMIT takes the addresses and no memory; a
+// reservation has no access anyway, and PAGE_NOACCESS says so.
+void *os_reserve_inaccessible(u64 size) {
+    void *p = VirtualAlloc(nullptr, (SIZE_T)size, MEM_RESERVE, PAGE_NOACCESS);
+    if (!p) os_fail();
+    return p;
+}
+
+// MEM_RELEASE frees the whole reservation, and takes a size of 0.
+void os_release_inaccessible(void *p, u64 size) {
+    (void)size;
+    VirtualFree(p, 0, MEM_RELEASE);
+}

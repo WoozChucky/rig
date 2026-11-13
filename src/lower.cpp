@@ -670,17 +670,20 @@ static Ir_Op ir_op_of(Token_Kind op, Type *t) {
 // build was given it. Each check has a message of its own, since each names
 // its own position. The branch is the statement's code, at its position; the
 // panic is at `at`, the place the message names, so a debugger stopped there
-// shows the same place.
+// shows the same place. The panic's `constant` is the prefix's length, all
+// of the text before MESSAGE, which the interpreter leaves out (ir.h).
 static void emit_runtime_check(Lowering *l, s32 fails, Position at, String message) {
     String path = l->diag->files[at.file].path;
-    String text = string_printf(l->arena, STR_FMT ":%d:%d: runtime error: " STR_FMT "\n", STR_ARG(path), at.line,
-                                at.col, STR_ARG(message));
+    String prefix = string_printf(l->arena, STR_FMT ":%d:%d: runtime error: ", STR_ARG(path), at.line, at.col);
+    String text = string_printf(l->arena, STR_FMT STR_FMT "\n", STR_ARG(prefix), STR_ARG(message));
     s32 fail = new_block(l);
     s32 ok = new_block(l);
     emit_branch(l, fails, fail, ok);
     Position statement = l->pos;
     l->pos = at;
-    emit_in(l, fail, IR_PANIC, IR_VOID)->target = add_bytes(l, text);
+    Ir_Instr *panic = emit_in(l, fail, IR_PANIC, IR_VOID);
+    panic->target = add_bytes(l, text);
+    panic->constant = (u64)prefix.count;
     l->pos = statement;
     l->block = ok;
 }
@@ -2270,6 +2273,7 @@ static void append_number(Lowering *l, s32 buffer, s32 length, s32 value, s32 is
 // view's may have been set below 0). The buffer is a local of the longest
 // WHERE any check passes plus 73 bytes: the fixed text is 33 ("index ", 6,
 // " is out of bounds (count ", 25, ")\n", 2), and each number at most 20.
+// WHERE is the message's prefix, so the panic's c is where_length (ir.h).
 static void lower_bounds_failed(Lowering *l) {
     l->proc = l->module->procs[l->bounds_failed];
     l->block = ir_new_block(l->arena, l->proc);
@@ -2290,6 +2294,7 @@ static void lower_bounds_failed(Lowering *l) {
     Ir_Instr *panic = emit(l, IR_PANIC, IR_VOID);
     panic->a = buffer;
     panic->b = total;
+    panic->c = where_length;
 }
 
 // __rig_string_equal(i64 count_a, ptr data_a, i64 count_b, ptr data_b) ->
