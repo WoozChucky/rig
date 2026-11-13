@@ -9,7 +9,7 @@
 set -e
 cd "$(dirname "$0")/.."
 
-VERSION=23.1.4
+VERSION=23.1.5
 ARCHIVE=LLVM-$VERSION-Linux-X64.tar.xz
 SHA256=25d814fda50d5fb0084b42be09605d8b1595d49d5e2e03a3345d7e112ff6f9f3
 URL=https://github.com/llvm/llvm-project/releases/download/llvmorg-$VERSION/$ARCHIVE
