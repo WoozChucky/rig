@@ -22,8 +22,9 @@
 // is reported as `interpreted tests/run/NAME`. A program the interpreter
 // can't run, one that hands C a Rig procedure (qsort_callback), has a
 // NAME.interp.err instead: its stderr must be that, its exit code 101, and
-// its stdout the start of NAME.out, what it printed before it stopped. The
-// interpreter is always bin/unit-tests's, whatever RIG is given.
+// its stdout what it printed before it stopped, the first lines of
+// NAME.out, whole, and one at least (its NAME.exit is the compiled run's).
+// The interpreter is always bin/unit-tests's, whatever RIG is given.
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, and it writes neither an object file nor a program.
@@ -368,7 +369,8 @@ static String run_test(Arena *a, String rig, String name) {
 // A program of tests/run interpreted by `unit_tests`, bin/unit-tests
 // --interpret, which must give what the compiled program gives; or, with a
 // NAME.interp.err, stop with that on stderr and 101, having printed the
-// start of its .out. {} when it passes, otherwise why not.
+// first lines of its .out, one at least. {} when it passes, otherwise why
+// not.
 static String interpreted_test(Arena *a, String unit_tests, String name) {
     Array<String> argv = {};
     array_add(&argv, unit_tests);
@@ -389,13 +391,20 @@ static String interpreted_test(Arena *a, String unit_tests, String name) {
     if (ran.exit_code != 101) {
         return string_printf(a, "exit code " STR_FMT ", expected 101", STR_ARG(exit_code_text(a, ran.exit_code)));
     }
+    // The .out alone: the .exit is the compiled run's, and the refusal's
+    // status is always 101.
     String expected_out = {};
-    s32 expected_exit = 0;
-    why = read_expected(a, name, &expected_out, &expected_exit);
-    if (why.count) return why;
-    // The .out cut to stdout's length: a stdout longer than the whole .out
-    // differs from it at its end, where it goes on.
-    String start = string_slice(expected_out, 0, ran.out.count < expected_out.count ? ran.out.count : expected_out.count);
+    if (!os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".out", STR_ARG(name)), &expected_out)) {
+        return str("no .out file");
+    }
+    // What it printed before it stopped: the .out's whole lines, from its
+    // first, through the one stdout ends in. So a stdout that's empty, that
+    // ends inside a line, or that goes on past the whole .out, differs
+    // from them: the program's output before the refusal must come out.
+    s64 end = ran.out.count > 1 ? ran.out.count : 1;
+    if (end > expected_out.count) end = expected_out.count;
+    while (end < expected_out.count && expected_out.data[end - 1] != '\n') end++;
+    String start = string_slice(expected_out, 0, end);
     if (!string_eq(ran.out, start)) return first_difference(a, "stdout (the start of the .out)", start, ran.out);
     return {};
 }

@@ -1,6 +1,10 @@
 // A Rig procedure passed to C as a callback (spec 7.6): libc's qsort calls
 // a #c_call comparison, on Linux and on Windows alike. A foreign procedure
 // is a #c_call value too, and is called through one as Rig calls it.
+//
+// The numbers are shown before they're sorted as well: the interpreter
+// refuses the first qsort (qsort_callback.interp.err), and the line it has
+// printed by then is what the runner holds to the start of the .out.
 qsort :: (base: *void, count: u64, size: u64, compare: (a: *void, b: *void) -> s32 #c_call) #foreign libc;
 printf :: (format: *u8, ..) -> s32 #foreign libc;
 puts :: (s: *u8) -> s32 #foreign libc;

@@ -2676,10 +2676,9 @@ static Process_Result interpret_test_raw(Arena *a, const String *words, s64 coun
     return r;
 }
 
-// interpret_test_raw's run, read as the test runner reads it. The
-// interpreted program writes as a compiled one does, in text mode, so on
-// Windows each "\n" comes out "\r\n", read as "\n" (test_link.cpp's
-// without_cr).
+// interpret_test_raw's run without its carriage returns (test_link.cpp's
+// without_cr): the interpreted program writes as a compiled one does, in
+// text mode, so on Windows each "\n" comes out "\r\n".
 static Process_Result interpret_test_run(Arena *a, const String *words, s64 count, bool merged) {
     Process_Result r = interpret_test_raw(a, words, count, merged);
     r.out = without_cr(a, r.out);
@@ -2765,6 +2764,25 @@ TEST(interpret_mode_command_line) {
     CHECK_STR(string_slice(r.err, 0, r.err.count < n ? r.err.count : n), cannot);
     CHECK_STR(r.out, "");
     CHECK_EQ(r.exit_code, 1);
+    arena_free(&a);
+}
+
+TEST(interpret_mode_reads_a_utf8_path) {
+    // FILE as rig build reads it, in UTF-8 (os_arguments): on Windows,
+    // main's own argv is in the ANSI code page, which can't name every
+    // file, nor ação 日本 in UTF-8 (os_arguments_are_utf8). Its runtime
+    // error names it as given.
+    Arena a = arena_make();
+    String path = interpret_test_file(&a, "a\xC3\xA7\xC3\xA3o \xE6\x97\xA5\xE6\x9C\xAC",  // ação 日本
+                                      "main :: () {\n"
+                                      "    zero := 0;\n"
+                                      "    n := 1 / zero;\n"
+                                      "}\n");
+    Process_Result r = interpret_test_run(&a, &path, 1, false);
+    CHECK_STR(r.out, "");
+    CHECK_STR(r.err,
+              ".build/tests/interp/a\xC3\xA7\xC3\xA3o \xE6\x97\xA5\xE6\x9C\xAC.rig:3:12: runtime error: division by zero\n");
+    CHECK_EQ(r.exit_code, 101);
     arena_free(&a);
 }
 
