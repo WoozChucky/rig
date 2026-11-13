@@ -7,11 +7,14 @@ rem     Rig's compiler is compiled against and linked with;
 rem   - lld-link, the linker build.bat puts beside rig.exe, which rig.exe
 rem     uses when Visual Studio has no link.exe;
 rem   - clang, the compiler that builds Rig (build.bat): bin\clang++.exe, the
-rem     name build.bat runs (it compiles C++ and links C++'s runtime), with
-rem     bin\clang.exe, the same program under its own name; and
-rem     lib\clang\MAJOR\include, its own headers (stddef.h, stdarg.h, the
-rem     intrinsics...), which it finds from where it's installed
-rem     (bin\..\lib\clang\MAJOR). None of its other tools are kept. Visual
+rem     one name build.bat runs (it compiles C++ and links C++'s runtime),
+rem     and lib\clang\MAJOR\include, its own headers (stddef.h, stdarg.h,
+rem     the intrinsics...), which it finds from where it's installed
+rem     (bin\..\lib\clang\MAJOR). The release's clang.exe and clang-cl.exe
+rem     are the same program under other names, but on Windows each is a
+rem     separate copy of it (about 113 MB), not a link, and nothing runs
+rem     them: clang++.exe runs its compiler (cc1) in its own process. So
+rem     only clang++.exe is kept, and none of clang's other tools. Visual
 rem     Studio's C and C++ libraries and headers aren't LLVM's to ship:
 rem     clang uses the installed ones, as build.bat says.
 rem Running it again extracts everything again over what's there, so a
@@ -53,7 +56,7 @@ if /i not "%ACTUAL%"=="%SHA256%" (
 )
 
 echo extracting into %DEST%
-tar.exe -xf "deps\%ARCHIVE%" -C "%DEST%" --strip-components=1 "*/include/llvm-c/*" "*/include/llvm/Config/*" "*/lib/LLVM*.lib" "*/bin/llvm-config.exe" "*/bin/lld-link.exe" "*/bin/clang.exe" "*/bin/clang++.exe" "*/lib/clang/%MAJOR%/include/*" || exit /b 1
+tar.exe -xf "deps\%ARCHIVE%" -C "%DEST%" --strip-components=1 "*/include/llvm-c/*" "*/include/llvm/Config/*" "*/lib/LLVM*.lib" "*/bin/llvm-config.exe" "*/bin/lld-link.exe" "*/bin/clang++.exe" "*/lib/clang/%MAJOR%/include/*" || exit /b 1
 
 del "deps\%ARCHIVE%"
 echo LLVM %VERSION% is in %DEST%

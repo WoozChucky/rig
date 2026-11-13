@@ -28,8 +28,10 @@ if [ ! -x "$LLVM/bin/llvm-config" ]; then
     echo "build.sh: LLVM not found in $LLVM; run scripts/get_llvm.sh first" >&2
     exit 1
 fi
+PINNED_CXX=0
 if [ -z "$CXX" ]; then
     CXX="$LLVM/bin/clang++"
+    PINNED_CXX=1
     # A deps/ made before get_llvm.sh kept clang has LLVM but no compiler.
     if [ ! -x "$CXX" ]; then
         echo "build.sh: clang not found in $LLVM; run scripts/get_llvm.sh again" >&2
@@ -37,12 +39,19 @@ if [ -z "$CXX" ]; then
     fi
 fi
 # Which compiler made this build, first in its log: "clang version 23.1.5 ...",
-# the first line clang prints. A compiler that doesn't answer stops here.
-CXX_VERSION=$($CXX --version 2> /dev/null | head -n 1)
-if [ -z "$CXX_VERSION" ]; then
-    echo "build.sh: $CXX --version failed; CXX names the compiler, or is unset for LLVM's clang" >&2
+# the first line clang prints. A compiler that doesn't run stops here, with
+# what it said on stderr left in place, since that names the cause (a shared
+# library the system lacks, say), and a message naming where the compiler
+# came from: the pinned clang, or CXX.
+if ! CXX_OUTPUT=$($CXX --version) || [ -z "$CXX_OUTPUT" ]; then
+    if [ $PINNED_CXX = 1 ]; then
+        echo "build.sh: the pinned clang, $CXX, failed to run (above); run scripts/get_llvm.sh again, or install the libraries it needs (libstdc++, libgcc_s, zlib)" >&2
+    else
+        echo "build.sh: CXX=$CXX failed to run (above); name a C++ compiler in CXX, or unset it to use the pinned clang" >&2
+    fi
     exit 1
 fi
+CXX_VERSION=$(printf '%s\n' "$CXX_OUTPUT" | head -n 1)
 echo "build.sh: $CXX: $CXX_VERSION"
 
 # The stamp: the defines src/version.h reads.
