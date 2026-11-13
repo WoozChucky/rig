@@ -351,8 +351,8 @@ struct Ir_Proc {
 // A file of the program, for a debugger: how to find it, and whether the
 // file it finds is the one the program was built from.
 struct Ir_Source {
-    String path;     // absolute, normalised (path_absolute): how an editor names it
-    u8 md5[16];      // the MD5 of its bytes
+    String path;  // absolute, normalised (path_absolute): how an editor names it
+    u8 md5[16];   // the MD5 of its bytes
 };
 
 struct Ir_Module {
