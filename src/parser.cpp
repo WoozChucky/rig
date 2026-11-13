@@ -26,6 +26,10 @@ struct Parser {
     // the top level resumes (parse_block_rest, parse_struct), or -1.
     s64 resume;
     s64 declaration;  // the token the top-level declaration being read began at
+    // Whether a #load named no file the parser could keep, so the program
+    // lacks it (Ast_File.lost_a_file): one with no string (parse_load), or
+    // one where only the top level can have it (error_misplaced_load).
+    bool lost_a_file;
 };
 
 // A limit of the compiler (spec 6.1): an expression nests at most MAX_DEPTH
@@ -110,8 +114,10 @@ static bool is_directive(Token *t, const char *name) {
 }
 
 // A #load anywhere but where a top-level declaration starts, at its '#'.
+// The file it names isn't loaded, so the program lacks it.
 static void error_misplaced_load(Parser *p, Position at) {
     diag_error(p->diag, at, "#load can only be at the top level");
+    p->lost_a_file = true;
 }
 
 static bool load_resumes_here(Parser *p);
@@ -1455,11 +1461,11 @@ static Ast *parse_struct(Parser *p, Token *name) {
 //
 // A load missing only its ';' is reported, but kept: it's whole without
 // it, and losing it would make every use of what the file declares unknown
-// too. One with no string names no file to keep, so parse_into records
+// too. One with no string names no file to keep, so the parser records
 // that the program lacks one (Ast_File.lost_a_file), and those uses aren't
-// reported either. Whatever came instead is skipped up to the next declaration, as
-// after any error, or to one later on the same line (`#load "a.rig" main
-// :: () {}`), as parse_into does after stray tokens.
+// reported either. Whatever came instead is skipped up to the next
+// declaration, as after any error, or to one later on the same line
+// (`#load "a.rig" main :: () {}`), as parse_into does after stray tokens.
 static void skip_to_next_declaration(Parser *p, s64 start);
 static s64 declaration_after_stray_tokens(Parser *p, s64 start);
 
@@ -1468,6 +1474,7 @@ static Ast *parse_load(Parser *p) {
     Token *directive = advance(p);
     Token *path = peek(p);
     if (path->kind != TOKEN_STRING) {
+        p->lost_a_file = true;
         // A TOKEN_ERROR (a string never closed, say) was reported by the
         // lexer already, as error_expected says.
         if (path->kind != TOKEN_ERROR) {
@@ -1805,15 +1812,11 @@ static Ast_Proc *broken_entry(Parser *p, s64 start) {
 
 void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
-    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, 0, -1, 0};
+    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, 0, -1, 0, false};
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;
         p.declaration = start;
         Ast *decl = parse_declaration(&p);
-        // A #load with no string (parse_load) names no file, so the program
-        // lacks the one it was meant to, as after a #load the loader can't
-        // follow (Ast_File.lost_a_file).
-        if (!decl && is_directive(&p.tokens[start], "load")) file->lost_a_file = true;
         if (!decl && p.resume >= 0) {
             // A body or a struct never closed said where the top level goes
             // on (parse_block_rest, parse_struct), inside its braces, so
@@ -1855,6 +1858,11 @@ void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
             array_add(&file->globals, decl);
         }
     }
+    // A #load with no string, or where only the top level can have one,
+    // names no file the loader could follow, so the program lacks the one
+    // it was meant to, as after a #load the loader can't follow
+    // (Ast_File.lost_a_file).
+    if (p.lost_a_file) file->lost_a_file = true;
 }
 
 Ast_File *parse(Array<Token> tokens, Arena *a, Diagnostics *d) {

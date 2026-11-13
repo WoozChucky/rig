@@ -306,6 +306,10 @@ check('diagnostics.js counts the errors in the other files of the program', () =
     const own = `${main}:9:14: error: x\n    y : u8 = 256;\n             ^\nrig: error: linking failed\n`;
     assert.strictEqual(otherFilesError(own, main, root), null);
     assert.strictEqual(otherFilesError(`other.rig:1:1: warning: w\n`, main, root), null);
+    // A source line quoted under an error is indented, and isn't an error
+    // of its own, even when its text reads like one.
+    const quoted = `${main}:1:6: error: x\n    puts("other.rig:1:1: error: y");\n         ^\n`;
+    assert.strictEqual(otherFilesError(quoted, main, root), null);
 });
 
 // rig counts a column in bytes of UTF-8 (src/diag.h: a tab is one, and so is
@@ -1095,8 +1099,8 @@ check('the tasks use $rig-runtime while rig.check is on, $rig when it is off', (
 // script check.js there (written by the check, below): a stand-in for
 // `rig check` that reads stdin and reports each `putz` in it as rig would,
 // slowly if the text says `slow`, with a warning about another file, and
-// an error in broken.rig if the text #loads it. The documents are stand-ins too, never
-// saved: what's checked is their text.
+// an error in broken.rig if the text #loads it. The documents are
+// stand-ins too, never saved: what's checked is their text.
 
 const STAND_IN = `
 const file = process.argv[2];
@@ -1246,7 +1250,8 @@ check('an error in a file the document loads is counted on its first line', asyn
         stub.document = doc;
         fire('open', doc);
         await until('the check', () => live.has(key));
-        // The document's own, then the one for broken.rig, at its first word.
+        // The document's own, then the one for broken.rig, on the first line's
+        // first character (the '#', no word).
         const [own, elsewhere, ...rest] = live.get(key);
         assert.deepStrictEqual(rest, []);
         assert.strictEqual(own.message, "unknown identifier 'putz'");

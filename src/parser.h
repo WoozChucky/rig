@@ -176,7 +176,9 @@
 // fields, the parser skips it up to its ';' (or, with no ';' first, to the
 // end of its line, a brace on it, or the end of the file) and goes on with
 // the body or the fields, which lose nothing by it; anywhere else, the
-// declaration is given up, as after any error below.
+// declaration is given up, as after any error below. Either way the file
+// it names isn't loaded, so the tree records that the program lacks it, as
+// for a #load with no string.
 //
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;
