@@ -7,6 +7,9 @@
 #   ld.lld     LLVM's linker, which rig runs from its own directory (spec
 #              10.6): without it rig can't link a program
 #   LICENSE, README.md
+#   LICENSE-LLVM.txt, LICENSE-LLD.txt
+#              the licences of LLVM, which rig links statically, and of
+#              ld.lld (third_party/README.md)
 #
 # Then it checks the archive as someone downloading it would use it: it
 # unpacks it into a temporary directory, builds tests/run/hello.rig with the
@@ -17,7 +20,7 @@ set -e
 cd "$(dirname "$0")/.."
 root=$(pwd)
 archive=dist/rig-linux-x64.tar.gz
-files="rig ld.lld LICENSE README.md"
+files="rig ld.lld LICENSE README.md LICENSE-LLVM.txt LICENSE-LLD.txt"
 
 ./build.sh release
 bin/rig version
@@ -29,6 +32,8 @@ trap 'rm -rf "$stage"' EXIT
 trap 'exit 1' INT TERM HUP
 mkdir "$stage/pack" "$stage/check"
 cp bin/rig bin/ld.lld LICENSE README.md "$stage/pack/"
+cp third_party/llvm/LICENSE.TXT "$stage/pack/LICENSE-LLVM.txt"
+cp third_party/lld/LICENSE.TXT "$stage/pack/LICENSE-LLD.txt"
 
 mkdir -p dist
 rm -f "$archive"
