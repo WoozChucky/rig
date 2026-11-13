@@ -18,6 +18,7 @@
 #include "lexer.cpp"
 #include "ast.cpp"
 #include "parser.cpp"
+#include "load.cpp"
 #include "types.cpp"
 #include "checker.cpp"
 #include "check_expr.cpp"

@@ -23,14 +23,7 @@
 // fine; at the same time, one could link the other's object.
 
 #include "link.h"
-
-// Whether the path ends in .rig, in any case: on Windows HELLO.RIG and
-// hello.rig are the same file, and on Linux .RIG is still plainly meant.
-bool is_rig_file(String path) {
-    if (path.count < 4) return false;
-    const u8 *end = path.data + path.count - 4;
-    return end[0] == '.' && (end[1] | 0x20) == 'r' && (end[2] | 0x20) == 'i' && (end[3] | 0x20) == 'g';
-}
+#include "load.h"  // is_rig_file, which the loader needs first
 
 // "src/hello.rig" -> "hello"; either slash. A name that is only ".rig" stays
 // as it is, rather than becoming nothing.
