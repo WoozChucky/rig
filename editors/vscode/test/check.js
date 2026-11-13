@@ -461,14 +461,15 @@ function debugModule() {
 check('programPath and debugConfiguration for win32', () => {
     const { programPath, debugConfiguration } = debugModule();
     const dir = 'C:\\work\\rig';
-    const program = path.win32.join(dir, 'x.exe');
-    assert.strictEqual(programPath('win32', 'C:\\work\\rig\\tests\\x.rig', dir), program);
+    const built = 'C:\\Temp\\rig-debug\\rig-0123456789ab';
+    assert.strictEqual(programPath('win32', 'C:\\work\\rig\\tests\\x.rig', dir), path.win32.join(dir, 'x.exe'));
     assert.strictEqual(programPath('win32', 'C:\\work\\rig\\X.RIG', dir), path.win32.join(dir, 'X.exe'));
-    assert.deepStrictEqual(debugConfiguration('win32', 'C:\\work\\rig\\tests\\x.rig', dir, ['a', 'b']), {
+    // The program where it was built, run in the workspace folder.
+    assert.deepStrictEqual(debugConfiguration('win32', 'C:\\work\\rig\\tests\\x.rig', built, dir, ['a', 'b']), {
         type: 'cppvsdbg',
         request: 'launch',
         name: 'Rig: debug x',
-        program,
+        program: path.win32.join(built, 'x.exe'),
         args: ['a', 'b'],
         cwd: dir,
         console: 'integratedTerminal',
@@ -478,15 +479,15 @@ check('programPath and debugConfiguration for win32', () => {
 check('programPath and debugConfiguration for linux', () => {
     const { programPath, debugConfiguration } = debugModule();
     const dir = '/home/me/rig';
-    const program = path.posix.join(dir, 'x');
-    assert.strictEqual(programPath('linux', '/home/me/rig/tests/x.rig', dir), program);
+    const built = '/tmp/rig-debug/rig-0123456789ab';
+    assert.strictEqual(programPath('linux', '/home/me/rig/tests/x.rig', dir), path.posix.join(dir, 'x'));
     // A name that's only `.rig` keeps it, as rig does.
     assert.strictEqual(programPath('linux', '/home/me/.rig', dir), path.posix.join(dir, '.rig'));
-    assert.deepStrictEqual(debugConfiguration('linux', '/home/me/rig/tests/x.rig', dir, []), {
+    assert.deepStrictEqual(debugConfiguration('linux', '/home/me/rig/tests/x.rig', built, dir, []), {
         type: 'cppdbg',
         request: 'launch',
         name: 'Rig: debug x',
-        program,
+        program: path.posix.join(built, 'x'),
         args: [],
         cwd: dir,
         MIMode: 'gdb',
@@ -500,10 +501,29 @@ check('programPath and debugConfiguration for linux', () => {
 // given one is left as it was.
 check('launchConfiguration keeps what the extension doesn\'t set', () => {
     const { debugConfiguration, launchConfiguration } = debugModule();
-    const generated = debugConfiguration('linux', '/home/me/x.rig', '/home/me', ['a']);
+    const generated = debugConfiguration('linux', '/home/me/x.rig', '/tmp/rig-debug/me-0123456789ab', '/home/me', ['a']);
     const config = { type: 'rig', name: 'mine', file: 'x.rig', args: ['b'], preLaunchTask: 'p', noDebug: true };
     assert.deepStrictEqual(launchConfiguration(config, generated), { ...generated, preLaunchTask: 'p', noDebug: true });
     assert.deepStrictEqual(Object.keys(config), ['type', 'name', 'file', 'args', 'preLaunchTask', 'noDebug']);
+});
+
+// Issue #104: a program built to be debugged is built outside the
+// workspace, in a directory of the system's temporary one that's the
+// workspace folder's own: the same one each time, another for another
+// folder, named after the folder (a name that's only a root has none). On
+// Windows a folder named in another case, or with '/', is the same folder.
+check('debugBuildDirectory is the folder\'s own, under the temporary directory', () => {
+    const { debugBuildDirectory } = debugModule();
+    const linux = debugBuildDirectory('linux', '/home/me/rig', '/tmp');
+    assert.match(linux, /^\/tmp\/rig-debug\/rig-[0-9a-f]{12}$/);
+    assert.strictEqual(debugBuildDirectory('linux', '/home/me/rig', '/tmp'), linux);
+    assert.notStrictEqual(debugBuildDirectory('linux', '/home/you/rig', '/tmp'), linux);
+    assert.notStrictEqual(debugBuildDirectory('linux', '/home/me/Rig', '/tmp'), linux);
+    assert.match(debugBuildDirectory('linux', '/', '/tmp'), /^\/tmp\/rig-debug\/[0-9a-f]{12}$/);
+    const windows = debugBuildDirectory('win32', 'C:\\Work\\Rig', 'C:\\Temp');
+    assert.match(windows, /^C:\\Temp\\rig-debug\\Rig-[0-9a-f]{12}$/);
+    assert.strictEqual(debugBuildDirectory('win32', 'c:/work/rig', 'C:\\Temp').toLowerCase(), windows.toLowerCase());
+    assert.notStrictEqual(debugBuildDirectory('win32', 'C:\\Work\\Other', 'C:\\Temp'), windows);
 });
 
 // What a file passes to require().
@@ -524,7 +544,7 @@ function ownModules() {
 // files only. debug.js and diagnostics.js don't need VS Code at all, so this
 // file can test them as they are.
 check('extension.js requires only vscode, Node\'s built-in modules and its own', () => {
-    const builtIn = ['child_process', 'path', 'fs', 'os'];
+    const builtIn = ['child_process', 'crypto', 'path', 'fs', 'os'];
     const required = requires('extension.js');
     assert.ok(required.includes('vscode'), 'extension.js never requires vscode');
     assert.deepStrictEqual(ownModules(), ['debug.js', 'diagnostics.js']);
@@ -1297,9 +1317,10 @@ check('a build whose compiler Node can\'t start says so and fails', async () => 
 // The `rig` debug type: its provider builds the file with the build task and
 // returns the launch configuration of Microsoft's C/C++ extension for the
 // program. As for the live check, Node stands in for rig: the extension runs
-// `node build FILE` in the workspace folder, and Node runs build.js there, a
-// stand-in for `rig build` that writes an empty "program" where rig would,
-// or fails as rig does when the file says `fail`. The stub's executeTask
+// `node build FILE` where it builds a program to debug, the folder's
+// directory under the temporary one (debugDirectoryOf), and Node runs
+// build.js there, a stand-in for `rig build` that writes an empty "program"
+// where rig would, or fails as rig does when the file says `fail`. The stub's executeTask
 // runs the task's terminal (stub.runTasks) and fires onDidEndTaskProcess
 // with its status.
 
@@ -1322,12 +1343,14 @@ function savedDocument(file) {
 }
 
 // `fn(dir, folder, file)` with the stand-in set up: dir is a workspace
-// folder (named "work") holding build.js and sort.rig, which is open in the
-// editor; rig.compilerPath is Node; tasks run.
+// folder (named "work") holding sort.rig, which is open in the editor, and
+// debugDirectoryOf(dir) holds build.js; rig.compilerPath is Node; tasks run.
 async function withDebugging(fn) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-vscode-check-'));
     try {
-        fs.writeFileSync(path.join(dir, 'build.js'), BUILD_STAND_IN);
+        fs.rmSync(debugDirectoryOf(dir), { recursive: true, force: true });
+        fs.mkdirSync(debugDirectoryOf(dir), { recursive: true });
+        fs.writeFileSync(path.join(debugDirectoryOf(dir), 'build.js'), BUILD_STAND_IN);
         const file = path.join(dir, 'sort.rig');
         fs.writeFileSync(file, 'main :: () {}\n');
         reset();
@@ -1339,7 +1362,18 @@ async function withDebugging(fn) {
         await fn(dir, folder, file);
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
+        fs.rmSync(debugDirectoryOf(dir), { recursive: true, force: true });
     }
+}
+
+// Where the extension builds a program of workspace folder `dir` to debug it.
+function debugDirectoryOf(dir) {
+    return debugModule().debugBuildDirectory(process.platform, dir, os.tmpdir());
+}
+
+// The configuration launched for `file` of workspace folder `dir`.
+function launched(file, dir, args) {
+    return debugModule().debugConfiguration(process.platform, file, debugDirectoryOf(dir), dir, args);
 }
 
 function debugProvider() {
@@ -1351,17 +1385,22 @@ function debugProvider() {
 
 // F5 in a folder with no launch.json asks the provider to resolve `{}`:
 // the active editor's file, built, then debugged where the build put it.
+// The program is built outside the workspace (issue #104: it left a
+// program in it), in the folder's debug build directory, made if need be,
+// from the file's absolute path as VS Code names it; it runs in the folder.
 check('resolving {} builds the open .rig file and debugs its program', async () => {
     const provider = debugProvider();
-    const { debugConfiguration, programPath } = debugModule();
+    const { programPath } = debugModule();
     await withDebugging(async (dir, folder, file) => {
         const resolved = await provider.resolveDebugConfiguration(folder, {});
         assert.deepStrictEqual(stub.errors, []);
-        assert.deepStrictEqual(resolved, debugConfiguration(process.platform, file, dir, []));
+        assert.deepStrictEqual(resolved, launched(file, dir, []));
         assert.strictEqual(stub.executed.length, 1);
         assert.strictEqual(stub.executed[0].definition.command, 'build');
         assert.strictEqual(stub.executed[0].name, 'build current file');
-        assert.ok(fs.existsSync(programPath(process.platform, file, dir)), `no program; the task said:\n${stub.taskOutput}`);
+        assert.ok(fs.existsSync(programPath(process.platform, file, debugDirectoryOf(dir))), `no program; the task said:\n${stub.taskOutput}`);
+        assert.ok(!fs.existsSync(programPath(process.platform, file, dir)), 'a program in the workspace');
+        assert.ok(stub.taskOutput.includes(` build ${file}`), `rig wasn't given the file's path; the task said:\n${stub.taskOutput}`);
     });
 });
 
@@ -1369,7 +1408,6 @@ check('resolving {} builds the open .rig file and debugs its program', async () 
 // only after the provider has run, and its args.
 check('a configuration\'s file may use ${file} and ${workspaceFolder}; args go to the program', async () => {
     const provider = debugProvider();
-    const { debugConfiguration } = debugModule();
     await withDebugging(async (dir, folder, file) => {
         const other = path.join(dir, 'other.rig');
         fs.writeFileSync(other, 'main :: () {}\n');
@@ -1385,7 +1423,7 @@ check('a configuration\'s file may use ${file} and ${workspaceFolder}; args go t
             const config = { type: 'rig', request: 'launch', name: 'x', file: given, args: ['1', 'two'] };
             const resolved = await provider.resolveDebugConfiguration(folder, config);
             assert.deepStrictEqual(stub.errors, [], given);
-            assert.deepStrictEqual(resolved, debugConfiguration(process.platform, expected, dir, ['1', 'two']), given);
+            assert.deepStrictEqual(resolved, launched(expected, dir, ['1', 'two']), given);
             assert.deepStrictEqual(stub.executed[0].definition.file, expected, given);
         }
     });
@@ -1499,11 +1537,10 @@ check('a build that\'s stopped, ends with no process or never starts cancels the
 // the C/C++ extension's configuration keeps.
 check('noDebug is kept', async () => {
     const provider = debugProvider();
-    const { debugConfiguration } = debugModule();
     await withDebugging(async (dir, folder, file) => {
         const resolved = await provider.resolveDebugConfiguration(folder, { noDebug: true });
         assert.deepStrictEqual(stub.errors, []);
-        assert.deepStrictEqual(resolved, Object.assign(debugConfiguration(process.platform, file, dir, []), { noDebug: true }));
+        assert.deepStrictEqual(resolved, Object.assign(launched(file, dir, []), { noDebug: true }));
     });
 });
 
@@ -1514,7 +1551,6 @@ check('noDebug is kept', async () => {
 // them. Those it sets are its own; `file`, Rig's, goes.
 check('a configuration\'s other attributes are kept', async () => {
     const provider = debugProvider();
-    const { debugConfiguration } = debugModule();
     await withDebugging(async (dir, folder, file) => {
         const others = {
             preLaunchTask: 'prepare',
@@ -1527,7 +1563,7 @@ check('a configuration\'s other attributes are kept', async () => {
         const config = { type: 'rig', request: 'launch', name: 'Debug sort', file: 'sort.rig', args: ['1'], ...others };
         const resolved = await provider.resolveDebugConfiguration(folder, config);
         assert.deepStrictEqual(stub.errors, []);
-        assert.deepStrictEqual(resolved, { ...others, ...debugConfiguration(process.platform, file, dir, ['1']) });
+        assert.deepStrictEqual(resolved, { ...others, ...launched(file, dir, ['1']) });
         assert.strictEqual(config.file, 'sort.rig', 'the configuration given was changed');
     });
 });
@@ -1554,7 +1590,6 @@ check('a relative file in a launch configuration with no folder is refused as a 
 // configuration for the file, which VS Code resolves through the provider.
 check('rig.debugFile starts the rig configuration, which resolves to the platform\'s', async () => {
     const provider = debugProvider();
-    const { debugConfiguration } = debugModule();
     assert.ok(provider);
     await withDebugging(async (dir, folder, file) => {
         // From the command palette: the active editor's file.
@@ -1562,7 +1597,7 @@ check('rig.debugFile starts the rig configuration, which resolves to the platfor
         assert.strictEqual(stub.debugged.length, 1);
         assert.strictEqual(stub.debugged[0].folder, folder);
         assert.deepStrictEqual(stub.debugged[0].config, { type: 'rig', request: 'launch', name: 'Debug the current .rig file', file });
-        assert.deepStrictEqual(stub.launched, [debugConfiguration(process.platform, file, dir, [])]);
+        assert.deepStrictEqual(stub.launched, [launched(file, dir, [])]);
 
         // From the editor title's button: the file it was pressed on.
         const other = path.join(dir, 'other.rig');
@@ -1571,7 +1606,7 @@ check('rig.debugFile starts the rig configuration, which resolves to the platfor
         stub.launched = [];
         await stub.registered['rig.debugFile'](fileUri(other));
         assert.strictEqual(stub.debugged[0].config.file, other);
-        assert.deepStrictEqual(stub.launched, [debugConfiguration(process.platform, other, dir, [])]);
+        assert.deepStrictEqual(stub.launched, [launched(other, dir, [])]);
     });
 });
 
