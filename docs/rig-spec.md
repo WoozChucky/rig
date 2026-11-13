@@ -1484,7 +1484,7 @@ This section describes how the compiler in this repository compiles a Rig progra
 ```text
 rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]
 rig check FILE.rig [--stdin]
-rig version
+rig version [--verbose]
 ```
 
 **`rig build`** compiles the program in `FILE.rig` into an executable. The options may come in any order.
@@ -1497,11 +1497,31 @@ rig version
 
 **`rig check`** reads and checks the program as `rig build` does, prints the same diagnostics, and stops: it writes no file. With `--stdin` it reads the program from standard input, and `FILE.rig` is only the name its diagnostics give it (the file need not exist), which lets an editor check text that is not saved.
 
-**`rig version`** prints the compiler's version and the version of the LLVM it is built with: `rig 0.1.0 (LLVM 23.1.5)`.
+**`rig version`** says which compiler this is, on one line: its version, the commit of Rig's repository it was built from with that commit's date, and the version of the LLVM linked into it:
+
+```text
+rig 0.1.0 (3f9c2a1b7d4e 2026-11-13) LLVM 23.1.5
+```
+
+- The version is the one in the repository's `VERSION` file when the compiler was built. Rig's versions are `0.MILESTONE.PATCH`: finishing milestone N of the roadmap makes `0.N.0`, fixes between milestones raise the patch, and `1.0.0` waits until the language is stable.
+- The commit is its hash's first 12 hex digits, followed by `-dirty` when the checkout had changes to tracked files that weren't committed (`3f9c2a1b7d4e-dirty`); untracked files don't count. The date is the commit's (`YYYY-MM-DD`), not the build's, so building the same commit again gives the same compiler. A compiler built without git, or from a source archive rather than a checkout, says `unknown` for both: `rig 0.1.0 (unknown unknown) LLVM 23.1.5`.
+- The LLVM version is LLVM's own answer, so it is the version of the libraries really linked.
+
+With `--verbose` that line is followed by one line for each part, `name: value`: the commit's full hash (or `unknown`), whether it was dirty (`yes` or `no`), its date, LLVM's version, the target triple the compiler builds for (`x86_64-pc-windows-msvc` or `x86_64-pc-linux-gnu`) and the kind of build of the compiler itself (`debug`, or `release` for an optimised build):
+
+```text
+rig 0.1.0 (3f9c2a1b7d4e 2026-11-13) LLVM 23.1.5
+commit: 3f9c2a1b7d4e5f60718293a4b5c6d7e8f9012345
+dirty: no
+date: 2026-11-13
+llvm: 23.1.5
+target: x86_64-pc-linux-gnu
+build: release
+```
 
 Both `build` and `check` take only a source file whose name ends in `.rig`, in any case: `rig: error: 'hello.txt' isn't a .rig file`. A file that cannot be read is `rig: error: cannot read 'hello.rig': MESSAGE`, with the system's reason (`rig: error: cannot read standard input: MESSAGE` with `--stdin`).
 
-The exit status is 0 on success; 1 when the program has errors, cannot be read, or cannot be built or linked; and 2 when the command line is malformed (no command or an unknown one, no file, two files, an option given twice, `-o` without a name or with an empty one, or `-o` or `--no-bounds-checks` given to `rig check`), in which case the usage is printed. A word that is not an option is taken as the file's name: an unknown option alone is a file that isn't a `.rig` file, and beside the file it is a second file.
+The exit status is 0 on success; 1 when the program has errors, cannot be read, or cannot be built or linked; and 2 when the command line is malformed (no command or an unknown one, no file, two files, an option given twice, `-o` without a name or with an empty one, `-o` or `--no-bounds-checks` given to `rig check`, or anything but `--verbose` after `rig version`), in which case the usage is printed. A word that is not an option is taken as the file's name: an unknown option alone is a file that isn't a `.rig` file, and beside the file it is a second file.
 
 ### 10.2 The compiler's stages
 
@@ -1583,7 +1603,7 @@ When a tool is missing, or the linker fails, the compiler prints the reason or t
 
 The debug information holds:
 
-- **A compile unit** for the source file, named by its absolute path (made from the path given to `rig build` and the directory the compiler ran in, which on Linux is named as the shell names it, `$PWD`, when that is the directory: reached through a symlink, it keeps the symlink's name, as the editor that sets a breakpoint knows it), with that directory and the MD5 checksum of the file's bytes, so a debugger finds the file and can tell when it has changed. On Windows a file on a network share (a UNC path, `\\server\share\dir\x.rig`) is named `/\server\share\dir\x.rig`: LLVM's CodeView writer keeps a name that starts with `/` as it is, where it would put the share after the directory's drive, and Windows reads `/\` as the `\\` that starts a UNC path, so a debugger finds the file on the share and takes a breakpoint on it by the share's name, the file's name alone or a drive path to it. The unit's language is C (C99), whose expression syntax a debugger then uses (`a.count`, `a[i]`; Rig's `p.*` is C's `*p`), and its producer is `rig 0.1.0 (LLVM X.Y.Z)`, X.Y.Z the version of the LLVM the compiler is built with.
+- **A compile unit** for the source file, named by its absolute path (made from the path given to `rig build` and the directory the compiler ran in, which on Linux is named as the shell names it, `$PWD`, when that is the directory: reached through a symlink, it keeps the symlink's name, as the editor that sets a breakpoint knows it), with that directory and the MD5 checksum of the file's bytes, so a debugger finds the file and can tell when it has changed. On Windows a file on a network share (a UNC path, `\\server\share\dir\x.rig`) is named `/\server\share\dir\x.rig`: LLVM's CodeView writer keeps a name that starts with `/` as it is, where it would put the share after the directory's drive, and Windows reads `/\` as the `\\` that starts a UNC path, so a debugger finds the file on the share and takes a breakpoint on it by the share's name, the file's name alone or a drive path to it. The unit's language is C (C99), whose expression syntax a debugger then uses (`a.count`, `a[i]`; Rig's `p.*` is C's `*p`), and its producer is `rig 0.1.0 (3f9c2a1b7d4e) (LLVM X.Y.Z)`: the compiler's version and commit as `rig version` gives them (section 10.1), without the date, `-dirty` after the hash when it was dirty and `unknown` without one, and X.Y.Z the version of the LLVM the compiler is built with.
 - **A subprogram for each procedure with a body**, by its Rig name, with its line and the line its body starts on, so `break main` or `break sort` stops at the procedure and a backtrace names each frame. The internal procedures of section 10.5 have none, and a debugger steps over them.
 - **Lexical blocks** following the program's scopes (section 4.7): each `if`, `else` and standalone block, and each loop's body, which starts at its `for` or `while`; and one inside its block for each declaration of a local that hides a variable (a global, a parameter or an outer local), from the declaration to the end of the block (rustc starts one at every `let`).
 - **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}` (an `else if` chain is left from the block that ran straight to the code after the chain, so a debugger doesn't stop at the `}` of an arm that didn't run), a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
