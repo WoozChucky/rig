@@ -3331,6 +3331,7 @@ TEST(lower_records_every_source) {
         "main :: () { helper(21); }\n",
         "helper :: (n: int) -> int {\n"
         "    doubled := n * 2;\n"
+        "    if doubled > 40 { doubled += 1; }\n"
         "    return doubled;\n"
         "}\n"
         "calls := 0;\n",
@@ -3368,12 +3369,13 @@ TEST(lower_records_every_source) {
         CHECK_EQ(index_of(ir, string_cstr(&a, line)), next);
         next += line.count;
     }
-    // helper's, its variables', its instructions' and the global's
-    // positions are in file 1; main's in file 0.
+    // helper's, its block's, its variables', its instructions' and the
+    // global's positions are in file 1; main's in file 0.
     CHECK(contains(ir, "  ; source helper at 1:1:1, body 1:1:27\n"));
+    CHECK(contains(ir, "  ; scope 1 in 0 at 1:3:21\n"));
     CHECK(contains(ir, " arg 1 in 0 at 1:1:12\n"));
     CHECK(contains(ir, " in 0 at 1:2:5\n"));
-    CHECK(contains(ir, "  ; type int at 1:5:1\n"));
+    CHECK(contains(ir, "  ; type int at 1:6:1\n"));
     CHECK(contains(ir, "  ; source main at 2:1, body 2:12\n"));
     String helper = proc_ir(ir, "helper");
     CHECK(contains(helper, "  ; 1:3:"));
