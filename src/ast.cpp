@@ -455,7 +455,8 @@ static bool before(Position a, Position b) {
 }
 
 // The procedures and the globals are two lists, each in source order:
-// merged by position, they're the file's declarations in its order.
+// merged by position, they're the declarations in source order, file by
+// file in load order (Position.file).
 Array<Ast *> ast_declarations(Ast_File *file) {
     Array<Ast *> all = {};
     s64 p = 0, g = 0;

@@ -22,8 +22,8 @@ struct Parser {
     s32 type_levels;            // the type levels (*, [], [N] and a procedure type's '(') open around
                                 // the next token
     s32 deepest;                // the most levels reached since take_deepest last restarted it
-    // After a body found never closed: the token where the top level
-    // resumes (parse_block_rest), or -1.
+    // After a body or a struct's braces found never closed: the token where
+    // the top level resumes (parse_block_rest, parse_struct), or -1.
     s64 resume;
 };
 
@@ -1222,7 +1222,13 @@ static Ast_Type *parse_type_level(Parser *p) {
         named->name = t->text;
         return named;
     }
-    error_expected(p, "a type");
+    // A #load is "#load can only be at the top level", as where an
+    // expression starts (parse_primary).
+    if (is_directive(t, "load")) {
+        error_misplaced_load(p, t->pos);
+    } else {
+        error_expected(p, "a type");
+    }
     return nullptr;
 }
 
@@ -1280,8 +1286,9 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // call (spec 7.6). Each is written once, in either order ("'#c_call' is
 // written twice"). A foreign procedure is C's already, and takes neither:
 // #c_call before #foreign is "a foreign procedure is C's already: it takes
-// no '#c_call'", #no_abc "expected '{'". Any directive there but these is
-// "unknown directive '#foo'".
+// no '#c_call'", #no_abc "expected '{'". A #load there is "#load can only be
+// at the top level"; any other directive but these is "unknown directive
+// '#foo'".
 //
 // Each element of the parameter list is a parameter or, last, the '..' of
 // a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign libc;).
@@ -1332,6 +1339,10 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
             advance(p);
             continue;
         }
+        if (is_directive(t, "load")) {
+            error_misplaced_load(p, t->pos);
+            return nullptr;
+        }
         if (!string_eq(t->text, str("foreign"))) {
             diag_error(p->diag, t->pos, "unknown directive '#" STR_FMT "'", STR_ARG(t->text));
             return nullptr;
@@ -1362,22 +1373,47 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
 // 'struct'). Every field ends with its ';', the last too. A column-1
 // declaration of a procedure or a struct (starts_declaration) before the
 // '}' means the braces were never closed: "expected '}'" there, where the
-// recovery resumes. A #load among the fields is reported and skipped, as
-// in a body (skip_misplaced_load), and the fields after it are kept.
+// top level resumes (p->resume). A #load among the fields is reported and
+// skipped, as in a body (skip_misplaced_load), and the fields after it are
+// kept.
+//
+// The #loads in column 1 right before such an end are read again at the
+// top level, as after a body never closed (parse_block_rest): "expected
+// '}'" is reported at the first of them, and the top level resumes there,
+// so the files they name are still loaded. So one in column 1 is only
+// reported as misplaced once known to stay among the fields: when a field
+// or a load not in column 1 follows it, or the '}' closes. Fields in column
+// 1 aren't read again as globals, as a body's would be: a field is written
+// as a global is, so nothing tells a forgotten '}' before a global from a
+// field that wasn't indented.
 static Ast *parse_struct(Parser *p, Token *name) {
     advance(p);  // 'struct'
     Ast_Struct *s = ast_new<Ast_Struct>(p->arena, AST_STRUCT, name->pos);
     s->name = name->text;
     if (!expect(p, TOKEN_LBRACE)) return nullptr;
+    s64 run = -1;                // where the column-1 loads up to here start, or -1
+    Array<Position> loads = {};  // those loads, not reported yet
     while (peek(p)->kind != TOKEN_RBRACE) {
         if (peek(p)->kind == TOKEN_EOF || starts_declaration(p)) {
+            // The run's loads are the top level's, read again there.
+            array_free(&loads);
+            if (run >= 0) p->next = run;
             error_expected(p, token_kind_name(TOKEN_RBRACE));
+            p->resume = p->next;
             return nullptr;
         }
         if (is_directive(peek(p), "load")) {
-            error_misplaced_load(p, skip_misplaced_load(p));
+            bool in_column_1 = peek(p)->pos.col == 1;
+            if (in_column_1 && run < 0) run = p->next;
+            array_add(&loads, skip_misplaced_load(p));
+            if (!in_column_1) {
+                report_misplaced_loads(p, &loads);
+                run = -1;
+            }
             continue;
         }
+        report_misplaced_loads(p, &loads);
+        run = -1;
         Token *field_name = peek(p);
         if (field_name->kind != TOKEN_IDENT) {
             error_expected(p, "a field's name");
@@ -1391,6 +1427,7 @@ static Ast *parse_struct(Parser *p, Token *name) {
         if (!field->type_expr || !expect(p, TOKEN_SEMICOLON)) return nullptr;
         array_add(&s->fields, field);
     }
+    report_misplaced_loads(p, &loads);
     advance(p);  // the '}'
     return s;
 }
@@ -1737,9 +1774,9 @@ void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
         s64 start = p.next;
         Ast *decl = parse_declaration(&p);
         if (!decl && p.resume >= 0) {
-            // A body never closed said where the top level goes on
-            // (parse_block_rest), inside the body, so after start; the
-            // declaration it was in is broken.
+            // A body or a struct never closed said where the top level goes
+            // on (parse_block_rest, parse_struct), inside its braces, so
+            // after start; the declaration it was in is broken.
             RIG_ASSERT(p.resume > start);
             decl = broken_entry(&p, start);
             p.next = p.resume;

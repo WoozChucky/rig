@@ -2096,6 +2096,11 @@ TEST(parse_load_in_a_body) {
               "3:15: #load can only be at the top level\n");
     CHECK_STR(body_dump(&a, "#load \"a.rig\"", &errors), "(block)");
     CHECK_STR(errors, "2:5: #load can only be at the top level\n");
+    // The skipping stops at the ';': a statement after it on the same line
+    // is kept, so x is still declared.
+    CHECK_STR(body_dump(&a, "#load \"a.rig\"; x := 1;\n    x = 2;", &errors),
+              "(block (var x _ (int 1)) (assign = (name x) (int 2)))");
+    CHECK_STR(errors, "2:5: #load can only be at the top level\n");
 
     // One without its ';' is skipped to the end of its line, no further: the
     // next statement is kept, so x is still declared.
@@ -2123,10 +2128,71 @@ TEST(parse_load_in_a_struct) {
     String errors;
     CHECK_STR(parse_src(&a, "S :: struct {\n    #load \"a.rig\";\n    x: int;\n}\n", &errors), "(struct S (x int))\n");
     CHECK_STR(errors, "2:5: #load can only be at the top level\n");
-    // In an expression, the same message, rather than "expected an
-    // expression".
+    // One in column 1 too, when a field follows it or the '}' closes after
+    // it: it stays among the fields.
+    CHECK_STR(parse_src(&a, "S :: struct {\n#load \"a.rig\";\n    x: int;\n}\n", &errors), "(struct S (x int))\n");
+    CHECK_STR(errors, "2:1: #load can only be at the top level\n");
+    CHECK_STR(parse_src(&a, "S :: struct {\n    x: int;\n#load \"a.rig\";\n}\n", &errors), "(struct S (x int))\n");
+    CHECK_STR(errors, "3:1: #load can only be at the top level\n");
+    arena_free(&a);
+}
+
+TEST(parse_load_after_a_struct_never_closed) {
+    // As after a body never closed: the #loads in column 1 right before the
+    // next declaration (or the end) are read again at the top level, where
+    // they're in their place, and aren't reported. So the one mistake, S's
+    // '}' forgotten, gives one error, and the load is kept.
+    Arena a = arena_make();
+    Token_List *list = src("S :: struct {\n    x: int;\n#load \"a.rig\";\nmain :: () { y := helper(); }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "3:1: expected '}', found directive\n");
+    CHECK_EQ(file->loads.count, 1);
+    CHECK_STR(ast_dump(&a, file),
+              "(broken S)\n(load \"a.rig\")\n(proc main (params) (block (var y _ (call helper))))\n");
+    token_list_free(list);
+
+    // Up to the end of the file too.
+    String errors;
+    CHECK_STR(parse_src(&a, "S :: struct {\n    x: int;\n#load \"a.rig\";\n#load \"b.rig\";\n", &errors),
+              "(broken S)\n(load \"a.rig\")\n(load \"b.rig\")\n");
+    CHECK_STR(errors, "3:1: expected '}', found directive\n");
+    // A field after the load keeps it among the fields, reported.
+    CHECK_STR(parse_src(&a, "S :: struct {\n#load \"a.rig\";\n    x: int;\nmain :: () {}\n", &errors),
+              "(broken S)\n(proc main (params) (block))\n");
+    CHECK_STR(errors,
+              "2:1: #load can only be at the top level\n"
+              "4:1: expected '}', found identifier 'main'\n");
+    arena_free(&a);
+}
+
+TEST(parse_load_in_an_expression) {
+    // Where an expression starts, the same message, rather than "expected
+    // an expression", and the declaration is given up.
+    Arena a = arena_make();
+    String errors;
     CHECK_STR(parse_src(&a, "main :: () {\n    x := #load \"a.rig\";\n}\n", &errors), "(broken main)\n");
     CHECK_STR(errors, "2:10: #load can only be at the top level\n");
+    arena_free(&a);
+}
+
+TEST(parse_load_in_a_type) {
+    // Where a type is expected, or a directive after a signature, the same
+    // message, rather than "expected a type" or "unknown directive", and the
+    // declaration is given up.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "g : #load \"a.rig\";\nmain :: () {}\n", &errors),
+              "(broken g)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:5: #load can only be at the top level\n");
+    CHECK_STR(body_dump(&a, "x : #load \"a.rig\";", &errors), "(broken f)\n");
+    CHECK_STR(errors, "2:9: #load can only be at the top level\n");
+    CHECK_STR(parse_src(&a, "S :: struct {\n    x: #load \"a.rig\";\n}\nmain :: () {}\n", &errors),
+              "(broken S)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "2:8: #load can only be at the top level\n");
+    CHECK_STR(parse_src(&a, "f :: (a: #load \"a.rig\") {}\n", &errors), "(broken f)\n");
+    CHECK_STR(errors, "1:10: #load can only be at the top level\n");
+    CHECK_STR(parse_src(&a, "main :: () #load \"a.rig\" {}\n", &errors), "(broken main)\n");
+    CHECK_STR(errors, "1:12: #load can only be at the top level\n");
     arena_free(&a);
 }
 
@@ -2160,6 +2226,18 @@ TEST(parse_load_after_a_body_never_closed) {
     CHECK_STR(parse_src(&a, "main :: () {\n    x := 1;\n#load \"a.rig\";\n}\n", &errors),
               "(proc main (params) (block (var x _ (int 1))))\n");
     CHECK_STR(errors, "3:1: #load can only be at the top level\n");
+
+    // Or a statement after it fails, and the body is given up: x := in
+    // column 1 doesn't end the run, but the load stays in the body.
+    list = src("main :: () {\n#load \"a.rig\";\nx := ;\n}\nhelper :: () {}\n");
+    file = parse(list->tokens, &a, &list->diag);
+    diag_sort(&list->diag);
+    CHECK_STR(messages(&a, &list->diag),
+              "2:1: #load can only be at the top level\n"
+              "3:6: expected an expression, found ';'\n");
+    CHECK_EQ(file->loads.count, 0);
+    CHECK_STR(ast_dump(&a, file), "(broken main)\n(proc helper (params) (block))\n");
+    token_list_free(list);
     arena_free(&a);
 }
 
@@ -2172,12 +2250,14 @@ TEST(parse_load_inside_a_broken_body) {
     const char *sources[] = {
         "f :: () {\n    x := ;\n#load \"a.rig\";\n}\nmain :: () {}\n",   // passed over
         "f :: () {\n    x := 1\n#load \"a.rig\";\n}\nmain :: () {}\n",  // where the error stopped
+        "f :: () {\n    x := ;\n    #load \"a.rig\";\n}\nmain :: () {}\n",  // indented
     };
     const char *expected[] = {
         "2:10: expected an expression, found ';'\n",
         "3:1: expected ';', found directive\n",
+        "2:10: expected an expression, found ';'\n",
     };
-    for (s64 i = 0; i < 2; i++) {
+    for (s64 i = 0; i < 3; i++) {
         Token_List *list = src(sources[i]);
         Ast_File *file = parse(list->tokens, &a, &list->diag);
         CHECK_STR(messages(&a, &list->diag), expected[i]);
