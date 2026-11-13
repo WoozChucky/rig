@@ -25,6 +25,8 @@ struct Checker {
                                  // below the levels of the type or value that needs it, 0 in a
                                  // declaration's own turn (checker.cpp's open_declaration)
     Array<Ast *> too_deep;       // the declarations found nested too deeply so far, each said once
+    bool lost_a_file;            // a #load failed (Ast_File.lost_a_file): a name declared nowhere
+                                 // may be the missing file's, so it isn't reported as unknown
 };
 
 // checker.cpp

@@ -884,8 +884,8 @@ class LiveCheck {
         // rig runs where a build would, the file's workspace folder (or its
         // directory), and gets the file's full path, which its diagnostics
         // then name. The file needn't exist: with --stdin the text is
-        // stdin's, and the name is what the diagnostics say and where its
-        // #loads are found from (its directory).
+        // stdin's, and the name is what the diagnostics call it and the
+        // file whose directory its #loads are found from.
         const cwd = buildDirectory(file, folder);
         return new Promise((resolve) => {
             // The compiler couldn't be started (it was deleted, or isn't a

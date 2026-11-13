@@ -77,6 +77,8 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text) {
         s64 first_load = tree->loads.count;
         parse_into(tree, tokens, a, d);
         array_free(&tokens);
+        // Each #load that fails leaves the program without the file it
+        // names, which the tree records (Ast_File.lost_a_file).
         for (s64 k = first_load; k < tree->loads.count; k++) {
             Ast_Load *load = tree->loads[k];
             // A string can hold a zero byte (\0), but the system takes a
@@ -84,15 +86,18 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text) {
             // such a path, as an empty one, names no file.
             if (load->path.count == 0) {
                 diag_error(d, load->path_pos, "a #load path can't be empty");
+                tree->lost_a_file = true;
                 continue;
             }
             if (memchr(load->path.data, 0, (size_t)load->path.count)) {
                 diag_error(d, load->path_pos, "a #load path can't contain a zero byte");
+                tree->lost_a_file = true;
                 continue;
             }
             String loaded = load_path(&loading, d->files[file].path, load->path, HOST_IS_WINDOWS);
             if (!is_rig_file(loaded)) {
                 diag_error(d, load->path_pos, "'" STR_FMT "' isn't a .rig file", STR_ARG(loaded));
+                tree->lost_a_file = true;
                 continue;
             }
             // A file that can't be read is reported at its first #load
@@ -102,6 +107,7 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text) {
             if (!os_read_file(a, loaded, &loaded_text)) {
                 diag_error(d, load->path_pos, "cannot read '" STR_FMT "': " STR_FMT, STR_ARG(loaded),
                            STR_ARG(os_error_message(&loading)));
+                tree->lost_a_file = true;
                 continue;
             }
             s32 added = diag_add_file(d, loaded, loaded_text);

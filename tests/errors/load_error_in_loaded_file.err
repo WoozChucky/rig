@@ -1,6 +1,9 @@
-tests/errors/load_error_in_loaded_file.rig:8:14: error: 256 doesn't fit in 'u8'
+tests/errors/load_error_in_loaded_file.rig:9:14: error: 256 doesn't fit in 'u8'
         y : u8 = 256;
                  ^
 tests/errors/load/bad_type.rig:3:14: error: 300 doesn't fit in 'u8'
         x : u8 = 300;
                  ^
+tests/errors/load/bad_type.rig:6:15: error: unknown type 'Factor'
+    scale :: (by: Factor) {}
+                  ^
