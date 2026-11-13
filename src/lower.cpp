@@ -441,8 +441,8 @@ static s32 address_of(Lowering *l, Ast *decl) {
 }
 
 // The index in module->procs of procedure `proc`, a Rig or foreign one of
-// the file: its name's (the checker allowed no other top-level declaration
-// of it).
+// the program, from any of its files: its name's (the checker allowed no
+// other top-level declaration of it, in any file).
 static s32 proc_index_of(Lowering *l, Ast_Proc *proc) {
     s32 *index = table_get(&l->proc_index, proc->name);
     RIG_ASSERT(index);
@@ -667,11 +667,11 @@ static Ir_Op ir_op_of(Token_Kind op, Type *t) {
 //
 // The panic writes the message to stderr and exits with status 101
 // (llvm_backend.cpp's __rig_panic). PATH is the path messages name the
-// check's file by (Source_File.path): the main file's as rig build was given
-// it, a loaded file's as its #load made it (load.h). Each check has a
-// message of its own, since each names its own position. The branch is the statement's code, at its position; the
-// panic is at `at`, the place the message names, so a debugger stopped there
-// shows the same place.
+// check's file by (Source_File.path): the main file's as rig build was
+// given it, a loaded file's as its #load made it (load.h). Each check has a
+// message of its own, since each names its own position. The branch is the
+// statement's code, at its position; the panic is at `at`, the place the
+// message names, so a debugger stopped there shows the same place.
 static void emit_runtime_check(Lowering *l, s32 fails, Position at, String message) {
     String path = l->diag->files[at.file].path;
     String text = string_printf(l->arena, STR_FMT ":%d:%d: runtime error: " STR_FMT "\n", STR_ARG(path), at.line,
@@ -2135,7 +2135,7 @@ static s32 add_global_array(Lowering *l, Type *array, Ast *literal) {
 // i1 index_is_signed): what a failing bounds check calls (emit_bounds_check).
 // Made the first time a check needs it, with no body yet: its body is made
 // once every procedure's is (lower_bounds_failed), when the longest `where`
-// is known. Its index in the module's procedures, after the file's.
+// is known. Its index in the module's procedures, after the program's.
 static s32 bounds_failed_proc(Lowering *l) {
     if (l->bounds_failed < 0) {
         Ir_Proc *p = ir_new_proc(l->module, l->arena, str("__rig_bounds_failed"));
@@ -2297,7 +2297,7 @@ static void lower_bounds_failed(Lowering *l) {
 // i1: what == on strings calls (lower_string_comparison). Made the first
 // time a comparison needs it, with no body yet (lower_string_equal makes
 // it, once every procedure's is); its index in the module's procedures,
-// after the file's.
+// after the program's.
 static s32 string_equal_proc(Lowering *l) {
     if (l->string_equal < 0) {
         Ir_Proc *p = ir_new_proc(l->module, l->arena, str("__rig_string_equal"));

@@ -3324,6 +3324,7 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
     Array<String> names = {};
     CHECK(os_list_directory(&a, str("tests/run"), &names));
     s64 programs = 0, lowered = 0;
+    s64 in_loaded_files = 0;  // the procedures from a file the program #loads
     for (s64 i = 0; i < names.count; i++) {
         String name = names[i];
         if (name.count < 4 || !string_eq(string_slice(name, name.count - 4, 4), str(".rig"))) continue;
@@ -3341,7 +3342,14 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
             if (!p->is_foreign) CHECK(from_source != compiler_made);
             // A procedure of the program's is m->procs[k] for
             // tree->procs[k], whichever file it's in: its lines run from its
-            // name's to its body's '}', in that file.
+            // name's to its body's '}', in that file. Its position is the
+            // tree's procedure's, so the file every instruction and variable
+            // is checked against below is the one it was parsed from.
+            if (from_source) {
+                CHECK_EQ(p->pos.file, tree->procs[k]->pos.file);
+                CHECK_EQ(p->pos.line, tree->procs[k]->pos.line);
+                if (p->pos.file > 0) in_loaded_files++;
+            }
             s32 first_line = p->pos.line;
             s32 last_line = from_source ? tree->procs[k]->body->end.line : 0;
             s64 prologue = 0;  // the entry block's first instructions: a slot and a store per scalar parameter
@@ -3380,9 +3388,11 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
             }
         }
     }
-    // Every end-to-end program builds, so every one is lowered here.
+    // Every end-to-end program builds, so every one is lowered here; some
+    // (load_files, load_runtime_error) have procedures in loaded files.
     CHECK(programs > 50);
     CHECK_EQ(lowered, programs);
+    CHECK(in_loaded_files > 0);
     array_free(&names);
     arena_free(&a);
 }

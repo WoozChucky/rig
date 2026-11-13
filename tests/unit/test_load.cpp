@@ -444,6 +444,40 @@ TEST(load_empty_or_zero_byte_path) {
     arena_free(&a);
 }
 
+TEST(load_failure_loses_a_file) {
+    // Every kind of #load that fails leaves the program without a file, and
+    // the tree says so (Ast_File.lost_a_file): a file that can't be read, a
+    // directory, a file that isn't a .rig file, an empty path and one with a
+    // zero byte. A file loaded twice, or a syntax error in a loaded file,
+    // loses nothing.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "load_failure_loses_a_file");
+    CHECK(os_make_directory(str(in_directory(&a, dir, "d.rig"))));
+    write_source(&a, dir, "b.rig", "helper :: () {}\n");
+    write_source(&a, dir, "b.txt", "helper :: () {}\n");
+    write_source(&a, dir, "broken.rig", "x :: ;\n");
+    struct Case {
+        const char *text;
+        bool lost;
+    };
+    Case cases[] = {
+        {"#load \"nope.rig\";\n", true},
+        {"#load \"d.rig\";\n", true},
+        {"#load \"b.txt\";\n", true},
+        {"#load \"\";\n", true},
+        {"#load \"b.rig\\0\";\n", true},
+        {"#load \"b.rig\";\n#load \"./b.rig\";\n#load \"main.rig\";\n", false},
+        {"#load \"broken.rig\";\n", false},
+    };
+    for (s64 i = 0; i < (s64)(sizeof cases / sizeof cases[0]); i++) {
+        Diagnostics d = {};
+        Ast_File *tree = load_program(&a, &d, str(in_directory(&a, dir, "main.rig")), str(cases[i].text));
+        CHECK_EQ(tree->lost_a_file, cases[i].lost);
+        diag_free(&d);
+    }
+    arena_free(&a);
+}
+
 TEST(load_with_stdin_path) {
     // rig check --stdin: the text comes from elsewhere, and its path names
     // a file that needn't exist, but its #loads are found from that path's

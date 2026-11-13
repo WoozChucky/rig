@@ -27,7 +27,9 @@
 //   than one file. It's the order of the files in Diagnostics.files, which
 //   Position.file numbers, so errors sort file by file in it (diag_sort).
 // Errors, at the #load's string, in the file holding it; each stops only
-// that #load, and the loading goes on:
+// that #load, and the loading goes on, the tree recording that a file is
+// missing (Ast_File.lost_a_file), so the checker doesn't report the names
+// it may have declared as unknown, or main as missing:
 //   a #load path can't be empty
 //   a #load path can't contain a zero byte  (the system's paths end at one)
 //   'src/x.txt' isn't a .rig file           (the file isn't read)

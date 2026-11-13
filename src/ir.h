@@ -347,9 +347,10 @@ struct Ir_Proc {
 
 struct Ir_Module {
     Array<Ir_Global> globals;
-    Array<Ir_Proc *> procs;  // the file's, in order, then __rig_bounds_failed when a bounds check
-                             // calls it and __rig_string_equal when == on strings does (lower.cpp,
-                             // in the order first needed)
+    Array<Ir_Proc *> procs;  // the program's, in order (every file's, in load order), then
+                             // __rig_bounds_failed when a bounds check calls it and
+                             // __rig_string_equal when == on strings does (lower.cpp, in the
+                             // order first needed)
     // The source file, for a debugger: empty for a module built by hand,
     // which gets no debug information.
     String source_path;      // absolute, normalised (path_absolute): how an editor names it
@@ -396,16 +397,17 @@ Ir_Instr *ir_emit_call_indirect(Ir_Proc *p, s32 block, s32 callee, Ir_Proc *sign
 // emitted into it.
 bool ir_block_has_ended(Ir_Proc *p, s32 block);
 
-// The module for a file that checked without errors (lower.cpp). `d` holds
-// the paths of the files the tree's positions refer to: a runtime error's
-// message names its place in the source as PATH:LINE:COL, PATH as given to
-// rig build (spec 6.4). The module's source_path and directory are the
-// first file's absolute_path and directory (empty when they are), and its
-// source_md5 that file's text's. With bounds_checks, as rig build has it
-// unless told --no-bounds-checks, every a[i] of a view or a string, and of
-// an array but where i is a constant (which the checker made sure is
-// inside), is checked at run time, but in a procedure marked #no_abc (spec
-// 6.5).
+// The module for a program that checked without errors (lower.cpp). `d`
+// holds the paths of the files the tree's positions refer to: a runtime
+// error's message names its place in the source as PATH:LINE:COL, PATH the
+// file's Source_File.path: the main file's as given to rig build, a loaded
+// file's as its #load made it (load.h; spec 8.1). The module's source_path
+// and directory are the first file's absolute_path and directory (empty
+// when they are), and its source_md5 that file's text's. With
+// bounds_checks, as rig build has it unless told --no-bounds-checks, every
+// a[i] of a view or a string, and of an array but where i is a constant
+// (which the checker made sure is inside), is checked at run time, but in a
+// procedure marked #no_abc (spec 6.5).
 Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks);
 
 // The module as text, in the format above.

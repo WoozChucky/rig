@@ -429,18 +429,23 @@
 // nothing more, so one mistake gives one message.
 //
 // The checker also runs after syntax errors, so they and the type errors in
-// the rest of the file are reported together. A declaration the parser gave
-// up on is a broken entry (parser.h): its name is declared, with an unknown
-// type, and nothing is reported about it or about its uses (a call to it
-// may pass anything). Its body isn't checked: there is none.
+// the rest of the program are reported together. A declaration the parser
+// gave up on is a broken entry (parser.h): its name is declared, with an
+// unknown type, and nothing is reported about it or about its uses (a call
+// to it may pass anything). Its body isn't checked: there is none. It runs
+// after a #load failed too (load.h): the program then lacks a file, whose
+// declarations are unknown, so a name declared nowhere isn't reported as
+// unknown ("unknown identifier", "unknown type"), nor main as missing
+// (Ast_File.lost_a_file).
 
 #pragma once
 
 #include "ast.h"
 #include "types.h"
 
-// Checks the file, filling in types and the procedures calls refer to.
-// True when the checker reported no errors (the parser may have).
+// Checks the program, every file's declarations in one tree (load.h),
+// filling in types and the procedures calls refer to. True when the checker
+// reported no errors (the parser or the loader may have).
 bool check(Ast_File *file, Arena *a, Diagnostics *d);
 
 // Whether e, checked with no errors, is a place in memory: a variable, but

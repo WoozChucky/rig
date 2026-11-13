@@ -430,10 +430,11 @@ static void report_type_as_value(Checker *c, Ast_Name *name) {
 // A built-in type's name (int, string, ...) isn't declared, but isn't
 // unknown either: it's said to be a type, as a struct's name is
 // (report_type_as_value), or, being called, "'s64' isn't a procedure, so
-// it can't be called".
+// it can't be called". Any other name is nothing to report when a #load
+// failed: the missing file may declare it (Checker.lost_a_file).
 static void report_undeclared(Checker *c, Ast_Name *name, bool called) {
     if (!type_from_name(name->name)) {
-        diag_error(c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
+        if (!c->lost_a_file) diag_error(c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
     } else if (called) {
         diag_error(c->diag, name->pos, "'" STR_FMT "' isn't a procedure, so it can't be called", STR_ARG(name->name));
     } else {

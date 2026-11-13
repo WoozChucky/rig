@@ -7,18 +7,20 @@
 // the program (without the bounds checks of a[i] with --no-bounds-checks,
 // spec 6.5), has LLVM write the object file .build/NAME.obj (Windows) or
 // .build/NAME.o (Linux) in the current directory, and links it into OUTPUT,
-// by default NAME.exe or NAME in the current directory, NAME being the
-// file's name without its directory and .rig (exit 0).
+// by default NAME.exe or NAME in the current directory, NAME being FILE.rig's
+// name (the main file's) without its directory and .rig (exit 0).
 //
 // The checker runs even when the parser found errors, so a syntax error in
 // one procedure and a type error in another are reported in one build. A
 // declaration the parser gave up on stays in the tree as a broken entry, its
 // name alone, which the checker takes as declared and says nothing about
 // (checker.h): so it doesn't report the name as unknown, or main as
-// missing, because of the syntax error.
+// missing, because of the syntax error. A #load that failed is the same:
+// the tree records that a file is missing (Ast_File.lost_a_file), and the
+// checker reports no name as unknown, nor main as missing, because of it.
 //
-// The object file is named after the source file alone, so two builds in
-// one directory of files with the same name in different directories
+// The object file is named after the main source file alone, so two builds
+// in one directory of files with the same name in different directories
 // (a/hello.rig, b/hello.rig) share .build/hello.o: one at a time, they're
 // fine; at the same time, one could link the other's object.
 

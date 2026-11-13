@@ -148,9 +148,10 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // A written type. A name is a built-in type, or a struct's, whose layout is
 // worked out here if it isn't yet (resolve_struct). Any other name declared
 // where the type is written isn't a type ("'foo' is not a type"), and a name
-// declared nowhere is "unknown type 'foo'". A broken entry's name may have
-// been anything, so nothing is said about it. A struct found to contain
-// itself has no type: its uses say nothing more.
+// declared nowhere is "unknown type 'foo'", unless a #load failed: the
+// missing file may declare it (Checker.lost_a_file). A broken entry's name
+// may have been anything, so nothing is said about it. A struct found to
+// contain itself has no type: its uses say nothing more.
 //
 // behind_pointer: the type is what a pointer points at, or a view's
 // elements, which lie elsewhere: a struct named right there needs only its
@@ -184,7 +185,7 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
     if (t) return t;
     Ast *decl = find_name(c, written->name);
     if (!decl) {
-        diag_error(c->diag, written->pos, "unknown type '" STR_FMT "'", STR_ARG(written->name));
+        if (!c->lost_a_file) diag_error(c->diag, written->pos, "unknown type '" STR_FMT "'", STR_ARG(written->name));
     } else if (decl->kind == AST_STRUCT) {
         Ast_Struct *s = (Ast_Struct *)decl;
         if (behind_pointer && s->resolve != RESOLVE_DONE) return s->declared;
@@ -1417,6 +1418,7 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
     Checker c = {};
     c.arena = a;
     c.diag = d;
+    c.lost_a_file = file->lost_a_file;
 
     // First every name, so procedures, globals, constants and structs can
     // be used before they're declared. They share one table: a global can't
@@ -1515,12 +1517,13 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
         if (file->procs[i]->body) check_body(&c, file->procs[i]);
     }
 
-    // A broken main, or a broken declaration whose name was lost, has
-    // nothing to say about main: what it declares is unknown. A global
-    // called main is no procedure, so it's as if there were none.
+    // A broken main, a broken declaration whose name was lost, or a file
+    // whose #load failed has nothing to say about main: what it declares is
+    // unknown. A global called main is no procedure, so it's as if there
+    // were none.
     Ast **main_decl = table_get(&c.top_level, str("main"));
     if (!main_decl || (*main_decl)->kind != AST_PROC) {
-        if (!lost_a_name) diag_error(d, {0, 1, 1}, "a procedure called 'main' is needed");
+        if (!lost_a_name && !c.lost_a_file) diag_error(d, {0, 1, 1}, "a procedure called 'main' is needed");
     } else if (!((Ast_Proc *)*main_decl)->is_broken) {
         Ast_Proc *m = (Ast_Proc *)*main_decl;
         if (m->params.count > 0 || m->results.count) {
