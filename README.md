@@ -4,7 +4,9 @@
 
 A compiled systems programming language for 64-bit Windows and Linux.
 
-Rig is in the spirit of Jai: no garbage collector, no virtual machine, C functions called directly, compile-time execution (planned), and one command that builds everything. A program compiles ahead of time to a native executable linked with the platform's C runtime, and manages its own memory. Rig is also a way to learn how a real language is built end to end, from the lexer to the debugger's line tables; its compiler is written in C-style C++23 over LLVM 23.1.4's C API.
+**Documentation: [woozchucky.github.io/rig](https://woozchucky.github.io/rig/)**, the language specification, searchable.
+
+Rig is in the spirit of Jai: no garbage collector, no virtual machine, C functions called directly, compile-time execution (planned), and one command that builds everything. A program compiles ahead of time to a native executable linked with the platform's C runtime, and manages its own memory. Rig is also a way to learn how a real language is built end to end, from the lexer to the debugger's line tables; its compiler is written in C-style C++23 over the C API of a pinned LLVM release (the version in `scripts/get_llvm.sh`).
 
 ## A taste of Rig
 
@@ -64,7 +66,7 @@ What works today, as [the specification](docs/rig-spec.md) describes it:
 - **Runtime checks, on by default:** an index out of bounds, a null pointer dereference, an integer division by zero or a checked cast that would change a number stops the program with `PATH:LINE:COL: runtime error: MESSAGE` and exit status 101. `#no_abc` or `--no-bounds-checks` turns the bounds checks off.
 - **C interop:** a C function declared once with `#foreign libc` is called like any procedure, with the platform's C calling convention.
 - **Diagnostics** that name the file, line and column and show the line.
-- **Debug information** in every build: a PDB on Windows, DWARF on Linux. gdb, cdb, WinDbg, Visual Studio and VS Code's C/C++ debugger stop at a line of the `.rig` file or at a procedure by its Rig name, show the call stack, and step a line at a time. (Variables and types are not described yet.)
+- **Debug information** in every build: a PDB on Windows, DWARF on Linux. gdb, cdb, WinDbg, Visual Studio and VS Code stop at a line of the `.rig` file or at a procedure by its Rig name, show the call stack, step a line at a time, and show the variables with their values.
 - **Windows x64 and Linux x86-64**, linked with each platform's own tools and C runtime.
 
 ## Status
@@ -108,7 +110,7 @@ bin/rig build hello.rig
 
 ## Editor support
 
-[editors/vscode](editors/vscode) is a VS Code extension for `.rig` files: syntax highlighting, the compiler's errors as you type, snippets, and commands to build and run the current file. Its [README](editors/vscode/README.md) says how to install it.
+[editors/vscode](editors/vscode) is a VS Code extension for `.rig` files: syntax highlighting, the compiler's errors as you type, snippets, and commands to build, run and debug the current file, with breakpoints in the `.rig` file (debugging needs Microsoft's C/C++ extension). Its [README](editors/vscode/README.md) says how to install it.
 
 ## Contributing
 

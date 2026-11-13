@@ -11,9 +11,9 @@ rem curl.exe and tar.exe ship with Windows 10 and later.
 setlocal
 cd /d "%~dp0\.."
 
-set VERSION=23.1.4
+set VERSION=23.1.5
 set ARCHIVE=clang+llvm-%VERSION%-x86_64-pc-windows-msvc.tar.xz
-set SHA256=854bffcfc84528e0ee92490ff5c178920abd358a79c3e98f053e41e3e8e4c6d2
+set SHA256=62fdada7f6fa2b73856486dfbbdba3d2c1882991621615bcb55c60207611c6d4
 set URL=https://github.com/llvm/llvm-project/releases/download/llvmorg-%VERSION%/%ARCHIVE%
 set DEST=%RIG_LLVM_DIR%
 if "%DEST%"=="" set DEST=deps\llvm-windows

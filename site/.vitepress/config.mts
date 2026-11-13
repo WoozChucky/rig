@@ -5,7 +5,7 @@ import { generate, repoDir, repoUrl, specPath } from '../scripts/spec.mjs'
 // Written by scripts/spec.mjs from the specification's headings. Importing it
 // makes it one of the config's dependencies, so the dev server restarts with
 // the new sidebar when a heading changes.
-import sidebar from './generated/sidebar.json'
+import sidebar from './generated/sidebar.json' with { type: 'json' }
 
 // Rig's highlighting is the VS Code extension's own grammar.
 const rigGrammar = JSON.parse(
