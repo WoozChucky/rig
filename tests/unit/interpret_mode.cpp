@@ -36,26 +36,34 @@ static void interpret_mode_usage(Interpret_Mode *mode) {
 static void interpret_mode(void *data) {
     Interpret_Mode *mode = (Interpret_Mode *)data;
     // The words after --interpret: FILE.rig [--no-bounds-checks], in either
-    // order, each once.
-    const char *file = nullptr;
+    // order, each once. In UTF-8, as rig reads its own (main.cpp): on
+    // Windows, main's argv is in the ANSI code page, which can't name every
+    // file.
+    Arena a = arena_make();
+    Array<String> args = os_arguments(&a, mode->argc, mode->argv);
+    String path = {};
+    bool have_path = false;
     bool bounds_checks = true;
-    for (int i = 2; i < mode->argc; i++) {
-        if (strcmp(mode->argv[i], "--no-bounds-checks") == 0 && bounds_checks) {
+    bool malformed = false;
+    for (s64 i = 2; i < args.count && !malformed; i++) {
+        String word = args[i];
+        bool is_option = word.count >= 2 && word.data[0] == '-' && word.data[1] == '-';
+        if (string_eq(word, str("--no-bounds-checks")) && bounds_checks) {
             bounds_checks = false;
-        } else if (strncmp(mode->argv[i], "--", 2) != 0 && !file) {
-            file = mode->argv[i];
+        } else if (!is_option && !have_path) {
+            path = word;
+            have_path = true;
         } else {
-            interpret_mode_usage(mode);
-            return;
+            malformed = true;
         }
     }
-    if (!file) {
+    array_free(&args);  // the list, not the words: they're the arena's, or argv's
+    if (malformed || !have_path) {
         interpret_mode_usage(mode);
+        arena_free(&a);
         return;
     }
 
-    Arena a = arena_make();
-    String path = str(file);
     String text = {};
     if (!os_read_file(&a, path, &text)) {
         fprintf(stderr, "unit-tests: error: cannot read '" STR_FMT "': " STR_FMT "\n", STR_ARG(path),

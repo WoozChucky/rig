@@ -1,6 +1,7 @@
 // unit.cpp: the unit test program, bin/unit-tests. A unity build like rig:
-// the whole compiler (src/all.cpp), the harness, then every test file. A
-// new test file is added to the list at the end.
+// the whole compiler (src/all.cpp), the harness, the --interpret mode
+// (interpret_mode.cpp), then every test file. A new test file is added to
+// the list at the end.
 //
 //   bin/unit-tests              every test
 //   bin/unit-tests lex          the tests whose names, or files' names, contain "lex"
