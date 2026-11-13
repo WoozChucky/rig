@@ -427,6 +427,11 @@ static void dump(Array<u8> *buffer, Ast *node) {
     }
     case AST_BREAK: out(buffer, "(break)"); break;
     case AST_CONTINUE: out(buffer, "(continue)"); break;
+    case AST_LOAD:
+        out(buffer, "(load ");
+        out_quoted(buffer, ((Ast_Load *)node)->path);
+        out(buffer, ")");
+        break;
     }
 }
 
@@ -462,10 +467,19 @@ Array<Ast *> ast_declarations(Ast_File *file) {
     return all;
 }
 
+// The loads, a third list in source order, are merged in by position too,
+// each printed before the first declaration that comes after it.
 String ast_dump(Arena *a, Ast_File *file) {
     Array<u8> buffer = {};
     Array<Ast *> declarations = ast_declarations(file);
-    for (s64 i = 0; i < declarations.count; i++) {
+    s64 l = 0;
+    for (s64 i = 0; i <= declarations.count; i++) {
+        bool last = i == declarations.count;
+        while (l < file->loads.count && (last || before(file->loads[l]->pos, declarations[i]->pos))) {
+            dump(&buffer, file->loads[l++]);
+            out(&buffer, "\n");
+        }
+        if (last) break;
         dump(&buffer, declarations[i]);
         out(&buffer, "\n");
     }
