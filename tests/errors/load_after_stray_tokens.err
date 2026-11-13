@@ -1,0 +1,3 @@
+tests/errors/load_after_stray_tokens.rig:6:1: error: expected identifier, found '*'
+    * #load "load/other_main.rig"; main :: () { greet(); }
+    ^
