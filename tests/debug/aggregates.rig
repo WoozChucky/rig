@@ -1,14 +1,14 @@
 // A debugger's view of procedures that take and return aggregates
 // (bin/run-tests runs it under gdb with aggregates.gdb and under cdb with
-// aggregates.cdb). Rig passes a struct by a pointer to the caller's copy
-// and returns one through a hidden pointer (spec 10.4), and the debug
-// information says so: a procedure returning a Pair returns nothing and
-// takes a *Pair first, so gdb's `finish` out of it shows no made-up value,
-// and one taking a Pair takes a *Pair, while the parameter itself still
-// shows as the struct, with its fields. The same goes for a struct of 8
-// bytes, which C would return in a register (where the made-up value of
-// a `finish` would come from), a string and an array. A procedure of
-// scalars, a debugger calls correctly from an expression.
+// aggregates.cdb). Rig passes an aggregate by a pointer to the caller's copy
+// and returns one through a hidden pointer (spec 10.4). In DWARF a struct, a
+// view and a string are types passed by reference: gdb shows the parameter
+// p as the struct, calls sum(q) with q's address and make(7) with a result
+// pointer of its own, and shows the value `finish` returns, even for a
+// struct of 8 bytes, which C returns in registers. An array's hidden pointer
+// is a parameter, result$, as every aggregate result's is in CodeView: gdb
+// calls both(&b, 4), cdb make(&q, 9). cdb's aggregate parameters are
+// pointers: sum(&q). A procedure of scalars, both call as they show it.
 Pair :: struct { a: int; b: int; }
 Small :: struct { a: s32; b: s32; }
 
