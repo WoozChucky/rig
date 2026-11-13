@@ -105,9 +105,15 @@
 //   a procedure the compiler makes, is in none, -1). They follow the
 //   checker's scopes: an if's or else's block, or a block statement, is a
 //   scope; a for's or while's body is the loop's scope, which starts at
-//   the keyword and holds the iterator and it_index. So where an inner block
-//   declares x again, a debugger shows the inner x inside it and the outer
-//   one after.
+//   the keyword and holds the iterator and it_index. And a declaration of a
+//   local that hides a variable (a global, a parameter, an outer local)
+//   starts a scope of its own, inside its block's, from the declaration to
+//   the block's end, and the local is declared in it: a name is hidden only
+//   from the end of its declaration (spec 4.7), but a debugger shows a
+//   scope's variables over the whole scope. Its initializer is in the scope
+//   around, its store in the new one. So where an inner block declares x
+//   again, a debugger shows the outer x until the declaration, the inner one
+//   from there to the block's end, and the outer one after.
 // - Variables (Ir_Var): every parameter, local, iterator and it_index, by
 //   name, with its Rig type, its scope, and where it lives: a local or a
 //   scalar parameter in its stack slot (an IR_LOCAL; a parameter's is
@@ -278,7 +284,8 @@ struct Ir_Param {
 // inside its parent.
 struct Ir_Scope {
     s32 parent;    // the scope it's inside; -1 for scope 0
-    Position pos;  // where it starts: its '{', or a loop's `for` or `while`
+    Position pos;  // where it starts: its '{', a loop's `for` or `while`, or the
+                   // declaration that hides a variable
 };
 
 // Where a variable lives, which says what Ir_Var.value is.

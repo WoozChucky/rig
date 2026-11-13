@@ -523,13 +523,19 @@ static LLVMValueRef llvm_global(Body *body, s32 n) {
 //   tells the debugger which machine code is which procedure, so `break
 //   sort` and a backtrace's names work.
 // - Lexical blocks (DILexicalBlock): the parts of a procedure where some
-//   names are visible, nested inside its subprogram as the source's blocks
-//   are; a variable belongs to the one that declares it.
-// - The line table: every instruction carries a location (DILocation,
-//   attached as !dbg): a line, a column and a scope, a subprogram or a
-//   block. LLVM turns the locations into a table from machine addresses to
-//   lines, which is what a debugger reads to set a breakpoint on a line, to
-//   show where the program stopped, and to step a line at a time.
+//   names are visible, nested inside its subprogram as the IR's scopes are:
+//   the source's blocks, and inside them the one each declaration that
+//   hides a variable starts (ir.h's "Scopes"); a variable belongs to the
+//   one that declares it.
+// - The line table: every instruction of the body carries a location
+//   (DILocation, attached as !dbg): a line, a column and a scope, a
+//   subprogram or a block. LLVM turns the locations into a table from
+//   machine addresses to lines, which is what a debugger reads to set a
+//   breakpoint on a line, to show where the program stopped, and to step a
+//   line at a time. The prologue's instructions have none: each parameter's
+//   stack slot and the store of its incoming value into it, before the
+//   body's first line, which is where a debugger's breakpoint on the
+//   procedure stops.
 // - Types (DIType): how to read a variable's bytes, a number of some size
 //   and encoding (DIBasicType), a pointer or a struct's member
 //   (DIDerivedType), a struct or an array (DICompositeType).
