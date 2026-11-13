@@ -772,11 +772,16 @@ static LLVMMetadataRef debug_file(Backend *b, Position pos) {
     return b->files[pos.file];
 }
 
-// The DIFile a type is in, and its members: a struct's is its
-// declaration's. Any other type (a view, a string, an array's stand-in),
-// which no line declares, is in the main file, the compile unit's.
+// Where a type is declared, the DIFile it and its members are in and its
+// line: a struct's are its declaration's. Any other type (a view, a string,
+// an array's stand-in), which no line declares, is in the main file, the
+// compile unit's, at line 0.
 static LLVMMetadataRef type_debug_file(Backend *b, Type *t) {
     return t->kind == TYPE_STRUCT ? debug_file(b, t->decl->pos) : b->files[0];
+}
+
+static unsigned type_debug_line(Type *t) {
+    return t->kind == TYPE_STRUCT ? (unsigned)t->decl->pos.line : 0;
 }
 
 // A member of the struct type `in`, which is in `file`: a field's name,
@@ -798,7 +803,7 @@ static LLVMMetadataRef debug_member(Backend *b, LLVMMetadataRef in, LLVMMetadata
 static Debug_Type stand_in_debug_type(Backend *b, Type *t) {
     if (t->kind == TYPE_POINTER) return {LLVMDIBuilderCreatePointerType(b->debug, nullptr, 64, 0, 0, nullptr, 0), 1};
     String name = type_name(b->arena, t);
-    unsigned line = t->kind == TYPE_STRUCT ? (unsigned)t->decl->pos.line : 0;
+    unsigned line = type_debug_line(t);
     LLVMMetadataRef file = type_debug_file(b, t);
     return {LLVMDIBuilderCreateForwardDecl(b->debug, DW_TAG_structure_type, (const char *)name.data,
                                            (size_t)name.count, file, file, line, 0, (u64)t->size * 8,
@@ -820,9 +825,9 @@ static LLVMMetadataRef part_debug_type(Backend *b, Type *part, s32 depth, s32 *l
     return made.node;
 }
 
-// A struct type, t, named `name`, made `depth` levels down, in its file
-// (type_debug_file) at its declaration's line (0 for a view's or a
-// string's, which no line declares). A struct can hold a pointer to itself
+// A struct type, t, named `name`, made `depth` levels down, in its file at
+// its line (type_debug_file, type_debug_line: a view or a string, which no
+// line declares, is in the main file at line 0). A struct can hold a pointer to itself
 // (Node's next: *Node), or a view of itself, so making a member's type can
 // lead back to the struct before it's made. So it's made in three steps:
 //   1. a temporary node, a replaceable composite, stands for it: remembered
@@ -842,7 +847,7 @@ static Debug_Type debug_struct(Backend *b, Type *t, String name, s32 depth,
                                                    LLVMMetadataRef file, LLVMMetadataRef *members,
                                                    s32 *levels)) {
     LLVMMetadataRef file = type_debug_file(b, t);
-    unsigned line = t->kind == TYPE_STRUCT ? (unsigned)t->decl->pos.line : 0;
+    unsigned line = type_debug_line(t);
     LLVMMetadataRef temporary = LLVMDIBuilderCreateReplaceableCompositeType(
         b->debug, DW_TAG_structure_type, (const char *)name.data, (size_t)name.count, file, file, line, 0,
         (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, "", 0);
