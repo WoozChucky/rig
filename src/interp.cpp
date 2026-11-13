@@ -32,8 +32,9 @@
 #include "thunk.h"
 
 // The range Rig procedures' values come from: 1 MB of addresses reserved
-// and never accessible, the k-th procedure's value (counting from 0, the
-// compiler's and foreign ones included) 16 x k bytes past its start, so
+// and never accessible, a Rig procedure's value, if it is the k-th
+// procedure (counting from 0, the compiler's and foreign ones included, a
+// foreign one's place never handed out), 16 x k bytes past its start, so
 // 65,536 procedures. 16 bytes apart, as functions' code is aligned, so the
 // values look like code addresses.
 static const u64 INTERP_PROC_RANGE = 1024 * 1024;

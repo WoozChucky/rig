@@ -828,12 +828,16 @@ TEST(interp_procedure_values) {
         CHECK_EQ(r.results[1], 0);
     }
     interp_test_free(&r);
-    // Each Rig procedure's address maps back to it, and nothing else does:
-    // not null, not an address between two, not one past the module's
-    // procedures, not a native one.
+    // Each Rig procedure's address is where section 10.8 puts it, the k-th
+    // 16 x k bytes past the reserved range's start, and maps back to it, and
+    // nothing else does: not null, not an address between two, not one past
+    // the module's procedures, not a native one.
+    CHECK_EQ(interp_proc_address(in, 0), (u64)in->proc_base);
     for (s32 k = 0; k < (s32)m->procs.count; k++) {
         u64 address = interp_proc_address(in, k);
         CHECK(address != 0);
+        CHECK_EQ(address, (u64)in->proc_base + 16 * (u64)k);
+        CHECK_EQ(address % 16, 0);
         CHECK_EQ(interp_proc_at(in, address), k);
         CHECK_EQ(interp_proc_at(in, address + 1), -1);
     }
