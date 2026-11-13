@@ -1,0 +1,4 @@
+// The arguments '..' stands for come after every named parameter.
+printf :: (format: *u8, .., n: s32) -> s32 #foreign libc;
+
+main :: () { }

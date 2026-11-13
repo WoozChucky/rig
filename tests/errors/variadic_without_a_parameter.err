@@ -1,0 +1,3 @@
+tests/errors/variadic_without_a_parameter.rig:3:7: error: '..' needs a parameter before it, as in (format: *u8, ..)
+    f :: (..) -> s32 #foreign libc;
+          ^
