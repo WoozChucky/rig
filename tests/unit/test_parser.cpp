@@ -2203,27 +2203,38 @@ TEST(parse_load_in_an_expression) {
 }
 
 TEST(parse_load_where_a_token_is_expected) {
-    // Where a ';', a ')', an operator or a field's name should come, the
-    // same message, rather than "expected ';'", and the declaration is given
-    // up. The file isn't loaded, so the program lacks it.
+    // Where a token should come, the same message, rather than "expected
+    // ';'" or the like: a statement's ';', a call's ')', a field's name after
+    // '.', a for loop's '..' after its first expression (a name there too,
+    // where the iterator's ':' isn't asked for), a struct's field's ';', or
+    // a load's ';'. The declaration is given up, and the misplaced load's
+    // file isn't loaded, so the program lacks it; but a load before it that
+    // is missing only its ';' is kept (parse_load), its file loaded.
     Arena a = arena_make();
     struct Case {
         const char *text;
         const char *errors;
+        const char *dump;
     };
     Case cases[] = {
-        {"main :: () {\n    x := 1 #load \"a.rig\";\n}\n", "2:12: #load can only be at the top level\n"},
-        {"main :: () {\n    f(1 #load \"a.rig\");\n}\n", "2:9: #load can only be at the top level\n"},
-        {"main :: () {\n    x := a.#load \"a.rig\";\n}\n", "2:12: #load can only be at the top level\n"},
-        {"main :: () {\n    for 0 #load \"a.rig\";\n}\n", "2:11: #load can only be at the top level\n"},
-        {"main :: () {\n    for a #load \"a.rig\";\n}\n", "2:11: #load can only be at the top level\n"},
-        {"S :: struct { a: int #load \"a.rig\"; }\n", "1:22: #load can only be at the top level\n"},
-        {"#load \"a.rig\" #load \"b.rig\";\n", "1:15: #load can only be at the top level\n"},
+        {"main :: () {\n    x := 1 #load \"a.rig\";\n}\n", "2:12: #load can only be at the top level\n",
+         "(broken main)\n"},
+        {"main :: () {\n    f(1 #load \"a.rig\");\n}\n", "2:9: #load can only be at the top level\n",
+         "(broken main)\n"},
+        {"main :: () {\n    x := a.#load \"a.rig\";\n}\n", "2:12: #load can only be at the top level\n",
+         "(broken main)\n"},
+        {"main :: () {\n    for 0 #load \"a.rig\";\n}\n", "2:11: #load can only be at the top level\n",
+         "(broken main)\n"},
+        {"main :: () {\n    for a #load \"a.rig\";\n}\n", "2:11: #load can only be at the top level\n",
+         "(broken main)\n"},
+        {"S :: struct { a: int #load \"a.rig\"; }\n", "1:22: #load can only be at the top level\n", "(broken S)\n"},
+        {"#load \"a.rig\" #load \"b.rig\";\n", "1:15: #load can only be at the top level\n", "(load \"a.rig\")\n"},
     };
     for (s64 i = 0; i < (s64)(sizeof cases / sizeof cases[0]); i++) {
         Token_List *list = src(cases[i].text);
         Ast_File *file = parse(list->tokens, &a, &list->diag);
         CHECK_STR(messages(&a, &list->diag), cases[i].errors);
+        CHECK_STR(ast_dump(&a, file), cases[i].dump);
         CHECK(file->lost_a_file);
         token_list_free(list);
     }
@@ -2374,6 +2385,7 @@ TEST(parse_load_inside_a_broken_body) {
         Ast_File *file = parse(list->tokens, &a, &list->diag);
         CHECK_STR(messages(&a, &list->diag), expected[i]);
         CHECK_EQ(file->loads.count, 0);
+        CHECK(file->lost_a_file);
         CHECK_STR(ast_dump(&a, file), "(broken f)\n(proc main (params) (block))\n");
         token_list_free(list);
     }
@@ -2396,10 +2408,10 @@ TEST(parse_load_later_on_a_line) {
 }
 
 TEST(parse_load_after_parentheses) {
-    // A ')' followed by a #load isn't a signature's: the load begins the
-    // next declaration, as #foreign never does. So a statement missing its
-    // ';' before a #load line is reported as that, not as a procedure
-    // mistyped: a value in parentheses,
+    // A ')' followed by a #load isn't a signature's, as one followed by
+    // #foreign is: at the top level, the load begins the next declaration.
+    // So a declaration there missing its ';' before a #load line is reported
+    // as that, not as a procedure mistyped: a value in parentheses,
     Arena a = arena_make();
     Token_List *list = src("x := (1 + 2)\n#load \"a.rig\";\nmain :: () {}\n");
     Ast_File *file = parse(list->tokens, &a, &list->diag);
@@ -2407,13 +2419,14 @@ TEST(parse_load_after_parentheses) {
     CHECK_EQ(file->loads.count, 1);
     CHECK_STR(ast_dump(&a, file), "(broken x)\n(load \"a.rig\")\n(proc main (params) (block))\n");
     token_list_free(list);
-    // a stray call outside any body, which keeps no name (broken_entry),
+    // or a stray call outside any body, which keeps no name (broken_entry).
     String errors;
     CHECK_STR(parse_src(&a, "foo(1)\n#load \"a.rig\";\nmain :: () {}\n", &errors),
               "(broken)\n(load \"a.rig\")\n(proc main (params) (block))\n");
     CHECK_STR(errors, "1:4: expected '::', found '('\n");
-    // or a local constant in parentheses, where the load, in a body, is
-    // misplaced.
+    // In a body, a local constant in parentheses isn't taken for a procedure
+    // mistyped either; the load there begins no declaration, and is
+    // reported as misplaced.
     CHECK_STR(body_dump(&a, "N :: (1)\n#load \"a.rig\";", &errors), "(broken f)\n");
     CHECK_STR(errors, "3:1: #load can only be at the top level\n");
     arena_free(&a);

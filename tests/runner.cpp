@@ -1159,11 +1159,24 @@ static bool is_example_file_name(String name) {
     return !is_device_name(name) && !same_file_name(name, str("example.rig"));
 }
 
+// The next word of an info string, its words separated by spaces and tabs,
+// from *at on: false when none is left. *at goes past it. has_file_word and
+// read_info both read the words through it, so they split them alike.
+static bool next_word(String words, s64 *at, String *word) {
+    s64 i = *at;
+    while (i < words.count && (words.data[i] == ' ' || words.data[i] == '\t')) i++;
+    s64 start = i;
+    while (i < words.count && words.data[i] != ' ' && words.data[i] != '\t') i++;
+    *at = i;
+    *word = string_slice(words, start, i - start);
+    return word->count > 0;
+}
+
 // Whether one of the words of an info string starts with "file=".
 static bool has_file_word(String words) {
-    for (s64 i = 0; i < words.count; i++) {
-        bool word_start = i == 0 || words.data[i - 1] == ' ' || words.data[i - 1] == '\t';
-        if (word_start && starts_with(string_slice(words, i, words.count - i), "file=")) return true;
+    String word = {};
+    for (s64 at = 0; next_word(words, &at, &word);) {
+        if (starts_with(word, "file=")) return true;
     }
     return false;
 }
@@ -1179,12 +1192,8 @@ static void read_info(Arena *a, String words, Example *ex) {
     bool file_block = has_file_word(words);
     if (file_block) ex->kind = EXAMPLE_FILE;
     bool kind_given = false, exit_given = false, file_given = false;
-    s64 start = 0;
-    for (s64 i = 0; i <= words.count; i++) {
-        if (i < words.count && words.data[i] != ' ' && words.data[i] != '\t') continue;
-        String word = string_slice(words, start, i - start);
-        start = i + 1;
-        if (!word.count) continue;
+    String word = {};
+    for (s64 at = 0; next_word(words, &at, &word);) {
         if (starts_with(word, "file=")) {
             String name = string_slice(word, 5, word.count - 5);
             if (file_given || !is_example_file_name(name)) {

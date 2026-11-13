@@ -151,10 +151,11 @@
 // The bodies of if, else, while and for are always blocks in braces (spec
 // 6.1), and a condition needs no parentheses: the body's '{' ends it. A for
 // whose first expression the body's '{' follows, not '..', goes over that
-// expression's elements; with no iterator named, a name followed by
-// anything else (`for i 0..9`, `for x in 0..9`) is "expected ':' after the
-// iterator's name, as in for i: 0..9", at what came instead of the ':';
-// anything else is "expected '..' or the loop's '{'".
+// expression's elements; with no iterator named, a name and then anything
+// else but a #load (`for i 0..9`, `for x in 0..9`) is "expected ':' after
+// the iterator's name, as in for i: 0..9", at what came instead of the ':';
+// anything else is "expected '..' or the loop's '{'", or a #load misplaced
+// (below).
 //
 // A program can be several files (spec 2.13): `#load "world/map.rig";` at
 // the top level names another, whose declarations join the program's. The
@@ -166,19 +167,23 @@
 // (Ast_File.lost_a_file), as the loader does for a #load it can't follow.
 // A load missing only its ';' is reported as any declaration is, but kept,
 // so the file it names is still loaded. Where a statement, a struct's
-// field, a parameter, an expression, a type or a block starts, or among the
-// directives after a signature, a #load is "#load can only be at the top
-// level", at its '#'; unless it starts a line outside any braces after a
-// top-level declaration that stopped short there (`N ::`, then the #load
-// on the next line): the recovery below resumes at it, so it's read as the
-// top-level load it is, and the error is the usual one for what's missing
-// before it ("expected an expression"). In a body or among a struct's
-// fields, the parser skips it up to its ';' (or, with no ';' first, to the
-// end of its line, a brace on it, or the end of the file) and goes on with
-// the body or the fields, which lose nothing by it; anywhere else, the
-// declaration is given up, as after any error below. Either way the file
-// it names isn't loaded, so the tree records that the program lacks it, as
-// for a #load with no string.
+// field, a parameter, an expression, a type or a block starts, among the
+// directives after a signature, or wherever a token is expected (a ';', a
+// ')', a field's name after '.', a loop's '..' or '{': `x := 1 #load
+// "a.rig";`, `#load "a.rig" #load "b.rig";`), a #load is "#load can only
+// be at the top level", at its '#'; unless it starts a line outside any
+// braces after a top-level declaration that stopped short there (`N ::`,
+// then the #load on the next line): the recovery below resumes at it, so
+// it's read as the top-level load it is, and the error is the usual one
+// for what's missing before it ("expected an expression"). Where a
+// statement or a struct's field starts, the parser skips it up to its ';'
+// (or, with no ';' first, to the end of its line, a brace on it, or the
+// end of the file) and goes on with the body or the fields, which lose
+// nothing by it; anywhere else, the declaration is given up, as after any
+// error below. Either way the file it names isn't loaded, so the tree
+// records that the program lacks it, as for a #load with no string. So it
+// does for a #load the recovery passes over, unreported, with a
+// declaration given up after another error.
 //
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;
