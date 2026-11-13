@@ -1,20 +1,34 @@
 // main.cpp: the rig command and its subcommands.
 
-#include <llvm-c/Core.h>
+#include "version.h"
 
 static void print_usage() {
     fprintf(stderr,
             "usage: rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]\n"
             "       rig check FILE.rig [--stdin]\n"
-            "       rig version\n");
+            "       rig version [--verbose]\n");
 }
 
-// rig version: Rig's version and the version of the LLVM linked into it,
-// asked of LLVM itself so it can't drift from the libraries really linked.
-static int command_version() {
-    unsigned major = 0, minor = 0, patch = 0;
-    LLVMGetVersion(&major, &minor, &patch);
-    printf("rig %s (LLVM %u.%u.%u)\n", RIG_VERSION, major, minor, patch);
+// rig version [--verbose]: which Rig this is, from the stamp the build
+// scripts gave the build (version.h): its version, the commit it was built
+// from and the LLVM linked into it, on one line; with --verbose, each part
+// on a line of its own as well, with the target and the kind of build.
+// Anything else after "version" is a malformed command line: 2, with the
+// usage.
+static int command_version(Arena *a, Array<String> words) {
+    bool verbose = words.count == 1 && string_eq(words[0], str("--verbose"));
+    if (words.count > 0 && !verbose) {
+        print_usage();
+        return 2;
+    }
+    Build_Stamp stamp = build_stamp();
+    String llvm = llvm_version(a);
+    if (verbose) {
+        String text = version_verbose(a, stamp, llvm, target_triple(target_host()));
+        printf(STR_FMT, STR_ARG(text));
+    } else {
+        printf(STR_FMT "\n", STR_ARG(version_line(a, stamp, llvm)));
+    }
     return 0;
 }
 
@@ -32,7 +46,8 @@ static void run_command(void *data) {
     Arena a = arena_make();
     int status = 2;
     if (args.count >= 2 && string_eq(args[1], str("version"))) {
-        status = command_version();
+        Array<String> words = {args.data + 2, args.count - 2, args.count - 2};
+        status = command_version(&a, words);
     } else if (args.count >= 2 && string_eq(args[1], str("build"))) {
         // A view of args, not an array of its own: never grown or freed.
         Array<String> words = {args.data + 2, args.count - 2, args.count - 2};

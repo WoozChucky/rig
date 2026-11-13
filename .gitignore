@@ -17,3 +17,5 @@
 /site/.vitepress/cache/
 /site/.vitepress/generated/
 /site/spec/
+# Release archives (scripts/package_linux.sh, package_windows.bat)
+/dist/
