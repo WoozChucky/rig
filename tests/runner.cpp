@@ -123,10 +123,8 @@ static const char *OBJ = ".o";
 // Seconds any one program may take. Each takes well under one.
 static const s32 TIMEOUT = 60;
 
-// Only Windows has \r\n to remove; elsewhere s comes back as it is, and the
-// arena goes unused.
-static String normalise_newlines([[maybe_unused]] Arena *a, String s) {
-#ifdef _WIN32
+// s with every "\r\n" made "\n".
+static String without_carriage_returns(Arena *a, String s) {
     u8 *out = (u8 *)arena_alloc(a, s.count ? s.count : 1, 1);
     s64 n = 0;
     for (s64 i = 0; i < s.count; i++) {
@@ -134,6 +132,13 @@ static String normalise_newlines([[maybe_unused]] Arena *a, String s) {
         out[n++] = s.data[i];
     }
     return {out, n};
+}
+
+// Only Windows has \r\n to remove; elsewhere s comes back as it is, and the
+// arena goes unused.
+static String normalise_newlines([[maybe_unused]] Arena *a, String s) {
+#ifdef _WIN32
+    return without_carriage_returns(a, s);
 #else
     return s;
 #endif
@@ -906,18 +911,6 @@ static void read_examples(Arena *a, String text, Array<Example> *examples) {
     if (in_block && in_rig) (*examples)[examples->count - 1].bad = str("the block is never closed");
 }
 
-// The specification as read, with "\r\n" made "\n" on every host: a checkout
-// with CRLF line endings holds the same examples.
-static String without_carriage_returns(Arena *a, String s) {
-    u8 *out = (u8 *)arena_alloc(a, s.count ? s.count : 1, 1);
-    s64 n = 0;
-    for (s64 i = 0; i < s.count; i++) {
-        if (s.data[i] == '\r' && i + 1 < s.count && s.data[i + 1] == '\n') continue;
-        out[n++] = s.data[i];
-    }
-    return {out, n};
-}
-
 // One example, written to SPEC_DIR/LINE/example.rig and built or checked
 // there, so its messages name it example.rig on every host. {} when it
 // passes, otherwise why not.
@@ -1002,6 +995,8 @@ static void spec_tests(Arena *a, String rig, s64 *passed, s64 *failed) {
         report(SPEC, string_printf(a, "can't read it: " STR_FMT, STR_ARG(os_error_message(a))), passed, failed);
         return;
     }
+    // "\r\n" read as "\n" on every host: a checkout with CRLF line endings
+    // holds the same examples.
     text = without_carriage_returns(a, text);
     Array<Example> examples = {};
     read_examples(a, text, &examples);
