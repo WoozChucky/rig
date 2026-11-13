@@ -411,7 +411,7 @@ static String print_module(Arena *a, Ir_Module *m, bool debug) {
             if (k) out(&p, ", ");
             out_param(&p, proc->params[k]);
         }
-        // A variadic procedure has a fixed parameter (the checker made sure),
+        // A variadic procedure has a fixed parameter (the parser made sure),
         // so the '...' always follows one.
         if (proc->is_variadic) out(&p, ", ...");
         out(&p, ")");
