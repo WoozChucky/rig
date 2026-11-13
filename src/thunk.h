@@ -55,5 +55,6 @@ void thunk_place(Thunk_Call *call, const Ir_Type *types, const Ir_Ext *exts, con
                  Array<u64> *stack);
 
 // The result's canonical bits from rax or xmm0, by its type (masks the
-// upper bits Windows leaves undefined; i1 is rax & 1). 0 for IR_VOID.
+// bits above a narrow integer, which neither convention defines; i1 is
+// rax & 1). 0 for IR_VOID.
 u64 thunk_result(Thunk_Call *call, Ir_Type type);

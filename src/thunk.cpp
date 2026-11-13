@@ -13,17 +13,23 @@
 // what, so an unwinder can step from the C function, through the thunk, to
 // the interpreter that called it.
 //
-// Both thunks do the same, in the same order:
-//   1. save rbp and rbx, the two callee-saved registers they use: rbx holds
-//      the Thunk_Call across the call, rbp the stack pointer to restore;
+// Both thunks do much the same, in the same order:
+//   1. save rbp and rbx, the two callee-saved registers they use, and set
+//      rbp to the stack pointer: rbx holds the Thunk_Call across the call,
+//      rbp the frame the stack pointer is restored from;
 //   2. pad the stack by 8 bytes when the stack arguments are an even
 //      number, so the stack is 16-aligned at the call, as both conventions
 //      require;
 //   3. push the stack arguments, the last first, so the first ends at the
 //      lowest address; one push at a time touches the stack in order, so a
 //      Windows guard page is never jumped over, however many there are;
-//   4. load the argument registers, call, and store rax and xmm0;
-//   5. restore the stack pointer from rbp, and rbx and rbp from the stack.
+//   4. on Windows, leave the 32 bytes of shadow space below them;
+//   5. load the argument registers, call, and store rax and xmm0;
+//   6. restore the stack pointer from rbp, and rbx and rbp from the stack.
+// They differ in step 1's order, as each one's unwind information asks:
+// Windows pushes both and then sets rbp, so rbp is the stack pointer to
+// restore; SysV sets rbp between the two pushes, so the stack pointer to
+// restore is rbp - 8, where rbx was saved.
 //
 // The 16-alignment: the call that entered the thunk pushed its return
 // address, so rsp was 8 past a multiple of 16 on entry, and the two saves
@@ -229,10 +235,12 @@ void thunk_place(Thunk_Call *call, const Ir_Type *types, const Ir_Ext *exts, con
 }
 
 u64 thunk_result(Thunk_Call *call, Ir_Type type) {
-    // The callee sets only its result's own bits: on Windows those of a
-    // narrow integer and nothing above (on Linux it widens an s8 or s16 to
-    // 32 bits, but a canonical value is zero-extended all the same); an f32
-    // only xmm0's low 32 bits. A bool is 0 or 1 in al.
+    // The callee sets only its result's own bits, on both conventions: a
+    // narrow integer's, leaving the bits above it undefined, and an f32's,
+    // xmm0's low 32. (clang marks an s8 or s16 result signext on SysV, but
+    // the ABI doesn't ask the callee to widen it, and LLVM's x86-64 backend
+    // doesn't.) So every narrow integer is masked here; a bool is 0 or 1 in
+    // al, so rax & 1.
     switch (type) {
     case IR_VOID: return 0;
     case IR_I1: return call->rax & 1;
