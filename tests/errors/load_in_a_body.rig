@@ -1,0 +1,4 @@
+// #load is a declaration of the program's (issue #112): not in a body.
+main :: () {
+    #load "load/also_f.rig";
+}

@@ -1,0 +1,8 @@
+// A name declared in two files of a program (issue #112) is declared twice:
+// the program has one top-level scope. The second declaration, in the
+// loaded file, is the error, and names the first by its file.
+#load "load/also_f.rig";
+
+f :: () {}
+
+main :: () { f(); }

@@ -3297,19 +3297,16 @@ TEST(module_knows_its_source) {
     arena_free(&a);
 }
 
-// The program at `path`, lowered as rig build lowers it, or null when it
-// doesn't check; its tree in *tree. Both live in the arena.
+// The program at `path`, with the files it #loads, lowered as rig build
+// lowers it, or null when it doesn't check; its tree in *tree. Both live in
+// the arena.
 static Ir_Module *lower_program(Arena *a, String path, Ast_File **tree) {
     String text = {};
     if (!os_read_file(a, path, &text)) return nullptr;
     Diagnostics d = {};
-    s32 file = diag_add_file(&d, path, text);
-    locate_file(&d, file);
-    Array<Token> tokens = lex(&d, file, a);
-    *tree = d.error_count ? nullptr : parse(tokens, a, &d);
+    *tree = load_program(a, &d, path, text);
     Ir_Module *m = nullptr;
-    if (*tree && check(*tree, a, &d)) m = ir_lower(*tree, &d, a, true);
-    array_free(&tokens);
+    if (d.error_count == 0 && check(*tree, a, &d)) m = ir_lower(*tree, &d, a, true);
     diag_free(&d);
     return m;
 }
