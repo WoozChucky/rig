@@ -190,9 +190,10 @@ enum Ir_Op : u8 {
     IR_RET,                          // ret [%a, ...]         one value per result
     IR_PANIC,                        // panic @global: writes the global's bytes but its final zero to stderr, exits 101
                                      // panic %a, %b: the same with the %b bytes (an i64) at the ptr %a
-                                     // Either way the text is "PATH:L:C: runtime error: MESSAGE\n", and
-                                     // the panic knows how long that prefix is (`constant`, `c`), so the
-                                     // interpreter can give MESSAGE alone; printing doesn't show it
+                                     // From lowering, the text is "PATH:L:C: runtime error: MESSAGE\n",
+                                     // and the panic knows how long that prefix is (`constant`, `c`;
+                                     // unknown, -1, when built by hand), so the interpreter can give
+                                     // MESSAGE alone; printing doesn't show it
     IR_UNREACHABLE,                  // unreachable           control never gets here
 };
 

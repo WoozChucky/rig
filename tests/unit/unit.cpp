@@ -198,6 +198,19 @@ static int helper_mode(int argc, char **argv) {
 #endif
         return 0;
     }
+    if (strcmp(argv[1], "--touch-reserved") == 0) {
+        // Reads a byte of what os_reserve_inaccessible reserved, which must
+        // fault and end this process; "survived" on stdout if it doesn't.
+        // The read is volatile, so the compiler can't drop it.
+#ifdef _WIN32
+        SetErrorMode(SEM_NOGPFAULTERRORBOX);  // the crash ends it, with no dialog box waiting for a click
+#endif
+        volatile u8 *p = (volatile u8 *)os_reserve_inaccessible(1024 * 1024);
+        if (!p) return 2;
+        u8 byte = p[0];
+        printf("survived %d\n", byte);
+        return 0;
+    }
     return -1;
 }
 
