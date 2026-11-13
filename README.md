@@ -119,4 +119,5 @@ and the rules every change follows.
 
 ## Licence
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). The compiler links LLVM, and its release archives ship LLVM's linker, so they also
+carry LLVM's and lld's licences ([third_party](third_party/README.md)).
