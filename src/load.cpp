@@ -5,7 +5,11 @@
 #include "os.h"
 
 // The paths are the host's: the files are read on it, whichever system the
-// program is built for.
+// program is built for. The driver asks the same question as
+// target_host() == TARGET_WINDOWS_X64, but target_host() is the LLVM
+// backend's (llvm_backend.h), which the front end doesn't depend on, and
+// all.cpp includes it after the loader; so here it's the compiler building
+// rig that answers, as it does for all.cpp's choice of os_windows.cpp.
 #ifdef _WIN32
 static const bool HOST_IS_WINDOWS = true;
 #else

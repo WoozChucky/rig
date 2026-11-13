@@ -41,7 +41,7 @@ bool os_file_id(String path, u64 id[3]);
 
 // `path` with its letters' case folded as the system folds names': on
 // Windows, where a name's case doesn't matter, every letter in upper case
-// (Ä as ä, not only A as a), as the invariant locale has it, close to the
+// (ä as Ä, not only a as A), as the invariant locale has it, close to the
 // table NTFS compares names by; on Linux, where case does matter, `path`
 // itself. For knowing a file with no id (os_file_id) by its path: two
 // names of one file that differ in case alone fold to one.

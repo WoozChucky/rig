@@ -169,14 +169,22 @@ TEST(load_once_by_identity) {
     // One file named several ways is loaded once, so its declarations
     // aren't declared twice: by the system's file id, not by the path's
     // text. On Windows its name in another case is it too, and on Linux a
-    // symbolic link to it. It's named as its first #load names it.
+    // symbolic link to it. A link's name is one only the id can know it by:
+    // on Windows, where every other name here comes to b.rig's path once
+    // made absolute and its case folded, that's a hard link's, hard.rig.
+    // It's named as its first #load names it.
     Arena a = arena_make();
     Diagnostics d = {};
     String dir = load_test_directory(&a, "load_once_by_identity");
     CHECK(os_make_directory(str(in_directory(&a, dir, "sub"))));
+    write_source(&a, dir, "b.rig", "helper :: () {}\n");
 #ifdef _WIN32
+    const char *hard = in_directory(&a, dir, "hard.rig");
+    DeleteFileA(hard);
+    CHECK(CreateHardLinkA(hard, in_directory(&a, dir, "b.rig"), nullptr));
     write_source(&a, dir, "main.rig",
-                 "#load \"b.rig\";\n#load \"./b.rig\";\n#load \"sub/../b.rig\";\n#load \"B.RIG\";\n");
+                 "#load \"b.rig\";\n#load \"./b.rig\";\n#load \"sub/../b.rig\";\n#load \"B.RIG\";\n"
+                 "#load \"hard.rig\";\n");
 #else
     String link = str(in_directory(&a, dir, "link.rig"));
     unlink(string_cstr(&a, link));
@@ -184,7 +192,6 @@ TEST(load_once_by_identity) {
     write_source(&a, dir, "main.rig",
                  "#load \"b.rig\";\n#load \"./b.rig\";\n#load \"sub/../b.rig\";\n#load \"link.rig\";\n");
 #endif
-    write_source(&a, dir, "b.rig", "helper :: () {}\n");
     Ast_File *tree = load_main(&a, &d, dir);
     CHECK_STR(messages(&a, &d), "");
     CHECK_EQ(d.files.count, 2);
@@ -374,6 +381,45 @@ TEST(load_goes_on_after_an_error) {
         CHECK_EQ(m->pos.col, 7);
         CHECK_STR(m->message, "a #load path can't contain a zero byte");
     }
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(load_goes_on_after_a_syntax_error) {
+    // A file that doesn't lex or parse cleanly is still followed, as the
+    // tree holds every file's declarations, broken ones included (load.h):
+    // main.rig's literal 0x has no digits, and b.rig's x has no value, but
+    // b.rig is loaded, its #load after the error is followed, and c.rig,
+    // whose turn comes after b.rig's errors, is parsed as any file is.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_goes_on_after_a_syntax_error");
+    write_source(&a, dir, "main.rig", "#load \"b.rig\";\nmain :: () { n := 0x; }\n");
+    write_source(&a, dir, "b.rig", "x :: ;\n#load \"c.rig\";\nhelper :: () {}\n");
+    write_source(&a, dir, "c.rig", "c :: () {}\n");
+    Ast_File *tree = load_main(&a, &d, dir);
+    CHECK_EQ(d.files.count, 3);
+    CHECK(tree != nullptr);
+    if (tree) {
+        // b.rig's broken x too.
+        CHECK_EQ(tree->procs.count, 4);
+        if (tree->procs.count == 4) {
+            CHECK_STR(tree->procs[0]->name, "main");
+            CHECK_STR(tree->procs[1]->name, "x");
+            CHECK_STR(tree->procs[2]->name, "helper");
+            CHECK_STR(tree->procs[3]->name, "c");
+        }
+    }
+    // Errors in the main file and in b.rig, none in c.rig.
+    s64 in_file[3] = {};
+    for (s64 i = 0; i < d.messages.count; i++) {
+        s32 file = d.messages[i].pos.file;
+        CHECK(file >= 0 && file < 3);
+        if (file >= 0 && file < 3) in_file[file]++;
+    }
+    CHECK(in_file[0] > 0);
+    CHECK(in_file[1] > 0);
+    CHECK_EQ(in_file[2], 0);
     diag_free(&d);
     arena_free(&a);
 }
