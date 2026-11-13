@@ -41,20 +41,25 @@ rem deps\llvm-windows made before get_llvm.bat kept clang has LLVM but no
 rem compiler. CXX may be given with quotes around it or without: they're
 rem taken off, and "%CXX%" below puts them back. (That line is reached
 rem only when CXX is set: %CXX:"=% of an unset CXX isn't empty.)
+set PINNED_CXX=
 if not defined CXX goto pinned_cxx
 set "CXX=%CXX:"=%"
 goto have_cxx
 :pinned_cxx
 set "CXX=%LLVM%\bin\clang++.exe"
+set PINNED_CXX=1
 if not exist "%CXX%" goto no_clang
 :have_cxx
 rem Which compiler made this build, first in its log: "clang version 23.1.5
 rem ...", the first line clang prints. A compiler that doesn't answer stops
-rem here. (for /f runs its command with cmd /c, which takes the quotes off
-rem a command that starts with one and holds a parenthesis, as a path may;
-rem starting it with call keeps them.)
+rem here, with what it said on stderr left in place (for /f takes only its
+rem stdout), since that names the cause, and a message naming where the
+rem compiler came from: the pinned clang, or CXX. (for /f runs its command
+rem with cmd /c, which takes the quotes off a command that starts with one
+rem and holds a parenthesis, as a path may; starting it with call keeps
+rem them.)
 set CXX_VERSION=
-for /f "delims=" %%v in ('call "%CXX%" --version 2^>nul') do if not defined CXX_VERSION set "CXX_VERSION=%%v"
+for /f "delims=" %%v in ('call "%CXX%" --version') do if not defined CXX_VERSION set "CXX_VERSION=%%v"
 if not defined CXX_VERSION goto bad_cxx
 echo build.bat: %CXX%: %CXX_VERSION%
 
@@ -153,7 +158,12 @@ echo build.bat: clang not found in %LLVM%; run scripts\get_llvm.bat again 1>&2
 exit /b 1
 
 :bad_cxx
-echo build.bat: "%CXX%" --version failed; CXX names the compiler, or is unset for LLVM's clang 1>&2
+if defined PINNED_CXX goto bad_pinned_cxx
+echo build.bat: CXX=%CXX% failed to run (above); name a C++ compiler in CXX, or unset it to use the pinned clang 1>&2
+exit /b 1
+
+:bad_pinned_cxx
+echo build.bat: the pinned clang, %CXX%, failed to run (above); run scripts\get_llvm.bat again 1>&2
 exit /b 1
 
 :no_msvc
