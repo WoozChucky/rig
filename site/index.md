@@ -11,6 +11,9 @@ hero:
     alt: An anvil
   actions:
     - theme: brand
+      text: Install
+      link: /install
+    - theme: alt
       text: Read the specification
       link: /spec/
     - theme: alt

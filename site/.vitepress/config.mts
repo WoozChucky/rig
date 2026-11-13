@@ -63,6 +63,7 @@ export default defineConfig({
   themeConfig: {
     logo: { light: '/logo.svg', dark: '/logo-dark.svg', alt: '' },
     nav: [
+      { text: 'Install', link: '/install' },
       { text: 'Specification', link: '/spec/', activeMatch: '^/spec/' },
       { text: 'Roadmap', link: `${repoUrl}/issues/85` }
     ],
