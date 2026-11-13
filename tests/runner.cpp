@@ -14,7 +14,13 @@
 // byte. .out and .err aren't normalised; .gitattributes keeps them LF.
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
-// NAME.err, and it writes neither an object file nor a program.
+// NAME.err, and it writes neither an object file nor a program. In a .err,
+// @NO_SUCH_FILE@ stands for the system's reason a missing file can't be
+// read, which is its own, in its language (no_such_file_message).
+//
+// Only the NAME.rig files directly in tests/run and tests/errors are
+// programs: their subdirectories, load/, hold the files the programs
+// #load, which aren't built on their own.
 //
 // Then a few fixed cases: rig build without -o from another directory, a
 // runtime error's order after the program's output when stdout and stderr
@@ -23,7 +29,8 @@
 // it names the commit rig was built from).
 //
 // Then rig check on every program of both directories, from a file and
-// from stdin, and its own command line (check_tests).
+// from stdin under the file's name, and its own command line
+// (check_tests).
 //
 // Then the specification's examples (spec_tests): every ```rig block of
 // docs/rig-spec.md (its section 1.4 says so too), written to
@@ -157,6 +164,24 @@ static bool starts_with(String s, const char *prefix) {
 static bool ends_with(String s, const char *suffix) {
     s64 n = (s64)strlen(suffix);
     return s.count >= n && memcmp(s.data + s.count - n, suffix, (size_t)n) == 0;
+}
+
+// s with every `from` replaced by `to`.
+static String replace_all(Arena *a, String s, const char *from, String to) {
+    s64 n = (s64)strlen(from);
+    String out = string_printf(a, "");
+    s64 start = 0;
+    for (s64 i = 0; i + n <= s.count;) {
+        if (memcmp(s.data + i, from, (size_t)n) == 0) {
+            out = string_printf(a, STR_FMT STR_FMT STR_FMT, STR_ARG(out), STR_ARG(string_slice(s, start, i - start)),
+                                STR_ARG(to));
+            i += n;
+            start = i;
+        } else {
+            i++;
+        }
+    }
+    return string_printf(a, STR_FMT STR_FMT, STR_ARG(out), STR_ARG(string_slice(s, start, s.count - start)));
 }
 
 // Line `index` (from 0) of s, without its "\n"; {} past the end.
@@ -322,14 +347,33 @@ static String run_test(Arena *a, String rig, String name) {
     return {};
 }
 
+// The system's reason a file that isn't there, in a directory that is,
+// can't be read: what @NO_SUCH_FILE@ stands for in a tests/errors .err. It
+// is the system's words, in its language ("No such file or directory" on
+// Linux, "The system cannot find the file specified" on Windows in
+// English), so the runner asks the system, by reading such a file itself,
+// as rig would.
+static String no_such_file_message(Arena *a) {
+    const char *missing = "tests/errors/load/no-such-file.rig";
+    String text = {};
+    if (os_read_file(a, str(missing), &text)) return string_printf(a, "(%s is there)", missing);
+    return os_error_message(a);
+}
+
+// tests/errors/NAME.err, which the program must print, its @NO_SUCH_FILE@
+// replaced (no_such_file_message); false when there's none.
+static bool read_expected_errors(Arena *a, String name, String *expected) {
+    if (!os_read_file(a, string_printf(a, "tests/errors/" STR_FMT ".err", STR_ARG(name)), expected)) return false;
+    *expected = replace_all(a, *expected, "@NO_SUCH_FILE@", no_such_file_message(a));
+    return true;
+}
+
 // A program that must fail to build, with its .err on stderr, and leave
 // nothing behind.
 static String error_test(Arena *a, String rig, String name) {
     String why = {};
     String expected = {};
-    if (!os_read_file(a, string_printf(a, "tests/errors/" STR_FMT ".err", STR_ARG(name)), &expected)) {
-        return str("no .err file");
-    }
+    if (!read_expected_errors(a, name, &expected)) return str("no .err file");
     String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
     String object = string_printf(a, ".build/" STR_FMT "%s", STR_ARG(name), OBJ);
     remove(string_cstr(a, program));
@@ -758,7 +802,8 @@ static void run_directory(Arena *a, String rig, const char *dir, String (*test)(
 // --stdin it reads the source from its standard input (what an editor has
 // on screen, unsaved) and names it FILE.rig, which needn't exist.
 
-// The directory the checks that must write nothing run in.
+// The directory where rig check is shown to write nothing, not even a
+// .build (check_writes_nothing_test).
 static const char *CHECK_DIR = ".build/tests/check";
 
 // run(), with `input` on the program's stdin.
@@ -819,10 +864,13 @@ static String check_wrote(Arena *a, String name) {
     return {};
 }
 
-// tests/DIR/NAME.rig checked twice: by its path from the repository's
-// root, and through --stdin from CHECK_DIR (where the name needn't exist,
-// and the diagnostics must still name it as given). Both must exit with
-// `exit_code` and print `err`, and write nothing.
+// tests/DIR/NAME.rig checked twice from the repository's root: by its path,
+// and through --stdin, named by that path, as an editor checks the text it
+// has on screen. Both must exit with `exit_code` and print `err`, and write
+// nothing. The --stdin check runs where the file is named from too, since
+// the files a program #loads are found from its name's directory
+// (tests/run/load/ for tests/run/NAME.rig); check_stdin_without_a_file_test
+// shows that the text is stdin's, under a name that needn't exist.
 static String check_both_ways(Arena *a, String rig, const char *dir, String name, s32 exit_code, String err) {
     String file = string_printf(a, "%s/" STR_FMT ".rig", dir, STR_ARG(name));
     String source = {};
@@ -838,16 +886,18 @@ static String check_both_ways(Arena *a, String rig, const char *dir, String name
     String wrote = check_wrote(a, name);
     if (wrote.count) return string_printf(a, "rig check wrote " STR_FMT, STR_ARG(wrote));
 
-    if (!run_check(a, rig, file, true, source, str(CHECK_DIR), &r, &why)) return why;
-    return check_result(a, "rig check --stdin", &r, exit_code, err);
+    if (!run_check(a, rig, file, true, source, {}, &r, &why)) return why;
+    why = check_result(a, "rig check --stdin", &r, exit_code, err);
+    if (why.count) return why;
+    wrote = check_wrote(a, name);
+    if (wrote.count) return string_printf(a, "rig check --stdin wrote " STR_FMT, STR_ARG(wrote));
+    return {};
 }
 
 // A program of tests/errors: exit 1 and its .err, as rig build gives.
 static String check_error_test(Arena *a, String rig, String name) {
     String expected = {};
-    if (!os_read_file(a, string_printf(a, "tests/errors/" STR_FMT ".err", STR_ARG(name)), &expected)) {
-        return str("no .err file");
-    }
+    if (!read_expected_errors(a, name, &expected)) return str("no .err file");
     return check_both_ways(a, rig, "tests/errors", name, 1, expected);
 }
 
@@ -858,8 +908,9 @@ static String check_run_test(Arena *a, String rig, String name) {
 }
 
 // rig check, run in CHECK_DIR, where check_tests removed any .build, leaves
-// none: it never gets as far as writing an object. Every --stdin check ran
-// there before this one, so this covers them too.
+// none: it never gets as far as writing an object. The --stdin checks of
+// check_stdin_without_a_file_test ran there before this one, so this
+// covers them too.
 static String check_writes_nothing_test(Arena *a, String rig) {
     String dir = str(CHECK_DIR);
     String program = string_printf(a, STR_FMT "/hello%s", STR_ARG(dir), EXE);
@@ -875,20 +926,22 @@ static String check_writes_nothing_test(Arena *a, String rig) {
     return {};
 }
 
-// --stdin with a name that isn't a file: the source is what came in, and
-// the diagnostics name the file as given.
+// --stdin with a name that isn't a file, in CHECK_DIR: the source is what
+// came in, and the diagnostics name the file as given.
 static String check_stdin_without_a_file_test(Arena *a, String rig) {
+    String dir = str(CHECK_DIR);
     String file = str("tests/no-such-directory/typed.rig");
-    if (os_file_exists(file)) return str("tests/no-such-directory/typed.rig exists");
+    String there = string_printf(a, STR_FMT "/" STR_FMT, STR_ARG(dir), STR_ARG(file));
+    if (os_file_exists(there)) return string_printf(a, STR_FMT " exists", STR_ARG(there));
     Process_Result r = {};
     String why = {};
     String hello = str("puts :: (s: *u8) -> s32 #foreign libc;\nmain :: () { puts(\"hi\"); }\n");
-    if (!run_check(a, rig, file, true, hello, {}, &r, &why)) return why;
+    if (!run_check(a, rig, file, true, hello, dir, &r, &why)) return why;
     why = check_result(a, "rig check --stdin", &r, 0, {});
     if (why.count) return why;
 
     String broken = str("main :: () { putz(\"hi\"); }\n");
-    if (!run_check(a, rig, file, true, broken, {}, &r, &why)) return why;
+    if (!run_check(a, rig, file, true, broken, dir, &r, &why)) return why;
     return check_result(a, "rig check --stdin", &r, 1,
                         str("tests/no-such-directory/typed.rig:1:14: error: unknown identifier 'putz'\n"
                             "    main :: () { putz(\"hi\"); }\n"
@@ -948,8 +1001,8 @@ static void check_tests(Arena *a, String rig, s64 *passed, s64 *failed) {
         }
         array_free(&names);
     }
-    report("rig check writes nothing, not even .build", check_writes_nothing_test(a, rig), passed, failed);
     report("rig check --stdin of a file that isn't there", check_stdin_without_a_file_test(a, rig), passed, failed);
+    report("rig check writes nothing, not even .build", check_writes_nothing_test(a, rig), passed, failed);
     for (const Command_Case &c : CHECK_CASES) {
         report(string_cstr(a, string_printf(a, "rig: %s", c.what)), command_test(a, rig, &c), passed, failed);
     }
@@ -1217,24 +1270,6 @@ static String repository_root(Arena *a) {
     }
 #endif
     return root;
-}
-
-// s with every `from` replaced by `to`.
-static String replace_all(Arena *a, String s, const char *from, String to) {
-    s64 n = (s64)strlen(from);
-    String out = string_printf(a, "");
-    s64 start = 0;
-    for (s64 i = 0; i + n <= s.count;) {
-        if (memcmp(s.data + i, from, (size_t)n) == 0) {
-            out = string_printf(a, STR_FMT STR_FMT STR_FMT, STR_ARG(out), STR_ARG(string_slice(s, start, i - start)),
-                                STR_ARG(to));
-            i += n;
-            start = i;
-        } else {
-            i++;
-        }
-    }
-    return string_printf(a, STR_FMT STR_FMT, STR_ARG(out), STR_ARG(string_slice(s, start, s.count - start)));
 }
 
 // Where `needle` first occurs in `haystack` from `from` on, or -1.
