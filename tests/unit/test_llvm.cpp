@@ -1706,3 +1706,31 @@ TEST(llvm_declares_and_calls_a_variadic_function) {
     }
     arena_free(&a);
 }
+
+TEST(llvm_calls_through_values_as_through_names) {
+    // A call through a procedure value is LLVM's call of a ptr, with the
+    // function type and the attributes a call of the procedure would have:
+    // the extensions, sret and the several results' struct.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Pair :: struct { a: int; b: int; }\n"
+                                "make :: (n: int) -> Pair { return Pair.{n, n}; }\n"
+                                "small :: (n: s8) -> u8 { return cast(u8) n; }\n"
+                                "two :: (n: int) -> (int, int) { return n, n; }\n"
+                                "main :: () {\n"
+                                "    m := make;\n"
+                                "    p := m(1);\n"
+                                "    s := small;\n"
+                                "    x := s(2);\n"
+                                "    t := two;\n"
+                                "    q, r := t(3);\n"
+                                "}\n");
+    String linux = llvm_text(&a, m, TARGET_LINUX_X64);
+    CHECK(contains(linux, "call void %"));
+    CHECK(contains(linux, "(ptr sret([16 x i8]) %"));
+    CHECK(contains(linux, "call zeroext i8 %"));
+    CHECK(contains(linux, "(i8 signext 2)"));
+    CHECK(contains(linux, "call { i64, i64 } %"));
+    CHECK(count_of(linux, "sret(") == 2);  // make's definition and the call through m
+    arena_free(&a);
+}

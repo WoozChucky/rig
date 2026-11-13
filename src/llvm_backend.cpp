@@ -1122,12 +1122,18 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
         break;
     case IR_ADDR: v = llvm_global(body, instr->target); break;
     case IR_PROC_ADDR: v = llvm_function(body, instr->target); break;
-    case IR_CALL: {
-        Ir_Proc *callee = m->procs[instr->target];
+    case IR_CALL:
+    case IR_CALL_INDIRECT: {
+        // A call through a procedure value is a call of the ptr, with the
+        // function type and attributes a call of the procedure itself has:
+        // its signature's.
+        bool direct = instr->op == IR_CALL;
+        Ir_Proc *callee = direct ? m->procs[instr->target] : instr->signature;
+        LLVMValueRef function = direct ? llvm_function(body, instr->target) : value(body, instr->a);
         LLVMValueRef *args = arena_new_array<LLVMValueRef>(a, instr->args.count ? instr->args.count : 1);
         for (s64 k = 0; k < instr->args.count; k++) args[k] = value(body, instr->args[k]);
-        LLVMValueRef call = LLVMBuildCall2(builder, function_type(c, callee, a), llvm_function(body, instr->target),
-                                           args, (unsigned)instr->args.count, "");
+        LLVMValueRef call = LLVMBuildCall2(builder, function_type(c, callee, a), function, args,
+                                           (unsigned)instr->args.count, "");
         mark_extensions(b, callee, call, true);
         mark_result_pointer(b, callee, call, true);
         if (callee->results.count == 1) {
