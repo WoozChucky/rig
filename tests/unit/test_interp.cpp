@@ -1,8 +1,9 @@
 // test_interp.cpp: the IR interpreter (issue #114): Rig's IR run inside the
 // compiler, with the meaning the LLVM backend gives it. Most tests lower a
 // program from source (helpers.cpp's lower_source) and run one of its
-// procedures; the ones about operands lowering never gives build the IR by
-// hand.
+// procedures; the ones about IR that lowering never makes (operands it
+// never gives, a panic without its prefix, a module growing between runs)
+// build it by hand.
 
 #include "test.h"
 
@@ -42,15 +43,14 @@ static void interp_test_free(Interp_Result *r) {
 }
 
 // m's procedure `name`, run in an interpreter of its own, which must
-// succeed and give `count` results, then the first of them, or all ones
-// when it fails.
-static u64 interp_test_value(Arena *a, Ir_Module *m, const char *name, s64 count = 1) {
+// succeed and give one result: that result, or all ones when it fails.
+static u64 interp_test_value(Arena *a, Ir_Module *m, const char *name) {
     Interp *in = interp_new(m);
     Interp_Result r = {};
     interp_test_run(in, m, name, a, &r);
     CHECK(r.ok);
-    CHECK_EQ(r.results.count, count);
-    u64 value = r.ok && r.results.count > 0 ? r.results[0] : ~(u64)0;
+    CHECK_EQ(r.results.count, 1);
+    u64 value = r.ok && r.results.count == 1 ? r.results[0] : ~(u64)0;
     interp_test_free(&r);
     interp_free(in);
     return value;
@@ -98,6 +98,20 @@ TEST(interp_integer_ops_wrap) {
                                 "remainder :: () -> s8 { x : s8 = -7; return x % 2; }\n"
                                 "wide_quotient :: () -> s16 { x : s16 = -30000; return x / 7; }\n"
                                 "widened :: () -> int { x : s8 = -5; return cast(int) x; }\n"
+                                "zero_extended :: () -> int { x : u8 = 200; return cast(int) x; }\n"
+                                "truncated :: () -> s8 { x : int = 300; return cast,trunc(s8) x; }\n"
+                                "by_minus_one :: () -> s64 { x : s64 = 5; y : s64 = -1; return x / y; }\n"
+                                "lowest_by_minus_one :: () -> s8 { x : s8 = -128; y : s8 = -1; return x / y; }\n"
+                                "lowest_remainder :: () -> s8 { x : s8 = -128; y : s8 = -1; return x % y; }\n"
+                                "unsigned_quotient :: () -> u64 {\n"
+                                "    x : u64 = 0xFFFF_FFFF_FFFF_FFFF;\n"
+                                "    return x / 2;\n"
+                                "}\n"
+                                "unsigned_remainder :: () -> u64 {\n"
+                                "    x : u64 = 0xFFFF_FFFF_FFFF_FFFF;\n"
+                                "    return x % 10;\n"
+                                "}\n"
+                                "small_unsigned :: () -> u8 { x : u8 = 250; return x / 3; }\n"
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_value(&a, m, "up"), 0x80);  // -128 as an i8's bits
     CHECK(interp_test_value(&a, m, "down") == ~(u64)0);
@@ -109,6 +123,19 @@ TEST(interp_integer_ops_wrap) {
     CHECK_EQ(interp_test_value(&a, m, "remainder"), 0xFF);  // -1, the dividend's sign
     CHECK_EQ(interp_test_value(&a, m, "wide_quotient"), (u16)(s16)(-30000 / 7));
     CHECK(interp_test_value(&a, m, "widened") == ~(u64)4);  // -5 sign-extended to 64 bits
+    CHECK_EQ(interp_test_value(&a, m, "zero_extended"), 200);  // 0xC8's top bit not copied up
+    CHECK_EQ(interp_test_value(&a, m, "truncated"), 0x2C);     // 0x12C cut to 8 bits
+    // A divisor that is -1 when the program runs: lowering selects 1 in its
+    // place and the negation for the quotient, which wraps for the most
+    // negative value, with remainder 0.
+    CHECK(interp_test_value(&a, m, "by_minus_one") == ~(u64)4);  // -5
+    CHECK_EQ(interp_test_value(&a, m, "lowest_by_minus_one"), 0x80);
+    CHECK_EQ(interp_test_value(&a, m, "lowest_remainder"), 0);
+    // Unsigned operands are read as they are, never sign-extended: the
+    // largest u64 isn't -1.
+    CHECK_EQ(interp_test_value(&a, m, "unsigned_quotient"), 0x7FFFFFFFFFFFFFFF);
+    CHECK_EQ(interp_test_value(&a, m, "unsigned_remainder"), 5);
+    CHECK_EQ(interp_test_value(&a, m, "small_unsigned"), 83);
     arena_free(&a);
 }
 
@@ -182,22 +209,24 @@ TEST(interp_comparisons_signed_and_unsigned) {
     // is below 1, a u32 0xFFFFFFFF above it.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
-                                "compare :: () -> bool, bool, bool, bool, bool, bool, bool, bool, bool {\n"
+                                "compare :: () -> bool, bool, bool, bool, bool, bool, bool, bool, bool,\n"
+                                "                 bool, bool, bool, bool {\n"
                                 "    a : s32 = -1;\n"
                                 "    b : s32 = 1;\n"
                                 "    c : u32 = 4294967295;\n"
                                 "    d : u32 = 1;\n"
                                 "    low : s8 = -128;\n"
                                 "    high : s8 = 127;\n"
-                                "    return a < b, c > d, b < a, d >= c, low < high, a == -1, a <= b, b > a, b >= a;\n"
+                                "    return a < b, c > d, b < a, d >= c, low < high, a == -1, a <= b, b > a, b >= a,\n"
+                                "           c < d, c <= d, d < c, d <= c;\n"
                                 "}\n"
                                 "main :: () { }\n");
     Interp *in = interp_new(m);
     Interp_Result r = {};
     interp_test_run(in, m, "compare", &a, &r);
     CHECK(r.ok);
-    CHECK_EQ(r.results.count, 9);
-    if (r.results.count == 9) {
+    CHECK_EQ(r.results.count, 13);
+    if (r.results.count == 13) {
         CHECK_EQ(r.results[0], 1);
         CHECK_EQ(r.results[1], 1);
         CHECK_EQ(r.results[2], 0);
@@ -207,6 +236,11 @@ TEST(interp_comparisons_signed_and_unsigned) {
         CHECK_EQ(r.results[6], 1);  // -1 <= 1, which unsigned (0xFFFFFFFF) it isn't
         CHECK_EQ(r.results[7], 1);  // 1 > -1
         CHECK_EQ(r.results[8], 1);  // 1 >= -1
+        // Unsigned, 0xFFFFFFFF is above 1, though signed it would be -1.
+        CHECK_EQ(r.results[9], 0);
+        CHECK_EQ(r.results[10], 0);
+        CHECK_EQ(r.results[11], 1);
+        CHECK_EQ(r.results[12], 1);
     }
     interp_test_free(&r);
     interp_free(in);
@@ -219,6 +253,13 @@ TEST(interp_floats) {
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "sum :: () -> float64 { x : float64 = 0.1; y : float64 = 0.2; return x + y; }\n"
+                                "difference :: () -> float64 { x : float64 = 0.3; y : float64 = 0.1; return x - y; }\n"
+                                "single_difference :: () -> float32 {\n"
+                                "    x : float32 = 0.3;\n"
+                                "    y : float32 = 0.1;\n"
+                                "    return x - y;\n"
+                                "}\n"
+                                "small_signed :: () -> float64 { x : s8 = -1; return cast(float64) x; }\n"
                                 "doubled :: () -> float32 { x : float32 = 3.4028235e38; return x * 2; }\n"
                                 "narrowed :: () -> float32 { x : float64 = 1.1; return cast(float32) x; }\n"
                                 "negated :: () -> float64 { x : float64 = 0.0; return -x; }\n"
@@ -259,6 +300,12 @@ TEST(interp_floats) {
                                 "main :: () { }\n");
     volatile f64 tenth = 0.1, fifth = 0.2;
     CHECK_EQ(interp_test_value(&a, m, "sum"), f64_bits(tenth + fifth));
+    volatile f64 three_tenths = 0.3;
+    CHECK_EQ(interp_test_value(&a, m, "difference"), f64_bits(three_tenths - tenth));
+    volatile f32 single_three_tenths = 0.3f, single_tenth = 0.1f;
+    CHECK_EQ(interp_test_value(&a, m, "single_difference"), interp_test_f32_bits(single_three_tenths - single_tenth));
+    // A narrow signed integer converts from its own width, sign and all.
+    CHECK(interp_test_value(&a, m, "small_signed") == f64_bits(-1.0));
     CHECK_EQ(interp_test_value(&a, m, "doubled"), 0x7F800000);  // +inf
     volatile f64 one_point_one = 1.1;
     CHECK_EQ(interp_test_value(&a, m, "narrowed"), interp_test_f32_bits((f32)one_point_one));
@@ -276,7 +323,6 @@ TEST(interp_floats) {
     CHECK_EQ(interp_test_value(&a, m, "rounded_once"), interp_test_f32_bits((f32)odd));
     // An f32's sign is its bit 31, not 63.
     CHECK_EQ(interp_test_value(&a, m, "single_negated"), 0x80000000);
-    volatile f32 single_tenth = 0.1f;
     CHECK(interp_test_value(&a, m, "widened") == f64_bits((f64)single_tenth));
     // The largest u64 is no -1: it rounds up to 2^64.
     CHECK(interp_test_value(&a, m, "unsigned_to_double") == f64_bits(18446744073709551616.0));
@@ -457,20 +503,24 @@ TEST(interp_globals_and_relocations) {
     Interp *in = interp_new(m);
     Interp_Result r = {};
     interp_test_run(in, m, "single", &a, &r);
-    f32 bytes = 0;
-    memcpy(&bytes, interp_global(in, interp_test_global(m, "third")), sizeof bytes);
-    CHECK_EQ(interp_test_f32_bits(bytes), interp_test_f32_bits((f32)one_point_one));
+    CHECK(r.ok);
     u64 held = 0;
-    memcpy(&held, interp_global(in, interp_test_global(m, "op")), sizeof held);
-    CHECK(held == interp_proc_address(in, interp_test_proc(m, "add")));
+    if (r.ok) {
+        f32 bytes = 0;
+        memcpy(&bytes, interp_global(in, interp_test_global(m, "third")), sizeof bytes);
+        CHECK_EQ(interp_test_f32_bits(bytes), interp_test_f32_bits((f32)one_point_one));
+        memcpy(&held, interp_global(in, interp_test_global(m, "op")), sizeof held);
+        CHECK(held == interp_proc_address(in, interp_test_proc(m, "add")));
+    }
     interp_test_free(&r);
     interp_free(in);
 
-    // Lowering's relocations all point back, to a literal made first, and
-    // sit at a global's start. By hand, one names a later global and sits
-    // at offset 8 of a 16-byte variable: every global is made before any
-    // relocation is written, and the relocation goes where it says, the
-    // bytes before it keeping their first value.
+    // Lowering's relocations to globals all point back, to a literal or an
+    // array.N made before the variable. By hand, one names a later global,
+    // at offset 8 of a 16-byte variable whose first 8 bytes are given:
+    // every global is made before any relocation is written, and the
+    // relocation goes where it says, the bytes before it keeping their
+    // first value.
     Ir_Module *by_hand = arena_new<Ir_Module>(&a);
     static const u8 first_bytes[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     s32 holder = add_byte_global(by_hand, "holder", 16, 8);
@@ -490,10 +540,12 @@ TEST(interp_globals_and_relocations) {
     CHECK(r.ok);
     CHECK_EQ(r.results.count, 1);
     if (r.results.count == 1) CHECK_EQ(r.results[0], 7);
-    u8 *bytes_held = interp_global(in, holder);
-    CHECK(memcmp(bytes_held, first_bytes, sizeof first_bytes) == 0);
-    memcpy(&held, bytes_held + 8, sizeof held);
-    CHECK(held == (u64)(uintptr_t)interp_global(in, holder + 1));
+    if (r.ok) {
+        u8 *bytes_held = interp_global(in, holder);
+        CHECK(memcmp(bytes_held, first_bytes, sizeof first_bytes) == 0);
+        memcpy(&held, bytes_held + 8, sizeof held);
+        CHECK(held == (u64)(uintptr_t)interp_global(in, holder + 1));
+    }
     interp_test_free(&r);
     interp_free(in);
     arena_free(&a);
@@ -516,14 +568,15 @@ TEST(interp_procedure_values) {
                                 "    return g == first, h == first, g != sub, g(1, 2), first(30, 4), h(500, 6);\n"
                                 "}\n"
                                 "value :: () -> *void { return cast(*void) sub; }\n"
-                                "mismatched :: () -> int, int {\n"
+                                "mismatched :: () -> int, int, int, int {\n"
                                 "    p := cast(*void) add;\n"
                                 "    fewer := cast((int) -> int) p;\n"
                                 "    more := cast((int, int, int) -> (int, int)) p;\n"
                                 "    kept := 77;\n"
+                                "    w := add(40, 2);\n"
                                 "    x := fewer(1);\n"
                                 "    y, z := more(1, 2, 3);\n"
-                                "    return kept, y;\n"
+                                "    return kept, x, y, z;\n"
                                 "}\n"
                                 "main :: () { }\n");
     Interp *in = interp_new(m);
@@ -548,15 +601,19 @@ TEST(interp_procedure_values) {
     interp_test_free(&r);
     // Called through a type with fewer or more parameters and results than
     // its own (spec 3.15 says not to), a procedure writes nothing outside
-    // the frames: the run ends, the caller's locals as they were. What a
-    // parameter or result given no value holds isn't specified; the ones
-    // given one are as usual.
+    // the frames: the run ends, the caller's locals as they were. A
+    // parameter or result given no value is 0 here, the compiled program's
+    // undefined; the ones given one are as usual. fewer(1) runs where
+    // add(40, 2) ran just before, so b would still hold 2 if it weren't
+    // given its 0.
     interp_test_run(in, m, "mismatched", &a, &r);
     CHECK(r.ok);
-    CHECK_EQ(r.results.count, 2);
-    if (r.results.count == 2) {
+    CHECK_EQ(r.results.count, 4);
+    if (r.results.count == 4) {
         CHECK_EQ(r.results[0], 77);
-        CHECK_EQ(r.results[1], 3);  // add(1, 2)
+        CHECK_EQ(r.results[1], 1);  // add(1, 0)
+        CHECK_EQ(r.results[2], 3);  // add(1, 2)
+        CHECK_EQ(r.results[3], 0);  // the result add doesn't give
     }
     interp_test_free(&r);
     // Each Rig procedure's address maps back to it, and nothing else does:
@@ -590,6 +647,11 @@ TEST(interp_panic_gives_message_and_frames) {
                               "}\n"
                               "main :: () {\n"
                               "    x := make_table();\n"
+                              "}\n"
+                              "before_the_start :: () -> int {\n"
+                              "    t : [10]int;\n"
+                              "    i := -1;\n"
+                              "    return t[i];\n"
                               "}\n",
                               true);
     Interp *in = interp_new(m);
@@ -613,6 +675,12 @@ TEST(interp_panic_gives_message_and_frames) {
               "    in make_table (tables.rig:4:13)\n"
               "    in main (tables.rig:7:5)\n");
     array_free(&paths);
+    interp_test_free(&r);
+    // A negative index is written with its '-' and its magnitude, which
+    // __rig_bounds_failed selects: 0 - value for a negative one.
+    interp_run(in, interp_test_proc(m, "before_the_start"), {}, &a, &r);
+    CHECK(!r.ok);
+    CHECK_STR(r.message, "index -1 is out of bounds (count 10)");
     interp_test_free(&r);
     interp_free(in);
 
@@ -712,6 +780,76 @@ TEST(interp_call_of_an_address_that_isnt_a_procedure) {
     arena_free(&a);
 }
 
+TEST(interp_global_that_cant_be_mapped) {
+    // A global whose relocation names a C function can't be mapped until
+    // compile-time C calls come (Task 4): the run fails before it starts,
+    // with no frames, and the globals it mapped are forgotten, so the next
+    // run tries again and fails the same way. Once the relocation names a
+    // Rig procedure, the run maps every global, the one after it too, and
+    // runs.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    s32 foreign = (s32)m->procs.count;
+    ir_new_proc(m, &a, str("puts"))->is_foreign = true;
+    s32 holder = add_byte_global(m, "holder", 8, 8);
+    array_add(&m->globals[holder].relocs, Ir_Reloc{0, foreign, true});
+    Ir_Global after = {};
+    after.name = str("after");
+    after.type = IR_I64;
+    after.initial = 42;
+    array_add(&m->globals, after);
+    s32 answer = (s32)m->procs.count;
+    Ir_Proc *p = new_proc_returning(m, &a, "answer", IR_I64);
+    s32 b = ir_new_block(&a, p);
+    emit_ret(p, b, interp_test_load(p, b, IR_I64, interp_test_addr(p, b, holder + 1)));
+
+    Interp *in = interp_new(m);
+    Interp_Result r = {};
+    for (s32 run = 0; run < 2; run++) {
+        interp_run(in, answer, {}, &a, &r);
+        CHECK(!r.ok);
+        CHECK_STR(r.message, INTERP_NO_C);
+        CHECK_EQ(r.frames.count, 0);
+        interp_test_free(&r);
+    }
+    m->globals[holder].relocs[0].global = answer;
+    interp_test_run(in, m, "answer", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 42);
+    if (r.ok) {
+        u64 held = 0;
+        memcpy(&held, interp_global(in, holder), sizeof held);
+        CHECK(held == interp_proc_address(in, answer));
+    }
+    interp_test_free(&r);
+    interp_free(in);
+    arena_free(&a);
+}
+
+TEST(interp_too_many_procedures) {
+    // Every procedure, a C function's too, takes an address in the range
+    // reserved for their values, which has room for 65,536: a module of
+    // more isn't run at all, failing before it starts, with no frames.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(m, &a, "answer", IR_I64);
+    s32 b = ir_new_block(&a, p);
+    emit_ret(p, b, emit_const(p, b, IR_I64, 42));
+    while (m->procs.count < 65536) ir_new_proc(m, &a, str("puts"))->is_foreign = true;
+    CHECK_EQ(interp_test_value(&a, m, "answer"), 42);
+    ir_new_proc(m, &a, str("puts"))->is_foreign = true;
+    Interp *in = interp_new(m);
+    Interp_Result r = {};
+    interp_run(in, interp_test_proc(m, "answer"), {}, &a, &r);
+    CHECK(!r.ok);
+    CHECK_STR(r.message, "the program has 65537 procedures, more than the 65536 the interpreter can give addresses to");
+    CHECK_EQ(r.frames.count, 0);
+    interp_test_free(&r);
+    interp_free(in);
+    arena_free(&a);
+}
+
 TEST(interp_division_by_zero_message) {
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
@@ -802,6 +940,23 @@ TEST(interp_recursion_to_the_limit) {
     arena_free(&a);
 }
 
+TEST(interp_a_return_frees_its_frame) {
+    // A return pops its frame: a million calls in a loop, in one run, each
+    // frame tens of bytes, would take far more than the 8 MB data stack if
+    // the frames stayed, and the run would fail with "stack overflow".
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "inc :: (n: int) -> int { return n + 1; }\n"
+                                "count :: () -> int {\n"
+                                "    n := 0;\n"
+                                "    while n < 1_000_000 { n = inc(n); }\n"
+                                "    return n;\n"
+                                "}\n"
+                                "main :: () { }\n");
+    CHECK_EQ(interp_test_value(&a, m, "count"), 1000000);
+    arena_free(&a);
+}
+
 TEST(interp_globals_survive_between_runs) {
     // One interpreter is one compile-time world: what a run leaves in a
     // global, the next run reads.
@@ -851,9 +1006,11 @@ TEST(interp_globals_survive_between_runs) {
     CHECK(r.ok);
     CHECK_EQ(r.results.count, 1);
     if (r.results.count == 1) CHECK_EQ(r.results[0], 40 + 11 + 11);
-    u64 held = 0;
-    memcpy(&held, interp_global(in, pointer), sizeof held);
-    CHECK(held == (u64)(uintptr_t)interp_global(in, counter));
+    if (r.ok) {
+        u64 held = 0;
+        memcpy(&held, interp_global(in, pointer), sizeof held);
+        CHECK(held == (u64)(uintptr_t)interp_global(in, counter));
+    }
     interp_test_free(&r);
     interp_free(in);
     arena_free(&a);
