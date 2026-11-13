@@ -151,12 +151,13 @@ if        null      return    struct    true      union     using     while
 
 ### 2.7 Directives
 
-A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has two:
+A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has three:
 
 - `#foreign`, which declares a procedure implemented in C (section 7.6);
-- `#no_abc`, which turns off bounds checks in one procedure (section 7.7).
+- `#no_abc`, which turns off bounds checks in one procedure (section 7.7);
+- `#c_call`, which makes a procedure one that C can call, and marks a procedure type as such a procedure's (sections 3.15, 7.6).
 
-Both appear after a procedure's signature. Any other directive there is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
+All three appear after a procedure's signature, and `#c_call` after a procedure type too. Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
 
 ### 2.8 Integer literals
 
@@ -243,17 +244,18 @@ Every value and every expression in Rig has a type, known while compiling. The t
 - array types `[N]T` (section 3.6);
 - view types `[]T` (section 3.7);
 - `string` (section 3.8);
-- struct types, declared by the program (section 3.9).
+- struct types, declared by the program (section 3.9);
+- procedure types `(int, int) -> int`, the types of procedure values (section 3.15).
 
 `void` is not a type of values: it appears only as what a `*void` points at (section 3.10). Untyped constants have types of their own until they meet one (section 3.12).
 
 ```ebnf
-Type = "*" Type | "[" Expression "]" Type | "[" "]" Type | identifier .
+Type = "*" Type | "[" Expression "]" Type | "[" "]" Type | ProcType | identifier .
 ```
 
 A type name is a built-in type's name or a struct's. A name declared as something else, written where a type goes, is `'foo' is not a type`; a name declared nowhere is `unknown type 'foo'`. The built-in type names always mean the built-in types: a struct cannot be called `u8` (`'u8' is a built-in type`). Other declarations may use those names, hiding nothing of the types: a variable may be called `int`, and `int` is still the type wherever a type is written.
 
-**Type identity.** Two types are the same type when they are the same built-in type, the same struct declaration, or are made the same way from the same types: `*T` and `*U` when `T` and `U` are the same, `[N]T` and `[M]U` when `N` equals `M` and `T` and `U` are the same, `[]T` and `[]U` when `T` and `U` are the same. `float` is the same type as `float32`. `int` and `s64` are different types with the same size and representation; each converts implicitly to the other (section 3.13).
+**Type identity.** Two types are the same type when they are the same built-in type, the same struct declaration, or are made the same way from the same types: `*T` and `*U` when `T` and `U` are the same, `[N]T` and `[M]U` when `N` equals `M` and `T` and `U` are the same, `[]T` and `[]U` when `T` and `U` are the same, and two procedure types when their parameter types, their result types and their `#c_call` marks are (section 3.15). `float` is the same type as `float32`. `int` and `s64` are different types with the same size and representation; each converts implicitly to the other (section 3.13).
 
 ### 3.2 Integer types
 
@@ -285,7 +287,7 @@ Signed integers are two's complement. Each integer type's alignment is its size.
 
 `*T` is the type of a pointer to a value of type `T`: 8 bytes, aligned to 8, holding an address. Any pointer may be null. A pointer is made by taking an address, `*x` (section 5.13), by arithmetic on a pointer (section 5.14), by a cast (section 3.14), or by a C function.
 
-`null` is the pointer to nothing. It is a constant with a type of its own, which converts to every pointer type and to nothing else: `p : *int = null;`. On its own, with no pointer type to take, it is an error: `x := null;` is `null needs a pointer type, as in p : *int = null;`.
+`null` is the pointer to nothing. It is a constant with a type of its own, which converts to every pointer type, to every procedure type (the procedure value that names no procedure, section 3.15) and to nothing else: `p : *int = null;`. On its own, with no pointer type to take, it is an error: `x := null;` is `null needs a pointer type, as in p : *int = null;`.
 
 `*void` is a pointer to anything, C's `void *`. It converts implicitly to and from every pointer type. It cannot be dereferenced (`can't dereference a '*void'; cast it to a pointer to something first`), indexed, or moved by arithmetic, since what it points at has no size. Every other pointer converts to another pointer type only through a cast.
 
@@ -355,6 +357,7 @@ A struct value is copied whole by assignment, as an argument and as a result. St
 | `[N]T` | N × size of T | alignment of T |
 | `[]T`, `string` | 16 | 8 |
 | struct | section 3.9 | section 3.9 |
+| procedure type | 8 | 8 |
 
 `size_of(T)` gives a type's size in bytes (section 5.16).
 
@@ -378,7 +381,7 @@ Where it meets no type, as in `x := 5;`, an untyped integer becomes an `int` and
 
 Two other kinds of value take their type from where they are used:
 
-- `null` takes the pointer type it meets (section 3.5);
+- `null` takes the pointer type or procedure type it meets (sections 3.5, 3.15);
 - a compound literal written without its type, `.{...}` or `.[...]`, takes the struct, array or view type it meets, or the type of a cast around it (section 5.17).
 
 Neither has a default type: with nothing to take a type from, each is an error. The one exception is `null` passed to a variadic foreign procedure after its parameters, which is a `*void`, C's `NULL` (section 7.6).
@@ -390,13 +393,14 @@ A value converts implicitly to another type only in these cases:
 - An untyped constant to a type it can take (section 3.12).
 - An integer type to another integer type that holds every one of its values: the same signedness and at least as wide, or unsigned to a wider signed type. So `u8` converts to `u16`, `s16`, `u64` and `int`, but not to `s8`; `int` and `s64` convert to each other.
 - `float32` to `float64`.
-- `null` to any pointer type.
+- `null` to any pointer type and any procedure type.
 - `*void` to any pointer type, and any pointer type to `*void`.
+- A procedure value to its own procedure type only: the same parameter types, result types and `#c_call` mark (section 3.15).
 - `[N]T` to `[]T`, a view of the array's `N` elements (section 5.17 says which memory the view points at).
 - A string literal to `*u8`.
 - `.{...}` to a struct type, and `.[...]` to an array or view type (section 5.17).
 
-Nothing else converts implicitly: not an integer to a narrower integer, not between integers and floats, not `float64` to `float32`, not between `bool` and any number, and not between pointers to different types other than through `*void`. Such a value is `a value of type 'int' doesn't convert to 'float32' implicitly`. A value always converts to its own type.
+Nothing else converts implicitly: not an integer to a narrower integer, not between integers and floats, not `float64` to `float32`, not between `bool` and any number, not between pointers to different types other than through `*void`, and not between procedure types, nor between a procedure value and a pointer. Such a value is `a value of type 'int' doesn't convert to 'float32' implicitly`. A value always converts to its own type.
 
 Implicit conversions happen wherever a value goes into something of a known type: a variable's declaration with a type, an assignment, an argument, a return, a field or element of a compound literal, and a binary operator's operands (section 5.3).
 
@@ -422,10 +426,13 @@ Cast = "cast" [ "," "trunc" ] "(" Type ")" Unary .
 | `int`, `s64`, `u64` | pointer | the number as an address |
 | `string` | `[]u8` | the same view (same count, same data) |
 | `[]u8` | `string` | the same view |
+| procedure value | `*void` | the procedure's address (section 3.15) |
+| `*void` | procedure type | the address as a procedure value of that type |
 
 Any other cast is an error:
 
 - a number to `bool`: `can't cast 'int' to 'bool': compare instead, as in x != 0`;
+- a procedure value to anything but its own type and `*void`, or anything but `*void` and `null` to a procedure type: `can't cast '(int) -> int' to '(s32) -> s32'; a procedure value casts only to and from *void`;
 - a pointer to any type but a pointer or a 64-bit integer, or a number or `bool` to a pointer: `can't cast '*int' to 'u32'; a pointer casts to another pointer or to a 64-bit integer`;
 - anything else: `can't cast 'string' to 'int'`.
 
@@ -468,6 +475,61 @@ main :: () {
 example.rig:3:10: runtime error: the value doesn't fit in 'u8'
 ```
 
+### 3.15 Procedure types
+
+```ebnf
+ProcType    = "(" [ ProcParam { "," ProcParam } ] ")" [ "->" ProcResults ] [ "#c_call" ] .
+ProcParam   = [ identifier ":" ] Type .
+ProcResults = Type | "(" Type { "," Type } ")" .
+```
+
+A procedure type is the type of a **procedure value**, which names a procedure that can be called through it (section 5.10). It is written as a procedure's signature (section 7.1) with no body: `(int, int) -> int` takes two `int`s and returns an `int`. The parameters' names are optional and are not part of the type, so `(a: int, b: int) -> int` and `(int, int) -> int` are the same type. A procedure type with no results has no arrow: `(int)` takes an `int` and returns nothing, and `()` takes nothing and returns nothing. Several results are written in parentheses, `(int) -> (int, int)`, since a type ends at a `,`: so a procedure type can be written anywhere a type goes, a parameter list included, `process :: (f: (int) -> int, x: int) -> int`. After a `->`, parentheses followed by another `->` are a procedure type, the one result (`() -> (int) -> int` returns a `(int) -> int`), and any other parentheses hold the results (`() -> (int)` returns an `int`). A `#c_call` at the end marks the procedure type it ends, the innermost one: in `() -> (int) -> int #c_call` it is the result's. A procedure type cannot take `..`: `a procedure type can't take '..': a procedure that takes more arguments can't be a value`.
+
+A procedure type goes wherever a type goes: a variable's, a constant's, a parameter's, a result's, a struct field's, an array's or a view's elements (`[4](int) -> int`), a pointer's target, a cast's and `size_of`'s. Its `(` is a level of the type, as a `*` is (section 9.4).
+
+**Identity.** Two procedure types are the same type when their parameter types are the same, in order, their result types are the same, in order, and both are marked `#c_call` or neither is. Messages write a procedure type in that form, with no names: `(int, int) -> int`, `(int) -> (int, int)`, `(*void, *void) -> s32 #c_call`, `()`.
+
+**Values.** A procedure value is the address of a procedure's code: 8 bytes, aligned to 8, as a pointer is (section 3.11). A procedure's name used other than in a call is its value, whose type is its signature's: with `add :: (a: int, b: int) -> int { ... }`, `f := add;` gives `f` the type `(int, int) -> int`. A constant may name a procedure, `OP :: add;`, and then stands for it wherever it is used, calls included (section 4.2). A global variable may hold one (section 4.3). A foreign procedure's value has a `#c_call` type (section 7.6), and a variadic foreign procedure, declared with `..`, cannot be a value, since no procedure type can say `..`: `'printf' can't be a value: it takes more arguments with '..', which no procedure type can say`.
+
+A procedure value may be **null**, naming no procedure: `null` converts to every procedure type, and a procedure-typed variable or field that is zeroed is null (section 4.3). Calling a null procedure value is a runtime error (section 8.4).
+
+**Comparisons.** `==` and `!=` compare two procedure values of the same type, or one with `null`, as addresses: a procedure's value is equal to itself and to no other procedure's (section 5.6). Values of two different types are not compared (`mismatched types '(int, int) -> int' and '(int) -> int' for '=='`). A procedure value has no order (`'<' needs numbers, not '(int, int) -> int'`) and takes no arithmetic (`'+' needs numbers, not '(int, int) -> int'`).
+
+**Conversions.** A procedure value converts implicitly only to its own type (section 3.13). A value of another signature is `a value of type '(int, int) -> int' doesn't convert to '(int) -> int' implicitly`, and as an argument `argument 1 of 'apply' has type '(int) -> int', which can't be converted to '(int, int) -> int'`: a procedure is only ever called as its own signature says. The one explicit conversion is to and from `*void`, the address as C stores a callback: `cast(*void) f` and `cast((int) -> int) p` (section 3.14). Every other cast with a procedure type is an error, between two procedure types included: `can't cast '(int) -> int' to '(s32) -> s32'; a procedure value casts only to and from *void`. Through `*void`, the program must cast back to the procedure's own type before calling it.
+
+**`#c_call`.** A procedure declared with `#c_call` is one that C can call (section 7.6), and its type is marked `#c_call` too: `compare :: (a: *void, b: *void) -> s32 #c_call { ... }` has the type `(*void, *void) -> s32 #c_call`. That type is not the type without the mark, and neither converts to the other: `a value of type '(*u8) -> s32 #c_call' doesn't convert to '(*u8) -> s32' implicitly; #c_call is part of the type, as in '(*u8) -> s32 #c_call'`, and, the other way, a Rig procedure passed where C expects a callback is `argument 4 of 'qsort' has type '(*void, *void) -> s32', which can't be converted to '(*void, *void) -> s32 #c_call'; mark 'compare' #c_call for C to call it`. A `#c_call` type's parameters and result are what C takes, as a foreign procedure's are (section 7.6).
+
+A procedure value holds no data besides the address: Rig has no closures. Procedures are declared only at the top level and capture nothing; a procedure that needs some state takes it as a parameter, as C passes a `void *user_data` beside a callback.
+
+```rig
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+add :: (a: int, b: int) -> int { return a + b; }
+mul :: (a: int, b: int) -> int { return a * b; }
+
+Op :: struct { symbol: *u8; run: (int, int) -> int; }
+
+apply :: (f: (int, int) -> int, a: int, b: int) -> int { return f(a, b); }
+
+main :: () {
+    ops := Op.[.{"+", add}, .{"*", mul}];
+    for ops { printf("6 %s 7 = %lld\n", it.symbol, it.run(6, 7)); }
+    f : (int, int) -> int;
+    if f == null { f = mul; }
+    printf("%lld %d\n", apply(f, 3, 4), f == mul);
+    p := cast(*void) f;
+    g := cast((int, int) -> int) p;
+    printf("%lld\n", g(5, 5));
+}
+```
+
+```text
+6 + 7 = 13
+6 * 7 = 42
+12 1
+25
+```
+
 ## 4. Declarations and scope
 
 ### 4.1 Declarations
@@ -477,6 +539,7 @@ A declaration binds a name to a constant, a variable, a procedure or a struct. E
 | Form | Declares |
 |---|---|
 | `name :: (params) -> results { ... }` | a procedure (section 7) |
+| `name :: (params) -> results #c_call { ... }` | a procedure that C can call (section 7.6) |
 | `name :: (params) -> results #foreign libc;` | a foreign procedure (section 7.6) |
 | `name :: struct { fields }` | a struct type (section 4.5) |
 | `name :: expression;` | a constant (section 4.2) |
@@ -488,7 +551,7 @@ A declaration binds a name to a constant, a variable, a procedure or a struct. E
 
 Procedures and structs are declared only at the top level: inside a body, `helper :: () { ... }` is `procedures can only be declared at the top level, for now`, and `Vec2 :: struct { ... }` is `structs can only be declared at the top level, for now`. Constants and variables are declared at the top level (as global constants and global variables) or inside a body (as local ones).
 
-After `::`, a `(` followed by `)` or by an identifier and `:` begins a procedure's parameter list; any other `(` begins a constant's value, so `N :: (1 + 2);` is a constant.
+After `::`, a `(` followed by `)` or by an identifier and `:` begins a procedure's parameter list; any other `(` begins a constant's value, so `N :: (1 + 2);` is a constant. After a single `:`, a `(` begins a procedure type (section 3.15), the variable's: `op : (int) -> int = negate;`.
 
 ### 4.2 Constants
 
@@ -496,7 +559,7 @@ After `::`, a `(` followed by `)` or by an identifier and `:` begins a procedure
 ConstDecl = identifier "::" Expression ";" .
 ```
 
-`N :: e;` declares the constant `N` with the value of `e`, which must be known while compiling (section 5.9): otherwise `the value of constant 'N' isn't known while compiling`. A constant is a number or a `bool`: any other value is `a constant can only be a number or a bool, for now`, so a string, a struct or an array cannot be a constant.
+`N :: e;` declares the constant `N` with the value of `e`, which must be known while compiling (section 5.9): otherwise `the value of constant 'N' isn't known while compiling`. A constant is a number, a `bool` or a procedure: any other value is `a constant can only be a number, a bool or a procedure, for now`, so a string, a struct or an array cannot be a constant. A constant that names a procedure, `OP :: add;` (or `OP :: OTHER;`, where `OTHER` names one), stands for that procedure: its type is the procedure's type (section 3.15), and `OP(1, 2)` calls `add` as `add(1, 2)` does.
 
 A constant has the type of its value: untyped when the value is an untyped constant, so `LIMIT :: 100;` meets types as the literal `100` does, and typed otherwise (`MASK :: cast(u8) 0xF0;` is a `u8`). A constant occupies no storage and cannot be assigned to (`can't assign to 'N': it's a constant`) or have its address taken.
 
@@ -532,7 +595,7 @@ A variable is a place in memory holding a value of its type, which can change.
 - `x : T;` declares `x` of type `T` and sets it to the zero value of `T`.
 - `x : T = ---;` declares `x` of type `T` and leaves it uninitialised: a local holds whatever its memory held, an unspecified value, until it is assigned. `---` needs a type: `x := ---;` is `'---' needs a type, as in x : int = ---;`.
 
-The **zero value** of a type is all bytes zero: 0 for numbers, `false`, `null`, every element of an array zero, a view or string with count 0 and data null, and every field of a struct zero.
+The **zero value** of a type is all bytes zero: 0 for numbers, `false`, `null` for a pointer and for a procedure value, every element of an array zero, a view or string with count 0 and data null, and every field of a struct zero.
 
 A local variable is declared after its value is worked out, so `x := x + 1;` in an inner block reads the outer `x` (section 4.7).
 
@@ -541,7 +604,8 @@ A local variable is declared after its value is worked out, so `x := x + 1;` in 
 - a constant (section 5.9);
 - a struct or array literal whose values are all known while compiling, nested literals included;
 - for a view, an array literal: the compiler makes a global array of its own for the literal, and the view points at it;
-- a string literal, as a `string`, a `*u8` or a `[]u8`, or through casts that keep its address (`cast(*void) cast(*u8) "x"`), or as a field or element of one: the linker writes the literal's address into the global. A literal's address cast to an integer is not allowed.
+- a string literal, as a `string`, a `*u8` or a `[]u8`, or through casts that keep its address (`cast(*void) cast(*u8) "x"`), or as a field or element of one: the linker writes the literal's address into the global. A literal's address cast to an integer is not allowed;
+- a procedure's name, or a constant that names one, as a procedure value or cast to `*void`, or as a field or element of a literal: the linker writes the procedure's address (section 3.15).
 
 A global with no value, or with `---`, starts at zero.
 
@@ -577,7 +641,7 @@ A procedure is declared at the top level with its signature and either a body or
 square :: (x: int) -> int { return x * x; }
 ```
 
-A procedure is not a value: its name can only be called. Written anywhere else it is `procedures can only be called, for now`.
+A procedure's name is called (section 5.10), and used anywhere else it is a procedure value, the procedure's address, whose type is the procedure's signature (section 3.15): it can be stored, passed, returned, compared and called through.
 
 ### 4.5 Structs
 
@@ -653,7 +717,7 @@ The same holds for a global variable's value, a struct's size (a struct cannot h
 
 ### 5.1 Operands and places
 
-The simplest expressions are operands: a literal (sections 2.8 to 2.11), the name of a variable, a parameter or a constant, a compound literal (section 5.17), `size_of(T)` (section 5.16), and an expression in parentheses, which only groups.
+The simplest expressions are operands: a literal (sections 2.8 to 2.11), the name of a variable, a parameter, a constant or a procedure (whose value is a procedure value, section 3.15), a compound literal (section 5.17), `size_of(T)` (section 5.16), and an expression in parentheses, which only groups.
 
 Some expressions denote memory. These are **places**: they can be assigned to (section 6.4) and their address can be taken (section 5.13). The places are:
 
@@ -743,6 +807,7 @@ A divisor that is the constant 0 is the compile-time error `division by zero`, a
 - **Numbers** meet at a type as arithmetic operands do (section 5.3) and are compared as numbers of that type: signed or unsigned integers by the type's sign, floats as IEEE 754 compares them. NaN is unordered: every comparison with it is false except `!=`, which is true, so `nan != nan`. `-0.0 == 0.0`.
 - **Bools** are compared with `==` and `!=` only. A bool has no order (`'<' needs numbers, not 'bool'`) and is equal to nothing but a bool (`mismatched types 'bool' and 'int' for '=='`).
 - **Pointers** meet at a pointer type, as an implicit conversion allows (`null` and `*void` meet any pointer type), and compare as unsigned addresses. Two pointers that do not meet are `mismatched types '*int' and '*u8' for '=='; cast one of them`; a pointer and something else, `mismatched types '*int' and 'int' for '<'`.
+- **Procedure values** are compared with `==` and `!=` only, two of the same procedure type or one with `null`, as addresses (section 3.15). Two of different types are `mismatched types '(int, int) -> int' and '(int) -> int' for '=='`; a procedure value has no order (`'<' needs numbers, not '(int, int) -> int'`).
 - **Strings** are compared with `==` and `!=` only: two strings are equal when their counts are equal and so is each byte. A string meets no other type (`mismatched types 'string' and '*u8' for '=='`) and has no order (`'<' needs numbers, not 'string'`).
 
 Nothing else is compared: `'==' needs numbers, bools, pointers or strings, not 'Vec2'`.
@@ -782,9 +847,14 @@ Untyped constant expressions are exact (section 3.12). Typed constant expression
 Call = Postfix "(" [ Expression { "," Expression } ] ")" .
 ```
 
-`f(a, b)` calls the procedure named `f` with the arguments `a` and `b`. The callee must be the name of a procedure: a call of anything else is `only a procedure's name can be called, for now`, and a call of a name declared as something else is `'x' isn't a procedure, so it can't be called`.
+`f(a, b)` calls the procedure named `f` with the arguments `a` and `b`. The callee is either:
 
-There must be one argument per parameter (`'puts' takes 1 argument, but 2 were given`), and each argument's value converts implicitly to its parameter's type (`argument 1 of 'f' has type 'int', which can't be converted to 'u8'`). A variadic foreign procedure, declared with `..`, takes at least one argument per parameter (`'printf' takes at least 1 argument, but 0 were given`) and any number more, each passed as section 7.6 says. The arguments are evaluated left to right, then the procedure runs; section 7 describes parameters and results.
+- the name of a procedure, or of a constant that names one (section 4.2): a **direct call** of that procedure;
+- any other expression whose value is a procedure value (section 3.15): a variable or a parameter (which hides a procedure of its name), a field (`s.op(x)`), an element (`table[i](x)`), a call's result (`choose(true)(8, 9)`). This is a **call through the value**: it calls the procedure the value names, and is checked as a call of a procedure of the value's type would be, against its parameters and results. Calling a null procedure value is a runtime error (section 8.4).
+
+A call of a name declared as something that is not a procedure value, a struct included, is `'x' isn't a procedure, so it can't be called`; a call of any other expression that is not a procedure value is `a value of type 'int' isn't a procedure, so it can't be called`, at the callee.
+
+There must be one argument per parameter (`'puts' takes 1 argument, but 2 were given`), and each argument's value converts implicitly to its parameter's type (`argument 1 of 'f' has type 'int', which can't be converted to 'u8'`). A call through a value is named in these messages by the name of the variable or parameter called, and otherwise by its type: `'(int, int) -> int' takes 2 arguments, but 3 were given`. A variadic foreign procedure, declared with `..`, takes at least one argument per parameter (`'printf' takes at least 1 argument, but 0 were given`) and any number more, each passed as section 7.6 says. The arguments are evaluated left to right, then the procedure runs; in a call through a value, the callee is evaluated first, before the arguments, and checked not to be null after them, just before the call (section 5.18). Section 7 describes parameters and results.
 
 A call is an expression whose value is the procedure's first result. A call of a procedure with no results has no value: it may only be a statement (section 6.3), and used as a value it is `'greet' returns nothing, so it has no value`. All the results of a call are received by several names or targets (sections 6.2, 6.4).
 
@@ -911,7 +981,7 @@ array literals
 ### 5.18 Order of evaluation
 
 - The operands of a binary operator are evaluated left to right; `&&` and `||` evaluate their right operand only when needed (section 5.7).
-- A call's arguments are evaluated left to right, before the call.
+- A call's arguments are evaluated left to right, before the call. A call through a procedure value evaluates the callee first (`table[next()]` before any argument), then the arguments, then checks that the value is not null (section 8.4), so the arguments' effects happen even when the call fails.
 - A compound literal's values are evaluated in the order written.
 - Indexing evaluates what is indexed (an array's address, a view's or a string's count and data, a pointer's value) before the index, so `v[f()]` indexes `v` as it was before `f` ran.
 - For `==` and `!=` on strings, the left operand's count and data are read before the right operand is evaluated.
@@ -1125,13 +1195,14 @@ main :: () {}
 ### 7.1 Declaration
 
 ```ebnf
-ProcDecl  = identifier "::" Signature ( [ "#no_abc" ] Block | "#foreign" identifier ";" ) .
-Signature = "(" [ Params ] ")" [ "->" Type { "," Type } ] .
+ProcDecl  = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#foreign" identifier ";" ) .
+Signature = "(" [ Params ] ")" [ "->" Results ] .
+Results   = Type { "," Type } | "(" Type { "," Type } ")" .
 Params    = Param { "," Param } [ "," ".." ] .
 Param     = identifier ":" Type .
 ```
 
-A procedure is declared at the top level with its name, its signature and its body. The signature lists the parameters in parentheses, each a name and a type, and after `->` the types of its results, separated by commas, with no parentheses around them. A procedure with no `->` returns nothing. A foreign procedure's list may end with `..`, after at least one parameter: it takes more arguments, as a C function declared with `...` does (section 7.6).
+A procedure is declared at the top level with its name, its signature and its body. The signature lists the parameters in parentheses, each a name and a type, and after `->` the types of its results, separated by commas, with or without parentheses around them: `-> int, int` and `-> (int, int)` are the same. A procedure with no `->` returns nothing. A result that is a procedure type (section 3.15) is written as in any other place: `-> (int) -> int` returns a `(int) -> int`, since parentheses followed by `->` are a procedure type's. Before the body, `#c_call` makes the procedure one that C can call (section 7.6) and `#no_abc` turns off its bounds checks (section 7.7): each at most once (`'#c_call' is written twice`), in either order. A foreign procedure's list may end with `..`, after at least one parameter: it takes more arguments, as a C function declared with `...` does (section 7.6).
 
 ```rig
 divmod :: (a: int, b: int) -> int, int {
@@ -1143,7 +1214,7 @@ main :: () {
 }
 ```
 
-Procedures may be declared in any order, and may call themselves and each other. A procedure is not a value: it can only be called (section 5.10).
+Procedures may be declared in any order, and may call themselves and each other. A procedure's name is also a value, the procedure's address, which can be stored and called through (sections 3.15, 5.10).
 
 ### 7.2 Parameters
 
@@ -1205,7 +1276,7 @@ hi
 
 A procedure declared with `#foreign` and a library name in place of a body is implemented outside the program, in C. The only library is `libc`, the platform's C runtime, which every program links (section 10.6): another name is `unknown library 'm'; the only one so far is 'libc'`. The procedure's name is the C function's name, and calls to it follow the platform's C calling convention (section 10.4).
 
-A foreign procedure's parameters and result are numbers, bools and pointers, which C receives as these types:
+A foreign procedure's parameters and result are numbers, bools, pointers and `#c_call` procedure values (below), which C receives as these types:
 
 | Rig | C |
 |---|---|
@@ -1216,6 +1287,7 @@ A foreign procedure's parameters and result are numbers, bools and pointers, whi
 | `float32`, `float64` | `float`, `double` |
 | `bool` | `_Bool` |
 | `*T`, `*void` | a pointer, `void *` |
+| a `#c_call` procedure type, `(*void, *void) -> s32 #c_call` | a pointer to a function, `int (*)(void *, void *)` |
 
 It returns at most one value (`a foreign procedure can return at most one value`). Structs, arrays, views and strings are not passed to or returned from C: `a foreign procedure can't take a 'Vec2' yet; pass a pointer to it`, `a foreign procedure can't take a '[3]int'; pass its .data`, `a foreign procedure can't take a 'string'; pass its .data, which may not end with a zero, or a literal`, and `a foreign procedure can't return a 'Vec2' yet`. A pointer to a struct is passed as a pointer to a C struct of the same layout (section 3.9). A C function that takes a variable number of arguments is declared with `..` (below).
 
@@ -1237,6 +1309,39 @@ from the heap
 ```
 
 `malloc`'s `*void` converts to `*int` without a cast, and `free` takes the `*int` back as a `*void` (section 3.5).
+
+**Procedures C can call (`#c_call`).** A procedure declared with `#c_call` before its body is one that C can call, through a function pointer it was given (a callback). Its type is marked `#c_call` (section 3.15), and a foreign procedure's parameter of such a type takes it: so a Rig procedure is passed to C as C's function pointer, as `qsort` takes its comparison:
+
+```rig
+qsort :: (base: *void, count: u64, size: u64, compare: (a: *void, b: *void) -> s32 #c_call) #foreign libc;
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+by_value :: (a: *void, b: *void) -> s32 #c_call {
+    x := (cast(*int) a).*;
+    y := (cast(*int) b).*;
+    if x < y { return -1; }
+    if x > y { return 1; }
+    return 0;
+}
+
+main :: () {
+    numbers := int.[42, 7, -3, 19, 0];
+    qsort(numbers.data, numbers.count, size_of(int), by_value);
+    for numbers { printf("%lld\n", it); }
+}
+```
+
+```text
+-3
+0
+7
+19
+42
+```
+
+A `#c_call` procedure's parameters and result follow the rules above for a foreign procedure's, so that C can pass and take them: `a #c_call procedure can't take a 'Vec2' yet; pass a pointer to it`, `a #c_call procedure can't take a 'string'; pass its .data, which may not end with a zero, or a literal`, `a #c_call procedure can return at most one value`, and the same for a `#c_call` procedure type written anywhere. It takes no `..`, as only a foreign procedure does. A procedure type given to C, as a foreign procedure's parameter or result, or as a `#c_call` procedure's, must be `#c_call` too: `a foreign procedure can't take a '(int) -> int', which isn't #c_call; C can call a '(int) -> int #c_call'`. A procedure without the mark doesn't convert to a `#c_call` type, nor the other way (section 3.15): passing one to `qsort` is `argument 4 of 'qsort' has type '(*void, *void) -> s32', which can't be converted to '(*void, *void) -> s32 #c_call'; mark 'compare' #c_call for C to call it`.
+
+Rig calls a `#c_call` procedure as it calls any other, directly or through a value. A foreign procedure is C's already, so its value has a `#c_call` type (`puts` is a `(*u8) -> s32 #c_call`), and it takes no `#c_call` of its own: `a foreign procedure is C's already: it takes no '#c_call'`. Today every Rig procedure follows C's calling convention (section 10.4), so the mark changes no code yet: it says which procedures C may call, so that when Rig procedures come to take more than C passes them, a `#c_call` procedure is the one that sets that up before running Rig code, and code written now keeps working.
 
 **Variadic foreign procedures.** A C function declared with `...`, such as `printf`, takes arguments beyond its named parameters. Its foreign procedure says so with `..` as the last element of its parameter list, after at least one parameter, as C requires one before its `...`:
 
@@ -1325,6 +1430,7 @@ The messages and their positions:
 | checked integer cast (section 8.3) | `the value doesn't fit in 'T'` | the `cast` |
 | null pointer dereference (section 8.4) | `null pointer dereference` | the `.` of `p.*`, the field's name of `p.x`, the `[` of `p[i]` or `v[i]`, the sequence of a `for` (its name, the name of its field, or the `(` of a call), the `==` or `!=` of a string comparison |
 | index out of bounds (section 8.5) | `index I is out of bounds (count C)` | the `[` |
+| call of a null procedure value (section 8.4) | `null procedure call` | the `(` of the call |
 
 ```rig runtime-error
 puts :: (s: *u8) -> s32 #foreign libc;
@@ -1357,11 +1463,30 @@ An integer division or remainder whose divisor is not known while compiling chec
 
 Widening to a type of the same signedness, or from unsigned to a wider signed type, cannot fail and is not checked. `cast,trunc` and casts involving floats are never checked.
 
-### 8.4 Null pointer dereference
+### 8.4 Null pointer dereference and null procedure calls
 
 Every read or write through a pointer checks first that the pointer is not null, and stops with `null pointer dereference` when it is: `p.*`, a field through a pointer (`p.x`), and an index into a pointer (`p[i]`). The check is made where the place is worked out, before anything is read or written, so `*p.*` with `p` null fails too.
 
 A view's or a string's data is a pointer too, checked when it would be read: when indexing (after the bounds check, and also when bounds checks are off), once before the first iteration of a `for` over it when its count is above 0, and in `==` or `!=` on strings when the two counts are equal and above 0 (the only case that reads bytes). A zeroed view, with count 0, reads nothing and passes.
+
+A procedure value is an address too (section 3.15). Every call through a procedure value checks that the value is not null, and stops with `null procedure call`, at the call's `(`, when it is. The check comes after the callee and the arguments are evaluated, right before the call (section 5.18), so what the arguments did has happened. A direct call, of a procedure by its name, is never checked: it always names a procedure.
+
+```rig runtime-error
+puts :: (s: *u8) -> s32 #foreign libc;
+
+say :: (s: *u8) -> int { puts(s); return 1; }
+
+main :: () {
+    f : (int) -> int;
+    x := f(say("the argument first"));
+}
+```
+
+This program prints `the argument first`, then stops:
+
+```text
+example.rig:7:11: runtime error: null procedure call
+```
 
 ### 8.5 Bounds checks
 
@@ -1395,6 +1520,7 @@ These are memory errors, which the program must avoid and no check catches:
 - moving a pointer outside the memory it points into and using it, and indexing a pointer outside its memory;
 - writing the bytes of a string literal, which are read-only;
 - using a misaligned pointer made by a cast;
+- calling a procedure value made by a cast from a `*void` that doesn't hold the address of a procedure of that type (section 3.15);
 - an index outside its sequence with bounds checks off.
 
 Reading a variable declared with `---` before assigning it gives an unspecified value, not a memory error.
@@ -1470,7 +1596,7 @@ The compiler limits how deeply a program's constructs nest:
 
 - An expression nests at most 1000 levels: each parenthesis, prefix operator, cast, call, dereference, field, element, compound literal and binary operator is a level above what it holds, so a chain of 1001 `+` is too deep. Deeper is `this expression is nested too deeply (more than 1000 levels)`, at the start of the outermost expression.
 - Blocks nest at most 1000 levels, a procedure's body the first: `blocks are nested too deeply (more than 1000 levels)`, at the `{` one too many.
-- A written type nests at most 1000 levels, each `*`, `[]` and `[N]` one: `types are nested too deeply (more than 1000 levels)`. Types and expressions inside each other count together: an array's count is inside its `[N]` level, and the type of `size_of` and of a cast is a level below the expression.
+- A written type nests at most 1000 levels, each `*`, `[]`, `[N]` and procedure type's `(` one: `types are nested too deeply (more than 1000 levels)`. Types and expressions inside each other count together: an array's count is inside its `[N]` level, and the type of `size_of` and of a cast is a level below the expression.
 - Top-level declarations worked out inside one another (a constant whose value names a constant declared after it, and so on) nest at most 1000 levels: `'A1001' is nested too deeply in the declarations that need it (more than 1000 levels)`. Declared in the order they are needed, a chain of any length compiles.
 
 An `else if` chain may have any number of arms.
@@ -1556,6 +1682,7 @@ Rig follows the platform's C calling convention, as clang implements it: the Mic
 - **Scalar parameters and results** (integers, floats, bools, pointers) are passed as C passes values of the C types in section 7.6. On Linux an `s8`, `u8`, `s16` or `u16` argument or result is extended to 32 bits by the side that passes it, sign-extended if its type is signed and zero-extended if not, as clang does; on Windows the receiving side extends it. A `bool` is passed as a whole byte or more, 0 or 1 with every other bit zero, on both. Rig's own procedures follow the same rules as foreign ones, so a call and its callee always agree.
 - **Variadic calls**, of a foreign procedure declared with `..` (section 7.6), follow C's convention for a call of a function declared with `...`, as clang makes it: the arguments after the named ones are passed after C's default argument promotions, as an `int`, a `long long`, a `double` or a pointer, so none is narrower than 32 bits. On Linux the caller also sets `al` to the number of vector registers the arguments use (at most 8), which the callee's `va_start` reads to know which to save. On Windows a `double` among the first four arguments goes in its integer register as well as its vector register, since the callee reads its arguments from the integer registers and the stack, as one list.
 - **Aggregates** (structs, arrays, views and strings) are never passed in registers. An aggregate argument is passed as a pointer to a copy the caller makes; the callee only reads it. An aggregate result is returned through a hidden pointer parameter: there is one per aggregate result, in result order, before the visible parameters, each pointing at a temporary of the caller's that `return` copies the value into, and that the caller copies to its destination after the call. When the aggregate is the procedure's only result, its pointer is the one C passes for a struct returned in memory (LLVM's `sret`), so the procedure also returns it, in `rax`, as C's convention says such a function does.
+- **Calls through procedure values** (section 5.10) are indirect calls, of the address the value holds, made exactly as a direct call of a procedure of the value's type is: the same parameters, extensions, hidden result pointers and results. Every procedure of that type expects that call, so a value holding any of them calls it correctly. A procedure value is the address of the procedure's own code, the one a direct call reaches, and C receives it as a function pointer. A `#c_call` type has no aggregates (section 7.6), so a call through one is C's call of a function pointer, plainly.
 - **Several results**: when a procedure has more than one scalar result, they are returned together as one LLVM structure value, whose passing LLVM decides; a single scalar result is returned as itself. Only Rig's own procedures have several results, so no C code sees it.
 - **Frame pointers** are kept in every procedure (LLVM's `"frame-pointer"="all"`): each frame begins by saving the caller's `rbp` and pointing `rbp` at it, so debuggers and profilers can walk the stack through the chain of frames.
 - **Stack probes**: a frame larger than a page touches each of its pages in order, so the guard page below the stack is always hit first. On Windows this is the C runtime's `__chkstk`; on Linux, inline probes (`"probe-stack"="inline-asm"`).
@@ -1609,7 +1736,7 @@ The debug information holds:
 - **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}` (an `else if` chain is left from the block that ran straight to the code after the chain, so a debugger doesn't stop at the `}` of an arm that didn't run), a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
 
 - **Variables:** every local variable, parameter, loop iterator (`it`, `it_index` or a named one) and global variable, by its Rig name and with its type. A local is in the lexical block that declares it, or, when it hides a variable, in the one its declaration starts, since a debugger shows a block's variables over the whole block, but a declaration hides a name only from its end: so before `g := 10;` a debugger shows the variable `g` it hides, from the declaration on the new one (its initializer is still in the block around it, and reads the outer one), and on leaving its block the outer one again. Parameters are stored in their own stack slots before the body's first line, so a breakpoint at a procedure already shows them. A scalar parameter's slot is where the program itself reads it from, as clang's code does at `-O0`: a value a debugger writes there (gdb's `set var n = 2`, cdb's `?? n = 2`) is the one the program goes on with. A parameter passed by address (a struct, array, view or string) is described as what is passed, the same in DWARF and CodeView: a pointer to the value, held in its slot. So a debugger shows the address and names the fields through it (gdb's `p->a`, `*p`, and `p.a`, which gdb reads through a pointer too; cdb's `a->count`; Visual Studio's `a.count`), and calls the procedure with an address (see **Types**). Each hidden result pointer is a parameter too, before the visible ones, named `result$` (`result$1`, `result$2`, ... when there are several), a name no Rig variable can have but both debuggers take in an expression (gdb's `print result$`, cdb's `?? result$`). It points at the caller's temporary, which holds the value only once `return` has copied it there. Constants have no storage and are not variables: a debugger doesn't see them.
-- **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; `[N]T` as arrays of N elements; and `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`. A procedure's type says how it is called (section 10.4), the same in DWARF and CodeView, not how C would pass the same types: an aggregate parameter is a pointer to its type, and each aggregate result a pointer parameter, `result$`, before the visible ones, the procedure returning its one scalar result, or nothing when it has none or several (gdb's `ptype make` is `void (struct Pair *, int)`, `ptype sum` `int (struct Pair *)`; cdb's `dt make` `void (Pair*, int64)`). A debugger that calls a procedure from an expression passes what that type says, so a call passes addresses where the procedure takes them: given `q`, a `Pair`, gdb's `print sum(&q)` and cdb's `.call sum(&q)` return `q.a + q.b`, and gdb's `print make(&q, 7)` and cdb's `.call make(&q, 7)` make `q` `{a = 7, b = 8}`; cdb refuses `.call make(7)` (`Too few arguments`). gdb's `finish` out of a procedure that returns an aggregate shows no value, rather than whatever the registers held. After it the procedure's frame is gone, and `result$` with it: to see the value, print `result$` before leaving (gdb names the address `$1`, say) and `*$1` after `finish`, or print the variable the caller assigns once its call's line is done. A procedure whose parameters and results are all scalars is called as C's (gdb's `print twice(4)`, cdb's `.call twice(4)`). CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
+- **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; `[N]T` as arrays of N elements; `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`; and a procedure type as a pointer to the subroutine type of its signature, as C's function pointers are described, `#c_call` or not, one node for each procedure type. A procedure's type says how it is called (section 10.4), the same in DWARF and CodeView, not how C would pass the same types: an aggregate parameter is a pointer to its type, and each aggregate result a pointer parameter, `result$`, before the visible ones, the procedure returning its one scalar result, or nothing when it has none or several (gdb's `ptype make` is `void (struct Pair *, int)`, `ptype sum` `int (struct Pair *)`; cdb's `dt make` `void (Pair*, int64)`). A debugger that calls a procedure from an expression passes what that type says, so a call passes addresses where the procedure takes them: given `q`, a `Pair`, gdb's `print sum(&q)` and cdb's `.call sum(&q)` return `q.a + q.b`, and gdb's `print make(&q, 7)` and cdb's `.call make(&q, 7)` make `q` `{a = 7, b = 8}`; cdb refuses `.call make(7)` (`Too few arguments`). gdb's `finish` out of a procedure that returns an aggregate shows no value, rather than whatever the registers held. After it the procedure's frame is gone, and `result$` with it: to see the value, print `result$` before leaving (gdb names the address `$1`, say) and `*$1` after `finish`, or print the variable the caller assigns once its call's line is done. A procedure whose parameters and results are all scalars is called as C's (gdb's `print twice(4)`, cdb's `.call twice(4)`). A procedure value's subroutine type is the one a procedure of its type has, so a debugger shows the value as an address and the procedure there, and calls through it as it calls the procedure: gdb's `print f` is `(int (*)(int, int)) 0x401136 <add>` and `ptype` of a value holding `make` `void (*)(struct Pair *, int)`; cdb's `dx f` is `procedure_values!add+0x0 [Type: __int64 (__cdecl*)(__int64,__int64)]`, after the address. A null value shows as `0x0`. gdb calls through a value as C does, `print f(10, 20)`; cdb's `.call` takes only a procedure's name, but calls through a value with C++'s expression evaluator, `.call @@c++(f)(10, 20)`. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
 
 A debug type is made at most 1000 levels deep (the limit of section 9.4), counting each type along its longest chain of fields, pointees and elements. A program can chain types more deeply (structs held by value, each declared after the one it holds, or each holding a pointer to the next); past the limit a pointer is described as `void *` and any other type as a declared struct of its name with no fields, so the compiler's work stays bounded.
 
@@ -1664,8 +1791,9 @@ A number literal may not be followed directly by a letter or a digit (section 2.
 File          = { TopLevel } .
 TopLevel      = ProcDecl | StructDecl | ConstDecl | VarDecl .
 
-ProcDecl      = identifier "::" Signature ( [ "#no_abc" ] Block | "#foreign" identifier ";" ) .
-Signature     = "(" [ Params ] ")" [ "->" Type { "," Type } ] .
+ProcDecl      = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#foreign" identifier ";" ) .
+Signature     = "(" [ Params ] ")" [ "->" Results ] .
+Results       = Type { "," Type } | "(" Type { "," Type } ")" .
 Params        = Param { "," Param } [ "," ".." ] .
 Param         = identifier ":" Type .
 
@@ -1680,10 +1808,16 @@ MultiVarDecl  = identifier "," identifier { "," identifier } ":=" Expression ";"
 Type          = "*" Type
               | "[" Expression "]" Type
               | "[" "]" Type
+              | ProcType
               | identifier .
+ProcType      = "(" [ ProcParam { "," ProcParam } ] ")" [ "->" ProcResults ] [ "#c_call" ] .
+ProcParam     = [ identifier ":" ] Type .
+ProcResults   = Type | "(" Type { "," Type } ")" .
 ```
 
-After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. `ProcDecl` and `StructDecl` appear only at the top level.
+After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. `ProcDecl` and `StructDecl` appear only at the top level. In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'`.
+
+In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{` or a directive other than `#c_call`; otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
 
 ### A.3 Statements
 
@@ -1753,11 +1887,12 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `false`, `true` | bool values | 2.11, 3.4 |
 | `for` | loop over a range or a sequence | 6.7, 6.8 |
 | `if` | conditional | 6.5 |
-| `null` | the null pointer | 3.5 |
+| `null` | the null pointer; the null procedure value | 3.5, 3.15 |
 | `return` | return from a procedure | 6.10 |
 | `struct` | struct type | 3.9, 4.5 |
 | `while` | loop on a condition | 6.6 |
 | `#foreign` | C procedure | 7.6 |
+| `#c_call` | procedure that C can call; its procedure type | 7.6, 3.15 |
 | `#no_abc` | no bounds checks in a procedure | 7.7 |
 | `size_of` | a type's size | 5.16 |
 | `it`, `it_index` | a loop's iterator and index | 6.7, 6.8 |
@@ -1775,14 +1910,14 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `.*` | dereference | 5.13 |
 | `.` | member access, compound literal | 5.12, 5.17 |
 | `[ ]` | indexing, array and view types | 5.11, 3.6, 3.7 |
-| `( )` | grouping, call, parameter list | 5.1, 5.10, 7.1 |
+| `( )` | grouping, call, parameter list, procedure type, several results | 5.1, 5.10, 7.1, 3.15 |
 | `{ }` | block, struct fields, struct literal | 6.1, 4.5, 5.17 |
 | `=` | assignment, initialiser, named field | 6.4, 4.3, 5.17 |
 | `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | compound assignment | 6.4 |
 | `:` | variable's type, parameter, field, named iterator | 4.3, 7.1, 4.5, 6.7 |
 | `::` | constant, procedure or struct declaration | 4.1 |
 | `:=` | variable declaration with its value's type | 4.3, 6.2 |
-| `->` | results of a procedure | 7.1 |
+| `->` | results of a procedure or of a procedure type | 7.1, 3.15 |
 | `..` | range; a variadic foreign procedure's other arguments | 6.7, 7.6 |
 | `---` | uninitialised variable | 4.3 |
 | `,` | separator; `cast,trunc` | 3.14, 5.10 |
