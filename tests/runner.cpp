@@ -60,8 +60,11 @@
 //                         neither example nor a Windows device's (NUL);
 //                         several blocks may come before one example, each
 //                         with its own NAME. One with no example after it
-//                         fails the run, and one with another word, a file=
-//                         block still, fails alone.
+//                         fails the run. One with another word is a file=
+//                         block still, so it takes no output block and
+//                         drops none of the file= blocks before it, but it
+//                         fails, isn't written, and the example that
+//                         #loads it fails too.
 // An example's output block is the first ```text block after it before the
 // next heading or ```rig block (a fragment has none); the two error kinds
 // need one. Any other word in the info string fails the example, as does a
@@ -1058,8 +1061,9 @@ static void check_tests(Arena *a, String rig, s64 *passed, s64 *failed) {
 
 // --- The specification's examples -------------------------------------------
 //
-// See the header: every ```rig block of docs/rig-spec.md, of the kind its
-// fence's info string names, held to its output block.
+// See the header: every ```rig block of docs/rig-spec.md but a file= one,
+// of the kind its fence's info string names, held to its output block; a
+// file= block is written beside the next example for it to #load.
 
 static const char *SPEC = "docs/rig-spec.md";
 static const char *SPEC_DIR = ".build/tests/spec";
@@ -1111,9 +1115,9 @@ static bool is_ascii_letter(u8 c) {
     return (c | 0x20) >= 'a' && (c | 0x20) <= 'z';
 }
 
-// Whether two file= names are one file's on Windows, which takes a name in
-// any case: equal but for the case of their ASCII letters, the only letters
-// a file= name has (is_example_file_name).
+// Whether x and y are equal but for the case of their ASCII letters, as
+// Windows compares names (a file= name has no other letters:
+// is_example_file_name).
 static bool same_file_name(String x, String y) {
     if (x.count != y.count) return false;
     for (s64 i = 0; i < x.count; i++) {
@@ -1132,8 +1136,8 @@ static bool is_device_name(String name) {
     while (stem < name.count && name.data[stem] != '.') stem++;
     String s = string_slice(name, 0, stem);
     const char *devices[] = {"con", "prn", "aux", "nul"};
-    for (s64 i = 0; i < (s64)(sizeof devices / sizeof devices[0]); i++) {
-        if (same_file_name(s, str(devices[i]))) return true;
+    for (const char *device : devices) {
+        if (same_file_name(s, str(device))) return true;
     }
     if (stem != 4 || s.data[3] < '0' || s.data[3] > '9') return false;
     String prefix = string_slice(s, 0, 3);
@@ -1165,14 +1169,15 @@ static bool has_file_word(String words) {
 }
 
 // What's wrong with a file= block whose info string has another word.
-static const char *FILE_TAKES_NO_OTHER_WORD ="a file= block is no example, so it takes no other word";
+static const char *FILE_TAKES_NO_OTHER_WORD = "a file= block is no example, so it takes no other word";
 
 // The words after `rig` in a fence's info string: the example's kind, a
 // program's exit status, and a file='s name. What it doesn't know goes in
 // ex->bad. A block with a file= word is a file= block however wrong its
-// info string is, so a mistake in it is reported at it alone: taken for an
-// example, it would take the output block after it, and the example after
-// it would lose the file= blocks before it (spec_tests).
+// info string is: taken for an example, it would take the output block
+// after it, and the example after it would lose the file= blocks before it
+// (spec_tests). A wrong one is reported at its own line, and as its file
+// isn't written, the example that #loads it fails too.
 static void read_info(Arena *a, String words, Example *ex) {
     bool file_block = has_file_word(words);
     if (file_block) ex->kind = EXAMPLE_FILE;
@@ -1183,16 +1188,6 @@ static void read_info(Arena *a, String words, Example *ex) {
         String word = string_slice(words, start, i - start);
         start = i + 1;
         if (!word.count) continue;
-        Example_Kind kind = EXAMPLE_PROGRAM;
-        if (starts_with(word, "exit=")) {
-            if (exit_given || !read_exit_status(word, &ex->exit_code)) {
-                ex->bad = string_printf(a, "the info string's '" STR_FMT "' isn't one exit= with a status from 0 to 255",
-                                        STR_ARG(word));
-                return;
-            }
-            exit_given = true;
-            continue;
-        }
         if (starts_with(word, "file=")) {
             String name = string_slice(word, 5, word.count - 5);
             if (file_given || !is_example_file_name(name)) {
@@ -1207,15 +1202,27 @@ static void read_info(Arena *a, String words, Example *ex) {
             file_given = true;
             continue;
         }
+        // A file= block is no example, so it has no kind nor exit status.
+        if (file_block) {
+            ex->bad = str(FILE_TAKES_NO_OTHER_WORD);
+            return;
+        }
+        Example_Kind kind = EXAMPLE_PROGRAM;
+        if (starts_with(word, "exit=")) {
+            if (exit_given || !read_exit_status(word, &ex->exit_code)) {
+                ex->bad = string_printf(a, "the info string's '" STR_FMT "' isn't one exit= with a status from 0 to 255",
+                                        STR_ARG(word));
+                return;
+            }
+            exit_given = true;
+            continue;
+        }
         if (string_eq(word, str("runtime-error"))) {
             kind = EXAMPLE_RUNTIME_ERROR;
         } else if (string_eq(word, str("error"))) {
             kind = EXAMPLE_ERROR;
         } else if (string_eq(word, str("fragment"))) {
             kind = EXAMPLE_FRAGMENT;
-        } else if (file_block) {
-            ex->bad = str(FILE_TAKES_NO_OTHER_WORD);
-            return;
         } else {
             ex->bad = string_printf(a,
                                     "unknown word '" STR_FMT "' in the info string (runtime-error, error, fragment, "
@@ -1227,13 +1234,8 @@ static void read_info(Arena *a, String words, Example *ex) {
             ex->bad = str("the info string names two kinds of example");
             return;
         }
-        if (!file_block) ex->kind = kind;
+        ex->kind = kind;
         kind_given = true;
-    }
-    // A file= block is no example, so it's no kind of one either.
-    if (file_block) {
-        if (kind_given || exit_given) ex->bad = str(FILE_TAKES_NO_OTHER_WORD);
-        return;
     }
     if (exit_given && ex->kind != EXAMPLE_PROGRAM) ex->bad = str("exit=N is for a program that runs to its end");
 }
