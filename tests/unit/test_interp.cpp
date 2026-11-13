@@ -16,9 +16,9 @@
 #include <time.h>  // time, for interp_recursion_to_the_limit
 #ifdef _WIN32
 #include <process.h>  // _getpid, for interp_calls_a_windows_function
-#endif
-#ifndef _WIN32
+#else
 #include <execinfo.h>  // backtrace, for thunk_unwinds_through_the_thunk
+#include <pthread.h>   // pthread_atfork, for interp_finds_c_functions_by_name
 #include <unwind.h>    // _Unwind_Backtrace, for thunk_unwinds_the_callers_registers
 #endif
 
@@ -2222,7 +2222,8 @@ TEST(thunk_keeps_the_callers_registers) {
 // name and called through the thunks.
 
 // The C function the interpreter finds by `name`, looked up as it does: the
-// compiler's own table first (Windows), then the system's.
+// compiler's own table first (the standard C library on Windows; what
+// libc_nonshared.a links in on Linux), then the system's.
 static void *interp_test_c_function(const char *name) {
     void *f = interp_c_library_function(str(name));
     return f ? f : os_find_c_function(str(name));
@@ -2319,6 +2320,8 @@ TEST(interp_calls_c_with_narrow_types) {
     //   (spec 10.4), so -5 reaches abs as an int -5. On Windows the callee
     //   extends it, and abs, which takes an int, doesn't, so its result
     //   isn't checked there.
+    // Each is called directly, typed by the foreign procedure, and through
+    // a value, typed by the value's procedure type: the call's signature.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "atoi :: (s: *u8) -> s8 #foreign libc;\n"
@@ -2328,31 +2331,53 @@ TEST(interp_calls_c_with_narrow_types) {
                                 "    x : s8 = -5;\n"
                                 "    return abs(x);\n"
                                 "}\n"
+                                "narrow_result_through_a_value :: () -> s8 {\n"
+                                "    g : (s: *u8) -> s8 #c_call = atoi;\n"
+                                "    return g(\"511\");\n"
+                                "}\n"
+                                "narrow_argument_through_a_value :: () -> s32 {\n"
+                                "    f : (x: s8) -> s32 #c_call = abs;\n"
+                                "    y : s8 = -5;\n"
+                                "    return f(y);\n"
+                                "}\n"
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_value(&a, m, "narrow_result"), 0xFF);
+    CHECK_EQ(interp_test_value(&a, m, "narrow_result_through_a_value"), 0xFF);
     u64 absolute = interp_test_value(&a, m, "narrow_argument");
+    u64 absolute_through_a_value = interp_test_value(&a, m, "narrow_argument_through_a_value");
 #ifdef _WIN32
     (void)absolute;
+    (void)absolute_through_a_value;
 #else
     CHECK_EQ(absolute, 5);
+    CHECK_EQ(absolute_through_a_value, 5);
 #endif
     arena_free(&a);
 }
 
 TEST(interp_calls_c_through_a_value) {
     // A C function's value is its native address, the one the interpreter
-    // looks up by name, and a call through it goes to C.
+    // looks up by name, and a call through it goes to C, float32 arguments
+    // and result too (the float registers, as the signature types them).
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "strlen :: (s: *u8) -> u64 #foreign libc;\n"
+                                "copysignf :: (x: float32, y: float32) -> float32 #foreign libc;\n"
                                 "measure :: () -> u64 {\n"
                                 "    say : (s: *u8) -> u64 #c_call = strlen;\n"
                                 "    n := say(\"four\");\n"
                                 "    return n;\n"
                                 "}\n"
+                                "floats :: () -> float32 {\n"
+                                "    h : (x: float32, y: float32) -> float32 #c_call = copysignf;\n"
+                                "    three : float32 = 3;\n"
+                                "    minus_one : float32 = -1;\n"
+                                "    return h(three, minus_one);\n"
+                                "}\n"
                                 "value :: () -> *void { return cast(*void) strlen; }\n"
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_value(&a, m, "measure"), 4);
+    CHECK_EQ(interp_test_value(&a, m, "floats"), interp_f32_bits(-3.0f));
     void *strlen_function = interp_test_c_function("strlen");
     CHECK(strlen_function != nullptr);
     CHECK(interp_test_value(&a, m, "value") == (u64)(uintptr_t)strlen_function);
@@ -2467,13 +2492,16 @@ TEST(interp_finds_c_functions_by_name) {
     // library's from the compiler's own table, which has no
     // aligned_alloc (UCRT has none) and no function of Windows'; those
     // from kernel32.dll, and the C runtime's extras from ucrtbase.dll.
-    // Linux: everything from libc but atexit and at_quick_exit, which
-    // libc.so.6 doesn't export, the compiler's own from its table; and
-    // libm-only functions (sqrt) not at all, as a program links libc alone
-    // (spec 10.6). Neither finds a name nothing has.
+    // Linux: everything from libc but what libc_nonshared.a links in
+    // statically (atexit, at_quick_exit, pthread_atfork), which libc.so.6
+    // doesn't export, the compiler's own from its table; and libm-only
+    // functions (sqrt) not at all, as a program links libc alone (spec
+    // 10.6). Neither finds a name nothing has.
 #ifdef _WIN32
     CHECK(interp_c_library_function(str("strlen")) == (void *)&strlen);
-    CHECK(interp_c_library_function(str("sqrt")) != nullptr);
+    CHECK(interp_c_library_function(str("sqrt")) == (void *)static_cast<double (*)(double)>(&sqrt));
+    CHECK(interp_c_library_function(str("sqrtf")) == (void *)&sqrtf);
+    CHECK(interp_c_library_function(str("sqrtl")) == (void *)static_cast<long double (*)(long double)>(&sqrtl));
     CHECK(interp_c_library_function(str("aligned_alloc")) == nullptr);
     CHECK(interp_c_library_function(str("GetCurrentProcessId")) == nullptr);
     CHECK(os_find_c_function(str("GetCurrentProcessId")) != nullptr);
@@ -2483,6 +2511,7 @@ TEST(interp_finds_c_functions_by_name) {
     CHECK(os_find_c_function(str("printf")) != nullptr);
     CHECK(interp_test_c_function("atexit") == (void *)&atexit);
     CHECK(interp_test_c_function("at_quick_exit") == (void *)&at_quick_exit);
+    CHECK(interp_test_c_function("pthread_atfork") == (void *)&pthread_atfork);
     CHECK(os_find_c_function(str("sqrt")) == nullptr);
 #endif
     CHECK(interp_test_c_function("nope_not_a_function") == nullptr);

@@ -1,8 +1,8 @@
 // os.h: what Rig needs from the operating system: files, directories,
 // running other programs (the linker, the tests' programs), the compiler's
-// stack, and address space for compile-time execution. One interface, two
-// implementations: os_windows.cpp and os_linux.cpp; all.cpp includes the
-// host's.
+// stack, and, for compile-time execution, address space and the system's C
+// functions by name. One interface, two implementations: os_windows.cpp and
+// os_linux.cpp; all.cpp includes the host's.
 //
 // Paths are UTF-8 Strings on both systems; on Windows either slash works.
 // A function that fails returns false (or null) and remembers why, for
@@ -126,10 +126,9 @@ void os_release_inaccessible(void *p, u64 size);
 // A function of the system's C library or of the OS, by name, for
 // compile-time C calls, or null. Linux: dlsym on dlopen("libc.so.6",
 // RTLD_LAZY | RTLD_NOLOAD) (libc and the dynamic loader it depends on, as
-// 10.6's -lc provides them); atexit and at_quick_exit, which -lc links in
-// statically, are looked up before this, in the compiler's own table.
-// Windows:
-// GetProcAddress in kernel32.dll, then in ucrtbase.dll (LoadLibraryW
-// once); the standard C library's functions are looked up before this,
-// in the compiler's own table.
+// 10.6's -lc provides them); what -lc links in statically (atexit,
+// at_quick_exit, pthread_atfork) is looked up before this, in the
+// compiler's own table. Windows: GetProcAddress in kernel32.dll, then in
+// ucrtbase.dll (LoadLibraryW once); the standard C library's functions are
+// looked up before this, in the compiler's own table.
 void *os_find_c_function(String name);

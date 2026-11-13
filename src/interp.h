@@ -28,20 +28,23 @@
 //   (interp_c_library_function): the compiler's C runtime is linked in
 //   statically, and compile-time printf must write into its stdout buffer,
 //   memory malloc gives must be the heap free takes back; on Linux, only
-//   atexit and at_quick_exit are, which libc.so.6 doesn't export;
+//   what libc_nonshared.a links in statically is (atexit, at_quick_exit,
+//   pthread_atfork), which libc.so.6 doesn't export;
 // - anything else is the system's (os_find_c_function): kernel32.dll's or
 //   ucrtbase.dll's on Windows, libc's on Linux;
 // - a name found nowhere fails, "'NAME' isn't in the C library at compile
 //   time".
-// A call of one, or of any address outside the Rig procedures' range, goes
-// through a thunk (thunk.h), the arguments typed by the callee's parameters
-// and, past them, a variadic call's by their values' types. C can't call
-// back into the interpreter, so a C call given a Rig procedure, as any
-// pointer argument, fixed or variadic, fails: "a Rig procedure can't be
-// passed to C at compile time, for now". The IR can't tell a procedure-
-// typed parameter from a *void, so both are refused; one C gets some other
-// way (in memory, as an integer) faults when C calls it. A C function that
-// ends the process (exit) ends the compiler.
+// A call of one, or of any non-null address outside the Rig procedures'
+// range, goes through a thunk (thunk.h), the arguments typed by the
+// callee's parameters and, past them, a variadic call's by their values'
+// types; a null address fails, "null procedure call", as the compiled
+// program's check does. C can't call back into the interpreter, so a C
+// call given a Rig procedure, as any pointer argument, fixed or variadic,
+// fails: "a Rig procedure can't be passed to C at compile time, for now".
+// The IR can't tell a procedure-typed parameter from a *void, so both are
+// refused; one C gets some other way (in memory, as an integer) faults
+// when C calls it. A C function that ends the process (exit) ends the
+// compiler.
 //
 // The loop is iterative, with an explicit stack of frames: it never
 // recurses in C++, so deep recursion in Rig can't overflow the compiler's
@@ -112,7 +115,8 @@ String interp_frames_text(Arena *a, Array<Interp_Frame> frames, Array<String> pa
 // interp_c_functions.cpp: on Windows, the C17 functions of <stdio.h>,
 // <stdlib.h>, <string.h>, <math.h>, <ctype.h>, <time.h> that are functions
 // (not macros), each as the compiler's own, overloads cast to C's
-// signature, aligned_alloc left out; on Linux, the compiler's own atexit
-// and at_quick_exit, which libc.so.6 doesn't export. Null for any other
+// signature, aligned_alloc left out; on Linux, the compiler's own copies
+// of what libc_nonshared.a links in statically (atexit, at_quick_exit,
+// pthread_atfork), which libc.so.6 doesn't export. Null for any other
 // name.
 void *interp_c_library_function(String name);

@@ -319,8 +319,9 @@ static bool interp_in_proc_range(Interp *in, u64 address) {
 
 // Foreign procedure k's C function, found by its name the first time it's
 // needed and kept: the compiler's own copy of a standard C function
-// (interp_c_library_function: any of them on Windows, atexit and
-// at_quick_exit on Linux), or else the system's (os_find_c_function). Null when neither has it, which isn't kept, so a
+// (interp_c_library_function: any of them on Windows, what
+// libc_nonshared.a links in on Linux), or else the system's
+// (os_find_c_function). Null when neither has it, which isn't kept, so a
 // later run looks again.
 static void *interp_c_function(Interp *in, s32 k) {
     void *f = in->c_functions[k];
