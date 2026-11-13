@@ -34,10 +34,28 @@ static String from_wide(Arena *a, const wchar_t *w, int length = -1) {
     return {s, n};
 }
 
+// Opened sharing every access, as os_file_id opens it, so a file another
+// program holds open (an editor's) can be read as it can be identified; one
+// that shrinks while it's read is read to its new end. Without
+// FILE_FLAG_BACKUP_SEMANTICS CreateFileW refuses a directory, so a
+// directory isn't read as a file (os.h); its reason, access denied, would
+// send the user to the file's permissions, so a directory's is
+// ERROR_DIRECTORY_NOT_SUPPORTED instead, as Linux's is EISDIR.
 bool os_read_file(Arena *a, String path, String *out) {
-    HANDLE file = CreateFileW(to_wide(a, path), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                              FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return os_fail();
+    wchar_t *wpath = to_wide(a, path);
+    HANDLE file = CreateFileW(wpath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();
+        if (error == ERROR_ACCESS_DENIED) {
+            DWORD attributes = GetFileAttributesW(wpath);
+            if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                error = ERROR_DIRECTORY_NOT_SUPPORTED;
+            }
+        }
+        os_last_error = error;
+        return false;
+    }
     LARGE_INTEGER size;
     if (!GetFileSizeEx(file, &size)) {
         os_fail();
@@ -169,11 +187,11 @@ bool os_file_id(String path, u64 id[3]) {
 }
 
 // LCMapStringEx's upper case in the invariant locale: the same on every
-// machine, whatever language its user chose (a Turkish one's i isn't
-// another letter's lower case), and one UTF-16 unit for each, so the
-// result is as long as the path. Should it fail, the path stays as it is:
-// its names in another case would then count as other files, which is no
-// worse than not folding.
+// machine, whatever language its user chose (on a Turkish user's machine
+// too, i is taken as I, not as İ as Turkish has it), and one UTF-16 unit
+// for each, so the result is as long as the path. Should it fail, the path
+// stays as it is: its names in another case would then count as other
+// files, which is no worse than not folding.
 String os_fold_case(Arena *a, String path) {
     if (path.count == 0) return path;
     Arena scratch = arena_make(1024);
