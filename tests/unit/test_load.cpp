@@ -625,7 +625,8 @@ TEST(load_failure_loses_a_file) {
     // given up after another error, in column 1 or not; and one passed over
     // after stray tokens, on the way to a declaration later on its line
     // (`* #load "b.rig"; main :: ...`). So does a loaded file's #load that
-    // fails. A file loaded twice, the main file loaded back, a syntax error
+    // fails, and a failure stays recorded when a file parsed later has none.
+    // A file loaded twice, the main file loaded back, a syntax error
     // in a loaded file, a #load missing only its ';', one in column 1 at the
     // end of a body or a struct never closed (read again at the top level),
     // or one starting the line where the recovery resumes after an error
@@ -661,6 +662,9 @@ TEST(load_failure_loses_a_file) {
         {"main :: () {\n    x := ;\n#load \"b.rig\";\n}\n", true},
         {"main :: () {\n    x := ;\n    #load \"b.rig\";\n}\n", true},
         {"* #load \"b.rig\"; main :: () {}\n", true},
+        {"#load \"nope.rig\";\n#load \"b.rig\";\n", true},
+        {"main :: () { #load \"b.txt\"; }\n#load \"b.rig\";\n", true},
+        {"#load \"c.rig\";\n#load \"b.rig\";\n", true},
         {"#load \"b.rig\";\n#load \"./b.rig\";\n#load \"main.rig\";\n", false},
         {"#load \"broken.rig\";\n", false},
         {"#load \"b.rig\"\n", false},
