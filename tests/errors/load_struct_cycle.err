@@ -1,0 +1,3 @@
+tests/errors/load/outer.rig:3:1: error: 'Outer' contains itself; it can hold a pointer to itself, *Outer
+    Outer :: struct {
+    ^

@@ -216,8 +216,8 @@
 // where the end was found.
 //
 // So one mistake gives one error, and the checker can still check the rest
-// of the file: the broken declaration's name is known to be declared, so
-// its uses aren't reported as unknown.
+// of the program (every file of it): the broken declaration's name is
+// known to be declared, so its uses aren't reported as unknown.
 
 #pragma once
 

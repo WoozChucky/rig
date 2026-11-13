@@ -827,9 +827,10 @@ static LLVMMetadataRef part_debug_type(Backend *b, Type *part, s32 depth, s32 *l
 
 // A struct type, t, named `name`, made `depth` levels down, in its file at
 // its line (type_debug_file, type_debug_line: a view or a string, which no
-// line declares, is in the main file at line 0). A struct can hold a pointer to itself
-// (Node's next: *Node), or a view of itself, so making a member's type can
-// lead back to the struct before it's made. So it's made in three steps:
+// line declares, is in the main file at line 0). A struct can hold a
+// pointer to itself (Node's next: *Node), or a view of itself, so making a
+// member's type can lead back to the struct before it's made. So it's made
+// in three steps:
 //   1. a temporary node, a replaceable composite, stands for it: remembered
 //      as t's debug type (of one level: a part that leads back to it adds
 //      none, then and after, see DEBUG_TYPE_LEVELS), it's what a pointer
@@ -1426,7 +1427,7 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
 
     LLVMMetadataRef plain = LLVMDIBuilderCreateExpression(b->debug, nullptr, 0);
     // Each variable is in the procedure's file, as its scopes are.
-    LLVMMetadataRef file = b->files[body->file];
+    LLVMMetadataRef file = debug_file(b, p->pos);
     // The result pointers, parameters 1 to `pointers` (the visible ones
     // come after them), at the procedure's own line: the i-th points at the
     // i-th aggregate result.

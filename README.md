@@ -72,7 +72,7 @@ What works today, as [the specification](docs/rig-spec.md) describes it:
 
 ## Status
 
-Rig is early. Milestones 1 (hello world) and 2 (the core language) of 8 are done, released as [Rig 0.2.0](https://github.com/WoozChucky/rig/releases/tag/v0.2.0), the first release; milestone 3, compile-time execution, is next. The [roadmap](https://github.com/WoozChucky/rig/issues/85) has the milestones and where each stands.
+Rig is early. Milestones 1 (hello world) and 2 (the core language) of 8 are done, released as [Rig 0.2.0](https://github.com/WoozChucky/rig/releases/tag/v0.2.0), the first release; milestone 3, compile-time execution, is under way, its first part, programs of several files (`#load`), done. The [roadmap](https://github.com/WoozChucky/rig/issues/85) has the milestones and where each stands.
 
 ## Quick start
 

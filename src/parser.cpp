@@ -1804,7 +1804,8 @@ static bool looks_declared(Parser *p, s64 start) {
 // followed by '::' (`#greet ::`, a stray '#' the lexer read as part of the
 // name). Taking a name means less is reported (calls to greet), so it is
 // taken only there: anything else after an identifier (a stray `foo("x");`
-// outside any body) would hide every unknown use of foo in the file.
+// outside any body) would hide every unknown use of foo in the program,
+// in any of its files.
 // Otherwise, and when the declaration starts with anything else (a stray
 // '}'), the entry has no name.
 static Ast_Proc *broken_entry(Parser *p, s64 start) {
