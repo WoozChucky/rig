@@ -1,5 +1,5 @@
-// helpers.cpp: test helpers shared by the parser's, checker's, IR's, LLVM
-// backend's and linker's tests.
+// helpers.cpp: test helpers shared by the parser's, loader's, checker's,
+// IR's, LLVM backend's and linker's tests.
 //
 // Two ways to get tokens. src() lexes real source text, the way rig build
 // does; milestone 2's tests use it, since the lexer is complete and source
