@@ -1,8 +1,22 @@
 @echo off
 rem get_llvm.bat: downloads the pinned LLVM release for Windows into
 rem deps\llvm-windows (or RIG_LLVM_DIR), keeping only what building Rig
-rem needs: the C API's headers, the static libraries, llvm-config and
-rem lld-link.
+rem needs:
+rem   - the C API's headers, the static libraries and llvm-config, which
+rem     Rig's compiler is compiled against and linked with;
+rem   - lld-link, the linker build.bat puts beside rig.exe, which rig.exe
+rem     uses when Visual Studio has no link.exe;
+rem   - clang, the compiler that builds Rig (build.bat): bin\clang++.exe, the
+rem     name build.bat runs (it compiles C++ and links C++'s runtime), with
+rem     bin\clang.exe, the same program under its own name; and
+rem     lib\clang\MAJOR\include, its own headers (stddef.h, stdarg.h, the
+rem     intrinsics...), which it finds from where it's installed
+rem     (bin\..\lib\clang\MAJOR). None of its other tools are kept. Visual
+rem     Studio's C and C++ libraries and headers aren't LLVM's to ship:
+rem     clang uses the installed ones, as build.bat says.
+rem Running it again extracts everything again over what's there, so a
+rem deps\llvm-windows from before clang was kept gets it without being
+rem deleted.
 rem
 rem The version is pinned on purpose (spec section 3): changing it is a
 rem deliberate change to this file, its checksum and get_llvm.sh.
@@ -12,6 +26,8 @@ setlocal
 cd /d "%~dp0\.."
 
 set VERSION=23.1.5
+rem MAJOR, 23: clang's resource directory is lib\clang\23.
+for /f "delims=." %%m in ("%VERSION%") do set MAJOR=%%m
 set ARCHIVE=clang+llvm-%VERSION%-x86_64-pc-windows-msvc.tar.xz
 set SHA256=62fdada7f6fa2b73856486dfbbdba3d2c1882991621615bcb55c60207611c6d4
 set URL=https://github.com/llvm/llvm-project/releases/download/llvmorg-%VERSION%/%ARCHIVE%
@@ -37,7 +53,7 @@ if /i not "%ACTUAL%"=="%SHA256%" (
 )
 
 echo extracting into %DEST%
-tar.exe -xf "deps\%ARCHIVE%" -C "%DEST%" --strip-components=1 "*/include/llvm-c/*" "*/include/llvm/Config/*" "*/lib/LLVM*.lib" "*/bin/llvm-config.exe" "*/bin/lld-link.exe" || exit /b 1
+tar.exe -xf "deps\%ARCHIVE%" -C "%DEST%" --strip-components=1 "*/include/llvm-c/*" "*/include/llvm/Config/*" "*/lib/LLVM*.lib" "*/bin/llvm-config.exe" "*/bin/lld-link.exe" "*/bin/clang.exe" "*/bin/clang++.exe" "*/lib/clang/%MAJOR%/include/*" || exit /b 1
 
 del "deps\%ARCHIVE%"
 echo LLVM %VERSION% is in %DEST%
