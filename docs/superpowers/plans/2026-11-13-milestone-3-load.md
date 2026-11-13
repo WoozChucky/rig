@@ -10,7 +10,7 @@
 - The checker and lowering need almost nothing new: `Position.file` already exists, diagnostics already sort by file, and the "already declared at PATH:L:C" message already names files.
 - The debug information goes from one source file per module to a list of them, one DIFile each.
 
-**Tech Stack:** C-style C++23 built with the pinned clang 23.1.5 (`build.bat`, `build.sh`), LLVM 23.1.5's C API, no STL. Windows (`GetFileInformationByHandle`) and Linux (`stat`) for file identity. gdb and cdb for the debugger test.
+**Tech Stack:** C-style C++23 built with the pinned clang 23.1.5 (`build.bat`, `build.sh`), LLVM 23.1.5's C API, no STL. Windows (`GetFileInformationByHandleEx`'s `FILE_ID_INFO`, with `GetFileInformationByHandle`'s 64-bit index as a fallback) and Linux (`stat`) for file identity. gdb and cdb for the debugger test.
 
 **Spec:** GitHub issue #112 (the decisions), and `docs/rig-spec.md`, which this plan updates (Task 5). Executors read both.
 
@@ -26,6 +26,9 @@
   - `'PATH' isn't a .rig file`, at the `#load`'s string
   - `cannot read 'PATH': MESSAGE`, at the `#load`'s string, MESSAGE being `os_error_message`
   - The existing `'NAME' is already declared at PATH:L:C` for a name declared in two files.
+- **Messages the loader adds** (not in #112; a path the system can't take, so no file is read), at the `#load`'s string:
+  - `a #load path can't be empty`
+  - `a #load path can't contain a zero byte` (a string can hold `\0`, but the system's paths end at one)
 - **Path rules:**
   - A `#load` path is relative to the directory of the file holding it; absolute paths stay as they are.
   - A diagnostic's PATH for a loaded file is the loading file's PATH up to and including its last separator, followed by the path as written (`src/` + `world/map.rig`).
@@ -93,7 +96,7 @@
 **Files:**
 - Create: `src/load.h`, `src/load.cpp` (and add `load.cpp` to `src/all.cpp`)
 - Modify: `src/os.h`, `src/os_windows.cpp`, `src/os_linux.cpp` (`os_file_id`)
-- Modify: `src/base.h`, `src/base.cpp` (`load_path`, a pure path helper beside `path_absolute`)
+- Modify: `src/base.h`, `src/base.cpp` (`load_path`, a pure path helper beside `path_absolute`; `is_rig_file`, moved there from `src/driver.cpp`)
 - Test: create `tests/unit/test_load.cpp` (and add it to `tests/unit/unit.cpp`); `tests/unit/test_os.cpp`; `tests/unit/test_base.cpp`
 
 **Interfaces:**
@@ -101,10 +104,13 @@
 - Produces:
   ```cpp
   // os.h: the file's identity: same file, same id, whatever path names it
-  // (links, "..", case on Windows). Linux: stat's st_dev and st_ino;
-  // Windows: GetFileInformationByHandle's volume serial number and file
-  // index. False when the file can't be opened.
-  bool os_file_id(String path, u64 id[2]);
+  // (links, "..", case on Windows). Linux: stat's st_dev and st_ino, and 0;
+  // Windows: the volume serial number and FILE_ID_INFO's 128-bit file id
+  // (ReFS's ids need all 128 bits), or, where a file system has no 128-bit
+  // ids, GetFileInformationByHandle's 64-bit index and 0. False when the
+  // file can't be opened, and when its id is 0 (a file system with no ids
+  // to give).
+  bool os_file_id(String path, u64 id[3]);
 
   // base.h: where `#load "written"` in the file at `from` points: `written`
   // when it's absolute (Linux: starts with '/'; Windows: a drive, "C:", or a
@@ -112,21 +118,21 @@
   // separator (\ counts only when `windows`), followed by `written`.
   String load_path(Arena *a, String from, String written, bool windows);
 
+  // base.h, moved from driver.cpp, as the loader uses it too.
+  bool is_rig_file(String path);
+
   // load.h
-  struct Loaded_Program {
-      Ast_File *tree;                  // every file's declarations; null if a file had errors
-      Array<Array<Token>> tokens;      // each file's tokens, kept as long as the tree is used
-  };
   // Lexes and parses `text`, the main file, named `path` (which need not
   // exist: rig check --stdin), then every file it #loads, transitively,
-  // each once, in load order. Every file is registered with `d`
+  // each once, in load order, into one tree: every file's declarations,
+  // broken ones included. Every file is registered with `d`
   // (diag_add_file, diag_locate_file from os_current_directory). Errors go
-  // to `d`; the tree is returned even with errors, so the checker still
-  // runs as today.
-  Loaded_Program load_program(Arena *a, Diagnostics *d, String path, String text);
-  void loaded_program_free(Loaded_Program *p);
+  // to `d`; the tree is returned even with errors, never null, so the
+  // checker still runs as today. The tree keeps nothing of the tokens, so
+  // each file's are freed once it's parsed.
+  Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text);
   ```
-- The main file's id is recorded when it exists, so a file loading it back loads nothing.
+- The main file is recorded before its `#load`s are followed, so a file loading it back loads nothing: by its id, or, when it has none (it doesn't exist, under `--stdin`), by its path made absolute. Any file without an id is known that way, so a missing file is reported at its first `#load` alone.
 
 - [ ] **Step 1: Write the failing tests.**
   - `test_base.cpp`, `load_path_joins_and_keeps_absolute`:
@@ -150,7 +156,7 @@
     - `load_missing_file`: `#load "nope.rig";` gives the error `cannot read '<dir>/nope.rig': ...` at the string's position in the main file. The prefix is checked, not the system's reason.
     - `load_not_a_rig_file`: `#load "b.txt";` gives `'<dir>/b.txt' isn't a .rig file` at the string. The file isn't read.
     - `load_with_stdin_path`: `load_program` given text with `#load "b.rig";` and a path `<dir>/absent.rig` that doesn't exist loads `<dir>/b.rig`.
-    - `load_long_chain`: 2000 files, each loading the next. Loads with no errors, which proves the queue doesn't recurse.
+    - `load_long_chain`: 5000 files, each loading the next, on a 64 KB stack. Loads with no errors, which proves the queue doesn't recurse: 5000 frames of at least 64 bytes don't fit in any stack glibc may hand the thread (at most 256 KB).
 - [ ] **Step 2: Run them and check they fail.** `build.bat` must fail, since `load_program`, `os_file_id` and `load_path` aren't declared yet.
 - [ ] **Step 3: Implement** `os_file_id` for both systems, `load_path`, and `load_program`.
   - On Windows, open with `CreateFileW` (`FILE_READ_ATTRIBUTES`, every share mode, `FILE_FLAG_BACKUP_SEMANTICS`) from the UTF-16 path, as `os_read_file` converts it.
@@ -169,8 +175,8 @@
 - Modify: `tests/runner.cpp`, only if a subdirectory of `tests/run` or `tests/errors` isn't skipped already. It lists only `*.rig`, so `load/` should be.
 
 **Interfaces:**
-- Consumes: Task 2's `load_program`, `loaded_program_free`.
-- `read_and_check` keeps its signature. It reads the main text as now, then `load_program(a, &d, path, text)`, check and lowering are as today, and `loaded_program_free` goes where `array_free(&tokens)` is now.
+- Consumes: Task 2's `load_program`.
+- `read_and_check` keeps its signature. It reads the main text as now, then `Ast_File *tree = load_program(a, &d, path, text)` (never null), and check and lowering are as today. Its `array_free(&tokens)` goes: the loader frees each file's tokens.
 
 - [ ] **Step 1: Write the failing end-to-end tests.**
   - `tests/run/load_files.rig`:
@@ -243,7 +249,7 @@
   - 4.6 and 4.7: the top level spans files;
   - 8.1: PATH for a loaded file;
   - 9.1: paths, and sorting by file in load order;
-  - 9.3: the new messages;
+  - 9.3: the new messages, those from #112 and the two the loader adds (`a #load path can't be empty`, `a #load path can't contain a zero byte`);
   - 10.1: `rig build`/`rig check` read the loaded files, and `--stdin` resolves from FILE's directory;
   - 10.7: one file entry per source;
   - appendix A: `LoadDecl = "#load" string_lit ";" .` among the top-level declarations.

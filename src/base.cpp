@@ -321,6 +321,12 @@ String load_path(Arena *a, String from, String written, bool windows) {
     return {out, directory + written.count};
 }
 
+bool is_rig_file(String path) {
+    if (path.count < 4) return false;
+    const u8 *end = path.data + path.count - 4;
+    return end[0] == '.' && (end[1] | 0x20) == 'r' && (end[2] | 0x20) == 'i' && (end[3] | 0x20) == 'g';
+}
+
 // ---------------------------------------------------------------------------
 // MD5 (RFC 1321)
 //

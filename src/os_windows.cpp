@@ -134,6 +134,9 @@ bool os_file_exists(String path) {
 // above it. Every name of the file opens that same file, so gives the same
 // id: Windows takes "." and ".." out of a path by its text before opening
 // it, names in another case are the same name, and opening follows links.
+// Which ids a file system gives is its own affair, though, and some (a
+// network share's, a virtual machine's shared folder's) give every file 0:
+// such an id would make every file the first one, so it counts as none.
 bool os_file_id(String path, u64 id[3]) {
     Arena scratch = arena_make(1024);
     HANDLE file = CreateFileW(to_wide(&scratch, path), FILE_READ_ATTRIBUTES,
@@ -158,6 +161,10 @@ bool os_file_id(String path, u64 id[3]) {
     }
     if (!ok) os_fail();
     CloseHandle(file);
+    if (ok && id[1] == 0 && id[2] == 0) {
+        os_last_error = ERROR_NOT_SUPPORTED;
+        return false;
+    }
     return ok;
 }
 
