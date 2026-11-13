@@ -46,8 +46,10 @@ class SpecError extends Error {}
 // GitHub's heading anchors: lower case, punctuation other than '-' and '_'
 // removed, spaces turned into '-', and a repeated anchor numbered '-1', '-2'.
 // The site keeps GitHub's anchors so that a link into docs/rig-spec.md on
-// GitHub and one into the site name a heading the same way.
-function githubSlug(text) {
+// GitHub and one into the site name a heading the same way. config.mts gives
+// it to VitePress too, which runs every link's '#anchor' through its slugify:
+// VitePress's own would turn '#315-procedure-types' into '#_315-procedure-types'.
+export function githubSlug(text) {
   return text
     .trim()
     .toLowerCase()
