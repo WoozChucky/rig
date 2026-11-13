@@ -7,8 +7,11 @@
 // write as source (a module growing between runs, a relocation to a C
 // function that isn't there, a call of a stray address or of a native one
 // of the test's own, 65,537 procedures), build it by hand. Then the call thunks' tests (thunk.h) call
-// C functions through them directly, in this process, and the last ones
-// have interpreted code call C, as a program does.
+// C functions through them directly, in this process, and the next ones
+// have interpreted code call C, as a program does. The last run
+// bin/unit-tests --interpret (interpret_mode.cpp), which interprets a
+// whole program as bin/run-tests does each of tests/run, as a child
+// process.
 
 #include "test.h"
 
@@ -2640,3 +2643,131 @@ TEST(interp_calls_a_windows_function) {
     arena_free(&a);
 }
 #endif
+
+// ---------------------------------------------------------------------------
+// bin/unit-tests --interpret FILE.rig (interpret_mode.cpp), the mode the
+// test runner interprets every tests/run program with, run here as a child
+// process: a program's exit, or its failure, ends the process.
+
+// .build/tests/interp/NAME.rig holding `text`, written for the mode to run;
+// its path.
+static String interpret_test_file(Arena *a, const char *name, const char *text) {
+    os_make_directory(str(".build"));
+    os_make_directory(str(".build/tests"));
+    os_make_directory(str(".build/tests/interp"));
+    String path = string_printf(a, ".build/tests/interp/%s.rig", name);
+    CHECK(os_write_file(path, str(text)));
+    return path;
+}
+
+// bin/unit-tests --interpret PATH, with a minute to finish, its stdout and
+// stderr one pipe when `merged`. The interpreted program writes as a
+// compiled one does, in text mode, so on Windows each "\r\n" is read as
+// "\n", as the test runner reads them.
+static Process_Result interpret_test_run(Arena *a, String path, bool merged) {
+    Array<String> argv = {};
+    array_add(&argv, unit_tests_path(a));
+    array_add(&argv, str("--interpret"));
+    array_add(&argv, path);
+    Process_Result r = {};
+    bool ran = merged ? os_run_merged(a, argv, {}, 60, &r) : os_run_for(a, argv, {}, 60, &r);
+    CHECK(ran);
+    CHECK(!r.timed_out);
+    array_free(&argv);
+#ifdef _WIN32
+    String streams[2] = {r.out, r.err};
+    for (String &s : streams) {
+        u8 *text = (u8 *)arena_alloc(a, s.count ? s.count : 1, 1);
+        s64 n = 0;
+        for (s64 i = 0; i < s.count; i++) {
+            if (s.data[i] == '\r' && i + 1 < s.count && s.data[i + 1] == '\n') continue;
+            text[n++] = s.data[i];
+        }
+        s = {text, n};
+    }
+    r.out = streams[0];
+    r.err = streams[1];
+#endif
+    return r;
+}
+
+TEST(interpret_mode_runs_a_program) {
+    Arena a = arena_make();
+    String path = interpret_test_file(&a, "hello",
+                                      "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                      "main :: () { puts(\"Hello\"); }\n");
+    Process_Result r = interpret_test_run(&a, path, false);
+    CHECK_STR(r.out, "Hello\n");
+    CHECK_STR(r.err, "");
+    CHECK_EQ(r.exit_code, 0);
+    arena_free(&a);
+}
+
+TEST(interpret_mode_exit) {
+    // C's exit ends the process, the mode's, with its status, and flushes
+    // what printf wrote before it.
+    Arena a = arena_make();
+    String path = interpret_test_file(&a, "exit",
+                                      "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                      "exit :: (status: s32) #foreign libc;\n"
+                                      "main :: () {\n"
+                                      "    printf(\"before %d\\n\", 7);\n"
+                                      "    exit(7);\n"
+                                      "    printf(\"after\\n\");\n"
+                                      "}\n");
+    Process_Result r = interpret_test_run(&a, path, false);
+    CHECK_STR(r.out, "before 7\n");
+    CHECK_STR(r.err, "");
+    CHECK_EQ(r.exit_code, 7);
+    arena_free(&a);
+}
+
+TEST(interpret_mode_flushes_before_failing) {
+    // stdout and stderr one pipe, as a compiled program's are in
+    // runner.cpp's merged_output_test: what printf wrote comes out before
+    // the runtime error, which is the program's own panic text.
+    Arena a = arena_make();
+    String path = interpret_test_file(&a, "fail",
+                                      "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                      "main :: () {\n"
+                                      "    printf(\"before\\n\");\n"
+                                      "    zero := 0;\n"
+                                      "    n := 1 / zero;\n"
+                                      "}\n");
+    Process_Result r = interpret_test_run(&a, path, true);
+    CHECK_STR(r.out, "before\n.build/tests/interp/fail.rig:5:12: runtime error: division by zero\n");
+    CHECK_EQ(r.exit_code, 101);
+    arena_free(&a);
+}
+
+TEST(interpret_mode_failure_without_a_panic) {
+    // A failure that isn't the program's panic, the stack running out, is
+    // written as a runtime error would be, at its innermost frame: the call
+    // that didn't fit.
+    Arena a = arena_make();
+    String path = interpret_test_file(&a, "overflow",
+                                      "down :: (n: int) -> int {\n"
+                                      "    return down(n + 1) + 1;\n"
+                                      "}\n"
+                                      "main :: () { down(0); }\n");
+    Process_Result r = interpret_test_run(&a, path, false);
+    CHECK_STR(r.out, "");
+    CHECK_STR(r.err, ".build/tests/interp/overflow.rig:2:5: runtime error: stack overflow\n");
+    CHECK_EQ(r.exit_code, 101);
+    arena_free(&a);
+}
+
+TEST(interpret_mode_reports_a_programs_errors) {
+    // A program that doesn't check isn't run: its diagnostics, as rig
+    // build prints them, and exit status 1.
+    Arena a = arena_make();
+    String path = interpret_test_file(&a, "broken", "main :: () { putz(\"hi\"); }\n");
+    Process_Result r = interpret_test_run(&a, path, false);
+    CHECK_STR(r.out, "");
+    CHECK_STR(r.err,
+              ".build/tests/interp/broken.rig:1:14: error: unknown identifier 'putz'\n"
+              "    main :: () { putz(\"hi\"); }\n"
+              "                 ^\n");
+    CHECK_EQ(r.exit_code, 1);
+    arena_free(&a);
+}
