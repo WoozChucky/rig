@@ -19,12 +19,13 @@ bool is_rig_file(String path) {
 }
 
 // Records the file at `path` as loaded, by its id (os_file_id), in `seen`:
-// the ids' 16 bytes, copied into the arena, are the keys. False when it was
-// loaded already. A file whose id can't be had (one that doesn't exist, as
-// rig check --stdin's path needn't) is taken as new; reading it says why
-// it can't be.
+// the ids' 24 bytes, copied into the arena, are the keys. False when it was
+// loaded already. A file whose id can't be had (one that doesn't exist) is
+// taken as new: a loaded file is then read, and the read says why it
+// can't be. The main file under rig check --stdin needn't exist and isn't
+// read at all; a file loading it back reads it from disk.
 static bool first_time_seen(Arena *a, Table<bool> *seen, String path) {
-    u64 id[2];
+    u64 id[3];
     if (!os_file_id(path, id)) return true;
     u8 *key = arena_new_array<u8>(a, sizeof id);
     memcpy(key, id, sizeof id);
@@ -57,6 +58,17 @@ Loaded_Program load_program(Arena *a, Diagnostics *d, String path, String text) 
         parse_into(program.tree, tokens, a, d);
         for (s64 k = first_load; k < program.tree->loads.count; k++) {
             Ast_Load *load = program.tree->loads[k];
+            // A string can hold a zero byte (\0), but the system takes a
+            // path as ending at one, so "b.rig\0x.rig" would read b.rig:
+            // such a path, as an empty one, names no file.
+            if (load->path.count == 0) {
+                diag_error(d, load->path_pos, "a #load path can't be empty");
+                continue;
+            }
+            if (memchr(load->path.data, 0, (size_t)load->path.count)) {
+                diag_error(d, load->path_pos, "a #load path can't contain a zero byte");
+                continue;
+            }
             String loaded = load_path(a, d->files[file].path, load->path, HOST_IS_WINDOWS);
             if (!is_rig_file(loaded)) {
                 diag_error(d, load->path_pos, "'" STR_FMT "' isn't a .rig file", STR_ARG(loaded));

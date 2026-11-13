@@ -104,8 +104,9 @@ bool os_file_exists(String path) {
 
 // The device the file is on and its inode there: stat follows every
 // symbolic link on the way, and the kernel resolves "..", so every name of
-// the file reaches the same pair.
-bool os_file_id(String path, u64 id[2]) {
+// the file reaches the same pair. The id's third u64 is 0: an inode number
+// fits in one, where Windows' 128-bit file ids take two (os_windows.cpp).
+bool os_file_id(String path, u64 id[3]) {
     Arena scratch = arena_make(1024);
     struct stat st;
     bool ok = stat(string_cstr(&scratch, path), &st) == 0;
@@ -114,6 +115,7 @@ bool os_file_id(String path, u64 id[2]) {
     if (!ok) return false;
     id[0] = (u64)st.st_dev;
     id[1] = (u64)st.st_ino;
+    id[2] = 0;
     return true;
 }
 

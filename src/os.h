@@ -27,10 +27,11 @@ bool os_file_exists(String path);
 // The file's identity, in id: the same for one file whatever path names it
 // (through a symbolic link, with "." and "..", in another case on Windows),
 // and different for another file, so the loader reads each file of a
-// program once (load.h). Linux: stat's st_dev and st_ino; Windows:
-// GetFileInformationByHandle's volume serial number and file index. False
-// when the file can't be opened.
-bool os_file_id(String path, u64 id[2]);
+// program once (load.h). A directory has one too. Linux: stat's st_dev and
+// st_ino, and 0; Windows: the volume's serial number and the file's 128-bit
+// id (FILE_ID_INFO), in two. False when the file isn't there or can't be
+// reached (os_error_message says why).
+bool os_file_id(String path, u64 id[3]);
 
 // Creates one directory (not its parents). True if it exists already.
 bool os_make_directory(String path);

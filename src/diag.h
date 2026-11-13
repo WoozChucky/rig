@@ -24,7 +24,9 @@ struct Position {
 };
 
 struct Source_File {
-    String path;           // as given on the command line: what messages name
+    // What messages name the file by: the main file's path as given on the
+    // command line, a loaded file's as load_path makes it (load.h).
+    String path;
     String text;
     // Where the file is, for the debug information (diag_locate_file);
     // empty until then.
