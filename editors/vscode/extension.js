@@ -178,13 +178,15 @@ function activeDocument() {
 // else the active editor's file. A relative `file` is from the task's
 // workspace folder; a task with none (one in a .code-workspace file, or with
 // no folder open) has nothing to take it from, and needs a full path.
-function taskFile(definition, folder) {
+// `what` names the definition in that message: a task, or the debugger's
+// launch configuration, whose file is taken the same way.
+function taskFile(definition, folder, what = 'task') {
     if (definition.file) {
         if (path.isAbsolute(definition.file)) return { file: path.resolve(definition.file) };
         if (folder) return { file: path.resolve(folder.uri.fsPath, definition.file) };
         return {
             error:
-                `the task's file "${definition.file}" is relative, but the task isn't in a workspace folder ` +
+                `the ${what}'s file "${definition.file}" is relative, but the ${what} isn't in a workspace folder ` +
                 `to take it from: give the full path, or \${workspaceFolder:NAME}/${definition.file}.`,
         };
     }
@@ -580,34 +582,47 @@ function expandFile(given, folder) {
 // resolves with its exit status: 0 when it built, undefined if the task was
 // stopped.
 //
-// VS Code says a task's process has ended with onDidEndTaskProcess, an
-// event for every task, so the build is told apart by the TaskExecution
-// executeTask returns. The listener is in place before the task starts, so
-// its end can't be missed; one that comes before executeTask has said which
-// execution is the build's is kept until it has.
+// VS Code says a task's process has ended with onDidEndTaskProcess, with
+// its exit status, and then that the task has ended with onDidEndTask;
+// both are events for every task, so the build's are told apart by the
+// TaskExecution executeTask returns. A task can end with no process end
+// (stopped before its process ended, say), so the task's end alone
+// resolves too, with no status: whatever happened, the launch doesn't wait
+// for good. The listeners are in place before the task starts, so its end
+// can't be missed; events that come before executeTask has said which
+// execution is the build's are kept until it has.
 function build(file, scope) {
     return new Promise((resolve, reject) => {
-        let execution;   // the build's, once executeTask resolves
-        const early = []; // processes that ended before then
-        const subscription = vscode.tasks.onDidEndTaskProcess((event) => {
-            if (execution === undefined) early.push(event);
-            else if (event.execution === execution) done(event.exitCode);
-        });
-        const done = (status) => {
-            subscription.dispose();
-            resolve(status);
+        let execution;    // the build's, once executeTask resolves
+        let early = [];   // events that came before then, in order: { ended, status }
+        let finished = false;
+        const subscriptions = [];
+        const finish = (settle, value) => {
+            if (finished) return;
+            finished = true;
+            for (const subscription of subscriptions) subscription.dispose();
+            settle(value);
         };
+        // `ended`: the task's end (true) or its process's (false).
+        const heard = (event, ended) => {
+            if (execution === undefined) early.push({ event, ended });
+            else if (event.execution === execution) finish(resolve, ended ? undefined : event.exitCode);
+        };
+        subscriptions.push(vscode.tasks.onDidEndTaskProcess((event) => heard(event, false)));
+        subscriptions.push(vscode.tasks.onDidEndTask((event) => heard(event, true)));
         const task = makeTask({ type: 'rig', command: 'build', file }, scope, TASK_NAMES.build);
         vscode.tasks.executeTask(task).then(
             (started) => {
+                if (!started) {
+                    finish(reject, new Error('VS Code started no task'));
+                    return;
+                }
                 execution = started;
-                const ended = early.find((event) => event.execution === started);
-                if (ended) done(ended.exitCode);
+                const before = early;
+                early = [];
+                for (const { event, ended } of before) heard(event, ended);
             },
-            (e) => {
-                subscription.dispose();
-                reject(e);
-            },
+            (e) => finish(reject, e),
         );
     });
 }
@@ -641,7 +656,7 @@ const debugProvider = {
         if (config.file) {
             target = expandFile(String(config.file), folder);
             // A relative path is from the configuration's folder, as a task's is.
-            if (!target.error) target = taskFile({ file: target.file }, folder);
+            if (!target.error) target = taskFile({ file: target.file }, folder, 'launch configuration');
         } else {
             target = documentFile(activeDocument());
         }
@@ -684,6 +699,12 @@ const debugProvider = {
             status = await build(file, scope);
         } catch (e) {
             vscode.window.showErrorMessage(`Rig: couldn't start the build: ${e && e.message ? e.message : e}`);
+            return undefined;
+        }
+        // No status: the build was stopped (Terminate Task), or ended
+        // without its process saying how.
+        if (status === undefined) {
+            vscode.window.showErrorMessage('Rig: the build was stopped.');
             return undefined;
         }
         if (status !== 0) {

@@ -648,6 +648,7 @@ function reset() {
         onCommand: () => {},     // what a command does
         executed: [],            // tasks started
         runTasks: false,         // whether executeTask runs them, or only records them
+        taskRunner: null,        // instead, what executeTask does: (task, execution) => what it resolves with
         taskOutput: '',          // what the tasks it ran wrote to their terminals
         extensions: ['ms-vscode.cpptools'], // the extensions installed
         debugged: [],            // startDebugging's calls: { folder, config }
@@ -773,18 +774,24 @@ const vscodeStub = {
         // As VS Code does with a CustomExecution task, when stub.runTasks
         // is set: makes its pseudoterminal from the definition, opens it, and
         // when it closes, fires onDidEndTaskProcess with the execution this
-        // returned and the status it closed with.
+        // returned and the status it closed with, then onDidEndTask. A
+        // check that sets stub.taskRunner does what that does instead.
         executeTask: async (task) => {
             stub.executed.push(task);
             const execution = { task };
+            if (stub.taskRunner) return stub.taskRunner(task, execution);
             if (!stub.runTasks) return execution;
             const terminal = await task.execution.callback(task.definition);
             terminal.onDidWrite((text) => (stub.taskOutput += text));
-            terminal.onDidClose((exitCode) => fire('endTaskProcess', { execution, exitCode }));
+            terminal.onDidClose((exitCode) => {
+                fire('endTaskProcess', { execution, exitCode });
+                fire('endTask', { execution });
+            });
             terminal.open();
             return execution;
         },
         onDidEndTaskProcess: listen('endTaskProcess'),
+        onDidEndTask: listen('endTask'),
     },
     debug: {
         registerDebugConfigurationProvider: (type, provider) => {
@@ -901,6 +908,12 @@ check('a relative task file with no workspace folder is an error', () => {
     assert.deepStrictEqual(taskFile({ type: 'rig', command: 'build', file: 'hello.rig' }, folder), {
         file: path.join(folder.uri.fsPath, 'hello.rig'),
     });
+    // A launch configuration's file is said to be one, not a task's.
+    const launched = taskFile({ file: 'hello.rig' }, undefined, 'launch configuration');
+    assert.match(
+        launched.error || '',
+        /^the launch configuration's file "hello\.rig" is relative, but the launch configuration isn't in a workspace folder/,
+    );
 });
 
 // What reaches the program from what's typed: escape sequences (arrow keys,
@@ -1050,9 +1063,10 @@ function fakeDocument(file, text) {
     };
 }
 
-// Fires one of VS Code's events at the extension's listeners.
+// Fires one of VS Code's events at the extension's listeners (a copy of
+// the list, since a listener may dispose of itself).
 function fire(event, value) {
-    for (const listener of activated.listeners[event] || []) listener(value);
+    for (const listener of [...(activated.listeners[event] || [])]) listener(value);
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1380,26 +1394,124 @@ check('a configuration\'s file with another variable is refused', async () => {
     });
 });
 
-// Each case cancels the launch (undefined) and says why, with a button.
+// Each case cancels the launch (undefined) and says why, with a button
+// (pressed here) that runs the command which helps, with its argument; a
+// failed build has no button.
 check('untrusted, untitled, no compiler, no C/C++ extension and a failed build cancel with a reason', async () => {
     const provider = debugProvider();
     const cases = [
-        ['untrusted', () => (stub.trusted = false), /trust/i],
-        ['untitled', () => (stub.document = untitled), /save the file first/],
-        ['no compiler', (dir) => (stub.compilerPath = path.join(dir, 'no-such-rig')), /rig\.compilerPath/],
-        ['no C/C++ extension', () => (stub.extensions = []), /C\/C\+\+ extension/],
+        ['untrusted', () => (stub.trusted = false), /trust/i, 'Manage Workspace Trust', ['workbench.trust.manage', undefined]],
+        ['untitled', () => (stub.document = untitled), /save the file first/, 'Save As...', ['workbench.action.files.saveAs', undefined]],
+        [
+            'no compiler',
+            (dir) => (stub.compilerPath = path.join(dir, 'no-such-rig')),
+            /rig\.compilerPath/,
+            'Open Settings',
+            ['workbench.action.openSettings', 'rig.compilerPath'],
+        ],
+        [
+            'no C/C++ extension',
+            () => (stub.extensions = []),
+            /C\/C\+\+ extension/,
+            'Install C/C++ Extension',
+            ['workbench.extensions.installExtension', 'ms-vscode.cpptools'],
+        ],
         ['a failed build', (dir, file) => fs.writeFileSync(file, 'main :: () { fail(); }\n'), /^Rig: the build failed; see the terminal and the Problems panel\.$/],
     ];
-    for (const [what, set, message] of cases) {
+    for (const [what, set, message, button, command] of cases) {
         await withDebugging(async (dir, folder, file) => {
             set(dir, file);
+            stub.answers = button ? [button] : [];
             const resolved = await provider.resolveDebugConfiguration(folder, {});
             assert.strictEqual(resolved, undefined, what);
             assert.strictEqual(stub.errors.length, 1, `${what}: ${stub.errors.join(' | ')}`);
             assert.match(stub.errors[0], message, what);
             assert.strictEqual(stub.executed.length, what === 'a failed build' ? 1 : 0, what);
+            await sleep(0); // the button's answer comes after the provider has returned
+            assert.deepStrictEqual(stub.commands, command ? [command] : [], what);
         });
     }
+});
+
+// The build's end, however it comes: stopped (Terminate Task closes its
+// terminal with no status), ended with no process end (onDidEndTask
+// alone), even before executeTask has resolved, or never started
+// (executeTask gives no execution). Each cancels the launch and says what
+// happened, rather than waiting for good, and leaves no listener behind.
+check('a build that\'s stopped, ends with no process or never starts cancels the launch and says so', async () => {
+    const provider = debugProvider();
+    const cases = [
+        [
+            'stopped',
+            (task, execution) => {
+                setImmediate(() => {
+                    fire('endTaskProcess', { execution, exitCode: undefined });
+                    fire('endTask', { execution });
+                });
+                return execution;
+            },
+            /^Rig: the build was stopped\.$/,
+        ],
+        [
+            'no process end',
+            (task, execution) => {
+                setImmediate(() => fire('endTask', { execution }));
+                return execution;
+            },
+            /^Rig: the build was stopped\.$/,
+        ],
+        [
+            'ended before executeTask resolved',
+            (task, execution) => {
+                fire('endTask', { execution });
+                return execution;
+            },
+            /^Rig: the build was stopped\.$/,
+        ],
+        ['no execution', () => undefined, /^Rig: couldn't start the build: /],
+    ];
+    for (const [what, runner, message] of cases) {
+        await withDebugging(async (dir, folder) => {
+            stub.taskRunner = runner;
+            const resolution = provider.resolveDebugConfiguration(folder, {});
+            const resolved = await Promise.race([resolution, sleep(2000).then(() => 'still waiting')]);
+            assert.strictEqual(resolved, undefined, what);
+            assert.strictEqual(stub.errors.length, 1, `${what}: ${stub.errors.join(' | ')}`);
+            assert.match(stub.errors[0], message, what);
+            assert.deepStrictEqual(activated.listeners.endTaskProcess || [], [], `${what}: a listener is left`);
+            assert.deepStrictEqual(activated.listeners.endTask || [], [], `${what}: a listener is left`);
+        });
+    }
+});
+
+// Run Without Debugging (Ctrl+F5) marks the configuration noDebug, which
+// the C/C++ extension's configuration keeps.
+check('noDebug is kept', async () => {
+    const provider = debugProvider();
+    const { debugConfiguration } = debugModule();
+    await withDebugging(async (dir, folder, file) => {
+        const resolved = await provider.resolveDebugConfiguration(folder, { noDebug: true });
+        assert.deepStrictEqual(stub.errors, []);
+        assert.deepStrictEqual(resolved, Object.assign(debugConfiguration(process.platform, file, dir, []), { noDebug: true }));
+    });
+});
+
+// A launch configuration in a .code-workspace file has no folder, so a
+// relative file has nothing to be relative to: it's refused, and the
+// message calls it a launch configuration, not a task.
+check('a relative file in a launch configuration with no folder is refused as a launch configuration\'s', async () => {
+    const provider = debugProvider();
+    await withDebugging(async () => {
+        const config = { type: 'rig', request: 'launch', name: 'x', file: 'sort.rig' };
+        const resolved = await provider.resolveDebugConfiguration(undefined, config);
+        assert.strictEqual(resolved, undefined);
+        assert.strictEqual(stub.errors.length, 1, stub.errors.join(' | '));
+        assert.match(
+            stub.errors[0],
+            /^Rig: the launch configuration's file "sort\.rig" is relative, but the launch configuration isn't in a workspace folder/,
+        );
+        assert.strictEqual(stub.executed.length, 0);
+    });
 });
 
 // The editor title's button and the command palette: a `rig`
