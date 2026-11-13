@@ -1,7 +1,7 @@
 // test_load.cpp: the loader (issue #112): which files a program's #loads
 // read, in what order, each once, and what's reported when one can't be.
 // Each test writes its files under .build/tests/load/NAME/, NAME the
-// test's, and loads them from there.
+// test's, and loads them from there. Uses test_os.cpp's SEPARATOR.
 
 #include "test.h"
 
@@ -41,14 +41,9 @@ static Ast_File *load_main(Arena *a, Diagnostics *d, String dir) {
 // names, made absolute by hand, as the debug information names the file:
 // the directory, then the names, each after the host's separator.
 static const char *in_current_directory(Arena *a, String relative) {
-#ifdef _WIN32
-    const char HOST_SEPARATOR = '\\';
-#else
-    const char HOST_SEPARATOR = '/';
-#endif
     String path = string_printf(a, STR_FMT "/" STR_FMT, STR_ARG(os_current_directory(a)), STR_ARG(relative));
     char *out = arena_new_array<char>(a, path.count + 1);
-    for (s64 i = 0; i < path.count; i++) out[i] = path.data[i] == '/' ? HOST_SEPARATOR : (char)path.data[i];
+    for (s64 i = 0; i < path.count; i++) out[i] = path.data[i] == '/' ? SEPARATOR : (char)path.data[i];
     out[path.count] = 0;
     return out;
 }
@@ -486,16 +481,15 @@ TEST(load_goes_on_after_a_syntax_error) {
             CHECK_STR(tree->procs[3]->name, "c");
         }
     }
-    // Errors in the main file and in b.rig, none in c.rig.
-    s64 in_file[3] = {};
-    for (s64 i = 0; i < d.messages.count; i++) {
-        s32 file = d.messages[i].pos.file;
-        CHECK(file >= 0 && file < 3);
-        if (file >= 0 && file < 3) in_file[file]++;
+    // One error in the main file, at its 0x, and one in b.rig, at x's
+    // missing value; none in c.rig.
+    diag_sort(&d);
+    CHECK_STR(messages(&a, &d), "2:19: number literal '0x' has no digits\n"
+                                "1:6: expected an expression, found ';'\n");
+    if (d.messages.count == 2) {
+        CHECK_EQ(d.messages[0].pos.file, 0);
+        CHECK_EQ(d.messages[1].pos.file, 1);
     }
-    CHECK(in_file[0] > 0);
-    CHECK(in_file[1] > 0);
-    CHECK_EQ(in_file[2], 0);
     diag_free(&d);
     arena_free(&a);
 }

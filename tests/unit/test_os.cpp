@@ -503,7 +503,9 @@ TEST(os_read_file_reads_a_file_open_for_writing) {
     os_make_directory(str(".build"));
     os_make_directory(str(".build/tests"));
     CHECK(os_write_file(str(".build/tests/open_for_writing.rig"), str("main :: () {}\n")));
-    HANDLE writer = CreateFileW(L".build\\tests\\open_for_writing.rig", GENERIC_WRITE,
+    // DELETE too, as some editors' saves hold it: Windows then refuses an
+    // open that doesn't share deleting.
+    HANDLE writer = CreateFileW(L".build\\tests\\open_for_writing.rig", GENERIC_WRITE | DELETE,
                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
                                 FILE_ATTRIBUTE_NORMAL, nullptr);
     CHECK(writer != INVALID_HANDLE_VALUE);
