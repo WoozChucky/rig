@@ -974,7 +974,8 @@ static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMVal
 
 // The location the next instructions built get: instr's line, column and
 // scope, or none. A procedure with no subprogram has no locations at all;
-// in one with a subprogram, every instruction from the IR has a position.
+// in one with a subprogram, every instruction from the IR has a position
+// but the prologue's (ir.h's "Positions"), which gets none.
 //
 // On Windows the column is 0, as clang-cl writes it: CodeView's line table
 // starts a new entry at each change of column, so a line holding a call
