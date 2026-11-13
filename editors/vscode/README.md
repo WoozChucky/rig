@@ -4,6 +4,8 @@ Syntax highlighting for `.rig` files: keywords, built-in types, directives (`#fo
 
 It also shows the compiler's errors as you type, has snippets, builds and runs the current file from a command, a button or a task, and debugs it: breakpoints in `.rig` files, the call stack and the variables, with the debuggers of Microsoft's C/C++ extension.
 
+The language itself is documented at [woozchucky.github.io/rig](https://woozchucky.github.io/rig/), its specification.
+
 It's JSON and three JavaScript files: a TextMate grammar (`syntaxes/rig.tmLanguage.json`), a language configuration, the snippets (`snippets/rig.json`), the extension's `package.json`, `extension.js`, the commands, tasks, debugging and live check, `debug.js`, the launch configuration that debugs a program, and `diagnostics.js`, which reads the compiler's errors; they use only VS Code's API and Node's built-in modules. No npm, no packages, no build step. The colours come from your theme; the grammar only names what each piece of text is.
 
 ## Installing
