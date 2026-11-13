@@ -7,7 +7,7 @@
 
 #include <time.h>  // time(), for the timeouts
 #ifndef _WIN32
-#include <errno.h>
+#include <errno.h>     // errno, ENOMEM (mincore's answer for an unmapped page)
 #include <stdlib.h>    // realpath, setenv, unsetenv
 #include <sys/mman.h>  // mincore
 #include <unistd.h>    // symlink, unlink, sysconf
