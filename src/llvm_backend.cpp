@@ -84,11 +84,13 @@ struct Backend {
     LLVMTargetMachineRef machine;
     LLVMValueRef panic;       // the runtime's __rig_panic, when the module panics
     LLVMTypeRef panic_type;   // its type, void (ptr, i64)
-    // The debug information (see "Debug information" below), all null for
-    // a module with no source file (one built by hand), which gets none.
+    // The debug information (see "Debug information" below), all null (no
+    // files) for a module with no source files (one built by hand), which
+    // gets none.
     LLVMDIBuilderRef debug;   // makes the metadata nodes, until finalised
     LLVMMetadataRef unit;     // the compile unit, DICompileUnit
-    LLVMMetadataRef file;     // the source file, DIFile
+    LLVMMetadataRef *files;   // each source file's DIFile, by Position.file (Ir_Module.sources)
+    s64 file_count;           // how many: one per source file
     // Each Rig type's debug type, made the first time a variable, a
     // procedure or another type needs it (debug_type). The key is the
     // Type's address, as bytes: each Rig type exists once (types.h), so its
@@ -553,8 +555,12 @@ static LLVMValueRef llvm_global(Body *body, s32 n) {
 // the same description, metadata nodes in the module, which a DIBuilder
 // makes:
 //
+// - The files (DIFile: a path and a checksum), one for each file of the
+//   program (#load, spec 2.13). Each node below that has a place in the
+//   source names the file it's in: a procedure's, a struct's or a global's
+//   declaration's.
 // - The compile unit (DICompileUnit): one per object, saying who made it,
-//   in which language, from which file (DIFile: its path and checksum).
+//   in which language, from which file: the main one.
 // - A subprogram (DISubprogram) per procedure: its name, file and line, the
 //   line its body starts on, and its type. Linked to the LLVM function, it
 //   tells the debugger which machine code is which procedure, so `break
@@ -566,7 +572,8 @@ static LLVMValueRef llvm_global(Body *body, s32 n) {
 //   one that declares it.
 // - The line table: every instruction of the body carries a location
 //   (DILocation, attached as !dbg): a line, a column and a scope, a
-//   subprogram or a block. LLVM turns the locations into a table from
+//   subprogram or a block, whose file is the location's (a location names
+//   none of its own). LLVM turns the locations into a table from
 //   machine addresses to lines, which is what a debugger reads to set a
 //   breakpoint on a line, to show where the program stopped, and to step a
 //   line at a time. The prologue's instructions have none: each parameter's
@@ -583,9 +590,9 @@ static LLVMValueRef llvm_global(Body *body, s32 n) {
 //
 // The IR knows all of it (ir.h's "Debug information"): each instruction's
 // position and scope, each procedure's source name, position, scopes and
-// variables, each global's Rig type, the module's source file. Only
-// modules with a source file get any; the procedures the compiler makes
-// have no source name and get none.
+// variables, each global's Rig type, the module's source files, which a
+// position's file indexes. Only modules with source files get any; the
+// procedures the compiler makes have no source name and get none.
 
 // A source file's name in CodeView. LLVM's CodeView writer makes the full
 // path of each file it names (CodeViewDebug's getFullFilepath) from the
@@ -625,22 +632,27 @@ void llvm_debug_file_names(Arena *a, String source_path, String directory, Targe
     }
 }
 
-// Starts the module's debug information: the builder, the file, the compile
-// unit, and the module flags that say which format LLVM writes.
+// Starts the module's debug information: the builder, the files, the
+// compile unit, and the module flags that say which format LLVM writes.
 static void begin_debug_info(Backend *b, Ir_Module *m, Arena *a) {
     b->debug = LLVMCreateDIBuilder(b->module);
 
-    // The file by its absolute path (an editor's breakpoints name it so;
+    // Each file by its absolute path (an editor's breakpoints name it so;
     // a UNC path as llvm_debug_file_names says), with the directory rig ran
     // in, and the MD5 of its bytes, in hex, so a debugger can tell the file
     // it shows has changed since the build.
-    char checksum[33];
-    for (int i = 0; i < 16; i++) snprintf(checksum + 2 * i, 3, "%02x", m->source_md5[i]);
-    String name = {}, directory = {};
-    llvm_debug_file_names(a, m->source_path, m->directory, b->target, &name, &directory);
-    b->file = LLVMDIBuilderCreateFileWithChecksum(b->debug, (const char *)name.data, (size_t)name.count,
-                                                  (const char *)directory.data, (size_t)directory.count, CSK_MD5,
-                                                  checksum, 32, nullptr, 0);
+    b->file_count = m->sources.count;
+    b->files = arena_new_array<LLVMMetadataRef>(a, b->file_count);
+    for (s64 i = 0; i < m->sources.count; i++) {
+        Ir_Source *source = &m->sources[i];
+        char checksum[33];
+        for (int k = 0; k < 16; k++) snprintf(checksum + 2 * k, 3, "%02x", source->md5[k]);
+        String name = {}, directory = {};
+        llvm_debug_file_names(a, source->path, m->directory, b->target, &name, &directory);
+        b->files[i] = LLVMDIBuilderCreateFileWithChecksum(b->debug, (const char *)name.data, (size_t)name.count,
+                                                          (const char *)directory.data, (size_t)directory.count,
+                                                          CSK_MD5, checksum, 32, nullptr, 0);
+    }
 
     // The language is C99: a debugger evaluates the expressions it's given
     // in the unit's language, and C's are Rig's (a.count, a[i]; Rig's p.*
@@ -658,9 +670,11 @@ static void begin_debug_info(Backend *b, Ir_Module *m, Arena *a) {
     // the line table to find a prologue's end only for a producer that
     // starts with "clang ". Rig's needn't: gdb also reads DWARF 5's
     // prologue_end, which LLVM writes.) Not optimised; full emission (types
-    // and variables too, not only lines).
+    // and variables too, not only lines). Its file is the main one, the
+    // file rig build was given, as a C unit's is the .c file compiled, not
+    // its headers.
     String producer = version_producer(a, build_stamp(), llvm_version(a));
-    b->unit = LLVMDIBuilderCreateCompileUnit(b->debug, LLVMDWARFSourceLanguageC99, b->file,
+    b->unit = LLVMDIBuilderCreateCompileUnit(b->debug, LLVMDWARFSourceLanguageC99, b->files[0],
                                              (const char *)producer.data, (size_t)producer.count, 0, "", 0, 0, "",
                                              0, LLVMDWARFEmissionFull, 0, 0, 0, "", 0, "", 0);
 
@@ -747,11 +761,25 @@ static Debug_Type remember_debug_type(Backend *b, Type *t, Debug_Type made) {
     return made;
 }
 
-// A member of the struct type `in`: a field's name, line, size and offset
-// (in bytes here; in bits, as DWARF has them, in the node) and debug type.
-static LLVMMetadataRef debug_member(Backend *b, LLVMMetadataRef in, String name, unsigned line, s64 size,
-                                    s64 offset, LLVMMetadataRef type) {
-    return LLVMDIBuilderCreateMemberType(b->debug, in, (const char *)name.data, (size_t)name.count, b->file, line,
+// The DIFile of the source file `pos` is in.
+static LLVMMetadataRef debug_file(Backend *b, Position pos) {
+    RIG_ASSERT(pos.file >= 0 && pos.file < b->file_count);
+    return b->files[pos.file];
+}
+
+// The DIFile a type is in, and its members: a struct's is its
+// declaration's. A view or a string, which no line declares, is in the
+// main file, the compile unit's.
+static LLVMMetadataRef type_debug_file(Backend *b, Type *t) {
+    return t->kind == TYPE_STRUCT ? debug_file(b, t->decl->pos) : b->files[0];
+}
+
+// A member of the struct type `in`, which is in `file`: a field's name,
+// line, size and offset (in bytes here; in bits, as DWARF has them, in the
+// node) and debug type.
+static LLVMMetadataRef debug_member(Backend *b, LLVMMetadataRef in, LLVMMetadataRef file, String name,
+                                    unsigned line, s64 size, s64 offset, LLVMMetadataRef type) {
+    return LLVMDIBuilderCreateMemberType(b->debug, in, (const char *)name.data, (size_t)name.count, file, line,
                                          (u64)size * 8, 0, (u64)offset * 8, LLVMDIFlagZero, type);
 }
 
@@ -766,8 +794,9 @@ static Debug_Type stand_in_debug_type(Backend *b, Type *t) {
     if (t->kind == TYPE_POINTER) return {LLVMDIBuilderCreatePointerType(b->debug, nullptr, 64, 0, 0, nullptr, 0), 1};
     String name = type_name(b->arena, t);
     unsigned line = t->kind == TYPE_STRUCT ? (unsigned)t->decl->pos.line : 0;
+    LLVMMetadataRef file = type_debug_file(b, t);
     return {LLVMDIBuilderCreateForwardDecl(b->debug, DW_TAG_structure_type, (const char *)name.data,
-                                           (size_t)name.count, b->file, b->file, line, 0, (u64)t->size * 8,
+                                           (size_t)name.count, file, file, line, 0, (u64)t->size * 8,
                                            (u32)t->align * 8, "", 0),
             1};
 }
@@ -787,10 +816,10 @@ static LLVMMetadataRef part_debug_type(Backend *b, Type *part, s32 depth, s32 *l
 }
 
 // A struct type, t, named `name`, declared at `line` (0 for a view's or a
-// string's, which no line declares), made `depth` levels down. A struct can
-// hold a pointer to itself (Node's next: *Node), or a view of itself, so
-// making a member's type can lead back to the struct before it's made. So
-// it's made in three steps:
+// string's, which no line declares) of its file (type_debug_file), made
+// `depth` levels down. A struct can hold a pointer to itself (Node's next:
+// *Node), or a view of itself, so making a member's type can lead back to
+// the struct before it's made. So it's made in three steps:
 //   1. a temporary node, a replaceable composite, stands for it: remembered
 //      as t's debug type (of one level: a part that leads back to it adds
 //      none, then and after, see DEBUG_TYPE_LEVELS), it's what a pointer
@@ -805,8 +834,9 @@ static LLVMMetadataRef part_debug_type(Backend *b, Type *part, s32 depth, s32 *l
 static Debug_Type debug_struct(Backend *b, Type *t, String name, unsigned line, s32 depth,
                                s64 (*make_members)(Backend *b, Type *t, s32 depth, LLVMMetadataRef in,
                                                    LLVMMetadataRef *members, s32 *levels)) {
+    LLVMMetadataRef file = type_debug_file(b, t);
     LLVMMetadataRef temporary = LLVMDIBuilderCreateReplaceableCompositeType(
-        b->debug, DW_TAG_structure_type, (const char *)name.data, (size_t)name.count, b->file, b->file, line, 0,
+        b->debug, DW_TAG_structure_type, (const char *)name.data, (size_t)name.count, file, file, line, 0,
         (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, "", 0);
     remember_debug_type(b, t, Debug_Type{temporary, 1});
     s64 most = t->kind == TYPE_STRUCT ? t->fields.count : 2;
@@ -814,7 +844,7 @@ static Debug_Type debug_struct(Backend *b, Type *t, String name, unsigned line, 
     s32 levels = 1;
     s64 count = make_members(b, t, depth, temporary, members, &levels);
     LLVMMetadataRef real =
-        LLVMDIBuilderCreateStructType(b->debug, b->file, (const char *)name.data, (size_t)name.count, b->file, line,
+        LLVMDIBuilderCreateStructType(b->debug, file, (const char *)name.data, (size_t)name.count, file, line,
                                       (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, nullptr, members,
                                       (unsigned)count, 0, nullptr, "", 0);
     LLVMMetadataReplaceAllUsesWith(temporary, real);
@@ -834,12 +864,13 @@ static Debug_Type debug_struct(Backend *b, Type *t, String name, unsigned line, 
 static s64 struct_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVMMetadataRef *members,
                           s32 *levels) {
     RIG_ASSERT(t->fields.count == t->decl->fields.count);
+    LLVMMetadataRef file = type_debug_file(b, t);
     for (s64 i = 0; i < t->fields.count; i++) {
         Type_Field *field = &t->fields[i];
         Ast_Field *declared = t->decl->fields[i];
         RIG_ASSERT(field->type);  // a field's type is null only after an error
         RIG_ASSERT(string_eq(declared->name, field->name));
-        members[i] = debug_member(b, in, field->name, (unsigned)declared->pos.line, field->type->size,
+        members[i] = debug_member(b, in, file, field->name, (unsigned)declared->pos.line, field->type->size,
                                   field->offset, part_debug_type(b, field->type, depth, levels));
     }
     return t->fields.count;
@@ -854,8 +885,9 @@ static s64 view_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVM
     LLVMMetadataRef element = part_debug_type(b, t->element, depth, levels);
     LLVMMetadataRef data = LLVMDIBuilderCreatePointerType(b->debug, element, 64, 0, 0, nullptr, 0);
     LLVMMetadataRef count = part_debug_type(b, &type_int, depth, levels);
-    members[0] = debug_member(b, in, str("count"), 0, 8, VIEW_COUNT_OFFSET, count);
-    members[1] = debug_member(b, in, str("data"), 0, 8, VIEW_DATA_OFFSET, data);
+    LLVMMetadataRef file = type_debug_file(b, t);
+    members[0] = debug_member(b, in, file, str("count"), 0, 8, VIEW_COUNT_OFFSET, count);
+    members[1] = debug_member(b, in, file, str("data"), 0, 8, VIEW_DATA_OFFSET, data);
     return 2;
 }
 
@@ -901,7 +933,9 @@ static LLVMMetadataRef debug_signature(Backend *b, Type **params, s64 param_coun
         LLVMMetadataRef type = depth < 0 ? debug_type_at(b, t, 0).node : part_debug_type(b, t, depth, levels);
         types[count++] = type_is_aggregate(t) ? debug_pointer(b, type) : type;
     }
-    return LLVMDIBuilderCreateSubroutineType(b->debug, b->file, types, (unsigned)count, LLVMDIFlagZero);
+    // A signature is in no file (many procedures, in any files, share
+    // one), and LLVM keeps none for it: the file given is the main one.
+    return LLVMDIBuilderCreateSubroutineType(b->debug, b->files[0], types, (unsigned)count, LLVMDIFlagZero);
 }
 
 // The debug type of a Rig type, t, `depth` levels below the type a
@@ -1060,21 +1094,27 @@ static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMVal
     // names the procedure by it, so a Rig `write` that LLVM renamed write.1
     // (C's write was taken first) would be write.1 to `break` and `bt`.
     // Local to the unit unless exported, as its symbol is; a definition;
-    // prototyped, as a C function with a parameter list is.
+    // prototyped, as a C function with a parameter list is. In the file
+    // it's declared in, which is where its scopes, its variables and so
+    // every line of its body are: a location names no file, its scope's is
+    // its own, so a breakpoint on a line of a loaded file, and a stop or a
+    // backtrace there, finds that file.
+    LLVMMetadataRef file = debug_file(b, p->pos);
     LLVMMetadataRef subprogram = LLVMDIBuilderCreateFunction(
-        b->debug, b->file, (const char *)p->source_name.data, (size_t)p->source_name.count, nullptr, 0, b->file,
+        b->debug, file, (const char *)p->source_name.data, (size_t)p->source_name.count, nullptr, 0, file,
         (unsigned)p->pos.line, type, !p->is_export, 1, (unsigned)p->body.line, LLVMDIFlagPrototyped, 0);
     LLVMSetSubprogram(function, subprogram);
 
     // Scope 0 is the body, the subprogram itself; each other scope is a
-    // lexical block inside its parent, which comes before it.
+    // lexical block inside its parent, which comes before it, in the
+    // procedure's file.
     body->scopes = arena_new_array<LLVMMetadataRef>(a, p->scopes.count);
     body->scope_count = p->scopes.count;
     body->scopes[0] = subprogram;
     for (s64 i = 1; i < p->scopes.count; i++) {
         Ir_Scope *s = &p->scopes[i];
         RIG_ASSERT(s->parent >= 0 && s->parent < i);
-        body->scopes[i] = LLVMDIBuilderCreateLexicalBlock(b->debug, body->scopes[s->parent], b->file,
+        body->scopes[i] = LLVMDIBuilderCreateLexicalBlock(b->debug, body->scopes[s->parent], file,
                                                           (unsigned)s->pos.line, (unsigned)s->pos.col);
     }
 }
@@ -1371,6 +1411,8 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
     for (s64 i = 0; i < pointers; i++) LLVMBuildStore(builder, value(body, (s32)i), pointer_slots[i]);
 
     LLVMMetadataRef plain = LLVMDIBuilderCreateExpression(b->debug, nullptr, 0);
+    // Each variable is in the procedure's file, as its scopes are.
+    LLVMMetadataRef file = debug_file(b, p->pos);
     // The result pointers, parameters 1 to `pointers` (the visible ones
     // come after them), at the procedure's own line: the i-th points at the
     // i-th aggregate result.
@@ -1381,7 +1423,7 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
         String name = pointers == 1 ? str("result$") : string_printf(a, "result$%lld", (long long)i + 1);
         unsigned line = (unsigned)p->pos.line;
         LLVMMetadataRef variable = LLVMDIBuilderCreateParameterVariable(
-            b->debug, body->scopes[0], (const char *)name.data, (size_t)name.count, (unsigned)i + 1, b->file, line,
+            b->debug, body->scopes[0], (const char *)name.data, (size_t)name.count, (unsigned)i + 1, file, line,
             type, 1, LLVMDIFlagArtificial);
         unsigned column = b->target == TARGET_WINDOWS_X64 ? 0 : (unsigned)p->pos.col;
         LLVMMetadataRef location = LLVMDIBuilderCreateDebugLocation(c, line, column, body->scopes[0], nullptr);
@@ -1403,10 +1445,10 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
         // it).
         LLVMMetadataRef variable =
             v->arg > 0 ? LLVMDIBuilderCreateParameterVariable(b->debug, scope, name, (size_t)v->name.count,
-                                                              (unsigned)(pointers + v->arg), b->file, line, type, 1,
+                                                              (unsigned)(pointers + v->arg), file, line, type, 1,
                                                               LLVMDIFlagZero)
-                       : LLVMDIBuilderCreateAutoVariable(b->debug, scope, name, (size_t)v->name.count, b->file,
-                                                         line, type, 1, LLVMDIFlagZero, 0);
+                       : LLVMDIBuilderCreateAutoVariable(b->debug, scope, name, (size_t)v->name.count, file, line,
+                                                         type, 1, LLVMDIFlagZero, 0);
         // The record's own location: the declaration's line, in its scope
         // (column 0 on Windows, as every location there: set_location).
         unsigned column = b->target == TARGET_WINDOWS_X64 ? 0 : (unsigned)v->pos.col;
@@ -1626,7 +1668,7 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     LLVMTargetDataRef layout = LLVMCreateTargetDataLayout(b->machine);
     LLVMSetModuleDataLayout(b->module, layout);
     LLVMDisposeTargetData(layout);
-    if (m->source_path.count > 0) begin_debug_info(b, m, a);
+    if (m->sources.count > 0) begin_debug_info(b, m, a);
 
     // The runtime first, so its C names are taken before the program's.
     if (module_has(m, IR_PANIC)) build_runtime(b);
@@ -1667,16 +1709,17 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     }
     // Each Rig global a debugger can show: a DIGlobalVariable of its type,
     // named as in the source (LLVM may have renamed the symbol, as it does a
-    // procedure's), local to the unit as the symbol is, in a global variable
-    // expression whose expression is empty (the variable is the global's
-    // memory itself), attached to the LLVM global (!dbg). What the compiler
-    // makes (str.N, array.N) has no Rig type, and none.
+    // procedure's), local to the unit as the symbol is, at its line of the
+    // file that declares it, in a global variable expression whose
+    // expression is empty (the variable is the global's memory itself),
+    // attached to the LLVM global (!dbg). What the compiler makes (str.N,
+    // array.N) has no Rig type, and none.
     for (s64 i = 0; b->debug && i < m->globals.count; i++) {
         Ir_Global *g = &m->globals[i];
         if (!g->rig_type) continue;
         LLVMMetadataRef expression = LLVMDIBuilderCreateExpression(b->debug, nullptr, 0);
         LLVMMetadataRef variable = LLVMDIBuilderCreateGlobalVariableExpression(
-            b->debug, b->unit, (const char *)g->name.data, (size_t)g->name.count, "", 0, b->file,
+            b->debug, b->unit, (const char *)g->name.data, (size_t)g->name.count, "", 0, debug_file(b, g->pos),
             (unsigned)g->pos.line, debug_type(b, g->rig_type), 1, expression, nullptr, 0);
         LLVMGlobalAddDebugInfo(globals[i], variable);
     }

@@ -127,9 +127,9 @@
 //   artificial parameter named result$: llvm_backend.cpp's
 //   declare_variables.)
 // - Globals keep their Rig type (Ir_Global.rig_type) and position; the
-//   module, the source file's absolute path, the directory rig ran in, and
-//   the file's MD5 (Ir_Module), so a debugger finds the file and can tell
-//   it has changed since.
+//   module, each source file's absolute path and MD5 (Ir_Module.sources,
+//   indexed by Position.file) and the directory rig ran in, so a debugger
+//   finds each file and can tell it has changed since.
 // ir_print leaves all of this out; ir_print_debug adds it as comments.
 
 #pragma once
@@ -345,17 +345,23 @@ struct Ir_Proc {
                                    // main, though C's returns an int
 };
 
+// A file of the program, for a debugger: how to find it, and whether the
+// file it finds is the one the program was built from.
+struct Ir_Source {
+    String path;     // absolute, normalised (path_absolute): how an editor names it
+    u8 md5[16];      // the MD5 of its bytes
+};
+
 struct Ir_Module {
     Array<Ir_Global> globals;
     Array<Ir_Proc *> procs;  // the program's, in order (every file's, in load order), then
                              // __rig_bounds_failed when a bounds check calls it and
                              // __rig_string_equal when == on strings does (lower.cpp, in the
                              // order first needed)
-    // The source file, for a debugger: empty for a module built by hand,
-    // which gets no debug information.
-    String source_path;      // absolute, normalised (path_absolute): how an editor names it
-    String directory;        // the directory rig ran in
-    u8 source_md5[16];       // the MD5 of the file's bytes
+    // The source files, for a debugger. A module built by hand has none,
+    // and gets no debug information.
+    Array<Ir_Source> sources;  // indexed by Position.file; empty for a module built by hand
+    String directory;          // the directory rig ran in
 };
 
 // Whether t is f32 or f64.
@@ -401,9 +407,10 @@ bool ir_block_has_ended(Ir_Proc *p, s32 block);
 // holds the paths of the files the tree's positions refer to: a runtime
 // error's message names its place in the source as PATH:LINE:COL, PATH the
 // file's Source_File.path: the main file's as given to rig build, a loaded
-// file's as its #load made it (load.h; spec 8.1). The module's source_path
-// and directory are the first file's absolute_path and directory (empty
-// when they are), and its source_md5 that file's text's. With
+// file's as its #load made it (load.h; spec 8.1). The module has a source
+// for each of d's files, in their order, Position.file's: its absolute_path
+// and the MD5 of its text. Its directory is the first file's (the loader
+// gives every file the same one: the directory rig runs in). With
 // bounds_checks, as rig build has it unless told --no-bounds-checks, every
 // a[i] of a view or a string, and of an array but where i is a constant
 // (which the checker made sure is inside), is checked at run time, but in a
@@ -413,13 +420,17 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks);
 // The module as text, in the format above.
 String ir_print(Arena *a, Ir_Module *m);
 
-// ir_print's text with the debug information as comments: first the source
-// file (when the module has one), then a global's Rig type after its line,
-// a procedure's source, scopes and variables after its own (none for a
-// procedure the compiler makes), and each instruction's position and scope
-// at the end of its line (none at line 0). Lines and columns as L:C:
+// ir_print's text with the debug information as comments: first a line for
+// each source file, in order (none for a module built by hand), then a
+// global's Rig type after its line, a procedure's source, scopes and
+// variables after its own (none for a procedure the compiler makes), and
+// each instruction's position and scope at the end of its line (none at
+// line 0). A position in the first file is L:C, its line and column, and
+// one in any other F:L:C, F the file's index (1:3:5 is line 3, column 5 of
+// the second source):
 //
 //   ; source C:\dev\rig\test.rig md5 0123456789abcdef0123456789abcdef
+//   ; source C:\dev\rig\sums.rig md5 fedcba9876543210fedcba9876543210
 //   global @counter: i64 = 0
 //     ; type int at 1:1
 //   proc @sum(i64, ptr) -> i64 {
