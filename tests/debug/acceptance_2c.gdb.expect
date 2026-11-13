@@ -1,0 +1,18 @@
+sort (a=...) at
+acceptance_2c.rig:39
+a[j] = a[j - 1];
+#0  sort (a=...) at
+acceptance_2c.rig:39
+#1
+in main () at
+acceptance_2c.rig:48
+$1 = 5
+$2 = 3
+$3 = 1
+#1
+acceptance_2c.rig:48
+sort(numbers);
+$4 = {5, 3, 9, 1, 7}
+#0  sort (a=...) at
+a[j] = a[j - 1];
+j -= 1;
