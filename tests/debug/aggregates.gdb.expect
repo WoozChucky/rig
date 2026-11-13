@@ -1,13 +1,29 @@
 make (n=5) at
-aggregates.rig:12
+aggregates.rig:16
 p := Pair.{n, n + 1};
 main () at
-aggregates.rig:22
+aggregates.rig:46
 q := make(5);
-!Value returned
+little (n=7) at
+aggregates.rig:21
+main () at
+aggregates.rig:47
+l := little(7);
+name (n=1) at
+aggregates.rig:26
+main () at
+aggregates.rig:48
+w := name(1);
+both (n=3) at
+aggregates.rig:31
+main () at
+aggregates.rig:49
+b := both(3);
 sum (p=...) at
-aggregates.rig:17
+aggregates.rig:36
 s := p.a + p.b;
 p = {a = 5, b = 6}
 = 6
+= 8
+!Value returned
 !.debug_names not created by gdb
