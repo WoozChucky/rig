@@ -1222,9 +1222,9 @@ static Ast *parse_struct(Parser *p, Token *name) {
 //           | IDENT ':=' expression ';'                       a global variable
 //
 // After '::', a procedure's parameters start with '(' ')', '(' IDENT ':' or
-// '(' '..'. Any other '(' begins a constant's value in parentheses: N :: (1 + 2); is
-// a constant. A global variable is written as a local one; whether its
-// value is known while compiling is the checker's to say.
+// '(' '..'. Any other '(' begins a constant's value in parentheses:
+// N :: (1 + 2); is a constant. A global variable is written as a local one;
+// whether its value is known while compiling is the checker's to say.
 //
 // ':' or ':=' followed by a signature (`greet : () {`, `greet := () {`) is
 // a procedure's declaration with its '::' mistyped, so it's reported as
@@ -1268,10 +1268,10 @@ static bool starts_global(Parser *p) {
 // list holds a name followed by ':' (`n: s32`), which a line can start
 // with: a call's or a value's parentheses never do, so a global after one
 // whose ')' is missing is still the next declaration. A list starts at a
-// '(' followed by ')', '..' or IDENT ':', as parse_declaration tells a procedure
-// from a constant (`greet (s: *u8,` too, a C habit), or by IDENT IDENT, a
-// first parameter missing its ':' (`f :: (a int,`): two names in a row
-// never begin an expression. Inside a list every '(' and ')' counts. A
+// '(' followed by ')', '..' or IDENT ':', as parse_declaration tells a
+// procedure from a constant (`greet (s: *u8,` too, a C habit), or by IDENT
+// IDENT, a first parameter missing its ':' (`f :: (a int,`): two names in a
+// row never begin an expression. Inside a list every '(' and ')' counts. A
 // list holds no braces, so a '{' or '}' ends it, closed or not: a body has
 // begun or ended.
 static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
