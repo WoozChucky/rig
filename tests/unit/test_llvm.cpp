@@ -1346,6 +1346,14 @@ TEST(llvm_debug_types_through_cycles_are_not_cut) {
     arena_free(&a);
 }
 
+// The node of the 64-bit pointer to debug type `node` ("!12"); {} when
+// there's none.
+static String pointer_node(Arena *a, String text, String node) {
+    return defined_node(line_with(
+        text, string_cstr(a, string_printf(a, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: " STR_FMT ", size: 64,",
+                                           STR_ARG(node)))));
+}
+
 TEST(llvm_variables_are_declared) {
     // Each variable is declared on its stack slot (#dbg_declare), in its
     // scope: a local; a scalar parameter, stored into a slot of its own; an
@@ -1443,18 +1451,71 @@ TEST(llvm_variables_are_declared) {
             CHECK(contains(text, string_cstr(&a, string_printf(&a, "\n  " STR_FMT " = zext i1 %%",
                                                                 STR_ARG(stored)))));
         }
-        // sum's type: its result's, then its parameters', int, []int, int,
-        // bool.
+        // sum's type: its result's, then its parameters', int, a pointer to
+        // []int (how the view is passed), int, bool.
         String type = node_line(&a, text, attached(&a, line_with(text, "!DISubprogram(name: \"sum\""), "type:"));
         String types = node_line(&a, text, attached(&a, type, "types:"));
         String integer = defined_node(line_with(text, "!DIBasicType(name: \"int\""));
         String boolean = defined_node(line_with(text, "!DIBasicType(name: \"bool\""));
         String list = string_printf(&a, " = !{" STR_FMT ", " STR_FMT ", " STR_FMT ", " STR_FMT "}", STR_ARG(integer),
-                                    STR_ARG(view), STR_ARG(integer), STR_ARG(boolean));
+                                    STR_ARG(pointer_node(&a, text, view)), STR_ARG(integer), STR_ARG(boolean));
         CHECK(contains(types, string_cstr(&a, list)));
         // main returns nothing in Rig, so its type's first is null.
         type = node_line(&a, text, attached(&a, line_with(text, "!DISubprogram(name: \"main\""), "type:"));
         CHECK(contains(node_line(&a, text, attached(&a, type, "types:")), "!{null}"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_procedure_types_say_how_they_are_called) {
+    // A procedure's debug type is how it's called (spec 10.4), not how C
+    // would pass the same types: an aggregate parameter is a pointer to the
+    // caller's copy, and an aggregate result a hidden pointer parameter
+    // before the visible ones, so the procedure returns its one scalar
+    // result, or nothing. With several scalar results it returns nothing a
+    // C type describes, so none either.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Pair :: struct { a: int; b: int; }\n"
+                                "make :: (n: int) -> Pair { return Pair.{n, n}; }\n"
+                                "sum :: (p: Pair, s: string) -> int { return p.a; }\n"
+                                "both :: (n: int) -> Pair, int { return Pair.{n, n}, n; }\n"
+                                "twice :: (n: int) -> int, int { return n, n; }\n"
+                                "pairs :: (n: [2]int) -> Pair, Pair { return Pair.{1, 2}, Pair.{3, 4}; }\n"
+                                "main :: () { }\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        String integer = defined_node(line_with(text, "!DIBasicType(name: \"int\""));
+        String pair = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Pair\""));
+        String string = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"string\""));
+        String array = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_array_type, baseType: "));
+        String to_pair = pointer_node(&a, text, pair);
+        CHECK(integer.count > 0 && pair.count > 0 && string.count > 0 && array.count > 0 && to_pair.count > 0);
+        struct Expected {
+            const char *name;
+            String types;  // the list's elements
+        };
+        Expected expected[] = {
+            {"make", string_printf(&a, "null, " STR_FMT ", " STR_FMT, STR_ARG(to_pair), STR_ARG(integer))},
+            {"sum", string_printf(&a, STR_FMT ", " STR_FMT ", " STR_FMT, STR_ARG(integer), STR_ARG(to_pair),
+                                  STR_ARG(pointer_node(&a, text, string)))},
+            {"both", string_printf(&a, STR_FMT ", " STR_FMT ", " STR_FMT, STR_ARG(integer), STR_ARG(to_pair),
+                                   STR_ARG(integer))},
+            {"twice", string_printf(&a, "null, " STR_FMT, STR_ARG(integer))},
+            {"pairs", string_printf(&a, "null, " STR_FMT ", " STR_FMT ", " STR_FMT, STR_ARG(to_pair), STR_ARG(to_pair),
+                                    STR_ARG(pointer_node(&a, text, array)))},
+        };
+        for (Expected &e : expected) {
+            String subprogram =
+                line_with(text, string_cstr(&a, string_printf(&a, "!DISubprogram(name: \"%s\"", e.name)));
+            String type = node_line(&a, text, attached(&a, subprogram, "type:"));
+            String types = node_line(&a, text, attached(&a, type, "types:"));
+            String list = string_printf(&a, " = !{" STR_FMT "}", STR_ARG(e.types));
+            if (!contains(types, string_cstr(&a, list))) {
+                printf("    %s: " STR_FMT ", not" STR_FMT "\n", e.name, STR_ARG(types), STR_ARG(list));
+            }
+            CHECK(contains(types, string_cstr(&a, list)));
+        }
     }
     arena_free(&a);
 }

@@ -1,0 +1,24 @@
+// A debugger's view of procedures that take and return aggregates
+// (bin/run-tests runs it under gdb with aggregates.gdb and under cdb with
+// aggregates.cdb). Rig passes a struct by a pointer to the caller's copy
+// and returns one through a hidden pointer (spec 10.4), and the debug
+// information says so: a procedure returning a Pair returns nothing and
+// takes a *Pair first, so gdb's `finish` out of it shows no made-up value,
+// and one taking a Pair takes a *Pair, while the parameter itself still
+// shows as the struct, with its fields.
+Pair :: struct { a: int; b: int; }
+
+make :: (n: int) -> Pair {
+    p := Pair.{n, n + 1};
+    return p;
+}
+
+sum :: (p: Pair) -> int {
+    s := p.a + p.b;
+    return s;
+}
+
+main :: () {
+    q := make(5);
+    s := sum(q);
+}
