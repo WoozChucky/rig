@@ -2162,6 +2162,27 @@ TEST(parse_load_after_a_struct_never_closed) {
     CHECK_STR(errors,
               "2:1: #load can only be at the top level\n"
               "4:1: expected '}', found identifier 'main'\n");
+
+    // A load not in column 1 is reported at once, and is neither kept nor
+    // lost when the next declaration ends the fields: alone, after a field,
+    list = src("S :: struct {\n    x: int;\n    #load \"a.rig\";\nmain :: () {}\n");
+    file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag),
+              "3:5: #load can only be at the top level\n"
+              "4:1: expected '}', found identifier 'main'\n");
+    CHECK_EQ(file->loads.count, 0);
+    CHECK_STR(ast_dump(&a, file), "(broken S)\n(proc main (params) (block))\n");
+    token_list_free(list);
+    // or after one in column 1, which it keeps among the fields too.
+    list = src("S :: struct {\n#load \"a.rig\";\n    #load \"b.rig\";\nmain :: () {}\n");
+    file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag),
+              "2:1: #load can only be at the top level\n"
+              "3:5: #load can only be at the top level\n"
+              "4:1: expected '}', found identifier 'main'\n");
+    CHECK_EQ(file->loads.count, 0);
+    CHECK_STR(ast_dump(&a, file), "(broken S)\n(proc main (params) (block))\n");
+    token_list_free(list);
     arena_free(&a);
 }
 
@@ -2193,6 +2214,46 @@ TEST(parse_load_in_a_type) {
     CHECK_STR(errors, "1:10: #load can only be at the top level\n");
     CHECK_STR(parse_src(&a, "main :: () #load \"a.rig\" {}\n", &errors), "(broken main)\n");
     CHECK_STR(errors, "1:12: #load can only be at the top level\n");
+    arena_free(&a);
+}
+
+TEST(parse_load_starting_the_next_line) {
+    // A #load starting the line after a top-level declaration that stopped
+    // short, outside any braces, is where the recovery resumes: it's read as
+    // the top-level load it is, and kept. So it isn't misplaced, and the
+    // error is what's missing before it: a body, a type or a value.
+    Arena a = arena_make();
+    const char *sources[] = {
+        "f :: ()\n#load \"a.rig\";\nmain :: () {}\n",
+        "g :\n#load \"a.rig\";\nmain :: () {}\n",
+        "N ::\n#load \"a.rig\";\nmain :: () {}\n",
+        "x : int =\n#load \"a.rig\";\nmain :: () {}\n",
+    };
+    const char *expected[] = {
+        "2:1: expected '{', found directive\n",
+        "2:1: expected a type, found directive\n",
+        "2:1: expected an expression, found directive\n",
+        "2:1: expected an expression, found directive\n",
+    };
+    const char *broken[] = {"f", "g", "N", "x"};
+    for (s64 i = 0; i < 4; i++) {
+        Token_List *list = src(sources[i]);
+        Ast_File *file = parse(list->tokens, &a, &list->diag);
+        CHECK_STR(messages(&a, &list->diag), expected[i]);
+        CHECK_EQ(file->loads.count, 1);
+        CHECK_STR(ast_dump(&a, file),
+                  string_cstr(&a, string_printf(&a, "(broken %s)\n(load \"a.rig\")\n(proc main (params) (block))\n",
+                                                broken[i])));
+        token_list_free(list);
+    }
+
+    // Inside braces, the recovery passes over it, so it's misplaced there.
+    Token_List *list = src("main :: () {\n    x :=\n#load \"a.rig\";\n}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "3:1: #load can only be at the top level\n");
+    CHECK_EQ(file->loads.count, 0);
+    CHECK_STR(ast_dump(&a, file), "(broken main)\n");
+    token_list_free(list);
     arena_free(&a);
 }
 
@@ -2284,7 +2345,8 @@ TEST(parse_load_later_on_a_line) {
 TEST(parse_load_without_a_string) {
     // The path is a string literal, and nothing else: a name is reported at
     // the name, and the parser goes on at the next declaration, keeping the
-    // failed load as a broken entry with no name, as any failed declaration.
+    // failed load as a broken entry, as any failed declaration is kept, but
+    // with no name: a load declares none.
     Arena a = arena_make();
     String errors;
     CHECK_STR(parse_src(&a, "#load a;\nmain :: () {}\n", &errors), "(broken)\n(proc main (params) (block))\n");
@@ -2347,7 +2409,7 @@ TEST(parse_into_appends) {
     Arena a = arena_make();
     Diagnostics d = {};
     s32 first = diag_add_file(&d, str("main.rig"), str("#load \"b.rig\";\nmain :: () { helper(); }\n"));
-    s32 second = diag_add_file(&d, str("b.rig"), str("helper :: () {}\n#load \"c.rig\";\nN :: 1;\n"));
+    s32 second = diag_add_file(&d, str("b.rig"), str("#load \"c.rig\";\nhelper :: () {}\nN :: 1;\n"));
     Array<Token> first_tokens = lex(&d, first, &a);
     Array<Token> second_tokens = lex(&d, second, &a);
     Ast_File *file = arena_new<Ast_File>(&a);
@@ -2366,13 +2428,14 @@ TEST(parse_into_appends) {
     CHECK_EQ(file->loads[0]->pos.file, first);
     CHECK_STR(file->loads[1]->path, "c.rig");
     CHECK_EQ(file->loads[1]->pos.file, second);
-    // The second file's load, line 2, comes after the first file's main,
-    // line 2 too, and among the second file's declarations.
+    // The dump goes file by file, in load order: the second file's load, at
+    // line 1, comes after the first file's main, at line 2, and before the
+    // second file's other declarations.
     CHECK_STR(ast_dump(&a, file),
               "(load \"b.rig\")\n"
               "(proc main (params) (block (call helper)))\n"
-              "(proc helper (params) (block))\n"
               "(load \"c.rig\")\n"
+              "(proc helper (params) (block))\n"
               "(const N (int 1))\n");
     array_free(&first_tokens);
     array_free(&second_tokens);

@@ -25,6 +25,7 @@ struct Parser {
     // After a body or a struct's braces found never closed: the token where
     // the top level resumes (parse_block_rest, parse_struct), or -1.
     s64 resume;
+    s64 declaration;  // the token the top-level declaration being read began at
 };
 
 // A limit of the compiler (spec 6.1): an expression nests at most MAX_DEPTH
@@ -112,6 +113,8 @@ static bool is_directive(Token *t, const char *name) {
 static void error_misplaced_load(Parser *p, Position at) {
     diag_error(p->diag, at, "#load can only be at the top level");
 }
+
+static bool load_resumes_here(Parser *p);
 
 static Ast *parse_expression(Parser *p, int min_precedence);
 static Ast *parse_unary(Parser *p);
@@ -230,7 +233,8 @@ static Ast *parse_size_of(Parser *p) {
 //
 // A #load where an expression starts (`x := #load "a.rig";`) is "#load can
 // only be at the top level", as anywhere but a top-level declaration,
-// rather than "expected an expression".
+// rather than "expected an expression"; unless the recovery resumes at it
+// (load_resumes_here), which reads it as the top-level load it is.
 static Ast *parse_primary(Parser *p) {
     Token *t = peek(p);
     p->height = 0;  // a name or a literal; parentheses say otherwise below
@@ -291,7 +295,7 @@ static Ast *parse_primary(Parser *p) {
         return inner;
     }
     default:
-        if (is_directive(t, "load")) {
+        if (is_directive(t, "load") && !load_resumes_here(p)) {
             error_misplaced_load(p, t->pos);
         } else {
             error_expected(p, "an expression");
@@ -957,10 +961,11 @@ static bool declares_in_column_1(Parser *p) {
 
 // A #load where a statement or a struct's field starts: "#load can only be
 // at the top level", at its '#', which is returned for the caller to report
-// (parse_block_rest says when). Other mistakes in a body give the
-// declaration up (parser.h says why), but a load declares nothing the body
-// could use, so the body loses nothing by leaving it out: the parser skips
-// it up to its ';' and goes on with the body, which is then checked.
+// (parse_block_rest and parse_struct say when). Other mistakes in a body
+// give the declaration up (parser.h says why), but a load declares nothing
+// the body could use, so the body loses nothing by leaving it out: the
+// parser skips it up to its ';' and goes on with the body or the fields,
+// which are then checked.
 // Without a ';', the skipping stops at the end of the load's line, or
 // before a brace on it, or at the end of the file: the statement on the
 // next line is kept (a variable it declares still known), the block around
@@ -1223,8 +1228,8 @@ static Ast_Type *parse_type_level(Parser *p) {
         return named;
     }
     // A #load is "#load can only be at the top level", as where an
-    // expression starts (parse_primary).
-    if (is_directive(t, "load")) {
+    // expression starts (parse_primary), unless the recovery resumes at it.
+    if (is_directive(t, "load") && !load_resumes_here(p)) {
         error_misplaced_load(p, t->pos);
     } else {
         error_expected(p, "a type");
@@ -1287,8 +1292,9 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // written twice"). A foreign procedure is C's already, and takes neither:
 // #c_call before #foreign is "a foreign procedure is C's already: it takes
 // no '#c_call'", #no_abc "expected '{'". A #load there is "#load can only be
-// at the top level"; any other directive but these is "unknown directive
-// '#foo'".
+// at the top level", unless the recovery resumes at it (load_resumes_here):
+// the '{' is then what's missing. Any other directive but these is
+// "unknown directive '#foo'".
 //
 // Each element of the parameter list is a parameter or, last, the '..' of
 // a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign libc;).
@@ -1340,6 +1346,7 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
             continue;
         }
         if (is_directive(t, "load")) {
+            if (load_resumes_here(p)) break;  // parse_block says "expected '{'"
             error_misplaced_load(p, t->pos);
             return nullptr;
         }
@@ -1568,6 +1575,21 @@ static bool starts_load(Parser *p) {
     return is_directive(t, "load") && p->tokens[p->next - 1].pos.line != t->pos.line;
 }
 
+// Whether the recovery, once the top-level declaration being read fails
+// here, resumes at the next token: a #load starting a line (starts_load)
+// outside every brace opened since the declaration began, as
+// skip_to_next_declaration counts them. The load is then read again as the
+// top-level one it is, and the file it names loaded, so it isn't misplaced
+// after all: where a body, a type or a value should be (`N ::` on the line
+// before it), the error is the usual one for what's missing.
+static bool load_resumes_here(Parser *p) {
+    if (!starts_load(p)) return false;
+    s64 depth = 0;
+    s64 parens = 0;
+    for (s64 i = p->declaration; i < p->next; i++) count_open(p, i, &depth, &parens);
+    return depth <= 0;
+}
+
 // After an error in a declaration that began at token `start`: skips to the
 // next token that starts a line and begins a declaration (IDENT '::', a
 // global variable's IDENT ':' or ':=' in column 1, or a #load outside every
@@ -1769,9 +1791,10 @@ static Ast_Proc *broken_entry(Parser *p, s64 start) {
 
 void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
-    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, 0, -1};
+    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, 0, -1, 0};
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;
+        p.declaration = start;
         Ast *decl = parse_declaration(&p);
         if (!decl && p.resume >= 0) {
             // A body or a struct never closed said where the top level goes
@@ -1800,8 +1823,9 @@ void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
             }
             // Whatever the declaration was meant to be, a procedure, a
             // struct, a global, a constant or a load, its entry is a broken
-            // Ast_Proc: only its name matters. A failed load's has none
-            // (broken_entry), as a load declares no name.
+            // Ast_Proc: only its name matters. A failed load's usually has
+            // none (broken_entry), as a load declares no name: only `#load
+            // ::`, read as a stray '#' before a name, keeps the name load.
             decl = broken_entry(&p, start);
             skip_to_next_declaration(&p, start);
         }
