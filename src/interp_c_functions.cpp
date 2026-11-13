@@ -28,6 +28,15 @@
 // The v... functions can: their va_list is, on Windows, a pointer to 8-byte
 // argument slots, which a Rig program can build itself.
 //
+// Three more aren't C17's functions but UCRT's behind C17's macros, which
+// a Rig program can only reach by calling them: __acrt_iob_func, which
+// stdin, stdout and stderr call (stdout is __acrt_iob_func(1)), _errno,
+// whose result errno reads through, and ___mb_cur_max_func, which
+// MB_CUR_MAX calls. ucrtbase.dll's would give its own: streams the table's
+// fputs would write into a buffer that's flushed only when the process
+// exits, after everything else; an errno the table's strtol never sets;
+// and MB_CUR_MAX of a locale other than the one the table's mblen uses.
+//
 // On Linux the compiler is linked with the system's C library,
 // dynamically, so os_find_c_function finds its functions, the same the
 // compiler itself calls, but what libc_nonshared.a links in statically:
@@ -144,6 +153,10 @@ static const Interp_C_Function INTERP_C_FUNCTIONS[] = {
     // <time.h> (7.27)
     INTERP_C(clock), INTERP_C(difftime), INTERP_C(mktime), INTERP_C(time), INTERP_C(timespec_get), INTERP_C(asctime),
     INTERP_C(ctime), INTERP_C(gmtime), INTERP_C(localtime), INTERP_C(strftime),
+
+    // UCRT's, behind C17's stdin, stdout and stderr, errno, and MB_CUR_MAX
+    // (see the top).
+    INTERP_C(__acrt_iob_func), INTERP_C(_errno), INTERP_C(___mb_cur_max_func),
 };
 
 #else

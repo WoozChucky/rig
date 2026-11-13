@@ -5,16 +5,17 @@
 // gives, a panic without its prefix, a relocation to a later global, a
 // mismatched call's effects that source hides), or that would be awkward to
 // write as source (a module growing between runs, a relocation to a C
-// function that isn't there, a call of a stray address, 65,537
-// procedures), build it by hand. Then the call thunks' tests (thunk.h) call
+// function that isn't there, a call of a stray address or of a native one
+// of the test's own, 65,537 procedures), build it by hand. Then the call thunks' tests (thunk.h) call
 // C functions through them directly, in this process, and the last ones
 // have interpreted code call C, as a program does.
 
 #include "test.h"
 
-#include <math.h>  // copysignf, ldexp and sqrt, for thunk_float_results and interp_finds_c_functions_by_name
+#include <math.h>  // copysignf, ldexp, sqrt, sqrtf and sqrtl, for thunk_float_results and interp_finds_c_functions_by_name
 #include <time.h>  // time, for interp_recursion_to_the_limit
 #ifdef _WIN32
+#include <errno.h>    // ERANGE, for interp_windows_shares_the_compilers_streams_and_errno
 #include <process.h>  // _getpid, for interp_calls_a_windows_function
 #else
 #include <execinfo.h>  // backtrace, for thunk_unwinds_through_the_thunk
@@ -2386,13 +2387,50 @@ TEST(interp_calls_c_with_narrow_types) {
     arena_free(&a);
 }
 
+TEST(interp_calls_a_native_address) {
+    // A call through any non-null address outside the Rig procedures'
+    // range goes to C, not only one a foreign procedure gave: here
+    // thunk_test_widen's, the test's own, as a pointer C returns or a
+    // native caller passes in would be. Given the s8 -5 it gives the int
+    // -5 on both hosts: on Windows clang-built code widens the argument
+    // itself, on SysV the thunk sign-extends it (spec 10.4).
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *signature = arena_new<Ir_Proc>(&a);
+    ir_add_param(signature, IR_I8, IR_EXT_SIGN);
+    array_add(&signature->results, {IR_I32, IR_EXT_NONE});
+    Ir_Proc *p = new_proc_returning(m, &a, "widen", IR_I32);
+    s32 address = ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    s32 narrow = ir_add_param(p, IR_I8, IR_EXT_SIGN);
+    s32 b = ir_new_block(&a, p);
+    Array<s32> call_args = {};
+    array_add(&call_args, narrow);
+    emit_ret(p, b, ir_emit_call_indirect(p, b, address, signature, call_args)->result);
+
+    Interp *in = interp_new(m);
+    Array<u64> args = {};
+    array_add(&args, (u64)(uintptr_t)&thunk_test_widen);
+    array_add(&args, 0xFB);
+    Interp_Result r = {};
+    interp_run(in, interp_test_proc(m, "widen"), args, &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 0xFFFFFFFB);
+    interp_test_free(&r);
+    array_free(&call_args);
+    array_free(&args);
+    interp_free(in);
+    arena_free(&a);
+}
+
 TEST(interp_calls_c_through_a_value) {
     // A C function's value is its native address, the one the interpreter
     // looks up by name, and a call through it goes to C, float32 arguments
     // and result too (the float registers, as the signature types them).
     // atexit's is the compiler's own on both hosts, from its table (on
-    // Linux, libc.so.6 doesn't export it), and so is pthread_atfork, which
-    // Linux calls: given no handlers, it registers nothing and gives 0.
+    // Linux, libc.so.6 doesn't export it). On Linux, pthread_atfork is the
+    // compiler's own too, from its table, and a direct call of it, given no
+    // handlers, adds an entry fork has nothing to run for, and gives 0.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "strlen :: (s: *u8) -> u64 #foreign libc;\n"
@@ -2564,6 +2602,30 @@ TEST(interp_windows_uses_the_compilers_own_printf) {
     // interpreted code calls is the compiler's own, writing into the same
     // stdout buffer, not a second C runtime's.
     CHECK(interp_c_library_function(str("printf")) == (void *)&printf);
+}
+
+TEST(interp_windows_shares_the_compilers_streams_and_errno) {
+    // C17's stdin, stdout, stderr, errno and MB_CUR_MAX are macros, which
+    // UCRT expands to calls of functions a Rig program declares itself.
+    // They're the compiler's own too, so interpreted code gets the stdout
+    // the table's fputs and printf write into, and the errno its strtol
+    // sets: "99999999999999999999" is out of a long's range.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "__acrt_iob_func :: (i: u32) -> *void #foreign libc;\n"
+                                "_errno :: () -> *s32 #foreign libc;\n"
+                                "strtol :: (s: *u8, end: *void, base: s32) -> s64 #foreign libc;\n"
+                                "standard_output :: () -> *void { return __acrt_iob_func(1); }\n"
+                                "out_of_range :: () -> s32 {\n"
+                                "    _errno().* = 0;\n"
+                                "    strtol(\"99999999999999999999\", null, 10);\n"
+                                "    return _errno().*;\n"
+                                "}\n"
+                                "main :: () { }\n");
+    CHECK(interp_test_value(&a, m, "standard_output") == (u64)(uintptr_t)stdout);
+    CHECK_EQ(interp_test_value(&a, m, "out_of_range"), ERANGE);
+    CHECK(interp_c_library_function(str("___mb_cur_max_func")) == (void *)&___mb_cur_max_func);
+    arena_free(&a);
 }
 
 TEST(interp_calls_a_windows_function) {
