@@ -134,9 +134,9 @@
 //   type: integers signed or unsigned, floats as IEEE 754 does. == and !=
 //   also compare two bools; ordering a bool is "'<' needs numbers, not
 //   'bool'", and a bool with anything else is "mismatched types 'bool' and
-//   'int' for '=='". == and != take nothing but numbers, bools, pointers
-//   and strings: "'==' needs numbers, bools, pointers or strings, not
-//   'Vec2'".
+//   'int' for '=='". == and != take nothing but numbers, bools, pointers,
+//   procedure values and strings: "'==' needs numbers, bools, pointers,
+//   procedure values or strings, not 'Vec2'".
 // - && || ! take bools and give one: "'&&' needs bools, not 'int'", "'!'
 //   needs a bool, not 'int'". && and || don't evaluate their right operand
 //   when the left one decides.
@@ -160,9 +160,11 @@
 //   - a procedure: "can't assign to 'N': it's a procedure";
 //   - any other expression: "only a variable, a field or an element can be
 //     assigned to".
-// - N :: e; needs e a number or a bool ("a constant can only be a number
-//   or a bool, for now": only they fold yet) known while compiling
-//   ("the value of constant 'N' isn't known while compiling").
+// - N :: e; needs e a number or a bool ("a constant can only be a number,
+//   a bool or a procedure, for now": only they fold yet) known while
+//   compiling ("the value of constant 'N' isn't known while compiling"),
+//   or a procedure (OP :: add;), as its own type: "'add' is a
+//   '(int, int) -> int', so a constant can't name it as a '(int) -> int'".
 // - The condition of if and while is a bool: "the condition of 'if' must
 //   be a bool, not 'int'".
 // - for a..b: the ends are integers meeting as an arithmetic operator's
@@ -320,8 +322,8 @@
 // - [N]T converts implicitly to []T, a view of its N elements, wherever a
 //   value converts (a declaration, an assignment, an argument, a return, a
 //   cast); nothing else converts to or from either but its own type. No
-//   operator takes them ("'==' needs numbers, bools, pointers or strings,
-//   not '[3]int'").
+//   operator takes them ("'==' needs numbers, bools, pointers, procedure
+//   values or strings, not '[3]int'").
 // - T.[a, b] is a [2]T, each value converting to T; .[a, b] takes its type
 //   where it's used, as .{...} does: an array type, whose count it must
 //   give ("'[3]int' has 3 elements, but this literal gives 2"), or a view
@@ -372,8 +374,8 @@
 //   an element of one): its address is put in the global's bytes by the
 //   linker (literal_address).
 // - A top-level constant follows a local one's rules: a number or a bool,
-//   so not a struct (`N :: Vec2.{1, 2};` is "a constant can only be a
-//   number or a bool, for now").
+//   or a procedure, so not a struct (`N :: Vec2.{1, 2};` is "a constant
+//   can only be a number, a bool or a procedure, for now").
 // - Both are checked where they're first needed (in another's value, or in
 //   source order), so their order doesn't matter: in `A :: B + 1; B :: 2;`
 //   A is 3. A value that needs itself, directly or through others, is "'A'
@@ -420,7 +422,8 @@
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - main must exist as a procedure, have a body, take nothing and return
-//   nothing.
+//   nothing. It can be called, but isn't a value: "'main' can't be a
+//   value: it's where the program starts" (it returns C's int to C).
 //
 // After an error, an expression whose type is unknown (null) reports
 // nothing more, so one mistake gives one message.
