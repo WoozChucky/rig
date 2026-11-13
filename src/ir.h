@@ -193,6 +193,10 @@ enum Ir_Op : u8 {
     IR_RET,                          // ret [%a, ...]         one value per result
     IR_PANIC,                        // panic @global: writes the global's bytes but its final zero to stderr, exits 101
                                      // panic %a, %b: the same with the %b bytes (an i64) at the ptr %a
+                                     // From lowering, the text is "PATH:L:C: runtime error: MESSAGE\n",
+                                     // and the panic knows how long that prefix is (`constant`, `c`;
+                                     // unknown, -1, when built by hand), so the interpreter can give
+                                     // MESSAGE alone; ir_print doesn't show the length
     IR_UNREACHABLE,                  // unreachable           control never gets here
 };
 
@@ -218,14 +222,19 @@ struct Ir_Instr {
                        // IR_INTTOPTR): the operand's type
     Ir_Pred pred;      // IR_CMP, IR_FCMP
     s32 result;        // the (first) value's number, or -1
-    s32 a, b, c;       // operands, value numbers (-1: none); c is IR_SELECT's and IR_BRANCH's condition
+    s32 a, b, c;       // operands, value numbers (-1: none); c is IR_SELECT's and IR_BRANCH's condition,
+                       // and IR_PANIC's prefix length (an i64) when the message is %a and %b (see `constant`)
     s32 target;        // IR_ADDR, IR_PANIC: a global (IR_PANIC: -1 when the message is %a and %b);
                        // IR_CALL, IR_PROC_ADDR: a procedure; IR_JUMP, IR_BRANCH: a block (the true one)
     s32 target2;       // IR_BRANCH: the false block
     u64 constant;      // IR_CONST: an integer's bits, zero-extended from the type's width; a
                        // float's value as a double's bits (f64_bits), which the backend
                        // rounds to the nearest float for an f32;
-                       // IR_LOCAL of bytes, IR_COPY, IR_ZERO: the number of bytes
+                       // IR_LOCAL of bytes, IR_COPY, IR_ZERO: the number of bytes;
+                       // IR_PANIC: the length of the message's prefix, "PATH:L:C: runtime
+                       // error: ", when `target` names its global; c is the value holding
+                       // that length when the message is %a and %b; -1 (as constant: all
+                       // ones) when unknown, as in a module built by hand (ir_emit)
     u32 align;         // IR_LOCAL of bytes: its alignment, a power of 2
     Array<s32> args;   // IR_CALL's and IR_CALL_INDIRECT's arguments, IR_RET's values
     Ir_Proc *signature;  // IR_CALL_INDIRECT: what the procedure called takes and gives, an Ir_Proc
@@ -385,9 +394,10 @@ s32 ir_add_param(Ir_Proc *p, Ir_Type type, Ir_Ext ext);
 s32 ir_new_block(Arena *a, Ir_Proc *p);
 
 // Appends an instruction to the block, its operands -1, with no position
-// (line 0) and no scope (-1), and numbers its value unless type is IR_VOID
-// or op gives nothing whatever its type: a terminator, or IR_STORE,
-// IR_COPY or IR_ZERO, which write memory. An
+// (line 0) and no scope (-1), and an IR_PANIC's prefix length unknown (its
+// `constant` all ones, -1; every other op's starts at 0), and numbers its
+// value unless type is IR_VOID or op gives nothing whatever its type: a
+// terminator, or IR_STORE, IR_COPY or IR_ZERO, which write memory. An
 // IR_LOCAL always gives a value, its address, whatever its type. The block
 // mustn't have ended (a terminator is last). The pointer is valid until the
 // next instruction is appended to the same block.

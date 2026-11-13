@@ -3624,3 +3624,75 @@ TEST(a_call_through_a_value_checks_for_null) {
     CHECK(contains(ir, "global @str.0 = \"test.rig:5:11: runtime error: null procedure call\0A\00\"\n"));
     arena_free(&a);
 }
+
+// A panic's message knows where its "PATH:L:C: runtime error: " prefix
+// ends (issue #114): the interpreter reports the message without it.
+
+// The procedure `name`'s first panic, or null when it has none.
+static Ir_Instr *panic_in(Ir_Module *m, const char *name) {
+    for (s64 i = 0; i < m->procs.count; i++) {
+        Ir_Proc *p = m->procs[i];
+        if (!string_eq(p->name, str(name))) continue;
+        for (s64 k = 0; k < p->blocks.count; k++) {
+            Ir_Block *block = p->blocks[k];
+            for (s64 n = 0; n < block->instrs.count; n++) {
+                if (block->instrs[n].op == IR_PANIC) return &block->instrs[n];
+            }
+        }
+    }
+    return nullptr;
+}
+
+TEST(panic_knows_its_prefix) {
+    // A runtime check's panic writes a global's bytes, and its `constant`
+    // is the length of the prefix those bytes start with: what follows is
+    // the message, its newline and the zero that ends the global.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "main :: () {\n"
+                                "    z := 0;\n"
+                                "    n := 10 / z;\n"
+                                "}\n");
+    Ir_Instr *panic = panic_in(m, "main");
+    CHECK(panic != nullptr);
+    if (panic) {
+        CHECK(panic->target >= 0);
+        CHECK_EQ(panic->c, -1);
+        CHECK_EQ(panic->constant, strlen("test.rig:3:13: runtime error: "));
+        if (panic->target >= 0) {
+            String message = message_of(m, panic->target);
+            CHECK(panic->constant <= (u64)message.count);
+            if (panic->constant <= (u64)message.count) {
+                s64 prefix = (s64)panic->constant;
+                CHECK_STR(string_slice(message, 0, prefix), "test.rig:3:13: runtime error: ");
+                CHECK_STR(string_slice(message, prefix, message.count - prefix), "division by zero\n");
+            }
+        }
+    }
+    // A panic built by hand doesn't know: its constant is all ones (-1)
+    // and its c is none.
+    Ir_Module *by_hand = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(by_hand, &a, "f", IR_VOID);
+    s32 b = ir_new_block(&a, p);
+    Ir_Instr *unknown = ir_emit(p, b, IR_PANIC, IR_VOID);
+    CHECK_EQ(unknown->constant, -1);
+    CHECK_EQ(unknown->c, -1);
+    arena_free(&a);
+}
+
+TEST(bounds_panic_knows_its_prefix) {
+    // __rig_bounds_failed's message is built in a buffer, `where` first:
+    // the prefix the failing check passed, `where_length` bytes long, its
+    // parameter %1. Its panic's c names that value.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "f :: (v: []int, i: int) -> int { return v[i]; }\n"
+                                "main :: () { }\n");
+    Ir_Instr *panic = panic_in(m, "__rig_bounds_failed");
+    CHECK(panic != nullptr);
+    if (panic) {
+        CHECK_EQ(panic->target, -1);
+        CHECK_EQ(panic->c, 1);
+    }
+    arena_free(&a);
+}

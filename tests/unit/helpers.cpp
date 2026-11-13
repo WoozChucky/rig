@@ -1,5 +1,5 @@
 // helpers.cpp: test helpers shared by the parser's, loader's, checker's,
-// IR's, LLVM backend's and linker's tests.
+// IR's, LLVM backend's, linker's and interpreter's tests.
 //
 // Two ways to get tokens. src() lexes real source text, the way rig build
 // does; milestone 2's tests use it, since the lexer is complete and source
@@ -207,9 +207,9 @@ static s64 count_of(String haystack, const char *needle) {
     }
 }
 
-// Hand-built IR, for the tests of the IR's printing, the backend and the
-// runtime that come before lowering can make what they need. Each returns
-// the value's number.
+// Hand-built IR, for the tests of the IR's printing, the backend, the
+// interpreter and the runtime that come before lowering can make what they
+// need, or need IR it never makes. Each returns the value's number.
 
 static s32 emit_const(Ir_Proc *p, s32 block, Ir_Type type, u64 bits) {
     Ir_Instr *c = ir_emit(p, block, IR_CONST, type);
@@ -267,6 +267,20 @@ static s32 emit_local_bytes(Ir_Proc *p, s32 block, u64 size, u32 align) {
     local->constant = size;
     local->align = align;
     return local->result;
+}
+
+// addr @global: the global's address.
+static s32 emit_addr(Ir_Proc *p, s32 block, s32 global) {
+    Ir_Instr *addr = ir_emit(p, block, IR_ADDR, IR_PTR);
+    addr->target = global;
+    return addr->result;
+}
+
+// load T %at.
+static s32 emit_load(Ir_Proc *p, s32 block, Ir_Type type, s32 at) {
+    Ir_Instr *load = ir_emit(p, block, IR_LOAD, type);
+    load->a = at;
+    return load->result;
 }
 
 // %at plus %offset bytes.

@@ -55,6 +55,9 @@ Ir_Instr *ir_emit(Ir_Proc *p, s32 block, Ir_Op op, Ir_Type type) {
     instr.a = instr.b = instr.c = -1;
     instr.target = instr.target2 = -1;
     instr.scope = -1;  // no position, no scope: lowering gives both (emit_in)
+    // A panic's prefix length is unknown (all ones, -1) until lowering says
+    // it: a module built by hand never does (ir.h).
+    if (op == IR_PANIC) instr.constant = ~(u64)0;
     Ir_Block *b = p->blocks[block];
     array_add(&b->instrs, instr);
     return &b->instrs[b->instrs.count - 1];

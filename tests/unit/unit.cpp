@@ -1,10 +1,14 @@
 // unit.cpp: the unit test program, bin/unit-tests. A unity build like rig:
-// the whole compiler (src/all.cpp), the harness, then every test file. A
-// new test file is added to the list at the end.
+// the whole compiler (src/all.cpp), the harness, the --interpret mode
+// (interpret_mode.cpp), then every test file. A new test file is added to
+// the list at the end.
 //
 //   bin/unit-tests              every test
 //   bin/unit-tests lex          the tests whose names, or files' names, contain "lex"
 //   bin/unit-tests --self-test  checks that the harness can fail
+//   bin/unit-tests --interpret FILE.rig [--no-bounds-checks]
+//                               runs a program interpreted (interpret_mode.cpp),
+//                               as bin/run-tests does with every tests/run program
 
 #include "../../src/all.cpp"
 #include "test.h"
@@ -12,6 +16,8 @@
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#else
+#include <sys/resource.h>  // setrlimit, for --touch-reserved
 #endif
 
 static const int MAX_TESTS = 4096;
@@ -198,6 +204,30 @@ static int helper_mode(int argc, char **argv) {
 #endif
         return 0;
     }
+    if (strcmp(argv[1], "--touch-reserved") == 0) {
+        // Reads a byte of what os_reserve_inaccessible reserved, which must
+        // fault and end this process; "survived" on stdout if it doesn't,
+        // and "can't reserve" on stderr, exiting 1, if there's nothing to
+        // read. The read is volatile, so the compiler can't drop it.
+#ifdef _WIN32
+        SetErrorMode(SEM_NOGPFAULTERRORBOX);  // the crash ends it, with no dialog box waiting for a click
+#else
+        // The crash ends it with no core file: where cores are allowed
+        // (`ulimit -c`), the kernel would write one to the current
+        // directory, the repository's, on every run.
+        struct rlimit no_core = {0, 0};
+        setrlimit(RLIMIT_CORE, &no_core);
+#endif
+        volatile u8 *p = (volatile u8 *)os_reserve_inaccessible(1024 * 1024);
+        if (!p) {
+            Arena a = arena_make();
+            fprintf(stderr, "can't reserve: " STR_FMT "\n", STR_ARG(os_error_message(&a)));
+            return 1;
+        }
+        u8 byte = p[0];
+        printf("survived %d\n", byte);
+        return 0;
+    }
     return -1;
 }
 
@@ -223,8 +253,32 @@ static void run_tests(void *data) {
     }
 }
 
+// --interpret's command line, and its exit status: interpret_mode.cpp,
+// after main, runs on the thread os_run_on_stack starts.
+struct Interpret_Mode {
+    int argc;
+    char **argv;
+    int status;
+};
+static void interpret_mode(void *data);
+
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "--self-test") == 0) return self_test();
+    if (argc >= 2 && strcmp(argv[1], "--interpret") == 0) {
+        // On the compiler's stack, as rig works: lexing, parsing and
+        // checking recurse. Before helper_mode, which makes stdout and
+        // stderr binary: the program writes in text mode here, as the
+        // compiled program does, so the runner compares the two alike.
+        Interpret_Mode mode = {argc, argv, 1};
+        if (!os_run_on_stack(RIG_STACK_SIZE, interpret_mode, &mode)) {
+            Arena a = arena_make();
+            fprintf(stderr, "unit-tests: can't start the interpreter's thread: " STR_FMT "\n",
+                    STR_ARG(os_error_message(&a)));
+            arena_free(&a);
+            return 1;
+        }
+        return mode.status;
+    }
     if (argc >= 2 && strncmp(argv[1], "--", 2) == 0) {
         int status = helper_mode(argc, argv);
         if (status >= 0) return status;
@@ -241,6 +295,9 @@ int main(int argc, char **argv) {
     printf("%d passed, %d failed\n", run.passed, run.failed);
     return run.failed ? 1 : 0;
 }
+
+// The --interpret mode.
+#include "interpret_mode.cpp"
 
 // The test files.
 #include "test_harness.cpp"
@@ -260,3 +317,4 @@ int main(int argc, char **argv) {
 #include "test_driver.cpp"
 #include "test_grammar.cpp"
 #include "test_version.cpp"
+#include "test_interp.cpp"

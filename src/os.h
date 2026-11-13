@@ -1,10 +1,11 @@
-// os.h: what Rig needs from the operating system: files, directories, and
-// running other programs (the linker, the tests' programs). One interface,
-// two implementations: os_windows.cpp and os_linux.cpp; all.cpp includes the
-// host's.
+// os.h: what Rig needs from the operating system: files, directories,
+// running other programs (the linker, the tests' programs), the compiler's
+// stack, and, for compile-time execution, address space and the system's C
+// functions by name. One interface, two implementations: os_windows.cpp and
+// os_linux.cpp; all.cpp includes the host's.
 //
 // Paths are UTF-8 Strings on both systems; on Windows either slash works.
-// A function that fails returns false and remembers why, for
+// A function that fails returns false (or null) and remembers why, for
 // os_error_message.
 
 #pragma once
@@ -131,3 +132,27 @@ u64 os_stack_size();
 // Whether the calling thread is the program's main thread, the one main()
 // started on.
 bool os_on_main_thread();
+
+// Compile-time execution (issue #114).
+
+// `size` bytes of addresses reserved and never made accessible: reading,
+// writing or calling any of them faults, and nothing else the process maps
+// can land there while they're held. The interpreter gives each Rig
+// procedure an address there as its value: distinct, stable, and of no use
+// to C by mistake. Null on failure.
+void *os_reserve_inaccessible(u64 size);
+
+// Gives back what os_reserve_inaccessible reserved: `p` as it returned it,
+// and the same size.
+void os_release_inaccessible(void *p, u64 size);
+
+// A function of the system's C library or of the OS, by name, for
+// compile-time C calls, or null. Linux: dlsym on dlopen("libc.so.6",
+// RTLD_LAZY | RTLD_NOLOAD) (libc and the dynamic loader it depends on, as
+// 10.6's -lc provides them); what -lc links in statically (atexit,
+// at_quick_exit, pthread_atfork) is looked up before this, in the
+// compiler's own table. Windows: GetProcAddress in kernel32.dll, then in
+// ucrtbase.dll (LoadLibraryW once); the standard C library's functions are
+// looked up before this, in the compiler's own table. Null isn't a
+// failure: a name nothing has leaves os_error_message as it was.
+void *os_find_c_function(String name);
