@@ -10,3 +10,10 @@
 /hello
 /deps/
 /.build/
+# The documentation site (site/): its packages, its build, and the pages
+# scripts/spec.mjs generates from docs/rig-spec.md
+/site/node_modules/
+/site/.vitepress/dist/
+/site/.vitepress/cache/
+/site/.vitepress/generated/
+/site/spec/
