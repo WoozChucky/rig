@@ -1,0 +1,5 @@
+// C (before C23) finds the arguments of a variadic function after its last
+// named parameter, so there must be one.
+f :: (..) -> s32 #foreign libc;
+
+main :: () { }
