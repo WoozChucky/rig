@@ -1,0 +1,10 @@
+l+t
+l+s
+l+l
+dt aggregates!make
+dt aggregates!sum
+bp `aggregates.rig:17`
+g
+dv /t
+?? p->b
+q

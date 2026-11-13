@@ -1,0 +1,8 @@
+make  void (
+Pair*,
+int64)
+sum  int64 (
+Pair*)
+17:     s := p.a + p.b;
+struct Pair * p = 0x
+int64 0n6

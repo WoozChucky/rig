@@ -1,0 +1,12 @@
+make (n=5) at
+aggregates.rig:12
+p := Pair.{n, n + 1};
+main () at
+aggregates.rig:22
+q := make(5);
+!Value returned
+sum (p=...) at
+aggregates.rig:17
+s := p.a + p.b;
+p = {a = 5, b = 6}
+= 6

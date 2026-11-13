@@ -316,9 +316,9 @@ struct Ir_Proc {
     Position body;             // its body's '{'
     Array<Ir_Scope> scopes;    // scope 0 is the body; empty without a source_name
     Array<Ir_Var> vars;        // in the order they're declared, the parameters first
-    Type *source_result;       // its result's Rig type when it has exactly one (an aggregate's
-                               // too, which the IR returns through a hidden pointer); null for
-                               // none or several (Rig's main has none, though C's returns an int)
+    Array<Type *> source_results;  // its results' Rig types, in order, aggregates too (each of
+                                   // them is a hidden pointer parameter in the IR); none for Rig's
+                                   // main, though C's returns an int
 };
 
 struct Ir_Module {
