@@ -1,0 +1,30 @@
+# Closing a milestone of the roadmap means a release is due (CONTRIBUTING.md,
+# "Releasing"): this says so on the roadmap's tracking issue, #85.
+name: milestone
+
+on:
+  milestone:
+    types: [closed]
+
+permissions:
+  issues: write
+
+jobs:
+  remind:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      # The milestones are titled "N: TITLE" ("2: The core language"). The
+      # title reaches the script as a variable, never pasted into it, so no
+      # title can run as a command.
+      - name: Comment on the roadmap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MILESTONE: ${{ github.event.milestone.title }}
+        run: |
+          case "$MILESTONE" in
+            [0-9]*': '*) name="${MILESTONE%%: *}, ${MILESTONE#*: }," ;;
+            *) name="\"$MILESTONE\"" ;;
+          esac
+          gh issue comment 85 --body "Milestone $name is closed: run the Release workflow with \`minor\`."
