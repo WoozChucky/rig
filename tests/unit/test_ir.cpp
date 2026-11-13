@@ -3572,13 +3572,12 @@ TEST(panic_knows_its_prefix) {
         CHECK(panic->target >= 0);
         CHECK_EQ(panic->c, -1);
         CHECK_EQ(panic->constant, strlen("test.rig:3:13: runtime error: "));
-        String bytes = m->globals[panic->target].bytes;
-        CHECK(panic->constant <= (u64)bytes.count);
-        if (panic->constant <= (u64)bytes.count) {
-            String rest = string_slice(bytes, (s64)panic->constant, bytes.count - (s64)panic->constant);
-            CHECK_EQ(rest.count, strlen("division by zero\n") + 1);
-            CHECK_EQ(rest.data[rest.count - 1], 0);
-            CHECK_STR(string_slice(rest, 0, rest.count - 1), "division by zero\n");
+        String message = message_of(m, panic->target);
+        CHECK(panic->constant <= (u64)message.count);
+        if (panic->constant <= (u64)message.count) {
+            s64 prefix = (s64)panic->constant;
+            CHECK_STR(string_slice(message, 0, prefix), "test.rig:3:13: runtime error: ");
+            CHECK_STR(string_slice(message, prefix, message.count - prefix), "division by zero\n");
         }
     }
     // A panic built by hand doesn't know: its constant is all ones (-1)

@@ -7,8 +7,10 @@
 
 #include <time.h>  // time(), for the timeouts
 #ifndef _WIN32
-#include <stdlib.h>  // realpath, setenv, unsetenv
-#include <unistd.h>  // symlink, unlink
+#include <errno.h>
+#include <stdlib.h>    // realpath, setenv, unsetenv
+#include <sys/mman.h>  // mincore
+#include <unistd.h>    // symlink, unlink, sysconf
 #endif
 
 #ifdef _WIN32
@@ -442,11 +444,23 @@ TEST(os_reserve_inaccessible_gives_untouchable_addresses) {
         u8 *last = first + SIZE - 1;
         CHECK(first != last);
         os_release_inaccessible(first, SIZE);
+        // Released, the addresses are free again, or every Interp torn down
+        // would leak its range. Reserving more wouldn't show it: a second
+        // range would be found elsewhere, in so large an address space.
+#ifdef _WIN32
+        MEMORY_BASIC_INFORMATION info = {};
+        CHECK(VirtualQuery(first, &info, sizeof info) == sizeof info);
+        CHECK_EQ(info.State, MEM_FREE);
+#else
+        // mincore fails with ENOMEM on a page that isn't mapped. The first
+        // page and the last are asked about, so releasing only part of the
+        // range doesn't pass.
+        u8 *last_page = first + SIZE - (u64)sysconf(_SC_PAGESIZE);
+        unsigned char resident;
+        CHECK(mincore(first, 1, &resident) == -1 && errno == ENOMEM);
+        CHECK(mincore(last_page, 1, &resident) == -1 && errno == ENOMEM);
+#endif
     }
-    // Released, they can be reserved again.
-    void *second = os_reserve_inaccessible(SIZE);
-    CHECK(second != nullptr);
-    if (second) os_release_inaccessible(second, SIZE);
 }
 
 TEST(touching_reserved_addresses_faults) {
@@ -454,7 +468,8 @@ TEST(touching_reserved_addresses_faults) {
     // violation on Windows, SIGSEGV on Linux (os_run's 128 + the signal). A
     // reservation that could be read, plain memory, would print "survived"
     // and exit 0; then a Rig procedure's value C read through would give
-    // bytes instead of stopping it.
+    // bytes instead of stopping it. One that failed would say why on
+    // stderr, which a fault leaves empty.
     Arena a = arena_make();
     Array<String> argv = {};
     array_add(&argv, unit_tests_path(&a));
@@ -467,6 +482,7 @@ TEST(touching_reserved_addresses_faults) {
     CHECK_EQ(result.exit_code, 128 + SIGSEGV);
 #endif
     CHECK_STR(result.out, "");
+    CHECK_STR(result.err, "");
     array_free(&argv);
     arena_free(&a);
 }
