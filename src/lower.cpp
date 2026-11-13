@@ -2406,7 +2406,9 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         // and every use reads it from there, as clang does at -O0 (the
         // header's "Parameters" says why). An aggregate one is the pointer
         // to the caller's copy. The hidden result pointers before them are
-        // no variable, and don't count in `arg`.
+        // no variable here, and don't count in `arg` (the backend describes
+        // each to a debugger as the artificial parameter result$, from
+        // source_results: llvm_backend.cpp's declare_variables).
         l.scope = -1;
         s32 body_scope = new_scope(&l, source->body->pos);
         s32 hidden = aggregate_results(source);
