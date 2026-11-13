@@ -1,0 +1,19 @@
+40:             j -= 1;
+acceptance_2c!sort+
+Call Site
+acceptance_2c!sort+
+[@ROOT@\tests\debug\acceptance_2c.rig @ 40]
+acceptance_2c!main+
+[@ROOT@\tests\debug\acceptance_2c.rig @ 49]
+int64 0n5
+int64 0n3
+int64 0n1
+acceptance_2c!main+
+numbers          [Type: __int64 [5]]
+[0]              : 5 [Type: __int64]
+[1]              : 5 [Type: __int64]
+[2]              : 9 [Type: __int64]
+[3]              : 1 [Type: __int64]
+[4]              : 7 [Type: __int64]
+acceptance_2c!sort+
+38:         while j > 0 && a[j - 1] > x {

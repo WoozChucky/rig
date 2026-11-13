@@ -1,13 +1,15 @@
 main () at @ROOT@/tests/debug/lines.rig:19
 write(1);
 Current source file is @ROOT@/tests/debug/lines.rig
-write (
+write (n=1) at
 lines.rig:10
 twice := n * 2;
-add (
+add (a=2, b=3) at
 lines.rig:14
 s := a + b;
-#0  add (
+a = 2
+b = 3
+#0  add (a=2, b=3) at
 lines.rig:14
 #1
 in main () at
