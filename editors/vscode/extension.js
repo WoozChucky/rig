@@ -16,11 +16,16 @@
 //   type, its errors shown as squiggles and in the Problems panel without
 //   building (the setting rig.check). While it's on, the tasks use the
 //   problem matcher `$rig-runtime` instead, which takes only a program's
-//   runtime errors, so a build doesn't list the compile errors twice.
+//   runtime errors, so a build doesn't list the compile errors twice;
+// - debugging: the debug type `rig`, which builds the file with the build
+//   task and then debugs the program with Microsoft's C/C++ extension
+//   (Visual Studio's debugger on Windows, gdb on Linux), and the command
+//   "Rig: Debug Current File" (rig.debugFile), which starts it.
 //
 // It's CommonJS and requires only VS Code's API, Node's built-in modules and
-// diagnostics.js beside it (reading rig's output, which needs no VS Code):
-// no npm packages, no build step. VS Code loads it as it is.
+// two files beside it that need no VS Code: debug.js (the C/C++ extension's
+// launch configuration for a program) and diagnostics.js (reading rig's
+// output). No npm packages, no build step: VS Code loads it as it is.
 
 'use strict';
 
@@ -29,6 +34,7 @@ const child_process = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { programPath, debugConfiguration } = require('./debug');
 const { samePath, parseDiagnostics, characterOfByteColumn } = require('./diagnostics');
 
 const windows = process.platform === 'win32';
@@ -50,15 +56,6 @@ function isInside(file, dir) {
         !relative.startsWith(`..${path.sep}`) &&
         !path.isAbsolute(relative)
     );
-}
-
-// The program `rig build FILE` writes, as src/driver.cpp names it: the file's
-// name without its directory and its .rig (in any case), with .exe on
-// Windows, in the directory rig ran in.
-function programPath(file, cwd) {
-    let name = path.basename(file);
-    if (name.length > 4 && name.toLowerCase().endsWith('.rig')) name = name.slice(0, -4);
-    return path.join(cwd, windows ? `${name}.exe` : name);
 }
 
 // Whether `file` exists and is a file that can be run.
@@ -194,6 +191,19 @@ function taskFile(definition, folder) {
     return documentFile(activeDocument());
 }
 
+// The workspace folder a build of `file` belongs to: the file's own, else
+// `scope`, the task's (a file from outside the workspace), else none.
+function buildFolder(file, scope) {
+    return vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file)) || (scope && scope.uri ? scope : undefined);
+}
+
+// Where rig runs to build a file, given buildFolder's answer: the workspace
+// folder, or the file's directory when there's none. rig writes the program
+// and .build/ there.
+function buildDirectory(file, folder) {
+    return folder ? folder.uri.fsPath : path.dirname(file);
+}
+
 // Shows an error with a button that opens the setting rig.compilerPath.
 function compilerError(message) {
     vscode.window.showErrorMessage(message, 'Open Settings').then((choice) => {
@@ -247,9 +257,9 @@ function forTerminal(text) {
 // lone ESC at the end goes too.
 const ESCAPES = /\x1b(?:\[[0-?]*[ -\/]*[@-~]|O[\s\S]|[\s\S])?/g;
 
-// Why the commands and tasks don't run in Restricted Mode.
+// Why the commands, tasks and debugging don't run in Restricted Mode.
 const UNTRUSTED =
-    'building and running need a trusted workspace: they run rig and the program it builds. ' +
+    'building, running and debugging need a trusted workspace: they run rig and the program it builds. ' +
     'The grammar and snippets still work.';
 
 // A task's work and the terminal VS Code shows it in. This is a
@@ -319,9 +329,7 @@ class RigTerminal {
             return this.fail(`Rig: ${target.error}`);
         }
         const file = target.file;
-        // The file's own workspace folder, else the task's (a file from
-        // outside the workspace), else none.
-        const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file)) || this.scope;
+        const folder = buildFolder(file, this.scope);
 
         // Build what's on screen, not what was last saved.
         const document = vscode.workspace.textDocuments.find((d) => d.uri.scheme === 'file' && samePath(d.uri.fsPath, file));
@@ -342,7 +350,7 @@ class RigTerminal {
         // (${workspaceFolder}), and an absolute one as it is, so rig gets a
         // relative name only when the task's folder is the one rig runs in
         // and the file is inside it: usually so, and the shorter output.
-        const cwd = folder ? folder.uri.fsPath : path.dirname(file);
+        const cwd = buildDirectory(file, folder);
         const relative = this.scope && samePath(this.scope.uri.fsPath, cwd) && isInside(file, cwd);
         const argument = relative ? path.relative(cwd, file) : file;
 
@@ -350,7 +358,7 @@ class RigTerminal {
         const built = await this.spawn(found.compiler, ['build', argument], cwd);
         if (built !== 0 || command === 'build') return this.finish(built);
 
-        const program = programPath(file, cwd);
+        const program = programPath(process.platform, file, cwd);
         this.note(`> ${program}`);
         const status = await this.spawn(program, [], cwd);
         this.note(`${path.basename(program)} exited with status ${status}`);
@@ -511,6 +519,197 @@ async function runFile(command, uri) {
     return vscode.tasks.executeTask(makeTask(definition, defaultScope(file), TASK_NAMES[command]));
 }
 
+// --- Debugging ----------------------------------------------------------------
+//
+// A program rig builds carries debug information a C debugger reads (a PDB on
+// Windows, DWARF on Linux), so debugging it needs no debugger of Rig's own:
+// Microsoft's C/C++ extension has one for each platform, and debug.js makes
+// its launch configuration. What's left is the debug type `rig`, declared
+// in package.json: a launch configuration of that type ({ "type": "rig" } in
+// launch.json, or the one F5 makes up in a folder with none) comes to
+// debugProvider below before anything starts. The provider builds the file,
+// then returns the C/C++ extension's configuration for the program in its
+// place. VS Code sees the type has changed, asks that type's providers in
+// turn, and launches it with the C/C++ extension's debugger; had the
+// provider returned undefined, nothing would start.
+
+// The name of the configuration that debugs the active file: the one
+// package.json gives launch.json, and the one rig.debugFile starts.
+const DEBUG_CURRENT = 'Debug the current .rig file';
+
+// The extension whose debuggers debug a Rig program.
+const CPPTOOLS = 'ms-vscode.cpptools';
+
+// A launch configuration's `file`, its variables replaced, as { file } or
+// { error }.
+//
+// VS Code replaces the ${...} variables of a launch configuration only after
+// the providers have resolved it, and this provider needs the file before:
+// it builds it. So it replaces the ones a file is named with itself: ${file}
+// (the active editor's file), ${workspaceFolder} (the folder whose
+// launch.json this is) and ${workspaceFolder:NAME}. Any other is refused
+// rather than handed to rig as it is.
+function expandFile(given, folder) {
+    let error = null;
+    const file = given.replace(/\$\{([^}]*)\}/g, (variable, name) => {
+        if (error) return variable;
+        const named = /^workspaceFolder:(.*)$/.exec(name);
+        if (name === 'file') {
+            const document = activeDocument();
+            if (document && document.uri.scheme === 'file') return document.uri.fsPath;
+            error = `uses ${variable}, but the active editor has no file on disk.`;
+        } else if (name === 'workspaceFolder') {
+            if (folder) return folder.uri.fsPath;
+            error = `uses ${variable}, but the configuration isn't in a workspace folder.`;
+        } else if (named) {
+            const found = (vscode.workspace.workspaceFolders || []).find((f) => f.name === named[1]);
+            if (found) return found.uri.fsPath;
+            error = `uses ${variable}, but no workspace folder is named "${named[1]}".`;
+        } else {
+            error =
+                `uses ${variable}, which the Rig debugger can't replace: it builds the file before VS Code ` +
+                'replaces variables. Use ${file}, ${workspaceFolder}, ${workspaceFolder:NAME} or a path.';
+        }
+        return variable;
+    });
+    return error ? { error: `the launch configuration's file "${given}" ${error}` } : { file };
+}
+
+// Runs the build task for `file` (the same task "Rig: Build Current File"
+// runs, its output in a terminal and its errors in the Problems panel) and
+// resolves with its exit status: 0 when it built, undefined if the task was
+// stopped.
+//
+// VS Code says a task's process has ended with onDidEndTaskProcess, an
+// event for every task, so the build is told apart by the TaskExecution
+// executeTask returns. The listener is in place before the task starts, so
+// its end can't be missed; one that comes before executeTask has said which
+// execution is the build's is kept until it has.
+function build(file, scope) {
+    return new Promise((resolve, reject) => {
+        let execution;   // the build's, once executeTask resolves
+        const early = []; // processes that ended before then
+        const subscription = vscode.tasks.onDidEndTaskProcess((event) => {
+            if (execution === undefined) early.push(event);
+            else if (event.execution === execution) done(event.exitCode);
+        });
+        const done = (status) => {
+            subscription.dispose();
+            resolve(status);
+        };
+        const task = makeTask({ type: 'rig', command: 'build', file }, scope, TASK_NAMES.build);
+        vscode.tasks.executeTask(task).then(
+            (started) => {
+                execution = started;
+                const ended = early.find((event) => event.execution === started);
+                if (ended) done(ended.exitCode);
+            },
+            (e) => {
+                subscription.dispose();
+                reject(e);
+            },
+        );
+    });
+}
+
+// Shows `message` with one button, which runs `command` (with `arg`). The
+// provider doesn't wait for the answer: a message left unanswered would
+// hold the launch up for good.
+function errorWithAction(message, button, command, arg) {
+    vscode.window.showErrorMessage(message, button).then((choice) => {
+        if (choice) vscode.commands.executeCommand(command, arg);
+    });
+}
+
+// The provider of the debug type `rig`. VS Code calls
+// resolveDebugConfiguration with the configuration to launch (from
+// launch.json, `{}` for F5 without one, or rig.debugFile's) and the
+// workspace folder it belongs to, if any. It returns the configuration to
+// launch instead, or undefined to launch nothing, after saying why.
+//
+// The configuration's own attributes are `file` (by default the active
+// editor's) and `args`, the program's command line.
+const debugProvider = {
+    async resolveDebugConfiguration(folder, config) {
+        // Debugging runs rig and the program; VS Code has no debugging in
+        // Restricted Mode either.
+        if (!vscode.workspace.isTrusted) {
+            errorWithAction(`Rig: ${UNTRUSTED}`, 'Manage Workspace Trust', 'workbench.trust.manage');
+            return undefined;
+        }
+        let target;
+        if (config.file) {
+            target = expandFile(String(config.file), folder);
+            // A relative path is from the configuration's folder, as a task's is.
+            if (!target.error) target = taskFile({ file: target.file }, folder);
+        } else {
+            target = documentFile(activeDocument());
+        }
+        if (target.untitled) {
+            // Once it's saved, F5 again debugs it.
+            errorWithAction(`Rig: ${target.error}`, 'Save As...', 'workbench.action.files.saveAs');
+            return undefined;
+        }
+        if (target.error) {
+            vscode.window.showErrorMessage(`Rig: ${target.error}`);
+            return undefined;
+        }
+        const file = target.file;
+
+        // The build would say there's no compiler too; said here, the
+        // launch stops before it, with the button to the setting.
+        const scope = folder || defaultScope(file);
+        const buildIn = buildFolder(file, scope);
+        const found = findCompiler(file, buildIn);
+        if (found.error) {
+            compilerError(`Rig: ${found.error}`);
+            return undefined;
+        }
+        // Without it, the configuration returned would name a debug type
+        // VS Code doesn't know. In a WSL window it must be installed in WSL,
+        // where this extension and the program run.
+        if (!vscode.extensions.getExtension(CPPTOOLS)) {
+            errorWithAction(
+                `Rig: debugging needs Microsoft's C/C++ extension (${CPPTOOLS}), installed where this extension runs ` +
+                    '(in a WSL window, in WSL): its debuggers read the debug information rig writes.',
+                'Install C/C++ Extension',
+                'workbench.extensions.installExtension',
+                CPPTOOLS,
+            );
+            return undefined;
+        }
+
+        let status;
+        try {
+            status = await build(file, scope);
+        } catch (e) {
+            vscode.window.showErrorMessage(`Rig: couldn't start the build: ${e && e.message ? e.message : e}`);
+            return undefined;
+        }
+        if (status !== 0) {
+            vscode.window.showErrorMessage('Rig: the build failed; see the terminal and the Problems panel.');
+            return undefined;
+        }
+        const resolved = debugConfiguration(process.platform, file, buildDirectory(file, buildIn), config.args || []);
+        // Run Without Debugging (Ctrl+F5) marks the configuration noDebug;
+        // the C/C++ extension's debuggers then just run the program.
+        if (config.noDebug) resolved.noDebug = true;
+        return resolved;
+    },
+};
+
+// rig.debugFile: debugs the file the editor title's button was pressed on
+// (its uri), or from the command palette the active editor's, by starting
+// the `rig` configuration for it: the provider does the rest, so F5 and
+// this behave alike. With no file, the provider says why.
+function debugFile(uri) {
+    const file = uri && uri.scheme === 'file' ? uri.fsPath : activeRigFile();
+    const config = { type: 'rig', request: 'launch', name: DEBUG_CURRENT };
+    if (file) config.file = file;
+    const folder = file ? vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file)) : undefined;
+    return vscode.debug.startDebugging(folder, config);
+}
+
 // --- The live check -----------------------------------------------------------
 
 // How long the live check waits after the last change before checking, so
@@ -627,7 +826,7 @@ class LiveCheck {
         // directory), and gets the file's full path, which its diagnostics
         // then name. The file needn't exist: with --stdin the name is only a
         // name.
-        const cwd = folder ? folder.uri.fsPath : path.dirname(file);
+        const cwd = buildDirectory(file, folder);
         return new Promise((resolve) => {
             // The compiler couldn't be started (it was deleted, or isn't a
             // program): no problems listed, and said once, like a missing
@@ -692,6 +891,8 @@ function activate(context) {
         vscode.tasks.registerTaskProvider('rig', taskProvider),
         vscode.commands.registerCommand('rig.buildFile', (uri) => runFile('build', uri)),
         vscode.commands.registerCommand('rig.runFile', (uri) => runFile('run', uri)),
+        vscode.commands.registerCommand('rig.debugFile', (uri) => debugFile(uri)),
+        vscode.debug.registerDebugConfigurationProvider('rig', debugProvider),
         live,
         // On open and save with onType and onSave alike; on each change,
         // after a pause, with onType only. (A change event with no changes
