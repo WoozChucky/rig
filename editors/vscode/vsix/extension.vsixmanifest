@@ -12,6 +12,8 @@
     <Properties>
       <Property Id="Microsoft.VisualStudio.Code.Engine" Value="^1.75.0" />
       <Property Id="Microsoft.VisualStudio.Code.ExtensionKind" Value="workspace,ui" />
+      <Property Id="Microsoft.VisualStudio.Services.Links.Source" Value="https://github.com/WoozChucky/rig" />
+      <Property Id="Microsoft.VisualStudio.Services.Links.Learn" Value="https://woozchucky.github.io/rig/" />
     </Properties>
   </Metadata>
   <Installation>
