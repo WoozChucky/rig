@@ -1,0 +1,34 @@
+// A debugger's view of procedure values (bin/run-tests runs it under gdb
+// with procedure_values.gdb and under cdb with procedure_values.cdb). A
+// procedure value is described as a C function pointer is (spec 10.7): a
+// debugger shows it as an address and the procedure there, a null one as
+// zero, and calls the procedure through it. Its type is the procedure's,
+// as a direct call passes the arguments: swap's Pair by address, and the
+// Pair it returns through a pointer first. gdb calls through a value as C
+// does, `print f(10, 20)`; cdb's .call takes only a procedure's name, so it
+// calls through a value with C++'s evaluator, `.call @@c++(f)(10, 20)`.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Pair :: struct { a: int; b: int; }
+Ops :: struct { op: (int, int) -> int; }
+
+add :: (a: int, b: int) -> int { return a + b; }
+mul :: (a: int, b: int) -> int { return a * b; }
+swap :: (p: Pair, k: int) -> Pair { return Pair.{p.b * k, p.a * k}; }
+compare :: (a: *void, b: *void) -> s32 #c_call { return 0; }
+
+apply :: (f: (int, int) -> int, a: int, b: int) -> int {
+    return f(a, b);
+}
+
+main :: () {
+    f := add;
+    ops := Ops.{mul};
+    table : [2](int, int) -> int = .[add, mul];
+    none : (int, int) -> int;
+    s := swap;
+    c := compare;
+    printf("%lld\n", apply(f, 2, 3));
+    printf("%lld\n", apply(ops.op, 4, 5));
+    printf("%lld\n", s(Pair.{1, 2}, 3).a + cast(int) c(null, null));
+}

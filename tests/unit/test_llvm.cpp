@@ -1739,3 +1739,84 @@ TEST(llvm_calls_through_values_as_through_names) {
     CHECK(count_of(linux, "sret(") == 2);  // make's definition and the call through m
     arena_free(&a);
 }
+
+// The subroutine type a procedure-typed variable named `name` points at,
+// and the list of its types: "!{!9, !9, !9}" from the variable's
+// "type: !12", whose pointer's "baseType: !11", whose "types: !10".
+static String pointed_signature(Arena *a, String text, const char *name) {
+    String variable = line_with(text, string_cstr(a, string_printf(a, "!DILocalVariable(name: \"%s\"", name)));
+    String pointer = node_line(a, text, attached(a, variable, "type:"));
+    if (!contains(pointer, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: ")) return {};
+    String signature = node_line(a, text, attached(a, pointer, "baseType:"));
+    if (!contains(signature, "!DISubroutineType(")) return {};
+    String types = node_line(a, text, attached(a, signature, "types:"));
+    s64 at = index_of(types, "!{");
+    return at < 0 ? String{} : string_slice(types, at, types.count - at);
+}
+
+TEST(llvm_procedure_values_are_function_pointers) {
+    // A procedure-typed variable, parameter or field is a pointer to the
+    // subroutine type of its signature, as a C function pointer is, so a
+    // debugger shows the procedure it holds and can call it. The signature
+    // is the one a procedure of the type has (spec 10.4, 10.7): aggregates
+    // as pointers, a hidden pointer per aggregate result first, the one
+    // scalar result or none. One type is one node, wherever it's used, and
+    // #c_call changes nothing a debugger sees.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Pair :: struct { a: int; b: int; }\n"
+                                "Ops :: struct { op: (int, int) -> int; }\n"
+                                "add :: (a: int, b: int) -> int { return a + b; }\n"
+                                "make :: (p: Pair, n: int) -> Pair { return p; }\n"
+                                "two :: (n: int) -> (int, int) { return n, n; }\n"
+                                "none :: () { }\n"
+                                "compare :: (a: *void, b: *void) -> s32 #c_call { return 0; }\n"
+                                "apply :: (g: (int, int) -> int) -> int { return g(1, 2); }\n"
+                                "main :: () {\n"
+                                "    f := add;\n"
+                                "    m := make;\n"
+                                "    t := two;\n"
+                                "    z := none;\n"
+                                "    c := compare;\n"
+                                "    o := Ops.{add};\n"
+                                "    apply(f);\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        String integer = defined_node(line_with(text, "!DIBasicType(name: \"int\""));
+        String s32 = defined_node(line_with(text, "!DIBasicType(name: \"s32\""));
+        String pair = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Pair\""));
+        String to_pair = pointer_node(&a, text, pair);
+        String to_void = defined_node(line_with(text, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: null"));
+        CHECK(integer.count > 0 && s32.count > 0 && to_pair.count > 0 && to_void.count > 0);
+        struct Expected {
+            const char *name;
+            String types;
+        };
+        Expected expected[] = {
+            {"f", string_printf(&a, "!{" STR_FMT ", " STR_FMT ", " STR_FMT "}", STR_ARG(integer), STR_ARG(integer),
+                                STR_ARG(integer))},
+            {"g", string_printf(&a, "!{" STR_FMT ", " STR_FMT ", " STR_FMT "}", STR_ARG(integer), STR_ARG(integer),
+                                STR_ARG(integer))},
+            {"m", string_printf(&a, "!{null, " STR_FMT ", " STR_FMT ", " STR_FMT "}", STR_ARG(to_pair),
+                                STR_ARG(to_pair), STR_ARG(integer))},
+            {"t", string_printf(&a, "!{null, " STR_FMT "}", STR_ARG(integer))},
+            {"z", string_printf(&a, "!{null}")},
+            {"c", string_printf(&a, "!{" STR_FMT ", " STR_FMT ", " STR_FMT "}", STR_ARG(s32), STR_ARG(to_void),
+                                STR_ARG(to_void))},
+        };
+        for (Expected &e : expected) {
+            String got = pointed_signature(&a, text, e.name);
+            if (!string_eq(got, e.types)) {
+                printf("    %s: " STR_FMT ", not " STR_FMT "\n", e.name, STR_ARG(got), STR_ARG(e.types));
+            }
+            CHECK(string_eq(got, e.types));
+        }
+        // f, apply's g and Ops' op have one type, one pointer node.
+        String f = attached(&a, line_with(text, "!DILocalVariable(name: \"f\""), "type:");
+        CHECK(string_eq(attached(&a, line_with(text, "!DILocalVariable(name: \"g\""), "type:"), f));
+        CHECK(string_eq(attached(&a, line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"op\""), "baseType:"),
+                        f));
+    }
+    arena_free(&a);
+}
