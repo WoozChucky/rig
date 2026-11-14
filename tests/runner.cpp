@@ -43,8 +43,8 @@
 // it names the commit rig was built from).
 //
 // Then rig check on every program of both directories, from a file and
-// from stdin under the file's name, and its own command line
-// (check_tests).
+// from stdin under the file's name, a loaded file's text from stdin within
+// its program (--stdin-for), and its own command line (check_tests).
 //
 // Then the specification's examples (spec_tests): every ```rig block of
 // docs/rig-spec.md but a file= one (below; its section 1.4 says so too),
@@ -908,13 +908,18 @@ static void run_directory(Arena *a, String program, const char *how, const char 
 
 // --- rig check ---------------------------------------------------------------
 //
-// rig check FILE.rig [--stdin] does what rig build does up to the
-// diagnostics and stops there: it must say exactly what rig build says
-// about a program in tests/errors, nothing about one in tests/run, and
-// write nothing, neither an object, a program nor a .build directory. With
-// --stdin it reads the source from its standard input (what an editor has
-// on screen, unsaved) and names it FILE.rig, which needn't exist, and whose
-// directory the source's #loads are found from.
+// rig check FILE.rig [--stdin | --stdin-for FILE.rig] does what rig build
+// does up to the diagnostics and stops there: it must say exactly what rig
+// build says about a program in tests/errors, nothing about one in
+// tests/run, and write nothing, neither an object, a program nor a .build
+// directory. With --stdin it reads the source from its standard input
+// (what an editor has on screen, unsaved) and names it FILE.rig, which
+// needn't exist, and whose directory the source's #loads are found from.
+// rig check MAIN.rig --stdin-for FILE.rig checks the program MAIN.rig with
+// stdin as the text of FILE.rig, a file it #loads (an editor's text of a
+// loaded file, checked as part of its program): it must say what rig build
+// would say if FILE.rig held that text, or that MAIN.rig doesn't load
+// FILE.rig.
 
 // The directory where rig check is shown to write nothing, not even a
 // .build (check_writes_nothing_test).
@@ -946,6 +951,21 @@ static bool run_check(Arena *a, String rig, String file, bool from_stdin, String
     array_add(&argv, str("check"));
     array_add(&argv, file);
     if (from_stdin) array_add(&argv, str("--stdin"));
+    bool started = run_with_input(a, argv, directory, input, result, why);
+    array_free(&argv);
+    return started;
+}
+
+// rig check MAIN --stdin-for FILE, input on stdin, in `directory` ({}:
+// this one); false with `why` when it couldn't run.
+static bool run_check_for(Arena *a, String rig, String main, String file, String input, String directory,
+                          Process_Result *result, String *why) {
+    Array<String> argv = {};
+    array_add(&argv, rig);
+    array_add(&argv, str("check"));
+    array_add(&argv, main);
+    array_add(&argv, str("--stdin-for"));
+    array_add(&argv, file);
     bool started = run_with_input(a, argv, directory, input, result, why);
     array_free(&argv);
     return started;
@@ -1026,7 +1046,8 @@ static String check_run_test(Arena *a, String rig, String name) {
 
 // rig check, run in CHECK_DIR, where check_tests removed any .build, leaves
 // none: it never gets as far as writing an object. The --stdin checks of
-// check_stdin_without_a_file_test ran there before this one, so this
+// check_stdin_without_a_file_test and the --stdin-for ones of
+// check_stdin_for_the_main_file_test ran there before this one, so this
 // covers them too.
 static String check_writes_nothing_test(Arena *a, String rig) {
     String dir = str(CHECK_DIR);
@@ -1043,11 +1064,21 @@ static String check_writes_nothing_test(Arena *a, String rig) {
     return {};
 }
 
+// The name check_stdin_without_a_file_test checks a text under, in
+// CHECK_DIR, where no such file is; a broken text, and what rig check says
+// of it under that name. check_stdin_for_the_main_file_test checks them
+// too.
+static const char *NOWHERE = "tests/no-such-directory/typed.rig";
+static const char *NOWHERE_BROKEN = "main :: () { putz(\"hi\"); }\n";
+static const char *NOWHERE_BROKEN_ERR = "tests/no-such-directory/typed.rig:1:14: error: unknown identifier 'putz'\n"
+                                        "    main :: () { putz(\"hi\"); }\n"
+                                        "                 ^\n";
+
 // --stdin with a name that isn't a file, in CHECK_DIR: the source is what
 // came in, and the diagnostics name the file as given.
 static String check_stdin_without_a_file_test(Arena *a, String rig) {
     String dir = str(CHECK_DIR);
-    String file = str("tests/no-such-directory/typed.rig");
+    String file = str(NOWHERE);
     String there = string_printf(a, STR_FMT "/" STR_FMT, STR_ARG(dir), STR_ARG(file));
     if (os_file_exists(there)) return string_printf(a, STR_FMT " exists", STR_ARG(there));
     Process_Result r = {};
@@ -1057,13 +1088,19 @@ static String check_stdin_without_a_file_test(Arena *a, String rig) {
     why = check_result(a, "rig check --stdin", &r, 0, {});
     if (why.count) return why;
 
-    String broken = str("main :: () { putz(\"hi\"); }\n");
-    if (!run_check(a, rig, file, true, broken, dir, &r, &why)) return why;
-    return check_result(a, "rig check --stdin", &r, 1,
-                        str("tests/no-such-directory/typed.rig:1:14: error: unknown identifier 'putz'\n"
-                            "    main :: () { putz(\"hi\"); }\n"
-                            "                 ^\n"));
+    if (!run_check(a, rig, file, true, str(NOWHERE_BROKEN), dir, &r, &why)) return why;
+    return check_result(a, "rig check --stdin", &r, 1, str(NOWHERE_BROKEN_ERR));
 }
+
+// The text check_stdin_of_another_text_test checks under the name of
+// tests/run/load_files.rig, and what rig check says of it there.
+// check_stdin_for_the_main_file_test checks them too.
+static const char *LOAD_FILES_TYPED = "#load \"load/print.rig\";\n"
+                                      "newline :: () { putchar(10); }\n"
+                                      "main :: () { print_line(7); putz(\"hi\"); }\n";
+static const char *LOAD_FILES_TYPED_ERR = "tests/run/load_files.rig:3:29: error: unknown identifier 'putz'\n"
+                                          "    main :: () { print_line(7); putz(\"hi\"); }\n"
+                                          "                                ^\n";
 
 // --stdin under the name of a file that is there, from the repository's
 // root, with a text of its own: what an editor sends when the file on
@@ -1081,24 +1118,118 @@ static String check_stdin_of_another_text_test(Arena *a, String rig) {
     remove(string_cstr(a, string_printf(a, ".build/load_files%s", OBJ)));
     Process_Result r = {};
     String why = {};
-    String typed = str("#load \"load/print.rig\";\n"
-                       "newline :: () { putchar(10); }\n"
-                       "main :: () { print_line(7); putz(\"hi\"); }\n");
-    if (!run_check(a, rig, file, true, typed, {}, &r, &why)) return why;
-    why = check_result(a, "rig check --stdin", &r, 1,
-                       str("tests/run/load_files.rig:3:29: error: unknown identifier 'putz'\n"
-                           "    main :: () { print_line(7); putz(\"hi\"); }\n"
-                           "                                ^\n"));
+    if (!run_check(a, rig, file, true, str(LOAD_FILES_TYPED), {}, &r, &why)) return why;
+    why = check_result(a, "rig check --stdin", &r, 1, str(LOAD_FILES_TYPED_ERR));
     if (why.count) return why;
     String wrote = check_wrote(a, str("load_files"));
     if (wrote.count) return string_printf(a, "rig check --stdin wrote " STR_FMT, STR_ARG(wrote));
     return {};
 }
 
+// --stdin-for a file the program loads, from the repository's root: what an
+// editor sends for a loaded file on screen, checked as part of the program
+// that loads it, here tests/run/load_runtime_error.rig, whose
+// #load "load/divide.rig" is tests/run/load/divide.rig. With the file's own
+// text the program checks clean; with b, divide's parameter, typed as c,
+// the error is in that text, named as the #load names the file. It is
+// however the command line spells the file, since the loader knows a file
+// by its identity (load.h), not by its path's text. Like every check, it
+// writes nothing (check_wrote).
+static String check_stdin_for_a_loaded_file_test(Arena *a, String rig) {
+    String main = str("tests/run/load_runtime_error.rig");
+    String file = str("tests/run/load/divide.rig");
+    String source = {};
+    if (!os_read_file(a, file, &source)) return string_printf(a, "can't read " STR_FMT, STR_ARG(file));
+    // rig build put an object here earlier; rig check mustn't make one.
+    remove(string_cstr(a, string_printf(a, ".build/load_runtime_error%s", OBJ)));
+    Process_Result r = {};
+    String why = {};
+    if (!run_check_for(a, rig, main, file, source, {}, &r, &why)) return why;
+    why = check_result(a, "rig check --stdin-for", &r, 0, {});
+    if (why.count) return why;
+    String wrote = check_wrote(a, str("load_runtime_error"));
+    if (wrote.count) return string_printf(a, "rig check --stdin-for wrote " STR_FMT, STR_ARG(wrote));
+
+    String typed = replace_all(a, source, "a / b", str("a / c"));
+    if (string_eq(typed, source)) return string_printf(a, STR_FMT " has no \"a / b\"", STR_ARG(file));
+    String err = str("tests/run/load/divide.rig:3:16: error: unknown identifier 'c'\n"
+                     "        return a / c;\n"
+                     "                   ^\n");
+    const char *spellings[] = {
+        "tests/run/load/divide.rig",
+        "tests/run/./load/divide.rig",
+        "tests/run/load/../load/divide.rig",
+#ifdef _WIN32
+        "tests\\run\\LOAD\\Divide.rig",
+#endif
+    };
+    for (const char *spelling : spellings) {
+        if (!run_check_for(a, rig, main, str(spelling), typed, {}, &r, &why)) return why;
+        why = check_result(a, string_cstr(a, string_printf(a, "rig check --stdin-for %s", spelling)), &r, 1, err);
+        if (why.count) return why;
+    }
+    return {};
+}
+
+// --stdin-for a file the program loads that isn't there,
+// tests/errors/load_missing.rig's load/nope.rig: the text stands for it,
+// so it isn't reported as unread, and the names it declares are known.
+// What's left of the .err is the errors no file could fix: those after its
+// first, the cannot read's three lines.
+static String check_stdin_for_a_missing_file_test(Arena *a, String rig) {
+    String file = str("tests/errors/load/nope.rig");
+    if (os_file_exists(file)) return string_printf(a, STR_FMT " exists", STR_ARG(file));
+    String expected = {};
+    if (!read_expected_errors(a, str("load_missing"), &expected)) return str("no tests/errors/load_missing.err");
+    s64 start = 0;
+    for (int lines = 0; lines < 3 && start < expected.count; start++) {
+        if (expected.data[start] == '\n') lines++;
+    }
+    expected = string_slice(expected, start, expected.count - start);
+    if (!starts_with(expected, "tests/errors/load_missing.rig:13:14: ")) {
+        return str("tests/errors/load_missing.err's second error isn't at 13:14");
+    }
+    String text = str("Vec2 :: struct { x: int; y: int; }\n"
+                      "make :: () -> Vec2 { v : Vec2; return v; }\n"
+                      "show :: (v: Vec2, by: int) {}\n"
+                      "scale :: 2;\n"
+                      "count : int;\n");
+    Process_Result r = {};
+    String why = {};
+    if (!run_check_for(a, rig, str("tests/errors/load_missing.rig"), file, text, {}, &r, &why)) return why;
+    return check_result(a, "rig check --stdin-for", &r, 1, expected);
+}
+
+// --stdin-for the main file itself is --stdin: the text is the main
+// file's. Its #loads are found from its name's directory, as with --stdin,
+// and it needn't exist: in CHECK_DIR, NOWHERE isn't there, and it is
+// checked, not reported as unread. The texts and what's said of them are
+// check_stdin_of_another_text_test's and check_stdin_without_a_file_test's.
+static String check_stdin_for_the_main_file_test(Arena *a, String rig) {
+    Process_Result r = {};
+    String why = {};
+    String main = str("tests/run/load_files.rig");
+    if (!run_check_for(a, rig, main, str("tests/run/./load_files.rig"), str(LOAD_FILES_TYPED), {}, &r, &why)) {
+        return why;
+    }
+    why = check_result(a, "rig check --stdin-for", &r, 1, str(LOAD_FILES_TYPED_ERR));
+    if (why.count) return why;
+
+    String dir = str(CHECK_DIR);
+    String there = string_printf(a, STR_FMT "/%s", STR_ARG(dir), NOWHERE);
+    if (os_file_exists(there)) return string_printf(a, STR_FMT " exists", STR_ARG(there));
+    if (!run_check_for(a, rig, str(NOWHERE), str(NOWHERE), str(NOWHERE_BROKEN), dir, &r, &why)) return why;
+    return check_result(a, "rig check --stdin-for", &r, 1, str(NOWHERE_BROKEN_ERR));
+}
+
 // rig check's command line, right and wrong, as COMMAND_CASES rig build's,
 // and the rule the two share: the source file's name ends in .rig.
 static const Command_Case CHECK_CASES[] = {
-    {"rig check with no file", {"check"}, 2, "usage: "},
+    {"rig check with no file",
+     {"check"},
+     2,
+     "usage: rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]\n"
+     "       rig check FILE.rig [--stdin | --stdin-for FILE.rig]\n"},
     {"rig check with two files", {"check", "tests/run/hello.rig", "tests/run/hello.rig"}, 2, "usage: "},
     {"rig check with -o", {"check", "tests/run/hello.rig", "-o", ".build/tests/output.RIG"}, 2, "usage: "},
     {"rig check with --stdin twice", {"check", "--stdin", "tests/run/hello.rig", "--stdin"}, 2, "usage: "},
@@ -1122,6 +1253,42 @@ static const Command_Case CHECK_CASES[] = {
      {"check", "tests/missing.rig"},
      1,
      "rig: error: cannot read 'tests/missing.rig': "},
+    {"--stdin-for with no name", {"check", "tests/run/load_runtime_error.rig", "--stdin-for"}, 2, "usage: "},
+    {"--stdin-for with an empty name",
+     {"check", "tests/run/load_runtime_error.rig", "--stdin-for", ""},
+     2,
+     "usage: "},
+    {"--stdin-for twice",
+     {"check", "tests/run/load_runtime_error.rig", "--stdin-for", "tests/run/load/divide.rig", "--stdin-for",
+      "tests/run/load/divide.rig"},
+     2,
+     "usage: "},
+    {"--stdin-for with --stdin",
+     {"check", "tests/run/load_runtime_error.rig", "--stdin", "--stdin-for", "tests/run/load/divide.rig"},
+     2,
+     "usage: "},
+    {"--stdin with --stdin-for",
+     {"check", "tests/run/load_runtime_error.rig", "--stdin-for", "tests/run/load/divide.rig", "--stdin"},
+     2,
+     "usage: "},
+    {"--stdin-for of a name not ending in .rig",
+     {"check", "tests/run/load_runtime_error.rig", "--stdin-for", "tests/run/hello.out"},
+     1,
+     "rig: error: 'tests/run/hello.out' isn't a .rig file\n"},
+    {"--stdin-for with a main file that isn't there",
+     {"check", "tests/missing.rig", "--stdin-for", "tests/run/load/divide.rig"},
+     1,
+     "rig: error: cannot read 'tests/missing.rig': "},
+    {"--stdin-for of a file the program doesn't load",
+     {"check", "tests/run/hello.rig", "--stdin-for", "tests/run/load/divide.rig"},
+     1,
+     "rig: error: 'tests/run/hello.rig' doesn't load 'tests/run/load/divide.rig'\n"},
+    {"rig build with --stdin-for",
+     {"build", "tests/run/load_runtime_error.rig", "--stdin-for", "tests/run/load/divide.rig"},
+     2,
+     "usage: "},
+    {"rig build --stdin-for alone", {"build", "--stdin-for"}, 2, "usage: "},
+    {"rig build with -o --stdin-for", {"build", "tests/run/hello.rig", "-o", "--stdin-for"}, 2, "usage: "},
 };
 
 // Every rig check test, one after another.
@@ -1151,6 +1318,10 @@ static void check_tests(Arena *a, String rig, s64 *passed, s64 *failed) {
     report("rig check --stdin of another text than the file's", check_stdin_of_another_text_test(a, rig), passed,
            failed);
     report("rig check --stdin of a file that isn't there", check_stdin_without_a_file_test(a, rig), passed, failed);
+    report("rig check --stdin-for a loaded file", check_stdin_for_a_loaded_file_test(a, rig), passed, failed);
+    report("rig check --stdin-for a file that isn't there", check_stdin_for_a_missing_file_test(a, rig), passed,
+           failed);
+    report("rig check --stdin-for the main file", check_stdin_for_the_main_file_test(a, rig), passed, failed);
     report("rig check writes nothing, not even .build", check_writes_nothing_test(a, rig), passed, failed);
     for (const Command_Case &c : CHECK_CASES) {
         report(string_cstr(a, string_printf(a, "rig: %s", c.what)), command_test(a, rig, &c), passed, failed);
