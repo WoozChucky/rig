@@ -247,9 +247,11 @@ Ast_Proc *procedure_address(Ast *e) {
     }
 }
 
-// Casts are walked through; constant data goes on from the node holding
-// its value (constant_data): a string constant's literal, or the value a
-// *u8 field of a constant holds, which may be a cast of a literal.
+// Casts are walked through, and so is .data, the address of the bytes of
+// the string or view it's taken of (a .count is no pointer, and an array
+// is no literal); constant data goes on from the node holding its value
+// (constant_data): a string constant's literal, or the value a *u8 field
+// of a constant holds, which may be a cast of a literal.
 Ast_String *literal_address(Ast *e) {
     for (;;) {
         Type *t = e->type;
@@ -257,6 +259,10 @@ Ast_String *literal_address(Ast *e) {
         if (e->kind == AST_STRING) return (Ast_String *)e;
         if (e->kind == AST_CAST) {
             e = ((Ast_Cast *)e)->value;
+            continue;
+        }
+        if (e->kind == AST_MEMBER && ((Ast_Member *)e)->index < 0) {
+            e = ((Ast_Member *)e)->operand;
             continue;
         }
         Ast *value;

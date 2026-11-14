@@ -4745,13 +4745,15 @@ TEST(constants_hold_data) {
     // constant that is null stays a scalar constant, and one that is a
     // string literal's address holds data, that literal, reached through a
     // field or an element of constant data too, written as a cast of it or
-    // not. A null pointer or procedure inside data is constant.
+    // not, or as a string constant's .data. A null pointer or procedure
+    // inside data is constant.
     Arena a = arena_make();
     Checked c = check_src(&a, DATA_CONSTANTS
                           "SYMBOL :: OPS[1].symbol;\n"
                           "NO_OP :: Op.{null, null};\n"
                           "CASTOP :: Op.{cast(*u8) \"+\", add};\n"
                           "CAST_SYMBOL :: CASTOP.symbol;\n"
+                          "NAME_DATA :: NAME.data;\n"
                           "main :: () { T :: int.[1, 2]; S :: NAME; }\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     CHECK(holds_data(global_named(&c, "NAME")));
@@ -4794,6 +4796,10 @@ TEST(constants_hold_data) {
     if (cast_symbol->data && cast_symbol->data->kind == AST_STRING) {
         CHECK_STR(((Ast_String *)cast_symbol->data)->value, "+");
     }
+    Ast_Const *name_data = (Ast_Const *)global_named(&c, "NAME_DATA");
+    CHECK(holds_data(name_data));
+    CHECK_STR(type_name(&a, name_data->type), "*u8");
+    CHECK(name_data->data == name->data);
     Ast_Proc *op = ((Ast_Const *)global_named(&c, "OP"))->proc;
     CHECK(op && string_eq(op->name, str("add")));
     Ast_Const *nowhere = (Ast_Const *)global_named(&c, "NOWHERE");
@@ -4866,7 +4872,8 @@ TEST(constant_data_resolves) {
 
 TEST(constant_data_rules) {
     // A constant's value, and every value inside it, must be known while
-    // compiling, reported at the first one that isn't. A pointer in it is
+    // compiling, reported at the first one that isn't, inside a literal
+    // that a cast, a field or an element is taken of too. A pointer in it is
     // null or a string literal's address: any cast, from a number, a
     // procedure or a pointer variable, gets its own message. A procedure in
     // it is a procedure or null. No part of it is a view, which would point
@@ -4896,6 +4903,9 @@ TEST(constant_data_rules) {
                            "INNER :: Wrapper.{h = Holder.{v = int.[1]}}.h;\n"
                            "LIVE_RUN :: Op.{\"+\", callback};\n"
                            "CAST_HELD :: cast(*int) pointer;\n"
+                           "CAST_LIVE :: cast(Holder) Holder.{n = value};\n"
+                           "FIELD_LIVE :: Holder.{n = value}.n;\n"
+                           "ELEMENT_LIVE :: int.[1, value][0];\n"
                            "main :: () { }\n"),
               "7:9: a constant can't hold a view; only a string or an array can be one\n"
               "8:26: a constant can't hold a view; only a string or an array can be one\n"
@@ -4908,7 +4918,10 @@ TEST(constant_data_rules) {
               "19:36: a constant can't hold a view; only a string or an array can be one\n"
               "20:35: a constant can't hold a view; only a string or an array can be one\n"
               "21:22: the value of constant 'LIVE_RUN' isn't known while compiling\n"
-              "22:14: a constant's pointer can only be null or a string literal's address\n");
+              "22:14: a constant's pointer can only be null or a string literal's address\n"
+              "23:39: the value of constant 'CAST_LIVE' isn't known while compiling\n"
+              "24:27: the value of constant 'FIELD_LIVE' isn't known while compiling\n"
+              "25:25: the value of constant 'ELEMENT_LIVE' isn't known while compiling\n");
     arena_free(&a);
 }
 
@@ -4981,7 +4994,8 @@ TEST(string_constants_convert_as_literals) {
 
 TEST(global_values_name_constant_data) {
     // A global's value may name constant data, or a field or an element of
-    // it: the global gets a copy of its own (spec 4.3).
+    // it: the global gets a copy of its own (spec 4.3). A string constant's
+    // .data is its literal's address, as the literal's is.
     Arena a = arena_make();
     CHECK_STR(check_source(&a, DATA_CONSTANTS
                            "origin := ORIGIN;\n"
@@ -4990,6 +5004,7 @@ TEST(global_values_name_constant_data) {
                            "view : []int = PRIMES;\n"
                            "name : *u8 = NAME;\n"
                            "text := NAME;\n"
+                           "data : *u8 = NAME.data;\n"
                            "first := OPS[0];\n"
                            "op : (int, int) -> int = OPS[0].run;\n"
                            "main :: () { }\n"),
@@ -5169,26 +5184,44 @@ TEST(constant_data_folds) {
 TEST(mistyped_constant_data_doesnt_fold) {
     // A literal given a value of the wrong type, reported, keeps its own
     // type, so a field or an element of the part it got wrong is no part of
-    // data: it's left unfolded, and a constant naming it isn't known.
+    // data: it's left unfolded, and a constant naming it isn't known. A
+    // string field given a number has no bytes to count or index, nor a
+    // bound to be out of. An array literal that gives too few elements,
+    // reported, has the ones it lacks taken as zero.
     Arena a = arena_make();
-    CHECK_STR(check_source(&a,
-                           "Vec2 :: struct { x: int; y: int; }\n"
-                           "Line :: struct { a: Vec2; b: Vec2; }\n"
-                           "Grid :: struct { rows: [2][2]int; }\n"
-                           "X :: Line.{a = 5}.a.x;\n"
-                           "main :: () {\n"
-                           "    a := Line.{a = 5}.a.x;\n"
-                           "    b := Line.{\"hi\"}.a.x;\n"
-                           "    c := Vec2.[1, 2][0].x;\n"
-                           "    d := Grid.{rows = 5}.rows[0][1];\n"
-                           "}\n"),
-              "4:6: the value of constant 'X' isn't known while compiling\n"
-              "4:16: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
-              "6:20: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
-              "7:16: a value of type 'string' doesn't convert to 'Vec2' implicitly\n"
-              "8:16: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
-              "8:19: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
-              "9:23: a value of type 'int' doesn't convert to '[2][2]int' implicitly\n");
+    Checked c = check_src(&a,
+                          "Vec2 :: struct { x: int; y: int; }\n"
+                          "Line :: struct { a: Vec2; b: Vec2; }\n"
+                          "Grid :: struct { rows: [2][2]int; a: [3]int; }\n"
+                          "Named :: struct { name: string; n: int; }\n"
+                          "X :: Line.{a = 5}.a.x;\n"
+                          "main :: () {\n"
+                          "    a := Line.{a = 5}.a.x;\n"
+                          "    b := Line.{\"hi\"}.a.x;\n"
+                          "    c := Vec2.[1, 2][0].x;\n"
+                          "    d := Grid.{rows = 5}.rows[0][1];\n"
+                          "    e := Named.{1, 1}.name.count;\n"
+                          "    f := Named.{1, 1}.name[0];\n"
+                          "    g := Named.{1, 1}.name[5];\n"
+                          "    h := Grid.{a = .[1, 2]}.a[2];\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag),
+              "5:16: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
+              "5:6: the value of constant 'X' isn't known while compiling\n"
+              "7:20: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
+              "8:16: a value of type 'string' doesn't convert to 'Vec2' implicitly\n"
+              "9:16: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
+              "9:19: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
+              "10:23: a value of type 'int' doesn't convert to '[2][2]int' implicitly\n"
+              "11:17: a value of type 'int' doesn't convert to 'string' implicitly\n"
+              "12:17: a value of type 'int' doesn't convert to 'string' implicitly\n"
+              "13:17: a value of type 'int' doesn't convert to 'string' implicitly\n"
+              "14:20: '[3]int' has 3 elements, but this literal gives 2\n");
+    CHECK(!value_of(&c, "e")->is_constant);
+    CHECK(!value_of(&c, "f")->is_constant);
+    CHECK(!value_of(&c, "g")->is_constant);
+    CHECK(folds_to(&c, "h", 0));
+    token_list_free(c.list);
     arena_free(&a);
 }
 
