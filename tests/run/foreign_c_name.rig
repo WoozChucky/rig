@@ -1,0 +1,34 @@
+// A foreign procedure with a C name of its own (issue #135): the string
+// after #foreign's library is the C function's name, and the procedure's
+// own name is its name in Rig. C's free is declared twice here, under its
+// own name and as c_free, and both are called: one symbol, each call
+// through its own declaration. The program keeps C's names for its own
+// procedure (puts, which counts the lines it writes) and global (malloc),
+// which the C functions behind c_puts and c_malloc don't take from it.
+free :: (p: *void) #foreign libc;
+c_free :: (p: *void) #foreign libc "free";
+c_malloc :: (size: u64) -> *void #foreign libc "malloc";
+c_puts :: (s: *u8) -> s32 #foreign libc "puts";
+length :: (s: *u8) -> u64 #foreign libc "strlen";
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+lines := 0;
+malloc := 3;
+
+puts :: (s: *u8) {
+    c_puts(s);
+    lines += 1;
+}
+
+main :: () {
+    a := c_malloc(16);
+    b := c_malloc(32);
+    free(a);
+    c_free(b);
+    // Through its value, which is C's free itself.
+    release := c_free;
+    release(c_malloc(8));
+    puts("three blocks freed");
+    puts("by two declarations of free");
+    printf("%lld lines, %llu bytes, malloc %lld\n", lines, length("seven c"), malloc);
+}

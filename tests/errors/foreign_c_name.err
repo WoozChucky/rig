@@ -1,0 +1,6 @@
+tests/errors/foreign_c_name.rig:1:29: error: a foreign procedure's C name can't be empty
+    nothing :: () #foreign libc "";
+                                ^
+tests/errors/foreign_c_name.rig:2:36: error: 'fr ee' can't be a C function's name: it has white space
+    c_free :: (p: *void) #foreign libc "fr ee";
+                                       ^

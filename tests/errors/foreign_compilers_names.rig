@@ -1,0 +1,4 @@
+c_main :: () -> s32 #foreign libc "main";
+panic :: () #foreign libc "__rig_panic";
+__rig_bounds_failed :: () #foreign libc;
+main :: () { c_main(); }

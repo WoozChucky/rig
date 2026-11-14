@@ -4,12 +4,14 @@
 // prints it or writes an object file. Each IR block is one LLVM basic block,
 // and every stack slot's alloca is in the entry block, whichever block asked
 // for it. Rig's procedures are internal, the entry point and foreign
-// procedures external; a procedure with several results returns them as one
-// LLVM struct. Constant bytes are private constant arrays, Rig's global
-// variables internal globals. No instruction carries nsw, nuw or exact:
-// Rig's integers wrap (spec 6.4). On Linux, i8 and i16 parameters and
-// results are marked signext or zeroext, on every function and call, as
-// clang marks them; on Windows they aren't; an i1 is zeroext on both.
+// procedures external, each foreign one declared under its C name
+// (#foreign libc "free"), one declaration per C function; a procedure with
+// several results returns them as one LLVM struct. Constant bytes are
+// private constant arrays, Rig's global variables internal globals. No
+// instruction carries nsw, nuw or exact: Rig's integers wrap (spec 6.4). On
+// Linux, i8 and i16 parameters and results are marked signext or zeroext,
+// on every function and call, as clang marks them; on Windows they aren't;
+// an i1 is zeroext on both.
 //
 // A module with a panic also gets the runtime's __rig_panic, which writes
 // the message to stderr with C's write (_write on Windows) and exits with
