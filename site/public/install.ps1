@@ -3,10 +3,11 @@
 #   irm https://woozchucky.github.io/rig/install.ps1 | iex
 #   & ([scriptblock]::Create((irm https://woozchucky.github.io/rig/install.ps1))) -Version 0.2.0
 #
-# It does what the website's Install page (https://woozchucky.github.io/rig/install)
-# does by hand: downloads a release's rig-windows-x64.zip and SHA256SUMS,
-# checks the archive's SHA-256, unpacks it into %LOCALAPPDATA%\Programs\rig
-# and adds that folder to the user PATH if it isn't there yet. Then it
+# It does what the website's Install page does by hand
+# (https://woozchucky.github.io/rig/install): downloads a release's
+# rig-windows-x64.zip and SHA256SUMS, checks the archive's SHA-256, unpacks
+# it into %LOCALAPPDATA%\Programs\rig and adds that folder to the user PATH
+# if it isn't there yet. Then it
 # installs the VS Code extension when `code` is on the PATH, and builds hello
 # world with the installed rig.exe to check that the computer has what
 # linking needs. Running it again upgrades: the files are overwritten.
@@ -75,10 +76,10 @@ if ($true) { & {
     # drawing it makes Windows PowerShell 5.1's Invoke-WebRequest many times
     # slower. (Functions of script modules, such as 5.1's Expand-Archive,
     # don't see these preferences, so the archive is unpacked with .NET
-    # instead; see Install-Rig.) A user's strict mode would turn reading a property an
-    # exception doesn't have into an error, so it is off here. In
-    # PowerShell 7.3 and later, a program's non-zero exit status is not an
-    # error here: the script reads $LASTEXITCODE itself.
+    # instead; see Install-Rig.) A user's strict mode would turn reading a
+    # property an exception doesn't have into an error, so it is off here.
+    # In PowerShell 7.3 and later, a program's non-zero exit status is not
+    # an error here: the script reads $LASTEXITCODE itself.
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
     Set-StrictMode -Off
