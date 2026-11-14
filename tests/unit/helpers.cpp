@@ -207,6 +207,18 @@ static s64 count_of(String haystack, const char *needle) {
     }
 }
 
+// The first line of `text` containing `needle`, without its "\n"; {} when
+// there's none. A needle starting with "\n" finds the line after that one.
+static String line_with(String text, const char *needle) {
+    s64 at = index_of(text, needle);
+    if (at < 0) return {};
+    if (needle[0] == '\n') at++;
+    s64 start = at, end = at;
+    while (start > 0 && text.data[start - 1] != '\n') start--;
+    while (end < text.count && text.data[end] != '\n') end++;
+    return string_slice(text, start, end - start);
+}
+
 // Hand-built IR, for the tests of the IR's printing, the backend, the
 // interpreter and the runtime that come before lowering can make what they
 // need, or need IR it never makes. Each returns the value's number.

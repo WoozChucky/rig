@@ -803,6 +803,29 @@ TEST(interp_maps_read_only_globals) {
     arena_free(&a);
 }
 
+TEST(interp_reads_constant_data) {
+    // Issue #113: constants' read-only globals, read at run time through an
+    // index, a for and a procedure in a table: sub(7, 2) * 1000, plus the
+    // primes' sum (28) * 10, plus 'i' (105).
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "add :: (a: int, b: int) -> int { return a + b; }\n"
+                                "sub :: (a: int, b: int) -> int { return a - b; }\n"
+                                "Op :: struct { symbol: *u8; run: (int, int) -> int; }\n"
+                                "OPS :: Op.[.{\"+\", add}, .{\"-\", sub}];\n"
+                                "PRIMES :: int.[2, 3, 5, 7, 11];\n"
+                                "NAME :: \"rig\";\n"
+                                "read :: () -> int {\n"
+                                "    i := 1;\n"
+                                "    total := 0;\n"
+                                "    for PRIMES { total += it; }\n"
+                                "    return OPS[i].run(PRIMES[i + 2], 2) * 1000 + total * 10 + cast(int) NAME[i];\n"
+                                "}\n"
+                                "main :: () { }\n");
+    CHECK_EQ(interp_test_value(&a, m, "read"), 5385);
+    arena_free(&a);
+}
+
 TEST(interp_procedure_values) {
     // A procedure's value is the same from procaddr, from a global's
     // relocation, and after a cast to *void and back (procedure_values.rig's

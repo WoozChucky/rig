@@ -1471,8 +1471,9 @@ TEST(a_call_as_one_value_is_its_first_result) {
 TEST(ir_of_globals) {
     // A global variable is an internal global of its type, its first value
     // known while compiling (zero without one, or with ---), read and
-    // written through its address. Constants never reach the IR: their
-    // uses are constants already. String literals keep their own count.
+    // written through its address. A constant used only folded, as these
+    // are, never reaches the IR: its uses are constants already. String
+    // literals keep their own count.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_source(&a,
                                           "puts :: (s: *u8) -> s32 #foreign libc;\n"
@@ -3714,5 +3715,182 @@ TEST(bounds_panic_knows_its_prefix) {
         CHECK_EQ(panic->target, -1);
         CHECK_EQ(panic->c, 1);
     }
+    arena_free(&a);
+}
+
+// Issue #113: constants holding data. A data constant used at run time is
+// one read-only global of bytes, const.N, made where a use first needs it;
+// one used only folded never reaches the IR.
+
+TEST(data_constant_used_only_folded_takes_no_storage) {
+    // Every use here folds: an element at a constant index, an array's and
+    // a string's .count, a string's byte. So neither the constants nor the
+    // string literal have a global, and the sizes and the sum are numbers.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "PRIMES :: int.[2, 3, 5, 7, 11];\n"
+                                          "N :: PRIMES[2];\n"
+                                          "NAME :: \"rig\";\n"
+                                          "main :: () { grid : [N]int; sized : [PRIMES.count]u8; "
+                                          "x := PRIMES[4] + NAME.count; c := NAME[0]; }\n"));
+    CHECK(!contains(ir, "@const."));
+    CHECK(!contains(ir, "@str."));
+    String main = proc_ir(ir, "main");
+    CHECK(contains(main, "local 40 align 8"));
+    CHECK(contains(main, "local 5 align 1"));
+    CHECK(contains(main, "const i64 14"));
+    arena_free(&a);
+}
+
+TEST(data_constant_lives_once_in_read_only_data) {
+    // An element at an index known only at run time, and a for, read the
+    // constant's bytes: one read-only global, whichever procedure uses it,
+    // its five ints little-endian.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "PRIMES :: int.[2, 3, 5, 7, 11];\n"
+                                          "at :: (i: int) -> int { return PRIMES[i]; }\n"
+                                          "main :: () { i := 4; total := 0; for PRIMES { total += it; } "
+                                          "x := at(i) + PRIMES[i]; }\n"));
+    CHECK_EQ(count_of(ir, "const @const."), 1);
+    CHECK(contains(ir, "const @const.0: 40 align 8 = \""
+                       "\\02\\00\\00\\00\\00\\00\\00\\00"
+                       "\\03\\00\\00\\00\\00\\00\\00\\00"
+                       "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\07\\00\\00\\00\\00\\00\\00\\00"
+                       "\\0B\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    CHECK(contains(proc_ir(ir, "at"), "addr @const.0"));
+    CHECK(contains(proc_ir(ir, "main"), "addr @const.0"));
+    arena_free(&a);
+}
+
+TEST(local_data_constant_is_read_only_data_too) {
+    // A constant declared in a procedure is no variable: its bytes are a
+    // read-only global, as a top-level one's are.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a, "main :: () { T :: int.[10, 20]; i := 1; x := T[i]; }\n"));
+    CHECK(contains(ir, "const @const.0: 16 align 8 = \""
+                       "\\0A\\00\\00\\00\\00\\00\\00\\00"
+                       "\\14\\00\\00\\00\\00\\00\\00\\00\""));
+    arena_free(&a);
+}
+
+TEST(string_constant_shares_its_bytes) {
+    // A string constant's literal has one str.N, whatever reaches it: each
+    // *u8 use is its address, and the string itself, a view, is a
+    // read-only global of its count and a relocation to those bytes.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                          "NAME :: \"rig\";\n"
+                                          "main :: () { puts(NAME); puts(NAME); s := NAME; }\n"));
+    CHECK_EQ(count_of(ir, "\"rig\\00\""), 1);
+    CHECK(contains(ir, "const @const.0: 16 align 8 = \"\\03"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @str.0"));
+    String main = proc_ir(ir, "main");
+    CHECK_EQ(count_of(main, "addr @str.0"), 2);
+    CHECK_EQ(count_of(main, "addr @const.0"), 1);
+    arena_free(&a);
+}
+
+TEST(view_of_a_data_constant_sees_its_read_only_data) {
+    // A view of an array constant points into the constant's global, with
+    // no copy on the stack: nothing can write it (the checker allows no
+    // part of a constant as a place), so nothing can change what it sees.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "sum :: (v: []int) -> int { return v.count; }\n"
+                                          "PRIMES :: int.[2, 3, 5, 7, 11];\n"
+                                          "main :: () { n := sum(PRIMES); }\n"));
+    String main = proc_ir(ir, "main");
+    CHECK(contains(main, "addr @const.0"));
+    CHECK(!contains(main, "local 40 align 8"));
+    CHECK(!contains(main, ", 40\n"));
+    arena_free(&a);
+}
+
+TEST(table_constant_holds_relocations) {
+    // A table of string literals and procedures is all addresses: its
+    // bytes are zero, and each address a relocation, in order.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "add :: (a: int, b: int) -> int { return a + b; }\n"
+                                          "sub :: (a: int, b: int) -> int { return a - b; }\n"
+                                          "Op :: struct { symbol: *u8; run: (int, int) -> int; }\n"
+                                          "OPS :: Op.[.{\"+\", add}, .{\"-\", sub}];\n"
+                                          "main :: () { i := 1; f := OPS[i].run; }\n"));
+    CHECK(contains(ir, "const @const.0: 32 align 8 = zero reloc 0 @str.0 reloc 8 @add reloc 16 @str.1 reloc 24 "
+                       "@sub\n"));
+    arena_free(&a);
+}
+
+TEST(global_copies_constant_data) {
+    // A global whose value is constant data, or holds some, gets the bytes
+    // themselves, writable, as for a literal: no const.N. A view global of
+    // an array constant gets an array.N of its own, and a pointer or a
+    // procedure from a constant the same relocation a literal gives.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "Vec2 :: struct { x: int; y: int; }\n"
+                                          "Line :: struct { a: Vec2; b: Vec2; }\n"
+                                          "add :: (a: int, b: int) -> int { return a + b; }\n"
+                                          "Op :: struct { symbol: *u8; run: (int, int) -> int; }\n"
+                                          "NAME :: \"rig\";\n"
+                                          "ORIGIN :: Vec2.{3, 4};\n"
+                                          "PRIMES :: int.[2, 3, 5, 7, 11];\n"
+                                          "LINE :: Line.{a = ORIGIN};\n"
+                                          "OPS :: Op.[.{\"+\", add}, .{NAME, add}];\n"
+                                          "OP :: OPS[0].run;\n"
+                                          "NOWHERE :: cast(*void) null;\n"
+                                          "NOTHING :: null;\n"
+                                          "GREETING :: cast(*u8) \"hi\";\n"
+                                          "COPY :: PRIMES;\n"
+                                          "SYMBOL :: OPS[1].symbol;\n"
+                                          "NO_OP :: Op.{null, null};\n"
+                                          "CASTOP :: Op.{cast(*u8) \"+\", add};\n"
+                                          "CAST_SYMBOL :: CASTOP.symbol;\n"
+                                          "origin := ORIGIN;\n"
+                                          "line := Line.{a = ORIGIN};\n"
+                                          "view : []int = PRIMES;\n"
+                                          "name : *u8 = NAME;\n"
+                                          "second := OPS[1];\n"
+                                          "op : (int, int) -> int = OPS[0].run;\n"
+                                          "main :: () { }\n"));
+    CHECK(!contains(ir, "@const."));
+    CHECK(contains(ir, "global @origin: 16 align 8 = \""
+                       "\\03\\00\\00\\00\\00\\00\\00\\00"
+                       "\\04\\00\\00\\00\\00\\00\\00\\00\""));
+    CHECK(contains(ir, "global @line: 32 align 8 = \""
+                       "\\03\\00\\00\\00\\00\\00\\00\\00"
+                       "\\04\\00\\00\\00\\00\\00\\00\\00"));
+    CHECK(contains(ir, "global @array.0: 40 align 8 = "));
+    CHECK(contains(ir, "reloc 8 @array.0"));
+    CHECK(contains(ir, "global @name: 8 align 8 = zero reloc 0 @str."));
+    CHECK(contains(line_with(ir, "global @second: "), "reloc 8 @add"));
+    CHECK(contains(ir, "global @op: 8 align 8 = zero reloc 0 @add"));
+    arena_free(&a);
+}
+
+TEST(left_out_parts_of_constants_are_zero) {
+    // A part a constant's literal leaves out is zero: in a global copied
+    // from it, nothing is written, and a view global of a left-out array
+    // still sees all its elements, zeros, in an array.N of its own. At run
+    // time a view of one points into the constant's global, zeros there.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "Box :: struct { n: int; items: [3]int; }\n"
+                                          "EMPTY :: Box.{n = 1};\n"
+                                          "sum :: (v: []int) -> int { return v.count; }\n"
+                                          "items := EMPTY.items;\n"
+                                          "view : []int = EMPTY.items;\n"
+                                          "main :: () { n := sum(EMPTY.items); }\n"));
+    CHECK(contains(ir, "global @items: 24 align 8 = zero\n"));
+    CHECK(contains(ir, "global @array.0: 24 align 8 = zero\n"));
+    CHECK(contains(ir, "global @view: 16 align 8 = \"\\03\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @array.0\n"));
+    CHECK(contains(ir, "const @const.0: 32 align 8 = \"\\01"));
+    String main = proc_ir(ir, "main");
+    CHECK(contains(main, "addr @const.0"));
+    CHECK(!contains(main, "local 24 align 8"));
     arena_free(&a);
 }
