@@ -9,7 +9,11 @@
 // __acrt_iob_func(2), on Windows but a data symbol, stderr, in glibc,
 // which Rig can't declare, and there's no #if to choose between them),
 // so Basic prints only to standard output.
+//
+// Numbers are written into a buffer on the stack by numbers.rig and then
+// printed, so printing never allocates.
 #load "libc.rig";
+#load "numbers.rig";
 
 // Writes the bytes of s, and nothing else. An empty string, or a zeroed
 // one whose data is null, writes nothing: its count is 0, so no byte is
@@ -31,6 +35,19 @@ print_bool :: (value: bool) {
     } else {
         print_string("false");
     }
+}
+
+// Writes value in base 10, with a "-" before a negative value.
+print_int :: (value: int) {
+    buffer : [INT_TEXT_MAX]u8;
+    print_string(format_int(buffer, value, 10));
+}
+
+// Writes value with decimals digits after the point, from 0 to 9, as
+// format_float does: "nan", "inf" and "-inf" included.
+print_float :: (value: float64, decimals: int) {
+    buffer : [FLOAT_TEXT_MAX]u8;
+    print_string(format_float(buffer, value, decimals));
 }
 
 // Writes s and then a line feed, the one byte that ends a line. It is a

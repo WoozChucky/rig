@@ -1,0 +1,350 @@
+// Basic's numbers: integers to text in any base from 2 to 36 and back, and
+// floats to text with a given number of decimals and back.
+//
+// Text is written into a buffer the caller gives, and what was written
+// comes back as a string that views the buffer's first bytes, so nothing
+// here allocates and a number can be printed or appended without an
+// allocator. A buffer of INT_TEXT_MAX or FLOAT_TEXT_MAX bytes is always
+// enough; a smaller one that turns out too short stops the program at the
+// language's own bounds check, before any byte is written past its end.
+//
+// Parsing takes the whole string or nothing: a number with anything around
+// it, spaces included, isn't one, and the bool result says which it was.
+
+// The most bytes format_int writes: 64 binary digits and a sign.
+INT_TEXT_MAX :: 65;
+
+// The most bytes format_float writes: a sign, 309 digits (float64's
+// largest value is about 1.8e308), a point and 9 decimals.
+FLOAT_TEXT_MAX :: 320;
+
+// The value of c as a digit: 0 to 9 for "0" to "9", and 10 to 35 for "a" to
+// "z" and for "A" to "Z", so a digit of any base up to 36 in either case.
+// Any other byte is -1. Whether the digit belongs to a base is the caller's
+// test: digit_value(c) < base.
+digit_value :: (c: u8) -> int {
+    if c >= "0"[0] && c <= "9"[0] { return c - "0"[0]; }
+    if c >= "a"[0] && c <= "z"[0] { return cast(int) (c - "a"[0]) + 10; }
+    if c >= "A"[0] && c <= "Z"[0] { return cast(int) (c - "A"[0]) + 10; }
+    return -1;
+}
+
+// Writes value in base into buffer, with lowercase digits and a "-" before
+// a negative value, and returns the text written, at the buffer's start. A
+// base outside 2 to 36 writes nothing and returns "".
+//
+// The digits come from the magnitude as a u64: int's most negative value,
+// -9223372036854775808, has no positive int, but its magnitude is a u64,
+// and 0 - m on a u64 wraps to exactly it. So no value needs a case of its
+// own.
+format_int :: (buffer: []u8, value: int, base: int) -> string {
+    DIGITS :: "0123456789abcdefghijklmnopqrstuvwxyz";
+    if base < 2 || base > 36 { return ""; }
+    radix := cast(u64) base;
+    magnitude := cast,trunc(u64) value;
+    if value < 0 { magnitude = 0 - magnitude; }
+
+    count := 0;
+    if value < 0 {
+        buffer[0] = "-"[0];
+        count = 1;
+    }
+
+    // The digits come from the least significant, by % and /, so they're
+    // counted first and then written from the last place back, each where
+    // it belongs: 0 is one digit.
+    digits := 1;
+    rest := magnitude / radix;
+    while rest != 0 {
+        digits += 1;
+        rest /= radix;
+    }
+    for 1..digits {
+        buffer[count + digits - it] = DIGITS[magnitude % radix];
+        magnitude /= radix;
+    }
+    count += digits;
+
+    text := cast(string) buffer;
+    text.count = count;
+    return text;
+}
+
+// Reads s as an integer in base: an optional "+" or "-", then one digit or
+// more of the base, in either case, and nothing else, so no spaces, no
+// prefix such as 0x and no "_". Gives the value and true, or 0 and false
+// for anything else, for a value outside int, and for a base outside 2 to
+// 36.
+parse_int :: (s: string, base: int) -> int, bool {
+    if base < 2 || base > 36 { return 0, false; }
+    negative := false;
+    start := 0;
+    if s.count > 0 && (s[0] == "+"[0] || s[0] == "-"[0]) {
+        negative = s[0] == "-"[0];
+        start = 1;
+    }
+    if start >= s.count { return 0, false; }
+
+    // The magnitude is gathered in a u64, so the most negative int, whose
+    // magnitude is one more than the largest int, fits too. It may grow to
+    // the limit and no further: magnitude * radix + digit <= limit is
+    // magnitude <= (limit - digit) / radix, which is tested before the step
+    // so the step itself never wraps.
+    limit : u64 = 9223372036854775807;
+    if negative { limit += 1; }
+    radix := cast(u64) base;
+    magnitude : u64 = 0;
+    for i: start..s.count - 1 {
+        digit := digit_value(s[i]);
+        if digit < 0 || digit >= base { return 0, false; }
+        d := cast(u64) digit;
+        if magnitude > (limit - d) / radix { return 0, false; }
+        magnitude = magnitude * radix + d;
+    }
+
+    // A negative magnitude of 9223372036854775808 wraps to int's most
+    // negative value through the u64, as format_int's does the other way.
+    if negative { return cast,trunc(int) (0 - magnitude), true; }
+    return cast(int) magnitude, true;
+}
+
+// Writes value into buffer with decimals digits after the point, from 0 to
+// 9 (a number outside is taken as the nearer of the two), and returns the
+// text written, at the buffer's start. With 0 decimals there's no point.
+//
+// - NaN is "nan", and an infinity "inf" or "-inf".
+// - A negative value gets a "-", -0.0 included, and so does one that
+//   rounds to zero, as C's printf does: -0.001 with 2 decimals is "-0.00".
+// - The last decimal is rounded half away from zero, on the float64's own
+//   value: 0.125 with 2 decimals is "0.13", but 2.675 is "2.67", since the
+//   float64 nearest to 2.675 is a little below it.
+//
+// Below 1e18 the whole digits are exact for the value given. From 1e18 up,
+// only the first 18 digits or so come from the value, the last of them
+// approximate, and the rest are written as zeros.
+format_float :: (buffer: []u8, value: float64, decimals: int) -> string {
+    LARGEST :: 1.7976931348623157e308; // float64's largest finite value
+    count := 0;
+    if value != value { // only NaN isn't equal to itself
+        for "nan" {
+            buffer[count] = it;
+            count += 1;
+        }
+        text := cast(string) buffer;
+        text.count = count;
+        return text;
+    }
+
+    // -0.0 compares equal to 0, but 1 divided by it is -inf: that tells the
+    // two zeros apart.
+    magnitude := value;
+    if value < 0 || (value == 0 && 1.0 / value < 0) {
+        buffer[0] = "-"[0];
+        count = 1;
+        magnitude = -value;
+    }
+
+    if magnitude > LARGEST {
+        for "inf" {
+            buffer[count] = it;
+            count += 1;
+        }
+        text := cast(string) buffer;
+        text.count = count;
+        return text;
+    }
+
+    places := decimals;
+    if places < 0 { places = 0; }
+    if places > 9 { places = 9; }
+    scale : u64 = 1;
+    for 1..places { scale *= 10; }
+
+    // The number is written as whole, then zeros zeros, then the point and
+    // scaled, the decimals as an integer, padded to places digits.
+    whole : u64 = 0;
+    zeros := 0;
+    scaled : u64 = 0;
+    if magnitude < 1e18 {
+        // Below 1e18 the whole part fits in a u64 and is exact, and so is
+        // the fraction taken away from it: both are parts of one float64,
+        // and subtracting the whole part only clears bits. The decimals
+        // are the fraction times 10^places, one multiply that rounds once,
+        // then rounded half up by adding 0.5 and cutting off. A fraction
+        // that rounds up to a whole one, as 0.999 to 2 decimals does,
+        // carries into the whole part.
+        whole = cast(u64) magnitude;
+        fraction := magnitude - cast(float64) whole;
+        scaled = cast(u64) (fraction * cast(float64) scale + 0.5);
+        if scaled >= scale {
+            whole += 1;
+            scaled -= scale;
+        }
+    } else {
+        // From 1e18 up, the number is brought below 1e18 by dividing by
+        // 10, and each division is a zero written after its digits. Each
+        // division rounds, so the last digits kept are approximate, and a
+        // float64 that large has no fraction, so the decimals are zeros.
+        while magnitude >= 1e18 {
+            magnitude /= 10;
+            zeros += 1;
+        }
+        whole = cast(u64) (magnitude + 0.5);
+    }
+
+    // The whole part's digits, counted first and then written from the last
+    // place back, as format_int does.
+    digits := 1;
+    rest := whole / 10;
+    while rest != 0 {
+        digits += 1;
+        rest /= 10;
+    }
+    for 1..digits {
+        buffer[count + digits - it] = "0"[0] + cast(u8) (whole % 10);
+        whole /= 10;
+    }
+    count += digits;
+    for 1..zeros {
+        buffer[count] = "0"[0];
+        count += 1;
+    }
+
+    if places > 0 {
+        buffer[count] = "."[0];
+        count += 1;
+        for 1..places {
+            buffer[count + places - it] = "0"[0] + cast(u8) (scaled % 10);
+            scaled /= 10;
+        }
+        count += places;
+    }
+
+    text := cast(string) buffer;
+    text.count = count;
+    return text;
+}
+
+// Reads s as a float: an optional "+" or "-", digits with an optional
+// point among them, and an optional exponent, "e" or "E" with an optional
+// sign and digits. There must be a digit before or after the point, so
+// "5." and ".5" are numbers but "." isn't, and nothing else: no spaces, no
+// "_", no "inf" or "nan". Gives the value and true, or 0 and false for
+// anything else. A value too large for a float64 is an infinity, and one
+// too small is zero, both with true.
+//
+// The result is correctly rounded when the significant digits fit in 2^53
+// and the power of ten is within 22 either way, as in "3.14" or
+// "123456789.125". Otherwise it is within a few units in the last place.
+parse_float :: (s: string) -> float64, bool {
+    // The powers of ten a float64 holds exactly: 5^22 is below 2^53, and
+    // 10^22 is 5^22 * 2^22.
+    POWERS :: float64.[
+        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+        1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
+    ];
+    LARGEST :: 1.7976931348623157e308; // float64's largest finite value
+
+    i := 0;
+    negative := false;
+    if s.count > 0 && (s[0] == "+"[0] || s[0] == "-"[0]) {
+        negative = s[0] == "-"[0];
+        i = 1;
+    }
+
+    // The digits become mantissa * 10^exponent. The mantissa keeps the
+    // first 19 significant digits, as many as always fit in a u64; leading
+    // zeros aren't significant. A whole digit past those 19 still counts,
+    // as one more power of ten, and a decimal one is dropped. Every decimal
+    // digit kept lowers the exponent by one, and so does every leading zero
+    // of the decimals, which adds nothing to the mantissa: "0.0125" is 125
+    // and -4.
+    mantissa : u64 = 0;
+    kept := 0;
+    exponent := 0;
+    digits := 0;
+    while i < s.count {
+        digit := digit_value(s[i]);
+        if digit < 0 || digit > 9 { break; }
+        if kept < 19 && (kept > 0 || digit > 0) {
+            mantissa = mantissa * 10 + cast(u64) digit;
+            kept += 1;
+        } else if kept == 19 {
+            exponent += 1;
+        }
+        digits += 1;
+        i += 1;
+    }
+    if i < s.count && s[i] == "."[0] {
+        i += 1;
+        while i < s.count {
+            digit := digit_value(s[i]);
+            if digit < 0 || digit > 9 { break; }
+            if kept < 19 {
+                if kept > 0 || digit > 0 {
+                    mantissa = mantissa * 10 + cast(u64) digit;
+                    kept += 1;
+                }
+                exponent -= 1;
+            }
+            digits += 1;
+            i += 1;
+        }
+    }
+    if digits == 0 { return 0, false; }
+
+    // The exponent's digits are read whole, but its value stops growing at
+    // 100000: any power of ten that far out is already past a float64's
+    // range either way, and the int can't overflow however many digits
+    // there are.
+    if i < s.count && (s[i] == "e"[0] || s[i] == "E"[0]) {
+        i += 1;
+        exponent_negative := false;
+        if i < s.count && (s[i] == "+"[0] || s[i] == "-"[0]) {
+            exponent_negative = s[i] == "-"[0];
+            i += 1;
+        }
+        written := 0;
+        exponent_digits := 0;
+        while i < s.count {
+            digit := digit_value(s[i]);
+            if digit < 0 || digit > 9 { break; }
+            written = written * 10 + digit;
+            if written > 100000 { written = 100000; }
+            exponent_digits += 1;
+            i += 1;
+        }
+        if exponent_digits == 0 { return 0, false; }
+        if exponent_negative {
+            exponent -= written;
+        } else {
+            exponent += written;
+        }
+    }
+    if i != s.count { return 0, false; }
+
+    // A mantissa up to 2^53 converts to a float64 exactly, and so is each
+    // power up to 1e22, so one multiply or divide by it rounds once, to the
+    // nearest float64: the correctly rounded result. Otherwise the power is
+    // applied 1e22 at a time, rounding each time, while the value is still
+    // neither 0 nor an infinity, and then the rest of it.
+    value := cast(float64) mantissa;
+    if mantissa > 9007199254740992 || exponent < -22 || exponent > 22 {
+        while exponent > 22 && value != 0 && value <= LARGEST {
+            value *= 1e22;
+            exponent -= 22;
+        }
+        while exponent < -22 && value != 0 {
+            value /= 1e22;
+            exponent += 22;
+        }
+    }
+    if exponent >= 0 && exponent <= 22 {
+        value *= POWERS[exponent];
+    } else if exponent < 0 && exponent >= -22 {
+        value /= POWERS[-exponent];
+    }
+
+    if negative { value = -value; }
+    return value, true;
+}
