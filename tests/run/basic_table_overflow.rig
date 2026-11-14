@@ -1,0 +1,30 @@
+// Basic's hash tables (issue #134) with values of int's largest size. An
+// entry that big has no int size, so it is given the largest multiple of 8
+// an int holds, and 16 of them, the first set's entries, would be past
+// int's largest value, where multiplying them out would wrap: the table
+// asks for int's largest value instead. No allocator has that, and given
+// null the table stops the program as it zeroes the new entries, with the
+// language's null pointer dereference, at set_memory's line in memory.rig,
+// which this .err names.
+#load "../../modules/Basic/module.rig";
+
+// Prints the size of each allocation asked for, and gives none.
+refusing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE || mode == RESIZE {
+        print_string("asked for ");
+        print_int(size);
+        print_byte(10);
+    }
+    return null;
+}
+
+main :: () {
+    t : Int_Table;
+    int_table_init(*t, 9223372036854775807, Allocator.{refusing_allocator_proc, null});
+    print_string("entry size ");
+    print_int(t.entry_size);
+    print_byte(10);
+    one := 1;
+    int_table_set(*t, 1, *one);
+    print_string("not reached");
+}
