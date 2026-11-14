@@ -23,7 +23,11 @@
 # hand sh only part of it. So nothing runs until the last line: everything
 # else defines functions, and the last line calls main. A script cut
 # anywhere before that line defines functions and stops, or fails to parse
-# (an unfinished function), and either way runs no command.
+# (an unfinished function), and either way runs no command. The call is in
+# braces, { main "$@"; }, for a cut inside that line: a bare `main "$@"`
+# cut after `main` would still run main, without the options (an install
+# where --uninstall was asked for), but sh runs a { ... } group only once
+# it has read its closing brace.
 #
 # Written for POSIX sh (dash, Ubuntu's sh, runs it), with curl or wget,
 # sha256sum or shasum, tar and gzip.
@@ -101,33 +105,49 @@ check_platform() {
 }
 
 # download URL FILE: fetches URL into FILE, with curl or wget. A file that
-# isn't there (an HTTP error, such as 404 for a release that doesn't exist)
-# and a network that can't be reached stop the script with different
-# messages, since they call for different fixes.
+# isn't there (HTTP status 404, as for a release that doesn't exist), any
+# other answer that isn't the file (403 or 429 when GitHub limits
+# requests, 5xx when it has trouble), and a network that can't be reached
+# stop the script with different messages, since they call for different
+# fixes.
 download() {
     if has curl; then
-        # --fail: an HTTP error is an error, not a file holding the error
-        # page. --location follows GitHub's redirect to where the file is.
-        curl --fail --silent --show-error --location --output "$2" "$1"
+        # --location follows GitHub's redirect to where the file is.
+        # --write-out prints the status of the last answer, the file's, to
+        # tell 404 from the other errors. (--fail would make every error
+        # one exit status, 22.) A file:// URL has no status: 000.
+        code=$(curl --silent --show-error --location --output "$2" --write-out '%{http_code}' "$1")
         status=$?
-        # 22 is curl's "HTTP error"; 37 a file:// URL that doesn't exist.
+        # 37 is curl's "couldn't read the file": a file:// URL that
+        # doesn't exist.
         case $status in
-            0) return 0 ;;
-            22 | 37) not_found "$1" ;;
+            0) ;;
+            37) not_found "$1" ;;
             *) die "couldn't download $1 (curl's exit status $status): check your network connection" ;;
         esac
     elif has wget; then
-        wget --quiet --output-document="$2" "$1"
+        # --server-response writes the answers' headers to stderr, even
+        # with --quiet; their last status line, "HTTP/1.1 404 Not Found",
+        # is the file's (the ones before it are redirects).
+        wget --quiet --server-response --output-document="$2" "$1" 2> "$2.headers"
         status=$?
-        # 8 is wget's "the server sent an error response".
+        code=$(awk '$1 ~ /^HTTP\// { code = $2 } END { print code }' "$2.headers")
+        rm -f "$2.headers"
+        # 8 is wget's "the server sent an error response", whose status
+        # is read below.
         case $status in
             0) return 0 ;;
-            8) not_found "$1" ;;
+            8) ;;
             *) die "couldn't download $1 (wget's exit status $status): check your network connection" ;;
         esac
     else
         die "downloading needs curl or wget, and neither is installed (on Debian and Ubuntu: sudo apt install curl)"
     fi
+    case $code in
+        2?? | 000) return 0 ;;
+        404) not_found "$1" ;;
+        *) die "couldn't download $1: the server answered with HTTP status $code (GitHub may be busy, or limiting requests); try again in a few minutes" ;;
+    esac
 }
 
 not_found() {
@@ -205,17 +225,26 @@ add_path_line() {
 
 # Removes the PATH lines this script added, and nothing else: only lines
 # equal to path_line. The file is rewritten in place (cat >), so a file
-# that is a link stays one and keeps its permissions.
+# that is a link stays one and keeps its permissions. Sets removed when it
+# took a line out, for uninstall_rig's closing message.
 remove_path_lines() {
     for file in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
         if [ -f "$file" ] && grep -qxF "$path_line" "$file"; then
             kept=$(mktemp) || die "couldn't make a temporary file"
             # grep -v exits 1 when it keeps no line (a file that held only
-            # ours), which is not a failure here.
-            grep -vxF "$path_line" "$file" > "$kept"
+            # ours), which is not a failure here; 2 is an error reading
+            # the file, after which $kept may hold only part of it, and
+            # writing that back would lose the rest of the user's file.
+            status=0
+            grep -vxF "$path_line" "$file" > "$kept" || status=$?
+            if [ "$status" -gt 1 ]; then
+                rm -f "$kept"
+                die "couldn't read $file"
+            fi
             cat "$kept" > "$file" || die "couldn't write $file"
             rm -f "$kept"
             say "Removed Rig's PATH line from $file"
+            removed=1
         fi
     done
 }
@@ -233,21 +262,41 @@ main :: () { puts("Hello, World!"); }
 EOF
     # Each in a subshell, $(...), so the cd doesn't outlive it. rig writes
     # the program, and its object files under .build, in the current
-    # folder. output is what the step that failed printed: the build's, or
-    # the program's.
-    if output=$(cd "$hello_dir" && "$share_dir/rig" build hello.rig 2>&1) &&
-        output=$(cd "$hello_dir" && ./hello 2>&1) &&
-        [ "$output" = "Hello, World!" ]; then
+    # folder. A build that fails is what the requirements are about: the
+    # link step is the one that needs the system's files.
+    if ! output=$(cd "$hello_dir" && "$share_dir/rig" build hello.rig 2>&1); then
+        say ""
+        say "Rig is installed, but it couldn't build hello world:"
+        printf '%s\n' "$output" | sed 's/^/    /'
+        say "Linking a program needs glibc's development files: install them with"
+        say "    sudo apt install libc6-dev       (Debian, Ubuntu)"
+        say "    sudo dnf install glibc-devel     (Fedora)"
+        say "Arch's glibc has them already. More: $requirements_url"
+        say ""
+        return 0
+    fi
+    # Built, so the requirements are there. A program that then doesn't
+    # run, or prints something else, has another cause, which the
+    # requirements message would only hide: a temporary folder mounted
+    # noexec (hardened systems mount /tmp so), say.
+    status=0
+    output=$(cd "$hello_dir" && ./hello 2>&1) || status=$?
+    if [ "$status" -eq 0 ] && [ "$output" = "Hello, World!" ]; then
         say "Built and ran hello world: Rig has what it needs."
         return 0
     fi
     say ""
-    say "Rig is installed, but it couldn't build hello world:"
-    printf '%s\n' "$output" | sed 's/^/    /'
-    say "Linking a program needs glibc's development files: install them with"
-    say "    sudo apt install libc6-dev       (Debian, Ubuntu)"
-    say "    sudo dnf install glibc-devel     (Fedora)"
-    say "Arch's glibc has them already. More: $requirements_url"
+    if [ "$status" -eq 0 ]; then
+        say "Rig is installed and built hello world, but the program printed something else:"
+    else
+        say "Rig is installed and built hello world, but running it failed (exit status $status):"
+    fi
+    if [ -n "$output" ]; then
+        printf '%s\n' "$output" | sed 's/^/    /'
+    fi
+    say "Building works, so Rig has what it needs. This system may not let programs run"
+    say "from a temporary folder (${TMPDIR:-/tmp}, if it is mounted noexec, say): build and"
+    say "run hello world in a folder of your own to see."
     say ""
 }
 
@@ -344,6 +393,9 @@ install_rig() {
     say "    rig build hello.rig"
 }
 
+# Removes what install_rig put in place. removed is set by each step that
+# took something away, the PATH lines and the extension included: Rig's
+# folder may have been deleted by hand already.
 uninstall_rig() {
     removed=
     if [ -d "$share_dir" ]; then
@@ -365,6 +417,7 @@ uninstall_rig() {
         # code fails when the extension isn't installed; that is fine.
         if code --uninstall-extension "$extension_id" > /dev/null 2>&1; then
             say "Removed the VS Code extension"
+            removed=1
         fi
     fi
     if [ -n "$removed" ]; then
@@ -416,4 +469,4 @@ main() {
     fi
 }
 
-main "$@"
+{ main "$@"; }
