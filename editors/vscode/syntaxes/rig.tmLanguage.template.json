@@ -20,7 +20,16 @@
             "include": "#declarations"
         },
         {
+            "include": "#cast-type"
+        },
+        {
             "include": "#cast"
+        },
+        {
+            "include": "#size-of"
+        },
+        {
+            "include": "#for-iterator"
         },
         {
             "include": "#keywords"
@@ -30,6 +39,9 @@
         },
         {
             "include": "#iterators"
+        },
+        {
+            "include": "#typed-literal"
         },
         {
             "include": "#types"
@@ -42,6 +54,12 @@
         },
         {
             "include": "#dereference"
+        },
+        {
+            "include": "#type-annotation"
+        },
+        {
+            "include": "#result-types"
         },
         {
             "include": "#operators"
@@ -171,8 +189,71 @@
                 }
             ]
         },
+        "cast-type": {
+            "comment": "cast(T) and cast,trunc(T): T is a type (#type), up to the ')' that closes the cast's '('. The modifier is #cast's, as when no '(' follows it on the line.",
+            "begin": "\\b(cast)\\s*(?:(,)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*)?(\\()",
+            "beginCaptures": {
+                "1": {
+                    "name": "keyword.other.cast.rig"
+                },
+                "2": {
+                    "name": "punctuation.separator.comma.rig"
+                },
+                "3": {
+                    "name": "keyword.other.cast-modifier.rig"
+                }
+            },
+            "end": "\\)",
+            "patterns": [
+                {
+                    "include": "#type"
+                }
+            ]
+        },
+        "size-of": {
+            "comment": "size_of(T): T is a type (#type). size_of is a name, not a keyword (spec A.4), so it's coloured as a call, as before it took its type.",
+            "begin": "\\b(size_of)\\s*(\\()",
+            "beginCaptures": {
+                "1": {
+                    "name": "entity.name.function.call.rig"
+                }
+            },
+            "end": "\\)",
+            "patterns": [
+                {
+                    "include": "#type"
+                }
+            ]
+        },
+        "for-iterator": {
+            "comment": "for n: numbers, for * p: items (spec 6.7, 6.8): the name and ':' after 'for' (or 'for *') name the iterator, and what follows is the sequence or range, an expression. Taken here, with its ':', before #type-annotation would take the ':' as a type's.",
+            "match": "\\b(for)\\b\\s*(?:(\\*)\\s*)?([A-Za-z_][A-Za-z0-9_]*)\\s*(:)(?![:=])",
+            "captures": {
+                "1": {
+                    "patterns": [
+                        {
+                            "include": "#keywords"
+                        }
+                    ]
+                },
+                "2": {
+                    "patterns": [
+                        {
+                            "include": "#operators"
+                        }
+                    ]
+                },
+                "4": {
+                    "patterns": [
+                        {
+                            "include": "#operators"
+                        }
+                    ]
+                }
+            }
+        },
         "cast": {
-            "comment": "cast,trunc(T): the modifier after the comma. Hand-written: a modifier (trunc, spec 6.4) is a name after cast's comma, not a keyword, so no compiler table lists the modifiers, and the rule takes any name there.",
+            "comment": "cast,trunc(T): the modifier after the comma, when no '(' follows it on the line (#cast-type takes it otherwise, with the same scopes). Hand-written: a modifier (trunc, spec 3.14) is a name after cast's comma, not a keyword, so no compiler table lists the modifiers, and the rule takes any name there.",
             "match": "\\b(cast)\\s*(,)\\s*([A-Za-z_][A-Za-z0-9_]*)",
             "captures": {
                 "1": {
@@ -225,6 +306,31 @@
             "name": "support.type.primitive.rig",
             "match": "\\b(?:@TYPES@)\\b"
         },
+        "type-name": {
+            "comment": "A name where a type is written: a built-in type keeps its scope (#types), any other is a type the program declares.",
+            "patterns": [
+                {
+                    "include": "#types"
+                },
+                {
+                    "name": "entity.name.type.rig",
+                    "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+                }
+            ]
+        },
+        "typed-literal": {
+            "comment": "The type a literal is written with, right before its '.{' or '.[': Vec2.{1, 2}, int.[1, 2] (spec 5.17).",
+            "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\.[{\\[])",
+            "captures": {
+                "1": {
+                    "patterns": [
+                        {
+                            "include": "#type-name"
+                        }
+                    ]
+                }
+            }
+        },
         "numbers": {
             "comment": "As the lexer reads them: decimal, 0x and 0b with lowercase prefixes and at least one digit, '_' anywhere after the first digit, floats with a digit after the '.' or an exponent. A number running into letters (123abc, 0b12, 0X10, 1.5f, 1e+, 0x_) is one bad literal.",
             "patterns": [
@@ -273,6 +379,114 @@
                     "name": "keyword.operator.dereference.rig"
                 }
             }
+        },
+        "type-annotation": {
+            "comment": "The type after a single ':' (not '::' or ':='): a parameter's, a field's, a variable's (spec 3.1, 4). It runs to what ends a type at its own level, ; = , ) ] { or }, or to the line's end, so a type is on one line. A for loop's iterator, for n: numbers, is #for-iterator's, which takes its ':' first.",
+            "begin": "(?<!:)(:)(?![:=])",
+            "beginCaptures": {
+                "1": {
+                    "patterns": [
+                        {
+                            "include": "#operators"
+                        }
+                    ]
+                }
+            },
+            "end": "(?=[;=,)\\]{}]|$)",
+            "patterns": [
+                {
+                    "include": "#type"
+                }
+            ]
+        },
+        "result-types": {
+            "comment": "A procedure's results after its '->' (spec 7.1): -> Vec2, Vec2 { has two, separated by commas, up to the body's '{', a ';' (#foreign), ) ] } = or the line's end. A '->' inside a type, as in f: (Vec2) -> Vec2, n: int, is the type's own (#type), where a ',' ends the type.",
+            "begin": "->",
+            "beginCaptures": {
+                "0": {
+                    "patterns": [
+                        {
+                            "include": "#operators"
+                        }
+                    ]
+                }
+            },
+            "end": "(?=[;={})\\]]|$)",
+            "patterns": [
+                {
+                    "include": "#type"
+                }
+            ]
+        },
+        "type": {
+            "comment": "A type (spec 3.1): the prefixes *, [N] and [], a procedure type's (...) -> ..., #c_call, and names, each a type. The rule that starts the type says where it ends.",
+            "patterns": [
+                {
+                    "include": "#comments"
+                },
+                {
+                    "include": "#directives"
+                },
+                {
+                    "include": "#keywords"
+                },
+                {
+                    "include": "#constants"
+                },
+                {
+                    "include": "#numbers"
+                },
+                {
+                    "include": "#invalid"
+                },
+                {
+                    "include": "#type-parameters"
+                },
+                {
+                    "include": "#type-brackets"
+                },
+                {
+                    "include": "#operators"
+                },
+                {
+                    "include": "#type-name"
+                }
+            ]
+        },
+        "type-parameters": {
+            "comment": "A procedure type's parameters (spec 3.15): (Vec2, int), or with names, (a: Vec2, b: int). A name before a ':' names a parameter; every other is a type.",
+            "begin": "\\(",
+            "end": "\\)",
+            "patterns": [
+                {
+                    "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\s*(:)(?![:=])",
+                    "captures": {
+                        "1": {
+                            "patterns": [
+                                {
+                                    "include": "#operators"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "include": "#type"
+                }
+            ]
+        },
+        "type-brackets": {
+            "comment": "The [N] of an array type or the [] of a view's, before the element type: N is an expression, highlighted as everywhere else. Brackets inside it pair with each other, so [a[1]]Vec2 ends at the right ']'.",
+            "begin": "\\[",
+            "end": "\\]",
+            "patterns": [
+                {
+                    "include": "#type-brackets"
+                },
+                {
+                    "include": "$self"
+                }
+            ]
         },
         "operators": {
             "comment": "The lexer's punctuation but the brackets, longest first, each its own capture group with its scope (tests/unit/test_grammar.cpp's OPERATOR_SCOPES): the first alternative that matches is then the longest, as the lexer reads them, so <<= is one operator, not << and =. --- (a variable left uninitialised on purpose) is here too.",
