@@ -4,8 +4,10 @@
 // level of one names another, whose declarations join the program's one
 // top-level scope (spec 2.13). The parser only records each #load
 // (Ast_Load); the loader takes the main file's text, as the driver read it,
-// reads every file the program loads, and parses them all into one tree
-// (parse_into), for the checker to check as it would one file.
+// reads every file the program loads, but the one whose text the caller may
+// give in place of the file's (rig check --stdin-for, below), and parses
+// them all into one tree (parse_into), for the checker to check as it would
+// one file.
 //
 // The rules:
 // - A #load's path is relative to the directory of the file holding it, as
@@ -24,9 +26,11 @@
 // - A file can be given with its text, in place of what's on disk (rig
 //   check --stdin-for: an editor's text, not yet saved). It's known by the
 //   same identity, so wherever the program loads it, however it's named,
-//   the main file included, that text is its text, taken at its first
-//   #load as a file on disk is read there. It needn't exist, and it keeps
-//   the name its #load gives it.
+//   the main file included, that text is its text, taken where a file on
+//   disk would be read: first of all for the main file, at its first #load
+//   for any other. It needn't exist, and it keeps the name it would have
+//   on disk: for the main file the path the caller gives, for any other the
+//   one its first #load gives it.
 // - The order is the main file's, then each loaded file's in the order its
 //   first #load was met, the files walked in that same order: a queue, not
 //   a recursion, so a chain of loads of any length takes no more stack

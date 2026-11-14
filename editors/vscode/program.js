@@ -4,17 +4,19 @@
 //
 // A file that a program #loads has no main of its own, and uses names
 // declared in the program's other files, so checked alone it's full of
-// errors that aren't. The live check checks it as part of its program instead:
+// errors that aren't. The live check checks it as part of its program
+// instead:
 //
 //     rig check MAIN.rig --stdin-for FILE.rig
 //
 // with the editor's text of FILE on standard input. To find MAIN it tries
-// the files of the workspace folder that declare main, in a fixed order,
-// until rig's answer isn't that MAIN doesn't load FILE. This module holds
-// the parts of that which need no VS Code: whether a text declares main,
-// the order the files are tried in, which files are tried at all, and what
-// rig's answers say. extension.js does the rest: it finds the files, reads
-// them and runs rig.
+// the main file it remembers for FILE, if any, then the setting rig.main,
+// if set, and then the files of the workspace folder that declare main, in
+// a fixed order, until rig's answer isn't that MAIN doesn't load FILE. This
+// module holds the parts of the search which need no VS Code: whether a
+// text declares main, the order the folder's files are tried in, which
+// files are tried at all, and what rig's answers say. extension.js does the
+// rest: it reads the setting, finds the files, reads them and runs rig.
 
 'use strict';
 
@@ -36,9 +38,10 @@ function nameCharacter(ch) {
 // This is a scan, not a parse: it skips what rig's lexer skips (comments,
 // and a byte-order mark first) and what can hold the words `main ::`
 // without declaring anything (strings), and counts braces so a main
-// declared inside a procedure or a struct isn't taken. A text that doesn't parse can still be judged, which
-// matters, since the files it reads are being edited. An unclosed /* runs
-// to the end of the text, as it does for rig.
+// declared inside a procedure or a struct isn't taken. A text that doesn't
+// parse can still be judged, which matters, since the files it reads are
+// being edited. An unclosed /* runs to the end of the text, as it does for
+// rig.
 function declaresMain(text) {
     let depth = 0;   // the braces open here: 0 is the top level
     // A byte-order mark first, which some Windows editors write, isn't part of
@@ -139,7 +142,8 @@ function doesntLoad(code, output) {
     return code === 1 && output.split(/\r?\n/).some((line) => DOESNT_LOAD.test(line));
 }
 
-// Whether rig's answer is an old rig's to --stdin-for: exit 2, stderr starting `usage:`.
+// Whether rig's answer is an old rig's to --stdin-for: exit 2, stderr
+// starting `usage:`.
 //
 // A rig from before --stdin-for takes it for a second file and prints its
 // usage; this one does that only for a command line the extension never
