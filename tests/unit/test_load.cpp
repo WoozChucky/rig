@@ -1,5 +1,7 @@
 // test_load.cpp: the loader (issue #112): which files a program's #loads
-// read, in what order, each once, and what's reported when one can't be.
+// read, in what order, each once, what's reported when one can't be, and a
+// file given with its text in place of what's on disk (rig check
+// --stdin-for).
 // Each test writes its files under .build/tests/load/NAME/, NAME the
 // test's, and loads them from there. Uses test_os.cpp's SEPARATOR and
 // reason.
@@ -740,6 +742,230 @@ TEST(load_with_stdin_path) {
     CHECK_EQ(d.files.count, 2);
     if (d.files.count == 2) {
         CHECK_STR(d.files[0].path, in_directory(&a, dir, "absent.rig"));
+        CHECK_STR(d.files[1].path, in_directory(&a, dir, "b.rig"));
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(load_same_file_by_identity) {
+    // load_same_file knows a file as the loader does: a.rig, there, by its
+    // id, however it's named; gone.rig, not there, by its path made
+    // absolute, with '.' and '..' taken out by the text alone, so sub needn't
+    // exist. On Windows a name's case doesn't matter, with an id or without,
+    // and '\' separates; on Linux A.RIG isn't there, so it has no id, and
+    // isn't a.rig, which has one.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "load_same_file_by_identity");
+    write_source(&a, dir, "a.rig", "a :: () {}\n");
+    CHECK(!os_file_exists(str(in_directory(&a, dir, "gone.rig"))));
+    String a_rig = str(in_directory(&a, dir, "a.rig"));
+    String gone = str(in_directory(&a, dir, "gone.rig"));
+    CHECK(load_same_file(a_rig, a_rig));
+    CHECK(load_same_file(a_rig, str(in_directory(&a, dir, "./a.rig"))));
+    CHECK(load_same_file(gone, str(in_directory(&a, dir, "sub/../gone.rig"))));
+    CHECK(!load_same_file(a_rig, gone));
+#ifdef _WIN32
+    CHECK(load_same_file(string_printf(&a, STR_FMT "\\A.RIG", STR_ARG(dir)), a_rig));
+    CHECK(load_same_file(str(in_directory(&a, dir, "GONE.RIG")), gone));
+#else
+    CHECK(!load_same_file(str(in_directory(&a, dir, "A.RIG")), a_rig));
+#endif
+    arena_free(&a);
+}
+
+// load_program on dir/main.rig, read from the file, with `file`'s text
+// `text` in place of what's on disk (rig check --stdin-for), `file` a path
+// from the directory the tests run in. *reached says whether the program
+// reached it.
+static Ast_File *load_main_with_stdin_for(Arena *a, Diagnostics *d, String dir, String file, const char *text,
+                                          bool *reached) {
+    String path = str(in_directory(a, dir, "main.rig"));
+    String main_text = {};
+    CHECK(os_read_file(a, path, &main_text));
+    return load_program(a, d, path, main_text, file, str(text), reached);
+}
+
+// What the --stdin-for tests below give for h.rig, and what's on disk when
+// it is there: a text with a procedure main.rig calls, and one without.
+static const char *const STDIN_H = "greet :: () {}\n";
+static const char *const DISK_H = "nothing :: () {}\n";
+
+// Checks that dir/main.rig's program, loading dir/h.rig, took h.rig's text
+// from stdin_text: reached, with no messages, h.rig named by its #load, and
+// main's and greet's procedures, h.rig's on disk not read.
+static void check_h_from_stdin(Arena *a, Diagnostics *d, String dir, Ast_File *tree, bool reached) {
+    CHECK(reached);
+    CHECK_STR(messages(a, d), "");
+    CHECK_EQ(d->files.count, 2);
+    if (d->files.count == 2) {
+        CHECK_STR(d->files[1].path, in_directory(a, dir, "h.rig"));
+        CHECK_STR(d->files[1].text, STDIN_H);
+    }
+    CHECK(tree != nullptr);
+    if (tree) {
+        CHECK(!tree->lost_a_file);
+        CHECK_EQ(tree->procs.count, 2);
+        if (tree->procs.count == 2) {
+            CHECK_STR(tree->procs[0]->name, "main");
+            CHECK_STR(tree->procs[1]->name, "greet");
+        }
+    }
+}
+
+TEST(load_stdin_for_a_file_on_disk) {
+    // h.rig is there, but its text is the one given: it's what an editor
+    // holds, not yet saved.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_stdin_for_a_file_on_disk");
+    write_source(&a, dir, "main.rig", "#load \"h.rig\";\nmain :: () { greet(); }\n");
+    write_source(&a, dir, "h.rig", DISK_H);
+    bool reached = false;
+    Ast_File *tree = load_main_with_stdin_for(&a, &d, dir, str(in_directory(&a, dir, "h.rig")), STDIN_H, &reached);
+    check_h_from_stdin(&a, &d, dir, tree, reached);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(load_stdin_for_a_missing_file) {
+    // h.rig isn't there, as a file an editor has made and not yet saved:
+    // its text is the one given, with no "cannot read", and no file lost.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_stdin_for_a_missing_file");
+    write_source(&a, dir, "main.rig", "#load \"h.rig\";\nmain :: () { greet(); }\n");
+    CHECK(!os_file_exists(str(in_directory(&a, dir, "h.rig"))));
+    bool reached = false;
+    Ast_File *tree = load_main_with_stdin_for(&a, &d, dir, str(in_directory(&a, dir, "h.rig")), STDIN_H, &reached);
+    check_h_from_stdin(&a, &d, dir, tree, reached);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+// load_stdin_for_another_spelling's cases, in `dir`, with h.rig on disk
+// (`on_disk`) or not.
+static void check_another_spelling(Arena *a, String dir, bool on_disk) {
+    // sub is there in both: on Linux the system resolves sub/.. through sub,
+    // so without it sub/../h.rig has no id while the #load's h.rig, on disk,
+    // has one, and they'd be two files.
+    CHECK(os_make_directory(str(in_directory(a, dir, "sub"))));
+    write_source(a, dir, "main.rig", "#load \"h.rig\";\nmain :: () { greet(); }\n");
+    if (on_disk) write_source(a, dir, "h.rig", DISK_H);
+    CHECK(os_file_exists(str(in_directory(a, dir, "h.rig"))) == on_disk);
+    const char *spellings[] = {"./h.rig", "sub/../h.rig"};
+    for (s64 i = 0; i < (s64)(sizeof spellings / sizeof spellings[0]); i++) {
+        Diagnostics d = {};
+        bool reached = false;
+        String file = str(in_directory(a, dir, spellings[i]));
+        Ast_File *tree = load_main_with_stdin_for(a, &d, dir, file, STDIN_H, &reached);
+        check_h_from_stdin(a, &d, dir, tree, reached);
+        diag_free(&d);
+    }
+    Diagnostics d = {};
+    bool reached = false;
+#ifdef _WIN32
+    // '\' separates, and a name's case doesn't matter.
+    String upper = string_printf(a, STR_FMT "\\H.RIG", STR_ARG(dir));
+    Ast_File *tree = load_main_with_stdin_for(a, &d, dir, upper, STDIN_H, &reached);
+    check_h_from_stdin(a, &d, dir, tree, reached);
+#else
+    // A name's case matters: H.RIG isn't h.rig, which is read from the disk,
+    // or isn't there to be read.
+    load_main_with_stdin_for(a, &d, dir, str(in_directory(a, dir, "H.RIG")), STDIN_H, &reached);
+    CHECK(!reached);
+    if (on_disk) {
+        CHECK_STR(messages(a, &d), "");
+        CHECK_EQ(d.files.count, 2);
+        if (d.files.count == 2) CHECK_STR(d.files[1].text, DISK_H);
+    } else {
+        CHECK_EQ(d.files.count, 1);
+        CHECK_EQ(d.messages.count, 1);
+        if (d.messages.count == 1) check_cannot_read(a, &d.messages[0], 0, 1, 7, str(in_directory(a, dir, "h.rig")));
+    }
+#endif
+    diag_free(&d);
+}
+
+TEST(load_stdin_for_another_spelling) {
+    // The file given is the #load's file however it's named, there or not,
+    // and it keeps the name its #load gives it. Two directories, one with
+    // h.rig and one without, as a directory stays from one run to the next.
+    Arena a = arena_make();
+    check_another_spelling(&a, load_test_directory(&a, "load_stdin_for_another_spelling"), true);
+    check_another_spelling(&a, load_test_directory(&a, "load_stdin_for_another_spelling_missing"), false);
+    arena_free(&a);
+}
+
+TEST(load_stdin_for_loads_from_its_directory) {
+    // sub/h.rig, not on disk, is loaded by main.rig and by b.rig, and its
+    // text is taken once, at its first #load. Its own #loads are found from
+    // sub, where it is: c.rig is sub/c.rig, ../main.rig the main file and
+    // h.rig itself, which load nothing more.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_stdin_for_loads_from_its_directory");
+    CHECK(os_make_directory(str(in_directory(&a, dir, "sub"))));
+    write_source(&a, dir, "main.rig", "#load \"sub/h.rig\";\n#load \"b.rig\";\nmain :: () { helper(); }\n");
+    write_source(&a, dir, "b.rig", "#load \"sub/h.rig\";\nb :: () {}\n");
+    write_source(&a, dir, "sub/c.rig", "c :: () {}\n");
+    CHECK(!os_file_exists(str(in_directory(&a, dir, "sub/h.rig"))));
+    bool reached = false;
+    load_main_with_stdin_for(&a, &d, dir, str(in_directory(&a, dir, "sub/h.rig")),
+                             "#load \"c.rig\";\n#load \"../main.rig\";\n#load \"h.rig\";\nhelper :: () { c(); }\n",
+                             &reached);
+    CHECK(reached);
+    CHECK_STR(messages(&a, &d), "");
+    const char *names[] = {"main.rig", "sub/h.rig", "b.rig", "sub/c.rig"};
+    String expected = string_printf(&a, "");
+    for (s64 i = 0; i < 4; i++) {
+        expected = string_printf(&a, STR_FMT STR_FMT "/%s\n", STR_ARG(expected), STR_ARG(dir), names[i]);
+    }
+    CHECK_STR(file_paths(&a, &d), string_cstr(&a, expected));
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(load_stdin_for_never_reached) {
+    // main.rig loads b.rig alone, so h.rig is never reached: it says so,
+    // and the program is as it would be without it.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_stdin_for_never_reached");
+    write_source(&a, dir, "main.rig", "#load \"b.rig\";\nmain :: () {}\n");
+    write_source(&a, dir, "b.rig", "b :: () {}\n");
+    bool reached = true;
+    load_main_with_stdin_for(&a, &d, dir, str(in_directory(&a, dir, "h.rig")), STDIN_H, &reached);
+    CHECK(!reached);
+    CHECK_STR(messages(&a, &d), "");
+    String expected = string_printf(&a, STR_FMT "/main.rig\n" STR_FMT "/b.rig\n", STR_ARG(dir), STR_ARG(dir));
+    CHECK_STR(file_paths(&a, &d), string_cstr(&a, expected));
+    if (d.files.count == 2) {
+        CHECK_STR(d.files[0].text, "#load \"b.rig\";\nmain :: () {}\n");
+        CHECK_STR(d.files[1].text, "b :: () {}\n");
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(load_stdin_for_the_main_file) {
+    // The file given can be the main file, however it's named: its text is
+    // the one given, its #loads followed, and it keeps the path given for
+    // the main file.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "load_stdin_for_the_main_file");
+    write_source(&a, dir, "main.rig", "main :: () {}\n");
+    write_source(&a, dir, "b.rig", "helper :: () {}\n");
+    const char *typed = "#load \"b.rig\";\nmain :: () { helper(); }\n";
+    bool reached = false;
+    load_main_with_stdin_for(&a, &d, dir, str(in_directory(&a, dir, "./main.rig")), typed, &reached);
+    CHECK(reached);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 2);
+    if (d.files.count == 2) {
+        CHECK_STR(d.files[0].path, in_directory(&a, dir, "main.rig"));
+        CHECK_STR(d.files[0].text, typed);
         CHECK_STR(d.files[1].path, in_directory(&a, dir, "b.rig"));
     }
     diag_free(&d);
