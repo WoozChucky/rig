@@ -101,6 +101,12 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
 bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 seconds, String input,
                        Process_Result *result);
 
+// os_run_for, with the program's stdin a pipe that nothing is written to
+// and that stays open while the program runs: a program that reads it
+// waits until it's killed (give it seconds). For a test that a program
+// doesn't read its stdin before something else, or at all.
+bool os_run_with_stdin_open(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result);
+
 // os_run_for, with the program's stdout and stderr both the one pipe, as a
 // shell's `2>&1` makes them: everything it wrote is in out, in the order it
 // reached the pipe, and err is empty. For a test of the order a program's
