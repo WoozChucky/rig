@@ -190,7 +190,7 @@
             ]
         },
         "cast-type": {
-            "comment": "cast(T) and cast,trunc(T): T is a type (#type), up to the ')' that closes the cast's '('. The modifier is #cast's, as when no '(' follows it on the line.",
+            "comment": "cast(T) and cast,trunc(T): T is a type (#type), up to the ')' that closes the cast's '(', or the line's end, so a '(' left unclosed while typing doesn't make the lines after it types. The cast and its modifier get #cast's scopes, which takes them when no '(' follows on the line.",
             "begin": "\\b(cast)\\s*(?:(,)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*)?(\\()",
             "beginCaptures": {
                 "1": {
@@ -203,7 +203,7 @@
                     "name": "keyword.other.cast-modifier.rig"
                 }
             },
-            "end": "\\)",
+            "end": "\\)|$",
             "patterns": [
                 {
                     "include": "#type"
@@ -211,14 +211,14 @@
             ]
         },
         "size-of": {
-            "comment": "size_of(T): T is a type (#type). size_of is a name, not a keyword (spec A.4), so it's coloured as a call, as before it took its type.",
+            "comment": "size_of(T): T is a type (#type), up to the ')' or the line's end, as in #cast-type. size_of is a name, not a keyword (spec A.4), so it's coloured as a call, as before it took its type.",
             "begin": "\\b(size_of)\\s*(\\()",
             "beginCaptures": {
                 "1": {
                     "name": "entity.name.function.call.rig"
                 }
             },
-            "end": "\\)",
+            "end": "\\)|$",
             "patterns": [
                 {
                     "include": "#type"
@@ -319,8 +319,8 @@
             ]
         },
         "typed-literal": {
-            "comment": "The type a literal is written with, right before its '.{' or '.[': Vec2.{1, 2}, int.[1, 2] (spec 5.17).",
-            "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\.[{\\[])",
+            "comment": "The type a literal is written with, before its '.{' or '.[', spaces allowed around the '.' as the lexer allows them: Vec2.{1, 2}, Vec2 .{1, 2}, int.[1, 2] (spec 5.17). A keyword before an untyped literal, return .{a, b}, is #keywords', listed earlier.",
+            "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\.\\s*[{\\[])",
             "captures": {
                 "1": {
                     "patterns": [
@@ -381,7 +381,7 @@
             }
         },
         "type-annotation": {
-            "comment": "The type after a single ':' (not '::' or ':='): a parameter's, a field's, a variable's (spec 3.1, 4). It runs to what ends a type at its own level, ; = , ) ] { or }, or to the line's end, so a type is on one line. A for loop's iterator, for n: numbers, is #for-iterator's, which takes its ':' first.",
+            "comment": "The type after a single ':' (not '::' or ':='): a parameter's, a field's, a variable's (spec 3.1, 4). It runs to what ends a type at its own level, ; = , ) ] { or }, or to the line's end: only a procedure type's parameters (#type-parameters) go on past it, to their ')'. A for loop's iterator, for n: numbers, is #for-iterator's, which takes its ':' first.",
             "begin": "(?<!:)(:)(?![:=])",
             "beginCaptures": {
                 "1": {

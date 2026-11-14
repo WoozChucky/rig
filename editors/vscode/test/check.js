@@ -813,6 +813,8 @@ check('the grammar colours the types of procedure types', () => {
         int: [PRIMITIVE, PRIMITIVE, PRIMITIVE],
     });
     assertScopes('run : (Vec2, int) -> Vec2;', { Vec2: [TYPE, TYPE], int: PRIMITIVE, run: null });
+    // The ':' after a parameter's name is a colon there too.
+    assertScopes('run : (a: Vec2, b: int) -> Vec2;', { ':': 'punctuation.separator.colon.rig', a: null, b: null, Vec2: [TYPE, TYPE] });
     assertScopes('Op :: struct { symbol: *u8; run: (int, int) -> int; }', { Op: TYPE, run: null, int: PRIMITIVE });
     assertScopes('table : [2](Vec2, int) -> int = .[add, sub];', { Vec2: TYPE, add: null, sub: null, 2: 'constant.numeric.integer.rig' });
     assertScopes('v : [](int, int) -> int = table;', { int: PRIMITIVE, table: null });
@@ -831,6 +833,15 @@ check('the grammar colours the type of a literal, a cast and size_of', () => {
     assertScopes('v := Vec2.{1, 2};', { v: null, Vec2: TYPE, '.': 'punctuation.accessor.rig' });
     assertScopes('ps := Vec2.[.{1, 2}, .{3, 4}];', { Vec2: TYPE, ps: null });
     assertScopes('n := int.[1, 2];', { int: PRIMITIVE });
+    // Spaces around the '.', as the lexer allows them.
+    assertScopes('v := Vec2 .{1, 2};', { v: null, Vec2: TYPE, '.': 'punctuation.accessor.rig' });
+    assertScopes('w := Vec2. {3, 4};', { w: null, Vec2: TYPE });
+    assertScopes('a := int .[1, 2];', { a: null, int: PRIMITIVE });
+    // A keyword before an untyped literal stays a keyword; a range and a
+    // dereference aren't literals.
+    assertScopes('return .{a, b};', { return: 'keyword.control.rig', a: null });
+    assertScopes('for 0 .. n { x := a .. b; }', { n: null, a: null, b: null, '..': 'keyword.operator.range.rig' });
+    assertScopes('q := p.*.{1};', { p: null, '*': 'keyword.operator.dereference.rig' });
     assertScopes('ops := Op.[.{"add", add}, .{"sub", sub}];', { Op: TYPE, add: ['string.quoted.double.rig', null] });
     assertScopes('q := cast(*Vec2) p;', { cast: 'keyword.other.cast.rig', Vec2: TYPE, p: null, '*': 'keyword.operator.arithmetic.rig' });
     assertScopes('h := cast((Vec2, int) -> Vec2) p;', { Vec2: [TYPE, TYPE], int: PRIMITIVE, p: null });
@@ -845,6 +856,13 @@ check('the grammar colours the type of a literal, a cast and size_of', () => {
     assertScopes('s := cast , trunc (Small) x;', { trunc: 'keyword.other.cast-modifier.rig', Small: TYPE, x: null });
     assertScopes('if size_of(Vec2) == 8 {', { size_of: 'entity.name.function.call.rig', Vec2: TYPE, 8: 'constant.numeric.integer.rig' });
     assertScopes('n := size_of(*Vec2) + size_of([4]Vec2);', { Vec2: [TYPE, TYPE], 4: 'constant.numeric.integer.rig' });
+    // A '(' left unclosed while typing ends with its line: the next line's
+    // names aren't types.
+    assertScopes('q := cast(\ny := foo(1);', { y: null, foo: 'entity.name.function.call.rig' });
+    assertScopes('q := cast,trunc(\ny := foo(1);', { y: null, foo: 'entity.name.function.call.rig' });
+    assertScopes('n := size_of(\ny := foo(1);', { y: null, foo: 'entity.name.function.call.rig' });
+    // But a procedure type's parameters may go on over lines, to their ')'.
+    assertScopes('h := cast((a: int,\n          b: Vec2) -> Vec2) p;', { Vec2: [TYPE, TYPE], b: null, p: null });
 });
 
 check('the grammar colours no type where none is written', () => {
@@ -867,8 +885,25 @@ check('the grammar colours no type where none is written', () => {
     assertScopes('v = .{v.y, v.x};', { v: null, y: null });
     assertScopes('a : Vec2; b := a;', { a: [null, null], b: null, Vec2: TYPE });
     assertScopes('return b, a;', { return: 'keyword.control.rig', a: null, b: null });
-    // A type ends with its line: an unfinished one takes nothing after it.
+    // A type ends with its line: an unfinished one takes nothing after it,
+    // after a ':' or a '->'.
     assertScopes('x :\ny := 5;', { y: null });
+    assertScopes('f :: () -> int\ny := 5;', { int: PRIMITIVE, y: null });
+    // A comment in a type is a comment, its ':' included.
+    assertScopes('f :: () -> int // the count: Foo', {
+        int: PRIMITIVE,
+        '//': 'comment.line.double-slash.rig',
+        the: 'comment.line.double-slash.rig',
+        count: 'comment.line.double-slash.rig',
+        Foo: 'comment.line.double-slash.rig',
+    });
+    assertScopes('f :: () -> Vec2 /* first */, Node {', {
+        Vec2: TYPE,
+        first: 'comment.block.rig',
+        ',': 'punctuation.separator.comma.rig',
+        Node: TYPE,
+    });
+    assertScopes('x : Vec2 /* a: Foo */;', { Vec2: TYPE, Foo: 'comment.block.rig' });
     // A ':' in a comment or a string is the comment's or the string's.
     assertScopes('// note: Vec2 here', { Vec2: 'comment.line.double-slash.rig' });
     assertScopes('/* a: Vec2\n   b: Vec2 */ c: Vec2;', { Vec2: ['comment.block.rig', 'comment.block.rig', TYPE] });
