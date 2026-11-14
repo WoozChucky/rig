@@ -1,0 +1,20 @@
+// Basic's growable array (issue #134) given an insert past its end: an
+// insert may be at any index up to the count, where it adds at the end,
+// and one more stops the program with the language's own message, as if
+// the count were one more, at check_index in array.rig, whose line and
+// column basic_array_insert_past_end.err names. Edit one, edit the other.
+#load "../../modules/Basic/module.rig";
+
+main :: () {
+    a : Array;
+    array_init(*a, size_of(int), HEAP_ALLOCATOR);
+    for 1..3 {
+        value := it;
+        array_add(*a, *value);
+    }
+    value := 4;
+    array_insert(*a, 3, *value);
+    print_line("inserted at the count");
+    array_insert(*a, 5, *value);
+    print_line("not reached");
+}
