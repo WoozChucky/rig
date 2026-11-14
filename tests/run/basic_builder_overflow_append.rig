@@ -1,0 +1,36 @@
+// Basic's string builder (issue #134) given an append longer than int's
+// largest value less what it holds: the bytes needed are taken as int's
+// largest, not a sum that wraps, and the capacity doubles from 128, twice
+// the 64 the first append took, until it is past half of int's largest,
+// where another doubling would wrap, and is then what is needed.
+// No allocator has that many bytes, and given null the builder stops the
+// program at its copy with the language's null pointer dereference, at the
+// line of builder.rig this .err names.
+#load "../../modules/Basic/module.rig";
+
+LARGEST :: 9223372036854775807; // int's largest value
+
+// Prints the size of each allocation asked for, and gives the heap's for a
+// size the heap could have, and null for one past a gigabyte.
+refusing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE || mode == RESIZE {
+        print_string("asked for ");
+        print_int(size);
+        print_byte(10);
+        if size > 1024 * 1024 * 1024 { return null; }
+    }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+main :: () {
+    b : String_Builder;
+    builder_init(*b, Allocator.{refusing_allocator_proc, null});
+    append_string(*b, "abc");
+
+    // No string this long exists, but its bytes are never read: the append
+    // stops before copying them.
+    too_long := "x";
+    too_long.count = LARGEST;
+    append_string(*b, too_long);
+    print_string("not reached");
+}

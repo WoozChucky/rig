@@ -1,0 +1,16 @@
+// Basic's hash tables (issue #134) given an entry index out of bounds: one
+// key takes 16 entries, and entry 16 is past them. The program stops with
+// the language's own message, index I is out of bounds (count C), at
+// check_index in array.rig, whose line and column
+// basic_table_entry_bounds.err names. Edit one, edit the other.
+#load "../../modules/Basic/module.rig";
+
+main :: () {
+    t : Table;
+    table_init(*t, size_of(int), HEAP_ALLOCATOR);
+    one := 1;
+    table_set(*t, "one", *one);
+    print_line("before");
+    used, key, value := table_entry(t, t.capacity);
+    print_line("after");
+}

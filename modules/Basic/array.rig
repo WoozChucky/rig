@@ -1,0 +1,203 @@
+// Basic's growable array: elements of one size, one after another in
+// memory from an allocator, which grows as elements are added. Rig has no
+// generics yet, so the array is untyped: it knows only how many bytes an
+// element is, copies elements in and out by that many bytes, and hands out
+// an element's address as a *void, which the caller casts to a pointer to
+// its own type:
+//
+//     points : Array;
+//     array_init(*points, size_of(Point), HEAP_ALLOCATOR);
+//     p := Point.{1, 2};
+//     array_add(*points, *p);
+//     first := cast(*Point) array_get(points, 0);
+//
+// An index outside the elements stops the program with the language's own
+// bounds check, through check_index, just as indexing an array of the
+// language's does: there is no portable way to write a message of Basic's
+// own to standard error.
+#load "allocators.rig";
+#load "memory.rig";
+
+// Stops the program unless index is at least 0 and less than count, as
+// indexing does: with the language's own runtime error, "index I is out of
+// bounds (count C)", at this procedure's line in array.rig, compiled and
+// interpreted. Built with --no-bounds-checks, it checks nothing, as no
+// indexing does then.
+//
+// It indexes a view whose count is count. Its data is a local's address,
+// since indexing a view whose data is null fails the null check once the
+// bounds check passes. Only the element's address is taken, and nothing is
+// read through it, so an address past the one byte the local holds is
+// harmless. The address goes into a variable, since only a call can be a
+// statement.
+check_index :: (index: int, count: int) {
+    anchor : u8;
+    bounds : []u8;
+    bounds.data = *anchor;
+    bounds.count = count;
+    // tests/run/basic_array_bounds.err, basic_array_pop_empty.err,
+    // basic_array_insert_past_end.err, basic_array_insert_negative.err,
+    // basic_array_remove_ordered_empty.err, basic_array_get_no_bytes.err,
+    // basic_array_remove_unordered_past_end.err, basic_table_entry_bounds.err
+    // and basic_int_table_entry_empty.err name this line and column, the [.
+    element := *bounds[index];
+}
+
+// An array of count elements of element_size bytes each, at data, which
+// has room for capacity of them, from allocator. data is null, and count
+// and capacity 0, until the first element is added.
+Array :: struct {
+    element_size: int;
+    count: int;
+    capacity: int;
+    data: *u8;
+    allocator: Allocator;
+}
+
+// Makes array an empty array of elements of element_size bytes, whose
+// memory comes from allocator. Nothing is taken until the first add. It
+// doesn't give back memory an array already had: array_free does.
+//
+// Elements of 0 bytes, of a struct with no fields, take no memory: the
+// array counts them, and every element's address is data, null. A negative
+// element_size, which no type has, is taken as 0.
+array_init :: (array: *Array, element_size: int, allocator: Allocator) {
+    array.element_size = element_size;
+    if element_size < 0 { array.element_size = 0; }
+    array.count = 0;
+    array.capacity = 0;
+    array.data = null;
+    array.allocator = allocator;
+}
+
+// The address of element index, which stops the program unless index is
+// within the elements. It is valid until the array next grows, which may
+// move the elements.
+//
+// An allocator that has no more memory gives null when the array grows,
+// and the array doesn't test for it: its data is then null, and reaching
+// an element stops the program here with the language's null pointer
+// dereference.
+array_get :: (array: Array, index: int) -> *void {
+    check_index(index, array.count);
+    if array.element_size == 0 { return array.data; }
+    // tests/run/basic_array_overflow.err,
+    // basic_array_overflow_doubling.err and basic_array_overflow_exact.err
+    // name this line.
+    return *array.data[index * array.element_size];
+}
+
+// Adds a copy of the element_size bytes at item as the new last element,
+// or a zeroed element when item is null, and returns its address, valid
+// until the array next grows. item may be one of the array's own elements.
+array_add :: (array: *Array, item: *void) -> *void {
+    return array_insert(array, array.count, item);
+}
+
+// Inserts a copy of the element_size bytes at item as element index, or a
+// zeroed element when item is null, and returns its address, valid until
+// the array next grows. The elements from index on move up one. index may
+// be from 0 to the count, where the element is added at the end; anything
+// else stops the program, as if the count were one more.
+//
+// When the elements fill the capacity, it becomes the larger of 8 and
+// twice the old one, and the memory is moved there with resize. Growing by
+// doubling, rather than by one element, means n elements added one at a
+// time are moved about n times in all, not about n * n / 2.
+//
+// item may be in the array's own elements, to add again what it holds
+// already. Growing can move them and give back the memory they were in,
+// and the elements from index on move up, so item's bytes are then copied
+// from where they went.
+array_insert :: (array: *Array, index: int, item: *void) -> *void {
+    LARGEST :: 9223372036854775807; // int's largest value
+    HALF :: LARGEST / 2;
+    check_index(index, array.count + 1);
+    size := array.element_size;
+
+    // Whether all of item's bytes are in the elements, and how far into
+    // them it starts.
+    from := cast(*u8) item;
+    offset := from - array.data;
+    own := from != null && from >= array.data && offset <= array.count * size - size;
+
+    if array.count >= array.capacity {
+        // Doubling past half of int's largest would wrap, so a capacity
+        // past it becomes int's largest.
+        capacity := 8;
+        if array.capacity > 4 {
+            capacity = LARGEST;
+            if array.capacity <= HALF { capacity = array.capacity * 2; }
+        }
+        // Past int's largest, no memory holds the elements: asking for that
+        // many bytes gives null. A size of 0 asks for none, and gets null.
+        bytes := LARGEST;
+        if size == 0 || capacity <= LARGEST / size { bytes = capacity * size; }
+        array.data = cast(*u8) resize(array.data, array.capacity * size, bytes, array.allocator);
+        array.capacity = capacity;
+    }
+    array.count += 1;
+    at := cast(*u8) array_get(array.*, index);
+    copy_memory(at + size, at, (array.count - 1 - index) * size);
+
+    if item == null {
+        set_memory(at, 0, size);
+    } else if own {
+        // item's bytes before element index's start stayed where they
+        // were, and the ones from it on moved up one element with it: low
+        // is how many stayed, all of them for an item below index and none
+        // for one at or past it. Only an item that doesn't start at an
+        // element's start has some of each.
+        low := index * size - offset;
+        if low < 0 { low = 0; }
+        if low > size { low = size; }
+        copy_memory(at, array.data + offset, low);
+        copy_memory(at + low, array.data + offset + low + size, size - low);
+    } else {
+        copy_memory(at, item, size);
+    }
+    return at;
+}
+
+// Copies the last element into item, unless item is null, and removes it.
+// An empty array has no last element, and stops the program with "index -1
+// is out of bounds (count 0)".
+array_pop :: (array: *Array, item: *void) {
+    last := array_get(array.*, array.count - 1);
+    if item != null { copy_memory(item, last, array.element_size); }
+    array.count -= 1;
+}
+
+// Removes element index, moving the later elements down one, so they keep
+// their order. An index outside the elements stops the program.
+array_remove_ordered :: (array: *Array, index: int) {
+    at := cast(*u8) array_get(array.*, index);
+    size := array.element_size;
+    copy_memory(at, at + size, (array.count - 1 - index) * size);
+    array.count -= 1;
+}
+
+// Removes element index by moving the last element into its place, which
+// copies one element rather than all the later ones, and changes their
+// order. An index outside the elements stops the program.
+array_remove_unordered :: (array: *Array, index: int) {
+    at := array_get(array.*, index);
+    copy_memory(at, array_get(array.*, array.count - 1), array.element_size);
+    array.count -= 1;
+}
+
+// Empties array for reuse: its count goes to 0, and its memory is kept, so
+// as many elements are added again without allocating.
+array_reset :: (array: *Array) {
+    array.count = 0;
+}
+
+// Gives the array's memory back to its allocator. The array is empty, with
+// data null and count and capacity 0, and keeps its element size and its
+// allocator, so it can be added to again.
+array_free :: (array: *Array) {
+    free(array.data, array.allocator);
+    array.data = null;
+    array.count = 0;
+    array.capacity = 0;
+}

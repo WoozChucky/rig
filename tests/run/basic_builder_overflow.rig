@@ -1,0 +1,29 @@
+// Basic's string builder (issue #134) past half of int's largest value,
+// where doubling its capacity would wrap: an append that doesn't fit asks
+// for int's largest value instead. No allocator has that, and given null
+// the builder stops the program at its copy with the language's null
+// pointer dereference, at the line of builder.rig this .err names.
+#load "../../modules/Basic/module.rig";
+
+LARGEST :: 9223372036854775807; // int's largest value
+
+// Prints the size of each allocation asked for, and gives none.
+refusing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE || mode == RESIZE {
+        print_string("asked for ");
+        print_int(size);
+        print_byte(10);
+    }
+    return null;
+}
+
+main :: () {
+    // A builder can't be this full, so its fields are set as if it were.
+    // Its data stays null: the append stops before reading it.
+    b : String_Builder;
+    builder_init(*b, Allocator.{refusing_allocator_proc, null});
+    b.capacity = LARGEST / 2 + 1;
+    b.count = b.capacity;
+    append_byte(*b, "x"[0]);
+    print_string("not reached");
+}

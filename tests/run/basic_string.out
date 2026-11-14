@@ -1,0 +1,46 @@
+true false true false true false
+-1 1 0 -1 1 0 1 -1 1
+2 3 -1 -1 0 -1 4
+4 0 -1 0 -1 0 3 0
+1 5 3 -1 0 3 0
+true true false false true false true
+8 [hi there]
+3 [x  ]
+3 [  x]
+0 []
+0 []
+0 []
+0 []
+3 [ell]
+2 [lo]
+2 [he]
+0 []
+0 []
+3 [llo]
+0 []
+5 [hello]
+4 [a] [b] [] [c]
+1 []
+2 [a] [b,c]
+2 [] []
+1 [a,b]
+0
+true [key] [value=x]
+false [novalue] []
+true [] [x]
+true [k] []
+true true true true
+0 -1 1 -1 0 -1 true false false
+0 5 true true
+0 []
+0 []
+0 []
+0 []
+1 []
+false [] []
+4 [ello]
+2 [he]
+0 []
+0 []
+5 [hello]
+0 []

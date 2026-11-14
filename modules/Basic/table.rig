@@ -1,0 +1,450 @@
+// Basic's hash tables: values found by their key, a string or an int, in
+// about the same time however many there are. Like the array, a table is
+// untyped: it knows only how many bytes a value is, copies values in by
+// that many bytes, and hands out a value's address as a *void, which the
+// caller casts to a pointer to its own type:
+//
+//     ages : Table;
+//     table_init(*ages, size_of(int), HEAP_ALLOCATOR);
+//     age := 36;
+//     table_set(*ages, "ada", *age);
+//     found := table_find(ages, "ada");
+//     if found != null { print_int((cast(*int) found).*); }
+//
+// There are two kinds, Table for string keys and Int_Table for int keys,
+// each with its procedures named by it, table_ and int_table_, since Rig
+// has no generics or overloading yet. Both lay out their entries the same
+// way and share the probing and the growing, and differ only in the key:
+// how it is hashed, compared, kept and given back.
+//
+// A table's entries are one run of memory from its allocator, a power of
+// two of them, each a header (the key's hash, the entry's state and the
+// key) followed by the value. A key's entry is found by open addressing
+// with linear probing: the probe starts at the entry the key's hash picks
+// and steps one entry at a time, wrapping at the end, until it finds the
+// key or an empty entry. Keys whose probes start at the same entry, or run
+// into each other, sit one after another: a chain. A set rehashes the
+// table rather than leave more than three quarters of its entries used or
+// removed, so a probe meets an empty entry soon.
+#load "allocators.rig";
+#load "memory.rig";
+#load "array.rig";
+
+// An entry's state (constants until enums). New entries' memory is zeroed,
+// so every entry starts empty.
+TABLE_EMPTY :: 0;
+TABLE_USED :: 1;
+TABLE_REMOVED :: 2;
+
+// The 64-bit FNV-1a hash of count bytes from data. From the offset basis,
+// each byte is mixed in with an exclusive or and spread over the hash's
+// bits with a multiply by the FNV prime, which wraps. It is short and needs
+// no tables.
+//
+// An exclusive or keeps each bit in place and a multiply carries bits only
+// upward, so the hash's lowest k bits come from the lowest k bits of each
+// byte alone. Two keys of the same length that differ in one byte, below
+// its bit k, get different low k bits: "key1" and "key2" start their probes
+// at different entries. Keys that differ only higher up in a byte don't:
+// "a" and "A", which differ in bit 5, start at the same entry of 16 or 32,
+// as the ints 0 and 16 do of 16, and the probe steps past. A table of 256
+// entries or more picks with every bit of each byte.
+//
+// A count of 0 or less hashes no bytes, and gives the offset basis.
+hash_bytes :: (data: *u8, count: int) -> u64 {
+    hash : u64 = 14695981039346656037; // the offset basis, 0xcbf29ce484222325
+    if count <= 0 { return hash; }
+    for i: 0..count - 1 {
+        hash ^= data[i];
+        hash *= 1099511628211; // the prime, 0x100000001b3
+    }
+    return hash;
+}
+
+// The hash of a string's bytes. The empty string, zeroed or not, hashes no
+// bytes.
+hash_string :: (s: string) -> u64 {
+    return hash_bytes(s.data, s.count);
+}
+
+// The hash of an int's 8 bytes, in the order memory holds them. A
+// parameter has no address, so they're read from a copy.
+hash_int :: (key: int) -> u64 {
+    copy := key;
+    return hash_bytes(cast(*u8) *copy, size_of(int));
+}
+
+// What both kinds of entry start with: the key's full hash and the entry's
+// state. The hash is kept so that a probe compares keys only when their
+// hashes are equal, and growing never hashes a key again. The probing and
+// growing both kinds share read an entry through this, whichever kind it
+// is, and so never its key.
+Table_Entry_Header :: struct {
+    hash: u64;
+    state: int;
+}
+
+// The header of a string-keyed entry. key is the table's own copy of the
+// key, in memory from the table's allocator: zeroed, with no memory, for
+// the empty key.
+Table_Entry :: struct {
+    hash: u64;
+    state: int;
+    key: string;
+}
+
+// The header of an int-keyed entry.
+Int_Table_Entry :: struct {
+    hash: u64;
+    state: int;
+    key: int;
+}
+
+// Where the value starts in each kind's entry: after the header, at a
+// multiple of 8.
+TABLE_VALUE_OFFSET :: (size_of(Table_Entry) + 7) & ~7;
+INT_TABLE_VALUE_OFFSET :: (size_of(Int_Table_Entry) + 7) & ~7;
+
+// A table of string keys, each with a value of value_size bytes. Its
+// capacity entries, entry_size bytes each, are at entries, from allocator:
+// count of them hold a key, and removed are marked removed. entries is
+// null, and count and capacity 0, until the first set.
+Table :: struct {
+    value_size: int;
+    entry_size: int;
+    count: int;
+    removed: int;
+    capacity: int;
+    entries: *u8;
+    allocator: Allocator;
+}
+
+// A table of int keys, laid out as a Table.
+Int_Table :: struct {
+    value_size: int;
+    entry_size: int;
+    count: int;
+    removed: int;
+    capacity: int;
+    entries: *u8;
+    allocator: Allocator;
+}
+
+// The bytes of an entry whose value starts at value_offset, a multiple of
+// 8, and is value_size bytes: the value's size is rounded up to 8 too, so
+// every entry's size is a multiple of 8 and every value is aligned to 8, as
+// any Rig type needs (spec 3.11), when the entries' memory is, as the
+// heap's is. An entry too big for its size to be an int is given the
+// largest multiple of 8 an int holds, and no allocator gives memory for
+// even one of those.
+table_entry_size :: (value_offset: int, value_size: int) -> int {
+    LARGEST :: 9223372036854775807; // int's largest value
+    if value_size > LARGEST - 7 - value_offset { return LARGEST - 7; }
+    return value_offset + ((value_size + 7) & ~7);
+}
+
+// Looks for a key in capacity entries of entry_size bytes at entries, by
+// its hash. same_key says whether an entry whose hash is the key's holds
+// the key, given the entry and key, the key's address. Gives the index of
+// the key's entry, or -1, and where the key would go if it were set: the
+// first removed entry the probe passed, or else the empty entry it stopped
+// at. Both are -1 when there are no entries, which are then never touched.
+//
+// The probe starts at the entry the hash's low bits pick: capacity is a
+// power of two, so hash & (capacity - 1) is the hash modulo the capacity.
+// It steps past removed entries, since a key set after the removed one may
+// be further along the same chain, and stops at an empty one, past which no
+// key of the chain was ever put. A set keeps a quarter of the entries
+// empty, so the probe always meets one before it has been round them all.
+table_probe :: (entries: *u8, capacity: int, entry_size: int, hash: u64, key: *void, same_key: (entry: *u8, key: *void) -> bool) -> int, int {
+    found := -1;
+    slot := -1;
+    if capacity == 0 { return found, slot; }
+    mask := capacity - 1;
+    index := cast(int) (hash & cast(u64) mask);
+    for 1..capacity {
+        entry := entries + index * entry_size;
+        header := cast(*Table_Entry_Header) entry;
+        if header.state == TABLE_EMPTY {
+            if slot < 0 { slot = index; }
+            return found, slot;
+        }
+        if header.state == TABLE_REMOVED {
+            if slot < 0 { slot = index; }
+        } else if header.hash == hash && same_key(entry, key) {
+            return index, slot;
+        }
+        index = (index + 1) & mask;
+    }
+    return found, slot;
+}
+
+// Makes room for a set's key, before the set looks for it, in capacity
+// entries of entry_size bytes at entries, from allocator, of which count
+// hold a key and removed are marked removed. Gives the entries, their
+// capacity and how many are removed: as they were, while one more key
+// leaves at most three quarters of the entries used or removed, and
+// otherwise rehashed into new entries. Removed entries are counted, since
+// a probe steps past them as past a key: a table whose keys come and go
+// would otherwise fill with them, and its probes grow long.
+//
+// The new capacity is 16 for a table with no entries, and twice the old
+// one when the keys and the new one would fill more than half the entries.
+// Otherwise it stays the same, and the rehash only clears the removed
+// entries.
+//
+// Rehashing copies every used entry, header, key and value, to where its
+// stored hash puts it among the new entries, past any used one: the keys
+// are all different, so none is compared, hashed or copied again. The old
+// entries aren't given back here: a set's value may be one of their
+// values, so the set gives them back once its value is copied.
+table_make_room :: (entries: *u8, capacity: int, count: int, removed: int, entry_size: int, allocator: Allocator) -> *u8, int, int {
+    LARGEST :: 9223372036854775807; // int's largest value
+    if (count + removed + 1) * 4 <= capacity * 3 { return entries, capacity, removed; }
+    new_capacity := capacity;
+    if capacity == 0 {
+        new_capacity = 16;
+    } else if (count + 1) * 2 > capacity {
+        new_capacity = capacity * 2;
+    }
+    // Entries that many bytes have no int size: asking for int's largest
+    // gives null.
+    bytes := LARGEST;
+    if new_capacity <= LARGEST / entry_size { bytes = new_capacity * entry_size; }
+    new_entries := cast(*u8) alloc(bytes, allocator);
+    set_memory(new_entries, 0, bytes);
+
+    mask := new_capacity - 1;
+    for i: 0..capacity - 1 {
+        from := entries + i * entry_size;
+        header := cast(*Table_Entry_Header) from;
+        if header.state == TABLE_USED {
+            index := cast(int) (header.hash & cast(u64) mask);
+            while (cast(*Table_Entry_Header) (new_entries + index * entry_size)).state != TABLE_EMPTY {
+                index = (index + 1) & mask;
+            }
+            copy_memory(new_entries + index * entry_size, from, entry_size);
+        }
+    }
+    return new_entries, new_capacity, 0;
+}
+
+// Whether the string-keyed entry at entry holds the string at key: the
+// same count and the same bytes.
+table_same_key :: (entry: *u8, key: *void) -> bool {
+    held := (cast(*Table_Entry) entry).key;
+    wanted := (cast(*string) key).*;
+    return held.count == wanted.count && compare_memory(held.data, wanted.data, held.count) == 0;
+}
+
+// Makes table an empty table of string keys with values of value_size
+// bytes, whose memory comes from allocator. Nothing is taken until the
+// first set. It doesn't give back memory a table already had: table_free
+// does.
+//
+// Values of 0 bytes take no memory beyond their entries' headers, and a
+// negative value_size, which no type has, is taken as 0.
+table_init :: (table: *Table, value_size: int, allocator: Allocator) {
+    table.value_size = value_size;
+    if value_size < 0 { table.value_size = 0; }
+    table.entry_size = table_entry_size(TABLE_VALUE_OFFSET, table.value_size);
+    table.count = 0;
+    table.removed = 0;
+    table.capacity = 0;
+    table.entries = null;
+    table.allocator = allocator;
+}
+
+// Sets key's value to a copy of the value_size bytes at value, or to zeroed
+// bytes when value is null, and returns the value's address in the table,
+// valid until the table's next set or free: a set may rehash the table,
+// which moves every value even when the capacity stays the same, and a
+// remove moves none. A key that isn't there yet is added:
+// the table keeps a copy of it, in memory from its allocator, so the bytes
+// key views may change or go once the set is done. A new key takes the
+// first removed entry its probe passed, if any, and an empty one if not.
+//
+// value may be one of the table's own values, to set another key to what
+// one holds already: growing moves them, so the old entries are given back
+// only once the value is copied.
+//
+// An allocator that has no more memory gives null, and the table doesn't
+// test for it: the zeroing of new entries, or the copy of a new key, then
+// stops the program with the language's null pointer dereference.
+table_set :: (table: *Table, key: string, value: *void) -> *void {
+    hash := hash_string(key);
+    old_entries := table.entries;
+    table.entries, table.capacity, table.removed = table_make_room(table.entries, table.capacity, table.count, table.removed, table.entry_size, table.allocator);
+
+    wanted := key;
+    found, slot := table_probe(table.entries, table.capacity, table.entry_size, hash, *wanted, table_same_key);
+    at := found;
+    if found < 0 {
+        at = slot;
+        entry := cast(*Table_Entry) (table.entries + at * table.entry_size);
+        if entry.state == TABLE_REMOVED { table.removed -= 1; }
+        entry.hash = hash;
+        entry.state = TABLE_USED;
+        entry.key.data = cast(*u8) alloc(key.count, table.allocator);
+        entry.key.count = key.count;
+        copy_memory(entry.key.data, key.data, key.count);
+        table.count += 1;
+    }
+
+    to := table.entries + at * table.entry_size + TABLE_VALUE_OFFSET;
+    if value == null {
+        set_memory(to, 0, table.value_size);
+    } else {
+        copy_memory(to, value, table.value_size);
+    }
+    if table.entries != old_entries { free(old_entries, table.allocator); }
+    return to;
+}
+
+// The address of key's value in the table, valid until the table's next
+// set or free, or null when key isn't there. A table with no entries,
+// before its first set or after table_free, has no keys.
+table_find :: (table: Table, key: string) -> *void {
+    wanted := key;
+    found, slot := table_probe(table.entries, table.capacity, table.entry_size, hash_string(key), *wanted, table_same_key);
+    if found < 0 { return null; }
+    return table.entries + found * table.entry_size + TABLE_VALUE_OFFSET;
+}
+
+// Removes key, giving its copy back to the table's allocator, and says
+// whether it was there. Its entry is marked removed rather than emptied: a
+// key further along the same chain is found by stepping past it, and would
+// be lost behind an empty entry.
+table_remove :: (table: *Table, key: string) -> bool {
+    wanted := key;
+    found, slot := table_probe(table.entries, table.capacity, table.entry_size, hash_string(key), *wanted, table_same_key);
+    if found < 0 { return false; }
+    entry := cast(*Table_Entry) (table.entries + found * table.entry_size);
+    free(entry.key.data, table.allocator);
+    entry.key.data = null;
+    entry.key.count = 0;
+    entry.state = TABLE_REMOVED;
+    table.count -= 1;
+    table.removed += 1;
+    return true;
+}
+
+// Entry index of the table, for going over every key and value: whether it
+// holds a key, the key and the value's address. One that holds none gives
+// false, the zeroed string and null. index must be from 0 to the capacity
+// less one, or the program stops with the language's own bounds check,
+// through check_index, so a table with no entries has none to give. Built
+// with --no-bounds-checks, nothing is checked.
+//
+// The key is the table's own copy, valid until it is removed or the table
+// freed, and the value's address is valid until the table's next set or
+// free.
+table_entry :: (table: Table, index: int) -> bool, string, *void {
+    check_index(index, table.capacity);
+    entry := cast(*Table_Entry) (table.entries + index * table.entry_size);
+    none : string;
+    if entry.state != TABLE_USED { return false, none, null; }
+    return true, entry.key, cast(*u8) entry + TABLE_VALUE_OFFSET;
+}
+
+// Gives every key's copy and the entries back to the table's allocator.
+// The table is empty, with entries null and count and capacity 0, and
+// keeps its value size and its allocator, so it can be set again.
+table_free :: (table: *Table) {
+    for i: 0..table.capacity - 1 {
+        entry := cast(*Table_Entry) (table.entries + i * table.entry_size);
+        if entry.state == TABLE_USED { free(entry.key.data, table.allocator); }
+    }
+    free(table.entries, table.allocator);
+    table.entries = null;
+    table.count = 0;
+    table.removed = 0;
+    table.capacity = 0;
+}
+
+// Whether the int-keyed entry at entry holds the int at key.
+int_table_same_key :: (entry: *u8, key: *void) -> bool {
+    return (cast(*Int_Table_Entry) entry).key == (cast(*int) key).*;
+}
+
+// Makes table an empty table of int keys, as table_init does for strings.
+int_table_init :: (table: *Int_Table, value_size: int, allocator: Allocator) {
+    table.value_size = value_size;
+    if value_size < 0 { table.value_size = 0; }
+    table.entry_size = table_entry_size(INT_TABLE_VALUE_OFFSET, table.value_size);
+    table.count = 0;
+    table.removed = 0;
+    table.capacity = 0;
+    table.entries = null;
+    table.allocator = allocator;
+}
+
+// Sets key's value, as table_set does for strings. An int key is kept in
+// its entry, so it takes no memory of its own.
+int_table_set :: (table: *Int_Table, key: int, value: *void) -> *void {
+    hash := hash_int(key);
+    old_entries := table.entries;
+    table.entries, table.capacity, table.removed = table_make_room(table.entries, table.capacity, table.count, table.removed, table.entry_size, table.allocator);
+
+    wanted := key;
+    found, slot := table_probe(table.entries, table.capacity, table.entry_size, hash, *wanted, int_table_same_key);
+    at := found;
+    if found < 0 {
+        at = slot;
+        entry := cast(*Int_Table_Entry) (table.entries + at * table.entry_size);
+        if entry.state == TABLE_REMOVED { table.removed -= 1; }
+        entry.hash = hash;
+        entry.state = TABLE_USED;
+        entry.key = key;
+        table.count += 1;
+    }
+
+    to := table.entries + at * table.entry_size + INT_TABLE_VALUE_OFFSET;
+    if value == null {
+        set_memory(to, 0, table.value_size);
+    } else {
+        copy_memory(to, value, table.value_size);
+    }
+    if table.entries != old_entries { free(old_entries, table.allocator); }
+    return to;
+}
+
+// The address of key's value, or null, as table_find gives for strings.
+int_table_find :: (table: Int_Table, key: int) -> *void {
+    wanted := key;
+    found, slot := table_probe(table.entries, table.capacity, table.entry_size, hash_int(key), *wanted, int_table_same_key);
+    if found < 0 { return null; }
+    return table.entries + found * table.entry_size + INT_TABLE_VALUE_OFFSET;
+}
+
+// Removes key and says whether it was there, as table_remove does for
+// strings.
+int_table_remove :: (table: *Int_Table, key: int) -> bool {
+    wanted := key;
+    found, slot := table_probe(table.entries, table.capacity, table.entry_size, hash_int(key), *wanted, int_table_same_key);
+    if found < 0 { return false; }
+    entry := cast(*Int_Table_Entry) (table.entries + found * table.entry_size);
+    entry.state = TABLE_REMOVED;
+    table.count -= 1;
+    table.removed += 1;
+    return true;
+}
+
+// Entry index of the table, as table_entry gives for strings: one that
+// holds no key gives false, 0 and null.
+int_table_entry :: (table: Int_Table, index: int) -> bool, int, *void {
+    check_index(index, table.capacity);
+    entry := cast(*Int_Table_Entry) (table.entries + index * table.entry_size);
+    if entry.state != TABLE_USED { return false, 0, null; }
+    return true, entry.key, cast(*u8) entry + INT_TABLE_VALUE_OFFSET;
+}
+
+// Gives the entries back to the table's allocator, as table_free does for
+// strings: an int table has no keys' copies to give back.
+int_table_free :: (table: *Int_Table) {
+    free(table.entries, table.allocator);
+    table.entries = null;
+    table.count = 0;
+    table.removed = 0;
+    table.capacity = 0;
+}

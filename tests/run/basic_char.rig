@@ -1,0 +1,36 @@
+// Basic's char (issue #134): ASCII classes and case on a u8, passed to
+// show as procedure values.
+#load "../../modules/Basic/module.rig";
+
+show :: (name: string, test: (c: u8) -> bool, sample: string) {
+    print_string(name);
+    print_byte(32);
+    for sample {
+        if test(it) { print_byte("1"[0]); } else { print_byte("0"[0]); }
+    }
+    print_byte(10);
+}
+
+main :: () {
+    show("is_digit", is_digit, "09/:a ");
+    show("is_alpha", is_alpha, "azAZ@[`{0_");
+    show("is_alnum", is_alnum, "aZ09 _-");
+    show("is_space", is_space, " \t\n\rx\0");
+    show("is_upper", is_upper, "AZ@[az");
+    show("is_lower", is_lower, "az`{AZ");
+    print_bool(is_space(11));
+    print_byte(32);
+    print_bool(is_space(12));
+    print_byte(32);
+    print_bool(is_space(14));
+    print_byte(10);
+    text := "Hello, World! 09 az{@[";
+    for text { print_byte(to_upper(it)); }
+    print_byte(10);
+    for text { print_byte(to_lower(it)); }
+    print_byte(10);
+    print_bool(is_alpha(200));
+    print_byte(32);
+    print_bool(to_upper(200) == 200);
+    print_byte(10);
+}
