@@ -2,7 +2,9 @@
 // its table of structs holding strings and procedures, and its view of
 // memory malloc gave while compiling are baked into the program as
 // constant data, as if they had been written there. One of the primes
-// sizes an array. A table used in a body is read at run time.
+// sizes an array. A table used in a body is read at run time. A table of
+// narrow scalars keeps each at its own width, and a #run's bytes cast to a
+// string are a string literal's.
 printf :: (format: *u8, ..) -> s32 #foreign libc;
 malloc :: (size: u64) -> *void #foreign libc;
 
@@ -49,6 +51,28 @@ squares :: (n: int) -> []int {
     return v;
 }
 
+Narrow :: struct { a: s8; b: u8; c: s16; d: bool; z: bool; f: u16; e: float32; g: int; }
+
+narrow :: () -> [2]Narrow {
+    r : [2]Narrow;
+    r[0] = .{-1, 200, -300, true, false, 65000, 1.5, 7};
+    r[1] = .{5, 0, 0, false, true, 0, 0.0, -1};
+    return r;
+}
+
+letters : [3]u8;
+
+bytes :: () -> []u8 {
+    letters[0] = 97;
+    letters[1] = 98;
+    letters[2] = 99;
+    return letters;
+}
+
+NARROW :: #run narrow();
+WORD :: cast(string) #run bytes();
+word := cast(string) #run bytes();
+
 PRIMES :: #run primes();
 OPS :: #run ops();
 SQUARES :: #run squares(5);
@@ -72,4 +96,17 @@ main :: () {
     table := #run ops();
     printf("%lld %lld %lld\n", local[i], view[i + 1], SAME[i + 2]);
     printf("4 %s 5 = %lld\n", table[i].symbol.data, table[i].run(4, 5));
+
+    // Folded, then read at run time.
+    n := NARROW[0];
+    printf("%d %d %d %d %d %d %g %lld\n", NARROW[0].a, NARROW[0].b, NARROW[0].c, NARROW[0].d, NARROW[0].z,
+           NARROW[0].f, NARROW[0].e, NARROW[0].g);
+    printf("%d %d %d %d %d %d %g %lld\n", n.a, n.b, n.c, n.d, n.z, n.f, n.e, n.g);
+    j := 1;
+    printf("%d %d %d %d %d %d %g %lld\n", NARROW[j].a, NARROW[j].b, NARROW[j].c, NARROW[j].d, NARROW[j].z,
+           NARROW[j].f, NARROW[j].e, NARROW[j].g);
+
+    // The global's bytes are its own: changing them leaves WORD's.
+    word[0] = 65;
+    printf("%s %s %lld\n", WORD, word.data, WORD.count);
 }

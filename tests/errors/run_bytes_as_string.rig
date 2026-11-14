@@ -1,8 +1,0 @@
-// A #run's baked []u8 is the array of its elements, not a string literal
-// (spec 7.8): cast to a string, it's no value a constant or a global can
-// hold.
-store : [3]u8;
-bytes :: () -> []u8 { store[0] = 97; store[1] = 98; store[2] = 99; return store; }
-S :: cast(string) #run bytes();
-g := cast(string) #run bytes();
-main :: () { s := cast(string) #run bytes(); }

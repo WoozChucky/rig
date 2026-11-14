@@ -1,6 +1,0 @@
-tests/errors/run_bytes_as_string.rig:6:6: error: the value of constant 'S' isn't known while compiling
-    S :: cast(string) #run bytes();
-         ^
-tests/errors/run_bytes_as_string.rig:7:6: error: a global's value must be known while compiling, for now
-    g := cast(string) #run bytes();
-         ^

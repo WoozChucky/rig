@@ -254,12 +254,17 @@ Ast_Proc *procedure_address(Ast *e) {
 // (constant_data): a string constant's literal, or the value a *u8 field
 // of a constant holds, which may be a cast of a literal; and a #run's baked
 // string, a literal (Ast_String.is_baked), alone or in a baked struct or
-// array.
+// array, or its baked []u8 cast to a string, whose value is its bytes'
+// literal (Ast_Literal.text), where the []u8 itself is an array's.
 Ast_String *literal_address(Ast *e) {
     for (;;) {
         Type *t = e->type;
         if (!t || (!type_is_view_or_string(t) && !type_is_pointer(t))) return nullptr;
         if (e->kind == AST_STRING) return (Ast_String *)e;
+        Ast *text;
+        if (e->kind == AST_CAST && t == &type_string && constant_data(e, &text)) {
+            return text ? (Ast_String *)text : nullptr;
+        }
         if (e->kind == AST_CAST) {
             e = ((Ast_Cast *)e)->value;
             continue;
@@ -379,14 +384,15 @@ bool constant_data(Ast *e, Ast **value) {
         // the same bytes: the value is the same. Any other cast makes
         // another value, a pointer or a view of it. A string's data is a
         // string literal, though: a #run's baked []u8 is the array literal
-        // of its elements, which no string's slot can hold, so a cast of it
-        // to a string is none.
+        // of its elements, which holds them as one too (Ast_Literal.text),
+        // the value of its cast to a string. Any other array literal in a
+        // []u8's slot (a struct literal's field, written) has none.
         Ast *from = ((Ast_Cast *)e)->value;
         bool same = from->type == t || is_bytes_retyped(from->type, t);
         if (!same || !constant_data(from, value)) return false;
         if (t == &type_string && *value && (*value)->kind != AST_STRING) {
-            *value = nullptr;
-            return false;
+            *value = (*value)->kind == AST_LITERAL ? ((Ast_Literal *)*value)->text : nullptr;
+            return *value != nullptr;
         }
         return true;
     }
