@@ -20,7 +20,8 @@
 #
 # It works in Windows PowerShell 5.1, which comes with Windows, and in
 # PowerShell 7. The whole script is one command: a script block, called
-# with &, which the last line closes. That is for three reasons:
+# with &, inside an `if ($true) { ... }`, both of which the last line
+# closes. That is for three reasons:
 #
 #   - `irm ... | iex` runs the text in the user's own session, in the scope
 #     they typed it in. Inside a script block called with &, the script's
@@ -30,8 +31,12 @@
 #     $LASTEXITCODE, the TLS versions .NET allows) are put back as they were
 #     by the block's finally. Failures are thrown, never `exit`, which would
 #     close the user's window.
-#   - A download cut short ends before the block's closing brace, so
-#     PowerShell can't parse it and runs none of it.
+#   - A download cut short can't be parsed, so PowerShell runs none of it.
+#     A cut anywhere before the last line leaves the script block open. The
+#     `if` is for a cut inside the last line: without it, a text that ended
+#     between the block's `}` and ` @args` would parse, and run the block
+#     without the user's options. With it, every cut leaves the `if` open.
+#     (`if` makes no scope of its own, so $args is still the script's.)
 #   - The options: `& ([scriptblock]::Create(text)) -Version 0.2.0` passes
 #     them to the script, and `@args` hands them on to the block. Splatting
 #     $args keeps each option's name with its value, so the block's param()
@@ -42,7 +47,7 @@
 # The text is plain ASCII, so it reads the same whatever encoding
 # Invoke-RestMethod decodes it with.
 
-& {
+if ($true) { & {
     [CmdletBinding()]
     param(
         # A release, such as 0.2.0, instead of the latest.
@@ -68,7 +73,9 @@
     # The block's own preferences. Stop makes a failing cmdlet throw, rather
     # than write an error and go on. The progress bar is hidden because
     # drawing it makes Windows PowerShell 5.1's Invoke-WebRequest many times
-    # slower. A user's strict mode would turn reading a property an
+    # slower. (Functions of script modules, such as 5.1's Expand-Archive,
+    # don't see these preferences, so the archive is unpacked with .NET
+    # instead; see Install-Rig.) A user's strict mode would turn reading a property an
     # exception doesn't have into an error, so it is off here. In
     # PowerShell 7.3 and later, a program's non-zero exit status is not an
     # error here: the script reads $LASTEXITCODE itself.
@@ -169,8 +176,12 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
             if ($fields.Count -eq 2 -and $fields[1].TrimStart('*') -eq $name) { $expected = $fields[0] }
         }
         if (-not $expected) { throw "the release's SHA256SUMS has no line for $name" }
-        $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $folder $name)).Hash
-        if ($actual -ne $expected) {
+        # Get-FileHash writes the hash in uppercase, and sha256sum, which
+        # made SHA256SUMS, in lowercase. Both are put in lowercase and
+        # compared with -cne, case and all, so that the comparison doesn't
+        # rest on -ne happening to ignore case.
+        $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $folder $name)).Hash.ToLowerInvariant()
+        if ($actual -cne $expected.ToLowerInvariant()) {
             throw "${name}: FAILED, its checksum is not the one in SHA256SUMS (the download is damaged or not the one released); nothing was installed"
         }
         Write-Host "${name}: OK"
@@ -193,6 +204,11 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
         } finally {
             Pop-Location
         }
+    }
+
+    # Writes a program's output indented, a line at a time.
+    function Write-Indented([string]$text) {
+        Write-Host (($text -split '\r?\n' | ForEach-Object { "    $_" }) -join [Environment]::NewLine)
     }
 
     # Tells Windows that the environment changed, so that the terminals
@@ -245,12 +261,19 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
 
         # 3. Unpack into the temporary folder first: an archive that can't
         # be read stops here, with nothing installed. Then copy its files
-        # over the old ones. Expand-Archive is a function of a script module
-        # in Windows PowerShell 5.1, which doesn't see the block's
-        # $ErrorActionPreference, hence its own -ErrorAction. rig.exe finds
-        # lld-link.exe beside it, so they stay together.
+        # over the old ones. rig.exe finds lld-link.exe beside it, so they
+        # stay together. The archive is unpacked with .NET's ZipFile rather
+        # than Expand-Archive: in Windows PowerShell 5.1 that is a function
+        # of a script module, which doesn't see the block's preferences, so
+        # it would draw its progress bar, slowly, file by file. (5.1 needs
+        # the assembly loaded; PowerShell 7 has it already.)
         $unpacked = Join-Path $work 'unpacked'
-        Expand-Archive -LiteralPath (Join-Path $work $archive) -DestinationPath $unpacked -Force -ErrorAction Stop
+        try {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $work $archive), $unpacked)
+        } catch {
+            throw "couldn't unpack $archive ($($_.Exception.Message))"
+        }
         if (-not (Test-Path -LiteralPath (Join-Path $unpacked 'rig.exe'))) { throw "$archive has no rig.exe in it" }
         New-Item -ItemType Directory -Force -Path $dir > $null
         try {
@@ -304,18 +327,41 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
         $hello = Join-Path $work 'hello'
         New-Item -ItemType Directory -Path $hello > $null
         [IO.File]::WriteAllText((Join-Path $hello 'hello.rig'), "puts :: (s: *u8) -> s32 #foreign libc;`nmain :: () { puts(`"Hello, World!`"); }`n")
-        $result = Invoke-Program $rig @('build', 'hello.rig') $hello
-        if ($result.Status -eq 0) { $result = Invoke-Program (Join-Path $hello 'hello.exe') @() $hello }
-        if ($result.Status -eq 0 -and $result.Output.Trim() -eq 'Hello, World!') {
-            Write-Host 'Built and ran hello world: Rig has what it needs.'
-        } else {
+        $build = Invoke-Program $rig @('build', 'hello.rig') $hello
+        if ($build.Status -ne 0) {
+            # A build that fails is what the requirements are about: the
+            # link step is the one that needs Visual Studio's tools.
             Write-Host ''
             Write-Host "Rig is installed, but it couldn't build hello world:"
-            Write-Host (($result.Output -split '\r?\n' | ForEach-Object { "    $_" }) -join [Environment]::NewLine)
+            Write-Indented $build.Output
             Write-Host 'Linking a program needs Visual Studio, or its free Build Tools'
             Write-Host '(https://visualstudio.microsoft.com/downloads/), with the "Desktop development with C++"'
             Write-Host "workload. More: $requirementsUrl"
             Write-Host ''
+        } else {
+            # Built, so the requirements are there. A program that then
+            # doesn't run, or prints something else, has another cause,
+            # which the requirements message would only hide: an antivirus
+            # that stops new programs in the temporary folder, say.
+            $run = Invoke-Program (Join-Path $hello 'hello.exe') @() $hello
+            if ($run.Status -eq 0 -and $run.Output.Trim() -eq 'Hello, World!') {
+                Write-Host 'Built and ran hello world: Rig has what it needs.'
+            } else {
+                # Status -1 is Invoke-Program's: Windows refused to start it.
+                Write-Host ''
+                if ($run.Status -eq 0) {
+                    Write-Host 'Rig is installed and built hello world, but the program printed something else:'
+                } elseif ($run.Status -eq -1) {
+                    Write-Host "Rig is installed and built hello world, but couldn't run it:"
+                } else {
+                    Write-Host "Rig is installed and built hello world, but running it failed (exit status $($run.Status)):"
+                }
+                if ($run.Output) { Write-Indented $run.Output }
+                Write-Host 'Building works, so Rig has what it needs. Running a program from the temporary'
+                Write-Host 'folder went wrong (an antivirus may stop new programs there): build and run'
+                Write-Host 'hello world in a folder of your own to see.'
+                Write-Host ''
+            }
         }
 
         # 7. Say how it went, and what to do next. A terminal opened before
@@ -333,6 +379,9 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
         Write-Host '    rig build hello.rig'
     }
 
+    # Removes what Install-Rig put in place. $removed is set by each step
+    # that took something away, the PATH entry and the extension included:
+    # Rig's folder may have been deleted by hand already.
     function Uninstall-Rig([string]$work) {
         $removed = $false
         if (Test-Path -LiteralPath $dir) {
@@ -353,6 +402,7 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
                 Set-UserPath (($entries -ne $dir) -join ';')
                 Send-EnvironmentChange
                 Write-Host "Removed $dir from your user PATH"
+                $removed = $true
             }
         }
         if (-not $NoVSCode) {
@@ -360,6 +410,7 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
             # code fails when the extension isn't installed; that is fine.
             if ($code -and (Invoke-Program $code.Source @('--uninstall-extension', $extensionId) $work).Status -eq 0) {
                 Write-Host 'Removed the VS Code extension'
+                $removed = $true
             }
         }
         if ($removed) {
@@ -406,4 +457,4 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
         }
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
     }
-} @args
+} @args }
