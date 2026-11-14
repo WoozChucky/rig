@@ -1675,7 +1675,11 @@ check('rig.main expands ${workspaceFolder} and ~, and is from the folder', () =>
         const m = path.join(dir, 'm.rig');
         fs.writeFileSync(m, 'main :: () {}\n');
         assert.deepStrictEqual(mainSetting(file, folder), {});
-        for (const setting of ['${workspaceFolder}/sub/../m.rig', 'm.rig', './m.rig']) {
+        // Only white space is no setting, and white space around a path isn't
+        // part of it.
+        stub.mains[dir] = '  ';
+        assert.deepStrictEqual(mainSetting(file, folder), {});
+        for (const setting of ['${workspaceFolder}/sub/../m.rig', 'm.rig', './m.rig', ' m.rig ']) {
             stub.mains[dir] = setting;
             assert.deepStrictEqual(mainSetting(file, folder), { file: m }, setting);
         }
@@ -1771,10 +1775,14 @@ check('rig.main names the program, and one that doesn\'t load the file falls bac
             [0, 0, "an error in another file of the program: c.rig:2:14: unknown identifier 'putz'"],
         ]);
 
-        stub.mains[dir] = 'a.rig';
+        // On Windows rig.main may spell a.rig in another case than the search
+        // finds it in (VS Code's search lowercases the drive letter, for one):
+        // it's still the same file, tried once.
+        const a = process.platform === 'win32' ? path.join(dir, 'a.rig').toUpperCase() : path.join(dir, 'a.rig');
+        stub.mains[dir] = a;
         const second = await checked(dir, doc, 'configuration', MAIN_CHANGED);
         assert.deepStrictEqual(second.calls, [
-            [path.join(dir, 'a.rig'), '--stdin-for', file],
+            [a, '--stdin-for', file],
             [path.join(dir, 'b.rig'), '--stdin-for', file],
         ]);
         assert.deepStrictEqual(stub.errors, []);
@@ -1797,10 +1805,15 @@ check('a main file, a file no program loads and a file in no folder are checked 
 
         // rig.main is the document itself. It must be a file to be compared
         // with the document (else it's said to be missing), so it's on disk.
+        // On Windows it's the document in any case.
         doc.text = 'putz();\n';
         fs.writeFileSync(file, 'putz();\n');
         stub.mains[dir] = 'helper.rig';
         assert.deepStrictEqual((await checked(dir, doc, 'save')).calls, [alone]);
+        if (process.platform === 'win32') {
+            stub.mains[dir] = file.toUpperCase();
+            assert.deepStrictEqual((await checked(dir, doc, 'save')).calls, [alone]);
+        }
         fs.rmSync(file);
         delete stub.mains[dir];
 
