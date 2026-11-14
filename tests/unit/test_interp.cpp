@@ -1704,7 +1704,8 @@ TEST(interp_fails_a_call_of_a_procedure_not_lowered) {
 TEST(interp_finds_foreign_procedures_by_address) {
     // A foreign procedure's value is its C function's address, which leads
     // back to the procedure once the interpreter has found it; nothing else
-    // does, null included. strlen comes after puts, so its index isn't 0.
+    // does, null included, nor a search that starts after it. strlen comes
+    // after puts, so its index isn't 0.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "puts :: (s: *u8) -> s32 #foreign libc;\n"
@@ -1713,16 +1714,18 @@ TEST(interp_finds_foreign_procedures_by_address) {
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_proc(m, "strlen"), 1);
     Interp *in = interp_new(m);
-    CHECK_EQ(interp_c_function_at(in, 1), -1);
+    CHECK_EQ(interp_c_function_at(in, 1, 0), -1);
     Interp_Result r = {};
     interp_test_run(in, m, "get", &a, &r);
     CHECK(r.ok);
     CHECK_EQ(r.results.count, 1);
     if (r.results.count == 1) {
         u64 address = r.results[0];
-        CHECK_EQ(interp_c_function_at(in, address), interp_test_proc(m, "strlen"));
-        CHECK_EQ(interp_c_function_at(in, address + 1), -1);
-        CHECK_EQ(interp_c_function_at(in, 0), -1);
+        CHECK_EQ(interp_c_function_at(in, address, 0), interp_test_proc(m, "strlen"));
+        CHECK_EQ(interp_c_function_at(in, address, interp_test_proc(m, "strlen")), interp_test_proc(m, "strlen"));
+        CHECK_EQ(interp_c_function_at(in, address, interp_test_proc(m, "strlen") + 1), -1);
+        CHECK_EQ(interp_c_function_at(in, address + 1, 0), -1);
+        CHECK_EQ(interp_c_function_at(in, 0, 0), -1);
     }
     interp_test_free(&r);
     interp_free(in);

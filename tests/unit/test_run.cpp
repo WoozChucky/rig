@@ -8,19 +8,23 @@
 
 TEST(run_bakes_numbers) {
     // A #run's result is a typed constant of its operand's type: an integer
-    // sign-extended by its own type, a float32 as the double holding its
-    // value, a bool 1 or 0. One sizes an array, and folds with what's
-    // around it.
+    // sign-extended from its own type's width, an unsigned one never, its
+    // high bit set or not, a float32 as the double holding its value, a
+    // bool 1 or 0. One sizes an array, and folds with what's around it.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "limit :: () -> int { n := 0; for 1..10 { n += it; } return n; }\n"
                           "neg :: () -> s8 { return -3; }\n"
+                          "wide :: () -> s32 { return -70000; }\n"
+                          "byte :: () -> u8 { return 200; }\n"
                           "big :: () -> u64 { return 18446744073709551615; }\n"
                           "half :: () -> float32 { return 0.5; }\n"
                           "third :: () -> float64 { return 1.0 / 3.0; }\n"
                           "yes :: () -> bool { return 3 > 2; }\n"
                           "LIMIT :: #run limit();\n"
                           "NEG :: #run neg();\n"
+                          "WIDE :: #run wide();\n"
+                          "BYTE :: #run byte();\n"
                           "BIG :: #run big();\n"
                           "HALF :: #run half();\n"
                           "THIRD :: #run third();\n"
@@ -36,6 +40,8 @@ TEST(run_bakes_numbers) {
     Expected expected[] = {
         {"LIMIT", 55, "int"},
         {"NEG", (u64)(s64)-3, "s8"},
+        {"WIDE", (u64)(s64)-70000, "s32"},
+        {"BYTE", 200, "u8"},
         {"BIG", UINT64_MAX, "u64"},
         {"HALF", f64_bits(0.5), "float32"},
         {"THIRD", f64_bits(1.0 / 3.0), "float64"},
@@ -80,6 +86,41 @@ TEST(run_bakes_procedure_values) {
     CHECK_EQ(call->kind, AST_CALL);
     CHECK(((Ast_Call *)call)->proc == add);
     token_list_free(c.list);
+    arena_free(&a);
+}
+
+#ifndef _WIN32
+TEST(run_bakes_the_foreign_procedure_it_gave) {
+    // Two foreign procedures may name one C function: glibc's index is
+    // strchr. A value of that function is baked as the procedure of the
+    // run's type, so a constant names it as it may name the written one,
+    // though the interpreter found the other first.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "strchr :: (s: *u8, c: s32) -> *u8 #foreign libc;\n"
+                          "index :: (s: *u8, c: s32) -> *void #foreign libc;\n"
+                          "use :: () -> int { p := strchr(\"ab\", 98); return 1; }\n"
+                          "X :: #run use();\n"
+                          "pick :: () -> (s: *u8, c: s32) -> *void #c_call { return index; }\n"
+                          "P :: #run pick();\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    CHECK(((Ast_Const *)global_named(&c, "P"))->proc == c.file->procs[1]);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+#endif
+
+TEST(run_refuses_procedure_values_of_no_procedure) {
+    // A procedure value made from an integer is no procedure's: it is
+    // refused as a pointer is, and what uses it says nothing more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "bad :: () -> (a: int) -> int { p := cast(*void) 12345; return cast((a: int) -> int) p; }\n"
+                           "P :: #run bad();\n"
+                           "Q :: P;\n"
+                           "main :: () { n := P(1); }\n"),
+              "2:6: #run's result holds a pointer, which can't be baked, for now\n");
     arena_free(&a);
 }
 
@@ -172,5 +213,33 @@ TEST(run_failure_says_nothing_more) {
                            "main :: () { }\n"),
               joined(&a, failed_fail_at(&a, "2:6"), failed_fail_at(&a, "4:11"), failed_fail_at(&a, "5:6"),
                      failed_fail_at(&a, "6:10")));
+    arena_free(&a);
+}
+
+TEST(run_overflowing_the_stack_shows_some_calls) {
+    // A recursion that never ends overflows the interpreter's stack with a
+    // frame a level, tens of thousands of them: the failure shows the
+    // innermost ten and the outermost ten, and how many calls are between,
+    // a count that depends on a frame's size (N here).
+    Arena a = arena_make();
+    String text = check_source(&a,
+                               "deep :: (n: int) -> int { return deep(n + 1) + 1; }\n"
+                               "D :: #run deep(0);\n"
+                               "main :: () { }\n");
+    s64 count_at = index_of(text, "    ... ") + 8;
+    s64 count_end = index_of(text, " more calls\n");
+    CHECK(count_at >= 8 && count_end > count_at);
+    if (count_at >= 8 && count_end > count_at) {
+        for (s64 i = count_at; i < count_end; i++) CHECK(text.data[i] >= '0' && text.data[i] <= '9');
+        String after = string_slice(text, count_end, text.count - count_end);
+        text = string_printf(&a, "%.*sN" STR_FMT, (int)count_at, (const char *)text.data, STR_ARG(after));
+    }
+    String expected = string_printf(&a, "2:6: #run failed: runtime error: stack overflow\n");
+    for (s32 i = 0; i < 19; i++) {
+        if (i == 10) expected = string_printf(&a, STR_FMT "    ... N more calls\n", STR_ARG(expected));
+        expected = string_printf(&a, STR_FMT "    in deep (test.rig:1:27)\n", STR_ARG(expected));
+    }
+    expected = string_printf(&a, STR_FMT "    in #run (test.rig:2:6)\n", STR_ARG(expected));
+    CHECK_STR(text, string_cstr(&a, expected));
     arena_free(&a);
 }

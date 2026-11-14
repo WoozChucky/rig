@@ -933,10 +933,10 @@ s32 interp_proc_at(Interp *in, u64 address) {
     return (s32)k;
 }
 
-s32 interp_c_function_at(Interp *in, u64 address) {
+s32 interp_c_function_at(Interp *in, u64 address, s32 from) {
     // A procedure not found yet is null here, which no address matches.
     if (address == 0) return -1;
-    for (s64 k = 0; k < in->c_functions.count; k++) {
+    for (s64 k = from; k < in->c_functions.count; k++) {
         if ((u64)in->c_functions[k] == address) return (s32)k;
     }
     return -1;
