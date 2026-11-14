@@ -1310,6 +1310,7 @@ static const Command_Case CHECK_CASES[] = {
      1,
      "rig: error: cannot read 'tests/missing.rig': "},
     {"--stdin-for with no name", {"check", "tests/run/load_runtime_error.rig", "--stdin-for"}, 2, "usage: "},
+    {"--stdin-for without a main file", {"check", "--stdin-for", "tests/run/load/divide.rig"}, 2, "usage: "},
     {"--stdin-for with an empty name",
      {"check", "tests/run/load_runtime_error.rig", "--stdin-for", ""},
      2,
