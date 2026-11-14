@@ -3818,9 +3818,9 @@ TEST(string_doesnt_become_a_c_string) {
 
 TEST(string_members_and_index) {
     // A string is a view of u8: .count an int and .data a *u8, places when
-    // the string is one; s[i] a u8, always a place (the bytes lie
-    // elsewhere, as a view's elements do); for s gives each byte, for * s a
-    // pointer to each.
+    // the string is one; s[i] a u8, a place unless the string is part of a
+    // constant (the bytes lie elsewhere, as a view's elements do); for s
+    // gives each byte, for * s a pointer to each.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "f :: (s: string) {\n"
@@ -5012,8 +5012,8 @@ TEST(constant_data_folds) {
     // too, and so is an element of an array left out, and a string left out
     // has no bytes, its .count 0. So a constant can name one and size an
     // array. An aggregate part, even one left out, isn't a number; nor is a
-    // pointer or a procedure inside data, and an element at an index known
-    // only at run time is read then.
+    // pointer or a procedure inside data, and an element or a byte at an
+    // index known only at run time is read then.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "Vec2 :: struct { x: int; y: int; }\n"
@@ -5029,6 +5029,8 @@ TEST(constant_data_folds) {
                           "OPS :: Op.[.{\"+\", add}];\n"
                           "EMPTY :: Named.{n = 1};\n"
                           "BLANK :: Grid.{};\n"
+                          "C :: Named.{\"cfg\", 7};\n"
+                          "NAMES :: string.[\"ab\", \"cde\"];\n"
                           "N :: PRIMES[2];\n"
                           "NONE :: EMPTY.name.count;\n"
                           "ZERO :: BLANK.a[1];\n"
@@ -5043,6 +5045,10 @@ TEST(constant_data_folds) {
                           "    row := BLANK.rows[0];\n"
                           "    count := NAME.count;\n"
                           "    letter := NAME[1];\n"
+                          "    field_letter := C.name[1];\n"
+                          "    field_count := C.name.count;\n"
+                          "    element_letter := NAMES[1][2];\n"
+                          "    element_count := NAMES[1].count;\n"
                           "    x := ORIGIN.y;\n"
                           "    ax := LINE.a.x;\n"
                           "    by := LINE.b.y;\n"
@@ -5055,6 +5061,7 @@ TEST(constant_data_folds) {
                           "    run := OPS[0].run;\n"
                           "    i := 1;\n"
                           "    varying := PRIMES[i];\n"
+                          "    varying_letter := NAME[i];\n"
                           "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     Ast *n = global_named(&c, "N");
@@ -5074,6 +5081,10 @@ TEST(constant_data_folds) {
     CHECK_STR(type_name(&a, value_of(&c, "count")->type), "int");
     CHECK(folds_to(&c, "letter", 'i'));
     CHECK_STR(type_name(&a, value_of(&c, "letter")->type), "u8");
+    CHECK(folds_to(&c, "field_letter", 'f'));
+    CHECK(folds_to(&c, "field_count", 3));
+    CHECK(folds_to(&c, "element_letter", 'e'));
+    CHECK(folds_to(&c, "element_count", 3));
     CHECK(folds_to(&c, "x", 4));
     CHECK(folds_to(&c, "ax", 3));
     CHECK(folds_to(&c, "by", 0));
@@ -5087,6 +5098,7 @@ TEST(constant_data_folds) {
     CHECK(!value_of(&c, "symbol")->is_constant);
     CHECK(!value_of(&c, "run")->is_constant);
     CHECK(!value_of(&c, "varying")->is_constant);
+    CHECK(!value_of(&c, "varying_letter")->is_constant);
     token_list_free(c.list);
     arena_free(&a);
 }
@@ -5124,6 +5136,7 @@ TEST(constant_parts_arent_places) {
                            "    C.text[0] = 65;\n"
                            "    t := NAME.data;\n"
                            "    \"abc\"[0] = 65;\n"
+                           "    for * \"abc\" { }\n"
                            "}\n"),
               "9:5: can't assign to 'PRIMES': it's a constant\n"
               "10:5: can't assign to 'ORIGIN': it's a constant\n"
