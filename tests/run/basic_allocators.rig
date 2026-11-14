@@ -1,6 +1,6 @@
-// Basic's allocators (issue #134): the heap, an arena and a pool, each
-// given its memory by an allocator of this program's own that counts what
-// it asks its parent, the heap, to do.
+// Basic's allocators (issue #134): the heap, used directly, and an arena and
+// a pool, each given its memory by an allocator of this program's own that
+// counts what it asks the heap to do, or by one that gives nothing.
 //
 // The program also declares C's malloc itself, under C's own name, which
 // Basic leaves free to declare: Basic's own is c_malloc (issue #135).
@@ -8,14 +8,27 @@
 
 malloc :: (size: u64) -> *void #foreign libc;
 
-Counter :: struct { allocations: int; frees: int; }
+// int's largest value.
+INT_LARGEST :: 9223372036854775807;
+
+// What a counting allocator was asked to do: how many allocations and
+// frees, and how many bytes the last allocation was for.
+Counter :: struct { allocations: int; frees: int; last_size: int; }
 
 // Passes every call on to the heap, counting allocations and frees.
 counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     counter := cast(*Counter) data;
-    if mode == ALLOCATE { counter.allocations += 1; }
+    if mode == ALLOCATE {
+        counter.allocations += 1;
+        counter.last_size = size;
+    }
     if mode == FREE { counter.frees += 1; }
     return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+// Gives no memory, as a parent that has run out would.
+failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return null;
 }
 
 main :: () {
@@ -48,19 +61,32 @@ main :: () {
     print_byte(10);
     free(own, HEAP_ALLOCATOR);
 
-    // Resizing null asks the allocator to allocate, and resizing to 0 asks
-    // it to free, rather than to resize.
+    // The helpers settle the edges without asking the allocator: freeing
+    // null and allocating less than 1 byte ask it nothing.
     counter0 : Counter;
     counted := Allocator.{counting_allocator_proc, *counter0};
+    free(null, counted);
+    print_string("free of null asks nothing: ");
+    print_bool(counter0.frees == 0);
+    print_string(", alloc of -1: ");
+    print_bool(alloc(-1, counted) == null && counter0.allocations == 0);
+    print_byte(10);
+
+    // Resizing null asks the allocator to allocate, and resizing to 0 or
+    // less asks it to free, rather than to resize.
     grown := resize(null, 0, 8, counted);
     print_string("resize of null allocates: ");
     print_bool(grown != null && counter0.allocations == 1);
     print_string(", to 0 frees: ");
     print_bool(resize(grown, 8, 0, counted) == null && counter0.frees == 1);
+    again := alloc(8, counted);
+    print_string(", to -1 frees: ");
+    print_bool(resize(again, 8, -1, counted) == null && counter0.frees == 2);
     print_byte(10);
 
-    // An arena of 64-byte blocks. Each allocation starts at a multiple of 8
-    // bytes into its block, so a 10-byte one takes 16.
+    // An arena of 64-byte blocks, each asked of the parent with its 16-byte
+    // header. Each allocation starts at a multiple of 8 bytes into its
+    // block, so a 10-byte one takes 16.
     counter : Counter;
     parent := Allocator.{counting_allocator_proc, *counter};
     arena : Arena;
@@ -72,21 +98,53 @@ main :: () {
     print_int(p2 - p1);
     print_string(", parent allocations ");
     print_int(counter.allocations);
+    print_string(" of ");
+    print_int(counter.last_size);
     print_byte(10);
 
-    // 40 bytes past the 32 in use don't fit in 64, so a new block comes.
+    // 32 bytes past the 32 in use fill the block exactly.
+    p3 := cast(*u8) alloc(32, a);
+    print_string("arena exact fit: p3 - p1 = ");
+    print_int(p3 - p1);
+    print_string(", parent allocations ");
+    print_int(counter.allocations);
+    print_byte(10);
+
+    // 40 bytes don't fit in the full block, so a new block comes.
     alloc(40, a);
     print_string("arena past a block: parent allocations ");
     print_int(counter.allocations);
+    print_string(" of ");
+    print_int(counter.last_size);
     print_byte(10);
 
-    // An allocation bigger than a block gets a block of its own size.
-    big := alloc(200, a);
-    print_string("arena bigger than a block: parent allocations ");
+    // 60 bytes are in use, 4 short of the block's end, so the next
+    // allocation would start at 64, where nothing is left: a new block.
+    alloc(20, a);
+    alloc(1, a);
+    print_string("arena past a block's last 8: parent allocations ");
     print_int(counter.allocations);
     print_byte(10);
 
-    // A reset gives back the two older blocks and keeps the newest.
+    // A size near int's largest doesn't fit in what is left of the block,
+    // and a block that big, with its header, has no int size: null, with
+    // nothing asked of the parent.
+    print_string("arena alloc of int's largest: ");
+    print_bool(alloc(INT_LARGEST, a) == null && counter.allocations == 3);
+    print_byte(10);
+
+    // An allocation bigger than a block gets a block of its own size.
+    big := cast(*u8) alloc(200, a);
+    for i: 0..199 { big[i] = 42; }
+    print_string("arena bigger than a block: parent allocations ");
+    print_int(counter.allocations);
+    print_string(" of ");
+    print_int(counter.last_size);
+    print_string(", block size ");
+    print_int(arena.block.size);
+    print_byte(10);
+
+    // A reset gives back the three older blocks and keeps the newest.
     arena_reset(*arena);
     print_string("arena reset: parent frees ");
     print_int(counter.frees);
@@ -94,15 +152,24 @@ main :: () {
 
     q := alloc(8, a);
     print_string("arena reuses its block: ");
-    print_bool(q == big && counter.allocations == 3);
+    print_bool(q == big && counter.allocations == 4);
     print_byte(10);
 
     // A resize in an arena allocates anew and copies the old bytes.
-    letters := "abcdefgh";
+    letters := "abcdefghijklmnop";
     copy_memory(q, letters.data, 8);
-    r := resize(q, 8, 16, a);
+    r := cast(*u8) resize(q, 8, 16, a);
     print_string("arena resize copies: ");
     print_bool(r != q && compare_memory(r, q, 8) == 0);
+    print_byte(10);
+
+    // A resize to fewer bytes copies only those: the bytes past them, which
+    // the next allocation gets, still hold what big's filling put there.
+    copy_memory(r, letters.data, 16);
+    r2 := cast(*u8) resize(r, 16, 4, a);
+    next := cast(*u8) alloc(8, a);
+    print_string("arena resize to fewer bytes: ");
+    print_bool(compare_memory(r2, r, 4) == 0 && next - r2 == 8 && next[0] == 42);
     print_byte(10);
 
     // Freeing one allocation does nothing; free_all gives back the block.
@@ -117,11 +184,34 @@ main :: () {
     print_int(counter.allocations);
     print_byte(10);
 
+    // free_all gives back every block, not only the newest.
+    alloc(60, a);
+    alloc(60, a);
     free_all(a);
     print_string("arena: allocations ");
     print_int(counter.allocations);
     print_string(", frees ");
     print_int(counter.frees);
+    print_byte(10);
+
+    // A block_size of 0 means 4096.
+    counter3 : Counter;
+    arena3 : Arena;
+    arena_init(*arena3, 0, Allocator.{counting_allocator_proc, *counter3});
+    alloc(1, arena_allocator(*arena3));
+    print_string("arena of block size 0: ");
+    print_int(arena3.block_size);
+    print_string(", parent asked for ");
+    print_int(counter3.last_size);
+    print_byte(10);
+    free_all(arena_allocator(*arena3));
+
+    // A parent's null is passed on, and the arena takes no block.
+    failing := Allocator.{failing_allocator_proc, null};
+    arena4 : Arena;
+    arena_init(*arena4, 64, failing);
+    print_string("arena on a failing parent: ");
+    print_bool(alloc(8, arena_allocator(*arena4)) == null && arena4.block == null);
     print_byte(10);
 
     // A pool of three slots of 20 bytes, rounded up to 24.
@@ -164,13 +254,51 @@ main :: () {
     print_bool(resize(s5, 24, 25, pa) == null);
     print_byte(10);
 
-    // free_all gives the slots' memory back, and the pool can be used again.
+    // The slot freed last is handed out first.
+    free(s1, pa);
+    free(s3, pa);
+    print_string("pool hands out the last freed: ");
+    print_bool(alloc(8, pa) == s3);
+    print_byte(10);
+
+    // free_all gives the slots' memory back, with s1 still on the free
+    // list, and the pool can be used again: its three new slots, in address
+    // order, and no fourth.
     free_all(pa);
-    alloc(4, pa);
+    t1 := cast(*u8) alloc(4, pa);
+    t2 := cast(*u8) alloc(4, pa);
+    t3 := cast(*u8) alloc(4, pa);
+    print_string("pool after free_all: ");
+    print_bool(t2 - t1 == 24 && t3 - t2 == 24 && alloc(8, pa) == null);
+    print_byte(10);
     free_all(pa);
     print_string("pool: allocations ");
     print_int(counter2.allocations);
     print_string(", frees ");
     print_int(counter2.frees);
+    print_byte(10);
+
+    // A slot_size of 0 is raised to hold a free slot's link: 8 bytes.
+    pool0 : Pool;
+    pool_init(*pool0, 0, 2, HEAP_ALLOCATOR);
+    print_string("pool of slot size 0: ");
+    print_int(pool0.slot_size);
+    print_string(", allocates: ");
+    print_bool(alloc(8, pool_allocator(*pool0)) != null);
+    print_byte(10);
+    free_all(pool_allocator(*pool0));
+
+    // 2^61 + 1 slots of 8 bytes have no int size, so nothing is allocated.
+    huge : Pool;
+    pool_init(*huge, 8, 2305843009213693953, HEAP_ALLOCATOR);
+    print_string("pool too big for an int: ");
+    print_bool(alloc(8, pool_allocator(*huge)) == null);
+    print_byte(10);
+
+    // A parent's null is passed on, and the pool takes no memory.
+    pool4 : Pool;
+    pool_init(*pool4, 8, 2, failing);
+    print_string("pool on a failing parent: ");
+    print_bool(alloc(8, pool_allocator(*pool4)) == null && pool4.memory == null);
     print_byte(10);
 }
