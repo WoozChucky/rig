@@ -91,7 +91,7 @@ A compile-time error is named by its message, in code type: an assignment to a c
 
 Some terms used throughout:
 
-- A **constant** is a value known while compiling: a literal, a named constant, or an expression made only of constants (section 5.9). It may be **constant data**: a string, or a struct or an array made only of constants (sections 4.2, 5.9).
+- A **constant** is a value known while compiling: a literal, a named constant, or an expression made only of constants (section 5.9). It may be **constant data**: a string, or a struct or an array whose fields and elements are known while compiling (sections 4.2, 5.9).
 - An **untyped constant** is a numeric constant that has not yet met a type (section 3.12).
 - A **place** is an expression that denotes memory: it can be assigned to and has an address (section 5.1).
 - A **sequence** is an array, a view or a string: what can be indexed with bounds checks and gone over with `for` (sections 5.11, 6.8).
@@ -620,7 +620,7 @@ ConstDecl = identifier "::" Expression ";" .
 `N :: e;` declares the constant `N` with the value of `e`, which must be known while compiling (section 5.9). A constant holds one of these:
 
 - a number or a `bool`;
-- a pointer: `null`, or a string literal's address (`GREETING :: cast(*u8) "hi";`);
+- a pointer: `null`, or a string literal's address (`GREETING :: cast(*u8) "hi";`, or `NAME.data` for a string constant `NAME`);
 - a procedure (below);
 - data: a string (`NAME :: "rig";`), or a struct or an array (`ORIGIN :: Vec2.{3, 4};`, `PRIMES :: int.[2, 3, 5, 7, 11];`) whose fields and elements hold these in turn, nested to any depth: numbers, `bool`s, pointers as above, procedure values, strings, structs and arrays. It is written as a literal of such values, as another constant holding data, or as a part of one (`COPY :: PRIMES;`, `LINE :: Line.{a = ORIGIN};`, `START :: LINE.a;`): constant data (section 5.9). A field a struct literal leaves out is zero, as in any literal (section 5.17).
 

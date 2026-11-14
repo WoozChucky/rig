@@ -312,11 +312,11 @@ static void check_var(Checker *c, Ast_Var *var) {
 // A string literal is known while compiling too, though its address isn't a
 // number the file can hold as it is: the linker fills it in (a relocation,
 // lower.cpp's constant_bytes). So a global (or a field or an element of one)
-// may be a literal as a string, a *u8, or through casts that keep the
-// address, as cast([]u8) "abc" or cast(*void) cast(*u8) "x" do
+// may be a literal as a string, a *u8, its .data, or through casts that
+// keep the address, as cast([]u8) "abc" or cast(*void) cast(*u8) "x" do
 // (literal_address); not as an integer (cast(int) cast(*u8) "hi"), which
-// would need the linker to write a number, nor a string that isn't a
-// literal. A procedure's address is the same (procedure_address): a
+// would need the linker to write a number, nor a string that holds no
+// literal's bytes (a variable's). A procedure's address is the same (procedure_address): a
 // global, a field or an element may hold a procedure, or a constant naming
 // one, as it is or cast to *void.
 //
@@ -345,10 +345,44 @@ static void check_global_var(Checker *c, Ast_Var *var) {
     if (check_var_value(c, var)) check_global_value(c, var->value);
 }
 
+// Whether e is known while compiling, as a literal's value of constant
+// data must be (constant_data).
+static bool is_known(Ast *e) {
+    Ast *data;
+    return e->is_constant || procedure_address(e) || literal_address(e) || constant_data(e, &data);
+}
+
+// The first value inside e, which isn't known while compiling, that isn't
+// either: through a cast, a field's struct, an element's array or string,
+// and a literal's values, to the first that isn't (spec 4.2), so in
+// cast(Holder) Holder.{n = count} or int.[1, count][0] it's count. e
+// itself when none of them is: what it's made of is known, but not it.
+// Null for a value with no type, whose own error was reported.
+static Ast *unknown_part(Ast *e) {
+    for (;;) {
+        if (!e->type) return nullptr;
+        Ast *inner = nullptr;
+        if (e->kind == AST_CAST) inner = ((Ast_Cast *)e)->value;
+        if (e->kind == AST_MEMBER) inner = ((Ast_Member *)e)->operand;
+        if (e->kind == AST_INDEX) inner = ((Ast_Index *)e)->operand;
+        if (e->kind == AST_LITERAL) {
+            Ast_Literal *literal = (Ast_Literal *)e;
+            for (s64 i = 0; i < literal->values.count && !inner; i++) {
+                if (!is_known(literal->values[i])) inner = literal->values[i];
+            }
+        }
+        if (!inner || is_known(inner)) return e;
+        e = inner;
+    }
+}
+
 // "the value of constant 'N' isn't known while compiling", at `value`, the
-// constant's own value or the first value inside it that isn't.
+// constant's own value or a value inside it, or at the first value inside
+// that isn't (unknown_part).
 static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value) {
-    diag_error(c->diag, value->start, "the value of constant '" STR_FMT "' isn't known while compiling",
+    Ast *part = unknown_part(value);
+    if (!part) return;
+    diag_error(c->diag, part->start, "the value of constant '" STR_FMT "' isn't known while compiling",
                STR_ARG(constant->name));
 }
 

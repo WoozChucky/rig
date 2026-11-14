@@ -4,7 +4,8 @@
 // writable copy of its own (a view global's array too), so writing one
 // leaves the constant as it was, read again at run time. A view global
 // given a view that is a part of constant data sees the array holding it,
-// or none, the empty view, for one a literal leaves out.
+// or none, the empty view, for one a literal leaves out. A string
+// constant's .data is its literal's address, as a constant and a global.
 printf :: (format: *u8, ..) -> s32 #foreign libc;
 puts :: (s: *u8) -> s32 #foreign libc;
 
@@ -25,6 +26,7 @@ OP :: OPS[2].run;
 SYMBOL :: OPS[1].symbol;
 NO_VIEW :: Holder.{n = 1};
 UNNAMED :: Named.{n = 1};
+NAME_DATA :: NAME.data;
 
 origin := ORIGIN;
 copy := PRIMES;
@@ -36,6 +38,7 @@ empty : []int = NO_VIEW.v;
 holder := Holder.{v = NO_VIEW.v, n = 2};
 nameless : []u8 = cast([]u8) UNNAMED.name;
 pair : []int = Holder.{v = int.[5, 6]}.v;
+name_data : *u8 = NAME.data;
 
 main :: () {
     for OPS { printf("6 %s 3 = %lld\n", it.symbol, it.run(6, 3)); }
@@ -58,4 +61,6 @@ main :: () {
     printf("%s %s %lld %lld\n", name, second.symbol, second.run(8, 5), op(8, 5));
     printf("%lld %lld %lld %lld\n", empty.count, holder.v.count, holder.n, nameless.count);
     printf("%lld %lld %lld\n", pair.count, pair[0], pair[1]);
+    puts(NAME_DATA);
+    puts(name_data);
 }

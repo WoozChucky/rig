@@ -503,8 +503,8 @@ Ast_Name *constant_root(Ast *e);
 // string, or where it meets a *u8), or a cast of it that keeps the address,
 // to []u8 or between pointers (cast(*void) cast(*u8) "x"), or constant data
 // holding it (constant_data: NAME for NAME :: "rig";, a *u8 field of a
-// constant, OPS[0].symbol), and casts of that; null for anything else, a
-// cast of it to an integer too. A global and a constant may hold one, its
+// constant, OPS[0].symbol), and casts of that, and the .data of any of
+// them (NAME.data); null for anything else, a cast of it to an integer too. A global and a constant may hold one, its
 // address written there by the linker: the checker asks this to allow it,
 // and where a string converts to a *u8 as a literal does; lowering, to
 // write it (constant_bytes).
