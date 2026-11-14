@@ -1249,7 +1249,7 @@ check('the commands do nothing in an untrusted workspace but say so', async () =
 
 check('activate listens to the documents for the live check', () => {
     loadExtension();
-    for (const event of ['open', 'change', 'save', 'close', 'configuration']) {
+    for (const event of ['open', 'change', 'save', 'close', 'configuration', 'folders', 'fsCreate', 'fsChange', 'fsDelete']) {
         assert.ok((activated.listeners[event] || []).length > 0, `no listener for ${event}`);
     }
     assert.ok(activated.collections.rig, "no diagnostic collection 'rig'");
@@ -1290,8 +1290,11 @@ check('the tasks use $rig-runtime while rig.check is on, $rig when it is off', (
 //
 // Except for that doesn't-load answer, which is its line alone as rig's is,
 // it adds a warning about another file. Either way it answers slowly if
-// stdin's text says `slow`. The documents are stand-ins too, never saved:
-// what's checked is their text.
+// stdin's text says `slow`. When there's a file named old-rig where it runs,
+// it's a rig from before --stdin-for instead: given that option, it answers
+// at once, without reading stdin, with that rig's usage and exit code 2, as
+// it takes the option for a second file. The documents are stand-ins too,
+// never saved: what's checked is their text.
 
 const STAND_IN = `
 const fs = require('fs');
@@ -1315,9 +1318,20 @@ function report(text, name) {
 }
 
 let text = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (s) => (text += s));
-process.stdin.on('end', () => {
+if (args[1] === '--stdin-for' && fs.existsSync('old-rig')) {
+    process.stderr.write(
+        'usage: rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]\\n' +
+            '       rig check FILE.rig [--stdin]\\n' +
+            '       rig version [--verbose]\\n',
+    );
+    process.exitCode = 2;
+} else {
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (s) => (text += s));
+    process.stdin.on('end', answer);
+}
+
+function answer() {
     setTimeout(() => {
         let errors = 0;
         if (args[1] === '--stdin-for') {
@@ -1343,7 +1357,7 @@ process.stdin.on('end', () => {
         process.stderr.write('other.rig:1:1: warning: not this file\\n');
         process.exitCode = errors ? 1 : 0;
     }, text.includes('slow') ? 1500 : 0);
-});
+}
 `;
 
 // The command lines the stand-in compiler was started with in `dir`, in
@@ -1897,8 +1911,9 @@ check('a compiler Node can\'t start ends the search at the first main file', asy
     });
 });
 
-// When VS Code can't search the folder, the document is checked alone; a
-// file it can't read isn't a main file to try, as rig couldn't read it.
+// When VS Code can't search the folder, the document is checked alone, and
+// searched for again next time; a file it can't read isn't a main file to
+// try, as rig couldn't read it.
 check('a folder VS Code can\'t search, or a file it can\'t read, is no main file to try', async () => {
     loadExtension();
     const { findFiles, fs: files } = vscodeStub.workspace;
@@ -1916,7 +1931,15 @@ check('a folder VS Code can\'t search, or a file it can\'t read, is no main file
             assert.deepStrictEqual(unsearched.calls, [[file, '--stdin']]);
             assert.deepStrictEqual(unsearched.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
 
+            // That the folder couldn't be searched isn't remembered as no
+            // program loading the document: its next check searches.
             vscodeStub.workspace.findFiles = findFiles;
+            const searched = await checked(dir, doc, 'change', { document: doc, contentChanges: [{}] });
+            assert.deepStrictEqual(searched.calls, [
+                [path.join(dir, 'a.rig'), '--stdin-for', file],
+                [path.join(dir, 'b.rig'), '--stdin-for', file],
+            ]);
+
             files.readFile = (uri) =>
                 path.basename(uri.fsPath) === 'b.rig' ? Promise.reject(new Error('unreadable')) : readFile(uri);
             const unread = await checked(dir, doc, 'save');
@@ -2094,6 +2117,200 @@ check('disposing of the live check stops a search', async () => {
             // The first activation's collection is the one the other checks read.
             activated.collections.rig = collection;
         }
+    });
+});
+
+// The main file found for a document is remembered, so a change of the
+// document runs one rig, not the search. It's forgotten, and searched for
+// again, when what the search saw may have changed: a .rig file of the
+// folder created, changed or deleted (the file system watcher's events, an
+// edit outside VS Code among them) or saved, or the workspace folders
+// changing, which checks the open documents again at once. A remembered
+// main file whose program no longer loads the document, changed with no
+// event, is dropped, and the search goes on without it.
+check('a document\'s program is remembered until a .rig file in its folder is created, changed, deleted or saved, or the folders change', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        const rig = (name) => path.join(dir, name);
+        const through = (name) => [rig(name), '--stdin-for', file];
+        const change = { document: doc, contentChanges: [{}] };
+        const loader = '#load "helper.rig";\nmain :: () {}\n';
+        fs.writeFileSync(rig('a.rig'), 'main :: () {}\n');
+        fs.writeFileSync(rig('b.rig'), loader);
+
+        const opened = await checked(dir, doc, 'open');
+        assert.deepStrictEqual(opened.calls, [through('a.rig'), through('b.rig')], 'on opening');
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('b.rig')], 'remembered');
+        // Closing the document forgets its program.
+        fire('close', doc);
+        assert.deepStrictEqual((await checked(dir, doc, 'open')).calls, [through('a.rig'), through('b.rig')], 'reopened');
+
+        fs.writeFileSync(rig('a0.rig'), loader);
+        fire('fsCreate', fileUri(rig('a0.rig')));
+        assert.deepStrictEqual(
+            (await checked(dir, doc, 'change', change)).calls,
+            [through('a.rig'), through('a0.rig')],
+            'after a file is created',
+        );
+
+        // Saving a.rig checks it too, alone, as it declares main, and checks
+        // the document again at once.
+        fs.writeFileSync(rig('a.rig'), loader);
+        const saved = fakeDocument(rig('a.rig'), loader);
+        const before = calls(dir).length;
+        const onSave = await checked(dir, doc, 'save', saved);
+        assert.deepStrictEqual(onSave.calls.filter((c) => c[1] === '--stdin-for'), [through('a.rig')], 'after a file is saved');
+        await until('the check of a.rig', () => live.has(saved.uri.toString()));
+        assert.strictEqual(calls(dir).slice(before).length, 2, 'after a file is saved');
+        fire('close', saved);
+
+        fs.rmSync(rig('a.rig'));
+        fire('fsDelete', fileUri(rig('a.rig')));
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('a0.rig')], 'after a file is deleted');
+
+        fs.writeFileSync(rig('a0.rig'), 'main :: () {}\n');
+        assert.deepStrictEqual(
+            (await checked(dir, doc, 'change', change)).calls,
+            [through('a0.rig'), through('b.rig')],
+            'after the remembered file stops loading the document',
+        );
+
+        fs.writeFileSync(rig('a.rig'), loader);
+        fire('fsChange', fileUri(rig('a.rig')));
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('a.rig')], 'after a file changes');
+
+        fs.writeFileSync(rig('0.rig'), loader);
+        assert.deepStrictEqual(
+            (await checked(dir, doc, 'folders', { added: [], removed: [] })).calls,
+            [through('0.rig')],
+            'after the folders change',
+        );
+        assert.deepStrictEqual(stub.errors, []);
+    });
+});
+
+// rig.main may name a file in no workspace folder, whose changes the file
+// system watcher doesn't see. Saving it forgets every program, so a
+// document no program loaded, and so checked alone, is found to be part of
+// rig.main's program once that #loads it.
+check('saving a rig.main in no folder forgets the programs', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-vscode-check-'));
+    try {
+        await withStandIn(async (dir) => {
+            // The stand-in for the check of the saved file, which runs in
+            // its directory.
+            fs.writeFileSync(path.join(outside, 'check.js'), STAND_IN);
+            const file = path.join(dir, 'helper.rig');
+            const doc = fakeDocument(file, 'putz();\n');
+            stub.document = doc;
+            const main = path.join(outside, 'm.rig');
+            fs.writeFileSync(main, 'main :: () {}\n');
+            stub.mains[dir] = main;
+            const through = [main, '--stdin-for', file];
+            const alone = [file, '--stdin'];
+            const change = { document: doc, contentChanges: [{}] };
+            assert.deepStrictEqual((await checked(dir, doc, 'open')).calls, [through, alone], 'on opening');
+            assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [alone], 'remembered');
+
+            const loader = `#load "${path.relative(outside, file).split(path.sep).join('/')}";\nmain :: () {}\n`;
+            fs.writeFileSync(main, loader);
+            const saved = fakeDocument(main, loader);
+            fire('save', saved);
+            await until('the check of m.rig', () => live.has(saved.uri.toString()));
+            fire('close', saved);
+            assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through], 'after m.rig is saved');
+            assert.deepStrictEqual(stub.errors, []);
+        });
+    } finally {
+        fs.rmSync(outside, { recursive: true, force: true });
+    }
+});
+
+// Saving a file may change the program of every open document of its
+// folder, so they're all checked again, not only the one saved, and their
+// programs searched for again. Here the saved main file's error goes from
+// the count of the program's other files' errors on the loaded document,
+// and lone.rig, which no program loads, is searched for again.
+check('saving a .rig file re-checks the other open documents of its folder', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'helper.rig');
+        const lone = path.join(dir, 'lone.rig');
+        const b = path.join(dir, 'b.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        const loneDoc = fakeDocument(lone, 'putz();\n');
+        fs.writeFileSync(b, '#load "helper.rig";\nmain :: () { putz(); }\n');
+        stub.document = doc;
+        stub.documents = [loneDoc];
+        fire('open', loneDoc);
+        const opened = await checked(dir, doc, 'open');
+        assert.deepStrictEqual(opened.diagnostics, [
+            [0, 0, "unknown identifier 'putz'"],
+            [0, 0, "an error in another file of the program: b.rig:2:14: unknown identifier 'putz'"],
+        ]);
+        await until('the check of lone.rig', () => live.has(loneDoc.uri.toString()));
+
+        const fixed = '#load "helper.rig";\nmain :: () {}\n';
+        fs.writeFileSync(b, fixed);
+        const saved = fakeDocument(b, fixed);
+        stub.documents.push(saved);
+        live.delete(loneDoc.uri.toString());
+        const before = calls(dir).length;
+        const onSave = await checked(dir, doc, 'save', saved);
+        assert.deepStrictEqual(onSave.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
+        await until('the check of lone.rig', () => live.has(loneDoc.uri.toString()));
+        await until('the check of b.rig', () => live.has(saved.uri.toString()));
+        const sorted = (list) => list.map((c) => JSON.stringify(c)).sort();
+        assert.deepStrictEqual(
+            sorted(calls(dir).slice(before)),
+            sorted([
+                [b, '--stdin'],
+                [b, '--stdin-for', file],
+                [b, '--stdin-for', lone],
+                [lone, '--stdin'],
+            ]),
+        );
+        assert.deepStrictEqual(stub.errors, []);
+    });
+});
+
+// A rig from before --stdin-for answers it with its usage: the document is
+// then checked alone, as it was before, which is better than nothing, and
+// the rig is said to be too old once, with the button to rig.compilerPath.
+// A new compiler may be too old as well, and is said to be again. Nothing
+// is remembered, so a rig updated in place is used at once.
+check('a rig too old for --stdin-for is said once, and the file is checked alone', async () => {
+    loadExtension();
+    await withStandIn(async (dir) => {
+        fs.writeFileSync(path.join(dir, 'old-rig'), '');
+        const b = path.join(dir, 'b.rig');
+        fs.writeFileSync(b, '#load "helper.rig";\nmain :: () {}\n');
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        stub.answers = ['Open Settings'];
+        const old = [[b, '--stdin-for', file], [file, '--stdin']];
+        for (const event of ['open', 'save']) {
+            const result = await checked(dir, doc, event);
+            assert.deepStrictEqual(result.calls, old, event);
+            assert.deepStrictEqual(result.diagnostics, [[0, 0, "unknown identifier 'putz'"]], event);
+        }
+        const message = 'Rig: this rig is too old to check a loaded file as part of its program; update it.';
+        assert.deepStrictEqual(stub.errors, [message]);
+        assert.match(stub.errors[0], /too old to check a loaded file/);
+        await until('the button\'s command', () => stub.commands.length > 0);
+        assert.deepStrictEqual(stub.commands, [['workbench.action.openSettings', 'rig.compilerPath']]);
+
+        const compilerChanged = { affectsConfiguration: (section) => section === 'rig.compilerPath' || section === 'rig' };
+        assert.deepStrictEqual((await checked(dir, doc, 'configuration', compilerChanged)).calls, old);
+        assert.deepStrictEqual(stub.errors, [message, message]);
     });
 });
 
