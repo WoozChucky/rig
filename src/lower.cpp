@@ -2006,10 +2006,11 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
         }
         break;
     }
-    // Nothing here: a number's uses are constants already, a procedure's its
-    // address, a pointer's its literal's str.N (literal_global), and so are
-    // a string's uses met as a *u8; data's const.N is made where a use first
-    // reads its bytes (constant_global).
+    // Nothing here: a number's, a bool's or a null pointer's uses are
+    // constants already, a procedure's its address, a pointer to a literal's
+    // that literal's str.N (literal_global), and so are a string's uses met
+    // as a *u8; data's const.N is made where a use first reads its bytes
+    // (constant_global).
     case AST_CONST: break;
     case AST_MULTI_VAR: lower_multi_var(l, (Ast_Multi_Var *)s); break;
     case AST_ASSIGN: {

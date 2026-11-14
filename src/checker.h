@@ -297,7 +297,7 @@
 // - A struct larger than any type may be, 2^40 bytes (TYPE_MAX_SIZE), is
 //   "'Huge' is too big", at its name.
 //
-// Arrays and views (spec 6.5, Jai's).
+// Arrays and views (spec 3.6 and 3.7, Jai's).
 // - [N]T is N T's one after another; N is an integer known while compiling,
 //   from 0 up: "an array's count must be an integer, not 'float32'", "an
 //   array's count must be known while compiling", "an array's count can't
@@ -364,7 +364,7 @@
 //   take a '[3]int'; pass its .data", and returns none ("... can't return a
 //   '[]int' yet").
 //
-// Strings (spec 6.5).
+// Strings (spec 3.8).
 // - string is a view of bytes, laid out as []u8, { count: int; data: *u8; },
 //   not ended by a zero. A string literal is one, its count the bytes
 //   without the zero after them (x := "hi"; x.count is 2). .count and .data,
@@ -375,10 +375,11 @@
 // - A string literal converts to *u8, its bytes being known to end with a
 //   zero, and so does constant data holding one, a constant or a string
 //   field or element of one (NAME for `NAME :: "rig";`, NAMED.name,
-//   NAMES[1]): is_literal_string. No other string does, a cast of a literal
-//   included, since its bytes may go on past its count: "a value of type
-//   'string' doesn't convert to '*u8' implicitly; its .data may not end
-//   with a zero" (an argument's message ends the same way).
+//   NAMES[1]): is_literal_string. No other string does, its bytes possibly
+//   going on past its count; nor does a cast of a literal, a string like
+//   any other (spec 3.8): "a value of type 'string' doesn't convert to
+//   '*u8' implicitly; its .data may not end with a zero" (an argument's
+//   message ends the same way).
 // - == and != compare two strings by their bytes; a string meets no other
 //   type ("mismatched types 'string' and '*u8' for '=='"), and has no order
 //   or arithmetic ("'<' needs numbers, not 'string'").
