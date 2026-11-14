@@ -40,6 +40,10 @@ make_point :: () -> Point {
 }
 #run say();
 #run make_point();
+// Constants, whose runs have nothing to do.
+#run 1 + 2;
+#run SECOND;
+#run "text";
 #run {
     if counter > 0 {
         puts("return ends a block's run");

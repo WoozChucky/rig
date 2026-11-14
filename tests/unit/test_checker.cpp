@@ -5479,6 +5479,7 @@ TEST(run_has_its_operands_type) {
     CHECK_EQ(run->kind, AST_RUN);
     CHECK(run->is_constant);
     CHECK_EQ(run->constant, 5u);
+    CHECK(((Ast_Run *)run)->value == ((Ast_Run *)run)->operand);
     CHECK_STR(type_of(&a, &c, "a"), "int");
     CHECK_STR(type_of(&a, &c, "b"), "float32");
     CHECK(value_of(&c, "b")->is_constant);
@@ -5490,6 +5491,13 @@ TEST(run_has_its_operands_type) {
     CHECK_STR(type_of(&a, &c, "d"), "int");
     CHECK(value_of(&c, "d")->is_constant);
     CHECK_EQ(value_of(&c, "d")->constant, 10u);
+    // #run binds as a unary operator does: d is (#run (2 + 3)) * 2.
+    Ast *product = value_of(&c, "d");
+    CHECK_EQ(product->kind, AST_BINARY);
+    if (product->kind == AST_BINARY) {
+        Ast_Run *folded = (Ast_Run *)((Ast_Binary *)product)->left;
+        CHECK(folded->kind == AST_RUN && folded->value == folded->operand);
+    }
     CHECK_STR(type_of(&a, &c, "e"), "int");
     Ast *call = value_of(&c, "e");
     CHECK_EQ(call->kind, AST_RUN);
@@ -5514,6 +5522,19 @@ TEST(run_in_a_body_must_be_a_value) {
                            "    x := #run f();\n"
                            "}\n"),
               "3:5: #run in a body must be a value, as in x := #run f();\n");
+    arena_free(&a);
+}
+
+TEST(run_of_a_call_that_returns_nothing) {
+    // A #run's operand is a value: a call that returns nothing has none,
+    // and says so, as anywhere a value is needed. The #run runs nothing.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "setup :: () { }\n"
+                           "N :: #run setup();\n"
+                           "main :: () { x := #run setup(); }\n"),
+              "2:11: 'setup' returns nothing, so it has no value\n"
+              "3:24: 'setup' returns nothing, so it has no value\n");
     arena_free(&a);
 }
 

@@ -125,9 +125,15 @@ TEST(run_bakes_the_foreign_procedure_it_gave) {
                           "X :: #run use();\n"
                           "pick :: () -> (s: *u8, c: s32) -> *void #c_call { return index; }\n"
                           "P :: #run pick();\n"
+                          "both :: () -> bool { return cast(*void) strchr == cast(*void) index; }\n"
+                          "SAME :: #run both();\n"
                           "main :: () { }\n");
     CHECK_STR(sorted_messages(&a, &c), "");
     CHECK(((Ast_Const *)global_named(&c, "P"))->proc == c.file->procs[1]);
+    // The case this test is for: should the C library stop making index
+    // strchr, it fails here rather than passing without testing anything.
+    Ast *same = global_named(&c, "SAME");
+    CHECK(same->is_constant && same->constant == 1);
     token_list_free(c.list);
     arena_free(&a);
 }
@@ -657,6 +663,130 @@ TEST(run_baked_views_pass_from_constant_to_constant) {
     CHECK_EQ(items ? items->values.count : 0, 3);
     for (s64 i = 0; items && i < items->values.count && i < 3; i++) {
         CHECK(is_number(&a, items->values[i], (u64)i + 1, "int"));
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(run_bakes_a_calls_first_result) {
+    // A call's value is its first result, so a #run of a procedure with
+    // several is that one: a number, or a struct copied through its hidden
+    // pointer.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Point :: struct { x: int; y: int; }\n"
+                          "two :: () -> (int, int) { return 7, 2; }\n"
+                          "point :: () -> (Point, int) { return .{3, 4}, 9; }\n"
+                          "M :: #run two();\n"
+                          "Q :: #run point();\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    CHECK(is_number(&a, global_named(&c, "M"), 7, "int"));
+    Ast_Literal *fields = literal_data(&a, &c, "Q", "Point");
+    CHECK_EQ(fields ? fields->values.count : 0, 2);
+    if (fields && fields->values.count == 2) {
+        CHECK(is_number(&a, fields->values[0], 3, "int"));
+        CHECK(is_number(&a, fields->values[1], 4, "int"));
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(run_reaches_every_part_of_a_body) {
+    // A #run in the declaration pass reaches bodies no turn has checked yet:
+    // each is checked as the walk meets it, wherever it's called from (an
+    // else branch, a range's ends, a loop's sequence, the value of a
+    // declaration of several variables), before the run lowers it. Each is
+    // declared after the #run, and called nowhere else.
+    Arena a = arena_make();
+    const char *program = "N :: #run f();\n"
+                          "f :: () -> int {\n"
+                          "    x := 0;\n"
+                          "    if x > 0 { x = 1; } else { x = g(); }\n"
+                          "    for lo()..hi() { x += it; }\n"
+                          "    for s() { x += it; }\n"
+                          "    a, b := h();\n"
+                          "    return x + a + b;\n"
+                          "}\n"
+                          "g :: () -> int { return %s; }\n"
+                          "lo :: () -> int { return %s; }\n"
+                          "hi :: () -> int { return %s; }\n"
+                          "store : [2]int;\n"
+                          "s :: () -> []int { store[0] = 10; store[1] = 20; return %s; }\n"
+                          "h :: () -> (int, int) { return %s; }\n"
+                          "main :: () { }\n";
+    const char *values[] = {"2", "1", "3", "store", "100, 200"};
+    Checked c = check_src(&a, string_cstr(&a, string_printf(&a, program, values[0], values[1], values[2], values[3],
+                                                            values[4])));
+    CHECK_STR(sorted_messages(&a, &c), "");
+    // 2, then 1 + 2 + 3, then 10 + 20, then 100 + 200.
+    CHECK(is_number(&a, global_named(&c, "N"), 338, "int"));
+    token_list_free(c.list);
+    // An error in any of them stops the run, which says nothing more.
+    for (s64 i = 0; i < 5; i++) {
+        const char *with[5];
+        for (s64 k = 0; k < 5; k++) with[k] = k == i ? "oops" : values[k];
+        c = check_src(&a, string_cstr(&a, string_printf(&a, program, with[0], with[1], with[2], with[3], with[4])));
+        String said = sorted_messages(&a, &c);
+        CHECK(contains(said, "unknown identifier 'oops'"));
+        CHECK(!contains(said, "#run"));
+        CHECK(global_named(&c, "N")->type == nullptr);
+        token_list_free(c.list);
+    }
+    arena_free(&a);
+}
+
+TEST(run_reads_globals_and_constant_data) {
+    // A #run's code may read globals whose values point elsewhere: a
+    // procedure value, a string's bytes, a struct holding a string, a
+    // procedure and a view of an array literal; and a constant array at an
+    // index known only when it runs. The procedures they name are declared
+    // after the #run, and reached only through those values, so each is
+    // checked as the walk meets the global, before the run lowers it.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "N :: #run f();\n"
+                          "f :: () -> int {\n"
+                          "    total := op(1, 2) + text.count + text[0];\n"
+                          "    total += held.label.count + held.label[1] + held.run(4, 5) + held.items[1];\n"
+                          "    i := 2;\n"
+                          "    return total + TABLE[i];\n"
+                          "}\n"
+                          "op := add;\n"
+                          "text := \"hello\";\n"
+                          "Holder :: struct { label: string; run: (int, int) -> int; items: []int; }\n"
+                          "held := Holder.{\"ab\", mul, int.[4, 5, 6]};\n"
+                          "TABLE :: int.[7, 8, 9];\n"
+                          "add :: (a: int, b: int) -> int { return a + b; }\n"
+                          "mul :: (a: int, b: int) -> int { return a * b; }\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    // 3 + 5 + 'h' (104), then 2 + 'b' (98) + 20 + 5, then 9.
+    CHECK(is_number(&a, global_named(&c, "N"), 246, "int"));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(run_bakes_views_of_its_own_locals) {
+    // A view of a local of the #run's code is baked with the elements its
+    // memory holds when the run ends: nothing runs between the run's end and
+    // the baking, though the procedure the local was in has returned.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "local_view :: () -> []int {\n"
+                          "    a : [4]int;\n"
+                          "    for 0..3 { a[it] = 10 + it; }\n"
+                          "    v : []int = a;\n"
+                          "    return v;\n"
+                          "}\n"
+                          "deeper :: () -> []int { v := local_view(); return v; }\n"
+                          "V :: #run deeper();\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    Ast_Literal *items = literal_data(&a, &c, "V", "[4]int");
+    CHECK_EQ(items ? items->values.count : 0, 4);
+    for (s64 i = 0; items && i < items->values.count && i < 4; i++) {
+        CHECK(is_number(&a, items->values[i], 10 + (u64)i, "int"));
     }
     token_list_free(c.list);
     arena_free(&a);
