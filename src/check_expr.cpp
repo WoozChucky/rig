@@ -1470,7 +1470,7 @@ static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to
     return nullptr;
 }
 
-// cast(T) e and cast,trunc(T) e (spec 6.4). The result has type T.
+// cast(T) e and cast,trunc(T) e (spec 3.14). The result has type T.
 // - From an integer to an integer: cast keeps the number, so it's checked:
 //   a constant that isn't one of T's values is reported here ("300 doesn't
 //   fit in 'u8'", at the cast), and any other value is checked at run time
@@ -1486,10 +1486,11 @@ static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to
 //   check_pointer_cast.
 // - A procedure value to or from *void: check_proc_cast.
 // - A string to a []u8 and a []u8 to a string: the same view, retyped
-//   (spec 6.5), the same bytes.
+//   (spec 3.14), the same bytes.
 // - Anything else casts only where it converts implicitly: to its own
-//   type, null to a pointer, an array to a view of it, or a string literal
-//   to *u8. Otherwise "can't cast 'A' to 'B'".
+//   type, null to a pointer, an array to a view of it, or a string literal,
+//   or constant data holding one (is_literal_string, spec 3.8), to *u8.
+//   Otherwise "can't cast 'A' to 'B'".
 // - cast,trunc takes integers only: "cast,trunc only takes integers".
 // A cast of a constant is a constant of T: a checked cast's is the same
 // number, a cast,trunc's is wrapped to T as at run time (wrap_to).

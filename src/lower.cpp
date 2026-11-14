@@ -2139,7 +2139,19 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
     if (t->kind == TYPE_VIEW) {
         // The array is the value's own, [N]T, a literal's or constant
         // data's; add_global_array writes it, a part left out as zeros, all
-        // N of its elements still seen.
+        // N of its elements still seen. A value typed as the view is itself
+        // a part of constant data (a struct literal's view field, or a
+        // constant's that its literal leaves out): its array is the node
+        // holding it (constant_data), and a view left out is the empty
+        // view, zeros.
+        if (value->type->kind != TYPE_ARRAY) {
+            Ast *data;
+            bool known = constant_data(value, &data);
+            RIG_ASSERT(known);
+            if (!data) return;
+            value = data;
+            RIG_ASSERT(value->type->kind == TYPE_ARRAY);
+        }
         Type *array = value->type;
         s32 global = add_global_array(l, array, value);
         write_bits(bytes + offset + VIEW_COUNT_OFFSET, (u64)array->count, 8);
