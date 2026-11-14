@@ -1,0 +1,42 @@
+// Tables as constants (issue #113, spec 4.2): an array of structs holding
+// string literals' and procedures' addresses, gone through, indexed at run
+// time and called through. And globals given constant data: each is a
+// writable copy of its own (a view global's array too), so writing one
+// leaves the constant as it was.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+add :: (a: int, b: int) -> int { return a + b; }
+sub :: (a: int, b: int) -> int { return a - b; }
+mul :: (a: int, b: int) -> int { return a * b; }
+
+Vec2 :: struct { x: int; y: int; }
+Op :: struct { symbol: *u8; run: (int, int) -> int; }
+
+NAME :: "rig";
+ORIGIN :: Vec2.{3, 4};
+PRIMES :: int.[2, 3, 5, 7, 11];
+OPS :: Op.[.{"+", add}, .{"-", sub}, .{"*", mul}];
+OP :: OPS[2].run;
+
+origin := ORIGIN;
+copy := PRIMES;
+view : []int = PRIMES;
+name : *u8 = NAME;
+second := OPS[1];
+op : (int, int) -> int = OPS[0].run;
+
+main :: () {
+    for OPS { printf("6 %s 3 = %lld\n", it.symbol, it.run(6, 3)); }
+    i := 1;
+    printf("%s %lld\n", OPS[i].symbol, OPS[i].run(10, 4));
+    printf("%lld\n", OP(7, 6));
+
+    origin.x = 9;
+    copy[0] = 100;
+    view[1] = 300;
+    printf("%lld %lld %lld %lld\n", origin.x, copy[0], view[1], copy[1]);
+    j := 0;
+    k := 1;
+    printf("%lld %lld %lld\n", ORIGIN.x, PRIMES[j], PRIMES[k]);
+    printf("%s %s %lld %lld\n", name, second.symbol, second.run(8, 5), op(8, 5));
+}

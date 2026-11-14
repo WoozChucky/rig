@@ -931,18 +931,6 @@ static const char *LINES =
     "    }\n"
     "}\n";
 
-// The first line of `text` containing `needle`, without its "\n"; {} when
-// there's none. A needle starting with "\n" finds the line after that one.
-static String line_with(String text, const char *needle) {
-    s64 at = index_of(text, needle);
-    if (at < 0) return {};
-    if (needle[0] == '\n') at++;
-    s64 start = at, end = at;
-    while (start > 0 && text.data[start - 1] != '\n') start--;
-    while (end < text.count && text.data[end] != '\n') end++;
-    return string_slice(text, start, end - start);
-}
-
 // The metadata node a line names after `label` ("!dbg", "scope:"): "!7"
 // from "call void @f(), !dbg !7"; {} when it names none.
 static String attached(Arena *a, String line, const char *label) {
@@ -1702,6 +1690,30 @@ TEST(llvm_read_only_global) {
         CHECK(contains(zeros, "@zeros = private constant [16 x i8] zeroinitializer, align 8"));
         CHECK(!contains(table, "unnamed_addr") && !contains(table, "!dbg"));
         CHECK(!contains(zeros, "unnamed_addr") && !contains(zeros, "!dbg"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_data_constant_is_private_constant) {
+    // Issue #113: a data constant lowered from source is the same LLVM
+    // constant, its string literal's and procedure's addresses inside it,
+    // and a debugger is told nothing of it: no global variable at all.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                "add :: (a: int, b: int) -> int { return a + b; }\n"
+                                "Op :: struct { symbol: *u8; run: (int, int) -> int; }\n"
+                                "OPS :: Op.[.{\"+\", add}];\n"
+                                "main :: () { i := 0; puts(OPS[i].symbol); }\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        String table = line_with(text, "@const.0 = ");
+        CHECK(contains(table, "private constant"));
+        CHECK(contains(table, "ptr @str."));
+        CHECK(contains(table, "ptr @add"));
+        CHECK(contains(table, "align 8"));
+        CHECK(!contains(table, "unnamed_addr") && !contains(table, "!dbg"));
+        CHECK_EQ(count_of(text, "!DIGlobalVariable("), 0);
     }
     arena_free(&a);
 }

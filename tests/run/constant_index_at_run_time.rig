@@ -1,0 +1,10 @@
+// An index into an array constant that isn't known while compiling is
+// checked at run time (spec 5.11), as any array's is.
+puts :: (s: *u8) -> s32 #foreign libc;
+PRIMES :: int.[2, 3, 5, 7, 11];
+main :: () {
+    i := 5;
+    puts("before");
+    n := PRIMES[i];
+    puts("after");
+}

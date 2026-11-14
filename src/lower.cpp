@@ -29,8 +29,17 @@
 // - A global variable is an Ir_Global of its type, whose first value (the
 //   constant the checker made sure it has, or zero) is in the program's
 //   file. It's read and written as a slot is, through its address, an
-//   IR_ADDR. Constants, local or top-level, never reach the IR: every use
-//   of one is a constant already.
+//   IR_ADDR.
+// - Constants, local or top-level (spec 4.2). A use of a number, a bool or
+//   null is a constant already, and so is a part of constant data the
+//   checker folded (PRIMES[2], ORIGIN.x, NAME.count): a constant used only
+//   so never reaches the IR. A constant naming a procedure is its address.
+//   A data constant used at run time (PRIMES[i], for PRIMES, a copy of
+//   ORIGIN) is one read-only global of bytes, const.N, made where a use
+//   first needs it (constant_global) and the same for every use after: its
+//   value's bytes and relocations, as a global variable's are, but never
+//   written. Its value is the global's address, as any aggregate's is, and
+//   a view of it points into it, with no copy (lower_view_of).
 // - Several results: a return gives one value per result, a call numbers
 //   one value per result (its first is the call's value where one is
 //   wanted), and names or targets receiving them are stored from those
@@ -99,24 +108,29 @@
 //   (lower_index_address, lower_bounds_failed). #no_abc and rig build
 //   --no-bounds-checks leave the check out; a pointer's index is never
 //   checked (C's p[i]), only its null.
-// - An array becomes a view where the checker said it converts: a view of
-//   the array itself when it's a place, so a procedure given it changes it;
-//   otherwise of a temporary of the view's own, the array copied into it
-//   once it's worked out (lower_view_of, view_of_copy). A literal is built
-//   element by element in a temporary of its own, and a view never sees
-//   that temporary, nor a call's result's: running the same place again in
-//   a loop can't rebuild what an old view still reads. for over an array, a
-//   view or a string takes its data and count once, then counts an index up
-//   to the count (lower_for_sequence). A global view of a literal points at
-//   a global array made for the literal (constant_bytes).
-// - A string (spec 6.5) is a view of bytes, laid out as one: s[i], .count,
-//   .data and for are a view's. A literal used as a string is a view built
-//   in a temporary, its count and its constant bytes' address (str.N, which
-//   still ends with the zero C needs); a literal meeting a *u8 is only that
-//   address, as in milestone 1. a == b on strings calls __rig_string_equal,
-//   an IR procedure lowering adds to a module that compares strings
-//   (lower_string_equal), and != negates it. A global holding a literal
-//   points at its bytes through a relocation (constant_bytes).
+// - An array becomes a view where the checker said it converts (spec
+//   5.17): a view of the array itself when it's a place, so a procedure
+//   given it changes it, or when it's a constant or a part of one, its
+//   read-only global; otherwise of a temporary of the view's own, the array
+//   copied into it once it's worked out (lower_view_of, view_of_copy). A
+//   literal is built element by element in a temporary of its own, and a
+//   view never sees that temporary, nor a call's result's: running the same
+//   place again in a loop can't rebuild what an old view still reads. for
+//   over an array, a view or a string takes its data and count once, then
+//   counts an index up to the count (lower_for_sequence). A global view of a
+//   literal, or of an array constant, points at a global array of its own
+//   (constant_bytes).
+// - A string (spec 3.8) is a view of bytes, laid out as one: s[i], .count,
+//   .data and for are a view's. A literal's bytes are a constant global of
+//   their own, str.N, one per literal however often it's reached
+//   (literal_global), which still ends with the zero C needs. A literal
+//   used as a string is a view built in a temporary, its count and that
+//   global's address; a literal meeting a *u8 is only that address, as in
+//   milestone 1, and so is a string constant meeting one. a == b on strings
+//   calls __rig_string_equal, an IR procedure lowering adds to a module
+//   that compares strings (lower_string_equal), and != negates it. A global
+//   holding a literal points at its bytes through a relocation
+//   (constant_bytes).
 // - Rig's main is C's main (ir.h): exported, its every return a ret of C's
 //   int 0, so the program needs no wrapper around it.
 // - What a debugger needs (ir.h's "Debug information") is kept as the code
@@ -165,7 +179,11 @@ struct Lowering {
     Table<s32> proc_index;    // a Rig or foreign procedure's index in module->procs, by name
     Table<s32> global_index;  // a global variable's index in module->globals, by name
     s32 string_count;         // the str.N globals made so far: string literals and panic messages
-    Ir_Proc *proc;            // the procedure whose body is being lowered
+    Table<s32> literal_globals;   // each string literal node's str.N, by node_key: one per literal,
+                                  // however many uses and constants reach it
+    Table<s32> constant_globals;  // each data constant's const.N, by node_key, once a use needs it
+    s32 constant_count;           // the const.N globals made so far
+    Ir_Proc *proc;           // the procedure whose body is being lowered
     s32 block;                // the block instructions go into
     Array<Local> locals;      // the current procedure's variables and parameters so far
     Array<Loop> loops;        // the loops around the statement being lowered, innermost last
@@ -365,6 +383,27 @@ static s32 add_bytes(Lowering *l, String bytes) {
     return (s32)(l->module->globals.count - 1);
 }
 
+// A node's address as a Table key: its 8 bytes, copied into the arena so a
+// table can keep them.
+static String node_key(Arena *a, const void *node) {
+    u8 *bytes = (u8 *)arena_alloc(a, sizeof node, 1);
+    memcpy(bytes, &node, sizeof node);
+    return {bytes, (s64)sizeof node};
+}
+
+// String literal `literal`'s bytes' global, str.N (add_bytes): made the
+// first time, the same after. So a literal has one global however often
+// it's reached: `NAME :: "rig";` used as a *u8 twice, and as a string
+// (whose const.N has a relocation to it), is one "rig".
+static s32 literal_global(Lowering *l, Ast_String *literal) {
+    String key = node_key(l->arena, literal);
+    s32 *found = table_get(&l->literal_globals, key);
+    if (found) return *found;
+    s32 global = add_bytes(l, literal->value);
+    table_put(&l->literal_globals, key, global);
+    return global;
+}
+
 // Ends block `from` with a jump to block `to` (-1: not made yet, filled in
 // later through terminator_of).
 static void emit_jump(Lowering *l, s32 from, s32 to) {
@@ -530,6 +569,7 @@ static s32 aggregate_results(Ast_Proc *proc) {
 
 static s32 lower_expr(Lowering *l, Ast *e);
 static s32 lower_address(Lowering *l, Ast *e);
+static s32 constant_global(Lowering *l, Ast_Const *constant);
 
 // A view's count and data, loaded from the view at %view (its fields, as
 // types.h lays them out).
@@ -564,13 +604,13 @@ static s32 view_of_array(Lowering *l, Type *array, s32 data) {
 }
 
 // The address of a string literal's bytes, a constant global of their own
-// (str.N), ending with a zero: what C gets for a literal, and a string's
-// data.
+// (str.N, one per literal: literal_global), ending with a zero: what C gets
+// for a literal or a string constant, and a literal string's data.
 //
 //     %p = addr @str.N
 static s32 literal_bytes(Lowering *l, Ast_String *literal) {
     Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
-    addr->target = add_bytes(l, literal->value);
+    addr->target = literal_global(l, literal);
     return addr->result;
 }
 
@@ -597,24 +637,29 @@ static s32 view_of_copy(Lowering *l, Type *array, s32 value) {
     return view_of_array(l, array, data);
 }
 
-// The view an array e converts to (spec 6.5). When e is a place (the
+// The view an array e converts to (spec 5.17). When e is a place (the
 // checker's expr_is_place), a view of it where it is: `sort(numbers)` sorts
-// numbers. Anything else, a literal, a call's result, a parameter, is
-// copied first (view_of_copy).
+// numbers. When it's a constant or a part of one (constant_root), a view of
+// the constant's read-only global, where it is too: nothing writes it, so
+// nothing can change what the view sees, and `sum(PRIMES)` copies nothing.
+// Anything else, a literal, a call's result, a parameter, is copied first
+// (view_of_copy).
 static s32 lower_view_of(Lowering *l, Ast *e) {
     if (expr_is_place(e)) return view_of_array(l, e->type, lower_address(l, e));
+    if (constant_root(e)) return view_of_array(l, e->type, lower_expr(l, e));
     return view_of_copy(l, e->type, lower_expr(l, e));
 }
 
 // The value of `e`, of the type `to` its use wants (the checker said it
 // converts): a constant made at that type, e's value widened to it, an
-// array's view (lower_view_of), or a string literal's bytes' address where
-// it meets a *u8 (the only pointer the checker lets a string become).
-// Returns the value's number.
+// array's view (lower_view_of), or, where a string meets a *u8, the address
+// of the string literal's bytes it is (literal_address): a literal, or
+// constant data holding one, the only strings the checker lets become a
+// pointer (spec 3.8). Returns the value's number.
 static s32 lower_value(Lowering *l, Ast *e, Type *to) {
     if (e->is_constant) return emit_constant(l, ir_type_of(to), e->constant);
     if (to && to->kind == TYPE_VIEW && e->type->kind == TYPE_ARRAY) return lower_view_of(l, e);
-    if (to && type_is_pointer(to) && e->kind == AST_STRING) return literal_bytes(l, (Ast_String *)e);
+    if (to && type_is_pointer(to) && e->type == &type_string) return literal_bytes(l, literal_address(e));
     return resize(l, lower_expr(l, e), e->type, ir_type_of(to));
 }
 
@@ -889,8 +934,9 @@ static s32 lower_float_cast(Lowering *l, s32 v, Type *from, Type *to) {
 //     keeps the number: no check.
 // - From a bool, the i1 widens to 0 or 1 (zext); a cast to the same type
 //   is the value as it is, and so is a string's to a []u8 and back (the same
-//   view, the same address); a string literal's to *u8 is its bytes'
-//   address, as where it meets a *u8 without a cast.
+//   view, the same address); a string literal's, or a string constant's, to
+//   *u8 is the literal's bytes' address, as where it meets a *u8 without a
+//   cast.
 // - A pointer to a pointer is the same address; to an int, s64 or u64 it's
 //   ptrtoint, and from one inttoptr: the address as a number and back,
 //   unchecked (spec 6.5).
@@ -899,9 +945,9 @@ static s32 lower_float_cast(Lowering *l, s32 v, Type *from, Type *to) {
 static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
     Type *from = cast->value->type, *to = cast->type;
     // An array to a view converts as anywhere else, and so does a string
-    // literal to *u8.
+    // literal, or a string constant, to *u8.
     if (from->kind == TYPE_ARRAY && to->kind == TYPE_VIEW) return lower_value(l, cast->value, to);
-    if (type_is_pointer(to) && cast->value->kind == AST_STRING) return lower_value(l, cast->value, to);
+    if (type_is_pointer(to) && from == &type_string) return lower_value(l, cast->value, to);
     Ir_Type have = ir_type_of(from), want = ir_type_of(to);
     s32 v = lower_value(l, cast->value, from);
     // An aggregate is otherwise only ever cast to its own type, or a string
@@ -1057,7 +1103,8 @@ static s32 lower_string_comparison(Lowering *l, Ast_Binary *b) {
 // checked not to be null at the field's name (as p.* is at its '.'), before
 // anything is read or written. Otherwise e is a struct, whose value is its
 // address already: a variable's slot, a parameter's copy, a call's or a
-// literal's temporary, a field of an outer struct. Then x's offset is added.
+// literal's temporary, a constant's read-only global, a field of an outer
+// struct. Then x's offset is added.
 static s32 lower_member_address(Lowering *l, Ast_Member *m) {
     Ast *operand = m->operand;
     Type *t = operand->type;
@@ -1265,14 +1312,26 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         // An aggregate parameter is the caller's copy's address; a scalar
         // parameter, as a variable, is read from its slot, here, at the
         // statement reading it.
-        // A procedure, or a constant naming one, is its address.
+        // A procedure, or a constant naming one, is its address. A constant
+        // holding data (a number's never gets here: it's a constant) is the
+        // address of its value: a string's, a struct's or an array's
+        // read-only global, as any aggregate's value is its bytes' address,
+        // or, a pointer, the string literal's bytes it points at.
         Ast *decl = ((Ast_Name *)e)->decl;
         if (decl->kind == AST_PARAM) {
             s32 value = local_of(l, decl)->value;
             return type_is_aggregate(decl->type) ? value : emit_get(l, decl->type, value);
         }
         if (decl->kind == AST_PROC) return emit_proc_address(l, (Ast_Proc *)decl);
-        if (decl->kind == AST_CONST) return emit_proc_address(l, ((Ast_Const *)decl)->proc);
+        if (decl->kind == AST_CONST) {
+            Ast_Const *constant = (Ast_Const *)decl;
+            if (constant->proc) return emit_proc_address(l, constant->proc);
+            RIG_ASSERT(constant->is_data);
+            if (type_is_pointer(constant->type)) return literal_bytes(l, (Ast_String *)constant->data);
+            Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
+            addr->target = constant_global(l, constant);
+            return addr->result;
+        }
         return emit_get(l, decl->type, address_of(l, decl));
     }
     case AST_DEREF: return emit_get(l, e->type, lower_address(l, e));
@@ -1338,11 +1397,12 @@ static s32 lower_expr(Lowering *l, Ast *e) {
 }
 
 // The type an argument after a variadic procedure's fixed parameters is
-// passed as: a string literal as a C string, a *u8 (lower_value then gives
-// its bytes' address), anything else as C's default argument promotions
-// make its type.
+// passed as: a string literal, or constant data holding one (NAME for
+// `NAME :: "rig";`, literal_address), as a C string, a *u8 (lower_value
+// then gives the literal's bytes' address), anything else as C's default
+// argument promotions make its type.
 static Type *extra_argument_type(Ast *arg) {
-    if (arg->kind == AST_STRING) return type_pointer_to(type_from_name(str("u8")));
+    if (arg->type == &type_string && literal_address(arg)) return type_pointer_to(type_from_name(str("u8")));
     return type_c_promoted(arg->type);
 }
 
@@ -1387,8 +1447,9 @@ static Ir_Proc *signature_of(Lowering *l, Type *t) {
 //   have none to convert to: each is passed as C's default argument
 //   promotions make its own type (extra_argument_type): an s8 or s16
 //   sign-extended to an i32, a u8, u16 or bool zero-extended, a float32
-//   widened to an f64; a string literal as its bytes' address, a C string
-//   (the checker allows no other aggregate there).
+//   widened to an f64; a string literal, or a string constant, as the
+//   literal's bytes' address, a C string (the checker allows no other
+//   aggregate there).
 // - The scalar results are the call's values, consecutive (ir_emit_call).
 //
 //     v := make(3);              %0 = local 8 align 4      (v)
@@ -1934,7 +1995,9 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
         }
         break;
     }
-    case AST_CONST: break;  // its uses are constants already
+    // Nothing here: a number's uses are constants already, a procedure's its
+    // address, and data is made where a use first needs it (constant_global).
+    case AST_CONST: break;
     case AST_MULTI_VAR: lower_multi_var(l, (Ast_Multi_Var *)s); break;
     case AST_ASSIGN: {
         Ast_Assign *assign = (Ast_Assign *)s;
@@ -2012,29 +2075,46 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
 
 static s32 add_global_array(Lowering *l, Type *array, Ast *literal);
 
+// The struct or array literal holding the value of `value`, an aggregate's
+// that constant_bytes writes: value itself, or, for constant data written
+// some other way (a constant's name, a field or an element of one, a cast
+// of it), the literal holding it (constant_data); null for a part a literal
+// leaves out, all zeros.
+static Ast_Literal *literal_of(Ast *value) {
+    if (value->kind == AST_LITERAL) return (Ast_Literal *)value;
+    Ast *data;
+    bool known = constant_data(value, &data);
+    RIG_ASSERT(known && (!data || data->kind == AST_LITERAL));
+    return (Ast_Literal *)data;
+}
+
 // The bytes of a constant value of type t, written `offset` bytes into a
 // global's `bytes`: a struct literal's values at their fields' offsets (the
 // fields not given, and the padding, stay zero), an array literal's at i
 // times the element's size, an integer's low bytes, a bool's 0 or 1, a
 // float's IEEE 754 bits (a float32's rounded from the double the constant
 // keeps, as the backend rounds an f32 constant), a pointer's address (null's
-// zeros). A view's value is an array literal (the checker allows nothing
-// else in a global, but a string literal), which becomes a global array of
-// its own: the view's count is written here, and its data is that array's
-// address, which only the linker knows, so a relocation says where it goes.
-// A string literal, as a string, a []u8 or a pointer (literal_address), is
-// written the same way: its count, for a string or a view, and a relocation
-// to its constant bytes, str.N, where the data or the pointer goes. The
-// backend wants `relocs` in increasing order of offset, so the values are
-// written in that order: an array's in turn, and a struct's by its fields,
-// in the order they are laid out, not the order a literal with names gives
-// them. A procedure's address (procedure_address) is a relocation too, to
-// the procedure. The checker made sure every value is a constant, a string
-// literal, a procedure, or a literal of them (check_global_value).
+// zeros). Constant data is written as the literal holding it (literal_of):
+// `origin := ORIGIN;` gets ORIGIN's bytes, copied into the global, and a
+// part a literal leaves out writes nothing, zeros. A view's value is an
+// array, a literal or constant data (the checker allows nothing else in a
+// global, but a string literal), which becomes a global array of its own:
+// the view's count is written here, and its data is that array's address,
+// which only the linker knows, so a relocation says where it goes. A string
+// literal, as a string, a []u8 or a pointer (literal_address), constant data
+// holding one included, is written the same way: its count, for a string or
+// a view, and a relocation to its constant bytes, str.N (literal_global),
+// where the data or the pointer goes. The backend wants `relocs` in
+// increasing order of offset, so the values are written in that order: an
+// array's in turn, and a struct's by its fields, in the order they are laid
+// out, not the order a literal with names gives them. A procedure's address
+// (procedure_address) is a relocation too, to the procedure. The checker
+// made sure every value is a constant, a string literal, a procedure,
+// constant data, or a literal of them (check_global_value).
 static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *relocs, Type *t, Ast *value) {
     Ast_String *literal = literal_address(value);
     if (literal) {
-        s32 global = add_bytes(l, literal->value);
+        s32 global = literal_global(l, literal);
         if (!type_is_view_or_string(t)) {
             array_add(relocs, Ir_Reloc{offset, global, false});  // a pointer, *u8 or what a cast made it
             return;
@@ -2050,15 +2130,18 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
         return;
     }
     if (t->kind == TYPE_VIEW) {
-        Type *array = value->type;  // the literal's [N]T
+        // The array is the value's own, [N]T, a literal's or constant
+        // data's; add_global_array writes it, a part left out as zeros, all
+        // N of its elements still seen.
+        Type *array = value->type;
         s32 global = add_global_array(l, array, value);
         write_bits(bytes + offset + VIEW_COUNT_OFFSET, (u64)array->count, 8);
         array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, global, false});
         return;
     }
     if (type_is_aggregate(t)) {
-        RIG_ASSERT(value->kind == AST_LITERAL);
-        Ast_Literal *literal = (Ast_Literal *)value;
+        Ast_Literal *literal = literal_of(value);
+        if (!literal) return;  // a part left out: zeros
         if (t->kind == TYPE_ARRAY) {
             for (s64 i = 0; i < literal->values.count; i++) {
                 constant_bytes(l, bytes, offset + i * t->element->size, relocs, t->element, literal->values[i]);
@@ -2067,16 +2150,10 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
         }
         // Field by field; a named literal's value for each, if it gives one.
         for (s64 f = 0; f < t->fields.count; f++) {
-            s64 i = f;
-            if (literal->names.count) {
-                i = -1;
-                for (s64 k = 0; k < literal->names.count; k++) {
-                    if (string_eq(literal->names[k], t->fields[f].name)) i = k;
-                }
-            }
-            if (i < 0 || i >= literal->values.count) continue;
+            Ast *field_value = literal_field_value(literal, t, (s32)f);
+            if (!field_value) continue;
             Type_Field *field = &t->fields[f];
-            constant_bytes(l, bytes, offset + field->offset, relocs, field->type, literal->values[i]);
+            constant_bytes(l, bytes, offset + field->offset, relocs, field->type, field_value);
         }
         return;
     }
@@ -2096,11 +2173,14 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
 // for an empty one), or t's whole size for anything else, a scalar, a view
 // or a string. The bytes after it are zeros, which the global's size covers
 // and the compiler never holds: `big : [1 << 30]u8;` has no bytes at all,
-// and `S.{x = 1}` only up to x's.
+// and `S.{x = 1}` only up to x's. Constant data's is its literal's
+// (literal_of), and a part a literal leaves out needs none.
 static s64 constant_extent(Type *t, Ast *value) {
     if (!type_is_aggregate(t) || t->kind == TYPE_VIEW || literal_address(value)) return t->size;
-    RIG_ASSERT(value->kind == AST_LITERAL);  // a string's value is a string literal
-    Ast_Literal *literal = (Ast_Literal *)value;
+    // A string here is one a literal leaves out: any other is a string
+    // literal's, literal_address's.
+    Ast_Literal *literal = literal_of(value);
+    if (!literal) return 0;
     s64 extent = 0;
     for (s64 i = 0; i < literal->values.count; i++) {
         Type *field;
@@ -2141,6 +2221,31 @@ static s32 add_global_array(Lowering *l, Type *array, Ast *literal) {
     global_value(l, &g, array, literal);
     array_add(&l->module->globals, g);
     return (s32)(l->module->globals.count - 1);
+}
+
+// Data constant `constant`'s read-only global, const.N: has_layout and
+// is_read_only, its type's size and alignment, its value's bytes and
+// relocations (global_value), no rig_type. Made the first time a use needs
+// it, the same after; its index. So a constant used only folded (PRIMES[2],
+// NAME.count) has none, and one used at run time has one, wherever it's
+// used. The bytes are the value node's, not `data`'s, which is null for a
+// part a literal leaves out: constant_bytes finds the literal itself.
+static s32 constant_global(Lowering *l, Ast_Const *constant) {
+    String key = node_key(l->arena, constant);
+    s32 *found = table_get(&l->constant_globals, key);
+    if (found) return *found;
+    Ir_Global g = {};
+    g.name = string_printf(l->arena, "const.%d", l->constant_count++);
+    g.type = IR_VOID;
+    g.has_layout = true;
+    g.is_read_only = true;
+    g.size = constant->type->size;
+    g.align = (u32)constant->type->align;
+    global_value(l, &g, constant->type, constant->value);  // may add str.N globals first
+    array_add(&l->module->globals, g);
+    s32 global = (s32)(l->module->globals.count - 1);
+    table_put(&l->constant_globals, key, global);
+    return global;
 }
 
 // __rig_bounds_failed(ptr where, i64 where_length, i64 index, i64 count,
@@ -2425,11 +2530,14 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     // own, and a string. A pointer holding a string literal's address is a
     // global of bytes too, 8 of them: an address the linker writes is a
     // relocation, which only a global of bytes has; and so is one holding a
-    // procedure's address, a procedure value or a *void. Constants and
-    // structs' declarations are skipped: a constant's uses are constants
-    // (or, naming a procedure, its address), and a struct is only a type.
-    // The procedures are numbered first (proc_index), so a relocation can
-    // name one.
+    // procedure's address, a procedure value or a *void. A value that is
+    // constant data, or holds some, is copied into the global's bytes:
+    // `origin := ORIGIN;` is a variable of its own. Constants and structs'
+    // declarations are skipped: a constant's uses are constants (or, naming
+    // a procedure, its address), or its data's read-only global, made
+    // where a use first needs it (constant_global); and a struct is only a
+    // type. The procedures are numbered first (proc_index), so a relocation
+    // can name one.
     for (s64 i = 0; i < f->procs.count; i++) table_put(&l.proc_index, f->procs[i]->name, (s32)i);
     for (s64 i = 0; i < f->globals.count; i++) {
         if (f->globals[i]->kind != AST_VAR) continue;
@@ -2566,6 +2674,8 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
 
     table_free(&l.proc_index);
     table_free(&l.global_index);
+    table_free(&l.literal_globals);
+    table_free(&l.constant_globals);
     array_free(&l.locals);
     array_free(&l.loops);
     return m;
