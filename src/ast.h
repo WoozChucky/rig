@@ -294,6 +294,9 @@ struct Ast_Literal : Ast {
     bool is_array;                  // T.[a, b] or .[a, b]: an array's elements, in order
     s8 is_data;                     // filled in by the checker once asked (constant_data): 1 when it's
                                     // constant data, -1 when it isn't, 0 not asked yet
+    bool is_baked;                  // made from a #run's result (run.cpp): in a view's slot, a baked
+                                    // view's elements, which a constant may hold, where a written
+                                    // view can't be held
 };
 
 // a[i]: element i of the array, view or string a, or what the pointer a

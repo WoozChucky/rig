@@ -170,9 +170,10 @@
 //   value inside e that isn't. A pointer, in data or alone, is null or a
 //   string literal's address: any cast (from a number, a procedure or a
 //   pointer variable) or a procedure is "a constant's pointer can only be
-//   null or a string literal's address". No part of a constant is a view,
-//   which would see memory of its own: "a constant can't hold a view; only
-//   a string or an array can be one".
+//   null or a string literal's address". No part of a constant written in
+//   the source is a view, which would see memory of its own: "a constant
+//   can't hold a view; only a string or an array can be one" (a #run's
+//   baked view is the exception, below).
 // - The condition of if and while is a bool: "the condition of 'if' must
 //   be a bool, not 'int'".
 // - for a..b: the ends are integers meeting as an arithmetic operator's
@@ -490,9 +491,12 @@
 //   failed: its result holds a view with a negative count" ("a string").
 // - A baked string is a string literal's bytes: it converts to a *u8 and
 //   passes C's '...' as a literal does (is_literal_string). A constant may
-//   hold a baked view, its elements read-only data, though not a written
-//   one ("a constant can't hold a view"). A global holding a baked view or
-//   string gets a writable copy of its elements or bytes (spec 4.3).
+//   hold a baked view, its elements read-only data, as the #run's value or
+//   reached through constant data (V2 :: V; IT :: T.items;), though not a
+//   written one ("a constant can't hold a view"). A baked []u8 cast to a
+//   string is no constant data: its value is the array of its elements,
+//   not a string literal. A global holding a baked view or string gets a
+//   writable copy of its elements or bytes (spec 4.3).
 // - main is where the program starts: a #run that reaches a call of it is
 //   "main is where the program starts; #run can't call it", at the #run.
 // - A body a #run needs while that body is being checked (its own #run, or
@@ -598,7 +602,9 @@ bool is_literal_string(Ast *e);
 // - the name of a constant with is_data (its `data`);
 // - a field of constant data (a struct's, not reached through a pointer),
 //   or an element of it (an array's) at an is_constant index;
-// - a cast of constant data to its own type, or between string and []u8;
+// - a cast of constant data to its own type, or between string and []u8,
+//   but for a #run's baked []u8 cast to a string: its data is an array
+//   literal, which a string can't be;
 // - a #run whose baked value isn't a number (Ast_Run.value): a procedure
 //   value's name, which procedure_address walks on from, a string literal,
 //   or a struct or array literal of constant data (is_data already); a

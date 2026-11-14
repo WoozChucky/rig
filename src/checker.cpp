@@ -438,10 +438,14 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 // reporting the first value that isn't constant data. t is the slot's
 // type, which may differ from the value's: a string literal in a *u8 field
 // stays a string, an array literal in a view field is an array.
-// - A constant never holds a view, though its array would be constant
-//   data: it would see memory of its own, a copy for each use or one that
-//   isn't read-only. "a constant can't hold a view; only a string or an
-//   array can be one".
+// - A written value never puts a view in a constant, though its array
+//   would be constant data: it would see memory of its own, a copy for
+//   each use or one that isn't read-only. "a constant can't hold a view;
+//   only a string or an array can be one". A #run's baked view is the one
+//   a constant may hold, its elements read-only (lower.cpp): the #run's
+//   value, or constant data reaching it (V2 :: V, IT :: T.items, a cast to
+//   its own type), whose data is the baked array literal of its elements
+//   (Ast_Literal.is_baked).
 // - A string, a struct or an array is a literal whose values are checked in
 //   turn, a string literal, or anything else constant_data finds a value
 //   for: a constant holding it, a field or an element of one, a cast. The
@@ -465,6 +469,10 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
     if (value->kind == AST_RUN) return ((Ast_Run *)value)->value != nullptr;
     if (!value->type) return false;
     if (t->kind == TYPE_VIEW) {
+        Ast *data;
+        if (constant_data(value, &data) && data && data->kind == AST_LITERAL && ((Ast_Literal *)data)->is_baked) {
+            return true;
+        }
         diag_error(c->diag, value->start, "a constant can't hold a view; only a string or an array can be one");
         return false;
     }
