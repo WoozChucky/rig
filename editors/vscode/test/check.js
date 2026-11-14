@@ -993,8 +993,20 @@ check('the grammar colours the types in every program of tests/run', () => {
     assert.ok(files.length > 50, `only ${files.length} programs`);
 
     const sources = new Map(files.map((f) => [f, fs.readFileSync(f, 'utf8')]));
+    // The structs a program may name: its own, and those of the modules a
+    // program #loads (modules/Basic's Allocator, say).
+    const modules = [];
+    const walkModules = (dir) => {
+        if (!fs.existsSync(dir)) return;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const file = path.join(dir, entry.name);
+            if (entry.isDirectory()) walkModules(file);
+            else if (entry.name.endsWith('.rig')) modules.push(fs.readFileSync(file, 'utf8'));
+        }
+    };
+    walkModules(path.join(root, 'modules'));
     const structs = new Set();
-    for (const source of sources.values()) {
+    for (const source of [...sources.values(), ...modules]) {
         for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*struct\b/g)) structs.add(m[1]);
     }
     assert.ok(structs.has('Vec2') && structs.has('Node'));
