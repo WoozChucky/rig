@@ -595,7 +595,9 @@ bool is_literal_string(Ast *e);
 // followed in turn. So *value is a string or struct or array literal, or a
 // scalar field's or element's value node as the literal wrote it (a
 // constant, a procedure's name, a string literal, or a cast of one, which
-// literal_address and procedure_address walk on from); or null when a
+// literal_address and procedure_address walk on from); or a #run's baked
+// value, a procedure's name, which procedure_address walks on from; or
+// null when a
 // literal leaves the field out (zero), and so for any field or element of
 // such a null part. A string's element is a byte that no node holds: not
 // constant data; nor is a field or an element of a value a literal gives

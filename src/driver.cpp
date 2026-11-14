@@ -247,14 +247,18 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
 // --stdin-for one's), else 0; 2 for a malformed line (no file, two files,
 // --stdin twice, --stdin-for with no name or an empty one, twice, or with
 // --stdin, or -o: check writes nothing, so there is no output to name, nor
-// --no-bounds-checks: nothing is lowered), with the usage. The word after
-// --stdin-for is its file whatever it is, as -o's is its output: in
-// --stdin-for --stdin, the file is named --stdin, which isn't a .rig file.
+// --no-bounds-checks: it is the program's, which is never lowered, not a
+// #run's code's), with the usage. The word after --stdin-for is its
+// file whatever it is, as -o's is its output: in --stdin-for --stdin, the
+// file is named --stdin, which isn't a .rig file.
 //
-// It runs read_and_check, rig build's front half, and stops: nothing is
-// lowered, LLVM and the linker aren't involved, and no file or .build
-// directory is written. That makes it quick and harmless to run on every
-// keystroke, which is what an editor does with it:
+// It runs read_and_check, rig build's front half, and stops: the program
+// isn't lowered, LLVM and the linker aren't involved, and rig check itself
+// writes no file or .build directory. The expression #runs do run, in the
+// compile-time world (spec 7.8): their code may print, take any time, or do
+// whatever C lets it, which is why the editor limits a check's time. Else
+// it is quick to run on every keystroke, which is what an editor does with
+// it:
 // - --stdin reads the source from standard input, so the editor can send
 //   what's on screen, saved or not, and FILE.rig is then the name the
 //   diagnostics give it and the file whose directory its #loads are found

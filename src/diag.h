@@ -44,7 +44,9 @@ struct Diagnostic {
     Position pos;
     String message;
     String lines;  // more lines, printed after the caret: a failed #run's frames ("    in NAME
-                   // (PATH:L:C)\n" each, spec 7.8); empty for most
+                   // (PATH:L:C)\n" each, spec 7.8, and "    ... N more calls\n" between the
+                   // innermost and outermost ten when there are many: run.cpp's
+                   // report_failure); empty for most
 };
 
 // Zero-initialised ({}) is ready to use.
