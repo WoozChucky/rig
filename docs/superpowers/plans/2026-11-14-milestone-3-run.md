@@ -26,17 +26,17 @@
   - `-Wall -Wextra` with no warnings, in debug and `release` builds.
   - Code is study material: each new piece says what it does and why, in the existing comments' style. A comment an edit touches cites the spec's current section numbers.
   - The spec is `docs/rig-spec.md`. The old design doc is no longer updated.
-- **Both hosts before every push.** Everything must pass with no warnings. The debugger tests must PASS, not SKIP: cdb on Windows, gdb on Linux.
+- **Both hosts for every commit:** Windows before it is pushed, Linux right after (it pulls from origin). A failure on Linux is fixed in a new commit. Everything must pass with no warnings. The debugger tests must PASS, not SKIP: cdb on Windows, gdb on Linux.
   - **Windows** (PowerShell, cwd `C:\dev\rig-wt\115`):
     - `$env:RIG_LLVM_DIR = 'C:\dev\rig\deps\llvm-windows'; cmd /c "C:\dev\rig-wt\115\build.bat"`
     - `.\bin\unit-tests.exe`
     - `.\bin\run-tests.exe`
     - When `editors/vscode` or `tests/errors` changes: `node editors/vscode/test/check.js` (it reads every `tests/errors/*.err`).
-  - **Linux** (WSL), in `~/rig-wt/115`:
-    - Create it once: `wsl -e bash -lc 'git -C ~/rig fetch origin && git -C ~/rig worktree add ~/rig-wt/115 issue/115-run'`.
-    - Bring each new commit over before it is pushed: `wsl -e bash -lc 'cd ~/rig-wt/115 && git pull --ff-only /mnt/c/dev/rig-wt/115 issue/115-run'`.
-    - Build and test: `wsl -e bash -lc 'cd ~/rig-wt/115 && RIG_LLVM_DIR=$HOME/rig/deps/llvm-linux ./build.sh && bin/unit-tests && bin/run-tests'`.
-    - The extension's checks: `wsl -e bash -lc 'cd ~/rig-wt/115 && $(ls -d ~/.vscode-server/bin/*/node | head -1) editors/vscode/test/check.js'`.
+  - **Linux** (WSL), in `~/rig-wt/115` (it exists, on this branch):
+    - PowerShell mangles `$` and quotes in inline WSL commands, so each Linux step is a bash script written into the scratchpad and run with `wsl -e bash -lc "tr -d '\r' < /mnt/c/.../NAME.sh | bash"`.
+    - Push first, then bring the commit over from origin: `cd ~/rig-wt/115 && git pull -q --ff-only`.
+    - Build and test: `RIG_LLVM_DIR=$HOME/rig/deps/llvm-linux ./build.sh && bin/unit-tests && bin/run-tests`.
+    - The extension's checks: `$(ls -d ~/.vscode-server/bin/*/node | head -1) editors/vscode/test/check.js`.
   - Before the final review, the `release` builds too: `cmd /c "C:\dev\rig-wt\115\build.bat release"`, and `./build.sh release` on Linux, each followed by both test programs.
 - **Messages, verbatim** (all new):
   - `#run in a body must be a value, as in x := #run f();`, at the `#run`.
@@ -53,7 +53,9 @@
   - **Commit messages:** a short imperative summary line, a blank line, an optional body, and nothing else. No trailers, no attribution lines.
   - Before the PR is marked ready, an independent review runs. Fix every finding in production code and tests, minor ones included, and any wrong comment or doc. Comment and doc *polish* never holds the PR: it becomes GitHub issues labelled `documentation`.
 
-## Facts (verified at 96847c7, this branch's base)
+## Facts (verified at 96847c7, rechecked at a7e9c30)
+
+Line numbers are 96847c7's. The merge of main at a7e9c30 moved some by a few lines (`lower.cpp`'s by about 7 to 10, `check_expr.cpp`'s by a few); the ones that moved more are given at a7e9c30.
 
 1. **Lexer:** `#run` lexes already, as `TOKEN_DIRECTIVE` with text `run` (`lexer.cpp:173-190`). The parser decides on directives through `is_directive` (`parser.cpp:107`).
 2. **Parser:**
@@ -114,16 +116,16 @@
    - Results are canonical: zero-extended, an f32's bits in the low 32 (`interp.h:91-104`). `Ast.constant` wants signed types sign-extended and every float as a double's bits (`ast.h:82-85`).
 8. **Driver and diagnostics:**
    - `read_and_check` (`driver.cpp:74-129`) loads, checks, prints only `if (!ok)` right after `check()`, then lowers. `rig check` is told apart by `lowered == nullptr` (`command_check`, `257-291`).
-   - `tests/unit/interpret_mode.cpp:76-147` copies it, then runs `main` on an interpreter.
+   - `tests/unit/interpret_mode.cpp:72-96` copies it, then runs `main` on an interpreter (`98-130`).
    - `Diagnostic` is `{pos, message}` (`diag.h:38-41`). `diag_render` (`diag.cpp:87-110`) prints the message line, the source line and the caret.
    - `messages()` (`tests/unit/helpers.cpp:130`) prints `"L:C: message\n"` per diagnostic.
 9. **Runner:**
    - `build_program` (`runner.cpp:329-344`) ignores rig build's stdout. `run_test` (`395-411`) and `interpreted_test` (`416-462`) hold the program to `.out`, `.exit` and `.err`, or `.interp.err`.
    - `check_result` (`994-1007`) requires `rig check` to write nothing to stdout. `check_run_test` (`1061-1064`) says "checking never runs it". `check_error_test` expects exit 1 and the `.err`.
-   - The extension's `test/check.js` reads every `tests/errors/*.err` (`105-147`, `240-270`). An indented line must not match the problem matcher.
-10. **Extension:**
-    - `LiveCheck.runRig` (`extension.js:1198-1219`) runs one check and drains stdout ("rig check writes nothing there").
-    - Settings are read through `vscode.workspace.getConfiguration('rig', uri)`. Messages go through `settingError` (`244-248`).
+   - The extension's `test/check.js` reads every `tests/errors/*.err` in three loops (at a7e9c30): the problem matcher's (`107-145`) and diagnostics.js's (`242-272`), each requiring a diagnostic in every file and naming its program `NAME.rig` from the `.err`'s name, and `$rig-runtime`'s (`212-219`), which only requires that no line match it. An indented line must not match the problem matcher.
+10. **Extension** (line numbers at a7e9c30):
+    - `LiveCheck.runRig` (`extension.js:1217-1235`) runs one check and drains stdout ("rig check writes nothing there", `1229`).
+    - Settings are read through `vscode.workspace.getConfiguration('rig', uri)`. Messages go through `settingError` (`257-262`).
     - The stand-in compiler answers after 1500 ms when stdin says `slow` (`test/check.js:1353-1380`).
     - The version is `0.3.0` in `package.json` and `vsix/extension.vsixmanifest:6`.
 
@@ -208,7 +210,7 @@
 7. **Lowering closes over what it reaches by itself.** On demand, declaring a procedure queues its body, and `ir_lower_run` lowers the queue (first in, first out) after the run's own procedure. The walk only has to make sure all of it is checked: it follows the same names lowering can (calls, procedure values, constants, globals' values).
 8. **The compile-time `__rig_bounds_failed` and `__rig_string_equal` are made, bodies and all, when the on-demand lowering is made** (indexes 0 and 1). The bounds buffer is sized for the longest prefix any of the program's files can give: the longest `Source_File.path` plus 39 (two 10-digit numbers, two colons, and `: runtime error: `, 17), plus the usual 73. All files are loaded before `check()`, so the bound is known then.
 9. **`#no_abc` is honored at compile time.** It is part of a procedure's meaning, not a build option. Only `--no-bounds-checks` is ignored.
-10. **A run's procedure** is named `run.N` in the compile-time module (N counting the runs lowered). Its `source_name` is `#run`, and every instruction it emits itself is at the `#run`'s position, so the outer frame reads `in #run (PATH:L:C)`. It is never entered in `proc_index`.
+10. **A run's procedure** is named `run.N` in the compile-time module (N counting the runs lowered). Its `source_name` is `#run`, and every instruction it emits itself is at the `#run`'s position, so the outer frame reads `in #run (PATH:L:C)`. A top-level `#run { }`'s block is lowered as a body is, each statement at its own position (and a failing check at the check), so its frame reads the statement's or the check's place (Task 3's `1:34`, Task 6's `3:26` and `5:29`). It is never entered in `proc_index`.
 11. **Every interpreter failure is reported as `#run failed: runtime error: MESSAGE`**, as the issue's example shows: panics, `stack overflow`, the C refusals, a C function found nowhere. Baking failures are `#run failed: MESSAGE` without `runtime error:`. A failure with no frames has no extra lines.
 12. **A string with a negative count** gets `#run failed: its result holds a string with a negative count`.
 13. **A procedure value that is no procedure's** (an address made from an integer, or a run's or the compiler's own procedure) gets the pointer message.
@@ -686,7 +688,7 @@ static void lowered_runs_free(Lowered_Runs *r);  // the lowering and the tokens;
 ### Task 4: Running `#run` while checking; numbers, procedure values, failures
 
 **Files:**
-- Create: `src/run.h`, `src/run.cpp` (in `all.cpp` right after `interp.cpp`; `run.h` declares `struct Checker;` and is included by `check_run.cpp`)
+- Create: `src/run.h`, `src/run.cpp` (in `all.cpp` right after `interp.cpp`; `run.h` declares `struct Checker;` and is included by `check.h`, so that `checker.cpp`'s `check()`, which comes before `check_run.cpp` in the unity build and makes and frees a world, sees `compile_time_new` and `compile_time_free` too)
 - Modify: `src/checker.h` (`check`'s world), `src/check.h` (`Checker.world`), `src/checker.cpp` (`check()`), `src/check_run.cpp` (`check_run`'s step 5)
 - Modify: `src/check_expr.cpp` (`constant_data`'s `case AST_RUN`), `src/lower.cpp` (`lower_expr`'s `case AST_RUN`, a procedure value)
 - Modify: `src/diag.h`, `src/diag.cpp` (`Diagnostic.lines`, `diag_add_lines`, rendering)
@@ -1068,7 +1070,7 @@ static s32 add_global_array(Lowering *l, Type *array, Ast *value, bool writable)
   - `build_program`, `run_test`, `interpreted_test`, `check_error_test`;
   - the header comment (`1-157`);
   - `check_run_test`'s comment.
-- Modify: `editors/vscode/test/check.js` (its two `tests/errors/*.err` loops leave out `*.check.err`)
+- Modify: `editors/vscode/test/check.js` (the problem matcher's and diagnostics.js's `tests/errors/*.err` loops leave out `*.check.err`; `$rig-runtime`'s may read it as it is)
 - Modify: `CONTRIBUTING.md` (the tests list, `:63-69`)
 - Test: `tests/unit/test_run.cpp`
 - Create: `tests/run/run_top_level.rig`, `.out` and `.build.out`, and `tests/run/load/run_top_level.rig`
@@ -1186,7 +1188,7 @@ static String build_program(Arena *a, Array<String> argv, String directory, Stri
 - Modify: `editors/vscode/extension.js`:
   - `checkTimeout(uri)`;
   - `LiveCheck`: `toldTimeout`, the limit in `runRig`, and its result in `show`, `through` and the alone check;
-  - the stdout comment at `1212`.
+  - the stdout comment at `1229`.
 - Modify: `editors/vscode/README.md` ("Errors as you type", "Checking it", and "Changing it"'s version list)
 - Test: `editors/vscode/test/check.js`
 
