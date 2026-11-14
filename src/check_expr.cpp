@@ -379,6 +379,15 @@ bool constant_data(Ast *e, Ast **value) {
         bool same = from->type == t || is_bytes_retyped(from->type, t);
         return same && constant_data(from, value);
     }
+    case AST_RUN: {
+        // A #run's baked value (run.cpp) that isn't a number: the node
+        // holding it, a name bound to a procedure. A number is a constant
+        // (Ast.constant), and a #run with no value has none to give.
+        Ast_Run *run = (Ast_Run *)e;
+        if (!run->value || run->is_constant) return false;
+        *value = run->value;
+        return true;
+    }
     default: return false;
     }
 }

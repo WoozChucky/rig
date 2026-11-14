@@ -478,6 +478,11 @@
 //   says nothing more either. Each body, global and constant records
 //   whether its own check had errors (Ast_Proc.had_errors,
 //   Ast_Var.had_errors, Ast_Const.had_errors).
+// - It runs in the compilation's one compile-time world (run.h), and its
+//   result is baked into the tree, a typed constant (run.cpp). A run that
+//   fails is "#run failed: runtime error: MESSAGE", at the #run, followed
+//   by the calls that led there; it has no value then, and what needs it
+//   says nothing more, as after an error it reaches.
 // - main is where the program starts: a #run that reaches a call of it is
 //   "main is where the program starts; #run can't call it", at the #run.
 // - A body a #run needs while that body is being checked (its own #run, or
@@ -521,11 +526,16 @@
 #include "ast.h"
 #include "types.h"
 
+struct Compile_Time;  // run.h: the compile-time world
+
 // Checks the program, every file's declarations in one tree (load.h),
 // filling in types and the procedures calls refer to: the declarations,
 // then the bodies, then the top-level #runs (checked, never run here). True
 // when the checker reported no errors (the parser or the loader may have).
-bool check(Ast_File *file, Arena *a, Diagnostics *d);
+// Expression #runs run while it checks, where it first needs their values
+// (spec 7.8): in `world`, which the caller keeps for the top-level runs;
+// without one, check() makes one of its own and frees it before returning.
+bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world = nullptr);
 
 // Whether e, checked with no errors, is a place in memory: a variable, but
 // not a loop's iterator or index; p.*; a field of a place, or of a struct
@@ -578,7 +588,9 @@ bool is_literal_string(Ast *e);
 // - the name of a constant with is_data (its `data`);
 // - a field of constant data (a struct's, not reached through a pointer),
 //   or an element of it (an array's) at an is_constant index;
-// - a cast of constant data to its own type, or between string and []u8.
+// - a cast of constant data to its own type, or between string and []u8;
+// - a #run whose baked value isn't a number (Ast_Run.value): a procedure
+//   value's name, which procedure_address walks on from.
 // A field's or element's value node that is itself constant data is
 // followed in turn. So *value is a string or struct or array literal, or a
 // scalar field's or element's value node as the literal wrote it (a
@@ -602,9 +614,9 @@ Type *call_result_type(Ast_Call *call, s64 i);
 
 // The procedure whose address e, checked, is: a procedure's name, a
 // constant that names one (OP :: add;), a field or an element of constant
-// data that holds one (OPS[0].run, constant_data), or a cast of any of
-// them that keeps the address, to *void or to a procedure type (cast(*void)
-// add); null for anything else, a field a literal leaves out too. A global
+// data that holds one (OPS[0].run, constant_data), a #run that gave one,
+// or a cast of any of them that keeps the address, to *void or to a
+// procedure type (cast(*void) add); null for anything else, a field a literal leaves out too. A global
 // and a constant may hold one, its address written there by the linker, as
 // a string literal's is: the checker asks this to allow it, and lowering
 // to write it (constant_bytes).

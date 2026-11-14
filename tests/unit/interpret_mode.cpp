@@ -75,22 +75,28 @@ static void interpret_mode(void *data) {
 
     // A copy of rig build's read_and_check (driver.cpp), which must follow
     // its changes: the loader reads, lexes and parses FILE and every file
-    // it #loads into the one tree (load_program). It can't call
+    // it #loads into the one tree (load_program), and the checker runs the
+    // expression #runs in a compile-time world of their own, freed before
+    // the program is lowered, so main's interpreter starts from the
+    // globals' written values. It can't call
     // read_and_check, which frees the diagnostics, and with them the paths
     // of the program's files, which a failure's frames name by index (a
     // loaded file's as its #load made it); so it has one more step: the
     // paths are copied before the diagnostics go.
     Diagnostics d = {};
     Ast_File *tree = load_program(&a, &d, path, text);
-    check(tree, &a, &d);
+    Compile_Time *world = compile_time_new(&d);
+    check(tree, &a, &d, world);
     if (d.error_count) {
         diag_sort(&d);
         diag_print(&d);
+        compile_time_free(world);
         diag_free(&d);
         arena_free(&a);
         mode->status = 1;
         return;
     }
+    compile_time_free(world);
     Ir_Module *m = ir_lower(tree, &d, &a, bounds_checks);
     Array<String> paths = {};
     for (s64 i = 0; i < d.files.count; i++) array_add(&paths, string_copy(&a, d.files[i].path));

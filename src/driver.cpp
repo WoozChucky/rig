@@ -12,6 +12,13 @@
 // by default NAME.exe or NAME in the current directory, NAME being FILE.rig's
 // name (the main file's) without its directory and .rig (exit 0).
 //
+// The checker runs the program's expression #runs while it checks, where it
+// first needs their values (spec 7.8), in rig check too: what they print
+// goes to its stdout, and one that fails is an error like any other. They
+// run in a compile-time world of their own, made before the checker starts
+// and freed once it's done, so the program's module, lowered after, starts
+// from the globals' written values.
+//
 // The checker runs even when the parser found errors, so a syntax error in
 // one procedure and a type error in another are reported in one build. A
 // declaration the parser gave up on stays in the tree as a broken entry, its
@@ -109,7 +116,11 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Modul
         diag_free(&d);
         return nullptr;
     }
-    check(tree, a, &d);
+    // The compile-time world, where the checker runs the expression #runs
+    // (spec 7.8), freed before the program is lowered: the program's module
+    // is its own, its globals untouched by the runs.
+    Compile_Time *world = compile_time_new(&d);
+    check(tree, a, &d, world);
     bool ok = d.error_count == 0;
     if (!ok) {
         // Into source order, file by file in load order: for each file the
@@ -120,6 +131,7 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Modul
         diag_sort(&d);
         diag_print(&d);
     }
+    compile_time_free(world);
     // Lowered while d still holds the files' paths, which a runtime error's
     // message names, and their absolute paths and directories, which the
     // debug information does; the module keeps its own copies.
