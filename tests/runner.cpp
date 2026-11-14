@@ -676,11 +676,18 @@ static const Command_Case COMMAND_CASES[] = {
      "rig: error: the output '.build/tests/output.RIG' ends in .rig; is it the source file?\n"},
 };
 
-// The program CHECK_CASES' "-o --stdin-for" case would build in the
-// repository's root if rig took --stdin-for for -o's name: that case can't
-// aim it into .build/tests, as the others aim theirs, since the word is the
-// name. On Windows the linker writes a PDB beside it, there too. Whoever
-// writes them is told so, and they're removed.
+// One case of COMMAND_CASES or CHECK_CASES: runs rig with the case's
+// arguments and fails unless it exits with the case's code, its stderr
+// starting with the case's text, having written no file it shouldn't.
+//
+// It looks for two kinds of file. .build/tests/output.RIG is the output some
+// cases name, which rig must refuse before writing it. And the program
+// CHECK_CASES' "-o --stdin-for" case would build in the repository's root if
+// rig took --stdin-for for -o's name: that case can't aim it into
+// .build/tests, as the others aim theirs, since the word is the name. On
+// Windows the linker writes a PDB beside it, there too. Each is removed
+// before the case runs, so a last run's doesn't count; writing one fails the
+// case, and the ones in the root are removed again, so none is left there.
 static String command_test(Arena *a, String rig, const Command_Case *c) {
     remove(".build/tests/output.RIG");  // what the last case must not write
 #ifdef _WIN32
@@ -1311,8 +1318,10 @@ static String check_stdin_for_reads_the_main_file_first_test(Arena *a, String ri
 }
 
 // rig check's command line, right and wrong, as COMMAND_CASES rig build's,
-// the rule the two share: the source file's name ends in .rig, and rig
-// build's refusal of rig check's --stdin-for.
+// and some of rig build's too: the rule the two share, that the source
+// file's name ends in .rig, tested here for both; and rig build's refusal
+// of rig check's --stdin-for, wherever it stands, which is about rig
+// check's option.
 static const Command_Case CHECK_CASES[] = {
     {"rig check with no file",
      {"check"},
