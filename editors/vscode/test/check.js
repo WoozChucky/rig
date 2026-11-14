@@ -334,6 +334,86 @@ check('diagnostics.js turns rig\'s byte columns into VS Code\'s characters', () 
     assert.strictEqual(characterOfByteColumn('', 1), 0);
 });
 
+// --- Finding the program: program.js ---------------------------------------
+
+// The parts of finding the program a loaded file belongs to that need no
+// VS Code: which files declare main, the order they're tried in, which
+// files may be tried at all, and what rig's answers say. extension.js
+// requires it; so does this file, with no stand-in needed.
+function program() {
+    return require(path.join(extension, 'program.js'));
+}
+
+// main declared at the top level, and only there: not in a comment or a
+// string, not inside a procedure, and not a longer name that ends or starts
+// with main.
+check('program.js: declaresMain finds main :: at the top level only', () => {
+    const { declaresMain } = program();
+    const yes = [
+        'main :: () {}',
+        'main::(){}',
+        'x :: 1;\nmain :: () {\n}',
+        '/* a */ main :: () {}',
+        'main\n::\n() {}',
+        's :: "abc\nmain :: () {}',      // the unclosed string ends at its line
+        's :: "\\\\"; main :: () {}',    // an escaped backslash, then the closing quote
+    ];
+    for (const text of yes) assert.strictEqual(declaresMain(text), true, JSON.stringify(text));
+    const no = [
+        '',
+        '// main :: () {}',
+        '/* /* */ main :: () {} */',     // block comments nest
+        's :: "main :: ()";',
+        's :: "\\" main :: ";',           // an escaped quote doesn't close the string
+        'f :: () { main :: () {} }',
+        'domain :: () {}',
+        'main2 :: () {}',
+        'main : int = 0;',
+        '/* main :: () {}',               // an unclosed comment runs to the end
+    ];
+    for (const text of no) assert.strictEqual(declaresMain(text), false, JSON.stringify(text));
+});
+
+check('program.js: pathOrder sorts by the path from the folder, with / between names', () => {
+    const { pathOrder } = program();
+    const w = path.resolve('w');
+    const files = ['b.rig', 'sub/a.rig', 'sub0.rig', 'a.rig', 'B.rig', 'a0.rig', 'a-b.rig'].map((f) => path.join(w, f));
+    const given = files.slice();
+    // On Windows, '\' (after '0') would put sub0.rig first.
+    const expected = ['B.rig', 'a-b.rig', 'a.rig', 'a0.rig', 'b.rig', 'sub/a.rig', 'sub0.rig'].map((f) => path.join(w, f));
+    assert.deepStrictEqual(pathOrder(w, files), expected);
+    assert.deepStrictEqual(files, given, 'pathOrder changed the array it was given');
+});
+
+// rig writes its programs to .build, where this repository's tests write
+// scratch programs that declare main: none of them is a program's main file.
+check('program.js: searchable leaves out what is under a .build directory', () => {
+    const { searchable } = program();
+    for (const relative of ['a.rig', 'sub/a.rig', '.builder/a.rig']) {
+        assert.strictEqual(searchable(relative), true, relative);
+    }
+    for (const relative of ['.build/a.rig', 'x/.build/y/a.rig', 'x\\.build\\a.rig']) {
+        assert.strictEqual(searchable(relative), false, relative);
+    }
+});
+
+// What rig check MAIN --stdin-for FILE answers: FILE isn't in MAIN's program
+// (doesntLoad), or the option is unknown to this rig (tooOld).
+check('program.js: doesntLoad and tooOld read rig\'s answer', () => {
+    const { doesntLoad, tooOld } = program();
+    const line = "rig: error: 'm.rig' doesn't load 'h.rig'\n";
+    assert.strictEqual(doesntLoad(1, line), true);
+    assert.strictEqual(doesntLoad(1, `m.rig:1:1: warning: w\n    x\n    ^\n${line}`), true);
+    assert.strictEqual(doesntLoad(1, line.replace('\n', '\r\n')), true);
+    assert.strictEqual(doesntLoad(0, line), false);
+    assert.strictEqual(doesntLoad(1, "h.rig:3:16: error: unknown identifier 'c'\n        return a / c;\n                   ^\n"), false);
+    // A source line quoted under an error is indented: it isn't rig's answer.
+    assert.strictEqual(doesntLoad(1, `h.rig:1:6: error: x\n    ${line}`), false);
+    assert.strictEqual(tooOld(2, 'usage: rig build FILE.rig ...\n'), true);
+    assert.strictEqual(tooOld(1, 'usage: ...'), false);
+    assert.strictEqual(tooOld(2, "rig: error: x\n"), false);
+});
+
 // --- Snippets --------------------------------------------------------------
 
 // A snippet's body is a string or an array of lines; either way, its text.
@@ -609,8 +689,8 @@ function ownModules() {
 }
 
 // No npm packages: VS Code's API, Node's own modules and the extension's own
-// files only. debug.js and diagnostics.js don't need VS Code at all, so this
-// file can test them as they are.
+// files only. debug.js, diagnostics.js and program.js don't need VS Code at
+// all, so this file can test them as they are.
 check('extension.js requires only vscode, Node\'s built-in modules and its own', () => {
     const builtIn = ['child_process', 'crypto', 'path', 'fs', 'os'];
     const required = requires('extension.js');
@@ -619,7 +699,7 @@ check('extension.js requires only vscode, Node\'s built-in modules and its own',
     for (const name of required) {
         assert.ok(name === 'vscode' || name.startsWith('./') || builtIn.includes(name), `extension.js requires '${name}'`);
     }
-    for (const file of ['debug.js', 'diagnostics.js']) {
+    for (const file of ['debug.js', 'diagnostics.js', 'program.js']) {
         for (const name of requires(file)) {
             assert.ok(builtIn.includes(name), `${file} requires '${name}'`);
         }
@@ -628,8 +708,8 @@ check('extension.js requires only vscode, Node\'s built-in modules and its own',
 
 // Node parses the files without running them: a syntax error shows here
 // rather than when VS Code loads the extension.
-check('node --check extension.js, debug.js and diagnostics.js', () => {
-    for (const file of ['extension.js', 'debug.js', 'diagnostics.js']) {
+check('node --check extension.js, debug.js, diagnostics.js and program.js', () => {
+    for (const file of ['extension.js', 'debug.js', 'diagnostics.js', 'program.js']) {
         const result = require('child_process').spawnSync(process.execPath, ['--check', path.join(extension, file)], {
             encoding: 'utf8',
         });
