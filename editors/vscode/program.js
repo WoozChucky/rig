@@ -33,15 +33,17 @@ function nameCharacter(ch) {
 // outside comments (// to the line's end; /* */ nest) and strings ("...", on
 // one line, \" and \\ escaped; an unclosed one ends at its line's end).
 //
-// This is a scan, not a parse: it skips what rig's lexer skips (comments)
-// and what can hold the words `main ::` without declaring anything
-// (strings), and counts braces so a main declared inside a procedure or a
-// struct isn't taken. A text that doesn't parse can still be judged, which
+// This is a scan, not a parse: it skips what rig's lexer skips (comments,
+// and a byte-order mark first) and what can hold the words `main ::`
+// without declaring anything (strings), and counts braces so a main
+// declared inside a procedure or a struct isn't taken. A text that doesn't parse can still be judged, which
 // matters, since the files it reads are being edited. An unclosed /* runs
 // to the end of the text, as it does for rig.
 function declaresMain(text) {
     let depth = 0;   // the braces open here: 0 is the top level
-    let i = 0;
+    // A byte-order mark first, which some Windows editors write, isn't part of
+    // the text for rig (src/lexer.cpp), so it can't start a name here either.
+    let i = text.startsWith('﻿') ? 1 : 0;
     while (i < text.length) {
         const ch = text[i];
         if (text.startsWith('//', i)) {
