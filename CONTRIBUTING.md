@@ -97,7 +97,9 @@ The release's files have fixed names, so `https://github.com/WoozChucky/rig/rele
 - `rig-vscode.vsix`: the VS Code extension (`code --install-extension rig-vscode.vsix`), made by `editors/vscode/install.sh --vsix FILE`. The extension keeps its own version, in its `package.json`, apart from Rig's.
 - `SHA256SUMS`: the SHA-256 of each of the three, as `sha256sum` writes them (`sha256sum -c SHA256SUMS` checks the downloads).
 
-The website's Install page ([site/install.md](site/install.md)) links these fixed "latest" URLs, so the names must not change: the release workflow's names are a contract.
+The website's Install page ([site/install.md](site/install.md)) links these fixed "latest" URLs, and its one-line installers download them, so the names must not change: the release workflow's names are a contract.
+
+The installers are [site/public/install.sh](site/public/install.sh) (Linux, `curl ... | sh`) and [site/public/install.ps1](site/public/install.ps1) (Windows, `irm ... | iex`), which the website serves at its root; the Install page says what they do. Each says in its comments how it is written to be safe to pipe. `scripts/test_install.sh` tests install.sh as its users run it, in a throwaway `HOME`, against the latest release and 0.2.0: CI runs it, with shellcheck, and parses install.ps1 with PowerShell 7. CI has no Windows runner, so after a change to install.ps1 run `scripts/test_install.ps1` on Windows, in both PowerShells (`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test_install.ps1`, then the same with `pwsh`): it installs into a temporary `LOCALAPPDATA` with a stand-in for VS Code, and leaves your user `PATH` alone (it checks). Editing the `PATH` is then checked by hand once: note your user `PATH`'s raw value (`(Get-Item HKCU:\Environment).GetValue('Path', '', 'DoNotExpandEnvironmentNames')`), run the one-line install and `-Uninstall`, and compare.
 
 There is no CHANGELOG.md: the Releases page is the changelog.
 
