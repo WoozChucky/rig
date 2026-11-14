@@ -77,7 +77,8 @@ struct Ast {
                        // value points here (ast_new sets it to pos, the parser
                        // moves it left for operators, calls and parentheses)
     Type *type;        // filled in by the checker; null until then, or after an error
-    bool is_constant;  // the checker knows the value while compiling (spec 6.4)
+    bool is_constant;  // the checker knows the value while compiling, one scalar (spec 5.9); never
+                       // set for data (a string, a struct, an array: Ast_Const.is_data)
     u64 constant;      // that value's bits: an integer's sign-extended to 64 bits when its
                        // type is signed or untyped, zero-extended when unsigned; a bool's
                        // 1 or 0; a float's, the bits of the double holding its value
@@ -170,8 +171,9 @@ struct Ast_Var : Ast {
                             // or a constant they need starts a level below
 };
 
-// A constant: `N :: e;`. The checker folds e, so the constant's value is in
-// its own is_constant and constant, and its type is e's (untyped when e is).
+// A constant: `N :: e;`. Its type is e's (untyped when e is). The checker
+// folds a number or a bool (or null) into the constant's own is_constant
+// and constant; a procedure is in proc, and data in data (spec 4.2).
 struct Ast_Const : Ast {
     String name;
     Ast *value;
@@ -179,6 +181,11 @@ struct Ast_Const : Ast {
                           // type (checker.cpp's check_const_value): that procedure. It's
                           // no number, so is_constant isn't set: a use of it is the procedure's
                           // address, as its name's is (check_expr.cpp's procedure_address)
+    bool is_data;         // a constant holding data (a string, a struct, an array, or a pointer to a
+                          // string literal's bytes): never is_constant, its value is `data`
+    Ast *data;            // is_data: the node holding its value (constant_data): a string literal, or
+                          // a struct or array literal; a pointer's string literal; null when that's
+                          // a field or element a literal leaves out, so the value is zero
     Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it
     s32 levels;           // the deepest levels of its value (MAX_DEPTH), as Ast_Var's
 };

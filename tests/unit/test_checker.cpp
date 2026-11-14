@@ -2,8 +2,9 @@
 // constants, operators, conversions and returns (issue #33), then bools,
 // conditions and loops (issue #34), then division and casts (issue #35),
 // then several results, globals and top-level constants (issue #36), then
-// floats (issue #37), and the fixes from milestone 2a's review (issue #52).
-// Milestone 1's tests build tokens by hand (toks(), helpers.cpp), milestone
+// floats (issue #37), and the fixes from milestone 2a's review (issue #52);
+// after them a section per later issue, the last constants holding data
+// (issue #113). Milestone 1's tests build tokens by hand (toks(), helpers.cpp), milestone
 // 2a's lex real source (src()); either way, parsed, then checked.
 
 #include "test.h"
@@ -721,8 +722,7 @@ TEST(local_constant_must_be_constant) {
                            "}\n"),
               "4:10: the value of constant 'N' isn't known while compiling\n"
               "6:10: the value of constant 'K' isn't known while compiling\n"
-              "7:10: a constant can only be a number, a bool or a procedure, for now\n"
-              "9:10: a constant can only be a number, a bool or a procedure, for now\n");
+              "9:10: the value of constant 'P' isn't known while compiling\n");
     arena_free(&a);
 }
 
@@ -2242,8 +2242,8 @@ TEST(deref_rules) {
 
 TEST(null_converts_to_pointers) {
     // null converts to every pointer type and to nothing else; alone it has
-    // no type to take. It's a constant, but only numbers and bools can be
-    // constants' values, for now.
+    // no type to take. It's a constant, so a constant can be null (N ::
+    // null;, of null's own type).
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "take :: (p: *u8) { }\n"
@@ -2261,7 +2261,6 @@ TEST(null_converts_to_pointers) {
                            "}\n"),
               "7:10: null needs a pointer type, as in p : *int = null;\n"
               "8:15: a value of type 'null' doesn't convert to 'int' implicitly\n"
-              "11:10: a constant can only be a number, a bool or a procedure, for now\n"
               "12:8: the condition of 'if' must be a bool, not 'null'\n");
     Checked c = check_src(&a, "main :: () { p : *int = null; }\n");
     Ast *value = ((Ast_Var *)local_named(&c, "p"))->value;
@@ -3036,7 +3035,6 @@ TEST(global_struct_literal_must_be_constant) {
                            "main :: () { }\n"),
               "5:14: a global's value must be known while compiling, for now\n"
               "6:9: a global's value must be known while compiling, for now\n"
-              "8:6: a constant can only be a number, a bool or a procedure, for now\n"
               "9:6: this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}\n");
     arena_free(&a);
 }
@@ -4705,5 +4703,202 @@ TEST(procedure_values_and_void_pointers_say_to_cast) {
               "6:29: a value of type '*void' doesn't convert to '(int, int) -> int' implicitly; cast it with "
               "cast((int, int) -> int)\n"
               "7:15: a value of type '(int, int) -> int' doesn't convert to '*u8' implicitly\n");
+    arena_free(&a);
+}
+
+// Issue #113: constants holding data (spec 4.2, 5.9).
+
+// Top-level constants of every kind of data: a string, structs and arrays,
+// nested, with procedures and string literals' addresses inside, and the
+// pointer constants beside them. constants_hold_data checks them, and
+// global_values_name_constant_data gives their values to globals.
+#define DATA_CONSTANTS                                          \
+    "Vec2 :: struct { x: int; y: int; }\n"                      \
+    "Line :: struct { a: Vec2; b: Vec2; }\n"                    \
+    "add :: (a: int, b: int) -> int { return a + b; }\n"        \
+    "Op :: struct { symbol: *u8; run: (int, int) -> int; }\n"   \
+    "NAME :: \"rig\";\n"                                        \
+    "ORIGIN :: Vec2.{0, 0};\n"                                  \
+    "PRIMES :: int.[2, 3, 5, 7, 11];\n"                         \
+    "LINE :: Line.{a = ORIGIN};\n"                              \
+    "OPS :: Op.[.{\"+\", add}, .{NAME, add}];\n"                \
+    "OP :: OPS[0].run;\n"                                       \
+    "NOWHERE :: cast(*void) null;\n"                            \
+    "NOTHING :: null;\n"                                        \
+    "GREETING :: cast(*u8) \"hi\";\n"                           \
+    "COPY :: PRIMES;\n"
+
+// Whether decl is a constant holding data: is_data, and never is_constant.
+static bool holds_data(Ast *decl) {
+    return decl->kind == AST_CONST && ((Ast_Const *)decl)->is_data && !decl->is_constant;
+}
+
+TEST(constants_hold_data) {
+    // A constant can be a string, or a struct or an array whose values are
+    // constant data, nested to any depth, procedures, null and string
+    // literals' addresses included. It's marked is_data, its value the node
+    // holding it (Ast_Const.data), and is never is_constant, which holds one
+    // scalar: lowering would emit it as one. Nor is a use of it. A pointer
+    // constant that is null stays a scalar constant, and one that is a
+    // string literal's address holds data, that literal.
+    Arena a = arena_make();
+    Checked c = check_src(&a, DATA_CONSTANTS "main :: () { T :: int.[1, 2]; S :: NAME; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(holds_data(global_named(&c, "NAME")));
+    CHECK(holds_data(global_named(&c, "ORIGIN")));
+    CHECK(holds_data(global_named(&c, "PRIMES")));
+    CHECK(holds_data(global_named(&c, "LINE")));
+    CHECK(holds_data(global_named(&c, "OPS")));
+    CHECK(holds_data(global_named(&c, "GREETING")));
+    CHECK(holds_data(global_named(&c, "COPY")));
+    CHECK(holds_data(local_named(&c, "T")));
+    CHECK(holds_data(local_named(&c, "S")));
+    CHECK(!value_of(&c, "S")->is_constant);
+    Ast_Const *name = (Ast_Const *)global_named(&c, "NAME");
+    CHECK_EQ(name->data->kind, AST_STRING);
+    CHECK(((Ast_Const *)global_named(&c, "COPY"))->data == ((Ast_Const *)global_named(&c, "PRIMES"))->data);
+    CHECK(((Ast_Const *)local_named(&c, "S"))->data == name->data);
+    Ast_Const *greeting = (Ast_Const *)global_named(&c, "GREETING");
+    CHECK_STR(type_name(&a, greeting->type), "*u8");
+    CHECK_EQ(greeting->data->kind, AST_STRING);
+    CHECK_STR(((Ast_String *)greeting->data)->value, "hi");
+    Ast_Proc *op = ((Ast_Const *)global_named(&c, "OP"))->proc;
+    CHECK(op && string_eq(op->name, str("add")));
+    Ast_Const *nowhere = (Ast_Const *)global_named(&c, "NOWHERE");
+    CHECK(nowhere->is_constant);
+    CHECK(!nowhere->is_data);
+    CHECK_EQ(nowhere->constant, 0);
+    CHECK_STR(type_name(&a, nowhere->type), "*void");
+    Ast_Const *nothing = (Ast_Const *)global_named(&c, "NOTHING");
+    CHECK(nothing->is_constant);
+    CHECK(!nothing->is_data);
+    CHECK(nothing->type == &type_null);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(constant_data_resolves) {
+    // constant_data follows names, fields, elements and casts to the node
+    // holding a value: a literal, a string literal, or null for a field a
+    // literal leaves out, which is zero. An element needs a constant index,
+    // and a literal's every value must be constant.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Vec2 :: struct { x: int; y: int; }\n"
+                          "Line :: struct { a: Vec2; b: Vec2; }\n"
+                          "NAME :: \"rig\";\n"
+                          "ORIGIN :: Vec2.{3, 4};\n"
+                          "LINE :: Line.{a = ORIGIN};\n"
+                          "LINES :: Line.[LINE, .{b = .{5, 6}}];\n"
+                          "main :: () {\n"
+                          "    a := LINES[1].b;\n"
+                          "    b := LINE.b;\n"
+                          "    c := cast([]u8) NAME;\n"
+                          "    d := LINES[0].a;\n"
+                          "    i := 0;\n"
+                          "    e := LINES[i];\n"
+                          "    f := Vec2.{1, 2};\n"
+                          "    g := Vec2.{i, 2};\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast *value = nullptr;
+    CHECK(constant_data(value_of(&c, "a"), &value));
+    CHECK(value && value->kind == AST_LITERAL);
+    if (value && value->kind == AST_LITERAL) CHECK_EQ(((Ast_Literal *)value)->values[0]->constant, 5);
+    CHECK(constant_data(value_of(&c, "b"), &value));
+    CHECK(value == nullptr);
+    CHECK(constant_data(value_of(&c, "c"), &value));
+    CHECK(value && value->kind == AST_STRING);
+    CHECK(constant_data(value_of(&c, "d"), &value));
+    CHECK(value == ((Ast_Const *)global_named(&c, "ORIGIN"))->value);
+    CHECK(!constant_data(value_of(&c, "e"), &value));
+    CHECK(constant_data(value_of(&c, "f"), &value));
+    CHECK(value == value_of(&c, "f"));
+    CHECK(!constant_data(value_of(&c, "g"), &value));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(constant_data_rules) {
+    // A constant's value, and every value inside it, must be known while
+    // compiling, reported at the first one that isn't. A pointer in it is
+    // null or a string literal's address: one cast from a number or a
+    // procedure gets its own message. No part of it is a view, which would
+    // point at memory of its own; a view field a literal leaves out is
+    // zero, and fine.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Holder :: struct { p: *int; v: []int; n: int; }\n"
+                           "Named :: struct { name: string; n: int; }\n"
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "value := 3;\n"
+                           "text := \"hi\";\n"
+                           "pointer : *int;\n"
+                           "VIEW :: cast([]u8) \"hi\";\n"
+                           "WITH_VIEW :: Holder.{v = int.[1]};\n"
+                           "ZERO_VIEW :: Holder.{n = 1};\n"
+                           "AT :: cast(*int) 4096;\n"
+                           "CALLBACK :: Holder.{p = cast(*int) cast(*void) add};\n"
+                           "LIVE :: Holder.{n = value};\n"
+                           "NAMED :: Named.{text, 1};\n"
+                           "DEEP :: Holder.[.{n = 1}, .{n = value}];\n"
+                           "HELD :: pointer;\n"
+                           "main :: () { }\n"),
+              "7:9: a constant can't hold a view; only a string or an array can be one\n"
+              "8:26: a constant can't hold a view; only a string or an array can be one\n"
+              "10:7: a constant's pointer can only be null or a string literal's address\n"
+              "11:25: a constant's pointer can only be null or a string literal's address\n"
+              "12:21: the value of constant 'LIVE' isn't known while compiling\n"
+              "13:17: the value of constant 'NAMED' isn't known while compiling\n"
+              "14:33: the value of constant 'DEEP' isn't known while compiling\n"
+              "15:9: the value of constant 'HELD' isn't known while compiling\n");
+    arena_free(&a);
+}
+
+TEST(string_constants_convert_as_literals) {
+    // A string constant is a string literal's bytes, with the zero after
+    // them, so it converts to *u8 and passes C's '...' as the literal
+    // does. A string variable holding the same bytes doesn't.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                          "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                          "NAME :: \"rig\";\n"
+                          "main :: () {\n"
+                          "    puts(NAME);\n"
+                          "    p : *u8 = NAME;\n"
+                          "    q := cast(*u8) NAME;\n"
+                          "    b := cast([]u8) NAME;\n"
+                          "    printf(\"%s\\n\", NAME);\n"
+                          "    s := \"rig\";\n"
+                          "    puts(s);\n"
+                          "    printf(\"%s\\n\", s);\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag),
+              "11:10: argument 1 of 'puts' has type 'string', which can't be converted to '*u8'; its .data may not "
+              "end with a zero\n"
+              "12:20: argument 2 of 'printf' has type 'string', which C's '...' can't take; pass its .data, which "
+              "may not end with a zero, or a literal\n");
+    CHECK_STR(type_of(&a, &c, "q"), "*u8");
+    CHECK_STR(type_of(&a, &c, "b"), "[]u8");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(global_values_name_constant_data) {
+    // A global's value may name constant data, or a field or an element of
+    // it: the global gets a copy of its own (spec 4.3).
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, DATA_CONSTANTS
+                           "origin := ORIGIN;\n"
+                           "line := Line.{a = ORIGIN};\n"
+                           "copy := PRIMES;\n"
+                           "view : []int = PRIMES;\n"
+                           "name : *u8 = NAME;\n"
+                           "text := NAME;\n"
+                           "first := OPS[0];\n"
+                           "op : (int, int) -> int = OPS[0].run;\n"
+                           "main :: () { }\n"),
+              "");
     arena_free(&a);
 }
