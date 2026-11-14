@@ -215,10 +215,13 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
     # Tells Windows that the environment changed, so that the terminals
     # opened next see the new PATH: setting and removing a variable through
     # .NET broadcasts WM_SETTINGCHANGE, which Explorer listens to. Writing
-    # the registry, as the PATH is written here, doesn't.
+    # the registry, as the PATH is written here, doesn't. The removal passes
+    # [NullString]::Value, not $null: PowerShell 7 hands $null to a string
+    # parameter as "", which .NET there stores as an empty variable instead
+    # of removing it.
     function Send-EnvironmentChange {
         [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', '1', 'User')
-        [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', $null, 'User')
+        [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', [NullString]::Value, 'User')
     }
 
     # The user PATH as it is stored: HKCU\Environment's Path, read without

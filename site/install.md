@@ -114,11 +114,11 @@ In PowerShell (Windows PowerShell, which comes with Windows, or PowerShell 7):
    if (($path -split ';') -notcontains $rig) {
        $new = if (-not $path) { $rig } elseif ($path.EndsWith(';')) { "$path$rig;" } else { "$path;$rig" }
        New-ItemProperty HKCU:\Environment Path -PropertyType ExpandString -Force -Value $new > $null
-       [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', '1', 'User'); [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', $null, 'User')
+       [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', '1', 'User'); [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', [NullString]::Value, 'User')
    }
    ```
 
-   This edits the user `PATH` as stored, so its other entries stay exactly as they are: one written with a variable, such as `%USERPROFILE%\.dotnet\tools`, keeps the variable. The folder goes at the end, before the `;` the `PATH` may end with, so that taking it off again gives back the `PATH` you had. The last line only tells Windows that the environment changed (setting and removing a variable broadcasts that), so the terminals you open next see the new `PATH`.
+   This edits the user `PATH` as stored, so its other entries stay exactly as they are: one written with a variable, such as `%USERPROFILE%\.dotnet\tools`, keeps the variable. The folder goes at the end, before the `;` the `PATH` may end with, so that taking it off again gives back the `PATH` you had. The last line only tells Windows that the environment changed (setting and removing a variable broadcasts that; `[NullString]::Value` removes it in PowerShell 7 too, where `$null` would leave it set to nothing), so the terminals you open next see the new `PATH`.
 
 5. Open a new terminal (one opened before doesn't see the new `PATH`), and check:
 
@@ -136,7 +136,7 @@ In PowerShell (Windows PowerShell, which comes with Windows, or PowerShell 7):
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\rig"
 $path = (Get-Item HKCU:\Environment).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
 New-ItemProperty HKCU:\Environment Path -PropertyType ExpandString -Force -Value ((($path -split ';') -ne "$env:LOCALAPPDATA\Programs\rig") -join ';') > $null
-[Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', '1', 'User'); [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', $null, 'User')
+[Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', '1', 'User'); [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', [NullString]::Value, 'User')
 ```
 
 ### Linux
