@@ -1,20 +1,32 @@
 heap resize keeps the bytes: true
 heap alloc of 0: true, resize to 0: true
 the program's own malloc: true
-resize of null allocates: true, to 0 frees: true
-arena: p2 - p1 = 16, parent allocations 1
-arena past a block: parent allocations 2
-arena bigger than a block: parent allocations 3
-arena reset: parent frees 2
+free of null asks nothing: true, alloc of -1: true
+resize of null allocates: true, to 0 frees: true, to -1 frees: true
+arena: p2 - p1 = 16, parent allocations 1 of 80
+arena exact fit: p3 - p1 = 32, parent allocations 1
+arena past a block: parent allocations 2 of 80
+arena past a block's last 8: parent allocations 3
+arena alloc of int's largest: true
+arena bigger than a block: parent allocations 4 of 216, block size 200
+arena reset: parent frees 3
 arena reuses its block: true
 arena resize copies: true
-arena free_all: parent frees 3
-arena after free_all: parent allocations 4
-arena: allocations 4, frees 4
+arena resize to fewer bytes: true
+arena free_all: parent frees 4
+arena after free_all: parent allocations 5
+arena: allocations 7, frees 7
+arena of block size 0: 4096, parent asked for 4112
+arena on a failing parent: true
 pool slots: 24 24, parent allocations 1
 pool exhausted: true
 pool too big: true
 pool reuses the freed slot: true
 pool resize within a slot: true
 pool resize past a slot: true
+pool hands out the last freed: true
+pool after free_all: true
 pool: allocations 2, frees 2
+pool of slot size 0: 8, allocates: true
+pool too big for an int: true
+pool on a failing parent: true

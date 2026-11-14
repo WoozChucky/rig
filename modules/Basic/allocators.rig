@@ -58,9 +58,10 @@ alloc :: (size: int, allocator: Allocator) -> *void {
 //
 // Resizing to 0 or less frees memory and returns null, so no allocator is
 // ever asked to resize to 0. That matters for the heap: what C's realloc
-// does with a size of 0 is left to each C library, and the compiled
-// program's C library and the interpreter's (the compiler's own) differ,
-// one freeing the memory and the other keeping it.
+// does with a size of 0 is left to each C library, and on Windows the
+// compiled program's C library and the interpreter's (the compiler's own,
+// linked statically) differ, one freeing the memory and the other keeping
+// it.
 resize :: (memory: *void, old_size: int, new_size: int, allocator: Allocator) -> *void {
     if memory == null { return alloc(new_size, allocator); }
     if new_size <= 0 {
