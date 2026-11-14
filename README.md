@@ -10,19 +10,28 @@ Rig is in the spirit of Jai: no garbage collector, no virtual machine, C functio
 
 ## Install
 
-On Linux (x86-64), in a terminal:
+One command installs Rig for your user. It needs no administrator rights.
 
-```sh
-curl -fsSL https://woozchucky.github.io/rig/install.sh | sh
-```
+1. Run the command for your system.
 
-On Windows (x64), in PowerShell:
+   **Linux** (x86-64), in a terminal:
 
-```powershell
-irm https://woozchucky.github.io/rig/install.ps1 | iex
-```
+   ```sh
+   curl -fsSL https://woozchucky.github.io/rig/install.sh | sh
+   ```
 
-Either one downloads the latest release, checks it, installs it for your user (no administrator rights needed), puts `rig` on your `PATH`, adds the [VS Code extension](editors/vscode) if you have VS Code, and builds hello world to check that your system has what Rig needs. Run it again to upgrade. The website's [Install page](https://woozchucky.github.io/rig/install) has the rest: the requirements (Visual Studio's C++ tools on Windows, glibc's development files on Linux), the options, how to install by hand, and how to uninstall.
+   **Windows** (x64), in PowerShell:
+
+   ```powershell
+   irm https://woozchucky.github.io/rig/install.ps1 | iex
+   ```
+
+2. Open a new terminal. The one you ran the command in doesn't see the new `PATH` yet.
+3. Check that it works: `rig version`.
+
+The command downloads the latest release and checks it. It puts `rig` on your `PATH`, and adds the [VS Code extension](editors/vscode) if you have VS Code. Then it builds hello world, to check that your system has what Rig needs. If something is missing, it says what to install: Visual Studio's C++ tools on Windows, glibc's development files on Linux.
+
+To upgrade, run the command again. The website's [Install page](https://woozchucky.github.io/rig/install) has the options (a given version, uninstalling) and how to install by hand.
 
 ## A taste of Rig
 
@@ -92,7 +101,7 @@ Rig is early. Milestones 1 (hello world) and 2 (the core language) of 8 are done
 
 ## Quick start
 
-With Rig [installed](#install), save hello world as `hello.rig`, in a folder of your own:
+With Rig [installed](#install), open a new terminal and save hello world as `hello.rig`, in a folder of your own:
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;
