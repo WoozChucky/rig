@@ -1,0 +1,8 @@
+// exit() in a #run ends the compiler there (spec 7.8), after printing
+// the errors found so far: here the syntax error in broken, which the
+// #run doesn't reach.
+exit :: (status: s32) #foreign libc;
+broken :: () { x := ; }
+stop :: () -> int { exit(1); return 0; }
+N :: #run stop();
+main :: () { }

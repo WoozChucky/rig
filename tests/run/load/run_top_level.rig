@@ -1,0 +1,2 @@
+// Loaded by tests/run/run_top_level.rig: its top-level #run runs after that file's.
+#run puts("the loaded file's runs come after");

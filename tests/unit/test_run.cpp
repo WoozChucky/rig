@@ -661,3 +661,41 @@ TEST(run_baked_views_pass_from_constant_to_constant) {
     token_list_free(c.list);
     arena_free(&a);
 }
+
+// The messages for `text`, parsed and checked with a compile-time world of
+// its own, as rig build does: once it checks with no errors, its top-level
+// #runs run in that world (compile_time_run_top_level). Sorted, as rig
+// build prints them; "" when it checks and every run succeeds.
+static String messages_after_runs(Arena *a, const char *text) {
+    Token_List *list = src(text);
+    Ast_File *file = parse(list->tokens, a, &list->diag);
+    Compile_Time *world = compile_time_new(&list->diag);
+    check(file, a, &list->diag, world);
+    if (list->diag.error_count == 0) compile_time_run_top_level(world, file);
+    compile_time_free(world);
+    diag_sort(&list->diag);
+    String result = messages(a, &list->diag);
+    token_list_free(list);
+    return result;
+}
+
+TEST(top_level_runs_share_the_world_and_fail_alone) {
+    // The top-level #runs run in order, in the one compile-time world, so
+    // the second and third see the counter the first set. Each that fails
+    // is an error at its #run, with its frames (a block's at the statement
+    // that failed), and the runs after it still run. Checking alone never
+    // runs a top-level run.
+    Arena a = arena_make();
+    const char *program = "counter := 0;\n"
+                          "#run { counter = 3; }\n"
+                          "#run { a : [2]int; x := a[counter]; }\n"
+                          "#run { b : [1]int; y := b[counter]; }\n"
+                          "main :: () { }\n";
+    CHECK_STR(messages_after_runs(&a, program),
+              "3:1: #run failed: runtime error: index 3 is out of bounds (count 2)\n"
+              "    in #run (test.rig:3:26)\n"
+              "4:1: #run failed: runtime error: index 3 is out of bounds (count 1)\n"
+              "    in #run (test.rig:4:26)\n");
+    CHECK_STR(check_source(&a, program), "");
+    arena_free(&a);
+}

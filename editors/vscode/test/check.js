@@ -103,10 +103,16 @@ check('no problem matcher shares its owner with the live check\'s collection', (
 // the column, both indented by four spaces. FILE is NAME.rig, or a file it
 // #loads, in tests/errors/load/. The matcher must take each first line,
 // with the file, line and column the source and caret lines confirm, and no
-// indented line.
+// indented line. A NAME.check.err, what `rig check` prints instead for a
+// program whose errors only `rig build` finds, may be empty, and is left
+// out (buildErrFiles).
+function buildErrFiles(dir) {
+    return fs.readdirSync(dir).filter((f) => f.endsWith('.err') && !f.endsWith('.check.err'));
+}
+
 check('the problem matcher reads every diagnostic of tests/errors', () => {
     const dir = path.join(root, 'tests', 'errors');
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.err'));
+    const files = buildErrFiles(dir);
     assert.ok(files.length > 0, 'tests/errors has no .err files');
     for (const name of files) {
         const lines = fs.readFileSync(path.join(dir, name), 'utf8').replace(/\r\n/g, '\n').split('\n');
@@ -235,14 +241,15 @@ check('diagnostics.js reads with the same regular expression as $rig', () => {
     assert.strictEqual(runtimeMatcher().pattern.regexp, matcher().pattern.regexp.replace('(?:runtime )?', 'runtime '));
 });
 
-// What `rig check tests/errors/NAME.rig` prints is NAME.err: each file's
+// What `rig check tests/errors/NAME.rig` prints is NAME.err, but for a
+// program with a NAME.check.err (left out here: buildErrFiles): each file's
 // diagnostics, and only those, come out for that file (NAME.rig, or a file
 // it #loads, in tests/errors/load/), at the line and column each names,
 // with its severity and message, and none of the source and caret lines.
 check('diagnostics.js reads every diagnostic of tests/errors', () => {
     const { parseDiagnostics } = diagnostics();
     const dir = path.join(root, 'tests', 'errors');
-    for (const name of fs.readdirSync(dir).filter((f) => f.endsWith('.err'))) {
+    for (const name of buildErrFiles(dir)) {
         const text = fs.readFileSync(path.join(dir, name), 'utf8');
         // Each file's diagnostics, under its name as the .err gives it.
         // NAME.rig is there even with none of its own: a name declared again

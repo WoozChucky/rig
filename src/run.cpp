@@ -17,6 +17,10 @@
 // reaches has checked with no errors: a constant's #run in the declaration
 // pass, a body's when the body is checked. A run's code may hold another
 // #run, already run then: its value is baked, and lowered as any constant.
+// The top-level #runs run later, for their effect, once the whole program
+// has checked with no errors, and only in rig build and interpret mode
+// (compile_time_run_top_level): each sees what the expression runs, and the
+// top-level runs before it, left in the globals.
 //
 // A failure. Anything the interpreter fails at (a runtime check's panic, the
 // stack running out, a call it can't make, a C function found nowhere) is an
@@ -355,23 +359,32 @@ static void report_failure(Compile_Time *ct, Ast_Run *run, Interp_Result *result
     array_free(&paths);
 }
 
-// In order:
+// What every run does, an expression's or a top-level one's, in order:
 // 1. The world's parts, the first time.
 // 2. The run's procedure, lowered with everything it reaches.
-// 3. An aggregate result is copied through a hidden pointer, its procedure's
+// 3. What the compiler printed so far is written out first (fflush), so it
+//    comes before what the run prints, in order. Then the run, given `args`,
+//    its result in *result, its strings and frames in `scratch`.
+// 4. A failure is said, with its frames.
+static void run_procedure(Compile_Time *ct, Ast_Run *run, Array<u64> args, Arena *scratch, Interp_Result *result) {
+    if (!ct->module) make_parts(ct);
+    s32 proc = ir_lower_run(ct->lowering, run);
+    fflush(nullptr);
+    interp_run(ct->interp, proc, args, scratch, result);
+    if (!result->ok) report_failure(ct, run, result, scratch);
+}
+
+// In order:
+// 1. An aggregate result is copied through a hidden pointer, its procedure's
 //    one parameter: memory of its size for it (1 byte at least, as calloc
 //    may give null for 0).
-// 4. What the compiler printed so far is written out first (fflush), so it
-//    comes before what the run prints, in order. Then the run.
-// 5. A failure is said, with its frames.
-// 6. Otherwise the result is baked: a scalar from its bits, an aggregate
+// 2. The run (run_procedure), a failure said there.
+// 3. Otherwise the result is baked: a scalar from its bits, an aggregate
 //    from that memory. A part refused is said, and nothing is kept.
-// 7. The memory and the result's arrays are freed: the strings the run gave
+// 4. The memory and the result's arrays are freed: the strings the run gave
 //    were copied into the diagnostics, and a baked value into the checker's
 //    arena, a string's bytes too.
 bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run) {
-    if (!ct->module) make_parts(ct);
-    s32 proc = ir_lower_run(ct->lowering, run);
     Type *t = run->type;
     bool aggregate = type_is_aggregate(t);
     void *memory = nullptr;
@@ -381,14 +394,11 @@ bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run) {
         if (!memory) out_of_memory();
         array_add(&args, (u64)(uintptr_t)memory);
     }
-    fflush(nullptr);
     Arena scratch = arena_make();
     Interp_Result result = {};
-    interp_run(ct->interp, proc, args, &scratch, &result);
+    run_procedure(ct, run, args, &scratch, &result);
     Ast *value = nullptr;
-    if (!result.ok) {
-        report_failure(ct, run, &result, &scratch);
-    } else {
+    if (result.ok) {
         Baking baking = {ct, c, run, nullptr};
         value = aggregate ? bake_value(&baking, t, (const u8 *)memory) : bake_scalar(&baking, t, result.results[0]);
         if (baking.refusal) diag_error(c->diag, run->pos, "%s", baking.refusal);
@@ -404,4 +414,22 @@ bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run) {
     array_free(&result.frames);
     arena_free(&scratch);
     return value != nullptr;
+}
+
+// Each run as an expression's is run (run_procedure), with no arguments: a
+// top-level run's procedure has no result to copy, its expression's value
+// or its block's end thrown away (ir_lower_run). Ast_File.runs is in the
+// order they run in already: the loader parses the files one at a time, in
+// load order, each into the end of the lists. A failure is said, and the
+// next run starts afresh on an empty stack, with the globals as the failed
+// one left them.
+void compile_time_run_top_level(Compile_Time *ct, Ast_File *file) {
+    for (s64 i = 0; i < file->runs.count; i++) {
+        Arena scratch = arena_make();
+        Interp_Result result = {};
+        run_procedure(ct, file->runs[i], {}, &scratch, &result);
+        array_free(&result.results);
+        array_free(&result.frames);
+        arena_free(&scratch);
+    }
 }

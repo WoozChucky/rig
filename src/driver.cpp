@@ -14,10 +14,14 @@
 //
 // The checker runs the program's expression #runs while it checks, where it
 // first needs their values (spec 7.8), in rig check too: what they print
-// goes to its stdout, and one that fails is an error like any other. They
-// run in a compile-time world of their own, made before the checker starts
-// and freed once it's done, so the program's module, lowered after, starts
-// from the globals' written values.
+// goes to its stdout, and one that fails is an error like any other. rig
+// build then runs the top-level #runs, for their effect, once the whole
+// program has checked with no errors; rig check never does. All of them run
+// in a compile-time world of their own, made before the checker starts and
+// freed once the runs are done, so the program's module, lowered after,
+// starts from the globals' written values. The diagnostics are printed
+// after every run, so a failed top-level run's error comes out with the
+// rest; a run that ends the compiler (C's exit) has them printed first.
 //
 // The checker runs even when the parser found errors, so a syntax error in
 // one procedure and a type error in another are reported in one build. A
@@ -69,7 +73,8 @@ String executable_path(Arena *a, String output, String name, Target t) {
 // #loads (load_program), checks the program, and prints every diagnostic to
 // stderr. Returns the checked tree, or nullptr when the source couldn't be
 // read or had errors, which it has then reported. With `lowered`, as rig
-// build asks, a program without errors is also lowered into *lowered, its
+// build asks, a program that checks without errors has its top-level #runs
+// run, and one still without errors after them is lowered into *lowered, its
 // indexes bounds-checked when bounds_checks is set; rig check passes
 // nullptr and stops at the checker.
 //
@@ -116,21 +121,28 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Modul
         diag_free(&d);
         return nullptr;
     }
-    // The compile-time world, where the checker runs the expression #runs
-    // (spec 7.8), freed before the program is lowered: the program's module
-    // is its own, its globals untouched by the runs.
+    // From here until they're printed, a #run's code may end the process
+    // (C's exit), and the diagnostics found by then are printed as it ends
+    // (diag_print_at_exit). The compile-time world, where the checker runs
+    // the expression #runs (spec 7.8), and rig build the top-level ones once
+    // the program checked with no errors, is freed before the program is
+    // lowered: the program's module is its own, its globals untouched by
+    // the runs.
+    diag_print_at_exit(&d);
     Compile_Time *world = compile_time_new(&d);
     check(tree, a, &d, world);
+    if (d.error_count == 0 && lowered) compile_time_run_top_level(world, tree);
     bool ok = d.error_count == 0;
     if (!ok) {
         // Into source order, file by file in load order: for each file the
         // lexer reported the whole file before the parser began, and the
         // parser before the loader's errors about its #loads; the checker
         // came after every file, and reports every signature before any
-        // body.
+        // body; a failed top-level run's error comes after all of them.
         diag_sort(&d);
         diag_print(&d);
     }
+    diag_print_at_exit(nullptr);
     compile_time_free(world);
     // Lowered while d still holds the files' paths, which a runtime error's
     // message names, and their absolute paths and directories, which the
@@ -255,10 +267,11 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
 // It runs read_and_check, rig build's front half, and stops: the program
 // isn't lowered, LLVM and the linker aren't involved, and rig check itself
 // writes no file or .build directory. The expression #runs do run, in the
-// compile-time world (spec 7.8): their code may print, take any time, or do
-// whatever C lets it, which is why the editor limits a check's time. Else
-// it is quick to run on every keystroke, which is what an editor does with
-// it:
+// compile-time world (spec 7.8), though the top-level ones never do (they
+// are checked, and what they reach, but not run): their code may print,
+// take any time, or do whatever C lets it, which is why the editor limits
+// a check's time. Else it is quick to run on every keystroke, which is
+// what an editor does with it:
 // - --stdin reads the source from standard input, so the editor can send
 //   what's on screen, saved or not, and FILE.rig is then the name the
 //   diagnostics give it and the file whose directory its #loads are found
