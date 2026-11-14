@@ -1,0 +1,40 @@
+true false true false
+-1 1 0 -1 1 0 1
+2 3 -1 -1
+4 0 -1 0 -1 0
+1 5 3 -1
+true true false true false true
+[hi there]
+[x  ]
+[  x]
+[]
+[]
+[ell]
+[lo]
+[he]
+[]
+[]
+[llo]
+[]
+[hello]
+4 [a] [b] [] [c]
+1 []
+2 [a] [b,c]
+2 [] []
+0
+true [key] [value=x]
+false [novalue] []
+true
+0 -1 1 -1 0 -1 true false false
+[]
+[]
+[]
+[]
+1 []
+false [] []
+[ello]
+[he]
+[]
+[]
+[hello]
+[]

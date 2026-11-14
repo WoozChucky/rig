@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, and printing to standard output; later parts add strings, allocators, a string builder, and growable arrays and hash tables (issue #134).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, and printing to standard output; later parts add allocators, a string builder, and growable arrays and hash tables (issue #134).
 
 ## Loading it
 
@@ -60,6 +60,26 @@ Numbers are written into a buffer the caller gives, and the text comes back as a
 - `parse_int(s: string, base: int) -> int, bool`: reads an optional `+` or `-` and one digit or more of the base, either case; `0, false` for anything else, a value outside `int` or a base outside 2 to 36.
 - `format_float(buffer: []u8, value: float64, decimals: int) -> string`: writes `value` with 0 to 9 decimals (others are clamped), the last rounded half away from zero on the `float64`'s own value, though a value within about a unit in the last place of a tie can round the other way (`1.805` with 2 decimals is `1.81`); `nan`, `inf`, `-inf`, and `-` before any negative value, `-0.0` included. From 1e18 up, 18 leading digits are written, of which only about the first 15 or 16 are the value's, and the rest are zeros.
 - `parse_float(s: string) -> float64, bool`: reads `[+-] digits [. digits] [(e|E) [+-] digits]`, with a digit before or after the point; `0, false` for anything else. A value too large is an infinity. Correctly rounded when the significant digits fit in 2^53 and the power of ten is within ±22, otherwise within a few units in the last place.
+
+## Strings (`string.rig`)
+
+Every string returned is a view into the string given: nothing is copied or allocated. Indexes and counts are in bytes, compared unsigned, with no knowledge of UTF-8. A zeroed string (count 0, data null) is the empty string everywhere, and no byte is read through its null data.
+
+- `strings_equal(a: string, b: string) -> bool`: `a == b`, as a procedure a procedure value can name.
+- `compare_strings(a: string, b: string) -> int`: -1, 0 or 1 by the first byte that differs, compared unsigned; a prefix sorts first.
+- `find_byte(s: string, byte: u8) -> int`: the index of the first `byte` in `s`, or -1.
+- `find_byte_from_end(s: string, byte: u8) -> int`: the index of the last `byte` in `s`, or -1.
+- `find_string(s: string, needle: string) -> int`: the index of the first `needle` in `s`, or -1; the empty needle is found at 0.
+- `find_string_from_end(s: string, needle: string) -> int`: the index of the last `needle` in `s`, or -1; the empty needle is found at `s.count`.
+- `starts_with(s: string, prefix: string) -> bool`: whether `s` begins with `prefix`; every string begins with `""`.
+- `ends_with(s: string, suffix: string) -> bool`: whether `s` ends with `suffix`; every string ends with `""`.
+- `trim_left(s: string) -> string`: `s` without the `is_space` bytes at its start.
+- `trim_right(s: string) -> string`: `s` without the `is_space` bytes at its end.
+- `trim(s: string) -> string`: `s` without the `is_space` bytes at either end.
+- `slice(s: string, start: int, count: int) -> string`: `count` bytes from `start`, clamped to stay in `s`: `start` to `0..s.count`, then `count` to `0..s.count - start`.
+- `advance(s: string, amount: int) -> string`: `s` without its first `amount` bytes, clamped as `slice` is.
+- `split(s: string, separator: u8, parts: []string) -> int`: writes the pieces of `s` between separators into `parts` and returns how many; empty pieces count, `""` is one empty piece, the last part holds the unsplit rest when `parts` runs out, and an empty `parts` gets 0.
+- `split_from_left(s: string, separator: u8) -> bool, string, string`: whether `separator` is in `s`, and the bytes before and after its first occurrence; `false, s, ""` without one.
 
 ## Print (`print.rig`)
 
