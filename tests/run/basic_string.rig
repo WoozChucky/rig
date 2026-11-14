@@ -38,6 +38,8 @@ main :: () {
     parts : [8]string;
     two : []string = parts;
     two.count = 2;
+    one : []string = parts;
+    one.count = 1;
     none : []string;
 
     print_bool(strings_equal("abc", "abc"));
@@ -47,6 +49,12 @@ main :: () {
     print_bool(strings_equal("", empty));
     print_byte(32);
     print_bool(strings_equal("ab", "abc"));
+    print_byte(32);
+    // strings_equal as a procedure value, which is what it is there for.
+    equal : (string, string) -> bool = strings_equal;
+    print_bool(equal("abc", "abc"));
+    print_byte(32);
+    print_bool(equal("abc", "abd"));
     print_byte(10);
 
     // A prefix sorts first, by -1 or 1 however much shorter it is, and bytes
@@ -84,6 +92,8 @@ main :: () {
     print_int(find_byte_from_end("hello", "h"[0]));
     print_byte(32);
     print_int(find_byte_from_end("hello", "z"[0]));
+    print_byte(32);
+    print_int(find_byte("hello", "o"[0]));
     print_byte(10);
 
     print_int(find_string("hello world", "o w"));
@@ -124,6 +134,8 @@ main :: () {
     print_byte(32);
     print_bool(starts_with("he", "hello"));
     print_byte(32);
+    print_bool(starts_with("hello", "hex"));
+    print_byte(32);
     print_bool(ends_with("hello", "lo"));
     print_byte(32);
     print_bool(ends_with("hello", "he"));
@@ -157,6 +169,7 @@ main :: () {
     show_parts(split("", ","[0], parts), parts);
     show_parts(split("a,b,c", ","[0], two), two);
     show_parts(split(",", ","[0], parts), parts);
+    show_parts(split("a,b", ","[0], one), one);
     show_parts(split("a,b", ","[0], none), none);
 
     found, before, after := split_from_left("key=value=x", "="[0]);
@@ -168,6 +181,23 @@ main :: () {
     print_line("]");
 
     found, before, after = split_from_left("novalue", "="[0]);
+    print_bool(found);
+    print_string(" [");
+    print_string(before);
+    print_string("] [");
+    print_string(after);
+    print_line("]");
+
+    // A separator at either end leaves an empty piece on that side.
+    found, before, after = split_from_left("=x", "="[0]);
+    print_bool(found);
+    print_string(" [");
+    print_string(before);
+    print_string("] [");
+    print_string(after);
+    print_line("]");
+
+    found, before, after = split_from_left("k=", "="[0]);
     print_bool(found);
     print_string(" [");
     print_string(before);

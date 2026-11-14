@@ -1,9 +1,9 @@
-true false true false
+true false true false true false
 -1 1 0 -1 1 0 1 -1 1
-2 3 -1 -1 0 -1
+2 3 -1 -1 0 -1 4
 4 0 -1 0 -1 0 3 0
 1 5 3 -1 0 3 0
-true true false true false true
+true true false false true false true
 8 [hi there]
 3 [x  ]
 3 [  x]
@@ -23,9 +23,12 @@ true true false true false true
 1 []
 2 [a] [b,c]
 2 [] []
+1 [a,b]
 0
 true [key] [value=x]
 false [novalue] []
+true [] [x]
+true [k] []
 true true true true
 0 -1 1 -1 0 -1 true false false
 0 5 true true
