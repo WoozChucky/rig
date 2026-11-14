@@ -1,6 +1,6 @@
 // Basic: Rig's first library, written in Rig over a thin layer of C
-// (libc.rig). It gathers what most programs need first: for now, printing
-// to standard output.
+// (libc.rig). It gathers what most programs need first: for now, numbers
+// to text and back, and printing to standard output.
 //
 // A program loads all of it through this file, by its path from the
 // program's own directory, until Rig has #import: from tests/run that is
@@ -14,4 +14,5 @@
 // Each part loads the parts it uses itself, and a file is read once however
 // often it is named, so the order here is only the reading order.
 #load "libc.rig";
+#load "numbers.rig";
 #load "print.rig";
