@@ -2209,6 +2209,15 @@ check('a document\'s program is remembered until a .rig file in its folder is cr
         fire('fsChange', fileUri(rig('a.rig')));
         assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('a.rig')], 'after a file changes');
 
+        // A file deleted forgets the program even when it isn't the
+        // remembered main file: here 1.rig, added with no event, is found
+        // only by the search that x.rig's deletion starts.
+        fs.writeFileSync(rig('1.rig'), loader);
+        fs.writeFileSync(rig('x.rig'), 'x :: 1;\n');
+        fs.rmSync(rig('x.rig'));
+        fire('fsDelete', fileUri(rig('x.rig')));
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('1.rig')], 'after another file is deleted');
+
         fs.writeFileSync(rig('0.rig'), loader);
         assert.deepStrictEqual(
             (await checked(dir, doc, 'folders', { added: [], removed: [] })).calls,
@@ -2220,10 +2229,10 @@ check('a document\'s program is remembered until a .rig file in its folder is cr
 });
 
 // rig.main may name a file in no workspace folder, whose changes the file
-// system watcher doesn't see. Saving it forgets every program, and checks
-// every open document again at once, so a document no program loaded, and
-// so checked alone, is found to be part of rig.main's program once that
-// #loads it.
+// system watcher doesn't see. Saving it forgets the programs of the
+// documents with a rig.main, and checks them again at once, so a document
+// no program loaded, and so checked alone, is found to be part of
+// rig.main's program once that #loads it.
 check('saving a rig.main in no folder forgets the programs and re-checks the documents', async () => {
     loadExtension();
     const live = activated.collections.rig;
@@ -2334,6 +2343,8 @@ check('a .rig file saved or changed in one folder leaves the other folders\' doc
             await checked(dir, doc, 'save', saved);
             await until('the check of b.rig', () => live.has(saved.uri.toString()));
             fire('close', saved);
+            // A change outside VS Code, not the save's own.
+            fs.writeFileSync(path.join(dir, 'b.rig'), `${loader}// changed\n`);
             fire('fsChange', fileUri(path.join(dir, 'b.rig')));
             await sleep(300);
             assert.strictEqual(calls(dir2).length, 2, 'the other folder\'s document checked again');
@@ -2350,8 +2361,9 @@ check('a .rig file saved or changed in one folder leaves the other folders\' doc
 
 // rig.main may name a file in another workspace folder. A .rig file of
 // that folder created, changed, deleted or saved forgets that folder's
-// programs, and the programs of the documents whose rig.main the file is;
-// saved, it checks those documents again too. Here the document is first
+// programs, and the programs of the documents with a rig.main, such as
+// those whose rig.main the file is; saved, it checks those documents again
+// too. Here the document is first
 // checked alone, as rig.main's program doesn't load it, then through
 // rig.main once that loads it.
 check('a file another folder\'s rig.main names forgets the programs of that folder\'s documents', async () => {
@@ -2390,6 +2402,122 @@ check('a file another folder\'s rig.main names forgets the programs of that fold
     });
 });
 
+// rig.main's program may load files anywhere, in another workspace folder
+// or in none, not only rig.main itself. A .rig file created, changed,
+// deleted or saved in another folder, or in none, forgets the program of
+// each document with a rig.main. Here, with rig.main in another folder, a
+// file it loads changes outside VS Code to #load the document, and with
+// rig.main in no folder, one is saved so; the document, checked alone till
+// then, is checked through rig.main. (The stand-in reads only the main
+// file's text, so that's where the #load goes.)
+check('a file rig.main\'s program loads, in another folder or in none, forgets the program', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    for (const event of ['fsChange', 'save']) {
+        await withOtherDir(async (app) => {
+            await withStandIn(async (dir) => {
+                if (event === 'fsChange') stub.folders.push(fakeFolder(app));
+                const file = path.join(dir, 'helper.rig');
+                const doc = fakeDocument(file, 'putz();\n');
+                stub.document = doc;
+                const main = path.join(app, 'main.rig');
+                const lib = path.join(app, 'lib.rig');
+                fs.writeFileSync(main, '#load "lib.rig";\nmain :: () {}\n');
+                fs.writeFileSync(lib, '');
+                stub.mains[dir] = main;
+                const through = [main, '--stdin-for', file];
+                const alone = [file, '--stdin'];
+                const change = { document: doc, contentChanges: [{}] };
+                assert.deepStrictEqual((await checked(dir, doc, 'open')).calls, [through, alone], `${event}: on opening`);
+                assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [alone], `${event}: remembered`);
+
+                const loader = `#load "${path.relative(app, file).split(path.sep).join('/')}";\n`;
+                fs.writeFileSync(lib, loader);
+                fs.writeFileSync(main, `#load "lib.rig";\n${loader}main :: () {}\n`);
+                if (event === 'fsChange') {
+                    fire('fsChange', fileUri(lib));
+                    assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through], 'after lib.rig changes');
+                } else {
+                    const saved = fakeDocument(lib, loader);
+                    assert.deepStrictEqual((await checked(dir, doc, 'save', saved)).calls, [through], 'on saving lib.rig');
+                    await until('the check of lib.rig', () => live.has(saved.uri.toString()));
+                    fire('close', saved);
+                }
+                assert.deepStrictEqual(stub.errors, []);
+            });
+        });
+    }
+});
+
+// A .rig file in no workspace folder, such as a scratch file opened from
+// anywhere, isn't part of the program of a document without a rig.main,
+// which is found in the document's folder: saving it leaves that program
+// remembered.
+check('saving a .rig file in no folder leaves the programs of documents without a rig.main be', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withOtherDir(async (outside) => {
+        await withStandIn(async (dir) => {
+            const file = path.join(dir, 'helper.rig');
+            const doc = fakeDocument(file, 'putz();\n');
+            stub.document = doc;
+            const through = (name) => [path.join(dir, name), '--stdin-for', file];
+            fs.writeFileSync(path.join(dir, 'a.rig'), 'main :: () {}\n');
+            fs.writeFileSync(path.join(dir, 'b.rig'), '#load "helper.rig";\nmain :: () {}\n');
+            assert.deepStrictEqual((await checked(dir, doc, 'open')).calls, [through('a.rig'), through('b.rig')]);
+
+            const scratch = path.join(outside, 'x.rig');
+            fs.writeFileSync(scratch, 'main :: () {}\n');
+            const saved = fakeDocument(scratch, 'main :: () {}\n');
+            fire('save', saved);
+            await until('the check of x.rig', () => live.has(saved.uri.toString()));
+            fire('close', saved);
+            await sleep(300);
+            assert.strictEqual(calls(dir).length, 2, 'the document checked again');
+            const change = { document: doc, contentChanges: [{}] };
+            assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('b.rig')]);
+            assert.deepStrictEqual(stub.errors, []);
+        });
+    });
+});
+
+// VS Code's file system watcher reports the files VS Code saves, as well
+// as those changed outside it, so a save's own write comes back as a
+// change. The save has forgotten the programs it concerns, and checked
+// their documents again: the change forgets nothing more, so what those
+// checks found is kept. A change outside VS Code after that, which leaves
+// the file another time of modification, forgets it.
+check('a save\'s own change on disk forgets nothing more', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        const a = path.join(dir, 'a.rig');
+        const through = (name) => [path.join(dir, name), '--stdin-for', file];
+        const change = { document: doc, contentChanges: [{}] };
+        const loader = '#load "helper.rig";\nmain :: () {}\n';
+        fs.writeFileSync(a, 'main :: () {}\n');
+        fs.writeFileSync(path.join(dir, 'b.rig'), loader);
+        await checked(dir, doc, 'open');
+
+        fs.writeFileSync(a, 'main :: () {}\n');
+        const saved = fakeDocument(a, 'main :: () {}\n');
+        const onSave = await checked(dir, doc, 'save', saved);
+        assert.deepStrictEqual(onSave.calls.filter((c) => c[1] === '--stdin-for'), [through('a.rig'), through('b.rig')], 'on saving a.rig');
+        await until('the check of a.rig', () => live.has(saved.uri.toString()));
+        fire('close', saved);
+        fire('fsChange', fileUri(a));
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('b.rig')], 'after the save\'s change');
+
+        fs.writeFileSync(a, loader);
+        fire('fsChange', fileUri(a));
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('a.rig')], 'after a change outside VS Code');
+        assert.deepStrictEqual(stub.errors, []);
+    });
+});
+
 // A remembered main file may be gone with no event for it: deleted outside
 // VS Code where the file system watcher doesn't look (in no workspace
 // folder, as here) or misses it. rig couldn't read it, so it isn't tried:
@@ -2416,12 +2544,33 @@ check('a remembered main file that is gone is forgotten', async () => {
 
 // A .rig file created while a search is under way may be the main file
 // the search would have found, had it been there: the search's answer
-// isn't remembered, and the next check searches again. Here the search has
-// found a.rig alone, and the file created is b.rig, which loads the
-// document.
+// isn't remembered, and the next check searches again. First the search
+// has found a.rig alone, which doesn't load the document, and the file
+// created is b.rig, which does; then the search has found b.rig, and the
+// file created is a.rig, which loads the document too, and comes first.
 check('a search under way when a .rig file is created remembers nothing', async () => {
     loadExtension();
     const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz(); // slow\n');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        const through = (name) => [path.join(dir, name), '--stdin-for', file];
+        const loader = '#load "helper.rig";\nmain :: () {}\n';
+        fs.writeFileSync(path.join(dir, 'b.rig'), loader);
+        fire('open', doc);
+        await until('the slow check through b.rig', () => calls(dir).length === 1);
+        fs.writeFileSync(path.join(dir, 'a.rig'), loader);
+        fire('fsCreate', fileUri(path.join(dir, 'a.rig')));
+        await until('the check', () => live.has(key));
+        assert.deepStrictEqual(calls(dir), [through('b.rig')]);
+
+        doc.text = 'putz();\n';
+        const change = { document: doc, contentChanges: [{}] };
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('a.rig')]);
+        assert.deepStrictEqual(stub.errors, []);
+    });
     await withStandIn(async (dir) => {
         const file = path.join(dir, 'helper.rig');
         const doc = fakeDocument(file, 'putz(); // slow\n');
