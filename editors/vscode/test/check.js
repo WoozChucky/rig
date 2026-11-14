@@ -869,10 +869,10 @@ reset();
 
 // What activate() set up once, for every check: the listeners it gave each
 // of VS Code's events, by the event's name, the task provider, the debug
-// configuration providers, by debug type, and the diagnostic collections it
+// configuration providers, by debug type, the diagnostic collections it
 // made, by name, each a Map from a document's uri (as a string) to its
-// diagnostics.
-const activated = { listeners: {}, taskProvider: null, debugProviders: {}, collections: {} };
+// diagnostics, the file system watchers it made, and its context.
+const activated = { listeners: {}, taskProvider: null, debugProviders: {}, collections: {}, watchers: [], context: null };
 
 function listen(event) {
     return (listener) => {
@@ -998,12 +998,19 @@ const vscodeStub = {
         fs: {
             readFile: (uri) => fs.promises.readFile(uri.fsPath),
         },
-        createFileSystemWatcher: () => ({
-            onDidCreate: listen('fsCreate'),
-            onDidChange: listen('fsChange'),
-            onDidDelete: listen('fsDelete'),
-            dispose() {},
-        }),
+        // Each watcher made is recorded in activated.watchers, with its glob
+        // pattern.
+        createFileSystemWatcher: (pattern) => {
+            const watcher = {
+                pattern,
+                onDidCreate: listen('fsCreate'),
+                onDidChange: listen('fsChange'),
+                onDidDelete: listen('fsDelete'),
+                dispose() {},
+            };
+            activated.watchers.push(watcher);
+            return watcher;
+        },
         onDidOpenTextDocument: listen('open'),
         onDidChangeTextDocument: listen('change'),
         onDidSaveTextDocument: listen('save'),
@@ -1095,7 +1102,8 @@ function loadExtension() {
     };
     require.cache.vscode = { id: 'vscode', filename: 'vscode', loaded: true, exports: vscodeStub };
     loaded = require(path.join(extension, 'extension.js'));
-    loaded.activate({ subscriptions: [] });
+    activated.context = { subscriptions: [] };
+    loaded.activate(activated.context);
     assert.ok(loaded.forTests, 'extension.js exports no forTests');
     return loaded;
 }
@@ -1253,6 +1261,12 @@ check('activate listens to the documents for the live check', () => {
         assert.ok((activated.listeners[event] || []).length > 0, `no listener for ${event}`);
     }
     assert.ok(activated.collections.rig, "no diagnostic collection 'rig'");
+    // The .rig files at any depth, not only the folder's own; disposed of
+    // with the extension.
+    const [watcher] = activated.watchers;
+    assert.ok(watcher, 'no file system watcher');
+    assert.strictEqual(watcher.pattern, '**/*.rig');
+    assert.ok(activated.context.subscriptions.includes(watcher), 'the file system watcher is never disposed of');
 });
 
 // While the live check shows the compile errors, the tasks' matcher takes
@@ -1430,6 +1444,18 @@ async function withStandIn(fn) {
     } finally {
         // Ends any check still running (and its timer) before the folder goes.
         for (const document of vscodeStub.workspace.textDocuments) fire('close', document);
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+// Another scratch directory with the stand-in compiler, for files in
+// another workspace folder or in none, removed after the async `fn`.
+async function withOtherDir(fn) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-vscode-check-'));
+    try {
+        fs.writeFileSync(path.join(dir, 'check.js'), STAND_IN);
+        await fn(dir);
+    } finally {
         fs.rmSync(dir, { recursive: true, force: true });
     }
 }
@@ -2194,10 +2220,11 @@ check('a document\'s program is remembered until a .rig file in its folder is cr
 });
 
 // rig.main may name a file in no workspace folder, whose changes the file
-// system watcher doesn't see. Saving it forgets every program, so a
-// document no program loaded, and so checked alone, is found to be part of
-// rig.main's program once that #loads it.
-check('saving a rig.main in no folder forgets the programs', async () => {
+// system watcher doesn't see. Saving it forgets every program, and checks
+// every open document again at once, so a document no program loaded, and
+// so checked alone, is found to be part of rig.main's program once that
+// #loads it.
+check('saving a rig.main in no folder forgets the programs and re-checks the documents', async () => {
     loadExtension();
     const live = activated.collections.rig;
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-vscode-check-'));
@@ -2221,10 +2248,10 @@ check('saving a rig.main in no folder forgets the programs', async () => {
             const loader = `#load "${path.relative(outside, file).split(path.sep).join('/')}";\nmain :: () {}\n`;
             fs.writeFileSync(main, loader);
             const saved = fakeDocument(main, loader);
-            fire('save', saved);
+            assert.deepStrictEqual((await checked(dir, doc, 'save', saved)).calls, [through], 'on saving m.rig');
             await until('the check of m.rig', () => live.has(saved.uri.toString()));
             fire('close', saved);
-            assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through], 'after m.rig is saved');
+            assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through], 'remembered again');
             assert.deepStrictEqual(stub.errors, []);
         });
     } finally {
@@ -2277,6 +2304,141 @@ check('saving a .rig file re-checks the other open documents of its folder', asy
                 [lone, '--stdin'],
             ]),
         );
+        assert.deepStrictEqual(stub.errors, []);
+    });
+});
+
+// Only what may have changed is forgotten and checked again: a .rig file
+// saved or changed in one workspace folder leaves the documents of another
+// as they are, their programs remembered.
+check('a .rig file saved or changed in one folder leaves the other folders\' documents be', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withOtherDir(async (dir2) => {
+        await withStandIn(async (dir) => {
+            stub.folders.push(fakeFolder(dir2));
+            const loader = '#load "helper.rig";\nmain :: () {}\n';
+            const doc = fakeDocument(path.join(dir, 'helper.rig'), 'putz();\n');
+            const file2 = path.join(dir2, 'helper.rig');
+            const doc2 = fakeDocument(file2, 'putz();\n');
+            fs.writeFileSync(path.join(dir, 'b.rig'), loader);
+            fs.writeFileSync(path.join(dir2, 'a.rig'), 'main :: () {}\n');
+            fs.writeFileSync(path.join(dir2, 'b.rig'), loader);
+            const through2 = (name) => [path.join(dir2, name), '--stdin-for', file2];
+            stub.document = doc;
+            stub.documents = [doc2];
+            await checked(dir, doc, 'open');
+            assert.deepStrictEqual((await checked(dir2, doc2, 'open')).calls, [through2('a.rig'), through2('b.rig')]);
+
+            const saved = fakeDocument(path.join(dir, 'b.rig'), loader);
+            await checked(dir, doc, 'save', saved);
+            await until('the check of b.rig', () => live.has(saved.uri.toString()));
+            fire('close', saved);
+            fire('fsChange', fileUri(path.join(dir, 'b.rig')));
+            await sleep(300);
+            assert.strictEqual(calls(dir2).length, 2, 'the other folder\'s document checked again');
+            const change2 = { document: doc2, contentChanges: [{}] };
+            assert.deepStrictEqual(
+                (await checked(dir2, doc2, 'change', change2)).calls,
+                [through2('b.rig')],
+                'the other folder\'s program forgotten',
+            );
+            assert.deepStrictEqual(stub.errors, []);
+        });
+    });
+});
+
+// rig.main may name a file in another workspace folder. A .rig file of
+// that folder created, changed, deleted or saved forgets that folder's
+// programs, and the programs of the documents whose rig.main the file is;
+// saved, it checks those documents again too. Here the document is first
+// checked alone, as rig.main's program doesn't load it, then through
+// rig.main once that loads it.
+check('a file another folder\'s rig.main names forgets the programs of that folder\'s documents', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withOtherDir(async (app) => {
+        await withStandIn(async (dir) => {
+            stub.folders.push(fakeFolder(app));
+            const file = path.join(dir, 'helper.rig');
+            const doc = fakeDocument(file, 'putz();\n');
+            stub.document = doc;
+            const main = path.join(app, 'main.rig');
+            const loader = `#load "${path.relative(app, file).split(path.sep).join('/')}";\nmain :: () {}\n`;
+            const other = 'main :: () {}\n';
+            fs.writeFileSync(main, other);
+            stub.mains[dir] = main;
+            const through = [main, '--stdin-for', file];
+            const alone = [file, '--stdin'];
+            const change = { document: doc, contentChanges: [{}] };
+            assert.deepStrictEqual((await checked(dir, doc, 'open')).calls, [through, alone], 'on opening');
+
+            fs.writeFileSync(main, loader);
+            fire('fsChange', fileUri(main));
+            assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through], 'after it changes');
+            fs.writeFileSync(main, other);
+            fire('fsChange', fileUri(main));
+            assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through, alone], 'after it changes back');
+
+            fs.writeFileSync(main, loader);
+            const saved = fakeDocument(main, loader);
+            assert.deepStrictEqual((await checked(dir, doc, 'save', saved)).calls, [through], 'on saving it');
+            await until('the check of main.rig', () => live.has(saved.uri.toString()));
+            fire('close', saved);
+            assert.deepStrictEqual(stub.errors, []);
+        });
+    });
+});
+
+// A remembered main file may be gone with no event for it: deleted outside
+// VS Code where the file system watcher doesn't look (in no workspace
+// folder, as here) or misses it. rig couldn't read it, so it isn't tried:
+// it's forgotten, and the search goes on.
+check('a remembered main file that is gone is forgotten', async () => {
+    loadExtension();
+    await withOtherDir(async (outside) => {
+        await withStandIn(async (dir) => {
+            const file = path.join(dir, 'helper.rig');
+            const doc = fakeDocument(file, 'putz();\n');
+            stub.document = doc;
+            const main = path.join(outside, 'm.rig');
+            fs.writeFileSync(main, `#load "${path.relative(outside, file).split(path.sep).join('/')}";\nmain :: () {}\n`);
+            stub.mains[dir] = main;
+            assert.deepStrictEqual((await checked(dir, doc, 'open')).calls, [[main, '--stdin-for', file]], 'on opening');
+
+            fs.rmSync(main);
+            const after = await checked(dir, doc, 'change', { document: doc, contentChanges: [{}] });
+            assert.deepStrictEqual(after.calls, [[file, '--stdin']]);
+            assert.deepStrictEqual(after.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
+        });
+    });
+});
+
+// A .rig file created while a search is under way may be the main file
+// the search would have found, had it been there: the search's answer
+// isn't remembered, and the next check searches again. Here the search has
+// found a.rig alone, and the file created is b.rig, which loads the
+// document.
+check('a search under way when a .rig file is created remembers nothing', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz(); // slow\n');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        const through = (name) => [path.join(dir, name), '--stdin-for', file];
+        fs.writeFileSync(path.join(dir, 'a.rig'), 'main :: () {}\n');
+        fire('open', doc);
+        await until('the slow check through a.rig', () => calls(dir).length === 1);
+        fs.writeFileSync(path.join(dir, 'b.rig'), '#load "helper.rig";\nmain :: () {}\n');
+        fire('fsCreate', fileUri(path.join(dir, 'b.rig')));
+        doc.text = 'putz();\n';
+        await until('the check', () => live.has(key));
+        assert.deepStrictEqual(calls(dir), [through('a.rig'), [file, '--stdin']]);
+
+        const change = { document: doc, contentChanges: [{}] };
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('a.rig'), through('b.rig')]);
         assert.deepStrictEqual(stub.errors, []);
     });
 });
