@@ -33,7 +33,7 @@
   - Removed: `a constant can only be a number, a bool or a procedure, for now`.
 - **Work flow:**
   - Branch `issue/113-constant-data`. This plan is its first commit, already pushed. Open the draft PR, `Closes #113`, with labels `language` and `enhancement` and milestone `3: Compile-time execution`, if it isn't open yet. Push after each commit.
-  - Commit messages are a short imperative summary, optionally a body, and nothing else. No AI attribution of any kind: no `Claude-Session` line, no claude.ai link, no `Co-Authored-By`, no mention of Claude or AI.
+  - Commit messages are a short imperative summary, optionally a body, and nothing else: no trailers or attribution lines.
   - Before the PR is marked ready, an independent review runs. Fix every finding in production code and in tests, minor ones included, and fix any wrong comment or doc. Comment and doc *polish* never holds the PR up: it becomes GitHub issues labelled `documentation`.
 
 ## Facts (verified on `main` at 532f788)
