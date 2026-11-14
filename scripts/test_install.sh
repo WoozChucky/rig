@@ -65,7 +65,7 @@ export PATH="$work/bin:/usr/local/bin:/usr/bin:/bin"
 
 # A fresh, empty HOME.
 fresh_home() {
-    rm -rf "$work/home" "$work/code.log"
+    rm -rf "${work:?}/home" "${work:?}/code.log"
     mkdir "$work/home"
     export HOME="$work/home"
 }
@@ -188,8 +188,8 @@ done
 
 fresh_home
 installer || fail "installing the latest release failed"
-[ -L "$HOME/.local/bin/rig" ] || fail "~/.local/bin/rig isn't a link"
-[ "$(readlink "$HOME/.local/bin/rig")" = "$HOME/.local/share/rig/rig" ] || fail "~/.local/bin/rig doesn't link to ~/.local/share/rig/rig"
+[ -L "$HOME/.local/bin/rig" ] || fail "the link ~/.local/bin/rig is missing"
+[ "$(readlink "$HOME/.local/bin/rig")" = "$HOME/.local/share/rig/rig" ] || fail "the link ~/.local/bin/rig doesn't point to ~/.local/share/rig/rig"
 [ -x "$HOME/.local/share/rig/ld.lld" ] || fail "ld.lld isn't beside rig"
 latest=$("$HOME/.local/bin/rig" version) || fail "rig version failed"
 case $latest in rig\ *) ;; *) fail "rig version says '$latest'" ;; esac
@@ -201,8 +201,8 @@ mkdir "$work/hello"
 printf '%s\n' 'puts :: (s: *u8) -> s32 #foreign libc;' 'main :: () { puts("Hello, World!"); }' > "$work/hello/hello.rig"
 (cd "$work/hello" && "$HOME/.local/bin/rig" build hello.rig > /dev/null && ./hello > hello.txt) || fail "building hello world failed"
 [ "$(cat "$work/hello/hello.txt")" = "Hello, World!" ] || fail "hello world printed '$(cat "$work/hello/hello.txt")'"
-[ "$(path_lines "$HOME/.profile")" = 1 ] || fail "~/.profile hasn't the PATH line once"
-[ "$(path_lines "$HOME/.bashrc")" = 1 ] || fail "~/.bashrc hasn't the PATH line once"
+[ "$(path_lines "$HOME/.profile")" = 1 ] || fail "the PATH line isn't in ~/.profile once"
+[ "$(path_lines "$HOME/.bashrc")" = 1 ] || fail "the PATH line isn't in ~/.bashrc once"
 [ ! -e "$HOME/.zshrc" ] || fail "install.sh made a ~/.zshrc"
 grep -qx -- "--install-extension .*/rig-vscode.vsix --force" "$work/code.log" || fail "the extension wasn't installed: $(cat "$work/code.log" 2>/dev/null)"
 pass "installs $latest: rig version, hello world, the PATH line, the extension"
@@ -215,9 +215,9 @@ echo broken > "$HOME/.local/share/rig/rig"
 touch "$HOME/.zshrc"
 installer || fail "running install.sh again failed"
 [ "$("$HOME/.local/bin/rig" version)" = "$latest" ] || fail "running it again didn't replace rig"
-[ "$(path_lines "$HOME/.profile")" = 1 ] || fail "~/.profile has a second PATH line"
-[ "$(path_lines "$HOME/.bashrc")" = 1 ] || fail "~/.bashrc has a second PATH line"
-[ "$(path_lines "$HOME/.zshrc")" = 1 ] || fail "~/.zshrc hasn't the PATH line once"
+[ "$(path_lines "$HOME/.profile")" = 1 ] || fail "the PATH line is in ~/.profile twice"
+[ "$(path_lines "$HOME/.bashrc")" = 1 ] || fail "the PATH line is in ~/.bashrc twice"
+[ "$(path_lines "$HOME/.zshrc")" = 1 ] || fail "the PATH line isn't in ~/.zshrc once"
 pass "running it again upgrades in place, and adds no second PATH line"
 
 # With ~/.local/bin on the PATH, no shell file is touched.
@@ -225,7 +225,7 @@ rm -f "$HOME/.zshrc"
 cp "$HOME/.bashrc" "$work/bashrc.before"
 sed -i '/added by Rig/d' "$HOME/.bashrc"
 PATH="$HOME/.local/bin:$PATH" installer || fail "installing with ~/.local/bin on the PATH failed"
-[ "$(path_lines "$HOME/.bashrc")" = 0 ] || fail "~/.bashrc got the PATH line with ~/.local/bin on the PATH"
+[ "$(path_lines "$HOME/.bashrc")" = 0 ] || fail "the PATH line went into ~/.bashrc with ~/.local/bin on the PATH"
 ! says "Open a new terminal" || fail "says to open a new terminal with the PATH unchanged"
 cp "$work/bashrc.before" "$HOME/.bashrc"
 pass "with ~/.local/bin on the PATH, the shell files are left alone"
