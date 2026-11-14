@@ -4,10 +4,10 @@
 #   curl -fsSL https://woozchucky.github.io/rig/install.sh | sh
 #   curl -fsSL https://woozchucky.github.io/rig/install.sh | sh -s -- --version 0.2.0
 #
-# It does what the website's Install page (https://woozchucky.github.io/rig/install)
-# does by hand: downloads a release's rig-linux-x64.tar.gz and SHA256SUMS,
-# checks the archive's SHA-256, unpacks it into ~/.local/share/rig and links
-# ~/.local/bin/rig to it. Then it puts ~/.local/bin on the PATH if it isn't
+# It does what the website's Install page does by hand
+# (https://woozchucky.github.io/rig/install): downloads a release's
+# rig-linux-x64.tar.gz and SHA256SUMS, checks the archive's SHA-256, unpacks
+# it into ~/.local/share/rig and links ~/.local/bin/rig to it. Then it puts ~/.local/bin on the PATH if it isn't
 # there yet, installs the VS Code extension when `code` is on the PATH, and
 # builds hello world with the installed rig to check that the system has
 # what linking needs. Running it again upgrades: the files are overwritten.
@@ -134,10 +134,12 @@ download() {
         code=$(awk '$1 ~ /^HTTP\// { code = $2 } END { print code }' "$2.headers")
         rm -f "$2.headers"
         # 8 is wget's "the server sent an error response", whose status
-        # is read below.
+        # is read below. A wget that printed no status line (wget2, which
+        # some systems install as wget, may print none with --quiet) leaves
+        # it unknown: then 404 and the other errors can't be told apart.
         case $status in
             0) return 0 ;;
-            8) ;;
+            8) [ -n "$code" ] || unknown_error "$1" ;;
             *) die "couldn't download $1 (wget's exit status $status): check your network connection" ;;
         esac
     else
@@ -155,6 +157,14 @@ not_found() {
         die "there is no Rig $version to download ($1 isn't there): the releases are listed at https://github.com/WoozChucky/rig/releases"
     fi
     die "$1 isn't there: the latest release of Rig may be being published; try again in a few minutes"
+}
+
+# An error answer whose HTTP status wget didn't say: either cause is named.
+unknown_error() {
+    if [ -n "$version" ]; then
+        die "couldn't download $1: the server answered with an error; there may be no Rig $version (the releases are listed at https://github.com/WoozChucky/rig/releases), or GitHub may be busy: try again in a few minutes"
+    fi
+    die "couldn't download $1: the server answered with an error (GitHub may be busy, or limiting requests); try again in a few minutes"
 }
 
 # The SHA-256 of a file, as lowercase hexadecimal, with sha256sum (GNU
