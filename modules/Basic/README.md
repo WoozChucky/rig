@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, and printing to standard output; later parts add allocators, a string builder, and growable arrays and hash tables (issue #134).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, allocators (the heap, an arena and a pool), and printing to standard output; later parts add a string builder, and growable arrays and hash tables (issue #134).
 
 ## Loading it
 
@@ -14,9 +14,10 @@ Rig has no `#import` yet, so a program loads Basic with `#load`, by the path fro
 
 ## Its C layer
 
-`libc.rig` declares the only C functions Basic calls, each under a name of its own that starts with `c_` (`#foreign libc "NAME"`, spec 7.6). So a program that loads Basic keeps C's own names: it may declare C's `putchar`, `malloc` and `realloc` itself. `free` is the exception, since Basic's allocators will take that name for their own helper and `c_free` is taken too, so such a program declares C's `free` under another name, as in `libc_free :: (p: *void) #foreign libc "free";`.
+`libc.rig` declares the only C functions Basic calls, each under a name of its own that starts with `c_` (`#foreign libc "NAME"`, spec 7.6). So a program that loads Basic keeps C's own names: it may declare C's `putchar`, `malloc` and `realloc` itself. `free` is the exception, since Basic's allocators take that name for their own helper and `c_free` is taken too, so such a program declares C's `free` under another name, as in `libc_free :: (p: *void) #foreign libc "free";`.
 
 - `c_putchar(c: s32) -> s32`: C's `putchar`, the one call that writes a byte to standard output.
+- `c_malloc(size: u64) -> *void`, `c_realloc(memory: *void, size: u64) -> *void`, `c_free(memory: *void)`: C's `malloc`, `realloc` and `free`, the heap allocator's memory. Basic never calls them with a size of 0.
 
 ## Characters (`char.rig`)
 
@@ -80,6 +81,27 @@ Every string returned is a view into the string given: nothing is copied or allo
 - `advance(s: string, amount: int) -> string`: `s` without its first `amount` bytes, clamped as `slice` is.
 - `split(s: string, separator: u8, parts: []string) -> int`: writes the pieces of `s` between separators into `parts` and returns how many; empty pieces count, `""` is one empty piece, the last part holds the unsplit rest when `parts` runs out, and an empty `parts` gets 0.
 - `split_from_left(s: string, separator: u8) -> bool, string, string`: whether `separator` is in `s`, and the bytes before and after its first occurrence; without one, `false`, `s` and an empty view at the end of `s`.
+
+## Allocators (`allocators.rig`)
+
+An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` holds a procedure and the data it works on, and the procedure is called with a mode, `ALLOCATE`, `RESIZE`, `FREE` or `FREE_ALL`. A program calls the four helpers rather than the procedure. They settle the edges, so an allocator is only ever asked for more than 0 bytes and only ever given memory that isn't null to resize or free. An allocator that can't give memory returns null. The heap's memory is aligned as C's `malloc` aligns it, and an arena's or a pool's to 8 bytes when its parent's is, as the heap's is.
+
+- `ALLOCATE`, `RESIZE`, `FREE`, `FREE_ALL`: the modes, 0 to 3.
+- `Allocator`: `proc: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void` and `data: *void`.
+- `alloc(size: int, allocator: Allocator) -> *void`: `size` bytes, or null; null for a size of 0 or less, without asking the allocator.
+- `resize(memory: *void, old_size: int, new_size: int, allocator: Allocator) -> *void`: `memory` made `new_size` bytes long, perhaps moved, its first bytes kept; null when the allocator can't, and `memory` is as it was. Resizing null is `alloc`, and resizing to 0 or less is `free` and gives null.
+- `free(memory: *void, allocator: Allocator)`: gives `memory` back; freeing null does nothing.
+- `free_all(allocator: Allocator)`: gives back everything the allocator gave, for an arena or a pool; the heap's does nothing.
+- `heap_allocator_proc`, `HEAP_ALLOCATOR`: C's heap, through `c_malloc`, `c_realloc` and `c_free`.
+- `Arena_Block`: an arena block's header, `previous: *Arena_Block` and `size: int`, 16 bytes, with its `size` bytes after it.
+- `Arena`: `parent: Allocator`, `block_size: int`, `block: *Arena_Block` (the newest) and `used: int` (its bytes handed out).
+- `arena_init(arena: *Arena, block_size: int, parent: Allocator)`: an empty arena whose blocks of `block_size` bytes (4096 for 0 or less) come from `parent`.
+- `arena_allocator_proc`, `arena_allocator(arena: *Arena) -> Allocator`: allocations one after another in the newest block, each at a multiple of 8, and a new block of `block_size` bytes, or the allocation's size when larger, when one doesn't fit. A resize allocates anew and copies, and a free does nothing; `free_all` gives every block back.
+- `arena_reset(arena: *Arena)`: gives back every block but the newest, and hands that one out again from its start.
+- `Pool_Slot`: a free slot, `next: *Pool_Slot`, held in the slot's own first bytes.
+- `Pool`: `parent: Allocator`, `slot_size: int`, `slot_count: int`, `memory: *u8` and `free_list: *Pool_Slot`.
+- `pool_init(pool: *Pool, slot_size: int, slot_count: int, parent: Allocator)`: an empty pool of `slot_count` slots of `slot_size` bytes, raised to at least 8 and up to a multiple of 8, whose memory comes from `parent` at the first allocation.
+- `pool_allocator_proc`, `pool_allocator(pool: *Pool) -> Allocator`: a free slot for up to `slot_size` bytes, in address order at first, and null for more or when none is free. A resize within a slot keeps it, and one past it gives null; a free puts the slot back, to be handed out next, and `free_all` gives the memory back to `parent`, after which the pool can be used again.
 
 ## Print (`print.rig`)
 

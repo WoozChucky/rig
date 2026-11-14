@@ -1,0 +1,318 @@
+// Basic's allocators: where memory comes from. An allocator is passed to
+// whatever needs memory, rather than everything taking it from one global
+// heap, so the caller decides where it comes from and how it goes back: one
+// call to C's heap at a time, a run of blocks given back all at once (an
+// arena), or slots of one size (a pool).
+//
+// An allocator is Jai's shape: one procedure and the data it works on. The
+// procedure is called with a mode, ALLOCATE, RESIZE, FREE or FREE_ALL, and
+// does what the mode says, with the data as its last argument: an arena's
+// procedure gets its Arena, a pool's its Pool, the heap's nothing. Anything
+// that holds an Allocator can be given any of them, or one a program writes
+// itself, without knowing which.
+//
+// A program calls the four helpers, alloc, resize, free and free_all,
+// rather than an allocator's procedure. They settle the edges once, so no
+// allocator procedure has to: an allocator is only ever asked for more
+// than 0 bytes, and only ever given memory that isn't null to resize or
+// free. An allocator that can't give memory returns null, and the helpers
+// pass that on.
+#load "libc.rig";
+#load "memory.rig";
+
+// The modes an allocator procedure is called with (constants until enums).
+ALLOCATE :: 0;
+RESIZE :: 1;
+FREE :: 2;
+FREE_ALL :: 3;
+
+// Jai's shape: one procedure and its data. The procedure type is written
+// out, since Rig has no type aliases yet.
+//
+// The procedure is called as proc(mode, size, old_size, old_memory, data):
+//
+// - ALLOCATE: size bytes, or null.
+// - RESIZE: old_memory, which holds old_size bytes, made size bytes long,
+//   moved or not, with the first of its old bytes kept; or null, and then
+//   old_memory is as it was.
+// - FREE: gives old_memory back. Returns null.
+// - FREE_ALL: gives back everything the allocator gave. Returns null.
+Allocator :: struct {
+    proc: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void;
+    data: *void;
+}
+
+// size bytes from allocator, or null when it has none to give. A size of 0
+// or less gives null without asking the allocator.
+alloc :: (size: int, allocator: Allocator) -> *void {
+    if size <= 0 { return null; }
+    return allocator.proc(ALLOCATE, size, 0, null, allocator.data);
+}
+
+// memory, which holds old_size bytes from allocator, made new_size bytes
+// long. The result may be another address, holding the first of memory's
+// bytes, and then memory is gone. When the allocator can't give the bytes,
+// the result is null and memory is as it was, still the caller's to free.
+//
+// Resizing null is alloc, so memory can start out null and grow.
+//
+// Resizing to 0 or less frees memory and returns null, so no allocator is
+// ever asked to resize to 0. That matters for the heap: what C's realloc
+// does with a size of 0 is left to each C library, and the compiled
+// program's C library and the interpreter's (the compiler's own) differ,
+// one freeing the memory and the other keeping it.
+resize :: (memory: *void, old_size: int, new_size: int, allocator: Allocator) -> *void {
+    if memory == null { return alloc(new_size, allocator); }
+    if new_size <= 0 {
+        free(memory, allocator);
+        return null;
+    }
+    return allocator.proc(RESIZE, new_size, old_size, memory, allocator.data);
+}
+
+// Gives memory back to the allocator it came from. Freeing null does
+// nothing.
+free :: (memory: *void, allocator: Allocator) {
+    if memory == null { return; }
+    allocator.proc(FREE, 0, 0, memory, allocator.data);
+}
+
+// Gives back everything allocator has given, for the allocators that keep
+// track of it: an arena and a pool do, the heap doesn't.
+free_all :: (allocator: Allocator) {
+    allocator.proc(FREE_ALL, 0, 0, null, allocator.data);
+}
+
+// The heap: C's malloc, realloc and free, through Basic's C layer. Its
+// memory is aligned for any type, as C's is.
+//
+// FREE_ALL does nothing: the heap doesn't know what it gave, so each piece
+// goes back with free. The sizes are above 0 (the helpers see to it), so
+// they convert to C's size_t, a u64, unchanged.
+heap_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE { return c_malloc(cast(u64) size); }
+    if mode == RESIZE { return c_realloc(old_memory, cast(u64) size); }
+    if mode == FREE { c_free(old_memory); }
+    return null;
+}
+
+// The heap as an Allocator. It needs no data.
+HEAP_ALLOCATOR :: Allocator.{heap_allocator_proc, null};
+
+// The header at the start of each of an arena's blocks: the block made
+// before it, and how many bytes follow the header. The header is 16 bytes,
+// a multiple of 8, so the bytes after it start as aligned as the block.
+Arena_Block :: struct {
+    previous: *Arena_Block;
+    size: int;
+}
+
+// An arena: memory handed out from the front of a block, one allocation
+// after another, and given back only all at once. Allocating is moving
+// used forward, and nothing is given back one allocation at a time, so
+// it suits memory that lives and dies together, such as a frame's or a
+// request's.
+//
+// The blocks come from parent, block_size bytes each, or more for an
+// allocation bigger than that. block is the newest, and used is how many
+// of its bytes are handed out; older blocks hang off it through previous.
+Arena :: struct {
+    parent: Allocator;
+    block_size: int;
+    block: *Arena_Block;
+    used: int;
+}
+
+// Makes arena an empty arena whose blocks come from parent, block_size
+// bytes each, or 4096 for a block_size of 0 or less. No block is taken
+// until the first allocation. It doesn't give back blocks an arena already
+// had: free_all does.
+arena_init :: (arena: *Arena, block_size: int, parent: Allocator) {
+    arena.parent = parent;
+    arena.block_size = block_size;
+    if block_size <= 0 { arena.block_size = 4096; }
+    arena.block = null;
+    arena.used = 0;
+}
+
+// An arena's allocator procedure; data is its *Arena.
+//
+// - ALLOCATE starts at the first multiple of 8 at or past used, so every
+//   allocation is aligned to 8, as any Rig type needs (spec 3.11), when the
+//   parent's memory is, as the heap's is. When the rest of the block can't
+//   hold size bytes, a new block is taken from the parent, block_size bytes
+//   or size when that is larger, plus the header, and what was left of the
+//   old block goes unused. A parent's null is
+//   passed on.
+// - RESIZE allocates anew and copies the old bytes that fit: an arena
+//   can't grow memory in place, since more may have been handed out after
+//   it.
+// - FREE does nothing. The memory goes back with the rest of its block.
+// - FREE_ALL gives every block back to the parent.
+arena_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    LARGEST :: 9223372036854775807; // int's largest value
+    arena := cast(*Arena) data;
+    if mode == ALLOCATE {
+        start := (arena.used + 7) & ~7;
+        // Compared as size against what is left, rather than start + size
+        // against the block's size, so that a size near int's largest
+        // can't wrap the sum. start may be past the block's end, when used
+        // is within 7 of it, and then nothing is left.
+        if arena.block == null || size > arena.block.size - start {
+            bytes := arena.block_size;
+            if size > bytes { bytes = size; }
+            // A block that big, with its header, has no int size.
+            if bytes > LARGEST - size_of(Arena_Block) { return null; }
+            block := cast(*Arena_Block) alloc(size_of(Arena_Block) + bytes, arena.parent);
+            if block == null { return null; }
+            block.previous = arena.block;
+            block.size = bytes;
+            arena.block = block;
+            start = 0;
+        }
+        arena.used = start + size;
+        return cast(*u8) arena.block + size_of(Arena_Block) + start;
+    }
+    if mode == RESIZE {
+        memory := arena_allocator_proc(ALLOCATE, size, 0, null, data);
+        if memory == null { return null; }
+        count := old_size;
+        if size < count { count = size; }
+        copy_memory(memory, old_memory, count);
+        return memory;
+    }
+    if mode == FREE_ALL {
+        // A reset gives back every block but the newest, so only that one
+        // is left to give back.
+        arena_reset(arena);
+        free(arena.block, arena.parent);
+        arena.block = null;
+    }
+    return null;
+}
+
+// arena as an Allocator.
+arena_allocator :: (arena: *Arena) -> Allocator {
+    return Allocator.{arena_allocator_proc, arena};
+}
+
+// Empties arena for reuse: every block but the newest goes back to the
+// parent, and the newest is handed out again from its start. So an arena
+// reset once per frame keeps one block from frame to frame, and asks its
+// parent for more only in a frame that doesn't fit in it. Everything the
+// arena gave before is gone.
+arena_reset :: (arena: *Arena) {
+    newest := arena.block;
+    if newest != null {
+        block := newest.previous;
+        while block != null {
+            previous := block.previous;
+            free(block, arena.parent);
+            block = previous;
+        }
+        newest.previous = null;
+    }
+    arena.used = 0;
+}
+
+// A free slot of a pool, which holds the next free slot in its own first
+// bytes: the free list costs no memory beyond the slots.
+Pool_Slot :: struct {
+    next: *Pool_Slot;
+}
+
+// A pool: slot_count slots of slot_size bytes each, in one piece of memory
+// from parent, handed out one at a time and given back one at a time.
+// Allocating and freeing are taking a slot off the free list and putting
+// it back on, so they take the same time whatever is in use, and freed
+// slots are reused with no gaps between them. It suits many things of one
+// size, such as a tree's nodes.
+//
+// memory is null until the first allocation, and again after free_all.
+Pool :: struct {
+    parent: Allocator;
+    slot_size: int;
+    slot_count: int;
+    memory: *u8;
+    free_list: *Pool_Slot;
+}
+
+// Makes pool an empty pool of slot_count slots of slot_size bytes, whose
+// memory comes from parent at the first allocation. slot_size is raised to
+// at least the size of a Pool_Slot, since a free slot holds one, and up to
+// a multiple of 8, so every slot is aligned to 8 when the parent's memory
+// is. It doesn't give back memory a pool already had: free_all does.
+pool_init :: (pool: *Pool, slot_size: int, slot_count: int, parent: Allocator) {
+    LARGEST :: 9223372036854775807; // int's largest value
+    size := slot_size;
+    if size < size_of(Pool_Slot) { size = size_of(Pool_Slot); }
+    // Rounding up would wrap past int's largest: the largest multiple of 8
+    // is as near as it gets, and no parent will give that many bytes.
+    if size > LARGEST - 7 { size = LARGEST - 7; }
+    pool.parent = parent;
+    pool.slot_size = (size + 7) & ~7;
+    pool.slot_count = slot_count;
+    pool.memory = null;
+    pool.free_list = null;
+}
+
+// A pool's allocator procedure; data is its *Pool.
+//
+// - ALLOCATE of up to slot_size bytes takes the first free slot. The first
+//   one after pool_init or FREE_ALL takes the slots' memory from the parent
+//   and puts every slot on the free list, in address order. More than
+//   slot_size, no free slot, or a parent's null, gives null.
+// - RESIZE to at most slot_size keeps the same slot. Beyond, it gives null
+//   and the slot is as it was.
+// - FREE puts the slot back on the free list, first, so it is the next
+//   handed out.
+// - FREE_ALL gives the slots' memory back to the parent. The pool can be
+//   used again, and takes memory anew at its next allocation.
+pool_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    LARGEST :: 9223372036854775807; // int's largest value
+    pool := cast(*Pool) data;
+    if mode == ALLOCATE {
+        if size > pool.slot_size { return null; }
+        if pool.memory == null {
+            // The slots' bytes would have no int size. A slot_count of 0
+            // or less asks for 0 bytes or less, which alloc gives as null.
+            if pool.slot_count > LARGEST / pool.slot_size { return null; }
+            memory := cast(*u8) alloc(pool.slot_size * pool.slot_count, pool.parent);
+            if memory == null { return null; }
+            pool.memory = memory;
+            // Each slot goes on the front of the list, so they're put on
+            // from the last down, and the first slot ends up first.
+            i := pool.slot_count;
+            while i > 0 {
+                i -= 1;
+                slot := cast(*Pool_Slot) (memory + i * pool.slot_size);
+                slot.next = pool.free_list;
+                pool.free_list = slot;
+            }
+        }
+        first := pool.free_list;
+        if first == null { return null; }
+        pool.free_list = first.next;
+        return first;
+    }
+    if mode == RESIZE {
+        if size <= pool.slot_size { return old_memory; }
+        return null;
+    }
+    if mode == FREE {
+        slot := cast(*Pool_Slot) old_memory;
+        slot.next = pool.free_list;
+        pool.free_list = slot;
+    }
+    if mode == FREE_ALL {
+        free(pool.memory, pool.parent);
+        pool.memory = null;
+        pool.free_list = null;
+    }
+    return null;
+}
+
+// pool as an Allocator.
+pool_allocator :: (pool: *Pool) -> Allocator {
+    return Allocator.{pool_allocator_proc, pool};
+}
