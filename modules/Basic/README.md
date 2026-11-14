@@ -63,7 +63,7 @@ Numbers are written into a buffer the caller gives, and the text comes back as a
 
 ## Strings (`string.rig`)
 
-Every string returned is a view into the string given: nothing is copied or allocated. Indexes and counts are in bytes, compared unsigned, with no knowledge of UTF-8. A zeroed string (count 0, data null) is the empty string everywhere, and no byte is read through its null data.
+Every string returned is a view into the string given: nothing is copied or allocated. Indexes and counts are in bytes, and bytes are compared unsigned, with no knowledge of UTF-8. A zeroed string (count 0, data null) is the empty string everywhere, and no byte is read through its null data.
 
 - `strings_equal(a: string, b: string) -> bool`: `a == b`, as a procedure a procedure value can name.
 - `compare_strings(a: string, b: string) -> int`: -1, 0 or 1 by the first byte that differs, compared unsigned; a prefix sorts first.
