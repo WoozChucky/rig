@@ -79,7 +79,7 @@ Every string returned is a view into the string given: nothing is copied or allo
 - `slice(s: string, start: int, count: int) -> string`: `count` bytes from `start`, clamped to stay in `s`: `start` to `0..s.count`, then `count` to `0..s.count - start`.
 - `advance(s: string, amount: int) -> string`: `s` without its first `amount` bytes, clamped as `slice` is.
 - `split(s: string, separator: u8, parts: []string) -> int`: writes the pieces of `s` between separators into `parts` and returns how many; empty pieces count, `""` is one empty piece, the last part holds the unsplit rest when `parts` runs out, and an empty `parts` gets 0.
-- `split_from_left(s: string, separator: u8) -> bool, string, string`: whether `separator` is in `s`, and the bytes before and after its first occurrence; `false, s, ""` without one.
+- `split_from_left(s: string, separator: u8) -> bool, string, string`: whether `separator` is in `s`, and the bytes before and after its first occurrence; without one, `false`, `s` and an empty view at the end of `s`.
 
 ## Print (`print.rig`)
 

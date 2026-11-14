@@ -12,9 +12,9 @@
 // everywhere here: its count of 0 stops every loop before a byte is read,
 // and a view of it starts at offset 0, so its null data is never moved.
 //
-// Every result is cut out by slice, which clamps what it is asked for to
-// the string it is given, so no procedure here can return a view that
-// reaches outside its string.
+// Every result is the string given or a view cut out of it by slice, which
+// clamps what it is asked for to the string it is given, so no procedure
+// here can return a view that reaches outside its string.
 #load "char.rig";
 #load "memory.rig";
 
@@ -167,10 +167,10 @@ split :: (s: string, separator: u8, parts: []string) -> int {
 
 // Splits s at the first byte equal to separator: whether there is one, the
 // bytes before it and the bytes after it, without it. Without a separator,
-// it is false, s and "". So "key=value=x" at "=" is true, "key" and
-// "value=x".
+// it is false, s and an empty view at the end of s, so that every result is
+// a view into s. So "key=value=x" at "=" is true, "key" and "value=x".
 split_from_left :: (s: string, separator: u8) -> bool, string, string {
     at := find_byte(s, separator);
-    if at < 0 { return false, s, ""; }
+    if at < 0 { return false, s, advance(s, s.count); }
     return true, slice(s, 0, at), advance(s, at + 1);
 }
