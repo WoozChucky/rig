@@ -754,17 +754,22 @@ TEST(load_same_file_by_identity) {
     // absolute, with '.' and '..' taken out by the text alone, so sub needn't
     // exist. On Windows a name's case doesn't matter, with an id or without,
     // and '\' separates; on Linux A.RIG isn't there, so it has no id, and
-    // isn't a.rig, which has one.
+    // isn't a.rig, which has one. Two files known the same way, b.rig and
+    // a.rig by their ids, other.rig and gone.rig by their paths, are two.
     Arena a = arena_make();
     String dir = load_test_directory(&a, "load_same_file_by_identity");
     write_source(&a, dir, "a.rig", "a :: () {}\n");
+    write_source(&a, dir, "b.rig", "b :: () {}\n");
     CHECK(!os_file_exists(str(in_directory(&a, dir, "gone.rig"))));
+    CHECK(!os_file_exists(str(in_directory(&a, dir, "other.rig"))));
     String a_rig = str(in_directory(&a, dir, "a.rig"));
     String gone = str(in_directory(&a, dir, "gone.rig"));
     CHECK(load_same_file(a_rig, a_rig));
     CHECK(load_same_file(a_rig, str(in_directory(&a, dir, "./a.rig"))));
     CHECK(load_same_file(gone, str(in_directory(&a, dir, "sub/../gone.rig"))));
     CHECK(!load_same_file(a_rig, gone));
+    CHECK(!load_same_file(a_rig, str(in_directory(&a, dir, "b.rig"))));
+    CHECK(!load_same_file(gone, str(in_directory(&a, dir, "other.rig"))));
     // nosub isn't there either. A path with an id never names the same file
     // as one without, even when the two made absolute are one path.
     CHECK(!os_file_exists(str(in_directory(&a, dir, "nosub"))));
@@ -981,25 +986,35 @@ TEST(load_stdin_for_loads_from_its_directory) {
     arena_free(&a);
 }
 
-TEST(load_stdin_for_never_reached) {
-    // main.rig loads b.rig alone, so h.rig is never reached: it says so,
-    // and the program is as it would be without it.
-    Arena a = arena_make();
+// load_stdin_for_never_reached's case, in `dir`, with h.rig on disk
+// (`on_disk`) or not.
+static void check_never_reached(Arena *a, String dir, bool on_disk) {
     Diagnostics d = {};
-    String dir = load_test_directory(&a, "load_stdin_for_never_reached");
-    write_source(&a, dir, "main.rig", "#load \"b.rig\";\nmain :: () {}\n");
-    write_source(&a, dir, "b.rig", "b :: () {}\n");
+    write_source(a, dir, "main.rig", "#load \"b.rig\";\nmain :: () {}\n");
+    write_source(a, dir, "b.rig", "b :: () {}\n");
+    if (on_disk) write_source(a, dir, "h.rig", DISK_H);
+    CHECK(os_file_exists(str(in_directory(a, dir, "h.rig"))) == on_disk);
     bool reached = true;
-    load_main_with_stdin_for(&a, &d, dir, str(in_directory(&a, dir, "h.rig")), STDIN_H, &reached);
+    load_main_with_stdin_for(a, &d, dir, str(in_directory(a, dir, "h.rig")), STDIN_H, &reached);
     CHECK(!reached);
-    CHECK_STR(messages(&a, &d), "");
-    String expected = string_printf(&a, STR_FMT "/main.rig\n" STR_FMT "/b.rig\n", STR_ARG(dir), STR_ARG(dir));
-    CHECK_STR(file_paths(&a, &d), string_cstr(&a, expected));
+    CHECK_STR(messages(a, &d), "");
+    String expected = string_printf(a, STR_FMT "/main.rig\n" STR_FMT "/b.rig\n", STR_ARG(dir), STR_ARG(dir));
+    CHECK_STR(file_paths(a, &d), string_cstr(a, expected));
     if (d.files.count == 2) {
         CHECK_STR(d.files[0].text, "#load \"b.rig\";\nmain :: () {}\n");
         CHECK_STR(d.files[1].text, "b :: () {}\n");
     }
     diag_free(&d);
+}
+
+TEST(load_stdin_for_never_reached) {
+    // main.rig loads b.rig alone, so h.rig is never reached: it says so,
+    // and the program is as it would be without it. Two directories, one
+    // without h.rig and one with it, where h.rig, main.rig and b.rig are
+    // all known by their ids, and main.rig and b.rig keep their own texts.
+    Arena a = arena_make();
+    check_never_reached(&a, load_test_directory(&a, "load_stdin_for_never_reached"), false);
+    check_never_reached(&a, load_test_directory(&a, "load_stdin_for_never_reached_on_disk"), true);
     arena_free(&a);
 }
 
@@ -1022,6 +1037,8 @@ TEST(load_stdin_for_the_main_file) {
         CHECK_STR(d.files[0].path, in_directory(&a, dir, "main.rig"));
         CHECK_STR(d.files[0].text, typed);
         CHECK_STR(d.files[1].path, in_directory(&a, dir, "b.rig"));
+        // b.rig, known by its id as main.rig is, keeps its own text.
+        CHECK_STR(d.files[1].text, "helper :: () {}\n");
     }
     diag_free(&d);
     arena_free(&a);
