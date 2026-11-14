@@ -1,0 +1,142 @@
+// Basic's string builder: text put together a piece at a time, in memory
+// that grows as it fills, and copied out as one string at the end. A string
+// is a view of bytes someone else holds, so text made at run time, from
+// pieces and numbers, needs memory of its own to be made in: the builder's,
+// taken from the allocator it is given.
+//
+// Every append goes through append_string, which is where the memory
+// grows. A number is written into a buffer on the stack by numbers.rig and
+// appended from there, so nothing but the builder's own memory is
+// allocated.
+#load "allocators.rig";
+#load "numbers.rig";
+#load "memory.rig";
+
+// Text being built: count bytes at data, which has room for capacity bytes,
+// from allocator. data is null, and count and capacity 0, until the first
+// append that needs room.
+String_Builder :: struct {
+    allocator: Allocator;
+    data: *u8;
+    count: int;
+    capacity: int;
+}
+
+// Makes builder an empty builder whose memory comes from allocator. Nothing
+// is taken until the first append that needs it. It doesn't give back
+// memory a builder already had: builder_free does.
+builder_init :: (builder: *String_Builder, allocator: Allocator) {
+    builder.allocator = allocator;
+    builder.data = null;
+    builder.count = 0;
+    builder.capacity = 0;
+}
+
+// Appends the bytes of s. An empty or zeroed string appends nothing, and so
+// takes no memory.
+//
+// When the bytes don't fit, the capacity becomes the larger of 64 and
+// twice the old one, doubled again until they fit, and the memory is moved
+// there with resize. Growing by doubling, rather than by what each append
+// needs, means n bytes appended one at a time are moved about n times in
+// all, not about n * n / 2.
+//
+// An allocator that has no more memory gives null, and the builder doesn't
+// test for it: its data is then null, and the copy below, which takes the
+// address of an element of data, stops the program with the language's
+// null pointer dereference.
+append_string :: (builder: *String_Builder, s: string) {
+    LARGEST :: 9223372036854775807; // int's largest value
+    HALF :: LARGEST / 2;
+    if s.count <= 0 { return; }
+    if s.count > builder.capacity - builder.count {
+        // Past int's largest, no memory holds the bytes: asking for that
+        // many gives null.
+        needed := LARGEST;
+        if s.count <= LARGEST - builder.count { needed = builder.count + s.count; }
+        // Doubling past half of int's largest would wrap, so from there the
+        // capacity is what is needed.
+        capacity := 64;
+        if builder.capacity > 32 {
+            capacity = LARGEST;
+            if builder.capacity <= HALF { capacity = builder.capacity * 2; }
+        }
+        while capacity < needed {
+            if capacity > HALF {
+                capacity = needed;
+            } else {
+                capacity *= 2;
+            }
+        }
+        builder.data = cast(*u8) resize(builder.data, builder.capacity, capacity, builder.allocator);
+        builder.capacity = capacity;
+    }
+    copy_memory(*builder.data[builder.count], s.data, s.count);
+    builder.count += s.count;
+}
+
+// Appends one byte, as itself: append_byte(builder, 32) appends a space.
+append_byte :: (builder: *String_Builder, byte: u8) {
+    bytes : [1]u8;
+    bytes[0] = byte;
+    view : []u8 = bytes;
+    append_string(builder, cast(string) view);
+}
+
+// Appends value in a base from 2 to 36, as format_int writes it; another
+// base appends nothing.
+append_int :: (builder: *String_Builder, value: int, base: int) {
+    buffer : [INT_TEXT_MAX]u8;
+    append_string(builder, format_int(buffer, value, base));
+}
+
+// Appends value with decimals digits after the point, from 0 to 9, as
+// format_float writes it: "nan", "inf" and "-inf" included.
+append_float :: (builder: *String_Builder, value: float64, decimals: int) {
+    buffer : [FLOAT_TEXT_MAX]u8;
+    append_string(builder, format_float(buffer, value, decimals));
+}
+
+// Appends true or false.
+append_bool :: (builder: *String_Builder, value: bool) {
+    if value {
+        append_string(builder, "true");
+    } else {
+        append_string(builder, "false");
+    }
+}
+
+// A copy of the builder's text, in memory from allocator, which may be
+// another than the builder's. The caller gives it back with
+// free(s.data, allocator). The copy is the caller's own: the builder can be
+// appended to, reset or freed without changing it.
+//
+// An empty builder gives the zeroed string, count 0 and data null, and
+// allocates nothing: a literal "" would do as well to read, but its data
+// isn't null, and freeing it would give an allocator memory it never gave.
+// An allocator that has no memory gives null, and the copy stops the
+// program with a null pointer dereference, as append_string's does.
+builder_to_string :: (builder: *String_Builder, allocator: Allocator) -> string {
+    text : string;
+    if builder.count == 0 { return text; }
+    text.data = cast(*u8) alloc(builder.count, allocator);
+    text.count = builder.count;
+    copy_memory(*text.data[0], builder.data, builder.count);
+    return text;
+}
+
+// Empties builder for reuse: its count goes to 0, and its memory is kept,
+// so text of the same length is built again without allocating.
+builder_reset :: (builder: *String_Builder) {
+    builder.count = 0;
+}
+
+// Gives the builder's memory back to its allocator. The builder is empty,
+// with data null and count and capacity 0, and keeps its allocator, so it
+// can be appended to again.
+builder_free :: (builder: *String_Builder) {
+    free(builder.data, builder.allocator);
+    builder.data = null;
+    builder.count = 0;
+    builder.capacity = 0;
+}
