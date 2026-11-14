@@ -1693,6 +1693,22 @@ check('rig.main expands ${workspaceFolder} and ~, and is from the folder', () =>
                 : { error: `The setting rig.main is "${setting}", but there's no file ${home}.` };
             assert.deepStrictEqual(mainSetting(file, folder), expected, setting);
         }
+        // A directory named like a .rig file is no file.
+        fs.mkdirSync(path.join(dir, 'd.rig'));
+        stub.mains[dir] = 'd.rig';
+        assert.deepStrictEqual(mainSetting(file, folder), {
+            error: `The setting rig.main is "d.rig", but there's no file ${path.join(dir, 'd.rig')}.`,
+        });
+        // A $ in the folder's path is taken as it is: $& there isn't what
+        // ${workspaceFolder} matched.
+        const odd = path.join(dir, 'a$&b');
+        fs.mkdirSync(odd);
+        const oddM = path.join(odd, 'm.rig');
+        fs.writeFileSync(oddM, 'main :: () {}\n');
+        const oddFolder = fakeFolder(odd);
+        stub.folders = [oddFolder];
+        stub.mains[odd] = '${workspaceFolder}/m.rig';
+        assert.deepStrictEqual(mainSetting(path.join(odd, 'helper.rig'), oddFolder), { file: oddM });
     });
 });
 
