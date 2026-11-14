@@ -37,9 +37,10 @@
 //   A data constant used at run time (PRIMES[i], for PRIMES, a copy of
 //   ORIGIN) is one read-only global of bytes, const.N, made where a use
 //   first needs it (constant_global) and the same for every use after: its
-//   value's bytes and relocations, as a global variable's are, but never
-//   written. Its value is the global's address, as any aggregate's is, and
-//   a view of it points into it, with no copy (lower_view_of).
+//   value's bytes and relocations, as a global variable's are, but the
+//   program must not write them: a write through a view of one is
+//   undefined. Its value is the global's address, as any aggregate's is,
+//   and a view of it points into it, with no copy (lower_view_of).
 // - Several results: a return gives one value per result, a call numbers
 //   one value per result (its first is the call's value where one is
 //   wanted), and names or targets receiving them are stored from those
@@ -640,8 +641,11 @@ static s32 view_of_copy(Lowering *l, Type *array, s32 value) {
 // The view an array e converts to (spec 5.17). When e is a place (the
 // checker's expr_is_place), a view of it where it is: `sort(numbers)` sorts
 // numbers. When it's a constant or a part of one (constant_root), a view of
-// the constant's read-only global, where it is too: nothing writes it, so
-// nothing can change what the view sees, and `sum(PRIMES)` copies nothing.
+// the constant's read-only global, where it is too, and `sum(PRIMES)` copies
+// nothing. The view points at data the program must not write: the checker
+// refuses a write to the constant itself, but one through the view
+// (`v[0] = 9` in a procedure given PRIMES) is undefined, a memory error, as
+// one through a view of a string literal's bytes is.
 // Anything else, a literal, a call's result, a parameter, is copied first
 // (view_of_copy).
 static s32 lower_view_of(Lowering *l, Ast *e) {
@@ -917,7 +921,7 @@ static s32 lower_float_cast(Lowering *l, s32 v, Type *from, Type *to) {
 //   source's sign to widen (resize), and nothing between types of one
 //   width: the bits stay, only their meaning changes.
 // - cast converts the same way, but the number must survive, or it's a
-//   runtime error at the cast (spec 6.4: "the value doesn't fit in 'T'"):
+//   runtime error at the cast (spec 8.3: "the value doesn't fit in 'T'"):
 //   - narrowing: truncated, then extended back by T's sign, the value must
 //     come back unchanged (300 as a u8 is 44, which comes back as 44);
 //     and, from an unsigned type to a signed one, the narrowed value must
@@ -939,7 +943,7 @@ static s32 lower_float_cast(Lowering *l, s32 v, Type *from, Type *to) {
 //   cast.
 // - A pointer to a pointer is the same address; to an int, s64 or u64 it's
 //   ptrtoint, and from one inttoptr: the address as a number and back,
-//   unchecked (spec 6.5).
+//   unchecked (spec 3.14).
 // The value may be a constant even when the cast isn't (cast(*int) 4096):
 // it's made at its own type.
 static s32 lower_cast(Lowering *l, Ast_Cast *cast) {

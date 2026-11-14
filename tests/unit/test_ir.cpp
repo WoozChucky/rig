@@ -3775,6 +3775,46 @@ TEST(local_data_constant_is_read_only_data_too) {
     arena_free(&a);
 }
 
+TEST(same_named_local_constants_have_globals_of_their_own) {
+    // Each declaration is its own constant, whatever its name: f's T and
+    // g's T are two read-only globals, each with its own bytes, and each
+    // procedure reads its own.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: (i: int) -> int { T :: int.[1, 2]; return T[i]; }\n"
+                                          "g :: (i: int) -> int { T :: int.[3, 4]; return T[i]; }\n"
+                                          "main :: () { }\n"));
+    CHECK_EQ(count_of(ir, "const @const."), 2);
+    CHECK(contains(ir, "const @const.0: 16 align 8 = \""
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\02\\00\\00\\00\\00\\00\\00\\00\""));
+    CHECK(contains(ir, "const @const.1: 16 align 8 = \""
+                       "\\03\\00\\00\\00\\00\\00\\00\\00"
+                       "\\04\\00\\00\\00\\00\\00\\00\\00\""));
+    CHECK(contains(proc_ir(ir, "f"), "addr @const.0"));
+    CHECK(contains(proc_ir(ir, "g"), "addr @const.1"));
+    arena_free(&a);
+}
+
+TEST(pointer_constant_is_its_literal_bytes) {
+    // A *u8 constant, given a literal or a table's *u8 field, holds no data
+    // of its own: a use is the address of the literal's bytes, str.N, and
+    // so is a string constant cast to *u8. None of them makes a const.N.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                          "Op :: struct { symbol: *u8; n: int; }\n"
+                                          "OPS :: Op.[.{\"+\", 1}, .{\"-\", 2}];\n"
+                                          "GREETING :: cast(*u8) \"hi\";\n"
+                                          "SYMBOL :: OPS[1].symbol;\n"
+                                          "NAME :: \"rig\";\n"
+                                          "main :: () { puts(GREETING); puts(SYMBOL); puts(cast(*u8) NAME); }\n"));
+    CHECK(!contains(ir, "@const."));
+    String main = proc_ir(ir, "main");
+    CHECK_EQ(count_of(main, "addr @str."), 3);
+    arena_free(&a);
+}
+
 TEST(string_constant_shares_its_bytes) {
     // A string constant's literal has one str.N, whatever reaches it: each
     // *u8 use is its address, and the string itself, a view, is a
@@ -3795,8 +3835,9 @@ TEST(string_constant_shares_its_bytes) {
 
 TEST(view_of_a_data_constant_sees_its_read_only_data) {
     // A view of an array constant points into the constant's global, with
-    // no copy on the stack: nothing can write it (the checker allows no
-    // part of a constant as a place), so nothing can change what it sees.
+    // no copy on the stack. The program must not write it: the checker
+    // allows no part of a constant as a place, and a write through the view
+    // is undefined, as one through a view of a string literal's bytes is.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_source(&a,
                                           "sum :: (v: []int) -> int { return v.count; }\n"
@@ -3863,8 +3904,14 @@ TEST(global_copies_constant_data) {
     CHECK(contains(ir, "global @line: 32 align 8 = \""
                        "\\03\\00\\00\\00\\00\\00\\00\\00"
                        "\\04\\00\\00\\00\\00\\00\\00\\00"));
-    CHECK(contains(ir, "global @array.0: 40 align 8 = "));
-    CHECK(contains(ir, "reloc 8 @array.0"));
+    CHECK(contains(ir, "global @array.0: 40 align 8 = \""
+                       "\\02\\00\\00\\00\\00\\00\\00\\00"
+                       "\\03\\00\\00\\00\\00\\00\\00\\00"
+                       "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\07\\00\\00\\00\\00\\00\\00\\00"
+                       "\\0B\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    CHECK(contains(ir, "global @view: 16 align 8 = \"\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @array.0\n"));
     CHECK(contains(ir, "global @name: 8 align 8 = zero reloc 0 @str."));
     CHECK(contains(line_with(ir, "global @second: "), "reloc 8 @add"));
     CHECK(contains(ir, "global @op: 8 align 8 = zero reloc 0 @add"));
