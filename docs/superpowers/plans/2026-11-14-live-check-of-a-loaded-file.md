@@ -65,7 +65,7 @@
 4. **The runner.**
    - `run_check` (`tests/runner.cpp:942-952`) builds `check FILE [--stdin]`, and `run_with_input` (924) puts input on stdin. `check_result` (956-968) also fails on any stdout.
    - The fixed tests are `check_stdin_without_a_file_test` (1048-1066, in `CHECK_DIR`) and `check_stdin_of_another_text_test` (1076-1096). Its `typed` text gives exactly `tests/run/load_files.rig:3:29: error: unknown identifier 'putz'` and its source lines.
-   - `CHECK_CASES` is at 1100-1125. `Command_Case.args` has 7 slots (650-655). `command_test` (679) runs with empty stdin (`os_run_for`, `src/os.h:95-101`).
+   - `CHECK_CASES` is at 1100-1125. `Command_Case.args` has 7 slots (650-655). `command_test` (679) runs with empty stdin (`os_run_for`, `src/os.h:90-95`).
    - `check_tests` (1128-1158) reports each test. The header comments are at 45-47 and 911-917.
 5. **The fixtures.**
    - `tests/run/load_runtime_error.rig` has `#load "load/divide.rig";`. `tests/run/load/divide.rig` is 4 lines with no `main`, and its line 3 is `    return a / b;`.
@@ -249,6 +249,7 @@ Added by this plan:
   - `check_stdin_for_the_main_file_test`, reported as `rig check --stdin-for the main file`:
     - `tests/run/load_files.rig --stdin-for tests/run/./load_files.rig` with `check_stdin_of_another_text_test`'s `typed` text gives that test's exit and stderr;
     - in `CHECK_DIR`, `tests/no-such-directory/typed.rig --stdin-for tests/no-such-directory/typed.rig` with `check_stdin_without_a_file_test`'s `broken` text gives that test's stderr, not `cannot read`.
+    - It is reported before `check_writes_nothing_test`, whose comment says it covers the checks run in `CHECK_DIR` before it.
   - `CHECK_CASES`:
     - `rig check with no file` now expects the start `usage: rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]\n       rig check FILE.rig [--stdin | --stdin-for FILE.rig]\n`.
     - New cases, MAIN `tests/run/load_runtime_error.rig` and FILE `tests/run/load/divide.rig` unless named:
@@ -300,7 +301,7 @@ Added by this plan:
   function tooOld(code, output) // -> boolean
   ```
 
-- [ ] **Step 1: Write the failing checks** in `check.js`, requiring `../program`. Each text below is a JavaScript string literal's contents, so `\n` is a line break and `\\` one backslash:
+- [ ] **Step 1: Write the failing checks** in `check.js`, requiring `program.js` as it requires `diagnostics.js` (`require(path.join(extension, 'program.js'))`). Each text below is a JavaScript string literal's contents, so `\n` is a line break and `\\` one backslash:
   - `program.js: declaresMain finds main :: at the top level only`:
     - true: `main :: () {}`, `main::(){}`, `x :: 1;\nmain :: () {\n}`, `/* a */ main :: () {}`, `main\n::\n() {}`, `s :: "abc\nmain :: () {}` (the unclosed string ends at its line), and `s :: "\\\\"; main :: () {}` (an escaped backslash, then the closing quote);
     - false: ``, `// main :: () {}`, `/* /* */ main :: () {} */`, `s :: "main :: ()";`, `s :: "\\" main :: ";`, `f :: () { main :: () {} }`, `domain :: () {}`, `main2 :: () {}`, `main : int = 0;`, `/* main :: () {}` (unclosed).
@@ -394,7 +395,7 @@ Added by this plan:
   - For `check MAIN --stdin-for FILE`:
     - REL is `path.relative(dirname(MAIN), FILE)` with `/`;
     - MAIN's disk text without `#load "REL";` gives `rig: error: 'MAIN' doesn't load 'FILE'` and exit 1;
-    - otherwise it reports stdin's `putz` lines under `MAIN`'s text up to its last separator, followed by REL, and MAIN's own disk `putz` lines under MAIN;
+    - otherwise it reports stdin's `putz` lines under MAIN's path up to its last separator, followed by REL, and MAIN's own disk `putz` lines under MAIN;
     - it ends with the usual warning, and exits 1 if there were errors.
   - `check FILE --stdin` is as now. A helper `calls(dir)` returns `calls.log`'s lines, parsed, or `[]`.
 
@@ -406,11 +407,11 @@ Added by this plan:
     - `calls(dir)` is `[[a, '--stdin-for', doc], [b, '--stdin-for', doc]]`, with absolute `a` and `b`;
     - the diagnostics are `unknown identifier 'putz'` at 0:0, then `an error in another file of the program: b.rig:2:14: unknown identifier 'putz'`.
   - `rig.main names the program, and one that doesn't load the file falls back to the search`:
-    - with `b.rig` and `c.rig` as above and `stub.mains[dir] = 'c.rig'`, the only call is `c`'s;
+    - with `a.rig`, `b.rig` and `c.rig` as above and `stub.mains[dir] = 'c.rig'`, the only call is `c`'s;
     - then `stub.mains[dir] = 'a.rig'` and `fire('configuration', rig.main)`: the calls are `a` (doesn't load), then `b`.
   - `a main file, a file no program loads and a file in no folder are checked alone`. Each case's only call, or last, is `[doc, '--stdin']`:
     - the doc's text `main :: () { putz(); }\n` makes one call, with `b.rig` present;
-    - `stub.mains[dir] = 'helper.rig'`, the document itself, makes one call, with `b.rig` present;
+    - `stub.mains[dir] = 'helper.rig'`, the document itself, makes one call, with `b.rig` present. Here `helper.rig` is written to disk too (as `putz();\n`): `mainSetting` gives the `no file` error for a path that isn't a file, and then there is no file to compare with the document;
     - with only `a.rig`, the calls are `a`, then alone;
     - with `stub.folders = []`, `calls.log` is in the doc's directory, and the call is alone.
   - `a bad rig.main is said once, with a button to the setting, and the search is used`:
