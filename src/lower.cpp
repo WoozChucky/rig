@@ -183,11 +183,14 @@ struct Lowering {
     Table<s32> proc_index;    // a Rig or foreign procedure's index in module->procs, by name
     Table<s32> global_index;  // a global variable's index in module->globals, by name
     s32 string_count;         // the str.N globals made so far: string literals and panic messages
-    Table<s32> literal_globals;   // each string literal node's str.N, by node_key: one per literal,
-                                  // however many uses and constants reach it
-    Table<s32> constant_globals;  // each data constant's const.N, by node_key, once a use needs it
-    s32 constant_count;           // the const.N globals made so far
-    Ir_Proc *proc;           // the procedure whose body is being lowered
+    // Each string literal node's str.N, by node_key: one per literal,
+    // however many uses and constants reach it (literal_global).
+    Table<s32> literal_globals;
+    // Each data constant's const.N, by node_key, once a use needs it
+    // (constant_global).
+    Table<s32> constant_globals;
+    s32 constant_count;       // the const.N globals made so far
+    Ir_Proc *proc;            // the procedure whose body is being lowered
     s32 block;                // the block instructions go into
     Array<Local> locals;      // the current procedure's variables and parameters so far
     Array<Loop> loops;        // the loops around the statement being lowered, innermost last
@@ -387,12 +390,13 @@ static s32 add_bytes(Lowering *l, String bytes) {
     return (s32)(l->module->globals.count - 1);
 }
 
-// A node's address as a Table key: its 8 bytes, copied into the arena so a
-// table can keep them.
-static String node_key(Arena *a, const void *node) {
-    u8 *bytes = (u8 *)arena_alloc(a, sizeof node, 1);
-    memcpy(bytes, &node, sizeof node);
-    return {bytes, (s64)sizeof node};
+// A node's address as a Table key: the 8 bytes of the pointer at `node`,
+// where they are. A lookup's key is needed only while it looks, so the
+// caller's own pointer will do; the key table_put keeps must last as long
+// as the table, so it's copied into the arena (string_copy), only when the
+// lookup finds nothing.
+static String node_key(const void *const *node) {
+    return {(const u8 *)node, (s64)sizeof *node};
 }
 
 // String literal `literal`'s bytes' global, str.N (add_bytes): made the
@@ -400,11 +404,12 @@ static String node_key(Arena *a, const void *node) {
 // it's reached: `NAME :: "rig";` used as a *u8 twice, and as a string
 // (whose const.N has a relocation to it), is one "rig".
 static s32 literal_global(Lowering *l, Ast_String *literal) {
-    String key = node_key(l->arena, literal);
+    const void *node = literal;
+    String key = node_key(&node);
     s32 *found = table_get(&l->literal_globals, key);
     if (found) return *found;
     s32 global = add_bytes(l, literal->value);
-    table_put(&l->literal_globals, key, global);
+    table_put(&l->literal_globals, string_copy(l->arena, key), global);
     return global;
 }
 
@@ -648,9 +653,8 @@ static s32 view_of_copy(Lowering *l, Type *array, s32 value) {
 // nothing. The view points at data the program must not write: the checker
 // refuses a write to the constant itself, but one through the view
 // (`v[0] = 9` in a procedure given PRIMES) is undefined, a memory error, as
-// one through a view of a string literal's bytes is.
-// Anything else, a literal, a call's result, a parameter, is copied first
-// (view_of_copy).
+// one through a view of a string literal's bytes is. Anything else, a
+// literal, a call's result, a parameter, is copied first (view_of_copy).
 static s32 lower_view_of(Lowering *l, Ast *e) {
     if (expr_is_place(e)) return view_of_array(l, e->type, lower_address(l, e));
     if (constant_root(e)) return view_of_array(l, e->type, lower_expr(l, e));
@@ -1405,11 +1409,11 @@ static s32 lower_expr(Lowering *l, Ast *e) {
 
 // The type an argument after a variadic procedure's fixed parameters is
 // passed as: a string literal, or constant data holding one (NAME for
-// `NAME :: "rig";`, literal_address), as a C string, a *u8 (lower_value
-// then gives the literal's bytes' address), anything else as C's default
-// argument promotions make its type.
+// `NAME :: "rig";`, is_literal_string, the checker's rule), as a C string,
+// a *u8 (lower_value then gives the literal's bytes' address), anything
+// else as C's default argument promotions make its type.
 static Type *extra_argument_type(Ast *arg) {
-    if (arg->type == &type_string && literal_address(arg)) return type_pointer_to(type_from_name(str("u8")));
+    if (is_literal_string(arg)) return type_pointer_to(type_from_name(str("u8")));
     return type_c_promoted(arg->type);
 }
 
@@ -2003,7 +2007,9 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
         break;
     }
     // Nothing here: a number's uses are constants already, a procedure's its
-    // address, and data is made where a use first needs it (constant_global).
+    // address, a pointer's its literal's str.N (literal_global), and so are
+    // a string's uses met as a *u8; data's const.N is made where a use first
+    // reads its bytes (constant_global).
     case AST_CONST: break;
     case AST_MULTI_VAR: lower_multi_var(l, (Ast_Multi_Var *)s); break;
     case AST_ASSIGN: {
@@ -2250,10 +2256,12 @@ static s32 add_global_array(Lowering *l, Type *array, Ast *value) {
 // it, the same after; its index. So a constant used only folded (PRIMES[2],
 // NAME.count), or only as its literal's address (a pointer constant,
 // puts(NAME)), has none, and one whose bytes a use reads at run time has
-// one, wherever it's used. The bytes are the value node's, not `data`'s, which is null for a
-// part a literal leaves out: constant_bytes finds the literal itself.
+// one, wherever it's used. The bytes are the value node's, not `data`'s,
+// which is null for a part a literal leaves out: constant_bytes finds the
+// literal itself.
 static s32 constant_global(Lowering *l, Ast_Const *constant) {
-    String key = node_key(l->arena, constant);
+    const void *node = constant;
+    String key = node_key(&node);
     s32 *found = table_get(&l->constant_globals, key);
     if (found) return *found;
     Ir_Global g = {};
@@ -2266,7 +2274,7 @@ static s32 constant_global(Lowering *l, Ast_Const *constant) {
     global_value(l, &g, constant->type, constant->value);  // may add str.N globals first
     array_add(&l->module->globals, g);
     s32 global = (s32)(l->module->globals.count - 1);
-    table_put(&l->constant_globals, key, global);
+    table_put(&l->constant_globals, string_copy(l->arena, key), global);
     return global;
 }
 

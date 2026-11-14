@@ -4,8 +4,9 @@
 // then several results, globals and top-level constants (issue #36), then
 // floats (issue #37), and the fixes from milestone 2a's review (issue #52);
 // after them a section per later issue, the last constants holding data
-// (issue #113). Milestone 1's tests build tokens by hand (toks(), helpers.cpp), milestone
-// 2a's lex real source (src()); either way, parsed, then checked.
+// (issue #113). Milestone 1's tests build tokens by hand (toks(),
+// helpers.cpp), milestone 2a's lex real source (src()); either way, parsed,
+// then checked.
 
 #include "test.h"
 
@@ -5274,13 +5275,13 @@ TEST(constant_parts_arent_places) {
     // No part of a constant is a place (spec 5.1): its fields, its elements
     // and a string constant's bytes, a string field's of a struct constant
     // and a string element's of an array constant too, can't be assigned to
-    // nor have their address taken, and for *
-    // can't point into them. A string constant's .data is its bytes'
-    // address, a *u8, as a literal's is. What a pointer field points at is
-    // elsewhere, a struct's fields and a string's bytes reached through it
-    // too, and a string literal's bytes stay places, as they were. A part of
-    // a constant is reached through its fields and elements, not through a
-    // cast: writing through cast([]u8) NAME isn't refused, but undefined.
+    // nor have their address taken, and for * can't point into them. A
+    // string constant's .data is its bytes' address, a *u8, as a literal's
+    // is. What a pointer field points at is elsewhere, a struct's fields and
+    // a string's bytes reached through it too, and a string literal's bytes
+    // stay places, as they were. A part of a constant is reached through its
+    // fields and elements, not through a cast: writing through
+    // cast([]u8) NAME isn't refused, but undefined.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "Vec2 :: struct { x: int; y: int; }\n"
