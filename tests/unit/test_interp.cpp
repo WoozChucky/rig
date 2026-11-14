@@ -771,10 +771,13 @@ TEST(interp_maps_read_only_globals) {
     // mapped as a variable of bytes is: at their alignment, the bytes given
     // and then zeros, each relocation written, and writable, as a string
     // literal's are (spec 10.8). Here @const.0 is 24 bytes: a count (3),
-    // the address of @str.0, and 8 zeros.
+    // the address of @str.0, and 8 zeros. @zeros is 16 bytes, none given,
+    // all zero; it is mapped just before @const.0, so were it given fewer
+    // than its size its last bytes would be @const.0's.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a, "main :: () { }\n");
     s32 text = add_string(m, "str.0", "abc");
+    s32 zeros = add_read_only_global(m, "zeros", 16, 8);
     s32 constant = add_read_only_global(m, "const.0", 24, 8);
     u8 *bytes = (u8 *)arena_alloc(&a, 24, 1);  // zeroed
     bytes[0] = 3;
@@ -791,6 +794,9 @@ TEST(interp_maps_read_only_globals) {
         u64 address = 0;
         memcpy(&address, held + 8, sizeof address);
         CHECK(address == (u64)(uintptr_t)interp_global(in, text));
+        u8 *zeroed = interp_global(in, zeros);
+        CHECK_EQ((u64)(uintptr_t)zeroed % 8, 0);
+        for (int i = 0; i < 16; i++) CHECK_EQ(zeroed[i], 0);
     }
     interp_test_free(&r);
     interp_free(in);
