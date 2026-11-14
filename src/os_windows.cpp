@@ -356,9 +356,11 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
 }
 
 // os_run_with_input, and with `merge` os_run_merged: the program's stderr
-// is then its stdout's pipe too.
+// is then its stdout's pipe too. With `hold_stdin`, os_run_with_stdin_open:
+// the input pipe is made, but nothing is written to it, and the parent's
+// end closes only once the program has ended.
 static bool run_process(Arena *a, Array<String> argv, String directory, s32 seconds, String input, bool merge,
-                        Process_Result *result) {
+                        bool hold_stdin, Process_Result *result) {
     RIG_ASSERT(argv.count > 0 && seconds >= 0);
     result->timed_out = false;
     Array<u8> line = {};
@@ -371,8 +373,8 @@ static bool run_process(Arena *a, Array<String> argv, String directory, s32 seco
 
     // Pipes for stdout and stderr: the child inherits the write ends, the
     // parent keeps the read ends (not inheritable). stdin is NUL, or with
-    // input a third pipe the other way round: the child inherits its read
-    // end, and the parent keeps the write end.
+    // input (or held open) a third pipe the other way round: the child
+    // inherits its read end, and the parent keeps the write end.
     SECURITY_ATTRIBUTES inherit = {sizeof inherit, nullptr, TRUE};
     HANDLE out_read, out_write, err_read, err_write;
     if (!CreatePipe(&out_read, &out_write, &inherit, 0)) return os_fail();
@@ -385,7 +387,7 @@ static bool run_process(Arena *a, Array<String> argv, String directory, s32 seco
     SetHandleInformation(out_read, HANDLE_FLAG_INHERIT, 0);
     SetHandleInformation(err_read, HANDLE_FLAG_INHERIT, 0);
     HANDLE child_input = INVALID_HANDLE_VALUE, in_write = nullptr;
-    if (input.count) {
+    if (input.count || hold_stdin) {
         if (!CreatePipe(&child_input, &in_write, &inherit, 0)) {
             os_fail();
             CloseHandle(out_read);
@@ -458,14 +460,15 @@ static bool run_process(Arena *a, Array<String> argv, String directory, s32 seco
     }
 
     // The threads: two readers, and the writer when there's input. The
-    // writer closes its pipe itself.
+    // writer closes its pipe itself; a held one is closed below.
     Pipe_Reader out = {out_read, {}}, err = {err_read, {}};
     Pipe_Writer in = {in_write, input};
+    bool writing = in_write && !hold_stdin;
     HANDLE threads[3] = {CreateThread(nullptr, 0, read_pipe, &out, 0, nullptr),
                          CreateThread(nullptr, 0, read_pipe, &err, 0, nullptr),
-                         in_write ? CreateThread(nullptr, 0, write_pipe, &in, 0, nullptr) : nullptr};
-    DWORD thread_count = in_write ? 3 : 2;
-    RIG_ASSERT(threads[0] && threads[1] && (!in_write || threads[2]));
+                         writing ? CreateThread(nullptr, 0, write_pipe, &in, 0, nullptr) : nullptr};
+    DWORD thread_count = writing ? 3 : 2;
+    RIG_ASSERT(threads[0] && threads[1] && (!writing || threads[2]));
     // First the program, then the pipes' ends (a program it started may
     // still hold them), all within the time given.
     ULONGLONG deadline = seconds ? GetTickCount64() + (ULONGLONG)seconds * 1000 : 0;
@@ -487,6 +490,8 @@ static bool run_process(Arena *a, Array<String> argv, String directory, s32 seco
             wait = 100;
         }
     }
+    // The program has ended, or been killed: a held stdin can close.
+    if (hold_stdin) CloseHandle(in_write);
     for (DWORD i = 0; i < thread_count; i++) CloseHandle(threads[i]);
     CloseHandle(out_read);
     CloseHandle(err_read);
@@ -507,11 +512,15 @@ static bool run_process(Arena *a, Array<String> argv, String directory, s32 seco
 
 bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 seconds, String input,
                        Process_Result *result) {
-    return run_process(a, argv, directory, seconds, input, false, result);
+    return run_process(a, argv, directory, seconds, input, false, false, result);
+}
+
+bool os_run_with_stdin_open(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result) {
+    return run_process(a, argv, directory, seconds, {}, false, true, result);
 }
 
 bool os_run_merged(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result) {
-    return run_process(a, argv, directory, seconds, {}, true, result);
+    return run_process(a, argv, directory, seconds, {}, true, false, result);
 }
 
 Array<String> os_arguments(Arena *a, int argc, char **argv) {

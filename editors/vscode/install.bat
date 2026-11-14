@@ -23,7 +23,7 @@ set "TAR=%SystemRoot%\System32\tar.exe"
 rem The extension's files, from this folder: what the .vsix holds under
 rem extension\. install.sh has the same list, and test\check.js checks the
 rem two agree and hold every file package.json names.
-set "FILES=package.json language-configuration.json README.md extension.js debug.js diagnostics.js syntaxes\rig.tmLanguage.json snippets\rig.json"
+set "FILES=package.json language-configuration.json README.md extension.js debug.js diagnostics.js program.js syntaxes\rig.tmLanguage.json snippets\rig.json"
 
 if not exist "%TAR%" (
     echo install.bat: %TAR% is missing; it ships with Windows 10 version 1803 and later. 1>&2

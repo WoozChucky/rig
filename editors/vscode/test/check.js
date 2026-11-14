@@ -334,6 +334,103 @@ check('diagnostics.js turns rig\'s byte columns into VS Code\'s characters', () 
     assert.strictEqual(characterOfByteColumn('', 1), 0);
 });
 
+// --- Finding the program: program.js ---------------------------------------
+
+// The parts of finding the program a loaded file belongs to that need no
+// VS Code: which files declare main, the order they're tried in, which
+// files may be tried at all, and what rig's answers say. extension.js
+// requires it; so does this file, with no stand-in needed.
+function program() {
+    return require(path.join(extension, 'program.js'));
+}
+
+// main declared at the top level, and only there: not in a comment or a
+// string, not inside a procedure, and not a longer name that ends or starts
+// with main.
+check('program.js: declaresMain finds main :: at the top level only', () => {
+    const { declaresMain } = program();
+    const yes = [
+        'main :: () {}',
+        'main::(){}',
+        'x :: 1;\nmain :: () {\n}',
+        '/* a */ main :: () {}',
+        'main\n::\n() {}',
+        's :: "abc\nmain :: () {}',      // the unclosed string ends at its line
+        's :: "\\\\"; main :: () {}',    // an escaped backslash, then the closing quote
+        's :: "abc\\\nmain :: () {}',    // a backslash at the line's end doesn't take the break
+        's :: "{"; main :: () {}',       // a brace in a string isn't counted
+        '// x\nmain :: () {}',           // a line comment ends at its line
+        '}\nmain :: () {}',              // a stray } doesn't make the rest nested
+        'main\t\r\n::\t() {}',         // Windows line ends and tabs are white space
+        'helper :: () { putz(); }\nmain :: () {}',  // a closed body before main
+        'S :: struct { a: int; }\nf :: () { if x { } }\nmain :: () {}',
+        '\uFEFFmain :: () {}',           // a byte-order mark first isn't part of the name
+    ];
+    for (const text of yes) assert.strictEqual(declaresMain(text), true, JSON.stringify(text));
+    const no = [
+        '',
+        '// main :: () {}',
+        '/* /* */ main :: () {} */',     // block comments nest
+        's :: "main :: ()";',
+        's :: "\\" main :: ";',           // an escaped quote doesn't close the string
+        'f :: () { main :: () {} }',
+        'f :: () { if x { } main :: () {} }',  // closing an inner brace leaves the body open
+        'domain :: () {}',
+        'main2 :: () {}',
+        'my_main :: () {}',               // '_' and digits are part of a name
+        'x2main :: () {}',
+        'émain :: () {}',                 // as in função, a name beyond ASCII is one name
+        'mainé :: () {}',
+        'main : int = 0;',
+        '/* main :: () {}',               // an unclosed comment runs to the end
+    ];
+    for (const text of no) assert.strictEqual(declaresMain(text), false, JSON.stringify(text));
+});
+
+check('program.js: pathOrder sorts by the path from the folder, with / between names', () => {
+    const { pathOrder } = program();
+    const w = path.resolve('w');
+    const files = ['b.rig', 'sub/a.rig', 'sub0.rig', 'a.rig', 'B.rig', 'a0.rig', 'a-b.rig'].map((f) => path.join(w, f));
+    const given = files.slice();
+    // On Windows, '\' (after '0') would put sub0.rig first.
+    const expected = ['B.rig', 'a-b.rig', 'a.rig', 'a0.rig', 'b.rig', 'sub/a.rig', 'sub0.rig'].map((f) => path.join(w, f));
+    assert.deepStrictEqual(pathOrder(w, files), expected);
+    assert.deepStrictEqual(files, given, 'pathOrder changed the array it was given');
+});
+
+// rig writes its object files to .build, and this repository's tests write
+// scratch programs that declare main there: none of them is a program's main
+// file.
+check('program.js: searchable leaves out what is under a .build directory', () => {
+    const { searchable } = program();
+    for (const relative of ['a.rig', 'sub/a.rig', '.builder/a.rig']) {
+        assert.strictEqual(searchable(relative), true, relative);
+    }
+    for (const relative of ['.build/a.rig', 'x/.build/y/a.rig', 'x\\.build\\a.rig']) {
+        assert.strictEqual(searchable(relative), false, relative);
+    }
+});
+
+// What rig check MAIN --stdin-for FILE answers: FILE isn't in MAIN's program
+// (doesntLoad), or the option is unknown to this rig (tooOld).
+check('program.js: doesntLoad and tooOld read rig\'s answer', () => {
+    const { doesntLoad, tooOld } = program();
+    const line = "rig: error: 'm.rig' doesn't load 'h.rig'\n";
+    assert.strictEqual(doesntLoad(1, line), true);
+    assert.strictEqual(doesntLoad(1, `m.rig:1:1: warning: w\n    x\n    ^\n${line}`), true);
+    assert.strictEqual(doesntLoad(1, line.replace('\n', '\r\n')), true);
+    assert.strictEqual(doesntLoad(0, line), false);
+    assert.strictEqual(doesntLoad(2, line), false);
+    assert.strictEqual(doesntLoad(null, line), false);   // a check that was killed
+    assert.strictEqual(doesntLoad(1, "h.rig:3:16: error: unknown identifier 'c'\n        return a / c;\n                   ^\n"), false);
+    // A source line quoted under an error is indented: it isn't rig's answer.
+    assert.strictEqual(doesntLoad(1, `h.rig:1:6: error: x\n    ${line}`), false);
+    assert.strictEqual(tooOld(2, 'usage: rig build FILE.rig ...\n'), true);
+    assert.strictEqual(tooOld(1, 'usage: ...'), false);
+    assert.strictEqual(tooOld(2, "rig: error: x\n"), false);
+    assert.strictEqual(tooOld(2, 'rig: error: x\nusage: rig build FILE.rig ...\n'), false);
+});
+
 // --- Snippets --------------------------------------------------------------
 
 // A snippet's body is a string or an array of lines; either way, its text.
@@ -447,6 +544,18 @@ check('the setting rig.compilerPath is declared and read', () => {
     assert.strictEqual(properties['rig.compilerPath'].type, 'string');
     assert.strictEqual(properties['rig.compilerPath'].default, '');
     assert.ok(read('extension.js').includes("'compilerPath'"), "extension.js never reads 'compilerPath'");
+});
+
+// The main file of a workspace folder's program, which the live check checks
+// a loaded file as part of: a resource setting, so each folder has its own.
+check('the setting rig.main is declared and read', () => {
+    const setting = readJson('package.json').contributes.configuration.properties['rig.main'];
+    assert.ok(setting, 'package.json declares no setting rig.main');
+    assert.strictEqual(setting.type, 'string');
+    assert.strictEqual(setting.default, '');
+    assert.strictEqual(setting.scope, 'resource');
+    assert.ok(setting.markdownDescription, 'rig.main has no description');
+    assert.ok(read('extension.js').includes("'main'"), "extension.js never reads 'main'");
 });
 
 // --- Debugging: package.json ------------------------------------------------
@@ -609,17 +718,17 @@ function ownModules() {
 }
 
 // No npm packages: VS Code's API, Node's own modules and the extension's own
-// files only. debug.js and diagnostics.js don't need VS Code at all, so this
-// file can test them as they are.
+// files only. debug.js, diagnostics.js and program.js don't need VS Code at
+// all, so this file can test them as they are.
 check('extension.js requires only vscode, Node\'s built-in modules and its own', () => {
     const builtIn = ['child_process', 'crypto', 'path', 'fs', 'os'];
     const required = requires('extension.js');
     assert.ok(required.includes('vscode'), 'extension.js never requires vscode');
-    assert.deepStrictEqual(ownModules(), ['debug.js', 'diagnostics.js']);
+    assert.deepStrictEqual(ownModules(), ['debug.js', 'diagnostics.js', 'program.js']);
     for (const name of required) {
         assert.ok(name === 'vscode' || name.startsWith('./') || builtIn.includes(name), `extension.js requires '${name}'`);
     }
-    for (const file of ['debug.js', 'diagnostics.js']) {
+    for (const file of ['debug.js', 'diagnostics.js', 'program.js']) {
         for (const name of requires(file)) {
             assert.ok(builtIn.includes(name), `${file} requires '${name}'`);
         }
@@ -628,8 +737,8 @@ check('extension.js requires only vscode, Node\'s built-in modules and its own',
 
 // Node parses the files without running them: a syntax error shows here
 // rather than when VS Code loads the extension.
-check('node --check extension.js, debug.js and diagnostics.js', () => {
-    for (const file of ['extension.js', 'debug.js', 'diagnostics.js']) {
+check('node --check extension.js, debug.js, diagnostics.js and program.js', () => {
+    for (const file of ['extension.js', 'debug.js', 'diagnostics.js', 'program.js']) {
         const result = require('child_process').spawnSync(process.execPath, ['--check', path.join(extension, file)], {
             encoding: 'utf8',
         });
@@ -739,8 +848,10 @@ function reset() {
         folders: [],             // workspace folders
         compilerPath: '',        // the setting rig.compilerPath
         check: 'onType',         // the setting rig.check
+        mains: {},               // the setting rig.main, by the path of its workspace folder
         trusted: true,           // vscode.workspace.isTrusted
         document: undefined,     // the active editor's document
+        documents: [],           // the other open documents
         answers: [],             // what showErrorMessage's buttons answer, in turn
         errors: [],              // the messages it showed
         commands: [],            // executeCommand's calls
@@ -752,16 +863,17 @@ function reset() {
         extensions: ['ms-vscode.cpptools'], // the extensions installed
         debugged: [],            // startDebugging's calls: { folder, config }
         launched: [],            // what each resolved to, as VS Code would launch it
+        searches: [],            // findFiles' calls: the arguments of each
     });
 }
 reset();
 
 // What activate() set up once, for every check: the listeners it gave each
 // of VS Code's events, by the event's name, the task provider, the debug
-// configuration providers, by debug type, and the diagnostic collections it
+// configuration providers, by debug type, the diagnostic collections it
 // made, by name, each a Map from a document's uri (as a string) to its
-// diagnostics.
-const activated = { listeners: {}, taskProvider: null, debugProviders: {}, collections: {} };
+// diagnostics, the file system watchers it made, and its context.
+const activated = { listeners: {}, taskProvider: null, debugProviders: {}, collections: {}, watchers: [], context: null };
 
 function listen(event) {
     return (listener) => {
@@ -788,10 +900,39 @@ class Range {
     }
 }
 
+// A glob pattern within a folder, as findFiles takes it. `base` is a
+// WorkspaceFolder or a Uri, as VS Code allows.
+class RelativePattern {
+    constructor(base, pattern) {
+        Object.assign(this, { base, pattern });
+    }
+}
+
+// The workspace folder `scope` names for getConfiguration: a WorkspaceFolder,
+// a folder's Uri, or a file's Uri, whose folder holds it.
+function scopeFolder(scope) {
+    if (!scope) return undefined;
+    const uri = scope.uri || scope;
+    return stub.folders.find((f) => f.uri.fsPath === uri.fsPath) || vscodeStub.workspace.getWorkspaceFolder(uri);
+}
+
+// The .rig files (any case) under `dir`, at any depth, as findFiles finds
+// them: in reverse path order, so a caller can't count on any order.
+function rigFiles(dir) {
+    const found = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const file = path.join(dir, entry.name);
+        if (entry.isDirectory()) found.push(...rigFiles(file));
+        else if (/\.rig$/i.test(entry.name)) found.push(file);
+    }
+    return found.sort().reverse();
+}
+
 const vscodeStub = {
     EventEmitter,
     Position,
     Range,
+    RelativePattern,
     Diagnostic: class {
         constructor(range, message, severity) {
             Object.assign(this, { range, message, severity });
@@ -831,19 +972,57 @@ const vscodeStub = {
         get isTrusted() {
             return stub.trusted;
         },
+        // The other open documents, and the active editor's.
         get textDocuments() {
-            return stub.document ? [stub.document] : [];
+            const open = stub.documents.slice();
+            if (stub.document && !open.includes(stub.document)) open.push(stub.document);
+            return open;
         },
         getWorkspaceFolder: (uri) => stub.folders.find((f) => uri.fsPath.startsWith(f.uri.fsPath + path.sep)),
-        getConfiguration: () => ({
-            get: (key, fallback) => (key === 'compilerPath' ? stub.compilerPath : key === 'check' ? stub.check : fallback),
+        // rig.main is the scope's folder's (scopeFolder); the other settings
+        // are the same everywhere.
+        getConfiguration: (section, scope) => ({
+            get: (key, fallback) => {
+                if (key === 'compilerPath') return stub.compilerPath;
+                if (key === 'check') return stub.check;
+                if (key === 'main') {
+                    const folder = scopeFolder(scope);
+                    return (folder && stub.mains[folder.uri.fsPath]) || '';
+                }
+                return fallback;
+            },
         }),
+        // Each call is recorded in stub.searches. An exclude argument is
+        // recorded but not applied: VS Code would apply it instead of the
+        // setting files.exclude.
+        findFiles: async (include, ...rest) => {
+            stub.searches.push([include, ...rest]);
+            const base = include.base.uri ? include.base.uri.fsPath : include.base.fsPath;
+            return rigFiles(base).map(fileUri);
+        },
+        fs: {
+            readFile: (uri) => fs.promises.readFile(uri.fsPath),
+        },
+        // Each watcher made is recorded in activated.watchers, with its glob
+        // pattern.
+        createFileSystemWatcher: (pattern) => {
+            const watcher = {
+                pattern,
+                onDidCreate: listen('fsCreate'),
+                onDidChange: listen('fsChange'),
+                onDidDelete: listen('fsDelete'),
+                dispose() {},
+            };
+            activated.watchers.push(watcher);
+            return watcher;
+        },
         onDidOpenTextDocument: listen('open'),
         onDidChangeTextDocument: listen('change'),
         onDidSaveTextDocument: listen('save'),
         onDidCloseTextDocument: listen('close'),
         onDidChangeConfiguration: listen('configuration'),
         onDidGrantWorkspaceTrust: listen('trust'),
+        onDidChangeWorkspaceFolders: listen('folders'),
     },
     window: {
         get activeTextEditor() {
@@ -928,7 +1107,8 @@ function loadExtension() {
     };
     require.cache.vscode = { id: 'vscode', filename: 'vscode', loaded: true, exports: vscodeStub };
     loaded = require(path.join(extension, 'extension.js'));
-    loaded.activate({ subscriptions: [] });
+    activated.context = { subscriptions: [] };
+    loaded.activate(activated.context);
     assert.ok(loaded.forTests, 'extension.js exports no forTests');
     return loaded;
 }
@@ -1082,10 +1262,16 @@ check('the commands do nothing in an untrusted workspace but say so', async () =
 
 check('activate listens to the documents for the live check', () => {
     loadExtension();
-    for (const event of ['open', 'change', 'save', 'close', 'configuration']) {
+    for (const event of ['open', 'change', 'save', 'close', 'configuration', 'folders', 'fsCreate', 'fsChange', 'fsDelete']) {
         assert.ok((activated.listeners[event] || []).length > 0, `no listener for ${event}`);
     }
     assert.ok(activated.collections.rig, "no diagnostic collection 'rig'");
+    // The .rig files at any depth, not only the folder's own; disposed of
+    // with the extension.
+    const [watcher] = activated.watchers;
+    assert.ok(watcher, 'no file system watcher');
+    assert.strictEqual(watcher.pattern, '**/*.rig');
+    assert.ok(activated.context.subscriptions.includes(watcher), 'the file system watcher is never disposed of');
 });
 
 // While the live check shows the compile errors, the tasks' matcher takes
@@ -1105,38 +1291,105 @@ check('the tasks use $rig-runtime while rig.check is on, $rig when it is off', (
 //
 // A real check needs rig; these use Node itself as "the compiler" instead.
 // The setting rig.compilerPath names Node, so the extension runs
-// `node check FILE --stdin` in the workspace folder, and Node runs the
-// script check.js there (written by the check, below): a stand-in for
-// `rig check` that reads stdin and reports each `putz` in it as rig would,
-// slowly if the text says `slow`, with a warning about another file, and
-// an error in broken.rig if the text #loads it. The documents are
-// stand-ins too, never saved: what's checked is their text.
+// `node check FILE --stdin` or `node check MAIN --stdin-for FILE` in the
+// workspace folder (the file's directory when there's none), and Node runs
+// the script check.js there (written by the check, below): a stand-in for
+// `rig check`. It first adds its command line (what follows `check`) to
+// calls.log there, a line of JSON, so a check can count the processes the
+// extension started (calls). Then:
+//
+// - with --stdin, it reports each `putz` in stdin's text as rig would,
+//   under FILE's name, and an error in broken.rig if the text #loads it;
+// - with --stdin-for, it reads MAIN from disk. Unless MAIN has the line
+//   `#load "REL";`, REL being FILE's path from MAIN's directory with '/',
+//   it answers as rig does when MAIN's program never loads FILE. Otherwise
+//   it reports stdin's `putz`s under the name rig gives a loaded file
+//   (MAIN's directory as MAIN names it, then REL), and MAIN's own under
+//   MAIN.
+//
+// Except for that doesn't-load answer, which is its line alone as rig's is,
+// it adds a warning about another file. Either way it answers slowly if
+// stdin's text says `slow`. When there's a file named old-rig where it runs,
+// it's a rig from before --stdin-for instead: given that option, it answers
+// at once, without reading stdin, with that rig's usage and exit code 2, as
+// it takes the option for a second file. The documents are stand-ins too,
+// never saved: what's checked is their text.
 
 const STAND_IN = `
-const file = process.argv[2];
+const fs = require('fs');
+const path = require('path');
+const args = process.argv.slice(2);
+fs.appendFileSync('calls.log', JSON.stringify(args) + '\\n');
+
+// Reports each putz in text as an error in the file named name, and returns
+// how many there were.
+function report(text, name) {
+    let errors = 0;
+    text.split(/\\r?\\n/).forEach((line, i) => {
+        const at = line.indexOf('putz');
+        if (at < 0) return;
+        errors++;
+        const column = Buffer.byteLength(line.slice(0, at)) + 1;
+        process.stderr.write(name + ':' + (i + 1) + ':' + column + ": error: unknown identifier 'putz'\\n");
+        process.stderr.write('    ' + line + '\\n');
+    });
+    return errors;
+}
+
 let text = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (s) => (text += s));
-process.stdin.on('end', () => {
+if (args[1] === '--stdin-for' && fs.existsSync('old-rig')) {
+    process.stderr.write(
+        'usage: rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]\\n' +
+            '       rig check FILE.rig [--stdin]\\n' +
+            '       rig version [--verbose]\\n',
+    );
+    process.exitCode = 2;
+} else {
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (s) => (text += s));
+    process.stdin.on('end', answer);
+}
+
+function answer() {
     setTimeout(() => {
         let errors = 0;
-        text.split(/\\r?\\n/).forEach((line, i) => {
-            const at = line.indexOf('putz');
-            if (at < 0) return;
-            errors++;
-            const column = Buffer.byteLength(line.slice(0, at)) + 1;
-            process.stderr.write(file + ':' + (i + 1) + ':' + column + ": error: unknown identifier 'putz'\\n");
-            process.stderr.write('    ' + line + '\\n');
-        });
-        process.stderr.write('other.rig:1:1: warning: not this file\\n');
-        if (text.includes('#load "broken.rig"')) {
-            process.stderr.write("broken.rig:2:5: error: unknown identifier 'x'\\n");
-            errors++;
+        if (args[1] === '--stdin-for') {
+            const main = args[0];
+            const file = args[2];
+            const rel = path.relative(path.dirname(main), file).split(path.sep).join('/');
+            const own = fs.readFileSync(main, 'utf8');
+            if (!own.includes('#load "' + rel + '";')) {
+                process.stderr.write("rig: error: '" + main + "' doesn't load '" + file + "'\\n");
+                process.exitCode = 1;
+                return;
+            }
+            const directory = main.slice(0, Math.max(main.lastIndexOf('/'), main.lastIndexOf('\\\\')) + 1);
+            errors += report(text, directory + rel);
+            errors += report(own, main);
+        } else {
+            errors += report(text, args[0]);
+            if (text.includes('#load "broken.rig"')) {
+                process.stderr.write("broken.rig:2:5: error: unknown identifier 'x'\\n");
+                errors++;
+            }
         }
+        process.stderr.write('other.rig:1:1: warning: not this file\\n');
         process.exitCode = errors ? 1 : 0;
     }, text.includes('slow') ? 1500 : 0);
-});
+}
 `;
+
+// The command lines the stand-in compiler was started with in `dir`, in
+// order, each the list of words after `check`.
+function calls(dir) {
+    const log = path.join(dir, 'calls.log');
+    if (!fs.existsSync(log)) return [];
+    return fs
+        .readFileSync(log, 'utf8')
+        .split('\n')
+        .filter((line) => line)
+        .map((line) => JSON.parse(line));
+}
 
 function fakeDocument(file, text) {
     return {
@@ -1195,7 +1448,19 @@ async function withStandIn(fn) {
         await fn(dir);
     } finally {
         // Ends any check still running (and its timer) before the folder goes.
-        if (stub.document) fire('close', stub.document);
+        for (const document of vscodeStub.workspace.textDocuments) fire('close', document);
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+// Another scratch directory with the stand-in compiler, for files in
+// another workspace folder or in none, removed after the async `fn`.
+async function withOtherDir(fn) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-vscode-check-'));
+    try {
+        fs.writeFileSync(path.join(dir, 'check.js'), STAND_IN);
+        await fn(dir);
+    } finally {
         fs.rmSync(dir, { recursive: true, force: true });
     }
 }
@@ -1407,6 +1672,1002 @@ check('a build whose compiler Node can\'t start says so and fails', async () => 
             assert.ok(text.includes(`Couldn't run ${program}`), text);
             assert.strictEqual(terminal.child, null);
         });
+    });
+});
+
+// --- The live check of a loaded file ----------------------------------------
+//
+// A document that doesn't declare main is checked as part of the program
+// that loads it: rig.main's, else that of the first file of its folder, in
+// path order, that declares main and whose program loads it. The document
+// is helper.rig, with the text `putz();` and not on disk (loaded); the .rig
+// files a check names are written to disk, since that's where the
+// extension and rig read them.
+
+// Fires `event` (with `doc`, unless `value` is given) and waits for the
+// document's check to set its diagnostics: what calls(dir) gained meanwhile,
+// and the diagnostics, as [line, character, message].
+async function checked(dir, doc, event, value = doc) {
+    const live = activated.collections.rig;
+    const key = doc.uri.toString();
+    live.delete(key);
+    const before = calls(dir).length;
+    fire(event, value);
+    await until(`the check of ${path.basename(doc.uri.fsPath)} on ${event}`, () => live.has(key));
+    return {
+        calls: calls(dir).slice(before),
+        diagnostics: live.get(key).map((d) => [d.range.start.line, d.range.start.character, d.message]),
+    };
+}
+
+// A configuration event for the setting rig.main.
+const MAIN_CHANGED = { affectsConfiguration: (section) => section === 'rig.main' || section === 'rig' };
+
+// b.rig and c.rig load helper.rig and use putz; a.rig doesn't load it.
+function writeMains(dir) {
+    fs.writeFileSync(path.join(dir, 'a.rig'), 'main :: () {}\n');
+    fs.writeFileSync(path.join(dir, 'b.rig'), '#load "helper.rig";\nmain :: () { putz(); }\n');
+    fs.writeFileSync(path.join(dir, 'c.rig'), '#load "helper.rig";\nmain :: () { putz(); }\n');
+}
+
+check('rig.main expands ${workspaceFolder} and ~, and is from the folder', () => {
+    const { mainSetting } = loadExtension().forTests;
+    withScratch((dir) => {
+        reset();
+        const folder = fakeFolder(dir);
+        stub.folders = [folder];
+        const file = path.join(dir, 'helper.rig');
+        const m = path.join(dir, 'm.rig');
+        fs.writeFileSync(m, 'main :: () {}\n');
+        assert.deepStrictEqual(mainSetting(file, folder), {});
+        // Only white space is no setting, and white space around a path isn't
+        // part of it.
+        stub.mains[dir] = '  ';
+        assert.deepStrictEqual(mainSetting(file, folder), {});
+        for (const setting of ['${workspaceFolder}/sub/../m.rig', 'm.rig', './m.rig', ' m.rig ']) {
+            stub.mains[dir] = setting;
+            assert.deepStrictEqual(mainSetting(file, folder), { file: m }, setting);
+        }
+        // .rig in any case, as rig takes it. (On Windows M.RIG is m.rig.)
+        const upper = path.join(dir, 'M.RIG');
+        fs.writeFileSync(upper, 'main :: () {}\n');
+        stub.mains[dir] = 'M.RIG';
+        assert.deepStrictEqual(mainSetting(file, folder), { file: upper });
+        // ~ with either slash on Windows, where both separate names.
+        const home = path.join(os.homedir(), 'm.rig');
+        for (const setting of process.platform === 'win32' ? ['~/m.rig', '~\\m.rig'] : ['~/m.rig']) {
+            stub.mains[dir] = setting;
+            const expected = fs.existsSync(home)
+                ? { file: home }
+                : { error: `The setting rig.main is "${setting}", but there's no file ${home}.` };
+            assert.deepStrictEqual(mainSetting(file, folder), expected, setting);
+        }
+        // A directory named like a .rig file is no file.
+        fs.mkdirSync(path.join(dir, 'd.rig'));
+        stub.mains[dir] = 'd.rig';
+        assert.deepStrictEqual(mainSetting(file, folder), {
+            error: `The setting rig.main is "d.rig", but there's no file ${path.join(dir, 'd.rig')}.`,
+        });
+        // A $ in the folder's path is taken as it is: $& there isn't what
+        // ${workspaceFolder} matched.
+        const odd = path.join(dir, 'a$&b');
+        fs.mkdirSync(odd);
+        const oddM = path.join(odd, 'm.rig');
+        fs.writeFileSync(oddM, 'main :: () {}\n');
+        const oddFolder = fakeFolder(odd);
+        stub.folders = [oddFolder];
+        stub.mains[odd] = '${workspaceFolder}/m.rig';
+        assert.deepStrictEqual(mainSetting(path.join(odd, 'helper.rig'), oddFolder), { file: oddM });
+    });
+});
+
+check('a loaded file is checked through the first main file in path order that loads it', async () => {
+    loadExtension();
+    await withStandIn(async (dir) => {
+        writeMains(dir);
+        // Between a.rig and b.rig in path order, and it loads the document,
+        // but it doesn't declare main: never tried, as rig would refuse it.
+        fs.writeFileSync(path.join(dir, 'a0.rig'), '#load "helper.rig";\nx :: 1;\n');
+        // Under .build, where rig writes: never a candidate, though it loads the document.
+        fs.mkdirSync(path.join(dir, '.build'));
+        fs.writeFileSync(path.join(dir, '.build', 'x.rig'), '#load "../helper.rig";\nmain :: () {}\n');
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        const result = await checked(dir, doc, 'open');
+        assert.deepStrictEqual(result.calls, [
+            [path.join(dir, 'a.rig'), '--stdin-for', file],
+            [path.join(dir, 'b.rig'), '--stdin-for', file],
+        ]);
+        assert.deepStrictEqual(result.diagnostics, [
+            [0, 0, "unknown identifier 'putz'"],
+            [0, 0, "an error in another file of the program: b.rig:2:14: unknown identifier 'putz'"],
+        ]);
+        assert.deepStrictEqual(stub.errors, []);
+        // The folder was searched with no exclude of the extension's own, so
+        // that VS Code leaves out what files.exclude does (the README says so).
+        assert.ok(stub.searches.length > 0, 'the folder was never searched');
+        assert.ok(stub.searches.every((args) => args[1] === undefined), 'findFiles was given an exclude');
+        // And at any depth, from the document's folder: the stub's findFiles
+        // finds every .rig file whatever the pattern, so it's checked here.
+        for (const [include] of stub.searches) {
+            assert.strictEqual(include.pattern, '**/*.rig');
+            assert.strictEqual((include.base.uri || include.base).fsPath, dir);
+        }
+    });
+});
+
+// A main file below the folder's top level is a candidate too, in path
+// order: sub/m.rig comes after b.rig, and before sub0.rig ('/' sorts before
+// '0'), which is then never tried.
+check('a main file in a subdirectory is found, in path order', async () => {
+    loadExtension();
+    await withStandIn(async (dir) => {
+        fs.writeFileSync(path.join(dir, 'a.rig'), 'main :: () {}\n');
+        fs.writeFileSync(path.join(dir, 'b.rig'), 'main :: () {}\n');
+        fs.mkdirSync(path.join(dir, 'sub'));
+        const m = path.join(dir, 'sub', 'm.rig');
+        fs.writeFileSync(m, '#load "../helper.rig";\nmain :: () {}\n');
+        fs.writeFileSync(path.join(dir, 'sub0.rig'), '#load "helper.rig";\nmain :: () {}\n');
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        const result = await checked(dir, doc, 'open');
+        assert.deepStrictEqual(result.calls, [
+            [path.join(dir, 'a.rig'), '--stdin-for', file],
+            [path.join(dir, 'b.rig'), '--stdin-for', file],
+            [m, '--stdin-for', file],
+        ]);
+        assert.deepStrictEqual(result.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
+        assert.deepStrictEqual(stub.errors, []);
+    });
+});
+
+// The document's file on disk may declare main while its text no longer
+// does (main deleted, not yet saved). It's still not a candidate, though
+// it comes first in path order: rig would be given it as MAIN and FILE.
+check('the document is never a candidate, even when its file on disk declares main', async () => {
+    loadExtension();
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'a.rig');
+        fs.writeFileSync(file, 'main :: () {}\n');
+        fs.writeFileSync(path.join(dir, 'b.rig'), '#load "a.rig";\nmain :: () {}\n');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        const result = await checked(dir, doc, 'open');
+        assert.deepStrictEqual(result.calls, [[path.join(dir, 'b.rig'), '--stdin-for', file]]);
+        assert.deepStrictEqual(result.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
+        assert.deepStrictEqual(stub.errors, []);
+    });
+});
+
+check('rig.main names the program, and one that doesn\'t load the file falls back to the search', async () => {
+    loadExtension();
+    await withStandIn(async (dir) => {
+        writeMains(dir);
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        stub.mains[dir] = 'c.rig';
+        const first = await checked(dir, doc, 'open');
+        assert.deepStrictEqual(first.calls, [[path.join(dir, 'c.rig'), '--stdin-for', file]]);
+        assert.deepStrictEqual(first.diagnostics, [
+            [0, 0, "unknown identifier 'putz'"],
+            [0, 0, "an error in another file of the program: c.rig:2:14: unknown identifier 'putz'"],
+        ]);
+
+        // On Windows rig.main may spell a.rig in another case than the search
+        // finds it in (VS Code's search lowercases the drive letter, for one):
+        // it's still the same file, tried once.
+        const a = process.platform === 'win32' ? path.join(dir, 'a.rig').toUpperCase() : path.join(dir, 'a.rig');
+        stub.mains[dir] = a;
+        const second = await checked(dir, doc, 'configuration', MAIN_CHANGED);
+        assert.deepStrictEqual(second.calls, [
+            [a, '--stdin-for', file],
+            [path.join(dir, 'b.rig'), '--stdin-for', file],
+        ]);
+        assert.deepStrictEqual(stub.errors, []);
+
+        // The search's b.rig is remembered, and tried before rig.main: the
+        // next keystroke's check runs rig once, through b.rig alone.
+        const third = await checked(dir, doc, 'change', { document: doc, contentChanges: [{}] });
+        assert.deepStrictEqual(third.calls, [[path.join(dir, 'b.rig'), '--stdin-for', file]]);
+    });
+});
+
+check('a main file, a file no program loads and a file in no folder are checked alone', async () => {
+    loadExtension();
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'helper.rig');
+        const alone = [file, '--stdin'];
+        fs.writeFileSync(path.join(dir, 'b.rig'), '#load "helper.rig";\nmain :: () {}\n');
+
+        // It declares main: its own program.
+        const doc = fakeDocument(file, 'main :: () { putz(); }\n');
+        stub.document = doc;
+        const own = await checked(dir, doc, 'open');
+        assert.deepStrictEqual(own.calls, [alone]);
+        assert.deepStrictEqual(own.diagnostics, [[0, 13, "unknown identifier 'putz'"]]);
+
+        // rig.main is the document itself. It must be a file to be compared
+        // with the document (else it's said to be missing), so it's on disk.
+        // On Windows it's the document in any case.
+        doc.text = 'putz();\n';
+        fs.writeFileSync(file, 'putz();\n');
+        stub.mains[dir] = 'helper.rig';
+        assert.deepStrictEqual((await checked(dir, doc, 'save')).calls, [alone]);
+        if (process.platform === 'win32') {
+            stub.mains[dir] = file.toUpperCase();
+            assert.deepStrictEqual((await checked(dir, doc, 'save')).calls, [alone]);
+        }
+        fs.rmSync(file);
+        delete stub.mains[dir];
+
+        // No program loads it.
+        fs.rmSync(path.join(dir, 'b.rig'));
+        fs.writeFileSync(path.join(dir, 'a.rig'), 'main :: () {}\n');
+        const nobody = await checked(dir, doc, 'save');
+        assert.deepStrictEqual(nobody.calls, [[path.join(dir, 'a.rig'), '--stdin-for', file], alone]);
+        assert.deepStrictEqual(nobody.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
+
+        // No workspace folder: rig runs in the file's directory.
+        stub.folders = [];
+        assert.deepStrictEqual((await checked(dir, doc, 'save')).calls, [alone]);
+        assert.deepStrictEqual(stub.errors, []);
+    });
+});
+
+check('a bad rig.main is said once, with a button to the setting, and the search is used', async () => {
+    loadExtension();
+    await withStandIn(async (dir) => {
+        fs.writeFileSync(path.join(dir, 'b.rig'), '#load "helper.rig";\nmain :: () { putz(); }\n');
+        const file = path.join(dir, 'helper.rig');
+        const b = [path.join(dir, 'b.rig'), '--stdin-for', file];
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+
+        stub.mains[dir] = 'nope.rig';
+        assert.deepStrictEqual((await checked(dir, doc, 'open')).calls, [b]);
+        assert.deepStrictEqual((await checked(dir, doc, 'save')).calls, [b]);
+        assert.deepStrictEqual(stub.errors, [
+            `Rig: The setting rig.main is "nope.rig", but there's no file ${path.normalize(path.join(dir, 'nope.rig'))}.`,
+        ]);
+
+        // Changing the setting may say so again; the button opens the setting.
+        stub.errors = [];
+        stub.answers = ['Open Settings'];
+        stub.mains[dir] = 'b.txt';
+        assert.deepStrictEqual((await checked(dir, doc, 'configuration', MAIN_CHANGED)).calls, [b]);
+        assert.deepStrictEqual(stub.errors, [
+            `Rig: The setting rig.main is "b.txt", but ${path.normalize(path.join(dir, 'b.txt'))} isn't a .rig file.`,
+        ]);
+        await until('the button\'s command', () => stub.commands.length > 0);
+        assert.deepStrictEqual(stub.commands, [['workbench.action.openSettings', 'rig.main']]);
+    });
+});
+
+// A compiler Node can't start is the answer of the first main file tried,
+// as it is of a document checked alone: said once, no problems listed, and
+// nothing else tried, neither the next main file nor the document alone.
+check('a compiler Node can\'t start ends the search at the first main file', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        writeMains(dir);
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        await withUnstartable(dir, async (program) => {
+            // Each start of the compiler: the words after `check`.
+            const child_process = require('child_process');
+            const spawn = child_process.spawn;
+            const started = [];
+            child_process.spawn = (command, args, ...rest) => {
+                if (command === program) started.push(args.slice(1));
+                return spawn.call(child_process, command, args, ...rest);
+            };
+            try {
+                // Setting the compiler checks the open document.
+                stub.compilerPath = program;
+                stub.document = doc;
+                fire('configuration', { affectsConfiguration: (section) => section === 'rig.compilerPath' || section === 'rig' });
+                await until('the error', () => stub.errors.length > 0);
+                await sleep(300);
+            } finally {
+                child_process.spawn = spawn;
+            }
+            assert.deepStrictEqual(started, [[path.join(dir, 'a.rig'), '--stdin-for', file]]);
+            assert.strictEqual(stub.errors.length, 1, stub.errors.join('\n'));
+            assert.ok(stub.errors[0].includes(`couldn't run ${program}`), stub.errors[0]);
+            assert.ok(!live.has(doc.uri.toString()), 'the document got diagnostics');
+        });
+    });
+});
+
+// When VS Code can't search the folder, the document is checked alone, and
+// searched for again next time; a file it can't read isn't a main file to
+// try, as rig couldn't read it.
+check('a folder VS Code can\'t search, or a file it can\'t read, is no main file to try', async () => {
+    loadExtension();
+    const { findFiles, fs: files } = vscodeStub.workspace;
+    const readFile = files.readFile;
+    await withStandIn(async (dir) => {
+        writeMains(dir);
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        try {
+            vscodeStub.workspace.findFiles = async () => {
+                throw new Error('no search');
+            };
+            const unsearched = await checked(dir, doc, 'open');
+            assert.deepStrictEqual(unsearched.calls, [[file, '--stdin']]);
+            assert.deepStrictEqual(unsearched.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
+
+            // That the folder couldn't be searched isn't remembered as no
+            // program loading the document: its next check searches.
+            vscodeStub.workspace.findFiles = findFiles;
+            const searched = await checked(dir, doc, 'change', { document: doc, contentChanges: [{}] });
+            assert.deepStrictEqual(searched.calls, [
+                [path.join(dir, 'a.rig'), '--stdin-for', file],
+                [path.join(dir, 'b.rig'), '--stdin-for', file],
+            ]);
+
+            files.readFile = (uri) =>
+                path.basename(uri.fsPath) === 'b.rig' ? Promise.reject(new Error('unreadable')) : readFile(uri);
+            const unread = await checked(dir, doc, 'save');
+            assert.deepStrictEqual(unread.calls, [
+                [path.join(dir, 'a.rig'), '--stdin-for', file],
+                [path.join(dir, 'c.rig'), '--stdin-for', file],
+            ]);
+            assert.deepStrictEqual(stub.errors, []);
+        } finally {
+            vscodeStub.workspace.findFiles = findFiles;
+            files.readFile = readFile;
+        }
+    });
+});
+
+// A check that starts while an older one is still searching (waiting for
+// findFiles or a file's text) takes over: the older one must then start no
+// rig and set nothing, or its answer could replace the newer one's.
+check('a search a newer check overtakes starts no process', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        fs.writeFileSync(path.join(dir, 'b.rig'), '#load "helper.rig";\nmain :: () {}\n');
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        fire('save', doc);
+        doc.text = 'x :: 1;\n';
+        fire('save', doc);
+        await until('the check', () => live.has(key));
+        assert.deepStrictEqual(calls(dir), [[path.join(dir, 'b.rig'), '--stdin-for', file]]);
+        assert.deepStrictEqual(live.get(key), []);
+        await sleep(500);
+        assert.deepStrictEqual(live.get(key), []);
+        assert.strictEqual(calls(dir).length, 1);
+    });
+});
+
+// The same while the older check's `rig check MAIN --stdin-for FILE` runs:
+// its process is ended, and what it answers (nothing, or part of an
+// answer) is ignored, by a newer check and by the document closing alike.
+// Nothing else is tried for it either: no other main file, and not the
+// document alone.
+check('a check overtaken while its rig --stdin-for runs sets nothing and tries nothing else', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        fs.writeFileSync(path.join(dir, 'b.rig'), '#load "helper.rig";\nmain :: () {}\n');
+        const file = path.join(dir, 'helper.rig');
+        const b = [path.join(dir, 'b.rig'), '--stdin-for', file];
+        const doc = fakeDocument(file, 'putz(); // slow\n');
+        const key = doc.uri.toString();
+        stub.document = doc;
+
+        // A newer check, once the slow one's rig has started.
+        fire('save', doc);
+        await until('the slow check\'s rig', () => calls(dir).length === 1);
+        doc.text = 'putz();\n';
+        const newer = await checked(dir, doc, 'save');
+        assert.deepStrictEqual(newer.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
+        await sleep(300);
+        assert.deepStrictEqual(calls(dir), [b, b]);
+
+        // The document closing.
+        doc.text = 'putz(); // slow\n';
+        fire('save', doc);
+        await until('the slow check\'s rig', () => calls(dir).length === 3);
+        fire('close', doc);
+        // The slow answer would have come by now, had its rig not been ended.
+        await sleep(1800);
+        assert.ok(!live.has(key), 'a closed document got diagnostics');
+        assert.deepStrictEqual(calls(dir), [b, b, b]);
+    });
+});
+
+// A newer check may also start in the moment between one rig answering
+// that its program doesn't load the document and the older check going on,
+// to the search for main files, to the next main file or to checking the
+// document alone: when run() is called from a promise's continuation, say.
+// The older check must then start nothing and search no more, so the rigs
+// started and the searches made from then on are the newer check's alone.
+// That moment is some promise steps after the first rig closes, so the
+// newer check is started 0 to 3 steps after it, each in turn: with another
+// main file to go on to (b.rig), with that and rig.main naming the first
+// (a.rig), whose rig is then started before the search, and with none.
+check('a check overtaken between two rigs starts no other and searches no more', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    const child_process = require('child_process');
+    const spawn = child_process.spawn;
+    const findFiles = vscodeStub.workspace.findFiles;
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        fs.writeFileSync(path.join(dir, 'a.rig'), 'main :: () {}\n');
+        const a = [path.join(dir, 'a.rig'), '--stdin-for', file];
+        const b = [path.join(dir, 'b.rig'), '--stdin-for', file];
+
+        // Each rig started: the words after `check`, and how many searches
+        // for main files were made. When `steps` isn't null, the next rig to
+        // close starts the newer check that many promise steps later, and
+        // started and searches are emptied for it.
+        let started = [];
+        let searches = 0;
+        let steps = null;
+        child_process.spawn = (program, args, ...rest) => {
+            const child = spawn.call(child_process, program, args, ...rest);
+            started.push(args.slice(1));
+            if (steps !== null) {
+                const n = steps;
+                steps = null;
+                child.on('close', () => {
+                    let step = Promise.resolve();
+                    for (let i = 0; i < n; i++) step = step.then(() => {});
+                    step.then(() => {
+                        started = [];
+                        searches = 0;
+                        fire('save', doc);
+                    });
+                });
+            }
+            return child;
+        };
+        vscodeStub.workspace.findFiles = (...args) => {
+            searches++;
+            return findFiles(...args);
+        };
+        try {
+            const loader = '#load "helper.rig";\nmain :: () {}\n';
+            for (const [bRig, main, expected] of [
+                [loader, '', [a, b]],
+                [loader, 'a.rig', [a, b]],
+                [null, '', [a, [file, '--stdin']]],
+            ]) {
+                if (bRig) fs.writeFileSync(path.join(dir, 'b.rig'), bRig);
+                else fs.rmSync(path.join(dir, 'b.rig'));
+                stub.mains[dir] = main;
+                for (let n = 0; n <= 3; n++) {
+                    const what = `${n} steps, ${bRig ? 'b.rig' : 'no b.rig'}, rig.main "${main}"`;
+                    live.delete(key);
+                    steps = n;
+                    fire('save', doc);
+                    await until('the newer check', () => live.has(key));
+                    assert.deepStrictEqual(started, expected, what);
+                    assert.strictEqual(searches, 1, what);
+                }
+            }
+        } finally {
+            child_process.spawn = spawn;
+            vscodeStub.workspace.findFiles = findFiles;
+        }
+    });
+});
+
+// Disposing of the live check ends a check still looking for the main file
+// too, which then starts no rig. A second activation, on a context of its
+// own, has the document to check (it checks the open documents at once),
+// and is disposed of while that check waits for findFiles.
+check('disposing of the live check stops a search', async () => {
+    const { activate } = loadExtension();
+    const collection = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        fs.writeFileSync(path.join(dir, 'b.rig'), '#load "helper.rig";\nmain :: () {}\n');
+        stub.document = fakeDocument(path.join(dir, 'helper.rig'), 'putz();\n');
+        const context = { subscriptions: [] };
+        try {
+            activate(context);
+            for (const subscription of context.subscriptions) subscription.dispose();
+            await sleep(500);
+            assert.deepStrictEqual(calls(dir), []);
+        } finally {
+            // The first activation's collection is the one the other checks read.
+            activated.collections.rig = collection;
+        }
+    });
+});
+
+// The main file found for a document is remembered, so a change of the
+// document runs one rig, not the search. It's forgotten, and searched for
+// again, when what the search saw may have changed: a .rig file of the
+// folder created, changed or deleted (the file system watcher's events, an
+// edit outside VS Code among them) or saved, or the workspace folders
+// changing, which checks the open documents again at once. A remembered
+// main file whose program no longer loads the document, changed with no
+// event, is dropped, and the search goes on without it.
+check('a document\'s program is remembered until a .rig file in its folder is created, changed, deleted or saved, or the folders change', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        const rig = (name) => path.join(dir, name);
+        const through = (name) => [rig(name), '--stdin-for', file];
+        const change = { document: doc, contentChanges: [{}] };
+        const loader = '#load "helper.rig";\nmain :: () {}\n';
+        fs.writeFileSync(rig('a.rig'), 'main :: () {}\n');
+        fs.writeFileSync(rig('b.rig'), loader);
+
+        const opened = await checked(dir, doc, 'open');
+        assert.deepStrictEqual(opened.calls, [through('a.rig'), through('b.rig')], 'on opening');
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('b.rig')], 'remembered');
+        // Closing the document forgets its program.
+        fire('close', doc);
+        assert.deepStrictEqual((await checked(dir, doc, 'open')).calls, [through('a.rig'), through('b.rig')], 'reopened');
+
+        fs.writeFileSync(rig('a0.rig'), loader);
+        fire('fsCreate', fileUri(rig('a0.rig')));
+        assert.deepStrictEqual(
+            (await checked(dir, doc, 'change', change)).calls,
+            [through('a.rig'), through('a0.rig')],
+            'after a file is created',
+        );
+
+        // Saving a.rig checks it too, alone, as it declares main, and checks
+        // the document again at once.
+        fs.writeFileSync(rig('a.rig'), loader);
+        const saved = fakeDocument(rig('a.rig'), loader);
+        const before = calls(dir).length;
+        const onSave = await checked(dir, doc, 'save', saved);
+        assert.deepStrictEqual(onSave.calls.filter((c) => c[1] === '--stdin-for'), [through('a.rig')], 'after a file is saved');
+        await until('the check of a.rig', () => live.has(saved.uri.toString()));
+        assert.strictEqual(calls(dir).slice(before).length, 2, 'after a file is saved');
+        fire('close', saved);
+
+        fs.rmSync(rig('a.rig'));
+        fire('fsDelete', fileUri(rig('a.rig')));
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('a0.rig')], 'after a file is deleted');
+
+        fs.writeFileSync(rig('a0.rig'), 'main :: () {}\n');
+        assert.deepStrictEqual(
+            (await checked(dir, doc, 'change', change)).calls,
+            [through('a0.rig'), through('b.rig')],
+            'after the remembered file stops loading the document',
+        );
+
+        fs.writeFileSync(rig('a.rig'), loader);
+        fire('fsChange', fileUri(rig('a.rig')));
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('a.rig')], 'after a file changes');
+
+        // A file deleted forgets the program even when it isn't the
+        // remembered main file: here 1.rig, added with no event, is found
+        // only by the search that x.rig's deletion starts.
+        fs.writeFileSync(rig('1.rig'), loader);
+        fs.writeFileSync(rig('x.rig'), 'x :: 1;\n');
+        fs.rmSync(rig('x.rig'));
+        fire('fsDelete', fileUri(rig('x.rig')));
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('1.rig')], 'after another file is deleted');
+
+        fs.writeFileSync(rig('0.rig'), loader);
+        assert.deepStrictEqual(
+            (await checked(dir, doc, 'folders', { added: [], removed: [] })).calls,
+            [through('0.rig')],
+            'after the folders change',
+        );
+        assert.deepStrictEqual(stub.errors, []);
+    });
+});
+
+// rig.main may name a file in no workspace folder, whose changes the file
+// system watcher doesn't see. Saving it forgets the programs of the
+// documents with a rig.main, and checks them again at once, so a document
+// no program loaded, and so checked alone, is found to be part of
+// rig.main's program once that #loads it.
+check('saving a rig.main in no folder forgets the programs and re-checks the documents', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-vscode-check-'));
+    try {
+        await withStandIn(async (dir) => {
+            // The stand-in for the check of the saved file, which runs in
+            // its directory.
+            fs.writeFileSync(path.join(outside, 'check.js'), STAND_IN);
+            const file = path.join(dir, 'helper.rig');
+            const doc = fakeDocument(file, 'putz();\n');
+            stub.document = doc;
+            const main = path.join(outside, 'm.rig');
+            fs.writeFileSync(main, 'main :: () {}\n');
+            stub.mains[dir] = main;
+            const through = [main, '--stdin-for', file];
+            const alone = [file, '--stdin'];
+            const change = { document: doc, contentChanges: [{}] };
+            assert.deepStrictEqual((await checked(dir, doc, 'open')).calls, [through, alone], 'on opening');
+            assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [alone], 'remembered');
+
+            const loader = `#load "${path.relative(outside, file).split(path.sep).join('/')}";\nmain :: () {}\n`;
+            fs.writeFileSync(main, loader);
+            const saved = fakeDocument(main, loader);
+            assert.deepStrictEqual((await checked(dir, doc, 'save', saved)).calls, [through], 'on saving m.rig');
+            await until('the check of m.rig', () => live.has(saved.uri.toString()));
+            fire('close', saved);
+            assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through], 'remembered again');
+            assert.deepStrictEqual(stub.errors, []);
+        });
+    } finally {
+        fs.rmSync(outside, { recursive: true, force: true });
+    }
+});
+
+// Saving a file may change the program of every open document of its
+// folder, so they're all checked again, not only the one saved, and their
+// programs searched for again. Here the saved main file's error goes from
+// the count of the program's other files' errors on the loaded document,
+// and lone.rig, which no program loads, is searched for again.
+check('saving a .rig file re-checks the other open documents of its folder', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'helper.rig');
+        const lone = path.join(dir, 'lone.rig');
+        const b = path.join(dir, 'b.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        const loneDoc = fakeDocument(lone, 'putz();\n');
+        fs.writeFileSync(b, '#load "helper.rig";\nmain :: () { putz(); }\n');
+        stub.document = doc;
+        stub.documents = [loneDoc];
+        fire('open', loneDoc);
+        const opened = await checked(dir, doc, 'open');
+        assert.deepStrictEqual(opened.diagnostics, [
+            [0, 0, "unknown identifier 'putz'"],
+            [0, 0, "an error in another file of the program: b.rig:2:14: unknown identifier 'putz'"],
+        ]);
+        await until('the check of lone.rig', () => live.has(loneDoc.uri.toString()));
+
+        const fixed = '#load "helper.rig";\nmain :: () {}\n';
+        fs.writeFileSync(b, fixed);
+        const saved = fakeDocument(b, fixed);
+        stub.documents.push(saved);
+        live.delete(loneDoc.uri.toString());
+        const before = calls(dir).length;
+        const onSave = await checked(dir, doc, 'save', saved);
+        assert.deepStrictEqual(onSave.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
+        await until('the check of lone.rig', () => live.has(loneDoc.uri.toString()));
+        await until('the check of b.rig', () => live.has(saved.uri.toString()));
+        const sorted = (list) => list.map((c) => JSON.stringify(c)).sort();
+        assert.deepStrictEqual(
+            sorted(calls(dir).slice(before)),
+            sorted([
+                [b, '--stdin'],
+                [b, '--stdin-for', file],
+                [b, '--stdin-for', lone],
+                [lone, '--stdin'],
+            ]),
+        );
+        assert.deepStrictEqual(stub.errors, []);
+    });
+});
+
+// Only what may have changed is forgotten and checked again: a .rig file
+// saved or changed in one workspace folder leaves the documents of another
+// as they are, their programs remembered.
+check('a .rig file saved or changed in one folder leaves the other folders\' documents be', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withOtherDir(async (dir2) => {
+        await withStandIn(async (dir) => {
+            stub.folders.push(fakeFolder(dir2));
+            const loader = '#load "helper.rig";\nmain :: () {}\n';
+            const doc = fakeDocument(path.join(dir, 'helper.rig'), 'putz();\n');
+            const file2 = path.join(dir2, 'helper.rig');
+            const doc2 = fakeDocument(file2, 'putz();\n');
+            fs.writeFileSync(path.join(dir, 'b.rig'), loader);
+            fs.writeFileSync(path.join(dir2, 'a.rig'), 'main :: () {}\n');
+            fs.writeFileSync(path.join(dir2, 'b.rig'), loader);
+            const through2 = (name) => [path.join(dir2, name), '--stdin-for', file2];
+            stub.document = doc;
+            stub.documents = [doc2];
+            await checked(dir, doc, 'open');
+            assert.deepStrictEqual((await checked(dir2, doc2, 'open')).calls, [through2('a.rig'), through2('b.rig')]);
+
+            const saved = fakeDocument(path.join(dir, 'b.rig'), loader);
+            await checked(dir, doc, 'save', saved);
+            await until('the check of b.rig', () => live.has(saved.uri.toString()));
+            fire('close', saved);
+            // A change outside VS Code, not the save's own.
+            fs.writeFileSync(path.join(dir, 'b.rig'), `${loader}// changed\n`);
+            fire('fsChange', fileUri(path.join(dir, 'b.rig')));
+            await sleep(300);
+            assert.strictEqual(calls(dir2).length, 2, 'the other folder\'s document checked again');
+            const change2 = { document: doc2, contentChanges: [{}] };
+            assert.deepStrictEqual(
+                (await checked(dir2, doc2, 'change', change2)).calls,
+                [through2('b.rig')],
+                'the other folder\'s program forgotten',
+            );
+            assert.deepStrictEqual(stub.errors, []);
+        });
+    });
+});
+
+// rig.main may name a file in another workspace folder. A .rig file of
+// that folder created, changed, deleted or saved forgets that folder's
+// programs, and the programs of the documents with a rig.main, such as
+// those whose rig.main the file is; saved, it checks those documents again
+// too. Here the document is first
+// checked alone, as rig.main's program doesn't load it, then through
+// rig.main once that loads it.
+check('a file another folder\'s rig.main names forgets the programs of that folder\'s documents', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withOtherDir(async (app) => {
+        await withStandIn(async (dir) => {
+            stub.folders.push(fakeFolder(app));
+            const file = path.join(dir, 'helper.rig');
+            const doc = fakeDocument(file, 'putz();\n');
+            stub.document = doc;
+            const main = path.join(app, 'main.rig');
+            const loader = `#load "${path.relative(app, file).split(path.sep).join('/')}";\nmain :: () {}\n`;
+            const other = 'main :: () {}\n';
+            fs.writeFileSync(main, other);
+            stub.mains[dir] = main;
+            const through = [main, '--stdin-for', file];
+            const alone = [file, '--stdin'];
+            const change = { document: doc, contentChanges: [{}] };
+            assert.deepStrictEqual((await checked(dir, doc, 'open')).calls, [through, alone], 'on opening');
+
+            fs.writeFileSync(main, loader);
+            fire('fsChange', fileUri(main));
+            assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through], 'after it changes');
+            fs.writeFileSync(main, other);
+            fire('fsChange', fileUri(main));
+            assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through, alone], 'after it changes back');
+
+            fs.writeFileSync(main, loader);
+            const saved = fakeDocument(main, loader);
+            assert.deepStrictEqual((await checked(dir, doc, 'save', saved)).calls, [through], 'on saving it');
+            await until('the check of main.rig', () => live.has(saved.uri.toString()));
+            fire('close', saved);
+            assert.deepStrictEqual(stub.errors, []);
+        });
+    });
+});
+
+// rig.main's program may load files anywhere, in another workspace folder
+// or in none, not only rig.main itself. A .rig file created, changed,
+// deleted or saved in another folder, or in none, forgets the program of
+// each document with a rig.main. Here, with rig.main in another folder, a
+// file it loads changes outside VS Code to #load the document, and with
+// rig.main in no folder, one is saved so; the document, checked alone till
+// then, is checked through rig.main. (The stand-in reads only the main
+// file's text, so that's where the #load goes.)
+check('a file rig.main\'s program loads, in another folder or in none, forgets the program', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    for (const event of ['fsChange', 'save']) {
+        await withOtherDir(async (app) => {
+            await withStandIn(async (dir) => {
+                if (event === 'fsChange') stub.folders.push(fakeFolder(app));
+                const file = path.join(dir, 'helper.rig');
+                const doc = fakeDocument(file, 'putz();\n');
+                stub.document = doc;
+                const main = path.join(app, 'main.rig');
+                const lib = path.join(app, 'lib.rig');
+                fs.writeFileSync(main, '#load "lib.rig";\nmain :: () {}\n');
+                fs.writeFileSync(lib, '');
+                stub.mains[dir] = main;
+                const through = [main, '--stdin-for', file];
+                const alone = [file, '--stdin'];
+                const change = { document: doc, contentChanges: [{}] };
+                assert.deepStrictEqual((await checked(dir, doc, 'open')).calls, [through, alone], `${event}: on opening`);
+                assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [alone], `${event}: remembered`);
+
+                const loader = `#load "${path.relative(app, file).split(path.sep).join('/')}";\n`;
+                fs.writeFileSync(lib, loader);
+                fs.writeFileSync(main, `#load "lib.rig";\n${loader}main :: () {}\n`);
+                if (event === 'fsChange') {
+                    fire('fsChange', fileUri(lib));
+                    assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through], 'after lib.rig changes');
+                } else {
+                    const saved = fakeDocument(lib, loader);
+                    assert.deepStrictEqual((await checked(dir, doc, 'save', saved)).calls, [through], 'on saving lib.rig');
+                    await until('the check of lib.rig', () => live.has(saved.uri.toString()));
+                    fire('close', saved);
+                }
+                assert.deepStrictEqual(stub.errors, []);
+            });
+        });
+    }
+});
+
+// A .rig file in no workspace folder, such as a scratch file opened from
+// anywhere, isn't part of the program of a document without a rig.main,
+// which is found in the document's folder: saving it leaves that program
+// remembered.
+check('saving a .rig file in no folder leaves the programs of documents without a rig.main be', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withOtherDir(async (outside) => {
+        await withStandIn(async (dir) => {
+            const file = path.join(dir, 'helper.rig');
+            const doc = fakeDocument(file, 'putz();\n');
+            stub.document = doc;
+            const through = (name) => [path.join(dir, name), '--stdin-for', file];
+            fs.writeFileSync(path.join(dir, 'a.rig'), 'main :: () {}\n');
+            fs.writeFileSync(path.join(dir, 'b.rig'), '#load "helper.rig";\nmain :: () {}\n');
+            assert.deepStrictEqual((await checked(dir, doc, 'open')).calls, [through('a.rig'), through('b.rig')]);
+
+            const scratch = path.join(outside, 'x.rig');
+            fs.writeFileSync(scratch, 'main :: () {}\n');
+            const saved = fakeDocument(scratch, 'main :: () {}\n');
+            fire('save', saved);
+            await until('the check of x.rig', () => live.has(saved.uri.toString()));
+            fire('close', saved);
+            await sleep(300);
+            assert.strictEqual(calls(dir).length, 2, 'the document checked again');
+            const change = { document: doc, contentChanges: [{}] };
+            assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('b.rig')]);
+            assert.deepStrictEqual(stub.errors, []);
+        });
+    });
+});
+
+// VS Code's file system watcher reports the files VS Code saves, as well
+// as those changed outside it, so a save's own write comes back as a
+// change. The save has forgotten the programs it concerns, and checked
+// their documents again: the change forgets nothing more, so what those
+// checks found is kept. A change outside VS Code after that, which leaves
+// the file another time of modification, forgets it.
+check('a save\'s own change on disk forgets nothing more', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        const a = path.join(dir, 'a.rig');
+        const through = (name) => [path.join(dir, name), '--stdin-for', file];
+        const change = { document: doc, contentChanges: [{}] };
+        const loader = '#load "helper.rig";\nmain :: () {}\n';
+        fs.writeFileSync(a, 'main :: () {}\n');
+        fs.writeFileSync(path.join(dir, 'b.rig'), loader);
+        await checked(dir, doc, 'open');
+
+        fs.writeFileSync(a, 'main :: () {}\n');
+        const saved = fakeDocument(a, 'main :: () {}\n');
+        const onSave = await checked(dir, doc, 'save', saved);
+        assert.deepStrictEqual(onSave.calls.filter((c) => c[1] === '--stdin-for'), [through('a.rig'), through('b.rig')], 'on saving a.rig');
+        await until('the check of a.rig', () => live.has(saved.uri.toString()));
+        fire('close', saved);
+        fire('fsChange', fileUri(a));
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('b.rig')], 'after the save\'s change');
+
+        fs.writeFileSync(a, loader);
+        fire('fsChange', fileUri(a));
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('a.rig')], 'after a change outside VS Code');
+        assert.deepStrictEqual(stub.errors, []);
+    });
+});
+
+// A remembered main file may be gone with no event for it: deleted outside
+// VS Code where the file system watcher doesn't look (in no workspace
+// folder, as here) or misses it. rig couldn't read it, so it isn't tried:
+// it's forgotten, and the search goes on.
+check('a remembered main file that is gone is forgotten', async () => {
+    loadExtension();
+    await withOtherDir(async (outside) => {
+        await withStandIn(async (dir) => {
+            const file = path.join(dir, 'helper.rig');
+            const doc = fakeDocument(file, 'putz();\n');
+            stub.document = doc;
+            const main = path.join(outside, 'm.rig');
+            fs.writeFileSync(main, `#load "${path.relative(outside, file).split(path.sep).join('/')}";\nmain :: () {}\n`);
+            stub.mains[dir] = main;
+            assert.deepStrictEqual((await checked(dir, doc, 'open')).calls, [[main, '--stdin-for', file]], 'on opening');
+
+            fs.rmSync(main);
+            const after = await checked(dir, doc, 'change', { document: doc, contentChanges: [{}] });
+            assert.deepStrictEqual(after.calls, [[file, '--stdin']]);
+            assert.deepStrictEqual(after.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
+        });
+    });
+});
+
+// A .rig file created while a search is under way may be the main file
+// the search would have found, had it been there: the search's answer
+// isn't remembered, and the next check searches again. First the search
+// has found a.rig alone, which doesn't load the document, and the file
+// created is b.rig, which does; then the search has found b.rig, and the
+// file created is a.rig, which loads the document too, and comes first.
+check('a search under way when a .rig file is created remembers nothing', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz(); // slow\n');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        const through = (name) => [path.join(dir, name), '--stdin-for', file];
+        const loader = '#load "helper.rig";\nmain :: () {}\n';
+        fs.writeFileSync(path.join(dir, 'b.rig'), loader);
+        fire('open', doc);
+        await until('the slow check through b.rig', () => calls(dir).length === 1);
+        fs.writeFileSync(path.join(dir, 'a.rig'), loader);
+        fire('fsCreate', fileUri(path.join(dir, 'a.rig')));
+        await until('the check', () => live.has(key));
+        assert.deepStrictEqual(calls(dir), [through('b.rig')]);
+
+        doc.text = 'putz();\n';
+        const change = { document: doc, contentChanges: [{}] };
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('a.rig')]);
+        assert.deepStrictEqual(stub.errors, []);
+    });
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz(); // slow\n');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        const through = (name) => [path.join(dir, name), '--stdin-for', file];
+        fs.writeFileSync(path.join(dir, 'a.rig'), 'main :: () {}\n');
+        fire('open', doc);
+        await until('the slow check through a.rig', () => calls(dir).length === 1);
+        fs.writeFileSync(path.join(dir, 'b.rig'), '#load "helper.rig";\nmain :: () {}\n');
+        fire('fsCreate', fileUri(path.join(dir, 'b.rig')));
+        doc.text = 'putz();\n';
+        await until('the check', () => live.has(key));
+        assert.deepStrictEqual(calls(dir), [through('a.rig'), [file, '--stdin']]);
+
+        const change = { document: doc, contentChanges: [{}] };
+        assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through('a.rig'), through('b.rig')]);
+        assert.deepStrictEqual(stub.errors, []);
+    });
+});
+
+// A rig from before --stdin-for answers it with its usage: the document is
+// then checked alone, as it was before, which is better than nothing, and
+// the rig is said to be too old once, with the button to rig.compilerPath.
+// A new compiler may be too old as well, and is said to be again. Nothing
+// is remembered, so a rig updated in place is used at once.
+check('a rig too old for --stdin-for is said once, and the file is checked alone', async () => {
+    loadExtension();
+    await withStandIn(async (dir) => {
+        fs.writeFileSync(path.join(dir, 'old-rig'), '');
+        const b = path.join(dir, 'b.rig');
+        fs.writeFileSync(b, '#load "helper.rig";\nmain :: () {}\n');
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        stub.answers = ['Open Settings'];
+        const old = [[b, '--stdin-for', file], [file, '--stdin']];
+        for (const event of ['open', 'save']) {
+            const result = await checked(dir, doc, event);
+            assert.deepStrictEqual(result.calls, old, event);
+            assert.deepStrictEqual(result.diagnostics, [[0, 0, "unknown identifier 'putz'"]], event);
+        }
+        const message = 'Rig: this rig is too old to check a loaded file as part of its program; update it.';
+        assert.deepStrictEqual(stub.errors, [message]);
+        assert.match(stub.errors[0], /too old to check a loaded file/);
+        await until('the button\'s command', () => stub.commands.length > 0);
+        assert.deepStrictEqual(stub.commands, [['workbench.action.openSettings', 'rig.compilerPath']]);
+
+        const compilerChanged = { affectsConfiguration: (section) => section === 'rig.compilerPath' || section === 'rig' };
+        assert.deepStrictEqual((await checked(dir, doc, 'configuration', compilerChanged)).calls, old);
+        assert.deepStrictEqual(stub.errors, [message, message]);
     });
 });
 

@@ -1,8 +1,8 @@
 // diagnostics.js: reading the compiler's diagnostics, for the live check in
 // extension.js. Plain Node, no VS Code: test/check.js loads it as it is.
 //
-// `rig check FILE --stdin` prints each error the way `rig build` does
-// (src/diag.h):
+// `rig check FILE --stdin` and `rig check MAIN --stdin-for FILE` print each
+// error the way `rig build` does (src/diag.h):
 //
 //     hello.rig:2:14: error: unknown identifier 'putz'
 //         main :: () { putz("Hello, World!"); }
@@ -62,12 +62,13 @@ function parseDiagnostics(output, file, cwd) {
     return found;
 }
 
-// rig check reads the files `file` #loads too, and reports their errors
-// under their names, which parseDiagnostics leaves out: they aren't the
-// document's. But a program that won't build should say so where it's
-// being edited, so they come back as one error of the document's, on its
-// first line, that counts them and names the first, by its path from the
-// document's directory:
+// rig check reads the program's other files too: those `file` #loads, and,
+// for a file checked as part of its program (--stdin-for), the main file
+// and what it loads. It reports their errors under their names, which
+// parseDiagnostics leaves out: they aren't the document's. But a program
+// that won't build should say so where it's being edited, so they come back
+// as one error of the document's, on its first line, that counts them and
+// names the first, by its path from the document's directory:
 //
 //     an error in another file of the program: load/shapes.rig:3:14: 300 doesn't fit in 'u8'
 //     2 errors in the program's other files, the first: load/shapes.rig:3:14: ...
@@ -89,9 +90,10 @@ function otherFilesError(output, file, cwd) {
 // The file at `other`, an absolute path (diagnosticLines), as a #load in
 // `file` would name it: its path from file's directory, with '/' between
 // the names. rig's own name for it can be long and, on Windows, mixed: the
-// live check gives rig the document's full path, so a file it loads is
-// named by the directory's path, with '\', then the #load's, with '/'
-// (C:\x\src\world/map.rig).
+// live check gives rig a full path, the document's or (with --stdin-for)
+// the main file's, so a file of the program is named by its loading file's
+// directory, as rig names it (with '\' in the path it was given), then the
+// #load's path, with '/' (C:\x\src\world/map.rig).
 function nameFrom(file, other) {
     const relative = path.relative(path.dirname(file), other);
     return windows ? relative.replace(/\\/g, '/') : relative;
