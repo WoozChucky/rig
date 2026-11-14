@@ -144,6 +144,7 @@ $server = $null
 $savedPath = $env:Path
 $savedAppData = $env:LOCALAPPDATA
 $userPathBefore = Get-RawUserPath
+$userVariablesBefore = ((Get-Item -LiteralPath 'HKCU:\Environment').GetValueNames() | Sort-Object) -join ','
 $environmentKey = Get-Item -LiteralPath 'HKCU:\Environment'
 $savedUserPathValue = $environmentKey.GetValue('Path', $null, 'DoNotExpandEnvironmentNames')
 $savedUserPathKind = $null
@@ -344,6 +345,11 @@ try {
 
     if ((Get-RawUserPath) -ne $userPathBefore) { Fail 'the user PATH changed' }
     Pass 'the user PATH is as it was'
+    # Only the PATH is Rig's to change: no other user variable may be left
+    # behind, such as the one Send-EnvironmentChange sets and removes.
+    $namesAfter = ((Get-Item -LiteralPath 'HKCU:\Environment').GetValueNames() | Sort-Object) -join ','
+    if ($namesAfter -ne $userVariablesBefore) { Fail "the user's environment variables changed: $userVariablesBefore before, $namesAfter after" }
+    Pass "the user's environment variables are as they were"
     Write-Host "test_install.ps1: all passed ($($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion))"
 } finally {
     # Close stops it, and its GetContext in the server's thread then throws,
