@@ -286,8 +286,10 @@ Ast *literal_field_value(Ast_Literal *literal, Type *t, s32 field) {
 }
 
 // A literal's value, `part`, as constant_data reads it: the node holding its
-// value, `part` itself when that's a scalar (a constant, a procedure, a
-// string literal's address), which constant_data doesn't follow.
+// value when `part` is itself constant data (a constant holding data, or a
+// field or an element of one), followed in turn; otherwise `part` itself, a
+// scalar as the literal wrote it (a constant, a procedure's name, a string
+// literal's address or a cast of one).
 static Ast *part_value(Ast *part) {
     Ast *value;
     return constant_data(part, &value) ? value : part;

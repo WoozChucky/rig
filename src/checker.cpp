@@ -357,9 +357,10 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 // reporting the first value that isn't constant data. t is the slot's
 // type, which may differ from the value's: a string literal in a *u8 field
 // stays a string, an array literal in a view field is an array.
-// - A view is never constant data, though its array would be: it would see
-//   memory of its own, a copy for each use or one that isn't read-only. "a
-//   constant can't hold a view; only a string or an array can be one".
+// - A constant never holds a view, though its array would be constant
+//   data: it would see memory of its own, a copy for each use or one that
+//   isn't read-only. "a constant can't hold a view; only a string or an
+//   array can be one".
 // - A string, a struct or an array is a literal whose values are checked in
 //   turn, a string literal, or anything else constant_data finds a value
 //   for: a constant holding it, a field or an element of one, a cast. The
@@ -373,10 +374,9 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 // - A procedure value is a procedure (procedure_address) or null.
 // - A number or a bool is is_constant.
 // A value with no type had its own error, reported: nothing more is said.
-// Nor about a string, a struct or an array that didn't convert to its
-// slot's type, or a literal whose values didn't all meet a field or an
-// element (too many, a field named twice or not at all, an array's count
-// missed).
+// Nor about a value that didn't convert to its slot's type, or a literal
+// whose values didn't all meet a field or an element (too many, a field
+// named twice or not at all, an array's count missed).
 static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Type *t) {
     if (!value->type) return false;
     if (t->kind == TYPE_VIEW) {
@@ -414,6 +414,9 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
         report_unknown_constant(c, constant, value);
         return false;
     }
+    // It doesn't convert to the slot's type: reported. A string literal
+    // reaches a pointer as its bytes' address, though its type stays string.
+    if (!type_converts(value->type, t) && !(type_is_pointer(t) && literal_address(value))) return false;
     if (type_is_pointer(t) || t == &type_null) {
         if (value->is_constant || literal_address(value)) return true;
         if (value->kind == AST_CAST || procedure_address(value)) {
