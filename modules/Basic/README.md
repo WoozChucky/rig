@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, numbers to text and back, and printing to standard output; later parts add memory, strings, allocators, a string builder, and growable arrays and hash tables (issue #134).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, and printing to standard output; later parts add strings, allocators, a string builder, and growable arrays and hash tables (issue #134).
 
 ## Loading it
 
@@ -40,6 +40,14 @@ One procedure per type, named by it: `int` and `u64` (every other integer type w
 - `clamp_int`, `clamp_u64`, `clamp_float32`, `clamp_float64` `(value: T, low: T, high: T) -> T`: `low` for a value below it, `high` for one above it, otherwise `value`.
 - `abs_int(value: int) -> int`: the magnitude; the most negative `int` is itself, since its negation wraps.
 - `abs_float32(value: float32) -> float32`, `abs_float64(value: float64) -> float64`: the value with its sign bit cleared, so `-0.0` gives `0.0` and NaN stays NaN.
+
+## Memory (`memory.rig`)
+
+C's `memmove`, `memset` and `memcmp`, written as byte loops in Rig rather than called from C. Memory is passed as `*void`, so any pointer converts to it. A count of 0 or less does nothing and reads nothing.
+
+- `copy_memory(destination: *void, source: *void, count: int)`: copies `count` bytes from `source` to `destination`; the two may overlap, and the bytes copied are the ones `source` held before the copy.
+- `set_memory(destination: *void, value: u8, count: int)`: sets `count` bytes from `destination` on to `value`.
+- `compare_memory(a: *void, b: *void, count: int) -> int`: -1, 0 or 1 as the first of `count` bytes that differs is smaller or larger in `a` than in `b`, the bytes compared unsigned; 0 when none differs.
 
 ## Numbers (`numbers.rig`)
 

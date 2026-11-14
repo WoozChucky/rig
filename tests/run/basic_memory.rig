@@ -1,0 +1,67 @@
+// Basic's memory (issue #134): setting bytes, copies that overlap both ways
+// and copies of no bytes, and compares that read bytes as unsigned.
+#load "../../modules/Basic/module.rig";
+
+// Prints the buffer's bytes as a string, the same view of them, and a line
+// feed.
+show :: (buffer: []u8) {
+    print_line(cast(string) buffer);
+}
+
+main :: () {
+    buffer : [16]u8;
+    set_memory(buffer.data, "."[0], 16);
+    show(buffer);
+
+    s := "abcdef";
+    copy_memory(buffer.data + 2, s.data, 6);
+    show(buffer);
+
+    // The destination is above the source, so the copy must go backward, or
+    // it would read bytes it has already overwritten.
+    copy_memory(buffer.data + 4, buffer.data + 2, 6);
+    show(buffer);
+
+    // The destination is below the source, so the copy must go forward.
+    copy_memory(buffer.data, buffer.data + 2, 8);
+    show(buffer);
+
+    // A count of 0 or less copies nothing.
+    copy_memory(buffer.data, s.data, 0);
+    copy_memory(buffer.data, s.data, -1);
+    show(buffer);
+
+    set_memory(buffer.data + 10, "x"[0], 3);
+    show(buffer);
+
+    // A count of 0 or less sets nothing.
+    set_memory(buffer.data, "y"[0], 0);
+    set_memory(buffer.data, "y"[0], -1);
+    show(buffer);
+
+    abc := "abc";
+    abd := "abd";
+    high : u8 = 200;
+    low : u8 = 100;
+    print_int(compare_memory(abc.data, abd.data, 3));
+    print_byte(32);
+    print_int(compare_memory(abd.data, abc.data, 3));
+    print_byte(32);
+    print_int(compare_memory(abc.data, abc.data, 3));
+    print_byte(32);
+    print_int(compare_memory(abc.data, abd.data, 2));
+    print_byte(32);
+    print_int(compare_memory(*high, *low, 1));
+    print_byte(32);
+    print_int(compare_memory(*low, *high, 1));
+    print_byte(32);
+    // The first byte that differs decides, whatever comes after it.
+    az := "az";
+    ba := "ba";
+    print_int(compare_memory(az.data, ba.data, 2));
+    print_byte(32);
+    print_int(compare_memory(abc.data, abd.data, 0));
+    print_byte(32);
+    print_int(compare_memory(abc.data, abd.data, -1));
+    print_byte(10);
+}
