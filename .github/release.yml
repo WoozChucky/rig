@@ -6,6 +6,8 @@ changelog:
   categories:
     - title: Language
       labels: [language]
+    - title: Library
+      labels: [library]
     - title: Compiler
       labels: [compiler, bug]
     - title: Tooling and editor

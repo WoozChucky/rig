@@ -1,0 +1,18 @@
+// Basic: Rig's first library, written in Rig over a thin layer of C
+// (libc.rig). It gathers what most programs need first: for now, numbers
+// to text and back, and printing to standard output.
+//
+// A program loads all of it through this file, by its path from the
+// program's own directory, until Rig has #import: from tests/run that is
+//
+//     #load "../../modules/Basic/module.rig";
+//
+// Loading is #load (spec 2.13), so every name Basic declares joins the
+// program's one top level: a program that loads Basic can't declare a
+// procedure, struct or constant of a name Basic uses. README.md lists them.
+//
+// Each part loads the parts it uses itself, and a file is read once however
+// often it is named, so the order here is only the reading order.
+#load "libc.rig";
+#load "numbers.rig";
+#load "print.rig";

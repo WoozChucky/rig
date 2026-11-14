@@ -1,0 +1,59 @@
+// Basic's print: writing to standard output. Every byte goes out through
+// c_putchar, C's putchar (libc.rig), so it passes through C's own stdout
+// buffer, and what a program prints with Basic and with C's printf comes
+// out in the order it was printed, compiled and interpreted.
+//
+// A string is bytes, and they're written as they are: no encoding is
+// checked or changed, so UTF-8 text prints as UTF-8. There's no portable
+// way to reach standard error from Rig yet (its C FILE * is a call,
+// __acrt_iob_func(2), on Windows but a data symbol, stderr, in glibc,
+// which Rig can't declare, and there's no #if to choose between them),
+// so Basic prints only to standard output.
+//
+// Numbers are written into a buffer on the stack by numbers.rig and then
+// printed, so printing never allocates.
+#load "libc.rig";
+#load "numbers.rig";
+
+// Writes the bytes of s, and nothing else. An empty string, or a zeroed
+// one whose data is null, writes nothing: its count is 0, so no byte is
+// read.
+print_string :: (s: string) {
+    for s { c_putchar(it); }
+}
+
+// Writes the byte itself, not its number: print_byte(33) writes "!", and
+// print_byte(10) ends a line.
+print_byte :: (byte: u8) {
+    c_putchar(byte);
+}
+
+// Writes true or false.
+print_bool :: (value: bool) {
+    if value {
+        print_string("true");
+    } else {
+        print_string("false");
+    }
+}
+
+// Writes value in base 10, with a "-" before a negative value.
+print_int :: (value: int) {
+    buffer : [INT_TEXT_MAX]u8;
+    print_string(format_int(buffer, value, 10));
+}
+
+// Writes value with decimals digits after the point, from 0 to 9, as
+// format_float does: "nan", "inf" and "-inf" included.
+print_float :: (value: float64, decimals: int) {
+    buffer : [FLOAT_TEXT_MAX]u8;
+    print_string(format_float(buffer, value, decimals));
+}
+
+// Writes s and then a line feed, the one byte that ends a line. It is a
+// line feed on Windows too: C's stdout there is in text mode and turns it
+// into a carriage return and a line feed.
+print_line :: (s: string) {
+    print_string(s);
+    print_byte(10); // line feed
+}
