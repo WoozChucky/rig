@@ -1,0 +1,175 @@
+// Basic's string builder (issue #134): appends of each kind, how its memory
+// grows, copies out that the builder's later changes don't touch, and a
+// builder with nothing in it, which allocates nothing.
+#load "../../modules/Basic/module.rig";
+
+// int's most negative value.
+INT_SMALLEST :: -9223372036854775808;
+
+// What a counting allocator was asked to do: how many allocations and
+// frees, and how many bytes the last allocation was for.
+Counter :: struct { allocations: int; frees: int; last_size: int; }
+
+// Passes every call on to the heap, counting allocations and frees.
+counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE {
+        counter.allocations += 1;
+        counter.last_size = size;
+    }
+    if mode == FREE { counter.frees += 1; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+// Prints a builder's count and capacity, separated by a space.
+show_sizes :: (builder: String_Builder) {
+    print_int(builder.count);
+    print_byte(32);
+    print_int(builder.capacity);
+}
+
+main :: () {
+    b : String_Builder;
+    builder_init(*b, HEAP_ALLOCATOR);
+    append_string(*b, "count: ");
+    append_int(*b, 42, 10);
+    append_byte(*b, 32);
+    append_int(*b, -255, 16);
+    append_byte(*b, 32);
+    append_float(*b, 3.14159, 2);
+    append_byte(*b, 32);
+    append_bool(*b, true);
+    append_byte(*b, 32);
+    append_bool(*b, false);
+    s := builder_to_string(*b, HEAP_ALLOCATOR);
+    print_line(s);
+    free(s.data, HEAP_ALLOCATOR);
+
+    // The first append that needed room took 64 bytes, the least a builder
+    // grows to, and everything after it fit.
+    print_int(b.capacity);
+    print_byte(10);
+
+    // A reset keeps the memory.
+    builder_reset(*b);
+    print_string("after reset: ");
+    show_sizes(b);
+    print_byte(10);
+
+    // 300 bytes, three at a time: the capacity doubles from 64 as it fills,
+    // to 128, 256 and 512.
+    for 1..100 { append_string(*b, "abc"); }
+    print_string("grown: ");
+    show_sizes(b);
+    print_byte(10);
+
+    // A copy out is the builder's bytes as they were: a later change to the
+    // builder doesn't reach it.
+    t := builder_to_string(*b, HEAP_ALLOCATOR);
+    b.data[0] = "x"[0];
+    print_string("copied out: ");
+    print_bool(t.count == 300 && t[0] == "a"[0] && ends_with(t, "bcabc"));
+    print_byte(10);
+    free(t.data, HEAP_ALLOCATOR);
+
+    // An append bigger than 64 bytes doubles 64 until it fits.
+    c : String_Builder;
+    builder_init(*c, HEAP_ALLOCATOR);
+    hundred : [100]u8;
+    set_memory(hundred.data, "y"[0], 100);
+    hundred_view : []u8 = hundred;
+    append_string(*c, cast(string) hundred_view);
+    print_string("one big append: ");
+    show_sizes(c);
+    print_byte(10);
+    builder_free(*c);
+
+    builder_free(*b);
+    print_string("freed: ");
+    show_sizes(b);
+    print_byte(32);
+    print_bool(b.data == null);
+    print_byte(10);
+
+    // A builder with nothing in it gives the zeroed string, and allocates
+    // nothing for it.
+    e : String_Builder;
+    builder_init(*e, HEAP_ALLOCATOR);
+    empty := builder_to_string(*e, HEAP_ALLOCATOR);
+    print_string("empty: ");
+    print_int(empty.count);
+    print_byte(32);
+    print_bool(empty.data == null);
+    print_byte(10);
+
+    // A freed builder keeps its allocator, so it can be used again.
+    append_string(*b, "again");
+    print_string("used again after free: ");
+    show_sizes(b);
+    print_byte(10);
+    builder_free(*b);
+
+    // An append that fills the capacity exactly doesn't grow it; one byte
+    // more does.
+    d : String_Builder;
+    builder_init(*d, HEAP_ALLOCATOR);
+    sixty_four := hundred_view;
+    sixty_four.count = 64;
+    append_string(*d, cast(string) sixty_four);
+    print_string("exact fit: ");
+    show_sizes(d);
+    append_byte(*d, "z"[0]);
+    print_string(", one more: ");
+    show_sizes(d);
+    print_byte(10);
+
+    // A copy out comes from the allocator given, not the builder's.
+    counter : Counter;
+    counting := Allocator.{counting_allocator_proc, *counter};
+    u := builder_to_string(*d, counting);
+    print_string("copied out of another allocator: ");
+    print_int(counter.allocations);
+    print_byte(32);
+    print_int(counter.last_size);
+    print_byte(32);
+    print_bool(u[63] == "y"[0] && u[64] == "z"[0]);
+    free(u.data, counting);
+    print_string(", frees ");
+    print_int(counter.frees);
+    print_byte(10);
+    builder_free(*d);
+
+    // Appends of nothing take no memory: an empty literal, a zeroed string
+    // and a number in a base format_int doesn't write. Nor do a reset and a
+    // free of a builder that has none.
+    zeroed : string;
+    append_string(*e, "");
+    append_string(*e, zeroed);
+    append_int(*e, 7, 99);
+    print_string("empty appends: ");
+    show_sizes(e);
+    print_byte(32);
+    print_bool(e.data == null);
+    builder_reset(*e);
+    builder_free(*e);
+    print_string(", reset and freed: ");
+    show_sizes(e);
+    print_byte(32);
+    print_bool(e.data == null);
+    print_byte(10);
+
+    // Numbers at their longest and in other bases.
+    f : String_Builder;
+    builder_init(*f, HEAP_ALLOCATOR);
+    append_int(*f, INT_SMALLEST, 10);
+    append_byte(*f, 32);
+    append_int(*f, 35, 36);
+    append_byte(*f, 32);
+    append_int(*f, 255, 2);
+    append_byte(*f, 32);
+    append_float(*f, -0.5, 0);
+    numbers := builder_to_string(*f, HEAP_ALLOCATOR);
+    print_line(numbers);
+    free(numbers.data, HEAP_ALLOCATOR);
+    builder_free(*f);
+}

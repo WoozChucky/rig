@@ -2,8 +2,8 @@
 // (libc.rig). It gathers what most programs need first: for now, the class
 // and case of a byte, min, max, clamp and abs, copying, setting and
 // comparing bytes in memory, numbers to text and back, views of strings,
-// allocators (the heap, an arena and a pool), and printing to standard
-// output.
+// allocators (the heap, an arena and a pool), a string builder, and
+// printing to standard output.
 //
 // A program loads all of it through this file, by its path from the
 // program's own directory, until Rig has #import: from tests/run that is
@@ -23,4 +23,5 @@
 #load "numbers.rig";
 #load "string.rig";
 #load "allocators.rig";
+#load "builder.rig";
 #load "print.rig";

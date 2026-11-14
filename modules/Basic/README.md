@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, allocators (the heap, an arena and a pool), and printing to standard output; later parts add a string builder, and growable arrays and hash tables (issue #134).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, allocators (the heap, an arena and a pool), a string builder, and printing to standard output; later parts add growable arrays and hash tables (issue #134).
 
 ## Loading it
 
@@ -102,6 +102,21 @@ An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` h
 - `Pool`: `parent: Allocator`, `slot_size: int`, `slot_count: int`, `memory: *u8` and `free_list: *Pool_Slot`.
 - `pool_init(pool: *Pool, slot_size: int, slot_count: int, parent: Allocator)`: an empty pool of `slot_count` slots of `slot_size` bytes, raised to at least 8 and up to a multiple of 8, whose memory comes from `parent` at the first allocation.
 - `pool_allocator_proc`, `pool_allocator(pool: *Pool) -> Allocator`: a free slot for up to `slot_size` bytes, in address order at first, and null for more or when none is free. A resize within a slot keeps it, and one past it gives null; a free puts the slot back, to be handed out next, and `free_all` gives the memory back to `parent`, after which the pool can be used again.
+
+## String builder (`builder.rig`)
+
+Text put together a piece at a time, in memory of the builder's own from the allocator it is given, and copied out as one string. When an append doesn't fit, the capacity becomes the larger of 64 and twice the old one, doubled again until it fits, and the memory moves with `resize`. Numbers are written on the stack first, so nothing but the builder's memory is allocated. An allocator that has no memory to give stops the program at the next write, with the language's `null pointer dereference`.
+
+- `String_Builder`: `allocator: Allocator`, `data: *u8`, `count: int` (the bytes built) and `capacity: int` (the bytes `data` has room for).
+- `builder_init(builder: *String_Builder, allocator: Allocator)`: an empty builder whose memory comes from `allocator`, taken at the first append that needs it.
+- `append_string(builder: *String_Builder, s: string)`: appends the bytes of `s`; an empty or zeroed string appends nothing and takes no memory.
+- `append_byte(builder: *String_Builder, byte: u8)`: appends the byte itself, not its number.
+- `append_int(builder: *String_Builder, value: int, base: int)`: appends `value` as `format_int` writes it.
+- `append_float(builder: *String_Builder, value: float64, decimals: int)`: appends `value` as `format_float` writes it.
+- `append_bool(builder: *String_Builder, value: bool)`: appends `true` or `false`.
+- `builder_to_string(builder: *String_Builder, allocator: Allocator) -> string`: a copy of the text in memory from `allocator`, which the caller gives back with `free(s.data, allocator)`; an empty builder gives the zeroed string (count 0, data null) and allocates nothing.
+- `builder_reset(builder: *String_Builder)`: empties the builder, keeping its memory.
+- `builder_free(builder: *String_Builder)`: gives the memory back; the builder is empty, with no memory, and keeps its allocator.
 
 ## Print (`print.rig`)
 
