@@ -432,6 +432,15 @@ static void dump(Array<u8> *buffer, Ast *node) {
         out_quoted(buffer, ((Ast_Load *)node)->path);
         out(buffer, ")");
         break;
+    case AST_RUN: {
+        // (run E) for #run e; (run (block ...)) for a top-level #run { ... },
+        // its procedure's body.
+        Ast_Run *run = (Ast_Run *)node;
+        out(buffer, "(run ");
+        dump(buffer, run->operand ? run->operand : run->proc->body);
+        out(buffer, ")");
+        break;
+    }
     }
 }
 
@@ -474,20 +483,26 @@ static void dump_line(Array<u8> *buffer, Ast *node) {
     out(buffer, "\n");
 }
 
-// The loads, a third list in source order, are merged in by position too:
-// before each declaration, the loads that come before it; after the last,
-// the loads left.
+// The loads and the top-level runs, two more lists in source order, are
+// merged in by position too: before each declaration, the loads and runs
+// that come before it, in order; after the last, those left.
 String ast_dump(Arena *a, Ast_File *file) {
     Array<u8> buffer = {};
     Array<Ast *> declarations = ast_declarations(file);
-    s64 l = 0;
-    for (s64 i = 0; i < declarations.count; i++) {
-        while (l < file->loads.count && before(file->loads[l]->pos, declarations[i]->pos)) {
-            dump_line(&buffer, file->loads[l++]);
+    s64 l = 0, r = 0;
+    for (s64 i = 0; i <= declarations.count; i++) {
+        // i == declarations.count: past the last, where everything left goes.
+        for (;;) {
+            Ast *load = l < file->loads.count ? file->loads[l] : nullptr;
+            Ast *run = r < file->runs.count ? file->runs[r] : nullptr;
+            Ast *next = !load ? run : !run ? load : before(run->pos, load->pos) ? run : load;
+            if (!next || (i < declarations.count && !before(next->pos, declarations[i]->pos))) break;
+            dump_line(&buffer, next);
+            if (next == load) l++;
+            else r++;
         }
-        dump_line(&buffer, declarations[i]);
+        if (i < declarations.count) dump_line(&buffer, declarations[i]);
     }
-    while (l < file->loads.count) dump_line(&buffer, file->loads[l++]);
     array_free(&declarations);
     return finish(a, &buffer);
 }
