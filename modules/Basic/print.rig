@@ -1,0 +1,40 @@
+// Basic's print: writing to standard output. Every byte goes out through
+// c_putchar, C's putchar (libc.rig), so it passes through C's own stdout
+// buffer, and what a program prints with Basic and with C's printf comes
+// out in the order it was printed, compiled and interpreted.
+//
+// A string is bytes, and they're written as they are: no encoding is
+// checked or changed, so UTF-8 text prints as UTF-8. There's no portable
+// way to reach standard error from Rig yet (a C FILE * isn't reachable
+// without a foreign variable), so Basic prints only to standard output.
+#load "libc.rig";
+
+// Writes the bytes of s, and nothing else. An empty string, or a zeroed
+// one whose data is null, writes nothing: its count is 0, so no byte is
+// read.
+print_string :: (s: string) {
+    for s { c_putchar(it); }
+}
+
+// Writes the byte itself, not its number: print_byte(33) writes "!", and
+// print_byte(10) ends a line.
+print_byte :: (byte: u8) {
+    c_putchar(byte);
+}
+
+// Writes true or false.
+print_bool :: (value: bool) {
+    if value {
+        print_string("true");
+    } else {
+        print_string("false");
+    }
+}
+
+// Writes s and then a line feed, the one byte that ends a line. It is a
+// line feed on Windows too: C's stdout there is in text mode and turns it
+// into a carriage return and a line feed.
+print_line :: (s: string) {
+    print_string(s);
+    print_byte(10); // line feed
+}

@@ -1,0 +1,14 @@
+// Basic's C layer: the only C functions Basic calls, each declared under a
+// name of its own that starts with c_ (#foreign libc "NAME", spec 7.6).
+// Every name Basic declares is the program's too, since a program has one
+// top level, so if Basic took C's own names, a program that loads it
+// couldn't declare putchar or malloc itself. With the c_ names it can, and
+// a program's putchar and Basic's c_putchar are the same C function.
+//
+// Everything else in Basic is written in Rig over these.
+
+// Writes one byte to standard output, through C's own stdout buffer. It is
+// the one call Basic writes with: unlike POSIX's write or Windows' _write,
+// putchar links and runs everywhere, compiled and interpreted, and its
+// bytes stay in order with the ones a program writes with C's printf.
+c_putchar :: (c: s32) -> s32 #foreign libc "putchar";
