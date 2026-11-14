@@ -651,6 +651,50 @@ static String merged_output_test(Arena *a, String rig) {
     return {};
 }
 
+// rig build of a program whose top-level #runs print and then fail, its
+// stdout and stderr in one pipe: what the runs printed must come out first,
+// then the diagnostics, which rig prints after the runs (driver.cpp), or with
+// `exits`, as a last run that prints a line and calls exit(3) ends rig
+// (diag_print_at_exit). stdout is a pipe, so C buffers it, and rig flushes
+// it before writing them. The program is written here, in .build/tests, as
+// a tests/errors program mustn't print.
+static String run_output_order_test(Arena *a, String rig, bool exits) {
+    String name = exits ? str("run_output_order_exit") : str("run_output_order");
+    String source = string_printf(a, ".build/tests/" STR_FMT ".rig", STR_ARG(name));
+    String text = string_printf(a,
+                                "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                "exit :: (status: s32) #foreign libc;\n"
+                                "#run { puts(\"the first run's line\"); a : [1]int; i := 2; a[i] = 0; }\n"
+                                "%s"
+                                "main :: () { }\n",
+                                exits ? "#run { puts(\"before exit\"); exit(3); }\n" : "");
+    if (!os_write_file(source, text)) return string_printf(a, "couldn't write " STR_FMT, STR_ARG(source));
+    String expected = string_printf(
+        a,
+        "the first run's line\n"
+        "%s" STR_FMT ":3:1: error: #run failed: runtime error: index 2 is out of bounds (count 1)\n"
+        "    #run { puts(\"the first run's line\"); a : [1]int; i := 2; a[i] = 0; }\n"
+        "    ^\n"
+        "    in #run (" STR_FMT ":3:59)\n",
+        exits ? "before exit\n" : "", STR_ARG(source), STR_ARG(source));
+
+    String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
+    Array<String> argv = build_command(a, rig, ".build/tests", name, program);
+    Process_Result built = {};
+    bool started = os_run_merged(a, argv, {}, TIMEOUT, &built);
+    array_free(&argv);
+    if (!started) return string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(rig), STR_ARG(os_error_message(a)));
+    if (built.timed_out) return string_printf(a, "rig build took longer than %d seconds", TIMEOUT);
+    built.out = normalise_newlines(a, built.out);
+    if (!string_eq(built.out, expected)) return first_difference(a, "stdout and stderr", expected, built.out);
+    s32 status = exits ? 3 : 1;
+    if (built.exit_code != status) {
+        return string_printf(a, "rig build exited with " STR_FMT ", expected %d", STR_ARG(exit_code_text(a, built.exit_code)),
+                             status);
+    }
+    return {};
+}
+
 // rig build where .build/ is a file, so rig can't create the directory, or
 // where the object file's name is a directory, so it can't write it: rig
 // must say which path, and exit with 1.
@@ -2118,6 +2162,10 @@ int main(int argc, char **argv) {
     report("a runtime error after the program's output, both in one pipe", merged_output_test(&a, rig), &passed,
            &failed);
     run_directory(&a, rig, "", "tests/errors", error_test, &passed, &failed);
+    report("a failed top-level #run's error after the runs' output, both in one pipe",
+           run_output_order_test(&a, rig, false), &passed, &failed);
+    report("a top-level #run's exit() after a failed one, the errors after the runs' output, in one pipe",
+           run_output_order_test(&a, rig, true), &passed, &failed);
     report("rig build where .build is a file", unwritable_test(&a, rig, false), &passed, &failed);
     report("rig build where the object file's name is a directory", unwritable_test(&a, rig, true), &passed, &failed);
     for (const Command_Case &c : COMMAND_CASES) {

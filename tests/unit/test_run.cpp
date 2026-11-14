@@ -681,20 +681,21 @@ static String messages_after_runs(Arena *a, const char *text) {
 
 TEST(top_level_runs_share_the_world_and_fail_alone) {
     // The top-level #runs run in order, in the one compile-time world, so
-    // the second and third see the counter the first set. Each that fails
-    // is an error at its #run, with its frames (a block's at the statement
-    // that failed), and the runs after it still run. Checking alone never
-    // runs a top-level run.
+    // the second sees the counter the first set, 3. Each that fails is an
+    // error at its #run, with its frames (a block's at the statement that
+    // failed), and the runs after it still run, with the globals as it left
+    // them: the third sees the 5 the second set before it failed. Checking
+    // alone never runs a top-level run.
     Arena a = arena_make();
     const char *program = "counter := 0;\n"
                           "#run { counter = 3; }\n"
-                          "#run { a : [2]int; x := a[counter]; }\n"
+                          "#run { a : [2]int; counter += 2; x := a[counter - 2]; }\n"
                           "#run { b : [1]int; y := b[counter]; }\n"
                           "main :: () { }\n";
     CHECK_STR(messages_after_runs(&a, program),
               "3:1: #run failed: runtime error: index 3 is out of bounds (count 2)\n"
-              "    in #run (test.rig:3:26)\n"
-              "4:1: #run failed: runtime error: index 3 is out of bounds (count 1)\n"
+              "    in #run (test.rig:3:40)\n"
+              "4:1: #run failed: runtime error: index 5 is out of bounds (count 1)\n"
               "    in #run (test.rig:4:26)\n");
     CHECK_STR(check_source(&a, program), "");
     arena_free(&a);

@@ -23,12 +23,23 @@ SECOND :: #run bump();
 setup :: () { counter = 41; }
 say :: () { puts("a void call runs"); }
 
+// A struct result, which an expression's #run would copy through a hidden
+// pointer: a top-level run's procedure has no result, so there's none.
+Point :: struct { x: int; y: int; }
+make_point :: () -> Point {
+    puts("an aggregate result is thrown away");
+    p : Point;
+    p.x = counter;
+    return p;
+}
+
 #run setup();
 #run {
     counter += 1;
     printf("counter is %lld while compiling, runs %lld\n", counter, runs);
 }
 #run say();
+#run make_point();
 #run {
     if counter > 0 {
         puts("return ends a block's run");
