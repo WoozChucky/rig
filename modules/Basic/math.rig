@@ -1,0 +1,126 @@
+// Basic's math: the smaller and the larger of two numbers, a number kept
+// within a range, and a number's magnitude. Rig has no overloading or
+// generics yet, so each is written once per type and named by it: int and
+// u64 for integers, since every other integer type widens to one of them
+// implicitly, and float32 and float64.
+//
+// The comparisons are written so that their edge cases are plain:
+//
+// - min and max return their first operand unless the second is strictly
+//   smaller or larger. Every comparison with NaN is false, so a NaN first
+//   operand comes back from both, and a NaN second one never does:
+//   min_float64(nan, 1) is NaN, min_float64(1, nan) is 1. Of two equal
+//   operands the first comes back, which matters only for 0.0 and -0.0,
+//   the one pair of equal values that differ.
+// - clamp tests the low bound first, so with low greater than high it gives
+//   low for a value below low and high for any other.
+// - abs of an integer is its negation when it is negative, and int's most
+//   negative value has no positive int: its negation wraps to itself
+//   (spec 5.8). abs of a float clears the sign bit, so -0.0 gives 0.0, and a
+//   NaN stays a NaN.
+
+// The smaller of a and b; a when they're equal.
+min_int :: (a: int, b: int) -> int {
+    if b < a { return b; }
+    return a;
+}
+
+// The larger of a and b; a when they're equal.
+max_int :: (a: int, b: int) -> int {
+    if b > a { return b; }
+    return a;
+}
+
+// value, or low when value is below it, or high when value is above it.
+clamp_int :: (value: int, low: int, high: int) -> int {
+    if value < low { return low; }
+    if value > high { return high; }
+    return value;
+}
+
+// The magnitude of value. The most negative int, -9223372036854775808,
+// comes back as itself, since its magnitude is one more than the largest
+// int and the negation wraps.
+abs_int :: (value: int) -> int {
+    if value < 0 { return -value; }
+    return value;
+}
+
+// The smaller of a and b; a when they're equal.
+min_u64 :: (a: u64, b: u64) -> u64 {
+    if b < a { return b; }
+    return a;
+}
+
+// The larger of a and b; a when they're equal.
+max_u64 :: (a: u64, b: u64) -> u64 {
+    if b > a { return b; }
+    return a;
+}
+
+// value, or low when value is below it, or high when value is above it.
+clamp_u64 :: (value: u64, low: u64, high: u64) -> u64 {
+    if value < low { return low; }
+    if value > high { return high; }
+    return value;
+}
+
+// The smaller of a and b; a when they're equal or either is NaN.
+min_float32 :: (a: float32, b: float32) -> float32 {
+    if b < a { return b; }
+    return a;
+}
+
+// The larger of a and b; a when they're equal or either is NaN.
+max_float32 :: (a: float32, b: float32) -> float32 {
+    if b > a { return b; }
+    return a;
+}
+
+// value, or low when value is below it, or high when value is above it. A
+// NaN value is neither, so it comes back as itself.
+clamp_float32 :: (value: float32, low: float32, high: float32) -> float32 {
+    if value < low { return low; }
+    if value > high { return high; }
+    return value;
+}
+
+// The magnitude of value: its sign bit, the highest of its 32, cleared.
+// So -0.0 gives 0.0, an infinity gives inf, and a NaN stays a NaN, where a
+// test of value < 0 would leave -0.0 negative. A parameter has no address
+// (spec 7.2), so the bits are reached through a local copy.
+abs_float32 :: (value: float32) -> float32 {
+    copy := value;
+    bits := cast(*u32) *copy;
+    bits.* &= 0x7FFF_FFFF;
+    return copy;
+}
+
+// The smaller of a and b; a when they're equal or either is NaN.
+min_float64 :: (a: float64, b: float64) -> float64 {
+    if b < a { return b; }
+    return a;
+}
+
+// The larger of a and b; a when they're equal or either is NaN.
+max_float64 :: (a: float64, b: float64) -> float64 {
+    if b > a { return b; }
+    return a;
+}
+
+// value, or low when value is below it, or high when value is above it. A
+// NaN value is neither, so it comes back as itself.
+clamp_float64 :: (value: float64, low: float64, high: float64) -> float64 {
+    if value < low { return low; }
+    if value > high { return high; }
+    return value;
+}
+
+// The magnitude of value: its sign bit, the highest of its 64, cleared, as
+// abs_float32 does.
+abs_float64 :: (value: float64) -> float64 {
+    copy := value;
+    bits := cast(*u64) *copy;
+    bits.* &= 0x7FFF_FFFF_FFFF_FFFF;
+    return copy;
+}
