@@ -300,3 +300,198 @@ TEST(run_overflowing_the_stack_shows_some_calls) {
     CHECK_STR(text, string_cstr(&a, expected));
     arena_free(&a);
 }
+
+// The data top-level constant `name` holds (Ast_Const.data), which must be
+// is_data.
+static Ast *data_of(Checked *c, const char *name) {
+    Ast_Const *constant = (Ast_Const *)global_named(c, name);
+    CHECK(constant->is_data);
+    return constant->data;
+}
+
+// Whether `e` is an is_constant number, `value`, of the type messages call
+// `type`.
+static bool is_number(Arena *a, Ast *e, u64 value, const char *type) {
+    return e && e->is_constant && e->constant == value && e->type &&
+           string_eq(type_name(a, e->type), str(type));
+}
+
+TEST(run_bakes_data) {
+    // A string, a struct, an array or a view a #run gives is baked into
+    // constant data, as if written: a string literal, and struct and array
+    // literals of what they hold. A view is the array of its elements. Its
+    // parts fold where they're used, as a written constant's do.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Vec2 :: struct { x: int; y: int; }\n"
+                          "Named :: struct { name: string; at: Vec2; scale: float32; }\n"
+                          "store : [3]int;\n"
+                          "squares :: () -> [5]int { a : [5]int; for 0..4 { a[it] = it * it; } return a; }\n"
+                          "greeting :: () -> string { return \"hello\"; }\n"
+                          "named :: () -> Named { return .{\"origin\", .{3, 4}, 0.5}; }\n"
+                          "view :: () -> []int { store[0] = 1; store[1] = 2; store[2] = 3; return store; }\n"
+                          "SQUARES :: #run squares();\n"
+                          "GREETING :: #run greeting();\n"
+                          "NAMED :: #run named();\n"
+                          "VIEW :: #run view();\n"
+                          "N :: SQUARES[3];\n"
+                          "main :: () { grid : [N]int; c := GREETING.count; first := GREETING[0]; x := NAMED.at.y; }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+
+    Ast *squares = data_of(&c, "SQUARES");
+    CHECK_EQ(squares->kind, AST_LITERAL);
+    CHECK_STR(type_name(&a, squares->type), "[5]int");
+    Ast_Literal *numbers = (Ast_Literal *)squares;
+    CHECK_EQ(numbers->values.count, 5);
+    u64 expected_squares[] = {0, 1, 4, 9, 16};
+    for (s64 i = 0; i < numbers->values.count && i < 5; i++) {
+        CHECK(is_number(&a, numbers->values[i], expected_squares[i], "int"));
+    }
+    CHECK(is_number(&a, global_named(&c, "N"), 9, "int"));
+    CHECK_STR(type_name(&a, local_named(&c, "grid")->type), "[9]int");
+
+    Ast *greeting = data_of(&c, "GREETING");
+    CHECK_EQ(greeting->kind, AST_STRING);
+    CHECK_STR(((Ast_String *)greeting)->value, "hello");
+    CHECK(((Ast_String *)greeting)->is_baked);
+    CHECK(is_number(&a, value_of(&c, "c"), 5, "int"));
+    CHECK(is_number(&a, value_of(&c, "first"), 104, "u8"));
+
+    Ast *named = data_of(&c, "NAMED");
+    CHECK_EQ(named->kind, AST_LITERAL);
+    CHECK_STR(type_name(&a, named->type), "Named");
+    Ast_Literal *fields = (Ast_Literal *)named;
+    CHECK_EQ(fields->values.count, 3);
+    if (fields->values.count == 3) {
+        CHECK_EQ(fields->values[0]->kind, AST_STRING);
+        CHECK_STR(((Ast_String *)fields->values[0])->value, "origin");
+        Ast *at = fields->values[1];
+        CHECK_EQ(at->kind, AST_LITERAL);
+        CHECK_STR(type_name(&a, at->type), "Vec2");
+        Ast_Literal *vec = (Ast_Literal *)at;
+        CHECK_EQ(vec->values.count, 2);
+        if (vec->values.count == 2) {
+            CHECK(is_number(&a, vec->values[0], 3, "int"));
+            CHECK(is_number(&a, vec->values[1], 4, "int"));
+        }
+        CHECK(is_number(&a, fields->values[2], f64_bits(0.5), "float32"));
+    }
+    CHECK(is_number(&a, value_of(&c, "x"), 4, "int"));
+
+    Ast *view = global_named(&c, "VIEW");
+    CHECK_STR(type_name(&a, view->type), "[]int");
+    Ast *elements = data_of(&c, "VIEW");
+    CHECK_EQ(elements->kind, AST_LITERAL);
+    CHECK_STR(type_name(&a, elements->type), "[3]int");
+    Ast_Literal *items = (Ast_Literal *)elements;
+    CHECK_EQ(items->values.count, 3);
+    for (s64 i = 0; i < items->values.count && i < 3; i++) {
+        CHECK(is_number(&a, items->values[i], (u64)i + 1, "int"));
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(run_baked_data_is_a_copy) {
+    // A baked view is a copy of what it saw, taken when its #run ran: a
+    // later run changing the global it pointed into leaves it as it was.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "store : [3]int;\n"
+                          "fill :: (v: int) -> []int { store[0] = v; return store; }\n"
+                          "FIRST :: #run fill(1);\n"
+                          "SECOND :: #run fill(2);\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    Ast_Literal *first = (Ast_Literal *)data_of(&c, "FIRST");
+    Ast_Literal *second = (Ast_Literal *)data_of(&c, "SECOND");
+    CHECK(is_number(&a, first->values[0], 1, "int"));
+    CHECK(is_number(&a, second->values[0], 2, "int"));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(run_bakes_structs_declared_later) {
+    // A #run in the declaration pass may give a struct whose late fields (a
+    // view, a pointer) aren't made yet: baking makes them first. A null
+    // pointer inside is null.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "TABLE :: #run make();\n"
+                          "make :: () -> Holder { h : Holder; h.n = 2; h.items = store; return h; }\n"
+                          "store : [2]int;\n"
+                          "Holder :: struct { items: []int; next: *Holder; n: int; }\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    Ast *table = data_of(&c, "TABLE");
+    CHECK_EQ(table->kind, AST_LITERAL);
+    CHECK_STR(type_name(&a, table->type), "Holder");
+    Ast_Literal *fields = (Ast_Literal *)table;
+    CHECK_EQ(fields->values.count, 3);
+    if (fields->values.count == 3) {
+        Ast *items = fields->values[0];
+        CHECK_EQ(items->kind, AST_LITERAL);
+        CHECK_STR(type_name(&a, items->type), "[2]int");
+        Ast_Literal *zeros = (Ast_Literal *)items;
+        CHECK_EQ(zeros->values.count, 2);
+        for (s64 i = 0; i < zeros->values.count && i < 2; i++) CHECK(is_number(&a, zeros->values[i], 0, "int"));
+        CHECK_EQ(fields->values[1]->kind, AST_NULL);
+        CHECK(fields->values[1]->is_constant);
+        CHECK(is_number(&a, fields->values[2], 2, "int"));
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(run_results_holding_pointers_are_refused) {
+    // An address means something only in the compiler's memory: a result
+    // holding one, itself or in a field, is refused, and the constant has
+    // no type. A null pointer is fine.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Holder :: struct { p: *int; n: int; }\n"
+                          "x := 5;\n"
+                          "point :: () -> *int { return *x; }\n"
+                          "hold :: () -> Holder { return .{*x, 1}; }\n"
+                          "empty :: () -> Holder { return .{null, 1}; }\n"
+                          "P :: #run point();\n"
+                          "H :: #run hold();\n"
+                          "E :: #run empty();\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "6:6: #run's result holds a pointer, which can't be baked, for now\n"
+                                       "7:6: #run's result holds a pointer, which can't be baked, for now\n");
+    CHECK(((Ast_Const *)global_named(&c, "E"))->is_data);
+    CHECK(!global_named(&c, "P")->type);
+    CHECK(!global_named(&c, "H")->type);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(run_negative_counts_are_refused) {
+    // A view or a string with a count below zero has no elements to bake:
+    // its #run fails.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "view :: () -> []int { v : []int; v.count = -1; return v; }\n"
+                           "text :: () -> string { s : string; s.count = -2; return s; }\n"
+                           "V :: #run view();\n"
+                           "S :: #run text();\n"
+                           "main :: () { }\n"),
+              "3:6: #run failed: its result holds a view with a negative count\n"
+              "4:6: #run failed: its result holds a string with a negative count\n");
+    arena_free(&a);
+}
+
+TEST(run_strings_convert_as_literals) {
+    // A baked string is a string literal's bytes, with the zero after them:
+    // it converts to *u8, and passes C's '...', as a literal does.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                           "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                           "name :: () -> string { return \"rig\"; }\n"
+                           "main :: () { p : *u8 = #run name(); x := puts(#run name()); y := printf(\"%s\\n\", #run "
+                           "name()); }\n"),
+              "");
+    arena_free(&a);
+}

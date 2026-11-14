@@ -198,11 +198,13 @@ struct Ast_Const : Ast {
                           // type (checker.cpp's check_const_value): that procedure. It's
                           // no number, so is_constant isn't set: a use of it is the procedure's
                           // address, as its name's is (check_expr.cpp's procedure_address)
-    bool is_data;         // a constant holding data (a string, a struct, an array, or a pointer to a
-                          // string literal's bytes): never is_constant, its value is `data`
+    bool is_data;         // a constant holding data (a string, a struct, an array, a pointer to a
+                          // string literal's bytes, or a view a #run gave): never is_constant, its
+                          // value is `data`
     Ast *data;            // is_data: the node holding its value (constant_data): a string literal, or
-                          // a struct or array literal; a pointer's string literal; null when that's
-                          // a field or element a literal leaves out, so the value is zero
+                          // a struct or array literal (a baked view's, its elements' array); a
+                          // pointer's string literal; null when that's a field or element a literal
+                          // leaves out, so the value is zero
     Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it
     s32 levels;           // the deepest levels of its value (MAX_DEPTH), as Ast_Var's
     bool had_errors;      // a top-level one's check (resolve_global) reported an error, as Ast_Var's
@@ -332,7 +334,9 @@ struct Ast_Name : Ast {
 };
 
 struct Ast_String : Ast {
-    String value;  // the bytes it means, escapes decoded
+    String value;   // the bytes it means, escapes decoded
+    bool is_baked;  // made from a #run's result (run.cpp): a global holding it gets bytes of its own,
+                    // writable (spec 4.3, 7.8), where a written literal's stay read-only
 };
 
 struct Ast_Int : Ast {
@@ -435,7 +439,8 @@ struct Ast_Run : Ast {
     bool is_top_level;  // in Ast_File.runs: run for its effect
     bool checked;       // the checker has been through it (check_run, check_top_level_run): once
     Ast *value;         // an expression #run's result once it ran: the node holding it, as constant
-                        // data's literal tree (run.cpp's bake_scalar), or the operand itself when
+                        // data's literal tree (run.cpp's bake_value; a view's, the array literal of
+                        // its elements, typed [count]T), or the operand itself when
                         // that is a constant and nothing ran; null when it has none: it hasn't run,
                         // its operand or what it reaches had errors, or it failed (said already)
 };

@@ -479,10 +479,20 @@
 //   whether its own check had errors (Ast_Proc.had_errors,
 //   Ast_Var.had_errors, Ast_Const.had_errors).
 // - It runs in the compilation's one compile-time world (run.h), and its
-//   result is baked into the tree, a typed constant (run.cpp). A run that
-//   fails is "#run failed: runtime error: MESSAGE", at the #run, followed
-//   by the calls that led there; it has no value then, and what needs it
-//   says nothing more, as after an error it reaches.
+//   result is baked into the tree, a typed constant (run.cpp): a number as
+//   one, anything else as constant data (constant_data), a copy of what
+//   the run gave. A run that fails is "#run failed: runtime error:
+//   MESSAGE", at the #run, followed by the calls that led there; it has no
+//   value then, and what needs it says nothing more, as after an error it
+//   reaches. So is a result that can't be baked: one holding a pointer
+//   that isn't null, "#run's result holds a pointer, which can't be baked,
+//   for now", or a view or a string whose count is below zero, "#run
+//   failed: its result holds a view with a negative count" ("a string").
+// - A baked string is a string literal's bytes: it converts to a *u8 and
+//   passes C's '...' as a literal does (is_literal_string). A constant may
+//   hold a baked view, its elements read-only data, though not a written
+//   one ("a constant can't hold a view"). A global holding a baked view or
+//   string gets a writable copy of its elements or bytes (spec 4.3).
 // - main is where the program starts: a #run that reaches a call of it is
 //   "main is where the program starts; #run can't call it", at the #run.
 // - A body a #run needs while that body is being checked (its own #run, or
@@ -590,16 +600,17 @@ bool is_literal_string(Ast *e);
 //   or an element of it (an array's) at an is_constant index;
 // - a cast of constant data to its own type, or between string and []u8;
 // - a #run whose baked value isn't a number (Ast_Run.value): a procedure
-//   value's name, which procedure_address walks on from.
+//   value's name, which procedure_address walks on from, a string literal,
+//   or a struct or array literal of constant data (is_data already); a
+//   view's is the array literal of its elements, typed [count]T where the
+//   #run is a []T.
 // A field's or element's value node that is itself constant data is
 // followed in turn. So *value is a string or struct or array literal, or a
 // scalar field's or element's value node as the literal wrote it (a
 // constant, a procedure's name, a string literal, or a cast of one, which
 // literal_address and procedure_address walk on from); or a #run's baked
-// value, a procedure's name, which procedure_address walks on from; or
-// null when a
-// literal leaves the field out (zero), and so for any field or element of
-// such a null part. A string's element is a byte that no node holds: not
+// value, one of the same; or null when a literal leaves the field out
+// (zero), and so for any field or element of such a null part. A string's element is a byte that no node holds: not
 // constant data; nor is a field or an element of a value a literal gives
 // with the wrong type, reported (Line.{a = 5}.a.x).
 bool constant_data(Ast *e, Ast **value);

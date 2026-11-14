@@ -1,0 +1,11 @@
+// A #run whose result holds a pointer, itself or in a field, can't be
+// baked into the program (spec 7.8): the address means something only in
+// the compiler's memory while it compiles.
+Holder :: struct { p: *int; n: int; }
+x := 5;
+point :: () -> *int { return *x; }
+hold :: () -> Holder { return .{*x, 1}; }
+P :: #run point();
+H :: #run hold();
+
+main :: () { }

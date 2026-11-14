@@ -1,0 +1,6 @@
+tests/errors/run_negative_count.rig:5:6: error: #run failed: its result holds a view with a negative count
+    V :: #run view();
+         ^
+tests/errors/run_negative_count.rig:6:6: error: #run failed: its result holds a string with a negative count
+    S :: #run text();
+         ^

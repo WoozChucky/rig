@@ -23,5 +23,6 @@ void compile_time_free(Compile_Time *ct);
 // Runs the expression #run `run`, which checked and whose walk was clean,
 // and bakes its result into run->value (and is_constant and constant for a
 // scalar). A failure is reported at the #run with the interpreter's frames,
-// and leaves it with no value. True when it has one.
+// and a result that can't be baked (a pointer, a negative count) at the
+// #run; either leaves it with no value. True when it has one.
 bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run);
