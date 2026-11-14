@@ -370,7 +370,7 @@ static void declare_stack_probe(Backend *b) {
 // (or fflush, or exit) is the one LLVM renames (write.1), and as an
 // internal symbol it works the same under any name. A program's own foreign
 // declaration of exit (or fflush) is then the same function as the
-// runtime's (see backend_build).
+// runtime's (see declare_foreign_functions).
 //
 // It has no source, so no debug information: no subprogram, and no location
 // on its instructions (a debugger steps over it, and shows the panicking
@@ -1659,6 +1659,41 @@ static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Glob
     return LLVMStructTypeInContext(c, p.types, (unsigned)p.count, 1);
 }
 
+// The program's foreign procedures, each a declaration of its C function
+// (ir_c_name: its C name, #foreign libc "free", or else its own), into
+// `functions` at its index. They're declared before the program's globals
+// and its own procedures, as the runtime's functions are (build_runtime),
+// so a C name is always C's: a procedure or a global of the program with
+// the same name, free or malloc, is the one LLVM renames (free.1), and as
+// an internal symbol it works the same under any name. Rig names don't
+// clash with C names, so the program may well have both (spec 7.6).
+//
+// One C function is one declaration. A C name declared already, by the
+// runtime (exit, say) or by another foreign procedure (free :: (p: *void)
+// #foreign libc; beside c_free :: (p: *void) #foreign libc "free";), is
+// that declaration: a second would be renamed, free.1, and the linker would
+// find no such function. Each procedure's calls still go through its own
+// function type and attributes (build_instr), so each is called as it's
+// declared, whatever the declaration says; whether they agree with C is the
+// program's business, as in C. The declaration is marked as the first one
+// says: another's widening attributes could contradict it (an s8's signext
+// beside a u8's zeroext), and the verifier refuses both on one parameter.
+static void declare_foreign_functions(Backend *b, Ir_Module *m, Arena *a, LLVMValueRef *functions) {
+    for (s64 i = 0; i < m->procs.count; i++) {
+        Ir_Proc *p = m->procs[i];
+        if (!p->is_foreign) continue;
+        const char *name = string_cstr(a, ir_c_name(p));
+        LLVMValueRef existing = LLVMGetNamedFunction(b->module, name);
+        if (existing && LLVMIsDeclaration(existing)) {
+            functions[i] = existing;
+            continue;
+        }
+        functions[i] = LLVMAddFunction(b->module, name, function_type(b->context, p, a));
+        mark_extensions(b, p, functions[i], false);
+        mark_result_pointer(b, p, functions[i], false);
+    }
+}
+
 // Builds and verifies the LLVM module for `m`. False with `error` set when
 // LLVM doesn't know the target or the module doesn't verify; either way the
 // caller calls backend_free.
@@ -1691,6 +1726,8 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     if (module_has(m, IR_PANIC)) build_runtime(b);
     if (module_has(m, IR_COPY) || module_has(m, IR_ZERO)) declare_memory_functions(b);
     declare_stack_probe(b);
+    LLVMValueRef *functions = arena_new_array<LLVMValueRef>(a, m->procs.count ? m->procs.count : 1);
+    declare_foreign_functions(b, m, a, functions);
 
     // The globals in two passes: every one made first, with its type, then,
     // once the functions are made too, each given its first value. A
@@ -1755,22 +1792,14 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
         LLVMGlobalAddDebugInfo(globals[i], variable);
     }
 
-    // Every function first, so a body can call one defined after it.
-    LLVMValueRef *functions = arena_new_array<LLVMValueRef>(a, m->procs.count ? m->procs.count : 1);
+    // Every function of the program first, so a body can call one defined
+    // after it. (The foreign ones are declared already.)
     for (s64 i = 0; i < m->procs.count; i++) {
         Ir_Proc *p = m->procs[i];
-        const char *name = string_cstr(a, p->name);
-        // A foreign procedure the runtime already declared (exit, say) is
-        // that declaration: a second would be renamed, exit.1, and the
-        // linker would find no such function.
-        LLVMValueRef existing = p->is_foreign ? LLVMGetNamedFunction(b->module, name) : nullptr;
-        if (existing && LLVMIsDeclaration(existing)) {
-            functions[i] = existing;
-        } else {
-            functions[i] = LLVMAddFunction(b->module, name, function_type(c, p, a));
-            if (!p->is_foreign && !p->is_export) LLVMSetLinkage(functions[i], LLVMInternalLinkage);
-            if (!p->is_foreign) mark_definition(b, functions[i]);
-        }
+        if (p->is_foreign) continue;
+        functions[i] = LLVMAddFunction(b->module, string_cstr(a, p->name), function_type(c, p, a));
+        if (!p->is_export) LLVMSetLinkage(functions[i], LLVMInternalLinkage);
+        mark_definition(b, functions[i]);
         mark_extensions(b, p, functions[i], false);
         mark_result_pointer(b, p, functions[i], false);
     }

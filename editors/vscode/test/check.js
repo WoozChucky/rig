@@ -926,6 +926,29 @@ check('the grammar\'s other rules still colour as they did', () => {
         '"': ['punctuation.definition.string.begin.rig', 'punctuation.definition.string.end.rig'],
         '==': 'keyword.operator.comparison.rig',
     });
+    // #foreign's C name after the library (issue #135) is a string, the
+    // name of a C function in it too.
+    assertScopes('c_free :: (p: *void) #foreign libc "free";', {
+        c_free: 'entity.name.function.rig',
+        '#foreign': 'keyword.other.directive.rig',
+        libc: 'entity.name.namespace.rig',
+        free: 'string.quoted.double.rig',
+        '"': ['punctuation.definition.string.begin.rig', 'punctuation.definition.string.end.rig'],
+        ';': 'punctuation.terminator.statement.rig',
+    });
+    // After results too, which run on to the ';': the name in the string
+    // isn't a type, nor is a ';' or a '{' in it the results' end.
+    assertScopes('c_malloc :: (size: u64) -> *void #foreign libc "malloc";', {
+        void: PRIMITIVE,
+        libc: 'entity.name.namespace.rig',
+        malloc: 'string.quoted.double.rig',
+        ';': 'punctuation.terminator.statement.rig',
+    });
+    assertScopes('odd :: () -> s32 #foreign libc "a;{b";', {
+        a: 'string.quoted.double.rig',
+        b: 'string.quoted.double.rig',
+        ';': ['string.quoted.double.rig', 'punctuation.terminator.statement.rig'],
+    });
     assertScopes('s := "bad \\q";', { '\\q': 'invalid.illegal.unknown-escape.rig' });
     assertScopes('s := "open', { open: 'invalid.illegal.unterminated-string.rig' });
     assertScopes('// Itself: a copy whose two sides are the same bytes.', { Itself: 'comment.line.double-slash.rig', copy: 'comment.line.double-slash.rig' });

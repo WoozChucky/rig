@@ -452,6 +452,15 @@
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
+// - A string after the library is the C function's name (issue #135),
+//   when it isn't the procedure's: c_free :: (p: *void) #foreign libc
+//   "free";. It has at least one byte, and no zero byte or white space,
+//   which are reported at the string: "a foreign procedure's C name can't
+//   be empty", "'fr ee' can't be a C function's name: it has white space"
+//   ("...: it has a zero byte"). The procedure's Rig name is the one calls,
+//   values and messages use; the C name is no Rig name, so two foreign
+//   procedures may name one C function, and the program may have a
+//   procedure or a global called as a C function is.
 // - main must exist as a procedure, have a body, take nothing and return
 //   nothing. It can be called, but isn't a value: "'main' can't be a
 //   value: it's where the program starts" (it returns C's int to C).
