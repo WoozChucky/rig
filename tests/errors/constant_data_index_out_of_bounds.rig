@@ -1,0 +1,10 @@
+// A constant index into constant data is checked while compiling (spec 5.11):
+// an array's against its count, a string's against its bytes.
+NAME :: "rig";
+PRIMES :: int.[2, 3, 5, 7, 11];
+N :: PRIMES[9];
+main :: () {
+    c := NAME[5];
+    d := "x"[1];
+    e := NAME[-1];
+}
