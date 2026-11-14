@@ -4134,3 +4134,32 @@ TEST(lowering_on_demand_sizes_the_bounds_buffer_for_the_longest_path) {
     diag_free(&d);
     arena_free(&a);
 }
+
+TEST(baked_views_and_strings_in_constants_and_globals) {
+    // A #run's baked view in a global sees a writable array.N of its own,
+    // and a baked string there writable bytes of its own, string.N, so the
+    // program may change them. A constant's view sees read-only elements, a
+    // const.N as the constant's own bytes are.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "store : [3]int;\n"
+                                          "make :: () -> []int { store[0] = 7; store[1] = 8; store[2] = 9; return store; }\n"
+                                          "name :: () -> string { return \"rig\"; }\n"
+                                          "VIEW :: #run make();\n"
+                                          "g : []int = #run make();\n"
+                                          "s := #run name();\n"
+                                          "main :: () { i := 1; x := VIEW[i]; g[0] = 1; s[0] = 82; }\n"));
+    const char *elements = "\\07\\00\\00\\00\\00\\00\\00\\00"
+                           "\\08\\00\\00\\00\\00\\00\\00\\00"
+                           "\\09\\00\\00\\00\\00\\00\\00\\00\"\n";
+    const char *three = "\\03\\00\\00\\00\\00\\00\\00\\00"
+                        "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @";
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "global @array.0: 24 align 8 = \"%s", elements))));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "global @g: 16 align 8 = \"%sarray.0\n", three))));
+    CHECK(contains(ir, "global @string.0: 4 align 1 = \"rig\\00\"\n"));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "global @s: 16 align 8 = \"%sstring.0\n", three))));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.1: 24 align 8 = \"%s", elements))));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.0: 16 align 8 = \"%sconst.1\n", three))));
+    CHECK(contains(proc_ir(ir, "main"), "addr @const.0"));
+    arena_free(&a);
+}

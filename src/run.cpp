@@ -30,14 +30,28 @@
 // Baking. A result is made into nodes of the tree, as if it were written
 // there: a number an Ast_Int, an Ast_Float or an Ast_Bool, folded
 // (is_constant), a procedure value a name bound to the procedure, a null
-// pointer null. So the one reading of constant data (#113: constant_data,
-// procedure_address, folding, and lowering's constant_global and
-// constant_bytes) takes a baked value as it takes a written one, and the
-// program never sees the compile-time module. The interpreter's values are
-// canonical (interp.h): a type's bits zero-extended from its width, a
-// float32's in the low 32 bits. Ast.constant wants a signed integer
-// sign-extended from its width, and every float as the bits of the double
-// holding its value: baking converts.
+// pointer null; a string a string literal, a struct or an array a literal
+// of constant data holding its parts, and a view the array literal of its
+// elements (bake_value). So the one reading of constant data (#113:
+// constant_data, procedure_address, literal_address, folding, and
+// lowering's constant_global and constant_bytes) takes a baked value as it
+// takes a written one, and the program never sees the compile-time module.
+// A baked value is a copy, made when its run ends: what its view or string
+// pointed at may change in a later run, and it stays as it was. The
+// interpreter's values are canonical (interp.h): a type's bits
+// zero-extended from its width, a float32's in the low 32 bits. Ast.constant
+// wants a signed integer sign-extended from its width, and every float as
+// the bits of the double holding its value: baking converts. An aggregate
+// result is read from the memory the run copied it into, which is laid out
+// as the target's, as all of the interpreter's memory is.
+//
+// What can't be baked. A non-null pointer anywhere in the result refers to
+// the compiler's own memory: "#run's result holds a pointer, which can't be
+// baked, for now". A view or a string whose count is below zero has no
+// elements: "#run failed: its result holds a view with a negative count"
+// (a string's says string). Baking stops at the first part refused, and
+// that is said at the #run, once, after it (Baking); nothing of the value
+// is kept, and the #run has no value, as after a failure.
 
 #include "check.h"
 #include "interp.h"
@@ -76,26 +90,42 @@ static void make_parts(Compile_Time *ct) {
     ct->interp = interp_new(ct->module);
 }
 
+// One result being baked: the run it's of, and why it can't be, once a
+// part of it is refused. Nothing is said while the value is baked: the
+// refusal is said at the #run once baking has stopped (compile_time_run),
+// and the value is kept only when there's none.
+struct Baking {
+    Compile_Time *ct;
+    Checker *c;
+    Ast_Run *run;
+    const char *refusal;  // the message, or null
+};
+
 // A new node of the baked value of `run`, of type t: at the #run, as every
 // node of it is, so a message about the value points there.
 template<typename T>
-static T *baked_node(Checker *c, Ast_Kind kind, Ast_Run *run, Type *t) {
-    T *node = ast_new<T>(c->arena, kind, run->pos);
+static T *baked_node(Baking *b, Ast_Kind kind, Type *t) {
+    T *node = ast_new<T>(b->c->arena, kind, b->run->pos);
     node->type = t;
     return node;
 }
 
-// "#run's result holds a pointer, which can't be baked, for now", at the
-// #run: an address means something only while compiling, in the
-// compiler's memory, and following it into the data it points at is for
-// later. Null, the node a refused value gives.
-static Ast *refuse_pointer(Checker *c, Ast_Run *run) {
-    diag_error(c->diag, run->pos, "#run's result holds a pointer, which can't be baked, for now");
+// A part of the value refused for `message`: null, the node it gives, and
+// the message kept for compile_time_run to say. A pointer is "#run's result
+// holds a pointer, which can't be baked, for now": an address means
+// something only while compiling, in the compiler's memory, and following
+// it into the data it points at is for later.
+static Ast *refuse(Baking *b, const char *message) {
+    b->refusal = message;
     return nullptr;
 }
 
+static Ast *refuse_pointer(Baking *b) {
+    return refuse(b, "#run's result holds a pointer, which can't be baked, for now");
+}
+
 // The node of a scalar value of type t, from its canonical bits, `bits`
-// (interp.h); null after a refusal, said. Each kind of scalar:
+// (interp.h); null after a refusal (refuse). Each kind of scalar:
 // - An integer is an Ast_Int, a signed one sign-extended from its width.
 // - A bool is an Ast_Bool, 1 or 0.
 // - A float is an Ast_Float: a float32's low 32 bits are the float32, whose
@@ -108,10 +138,11 @@ static Ast *refuse_pointer(Checker *c, Ast_Run *run) {
 //   function. Any other address, one made from an integer,
 //   or the address of a run's own procedure or of one the compiler makes
 //   (no procedure of the source), is refused as a pointer is. 0 is null.
-static Ast *bake_scalar(Compile_Time *ct, Checker *c, Ast_Run *run, Type *t, u64 bits) {
+static Ast *bake_scalar(Baking *b, Type *t, u64 bits) {
+    Compile_Time *ct = b->ct;
     switch (t->kind) {
     case TYPE_INTEGER: {
-        Ast_Int *number = baked_node<Ast_Int>(c, AST_INT, run, t);
+        Ast_Int *number = baked_node<Ast_Int>(b, AST_INT, t);
         if (t->is_signed && t->size < 8) {
             s32 shift = 64 - 8 * (s32)t->size;
             bits = (u64)((s64)(bits << shift) >> shift);
@@ -122,14 +153,14 @@ static Ast *bake_scalar(Compile_Time *ct, Checker *c, Ast_Run *run, Type *t, u64
         return number;
     }
     case TYPE_BOOL: {
-        Ast_Bool *truth = baked_node<Ast_Bool>(c, AST_BOOL, run, t);
+        Ast_Bool *truth = baked_node<Ast_Bool>(b, AST_BOOL, t);
         truth->value = bits != 0;
         truth->is_constant = true;
         truth->constant = truth->value ? 1 : 0;
         return truth;
     }
     case TYPE_FLOAT: {
-        Ast_Float *number = baked_node<Ast_Float>(c, AST_FLOAT, run, t);
+        Ast_Float *number = baked_node<Ast_Float>(b, AST_FLOAT, t);
         if (t->size == 4) {
             u32 low = (u32)bits;
             f32 single;
@@ -147,12 +178,12 @@ static Ast *bake_scalar(Compile_Time *ct, Checker *c, Ast_Run *run, Type *t, u64
     case TYPE_POINTER:
     case TYPE_PROC: {
         if (bits == 0) {
-            Ast *null = baked_node<Ast>(c, AST_NULL, run, t);
+            Ast *null = baked_node<Ast>(b, AST_NULL, t);
             null->is_constant = true;
             null->constant = 0;
             return null;
         }
-        if (t->kind == TYPE_POINTER) return refuse_pointer(c, run);
+        if (t->kind == TYPE_POINTER) return refuse_pointer(b);
         s32 index = interp_proc_at(ct->interp, bits);
         Ast_Proc *proc = index >= 0 ? ir_lowering_source(ct->lowering, index) : nullptr;
         if (index < 0) {
@@ -167,13 +198,109 @@ static Ast *bake_scalar(Compile_Time *ct, Checker *c, Ast_Run *run, Type *t, u64
                 if (source->type == t) break;
             }
         }
-        if (!proc) return refuse_pointer(c, run);
-        Ast_Name *name = baked_node<Ast_Name>(c, AST_NAME, run, t);
+        if (!proc) return refuse_pointer(b);
+        Ast_Name *name = baked_node<Ast_Name>(b, AST_NAME, t);
         name->name = proc->name;
         name->decl = proc;
         return name;
     }
     default: RIG_ASSERT(!"not a scalar"); return nullptr;
+    }
+}
+
+// `size` bytes at `at`, as they lie in memory: little-endian, as both of
+// Rig's targets are, so a scalar's are its canonical bits (interp.h).
+static u64 read_bits(const u8 *at, s64 size) {
+    u64 bits = 0;
+    for (s64 k = 0; k < size; k++) bits |= (u64)at[k] << (8 * k);
+    return bits;
+}
+
+// A struct or array literal of type t to hold `count` baked values, made as
+// the checker would find a written one of constant data: is_data already,
+// with no type written and no names, a struct's values its fields' in
+// order (literal_field_value).
+static Ast_Literal *baked_literal(Baking *b, Type *t, s64 count) {
+    Ast_Literal *literal = baked_node<Ast_Literal>(b, AST_LITERAL, t);
+    literal->is_array = t->kind == TYPE_ARRAY;
+    literal->is_data = 1;
+    array_reserve(&literal->values, count);
+    return literal;
+}
+
+static Ast *bake_value(Baking *b, Type *t, const u8 *at);
+
+// The elements of an array of type `array`, from its first at `at`: the
+// array literal holding them; null once one is refused.
+static Ast *bake_elements(Baking *b, Type *array, const u8 *at) {
+    Ast_Literal *literal = baked_literal(b, array, array->count);
+    Type *element = array->element;
+    for (s64 i = 0; i < array->count; i++) {
+        Ast *value = bake_value(b, element, at + i * element->size);
+        if (!value) return nullptr;
+        array_add(&literal->values, value);
+    }
+    return literal;
+}
+
+// The node of a value of type t whose bytes are at `at`, in the compiler's
+// memory, where the run left them; null when it can't be baked (refuse, or
+// a message said already). As a written value of constant data would be:
+// - A scalar is bake_scalar's, from its bytes.
+// - A string is a string literal (Ast_String) of its count of bytes from
+//   its data, copied, is_baked. A count below zero is "#run failed: its
+//   result holds a string with a negative count".
+// - A struct is a literal of its fields' values. A field's type may be a
+//   late one not made yet, by a #run in the declaration pass, before
+//   resolve_late_fields (check_late_field makes it); one still without a
+//   type had an error, said, and stops the baking.
+// - An array [N]T is a literal of its N elements.
+// - A view []T is the array literal of its elements, a [count]T
+//   (check_array_type, which says so when that's too big, and stops the
+//   baking), standing where the []T is (lower.cpp's constant_bytes reads
+//   an array value in a view's slot so). A count below zero is "#run
+//   failed: its result holds a view with a negative count". Data that
+//   isn't memory the compiler may read is a memory error (spec 8.6), not
+//   checked.
+// What a view or a string points at is copied as it is now: a later run
+// that changes it leaves the baked value as it was.
+static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
+    switch (t->kind) {
+    case TYPE_STRING:
+    case TYPE_VIEW: {
+        s64 count = (s64)read_bits(at + VIEW_COUNT_OFFSET, 8);
+        const u8 *data = (const u8 *)(uintptr_t)read_bits(at + VIEW_DATA_OFFSET, 8);
+        if (count < 0) {
+            return refuse(b, t->kind == TYPE_STRING ? "#run failed: its result holds a string with a negative count"
+                                                    : "#run failed: its result holds a view with a negative count");
+        }
+        if (t->kind == TYPE_VIEW) {
+            Type *array = check_array_type(b->c, t->element, (u64)count, b->run->pos);
+            return array ? bake_elements(b, array, data) : nullptr;
+        }
+        Ast_String *text = baked_node<Ast_String>(b, AST_STRING, t);
+        u8 *bytes = (u8 *)arena_alloc(b->c->arena, (u64)count + 1, 1);
+        if (count) memcpy(bytes, data, (size_t)count);
+        text->value = {bytes, count};
+        text->is_baked = true;
+        return text;
+    }
+    case TYPE_ARRAY: return bake_elements(b, t, at);
+    case TYPE_STRUCT: {
+        for (s64 i = 0; i < t->fields.count; i++) {
+            check_late_field(b->c, t, (s32)i);
+            if (!t->fields[i].type) return nullptr;
+        }
+        Ast_Literal *literal = baked_literal(b, t, t->fields.count);
+        for (s64 i = 0; i < t->fields.count; i++) {
+            Type_Field *field = &t->fields[i];
+            Ast *value = bake_value(b, field->type, at + field->offset);
+            if (!value) return nullptr;
+            array_add(&literal->values, value);
+        }
+        return literal;
+    }
+    default: return bake_scalar(b, t, read_bits(at, t->size));
     }
 }
 
@@ -218,10 +345,11 @@ static void report_failure(Compile_Time *ct, Ast_Run *run, Interp_Result *result
 // 4. What the compiler printed so far is written out first (fflush), so it
 //    comes before what the run prints, in order. Then the run.
 // 5. A failure is said, with its frames.
-// 6. Otherwise the result is baked.
+// 6. Otherwise the result is baked: a scalar from its bits, an aggregate
+//    from that memory. A part refused is said, and nothing is kept.
 // 7. The memory and the result's arrays are freed: the strings the run gave
 //    were copied into the diagnostics, and a baked value into the checker's
-//    arena.
+//    arena, a string's bytes too.
 bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run) {
     if (!ct->module) make_parts(ct);
     s32 proc = ir_lower_run(ct->lowering, run);
@@ -242,10 +370,9 @@ bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run) {
     if (!result.ok) {
         report_failure(ct, run, &result, &scratch);
     } else {
-        // An aggregate (a string, a struct, an array, a view) is baked
-        // from its memory: issue #115's next step.
-        RIG_ASSERT(!aggregate);
-        value = bake_scalar(ct, c, run, t, result.results[0]);
+        Baking baking = {ct, c, run, nullptr};
+        value = aggregate ? bake_value(&baking, t, (const u8 *)memory) : bake_scalar(&baking, t, result.results[0]);
+        if (baking.refusal) diag_error(c->diag, run->pos, "%s", baking.refusal);
     }
     if (value) {
         run->value = value;

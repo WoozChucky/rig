@@ -227,7 +227,8 @@ void report_no_conversion(Checker *c, Ast *value, Type *to) {
 
 // Casts are walked through; a field or an element of constant data goes on
 // from the node holding its value (constant_data), a procedure's name in a
-// literal, or a cast of one.
+// literal, or a cast of one, and so does a #run's baked value, a name bound
+// to the procedure, alone or in a baked struct or array.
 Ast_Proc *procedure_address(Ast *e) {
     for (;;) {
         Type *t = e->type;
@@ -251,7 +252,9 @@ Ast_Proc *procedure_address(Ast *e) {
 // the string or view it's taken of (a .count is no pointer, and an array
 // is no literal); constant data goes on from the node holding its value
 // (constant_data): a string constant's literal, or the value a *u8 field
-// of a constant holds, which may be a cast of a literal.
+// of a constant holds, which may be a cast of a literal; and a #run's baked
+// string, a literal (Ast_String.is_baked), alone or in a baked struct or
+// array.
 Ast_String *literal_address(Ast *e) {
     for (;;) {
         Type *t = e->type;
@@ -381,8 +384,10 @@ bool constant_data(Ast *e, Ast **value) {
     }
     case AST_RUN: {
         // A #run's baked value (run.cpp) that isn't a number: the node
-        // holding it, a name bound to a procedure. A number is a constant
-        // (Ast.constant), and a #run with no value has none to give.
+        // holding it, a name bound to a procedure, a string literal, or a
+        // struct or array literal of constant data; a view's is the array
+        // literal of its elements. A number is a constant (Ast.constant),
+        // and a #run with no value has none to give.
         Ast_Run *run = (Ast_Run *)e;
         if (!run->value || run->is_constant) return false;
         *value = run->value;

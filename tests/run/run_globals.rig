@@ -1,0 +1,35 @@
+// A #run in a global's value (issue #115, spec 4.3, 7.8) gives the global
+// its own copy of what the run gave: a view's elements in an array of the
+// global's own, and a string's bytes too, both writable, so the program
+// may change them. The program's own store starts at its written zeros,
+// whatever the run did to it while compiling. A #run's string is a
+// literal's bytes, which C reads up to their zero, and a #run may call C.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+strlen :: (s: *u8) -> u64 #foreign libc;
+
+store : [3]int;
+
+make :: () -> []int {
+    store[0] = 1;
+    store[1] = 2;
+    store[2] = 3;
+    return store;
+}
+
+name :: () -> string { return "rig"; }
+add :: (a: int, b: int) -> int { return a + b; }
+pick :: () -> (int, int) -> int { return add; }
+
+numbers : []int = #run make();
+text := #run name();
+op := #run pick();
+LEN :: #run strlen("compile time");
+
+main :: () {
+    numbers[0] = 10;
+    text[0] = 82;
+    printf("%lld %lld %lld\n", numbers[0], numbers[1], store[0]);
+    printf("%.*s\n", cast(s32) text.count, text.data);
+    printf("%s\n", #run name());
+    printf("%lld %llu\n", op(2, 3), LEN);
+}

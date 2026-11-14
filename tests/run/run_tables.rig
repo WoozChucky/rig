@@ -1,0 +1,65 @@
+// Tables computed while compiling (issue #115, spec 7.8): a #run's array,
+// its table of structs holding strings and procedures, and its view of
+// memory malloc gave while compiling are baked into the program as
+// constant data, as if they had been written there. One of the primes
+// sizes an array.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+malloc :: (size: u64) -> *void #foreign libc;
+
+Op :: struct {
+    symbol: string;
+    run: (int, int) -> int;
+}
+
+add :: (a: int, b: int) -> int { return a + b; }
+sub :: (a: int, b: int) -> int { return a - b; }
+mul :: (a: int, b: int) -> int { return a * b; }
+
+is_prime :: (n: int) -> bool {
+    if n < 2 { return false; }
+    d := 2;
+    while d * d <= n {
+        if n % d == 0 { return false; }
+        d += 1;
+    }
+    return true;
+}
+
+primes :: () -> [8]int {
+    found : [8]int;
+    count := 0;
+    n := 2;
+    while count < 8 {
+        if is_prime(n) {
+            found[count] = n;
+            count += 1;
+        }
+        n += 1;
+    }
+    return found;
+}
+
+ops :: () -> [3]Op { return Op.[.{"+", add}, .{"-", sub}, .{"*", mul}]; }
+
+squares :: (n: int) -> []int {
+    v : []int;
+    v.data = malloc(cast(u64) n * size_of(int));
+    v.count = n;
+    for 0..n - 1 { v[it] = it * it; }
+    return v;
+}
+
+PRIMES :: #run primes();
+OPS :: #run ops();
+SQUARES :: #run squares(5);
+N :: PRIMES[3];
+
+main :: () {
+    for PRIMES { printf("%lld ", it); }
+    printf("\n");
+    for OPS { printf("6 %s 3 = %lld\n", it.symbol.data, it.run(6, 3)); }
+    grid : [N]int;
+    printf("%lld\n", grid.count);
+    for SQUARES { printf("%lld ", it); }
+    printf("\n");
+}

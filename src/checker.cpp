@@ -345,7 +345,10 @@ static void check_var(Checker *c, Ast_Var *var) {
 // constant holding a string, a struct or an array (`origin := ORIGIN;`), a
 // field or an element of one, or casts of them. Its bytes are written into
 // the global's, a copy the global may change; a view of a constant array
-// gets an array of its own, as a view's array literal does.
+// gets an array of its own, as a view's array literal does. A #run's baked
+// value is constant data too (run.cpp), a baked view's included; a baked
+// string's bytes are the global's own copy as well (lower.cpp's
+// string_copy_global), where a written literal's stay read-only.
 //
 // A value that needs a #run with no value says nothing more: the #run's
 // failure, or the errors in what it reaches, were said (has_failed_run).

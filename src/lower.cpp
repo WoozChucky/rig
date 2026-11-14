@@ -44,6 +44,19 @@
 //   no copy (lower_view_of). A pointer constant (GREETING :: cast(*u8)
 //   "hi";) holds no bytes of its own, and a string constant met as a *u8
 //   (puts(NAME)) needs none: each is its literal's str.N address.
+// - A #run's result (#115, spec 7.8) was baked while checking into the
+//   tree a written value would make (run.cpp), so it's lowered as one: a
+//   number is a constant, a procedure value its procedure's address, and a
+//   constant holding data from one is a data constant as above. An
+//   expression #run's aggregate used at run time is a const.N of its own,
+//   one per #run (run_global). A view a constant or a #run holds (a baked
+//   one: no written constant may) is 16 bytes whose data is a relocation to
+//   its elements, a read-only const.N too; a global variable's view sees a
+//   writable array.N instead. A global variable holding a baked string,
+//   given by a #run or by a constant made from one, gets bytes of its own,
+//   writable, string.N (string_copy_global), where a written literal's
+//   are its one read-only str.N: the global is the program's to change,
+//   and the run's string is a value it was given, not a literal it wrote.
 // - Several results: a return gives one value per result, a call numbers
 //   one value per result (its first is the call's value where one is
 //   wanted), and names or targets receiving them are stored from those
@@ -216,7 +229,8 @@ struct Lowering {
     // however many uses and constants reach it (literal_global).
     Table<s32> literal_globals;
     // Each data constant's const.N, by node_key, once a use needs it
-    // (constant_global).
+    // (constant_global), and each expression #run's baked aggregate's
+    // (run_global).
     Table<s32> constant_globals;
     s32 constant_count;       // the const.N globals made so far
     Ir_Proc *proc;            // the procedure whose body is being lowered
@@ -231,6 +245,8 @@ struct Lowering {
     s64 longest_where;        // the longest "PATH:L:C: runtime error: " a bounds check passes it (on
                               // demand, the longest any can: ir_lowering_new)
     s32 array_count;          // the array.N globals made so far: the arrays global views see
+    s32 string_copy_count;    // the string.N globals made so far: the bytes of its own a global holding
+                              // a baked string gets (string_copy_global)
     s32 string_equal;         // __rig_string_equal's index in module->procs, once == on strings
                               // needs it; -1 (on demand, 1 from the start)
     // Where the instructions being emitted come from (ir.h's "Debug
@@ -635,6 +651,7 @@ static s32 aggregate_results(Ast_Proc *proc) {
 static s32 lower_expr(Lowering *l, Ast *e);
 static s32 lower_address(Lowering *l, Ast *e);
 static s32 constant_global(Lowering *l, Ast_Const *constant);
+static s32 run_global(Lowering *l, Ast_Run *run);
 
 // A view's count and data, loaded from the view at %view (its fields, as
 // types.h lays them out).
@@ -1384,9 +1401,10 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         // statement reading it.
         // A procedure, or a constant naming one, is its address. A constant
         // holding data (a number's never gets here: it's a constant) is the
-        // address of its value: a string's, a struct's or an array's
-        // read-only global, as any aggregate's value is its bytes' address,
-        // or, a pointer, the string literal's bytes it points at.
+        // address of its value: a string's, a struct's, an array's or a
+        // baked view's read-only global, as any aggregate's value is its
+        // bytes' address, or, a pointer, the string literal's bytes it
+        // points at.
         Ast *decl = ((Ast_Name *)e)->decl;
         if (decl->kind == AST_PARAM) {
             s32 value = local_of(l, decl)->value;
@@ -1463,12 +1481,21 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         return lower_operation(l, b->op, e->type, lower_value(l, b->left, e->type), b->right, b->pos);
     }
     case AST_RUN: {
-        // A #run's value, baked while checking (run.cpp): a number is a
-        // constant, lowered as one (lower_value), so this is a procedure
-        // value, the procedure's address.
-        Ast_Proc *proc = procedure_address(e);
-        RIG_ASSERT(proc);
-        return emit_proc_address(l, proc);
+        // A #run's value, baked while checking (run.cpp): a number, a bool
+        // or null is a constant, lowered as one (lower_value). A procedure
+        // value is the procedure's address. Anything else is an aggregate,
+        // whose value is the address of its run's read-only global
+        // (run_global), as a data constant's is; a baked view's elements
+        // are a read-only global of their own.
+        if (e->type->kind == TYPE_PROC) {
+            Ast_Proc *proc = procedure_address(e);
+            RIG_ASSERT(proc);
+            return emit_proc_address(l, proc);
+        }
+        RIG_ASSERT(type_is_aggregate(e->type));
+        Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
+        addr->target = run_global(l, (Ast_Run *)e);
+        return addr->result;
     }
     default: RIG_ASSERT(!"not a value"); return -1;
     }
@@ -2152,19 +2179,40 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
     for (s64 k = 0; k < size; k++) at[k] = (u8)(bits >> (8 * k));
 }
 
-static s32 add_global_array(Lowering *l, Type *array, Ast *value);
+static s32 add_global_array(Lowering *l, Type *array, Ast *value, bool writable);
 
 // The struct or array literal holding the value of `value`, an aggregate's
 // that constant_bytes writes: value itself, or, for constant data written
 // some other way (a constant's name, a field or an element of one, a cast
-// of it), the literal holding it (constant_data); null for a part a literal
-// leaves out, all zeros.
+// of it, a #run's baked value), the literal holding it (constant_data);
+// null for a part a literal leaves out, all zeros.
 static Ast_Literal *literal_of(Ast *value) {
     if (value->kind == AST_LITERAL) return (Ast_Literal *)value;
     Ast *data;
     bool known = constant_data(value, &data);
     RIG_ASSERT(known && (!data || data->kind == AST_LITERAL));
     return (Ast_Literal *)data;
+}
+
+// The bytes of a baked string, `literal`, for a global variable that holds
+// it: string.N, a global of bytes of its own, writable (has_layout, not
+// read-only), its count and a zero, aligned to 1; a new one each time. A
+// written literal's bytes are read-only, as in C, and every use of it
+// shares them (literal_global); a #run's string is the global's own data
+// (spec 4.3, 7.8), as a view's array is (add_global_array). Its name can't
+// be a Rig global's, which has no '.'.
+static s32 string_copy_global(Lowering *l, Ast_String *literal) {
+    Ir_Global g = {};
+    g.name = string_printf(l->arena, "string.%d", l->string_copy_count++);
+    g.type = IR_VOID;
+    g.has_layout = true;
+    g.size = literal->value.count + 1;
+    g.align = 1;
+    u8 *copy = (u8 *)arena_alloc(l->arena, (u64)literal->value.count + 1, 1);
+    memcpy(copy, literal->value.data, (size_t)literal->value.count);  // zeroed: the last byte is 0
+    g.bytes = {copy, literal->value.count + 1};
+    array_add(&l->module->globals, g);
+    return (s32)(l->module->globals.count - 1);
 }
 
 // The bytes of a constant value of type t, written `offset` bytes into a
@@ -2189,11 +2237,22 @@ static Ast_Literal *literal_of(Ast *value) {
 // out, not the order a literal with names gives them. A procedure's address
 // (procedure_address) is a relocation too, to the procedure. The checker
 // made sure every value is a constant, a string literal, a procedure,
-// constant data, or a literal of them (check_global_value).
-static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *relocs, Type *t, Ast *value) {
+// constant data, a literal of them (check_global_value), or a #run's baked
+// value (run.cpp), which is made of the same: a view's is the array literal
+// of its elements, read here as a view's array value is.
+//
+// `writable` says whose bytes they are: a global variable's (lower_global),
+// which the program may change, or a constant's or a #run's read-only
+// const.N (constant_global, run_global). A view's array is then a writable
+// array.N of its own, or a read-only const.N; and a baked string
+// (Ast_String.is_baked), which a global holds as its own data, gets bytes
+// of its own, string.N (string_copy_global), where a written literal's stay
+// its shared, read-only str.N.
+static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *relocs, Type *t, Ast *value,
+                           bool writable) {
     Ast_String *literal = literal_address(value);
     if (literal) {
-        s32 global = literal_global(l, literal);
+        s32 global = literal->is_baked && writable ? string_copy_global(l, literal) : literal_global(l, literal);
         if (!type_is_view_or_string(t)) {
             array_add(relocs, Ir_Reloc{offset, global, false});  // a pointer, *u8 or what a cast made it
             return;
@@ -2213,9 +2272,9 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
         // data's; add_global_array writes it, a part left out as zeros, all
         // N of its elements still seen. A value typed as the view is itself
         // a part of constant data (a struct literal's view field, or a
-        // constant's that its literal leaves out): its array is the node
-        // holding it (constant_data), and a view left out is the empty
-        // view, zeros.
+        // constant's that its literal leaves out), or a #run's baked view:
+        // its array is the node holding it (constant_data), and a view left
+        // out is the empty view, zeros.
         if (value->type->kind != TYPE_ARRAY) {
             Ast *data;
             bool known = constant_data(value, &data);
@@ -2225,7 +2284,7 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
             RIG_ASSERT(value->type->kind == TYPE_ARRAY);
         }
         Type *array = value->type;
-        s32 global = add_global_array(l, array, value);
+        s32 global = add_global_array(l, array, value, writable);
         write_bits(bytes + offset + VIEW_COUNT_OFFSET, (u64)array->count, 8);
         array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, global, false});
         return;
@@ -2235,7 +2294,8 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
         if (!literal) return;  // a part left out: zeros
         if (t->kind == TYPE_ARRAY) {
             for (s64 i = 0; i < literal->values.count; i++) {
-                constant_bytes(l, bytes, offset + i * t->element->size, relocs, t->element, literal->values[i]);
+                constant_bytes(l, bytes, offset + i * t->element->size, relocs, t->element, literal->values[i],
+                               writable);
             }
             return;
         }
@@ -2244,7 +2304,7 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
             Ast *field_value = literal_field_value(literal, t, (s32)f);
             if (!field_value) continue;
             Type_Field *field = &t->fields[f];
-            constant_bytes(l, bytes, offset + field->offset, relocs, field->type, field_value);
+            constant_bytes(l, bytes, offset + field->offset, relocs, field->type, field_value, writable);
         }
         return;
     }
@@ -2265,7 +2325,9 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
 // or a string. The bytes after it are zeros, which the global's size covers
 // and the compiler never holds: `big : [1 << 30]u8;` has no bytes at all,
 // and `S.{x = 1}` only up to x's. Constant data's is its literal's
-// (literal_of), and a part a literal leaves out needs none.
+// (literal_of), a #run's baked value's included, and a part a literal
+// leaves out needs none. A baked view's is a view's whole size, as any
+// view's: its elements are in a global of their own.
 static s64 constant_extent(Type *t, Ast *value) {
     if (!type_is_aggregate(t) || t->kind == TYPE_VIEW || literal_address(value)) return t->size;
     // A string here is one a literal leaves out: any other is a string
@@ -2292,41 +2354,43 @@ static s64 constant_extent(Type *t, Ast *value) {
 
 // A global of bytes of type t whose first value is `value`: the bytes up
 // to constant_extent, written by constant_bytes, and the relocations.
-static void global_value(Lowering *l, Ir_Global *g, Type *t, Ast *value) {
+// `writable`: a global variable's, not a constant's (constant_bytes).
+static void global_value(Lowering *l, Ir_Global *g, Type *t, Ast *value, bool writable) {
     s64 extent = constant_extent(t, value);
     u8 *bytes = (u8 *)arena_alloc(l->arena, extent ? (u64)extent : 1, 1);  // zeroed
-    constant_bytes(l, bytes, 0, &g->relocs, t, value);
+    constant_bytes(l, bytes, 0, &g->relocs, t, value, writable);
     g->bytes = {bytes, extent};
 }
 
-// A global of bytes for a global view's array value, `array.N`: a variable
-// (the view may write its elements), the value's bytes, an array literal's
-// or constant data's (the literal holding it, literal_of; zeros for a part a
-// literal leaves out); its index. Its name can't be a Rig global's, which
-// has no '.'.
-static s32 add_global_array(Lowering *l, Type *array, Ast *value) {
+// A global of bytes for a view's array value: the value's bytes, an array
+// literal's or constant data's (the literal holding it, literal_of; zeros
+// for a part a literal leaves out); its index. A global variable's view
+// (`writable`) sees `array.N`, a variable: the view may write its elements.
+// A view a constant holds (a #run's baked view, the only one a constant
+// may hold) sees `const.N`, read-only, counted with the constants' own: a
+// write through it is a memory error (spec 8.6), as one through a
+// constant's own bytes is. Either name can't be a Rig global's, which has
+// no '.'.
+static s32 add_global_array(Lowering *l, Type *array, Ast *value, bool writable) {
     Ir_Global g = {};
-    g.name = string_printf(l->arena, "array.%d", l->array_count++);
+    g.name = writable ? string_printf(l->arena, "array.%d", l->array_count++)
+                      : string_printf(l->arena, "const.%d", l->constant_count++);
     g.type = IR_VOID;
     g.has_layout = true;
+    g.is_read_only = !writable;
     g.size = array->size;
     g.align = (u32)array->align;
-    global_value(l, &g, array, value);
+    global_value(l, &g, array, value, writable);
     array_add(&l->module->globals, g);
     return (s32)(l->module->globals.count - 1);
 }
 
-// Data constant `constant`'s read-only global, const.N: has_layout and
-// is_read_only, its type's size and alignment, its value's bytes and
-// relocations (global_value), no rig_type. Made the first time a use needs
-// it, the same after; its index. So a constant used only folded (PRIMES[2],
-// NAME.count), or only as its literal's address (a pointer constant,
-// puts(NAME)), has none, and one whose bytes a use reads at run time has
-// one, wherever it's used. The bytes are the value node's, not `data`'s,
-// which is null for a part a literal leaves out: constant_bytes finds the
-// literal itself.
-static s32 constant_global(Lowering *l, Ast_Const *constant) {
-    const void *node = constant;
+// The read-only global, const.N, of `node` (a data constant or a #run),
+// whose value of type t is `value`: has_layout and is_read_only, t's size
+// and alignment, the value's bytes and relocations (global_value, not
+// writable), no rig_type. Made the first time, the same after (by node_key
+// in constant_globals); its index.
+static s32 read_only_global(Lowering *l, const void *node, Type *t, Ast *value) {
     String key = node_key(&node);
     s32 *found = table_get(&l->constant_globals, key);
     if (found) return *found;
@@ -2335,14 +2399,33 @@ static s32 constant_global(Lowering *l, Ast_Const *constant) {
     g.type = IR_VOID;
     g.has_layout = true;
     g.is_read_only = true;
-    g.size = constant->type->size;
-    g.align = (u32)constant->type->align;
-    global_value(l, &g, constant->type, constant->value);  // may add str.N globals first
+    g.size = t->size;
+    g.align = (u32)t->align;
+    global_value(l, &g, t, value, false);  // may add str.N and const.N globals first
     array_add(&l->module->globals, g);
     s32 global = (s32)(l->module->globals.count - 1);
     table_put(&l->constant_globals, string_copy(l->arena, key), global);
     return global;
 }
+
+// Data constant `constant`'s read-only global, const.N (read_only_global),
+// made the first time a use needs it, the same after; its index. So a
+// constant used only folded (PRIMES[2], NAME.count), or only as its
+// literal's address (a pointer constant, puts(NAME)), has none, and one
+// whose bytes a use reads at run time has one, wherever it's used. The
+// bytes are the value node's, not `data`'s, which is null for a part a
+// literal leaves out: constant_bytes finds the literal itself.
+static s32 constant_global(Lowering *l, Ast_Const *constant) {
+    return read_only_global(l, constant, constant->type, constant->value);
+}
+
+// An expression #run's baked aggregate, used at run time: one read-only
+// const.N per #run (read_only_global, of its type and the run itself, whose
+// value constant_bytes reads through constant_data), cached by node_key in
+// constant_globals, as a data constant's is; its index. A baked view's is
+// the view, 16 bytes, its data a relocation to its elements' own read-only
+// const.N.
+static s32 run_global(Lowering *l, Ast_Run *run) { return read_only_global(l, run, run->type, run); }
 
 // __rig_bounds_failed(ptr where, i64 where_length, i64 index, i64 count,
 // i1 index_is_signed): what a failing bounds check calls (emit_bounds_check).
@@ -2615,8 +2698,10 @@ static void set_source(Lowering *l, s32 index, Ast_Proc *source) {
 // relocation, which only a global of bytes has; and so is one holding a
 // procedure's address, a procedure value or a *void. A value that is
 // constant data, or holds some, is copied into the global's bytes:
-// `origin := ORIGIN;` is a variable of its own. The globals its value
-// needs (str.N, array.N) come before it.
+// `origin := ORIGIN;` is a variable of its own, and so is a #run's baked
+// value, its view's elements and its strings' bytes too (constant_bytes,
+// writable). The globals its value needs (str.N, array.N, string.N) come
+// before it.
 static s32 lower_global(Lowering *l, Ast_Var *var) {
     Ir_Global g = {};
     g.name = var->name;
@@ -2628,7 +2713,7 @@ static s32 lower_global(Lowering *l, Ast_Var *var) {
         g.has_layout = true;
         g.size = var->type->size;
         g.align = (u32)var->type->align;
-        if (var->value) global_value(l, &g, var->type, var->value);
+        if (var->value) global_value(l, &g, var->type, var->value, true);
     } else {
         g.type = ir_type_of(var->type);
     }

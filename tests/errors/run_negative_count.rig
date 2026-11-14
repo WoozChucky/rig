@@ -1,0 +1,7 @@
+// A #run whose result is a view or a string with a count below zero fails
+// (spec 7.8): there are no elements to bake.
+view :: () -> []int { v : []int; v.count = -1; return v; }
+text :: () -> string { s : string; s.count = -2; return s; }
+V :: #run view();
+S :: #run text();
+main :: () { }
