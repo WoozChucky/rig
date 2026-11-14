@@ -328,7 +328,9 @@ bool constant_data(Ast *e, Ast **value) {
         Ast *whole;
         if (!s || s->kind != TYPE_STRUCT || m->index < 0 || !constant_data(m->operand, &whole)) return false;
         if (!whole) return true;  // a struct left out: its fields are zero too
-        RIG_ASSERT(whole->kind == AST_LITERAL);
+        // Anything but a literal of this struct is a value of the wrong
+        // type, given a literal's field or element and reported: no data.
+        if (whole->kind != AST_LITERAL || whole->type != s) return false;
         Ast *part = literal_field_value((Ast_Literal *)whole, s, m->index);
         *value = part ? part_value(part) : nullptr;
         return true;
@@ -344,7 +346,8 @@ bool constant_data(Ast *e, Ast **value) {
             return false;
         }
         if (!whole) return true;  // an array left out: its elements are zero too
-        RIG_ASSERT(whole->kind == AST_LITERAL);
+        // As for a field: a value of the wrong type, reported.
+        if (whole->kind != AST_LITERAL || whole->type != array) return false;
         Ast_Literal *literal = (Ast_Literal *)whole;
         // A literal that gives too few elements has been reported; the ones
         // it lacks are taken as zero, as left out.

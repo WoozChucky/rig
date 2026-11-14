@@ -339,7 +339,8 @@
 //   constant's name does, so N :: PRIMES[2]; can size an array, and so do
 //   ORIGIN.y, a string's byte (NAME[1], a u8) and a string's .count (an
 //   int, its literal's count, 0 when a literal leaves it out). An aggregate
-//   part, a pointer or a procedure stays data, read where it's used.
+//   part, a string literal's address or a procedure stays data, read where
+//   it's used.
 // - [N]T converts implicitly to []T, a view of its N elements, wherever a
 //   value converts (a declaration, an assignment, an argument, a return, a
 //   cast); nothing else converts to or from either but its own type. No
@@ -526,7 +527,8 @@ Ast_String *literal_address(Ast *e);
 // literal_address and procedure_address walk on from); or null when a
 // literal leaves the field out (zero), and so for any field or element of
 // such a null part. A string's element is a byte that no node holds: not
-// constant data.
+// constant data; nor is a field or an element of a value a literal gives
+// with the wrong type, reported (Line.{a = 5}.a.x).
 bool constant_data(Ast *e, Ast **value);
 
 // The value struct literal `literal`, of struct type t, gives field `field`,
