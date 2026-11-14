@@ -167,10 +167,11 @@
 //   are such values, nested to any depth (constant_data). Anything else is
 //   "the value of constant 'N' isn't known while compiling", at the first
 //   value inside e that isn't. A pointer, in data or alone, is null or a
-//   string literal's address: one cast from a number or a procedure is "a
-//   constant's pointer can only be null or a string literal's address". No
-//   part of a constant is a view, which would see memory of its own: "a
-//   constant can't hold a view; only a string or an array can be one".
+//   string literal's address: any cast (from a number, a procedure or a
+//   pointer variable) or a procedure is "a constant's pointer can only be
+//   null or a string literal's address". No part of a constant is a view,
+//   which would see memory of its own: "a constant can't hold a view; only
+//   a string or an array can be one".
 // - The condition of if and while is a bool: "the condition of 'if' must
 //   be a bool, not 'int'".
 // - for a..b: the ends are integers meeting as an arithmetic operator's
@@ -491,10 +492,12 @@ Ast_String *literal_address(Ast *e);
 // - a cast of constant data to its own type, or between string and []u8.
 // A field's or element's value node that is itself constant data is
 // followed in turn. So *value is a string or struct or array literal, or a
-// scalar field's value node (a constant, a procedure, or the string literal
-// a *u8 holds); or null when a literal leaves the field out (zero), and so
-// for any field or element of such a null part. A string's element is a
-// byte that no node holds: not constant data.
+// scalar field's or element's value node as the literal wrote it (a
+// constant, a procedure's name, a string literal, or a cast of one, which
+// literal_address and procedure_address walk on from); or null when a
+// literal leaves the field out (zero), and so for any field or element of
+// such a null part. A string's element is a byte that no node holds: not
+// constant data.
 bool constant_data(Ast *e, Ast **value);
 
 // The value struct literal `literal`, of struct type t, gives field `field`,
