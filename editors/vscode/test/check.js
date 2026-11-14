@@ -41,7 +41,14 @@ function readJson(file) {
 // trailing commas, but a file that plain JSON.parse rejects is still a
 // mistake here: none of them uses either.
 check('every JSON file parses', () => {
-    for (const file of ['package.json', 'language-configuration.json', 'snippets/rig.json']) {
+    const files = [
+        'package.json',
+        'language-configuration.json',
+        'snippets/rig.json',
+        'syntaxes/rig.tmLanguage.json',
+        'syntaxes/rig.tmLanguage.template.json',
+    ];
+    for (const file of files) {
         assert.doesNotThrow(() => readJson(file), `${file} isn't valid JSON`);
     }
 });
@@ -470,6 +477,540 @@ check('the snippets are the expected ones, written in Rig\'s syntax', () => {
     assert.deepStrictEqual(Object.keys(byPrefix).sort(), Object.keys(expected).sort());
     for (const prefix of Object.keys(expected)) {
         assert.strictEqual(byPrefix[prefix], expected[prefix], `the snippet ${prefix}`);
+    }
+});
+
+// --- The grammar: what it colours -------------------------------------------
+
+// VS Code colours a .rig file by running syntaxes/rig.tmLanguage.json over it
+// with vscode-textmate, an npm package this file can't have. tokenize() below
+// applies the grammar as vscode-textmate does, as far as this grammar needs:
+//
+// - One line at a time (without its line break), carrying the begin/end
+//   rules still open from one line to the next.
+// - At each position, every pattern of the innermost open rule (its `end`
+//   first, then its `patterns`, includes resolved in place) searches from
+//   there; the leftmost match wins, and of two at the same place, the one
+//   listed first.
+// - A `match` rule gives its text its `name`, then each capture its
+//   `captures` name; a capture with `patterns` is tokenized again with them,
+//   on the line up to the capture's end. A `begin` rule does the same with
+//   `beginCaptures` (or `captures`) and stays open, its `name` on everything,
+//   until its `end` matches (`endCaptures`, or `captures`).
+// - A match rule that matches nothing, or a begin/end rule that ends where
+//   it began, makes vscode-textmate give up on the rest of the line: here
+//   it's an error, so a check fails instead.
+//
+// The regular expressions are JavaScript's RegExp, not Oniguruma, which
+// vscode-textmate uses. They read this grammar's regexes alike, with these
+// differences, which the grammar avoids:
+//
+// - \w and \b are ASCII in JavaScript and Unicode in Oniguruma. Rig's names
+//   are ASCII, so the grammar's names are [A-Za-z_][A-Za-z0-9_]*, and \b
+//   only stands beside one.
+// - $ is the end of the text in JavaScript, and the end of a line in
+//   Oniguruma, before a line break. vscode-textmate adds a "\n" to each line;
+//   tokenize() gives none, so $ is the line's end in both.
+// - Oniguruma's \G, \A, \z, \Z, \h, \H, \R, \X, \K, \p{...} and \x{...}, and
+//   its inline flags (?i) (?m) (?x), mean nothing or something else in
+//   JavaScript, which reads most of them as a plain letter: regExp() refuses
+//   a regex with one of them.
+const ROOT_SCOPE = 'source.rig';
+const TYPE = 'entity.name.type.rig';
+const PRIMITIVE = 'support.type.primitive.rig';
+
+// The keys a rule may have, each one tokenize() handles. A rule using
+// another of TextMate's (while, applyEndPatternLast, injections...) fails
+// the checks until tokenize() learns it.
+const RULE_KEYS = new Set([
+    'comment', 'name', 'contentName', 'match', 'captures',
+    'begin', 'end', 'beginCaptures', 'endCaptures', 'patterns', 'include',
+]);
+
+let theGrammar = null;
+function grammar() {
+    if (!theGrammar) theGrammar = readJson('syntaxes/rig.tmLanguage.json');
+    return theGrammar;
+}
+
+const regExps = new Map();
+function regExp(source) {
+    let re = regExps.get(source);
+    if (re) return re;
+    // An escaped backslash is a backslash, not the start of an escape.
+    const unsupported = /\\[GAzZhHRXKpP]|\\x\{|\(\?[imx]/.exec(source.replace(/\\\\/g, ''));
+    if (unsupported) {
+        throw new Error(`the grammar's regex ${source} uses ${unsupported[0]}, which JavaScript reads otherwise: avoid it`);
+    }
+    re = new RegExp(source, 'dg');   // d: each group's indices, for the captures
+    regExps.set(source, re);
+    return re;
+}
+
+// The rules a list of patterns stands for, in order: an include is the rule
+// it names (#name, the repository's; $self and $base, the grammar's top
+// level), and a rule with only `patterns` stands for those.
+const flattened = new Map();
+function rulesOf(patterns) {
+    if (flattened.has(patterns)) return flattened.get(patterns);
+    const rules = [];
+    const seen = new Set();
+    const add = (rule) => {
+        for (const key of Object.keys(rule)) assert.ok(RULE_KEYS.has(key), `tokenize() doesn't know a rule's "${key}"`);
+        if (rule.include !== undefined) {
+            const g = grammar();
+            let target;
+            if (rule.include === '$self' || rule.include === '$base') target = { patterns: g.patterns };
+            else if (rule.include.startsWith('#')) target = g.repository[rule.include.slice(1)];
+            assert.ok(target, `the grammar includes ${rule.include}, which it doesn't have`);
+            add(target);
+        } else if (rule.match !== undefined || rule.begin !== undefined) {
+            assert.ok(rule.match === undefined || rule.begin === undefined, `a rule has both match and begin: ${rule.match}`);
+            assert.ok(rule.begin === undefined || rule.end !== undefined, `the rule ${rule.begin} has no end`);
+            rules.push(rule);
+        } else {
+            assert.ok(Array.isArray(rule.patterns), `a rule with no match, begin, include or patterns: ${JSON.stringify(rule)}`);
+            // Included twice, it adds nothing: the first one wins.
+            if (seen.has(rule.patterns)) return;
+            seen.add(rule.patterns);
+            for (const p of rule.patterns) add(p);
+        }
+    };
+    for (const p of patterns) add(p);
+    flattened.set(patterns, rules);
+    return rules;
+}
+
+// Gives the characters from..to of a line the scopes `scopes`.
+function fill(out, from, to, scopes) {
+    for (let i = from; i < to; i++) out[i] = scopes;
+}
+
+// A match's captures, as `spec` (a rule's captures, beginCaptures or
+// endCaptures) names them: in the order of their numbers, so a group inside
+// another gets its scope inside the other's.
+function applyCaptures(text, m, spec, out, line) {
+    if (!spec) return;
+    for (let i = 0; i < m.length; i++) {
+        const capture = spec[i];
+        if (!capture || !m.indices[i]) continue;
+        const [start, end] = m.indices[i];
+        if (start === end) continue;
+        if (capture.name) {
+            for (let k = start; k < end; k++) out[k] = [...out[k], capture.name];
+        }
+        if (capture.patterns) {
+            const base = out[start];
+            const stack = [{ rule: null, end: null, rules: rulesOf(capture.patterns), content: base }];
+            scan(text.slice(0, end), start, stack, out, line);
+        }
+    }
+}
+
+// Tokenizes `text` from `pos` with the open rules `stack` (innermost last),
+// which it updates, writing each character's scopes into `out`.
+function scan(text, pos, stack, out, line) {
+    for (let steps = 0; ; steps++) {
+        assert.ok(steps < 100000, `tokenize() is in a loop on ${JSON.stringify(text)}`);
+        const frame = stack[stack.length - 1];
+        let best = null;
+        const consider = (re, rule) => {
+            re.lastIndex = pos;
+            const m = re.exec(text);
+            if (m && (!best || m.index < best.m.index)) best = { m, rule };
+        };
+        if (frame.end) consider(frame.end, null);
+        for (const rule of frame.rules) consider(regExp(rule.match !== undefined ? rule.match : rule.begin), rule);
+        if (!best) {
+            fill(out, pos, text.length, frame.content);
+            return;
+        }
+        const { m, rule } = best;
+        const start = m.index;
+        const end = start + m[0].length;
+        fill(out, pos, start, frame.content);
+        if (!rule) {
+            // The open rule's end.
+            if (end === pos && frame.line === line && frame.at === pos) {
+                throw new Error(`the rule ${frame.rule.begin} ends where it began, column ${pos + 1} of ${JSON.stringify(text)}`);
+            }
+            fill(out, start, end, frame.outer);
+            applyCaptures(text, m, frame.rule.endCaptures || frame.rule.captures, out, line);
+            stack.pop();
+            pos = end;
+            continue;
+        }
+        const outer = rule.name ? [...frame.content, rule.name] : frame.content;
+        fill(out, start, end, outer);
+        if (rule.match !== undefined) {
+            if (end === pos) throw new Error(`the rule ${rule.match} matches nothing, column ${pos + 1} of ${JSON.stringify(text)}`);
+            applyCaptures(text, m, rule.captures, out, line);
+            pos = end;
+            continue;
+        }
+        applyCaptures(text, m, rule.beginCaptures || rule.captures, out, line);
+        if (end === pos && frame.rule === rule) throw new Error(`the rule ${rule.begin} begins again where it began, column ${pos + 1} of ${JSON.stringify(text)}`);
+        stack.push({
+            rule,
+            end: regExp(rule.end),
+            rules: rulesOf(rule.patterns || []),
+            outer,
+            content: rule.contentName ? [...outer, rule.contentName] : outer,
+            // Where the scan that found the begin started, as vscode-textmate
+            // records it: an end there, matching nothing, means the rule
+            // began and ended without taking any text.
+            line,
+            at: pos,
+        });
+        pos = end;
+    }
+}
+
+// Each line of `source` as the scopes of each of its characters, from the
+// file's (source.rig) to the innermost. A byte order mark isn't part of the
+// text, as in VS Code.
+function tokenize(source) {
+    const lines = source.replace(/^﻿/, '').split(/\r?\n/);
+    const stack = [{ rule: null, end: null, rules: rulesOf(grammar().patterns), content: [ROOT_SCOPE] }];
+    return lines.map((text, line) => {
+        const out = new Array(text.length);
+        scan(text, 0, stack, out, line);
+        return { text, scopes: out };
+    });
+}
+
+// The scope of the text at columns from..from+length (0-based) of a
+// tokenized line: the innermost of its scopes, which every character of it
+// must have alike; null when it has none but the file's.
+function scopeAt(tokenized, from, length) {
+    const all = tokenized.scopes.slice(from, from + length).map((s) => s.join(' '));
+    assert.ok(all.every((s) => s === all[0]), `${JSON.stringify(tokenized.text.substr(from, length))} in ${JSON.stringify(tokenized.text)} has several scopes: ${all.join(' | ')}`);
+    const scopes = tokenized.scopes[from];
+    return scopes.length > 1 ? scopes[scopes.length - 1] : null;
+}
+
+// The scope of each occurrence of `word` in `source`, in order: a name or a
+// number as a whole word, anything else as it's written.
+function scopesOf(source, word) {
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(/^\w+$/.test(word) ? `\\b${escaped}\\b` : escaped, 'g');
+    const found = [];
+    for (const tokenized of tokenize(source)) {
+        for (const m of tokenized.text.matchAll(re)) found.push(scopeAt(tokenized, m.index, word.length));
+    }
+    return found;
+}
+
+// Checks the scopes of words in `source`: `expected` gives each word the
+// scope of every occurrence, or a list with each occurrence's, in order
+// (null: none but the file's).
+function assertScopes(source, expected) {
+    for (const [word, scope] of Object.entries(expected)) {
+        const got = scopesOf(source, word);
+        assert.ok(got.length > 0, `${JSON.stringify(word)} isn't in ${JSON.stringify(source)}`);
+        const want = Array.isArray(scope) ? scope : got.map(() => scope);
+        assert.deepStrictEqual(got, want, `the scopes of ${JSON.stringify(word)} in ${JSON.stringify(source)}`);
+    }
+}
+
+check('every regex of the grammar runs in JavaScript as it does in Oniguruma', () => {
+    const sources = [];
+    const visit = (node) => {
+        if (Array.isArray(node)) return node.forEach(visit);
+        if (!node || typeof node !== 'object') return;
+        for (const key of ['match', 'begin', 'end']) if (typeof node[key] === 'string') sources.push(node[key]);
+        Object.values(node).forEach(visit);
+    };
+    visit(grammar());
+    assert.ok(sources.length > 30, `only ${sources.length} regexes`);
+    for (const source of sources) assert.doesNotThrow(() => regExp(source), source);
+    // And every rule, from the top, is one tokenize() knows.
+    assert.doesNotThrow(() => Object.keys(grammar().repository).forEach((name) => rulesOf([{ include: `#${name}` }])));
+});
+
+// The type names, wherever a type is written: after a single ':' (a
+// parameter, a field, a variable), after '->' (every result), in a
+// procedure type's parameters, before a literal, and in cast() and
+// size_of(), through the prefixes * [N] and []. A built-in type stays
+// support.type.primitive.rig.
+check('the grammar colours the types of parameters, results, fields and variables', () => {
+    assertScopes('swap :: (a: Vec2, b: Vec2) -> Vec2, Vec2 {', {
+        Vec2: [TYPE, TYPE, TYPE, TYPE],
+        swap: 'entity.name.function.rig',
+        '::': 'keyword.operator.declaration.rig',
+        a: null,
+        b: null,
+        // The first two are the '::'.
+        ':': ['keyword.operator.declaration.rig', 'keyword.operator.declaration.rig', 'punctuation.separator.colon.rig', 'punctuation.separator.colon.rig'],
+        ',': 'punctuation.separator.comma.rig',
+        '->': 'keyword.operator.arrow.rig',
+    });
+    assertScopes('divmod :: (a: int, b: int) -> int, int {', { int: PRIMITIVE, a: null });
+    assertScopes('bump :: (v: Vec2) -> Vec2 {', { Vec2: TYPE, v: null });
+    assertScopes('Line :: struct { a: Vec2; b: Vec2; }', {
+        Line: TYPE,
+        struct: 'storage.type.rig',
+        Vec2: TYPE,
+        ';': 'punctuation.terminator.statement.rig',
+    });
+    assertScopes('Node :: struct {\n    value: int;\n    next: *Node;\n}', { Node: [TYPE, TYPE], value: null, int: PRIMITIVE, next: null });
+    assertScopes('shared : Vec2;', { shared: null, Vec2: TYPE });
+    assertScopes('x : Vec2 = Vec2.{1, 2};', {
+        x: null,
+        Vec2: [TYPE, TYPE],
+        '=': 'keyword.operator.assignment.rig',
+        1: 'constant.numeric.integer.rig',
+    });
+    assertScopes('p : *int = null;', { int: PRIMITIVE, null: 'constant.language.rig', p: null });
+    assertScopes('x:Vec2;', { Vec2: TYPE });
+    assertScopes('print :: (s: string) {', { string: PRIMITIVE, s: null });
+    assertScopes('printf :: (format: *u8, ..) -> s32 #foreign libc;', {
+        u8: PRIMITIVE,
+        s32: PRIMITIVE,
+        '..': 'keyword.operator.range.rig',
+        '#foreign': 'keyword.other.directive.rig',
+        libc: 'entity.name.namespace.rig',
+    });
+});
+
+check('the grammar colours a type through its prefixes * [N] and [], which keep their scopes', () => {
+    assertScopes('walk :: (p: *Vec2, v: []Vec2, pp: **Node) {', {
+        Vec2: [TYPE, TYPE],
+        Node: TYPE,
+        '*': 'keyword.operator.arithmetic.rig',
+        p: null,
+        v: null,
+        pp: null,
+    });
+    assertScopes('g : [4]Vec2;', { g: null, 4: 'constant.numeric.integer.rig', Vec2: TYPE });
+    // The count is an expression: its names aren't types.
+    assertScopes('m : [N + 1]*Vec2;', { N: null, '+': 'keyword.operator.arithmetic.rig', 1: 'constant.numeric.integer.rig', Vec2: TYPE });
+    assertScopes('q : [SIZES[2]]Vec2;', { SIZES: null, 2: 'constant.numeric.integer.rig', Vec2: TYPE });
+    assertScopes('n : [size_of(Vec2)]u8;', { Vec2: TYPE, u8: PRIMITIVE, size_of: 'entity.name.function.call.rig' });
+    assertScopes('Node :: struct { pairs: [][2]Node; v: int; }', { Node: [TYPE, TYPE], pairs: null, v: null, int: PRIMITIVE });
+    assertScopes('Link :: struct { next: *[2]Link; }', { Link: [TYPE, TYPE], 2: 'constant.numeric.integer.rig' });
+    assertScopes('push :: (list: *Node, value: int) -> *Node {', { Node: [TYPE, TYPE], list: null, value: null });
+    assertScopes('make :: (n: int) -> *Node #foreign libc;', { Node: TYPE, libc: 'entity.name.namespace.rig' });
+    assertScopes('squares :: () -> [4]Vec2 {', { 4: 'constant.numeric.integer.rig', Vec2: TYPE });
+});
+
+check('the grammar colours the types of procedure types', () => {
+    // A procedure type as a parameter's type: after it, n is a parameter.
+    assertScopes('apply :: (f: (Vec2) -> Vec2, n: int) -> Vec2 {', {
+        Vec2: [TYPE, TYPE, TYPE],
+        f: null,
+        n: null,
+        int: PRIMITIVE,
+        '->': ['keyword.operator.arrow.rig', 'keyword.operator.arrow.rig'],
+    });
+    assertScopes('f: (Vec2) -> Vec2, n: int', { Vec2: [TYPE, TYPE], n: null, int: PRIMITIVE });
+    // Its parameters' names aren't types; their types are.
+    assertScopes('process :: (f: (a: Vec2, b: int) -> Vec2, x: int) -> int {', {
+        Vec2: [TYPE, TYPE],
+        a: null,
+        b: null,
+        x: null,
+        int: [PRIMITIVE, PRIMITIVE, PRIMITIVE],
+    });
+    assertScopes('run : (Vec2, int) -> Vec2;', { Vec2: [TYPE, TYPE], int: PRIMITIVE, run: null });
+    assertScopes('Op :: struct { symbol: *u8; run: (int, int) -> int; }', { Op: TYPE, run: null, int: PRIMITIVE });
+    assertScopes('table : [2](Vec2, int) -> int = .[add, sub];', { Vec2: TYPE, add: null, sub: null, 2: 'constant.numeric.integer.rig' });
+    assertScopes('v : [](int, int) -> int = table;', { int: PRIMITIVE, table: null });
+    // Several results in parentheses, and a procedure type as the result.
+    assertScopes('f :: () -> (Vec2, int) {', { Vec2: TYPE, int: PRIMITIVE });
+    assertScopes('g :: () -> (Vec2) -> Vec2 {', { Vec2: [TYPE, TYPE] });
+    assertScopes('compare :: (a: *void, b: *void) -> s32 #c_call {', {
+        void: PRIMITIVE,
+        s32: PRIMITIVE,
+        '#c_call': 'keyword.other.directive.rig',
+    });
+    assertScopes('cb : (*Vec2) -> s32 #c_call;', { Vec2: TYPE, '#c_call': 'keyword.other.directive.rig' });
+});
+
+check('the grammar colours the type of a literal, a cast and size_of', () => {
+    assertScopes('v := Vec2.{1, 2};', { v: null, Vec2: TYPE, '.': 'punctuation.accessor.rig' });
+    assertScopes('ps := Vec2.[.{1, 2}, .{3, 4}];', { Vec2: TYPE, ps: null });
+    assertScopes('n := int.[1, 2];', { int: PRIMITIVE });
+    assertScopes('ops := Op.[.{"add", add}, .{"sub", sub}];', { Op: TYPE, add: ['string.quoted.double.rig', null] });
+    assertScopes('q := cast(*Vec2) p;', { cast: 'keyword.other.cast.rig', Vec2: TYPE, p: null, '*': 'keyword.operator.arithmetic.rig' });
+    assertScopes('h := cast((Vec2, int) -> Vec2) p;', { Vec2: [TYPE, TYPE], int: PRIMITIVE, p: null });
+    assertScopes('putchar(cast(s32) (n % 10) + 48);', { s32: PRIMITIVE, n: null, putchar: 'entity.name.function.call.rig' });
+    assertScopes('b := cast,trunc(u8) big;', {
+        cast: 'keyword.other.cast.rig',
+        ',': 'punctuation.separator.comma.rig',
+        trunc: 'keyword.other.cast-modifier.rig',
+        u8: PRIMITIVE,
+        big: null,
+    });
+    assertScopes('s := cast , trunc (Small) x;', { trunc: 'keyword.other.cast-modifier.rig', Small: TYPE, x: null });
+    assertScopes('if size_of(Vec2) == 8 {', { size_of: 'entity.name.function.call.rig', Vec2: TYPE, 8: 'constant.numeric.integer.rig' });
+    assertScopes('n := size_of(*Vec2) + size_of([4]Vec2);', { Vec2: [TYPE, TYPE], 4: 'constant.numeric.integer.rig' });
+});
+
+check('the grammar colours no type where none is written', () => {
+    // A for loop's named iterator: what follows its ':' is an expression.
+    assertScopes('for n: numbers { total += n; }', { for: 'keyword.control.rig', n: null, numbers: null, ':': 'punctuation.separator.colon.rig' });
+    assertScopes('for i: 1..10 {', { i: null, 1: 'constant.numeric.integer.rig', '..': 'keyword.operator.range.rig' });
+    assertScopes('for i: 1..a.count - 1 {', { a: null, count: null });
+    assertScopes('for * p: items { p.* = 0; }', { '*': ['keyword.operator.arithmetic.rig', 'keyword.operator.dereference.rig'], p: null, items: null });
+    assertScopes('for*cell:row.* { cell.* = it_index; }', { cell: null, row: null, it_index: 'variable.language.rig' });
+    assertScopes('for pt: poly.points { sum += pt.x; }', { pt: null, poly: null, points: null, x: null });
+    assertScopes('for b: "xyz" { putchar(b); }', { b: null, xyz: 'string.quoted.double.rig' });
+    // Names in expressions, declarations without a type, constants, fields,
+    // calls.
+    assertScopes('x := y + z;', { x: null, y: null, z: null, ':=': 'keyword.operator.declaration.rig' });
+    assertScopes('q, r := divmod(17, 5);', { q: null, r: null, divmod: 'entity.name.function.call.rig' });
+    assertScopes('N :: 5;', { N: 'variable.other.constant.rig' });
+    assertScopes('total := v.x + v.y;', { v: null, x: null, y: null });
+    assertScopes('show(shared);', { show: 'entity.name.function.call.rig', shared: null });
+    assertScopes('x : int = y;', { y: null });
+    assertScopes('v = .{v.y, v.x};', { v: null, y: null });
+    assertScopes('a : Vec2; b := a;', { a: [null, null], b: null, Vec2: TYPE });
+    assertScopes('return b, a;', { return: 'keyword.control.rig', a: null, b: null });
+    // A type ends with its line: an unfinished one takes nothing after it.
+    assertScopes('x :\ny := 5;', { y: null });
+    // A ':' in a comment or a string is the comment's or the string's.
+    assertScopes('// note: Vec2 here', { Vec2: 'comment.line.double-slash.rig' });
+    assertScopes('/* a: Vec2\n   b: Vec2 */ c: Vec2;', { Vec2: ['comment.block.rig', 'comment.block.rig', TYPE] });
+    assertScopes('puts("a: Vec2");', { Vec2: 'string.quoted.double.rig' });
+});
+
+// The rules that were there before types were coloured, on lines of
+// tests/run.
+check('the grammar\'s other rules still colour as they did', () => {
+    assertScopes('putchar :: (c: s32) -> s32 #foreign libc;', {
+        putchar: 'entity.name.function.rig',
+        '#foreign': 'keyword.other.directive.rig',
+        libc: 'entity.name.namespace.rig',
+    });
+    assertScopes('Vec2 :: struct { x: int; y: int; }', { Vec2: TYPE, struct: 'storage.type.rig', x: null });
+    assertScopes('MAX :: 10;', { MAX: 'variable.other.constant.rig', 10: 'constant.numeric.integer.rig' });
+    assertScopes('printf("%d %d\\n", f == add, f == sub);', {
+        printf: 'entity.name.function.call.rig',
+        '\\n': 'constant.character.escape.rig',
+        '"': ['punctuation.definition.string.begin.rig', 'punctuation.definition.string.end.rig'],
+        '==': 'keyword.operator.comparison.rig',
+    });
+    assertScopes('s := "bad \\q";', { '\\q': 'invalid.illegal.unknown-escape.rig' });
+    assertScopes('s := "open', { open: 'invalid.illegal.unterminated-string.rig' });
+    assertScopes('// Itself: a copy whose two sides are the same bytes.', { Itself: 'comment.line.double-slash.rig', copy: 'comment.line.double-slash.rig' });
+    assertScopes('/* a /* b */ c */ d', { c: 'comment.block.rig', d: null });
+    assertScopes('x = p.*;', { '.': 'punctuation.accessor.rig', '*': 'keyword.operator.dereference.rig' });
+    assertScopes('p.*=5;', { '*': 'keyword.operator.dereference.rig', '=': 'keyword.operator.assignment.rig' });
+    assertScopes('if cast,trunc(u8) big == 44 { puts("trunc keeps the low bits"); }', {
+        if: 'keyword.control.rig',
+        trunc: ['keyword.other.cast-modifier.rig', 'string.quoted.double.rig'],
+        44: 'constant.numeric.integer.rig',
+    });
+    assertScopes('x := cast,trunc', { cast: 'keyword.other.cast.rig', trunc: 'keyword.other.cast-modifier.rig' });
+    assertScopes('n := 0x1F + 0b101 + 1.5 + 1e3;', {
+        '0x1F': 'constant.numeric.hex.rig',
+        '0b101': 'constant.numeric.binary.rig',
+        '1.5': 'constant.numeric.float.rig',
+        '1e3': 'constant.numeric.float.rig',
+    });
+    assertScopes('n := 12ab;', { '12ab': 'invalid.illegal.number.rig' });
+    assertScopes('x : int = ---;', { '---': 'constant.language.uninitialized.rig' });
+    assertScopes('a <<= 2;', { '<<=': 'keyword.operator.assignment.compound.rig' });
+    assertScopes('for 0..9 { total += it; }', { it: 'variable.language.rig', '+=': 'keyword.operator.assignment.compound.rig' });
+    assertScopes('x := a @ b;', { '@': 'invalid.illegal.character.rig' });
+    assertScopes('#load "load/shapes.rig";', { '#load': 'keyword.other.directive.rig' });
+    assertScopes('defer free(p);', { defer: 'keyword.control.rig', free: 'entity.name.function.call.rig' });
+});
+
+// Every program of tests/run, through the grammar: no line breaks it, the
+// parameters, fields and results written `name: Type` of every procedure and
+// struct get their type coloured, and nothing is coloured as a type but the
+// names its structs are declared with.
+check('the grammar colours the types in every program of tests/run', () => {
+    const files = [];
+    const walk = (dir) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const file = path.join(dir, entry.name);
+            if (entry.isDirectory()) walk(file);
+            else if (entry.name.endsWith('.rig')) files.push(file);
+        }
+    };
+    walk(path.join(root, 'tests', 'run'));
+    assert.ok(files.length > 50, `only ${files.length} programs`);
+
+    const sources = new Map(files.map((f) => [f, fs.readFileSync(f, 'utf8')]));
+    const structs = new Set();
+    for (const source of sources.values()) {
+        for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*struct\b/g)) structs.add(m[1]);
+    }
+    assert.ok(structs.has('Vec2') && structs.has('Node'));
+
+    const typeScopes = new Set([TYPE, PRIMITIVE]);
+    const checked = {};   // file -> procedure -> the parameters and results checked
+    for (const [file, source] of sources) {
+        const name = path.relative(path.join(root, 'tests', 'run'), file).replace(/\\/g, '/');
+        let lines;
+        assert.doesNotThrow(() => (lines = tokenize(source)), name);
+        lines.forEach((tokenized, n) => {
+            const where = `${name}:${n + 1}: ${tokenized.text}`;
+            const text = tokenized.text;
+            // Each name coloured as a type is a struct's.
+            // (A word in a string may be split by an escape: \there.)
+            for (const m of text.matchAll(/\b[A-Za-z_]\w*\b/g)) {
+                const scopes = tokenized.scopes[m.index];
+                if (scopes[scopes.length - 1] !== TYPE) continue;
+                assert.strictEqual(scopeAt(tokenized, m.index, m[0].length), TYPE, where);
+                assert.ok(structs.has(m[0]), `${where}: ${m[0]} is coloured as a type`);
+            }
+            const procedure = /^\s*([A-Za-z_]\w*)\s*::\s*\(/.exec(text);
+            const count = (what) => {
+                if (!procedure) return;
+                const byProcedure = (checked[name] = checked[name] || {});
+                byProcedure[procedure[1]] = (byProcedure[procedure[1]] || 0) + what;
+            };
+            // name: Type, with prefixes, outside comments and strings.
+            for (const m of text.matchAll(/\b([A-Za-z_]\w*)\s*(:)(?![:=])\s*((?:\*\s*|\[[^\][]*\]\s*)*)([A-Za-z_]\w*)/g)) {
+                const colon = m.index + m[0].indexOf(':', m[1].length);
+                if (scopeAt(tokenized, colon, 1) !== 'punctuation.separator.colon.rig') continue;
+                const type = m.index + m[0].length - m[4].length;
+                if (/\bfor\s*(?:\*\s*)?$/.test(text.slice(0, m.index))) {
+                    // A for loop's iterator, and its sequence or range.
+                    assert.strictEqual(scopeAt(tokenized, type, m[4].length) === TYPE, false, `${where}: ${m[4]} is coloured as a type`);
+                    continue;
+                }
+                assert.strictEqual(scopeAt(tokenized, m.index, m[1].length), null, `${where}: the name ${m[1]}`);
+                assert.ok(typeScopes.has(scopeAt(tokenized, type, m[4].length)), `${where}: the type ${m[4]}`);
+                count(1);
+            }
+            // -> Type, Type {: each result, of a procedure whose parameters
+            // and results hold no procedure type.
+            const results = /^\s*[A-Za-z_]\w*\s*::\s*\([^()]*\)\s*->\s*\(?([^{;#()]*)/d.exec(text);
+            if (results) {
+                let at = results.indices[1][0];
+                for (const part of results[1].split(',')) {
+                    const t = /([A-Za-z_]\w*)\s*$/.exec(part);
+                    assert.ok(t, `${where}: a result`);
+                    assert.ok(typeScopes.has(scopeAt(tokenized, at + t.index, t[1].length)), `${where}: the result ${t[1]}`);
+                    at += part.length + 1;
+                    count(1);
+                }
+            }
+        });
+    }
+    // The specification's examples, which the website colours with this
+    // grammar too: none breaks it.
+    const spec = fs.readFileSync(path.join(root, 'docs', 'rig-spec.md'), 'utf8');
+    const examples = [...spec.matchAll(/^```rig[^\n]*\n([\s\S]*?)^```/gm)].map((m) => m[1]);
+    assert.ok(examples.length > 20, `only ${examples.length} examples in docs/rig-spec.md`);
+    examples.forEach((example, i) => assert.doesNotThrow(() => tokenize(example), `docs/rig-spec.md's example ${i + 1}`));
+
+    // Some known procedures, every parameter and result of them checked.
+    const known = {
+        'struct_copies.rig': { show: 1, bump: 2, swap: 4, f: 2 },
+        'acceptance_2b.rig': { push: 3, malloc: 2 },
+        'constant_data.rig': { length: 2, sum: 2 },
+        'procedure_values.rig': { add: 3 },
+    };
+    for (const [file, procedures] of Object.entries(known)) {
+        for (const [procedure, n] of Object.entries(procedures)) {
+            assert.strictEqual((checked[file] || {})[procedure], n, `${file}: ${procedure}'s parameters and results`);
+        }
     }
 });
 
