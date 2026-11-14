@@ -68,6 +68,14 @@ void check_late_field(Checker *c, Type *t, s32 index);
 // worked out yet (nested too deeply: reported).
 bool check_layout(Checker *c, Type *t);
 
+// check_layout, for the code a #run reaches (check_run.cpp's walk), which
+// needs every struct whole: one whose layout is still under way, a #run in
+// one of its counts reaching code that holds it, is a circle, "'S' is
+// defined in terms of itself", at the struct, once (one in a circle already
+// says nothing more), and it and everything needed since are marked, as
+// resolve_struct marks them: false.
+bool check_finished_layout(Checker *c, Type *t);
+
 // Makes sure procedure proc's signature is checked, its parameters' and
 // results' types known, before a call is checked against it: a call in a
 // global's value may come before its turn in source order (checker.cpp's

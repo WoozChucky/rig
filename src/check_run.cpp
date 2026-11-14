@@ -279,15 +279,16 @@ static bool walk_node(Reach *r, Ast *node) {
 // come in the declaration pass, before resolve_late_fields has made a late
 // field's type, and lowering and baking need them all. A pointer's target
 // isn't looked behind: lowering needs no more than its address. False when
-// a struct has no layout (a circle, too big, too deep) or a field no type:
-// errors, said.
+// a struct has no layout (a circle, too big, too deep), or is still being
+// laid out (a circle through this #run, check_finished_layout), or a field
+// has no type: errors, said.
 static bool walk_type(Reach *r, Type *t) {
     if (t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW) {
         reach_type(r, t->element);
         return true;
     }
     if (t->kind != TYPE_STRUCT) return true;
-    if (!check_layout(r->c, t)) return false;
+    if (!check_finished_layout(r->c, t)) return false;
     for (s64 i = 0; i < t->fields.count; i++) {
         check_late_field(r->c, t, (s32)i);
         if (!t->fields[i].type) return false;
@@ -325,8 +326,8 @@ static bool reach_run(Checker *c, Ast_Run *run, Type *t) {
 }
 
 // In order:
-// 1. Once: a #run is checked where it's met, and a value that is looked at
-//    again (a constant's, by each of its uses) finds it done.
+// 1. Once: a #run is checked where it's met, and never again, so neither
+//    the walk of what it reaches nor its messages ever happen twice.
 // 2. Its operand is a value, a call's first result (check_value: a call
 //    that returns nothing has none), its type the #run's; an untyped one
 //    gets its default type (check_default_type), so `C :: #run 7;` is a

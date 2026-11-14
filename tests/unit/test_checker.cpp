@@ -5432,7 +5432,8 @@ TEST(run_in_a_body_must_be_a_value) {
 TEST(run_cant_use_locals) {
     // Code run while compiling runs before any call of the procedure it's
     // in: its locals, its parameters and its loops' iterators don't exist
-    // yet. A local constant is known while compiling, and is fine.
+    // yet. A local constant is known while compiling, and is fine. A local
+    // inside a #run inside the operand is said once, by the inner #run.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "f :: (n: int) -> int { return n; }\n"
@@ -5442,13 +5443,17 @@ TEST(run_cant_use_locals) {
                            "    a := #run f(x);\n"
                            "    b := #run f(n + L);\n"
                            "    for 0..1 { c := #run f(it); d := #run f(it_index); }\n"
+                           "    e := #run f(#run f(x));\n"
+                           "    h := #run f(cast(int) x);\n"
                            "    return 0;\n"
                            "}\n"
                            "main :: () { }\n"),
               "5:17: #run can't use 'x': it's a local, which doesn't exist while compiling\n"
               "6:17: #run can't use 'n': it's a parameter, which doesn't exist while compiling\n"
               "7:28: #run can't use 'it': it's the loop's iterator, which doesn't exist while compiling\n"
-              "7:45: #run can't use 'it_index': it's the loop's index, which doesn't exist while compiling\n");
+              "7:45: #run can't use 'it_index': it's the loop's index, which doesn't exist while compiling\n"
+              "8:24: #run can't use 'x': it's a local, which doesn't exist while compiling\n"
+              "9:27: #run can't use 'x': it's a local, which doesn't exist while compiling\n");
     arena_free(&a);
 }
 
@@ -5494,6 +5499,42 @@ TEST(run_body_circles) {
     CHECK_STR(sorted_messages(&a, &c), "1:1: 'N' is defined in terms of itself\n");
     CHECK(global_named(&c, "N")->type == nullptr);
     token_list_free(c.list);
+    // A circle through a global, closed at a body under way: the global is
+    // in it, and loses its type, so use, which needs it, says nothing more.
+    c = check_src(&a,
+                  "N :: #run h();\n"
+                  "h :: () -> int { x := #run f(); return x; }\n"
+                  "f :: () -> int { return gv; }\n"
+                  "gv : int = #run h();\n"
+                  "use : int = gv;\n"
+                  "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "4:12: 'h' is defined in terms of itself\n");
+    CHECK(global_named(&c, "gv")->type == nullptr);
+    token_list_free(c.list);
+    // A body found in a circle already says nothing more: one message,
+    // however many #runs of it the body holds.
+    CHECK_STR(check_source(&a,
+                           "f :: () -> int {\n"
+                           "    a := #run f();\n"
+                           "    b := #run f();\n"
+                           "    return a + b;\n"
+                           "}\n"
+                           "main :: () { }\n"),
+              "2:10: 'f' is defined in terms of itself\n");
+    // A struct whose layout is under way, reached through the code of a #run
+    // in one of its counts: its size would depend on itself, as through
+    // a body that holds one (x : S), though f's body only holds a pointer
+    // and dereferences it.
+    CHECK_STR(check_source(&a,
+                           "S :: struct { a: int; b: [#run f()]int; }\n"
+                           "f :: () -> int { p : *S = null; x := p.*; return 1; }\n"
+                           "main :: () { }\n"),
+              "1:1: 'S' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a,
+                           "S :: struct { a: int; b: [#run f()]int; }\n"
+                           "f :: () -> int { x : S; return 1; }\n"
+                           "main :: () { }\n"),
+              "1:1: 'S' is defined in terms of itself\n");
     arena_free(&a);
 }
 
@@ -5513,15 +5554,39 @@ TEST(run_stops_at_errors_it_reaches) {
                           "a :: () -> int { return oops; }\n"
                           "b :: () -> int { return #run a(); }\n"
                           "c :: () { y := #run b(); }\n"
+                          "bad :: (p: no_such) -> int { return 1; }\n"
+                          "K :: also_unknown;\n"
                           "main :: () { }\n");
     CHECK_STR(sorted_messages(&a, &c),
               "1:25: unknown identifier 'unknown'\n"
               "4:11: a value of type 'string' doesn't convert to 'int' implicitly\n"
-              "7:25: unknown identifier 'oops'\n");
+              "7:25: unknown identifier 'oops'\n"
+              "10:12: unknown type 'no_such'\n"
+              "11:6: unknown identifier 'also_unknown'\n");
     CHECK(global_named(&c, "N")->type == nullptr);
     CHECK(global_named(&c, "grid")->type == nullptr);
     CHECK(global_named(&c, "M")->type == nullptr);
+    // Each global, constant and procedure keeps whether its own check had
+    // errors, a signature's included, whatever its body's check found.
+    CHECK(((Ast_Var *)global_named(&c, "g"))->had_errors);
+    CHECK(((Ast_Const *)global_named(&c, "K"))->had_errors);
+    CHECK(c.file->procs[0]->had_errors);   // f
+    CHECK(!c.file->procs[1]->had_errors);  // uses_g
+    CHECK(c.file->procs[5]->had_errors);   // bad
     token_list_free(c.list);
+    // A #run with no value says nothing more wherever it's needed: inside
+    // an operator, a cast or a literal, in a constant, a global's value or
+    // an array's count.
+    CHECK_STR(check_source(&a,
+                           "f :: () -> int { return unknown; }\n"
+                           "N :: #run f() + 1;\n"
+                           "P :: -#run f();\n"
+                           "g := #run f();\n"
+                           "grid : [#run f()]int;\n"
+                           "Q :: cast(u8) #run f();\n"
+                           "R :: int.[#run f()];\n"
+                           "main :: () { }\n"),
+              "1:25: unknown identifier 'unknown'\n");
     arena_free(&a);
 }
 
@@ -5552,6 +5617,38 @@ TEST(bodies_are_checked_once_on_demand) {
         CHECK(!c.file->procs[i]->had_errors);
     }
     token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(bodies_checked_on_demand_have_their_own_scopes_and_loops) {
+    // A body a #run reaches, and a declaration worked out where it's needed,
+    // see none of the names in scope where the #run is, nor its loops: f's x
+    // is unknown in g's body, in M's value and in S's count, and g's break
+    // is in no loop.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: () -> int { x := 1; return #run g(); }\n"
+                           "g :: () -> int { return x; }\n"
+                           "main :: () { }\n"),
+              "2:25: unknown identifier 'x'\n");
+    CHECK_STR(check_source(&a,
+                           "N :: #run f();\n"
+                           "f :: () -> int { x := 2; return M + x; }\n"
+                           "M :: x;\n"
+                           "main :: () { }\n"),
+              "3:6: unknown identifier 'x'\n");
+    CHECK_STR(check_source(&a,
+                           "N :: #run f();\n"
+                           "f :: () -> int { x := 2; y : [K]int; return x; }\n"
+                           "S :: struct { a: [x]int; }\n"
+                           "K :: size_of(S);\n"
+                           "main :: () { }\n"),
+              "3:19: unknown identifier 'x'\n");
+    CHECK_STR(check_source(&a,
+                           "f :: () -> int { for 0..1 { a := #run g(); } return 0; }\n"
+                           "g :: () -> int { break; return 1; }\n"
+                           "main :: () { }\n"),
+              "2:18: 'break' is only allowed inside a loop\n");
     arena_free(&a);
 }
 
@@ -5587,17 +5684,46 @@ TEST(top_level_runs_are_checked) {
 
 TEST(run_bodies_needed_inside_others_nest_at_most_max_depth) {
     // A body a #run reaches is checked inside the body that holds the
-    // #run, a level below it (spec 6.1): f1, needed by f0's body in its
-    // turn, is at 0, and f1001 at 1000. f1002 is one too many: said once,
-    // at its name, and checked later in its own turn. The #runs that needed
-    // it say nothing more.
+    // #run, a level below that one's deepest (spec 9.4), and its own levels
+    // count from there, as a global's do: each f here is 3 levels (its
+    // block, the #run and the call), so f1, needed by f0's body in its
+    // turn, is at 0, f2 at 4, and f250 at 996, where the last body's 1 (its
+    // block) fits. f251 is one too many: said once, at its name, and checked
+    // later in its own turn, where f252 is at 0. The #runs that needed it
+    // say nothing more.
     Arena a = arena_make();
     const char *runs = "f%lld :: () -> int { return #run f%lld(); }\n";
-    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, runs, 0, 1000, 1),
-                                      "f1001 :: () -> int { return 0; }\n")),
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, runs, 0, 249, 1),
+                                      "f250 :: () -> int { return 0; }\n")),
               "");
-    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, runs, 0, 1098, 1),
-                                      "f1099 :: () -> int { return 0; }\n")),
-              needed_too_deeply(&a, 1004, "f1002"));
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, runs, 0, 300, 1),
+                                      "f301 :: () -> int { return 0; }\n")),
+              needed_too_deeply(&a, 253, "f251"));
+    arena_free(&a);
+}
+
+TEST(run_bodies_count_their_own_levels) {
+    // A body's levels are its blocks and the expressions in them together
+    // (Ast_Proc.body_levels). Each body here is 303: its block and a #run
+    // of a call, 300 '+' deep, or 301 blocks and a #run of a call. f1,
+    // needed by f0 in its turn, is at 0, f2 at 304 and f3 at 608; f4 would
+    // reach 1215, so it is one too many, checked in its own turn, where f5
+    // is at 0 again, and so on. Counted as one level each, 60 such bodies
+    // overflowed the stack, nowhere near the limit.
+    Arena a = arena_make();
+    const char *expected = "";
+    for (s64 i = 4; i < 60; i += 4) {
+        const char *name = string_cstr(&a, string_printf(&a, "f%lld", (long long)i));
+        expected = joined(&a, expected, needed_too_deeply(&a, i + 2, name));
+    }
+    const char *sums = nested_source(&a, "f%lld :: () -> int { return #run f%lld()", " + 1", 300, "", "", "; }\n");
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, sums, 0, 59, 1),
+                                      "f60 :: () -> int { return 0; }\n")),
+              expected);
+    const char *blocks =
+        nested_source(&a, "f%lld :: () -> int {", " {", 300, " x := #run f%lld();", " }", " return 0; }\n");
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, blocks, 0, 59, 1),
+                                      "f60 :: () -> int { return 0; }\n")),
+              expected);
     arena_free(&a);
 }
