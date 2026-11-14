@@ -127,13 +127,29 @@ main :: () {
     print_byte(10);
     builder_free(*b);
 
-    // An append that fills the capacity exactly doesn't grow it; one byte
-    // more does.
+    // builder_init makes a builder that held something empty. It doesn't
+    // give back the memory, so this one is set as if it held 5 of hundred's
+    // 100 bytes, which aren't the heap's to have back.
+    h : String_Builder;
+    h.data = hundred.data;
+    h.count = 5;
+    h.capacity = 100;
+    builder_init(*h, HEAP_ALLOCATOR);
+    print_string("init again: ");
+    show_sizes(h);
+    print_byte(32);
+    print_bool(h.data == null);
+    print_byte(10);
+
+    // A builder isn't grown by an append that fills the room it has left
+    // exactly, only by one byte more: 32 bytes take 64, and 32 more fill
+    // them.
     d : String_Builder;
     builder_init(*d, HEAP_ALLOCATOR);
-    sixty_four := hundred_view;
-    sixty_four.count = 64;
-    append_string(*d, cast(string) sixty_four);
+    thirty_two := hundred_view;
+    thirty_two.count = 32;
+    append_string(*d, cast(string) thirty_two);
+    append_string(*d, cast(string) thirty_two);
     print_string("exact fit: ");
     show_sizes(d);
     append_byte(*d, "z"[0]);
@@ -188,22 +204,22 @@ main :: () {
     append_float(*g, 2.5, 3);
     append_string(*g, cast(string) forty);
 
-    // The builder's own text appended to itself grows it to 256, and the
-    // counting allocator's resize moves the bytes: they are read where they
-    // moved to, not where they were.
-    own : string;
-    own.data = g.data;
-    own.count = g.count;
-    append_string(*g, own);
+    // A view of the builder's own text, its last 50 bytes from the number
+    // on, appended to it grows it to 256, and the counting allocator's
+    // resize moves the bytes: they are read where they moved to, as far
+    // into the text as they were, not where they were.
     text : string;
+    text.data = g.data;
+    text.count = g.count;
+    append_string(*g, slice(text, 40, 50));
     text.data = g.data;
     text.count = g.count;
     print_string("own text appended: ");
     show_sizes(g);
     print_byte(32);
-    print_bool(slice(text, 0, 90) == slice(text, 90, 90));
+    print_bool(slice(text, 90, 50) == slice(text, 40, 50));
     print_byte(32);
-    print_line(slice(text, 130, 10));
+    print_line(slice(text, 90, 10));
 
     // A reset keeps the memory, so text that fits takes none; builder_free
     // gives it back, with one free.
@@ -222,9 +238,34 @@ main :: () {
     print_int(own_counter.frees);
     print_byte(10);
 
-    // Numbers at their longest and in other bases.
+    // Numbers at their longest, which fill append_int's and append_float's
+    // buffers: int's most negative value in base 2, INT_TEXT_MAX bytes, and
+    // float64's most negative finite value with 9 decimals, FLOAT_TEXT_MAX
+    // bytes. Each is what format_int or format_float writes.
     f : String_Builder;
     builder_init(*f, HEAP_ALLOCATOR);
+    int_buffer : [INT_TEXT_MAX]u8;
+    float_buffer : [FLOAT_TEXT_MAX]u8;
+    longest : string;
+    append_int(*f, INT_SMALLEST, 2);
+    longest.data = f.data;
+    longest.count = f.count;
+    print_string("longest: ");
+    print_int(f.count);
+    print_byte(32);
+    print_bool(longest == format_int(int_buffer, INT_SMALLEST, 2));
+    builder_reset(*f);
+    append_float(*f, -1.7976931348623157e308, 9);
+    longest.data = f.data;
+    longest.count = f.count;
+    print_byte(32);
+    print_int(f.count);
+    print_byte(32);
+    print_bool(longest == format_float(float_buffer, -1.7976931348623157e308, 9));
+    print_byte(10);
+
+    // Numbers in other bases.
+    builder_reset(*f);
     append_int(*f, INT_SMALLEST, 10);
     append_byte(*f, 32);
     append_int(*f, 35, 36);
