@@ -38,10 +38,19 @@ TABLE_REMOVED :: 2;
 
 // The 64-bit FNV-1a hash of count bytes from data. From the offset basis,
 // each byte is mixed in with an exclusive or and spread over the hash's
-// bits with a multiply by the FNV prime, which wraps. It is short, needs no
-// tables, and keys that differ in one byte, such as "key1" and "key2", get
-// different low bits, so their probes start at different entries. A count
-// of 0 or less hashes no bytes, and gives the offset basis.
+// bits with a multiply by the FNV prime, which wraps. It is short and needs
+// no tables.
+//
+// An exclusive or keeps each bit in place and a multiply carries bits only
+// upward, so the hash's lowest k bits come from the lowest k bits of each
+// byte alone. Two keys of the same length that differ in one byte, below
+// its bit k, get different low k bits: "key1" and "key2" start their probes
+// at different entries. Keys that differ only higher up in a byte don't:
+// "a" and "A", which differ in bit 5, start at the same entry of 16 or 32,
+// as the ints 0 and 16 do of 16, and the probe steps past. A table of 256
+// entries or more picks with every bit of each byte.
+//
+// A count of 0 or less hashes no bytes, and gives the offset basis.
 hash_bytes :: (data: *u8, count: int) -> u64 {
     hash : u64 = 14695981039346656037; // the offset basis, 0xcbf29ce484222325
     if count <= 0 { return hash; }
