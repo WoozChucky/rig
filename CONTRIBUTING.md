@@ -38,14 +38,14 @@ bin/rig version
 
 ```text
 rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]
-rig check FILE.rig [--stdin]
+rig check FILE.rig [--stdin | --stdin-for FILE.rig]
 rig version [--verbose]
 ```
 
 Section 10.1 of [the specification](docs/rig-spec.md#101-the-rig-command) is the whole command line. In short:
 
 - `bin/rig build hello.rig` (`bin\rig build hello.rig` in Windows' command prompt) writes `hello.exe` on Windows and `hello` on Linux, in the current directory. `-o OUTPUT` names it otherwise; on Windows a name with no extension gets `.exe`. `--no-bounds-checks` leaves out the checks of array, view and string indexes (`#no_abc` after a procedure's results does so for that procedure). The object file goes into a `.build` directory, made in the current directory.
-- `bin/rig check hello.rig` stops at the errors: it reads and checks the program as `build` does and prints the same diagnostics, but writes nothing. With `--stdin` it checks the text on its standard input under that file name, which is how an editor checks what you are typing before it is saved; the text's `#load`s are found from that file's directory.
+- `bin/rig check hello.rig` stops at the errors: it reads and checks the program as `build` does and prints the same diagnostics, but writes nothing. With `--stdin` it checks the text on its standard input under that file name, which is how an editor checks what you are typing before it is saved; the text's `#load`s are found from that file's directory. With `--stdin-for LOADED.rig` it checks `hello.rig`'s program from disk, but for `LOADED.rig`, a file the program loads, whose text it takes from its standard input: that's how an editor checks a loaded file as part of its program, which has the `main` and the names the file uses (a program that never loads it is `rig: error: 'hello.rig' doesn't load 'LOADED.rig'`).
 - Both commands take only a source file whose name ends in `.rig`.
 
 ### Debugging a Rig program
