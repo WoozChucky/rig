@@ -27,7 +27,7 @@
 # Linking hello world needs glibc's development files (libc6-dev).
 
 set -eu
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 script="$(pwd)/site/public/install.sh"
 [ -f "$script" ] || { echo "test_install.sh: $script is missing" >&2; exit 1; }
 
@@ -104,6 +104,7 @@ fresh_home
 lines=$(wc -l < "$script")
 size=$(wc -c < "$script")
 last_line=$(tail -n 1 "$script")
+# shellcheck disable=SC2016 # the text of the line, not an expansion
 [ "$last_line" = 'main "$@"' ] || fail "install.sh's last line is '$last_line', not the call of main"
 before_last=$((size - ${#last_line} - 1))
 cuts=0
