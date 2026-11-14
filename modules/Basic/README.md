@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, allocators (the heap, an arena and a pool), a string builder, a growable array, and printing to standard output; a later part adds hash tables (issue #134).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, and printing to standard output (issue #134).
 
 ## Loading it
 
@@ -134,6 +134,32 @@ Elements of one size, one after another in memory from the allocator the array i
 - `array_reset(array: *Array)`: empties the array, keeping its memory.
 - `array_free(array: *Array)`: gives the memory back; the array is empty, with no memory, and keeps its element size and allocator.
 
+## Hash tables (`table.rig`)
+
+Values found by their key, a string (`Table`) or an int (`Int_Table`). Like the array, a table is untyped: it knows only its value's size, copies values in by that many bytes, and hands out a value's address as a `*void` for the caller to cast, valid until the table next grows. A string key is copied into memory from the table's allocator when it is set, and given back when it is removed.
+
+The entries are one run of memory, a power of two of them, each a header (the key's 64-bit FNV-1a hash, the entry's state and the key) and then the value, at a multiple of 8, so every value is aligned to 8. Keys are found by open addressing with linear probing; a removed key's entry is marked removed, so keys further along its chain are still found, and a new key takes the first removed entry its probe passed. Before a set, when one more key would leave more than three quarters of the entries used or removed, the table is rehashed: into 16 entries the first time, twice as many when the keys would fill more than half, and otherwise as many, which only clears the removed entries. A table with no entries, before its first set or after it is freed, is found in without touching any. An allocator that has no memory to give stops the program at the next write, with the language's `null pointer dereference`.
+
+- `hash_bytes(data: *u8, count: int) -> u64`: the 64-bit FNV-1a hash of `count` bytes; the offset basis, 14695981039346656037, for 0 or less.
+- `hash_string(s: string) -> u64`: the hash of the bytes of `s`.
+- `hash_int(key: int) -> u64`: the hash of the 8 bytes of `key`, in the order memory holds them.
+- `TABLE_EMPTY`, `TABLE_USED`, `TABLE_REMOVED`: an entry's state, 0 to 2.
+- `Table_Entry_Header`: `hash: u64` and `state: int`, what both kinds of entry start with.
+- `Table_Entry`: a string-keyed entry's header, `hash: u64`, `state: int` and `key: string` (the table's copy).
+- `Int_Table_Entry`: an int-keyed entry's header, `hash: u64`, `state: int` and `key: int`.
+- `TABLE_VALUE_OFFSET`, `INT_TABLE_VALUE_OFFSET`: where the value starts in each kind's entry, 32 and 24.
+- `Table`, `Int_Table`: `value_size: int`, `entry_size: int`, `count: int` (the keys held), `removed: int` (the entries marked removed), `capacity: int` (the entries), `entries: *u8` and `allocator: Allocator`.
+- `table_entry_size(value_offset: int, value_size: int) -> int`: an entry's bytes, the value's size rounded up to 8 after its offset.
+- `table_probe(entries: *u8, capacity: int, entry_size: int, hash: u64, key: *void, same_key: (entry: *u8, key: *void) -> bool) -> int, int`: the probe both kinds share; the index of the key's entry or -1, and where the key would go, or -1 with no entries.
+- `table_make_room(entries: *u8, capacity: int, count: int, removed: int, entry_size: int, allocator: Allocator) -> *u8, int, int`: the growing both kinds share; the entries, capacity and removed count, rehashed when one more key needs it. The old entries are the caller's to give back.
+- `table_same_key(entry: *u8, key: *void) -> bool`, `int_table_same_key(entry: *u8, key: *void) -> bool`: whether an entry holds the key at `key`, for `table_probe`.
+- `table_init(table: *Table, value_size: int, allocator: Allocator)`, `int_table_init(table: *Int_Table, value_size: int, allocator: Allocator)`: an empty table of values of `value_size` bytes, whose memory comes from `allocator`, taken at the first set. A negative `value_size` is taken as 0.
+- `table_set(table: *Table, key: string, value: *void) -> *void`, `int_table_set(table: *Int_Table, key: int, value: *void) -> *void`: sets `key`'s value to a copy of the bytes at `value`, or zeroed bytes for null, adding the key if it isn't there, and gives the value's address. `value` may be one of the table's own values.
+- `table_find(table: Table, key: string) -> *void`, `int_table_find(table: Int_Table, key: int) -> *void`: the address of `key`'s value, or null.
+- `table_remove(table: *Table, key: string) -> bool`, `int_table_remove(table: *Int_Table, key: int) -> bool`: removes `key`, giving a string key's copy back, and says whether it was there.
+- `table_entry(table: Table, index: int) -> bool, string, *void`, `int_table_entry(table: Int_Table, index: int) -> bool, int, *void`: entry `index`, from 0 to the capacity less one: whether it holds a key, the key and the value's address; false, the zeroed string or 0, and null for one that holds none. Any other index stops the program.
+- `table_free(table: *Table)`, `int_table_free(table: *Int_Table)`: gives every key's copy and the entries back; the table is empty, with no entries, and keeps its value size and allocator.
+
 ## Print (`print.rig`)
 
 Everything goes to standard output through C's `putchar`, so it comes out in order with what a program writes with C's `printf`, compiled and interpreted. Bytes are written as they are, so UTF-8 text prints as UTF-8.
@@ -149,9 +175,10 @@ Everything goes to standard output through C's `putchar`, so it comes out in ord
 
 What Basic would do differently once Rig has it:
 
-- No type aliases, so the allocator's procedure type is written out wherever it's used.
-- No overloading or generics, so procedures are named by type (`min_int`, `min_float64`) and the collections are untyped, handing out `*void`.
-- No enums, so an allocator's modes are constants.
+- No type aliases, so the allocator's procedure type, and the key comparison the tables' probe takes, are written out wherever they're used.
+- No overloading or generics, so procedures are named by type (`min_int`, `min_float64`), the collections are untyped, handing out `*void`, and there is one kind of table per kind of key, `Table` and `Int_Table`, with the same fields.
+- No way for a struct to take in another's fields, as Jai's `using` does, so both kinds of table entry repeat the fields of `Table_Entry_Header`, and the code they share reads an entry's start through it.
+- No enums, so an allocator's modes and a table entry's states are constants.
 - No portable way to reach standard error and no conditional compilation, so Basic writes only through `c_putchar`, and an index out of bounds is reported by the language's own bounds check.
 - No `defer`, so what is allocated is freed by hand on every path.
 - No `#import`, so a program loads Basic with a `#load` of its relative path.

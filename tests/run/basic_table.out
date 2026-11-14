@@ -1,0 +1,30 @@
+empty table: true
+count 20, capacity 32
+all 20 found: true
+missing: true true true
+apple: 100, count 20
+remove: true false true 19
+empty key: true 20
+key copied: true true 21
+iteration: 21 entries, sum 296
+capacity 32
+freed: 0 0
+fnv-1a: true true
+same slot: true true
+past a removed key: 3
+removed key missing: true
+1 22 3, count 3
+10 11 12, count 6
+entries: 6
+removed entry taken again: 0
+1000 keys: true, capacity 2048
+after removing 500: 500 true true
+after adding 500 more: 1000, capacity 2048
+bool values: entry size 32, aligned true
+removed entries cleared: 3 16 0 true
+own value set while growing: 50 32
+no entries: false true false
+null value: true true
+unused entry: false 0 true true
+own allocator: allocations 4, frees 1, after free 4
+set after free: 4 1 16
