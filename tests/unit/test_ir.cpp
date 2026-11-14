@@ -4028,3 +4028,66 @@ TEST(constant_naming_other_data_has_its_bytes) {
     CHECK(contains(main, "addr @const.1"));
     arena_free(&a);
 }
+
+// Issue #115: lowering on demand, into a compile-time module (spec 7.8).
+
+// The program the on-demand tests share: three runs reaching twice, which
+// calls add and writes counter; unused and other reached by none of them.
+static const char *LOWERING_ON_DEMAND_PROGRAM =
+    "add :: (a: int, b: int) -> int { return a + b; }\n"
+    "unused :: () -> int { return 7; }\n"
+    "counter := 5;\n"
+    "other := 9;\n"
+    "twice :: (n: int) -> int { counter += 1; return add(n, n); }\n"
+    "N :: #run twice(3);\n"
+    "#run twice(20);\n"
+    "#run { x := twice(1); }\n"
+    "main :: () { }\n";
+
+TEST(lowering_on_demand_takes_what_a_run_reaches) {
+    // The module starts with the two helpers, whole. Each run's procedure
+    // comes next, then what it reaches, first named first lowered: run.0
+    // brings twice, which brings add; run.1 reaches twice again, which is
+    // there already, lowered once. N's run, an expression, returns its
+    // value. counter is made where twice's body first uses it; unused,
+    // other and main, which no run reaches, never are.
+    Arena a = arena_make();
+    Lowered_Runs r = lower_runs_of(&a, LOWERING_ON_DEMAND_PROGRAM);
+    CHECK_EQ(r.file->runs.count, 2);
+    CHECK_EQ(ir_lower_run(r.lowering, r.file->runs[0]), 2);
+    CHECK_EQ(ir_lower_run(r.lowering, r.file->runs[1]), 5);
+    CHECK_EQ(ir_lower_run(r.lowering, constant_run(r.file, "N")), 6);
+    String ir = ir_print(&a, r.module);
+    const char *order[] = {"proc @__rig_bounds_failed(", "proc @__rig_string_equal(", "proc @run.0()",
+                           "proc @twice(", "proc @add(", "proc @run.1()", "proc @run.2() -> i64"};
+    s64 last = -1;
+    for (const char *header : order) {
+        s64 at = index_of(ir, header);
+        if (at <= last) fprintf(stderr, "  '%s' isn't where it should be\n", header);
+        CHECK(at > last);
+        last = at;
+    }
+    CHECK_EQ(count_of(ir, "proc @twice("), 1);
+    CHECK(!contains(ir, "@unused"));
+    CHECK(!contains(ir, "@main"));
+    CHECK(!contains(ir, "@other"));
+    CHECK(contains(ir, "global @counter: i64 = 5\n"));
+    // The bounds buffer fits the longest prefix any file can give:
+    // test.rig's 8, 39 more, and the usual 73.
+    CHECK(contains(proc_ir(ir, "__rig_bounds_failed"), "local 120 align 1"));
+    Ast_Proc *twice = nullptr;
+    for (s64 i = 0; i < r.file->procs.count; i++) {
+        if (string_eq(r.file->procs[i]->name, str("twice"))) twice = r.file->procs[i];
+    }
+    CHECK(twice != nullptr);
+    CHECK(ir_lowering_source(r.lowering, 3) == twice);
+    CHECK(ir_lowering_source(r.lowering, 0) == nullptr);
+    CHECK(ir_lowering_source(r.lowering, 2) == nullptr);
+
+    // The program's own lowering of the same file is whole, and has no runs.
+    String program = ir_print(&a, ir_lower(r.file, &r.list->diag, &a, true));
+    CHECK(contains(program, "proc @unused("));
+    CHECK(!contains(program, "@run."));
+    lowered_runs_free(&r);
+    arena_free(&a);
+}

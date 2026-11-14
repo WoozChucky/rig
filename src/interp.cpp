@@ -588,6 +588,14 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
                 for (s64 k = 0; k < q->results.count; k++) v[instr->result + k] = k == 0 ? r : 0;
                 break;
             }
+            // A Rig procedure with no blocks is only declared: on-demand
+            // lowering (#115) lowers every body a run reaches before the
+            // run, so only IR made some other way gets here. It has nothing
+            // to run, as an address that is no procedure's hasn't.
+            if (m->procs.data[callee]->blocks.count == 0) {
+                interp_fail(in, frame, block, index, a, result, str("call of an address that isn't a procedure"));
+                return;
+            }
             Interp_Record *next = interp_push(in, frame, callee, interp_proc_info(in, callee));
             if (!next) {
                 interp_fail(in, frame, block, index, a, result, str("stack overflow"));
@@ -923,6 +931,15 @@ s32 interp_proc_at(Interp *in, u64 address) {
     u64 k = offset / INTERP_PROC_STRIDE;
     if (k >= (u64)in->module->procs.count || in->module->procs[(s64)k]->is_foreign) return -1;
     return (s32)k;
+}
+
+s32 interp_c_function_at(Interp *in, u64 address) {
+    // A procedure not found yet is null here, which no address matches.
+    if (address == 0) return -1;
+    for (s64 k = 0; k < in->c_functions.count; k++) {
+        if ((u64)in->c_functions[k] == address) return (s32)k;
+    }
+    return -1;
 }
 
 u8 *interp_global(Interp *in, s32 global) {

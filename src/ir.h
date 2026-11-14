@@ -380,7 +380,9 @@ struct Ir_Module {
     Array<Ir_Proc *> procs;  // the program's, in order (every file's, in load order), then
                              // __rig_bounds_failed when a bounds check calls it and
                              // __rig_string_equal when == on strings does (lower.cpp, in the
-                             // order first needed)
+                             // order first needed); a compile-time module lowered on demand
+                             // has the two helpers first, then the runs' procedures and what
+                             // they reach, in the order needed (ir_lower_run)
     // The source files, for a debugger. A module built by hand has none,
     // and gets no debug information.
     Array<Ir_Source> sources;  // indexed by Position.file
@@ -440,6 +442,40 @@ bool ir_block_has_ended(Ir_Proc *p, s32 block);
 // (which the checker made sure is inside), is checked at run time, but in a
 // procedure marked #no_abc (spec 7.7).
 Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks);
+
+// Lowering on demand (#115): what the code #run runs while compiling needs,
+// lowered a piece at a time into a compile-time module of its own, which
+// the interpreter runs (lower.cpp's header says how).
+
+// lower.cpp's state. ir_lower makes one for a whole program; the
+// compile-time world (#115, run.cpp) keeps one, lowering a piece at a time.
+struct Lowering;
+
+// A lowering that adds to m, which starts empty, on demand: a procedure is
+// declared the first time something lowered names it, its body lowered
+// after; a global made the first time a body uses it. Bounds checks are
+// always on (#no_abc still holds). __rig_bounds_failed (index 0) and
+// __rig_string_equal (index 1) are made at once, whole: the bounds
+// buffer is sized for the longest path among d's files. d and the tree
+// must outlive the lowering; m and what it holds live in `a`.
+Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a);
+
+// The procedure `run` runs, run.N in l's module, and everything it reaches,
+// lowered (spec 7.8); its index. An expression #run's procedure returns
+// its operand's value as a procedure with that one result does: a scalar as
+// its IR result, an aggregate copied through the hidden pointer, its
+// parameter 0. A top-level #run e; evaluates e and returns nothing (nothing
+// at all when e is a constant); a top-level #run { } is its block lowered
+// as a body. Its source_name is "#run", and what it emits itself is at
+// the #run. The checker made sure everything it reaches checked cleanly
+// (check_run.cpp's walk).
+s32 ir_lower_run(Lowering *l, Ast_Run *run);
+
+// The procedure of the source that l's module's procedure `proc` lowers;
+// null for the compiler's own procedures and the runs'.
+Ast_Proc *ir_lowering_source(Lowering *l, s32 proc);
+
+void ir_lowering_free(Lowering *l);
 
 // The module as text, in the format above.
 String ir_print(Arena *a, Ir_Module *m);
