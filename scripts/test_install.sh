@@ -12,7 +12,8 @@
 #   - A script cut short anywhere, its last line included, runs nothing.
 #   - --help, and each failure: an unknown option, a release that doesn't
 #     exist, a checksum that doesn't match, no network, a server's error
-#     (with curl, and with wget), another system or architecture. Each
+#     (with curl, with wget, and with a wget that prints no status line),
+#     another system or architecture. Each
 #     stops with its message, before anything is installed: HOME stays
 #     empty.
 #   - The hello world check: a build that fails gets the requirements
@@ -260,6 +261,23 @@ if PATH="$work/bin:$work/nocurl" RIG_INSTALL_BASE_URL=$errors installer --versio
 says "there is no Rig 9.9.9" || fail "--version 9.9.9's message, with wget"
 home_is_empty || fail "--version 9.9.9 changed HOME, with wget"
 pass "with wget, a server error (503) and a missing release (404) stop it, each with its message"
+# A wget that says the server sent an error (status 8) but prints no
+# headers, as wget2 (Fedora's wget) may with --quiet: the status is unknown,
+# and the message mustn't show a blank one.
+mkdir "$work/silentwget"
+printf '%s\n' '#!/bin/sh' 'exit 8' > "$work/silentwget/wget"
+chmod +x "$work/silentwget/wget"
+fresh_home
+if PATH="$work/silentwget:$work/bin:$work/nocurl" RIG_INSTALL_BASE_URL=$errors installer --no-vscode; then fail "a server error without headers succeeded"; fi
+says "the server answered with an error" || fail "a server error without headers: the message"
+! says "HTTP status" || fail "a server error without headers is reported with a blank status"
+home_is_empty || fail "a server error without headers changed HOME"
+fresh_home
+if PATH="$work/silentwget:$work/bin:$work/nocurl" RIG_INSTALL_BASE_URL=$errors installer --version 9.9.9 --no-vscode; then fail "--version 9.9.9 succeeded, with a wget that prints no headers"; fi
+says "there may be no Rig 9.9.9" || fail "--version 9.9.9 with a wget that prints no headers: the message"
+home_is_empty || fail "--version 9.9.9 with a wget that prints no headers changed HOME"
+rm -rf "$work/silentwget"
+pass "with a wget that prints no headers, a server error stops it, with no blank status"
 kill "$server_pid" 2> /dev/null || true
 server_pid=
 
