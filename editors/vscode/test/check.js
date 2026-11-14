@@ -863,6 +863,7 @@ function reset() {
         extensions: ['ms-vscode.cpptools'], // the extensions installed
         debugged: [],            // startDebugging's calls: { folder, config }
         launched: [],            // what each resolved to, as VS Code would launch it
+        searches: [],            // findFiles' calls: the arguments of each
     });
 }
 reset();
@@ -991,7 +992,11 @@ const vscodeStub = {
                 return fallback;
             },
         }),
-        findFiles: async (include) => {
+        // Each call is recorded in stub.searches. An exclude argument is
+        // recorded but not applied: VS Code would apply it instead of the
+        // setting files.exclude.
+        findFiles: async (include, ...rest) => {
+            stub.searches.push([include, ...rest]);
             const base = include.base.uri ? include.base.uri.fsPath : include.base.fsPath;
             return rigFiles(base).map(fileUri);
         },
@@ -1779,6 +1784,10 @@ check('a loaded file is checked through the first main file in path order that l
             [0, 0, "an error in another file of the program: b.rig:2:14: unknown identifier 'putz'"],
         ]);
         assert.deepStrictEqual(stub.errors, []);
+        // The folder was searched with no exclude of the extension's own, so
+        // that VS Code leaves out what files.exclude does (the README says so).
+        assert.ok(stub.searches.length > 0, 'the folder was never searched');
+        assert.ok(stub.searches.every((args) => args[1] === undefined), 'findFiles was given an exclude');
     });
 });
 
