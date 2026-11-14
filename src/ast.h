@@ -435,9 +435,9 @@ struct Ast_Run : Ast {
     bool is_top_level;  // in Ast_File.runs: run for its effect
     bool checked;       // the checker has been through it (check_run, check_top_level_run): once
     Ast *value;         // an expression #run's result once it ran: the node holding it, as constant
-                        // data's literal tree (run.cpp's bake), or the operand itself when that is a
-                        // constant and nothing ran; null when it has none: it hasn't run, its operand
-                        // or what it reaches had errors, or it failed (said already)
+                        // data's literal tree (run.cpp's bake_scalar), or the operand itself when
+                        // that is a constant and nothing ran; null when it has none: it hasn't run,
+                        // its operand or what it reaches had errors, or it failed (said already)
 };
 
 // A parsed file, or the files of a program parsed into one (parse_into):

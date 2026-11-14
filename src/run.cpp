@@ -23,8 +23,9 @@
 // error at the #run: "#run failed: runtime error: MESSAGE", then, after its
 // source line and caret, the calls that led there, innermost first, one a
 // line, "    in NAME (PATH:L:C)" (Diagnostic.lines), the outermost
-// "    in #run (PATH:L:C)", the run's own procedure. The #run then has no
-// value, and what needs it says nothing more (has_failed_run).
+// "    in #run (PATH:L:C)", the run's own procedure; of a deep recursion's
+// thousands, the innermost and outermost few (report_failure). The #run
+// then has no value, and what needs it says nothing more (has_failed_run).
 //
 // Baking. A result is made into nodes of the tree, as if it were written
 // there: a number an Ast_Int, an Ast_Float or an Ast_Bool, folded
@@ -103,7 +104,8 @@ static Ast *refuse_pointer(Checker *c, Ast_Run *run) {
 // - A procedure value is a name bound to the procedure of the source its
 //   address stands for: a Rig procedure's in the interpreter's range
 //   (interp_proc_at), or a foreign procedure's C function
-//   (interp_c_function_at). Any other address, one made from an integer,
+//   (interp_c_function_at), the one of the run's type should two name the
+//   function. Any other address, one made from an integer,
 //   or the address of a run's own procedure or of one the compiler makes
 //   (no procedure of the source), is refused as a pointer is. 0 is null.
 static Ast *bake_scalar(Compile_Time *ct, Checker *c, Ast_Run *run, Type *t, u64 bits) {
@@ -152,8 +154,19 @@ static Ast *bake_scalar(Compile_Time *ct, Checker *c, Ast_Run *run, Type *t, u64
         }
         if (t->kind == TYPE_POINTER) return refuse_pointer(c, run);
         s32 index = interp_proc_at(ct->interp, bits);
-        if (index < 0) index = interp_c_function_at(ct->interp, bits);
         Ast_Proc *proc = index >= 0 ? ir_lowering_source(ct->lowering, index) : nullptr;
+        if (index < 0) {
+            // Two foreign procedures may name one C function (glibc's index
+            // is strchr): the value is the one of the run's type, which a
+            // constant may name, or else the first.
+            for (s32 k = interp_c_function_at(ct->interp, bits, 0); k >= 0;
+                 k = interp_c_function_at(ct->interp, bits, k + 1)) {
+                Ast_Proc *source = ir_lowering_source(ct->lowering, k);
+                if (!source) continue;
+                if (!proc || source->type == t) proc = source;
+                if (source->type == t) break;
+            }
+        }
         if (!proc) return refuse_pointer(c, run);
         Ast_Name *name = baked_node<Ast_Name>(c, AST_NAME, run, t);
         name->name = proc->name;
@@ -164,15 +177,35 @@ static Ast *bake_scalar(Compile_Time *ct, Checker *c, Ast_Run *run, Type *t, u64
     }
 }
 
+// How many of a failure's innermost frames are shown, and as many of its
+// outermost: a recursion that never ends has a frame a level, tens of
+// thousands of them, one line each, and a terminal or an editor's live check
+// wants a few.
+static const s64 RUN_FRAMES_SHOWN = 10;
+
 // "#run failed: runtime error: MESSAGE", at the #run, and the frames after
-// it, the paths of the program's files naming where each is.
+// it, the paths of the program's files naming where each is. Of more than
+// 2 * RUN_FRAMES_SHOWN + 1, only the innermost and the outermost
+// RUN_FRAMES_SHOWN, and between them "    ... N more calls": N is 2 at
+// least, as one call left out would take the line that says so.
 static void report_failure(Compile_Time *ct, Ast_Run *run, Interp_Result *result, Arena *a) {
     Diagnostics *d = ct->diag;
     diag_error(d, run->pos, "#run failed: runtime error: " STR_FMT, STR_ARG(result->message));
-    if (!result->frames.count) return;
+    Array<Interp_Frame> frames = result->frames;
+    if (!frames.count) return;
     Array<String> paths = {};
     for (s64 i = 0; i < d->files.count; i++) array_add(&paths, d->files[i].path);
-    diag_add_lines(d, interp_frames_text(a, result->frames, paths));
+    if (frames.count <= 2 * RUN_FRAMES_SHOWN + 1) {
+        diag_add_lines(d, interp_frames_text(a, frames, paths));
+    } else {
+        Array<Interp_Frame> inner = {frames.data, RUN_FRAMES_SHOWN, RUN_FRAMES_SHOWN};
+        Array<Interp_Frame> outer = {frames.data + frames.count - RUN_FRAMES_SHOWN, RUN_FRAMES_SHOWN,
+                                     RUN_FRAMES_SHOWN};
+        String inner_text = interp_frames_text(a, inner, paths);
+        String outer_text = interp_frames_text(a, outer, paths);
+        diag_add_lines(d, string_printf(a, STR_FMT "    ... %lld more calls\n" STR_FMT, STR_ARG(inner_text),
+                                        (long long)(frames.count - 2 * RUN_FRAMES_SHOWN), STR_ARG(outer_text)));
+    }
     array_free(&paths);
 }
 

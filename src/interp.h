@@ -110,10 +110,11 @@ u64 interp_proc_address(Interp *in, s32 proc);
 // The Rig procedure whose compile-time value is `address`, or -1.
 s32 interp_proc_at(Interp *in, u64 address);
 
-// The foreign procedure whose C function, found so far (called, its value
-// taken, or written into a global), is at `address`; -1 for any other.
-// The first such, should two procedures name one function.
-s32 interp_c_function_at(Interp *in, u64 address);
+// The first foreign procedure, from m->procs[from] on, whose C function,
+// found so far (called, its value taken, or written into a global), is at
+// `address`; -1 when there is none. Two procedures may name one function,
+// so a caller wanting each of them starts again after the one it got.
+s32 interp_c_function_at(Interp *in, u64 address, s32 from);
 
 // A global's compile-time bytes, once a run has mapped it.
 u8 *interp_global(Interp *in, s32 global);
