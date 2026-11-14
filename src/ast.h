@@ -7,8 +7,10 @@
 // expressions; expressions made of calls, names, strings, integers,
 // floats, bools, null, operators, casts, addresses and dereferences,
 // size_of, fields (e.x), struct literals (Vec2.{1, 2}), elements (a[i])
-// and array literals (int.[1, 2]). And structs, declared at the top level,
-// and the files a program loads (#load "PATH";), named there too.
+// and array literals (int.[1, 2]), and code run while compiling (#run e).
+// And structs, declared at the top level, the files a program loads
+// (#load "PATH";), named there too, and the code it runs while compiling
+// for its effect (#run e; and #run { ... }), there too.
 // Each node kind is a struct that starts with Ast, so a pointer to any node
 // is also an Ast *, and `kind` says which it is.
 //
@@ -66,6 +68,7 @@ enum Ast_Kind : u8 {
     AST_LITERAL,       // Ast_Literal: Vec2.{1, 2}  Vec2.{y = 2}  .{1, 2}  int.[1, 2]  .[1, 2]
     AST_INDEX,         // Ast_Index: a[i]
     AST_LOAD,          // Ast_Load: #load "PATH";
+    AST_RUN,           // Ast_Run: #run e (an expression), or a top-level #run e; or #run { ... }
 };
 
 struct Ast {
@@ -109,9 +112,13 @@ struct Ast_Param : Ast {
     Ast_Type *type_expr;
 };
 
+struct Ast_Proc;
+
 struct Ast_Block : Ast {
     Array<Ast *> statements;
-    Position end;  // its '}': where a procedure that runs off its end is reported
+    Position end;    // its '}': where a procedure that runs off its end is reported
+    Ast_Proc *proc;  // a procedure's body (a top-level #run { }'s too): its procedure, set by the parser;
+                     // null for any other block
 };
 
 // How far the checker has got with a global variable, a top-level
@@ -404,14 +411,28 @@ struct Ast_Load : Ast {
     Position path_pos;  // the string literal, where messages about the file point
 };
 
+// #run: code run while compiling (spec 7.8). pos is the '#run'.
+// - As an expression, #run e is a prefix operator, binding as - and ! do
+//   (5.2): #run f() + 1 is (#run f()) + 1.
+// - At the top level, #run e; (any expression, its value thrown away) or
+//   #run { ... } is a declaration of its own, run for its effect once the
+//   program has checked. It declares no name.
+struct Ast_Run : Ast {
+    Ast *operand;       // e; null for #run { ... }
+    Ast_Proc *proc;     // #run { ... }: the procedure it runs as: named "#run", at the '#run', with no
+                        // parameters or results, its body the block; null otherwise
+    bool is_top_level;  // in Ast_File.runs: run for its effect
+};
+
 // A parsed file, or the files of a program parsed into one (parse_into):
 // their declarations, in source order, broken ones included; a file's
 // declarations come after those of the files loaded before it
 // (Position.file's order). Procedures (and broken entries, which are
 // Ast_Procs) are in procs; the globals, top-level variables (Ast_Var,
 // is_global set), constants (Ast_Const) and structs (Ast_Struct), in
-// globals; the loads (Ast_Load), in loads. Each list is in source order on
-// its own; ast_declarations merges procs and globals back by position.
+// globals; the loads (Ast_Load), in loads; the top-level runs (Ast_Run,
+// is_top_level set), in runs. Each list is in source order on its own;
+// ast_declarations merges procs and globals back by position.
 //
 // lost_a_file is set when a #load failed (load.h's errors), had no string
 // to name a file by, wasn't at the top level, or was passed over by the
@@ -423,6 +444,7 @@ struct Ast_File {
     Array<Ast_Proc *> procs;
     Array<Ast *> globals;
     Array<Ast_Load *> loads;
+    Array<Ast_Run *> runs;  // the top-level #runs, in source order, file by file in load order
     bool lost_a_file;
 };
 
@@ -430,7 +452,8 @@ struct Ast_File {
 // entries included) and globals together, in source order, file by file in
 // load order: what the checker goes through. Loads aren't among them: the
 // checker has nothing to do with them, the loader having read the files
-// they name. The caller frees the Array.
+// they name. Nor are the top-level runs, which declare no name. The caller
+// frees the Array.
 Array<Ast *> ast_declarations(Ast_File *file);
 
 // A new, zeroed node of struct T and kind `kind`, in the arena.
@@ -486,8 +509,11 @@ Token_Kind compound_operator(Token_Kind op);
 // An array's count prints as written: (array (name N) int) for [N]int.
 // A struct prints as (struct Vec2 (x float32) (y float32)), each field's
 // type as written ((x float) for x: float).
+// #run e prints as (run (call f)) for #run f(), in an expression, a
+// statement or at the top level alike; a top-level #run { ... } as
+// (run (block ...)).
 // Globals print as locals do, (var counter int) and (const LIMIT (int 100)),
-// and a load as (load "world/map.rig"), among the procedures in source
-// order.
+// a load as (load "world/map.rig"), and a top-level run as above, each on
+// a line of its own among the procedures, in source order.
 String ast_dump(Arena *a, Ast_File *file);
 String ast_dump_node(Arena *a, Ast *node);

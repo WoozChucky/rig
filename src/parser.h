@@ -11,7 +11,9 @@
 //               | IDENT ':=' expression ';'                         a global variable
 //               | IDENT '::' expression ';'                         a constant
 //               | '#load' STRING ';'                                another file of the program
-//   procedure   = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
+//               | run                                               code run while compiling
+//   run         = '#run' block | '#run' expression ';'
+//   procedure   ='(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
 //                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT ';')
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
 //   param       = IDENT ':' type
@@ -35,7 +37,7 @@
 //   for         = 'for' ['*'] [IDENT ':'] expression ['..' expression] block
 //   expression  = unary { BINARY_OPERATOR unary }, binary operators left-associative, tightest last:
 //                   1: ||   2: &&   3: == != < <= > >=   4: + - | ^   5: * / % << >> &
-//   unary       = ('-' | '~' | '!' | '*') unary | cast | postfix
+//   unary       = ('-' | '~' | '!' | '*' | '#run') unary | cast | postfix
 //   cast        = 'cast' [',' IDENT] '(' type ')' unary       (the IDENT: trunc)
 //   postfix     = primary { '(' [expression {',' expression}] ')' | '[' expression ']'
 //                           | '.' '*' | '.' IDENT
@@ -142,11 +144,11 @@
 // At the top level, after '::', a procedure's parameter list starts with
 // '(' ')', '(' IDENT ':' or '(' '..'; any other '(' begins a constant's
 // value, so `N :: (1 + 2);` is a constant. A name followed by ':' or ':='
-// and then a signature with a body or a directive other than #load after
-// it (`greet : () {`) is a procedure with its '::' mistyped: "expected
-// '::', found ':'"; a name, ':' and a procedure type followed by '=' or
-// ';', or by a #load (which begins the next declaration, so the variable
-// is then missing its ';'), is a variable of that type:
+// and then a signature with a body or a directive other than #load and
+// #run after it (`greet : () {`) is a procedure with its '::' mistyped:
+// "expected '::', found ':'"; a name, ':' and a procedure type followed by
+// '=' or ';', or by a #load or a #run (which begins the next declaration,
+// so the variable is then missing its ';'), is a variable of that type:
 // `op : (int) -> int = add;`. Anything else after a top-level name is
 // "expected '::', found ...".
 //
@@ -187,6 +189,28 @@
 // does for a #load the recovery passes over, unreported, with a
 // declaration given up after another error.
 //
+// Code runs while compiling with #run (spec 7.8). #run e is a prefix
+// operator, binding as - and ! do (spec 5.2): #run f() + 1 is
+// (#run f()) + 1, and it may be written wherever a value may, an array's
+// count included (`[#run f()]int`), each #run a level (MAX_DEPTH) as the
+// other prefix operators are. At the top level, #run e; runs any
+// expression, the whole of it up to its ';' (#run f() + 1; runs the sum),
+// for its effect, and #run { ... } runs a block: each is a declaration of
+// its own, which declares no name (Ast_Run, in Ast_File.runs), and the
+// block runs as a procedure named #run, so `return;` ends it. Only the top
+// level has the block form: in a body, `x := #run { };` is "expected an
+// expression, found '{'". A #run in a body as a statement, `#run f();`, is
+// parsed as an expression statement (the checker says it must be a
+// value). Unlike a #load, a #run is never misplaced: it's a value
+// wherever a value goes, and anywhere else, where a ';', a ')', a type or
+// a field's name is expected, the error is the usual one, "expected ';',
+// found directive". The recovery treats it as it treats a #load (below):
+// it resumes at a #run that starts a line outside any braces; a #run in
+// column 1 is among the column-1 declarations a body never closed is taken
+// to end before; a #run { in column 1 ends a body as a procedure's
+// declaration does; and a #run in column 1 ends a struct's fields, which
+// can't hold it.
+//
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;
 // the name only where the tokens still look like a declaration of it, as
@@ -195,27 +219,28 @@
 // start of a line, followed by '::', outside the braces of the body it gave
 // up in, or a procedure's, `name :: (`, in column 1; a global variable's
 // name in column 1, followed by ':' or ':=', outside any braces or
-// parameter list; or a #load starting a line outside any braces) and goes
-// on. Stray tokens in front of a declaration's name (`*greet :: () {}`) are
+// parameter list; or a #load or a #run starting a line outside any braces)
+// and goes on. Stray tokens in front of a declaration's name (`*greet :: () {}`) are
 // reported and skipped, and the declaration after them is parsed whole; so
 // is a declaration later on the line of a global that failed
 // (`counter : int = 1 2; f :: () {}`), the global keeping its name.
 //
 // A body never closed ends at the end of the file or at a procedure's or a
-// struct's declaration in column 1 (`name :: (` or `Name :: struct`),
-// which a body can't hold and which can only start a top-level
-// declaration: a constant in column 1 (`N :: 5;`) is a local constant, as
-// an indented one is. A struct's braces never closed end there too. The
-// body is then taken to end before the column-1 declarations (IDENT ':',
-// ':=' or '::', or a #load) right before that point, at its own level:
-// "expected '}'" is reported at the first of them, and the top level
-// resumes there, so they're read as the globals, constants and loads they
-// were meant to be (an if's '}' forgotten, then globals). A #load among
-// them isn't misplaced after all, so it isn't reported. A struct is taken
-// to end before the #loads in column 1 right before that point, the same
-// way, but not before fields in column 1: a field is written as a global
-// is, so they stay its fields. Without them, "expected '}'" is reported
-// where the end was found.
+// struct's declaration in column 1 (`name :: (` or `Name :: struct`), or a
+// #run { in column 1, which a body can't hold and which can only start a
+// top-level declaration: a constant in column 1 (`N :: 5;`) is a local
+// constant, as an indented one is. A struct's braces never closed end
+// there too, and at any #run in column 1. The body is then taken to end
+// before the column-1 declarations (IDENT ':', ':=' or '::', a #load or a
+// #run) right before that point, at its own level: "expected '}'" is
+// reported at the first of them, and the top level resumes there, so
+// they're read as the globals, constants, loads and runs they were meant
+// to be (an if's '}' forgotten, then globals). A #load among them isn't
+// misplaced after all, so it isn't reported. A struct is taken to end
+// before the #loads in column 1 right before that point, the same way, but
+// not before fields in column 1: a field is written as a global is, so
+// they stay its fields. Without them, "expected '}'" is reported where the
+// end was found.
 //
 // So one mistake gives one error, and the checker can still check the rest
 // of the program (every file of it): the broken declaration's name is
