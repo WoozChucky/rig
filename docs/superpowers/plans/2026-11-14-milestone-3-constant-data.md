@@ -88,7 +88,7 @@
     - `string_members_and_index` (:3821) asserts `"abc".count` isn't constant.
 11. **Stale citations** in code this plan touches, with the right sections:
     - `check_expr.cpp:361` (5.17 and 3.13);
-    - `check_expr.cpp:1437` (6.8);
+    - `check_expr.cpp:1437` (6.7, where the iterator and `it_index` are read-only);
     - `check_expr.cpp:1447` (7.2);
     - `check_expr.cpp:1469` (3.8 and 8.6);
     - `tests/errors/constant_index_out_of_bounds.rig:1` (5.11);
@@ -306,7 +306,7 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
 - [ ] **Step 2: Run** `build.bat`, then `bin\unit-tests.exe`. The new tests FAIL (or don't compile until `constant_data` exists), and so does `bin\run-tests.exe` on `constant_kinds`.
 - [ ] **Step 3: Implement** as in the interfaces.
   - Remove the "for now" message.
-  - Update the comments of `check_const_value`, `check_global_value`, `literal_address`, `check_convert` and `check_extra_argument`, and fix `checker.h`'s rule text.
+  - Update the comments of `check_const_value`, `check_global_value`, `literal_address` and `procedure_address` (their `checker.h` declarations too), `check_convert`, `check_extra_argument` and `Ast_Const`, and fix `checker.h`'s rule text.
   - Fix the stale citations at `check_expr.cpp:361` and `ast.h:79` (Fact 11).
 - [ ] **Step 4: Run all tests** on both hosts. Everything passes. No program yet uses a data constant at run time, so lowering isn't reached.
 - [ ] **Step 5: Commit** `Accept constants holding strings, structs and arrays`. Push, and open the draft PR.
@@ -332,6 +332,7 @@ Ast_Name *constant_root(Ast *e);
 - **Folding:**
   - `check_member`, after the field is found: if the field's type isn't an aggregate and `constant_data(m, &value)` holds, set `m->is_constant = !value || value->is_constant` and `m->constant = value ? value->constant : 0`.
   - `check_index`, for arrays, does the same with `constant_data(ix, &value)`, after the bounds check.
+  - `check_expression` sets `m->type` and `ix->type` only once `check_member` and `check_index` return, so set the node's type before calling `constant_data` on it (or `constant_data` mustn't read a member's or an index's own type).
   - For a string operand with an `is_constant` index and `constant_data(ix->operand, &value)`, the count is the literal's, or 0 when `value` is null. An index outside it is `index N is out of bounds for a string of C bytes` (`byte` when C is 1), at the index, by its sign, as for arrays. Otherwise the node folds to that byte, a `u8`.
   - `check_sequence_member`: a string's `.count` with `constant_data(m->operand, &value)` folds to its count (0 for null), still typed `int`.
 - **Places:**
@@ -445,7 +446,7 @@ Ast_Name *constant_root(Ast *e);
     - Its `.err` gives `8:5`, `9:5` and `10:5` (assign), and `11:11` and `12:11` (address).
 - [ ] **Step 2: Run** `bin\unit-tests.exe` and `bin\run-tests.exe`. The new tests FAIL.
 - [ ] **Step 3: Implement** as in the interfaces.
-  - Update the comments of `check_index`, `check_sequence_member`, `expr_is_place` (fix its 6.4 citation, Fact 11), `name_is_place` (a constant is no longer "kept nowhere"; fix the 6.1 citations) and `check_sequence`.
+  - Update the comments of `check_member`, `check_index`, `check_sequence_member`, `expr_is_place` (fix its 6.4 citation, Fact 11), `name_is_place` (a constant is no longer "kept nowhere"; fix the 6.1 citations) and `check_sequence`.
   - Fix `constant_index_out_of_bounds.rig`'s citation to 5.11.
 - [ ] **Step 4: Run all tests** on both hosts.
 - [ ] **Step 5: Commit** `Fold constant data, and keep every part of a constant read-only`.
@@ -477,7 +478,7 @@ static s32 add_read_only_global(Ir_Module *m, const char *name, s64 size, u32 al
 
 - [ ] **Step 1: Write the failing tests.**
   - `test_ir.cpp`, `ir_prints_read_only_globals`:
-    - A hand-built module: `add_string(m, "str.0", "abc")`, then `add_read_only_global(m, "const.0", 24, 8)` with `bytes[0] = 3` (24 bytes) and a reloc `{8, str.0}`.
+    - A hand-built module: `add_string(m, "str.0", "abc")`, then `add_read_only_global(m, "const.0", 24, 8)`, then given 24 bytes of its own (the helper, as `add_byte_global`, gives none), the first 3 and the rest 0, and a reloc `{8, str.0}`.
     - `ir_print` is exactly `global @str.0 = "abc\00"\n` and then `const @const.0: 24 align 8 = "\03` followed by 23 times `\00`, then `" reloc 8 @str.0\n`.
   - `test_llvm.cpp`, `llvm_read_only_global`: the same module plus `add_read_only_global(m, "zeros", 16, 8)`. For both targets:
     - the text contains `@const.0 = private constant <{ [8 x i8], ptr, [8 x i8] }> <{ [8 x i8] c"\03\00\00\00\00\00\00\00", ptr @str.0, [8 x i8] zeroinitializer }>, align 8`;
@@ -500,7 +501,7 @@ static s32 add_read_only_global(Ir_Module *m, const char *name, s64 size, u32 al
   - `Lowering`; `node_key`, `literal_global` and `constant_global`;
   - `literal_bytes`, `lower_value`, `lower_cast`, `lower_view_of`, `lower_expr`'s `AST_NAME`, `extra_argument_type`;
   - `constant_bytes` and `constant_extent`;
-  - the header comment (29-33, 102-119), 1937 and 2425-2433.
+  - the header comment (29-33, 102-119), 1937 and the globals loop's comment (2417-2432).
 - Test: `tests/unit/test_ir.cpp` (and `ir_of_globals`' comment at 1454), `tests/unit/test_llvm.cpp`, `tests/unit/test_interp.cpp`
 - Create:
   - `tests/run/constant_data.rig` and `.out`;
@@ -683,6 +684,7 @@ static s32 constant_global(Lowering *l, Ast_Const *constant);
     - a view of a constant points into its data;
     - a literal's `str.N` is one per node.
   - Fix the header's "spec 6.5" citations it touches (string: 3.8; views: 5.17).
+  - Update the comments of the functions it changes, which still say what was true: `lower_value`'s "the only pointer the checker lets a string become", `lower_view_of`'s, `lower_expr`'s `AST_NAME` ("a constant naming one"), `extra_argument_type`'s, `literal_bytes`', and `constant_bytes`' "The checker made sure every value is ..." and `constant_extent`'s assert comment.
 - [ ] **Step 4: Run all tests** on both hosts, debug and release. That includes the interpreted pass, where every new `tests/run` program must PASS, and `every_instruction_of_every_run_test_has_a_line`.
 - [ ] **Step 5: Commit** `Keep constants' data in read-only globals and read it from there`.
 
