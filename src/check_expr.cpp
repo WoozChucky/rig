@@ -2044,6 +2044,7 @@ Type *check_expression(Checker *c, Ast *e) {
     case AST_MEMBER: t = check_member(c, (Ast_Member *)e); break;
     case AST_LITERAL: t = check_literal(c, (Ast_Literal *)e); break;
     case AST_INDEX: t = check_index(c, (Ast_Index *)e); break;
+    case AST_RUN: t = check_run(c, (Ast_Run *)e); break;
     default: RIG_ASSERT(!"not an expression");
     }
     e->type = t;

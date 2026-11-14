@@ -450,6 +450,44 @@
 //   its .data"; a string's: "pass its .data, which may not end with a zero,
 //   or a literal").
 //
+// Code run while compiling (issue #115, spec 7.8).
+// - #run e is an expression, of e's type: an untyped constant's default
+//   type, so `C :: #run 7;` is a typed int. e is a value (a call that
+//   returns nothing has none). An e that is a constant already runs
+//   nothing: the #run is that constant. Any other runs when the checker
+//   first needs its value, and has the value it gives.
+// - In a body, it's a value, never a statement: "#run in a body must be a
+//   value, as in x := #run f();". Its operand runs before any call of the
+//   procedure it's in, so it can't use that procedure's locals, parameters
+//   or loops' iterators: "#run can't use 'x': it's a local, which doesn't
+//   exist while compiling" ("it's a parameter", "it's the loop's
+//   iterator", "it's the loop's index"), at the name. Local constants are
+//   fine.
+// - At the top level, #run e; (any expression, its value thrown away, a
+//   call that returns nothing too) or #run { ... } (a body of its own, which
+//   return ends) runs for its effect once the whole program checks. It's
+//   checked after every body, and never run by the checker.
+// - Before a #run runs, everything it reaches is checked (check_run.cpp's
+//   walk): the procedures its code calls or names, whose bodies are checked
+//   there and then if their turn hasn't come (check_reached_body), the
+//   globals and constants it names, and the struct types of what it
+//   reaches. An error anywhere there stops it, saying nothing new: the
+//   error was said where it is. The #run keeps its type but has no value,
+//   and what needs that value (an array's count, a constant, a global)
+//   says nothing more either. Each body, global and constant records
+//   whether its own check had errors (Ast_Proc.had_errors,
+//   Ast_Var.had_errors, Ast_Const.had_errors).
+// - main is where the program starts: a #run that reaches a call of it is
+//   "main is where the program starts; #run can't call it", at the #run.
+// - A body a #run needs while that body is being checked (its own #run, or
+//   one whose value the body needs, through a constant say) is a circle,
+//   "'f' is defined in terms of itself", at the #run, as a global's is
+//   (spec 4.8): the bodies in it have errors, and the globals in it no
+//   type. Bodies checked inside one another nest as declarations do (at
+//   most MAX_DEPTH levels deep, open_declaration): the one too many is
+//   "'f' is nested too deeply in the declarations that need it (more than
+//   1000 levels)", at its name, and is checked in its own turn.
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - main must exist as a procedure, have a body, take nothing and return
@@ -477,8 +515,9 @@
 #include "types.h"
 
 // Checks the program, every file's declarations in one tree (load.h),
-// filling in types and the procedures calls refer to. True when the checker
-// reported no errors (the parser or the loader may have).
+// filling in types and the procedures calls refer to: the declarations,
+// then the bodies, then the top-level #runs (checked, never run here). True
+// when the checker reported no errors (the parser or the loader may have).
 bool check(Ast_File *file, Arena *a, Diagnostics *d);
 
 // Whether e, checked with no errors, is a place in memory: a variable, but

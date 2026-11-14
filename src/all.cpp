@@ -22,6 +22,7 @@
 #include "types.cpp"
 #include "checker.cpp"
 #include "check_expr.cpp"
+#include "check_run.cpp"
 #include "ir.cpp"
 #include "lower.cpp"
 #include "thunk.cpp"
