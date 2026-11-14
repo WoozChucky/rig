@@ -308,7 +308,7 @@ install_rig() {
     path_changed=
     if ! bin_on_path; then
         if [ -n "$no_modify_path" ]; then
-            say "~/.local/bin isn't on your PATH: add it to run rig by name, with this line in ~/.profile or ~/.bashrc:"
+            say "Your PATH hasn't got ~/.local/bin: add it to run rig by name, with this line in ~/.profile or ~/.bashrc:"
             say "    $path_line"
         else
             add_path_line
