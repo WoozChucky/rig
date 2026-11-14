@@ -3718,27 +3718,32 @@ TEST(bounds_panic_knows_its_prefix) {
     arena_free(&a);
 }
 
-// Issue #113: constants holding data. A data constant used at run time is
-// one read-only global of bytes, const.N, made where a use first needs it;
-// one used only folded never reaches the IR.
+// Issue #113: constants holding data. A string, struct or array constant
+// whose bytes a use reads at run time is one read-only global of bytes,
+// const.N, made where such a use first needs it; one used only folded never
+// reaches the IR, and a pointer constant, or a string met as a *u8, is only
+// its literal's str.N address.
 
 TEST(data_constant_used_only_folded_takes_no_storage) {
     // Every use here folds: an element at a constant index, an array's and
-    // a string's .count, a string's byte. So neither the constants nor the
-    // string literal have a global, and the sizes and the sum are numbers.
+    // a string's .count, a string's byte. So neither the constants, top-level
+    // or local, nor the string literal have a global, and the sizes and the
+    // sums are numbers.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_source(&a,
                                           "PRIMES :: int.[2, 3, 5, 7, 11];\n"
                                           "N :: PRIMES[2];\n"
                                           "NAME :: \"rig\";\n"
                                           "main :: () { grid : [N]int; sized : [PRIMES.count]u8; "
-                                          "x := PRIMES[4] + NAME.count; c := NAME[0]; }\n"));
+                                          "x := PRIMES[4] + NAME.count; c := NAME[0]; "
+                                          "L :: int.[1, 2, 3]; y := L[1] + L.count; }\n"));
     CHECK(!contains(ir, "@const."));
     CHECK(!contains(ir, "@str."));
     String main = proc_ir(ir, "main");
     CHECK(contains(main, "local 40 align 8"));
     CHECK(contains(main, "local 5 align 1"));
     CHECK(contains(main, "const i64 14"));
+    CHECK(contains(main, "const i64 5"));
     arena_free(&a);
 }
 
@@ -3912,8 +3917,10 @@ TEST(global_copies_constant_data) {
                        "\\0B\\00\\00\\00\\00\\00\\00\\00\"\n"));
     CHECK(contains(ir, "global @view: 16 align 8 = \"\\05\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @array.0\n"));
-    CHECK(contains(ir, "global @name: 8 align 8 = zero reloc 0 @str."));
-    CHECK(contains(line_with(ir, "global @second: "), "reloc 8 @add"));
+    // name and second's symbol, both NAME, point at NAME's literal's bytes.
+    CHECK(contains(ir, "global @str.0 = \"rig\\00\"\n"));
+    CHECK(contains(ir, "global @name: 8 align 8 = zero reloc 0 @str.0\n"));
+    CHECK(contains(ir, "global @second: 16 align 8 = zero reloc 0 @str.0 reloc 8 @add\n"));
     CHECK(contains(ir, "global @op: 8 align 8 = zero reloc 0 @add"));
     arena_free(&a);
 }
@@ -3939,5 +3946,32 @@ TEST(left_out_parts_of_constants_are_zero) {
     String main = proc_ir(ir, "main");
     CHECK(contains(main, "addr @const.0"));
     CHECK(!contains(main, "local 24 align 8"));
+    arena_free(&a);
+}
+
+TEST(constant_naming_other_data_has_its_bytes) {
+    // A constant whose value is a part another constant's literal leaves
+    // out, or names another constant, used at run time, is a const.N of its
+    // own with the bytes its value stands for: ITEMS's zeros, COPY's
+    // PRIMES's five ints. PRIMES itself, never used, has none.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "Box :: struct { n: int; items: [3]int; }\n"
+                                          "EMPTY :: Box.{n = 1};\n"
+                                          "PRIMES :: int.[2, 3, 5, 7, 11];\n"
+                                          "ITEMS :: EMPTY.items;\n"
+                                          "COPY :: PRIMES;\n"
+                                          "main :: () { i := 1; x := ITEMS[i]; y := COPY[i]; }\n"));
+    CHECK_EQ(count_of(ir, "const @const."), 2);
+    CHECK(contains(ir, "const @const.0: 24 align 8 = zero\n"));
+    CHECK(contains(ir, "const @const.1: 40 align 8 = \""
+                       "\\02\\00\\00\\00\\00\\00\\00\\00"
+                       "\\03\\00\\00\\00\\00\\00\\00\\00"
+                       "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\07\\00\\00\\00\\00\\00\\00\\00"
+                       "\\0B\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    String main = proc_ir(ir, "main");
+    CHECK(contains(main, "addr @const.0"));
+    CHECK(contains(main, "addr @const.1"));
     arena_free(&a);
 }

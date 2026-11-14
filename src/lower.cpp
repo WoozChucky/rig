@@ -34,13 +34,16 @@
 //   null is a constant already, and so is a part of constant data the
 //   checker folded (PRIMES[2], ORIGIN.x, NAME.count): a constant used only
 //   so never reaches the IR. A constant naming a procedure is its address.
-//   A data constant used at run time (PRIMES[i], for PRIMES, a copy of
-//   ORIGIN) is one read-only global of bytes, const.N, made where a use
-//   first needs it (constant_global) and the same for every use after: its
-//   value's bytes and relocations, as a global variable's are, but the
-//   program must not write them: a write through a view of one is
-//   undefined. Its value is the global's address, as any aggregate's is,
-//   and a view of it points into it, with no copy (lower_view_of).
+//   A string, struct or array constant whose bytes a use reads at run time
+//   (PRIMES[i], for PRIMES, a copy of ORIGIN) is one read-only global of
+//   bytes, const.N, made where such a use first needs it (constant_global)
+//   and the same for every use after: its value's bytes and relocations,
+//   as a global variable's are, but the program must not write them: a
+//   write through a view of one is undefined. Its value is the global's
+//   address, as any aggregate's is, and a view of it points into it, with
+//   no copy (lower_view_of). A pointer constant (GREETING :: cast(*u8)
+//   "hi";) holds no bytes of its own, and a string constant met as a *u8
+//   (puts(NAME)) needs none: each is its literal's str.N address.
 // - Several results: a return gives one value per result, a call numbers
 //   one value per result (its first is the call's value where one is
 //   wanted), and names or targets receiving them are stored from those
@@ -2231,8 +2234,9 @@ static s32 add_global_array(Lowering *l, Type *array, Ast *literal) {
 // is_read_only, its type's size and alignment, its value's bytes and
 // relocations (global_value), no rig_type. Made the first time a use needs
 // it, the same after; its index. So a constant used only folded (PRIMES[2],
-// NAME.count) has none, and one used at run time has one, wherever it's
-// used. The bytes are the value node's, not `data`'s, which is null for a
+// NAME.count), or only as its literal's address (a pointer constant,
+// puts(NAME)), has none, and one whose bytes a use reads at run time has
+// one, wherever it's used. The bytes are the value node's, not `data`'s, which is null for a
 // part a literal leaves out: constant_bytes finds the literal itself.
 static s32 constant_global(Lowering *l, Ast_Const *constant) {
     String key = node_key(l->arena, constant);
@@ -2538,10 +2542,11 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     // constant data, or holds some, is copied into the global's bytes:
     // `origin := ORIGIN;` is a variable of its own. Constants and structs'
     // declarations are skipped: a constant's uses are constants (or, naming
-    // a procedure, its address), or its data's read-only global, made
-    // where a use first needs it (constant_global); and a struct is only a
-    // type. The procedures are numbered first (proc_index), so a relocation
-    // can name one.
+    // a procedure, its address), its literal's str.N address (a pointer
+    // constant, or a string met as a *u8), or its data's read-only global,
+    // made where a use first needs it (constant_global); and a struct is
+    // only a type. The procedures are numbered first (proc_index), so a
+    // relocation can name one.
     for (s64 i = 0; i < f->procs.count; i++) table_put(&l.proc_index, f->procs[i]->name, (s32)i);
     for (s64 i = 0; i < f->globals.count; i++) {
         if (f->globals[i]->kind != AST_VAR) continue;
