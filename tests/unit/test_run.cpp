@@ -2,7 +2,8 @@
 // runs when the checker first needs its value, in the one compile-time
 // world of the compilation, and its result is baked into the tree as a
 // constant (#113's constant data). Uses test_checker.cpp's helpers
-// (check_src, global_named, value_of, type_of, sorted_messages).
+// (check_src, global_named, value_of, sorted_messages, joined) and
+// helpers.cpp's (check_source, lower_source).
 
 #include "test.h"
 
@@ -86,6 +87,27 @@ TEST(run_bakes_procedure_values) {
     CHECK_EQ(call->kind, AST_CALL);
     CHECK(((Ast_Call *)call)->proc == add);
     token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(run_procedure_values_of_another_type) {
+    // A procedure value cast to another procedure type is still baked as
+    // the procedure it is, a foreign one the first that has its address, so
+    // a constant naming it as that other type gets the constant's error. A
+    // local holds the value as it is, and says nothing.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "strlen :: (s: *u8) -> u64 #foreign libc;\n"
+                           "wrong :: () -> (a: int) -> int { return cast((a: int) -> int) cast(*void) add; }\n"
+                           "W :: #run wrong();\n"
+                           "c_wrong :: () -> (s: *u8) -> u32 #c_call {\n"
+                           "    return cast((s: *u8) -> u32 #c_call) cast(*void) strlen;\n"
+                           "}\n"
+                           "L :: #run c_wrong();\n"
+                           "main :: () { w := #run wrong(); l := #run c_wrong(); }\n"),
+              "4:6: 'add' is a '(int, int) -> int', so a constant can't name it as a '(int) -> int'\n"
+              "8:6: 'strlen' is a '(*u8) -> u64 #c_call', so a constant can't name it as a '(*u8) -> u32 #c_call'\n");
     arena_free(&a);
 }
 
@@ -213,6 +235,41 @@ TEST(run_failure_says_nothing_more) {
                            "main :: () { }\n"),
               joined(&a, failed_fail_at(&a, "2:6"), failed_fail_at(&a, "4:11"), failed_fail_at(&a, "5:6"),
                      failed_fail_at(&a, "6:10")));
+    arena_free(&a);
+}
+
+// run_failures_show_up_to_21_calls's failure of #run deep(levels), at `at`
+// ("L:C"): levels + 2 frames, the failing deep's, the deeps waiting on it,
+// the #run's; all of them, or of more than 21 the innermost and outermost
+// ten and between them the count of the rest.
+static const char *failed_deep(Arena *a, const char *at, s32 levels) {
+    s32 frames = levels + 2;
+    String text = string_printf(a,
+                                "%s: #run failed: runtime error: index 1 is out of bounds (count 1)\n"
+                                "    in deep (test.rig:1:67)\n",
+                                at);
+    for (s32 i = 1; i < frames - 1; i++) {
+        if (frames > 21 && i == 10) {
+            text = string_printf(a, STR_FMT "    ... %d more calls\n", STR_ARG(text), frames - 20);
+            i = frames - 10;
+        }
+        text = string_printf(a, STR_FMT "    in deep (test.rig:1:74)\n", STR_ARG(text));
+    }
+    return string_cstr(a, string_printf(a, STR_FMT "    in #run (test.rig:%s)\n", STR_ARG(text), at));
+}
+
+TEST(run_failures_show_up_to_21_calls) {
+    // A failure shows every frame up to 21; of 22, the innermost ten and
+    // the outermost ten, and between them "... 2 more calls", never one,
+    // which would take the line of the call it leaves out.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "deep :: (n: int) -> int { if n == 0 { a : [1]int; i := 1; return a[i]; } return deep(n - 1); }\n"
+                           "A :: #run deep(19);\n"
+                           "B :: #run deep(20);\n"
+                           "C :: #run deep(25);\n"
+                           "main :: () { }\n"),
+              joined(&a, failed_deep(&a, "2:6", 19), failed_deep(&a, "3:6", 20), failed_deep(&a, "4:6", 25)));
     arena_free(&a);
 }
 
