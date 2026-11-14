@@ -1,0 +1,60 @@
+// Basic's memory: copying bytes from one place to another, setting them all
+// to one value, and comparing two runs of them, as C's memmove, memset and
+// memcmp do. They're byte loops written in Rig rather than calls into C, so
+// Basic's C layer stays the few functions libc.rig declares, and the same
+// Rig code runs compiled and interpreted.
+//
+// Each takes its memory as *void, so any pointer converts to it, and reads
+// and writes it as *u8, one byte at a time: a *void has no size to move or
+// index by (spec 3.5). A count of 0 or less does nothing and reads nothing,
+// so a null pointer with no bytes behind it is fine.
+
+// Copies count bytes from source to destination. The two may overlap, as
+// with C's memmove: the bytes copied are the ones source held before the
+// copy began.
+//
+// When the destination is below the source, a forward copy reads each byte
+// of the source before it is written over, since every write lands below
+// the bytes still to be read. When the destination is above the source, a
+// forward copy would overwrite the source's later bytes before reading
+// them, so the copy goes backward, from the last byte down, for the same
+// reason the other way round. The same address either way changes nothing.
+copy_memory :: (destination: *void, source: *void, count: int) {
+    if count <= 0 { return; }
+    to := cast(*u8) destination;
+    from := cast(*u8) source;
+    if to < from {
+        for i: 0..count - 1 { to[i] = from[i]; }
+    } else {
+        i := count;
+        while i > 0 {
+            i -= 1;
+            to[i] = from[i];
+        }
+    }
+}
+
+// Sets count bytes from destination on to value.
+set_memory :: (destination: *void, value: u8, count: int) {
+    if count <= 0 { return; }
+    to := cast(*u8) destination;
+    // tests/run/basic_table_overflow.err names this line and column, the
+    // [, where null memory stops the program.
+    for i: 0..count - 1 { to[i] = value; }
+}
+
+// Compares count bytes from a and from b: -1 when a's are smaller, 1 when
+// they're larger, and 0 when they're the same, as decided by the first byte
+// that differs. The bytes are compared as u8s, unsigned, so 200 is above
+// 100 as C's memcmp has it, not below it as a signed byte would be. A count
+// of 0 or less compares no bytes, so the runs are the same.
+compare_memory :: (a: *void, b: *void, count: int) -> int {
+    if count <= 0 { return 0; }
+    left := cast(*u8) a;
+    right := cast(*u8) b;
+    for i: 0..count - 1 {
+        if left[i] < right[i] { return -1; }
+        if left[i] > right[i] { return 1; }
+    }
+    return 0;
+}

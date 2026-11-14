@@ -1,0 +1,35 @@
+// Basic's string builder (issue #134) given an append whose capacity
+// doubles past half of int's largest value, where another doubling would
+// wrap, and still doesn't fit: the capacity is then what is needed, though
+// that is less than int's largest. No allocator has that many bytes, and
+// given null the builder stops the program at its copy with the language's
+// null pointer dereference, at the line of builder.rig this .err names.
+#load "../../modules/Basic/module.rig";
+
+// Prints the size of each allocation asked for, and gives none.
+refusing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE || mode == RESIZE {
+        print_string("asked for ");
+        print_int(size);
+        print_byte(10);
+    }
+    return null;
+}
+
+main :: () {
+    // A builder can't be this full, so its fields are set as if it were:
+    // 2^61 bytes in 2^61. Its data stays null: the append stops before
+    // reading it.
+    b : String_Builder;
+    builder_init(*b, Allocator.{refusing_allocator_proc, null});
+    b.capacity = 2305843009213693952;
+    b.count = b.capacity;
+
+    // 2^61 + 1 bytes more: the capacity doubles to 2^62, past half of int's
+    // largest, and 2^62 + 1 are needed. No string this long exists, but its
+    // bytes are never read: the append stops before copying them.
+    too_long := "x";
+    too_long.count = b.capacity + 1;
+    append_string(*b, too_long);
+    print_string("not reached");
+}
