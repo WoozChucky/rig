@@ -2,7 +2,7 @@
     "name": "rig-language",
     "displayName": "Rig",
     "description": "The Rig programming language: syntax highlighting, snippets, errors as you type, build and run commands, debugging",
-    "version": "0.2.2",
+    "version": "0.3.0",
     "publisher": "woozchucky",
     "license": "MIT",
     "homepage": "https://woozchucky.github.io/rig/",
@@ -185,6 +185,12 @@
                     ],
                     "default": "onType",
                     "markdownDescription": "When to run `rig check` on an open `.rig` file and show its errors in the editor and the Problems panel, without building. While it's on, the build and run tasks list only a program's runtime errors, since the compile errors are already there."
+                },
+                "rig.main": {
+                    "type": "string",
+                    "default": "",
+                    "scope": "resource",
+                    "markdownDescription": "The main file of this workspace folder's program, which the live check checks a loaded file as part of (`~` and `${workspaceFolder}` work; a relative path is from the workspace folder). Empty, or when that program doesn't load the file: the first `.rig` file in the folder, in path order, that declares `main` and whose program loads it."
                 }
             }
         },
