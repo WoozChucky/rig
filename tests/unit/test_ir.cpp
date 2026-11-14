@@ -3925,19 +3925,34 @@ TEST(global_copies_constant_data) {
     arena_free(&a);
 }
 
+// How many bytes the compiler holds for the module's global named `name`
+// (the rest of its size is zeros it never holds); -1 if there is none.
+static s64 bytes_held(Ir_Module *m, const char *name) {
+    for (s64 i = 0; i < m->globals.count; i++) {
+        if (string_eq(m->globals[i].name, str(name))) return m->globals[i].bytes.count;
+    }
+    return -1;
+}
+
 TEST(left_out_parts_of_constants_are_zero) {
     // A part a constant's literal leaves out is zero: in a global copied
     // from it, nothing is written, and a view global of a left-out array
     // still sees all its elements, zeros, in an array.N of its own. At run
     // time a view of one points into the constant's global, zeros there.
+    // The compiler holds none of a left-out part's bytes, and only EMPTY's
+    // up to n's.
     Arena a = arena_make();
-    String ir = ir_print(&a, lower_source(&a,
-                                          "Box :: struct { n: int; items: [3]int; }\n"
-                                          "EMPTY :: Box.{n = 1};\n"
-                                          "sum :: (v: []int) -> int { return v.count; }\n"
-                                          "items := EMPTY.items;\n"
-                                          "view : []int = EMPTY.items;\n"
-                                          "main :: () { n := sum(EMPTY.items); }\n"));
+    Ir_Module *m = lower_source(&a,
+                                "Box :: struct { n: int; items: [3]int; }\n"
+                                "EMPTY :: Box.{n = 1};\n"
+                                "sum :: (v: []int) -> int { return v.count; }\n"
+                                "items := EMPTY.items;\n"
+                                "view : []int = EMPTY.items;\n"
+                                "main :: () { n := sum(EMPTY.items); }\n");
+    CHECK_EQ(bytes_held(m, "items"), 0);
+    CHECK_EQ(bytes_held(m, "array.0"), 0);
+    CHECK_EQ(bytes_held(m, "const.0"), 8);
+    String ir = ir_print(&a, m);
     CHECK(contains(ir, "global @items: 24 align 8 = zero\n"));
     CHECK(contains(ir, "global @array.0: 24 align 8 = zero\n"));
     CHECK(contains(ir, "global @view: 16 align 8 = \"\\03\\00\\00\\00\\00\\00\\00\\00"
@@ -3952,16 +3967,19 @@ TEST(left_out_parts_of_constants_are_zero) {
 TEST(constant_naming_other_data_has_its_bytes) {
     // A constant whose value is a part another constant's literal leaves
     // out, or names another constant, used at run time, is a const.N of its
-    // own with the bytes its value stands for: ITEMS's zeros, COPY's
-    // PRIMES's five ints. PRIMES itself, never used, has none.
+    // own with the bytes its value stands for: ITEMS's zeros, none of which
+    // the compiler holds, COPY's PRIMES's five ints. PRIMES itself, never
+    // used, has none.
     Arena a = arena_make();
-    String ir = ir_print(&a, lower_source(&a,
-                                          "Box :: struct { n: int; items: [3]int; }\n"
-                                          "EMPTY :: Box.{n = 1};\n"
-                                          "PRIMES :: int.[2, 3, 5, 7, 11];\n"
-                                          "ITEMS :: EMPTY.items;\n"
-                                          "COPY :: PRIMES;\n"
-                                          "main :: () { i := 1; x := ITEMS[i]; y := COPY[i]; }\n"));
+    Ir_Module *m = lower_source(&a,
+                                "Box :: struct { n: int; items: [3]int; }\n"
+                                "EMPTY :: Box.{n = 1};\n"
+                                "PRIMES :: int.[2, 3, 5, 7, 11];\n"
+                                "ITEMS :: EMPTY.items;\n"
+                                "COPY :: PRIMES;\n"
+                                "main :: () { i := 1; x := ITEMS[i]; y := COPY[i]; }\n");
+    CHECK_EQ(bytes_held(m, "const.0"), 0);
+    String ir = ir_print(&a, m);
     CHECK_EQ(count_of(ir, "const @const."), 2);
     CHECK(contains(ir, "const @const.0: 24 align 8 = zero\n"));
     CHECK(contains(ir, "const @const.1: 40 align 8 = \""

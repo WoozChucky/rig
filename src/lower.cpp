@@ -2080,7 +2080,7 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
     for (s64 k = 0; k < size; k++) at[k] = (u8)(bits >> (8 * k));
 }
 
-static s32 add_global_array(Lowering *l, Type *array, Ast *literal);
+static s32 add_global_array(Lowering *l, Type *array, Ast *value);
 
 // The struct or array literal holding the value of `value`, an aggregate's
 // that constant_bytes writes: value itself, or, for constant data written
@@ -2215,17 +2215,19 @@ static void global_value(Lowering *l, Ir_Global *g, Type *t, Ast *value) {
     g->bytes = {bytes, extent};
 }
 
-// A global of bytes for a global view's array literal, `array.N`: a
-// variable (the view may write its elements), the literal's bytes; its
-// index. Its name can't be a Rig global's, which has no '.'.
-static s32 add_global_array(Lowering *l, Type *array, Ast *literal) {
+// A global of bytes for a global view's array value, `array.N`: a variable
+// (the view may write its elements), the value's bytes, an array literal's
+// or constant data's (the literal holding it, literal_of; zeros for a part a
+// literal leaves out); its index. Its name can't be a Rig global's, which
+// has no '.'.
+static s32 add_global_array(Lowering *l, Type *array, Ast *value) {
     Ir_Global g = {};
     g.name = string_printf(l->arena, "array.%d", l->array_count++);
     g.type = IR_VOID;
     g.has_layout = true;
     g.size = array->size;
     g.align = (u32)array->align;
-    global_value(l, &g, array, literal);
+    global_value(l, &g, array, value);
     array_add(&l->module->globals, g);
     return (s32)(l->module->globals.count - 1);
 }
