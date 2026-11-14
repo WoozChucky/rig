@@ -36,7 +36,7 @@ Either one installs the latest release for your user alone, with no administrato
 
    For another shell, such as fish, it says what to add.
 4. It installs the [VS Code extension](#vs-code-extension), if `code` is on your `PATH`.
-5. It builds and runs hello world, to check that your system has what Rig needs. If it can't, Rig stays installed, and the script says what to install: the [requirements](#requirements) below.
+5. It builds and runs hello world, to check that your system has what Rig needs. If the build fails, Rig stays installed, and the script says what to install: the [requirements](#requirements) below. If hello world builds but doesn't run, the requirements are there, and the script says so: something else stopped the program, such as a temporary folder that doesn't let programs run, or an antivirus.
 6. It prints `rig version`'s line, such as `rig 0.2.0 (89de631d10c7 2026-11-13) LLVM 23.1.5`. If it says to, open a new terminal (one opened before doesn't see the new `PATH`); then build a program with `rig build hello.rig`.
 
 **To upgrade**, run the command again: it overwrites the files, and adds nothing to the `PATH` the second time.
