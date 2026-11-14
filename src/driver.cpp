@@ -1,6 +1,7 @@
-// driver.cpp: rig build, every stage in order, and rig check, the stages up
-// to the diagnostics, of a program's files as they are on disk or with one
-// file's text from standard input, an editor's (command_check, at the end).
+// driver.cpp: rig build, every stage in order, of a program's files as they
+// are on disk, and rig check, the stages up to the diagnostics, of the same
+// files or with one file's text read from standard input instead, an
+// editor's text not yet saved (command_check, at the end).
 //
 // rig build FILE.rig [-o OUTPUT] [--no-bounds-checks] reads the file and the
 // files it #loads, lexes, parses and checks them, and stops there with the
