@@ -7,6 +7,10 @@
 //       main :: () { putz("Hello, World!"); }
 //                    ^
 //
+// A few have more lines after the caret: a #run that failed while
+// compiling is followed by the calls that led to the failure, one a line
+// (spec 7.8, Diagnostic.lines).
+//
 // Errors are collected, not printed at once: the compiler keeps going after
 // one (an editor's live check needs that: rig check --stdin or
 // --stdin-for, spec 10.1) and prints them all at the end, sorted by file
@@ -39,6 +43,8 @@ struct Source_File {
 struct Diagnostic {
     Position pos;
     String message;
+    String lines;  // more lines, printed after the caret: a failed #run's frames ("    in NAME
+                   // (PATH:L:C)\n" each, spec 7.8); empty for most
 };
 
 // Zero-initialised ({}) is ready to use.
@@ -61,6 +67,10 @@ void diag_locate_file(Diagnostics *d, s32 file, String directory, bool windows);
 
 // Records an error at pos, with a printf-style message.
 void diag_error(Diagnostics *d, Position pos, const char *fmt, ...);
+
+// Gives the error reported last these lines, copied: each ends with a line
+// break, and they're printed after its caret (Diagnostic.lines).
+void diag_add_lines(Diagnostics *d, String lines);
 
 // Sorts the errors by file, then line, then column, keeping the order of
 // errors at the same place. Each stage reports in its own order (the lexer

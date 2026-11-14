@@ -1746,11 +1746,12 @@ static String declared_name(Ast *decl) {
     }
 }
 
-bool check(Ast_File *file, Arena *a, Diagnostics *d) {
+bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     s64 errors_before = d->error_count;
     Checker c = {};
     c.arena = a;
     c.diag = d;
+    c.world = world ? world : compile_time_new(d);
     c.lost_a_file = file->lost_a_file;
 
     // First every name, so procedures, globals, constants and structs can
@@ -1879,5 +1880,6 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
     array_free(&c.loops);
     array_free(&c.resolving);
     array_free(&c.too_deep);
+    if (!world) compile_time_free(c.world);
     return d->error_count == errors_before;
 }

@@ -24,8 +24,13 @@ void diag_error(Diagnostics *d, Position pos, const char *fmt, ...) {
     vsnprintf(text, (size_t)n + 1, fmt, args);
     va_end(args);
 
-    array_add(&d->messages, {pos, {(const u8 *)text, n}});
+    array_add(&d->messages, {pos, {(const u8 *)text, n}, {}});
     d->error_count++;
+}
+
+void diag_add_lines(Diagnostics *d, String lines) {
+    RIG_ASSERT(d->messages.count > 0);
+    d->messages[d->messages.count - 1].lines = string_copy(&d->arena, lines);
 }
 
 // The text of line number `line` (from 1), without its line break, and
@@ -103,6 +108,8 @@ String diag_render(Arena *a, Diagnostics *d) {
             array_add(&out, c < line.count && line.data[c] == '\t' ? (u8)'\t' : (u8)' ');
         }
         append(&out, str("^\n"));
+        // Then its lines, if it has any: a failed #run's frames.
+        append(&out, m->lines);
     }
     String result = string_copy(a, {out.data, out.count});
     array_free(&out);

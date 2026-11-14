@@ -5373,8 +5373,8 @@ static String sorted_messages(Arena *a, Checked *c) {
 TEST(run_has_its_operands_type) {
     // #run e has e's type, an untyped constant's default type, so C is a
     // typed int. An operand that is a constant already runs nothing: the
-    // #run is that constant. Anything else is left without a value until
-    // it runs (issue #115's later steps).
+    // #run is that constant, its value the operand. Anything else runs,
+    // and its value is a node of its own, baked from the result.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "f :: () -> int { return 3; }\n"
@@ -5407,8 +5407,10 @@ TEST(run_has_its_operands_type) {
     CHECK_STR(type_of(&a, &c, "e"), "int");
     Ast *call = value_of(&c, "e");
     CHECK_EQ(call->kind, AST_RUN);
-    CHECK(!call->is_constant);
-    CHECK(((Ast_Run *)call)->value == nullptr);
+    CHECK(call->is_constant);
+    CHECK_EQ(call->constant, 3u);
+    Ast *baked = ((Ast_Run *)call)->value;
+    CHECK(baked && baked != ((Ast_Run *)call)->operand && baked->kind == AST_INT);
     CHECK_STR(type_of(&a, &c, "h"), "u8");
     CHECK_STR(type_of(&a, &c, "grid"), "[7]int");
     token_list_free(c.list);
@@ -5644,8 +5646,9 @@ TEST(run_stops_at_errors_it_reaches) {
               "1:25: unknown identifier 'unknown'\n");
     // A parameter whose type had an error counted to another declaration:
     // K's sizes it, so h itself had none, but a has no type, and the #run
-    // that reaches h through use_h fails. Until #run runs, the walk's
-    // verdict is seen only by walking again (reaches_clean).
+    // that reaches h through use_h fails, saying nothing: M has no value,
+    // while L runs. Walking again once the check is done (reaches_clean)
+    // gives the same verdicts.
     c = check_src(&a,
                   "K :: unknown_thing;\n"
                   "h :: (a: [K]int) -> int { return 1; }\n"
@@ -5656,6 +5659,9 @@ TEST(run_stops_at_errors_it_reaches) {
                   "main :: () { }\n");
     CHECK_STR(sorted_messages(&a, &c), "1:6: unknown identifier 'unknown_thing'\n");
     CHECK(!c.file->procs[0]->had_errors);
+    CHECK(global_named(&c, "M")->type == nullptr);
+    CHECK(global_named(&c, "L")->is_constant);
+    CHECK_EQ(global_named(&c, "L")->constant, 1u);
     CHECK(!reaches_clean(&a, &c, "M"));
     CHECK(reaches_clean(&a, &c, "L"));
     token_list_free(c.list);

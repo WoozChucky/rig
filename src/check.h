@@ -7,10 +7,13 @@
 #pragma once
 
 #include "checker.h"
+#include "run.h"
 
 struct Checker {
     Arena *arena;
     Diagnostics *diag;
+    Compile_Time *world;         // where expression #runs run (run.h): check()'s caller's, or one of
+                                 // check()'s own
     Table<Ast *> top_level;      // every procedure, global variable, top-level constant and
                                  // struct, by name: visible everywhere (Ast_Proc, Ast_Var,
                                  // Ast_Const, Ast_Struct)

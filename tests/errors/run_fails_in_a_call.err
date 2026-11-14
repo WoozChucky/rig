@@ -1,0 +1,6 @@
+tests/errors/run_fails_in_a_call.rig:12:6: error: #run failed: runtime error: index 10 is out of bounds (count 10)
+    A :: #run fill();
+         ^
+    in table (tests/errors/run_fails_in_a_call.rig:7:13)
+    in fill (tests/errors/run_fails_in_a_call.rig:10:21)
+    in #run (tests/errors/run_fails_in_a_call.rig:12:6)

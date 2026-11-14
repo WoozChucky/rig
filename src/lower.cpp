@@ -1462,6 +1462,14 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         }
         return lower_operation(l, b->op, e->type, lower_value(l, b->left, e->type), b->right, b->pos);
     }
+    case AST_RUN: {
+        // A #run's value, baked while checking (run.cpp): a number is a
+        // constant, lowered as one (lower_value), so this is a procedure
+        // value, the procedure's address.
+        Ast_Proc *proc = procedure_address(e);
+        RIG_ASSERT(proc);
+        return emit_proc_address(l, proc);
+    }
     default: RIG_ASSERT(!"not a value"); return -1;
     }
 }

@@ -1,0 +1,23 @@
+// Code run while compiling (issue #115, spec 7.8): a #run's result is a
+// typed constant of its operand's type. One sizes an array, one names a
+// procedure that main then calls, and one in a body folds with what's
+// around it.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+triangle :: (n: int) -> int {
+    total := 0;
+    for 1..n { total += it; }
+    return total;
+}
+
+add :: (a: int, b: int) -> int { return a + b; }
+pick :: () -> (int, int) -> int { return add; }
+
+LIMIT :: #run triangle(4);
+grid : [LIMIT]int;
+OP :: #run pick();
+
+main :: () {
+    seed := #run triangle(3) + 1;
+    printf("%lld %lld %lld\n", grid.count, seed, OP(2, 3));
+}

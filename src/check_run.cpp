@@ -365,8 +365,9 @@ static bool reach_run(Checker *c, Ast_Run *run, Type *t) {
 // 4. Anything else must reach no errors (reach_run); if it does, it has no
 //    value, and what needs it says nothing more (has_failed_run). One whose
 //    operand had errors isn't walked: only the locals in it are said.
-// 5. Then it runs, once the compile-time world can run it (issue #115's
-//    next steps). Until then it has no value either.
+// 5. Then it runs, in the compilation's compile-time world (run.cpp's
+//    compile_time_run), which bakes its result into its value. One that
+//    fails, said there, has no value either.
 Type *check_run(Checker *c, Ast_Run *run) {
     if (run->checked) return run->type;
     run->checked = true;
@@ -390,7 +391,9 @@ Type *check_run(Checker *c, Ast_Run *run) {
         return t;
     }
     if (!reach_run(c, run, t)) return t;
-    // 5: it would run here; it has no value until it does.
+    // Its type first: lowering gives its procedure the result it has.
+    run->type = t;
+    compile_time_run(c->world, c, run);
     return t;
 }
 
