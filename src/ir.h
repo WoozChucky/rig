@@ -353,8 +353,10 @@ struct Ir_Proc {
     Array<Ir_Param> params;    // the parameters are the values %0 ... %(count-1) (ir_add_param)
     Array<Ir_Param> results;   // none, one, or several (several only for Rig procedures)
     bool is_foreign;           // declared, defined elsewhere (libc); no blocks
-    String c_name;             // a foreign one's C function's name when it isn't `name`
-                               // (#foreign libc "free"); empty otherwise (ir_c_name)
+    String c_name;             // a foreign one's C function's name when its declaration
+                               // writes one (#foreign libc "free"), even one equal to
+                               // `name`; empty otherwise, the C name then being `name`
+                               // (ir_c_name)
     bool is_variadic;          // a foreign one declared with '..', C's '...': a call passes
                                // more arguments after params, each already widened by C's
                                // default argument promotions (types.h's type_c_promoted)
