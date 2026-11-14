@@ -765,11 +765,21 @@ TEST(load_same_file_by_identity) {
     CHECK(load_same_file(a_rig, str(in_directory(&a, dir, "./a.rig"))));
     CHECK(load_same_file(gone, str(in_directory(&a, dir, "sub/../gone.rig"))));
     CHECK(!load_same_file(a_rig, gone));
+    // nosub isn't there either. A path with an id never names the same file
+    // as one without, even when the two made absolute are one path.
+    CHECK(!os_file_exists(str(in_directory(&a, dir, "nosub"))));
+    String through_nosub = str(in_directory(&a, dir, "nosub/../a.rig"));
 #ifdef _WIN32
     CHECK(load_same_file(string_printf(&a, STR_FMT "\\A.RIG", STR_ARG(dir)), a_rig));
     CHECK(load_same_file(str(in_directory(&a, dir, "GONE.RIG")), gone));
+    // The system takes nosub/.. out by the text alone, so that path reaches
+    // a.rig and has its id.
+    CHECK(load_same_file(through_nosub, a_rig));
 #else
     CHECK(!load_same_file(str(in_directory(&a, dir, "A.RIG")), a_rig));
+    // The system resolves nosub/.. through nosub, so that path has no id
+    // while a.rig has one: they aren't one file.
+    CHECK(!load_same_file(through_nosub, a_rig));
 #endif
     arena_free(&a);
 }
