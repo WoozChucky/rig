@@ -4960,7 +4960,8 @@ TEST(string_constants_convert_as_literals) {
     // A string constant is a string literal's bytes, with the zero after
     // them, so it converts to *u8 and passes C's '...' as the literal
     // does, and so does a string field or element of constant data. A
-    // string variable holding the same bytes doesn't.
+    // string variable holding the same bytes doesn't, nor does a string a
+    // constant's literal leaves out, the empty string, holding no literal.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "puts :: (s: *u8) -> s32 #foreign libc;\n"
@@ -4980,12 +4981,23 @@ TEST(string_constants_convert_as_literals) {
                           "    s := \"rig\";\n"
                           "    puts(s);\n"
                           "    printf(\"%s\\n\", s);\n"
-                          "}\n");
+                          "    puts(EMPTY.name);\n"
+                          "    printf(\"%s\\n\", UNNAMED);\n"
+                          "    r : *u8 = UNNAMED;\n"
+                          "}\n"
+                          "EMPTY :: Named.{n = 1};\n"
+                          "UNNAMED :: EMPTY.name;\n");
     CHECK_STR(messages(&a, &c.list->diag),
               "16:10: argument 1 of 'puts' has type 'string', which can't be converted to '*u8'; its .data may not "
               "end with a zero\n"
               "17:20: argument 2 of 'printf' has type 'string', which C's '...' can't take; pass its .data, which "
-              "may not end with a zero, or a literal\n");
+              "may not end with a zero, or a literal\n"
+              "18:10: argument 1 of 'puts' has type 'string', which can't be converted to '*u8'; its .data may not "
+              "end with a zero\n"
+              "19:20: argument 2 of 'printf' has type 'string', which C's '...' can't take; pass its .data, which "
+              "may not end with a zero, or a literal\n"
+              "20:15: a value of type 'string' doesn't convert to '*u8' implicitly; its .data may not end with a "
+              "zero\n");
     CHECK_STR(type_of(&a, &c, "q"), "*u8");
     CHECK_STR(type_of(&a, &c, "b"), "[]u8");
     token_list_free(c.list);
@@ -5025,15 +5037,17 @@ TEST(constant_data_folds) {
     // (spec 5.9), through names, nested fields and literals of constants: a
     // field a literal leaves out is zero, read through a field left out
     // too, and so is an element of an array left out, and a string left out
-    // has no bytes, its .count 0. So a constant can name one and size an
-    // array. A float, or a narrow integer, has the bits of its field's or
-    // element's type: an untyped 2 given a float64 is 2.0, a -1 given an s8
-    // is sign-extended. A pointer or a procedure field or element left out,
-    // or given as null, is null, known too. An aggregate part, even one left
-    // out, isn't a number; nor is a pointer or a procedure a literal gives,
-    // a string's .data the address of its bytes, and an element or a byte at
-    // an index known only at run time is read then, as is a field reached
-    // through a pointer field, whose struct is elsewhere.
+    // has no bytes, its .count 0 and its .data null (a constant naming that
+    // .data holds null, a scalar, not data). So a constant can name one and
+    // size an array. A float, or a narrow integer, has the bits of its
+    // field's or element's type: an untyped 2 given a float64 is 2.0, a -1
+    // given an s8 is sign-extended. A pointer or a procedure field or
+    // element left out, or given as null, is null, known too. An aggregate
+    // part, even one left out, isn't a number; nor is a pointer or a
+    // procedure a literal gives, a string's .data the address of its bytes,
+    // and an element or a byte at an index known only at run time is read
+    // then, as is a field reached through a pointer field, whose struct is
+    // elsewhere.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "Vec2 :: struct { x: int; y: int; }\n"
@@ -5064,12 +5078,14 @@ TEST(constant_data_folds) {
                           "N :: PRIMES[2];\n"
                           "NONE :: EMPTY.name.count;\n"
                           "ZERO :: BLANK.a[1];\n"
+                          "NO_DATA :: EMPTY.name.data;\n"
                           "main :: () {\n"
                           "    grid : [N]int;\n"
                           "    sized : [PRIMES.count]int;\n"
                           "    unnamed : [NONE + 1]int;\n"
                           "    zeroed : [ZERO + 1]int;\n"
                           "    none := EMPTY.name.count;\n"
+                          "    no_data := EMPTY.name.data;\n"
                           "    element := BLANK.a[1];\n"
                           "    b := LINE.b;\n"
                           "    row := BLANK.rows[0];\n"
@@ -5120,6 +5136,12 @@ TEST(constant_data_folds) {
     CHECK_STR(type_of(&a, &c, "zeroed"), "[1]int");
     CHECK(folds_to(&c, "none", 0));
     CHECK_STR(type_name(&a, value_of(&c, "none")->type), "int");
+    CHECK(folds_to(&c, "no_data", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "no_data")->type), "*u8");
+    Ast_Const *no_data = (Ast_Const *)global_named(&c, "NO_DATA");
+    CHECK(no_data->is_constant && !no_data->is_data);
+    CHECK_EQ(no_data->constant, 0);
+    CHECK_STR(type_name(&a, no_data->type), "*u8");
     CHECK(folds_to(&c, "element", 0));
     CHECK(!value_of(&c, "b")->is_constant);
     CHECK(!value_of(&c, "row")->is_constant);
@@ -5184,10 +5206,10 @@ TEST(constant_data_folds) {
 TEST(mistyped_constant_data_doesnt_fold) {
     // A literal given a value of the wrong type, reported, keeps its own
     // type, so a field or an element of the part it got wrong is no part of
-    // data: it's left unfolded, and a constant naming it isn't known. A
-    // string field given a number has no bytes to count or index, nor a
-    // bound to be out of. An array literal that gives too few elements,
-    // reported, has the ones it lacks taken as zero.
+    // data: it's left unfolded, and a constant naming it has no type, with
+    // no error of its own. A string field given a number has no bytes to
+    // count or index, nor a bound to be out of. An array literal that gives
+    // too few elements, reported, has the ones it lacks taken as zero.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "Vec2 :: struct { x: int; y: int; }\n"
@@ -5204,10 +5226,10 @@ TEST(mistyped_constant_data_doesnt_fold) {
                           "    f := Named.{1, 1}.name[0];\n"
                           "    g := Named.{1, 1}.name[5];\n"
                           "    h := Grid.{a = .[1, 2]}.a[2];\n"
+                          "    R :: Grid.{rows = 5}.rows[0][1];\n"
                           "}\n");
     CHECK_STR(messages(&a, &c.list->diag),
               "5:16: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
-              "5:6: the value of constant 'X' isn't known while compiling\n"
               "7:20: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
               "8:16: a value of type 'string' doesn't convert to 'Vec2' implicitly\n"
               "9:16: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
@@ -5216,12 +5238,35 @@ TEST(mistyped_constant_data_doesnt_fold) {
               "11:17: a value of type 'int' doesn't convert to 'string' implicitly\n"
               "12:17: a value of type 'int' doesn't convert to 'string' implicitly\n"
               "13:17: a value of type 'int' doesn't convert to 'string' implicitly\n"
-              "14:20: '[3]int' has 3 elements, but this literal gives 2\n");
+              "14:20: '[3]int' has 3 elements, but this literal gives 2\n"
+              "15:23: a value of type 'int' doesn't convert to '[2][2]int' implicitly\n");
+    CHECK(!global_named(&c, "X")->type);
+    CHECK(!local_named(&c, "R")->type);
     CHECK(!value_of(&c, "e")->is_constant);
     CHECK(!value_of(&c, "f")->is_constant);
     CHECK(!value_of(&c, "g")->is_constant);
     CHECK(folds_to(&c, "h", 0));
     token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(nested_reads_of_literals_check_quickly) {
+    // A field or an element of a literal that is a value of another literal,
+    // whose field or element is read in turn, forty levels over, a pointer,
+    // a procedure or an array's element, in a constant and in a variable:
+    // each literal is found to be constant data once (Ast_Literal.is_data).
+    // Walked again at every read, the time would triple with each level,
+    // and forty would take years.
+    Arena a = arena_make();
+    const char *types = "S :: struct { p: *u8; }\n"
+                        "Op :: struct { run: (int, int) -> int; }\n"
+                        "A :: struct { a: [1]*u8; }\n"
+                        "add :: (a: int, b: int) -> int { return a + b; }\n";
+    const char *pointer = nested_source(&a, "Q :: ", "S.{p = ", 40, "\"x\"", "}.p", ";\n");
+    const char *procedure = nested_source(&a, "R :: ", "Op.{run = ", 40, "add", "}.run", ";\n");
+    const char *element = nested_source(&a, "T :: ", "A.{.[", 40, "\"x\"", "]}.a[0]", ";\n");
+    const char *local = nested_source(&a, "main :: () { q := ", "S.{p = ", 40, "\"x\"", "}.p", "; r := R; t := T; }\n");
+    CHECK(builds(&a, joined(&a, joined(&a, types, pointer), procedure, element, local)));
     arena_free(&a);
 }
 

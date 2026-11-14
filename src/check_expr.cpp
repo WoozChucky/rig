@@ -309,14 +309,23 @@ bool constant_data(Ast *e, Ast **value) {
     case AST_STRING: *value = e; return true;
     case AST_LITERAL: {
         if (t->kind != TYPE_STRUCT && t->kind != TYPE_ARRAY) return false;
+        // Decided once, then kept: each field or element read of a literal
+        // asks again, and a value that is itself such a read is walked
+        // several times over, so in S.{p = S.{p = "x"}.p}.p, nested deeper,
+        // walking the values each time would take three times as long for
+        // every level.
         Ast_Literal *literal = (Ast_Literal *)e;
-        for (s64 i = 0; i < literal->values.count; i++) {
-            Ast *part = literal->values[i];
-            Ast *ignored;
-            bool known = part->is_constant || procedure_address(part) || literal_address(part) ||
-                         constant_data(part, &ignored);
-            if (!known) return false;
+        if (!literal->is_data) {
+            bool known = true;
+            for (s64 i = 0; i < literal->values.count && known; i++) {
+                Ast *part = literal->values[i];
+                Ast *ignored;
+                known = part->is_constant || procedure_address(part) || literal_address(part) ||
+                        constant_data(part, &ignored);
+            }
+            literal->is_data = known ? 1 : -1;
         }
+        if (literal->is_data < 0) return false;
         *value = e;
         return true;
     }
@@ -1829,7 +1838,8 @@ static Type *check_size_of(Checker *c, Ast_Size_Of *size_of) {
 // m->index stays -1, lowering knowing them by name. A view's are its fields:
 // an int and a *T; a string's an int and a *u8. A string's .count is known
 // while compiling when the string is constant data (spec 5.9), its literal's
-// count, or 0 when a literal leaves it out: it folds, still an int. An
+// count, or 0 when a literal leaves it out: it folds, still an int; and so
+// is its .data when a literal leaves it out, null, the empty string's. An
 // array's .count is its N, an untyped integer constant as size_of is (so
 // b : u8 = a.count; takes it), a isn't evaluated for it; its .data, a *T, is
 // the address of its first element, so a must have one, as for *a[0]
@@ -1842,10 +1852,15 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
                    STR_ARG(m->name));
         return nullptr;
     }
-    Ast *bytes;
-    if (count && t == &type_string && constant_data(m->operand, &bytes) && (!bytes || bytes->kind == AST_STRING)) {
+    Ast *bytes = nullptr;
+    bool known = t == &type_string && constant_data(m->operand, &bytes);
+    if (count && known && (!bytes || bytes->kind == AST_STRING)) {
         m->is_constant = true;
         m->constant = bytes ? (u64)((Ast_String *)bytes)->value.count : 0;
+    }
+    if (!count && known && !bytes) {
+        m->is_constant = true;
+        m->constant = 0;
     }
     if (type_is_view_or_string(t)) return count ? &type_int : type_pointer_to(t->element);
     if (count) {

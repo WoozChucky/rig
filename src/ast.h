@@ -272,6 +272,8 @@ struct Ast_Literal : Ast {
     Array<Position> name_positions; // where each of those names is written
     Array<Ast *> values;
     bool is_array;                  // T.[a, b] or .[a, b]: an array's elements, in order
+    s8 is_data;                     // filled in by the checker once asked (constant_data): 1 when it's
+                                    // constant data, -1 when it isn't, 0 not asked yet
 };
 
 // a[i]: element i of the array, view or string a, or what the pointer a
