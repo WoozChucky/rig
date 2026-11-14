@@ -280,12 +280,33 @@ function compilerError(message) {
 // on Windows, where it only asks whether the file exists, so rig.compilerPath
 // may name one. Returning the error, rather than letting it be thrown, has
 // each caller handle both ways in one place.
-function startProcess(program, args, cwd) {
+//
+// With `group`, except on Windows, the process leads a process group of its
+// own, which endProcess ends whole: anything it started ends with it.
+function startProcess(program, args, cwd, group = false) {
     try {
-        return child_process.spawn(program, args, { cwd, windowsHide: true });
+        return child_process.spawn(program, args, { cwd, windowsHide: true, detached: group && process.platform !== 'win32' });
     } catch (e) {
         return e instanceof Error ? e : new Error(String(e));
     }
+}
+
+// Ends `child`, started by startProcess with `group`, with its process
+// group. rig.compilerPath may name a script that starts rig without exec:
+// ending the script alone would leave rig running, perhaps a #run that
+// never ends. When there's no group to end (on Windows, or the child never
+// started, or it has ended with all it started), the child itself is
+// ended, which then does nothing if it isn't running.
+function endProcess(child) {
+    if (process.platform !== 'win32' && child.pid) {
+        try {
+            process.kill(-child.pid, 'SIGTERM');
+            return;
+        } catch {
+            // no such group: fall through
+        }
+    }
+    child.kill();
 }
 
 // What to say when the compiler, `program`, couldn't be started, Node's
@@ -1004,7 +1025,7 @@ class LiveCheck {
         const child = this.running.get(key);
         if (child) {
             this.running.delete(key);
-            child.kill();
+            endProcess(child);
         }
     }
 
@@ -1252,7 +1273,7 @@ class LiveCheck {
 
     // Runs rig as the check of `key`, with `args`, in `cwd`, and `text` on its
     // standard input. this.running holds the process while it runs, so
-    // stop(key) ends it. Resolves { code, output } once it closes, `output`
+    // stop(key) ends it, with what it started (endProcess). Resolves { code, output } once it closes, `output`
     // all it wrote to stderr and `code` null when it was killed, or { error }
     // when it couldn't start: Node says so in one of two ways (see
     // startProcess), by throwing here or with the 'error' event. With
@@ -1260,7 +1281,7 @@ class LiveCheck {
     // resolves { timedOut: true, seconds } at once, whatever comes after.
     runRig(key, compiler, args, cwd, text, seconds) {
         return new Promise((resolve) => {
-            const child = startProcess(compiler, args, cwd);
+            const child = startProcess(compiler, args, cwd, true);
             if (child instanceof Error) return resolve({ error: child });
             this.running.set(key, child);
             let timer;
@@ -1273,7 +1294,7 @@ class LiveCheck {
             };
             if (seconds > 0) {
                 timer = setTimeout(() => {
-                    child.kill();
+                    endProcess(child);
                     end({ timedOut: true, seconds });
                 }, seconds * 1000);
             }
