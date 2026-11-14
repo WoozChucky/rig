@@ -1293,7 +1293,7 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 }
 
 // procedure = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
-//               ({'#c_call' | '#no_abc'} block | '#foreign' IDENT ';')
+//               ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';')
 // params    = param {',' param} [',' '..']
 //
 // Several results are written as a list after the arrow, with or without
@@ -1308,7 +1308,9 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // no '#c_call'", #no_abc "expected '{'". A #load there is "#load can only be
 // at the top level", unless the recovery resumes at it: the '{' is then
 // what's missing (error_expected_or_load). Any other directive but these is
-// "unknown directive '#foo'".
+// "unknown directive '#foo'". A string after #foreign's library is the C
+// function's name, when it isn't the procedure's own (c_free :: (p: *void)
+// #foreign libc "free";): the procedure keeps its name in Rig.
 //
 // Each element of the parameter list is a parameter or, last, the '..' of
 // a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign libc;).
@@ -1374,7 +1376,16 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
         }
         advance(p);
         Token *library = expect(p, TOKEN_IDENT);
-        if (!library || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+        if (!library) return nullptr;
+        // The C function's name, when it isn't the procedure's: any string
+        // here; the checker says which can be one (an empty one can't).
+        if (peek(p)->kind == TOKEN_STRING) {
+            Token *c_name = advance(p);
+            proc->has_c_name = true;
+            proc->c_name = c_name->string_value;
+            proc->c_name_pos = c_name->pos;
+        }
+        if (!expect(p, TOKEN_SEMICOLON)) return nullptr;
         proc->is_foreign = true;
         proc->foreign_library = library->text;
         proc->library_pos = library->pos;

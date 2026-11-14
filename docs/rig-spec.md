@@ -153,7 +153,7 @@ if        null      return    struct    true      union     using     while
 
 A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has four:
 
-- `#foreign`, which declares a procedure implemented in C (section 7.6);
+- `#foreign`, which declares a procedure implemented in C, followed by the library's name and, when the C function's name is not the procedure's own, by that name in a string: `#foreign libc` or `#foreign libc "free"` (section 7.6);
 - `#no_abc`, which turns off bounds checks in one procedure (section 7.7);
 - `#c_call`, which makes a procedure one that C can call, and marks a procedure type as such a procedure's (sections 3.15, 7.6);
 - `#load`, which makes another file part of the program (section 2.13).
@@ -599,6 +599,7 @@ A declaration of a name binds it to a constant, a variable, a procedure or a str
 | `name :: (params) -> results { ... }` | a procedure (section 7) |
 | `name :: (params) -> results #c_call { ... }` | a procedure that C can call (section 7.6) |
 | `name :: (params) -> results #foreign libc;` | a foreign procedure (section 7.6) |
+| `name :: (params) -> results #foreign libc "c_name";` | a foreign procedure of another C function, `c_name` (section 7.6) |
 | `name :: struct { fields }` | a struct type (section 4.5) |
 | `name :: expression;` | a constant (section 4.2) |
 | `name : Type = expression;` | a variable with a type and a value |
@@ -1290,14 +1291,14 @@ main :: () {}
 ### 7.1 Declaration
 
 ```ebnf
-ProcDecl  = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#foreign" identifier ";" ) .
+ProcDecl  = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#foreign" identifier [ string_lit ] ";" ) .
 Signature = "(" [ Params ] ")" [ "->" Results ] .
 Results   = Type { "," Type } | "(" Type { "," Type } ")" .
 Params    = Param { "," Param } [ "," ".." ] .
 Param     = identifier ":" Type .
 ```
 
-A procedure is declared at the top level with its name, its signature and its body. The signature lists the parameters in parentheses, each a name and a type, and after `->` the types of its results, separated by commas, with or without parentheses around them: `-> int, int` and `-> (int, int)` are the same. A procedure with no `->` returns nothing. A result that is a procedure type (section 3.15) is written as in any other place: `-> (int) -> int` returns a `(int) -> int`, since parentheses followed by `->` are a procedure type's. Before the body, `#c_call` makes the procedure one that C can call (section 7.6) and `#no_abc` turns off its bounds checks (section 7.7): each at most once (`'#c_call' is written twice`), in either order. A foreign procedure's list may end with `..`, after at least one parameter: it takes more arguments, as a C function declared with `...` does (section 7.6).
+A procedure is declared at the top level with its name, its signature and its body. The signature lists the parameters in parentheses, each a name and a type, and after `->` the types of its results, separated by commas, with or without parentheses around them: `-> int, int` and `-> (int, int)` are the same. A procedure with no `->` returns nothing. A result that is a procedure type (section 3.15) is written as in any other place: `-> (int) -> int` returns a `(int) -> int`, since parentheses followed by `->` are a procedure type's. Before the body, `#c_call` makes the procedure one that C can call (section 7.6) and `#no_abc` turns off its bounds checks (section 7.7): each at most once (`'#c_call' is written twice`), in either order. A foreign procedure's list may end with `..`, after at least one parameter: it takes more arguments, as a C function declared with `...` does (section 7.6). In place of the body, a foreign procedure has `#foreign`, its library and, when the C function's name is not the procedure's own, that name in a string (section 7.6).
 
 ```rig
 divmod :: (a: int, b: int) -> int, int {
@@ -1369,7 +1370,7 @@ main :: () { puts("hi"); }
 hi
 ```
 
-A procedure declared with `#foreign` and a library name in place of a body is implemented outside the program, in C. The only library is `libc`, the platform's C runtime, which every program links (section 10.6): another name is `unknown library 'm'; the only one so far is 'libc'`. The procedure's name is the C function's name, and calls to it follow the platform's C calling convention (section 10.4).
+A procedure declared with `#foreign` and a library name in place of a body is implemented outside the program, in C. The only library is `libc`, the platform's C runtime, which every program links (section 10.6): another name is `unknown library 'm'; the only one so far is 'libc'`. The procedure's name is the C function's name, unless a string after the library names the C function (below), and calls to it follow the platform's C calling convention (section 10.4).
 
 A foreign procedure's parameters and result are numbers, bools, pointers and `#c_call` procedure values (below), which C receives as these types:
 
@@ -1404,6 +1405,33 @@ from the heap
 ```
 
 `malloc`'s `*void` converts to `*int` without a cast, and `free` takes the `*int` back as a `*void` (section 3.5).
+
+**A C name of its own.** A string literal after the library is the C function's name, and the procedure's own name is its name in Rig: `c_free :: (p: *void) #foreign libc "free";` declares C's `free` as `c_free`. So a program can have a procedure of its own with a C function's name, and still call the C function:
+
+```rig
+c_free :: (p: *void) #foreign libc "free";
+c_malloc :: (size: u64) -> *void #foreign libc "malloc";
+puts :: (s: *u8) -> s32 #foreign libc;
+
+Pool :: struct { blocks: int; }
+
+free :: (pool: *Pool, p: *void) {
+    c_free(p);
+    pool.blocks -= 1;
+}
+
+main :: () {
+    pool := Pool.{1};
+    free(*pool, c_malloc(16));
+    if pool.blocks == 0 { puts("freed"); }
+}
+```
+
+```text
+freed
+```
+
+The C name is used to link the procedure, and to find its C function at compile time (section 10.8). The Rig name is used for everything in Rig: calls, procedure values and messages (`'c_free' takes 1 argument, but 2 were given`). The C name is not declared in Rig, so it takes no Rig name: here `free` is the program's own. Two foreign procedures may name the same C function, `free :: (p: *void) #foreign libc;` beside `c_free`, and both call it, each as its own declaration says; that the declarations agree with the C function, and with each other, is the program's business, as it is in C. The name is a string literal of at least one byte, with no white space or zero byte; otherwise it is an error at the string: `a foreign procedure's C name can't be empty`, `'fr ee' can't be a C function's name: it has white space`, and `'fr\0ee' can't be a C function's name: it has a zero byte`, where the name is shown with its escapes as Rig writes them (and any other control byte as `\xHH`). Any other byte is the linker's business: a C name need not be a Rig name, nor ASCII. It may not be the name of a function the compiler defines itself, though: `main`, the program's entry point (section 7.4), is `'main' can't be a C function's name: it's where the program starts`, and a name starting with `__rig_`, the prefix of the procedures the compiler adds (section 10.5), is `'__rig_panic' can't be a C function's name: names starting with __rig_ are the compiler's own`. The second applies to a foreign procedure without a string too, whose own name is its C name, at that name: `__rig_panic :: () #foreign libc;`. A foreign procedure of its own named `main` is the program's `main`, which needs a body (section 7.4).
 
 **Procedures C can call (`#c_call`).** A procedure declared with `#c_call` before its body is one that C can call, through a function pointer it was given (a callback). Its type is marked `#c_call` (section 3.15), and a foreign procedure's parameter of such a type takes it: so a Rig procedure is passed to C as C's function pointer, as `qsort` takes its comparison:
 
@@ -1690,6 +1718,10 @@ The sections defining each construct give its messages. Some of those met most o
 | `'notes.txt' isn't a .rig file` | 2.13 |
 | `a #load path can't be empty` | 2.13 |
 | `a #load path can't contain a zero byte` | 2.13 |
+| `a foreign procedure's C name can't be empty` | 7.6 |
+| `'fr ee' can't be a C function's name: it has white space` | 7.6 |
+| `'main' can't be a C function's name: it's where the program starts` | 7.6 |
+| `'__rig_panic' can't be a C function's name: names starting with __rig_ are the compiler's own` | 7.6 |
 
 ### 9.4 Limits
 
@@ -1861,12 +1893,12 @@ The compiler can run a program's code itself, while compiling, on its interprete
 
 C can't call into the interpreter, so a Rig procedure can't be given to C at compile time. A call of C given one as any pointer argument, fixed or variadic, is the runtime error `a Rig procedure can't be passed to C at compile time, for now`, at the call: a `#c_call` procedure given to `qsort` as its comparison (section 7.6), and a procedure's value cast to `*void` too, since the IR doesn't tell a procedure value from any other pointer. An integer argument isn't checked, since a count or a size may lie in the range by chance. A Rig procedure that reaches C some other way, stored in memory or cast to an integer, can't run there: its address is never accessible, so a call of it by C faults and stops the compiler, rather than running anything else.
 
-**Calling C.** A foreign procedure's C function is found by its name the first time it is needed: called, its value taken, or written into a global. It is called through a thunk, hand-written assembly for the platform's C calling convention (`src/thunk.cpp`), which passes the arguments and takes the result back as section 10.4 says, variadic calls included. The functions come from:
+**Calling C.** A foreign procedure's C function is found by its C name (the string after `#foreign libc`, or else the procedure's own name, section 7.6) the first time it is needed: called, its value taken, or written into a global. It is called through a thunk, hand-written assembly for the platform's C calling convention (`src/thunk.cpp`), which passes the arguments and takes the result back as section 10.4 says, variadic calls included. The functions come from:
 
 - **Windows:** the compiler's own C library first. The compiler is linked with the C runtime statically, so it holds its own copy of the C library, with its own state: `stdout`'s buffer, the heap, `errno`. Each function of C17's `<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<math.h>`, `<ctype.h>` and `<time.h>` (all but `aligned_alloc`, which the Universal C Runtime doesn't have; `printf` and its family included, which the Universal C Runtime has only as inline functions, section 10.6), and the three the runtime's `stdin`, `stdout`, `stderr`, `errno` and `MB_CUR_MAX` call (`__acrt_iob_func`, `_errno`, `___mb_cur_max_func`), is the compiler's own copy. So a `printf` at compile time writes into the buffer the compiler's own output goes through, in order with it, and memory `malloc` gives, `free` takes back. Any other name is looked up in `kernel32.dll` (Windows' own functions, such as `GetCurrentProcessId`), then in `ucrtbase.dll` (the C runtime's extras, such as `_getpid`), whose functions are a second C runtime's and share no state with the compiler's.
 - **Linux:** libc, the one the compiler is linked with dynamically, and the dynamic loader it depends on, as section 10.6's `-lc` provides them. `atexit`, `at_quick_exit` and `pthread_atfork`, which `-lc` links into each program statically and `libc.so.6` doesn't export, are the compiler's own copies. A function only libm has, such as `sqrt`, isn't found, as it isn't available to a compiled program.
 
-A name found nowhere is the runtime error `'NAME' isn't in the C library at compile time`, at the call, or where the procedure's value is taken. When a global holds its value, the run fails before it starts, with no frames.
+A name found nowhere is the runtime error `'NAME' isn't in the C library at compile time`, NAME being the C name, at the call, or where the procedure's value is taken. When a global holds its value, the run fails before it starts, with no frames.
 
 What C writes at compile time goes to the compiler's own standard output and error. `exit` really exits the compiler, with its status, after the C runtime flushes its streams.
 
@@ -1939,7 +1971,7 @@ File          = { TopLevel } .
 TopLevel      = ProcDecl | StructDecl | ConstDecl | VarDecl | LoadDecl .
 LoadDecl      = "#load" string_lit ";" .
 
-ProcDecl      = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#foreign" identifier ";" ) .
+ProcDecl      = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#foreign" identifier [ string_lit ] ";" ) .
 Signature     = "(" [ Params ] ")" [ "->" Results ] .
 Results       = Type { "," Type } | "(" Type { "," Type } ")" .
 Params        = Param { "," Param } [ "," ".." ] .

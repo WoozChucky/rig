@@ -12,7 +12,8 @@
 //               | IDENT '::' expression ';'                         a constant
 //               | '#load' STRING ';'                                another file of the program
 //   procedure   = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
-//                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT ';')
+//                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';')
+//                                                                  (the STRING: the C function's name)
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
 //   param       = IDENT ':' type
 //   type        = '*' type | '[' expression ']' type | '[' ']' type | proc_type | IDENT

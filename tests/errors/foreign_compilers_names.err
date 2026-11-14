@@ -1,0 +1,9 @@
+tests/errors/foreign_compilers_names.rig:1:35: error: 'main' can't be a C function's name: it's where the program starts
+    c_main :: () -> s32 #foreign libc "main";
+                                      ^
+tests/errors/foreign_compilers_names.rig:2:27: error: '__rig_panic' can't be a C function's name: names starting with __rig_ are the compiler's own
+    panic :: () #foreign libc "__rig_panic";
+                              ^
+tests/errors/foreign_compilers_names.rig:3:1: error: '__rig_bounds_failed' can't be a C function's name: names starting with __rig_ are the compiler's own
+    __rig_bounds_failed :: () #foreign libc;
+    ^
