@@ -1355,6 +1355,12 @@ static const Command_Case CHECK_CASES[] = {
      {"check", "tests/run/hello.out", "--stdin-for", "tests/run/x.txt"},
      1,
      "rig: error: 'tests/run/hello.out' isn't a .rig file\n"},
+    // Judged before anything is read: rig would otherwise say first that it
+    // cannot read the main file.
+    {"--stdin-for of a name not ending in .rig, with a main file that isn't there",
+     {"check", "tests/missing.rig", "--stdin-for", "tests/run/x.txt"},
+     1,
+     "rig: error: 'tests/run/x.txt' isn't a .rig file\n"},
     {"rig build with --stdin-for",
      {"build", "tests/run/load_runtime_error.rig", "--stdin-for", "tests/run/load/divide.rig"},
      2,
