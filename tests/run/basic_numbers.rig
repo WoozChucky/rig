@@ -196,8 +196,8 @@ main :: () {
     // e308: 1.7976931348623158e308, and 1.797693134862315807e308, whose 19
     // digits are the point's. Those past the point are infinities, however
     // the multiplies round: 1.797693134862315808e308 is just past it in 19
-    // digits, and 1.79769313486231581e308 and 1.79769313486231585e308 are
-    // further past it, but fewer digits.
+    // digits, and 1.79769313486231581e308 and 1.79769313486231585e308,
+    // written with fewer digits, are further past it.
     short, ok_short := parse_float("1.7976931348623157e308");
     padded, ok_padded := parse_float("1.7976931348623157000e308");
     whole, ok_whole := parse_long("17976931348623157", 292, "");
