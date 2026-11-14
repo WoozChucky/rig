@@ -315,17 +315,31 @@
 //   string or a pointer, not 'int'", "can't index a '*void'; cast it to a
 //   pointer to something first", at the '['; "an index must be an integer,
 //   not 'bool'", at i. A constant i of an array is checked here: "index 3 is
-//   out of bounds for '[3]int'", at i; every other index of an array, a view
-//   or a string is checked at run time (lowering), unless the procedure has
-//   #no_abc or the build --no-bounds-checks. An element is a place when its
-//   array is (so a[0] = 1 for a parameter a is "can't assign to 'a': it's a
-//   parameter"); a view's, a string's or a pointer's always.
+//   out of bounds for '[3]int'", at i; so is one of a string that is
+//   constant data (below), against its bytes, none when a literal leaves it
+//   out: "index 5 is out of bounds for a string of 3 bytes". Every other
+//   index of an array, a view or a string is checked at run time
+//   (lowering), unless the procedure has #no_abc or the build
+//   --no-bounds-checks. An element is a place when its array is (so a[0] = 1
+//   for a parameter a is "can't assign to 'a': it's a parameter"); a view's
+//   or a pointer's always, and a string's unless the string is part of a
+//   constant (constant_root): NAME[0] = 65 for `NAME :: "rig";` is "can't
+//   assign to 'NAME': it's a constant", as for * NAME is "can't take the
+//   address of 'NAME': it's a constant".
 // - a.count and a.data: a view's are its fields (an int, a *T, places when
 //   the view is one); an array's .count is its N, an untyped integer
 //   constant (a isn't evaluated), and its .data the address of its first
 //   element, a *T, which needs a to have an address, as *a[0] does. Neither
 //   of an array's can be assigned to ("can't assign to an array's
 //   'count'"). Nothing else: "'[3]int' has no field 'size'".
+// - A part of constant data (constant_data: a constant holding it, a
+//   literal, or a field or an element at a constant index of one) that is a
+//   number, a bool or null is known while compiling (spec 5.9): the value
+//   its literal gives, or zero when a literal leaves it out. It folds, as a
+//   constant's name does, so N :: PRIMES[2]; can size an array, and so do
+//   ORIGIN.y, a string's byte (NAME[1], a u8) and a string's .count (an
+//   int, its literal's count, 0 when a literal leaves it out). An aggregate
+//   part, a pointer or a procedure stays data, read where it's used.
 // - [N]T converts implicitly to []T, a view of its N elements, wherever a
 //   value converts (a declaration, an assignment, an argument, a return, a
 //   cast); nothing else converts to or from either but its own type. No
@@ -353,7 +367,10 @@
 // - string is a view of bytes, laid out as []u8, { count: int; data: *u8; },
 //   not ended by a zero. A string literal is one, its count the bytes
 //   without the zero after them (x := "hi"; x.count is 2). .count and .data,
-//   s[i] (a u8), for s (it a u8) and for * s (it a *u8) are a view's.
+//   s[i] (a u8), for s (it a u8) and for * s (it a *u8) are a view's, but
+//   for a string that is constant data: its .count and a byte at a constant
+//   index fold (above), and when it's part of a constant its bytes are no
+//   place, so for * NAME is refused (a[i] above).
 // - Only a literal converts to *u8, since only its bytes are known to end
 //   with a zero, and so does constant data holding one (literal_address):
 //   a constant, or a string field or element of one (NAME for

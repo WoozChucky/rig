@@ -5009,13 +5009,17 @@ TEST(constant_data_folds) {
     // string's byte at one and a string's .count are known while compiling
     // (spec 5.9), through names, nested fields and literals of constants: a
     // field a literal leaves out is zero, read through a field left out
-    // too. So a constant can name one and size an array. A pointer or a
-    // procedure inside data isn't a number, and an element at an index known
+    // too, and so is an element of an array left out, and a string left out
+    // has no bytes, its .count 0. So a constant can name one and size an
+    // array. An aggregate part, even one left out, isn't a number; nor is a
+    // pointer or a procedure inside data, and an element at an index known
     // only at run time is read then.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "Vec2 :: struct { x: int; y: int; }\n"
                           "Line :: struct { a: Vec2; b: Vec2; on: bool; }\n"
+                          "Named :: struct { name: string; n: int; }\n"
+                          "Grid :: struct { a: [3]int; rows: [2][2]int; }\n"
                           "add :: (a: int, b: int) -> int { return a + b; }\n"
                           "Op :: struct { symbol: *u8; run: (int, int) -> int; }\n"
                           "NAME :: \"rig\";\n"
@@ -5023,10 +5027,20 @@ TEST(constant_data_folds) {
                           "PRIMES :: int.[2, 3, 5, 7, 11];\n"
                           "LINE :: Line.{a = ORIGIN, on = true};\n"
                           "OPS :: Op.[.{\"+\", add}];\n"
+                          "EMPTY :: Named.{n = 1};\n"
+                          "BLANK :: Grid.{};\n"
                           "N :: PRIMES[2];\n"
+                          "NONE :: EMPTY.name.count;\n"
+                          "ZERO :: BLANK.a[1];\n"
                           "main :: () {\n"
                           "    grid : [N]int;\n"
                           "    sized : [PRIMES.count]int;\n"
+                          "    unnamed : [NONE + 1]int;\n"
+                          "    zeroed : [ZERO + 1]int;\n"
+                          "    none := EMPTY.name.count;\n"
+                          "    element := BLANK.a[1];\n"
+                          "    b := LINE.b;\n"
+                          "    row := BLANK.rows[0];\n"
                           "    count := NAME.count;\n"
                           "    letter := NAME[1];\n"
                           "    x := ORIGIN.y;\n"
@@ -5049,6 +5063,13 @@ TEST(constant_data_folds) {
     CHECK(n->type == &type_int);
     CHECK_STR(type_of(&a, &c, "grid"), "[5]int");
     CHECK_STR(type_of(&a, &c, "sized"), "[5]int");
+    CHECK_STR(type_of(&a, &c, "unnamed"), "[1]int");
+    CHECK_STR(type_of(&a, &c, "zeroed"), "[1]int");
+    CHECK(folds_to(&c, "none", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "none")->type), "int");
+    CHECK(folds_to(&c, "element", 0));
+    CHECK(!value_of(&c, "b")->is_constant);
+    CHECK(!value_of(&c, "row")->is_constant);
     CHECK(folds_to(&c, "count", 3));
     CHECK_STR(type_name(&a, value_of(&c, "count")->type), "int");
     CHECK(folds_to(&c, "letter", 'i'));
@@ -5073,7 +5094,8 @@ TEST(constant_data_folds) {
 TEST(constant_parts_arent_places) {
     // No part of a constant is a place (spec 5.1): its fields, its elements
     // and a string constant's bytes, a string field's of a struct constant
-    // too, can't be assigned to nor have their address taken, and for *
+    // and a string element's of an array constant too, can't be assigned to
+    // nor have their address taken, and for *
     // can't point into them. A string constant's .data is its bytes'
     // address, a *u8, as a literal's is. What a pointer field points at is
     // elsewhere, and a string literal's bytes stay places, as they were.
@@ -5085,53 +5107,64 @@ TEST(constant_parts_arent_places) {
                            "ORIGIN :: Vec2.{1, 2};\n"
                            "PRIMES :: int.[2, 3, 5, 7, 11];\n"
                            "C :: Named.{\"cfg\", \"abc\"};\n"
+                           "NAMES :: string.[\"ab\", \"cd\"];\n"
                            "main :: () {\n"
                            "    PRIMES[0] = 1;\n"
                            "    ORIGIN.x = 1;\n"
                            "    NAME[0] = 65;\n"
                            "    C.name[0] = 65;\n"
+                           "    NAMES[0][0] = 65;\n"
                            "    p := *PRIMES;\n"
                            "    q := *PRIMES[0];\n"
                            "    r := *NAME[0];\n"
                            "    for * NAME { }\n"
                            "    for * PRIMES { }\n"
+                           "    for * NAMES[1] { }\n"
                            "    d := PRIMES.data;\n"
                            "    C.text[0] = 65;\n"
                            "    t := NAME.data;\n"
                            "    \"abc\"[0] = 65;\n"
                            "}\n"),
-              "8:5: can't assign to 'PRIMES': it's a constant\n"
-              "9:5: can't assign to 'ORIGIN': it's a constant\n"
-              "10:5: can't assign to 'NAME': it's a constant\n"
-              "11:5: can't assign to 'C': it's a constant\n"
-              "12:11: can't take the address of 'PRIMES': it's a constant\n"
-              "13:11: can't take the address of 'PRIMES': it's a constant\n"
-              "14:11: can't take the address of 'NAME': it's a constant\n"
-              "15:11: can't take the address of 'NAME': it's a constant\n"
-              "16:11: can't take the address of 'PRIMES': it's a constant\n"
-              "17:10: can't take the address of 'PRIMES': it's a constant\n");
+              "9:5: can't assign to 'PRIMES': it's a constant\n"
+              "10:5: can't assign to 'ORIGIN': it's a constant\n"
+              "11:5: can't assign to 'NAME': it's a constant\n"
+              "12:5: can't assign to 'C': it's a constant\n"
+              "13:5: can't assign to 'NAMES': it's a constant\n"
+              "14:11: can't take the address of 'PRIMES': it's a constant\n"
+              "15:11: can't take the address of 'PRIMES': it's a constant\n"
+              "16:11: can't take the address of 'NAME': it's a constant\n"
+              "17:11: can't take the address of 'NAME': it's a constant\n"
+              "18:11: can't take the address of 'PRIMES': it's a constant\n"
+              "19:11: can't take the address of 'NAMES': it's a constant\n"
+              "20:10: can't take the address of 'PRIMES': it's a constant\n");
     arena_free(&a);
 }
 
 TEST(constant_data_bounds) {
     // A constant index into constant data is checked while compiling, by
     // its sign: an array's against its count, as any array's is, and a
-    // string's against its bytes, counted as the other messages count.
+    // string's against its bytes, counted as the other messages count, none
+    // for a string a literal leaves out.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "// A constant index into constant data is checked while compiling (spec 5.11):\n"
-                           "// an array's against its count, a string's against its bytes.\n"
+                           "// an array's against its count, a string's against its bytes (none when a\n"
+                           "// literal leaves it out).\n"
+                           "Named :: struct { name: string; n: int; }\n"
                            "NAME :: \"rig\";\n"
                            "PRIMES :: int.[2, 3, 5, 7, 11];\n"
+                           "EMPTY :: Named.{n = 1};\n"
                            "N :: PRIMES[9];\n"
                            "main :: () {\n"
                            "    c := NAME[5];\n"
                            "    d := \"x\"[1];\n"
                            "    e := NAME[-1];\n"
+                           "    f := EMPTY.name[0];\n"
                            "}\n"),
-              "5:13: index 9 is out of bounds for '[5]int'\n"
-              "7:15: index 5 is out of bounds for a string of 3 bytes\n"
-              "8:14: index 1 is out of bounds for a string of 1 byte\n"
-              "9:15: index -1 is out of bounds for a string of 3 bytes\n");
+              "8:13: index 9 is out of bounds for '[5]int'\n"
+              "10:15: index 5 is out of bounds for a string of 3 bytes\n"
+              "11:14: index 1 is out of bounds for a string of 1 byte\n"
+              "12:15: index -1 is out of bounds for a string of 3 bytes\n"
+              "13:21: index 0 is out of bounds for a string of 0 bytes\n");
     arena_free(&a);
 }
