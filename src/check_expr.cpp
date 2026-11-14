@@ -225,6 +225,9 @@ void report_no_conversion(Checker *c, Ast *value, Type *to) {
                STR_ARG(conversion_hint(c, value, value->type, to)));
 }
 
+// Casts are walked through; a field or an element of constant data goes on
+// from the node holding its value (constant_data), a procedure's name in a
+// literal, or a cast of one.
 Ast_Proc *procedure_address(Ast *e) {
     for (;;) {
         Type *t = e->type;
@@ -234,18 +237,150 @@ Ast_Proc *procedure_address(Ast *e) {
             if (decl->kind == AST_PROC) return (Ast_Proc *)decl;
             return decl->kind == AST_CONST ? ((Ast_Const *)decl)->proc : nullptr;
         }
-        if (e->kind != AST_CAST) return nullptr;
-        e = ((Ast_Cast *)e)->value;
+        if (e->kind == AST_CAST) {
+            e = ((Ast_Cast *)e)->value;
+            continue;
+        }
+        Ast *value;
+        if (!constant_data(e, &value) || !value) return nullptr;
+        e = value;
     }
 }
 
+// Casts are walked through, and so is .data, the address of the bytes of
+// the string or view it's taken of (a .count is no pointer, and an array
+// is no literal); constant data goes on from the node holding its value
+// (constant_data): a string constant's literal, or the value a *u8 field
+// of a constant holds, which may be a cast of a literal.
 Ast_String *literal_address(Ast *e) {
     for (;;) {
         Type *t = e->type;
         if (!t || (!type_is_view_or_string(t) && !type_is_pointer(t))) return nullptr;
         if (e->kind == AST_STRING) return (Ast_String *)e;
-        if (e->kind != AST_CAST) return nullptr;
-        e = ((Ast_Cast *)e)->value;
+        if (e->kind == AST_CAST) {
+            e = ((Ast_Cast *)e)->value;
+            continue;
+        }
+        if (e->kind == AST_MEMBER && ((Ast_Member *)e)->index < 0) {
+            e = ((Ast_Member *)e)->operand;
+            continue;
+        }
+        Ast *value;
+        if (!constant_data(e, &value) || !value) return nullptr;
+        e = value;
+    }
+}
+
+// Whether string e is a string literal's bytes, with the zero after them, so
+// it converts to a *u8 and passes C's '...' as the literal does (spec 3.8):
+// the literal itself, or constant data holding it (literal_address), as
+// NAME for NAME :: "rig"; or a string field of a constant. A cast isn't,
+// cast(string) "hi" included: only the literal as it's written, or
+// constant data holding it, converts.
+static bool is_literal_string(Ast *e) {
+    return e->type == &type_string && e->kind != AST_CAST && literal_address(e);
+}
+
+Ast *literal_field_value(Ast_Literal *literal, Type *t, s32 field) {
+    if (!literal->names.count) return field < literal->values.count ? literal->values[field] : nullptr;
+    // The first value given for it: one given twice is an error, reported,
+    // and the second was never checked against the field.
+    for (s64 i = 0; i < literal->names.count; i++) {
+        if (string_eq(literal->names[i], t->fields[field].name)) return literal->values[i];
+    }
+    return nullptr;
+}
+
+// A literal's value, `part`, as constant_data reads it: the node holding its
+// value when `part` is itself constant data (a constant holding data, or a
+// field or an element of one), followed in turn; otherwise `part` itself, a
+// scalar as the literal wrote it (a constant, a procedure's name, a string
+// literal's address or a cast of one).
+static Ast *part_value(Ast *part) {
+    Ast *value;
+    return constant_data(part, &value) ? value : part;
+}
+
+bool constant_data(Ast *e, Ast **value) {
+    *value = nullptr;
+    Type *t = e->type;
+    if (!t) return false;
+    switch (e->kind) {
+    case AST_STRING: *value = e; return true;
+    case AST_LITERAL: {
+        if (t->kind != TYPE_STRUCT && t->kind != TYPE_ARRAY) return false;
+        // Decided once, then kept: each field or element read of a literal
+        // asks again, and a value that is itself such a read is walked
+        // several times over, so in S.{p = S.{p = "x"}.p}.p, nested deeper,
+        // walking the values each time would take three times as long for
+        // every level.
+        Ast_Literal *literal = (Ast_Literal *)e;
+        if (!literal->is_data) {
+            bool known = true;
+            for (s64 i = 0; i < literal->values.count && known; i++) {
+                Ast *part = literal->values[i];
+                Ast *ignored;
+                known = part->is_constant || procedure_address(part) || literal_address(part) ||
+                        constant_data(part, &ignored);
+            }
+            literal->is_data = known ? 1 : -1;
+        }
+        if (literal->is_data < 0) return false;
+        *value = e;
+        return true;
+    }
+    case AST_NAME: {
+        Ast *decl = ((Ast_Name *)e)->decl;
+        if (decl->kind != AST_CONST || !((Ast_Const *)decl)->is_data) return false;
+        *value = ((Ast_Const *)decl)->data;
+        return true;
+    }
+    case AST_MEMBER: {
+        // A struct's field, not a pointer's (whose struct is elsewhere), nor
+        // an array's or a string's .count or .data (index -1).
+        Ast_Member *m = (Ast_Member *)e;
+        Type *s = m->operand->type;
+        Ast *whole;
+        if (!s || s->kind != TYPE_STRUCT || m->index < 0 || !constant_data(m->operand, &whole)) return false;
+        if (!whole) return true;  // a struct left out: its fields are zero too
+        // Anything but a literal of this struct is a value of the wrong
+        // type, given a literal's field or element and reported: no data.
+        if (whole->kind != AST_LITERAL || whole->type != s) return false;
+        Ast *part = literal_field_value((Ast_Literal *)whole, s, m->index);
+        *value = part ? part_value(part) : nullptr;
+        return true;
+    }
+    case AST_INDEX: {
+        // An array's element at a constant index, which check_index has
+        // found within its count. A string's element is a byte no node
+        // holds.
+        Ast_Index *ix = (Ast_Index *)e;
+        Type *array = ix->operand->type;
+        Ast *whole;
+        if (!array || array->kind != TYPE_ARRAY || !ix->index->is_constant || !constant_data(ix->operand, &whole)) {
+            return false;
+        }
+        if (!whole) return true;  // an array left out: its elements are zero too
+        // As for a field: a value of the wrong type, reported.
+        if (whole->kind != AST_LITERAL || whole->type != array) return false;
+        Ast_Literal *literal = (Ast_Literal *)whole;
+        // A literal that gives too few elements has been reported; the ones
+        // it lacks are taken as zero, as left out.
+        u64 i = ix->index->constant;
+        *value = i < (u64)literal->values.count ? part_value(literal->values[i]) : nullptr;
+        return true;
+    }
+    case AST_CAST: {
+        // To its own type (cast(Vec2) .{1, 2}), or between string and []u8,
+        // the same bytes: the value is the same. Any other cast makes
+        // another value, a pointer or a view of it.
+        Ast *from = ((Ast_Cast *)e)->value;
+        Type *bytes = type_view_of(type_from_name(str("u8")));
+        bool same = from->type == t || (from->type == &type_string && t == bytes) ||
+                    (from->type == bytes && t == &type_string);
+        return same && constant_data(from, value);
+    }
+    default: return false;
     }
 }
 
@@ -342,11 +477,12 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
         return true;
     }
     // A string literal's bytes are stored with a zero after them, so C can
-    // read them through a *u8 (milestone 1's rule): the literal converts to
-    // its bytes' address, though its type stays string (lowering looks at
-    // where it goes). Any other string's bytes may go on past its count, so
-    // it doesn't (type_converts).
-    if (e->kind == AST_STRING && is_c_string(to)) return true;
+    // read them through a *u8 (spec 3.8): the literal converts to its bytes'
+    // address, though its type stays string (lowering looks at where it
+    // goes), and so does constant data holding one (is_literal_string): a
+    // constant, or a string field or element of one. Any other string's
+    // bytes may go on past its count, so it doesn't (type_converts).
+    if (is_literal_string(e) && is_c_string(to)) return true;
     return type_converts(from, to);
 }
 
@@ -358,9 +494,9 @@ bool type_converts(Type *from, Type *to) {
     // pointer becomes another without a cast: a *u8 isn't a *int, and a
     // **int isn't a **void (what it points at, a *int, isn't a *void).
     if (type_is_pointer(from) && type_is_pointer(to)) return from->pointee == &type_void || to->pointee == &type_void;
-    // An array is seen through a view of its elements (spec 6.5): [N]T
-    // becomes the []T of its N T's, wherever it is (lowering). Never the
-    // other way: a view's count isn't known while compiling.
+    // An array is seen through a view of its elements (spec 3.13 and
+    // 5.17): [N]T becomes the []T of its N T's, wherever it is (lowering).
+    // Never the other way: a view's count isn't known while compiling.
     if (from->kind == TYPE_ARRAY && to->kind == TYPE_VIEW) return from->element == to->element;
     // Every float32 value is a float64 one, so a float32 widens; the other
     // way loses precision, and takes a cast.
@@ -512,10 +648,12 @@ static void give_extra_argument_a_type(Checker *c, Ast *arg) {
 // C can take: a number, a bool or a pointer, which lowering passes after
 // C's default argument promotions (type_c_promoted). A string literal goes
 // as a C string, its bytes' address, as it does to a *u8 (lowering looks
-// at the literal, whose type stays string). C passes structs by rules Rig
-// doesn't follow, and has no views or Rig strings: each is refused, with
-// what to pass instead. So is a compound literal without its type: being
-// told to write its type would only lead to the same refusal.
+// at the literal, whose type stays string), and so does constant data
+// holding one (is_literal_string): a constant, or a string field or element
+// of one. C passes structs by rules Rig doesn't follow, and has no views or
+// other Rig strings: each is refused, with what to pass instead. So is a
+// compound literal without its type: being told to write its type would
+// only lead to the same refusal.
 static void check_extra_argument(Checker *c, Ast_Proc *proc, Ast *arg, s64 index) {
     Type *t = arg->type;
     if (!t) return;  // its own mistake, reported already
@@ -531,7 +669,7 @@ static void check_extra_argument(Checker *c, Ast_Proc *proc, Ast *arg, s64 index
     }
     give_extra_argument_a_type(c, arg);
     t = arg->type;
-    if (t && type_is_aggregate(t) && arg->kind != AST_STRING) {
+    if (t && type_is_aggregate(t) && !is_literal_string(arg)) {
         const char *hint = t->kind == TYPE_STRUCT   ? "pass a pointer to it"
                            : t->kind == TYPE_STRING ? "pass its .data, which may not end with a zero, or a literal"
                                                     : "pass its .data";
@@ -1347,7 +1485,7 @@ static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to
     return nullptr;
 }
 
-// cast(T) e and cast,trunc(T) e (spec 6.4). The result has type T.
+// cast(T) e and cast,trunc(T) e (spec 3.14). The result has type T.
 // - From an integer to an integer: cast keeps the number, so it's checked:
 //   a constant that isn't one of T's values is reported here ("300 doesn't
 //   fit in 'u8'", at the cast), and any other value is checked at run time
@@ -1363,10 +1501,11 @@ static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to
 //   check_pointer_cast.
 // - A procedure value to or from *void: check_proc_cast.
 // - A string to a []u8 and a []u8 to a string: the same view, retyped
-//   (spec 6.5), the same bytes.
+//   (spec 3.14), the same bytes.
 // - Anything else casts only where it converts implicitly: to its own
-//   type, null to a pointer, an array to a view of it, or a string literal
-//   to *u8. Otherwise "can't cast 'A' to 'B'".
+//   type, null to a pointer, an array to a view of it, or a string literal,
+//   or constant data holding one (is_literal_string, spec 3.8), to *u8.
+//   Otherwise "can't cast 'A' to 'B'".
 // - cast,trunc takes integers only: "cast,trunc only takes integers".
 // A cast of a constant is a constant of T: a checked cast's is the same
 // number, a cast,trunc's is wrapped to T as at run time (wrap_to).
@@ -1434,7 +1573,7 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
     case AST_VAR: {
         // A variable has a slot, its place in memory (a global's in the
         // program's file), but a for loop's iterator and it_index are
-        // read-only (spec 6.1): the loop sets them, each iteration, and a
+        // read-only (spec 6.7): the loop sets them, each iteration, and a
         // pointer to one would let the body change it.
         Ast_Var *var = (Ast_Var *)decl;
         // it_index is the only one by that name: check_for reports an
@@ -1442,9 +1581,12 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
         what = string_eq(var->name, str("it_index")) ? "the loop's index" : "the loop's iterator";
         break;
     }
-    // A constant is a value known while compiling, kept nowhere.
+    // A constant is a value known while compiling (spec 4.2): a scalar one
+    // is kept nowhere, and one holding data is kept, if a use needs it, in
+    // the program's read-only data, no part of which is a place
+    // (constant_root).
     case AST_CONST: what = "a constant"; break;
-    // Read-only (spec 6.1): copy it into a variable to change it. Lowering
+    // Read-only (spec 7.2): copy it into a variable to change it. Lowering
     // gives a parameter no slot: it's the value the caller passed (for an
     // aggregate, a pointer to the caller's copy, which mustn't change).
     case AST_PARAM: what = "a parameter"; break;
@@ -1466,9 +1608,12 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
 // element is one when its array is; a view's, a string's or a pointer's
 // always is, its elements lying elsewhere (v[0] = 1 for a view parameter v
 // changes the elements it sees, not v; s[0] = 1 on a literal writes its
-// read-only bytes, a memory error, spec 6.4). A view's or a string's count
-// and data are fields like a struct's. An array's .count is a constant and
-// its .data an address worked out on the spot, so neither is a place.
+// read-only bytes, a memory error, spec 3.8 and 8.6), except a string's
+// that is part of a constant (constant_root): its bytes are the constant's,
+// and no part of a constant is a place, so NAME[0] = 65 is refused, said of
+// NAME (is_place). A view's or a string's count and data are fields like a
+// struct's. An array's .count is a constant and its .data an address worked
+// out on the spot, so neither is a place.
 bool expr_is_place(Ast *e) {
     switch (e->kind) {
     case AST_NAME: {
@@ -1484,9 +1629,39 @@ bool expr_is_place(Ast *e) {
     }
     case AST_INDEX: {
         Ast *operand = ((Ast_Index *)e)->operand;
+        if (operand->type == &type_string && constant_root(operand)) return false;
         return operand->type->kind != TYPE_ARRAY || expr_is_place(operand);
     }
     default: return false;
+    }
+}
+
+Ast_Name *constant_root(Ast *e) {
+    for (;;) {
+        switch (e->kind) {
+        case AST_NAME: {
+            Ast *decl = ((Ast_Name *)e)->decl;
+            return decl && decl->kind == AST_CONST && ((Ast_Const *)decl)->is_data ? (Ast_Name *)e : nullptr;
+        }
+        case AST_MEMBER: {
+            // A struct's field: one reached through a pointer is elsewhere,
+            // and a sequence's .count and .data aren't its bytes.
+            Ast *operand = ((Ast_Member *)e)->operand;
+            if (!operand->type || operand->type->kind != TYPE_STRUCT) return nullptr;
+            e = operand;
+            break;
+        }
+        case AST_INDEX: {
+            // An array's or a string's element: a view's or a pointer's is
+            // elsewhere.
+            Ast *operand = ((Ast_Index *)e)->operand;
+            Type *t = operand->type;
+            if (!t || (t->kind != TYPE_ARRAY && t != &type_string)) return nullptr;
+            e = operand;
+            break;
+        }
+        default: return nullptr;
+        }
     }
 }
 
@@ -1557,16 +1732,26 @@ static Type *check_deref(Checker *c, Ast_Deref *deref) {
     return t->pointee;
 }
 
-// a[i] (spec 6.5): element i of array, view or string a (a string's, a
+// a[i] (spec 5.11): element i of array, view or string a (a string's, a
 // u8), or the T i T's on from where pointer a points (C's a[i], p.* moved by
 // i, unchecked). i is any integer, read by its own sign; an untyped one
 // becomes an int. Reported at the '[': "'[]' needs an array, a view, a
 // string or a pointer, not 'int'", or "can't index a '*void'; ..." (it
 // points at nothing with a size); at i: "an index must be an integer, not
 // 'float32'". A constant i of an array is checked here, by its sign: "index
-// 3 is out of bounds for '[3]int'". Any other index of an array, a view or a
-// string is checked at run time (lowering), unless the procedure says
-// #no_abc or the build --no-bounds-checks.
+// 3 is out of bounds for '[3]int'"; and so is one of a string that is
+// constant data, whose bytes are known: "index 5 is out of bounds for a
+// string of 3 bytes". Any other index of an array, a view or a string is
+// checked at run time (lowering), unless the procedure says #no_abc or the
+// build --no-bounds-checks.
+//
+// An element of constant data at a constant index is known while compiling
+// (spec 5.9) when it's a number, a bool or null: an array's, the value its
+// literal gives (zero when it leaves it out, constant_data), and a string's,
+// its byte, a u8. So it folds, as a constant's name does: N :: PRIMES[2];
+// can size an array. An aggregate element, or a pointer to a string
+// literal's bytes or a procedure, stays a part of the data, read where it's
+// used.
 static Type *check_index(Checker *c, Ast_Index *ix) {
     Type *t = check_operand(c, ix->operand);
     Type *index = check_operand(c, ix->index);
@@ -1593,17 +1778,42 @@ static Type *check_index(Checker *c, Ast_Index *ix) {
                    STR_ARG(type_name(c->arena, i->type)));
         return nullptr;
     }
-    if (t->kind == TYPE_ARRAY && i->is_constant) {
+    // A string's bytes are known when it's constant data: those of the
+    // string literal holding it, or none when a literal leaves it out.
+    Ast *bytes = nullptr;
+    bool known_string = t == &type_string && i->is_constant && constant_data(ix->operand, &bytes) &&
+                        (!bytes || bytes->kind == AST_STRING);
+    if (i->is_constant && (t->kind == TYPE_ARRAY || known_string)) {
+        s64 count = t->kind == TYPE_ARRAY ? t->count : bytes ? ((Ast_String *)bytes)->value.count : 0;
         bool is_signed = i->type->is_signed;
         u64 v = i->constant;
-        bool outside = is_signed ? (s64)v < 0 || (s64)v >= t->count : v >= (u64)t->count;
+        bool outside = is_signed ? (s64)v < 0 || (s64)v >= count : v >= (u64)count;
         if (outside) {
             String number = is_signed ? string_printf(c->arena, "%lld", (long long)v)
                                       : string_printf(c->arena, "%llu", (unsigned long long)v);
-            diag_error(c->diag, i->start, "index " STR_FMT " is out of bounds for '" STR_FMT "'", STR_ARG(number),
-                       STR_ARG(type_name(c->arena, t)));
+            if (t->kind == TYPE_ARRAY) {
+                diag_error(c->diag, i->start, "index " STR_FMT " is out of bounds for '" STR_FMT "'",
+                           STR_ARG(number), STR_ARG(type_name(c->arena, t)));
+            } else {
+                diag_error(c->diag, i->start, "index " STR_FMT " is out of bounds for a string of %lld byte%s",
+                           STR_ARG(number), (long long)count, count == 1 ? "" : "s");
+            }
             return nullptr;
         }
+    }
+    if (known_string) {
+        // Within its count, so the literal is there.
+        ix->is_constant = true;
+        ix->constant = ((Ast_String *)bytes)->value.data[i->constant];
+        return element;
+    }
+    // constant_data reads the element's own type, which check_expression
+    // sets only once this returns.
+    ix->type = element;
+    Ast *value;
+    if (t->kind == TYPE_ARRAY && !type_is_aggregate(element) && constant_data(ix, &value)) {
+        ix->is_constant = !value || value->is_constant;
+        ix->constant = value ? value->constant : 0;
     }
     return element;
 }
@@ -1623,14 +1833,17 @@ static Type *check_size_of(Checker *c, Ast_Size_Of *size_of) {
     return &type_untyped_int;
 }
 
-// a.count and a.data of an array, a view or a string a (spec 6.5), the only
+// a.count and a.data of an array, a view or a string a (spec 5.12), the only
 // two names they have ("'[3]int' has no field 'size'", at the name);
 // m->index stays -1, lowering knowing them by name. A view's are its fields:
-// an int and a *T; a string's an int and a *u8. An array's .count is its N,
-// an untyped integer constant as size_of is (so b : u8 = a.count; takes it),
-// a isn't evaluated for it; its .data, a *T, is the address of its first
-// element, so a must have one, as for *a[0] ("can't take the address of 'a':
-// it's a parameter").
+// an int and a *T; a string's an int and a *u8. A string's .count is known
+// while compiling when the string is constant data (spec 5.9), its literal's
+// count, or 0 when a literal leaves it out: it folds, still an int; and so
+// is its .data when a literal leaves it out, null, the empty string's. An
+// array's .count is its N, an untyped integer constant as size_of is (so
+// b : u8 = a.count; takes it), a isn't evaluated for it; its .data, a *T, is
+// the address of its first element, so a must have one, as for *a[0]
+// ("can't take the address of 'a': it's a parameter").
 static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
     m->index = -1;
     bool count = string_eq(m->name, str("count"));
@@ -1638,6 +1851,16 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
         diag_error(c->diag, m->pos, "'" STR_FMT "' has no field '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
                    STR_ARG(m->name));
         return nullptr;
+    }
+    Ast *bytes = nullptr;
+    bool known = t == &type_string && constant_data(m->operand, &bytes);
+    if (count && known && (!bytes || bytes->kind == AST_STRING)) {
+        m->is_constant = true;
+        m->constant = bytes ? (u64)((Ast_String *)bytes)->value.count : 0;
+    }
+    if (!count && known && !bytes) {
+        m->is_constant = true;
+        m->constant = 0;
     }
     if (type_is_view_or_string(t)) return count ? &type_int : type_pointer_to(t->element);
     if (count) {
@@ -1657,6 +1880,13 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
 // check_sequence_member's, not reached through a pointer: on a pointer to
 // one, "'.count' isn't reached through a pointer, '*string'; write
 // .*.count".
+//
+// A field of constant data is known while compiling (spec 5.9) when it's a
+// number, a bool or null: the value its literal gives, or zero when it
+// leaves it out, or leaves out the struct holding it (constant_data). So it
+// folds, as a constant's name does: ORIGIN.y, LINE.b.y, Vec2.{5, 6}.y. An
+// aggregate field, or a pointer to a string literal's bytes or a procedure,
+// stays a part of the data, read where it's used.
 static Type *check_member(Checker *c, Ast_Member *m) {
     Type *t = check_operand(c, m->operand);
     if (!t) return nullptr;
@@ -1681,7 +1911,16 @@ static Type *check_member(Checker *c, Ast_Member *m) {
         return nullptr;
     }
     check_late_field(c, s, m->index);
-    return s->fields[m->index].type;
+    Type *field = s->fields[m->index].type;
+    // constant_data reads the field's own type, which check_expression sets
+    // only once this returns.
+    m->type = field;
+    Ast *value;
+    if (field && !type_is_aggregate(field) && constant_data(m, &value)) {
+        m->is_constant = !value || value->is_constant;
+        m->constant = value ? value->constant : 0;
+    }
+    return field;
 }
 
 // The value of field `field_type` given by `value`, in a literal: checked,

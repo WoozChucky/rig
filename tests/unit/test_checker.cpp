@@ -2,8 +2,9 @@
 // constants, operators, conversions and returns (issue #33), then bools,
 // conditions and loops (issue #34), then division and casts (issue #35),
 // then several results, globals and top-level constants (issue #36), then
-// floats (issue #37), and the fixes from milestone 2a's review (issue #52).
-// Milestone 1's tests build tokens by hand (toks(), helpers.cpp), milestone
+// floats (issue #37), and the fixes from milestone 2a's review (issue #52);
+// after them a section per later issue, the last constants holding data
+// (issue #113). Milestone 1's tests build tokens by hand (toks(), helpers.cpp), milestone
 // 2a's lex real source (src()); either way, parsed, then checked.
 
 #include "test.h"
@@ -721,8 +722,7 @@ TEST(local_constant_must_be_constant) {
                            "}\n"),
               "4:10: the value of constant 'N' isn't known while compiling\n"
               "6:10: the value of constant 'K' isn't known while compiling\n"
-              "7:10: a constant can only be a number, a bool or a procedure, for now\n"
-              "9:10: a constant can only be a number, a bool or a procedure, for now\n");
+              "9:10: the value of constant 'P' isn't known while compiling\n");
     arena_free(&a);
 }
 
@@ -2242,8 +2242,8 @@ TEST(deref_rules) {
 
 TEST(null_converts_to_pointers) {
     // null converts to every pointer type and to nothing else; alone it has
-    // no type to take. It's a constant, but only numbers and bools can be
-    // constants' values, for now.
+    // no type to take. It's a constant, so a constant can be null (N ::
+    // null;, of null's own type).
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "take :: (p: *u8) { }\n"
@@ -2261,7 +2261,6 @@ TEST(null_converts_to_pointers) {
                            "}\n"),
               "7:10: null needs a pointer type, as in p : *int = null;\n"
               "8:15: a value of type 'null' doesn't convert to 'int' implicitly\n"
-              "11:10: a constant can only be a number, a bool or a procedure, for now\n"
               "12:8: the condition of 'if' must be a bool, not 'null'\n");
     Checked c = check_src(&a, "main :: () { p : *int = null; }\n");
     Ast *value = ((Ast_Var *)local_named(&c, "p"))->value;
@@ -3036,7 +3035,6 @@ TEST(global_struct_literal_must_be_constant) {
                            "main :: () { }\n"),
               "5:14: a global's value must be known while compiling, for now\n"
               "6:9: a global's value must be known while compiling, for now\n"
-              "8:6: a constant can only be a number, a bool or a procedure, for now\n"
               "9:6: this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}\n");
     arena_free(&a);
 }
@@ -3820,9 +3818,9 @@ TEST(string_doesnt_become_a_c_string) {
 
 TEST(string_members_and_index) {
     // A string is a view of u8: .count an int and .data a *u8, places when
-    // the string is one; s[i] a u8, always a place (the bytes lie
-    // elsewhere, as a view's elements do); for s gives each byte, for * s a
-    // pointer to each.
+    // the string is one; s[i] a u8, a place unless the string is part of a
+    // constant (the bytes lie elsewhere, as a view's elements do); for s
+    // gives each byte, for * s a pointer to each.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "f :: (s: string) {\n"
@@ -3860,8 +3858,11 @@ TEST(string_members_and_index) {
     CHECK_STR(type_of(&a, &c, "z"), "u8");
     CHECK_STR(type_of(&a, &c, "l"), "int");
     CHECK_STR(type_of(&a, &c, "m"), "u8");
-    // A string's count is its field, read at run time, not a constant.
-    CHECK(!value_of(&c, "l")->is_constant);
+    // A literal's count is known while compiling, as constant data's is
+    // (spec 5.9); a variable's is its field, read at run time.
+    CHECK(value_of(&c, "l")->is_constant);
+    CHECK_EQ(value_of(&c, "l")->constant, 3);
+    CHECK(!value_of(&c, "n")->is_constant);
     token_list_free(c.list);
     CHECK_STR(check_source(&a,
                            "f :: (s: string) {\n"
@@ -4705,5 +4706,655 @@ TEST(procedure_values_and_void_pointers_say_to_cast) {
               "6:29: a value of type '*void' doesn't convert to '(int, int) -> int' implicitly; cast it with "
               "cast((int, int) -> int)\n"
               "7:15: a value of type '(int, int) -> int' doesn't convert to '*u8' implicitly\n");
+    arena_free(&a);
+}
+
+// Issue #113: constants holding data (spec 4.2, 5.9).
+
+// Top-level constants of every kind of data: a string, structs and arrays,
+// nested, with procedures and string literals' addresses inside, and the
+// pointer constants beside them. constants_hold_data checks them, and
+// global_values_name_constant_data gives their values to globals.
+#define DATA_CONSTANTS                                          \
+    "Vec2 :: struct { x: int; y: int; }\n"                      \
+    "Line :: struct { a: Vec2; b: Vec2; }\n"                    \
+    "add :: (a: int, b: int) -> int { return a + b; }\n"        \
+    "Op :: struct { symbol: *u8; run: (int, int) -> int; }\n"   \
+    "NAME :: \"rig\";\n"                                        \
+    "ORIGIN :: Vec2.{0, 0};\n"                                  \
+    "PRIMES :: int.[2, 3, 5, 7, 11];\n"                         \
+    "LINE :: Line.{a = ORIGIN};\n"                              \
+    "OPS :: Op.[.{\"+\", add}, .{NAME, add}];\n"                \
+    "OP :: OPS[0].run;\n"                                       \
+    "NOWHERE :: cast(*void) null;\n"                            \
+    "NOTHING :: null;\n"                                        \
+    "GREETING :: cast(*u8) \"hi\";\n"                           \
+    "COPY :: PRIMES;\n"
+
+// Whether decl is a constant holding data: is_data, and never is_constant.
+static bool holds_data(Ast *decl) {
+    return decl->kind == AST_CONST && ((Ast_Const *)decl)->is_data && !decl->is_constant;
+}
+
+TEST(constants_hold_data) {
+    // A constant can be a string, or a struct or an array whose values are
+    // constant data, nested to any depth, procedures, null and string
+    // literals' addresses included. It's marked is_data, its value the node
+    // holding it (Ast_Const.data), and is never is_constant, which holds one
+    // scalar: lowering would emit it as one. Nor is a use of it. A pointer
+    // constant that is null stays a scalar constant, and one that is a
+    // string literal's address holds data, that literal, reached through a
+    // field or an element of constant data too, written as a cast of it or
+    // not, or as a string constant's .data. A null pointer or procedure
+    // inside data is constant.
+    Arena a = arena_make();
+    Checked c = check_src(&a, DATA_CONSTANTS
+                          "SYMBOL :: OPS[1].symbol;\n"
+                          "NO_OP :: Op.{null, null};\n"
+                          "CASTOP :: Op.{cast(*u8) \"+\", add};\n"
+                          "CAST_SYMBOL :: CASTOP.symbol;\n"
+                          "NAME_DATA :: NAME.data;\n"
+                          "main :: () { T :: int.[1, 2]; S :: NAME; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(holds_data(global_named(&c, "NAME")));
+    CHECK(holds_data(global_named(&c, "ORIGIN")));
+    CHECK(holds_data(global_named(&c, "PRIMES")));
+    CHECK(holds_data(global_named(&c, "LINE")));
+    CHECK(holds_data(global_named(&c, "OPS")));
+    CHECK(holds_data(global_named(&c, "GREETING")));
+    CHECK(holds_data(global_named(&c, "COPY")));
+    CHECK(holds_data(local_named(&c, "T")));
+    CHECK(holds_data(local_named(&c, "S")));
+    CHECK(!value_of(&c, "S")->is_constant);
+    Ast_Const *name = (Ast_Const *)global_named(&c, "NAME");
+    CHECK_EQ(name->data->kind, AST_STRING);
+    // A constant holding a literal keeps that literal; null would mean zero.
+    Ast_Const *primes = (Ast_Const *)global_named(&c, "PRIMES");
+    CHECK(primes->data && primes->data == primes->value);
+    Ast_Const *ops = (Ast_Const *)global_named(&c, "OPS");
+    CHECK(ops->data && ops->data == ops->value);
+    Ast_Const *t = (Ast_Const *)local_named(&c, "T");
+    CHECK(t->data && t->data == t->value);
+    Ast_Const *no_op = (Ast_Const *)global_named(&c, "NO_OP");
+    CHECK(no_op->data && no_op->data == no_op->value);
+    CHECK(((Ast_Const *)global_named(&c, "COPY"))->data == primes->data);
+    CHECK(((Ast_Const *)local_named(&c, "S"))->data == name->data);
+    Ast_Const *greeting = (Ast_Const *)global_named(&c, "GREETING");
+    CHECK_STR(type_name(&a, greeting->type), "*u8");
+    CHECK_EQ(greeting->data->kind, AST_STRING);
+    CHECK_STR(((Ast_String *)greeting->data)->value, "hi");
+    Ast_Const *symbol = (Ast_Const *)global_named(&c, "SYMBOL");
+    CHECK(holds_data(symbol));
+    CHECK(symbol->data == name->data);
+    CHECK(holds_data(no_op));
+    Ast_Const *castop = (Ast_Const *)global_named(&c, "CASTOP");
+    CHECK(holds_data(castop));
+    CHECK(castop->data && castop->data == castop->value);
+    Ast_Const *cast_symbol = (Ast_Const *)global_named(&c, "CAST_SYMBOL");
+    CHECK(holds_data(cast_symbol));
+    CHECK(cast_symbol->data && cast_symbol->data->kind == AST_STRING);
+    if (cast_symbol->data && cast_symbol->data->kind == AST_STRING) {
+        CHECK_STR(((Ast_String *)cast_symbol->data)->value, "+");
+    }
+    Ast_Const *name_data = (Ast_Const *)global_named(&c, "NAME_DATA");
+    CHECK(holds_data(name_data));
+    CHECK_STR(type_name(&a, name_data->type), "*u8");
+    CHECK(name_data->data == name->data);
+    Ast_Proc *op = ((Ast_Const *)global_named(&c, "OP"))->proc;
+    CHECK(op && string_eq(op->name, str("add")));
+    Ast_Const *nowhere = (Ast_Const *)global_named(&c, "NOWHERE");
+    CHECK(nowhere->is_constant);
+    CHECK(!nowhere->is_data);
+    CHECK_EQ(nowhere->constant, 0);
+    CHECK_STR(type_name(&a, nowhere->type), "*void");
+    Ast_Const *nothing = (Ast_Const *)global_named(&c, "NOTHING");
+    CHECK(nothing->is_constant);
+    CHECK(!nothing->is_data);
+    CHECK(nothing->type == &type_null);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(constant_data_resolves) {
+    // constant_data follows names, fields, elements and casts to the node
+    // holding a value: a literal, a string literal, or null for a field a
+    // literal leaves out, by name or by giving fewer values, which is zero,
+    // and so for an element of an array field left out. An element needs a
+    // constant index, and a literal's every value must be constant. A
+    // string's element, a byte, isn't constant data: no node holds it.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Vec2 :: struct { x: int; y: int; }\n"
+                          "Line :: struct { a: Vec2; b: Vec2; }\n"
+                          "Pair :: struct { a: [2]int; n: int; }\n"
+                          "NAME :: \"rig\";\n"
+                          "ORIGIN :: Vec2.{3, 4};\n"
+                          "LINE :: Line.{a = ORIGIN};\n"
+                          "LINES :: Line.[LINE, .{b = .{5, 6}}];\n"
+                          "HOLE :: Pair.{n = 1};\n"
+                          "PART :: Vec2.{7};\n"
+                          "main :: () {\n"
+                          "    a := LINES[1].b;\n"
+                          "    b := LINE.b;\n"
+                          "    c := cast([]u8) NAME;\n"
+                          "    d := LINES[0].a;\n"
+                          "    i := 0;\n"
+                          "    e := LINES[i];\n"
+                          "    f := Vec2.{1, 2};\n"
+                          "    g := Vec2.{i, 2};\n"
+                          "    h := NAME[0];\n"
+                          "    j := HOLE.a[1];\n"
+                          "    k := PART.y;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast *value = nullptr;
+    CHECK(constant_data(value_of(&c, "a"), &value));
+    CHECK(value && value->kind == AST_LITERAL);
+    if (value && value->kind == AST_LITERAL) CHECK_EQ(((Ast_Literal *)value)->values[0]->constant, 5);
+    CHECK(constant_data(value_of(&c, "b"), &value));
+    CHECK(value == nullptr);
+    CHECK(constant_data(value_of(&c, "c"), &value));
+    CHECK(value && value->kind == AST_STRING);
+    CHECK(constant_data(value_of(&c, "d"), &value));
+    CHECK(value == ((Ast_Const *)global_named(&c, "ORIGIN"))->value);
+    CHECK(!constant_data(value_of(&c, "e"), &value));
+    CHECK(constant_data(value_of(&c, "f"), &value));
+    CHECK(value == value_of(&c, "f"));
+    CHECK(!constant_data(value_of(&c, "g"), &value));
+    CHECK(!constant_data(value_of(&c, "h"), &value));
+    CHECK(constant_data(value_of(&c, "j"), &value));
+    CHECK(value == nullptr);
+    CHECK(constant_data(value_of(&c, "k"), &value));
+    CHECK(value == nullptr);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(constant_data_rules) {
+    // A constant's value, and every value inside it, must be known while
+    // compiling, reported at the first one that isn't, inside a literal
+    // that a cast, a field or an element is taken of too. A pointer in it is
+    // null or a string literal's address: any cast, from a number, a
+    // procedure or a pointer variable, gets its own message. A procedure in
+    // it is a procedure or null. No part of it is a view, which would point
+    // at memory of its own, not even one inside a cast or a field of a
+    // literal; a view field a literal leaves out is zero, and fine.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Holder :: struct { p: *int; v: []int; n: int; }\n"
+                           "Named :: struct { name: string; n: int; }\n"
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "value := 3;\n"
+                           "text := \"hi\";\n"
+                           "pointer : *int;\n"
+                           "VIEW :: cast([]u8) \"hi\";\n"
+                           "WITH_VIEW :: Holder.{v = int.[1]};\n"
+                           "ZERO_VIEW :: Holder.{n = 1};\n"
+                           "AT :: cast(*int) 4096;\n"
+                           "CALLBACK :: Holder.{p = cast(*int) cast(*void) add};\n"
+                           "LIVE :: Holder.{n = value};\n"
+                           "NAMED :: Named.{text, 1};\n"
+                           "DEEP :: Holder.[.{n = 1}, .{n = value}];\n"
+                           "HELD :: pointer;\n"
+                           "Wrapper :: struct { h: Holder; }\n"
+                           "Op :: struct { symbol: *u8; run: (int, int) -> int; }\n"
+                           "callback : (int, int) -> int;\n"
+                           "CASTED :: cast(Holder) Holder.{v = int.[1]};\n"
+                           "INNER :: Wrapper.{h = Holder.{v = int.[1]}}.h;\n"
+                           "LIVE_RUN :: Op.{\"+\", callback};\n"
+                           "CAST_HELD :: cast(*int) pointer;\n"
+                           "CAST_LIVE :: cast(Holder) Holder.{n = value};\n"
+                           "FIELD_LIVE :: Holder.{n = value}.n;\n"
+                           "ELEMENT_LIVE :: int.[1, value][0];\n"
+                           "main :: () { }\n"),
+              "7:9: a constant can't hold a view; only a string or an array can be one\n"
+              "8:26: a constant can't hold a view; only a string or an array can be one\n"
+              "10:7: a constant's pointer can only be null or a string literal's address\n"
+              "11:25: a constant's pointer can only be null or a string literal's address\n"
+              "12:21: the value of constant 'LIVE' isn't known while compiling\n"
+              "13:17: the value of constant 'NAMED' isn't known while compiling\n"
+              "14:33: the value of constant 'DEEP' isn't known while compiling\n"
+              "15:9: the value of constant 'HELD' isn't known while compiling\n"
+              "19:36: a constant can't hold a view; only a string or an array can be one\n"
+              "20:35: a constant can't hold a view; only a string or an array can be one\n"
+              "21:22: the value of constant 'LIVE_RUN' isn't known while compiling\n"
+              "22:14: a constant's pointer can only be null or a string literal's address\n"
+              "23:39: the value of constant 'CAST_LIVE' isn't known while compiling\n"
+              "24:27: the value of constant 'FIELD_LIVE' isn't known while compiling\n"
+              "25:25: the value of constant 'ELEMENT_LIVE' isn't known while compiling\n");
+    arena_free(&a);
+}
+
+TEST(malformed_constant_data_has_one_error) {
+    // A literal that gives too many values, a field twice or one the struct
+    // hasn't, or a value that doesn't convert to its field's type, has its
+    // own error, and the constant holding it gets no other: not that its
+    // value isn't known, whatever the field's type.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: int; y: int; }\n"
+                           "Named :: struct { name: string; n: int; }\n"
+                           "Op :: struct { symbol: *u8; run: (int, int) -> int; }\n"
+                           "add :: (a: int, b: int) -> int { return a + b; }\n"
+                           "text := \"hi\";\n"
+                           "MANY :: Vec2.{1, 2, 3};\n"
+                           "TWICE :: Vec2.{x = 1, x = 2};\n"
+                           "UNKNOWN :: Vec2.{z = 1};\n"
+                           "WRONG :: Named.{1, 1};\n"
+                           "NUMBER :: Vec2.{text, 1};\n"
+                           "SYMBOL :: Op.{text, add};\n"
+                           "RUN :: Op.{\"+\", text};\n"
+                           "main :: () { }\n"),
+              "6:9: 'Vec2' has 2 fields, but this literal gives 3\n"
+              "7:23: field 'x' is given twice\n"
+              "8:18: 'Vec2' has no field 'z'\n"
+              "9:17: a value of type 'int' doesn't convert to 'string' implicitly\n"
+              "10:17: a value of type 'string' doesn't convert to 'int' implicitly\n"
+              "11:15: a value of type 'string' doesn't convert to '*u8' implicitly; its .data may not end with a "
+              "zero\n"
+              "12:17: a value of type 'string' doesn't convert to '(int, int) -> int' implicitly\n");
+    arena_free(&a);
+}
+
+TEST(string_constants_convert_as_literals) {
+    // A string constant is a string literal's bytes, with the zero after
+    // them, so it converts to *u8 and passes C's '...' as the literal
+    // does, and so does a string field or element of constant data. A
+    // string variable holding the same bytes doesn't, nor does a string a
+    // constant's literal leaves out, the empty string, holding no literal.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                          "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                          "Named :: struct { name: string; n: int; }\n"
+                          "NAME :: \"rig\";\n"
+                          "NAMED :: Named.{\"x\", 1};\n"
+                          "NAMES :: string.[\"a\", NAME];\n"
+                          "main :: () {\n"
+                          "    puts(NAME);\n"
+                          "    p : *u8 = NAME;\n"
+                          "    q := cast(*u8) NAME;\n"
+                          "    b := cast([]u8) NAME;\n"
+                          "    printf(\"%s\\n\", NAME);\n"
+                          "    puts(NAMED.name);\n"
+                          "    printf(\"%s\\n\", NAMES[1]);\n"
+                          "    s := \"rig\";\n"
+                          "    puts(s);\n"
+                          "    printf(\"%s\\n\", s);\n"
+                          "    puts(EMPTY.name);\n"
+                          "    printf(\"%s\\n\", UNNAMED);\n"
+                          "    r : *u8 = UNNAMED;\n"
+                          "}\n"
+                          "EMPTY :: Named.{n = 1};\n"
+                          "UNNAMED :: EMPTY.name;\n");
+    CHECK_STR(messages(&a, &c.list->diag),
+              "16:10: argument 1 of 'puts' has type 'string', which can't be converted to '*u8'; its .data may not "
+              "end with a zero\n"
+              "17:20: argument 2 of 'printf' has type 'string', which C's '...' can't take; pass its .data, which "
+              "may not end with a zero, or a literal\n"
+              "18:10: argument 1 of 'puts' has type 'string', which can't be converted to '*u8'; its .data may not "
+              "end with a zero\n"
+              "19:20: argument 2 of 'printf' has type 'string', which C's '...' can't take; pass its .data, which "
+              "may not end with a zero, or a literal\n"
+              "20:15: a value of type 'string' doesn't convert to '*u8' implicitly; its .data may not end with a "
+              "zero\n");
+    CHECK_STR(type_of(&a, &c, "q"), "*u8");
+    CHECK_STR(type_of(&a, &c, "b"), "[]u8");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(global_values_name_constant_data) {
+    // A global's value may name constant data, or a field or an element of
+    // it: the global gets a copy of its own (spec 4.3). A string constant's
+    // .data is its literal's address, as the literal's is.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, DATA_CONSTANTS
+                           "origin := ORIGIN;\n"
+                           "line := Line.{a = ORIGIN};\n"
+                           "copy := PRIMES;\n"
+                           "view : []int = PRIMES;\n"
+                           "name : *u8 = NAME;\n"
+                           "text := NAME;\n"
+                           "data : *u8 = NAME.data;\n"
+                           "first := OPS[0];\n"
+                           "op : (int, int) -> int = OPS[0].run;\n"
+                           "main :: () { }\n"),
+              "");
+    arena_free(&a);
+}
+
+// Whether the last procedure's local `name` is given a value folded to
+// `constant`.
+static bool folds_to(Checked *c, const char *name, u64 constant) {
+    Ast *value = value_of(c, name);
+    return value->is_constant && value->constant == constant;
+}
+
+TEST(constant_data_folds) {
+    // A scalar field of constant data, its element at a constant index, a
+    // string's byte at one and a string's .count are known while compiling
+    // (spec 5.9), through names, nested fields and literals of constants: a
+    // field a literal leaves out is zero, read through a field left out
+    // too, and so is an element of an array left out, and a string left out
+    // has no bytes, its .count 0 and its .data null (a constant naming that
+    // .data holds null, a scalar, not data). So a constant can name one and
+    // size an array. A float, or a narrow integer, has the bits of its
+    // field's or element's type: an untyped 2 given a float64 is 2.0, a -1
+    // given an s8 is sign-extended. A pointer or a procedure field or
+    // element left out, or given as null, is null, known too. An aggregate
+    // part, even one left out, isn't a number; nor is a pointer or a
+    // procedure a literal gives, a string's .data the address of its bytes,
+    // and an element or a byte at an index known only at run time is read
+    // then, as is a field reached through a pointer field, whose struct is
+    // elsewhere.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Vec2 :: struct { x: int; y: int; }\n"
+                          "Line :: struct { a: Vec2; b: Vec2; on: bool; }\n"
+                          "Named :: struct { name: string; n: int; }\n"
+                          "Grid :: struct { a: [3]int; rows: [2][2]int; }\n"
+                          "add :: (a: int, b: int) -> int { return a + b; }\n"
+                          "Op :: struct { symbol: *u8; run: (int, int) -> int; }\n"
+                          "Table :: struct { texts: [2]*u8; runs: [2](int, int) -> int; }\n"
+                          "V :: struct { x: float32; y: float64; s: s8; }\n"
+                          "Holder :: struct { v: *Named; }\n"
+                          "K :: 3;\n"
+                          "P :: V.{1, 2.5, -1};\n"
+                          "F :: float64.[2, K];\n"
+                          "T :: Table.{.[\"+\", null], .[add, null]};\n"
+                          "NAME :: \"rig\";\n"
+                          "ORIGIN :: Vec2.{3, 4};\n"
+                          "PRIMES :: int.[2, 3, 5, 7, 11];\n"
+                          "LINE :: Line.{a = ORIGIN, on = true};\n"
+                          "OPS :: Op.[.{\"+\", add}];\n"
+                          "BARE :: Op.{};\n"
+                          "NULLS :: Op.{null, null};\n"
+                          "H :: Holder.{};\n"
+                          "EMPTY :: Named.{n = 1};\n"
+                          "BLANK :: Grid.{};\n"
+                          "C :: Named.{\"cfg\", 7};\n"
+                          "NAMES :: string.[\"ab\", \"cde\"];\n"
+                          "N :: PRIMES[2];\n"
+                          "NONE :: EMPTY.name.count;\n"
+                          "ZERO :: BLANK.a[1];\n"
+                          "NO_DATA :: EMPTY.name.data;\n"
+                          "main :: () {\n"
+                          "    grid : [N]int;\n"
+                          "    sized : [PRIMES.count]int;\n"
+                          "    unnamed : [NONE + 1]int;\n"
+                          "    zeroed : [ZERO + 1]int;\n"
+                          "    none := EMPTY.name.count;\n"
+                          "    no_data := EMPTY.name.data;\n"
+                          "    element := BLANK.a[1];\n"
+                          "    b := LINE.b;\n"
+                          "    row := BLANK.rows[0];\n"
+                          "    count := NAME.count;\n"
+                          "    letter := NAME[1];\n"
+                          "    field_letter := C.name[1];\n"
+                          "    field_count := C.name.count;\n"
+                          "    element_letter := NAMES[1][2];\n"
+                          "    element_count := NAMES[1].count;\n"
+                          "    x := ORIGIN.y;\n"
+                          "    ax := LINE.a.x;\n"
+                          "    by := LINE.b.y;\n"
+                          "    on := LINE.on;\n"
+                          "    third := PRIMES[2];\n"
+                          "    literal := \"abc\".count;\n"
+                          "    first := \"abc\"[0];\n"
+                          "    field := Vec2.{5, 6}.y;\n"
+                          "    symbol := OPS[0].symbol;\n"
+                          "    run := OPS[0].run;\n"
+                          "    bare_symbol := BARE.symbol;\n"
+                          "    bare_run := BARE.run;\n"
+                          "    null_symbol := NULLS.symbol;\n"
+                          "    null_run := NULLS.run;\n"
+                          "    px := P.x;\n"
+                          "    py := P.y;\n"
+                          "    ps := P.s;\n"
+                          "    f0 := F[0];\n"
+                          "    f1 := F[1];\n"
+                          "    text := T.texts[0];\n"
+                          "    table_run := T.runs[0];\n"
+                          "    null_text := T.texts[1];\n"
+                          "    null_table_run := T.runs[1];\n"
+                          "    data := NAME.data;\n"
+                          "    field_data := C.name.data;\n"
+                          "    through := H.v.n;\n"
+                          "    i := 1;\n"
+                          "    varying := PRIMES[i];\n"
+                          "    varying_letter := NAME[i];\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast *n = global_named(&c, "N");
+    CHECK(n->is_constant);
+    CHECK_EQ(n->constant, 5);
+    CHECK(n->type == &type_int);
+    CHECK_STR(type_of(&a, &c, "grid"), "[5]int");
+    CHECK_STR(type_of(&a, &c, "sized"), "[5]int");
+    CHECK_STR(type_of(&a, &c, "unnamed"), "[1]int");
+    CHECK_STR(type_of(&a, &c, "zeroed"), "[1]int");
+    CHECK(folds_to(&c, "none", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "none")->type), "int");
+    CHECK(folds_to(&c, "no_data", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "no_data")->type), "*u8");
+    Ast_Const *no_data = (Ast_Const *)global_named(&c, "NO_DATA");
+    CHECK(no_data->is_constant && !no_data->is_data);
+    CHECK_EQ(no_data->constant, 0);
+    CHECK_STR(type_name(&a, no_data->type), "*u8");
+    CHECK(folds_to(&c, "element", 0));
+    CHECK(!value_of(&c, "b")->is_constant);
+    CHECK(!value_of(&c, "row")->is_constant);
+    CHECK(folds_to(&c, "count", 3));
+    CHECK_STR(type_name(&a, value_of(&c, "count")->type), "int");
+    CHECK(folds_to(&c, "letter", 'i'));
+    CHECK_STR(type_name(&a, value_of(&c, "letter")->type), "u8");
+    CHECK(folds_to(&c, "field_letter", 'f'));
+    CHECK(folds_to(&c, "field_count", 3));
+    CHECK(folds_to(&c, "element_letter", 'e'));
+    CHECK(folds_to(&c, "element_count", 3));
+    CHECK(folds_to(&c, "x", 4));
+    CHECK(folds_to(&c, "ax", 3));
+    CHECK(folds_to(&c, "by", 0));
+    CHECK(folds_to(&c, "on", 1));
+    CHECK_STR(type_name(&a, value_of(&c, "on")->type), "bool");
+    CHECK(folds_to(&c, "third", 5));
+    CHECK(folds_to(&c, "literal", 3));
+    CHECK_STR(type_name(&a, value_of(&c, "literal")->type), "int");
+    CHECK(folds_to(&c, "first", 'a'));
+    CHECK(folds_to(&c, "field", 6));
+    CHECK(!value_of(&c, "symbol")->is_constant);
+    CHECK(!value_of(&c, "run")->is_constant);
+    CHECK(folds_to(&c, "bare_symbol", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "bare_symbol")->type), "*u8");
+    CHECK(folds_to(&c, "bare_run", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "bare_run")->type), "(int, int) -> int");
+    CHECK(folds_to(&c, "null_symbol", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "null_symbol")->type), "*u8");
+    CHECK(folds_to(&c, "null_run", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "null_run")->type), "(int, int) -> int");
+    Ast *px = value_of(&c, "px");
+    CHECK(px->is_constant && float_value(px) == 1.0);
+    CHECK_STR(type_name(&a, px->type), "float32");
+    Ast *py = value_of(&c, "py");
+    CHECK(py->is_constant && float_value(py) == 2.5);
+    CHECK_STR(type_name(&a, py->type), "float64");
+    CHECK(folds_to(&c, "ps", (u64)-1));
+    CHECK_STR(type_name(&a, value_of(&c, "ps")->type), "s8");
+    Ast *f0 = value_of(&c, "f0");
+    CHECK(f0->is_constant && float_value(f0) == 2.0);
+    CHECK_STR(type_name(&a, f0->type), "float64");
+    Ast *f1 = value_of(&c, "f1");
+    CHECK(f1->is_constant && float_value(f1) == 3.0);
+    CHECK(!value_of(&c, "text")->is_constant);
+    CHECK(!value_of(&c, "table_run")->is_constant);
+    CHECK(folds_to(&c, "null_text", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "null_text")->type), "*u8");
+    CHECK(folds_to(&c, "null_table_run", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "null_table_run")->type), "(int, int) -> int");
+    CHECK(!value_of(&c, "data")->is_constant);
+    CHECK_STR(type_name(&a, value_of(&c, "data")->type), "*u8");
+    CHECK(!value_of(&c, "field_data")->is_constant);
+    CHECK_STR(type_name(&a, value_of(&c, "field_data")->type), "*u8");
+    CHECK(!value_of(&c, "through")->is_constant);
+    CHECK(!value_of(&c, "varying")->is_constant);
+    CHECK(!value_of(&c, "varying_letter")->is_constant);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(mistyped_constant_data_doesnt_fold) {
+    // A literal given a value of the wrong type, reported, keeps its own
+    // type, so a field or an element of the part it got wrong is no part of
+    // data: it's left unfolded, and a constant naming it has no type, with
+    // no error of its own. A string field given a number has no bytes to
+    // count or index, nor a bound to be out of. An array literal that gives
+    // too few elements, reported, has the ones it lacks taken as zero.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Vec2 :: struct { x: int; y: int; }\n"
+                          "Line :: struct { a: Vec2; b: Vec2; }\n"
+                          "Grid :: struct { rows: [2][2]int; a: [3]int; }\n"
+                          "Named :: struct { name: string; n: int; }\n"
+                          "X :: Line.{a = 5}.a.x;\n"
+                          "main :: () {\n"
+                          "    a := Line.{a = 5}.a.x;\n"
+                          "    b := Line.{\"hi\"}.a.x;\n"
+                          "    c := Vec2.[1, 2][0].x;\n"
+                          "    d := Grid.{rows = 5}.rows[0][1];\n"
+                          "    e := Named.{1, 1}.name.count;\n"
+                          "    f := Named.{1, 1}.name[0];\n"
+                          "    g := Named.{1, 1}.name[5];\n"
+                          "    h := Grid.{a = .[1, 2]}.a[2];\n"
+                          "    R :: Grid.{rows = 5}.rows[0][1];\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag),
+              "5:16: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
+              "7:20: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
+              "8:16: a value of type 'string' doesn't convert to 'Vec2' implicitly\n"
+              "9:16: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
+              "9:19: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
+              "10:23: a value of type 'int' doesn't convert to '[2][2]int' implicitly\n"
+              "11:17: a value of type 'int' doesn't convert to 'string' implicitly\n"
+              "12:17: a value of type 'int' doesn't convert to 'string' implicitly\n"
+              "13:17: a value of type 'int' doesn't convert to 'string' implicitly\n"
+              "14:20: '[3]int' has 3 elements, but this literal gives 2\n"
+              "15:23: a value of type 'int' doesn't convert to '[2][2]int' implicitly\n");
+    CHECK(!global_named(&c, "X")->type);
+    CHECK(!local_named(&c, "R")->type);
+    CHECK(!value_of(&c, "e")->is_constant);
+    CHECK(!value_of(&c, "f")->is_constant);
+    CHECK(!value_of(&c, "g")->is_constant);
+    CHECK(folds_to(&c, "h", 0));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(nested_reads_of_literals_check_quickly) {
+    // A field or an element of a literal that is a value of another literal,
+    // whose field or element is read in turn, forty levels over, a pointer,
+    // a procedure or an array's element, in a constant and in a variable:
+    // each literal is found to be constant data once (Ast_Literal.is_data).
+    // Walked again at every read, the time would triple with each level,
+    // and forty would take years.
+    Arena a = arena_make();
+    const char *types = "S :: struct { p: *u8; }\n"
+                        "Op :: struct { run: (int, int) -> int; }\n"
+                        "A :: struct { a: [1]*u8; }\n"
+                        "add :: (a: int, b: int) -> int { return a + b; }\n";
+    const char *pointer = nested_source(&a, "Q :: ", "S.{p = ", 40, "\"x\"", "}.p", ";\n");
+    const char *procedure = nested_source(&a, "R :: ", "Op.{run = ", 40, "add", "}.run", ";\n");
+    const char *element = nested_source(&a, "T :: ", "A.{.[", 40, "\"x\"", "]}.a[0]", ";\n");
+    const char *local = nested_source(&a, "main :: () { q := ", "S.{p = ", 40, "\"x\"", "}.p", "; r := R; t := T; }\n");
+    CHECK(builds(&a, joined(&a, joined(&a, types, pointer), procedure, element, local)));
+    arena_free(&a);
+}
+
+TEST(constant_parts_arent_places) {
+    // No part of a constant is a place (spec 5.1): its fields, its elements
+    // and a string constant's bytes, a string field's of a struct constant
+    // and a string element's of an array constant too, can't be assigned to
+    // nor have their address taken, and for *
+    // can't point into them. A string constant's .data is its bytes'
+    // address, a *u8, as a literal's is. What a pointer field points at is
+    // elsewhere, a struct's fields and a string's bytes reached through it
+    // too, and a string literal's bytes stay places, as they were. A part of
+    // a constant is reached through its fields and elements, not through a
+    // cast: writing through cast([]u8) NAME isn't refused, but undefined.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: int; y: int; }\n"
+                           "Named :: struct { name: string; text: *u8; n: int; }\n"
+                           "Holder :: struct { v: *Named; }\n"
+                           "H :: Holder.{};\n"
+                           "NAME :: \"rig\";\n"
+                           "ORIGIN :: Vec2.{1, 2};\n"
+                           "PRIMES :: int.[2, 3, 5, 7, 11];\n"
+                           "C :: Named.{\"cfg\", \"abc\"};\n"
+                           "NAMES :: string.[\"ab\", \"cd\"];\n"
+                           "main :: () {\n"
+                           "    PRIMES[0] = 1;\n"
+                           "    ORIGIN.x = 1;\n"
+                           "    NAME[0] = 65;\n"
+                           "    C.name[0] = 65;\n"
+                           "    NAMES[0][0] = 65;\n"
+                           "    p := *PRIMES;\n"
+                           "    q := *PRIMES[0];\n"
+                           "    r := *NAME[0];\n"
+                           "    for * NAME { }\n"
+                           "    for * PRIMES { }\n"
+                           "    for * NAMES[1] { }\n"
+                           "    d := PRIMES.data;\n"
+                           "    C.text[0] = 65;\n"
+                           "    H.v.name[0] = 65;\n"
+                           "    H.v.n = 3;\n"
+                           "    for * H.v.name { }\n"
+                           "    t := NAME.data;\n"
+                           "    (cast(string) NAME)[0] = 65;\n"
+                           "    (cast([]u8) NAME)[0] = 65;\n"
+                           "    \"abc\"[0] = 65;\n"
+                           "    for * \"abc\" { }\n"
+                           "}\n"),
+              "11:5: can't assign to 'PRIMES': it's a constant\n"
+              "12:5: can't assign to 'ORIGIN': it's a constant\n"
+              "13:5: can't assign to 'NAME': it's a constant\n"
+              "14:5: can't assign to 'C': it's a constant\n"
+              "15:5: can't assign to 'NAMES': it's a constant\n"
+              "16:11: can't take the address of 'PRIMES': it's a constant\n"
+              "17:11: can't take the address of 'PRIMES': it's a constant\n"
+              "18:11: can't take the address of 'NAME': it's a constant\n"
+              "19:11: can't take the address of 'NAME': it's a constant\n"
+              "20:11: can't take the address of 'PRIMES': it's a constant\n"
+              "21:11: can't take the address of 'NAMES': it's a constant\n"
+              "22:10: can't take the address of 'PRIMES': it's a constant\n");
+    arena_free(&a);
+}
+
+TEST(constant_data_bounds) {
+    // A constant index into constant data is checked while compiling, by
+    // its sign: an array's against its count, as any array's is, and a
+    // string's against its bytes, counted as the other messages count, none
+    // for a string a literal leaves out.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "// A constant index into constant data is checked while compiling (spec 5.11):\n"
+                           "// an array's against its count, a string's against its bytes (none when a\n"
+                           "// literal leaves it out).\n"
+                           "Named :: struct { name: string; n: int; }\n"
+                           "NAME :: \"rig\";\n"
+                           "PRIMES :: int.[2, 3, 5, 7, 11];\n"
+                           "EMPTY :: Named.{n = 1};\n"
+                           "N :: PRIMES[9];\n"
+                           "main :: () {\n"
+                           "    c := NAME[5];\n"
+                           "    d := \"x\"[1];\n"
+                           "    e := NAME[-1];\n"
+                           "    f := EMPTY.name[0];\n"
+                           "}\n"),
+              "8:13: index 9 is out of bounds for '[5]int'\n"
+              "10:15: index 5 is out of bounds for a string of 3 bytes\n"
+              "11:14: index 1 is out of bounds for a string of 1 byte\n"
+              "12:15: index -1 is out of bounds for a string of 3 bytes\n"
+              "13:21: index 0 is out of bounds for a string of 0 bytes\n");
     arena_free(&a);
 }

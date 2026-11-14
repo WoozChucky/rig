@@ -393,8 +393,8 @@ static bool interp_call_c(Interp *in, void *target, Ir_Type result, u64 *out) {
 // Maps the globals the module gained since the last run, in two passes as
 // the backend makes them: each allocated first, then the relocations
 // written, since one may name any global, a later one too. Every global is
-// writable here, a string literal's too, which the compiled program keeps
-// read-only. False, with nothing mapped, when a relocation can't be
+// writable here, a string literal's and a data constant's too, which the
+// compiled program keeps read-only. False, with nothing mapped, when a relocation can't be
 // written, as it names a C function that is nowhere: its message in *error,
 // in `a`.
 static bool interp_map_globals(Interp *in, Arena *a, String *error) {
@@ -404,10 +404,11 @@ static bool interp_map_globals(Interp *in, Arena *a, String *error) {
         Ir_Global *g = &m->globals[i];
         u8 *bytes;
         if (g->type == IR_VOID) {
-            // Bytes, a literal's (align 1) or a variable's: the first ones
-            // given, the rest zero (arena_alloc zeroes).
-            u64 size = g->is_variable ? (u64)g->size : (u64)g->bytes.count;
-            u64 align = g->is_variable ? g->align : 1;
+            // Bytes, a literal's (align 1), a variable's or a data
+            // constant's: the first ones given, the rest zero (arena_alloc
+            // zeroes).
+            u64 size = g->has_layout ? (u64)g->size : (u64)g->bytes.count;
+            u64 align = g->has_layout ? g->align : 1;
             RIG_ASSERT(g->bytes.count <= (s64)size);
             bytes = (u8 *)arena_alloc(&in->memory, size ? size : 1, align);
             if (g->bytes.count) memcpy(bytes, g->bytes.data, (size_t)g->bytes.count);
@@ -803,7 +804,7 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
             u64 count, prefix;
             if (instr->target >= 0) {
                 Ir_Global *g = &m->globals.data[instr->target];
-                RIG_ASSERT(g->type == IR_VOID && !g->is_variable && g->bytes.count > 0);
+                RIG_ASSERT(g->type == IR_VOID && !g->has_layout && g->bytes.count > 0);
                 text = g->bytes.data;
                 count = (u64)g->bytes.count - 1;
                 prefix = instr->constant;

@@ -1321,7 +1321,7 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
         if (instr->target >= 0) {
             // A string literal's bytes but the zero that ends them.
             Ir_Global *g = &m->globals[instr->target];
-            RIG_ASSERT(g->type == IR_VOID && !g->is_variable && g->bytes.count > 0);
+            RIG_ASSERT(g->type == IR_VOID && !g->has_layout && g->bytes.count > 0);
             args[0] = llvm_global(body, instr->target);
             args[1] = LLVMConstInt(LLVMInt64TypeInContext(c), (u64)(g->bytes.count - 1), 0);
         } else {
@@ -1599,9 +1599,10 @@ static void add_byte_run(LLVMContextRef c, Arena *a, Global_Pieces *p, Ir_Global
     }
 }
 
-// A variable of bytes as LLVM has it: its type, and, given `globals` and
-// `functions` (every global's and procedure's LLVM value, by IR index,
-// m->globals.count and m->procs.count of them), its first value in *init.
+// A variable of bytes, or a data constant's bytes, as LLVM has it: its
+// type, and, given `globals` and `functions` (every global's and
+// procedure's LLVM value, by IR index, m->globals.count and m->procs.count
+// of them), its first value in *init.
 //
 // When it's one run of bytes it's an array of them, [N x i8]
 // (zeroinitializer when they're all 0, as a global given no value is,
@@ -1693,21 +1694,35 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
 
     // The globals in two passes: every one made first, with its type, then,
     // once the functions are made too, each given its first value. A
-    // variable of bytes may hold the address of any global (a relocation),
-    // a later one too, or of a procedure, and that address is the LLVM
-    // global or function itself, which must exist by then.
+    // variable of bytes, or a constant's bytes, may hold the address of any
+    // global (a relocation), a later one too, or of a procedure, and that
+    // address is the LLVM global or function itself, which must exist by
+    // then.
     LLVMContextRef c = b->context;
     LLVMValueRef *globals = arena_new_array<LLVMValueRef>(a, m->globals.count ? m->globals.count : 1);
     for (s64 i = 0; i < m->globals.count; i++) {
         Ir_Global *g = &m->globals[i];
         LLVMValueRef global = nullptr;
-        if (g->type == IR_VOID && !g->is_variable) {
+        if (g->type == IR_VOID && !g->has_layout) {
             // A string literal's constant bytes, read-only.
             global = LLVMAddGlobal(b->module, bytes_type(c, g->bytes.count), string_cstr(a, g->name));
             LLVMSetGlobalConstant(global, 1);
             LLVMSetLinkage(global, LLVMPrivateLinkage);
             LLVMSetUnnamedAddress(global, LLVMGlobalUnnamedAddr);
             LLVMSetAlignment(global, 1);
+        } else if (g->type == IR_VOID && g->is_read_only) {
+            // A data constant's bytes, laid out as a variable of bytes is,
+            // but a constant: the object file puts it with the read-only
+            // data, and LLVM may read its bytes where the program does.
+            // Private, as a literal's bytes are, but not unnamed_addr, so
+            // LLVM never merges it with an equal constant: each constant
+            // has an address of its own.
+            RIG_ASSERT(g->align > 0 && (g->align & (g->align - 1)) == 0);
+            global = LLVMAddGlobal(b->module, byte_global(c, a, m, g, nullptr, nullptr, nullptr),
+                                   string_cstr(a, g->name));
+            LLVMSetGlobalConstant(global, 1);
+            LLVMSetLinkage(global, LLVMPrivateLinkage);
+            LLVMSetAlignment(global, g->align);
         } else if (g->type == IR_VOID) {
             // A variable of bytes, writable and internal like the program's
             // procedures, aligned as the IR says.
@@ -1729,7 +1744,7 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     // file that declares it, in a global variable expression whose
     // expression is empty (the variable is the global's memory itself),
     // attached to the LLVM global (!dbg). What the compiler makes (str.N,
-    // array.N) has no Rig type, and none.
+    // array.N, const.N) has no Rig type, and none.
     for (s64 i = 0; b->debug && i < m->globals.count; i++) {
         Ir_Global *g = &m->globals[i];
         if (!g->rig_type) continue;
@@ -1762,7 +1777,7 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     for (s64 i = 0; i < m->globals.count; i++) {
         Ir_Global *g = &m->globals[i];
         LLVMValueRef init = nullptr;
-        if (g->type == IR_VOID && !g->is_variable) {
+        if (g->type == IR_VOID && !g->has_layout) {
             // The bytes already end with their zero, so LLVM mustn't add
             // another.
             init = LLVMConstStringInContext2(c, (const char *)g->bytes.data, (size_t)g->bytes.count, 1);

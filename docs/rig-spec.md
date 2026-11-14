@@ -91,7 +91,7 @@ A compile-time error is named by its message, in code type: an assignment to a c
 
 Some terms used throughout:
 
-- A **constant** is a value known while compiling: a literal, a named constant, or an expression made only of constants (section 5.9).
+- A **constant** is a value known while compiling: a literal, a named constant, or an expression made only of constants (section 5.9). It may be **constant data**: a string, or a struct or an array whose fields and elements are known while compiling (sections 4.2, 5.9).
 - An **untyped constant** is a numeric constant that has not yet met a type (section 3.12).
 - A **place** is an expression that denotes memory: it can be assigned to and has an address (section 5.1).
 - A **sequence** is an array, a view or a string: what can be indexed with bounds checks and gone over with `for` (sections 5.11, 6.8).
@@ -366,9 +366,9 @@ An array converts implicitly to a view of its elements (section 3.13). Copying a
 
 `string` is a view of bytes: laid out as `[]u8`, `{ count: int; data: *u8; }`, 16 bytes aligned to 8, with the members `.count` and `.data`. A string is not ended by a zero byte, and its bytes may be any bytes. `string` and `[]u8` are different types that a cast turns into each other (section 3.14).
 
-A string literal is a `string` whose count is the number of bytes it stands for and whose data points at those bytes, which the program holds as read-only constant data, followed by a zero byte that the count does not include. Because of that zero, a string literal (and only a literal) also converts implicitly to `*u8`, the type C uses for a string, so it can be passed to C. Any other `string` does not: `a value of type 'string' doesn't convert to '*u8' implicitly; its .data may not end with a zero`.
+A string literal is a `string` whose count is the number of bytes it stands for and whose data points at those bytes, which the program holds as read-only constant data, followed by a zero byte that the count does not include. Because of that zero, a string literal also converts implicitly to `*u8`, the type C uses for a string, so it can be passed to C. So does a string constant, `NAME :: "rig";` (section 4.2), which holds a literal, and so does a string field or element of constant data that holds a literal, such as `C.name` for a struct constant `C` (section 5.9): each converts as its literal does, to the literal's bytes. One that a literal leaves out holds no literal: it is the empty string, whose data is null, and does not convert. A cast does not: `cast(string) "hi"` is a string like any other. Any other `string` does not: `a value of type 'string' doesn't convert to '*u8' implicitly; its .data may not end with a zero`. A string constant, like any string, becomes a `[]u8` by a cast (section 3.14), a view of the same bytes.
 
-A literal's bytes are read-only memory. Writing them (`s := "abc"; s[0] = 65;`) is a memory error that no check catches.
+A literal's bytes are read-only memory, and so are a string constant's, which are its literal's. Writing them (`s := "abc"; s[0] = 65;`, or through `cast([]u8) NAME`) is a memory error that no check catches. Assigning to a string constant's byte directly, `NAME[0] = 65;`, is refused: `can't assign to 'NAME': it's a constant` (section 5.1).
 
 ### 3.9 Struct types
 
@@ -454,7 +454,7 @@ A value converts implicitly to another type only in these cases:
 - `*void` to any pointer type, and any pointer type to `*void`.
 - A procedure value to its own procedure type only: the same parameter types, result types and `#c_call` mark (section 3.15).
 - `[N]T` to `[]T`, a view of the array's `N` elements (section 5.17 says which memory the view points at).
-- A string literal to `*u8`.
+- A string literal, or a string that is constant data holding one (a string constant, or a string field or element of constant data), to `*u8` (section 3.8).
 - `.{...}` to a struct type, and `.[...]` to an array or view type (section 5.17).
 
 Nothing else converts implicitly: not an integer to a narrower integer, not between integers and floats, not `float64` to `float32`, not between `bool` and any number, not between pointers to different types other than through `*void`, and not between procedure types, nor between a procedure value and a pointer. Such a value is `a value of type 'int' doesn't convert to 'float32' implicitly`. A value always converts to its own type.
@@ -546,7 +546,7 @@ A procedure type goes wherever a type goes: a variable's, a constant's, a parame
 
 **Identity.** Two procedure types are the same type when their parameter types are the same, in order, their result types are the same, in order, and both are marked `#c_call` or neither is. Messages write a procedure type in that form, with no names: `(int, int) -> int`, `(int) -> (int, int)`, `(*void, *void) -> s32 #c_call`, `()`.
 
-**Values.** A procedure value is the address of a procedure's code: 8 bytes, aligned to 8, as a pointer is (section 3.11). A procedure's name used other than in a call is its value, whose type is its signature's: with `add :: (a: int, b: int) -> int { ... }`, `f := add;` gives `f` the type `(int, int) -> int`. A constant may name a procedure, `OP :: add;`, and then stands for it wherever it is used, calls included (section 4.2). A global variable may hold one (section 4.3). A foreign procedure's value has a `#c_call` type (section 7.6), and a variadic foreign procedure, declared with `..`, cannot be a value, since no procedure type can say `..`: `'printf' can't be a value: it takes more arguments with '..', which no procedure type can say`. Nor can `main` (section 7.4): `'main' can't be a value: it's where the program starts`.
+**Values.** A procedure value is the address of a procedure's code: 8 bytes, aligned to 8, as a pointer is (section 3.11). A procedure's name used other than in a call is its value, whose type is its signature's: with `add :: (a: int, b: int) -> int { ... }`, `f := add;` gives `f` the type `(int, int) -> int`. A constant may name a procedure, `OP :: add;`, and then stands for it wherever it is used, calls included (section 4.2), and a constant's data may hold procedure values as fields or elements, as `OPS` does below. A global variable may hold one (section 4.3). A foreign procedure's value has a `#c_call` type (section 7.6), and a variadic foreign procedure, declared with `..`, cannot be a value, since no procedure type can say `..`: `'printf' can't be a value: it takes more arguments with '..', which no procedure type can say`. Nor can `main` (section 7.4): `'main' can't be a value: it's where the program starts`.
 
 A procedure value may be **null**, naming no procedure: `null` converts to every procedure type, and a procedure-typed variable or field that is zeroed is null (section 4.3). Calling a null procedure value is a runtime error (section 8.4).
 
@@ -566,11 +566,12 @@ mul :: (a: int, b: int) -> int { return a * b; }
 
 Op :: struct { symbol: *u8; run: (int, int) -> int; }
 
+OPS :: Op.[.{"+", add}, .{"*", mul}];
+
 apply :: (f: (int, int) -> int, a: int, b: int) -> int { return f(a, b); }
 
 main :: () {
-    ops := Op.[.{"+", add}, .{"*", mul}];
-    for ops { printf("6 %s 7 = %lld\n", it.symbol, it.run(6, 7)); }
+    for OPS { printf("6 %s 7 = %lld\n", it.symbol, it.run(6, 7)); }
     f : (int, int) -> int;
     if f == null { f = mul; }
     printf("%lld %d\n", apply(f, 3, 4), f == mul);
@@ -616,26 +617,53 @@ After `::`, a `(` followed by `)` or by an identifier and `:` begins a procedure
 ConstDecl = identifier "::" Expression ";" .
 ```
 
-`N :: e;` declares the constant `N` with the value of `e`, which must be known while compiling (section 5.9): otherwise `the value of constant 'N' isn't known while compiling`. A constant is a number, a `bool` or a procedure: any other value is `a constant can only be a number, a bool or a procedure, for now`, so a string, a struct or an array cannot be a constant. A constant that names a procedure, `OP :: add;` (or `OP :: OTHER;`, where `OTHER` names one), stands for that procedure: its type is the procedure's type (section 3.15), and `OP(1, 2)` calls `add` as `add(1, 2)` does. Casts may be written around the name when they end at the procedure's own type, as `cast((int, int) -> int) cast(*void) add` does; a constant that would name a procedure as another type is refused, since a call of it calls the procedure: `'add' is a '(int, int) -> int', so a constant can't name it as a '(int) -> int'`. A constant cannot name `main`, which is no value (section 7.4).
+`N :: e;` declares the constant `N` with the value of `e`, which must be known while compiling (section 5.9). A constant holds one of these:
 
-A constant has the type of its value: untyped when the value is an untyped constant, so `LIMIT :: 100;` meets types as the literal `100` does, and typed otherwise (`MASK :: cast(u8) 0xF0;` is a `u8`). A constant occupies no storage and cannot be assigned to (`can't assign to 'N': it's a constant`) or have its address taken.
+- a number or a `bool`;
+- a pointer: `null`, or a string literal's address (`GREETING :: cast(*u8) "hi";`, or `NAME.data` for a string constant `NAME`);
+- a procedure (below);
+- data: a string (`NAME :: "rig";`), or a struct or an array (`ORIGIN :: Vec2.{3, 4};`, `PRIMES :: int.[2, 3, 5, 7, 11];`) whose fields and elements hold these in turn, nested to any depth: numbers, `bool`s, pointers as above, procedure values, strings, structs and arrays. It is written as a literal of such values, as another constant holding data, or as a part of one (`COPY :: PRIMES;`, `LINE :: Line.{a = ORIGIN};`, `START :: LINE.a;`): constant data (section 5.9). A field a struct literal leaves out is zero, as in any literal (section 5.17).
+
+A value that isn't known while compiling is `the value of constant 'N' isn't known while compiling`, at the value, or at the first value inside its literals that isn't: in `LIVE :: Holder.{n = count};`, for a variable `count`, at `count`. A pointer, the constant's own or one inside its data, is `null` or a string literal's address; a cast that makes any other pointer, from a number, a procedure or a pointer variable (`cast(*int) 4096`, `cast(*void) add`), is `a constant's pointer can only be null or a string literal's address`. A constant holds no view, as its own value or inside its data, since a view would see memory of its own: `VIEW :: cast([]u8) "hi";` is `a constant can't hold a view; only a string or an array can be one`, at the value, and so is an array given to a view field. A view field that a struct literal leaves out is allowed: it is the empty view. Where a view is needed, an array constant converts to one, and a string constant is one already (section 3.13).
+
+A constant that names a procedure, `OP :: add;` (or `OP :: OTHER;`, where `OTHER` names one), stands for that procedure: its type is the procedure's type (section 3.15), and `OP(1, 2)` calls `add` as `add(1, 2)` does. Casts may be written around the name when they end at the procedure's own type, as `cast((int, int) -> int) cast(*void) add` does; a constant that would name a procedure as another type is refused, since a call of it calls the procedure: `'add' is a '(int, int) -> int', so a constant can't name it as a '(int) -> int'`. A constant cannot name `main`, which is no value (section 7.4).
+
+A constant has the type of its value: untyped when the value is an untyped constant, so `LIMIT :: 100;` meets types as the literal `100` does, and typed otherwise (`MASK :: cast(u8) 0xF0;` is a `u8`, `NAME :: "rig";` a `string`).
+
+A constant that is a number, a `bool`, a pointer or a procedure occupies no storage of its own: each use is its value, a string literal's address pointing at the literal's bytes (section 3.8). Nor does constant data that the program uses only through what folds (section 5.9): its fields, its elements at constant indexes, its `.count` (`N :: PRIMES[2];`, `[PRIMES.count]int`). Constant data used at run time, indexed by a variable, gone over by `for`, seen as a view, passed or copied whole, lives once in the program's read-only data (section 10.3), however many uses read it, and each use reads it there.
+
+No part of a constant can be assigned to or have its address taken: a constant is not a place (section 5.1), nor is any field or element of one, a string constant's bytes included. `PRIMES[0] = 1;` is `can't assign to 'PRIMES': it's a constant`, as `N = 1;` is `can't assign to 'N': it's a constant`, and `*ORIGIN.x` is `can't take the address of 'ORIGIN': it's a constant`.
+
+A local constant, declared in a body, holds what a top-level one does, by the same rules, and its data, used at run time, is read-only data too, once for the whole program however often its block runs.
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Vec2 :: struct { x: int; y: int; }
 
 KIB :: 1024;
 MIB :: KIB * KIB;
+NAME :: "rig";
+ORIGIN :: Vec2.{3, 4};
+PRIMES :: int.[2, 3, 5, 7, 11];
+N :: PRIMES[2];
 
 main :: () {
     small : u16 = KIB;
     big : u64 = MIB;
     HALF :: MIB / 2;
     if big / HALF == 2 && small == 1024 { puts("constants"); }
+    grid : [N]int;
+    total := 0;
+    for PRIMES { total += it; }
+    printf("%s %lld %lld %lld\n", NAME, grid.count, total, ORIGIN.x + ORIGIN.y);
 }
 ```
 
 ```text
 constants
+rig 5 28 7
 ```
 
 ### 4.3 Variables
@@ -660,8 +688,9 @@ A local variable is declared after its value is worked out, so `x := x + 1;` in 
 
 - a constant (section 5.9);
 - a struct or array literal whose values are all known while compiling, nested literals included;
-- for a view, an array literal: the compiler makes a global array of its own for the literal, and the view points at it;
-- a string literal, as a `string`, a `*u8` or a `[]u8`, or through casts that keep its address (`cast(*void) cast(*u8) "x"`), or as a field or element of one: the linker writes the literal's address into the global. A literal's address cast to an integer is not allowed;
+- constant data (sections 4.2, 5.9): a constant holding data, a field or an element of one, or any of these as a field or element of a literal (`origin := ORIGIN;`, `line := Line.{a = ORIGIN};`, `op : (int, int) -> int = OPS[0].run;`). The global gets a copy of the value, its own to change; a string's bytes stay its literal's, read-only;
+- for a view, an array literal, or an array that is constant data (`primes : []int = PRIMES;`): the compiler makes a global array of its own for it, a copy, and the view points at it;
+- a string literal or a string constant, as a `string`, a `*u8` or a `[]u8`, or through casts that keep its address (`cast(*void) cast(*u8) "x"`), or as a field or element of one: the linker writes the literal's address into the global. A literal's address cast to an integer is not allowed;
 - a procedure's name, or a constant that names one, as a procedure value or cast to `*void`, or as a field or element of a literal: the linker writes the procedure's address (section 3.15).
 
 A global with no value, or with `---`, starts at zero.
@@ -781,10 +810,10 @@ Some expressions denote memory. These are **places**: they can be assigned to (s
 - a variable, local or global, by its name;
 - `p.*`, what a pointer points at;
 - a field of a struct that is a place, and a field reached through a pointer (`p.x`);
-- an element of an array that is a place, and an element of a view, a string or a pointer (`v[i]`, `s[i]`, `p[i]`);
+- an element of an array that is a place, and an element of a view, a pointer or a string (`v[i]`, `p[i]`, `s[i]`), unless the string is part of a constant;
 - a view's or a string's `.count` and `.data`, when the view or string is a place.
 
-These are not places, and the messages say which they are: a constant (`it's a constant`), a parameter (`it's a parameter`), a loop's iterator or index (`it's the loop's iterator`, `it's the loop's index`), a procedure (`it's a procedure`), and any other value, such as a call's result or an arithmetic result (`only a variable, a field or an element can be assigned to`, `only a variable, a field or an element has an address`). An array's `.count` and `.data` are never places.
+These are not places, and the messages say which they are: a constant, and every part of one, its fields and elements and a string constant's bytes (`it's a constant`, naming the constant), a parameter (`it's a parameter`), a loop's iterator or index (`it's the loop's iterator`, `it's the loop's index`), a procedure (`it's a procedure`), and any other value, such as a call's result or an arithmetic result (`only a variable, a field or an element can be assigned to`, `only a variable, a field or an element has an address`). An array's `.count` and `.data` are never places.
 
 ### 5.2 Operators and precedence
 
@@ -889,12 +918,21 @@ Nothing else is compared: `'==' needs numbers, bools, pointers, procedure values
 A constant expression is one whose value is known while compiling. The compiler works it out (folds it), with the same result the program would compute. These are constant:
 
 - integer and float literals, `true` and `false`, `null`;
-- the name of a constant;
+- the name of a constant holding a number, a `bool` or `null`;
 - `size_of(T)` and an array's `.count`;
 - `-`, `~` or `!`, or an arithmetic, bitwise, shift, comparison or logical operator, applied to constant operands (an address, `*x`, is never a constant);
-- a cast of a constant to a number type or `bool`, and a cast of `null` to a pointer type.
+- a cast of a constant to a number type or `bool`, and a cast of `null` to a pointer type;
+- a part of constant data (below) that is a number, a `bool` or `null`: a field (`ORIGIN.y`), an element at a constant index (`PRIMES[2]`), a string's byte at a constant index (`NAME[1]`, a `u8`), or a string's `.count` (`NAME.count`, an `int`). A literal's parts fold too: `Vec2.{5, 6}.y` is 6, `"abc"[0]` is 97 and `"abc".count` is 3. A field or element that a literal leaves out is 0, `false` or `null`, and a string it leaves out is the empty string: its `.count` is 0 and its `.data` is `null`.
 
-A string literal, a compound literal, a variable and a call are not constants. Where a constant is required (a constant's value, an array's count) anything else is an error (sections 4.2, 3.6), with one exception: a constant's value may also name a procedure, as it is or through casts that end at its own type, since its address is known when the program is linked (section 4.2). A global variable's initial value accepts more than constants (section 4.3).
+**Constant data** is a value known while compiling that is a string, a struct or an array:
+
+- a string literal;
+- a struct or array literal whose every value is a constant, a procedure (its name, or a constant naming one, section 3.15), a string literal's address (section 3.8) or constant data, nested to any depth;
+- the name of a constant holding data (section 4.2);
+- a field of constant data, of a struct and not reached through a pointer, and an element of an array that is constant data, at a constant index;
+- a cast of constant data to its own type, or between `string` and `[]u8`.
+
+A part of constant data that is a string, a struct or an array is constant data too (`LINE.a`, `LINES[1]`). One that is a string literal's address or a procedure value is known while compiling, as a constant's value or a global's (sections 4.2, 4.3), but does not fold. A variable, a call and anything made from them are not constants: `Vec2.{i, 2}` is no constant data, and `PRIMES[i]`, for a variable `i`, is read at run time. Where a constant is required (a constant's value, an array's count) anything else is an error (sections 4.2, 3.6), with two exceptions, both a constant's value: it may name a procedure, as it is or through casts that end at its own type, since its address is known when the program is linked, and it may be constant data, or a string literal's address (section 4.2). A global variable's initial value accepts more than constants (section 4.3).
 
 Untyped constant expressions are exact (section 3.12). Typed constant expressions wrap as at run time; a division by the constant 0 is an error while compiling.
 
@@ -928,23 +966,23 @@ A call is an expression whose value is the procedure's first result. A call of a
 
 The index may be of any integer type and is read by its type's sign; an untyped index is an `int`. Anything else is `an index must be an integer, not 'bool'`, at the index. Indexing anything but these four is `'[]' needs an array, a view, a string or a pointer, not 'int'`, and a `*void` cannot be indexed (`can't index a '*void'; cast it to a pointer to something first`).
 
-**Bounds.** An index into an array, a view or a string must be at least 0 and less than its count. A constant index into an array is checked while compiling: `index 3 is out of bounds for '[3]int'`. Every other index into an array, a view or a string is checked when the program runs, and one outside the bounds stops it (section 8.5), unless bounds checks are turned off (section 7.7). An index into a pointer has no bounds to check; the pointer is checked not to be null (section 8.4).
+**Bounds.** An index into an array, a view or a string must be at least 0 and less than its count. A constant index into an array is checked while compiling: `index 3 is out of bounds for '[3]int'`, an array constant's included (`PRIMES[9]`). So is a constant index into a string that is constant data (section 5.9), against its bytes: for `NAME :: "rig";`, `NAME[5]` is `index 5 is out of bounds for a string of 3 bytes` (`a string of 1 byte` for one). An element of constant data at a constant index is constant data in turn, or a constant, which folds (section 5.9): `PRIMES[2]` is 5, `NAME[1]` is 105. Every other index into an array, a view or a string is checked when the program runs, and one outside the bounds stops it (section 8.5), unless bounds checks are turned off (section 7.7). An index into a pointer has no bounds to check; the pointer is checked not to be null (section 8.4).
 
-An element of an array is a place when the array is one. An element of a view, a string or a pointer is always a place: it lies in the memory the view, string or pointer leads to.
+An element of an array is a place when the array is one, so an array constant's is not. An element of a view, a string or a pointer is a place: it lies in the memory the view, string or pointer leads to. The one exception is an element of a string that is part of a constant, a byte of a string constant or of a string field of a struct constant: those bytes are the constant's, and no place (section 5.1). `NAME[0] = 65;` is `can't assign to 'NAME': it's a constant`.
 
 ### 5.12 Member access
 
 `e.x` names a member of `e`.
 
-**Fields.** When `e` is a struct, or a pointer to one, `e.x` is its field `x`. Through a pointer, `p.x` means `p.*.x`, and the pointer is checked not to be null (section 8.4). Only one pointer is followed: a `**Node` needs `.*` first, `pp.*.x`. A field that does not exist is `'Vec2' has no field 'z'`; a member of anything else is `'.x' needs a struct or a pointer to one, not 'int'`. A field is a place when its struct is one, and always when reached through a pointer.
+**Fields.** When `e` is a struct, or a pointer to one, `e.x` is its field `x`. Through a pointer, `p.x` means `p.*.x`, and the pointer is checked not to be null (section 8.4). Only one pointer is followed: a `**Node` needs `.*` first, `pp.*.x`. A field that does not exist is `'Vec2' has no field 'z'`; a member of anything else is `'.x' needs a struct or a pointer to one, not 'int'`. A field is a place when its struct is one, and always when reached through a pointer. A field of constant data is a constant when it is a number, a `bool` or `null`, and folds (section 5.9): for `ORIGIN :: Vec2.{3, 4};`, `ORIGIN.y` is 4. A field of a constant is not a place (section 5.1).
 
 **Counts and data.** Arrays, views and strings have the members `.count` and `.data`:
 
 | `e` | `e.count` | `e.data` |
 |---|---|---|
-| `[N]T` | `N`, an untyped integer constant; `e` is not evaluated | the address of the first element, a `*T`; `e` must have an address, as for `*e[0]` |
+| `[N]T` | `N`, an untyped integer constant; `e` is not evaluated | the address of the first element, a `*T`; `e` must have an address, as for `*e[0]`, which an array constant has not (`can't take the address of 'PRIMES': it's a constant`) |
 | `[]T` | the view's count, an `int` | the view's pointer, a `*T` |
-| `string` | the number of bytes, an `int` | the pointer to them, a `*u8` |
+| `string` | the number of bytes, an `int`; an `int` constant when the string is constant data (section 5.9) | the pointer to them, a `*u8`; a string constant's is its literal's bytes' address, read-only (section 3.8) |
 
 A view's and a string's `.count` and `.data` are places when the view or string is one, and can be assigned to. An array's cannot (`can't assign to an array's 'count'`). They are not reached through a pointer: on a pointer to an array, a view or a string, `.count` is `'.count' isn't reached through a pointer, '*string'; write .*.count`. Any other member is `'[3]int' has no field 'size'`.
 
@@ -1033,7 +1071,7 @@ swapped
 array literals
 ```
 
-**Arrays seen as views.** Where an array converts to a view, the view points at the array itself when the array is a place, so a procedure given the view sees and changes the caller's elements. Otherwise (a literal, a call's result) the array is copied into a temporary of the procedure that converts it, and the view points at that. Either way the view is valid only as long as the memory it points at: a view of a local array or of a temporary must not be used after the procedure that made it returns. Using it is a memory error that no check catches.
+**Arrays seen as views.** Where an array converts to a view, the view points at the array itself when the array is a place, so a procedure given the view sees and changes the caller's elements. When the array is a constant or part of one (`sum(PRIMES)`, or `sum(BOARD.cells)` for an array field of a struct constant `BOARD`), the view points at the constant's read-only data (section 4.2), with no copy: writing through it is a memory error that no check catches (section 8.6). Otherwise (a literal, a call's result) the array is copied into a temporary of the procedure that converts it, and the view points at that. A view of a local array or of a temporary is valid only as long as the memory it points at: it must not be used after the procedure that made it returns. Using it is a memory error that no check catches. A view of a constant's data is valid for the whole run.
 
 ### 5.18 Order of evaluation
 
@@ -1105,7 +1143,7 @@ AssignOp        = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | 
 MultiAssignment = Expression "," Expression { "," Expression } "=" Expression ";" .
 ```
 
-`x = e;` stores the value of `e`, converted implicitly to the type of `x`, into `x`. The target must be a place (section 5.1); anything else is reported as what it is: `can't assign to 'N': it's a constant`, `can't assign to 'a': it's a parameter`, `can't assign to 'it': it's the loop's iterator`, `can't assign to 'it_index': it's the loop's index`, `can't assign to 'f': it's a procedure`, or `only a variable, a field or an element can be assigned to`. A field or element of a struct or array parameter belongs to the parameter: `can't assign to 'a': it's a parameter`.
+`x = e;` stores the value of `e`, converted implicitly to the type of `x`, into `x`. The target must be a place (section 5.1); anything else is reported as what it is: `can't assign to 'N': it's a constant`, `can't assign to 'a': it's a parameter`, `can't assign to 'it': it's the loop's iterator`, `can't assign to 'it_index': it's the loop's index`, `can't assign to 'f': it's a procedure`, or `only a variable, a field or an element can be assigned to`. A field or element of a struct or array parameter belongs to the parameter: `can't assign to 'a': it's a parameter`. Likewise a field or element of a constant, a string constant's byte included, belongs to the constant: `PRIMES[0] = 1;` and `ORIGIN.x = 1;` are `can't assign to 'PRIMES': it's a constant` and `can't assign to 'ORIGIN': it's a constant`.
 
 `x op= e;` is `x = x op e;` with the place `x` worked out once, for each binary operator `op` of `+ - * / % & | ^ << >>`. The value `e` converts implicitly to the type of `x` (for a shift it may be any integer), and the operation is done at that type, so for `x : u8`, `x += 300;` is `300 doesn't fit in 'u8'`. A pointer takes `+=` and `-=` by an integer (section 5.14).
 
@@ -1178,7 +1216,7 @@ A range takes no `*`: `'for *' needs an array, a view or a string, not a range`.
 
 `for s { ... }` runs its body once for each element of `s`, an array, a view or a string, in order. In the body, `it` is the element, a copy made when its iteration begins, and `it_index` its index, an `int`. A name followed by `:` names the iterator instead of `it`, as for a range.
 
-`for * s { ... }` makes the iterator a pointer to each element (a `*T`, or a `*u8` for a string), so the body can change the elements. That needs the elements to have an address, as `*s[0]` does: an array must be a place (otherwise, for example, `can't take the address of 'a': it's a parameter`), while a view's and a string's elements always have one.
+`for * s { ... }` makes the iterator a pointer to each element (a `*T`, or a `*u8` for a string), so the body can change the elements. That needs the elements to have an address, as `*s[0]` does: an array must be a place (otherwise, for example, `can't take the address of 'a': it's a parameter`, or `can't take the address of 'PRIMES': it's a constant`), while a view's elements always have one, and so do a string's, unless the string is part of a constant (section 5.11): `for * NAME`, for `NAME :: "rig";`, is `can't take the address of 'NAME': it's a constant`.
 
 The sequence is evaluated once, before the first iteration, and its count and data are taken then: the body may change a view, and the loop does not see it. A view or string whose count is 0 or less runs no iteration. Before the first iteration, a view or string whose count says there are elements but whose data is null stops the program (section 8.4).
 
@@ -1447,7 +1485,7 @@ An argument with no type of its own takes Rig's default type (section 3.12), exc
 - an untyped float is a `float64`, C's `double`, not rounded to a `float32` first: `printf("%.10f", 0.1)` prints `0.1000000000`;
 - `null` is a `*void`, C's `NULL`.
 
-A string literal is passed as its bytes' address, a C string ending with a zero, as where it converts to a `*u8` (section 3.13): `printf("%s", "hi")`. C cannot take Rig's aggregates through `...`: a struct, an array, a view or any other string is refused, with what to pass instead: `argument 2 of 'printf' has type 'Vec2', which C's '...' can't take; pass a pointer to it`, `argument 2 of 'printf' has type '[32]u8', which C's '...' can't take; pass its .data` (a view's too), and `argument 2 of 'printf' has type 'string', which C's '...' can't take; pass its .data, which may not end with a zero, or a literal`. A compound literal without its type (section 5.17) is refused the same way, rather than asked for its type: `argument 2 of 'printf' is a struct literal, which C's '...' can't take; pass a pointer to a variable that holds it`, and for `.[...]`, `argument 2 of 'printf' is an array literal, which C's '...' can't take; pass the .data of a variable that holds it`. Since a string's bytes need not end with a zero, `%s` may read past them; `%.*s` takes the count first, as a C `int`: `printf("%.*s", cast(s32) s.count, s.data)`.
+A string literal is passed as its bytes' address, a C string ending with a zero, as where it converts to a `*u8` (section 3.13): `printf("%s", "hi")`. So is a string that is constant data holding one, a string constant or a string field or element of constant data (section 3.8), as its literal's bytes' address: `printf("%s", NAME)`. C cannot take Rig's aggregates through `...`: a struct, an array, a view or any other string is refused, with what to pass instead: `argument 2 of 'printf' has type 'Vec2', which C's '...' can't take; pass a pointer to it`, `argument 2 of 'printf' has type '[32]u8', which C's '...' can't take; pass its .data` (a view's too), and `argument 2 of 'printf' has type 'string', which C's '...' can't take; pass its .data, which may not end with a zero, or a literal`. A compound literal without its type (section 5.17) is refused the same way, rather than asked for its type: `argument 2 of 'printf' is a struct literal, which C's '...' can't take; pass a pointer to a variable that holds it`, and for `.[...]`, `argument 2 of 'printf' is an array literal, which C's '...' can't take; pass the .data of a variable that holds it`. Since a string's bytes need not end with a zero, `%s` may read past them; `%.*s` takes the count first, as a C `int`: `printf("%.*s", cast(s32) s.count, s.data)`.
 
 A call of a variadic foreign procedure follows the platform's convention for C's variadic functions (section 10.4). On Windows, the C runtime's DLLs export no `printf` or the rest of its family: a program links them from Visual Studio's `legacy_stdio_definitions.lib` (section 10.6).
 
@@ -1575,7 +1613,7 @@ These are memory errors, which the program must avoid and no check catches:
 
 - using a pointer or a view to memory that is no longer valid: a local or a temporary of a procedure that has returned (section 5.17), or memory given back to the C library;
 - moving a pointer outside the memory it points into and using it, and indexing a pointer outside its memory;
-- writing the bytes of a string literal, which are read-only;
+- writing the bytes of a string literal or a constant's data, which are read-only, through a view or a pointer to them (sections 3.8, 5.17): `cast([]u8) NAME`, a view of an array constant, or a string constant's `.data`;
 - using a misaligned pointer made by a cast;
 - calling a procedure value made by a cast from a `*void` that doesn't hold the address of a procedure of that type (section 3.15);
 - calling a procedure value read from a variable declared with `---` before it is assigned: it holds no procedure, and need not be null, so the null check (section 8.4) may pass it;
@@ -1736,7 +1774,7 @@ After lowering, beside the LLVM and linker stages, a stage can run the IR rather
 - **Structs** are laid out as C lays them out (section 3.9). A struct literal is built in zeroed memory, padding included.
 - **Arrays** are their elements one after another.
 - **Views and strings** are 16 bytes: the count, a 64-bit signed integer, at offset 0, and the data pointer at offset 8.
-- **String literals** are private, read-only constant data in the object file: their bytes followed by one zero byte.
+- **String literals and constants' data** are private, read-only constant data in the object file. A string literal is its bytes followed by one zero byte, once for each literal written in the source that the program uses at run time, however many uses reach it, and not at all when it is only folded (`"abc".count`, `NAME[1]`, section 5.9). A constant holding data (section 4.2) is there once when the program uses it at run time, and not at all when it is only folded: its value, laid out as its type is, with relocations for the addresses inside it (a string literal's, a procedure's), which the linker resolves. A string constant is a 16-byte string there, whose data points at its literal's bytes; where it becomes a `*u8`, it is the literal's address itself.
 - **Global variables** are data local to the program, initialised with their values' bytes. A global holding a string literal's or an array's address gets it through a relocation, which the linker resolves.
 - **Local variables** live in their procedure's stack frame. Every stack slot is allocated once, at the procedure's start, however often the block that declares it runs.
 
@@ -1802,7 +1840,7 @@ The debug information holds:
 - **Lexical blocks** following the program's scopes (section 4.7): each `if`, `else` and standalone block, and each loop's body, which starts at its `for` or `while`; and one inside its block for each declaration of a local that hides a variable (a global, a parameter or an outer local), from the declaration to the end of the block (rustc starts one at every `let`).
 - **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}` (an `else if` chain is left from the block that ran straight to the code after the chain, so a debugger doesn't stop at the `}` of an arm that didn't run), a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
 
-- **Variables:** every local variable, parameter, loop iterator (`it`, `it_index` or a named one) and global variable, by its Rig name and with its type. A local is in the lexical block that declares it, or, when it hides a variable, in the one its declaration starts, since a debugger shows a block's variables over the whole block, but a declaration hides a name only from its end: so before `g := 10;` a debugger shows the variable `g` it hides, from the declaration on the new one (its initializer is still in the block around it, and reads the outer one), and on leaving its block the outer one again. Parameters are stored in their own stack slots before the body's first line, so a breakpoint at a procedure already shows them. A scalar parameter's slot is where the program itself reads it from, as clang's code does at `-O0`: a value a debugger writes there (gdb's `set var n = 2`, cdb's `?? n = 2`) is the one the program goes on with. A parameter passed by address (a struct, array, view or string) is described as what is passed, the same in DWARF and CodeView: a pointer to the value, held in its slot. So a debugger shows the address and names the fields through it (gdb's `p->a`, `*p`, and `p.a`, which gdb reads through a pointer too; cdb's `a->count`; Visual Studio's `a.count`), and calls the procedure with an address (see **Types**). Each hidden result pointer is a parameter too, before the visible ones, named `result$` (`result$1`, `result$2`, ... when there are several), a name no Rig variable can have but both debuggers take in an expression (gdb's `print result$`, cdb's `?? result$`). It points at the caller's temporary, which holds the value only once `return` has copied it there. Constants have no storage and are not variables: a debugger doesn't see them.
+- **Variables:** every local variable, parameter, loop iterator (`it`, `it_index` or a named one) and global variable, by its Rig name and with its type. A local is in the lexical block that declares it, or, when it hides a variable, in the one its declaration starts, since a debugger shows a block's variables over the whole block, but a declaration hides a name only from its end: so before `g := 10;` a debugger shows the variable `g` it hides, from the declaration on the new one (its initializer is still in the block around it, and reads the outer one), and on leaving its block the outer one again. Parameters are stored in their own stack slots before the body's first line, so a breakpoint at a procedure already shows them. A scalar parameter's slot is where the program itself reads it from, as clang's code does at `-O0`: a value a debugger writes there (gdb's `set var n = 2`, cdb's `?? n = 2`) is the one the program goes on with. A parameter passed by address (a struct, array, view or string) is described as what is passed, the same in DWARF and CodeView: a pointer to the value, held in its slot. So a debugger shows the address and names the fields through it (gdb's `p->a`, `*p`, and `p.a`, which gdb reads through a pointer too; cdb's `a->count`; Visual Studio's `a.count`), and calls the procedure with an address (see **Types**). Each hidden result pointer is a parameter too, before the visible ones, named `result$` (`result$1`, `result$2`, ... when there are several), a name no Rig variable can have but both debuggers take in an expression (gdb's `print result$`, cdb's `?? result$`). It points at the caller's temporary, which holds the value only once `return` has copied it there. Constants are not variables: a debugger doesn't see them, though the program keeps some constants' data as read-only data (section 10.3).
 - **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; `[N]T` as arrays of N elements; `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`; and a procedure type as a pointer to the subroutine type of its signature, as C's function pointers are described, `#c_call` or not, one node for each procedure type. A procedure's type says how it is called (section 10.4), the same in DWARF and CodeView, not how C would pass the same types: an aggregate parameter is a pointer to its type, and each aggregate result a pointer parameter, `result$`, before the visible ones, the procedure returning its one scalar result, or nothing when it has none or several (gdb's `ptype make` is `void (struct Pair *, int)`, `ptype sum` `int (struct Pair *)`; cdb's `dt make` `void (Pair*, int64)`). A debugger that calls a procedure from an expression passes what that type says, so a call passes addresses where the procedure takes them: given `q`, a `Pair`, gdb's `print sum(&q)` and cdb's `.call sum(&q)` return `q.a + q.b`, and gdb's `print make(&q, 7)` and cdb's `.call make(&q, 7)` make `q` `{a = 7, b = 8}`; cdb refuses `.call make(7)` (`Too few arguments`). gdb's `finish` out of a procedure that returns an aggregate shows no value, rather than whatever the registers held. After it the procedure's frame is gone, and `result$` with it: to see the value, print `result$` before leaving (gdb names the address `$1`, say) and `*$1` after `finish`, or print the variable the caller assigns once its call's line is done. A procedure whose parameters and results are all scalars is called as C's (gdb's `print twice(4)`, cdb's `.call twice(4)`). A procedure value's subroutine type is the one a procedure of its type has, so a debugger shows the value as an address and the procedure there, and calls through it as it calls the procedure: gdb's `print f` is `(int (*)(int, int)) 0x401136 <add>` and `ptype` of a value holding `make` `void (*)(struct Pair *, int)`; cdb's `dx f` is `procedure_values!add+0x0 [Type: __int64 (__cdecl*)(__int64,__int64)]`, after the address. A null value shows as `0x0`. gdb calls through a value as C does, `print f(10, 20)`; cdb's `.call` takes only a procedure's name, but calls through a value with C++'s expression evaluator, `.call @@c++(f)(10, 20)`. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
 
 A debug type is made at most 1000 levels deep (the limit of section 9.4), counting each type along its longest chain of fields, pointees and elements. A program can chain types more deeply (structs held by value, each declared after the one it holds, or each holding a pointer to the next); past the limit a pointer is described as `void *` and any other type as a declared struct of its name with no fields, so the compiler's work stays bounded.
@@ -1815,7 +1853,7 @@ The compiler can run a program's code itself, while compiling, on its interprete
 
 **Memory.** The interpreter's memory is native memory of the compiler's own, laid out as the target's (section 10.3), so a pointer is a plain address, and C's functions (`malloc`, `memcpy`, `strlen`) work on interpreted data directly. So a memory error that no check catches (section 8.6), such as a write through a dangling pointer, or past a local array with bounds checks off, or by C given a bad pointer, is one in the compiler's own memory, which holds the interpreter's stack and globals and the compiler's own data: it may corrupt the compiler or stop it, as it would the compiled program.
 
-- **Globals** are made in memory from their bytes, and the addresses they hold (a string literal's, another global's, a procedure's) are written into them: a Rig procedure's is the address standing for it (below), a foreign one's its C function's. They are all writable, a string literal's bytes too, which a compiled program keeps read-only (writing them is a memory error no check catches, sections 3.8 and 8.6). They last as long as the interpreter: what one run leaves in a global, the next run sees.
+- **Globals** are made in memory from their bytes, and the addresses they hold (a string literal's, another global's, a procedure's) are written into them: a Rig procedure's is the address standing for it (below), a foreign one's its C function's. They are all writable, a string literal's bytes and a constant's data too, which a compiled program keeps read-only (writing them is a memory error no check catches, sections 3.8, 5.17 and 8.6). They last as long as the interpreter: what one run leaves in a global, the next run sees.
 - **Locals** live on the interpreter's own data stack, of 8 MB. Each call of a procedure gives it one slot per local and per temporary, at its start, however often the block that makes it runs, as the compiled program's frame has one per stack slot (section 10.3): a loop that declares a local, or makes a temporary, uses the same slot on every turn.
 - **Calls** keep their bookkeeping (each frame's values and the call it came from) on that stack too, so recursion that never ends runs out of it, however small its frames, and fails with the runtime error `stack overflow` (below), where the compiled program would crash. The interpreter keeps its frames there and never recurses itself, so deep recursion in Rig can't overflow the compiler's own stack.
 

@@ -160,11 +160,18 @@
 //   - a procedure: "can't assign to 'N': it's a procedure";
 //   - any other expression: "only a variable, a field or an element can be
 //     assigned to".
-// - N :: e; needs e a number or a bool ("a constant can only be a number,
-//   a bool or a procedure, for now": only they fold yet) known while
-//   compiling ("the value of constant 'N' isn't known while compiling"),
-//   or a procedure (OP :: add;), as its own type: "'add' is a
-//   '(int, int) -> int', so a constant can't name it as a '(int) -> int'".
+// - N :: e; needs e known while compiling (spec 4.2): a number, a bool or
+//   null; a procedure (OP :: add;), as its own type: "'add' is a
+//   '(int, int) -> int', so a constant can't name it as a '(int) -> int'";
+//   or data: a string, or a struct or an array whose fields and elements
+//   are such values, nested to any depth (constant_data). Anything else is
+//   "the value of constant 'N' isn't known while compiling", at the first
+//   value inside e that isn't. A pointer, in data or alone, is null or a
+//   string literal's address: any cast (from a number, a procedure or a
+//   pointer variable) or a procedure is "a constant's pointer can only be
+//   null or a string literal's address". No part of a constant is a view,
+//   which would see memory of its own: "a constant can't hold a view; only
+//   a string or an array can be one".
 // - The condition of if and while is a bool: "the condition of 'if' must
 //   be a bool, not 'int'".
 // - for a..b: the ends are integers meeting as an arithmetic operator's
@@ -308,17 +315,32 @@
 //   string or a pointer, not 'int'", "can't index a '*void'; cast it to a
 //   pointer to something first", at the '['; "an index must be an integer,
 //   not 'bool'", at i. A constant i of an array is checked here: "index 3 is
-//   out of bounds for '[3]int'", at i; every other index of an array, a view
-//   or a string is checked at run time (lowering), unless the procedure has
-//   #no_abc or the build --no-bounds-checks. An element is a place when its
-//   array is (so a[0] = 1 for a parameter a is "can't assign to 'a': it's a
-//   parameter"); a view's, a string's or a pointer's always.
+//   out of bounds for '[3]int'", at i; so is one of a string that is
+//   constant data (below), against its bytes, none when a literal leaves it
+//   out: "index 5 is out of bounds for a string of 3 bytes". Every other
+//   index of an array, a view or a string is checked at run time
+//   (lowering), unless the procedure has #no_abc or the build
+//   --no-bounds-checks. An element is a place when its array is (so a[0] = 1
+//   for a parameter a is "can't assign to 'a': it's a parameter"); a view's
+//   or a pointer's always, and a string's unless the string is part of a
+//   constant (constant_root): NAME[0] = 65 for `NAME :: "rig";` is "can't
+//   assign to 'NAME': it's a constant", as for * NAME is "can't take the
+//   address of 'NAME': it's a constant".
 // - a.count and a.data: a view's are its fields (an int, a *T, places when
 //   the view is one); an array's .count is its N, an untyped integer
 //   constant (a isn't evaluated), and its .data the address of its first
 //   element, a *T, which needs a to have an address, as *a[0] does. Neither
 //   of an array's can be assigned to ("can't assign to an array's
 //   'count'"). Nothing else: "'[3]int' has no field 'size'".
+// - A part of constant data (constant_data: a constant holding it, a
+//   literal, or a field or an element at a constant index of one) that is a
+//   number, a bool or null is known while compiling (spec 5.9): the value
+//   its literal gives, or zero when a literal leaves it out. It folds, as a
+//   constant's name does, so N :: PRIMES[2]; can size an array, and so do
+//   ORIGIN.y, a string's byte (NAME[1], a u8) and a string's .count (an
+//   int, its literal's count, 0 when a literal leaves it out). An aggregate
+//   part, a string literal's address or a procedure stays data, read where
+//   it's used.
 // - [N]T converts implicitly to []T, a view of its N elements, wherever a
 //   value converts (a declaration, an assignment, an argument, a return, a
 //   cast); nothing else converts to or from either but its own type. No
@@ -346,11 +368,17 @@
 // - string is a view of bytes, laid out as []u8, { count: int; data: *u8; },
 //   not ended by a zero. A string literal is one, its count the bytes
 //   without the zero after them (x := "hi"; x.count is 2). .count and .data,
-//   s[i] (a u8), for s (it a u8) and for * s (it a *u8) are a view's.
+//   s[i] (a u8), for s (it a u8) and for * s (it a *u8) are a view's, but
+//   for a string that is constant data: its .count and a byte at a constant
+//   index fold (above), and when it's part of a constant its bytes are no
+//   place, so for * NAME is refused (a[i] above).
 // - Only a literal converts to *u8, since only its bytes are known to end
-//   with a zero; any other string doesn't: "a value of type 'string'
-//   doesn't convert to '*u8' implicitly; its .data may not end with a zero"
-//   (an argument's message ends the same way).
+//   with a zero, and so does constant data holding one (literal_address):
+//   a constant, or a string field or element of one (NAME for
+//   `NAME :: "rig";`, NAMED.name, NAMES[1]); any other string doesn't:
+//   "a value of type 'string' doesn't convert to '*u8' implicitly; its
+//   .data may not end with a zero" (an argument's message ends the same
+//   way).
 // - == and != compare two strings by their bytes; a string meets no other
 //   type ("mismatched types 'string' and '*u8' for '=='"), and has no order
 //   or arithmetic ("'<' needs numbers, not 'string'").
@@ -372,10 +400,11 @@
 //   literal, which becomes a global array of its own. A string literal is
 //   known while compiling too, as a string, a *u8 or a []u8 (or a field or
 //   an element of one): its address is put in the global's bytes by the
-//   linker (literal_address).
-// - A top-level constant follows a local one's rules: a number or a bool,
-//   or a procedure, so not a struct (`N :: Vec2.{1, 2};` is "a constant
-//   can only be a number, a bool or a procedure, for now").
+//   linker (literal_address). So is constant data (constant_data): a
+//   constant holding it, or a field or an element of one, which the global
+//   gets a copy of, its own to change.
+// - A top-level constant follows a local one's rules: a number, a bool,
+//   null, a procedure or data (`N :: Vec2.{1, 2};`).
 // - Both are checked where they're first needed (in another's value, or in
 //   source order), so their order doesn't matter: in `A :: B + 1; B :: 2;`
 //   A is 3. A value that needs itself, directly or through others, is "'A'
@@ -412,9 +441,10 @@
 //   applies them: types.h's type_c_promoted). An untyped integer becomes
 //   an int, an untyped float a float64 (C's double, which a float32 would
 //   become anyway, so it isn't rounded to a float32 first), null a *void,
-//   and a string literal is passed as a C string, its bytes' address, as
-//   it is to a *u8 parameter. A struct, an array, a view or any other
-//   string is "argument 2 of 'printf' has type 'Vec2', which C's '...'
+//   and a string literal (or constant data holding one: a constant, or a
+//   string field or element of one) is passed as a C string, its bytes'
+//   address, as it is to a *u8 parameter. A struct, an array, a view or
+//   any other string is "argument 2 of 'printf' has type 'Vec2', which C's '...'
 //   can't take; pass a pointer to it" (an array's or a view's: "pass its
 //   .data"; a string's: "pass its .data, which may not end with a zero, or
 //   a literal").
@@ -453,20 +483,58 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d);
 // Whether e, checked with no errors, is a place in memory: a variable, but
 // not a loop's iterator or index; p.*; a field of a place, or of a struct
 // reached through a pointer; an element of a place's array, or of a view's,
-// a string's or a pointer's. An array's .count and .data never are. The one
+// a pointer's or a string's, unless that string is part of a constant
+// (constant_root). An array's .count and .data never are. The one
 // statement of the rule: the checker asks it before taking an address or
 // assigning (and says why not), and lowering asks it what an array
 // converted to a view is seen through (lower_view_of): the array itself, or
 // a copy of it.
 bool expr_is_place(Ast *e);
 
+// The name of the constant holding data that e, checked, is part of: e
+// itself naming one (Ast_Const.is_data), or a field (a struct's, not through
+// a pointer) or an element (an array's or a string's) of such a part, any
+// number of times over; null for anything else. A part's bytes are the
+// constant's: no place (expr_is_place), and, lowered, in its read-only
+// global (lower_view_of).
+Ast_Name *constant_root(Ast *e);
+
 // The string literal whose address e, checked, is: the literal itself (as a
 // string, or where it meets a *u8), or a cast of it that keeps the address,
-// to []u8 or between pointers (cast(*void) cast(*u8) "x"); null for anything
-// else, a cast of it to an integer too. A global may hold one, its address
-// written there by the linker: the checker asks this to allow it, and
-// lowering to write it (constant_bytes).
+// to []u8 or between pointers (cast(*void) cast(*u8) "x"), or constant data
+// holding it (constant_data: NAME for NAME :: "rig";, a *u8 field of a
+// constant, OPS[0].symbol), and casts of that, and the .data of any of
+// them (NAME.data); null for anything else, a cast of it to an integer too. A global and a constant may hold one, its
+// address written there by the linker: the checker asks this to allow it,
+// and where a string converts to a *u8 as a literal does; lowering, to
+// write it (constant_bytes).
 Ast_String *literal_address(Ast *e);
+
+// Whether e, checked, is constant data (spec 5.9), and in *value the node
+// holding its value, following names, fields, elements and casts:
+// - a string literal;
+// - a struct or array literal whose every value is is_constant, a procedure
+//   (procedure_address), a string literal's address (literal_address) or
+//   constant data, found the first time it's asked and kept
+//   (Ast_Literal.is_data);
+// - the name of a constant with is_data (its `data`);
+// - a field of constant data (a struct's, not reached through a pointer),
+//   or an element of it (an array's) at an is_constant index;
+// - a cast of constant data to its own type, or between string and []u8.
+// A field's or element's value node that is itself constant data is
+// followed in turn. So *value is a string or struct or array literal, or a
+// scalar field's or element's value node as the literal wrote it (a
+// constant, a procedure's name, a string literal, or a cast of one, which
+// literal_address and procedure_address walk on from); or null when a
+// literal leaves the field out (zero), and so for any field or element of
+// such a null part. A string's element is a byte that no node holds: not
+// constant data; nor is a field or an element of a value a literal gives
+// with the wrong type, reported (Line.{a = 5}.a.x).
+bool constant_data(Ast *e, Ast **value);
+
+// The value struct literal `literal`, of struct type t, gives field `field`,
+// by name or by position; null when it leaves it out.
+Ast *literal_field_value(Ast_Literal *literal, Type *t, s32 field);
 
 // A call's results, whatever it calls: the procedure's (Ast_Call.proc), or
 // those of the procedure value's type (Ast_Call.callee_type). For a call
@@ -475,9 +543,11 @@ s64 call_result_count(Ast_Call *call);
 Type *call_result_type(Ast_Call *call, s64 i);
 
 // The procedure whose address e, checked, is: a procedure's name, a
-// constant that names one (OP :: add;), or a cast of either that keeps the
-// address, to *void or to a procedure type (cast(*void) add); null for
-// anything else. A global may hold one, its address written there by the
-// linker, as a string literal's is: the checker asks this to allow it,
-// and lowering to write it (constant_bytes).
+// constant that names one (OP :: add;), a field or an element of constant
+// data that holds one (OPS[0].run, constant_data), or a cast of any of
+// them that keeps the address, to *void or to a procedure type (cast(*void)
+// add); null for anything else, a field a literal leaves out too. A global
+// and a constant may hold one, its address written there by the linker, as
+// a string literal's is: the checker asks this to allow it, and lowering
+// to write it (constant_bytes).
 Ast_Proc *procedure_address(Ast *e);

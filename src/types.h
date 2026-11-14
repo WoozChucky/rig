@@ -165,9 +165,11 @@ s32 type_field_index(Type *t, String name);
 extern Type type_void;
 extern Type type_int;
 
-// string: a view of bytes, not ended by a zero (spec 6.5), the type of a
-// string literal. A literal's bytes do end with one, so a literal (and only
-// a literal) also converts to *u8, which C reads up to the zero.
+// string: a view of bytes, not ended by a zero (spec 3.8), the type of a
+// string literal. A literal's bytes do end with one, so a literal, or
+// constant data holding one (a string constant, or a string field or
+// element of one: check_expr.cpp's is_literal_string), also converts to
+// *u8, which C reads up to the zero.
 extern Type type_string;
 
 // The type of null, the pointer to nothing: it converts to every pointer
