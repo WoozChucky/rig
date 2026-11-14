@@ -1,0 +1,20 @@
+heap resize keeps the bytes: true
+heap alloc of 0: true, resize to 0: true
+the program's own malloc: true
+resize of null allocates: true, to 0 frees: true
+arena: p2 - p1 = 16, parent allocations 1
+arena past a block: parent allocations 2
+arena bigger than a block: parent allocations 3
+arena reset: parent frees 2
+arena reuses its block: true
+arena resize copies: true
+arena free_all: parent frees 3
+arena after free_all: parent allocations 4
+arena: allocations 4, frees 4
+pool slots: 24 24, parent allocations 1
+pool exhausted: true
+pool too big: true
+pool reuses the freed slot: true
+pool resize within a slot: true
+pool resize past a slot: true
+pool: allocations 2, frees 2

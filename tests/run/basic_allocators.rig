@@ -1,0 +1,176 @@
+// Basic's allocators (issue #134): the heap, an arena and a pool, each
+// given its memory by an allocator of this program's own that counts what
+// it asks its parent, the heap, to do.
+//
+// The program also declares C's malloc itself, under C's own name, which
+// Basic leaves free to declare: Basic's own is c_malloc (issue #135).
+#load "../../modules/Basic/module.rig";
+
+malloc :: (size: u64) -> *void #foreign libc;
+
+Counter :: struct { allocations: int; frees: int; }
+
+// Passes every call on to the heap, counting allocations and frees.
+counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE { counter.allocations += 1; }
+    if mode == FREE { counter.frees += 1; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+main :: () {
+    // The heap: resize keeps the bytes it had.
+    p := cast(*u8) alloc(100, HEAP_ALLOCATOR);
+    for i: 0..99 { p[i] = cast(u8) i; }
+    p = resize(p, 100, 200, HEAP_ALLOCATOR);
+    print_string("heap resize keeps the bytes: ");
+    print_bool(p[0] == 0 && p[99] == 99);
+    print_byte(10);
+    free(p, HEAP_ALLOCATOR);
+
+    // The helpers' edges: nothing is allocated for 0 bytes, freeing null and
+    // the heap's free_all do nothing, and a resize to 0 frees.
+    print_string("heap alloc of 0: ");
+    print_bool(alloc(0, HEAP_ALLOCATOR) == null);
+    free(null, HEAP_ALLOCATOR);
+    free_all(HEAP_ALLOCATOR);
+    fresh := alloc(8, HEAP_ALLOCATOR);
+    print_string(", resize to 0: ");
+    print_bool(resize(fresh, 8, 0, HEAP_ALLOCATOR) == null);
+    print_byte(10);
+
+    // The heap gives memory back with C's free, so it takes back what the
+    // program's own malloc gave.
+    own := cast(*u8) malloc(16);
+    own[15] = 1;
+    print_string("the program's own malloc: ");
+    print_bool(own != null);
+    print_byte(10);
+    free(own, HEAP_ALLOCATOR);
+
+    // Resizing null asks the allocator to allocate, and resizing to 0 asks
+    // it to free, rather than to resize.
+    counter0 : Counter;
+    counted := Allocator.{counting_allocator_proc, *counter0};
+    grown := resize(null, 0, 8, counted);
+    print_string("resize of null allocates: ");
+    print_bool(grown != null && counter0.allocations == 1);
+    print_string(", to 0 frees: ");
+    print_bool(resize(grown, 8, 0, counted) == null && counter0.frees == 1);
+    print_byte(10);
+
+    // An arena of 64-byte blocks. Each allocation starts at a multiple of 8
+    // bytes into its block, so a 10-byte one takes 16.
+    counter : Counter;
+    parent := Allocator.{counting_allocator_proc, *counter};
+    arena : Arena;
+    arena_init(*arena, 64, parent);
+    a := arena_allocator(*arena);
+    p1 := cast(*u8) alloc(10, a);
+    p2 := cast(*u8) alloc(10, a);
+    print_string("arena: p2 - p1 = ");
+    print_int(p2 - p1);
+    print_string(", parent allocations ");
+    print_int(counter.allocations);
+    print_byte(10);
+
+    // 40 bytes past the 32 in use don't fit in 64, so a new block comes.
+    alloc(40, a);
+    print_string("arena past a block: parent allocations ");
+    print_int(counter.allocations);
+    print_byte(10);
+
+    // An allocation bigger than a block gets a block of its own size.
+    big := alloc(200, a);
+    print_string("arena bigger than a block: parent allocations ");
+    print_int(counter.allocations);
+    print_byte(10);
+
+    // A reset gives back the two older blocks and keeps the newest.
+    arena_reset(*arena);
+    print_string("arena reset: parent frees ");
+    print_int(counter.frees);
+    print_byte(10);
+
+    q := alloc(8, a);
+    print_string("arena reuses its block: ");
+    print_bool(q == big && counter.allocations == 3);
+    print_byte(10);
+
+    // A resize in an arena allocates anew and copies the old bytes.
+    letters := "abcdefgh";
+    copy_memory(q, letters.data, 8);
+    r := resize(q, 8, 16, a);
+    print_string("arena resize copies: ");
+    print_bool(r != q && compare_memory(r, q, 8) == 0);
+    print_byte(10);
+
+    // Freeing one allocation does nothing; free_all gives back the block.
+    free(r, a);
+    free_all(a);
+    print_string("arena free_all: parent frees ");
+    print_int(counter.frees);
+    print_byte(10);
+
+    alloc(1, a);
+    print_string("arena after free_all: parent allocations ");
+    print_int(counter.allocations);
+    print_byte(10);
+
+    free_all(a);
+    print_string("arena: allocations ");
+    print_int(counter.allocations);
+    print_string(", frees ");
+    print_int(counter.frees);
+    print_byte(10);
+
+    // A pool of three slots of 20 bytes, rounded up to 24.
+    counter2 : Counter;
+    parent2 := Allocator.{counting_allocator_proc, *counter2};
+    pool : Pool;
+    pool_init(*pool, 20, 3, parent2);
+    pa := pool_allocator(*pool);
+    s1 := cast(*u8) alloc(20, pa);
+    s2 := cast(*u8) alloc(20, pa);
+    s3 := cast(*u8) alloc(20, pa);
+    print_string("pool slots: ");
+    print_int(s2 - s1);
+    print_byte(32);
+    print_int(s3 - s2);
+    print_string(", parent allocations ");
+    print_int(counter2.allocations);
+    print_byte(10);
+
+    print_string("pool exhausted: ");
+    print_bool(alloc(20, pa) == null);
+    print_byte(10);
+
+    // A slot is free, but 25 bytes don't fit in one.
+    free(s2, pa);
+    print_string("pool too big: ");
+    print_bool(alloc(25, pa) == null);
+    print_byte(10);
+
+    s5 := alloc(8, pa);
+    print_string("pool reuses the freed slot: ");
+    print_bool(s5 == s2);
+    print_byte(10);
+
+    print_string("pool resize within a slot: ");
+    print_bool(resize(s5, 8, 24, pa) == s5);
+    print_byte(10);
+
+    print_string("pool resize past a slot: ");
+    print_bool(resize(s5, 24, 25, pa) == null);
+    print_byte(10);
+
+    // free_all gives the slots' memory back, and the pool can be used again.
+    free_all(pa);
+    alloc(4, pa);
+    free_all(pa);
+    print_string("pool: allocations ");
+    print_int(counter2.allocations);
+    print_string(", frees ");
+    print_int(counter2.frees);
+    print_byte(10);
+}
