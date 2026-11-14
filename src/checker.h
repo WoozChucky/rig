@@ -355,10 +355,12 @@
 //   without the zero after them (x := "hi"; x.count is 2). .count and .data,
 //   s[i] (a u8), for s (it a u8) and for * s (it a *u8) are a view's.
 // - Only a literal converts to *u8, since only its bytes are known to end
-//   with a zero, and so does a constant holding one (`NAME :: "rig";`,
-//   literal_address); any other string doesn't: "a value of type 'string'
-//   doesn't convert to '*u8' implicitly; its .data may not end with a zero"
-//   (an argument's message ends the same way).
+//   with a zero, and so does constant data holding one (literal_address):
+//   a constant, or a string field or element of one (NAME for
+//   `NAME :: "rig";`, NAMED.name, NAMES[1]); any other string doesn't:
+//   "a value of type 'string' doesn't convert to '*u8' implicitly; its
+//   .data may not end with a zero" (an argument's message ends the same
+//   way).
 // - == and != compare two strings by their bytes; a string meets no other
 //   type ("mismatched types 'string' and '*u8' for '=='"), and has no order
 //   or arithmetic ("'<' needs numbers, not 'string'").
@@ -421,9 +423,10 @@
 //   applies them: types.h's type_c_promoted). An untyped integer becomes
 //   an int, an untyped float a float64 (C's double, which a float32 would
 //   become anyway, so it isn't rounded to a float32 first), null a *void,
-//   and a string literal (or a constant holding one) is passed as a C
-//   string, its bytes' address, as it is to a *u8 parameter. A struct, an array, a view or any other
-//   string is "argument 2 of 'printf' has type 'Vec2', which C's '...'
+//   and a string literal (or constant data holding one: a constant, or a
+//   string field or element of one) is passed as a C string, its bytes'
+//   address, as it is to a *u8 parameter. A struct, an array, a view or
+//   any other string is "argument 2 of 'printf' has type 'Vec2', which C's '...'
 //   can't take; pass a pointer to it" (an array's or a view's: "pass its
 //   .data"; a string's: "pass its .data, which may not end with a zero, or
 //   a literal").
