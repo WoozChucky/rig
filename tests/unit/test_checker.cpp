@@ -1568,6 +1568,38 @@ TEST(foreign_c_names) {
               "4:23: 'free\\n' can't be a C function's name: it has white space\n"
               "5:23: 'fr\\0ee' can't be a C function's name: it has a zero byte\n"
               "6:23: '\\r\\0' can't be a C function's name: it has a zero byte\n");
+    // A quote and a backslash shown escaped too, and a raw vertical tab or
+    // form feed, white space as C's isspace says, as \xHH: Rig has no
+    // escape for either.
+    CHECK_STR(check_source(&a,
+                           "g :: () #foreign libc \"fr \\\"ee\";\n"
+                           "h :: () #foreign libc \"a\\\\b c\";\n"
+                           "i :: () #foreign libc \"a\vb\";\n"
+                           "j :: () #foreign libc \"a\fb\";\n"
+                           "main :: () { }\n"),
+              "1:23: 'fr \\\"ee' can't be a C function's name: it has white space\n"
+              "2:23: 'a\\\\b c' can't be a C function's name: it has white space\n"
+              "3:23: 'a\\x0bb' can't be a C function's name: it has white space\n"
+              "4:23: 'a\\x0cb' can't be a C function's name: it has white space\n");
+    // The names of what the compiler defines itself: main, the program's
+    // entry point, and the runtime's procedures, all named __rig_. A
+    // foreign procedure naming one would take or lose the symbol, and the
+    // program wouldn't link. At the string, or at a foreign procedure's own
+    // name when it has no string (a foreign main is reported as needing a
+    // body, as before, and only so).
+    CHECK_STR(check_source(&a,
+                           "m :: () -> s32 #foreign libc \"main\";\n"
+                           "p :: () #foreign libc \"__rig_panic\";\n"
+                           "__rig_string_equal :: () #foreign libc;\n"
+                           "__rig :: () #foreign libc;\n"
+                           "q :: () #foreign libc \"__rigs\";\n"
+                           "main :: () { }\n"),
+              "1:30: 'main' can't be a C function's name: it's where the program starts\n"
+              "2:23: '__rig_panic' can't be a C function's name: names starting with __rig_ are the compiler's own\n"
+              "3:1: '__rig_string_equal' can't be a C function's name: names starting with __rig_ are the "
+              "compiler's own\n");
+    CHECK_STR(check_source(&a, "main :: () #foreign libc;\n"),
+              "1:1: 'main' must have a body: it's where the program starts\n");
     // Any other bytes are the linker's business: a C name needn't be a Rig
     // name, nor ASCII. Nor is it a Rig name: two foreign procedures may
     // name one C function, a procedure of the program may have a C

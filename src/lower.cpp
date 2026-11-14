@@ -2609,8 +2609,12 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         Ir_Proc *p = ir_new_proc(m, a, source->name);
         p->is_foreign = source->is_foreign;
         // #foreign libc "free": the symbol, the Rig name staying p's. The
-        // string's bytes are the lexer's, so the module keeps its own copy,
-        // as it does a literal's.
+        // module keeps its own copy of the string's bytes, as it does a
+        // literal's (add_bytes), so it doesn't depend on the arena the
+        // lexer decoded them into: rig build's is the compilation's, which
+        // the module lives in too (load.cpp), but a caller may lex into one
+        // it frees once the module is made, as the unit tests' token lists
+        // do.
         if (source->has_c_name) p->c_name = string_copy(a, source->c_name);
         p->is_variadic = source->is_variadic;  // a foreign one: the checker made sure
         // An aggregate result is a hidden ptr parameter, before the visible
