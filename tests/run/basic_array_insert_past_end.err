@@ -1,1 +1,1 @@
-tests/run/../../modules/Basic/array.rig:40:23: runtime error: index 9 is out of bounds (count 9)
+tests/run/../../modules/Basic/array.rig:43:23: runtime error: index 9 is out of bounds (count 9)

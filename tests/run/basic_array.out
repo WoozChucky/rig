@@ -21,4 +21,5 @@ straddling item: (6, 9, 4) (4, 8, 12)
 edges: (1, 1) (0, 0) (2, 4) 3
 no bytes: 8 16 true 0
 no bytes, past half: 4611686018427387905 9223372036854775807
+no bytes, at half: 4611686018427387904 9223372036854775806
 negative size: 0 1 8 true

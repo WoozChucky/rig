@@ -1,0 +1,19 @@
+// Basic's growable array (issue #134) given an unordered remove at its
+// count, one past its last element: the program stops with the language's
+// own message, index I is out of bounds (count C), at check_index in
+// array.rig, whose line and column basic_array_remove_unordered_past_end.err
+// names. Edit one, edit the other.
+#load "../../modules/Basic/module.rig";
+
+main :: () {
+    a : Array;
+    array_init(*a, size_of(int), HEAP_ALLOCATOR);
+    for 1..3 {
+        value := it;
+        array_add(*a, *value);
+    }
+    array_remove_unordered(*a, 2);
+    print_line("removed the last element");
+    array_remove_unordered(*a, a.count);
+    print_line("not reached");
+}
