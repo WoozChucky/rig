@@ -1,0 +1,20 @@
+// Basic's growable array (issue #134) of elements of no bytes, every one
+// of whose addresses is the same, given an index out of bounds: it is
+// checked all the same, and the program stops with the language's own
+// message, at check_index in array.rig, whose line and column
+// basic_array_get_no_bytes.err names. Edit one, edit the other.
+#load "../../modules/Basic/module.rig";
+
+// No bytes at all.
+Empty :: struct {}
+
+main :: () {
+    z : Array;
+    array_init(*z, size_of(Empty), HEAP_ALLOCATOR);
+    nothing : Empty;
+    array_add(*z, *nothing);
+    array_pop(*z, null);
+    print_line("popped the one element");
+    y := array_get(z, 0);
+    print_line("not reached");
+}

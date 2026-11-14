@@ -1,0 +1,36 @@
+// Basic's growable array (issue #134) given an insert past its end: an
+// insert may be at any index up to the count, where it adds at the end,
+// and one more stops the program with the language's own message, as if
+// the count were one more, at check_index in array.rig, whose line and
+// column basic_array_insert_past_end.err names. Edit one, edit the other.
+//
+// The array is full when the bad insert comes, and its allocator prints
+// each allocation and resize it is asked for: the insert stops before it
+// asks for more memory, so the .out has no line for it.
+#load "../../modules/Basic/module.rig";
+
+// Prints the size of each allocation or resize asked for, and passes it on
+// to the heap.
+printing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE || mode == RESIZE {
+        print_string("asked for ");
+        print_int(size);
+        print_byte(10);
+    }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+main :: () {
+    a : Array;
+    array_init(*a, size_of(int), Allocator.{printing_allocator_proc, null});
+    for 1..7 {
+        value := it;
+        array_add(*a, *value);
+    }
+    // 8 ints fill the first capacity, 8.
+    value := 8;
+    array_insert(*a, 7, *value);
+    print_line("inserted at the count");
+    array_insert(*a, 9, *value);
+    print_line("not reached");
+}

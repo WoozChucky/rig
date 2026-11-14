@@ -1,0 +1,14 @@
+// Basic's hash tables (issue #134): an int table that was never set has no
+// entries, so even entry 0 is out of bounds. The program stops with the
+// language's own message, index I is out of bounds (count C), at
+// check_index in array.rig, whose line and column
+// basic_int_table_entry_empty.err names. Edit one, edit the other.
+#load "../../modules/Basic/module.rig";
+
+main :: () {
+    z : Int_Table;
+    int_table_init(*z, size_of(int), HEAP_ALLOCATOR);
+    print_line("no entries");
+    used, key, value := int_table_entry(z, 0);
+    print_line("not reached");
+}
