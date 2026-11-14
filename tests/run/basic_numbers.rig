@@ -116,6 +116,7 @@ main :: () {
     show_float(3.14159, 3);
     show_float(2.675, 2);
     show_float(0.125, 2);
+    show_float(1.805, 2);
     show_float(0.5, 0);
     show_float(2.5, 0);
     show_float(0.999, 2);
@@ -155,6 +156,12 @@ main :: () {
     show_parse_float("");
     show_parse_float(".");
     show_parse_float("1e");
+    show_parse_float("1E5");
+    show_parse_float("1e+5");
+    show_parse_float("2.5e+2");
+    show_parse_float("1e+");
+    show_parse_float("1e-");
+    show_parse_float("1e5x");
     show_parse_float("1.5x");
     show_parse_float("abc");
     show_parse_float("-");
@@ -172,14 +179,30 @@ main :: () {
     print_string("long: ");
     print_bool(ok_d && d > 1.2345678901e22 && d < 1.2345678902e22);
     print_byte(10);
+    // The same numbers with trailing zeros, which push the first one's
+    // mantissa past 2^53 and the second one's power below -22, are the
+    // same float64s.
+    e, ok_e := parse_float("810418677566.4278000");
+    f, ok_f := parse_float("556235117721632.0e-22");
+    print_string("zeros: ");
+    print_bool(ok_e && e == 810418677566.4278);
+    print_byte(32);
+    print_bool(ok_f && f == 556235117721632e-22);
+    print_byte(10);
 
-    // float64's largest value written three ways, the last two taking more
-    // multiplies, and 1.7976931348623158e308, still below the point where a
-    // float64 overflows (1.7976931348623159e308 above is past it).
+    // float64's largest value written three ways, the last two with its
+    // digits padded by zeros to a 19-digit mantissa, and two numbers still
+    // below the point where a float64 overflows, 1.797693134862315807937...
+    // e308: 1.7976931348623158e308, and 1.797693134862315807e308, whose 19
+    // digits are the point's. Those past the point are infinities, however
+    // the multiplies round: 1.797693134862315808e308 is just past it in 19
+    // digits, and 1.79769313486231581e308 and 1.79769313486231585e308 are
+    // further past it, but fewer digits.
     short, ok_short := parse_float("1.7976931348623157e308");
     padded, ok_padded := parse_float("1.7976931348623157000e308");
     whole, ok_whole := parse_long("17976931348623157", 292, "");
     above, ok_above := parse_float("1.7976931348623158e308");
+    edge, ok_edge := parse_float("1.797693134862315807e308");
     print_string("largest: ");
     print_bool(near_largest(short, ok_short));
     print_byte(32);
@@ -188,7 +211,12 @@ main :: () {
     print_bool(near_largest(whole, ok_whole));
     print_byte(32);
     print_bool(near_largest(above, ok_above));
+    print_byte(32);
+    print_bool(near_largest(edge, ok_edge));
     print_byte(10);
+    show_parse_float("1.797693134862315808e308");
+    show_parse_float("1.79769313486231581e308");
+    show_parse_float("1.79769313486231585e308");
 
     // Exactly 1 and 1e9, each with a digit exponent that cancels a written
     // one past 100000.

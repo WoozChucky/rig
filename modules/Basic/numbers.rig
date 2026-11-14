@@ -335,6 +335,16 @@ parse_float :: (s: string) -> float64, bool {
     if i != s.count { return 0, false; }
     power := exponent; // as read, for the overflow check at the end
 
+    // Trailing zeros aren't significant either, but they are kept in the
+    // mantissa, so "0.5000000000000000000" or "1.0e-22" would miss the one
+    // rounding below that "0.5" or "1e-22" gets. So a mantissa past 2^53,
+    // or one with a power below -22, sheds them, each one a power of ten
+    // more.
+    while mantissa % 10 == 0 && (mantissa > 9007199254740992 || exponent < -22) {
+        mantissa /= 10;
+        exponent += 1;
+    }
+
     // A mantissa up to 2^53 converts to a float64 exactly, and so is each
     // power up to 1e22, so one multiply or divide by it rounds once, to the
     // nearest float64: the correctly rounded result. Otherwise the power is
@@ -357,19 +367,25 @@ parse_float :: (s: string) -> float64, bool {
         value /= POWERS[-exponent];
     }
 
-    // Each multiply above rounds, so a number just below the point where a
-    // float64 overflows can still come out as an infinity, as LARGEST does
-    // written 1.7976931348623157000e308. That point is LARGEST plus half a
-    // unit in its last place, 1.797693134862315807937...e308, and a number
-    // below it rounds to LARGEST. So an infinity is checked on the decimal
-    // digits instead: the number's first digit is at 10^(kept - 1 + power),
-    // and when that is 10^308, its first 19 digits, the mantissa padded with
-    // zeros, are held against the point's, 1797693134862315807. A number
-    // that differs from the point only after those 19 counts as below it.
-    if value > LARGEST && kept - 1 + power == 308 {
+    // Each multiply above rounds, so a number near the point where a
+    // float64 overflows can come out on the wrong side of it: one just below
+    // it, as 1.797693134862315807e308 is, can be an infinity, and one just
+    // above it, as 1.79769313486231581e308 is, can be LARGEST. That point is
+    // LARGEST plus half a unit in its last place, 1.797693134862315807937...
+    // e308, and a number below it rounds to LARGEST. So an infinity is
+    // decided on the decimal digits instead, both ways: the number's first
+    // digit is at 10^(kept - 1 + power), and when that is 10^308, its first
+    // 19 digits, the mantissa padded with zeros, are held against the
+    // point's, 1797693134862315807. A number that differs from the point
+    // only after those 19 counts as below it.
+    if mantissa != 0 && kept - 1 + power == 308 {
         padded := mantissa;
         while padded < 1000000000000000000 { padded *= 10; }
-        if padded <= 1797693134862315807 { value = LARGEST; }
+        if padded > 1797693134862315807 {
+            value = 1.0 / 0.0; // an infinity
+        } else if value > LARGEST {
+            value = LARGEST;
+        }
     }
 
     if negative { value = -value; }
