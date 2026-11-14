@@ -8,6 +8,22 @@ A compiled systems programming language for 64-bit Windows and Linux.
 
 Rig is in the spirit of Jai: no garbage collector, no virtual machine, C functions called directly, compile-time execution (planned), and one command that builds everything. A program compiles ahead of time to a native executable linked with the platform's C runtime, and manages its own memory. Rig is also a way to learn how a real language is built end to end, from the lexer to the debugger's line tables; its compiler is written in C-style C++23 over the C API of a pinned LLVM release (the version in `scripts/get_llvm.sh`).
 
+## Install
+
+On Linux (x86-64), in a terminal:
+
+```sh
+curl -fsSL https://woozchucky.github.io/rig/install.sh | sh
+```
+
+On Windows (x64), in PowerShell:
+
+```powershell
+irm https://woozchucky.github.io/rig/install.ps1 | iex
+```
+
+Either one downloads the latest release, checks it, installs it for your user (no administrator rights needed), puts `rig` on your `PATH`, adds the [VS Code extension](editors/vscode) if you have VS Code, and builds hello world to check that your system has what Rig needs. Run it again to upgrade. The website's [Install page](https://woozchucky.github.io/rig/install) has the rest: the requirements (Visual Studio's C++ tools on Windows, glibc's development files on Linux), the options, how to install by hand, and how to uninstall.
+
 ## A taste of Rig
 
 ```rig
@@ -76,14 +92,23 @@ Rig is early. Milestones 1 (hello world) and 2 (the core language) of 8 are done
 
 ## Quick start
 
-The [releases](https://github.com/WoozChucky/rig/releases) have the compiler built for Windows and Linux, with the VS Code extension; the website's [Install page](https://woozchucky.github.io/rig/install) says how to install them and what each system needs. To build it yourself instead, build the compiler, then save hello world as `hello.rig`:
+With Rig [installed](#install), save hello world as `hello.rig`, in a folder of your own:
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;
 main :: () { puts("Hello, World!"); }
 ```
 
-**Windows** needs Visual Studio or its Build Tools with the "Desktop development with C++" workload:
+Build it and run it (on Windows, the program is `.\hello.exe`):
+
+```
+rig build hello.rig
+./hello
+```
+
+It prints `Hello, World!`.
+
+To build the compiler yourself instead, from this repository: **Windows** needs Visual Studio or its Build Tools with the "Desktop development with C++" workload:
 
 ```
 scripts\get_llvm.bat
@@ -111,7 +136,7 @@ bin/rig build hello.rig
 
 ## Editor support
 
-[editors/vscode](editors/vscode) is a VS Code extension for `.rig` files: syntax highlighting, the compiler's errors as you type, snippets, and commands to build, run and debug the current file, with breakpoints in the program's `.rig` files (debugging needs Microsoft's C/C++ extension). Its [README](editors/vscode/README.md) says how to install it.
+[editors/vscode](editors/vscode) is a VS Code extension for `.rig` files: syntax highlighting, the compiler's errors as you type, snippets, and commands to build, run and debug the current file, with breakpoints in the program's `.rig` files (debugging needs Microsoft's C/C++ extension). The [one-line install](#install) installs it when VS Code is there; its [README](editors/vscode/README.md) says how to install it from this repository.
 
 ## Contributing
 
