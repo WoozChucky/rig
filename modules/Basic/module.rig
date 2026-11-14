@@ -1,8 +1,8 @@
 // Basic: Rig's first library, written in Rig over a thin layer of C
 // (libc.rig). It gathers what most programs need first: for now, the class
 // and case of a byte, min, max, clamp and abs, copying, setting and
-// comparing bytes in memory, numbers to text and back, and printing to
-// standard output.
+// comparing bytes in memory, numbers to text and back, views of strings,
+// and printing to standard output.
 //
 // A program loads all of it through this file, by its path from the
 // program's own directory, until Rig has #import: from tests/run that is
@@ -20,4 +20,5 @@
 #load "math.rig";
 #load "memory.rig";
 #load "numbers.rig";
+#load "string.rig";
 #load "print.rig";
