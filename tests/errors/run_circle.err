@@ -1,0 +1,6 @@
+tests/errors/run_circle.rig:5:10: error: 'f' is defined in terms of itself
+        x := #run f();
+             ^
+tests/errors/run_circle.rig:9:1: error: 'M' is defined in terms of itself
+    M :: #run k();
+    ^

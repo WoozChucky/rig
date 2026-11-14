@@ -1,0 +1,17 @@
+// A #run runs while compiling (spec 7.8), before any call of the procedure
+// it's in: that procedure's locals and parameters don't exist yet, so its
+// operand can't use them. Two messages, one per #run.
+f :: (n: int) -> int {
+    return n;
+}
+
+g :: (n: int) -> int {
+    x := 1;
+    a := #run f(x);
+    b := #run f(n);
+    return a + b;
+}
+
+main :: () {
+    g(1);
+}

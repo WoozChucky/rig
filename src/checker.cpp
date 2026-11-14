@@ -28,7 +28,8 @@ Type *check_array_type(Checker *c, Type *element, u64 count, Position at) {
 // - not an integer: "an array's count must be an integer, not 'float32'"
 //   (an untyped constant named by the type it would take);
 // - not known while compiling: "an array's count must be known while
-//   compiling" (a variable, a call);
+//   compiling" (a variable, a call), unless it needs a #run with no value,
+//   whose failure was said (has_failed_run);
 // - below 0: "an array's count can't be negative (-1)".
 // An untyped constant becomes an int, as one that meets no type does.
 static bool check_array_count(Checker *c, Ast *count, u64 *out) {
@@ -42,7 +43,7 @@ static bool check_array_count(Checker *c, Ast *count, u64 *out) {
         return false;
     }
     if (!count->is_constant) {
-        diag_error(c->diag, count->start, "an array's count must be known while compiling");
+        if (!has_failed_run(count)) diag_error(c->diag, count->start, "an array's count must be known while compiling");
         return false;
     }
     if (t->is_signed && (s64)count->constant < 0) {
@@ -222,6 +223,26 @@ static void pop_scope(Checker *c) {
     c->scopes.count--;
 }
 
+// A declaration worked out where it's first needed (a global, a constant, a
+// struct's layout, a late field's type, a signature) means the same
+// wherever that is: its names are the top level's, whatever body needed it.
+// A body checked on demand has its own scopes too (check_body). So the
+// scopes open where it's needed are set aside, returned here, and the
+// checker goes on with none.
+static Array<Table<Ast *>> leave_scopes(Checker *c) {
+    Array<Table<Ast *>> outer = c->scopes;
+    c->scopes = {};
+    return outer;
+}
+
+// Back to the scopes leave_scopes set aside, every scope opened since
+// closed.
+static void return_to_scopes(Checker *c, Array<Table<Ast *>> outer) {
+    RIG_ASSERT(c->scopes.count == 0);
+    array_free(&c->scopes);
+    c->scopes = outer;
+}
+
 static void resolve_global(Checker *c, Ast *decl);
 
 // The declaration `name` means where the checker is, the innermost block's
@@ -325,6 +346,9 @@ static void check_var(Checker *c, Ast_Var *var) {
 // field or an element of one, or casts of them. Its bytes are written into
 // the global's, a copy the global may change; a view of a constant array
 // gets an array of its own, as a view's array literal does.
+//
+// A value that needs a #run with no value says nothing more: the #run's
+// failure, or the errors in what it reaches, were said (has_failed_run).
 static bool check_global_value(Checker *c, Ast *value) {
     if (value->is_constant) return true;
     if (!value->type) return false;  // a value inside a literal whose own error was reported
@@ -337,6 +361,7 @@ static bool check_global_value(Checker *c, Ast *value) {
     }
     Ast *data;
     if (literal_address(value) || procedure_address(value) || constant_data(value, &data)) return true;
+    if (has_failed_run(value)) return false;
     diag_error(c->diag, value->start, "a global's value must be known while compiling, for now");
     return false;
 }
@@ -395,8 +420,10 @@ static Ast *unknown_part(Ast *e) {
 
 // "the value of constant 'N' isn't known while compiling", at `value`, the
 // constant's own value or a value inside it, or at the first value inside
-// that isn't (unknown_part).
+// that isn't (unknown_part). Nothing when it needs a #run with no value,
+// whose failure was said (has_failed_run).
 static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value) {
+    if (has_failed_run(value)) return;
     Ast *part = unknown_part(value);
     if (!part) return;
     diag_error(c->diag, part->start, "the value of constant '" STR_FMT "' isn't known while compiling",
@@ -428,7 +455,11 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 // Nor about a value that didn't convert to its slot's type, or a literal
 // whose values didn't all meet a field or an element (too many, a field
 // named twice or not at all, an array's count missed).
+// A #run's value is fine once it has one: a baked one was judged when it
+// was baked (run.cpp), a view's included, and one that is its constant
+// operand is that constant. Without one, its failure was said.
 static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Type *t) {
+    if (value->kind == AST_RUN) return ((Ast_Run *)value)->value != nullptr;
     if (!value->type) return false;
     if (t->kind == TYPE_VIEW) {
         diag_error(c->diag, value->start, "a constant can't hold a view; only a string or an array can be one");
@@ -552,8 +583,10 @@ static void check_const(Checker *c, Ast_Const *constant) {
     declare(c, constant->name, constant);
 }
 
-// How far a global variable's, a top-level constant's, a struct's or a late
-// field's type's (make_late_field) checking has got.
+// How far a global variable's, a top-level constant's, a struct's, a late
+// field's type's (make_late_field), a signature's or a body's checking has
+// got. A body is on c->resolving as its block, so it's told apart from its
+// procedure's signature (check_body).
 static Ast_Resolve *resolve_state(Ast *decl) {
     switch (decl->kind) {
     case AST_VAR: return &((Ast_Var *)decl)->resolve;
@@ -561,6 +594,7 @@ static Ast_Resolve *resolve_state(Ast *decl) {
     case AST_STRUCT: return &((Ast_Struct *)decl)->resolve;
     case AST_FIELD: return &((Ast_Field *)decl)->resolve;
     case AST_PROC: return &((Ast_Proc *)decl)->resolve;
+    case AST_BLOCK: return &((Ast_Block *)decl)->proc->body_resolve;
     default: RIG_ASSERT(!"not resolved where first needed"); return nullptr;
     }
 }
@@ -626,10 +660,10 @@ static bool open_declaration(Checker *c, Ast *decl, String name, s32 levels, s32
 
 // A global variable or a top-level constant, checked the first time it's
 // needed: by the loop in check() that goes through them all in source
-// order, or earlier, by a use in the value of one before it (check_lookup
-// calls this). So declarations at the top level can come in any order:
-// in `A :: B + 1; B :: 2;`, checking A finds B, checks B there and then,
-// and A is the constant 3.
+// order, or earlier, by a use in the value of one before it, or in a body a
+// #run reaches (check_lookup calls this). So declarations at the top level
+// can come in any order: in `A :: B + 1; B :: 2;`, checking A finds B,
+// checks B there and then, and A is the constant 3.
 //
 // A value that needs itself, directly (`C :: C;`) or through others
 // (`A :: B; B :: A;`), would make that endless. The resolve state breaks
@@ -656,9 +690,15 @@ static bool open_declaration(Checker *c, Ast *decl, String name, s32 levels, s32
 // leads into a circle (`first := a;` checked first) isn't in it, and keeps
 // its own messages, though the circle's uses say nothing.
 //
-// Every global is resolved before any procedure body is checked, so the
-// scopes are always empty here: a local's name can never leak into a
-// global's value.
+// Every global is resolved with no scopes open. Bodies checked in their
+// own turn come after every global, but a body a #run reaches is checked
+// where the #run is, in the declaration pass too, and its names would be
+// in scope while a global or a constant it needs is worked out. So the
+// scopes are set aside (leave_scopes), and a local's name can never leak
+// into a global's value.
+//
+// Whether its check reported an error is kept (Ast_Var.had_errors,
+// Ast_Const.had_errors): a #run that reaches it doesn't run.
 static void resolve_global(Checker *c, Ast *decl) {
     Ast_Resolve *state = resolve_state(decl);
     if (*state == RESOLVE_DONE) return;
@@ -672,22 +712,31 @@ static void resolve_global(Checker *c, Ast *decl) {
         mark_circle(c, decl);
         return;
     }
-    RIG_ASSERT(c->scopes.count == 0);
     bool is_var = decl->kind == AST_VAR;
     String name = is_var ? ((Ast_Var *)decl)->name : ((Ast_Const *)decl)->name;
     s32 outer;
     if (!open_declaration(c, decl, name, is_var ? ((Ast_Var *)decl)->levels : ((Ast_Const *)decl)->levels, &outer)) {
         return;
     }
+    Array<Table<Ast *>> scopes = leave_scopes(c);
+    RIG_ASSERT(c->scopes.count == 0);
     *state = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, decl);
+    s64 errors = c->diag->error_count;
     if (is_var) {
         check_global_var(c, (Ast_Var *)decl);
     } else {
         check_const_value(c, (Ast_Const *)decl);
     }
+    bool had_errors = c->diag->error_count != errors;
+    if (is_var) {
+        ((Ast_Var *)decl)->had_errors = had_errors;
+    } else {
+        ((Ast_Const *)decl)->had_errors = had_errors;
+    }
     c->resolving.count--;
     c->levels = outer;
+    return_to_scopes(c, scopes);
     // In a circle, what was worked out came from a value that isn't one.
     if (*state == RESOLVE_CYCLE) {
         decl->type = nullptr;
@@ -891,11 +940,13 @@ static Type *resolve_struct(Checker *c, Ast_Struct *s) {
         if (layout_levels(s->fields[i]) > levels) levels = layout_levels(s->fields[i]);
     }
     if (!open_declaration(c, s, s->name, levels, &outer)) return nullptr;
+    Array<Table<Ast *>> scopes = leave_scopes(c);  // its counts' names are the top level's
     s->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)s);
     lay_out(c, s, outer);
     c->resolving.count--;
     c->levels = outer;
+    return_to_scopes(c, scopes);
     if (s->resolve == RESOLVE_CYCLE) {
         s->declared = nullptr;
     } else if (s->declared->size > TYPE_MAX_SIZE) {
@@ -925,11 +976,13 @@ static void make_late_field(Checker *c, Ast_Struct *s, s64 i) {
     }
     s32 outer;
     if (!open_declaration(c, field, field->name, field->type_expr->levels, &outer)) return;
+    Array<Table<Ast *>> scopes = leave_scopes(c);  // its counts' names are the top level's
     field->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)field);
     Type *type = resolve_type(c, field->type_expr);
     c->resolving.count--;
     c->levels = outer;
+    return_to_scopes(c, scopes);
     if (field->resolve == RESOLVE_CYCLE) type = nullptr;
     field->resolve = RESOLVE_DONE;
     field->type = type;
@@ -1334,6 +1387,12 @@ static void check_statement(Checker *c, Ast *statement) {
     case AST_FOR: check_for(c, (Ast_For *)statement); break;
     case AST_BREAK:
     case AST_CONTINUE: check_jump(c, (Ast_Jump *)statement); break;
+    case AST_RUN:
+        // A #run gives a value while compiling (spec 7.8), to be put where a
+        // value goes; code run for its effect is a top-level #run. Not
+        // checked further: it would run, for nothing.
+        diag_error(c->diag, statement->pos, "#run in a body must be a value, as in x := #run f();");
+        break;
     default:
         // An expression, whose value is ignored (spec 6.7): only a call does
         // anything, so anything else is reported, unless it was already.
@@ -1440,7 +1499,25 @@ static bool reaches_end(Ast_Block *block) {
 
 // A procedure's body. Its parameters are in the body's own scope, so a
 // local can't have a parameter's name.
+//
+// Checked in check()'s last pass, or earlier, where a #run reaches it
+// (check_reached_body): inside another body, or inside a global's value in
+// the pass before. So it's checked with a state of its own: the procedure,
+// the scopes and the loops of whatever was being checked are set aside,
+// and back when it's done, as the levels are. While it's under way, its
+// block is on c->resolving, so a #run that needs it then finds a circle.
+// Whether its check reported an error is kept (Ast_Proc.had_errors): a
+// #run that reaches it doesn't run.
 static void check_body(Checker *c, Ast_Proc *proc) {
+    Ast_Proc *outer_proc = c->proc;
+    Array<Table<Ast *>> outer_scopes = leave_scopes(c);
+    Array<Ast *> outer_loops = c->loops;
+    c->loops = {};
+    s32 outer_levels = c->levels;
+    proc->body_resolve = RESOLVE_UNDER_WAY;
+    array_add(&c->resolving, (Ast *)proc->body);
+    s64 errors = c->diag->error_count;
+
     c->proc = proc;
     push_scope(c);
     for (s64 i = 0; i < proc->params.count; i++) declare(c, proc->params[i]->name, proc->params[i]);
@@ -1455,7 +1532,49 @@ static void check_body(Checker *c, Ast_Proc *proc) {
         diag_error(c->diag, proc->body->end, "'" STR_FMT "' must return %s on every path, and this one reaches its end",
                    STR_ARG(proc->name), what);
     }
-    c->proc = nullptr;
+
+    c->resolving.count--;
+    proc->had_errors |= c->diag->error_count != errors;
+    proc->body_resolve = RESOLVE_DONE;
+    array_free(&c->loops);
+    c->loops = outer_loops;
+    return_to_scopes(c, outer_scopes);
+    c->levels = outer_levels;
+    c->proc = outer_proc;
+}
+
+// A body a #run reaches is a declaration worked out where it's first
+// needed, as a global is (resolve_global): a level below what needs it
+// (open_declaration), since a chain of bodies each running the next (f1's
+// running f2, f2's f3, ...) recurses on the stack, a body inside the one
+// before. Its own levels aren't counted: a body's expressions are bounded
+// by the parser, and a global one needs starts from where the body does,
+// as in a body checked in its own turn. A body that is too deep there is
+// said once, left to its own turn, and its #run says nothing more.
+//
+// A body found under way is a circle (spec 4.8 and 7.8): the #run needs
+// the code of a body that isn't all checked yet, its own or one that needs
+// the #run's value. "'f' is defined in terms of itself", at the #run, and
+// everything needed since the body (the end of c->resolving) is in the
+// circle, marked as resolve_global marks it, so the globals in it lose
+// their types and the bodies in it have errors.
+bool check_reached_body(Checker *c, Ast_Proc *proc, Position at) {
+    if (proc->is_broken) return false;
+    if (!proc->body) return !proc->had_errors;  // a foreign procedure: C's code
+    if (proc->body_resolve == RESOLVE_UNDER_WAY || proc->body_resolve == RESOLVE_CYCLE) {
+        if (proc->body_resolve == RESOLVE_UNDER_WAY) {
+            diag_error(c->diag, at, "'" STR_FMT "' is defined in terms of itself", STR_ARG(proc->name));
+        }
+        mark_circle(c, proc->body);
+        return false;
+    }
+    if (proc->body_resolve == RESOLVE_NOT_YET) {
+        s32 outer;
+        if (!open_declaration(c, proc, proc->name, 0, &outer)) return false;
+        check_body(c, proc);
+        c->levels = outer;
+    }
+    return !proc->had_errors;
 }
 
 // The procedure type of proc's checked signature (check_signature says
@@ -1541,7 +1660,10 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
 //
 // Whether the signature is known now: false in a circle, under way or
 // found in one, and when it's nested too deeply to check here (said), so a
-// call needing it has no type and says nothing more.
+// call needing it has no type and says nothing more. Whether its check
+// reported an error is kept (Ast_Proc.had_errors), as a global's is
+// (resolve_global), and so are the scopes it may be needed in, by a body
+// checked on demand: set aside.
 static bool resolve_signature(Checker *c, Ast_Proc *proc) {
     if (proc->is_broken || proc->resolve == RESOLVE_DONE) return true;
     if (proc->resolve == RESOLVE_UNDER_WAY || proc->resolve == RESOLVE_CYCLE) {
@@ -1559,13 +1681,17 @@ static bool resolve_signature(Checker *c, Ast_Proc *proc) {
         if (proc->results[i]->levels > levels) levels = proc->results[i]->levels;
     }
     if (!open_declaration(c, proc, proc->name, levels, &outer)) return false;
+    Array<Table<Ast *>> scopes = leave_scopes(c);  // its types' names are the top level's
     proc->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)proc);
+    s64 errors = c->diag->error_count;
     check_signature(c, proc, outer);
+    proc->had_errors |= c->diag->error_count != errors;
     c->resolving.count--;
     bool in_circle = proc->resolve == RESOLVE_CYCLE;
     proc->resolve = RESOLVE_DONE;
     c->levels = outer;
+    return_to_scopes(c, scopes);
     return !in_circle;
 }
 
@@ -1657,7 +1783,9 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
     // the types made before every layout was done, made again (made_again).
     // All are done before the bodies, which only find them finished: a
     // body may need a struct's size and fields, a call its procedure's
-    // parameters and results.
+    // parameters and results. All but the bodies a #run in the pass
+    // reaches, which are checked there (check_reached_body), and work out
+    // what they need there too.
     for (s64 i = 0; i < declarations.count; i++) {
         Ast *decl = declarations[i];
         if (decl->kind == AST_STRUCT) {
@@ -1683,10 +1811,17 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d) {
     }
     array_free(&declarations);
 
-    // Then the bodies. A broken entry has none: the parser gave up on it.
+    // Then the bodies, each that isn't done yet: a #run that reached one
+    // checked it there (check_reached_body), so it isn't checked twice. A
+    // broken entry has none: the parser gave up on it.
     for (s64 i = 0; i < file->procs.count; i++) {
-        if (file->procs[i]->body) check_body(&c, file->procs[i]);
+        Ast_Proc *proc = file->procs[i];
+        if (proc->body && proc->body_resolve == RESOLVE_NOT_YET) check_body(&c, proc);
     }
+    // Then the top-level #runs, in source order: checked, and what each
+    // reaches walked, but never run here (check_top_level_run): they run
+    // for their effect once the whole program checks (spec 7.8).
+    for (s64 i = 0; i < file->runs.count; i++) check_top_level_run(&c, file->runs[i]);
 
     // A broken main, a broken declaration whose name was lost, or a file a
     // #load failed to load (Ast_File.lost_a_file) has nothing to say about

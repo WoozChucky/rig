@@ -1,0 +1,12 @@
+// A #run needs the bodies it reaches checked before it runs (spec 4.8 and
+// 7.8): a body that runs itself, or that needs the value of a constant
+// whose #run reaches it, is defined in terms of itself.
+f :: () -> int {
+    x := #run f();
+    return x;
+}
+
+M :: #run k();
+k :: () -> int { return M; }
+
+main :: () { }

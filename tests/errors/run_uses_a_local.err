@@ -1,0 +1,6 @@
+tests/errors/run_uses_a_local.rig:10:17: error: #run can't use 'x': it's a local, which doesn't exist while compiling
+        a := #run f(x);
+                    ^
+tests/errors/run_uses_a_local.rig:11:17: error: #run can't use 'n': it's a parameter, which doesn't exist while compiling
+        b := #run f(n);
+                    ^

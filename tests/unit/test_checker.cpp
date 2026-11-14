@@ -5359,3 +5359,245 @@ TEST(constant_data_bounds) {
               "13:21: index 0 is out of bounds for a string of 0 bytes\n");
     arena_free(&a);
 }
+
+// Issue #115: #run (spec 7.8).
+
+// The messages of a program check_src checked, in source order as rig build
+// prints them: a body checked on demand says its mistakes before those of
+// the declarations before it.
+static String sorted_messages(Arena *a, Checked *c) {
+    diag_sort(&c->list->diag);
+    return messages(a, &c->list->diag);
+}
+
+TEST(run_has_its_operands_type) {
+    // #run e has e's type, an untyped constant's default type, so C is a
+    // typed int. An operand that is a constant already runs nothing: the
+    // #run is that constant. Anything else is left without a value until
+    // it runs (issue #115's later steps).
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "f :: () -> int { return 3; }\n"
+                          "g :: () -> u8 { return 1; }\n"
+                          "main :: () {\n"
+                          "    a := #run 5;\n"
+                          "    b := #run 1.5;\n"
+                          "    C :: #run 7;\n"
+                          "    d := #run (2 + 3) * 2;\n"
+                          "    e := #run f();\n"
+                          "    h := #run g();\n"
+                          "    grid : [C]int;\n"
+                          "}\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    Ast *run = value_of(&c, "a");
+    CHECK_EQ(run->kind, AST_RUN);
+    CHECK(run->is_constant);
+    CHECK_EQ(run->constant, 5u);
+    CHECK_STR(type_of(&a, &c, "a"), "int");
+    CHECK_STR(type_of(&a, &c, "b"), "float32");
+    CHECK(value_of(&c, "b")->is_constant);
+    CHECK_EQ(value_of(&c, "b")->constant, f64_bits(1.5));
+    Ast *constant = local_named(&c, "C");
+    CHECK_STR(type_of(&a, &c, "C"), "int");
+    CHECK(constant->is_constant);
+    CHECK_EQ(constant->constant, 7u);
+    CHECK_STR(type_of(&a, &c, "d"), "int");
+    CHECK(value_of(&c, "d")->is_constant);
+    CHECK_EQ(value_of(&c, "d")->constant, 10u);
+    CHECK_STR(type_of(&a, &c, "e"), "int");
+    Ast *call = value_of(&c, "e");
+    CHECK_EQ(call->kind, AST_RUN);
+    CHECK(!call->is_constant);
+    CHECK(((Ast_Run *)call)->value == nullptr);
+    CHECK_STR(type_of(&a, &c, "h"), "u8");
+    CHECK_STR(type_of(&a, &c, "grid"), "[7]int");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(run_in_a_body_must_be_a_value) {
+    // A body's #run gives a value to put somewhere; one run for its effect
+    // belongs at the top level.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: () -> int { return 1; }\n"
+                           "main :: () {\n"
+                           "    #run f();\n"
+                           "    x := #run f();\n"
+                           "}\n"),
+              "3:5: #run in a body must be a value, as in x := #run f();\n");
+    arena_free(&a);
+}
+
+TEST(run_cant_use_locals) {
+    // Code run while compiling runs before any call of the procedure it's
+    // in: its locals, its parameters and its loops' iterators don't exist
+    // yet. A local constant is known while compiling, and is fine.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: (n: int) -> int { return n; }\n"
+                           "g :: (n: int) -> int {\n"
+                           "    x := 1;\n"
+                           "    L :: 2;\n"
+                           "    a := #run f(x);\n"
+                           "    b := #run f(n + L);\n"
+                           "    for 0..1 { c := #run f(it); d := #run f(it_index); }\n"
+                           "    return 0;\n"
+                           "}\n"
+                           "main :: () { }\n"),
+              "5:17: #run can't use 'x': it's a local, which doesn't exist while compiling\n"
+              "6:17: #run can't use 'n': it's a parameter, which doesn't exist while compiling\n"
+              "7:28: #run can't use 'it': it's the loop's iterator, which doesn't exist while compiling\n"
+              "7:45: #run can't use 'it_index': it's the loop's index, which doesn't exist while compiling\n");
+    arena_free(&a);
+}
+
+TEST(run_cant_reach_main) {
+    // main is where the program starts: no #run calls it, directly or
+    // through the procedures it reaches. Said at each #run that does.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "helper :: () -> int { main(); return 1; }\n"
+                           "N :: #run helper();\n"
+                           "main :: () { x := #run helper(); }\n"),
+              "2:6: main is where the program starts; #run can't call it\n"
+              "3:19: main is where the program starts; #run can't call it\n");
+    arena_free(&a);
+}
+
+TEST(run_body_circles) {
+    // A #run needs the bodies it reaches checked before it runs: one found
+    // under way, being checked, is a circle (spec 4.8), said at the #run.
+    // The bodies in it have errors, so nothing that reaches them runs.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "f :: () -> int {\n"
+                          "    x := #run f();\n"
+                          "    return x;\n"
+                          "}\n"
+                          "g :: () -> int { return h(); }\n"
+                          "h :: () -> int { y := #run g(); return y; }\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c),
+              "2:10: 'f' is defined in terms of itself\n"
+              "6:23: 'h' is defined in terms of itself\n");
+    CHECK(c.file->procs[0]->had_errors);
+    CHECK(!c.file->procs[1]->had_errors);
+    CHECK(c.file->procs[2]->had_errors);
+    token_list_free(c.list);
+    // A constant whose #run reaches a body that needs the constant: the
+    // constant's own circle, said at it.
+    c = check_src(&a,
+                  "N :: #run f();\n"
+                  "f :: () -> int { return N; }\n"
+                  "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "1:1: 'N' is defined in terms of itself\n");
+    CHECK(global_named(&c, "N")->type == nullptr);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(run_stops_at_errors_it_reaches) {
+    // An error anywhere a #run reaches stops it, saying nothing more: a body
+    // checked on demand, a global with an error, a body checked in its own
+    // turn before a #run reached it, and a #run with no value. What needs
+    // the #run's value says nothing more either.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "f :: () -> int { return unknown; }\n"
+                          "N :: #run f();\n"
+                          "grid : [N]int;\n"
+                          "g : int = \"x\";\n"
+                          "uses_g :: () -> int { return g; }\n"
+                          "M :: #run uses_g();\n"
+                          "a :: () -> int { return oops; }\n"
+                          "b :: () -> int { return #run a(); }\n"
+                          "c :: () { y := #run b(); }\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c),
+              "1:25: unknown identifier 'unknown'\n"
+              "4:11: a value of type 'string' doesn't convert to 'int' implicitly\n"
+              "7:25: unknown identifier 'oops'\n");
+    CHECK(global_named(&c, "N")->type == nullptr);
+    CHECK(global_named(&c, "grid")->type == nullptr);
+    CHECK(global_named(&c, "M")->type == nullptr);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(bodies_are_checked_once_on_demand) {
+    // A body a #run reaches is checked there, before its turn, and not
+    // again in its turn: its mistakes are said once.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "f :: () -> int { x := 1; x := 2; return x; }\n"
+                          "N :: #run f();\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "1:26: 'x' is already declared at test.rig:1:18\n");
+    CHECK_EQ(c.file->procs[0]->body_resolve, RESOLVE_DONE);
+    CHECK(c.file->procs[0]->had_errors);
+    token_list_free(c.list);
+    // A body checked on demand needs a constant whose #run reaches another
+    // body: the constant is worked out with none of the first body's names
+    // in scope, x included.
+    c = check_src(&a,
+                  "N :: #run f();\n"
+                  "f :: () -> int { x := 2; return M + x; }\n"
+                  "M :: #run g();\n"
+                  "g :: () -> int { y := 40; return y; }\n"
+                  "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    for (s64 i = 0; i < c.file->procs.count; i++) {
+        CHECK_EQ(c.file->procs[i]->body_resolve, RESOLVE_DONE);
+        CHECK(!c.file->procs[i]->had_errors);
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(top_level_runs_are_checked) {
+    // A top-level #run is checked once the bodies are: any expression, a
+    // void call too, or a block checked as a procedure's body, where return
+    // ends it. What it reaches is walked as for an expression's #run. It
+    // never runs while checking.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "f :: () { }\n"
+                          "g :: () -> int { return 1; }\n"
+                          "#run f();\n"
+                          "#run g() + 1;\n"
+                          "#run { x := 1; if x > 0 { return; } f(); }\n"
+                          "#run unknown();\n"
+                          "#run { y : int = \"a\"; }\n"
+                          "#run main();\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c),
+              "6:6: unknown identifier 'unknown'\n"
+              "7:18: a value of type 'string' doesn't convert to 'int' implicitly\n"
+              "8:1: main is where the program starts; #run can't call it\n");
+    CHECK_EQ(c.file->runs.count, 6);
+    for (s64 i = 0; i < c.file->runs.count; i++) {
+        CHECK(c.file->runs[i]->checked);
+        CHECK(c.file->runs[i]->value == nullptr);
+    }
+    CHECK_EQ(c.file->runs[2]->proc->body_resolve, RESOLVE_DONE);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(run_bodies_needed_inside_others_nest_at_most_max_depth) {
+    // A body a #run reaches is checked inside the body that holds the
+    // #run, a level below it (spec 6.1): f1, needed by f0's body in its
+    // turn, is at 0, and f1001 at 1000. f1002 is one too many: said once,
+    // at its name, and checked later in its own turn. The #runs that needed
+    // it say nothing more.
+    Arena a = arena_make();
+    const char *runs = "f%lld :: () -> int { return #run f%lld(); }\n";
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, runs, 0, 1000, 1),
+                                      "f1001 :: () -> int { return 0; }\n")),
+              "");
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, runs, 0, 1098, 1),
+                                      "f1099 :: () -> int { return 0; }\n")),
+              needed_too_deeply(&a, 1004, "f1002"));
+    arena_free(&a);
+}

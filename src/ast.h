@@ -161,6 +161,10 @@ struct Ast_Proc : Ast {
     Position library_pos;       // where that name is written
     Ast_Resolve resolve;        // its signature's: checked in source order, or earlier by a call
                                 // in a global's value (checker.cpp's resolve_signature)
+    Ast_Resolve body_resolve;   // its body's: checked in check()'s last pass, or earlier, by a #run that
+                                // reaches it (checker.cpp's check_body); `resolve` is the signature's
+    bool had_errors;            // its signature's check or its body's reported an error: a #run reaching
+                                // it doesn't run
 };
 
 // A variable: `x : T = e;`, `x := e;` (its type is e's), `x : T;` (zeroed)
@@ -176,6 +180,8 @@ struct Ast_Var : Ast {
     Ast_Resolve resolve;    // a global's: how far the checker has got with it
     s32 levels;             // the deepest levels of its type and value (MAX_DEPTH): a global
                             // or a constant they need starts a level below
+    bool had_errors;        // a global's check (checker.cpp's resolve_global) reported an error: a
+                            // #run reaching it doesn't run
 };
 
 // A constant: `N :: e;`. Its type is e's (untyped when e is). The checker
@@ -195,6 +201,7 @@ struct Ast_Const : Ast {
                           // a field or element a literal leaves out, so the value is zero
     Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it
     s32 levels;           // the deepest levels of its value (MAX_DEPTH), as Ast_Var's
+    bool had_errors;      // a top-level one's check (resolve_global) reported an error, as Ast_Var's
 };
 
 // A field of a struct: `x: float;`, at its name. Its type is in Ast.type
@@ -422,6 +429,11 @@ struct Ast_Run : Ast {
     Ast_Proc *proc;     // #run { ... }: the procedure it runs as: named "#run", at the '#run', with no
                         // parameters or results, its body the block; null otherwise
     bool is_top_level;  // in Ast_File.runs: run for its effect
+    bool checked;       // the checker has been through it (check_run, check_top_level_run): once
+    Ast *value;         // an expression #run's result once it ran: the node holding it, as constant
+                        // data's literal tree (run.cpp's bake), or the operand itself when that is a
+                        // constant and nothing ran; null when it has none: it hasn't run, its operand
+                        // or what it reaches had errors, or it failed (said already)
 };
 
 // A parsed file, or the files of a program parsed into one (parse_into):
