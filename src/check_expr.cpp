@@ -461,9 +461,9 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
     // A string literal's bytes are stored with a zero after them, so C can
     // read them through a *u8 (spec 3.8): the literal converts to its bytes'
     // address, though its type stays string (lowering looks at where it
-    // goes), and so does a constant holding one (is_literal_string). Any
-    // other string's bytes may go on past its count, so it doesn't
-    // (type_converts).
+    // goes), and so does constant data holding one (is_literal_string): a
+    // constant, or a string field or element of one. Any other string's
+    // bytes may go on past its count, so it doesn't (type_converts).
     if (is_literal_string(e) && is_c_string(to)) return true;
     return type_converts(from, to);
 }
@@ -630,11 +630,12 @@ static void give_extra_argument_a_type(Checker *c, Ast *arg) {
 // C can take: a number, a bool or a pointer, which lowering passes after
 // C's default argument promotions (type_c_promoted). A string literal goes
 // as a C string, its bytes' address, as it does to a *u8 (lowering looks
-// at the literal, whose type stays string), and so does a constant holding
-// one (is_literal_string). C passes structs by rules Rig
-// doesn't follow, and has no views or Rig strings: each is refused, with
-// what to pass instead. So is a compound literal without its type: being
-// told to write its type would only lead to the same refusal.
+// at the literal, whose type stays string), and so does constant data
+// holding one (is_literal_string): a constant, or a string field or element
+// of one. C passes structs by rules Rig doesn't follow, and has no views or
+// other Rig strings: each is refused, with what to pass instead. So is a
+// compound literal without its type: being told to write its type would
+// only lead to the same refusal.
 static void check_extra_argument(Checker *c, Ast_Proc *proc, Ast *arg, s64 index) {
     Type *t = arg->type;
     if (!t) return;  // its own mistake, reported already
