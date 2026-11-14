@@ -1545,12 +1545,13 @@ static bool reaches_end(Ast_Block *block) {
 // A procedure's body. Its parameters are in the body's own scope, so a
 // local can't have a parameter's name.
 //
-// Checked in check()'s last pass, or earlier, where a #run reaches it
-// (check_reached_body): inside another body, or inside a global's value in
-// the pass before. So it's checked with a state of its own: the procedure,
-// the scopes and the loops of whatever was being checked are set aside,
-// and back when it's done, as the levels are. While it's under way, its
-// block is on c->resolving, so a #run that needs it then finds a circle.
+// Checked in check()'s pass over the bodies, or earlier, where a #run
+// reaches it (check_reached_body): inside another body, or inside a
+// global's value in the pass before. So it's checked with a state of its
+// own: the procedure, the scopes and the loops of whatever was being
+// checked are set aside, and back when it's done, as the levels are. While
+// it's under way, its block is on c->resolving, so a #run that needs it
+// then finds a circle.
 // Whether its check reported an error is kept (Ast_Proc.had_errors): a
 // #run that reaches it doesn't run.
 static void check_body(Checker *c, Ast_Proc *proc) {
@@ -1599,12 +1600,13 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 // below its deepest. A body that is too deep there is said once, left to
 // its own turn, and its #run says nothing more.
 //
-// A body checked in its own turn (check()'s last pass) isn't opened so, nor
-// is a top-level #run's expression (check_top_level_run): c->levels stays
-// 0 inside them, and a body their #runs need starts at 0, however deep in
-// them the #run is. So at most one of them, a body's blocks and
-// expressions up to twice MAX_DEPTH deep (parser.cpp's reach_in_body), is
-// on the stack under a chain that is counted, which the stack holds.
+// A body checked in its own turn (check()'s pass over the bodies) isn't
+// opened so, nor is a top-level #run's expression (check_top_level_run):
+// c->levels stays 0 inside them, and a body their #runs need starts at 0,
+// however deep in them the #run is. So at most one of them, a body's
+// blocks and expressions up to twice MAX_DEPTH deep (parser.cpp's
+// reach_in_body), is on the stack under a chain that is counted, which the
+// stack holds.
 //
 // A body found under way is a circle (spec 4.8 and 7.8): the #run needs
 // the code of a body that isn't all checked yet, its own or one that needs

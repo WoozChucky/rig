@@ -165,8 +165,9 @@ struct Ast_Proc : Ast {
     Position c_name_pos;        // where that string is written
     Ast_Resolve resolve;        // its signature's: checked in source order, or earlier by a call
                                 // in a global's value (checker.cpp's resolve_signature)
-    Ast_Resolve body_resolve;   // its body's: checked in check()'s last pass, or earlier, by a #run that
-                                // reaches it (checker.cpp's check_body); `resolve` is the signature's
+    Ast_Resolve body_resolve;   // its body's: checked in check()'s pass over the bodies, or earlier,
+                                // by a #run that reaches it (checker.cpp's check_body); `resolve` is
+                                // the signature's
     bool had_errors;            // its signature's check or its body's reported an error: a #run reaching
                                 // it doesn't run
     s32 body_levels;            // the deepest levels of its body, its blocks and the expressions and

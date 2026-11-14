@@ -1080,6 +1080,50 @@ static bool run_check_for(Arena *a, String rig, String main, String file, String
     return started;
 }
 
+// rig check of a program whose constant's #run prints a line while it's
+// checked, and which has an error elsewhere: what the run printed is rig
+// check's stdout, alone, and with stdout and stderr in one pipe it comes
+// first, then the diagnostic, which rig prints once the check is done. The
+// program is written here, in .build/tests, as a tests/errors program
+// mustn't print.
+static String check_run_output_test(Arena *a, String rig) {
+    String source = str(".build/tests/check_run_output.rig");
+    String text = str("puts :: (s: *u8) -> s32 #foreign libc;\n"
+                      "say :: () -> int { puts(\"while checking\"); return 1; }\n"
+                      "N :: #run say();\n"
+                      "main :: () { x : int = \"text\"; }\n");
+    if (!os_write_file(source, text)) return string_printf(a, "couldn't write " STR_FMT, STR_ARG(source));
+    String line = str("while checking\n");
+    String expected = string_printf(a,
+                                    STR_FMT STR_FMT ":4:24: error: a value of type 'string' doesn't convert to 'int' "
+                                            "implicitly\n"
+                                            "    main :: () { x : int = \"text\"; }\n"
+                                            "                           ^\n",
+                                    STR_ARG(line), STR_ARG(source));
+
+    Process_Result checked = {};
+    String why = {};
+    if (!run_check(a, rig, source, false, {}, {}, &checked, &why)) return why;
+    checked.out = normalise_newlines(a, checked.out);
+    if (!string_eq(checked.out, line)) return first_difference(a, "stdout", line, checked.out);
+
+    Array<String> argv = {};
+    array_add(&argv, rig);
+    array_add(&argv, str("check"));
+    array_add(&argv, source);
+    Process_Result merged = {};
+    bool started = os_run_merged(a, argv, {}, TIMEOUT, &merged);
+    array_free(&argv);
+    if (!started) return string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(rig), STR_ARG(os_error_message(a)));
+    if (merged.timed_out) return string_printf(a, "rig check took longer than %d seconds", TIMEOUT);
+    merged.out = normalise_newlines(a, merged.out);
+    if (!string_eq(merged.out, expected)) return first_difference(a, "stdout and stderr", expected, merged.out);
+    if (merged.exit_code != 1) {
+        return string_printf(a, "rig check exited with " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, merged.exit_code)));
+    }
+    return {};
+}
+
 // What's wrong with a check's result, or {}: its exit code, stdout and
 // stderr against what they must be.
 static String check_result(Arena *a, const char *what, Process_Result *r, s32 exit_code, String err) {
@@ -2166,6 +2210,8 @@ int main(int argc, char **argv) {
            run_output_order_test(&a, rig, false), &passed, &failed);
     report("a top-level #run's exit() after a failed one, the errors after the runs' output, in one pipe",
            run_output_order_test(&a, rig, true), &passed, &failed);
+    report("rig check prints what a constant's #run prints, before the diagnostics, in one pipe",
+           check_run_output_test(&a, rig), &passed, &failed);
     report("rig build where .build is a file", unwritable_test(&a, rig, false), &passed, &failed);
     report("rig build where the object file's name is a directory", unwritable_test(&a, rig, true), &passed, &failed);
     for (const Command_Case &c : COMMAND_CASES) {
