@@ -124,7 +124,7 @@ Elements of one size, one after another in memory from the allocator the array i
 
 - `check_index(index: int, count: int)`: stops the program with the language's `index I is out of bounds (count C)` unless `index` is at least 0 and less than `count`.
 - `Array`: `element_size: int`, `count: int` (the elements held), `capacity: int` (the elements `data` has room for), `data: *u8` and `allocator: Allocator`.
-- `array_init(array: *Array, element_size: int, allocator: Allocator)`: an empty array of elements of `element_size` bytes, whose memory comes from `allocator`, taken at the first add.
+- `array_init(array: *Array, element_size: int, allocator: Allocator)`: an empty array of elements of `element_size` bytes, whose memory comes from `allocator`, taken at the first add. A negative `element_size` is taken as 0.
 - `array_add(array: *Array, item: *void) -> *void`: adds a copy of the bytes at `item` as the last element, or a zeroed element for null, and gives its address.
 - `array_get(array: Array, index: int) -> *void`: the address of element `index`.
 - `array_pop(array: *Array, item: *void)`: copies the last element into `item`, unless null, and removes it; an empty array stops the program.

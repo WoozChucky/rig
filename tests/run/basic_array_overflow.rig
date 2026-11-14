@@ -20,14 +20,14 @@ refusing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *vo
 
 main :: () {
     // An array can't be this full, so its fields are set as if it were:
-    // 2^59 Points of 16 bytes in room for 2^59. Its data stays null: the
-    // add stops before reaching it.
+    // 2^58 Points of 16 bytes, 2^62 bytes, in room for 2^58. Its data
+    // stays null: the add stops before reaching it.
     a : Array;
     array_init(*a, size_of(Point), Allocator.{refusing_allocator_proc, null});
-    a.capacity = 576460752303423488;
+    a.capacity = 288230376151711744;
     a.count = a.capacity;
 
-    // One more doubles the capacity to 2^60 Points, 2^64 bytes, which no
+    // One more doubles the capacity to 2^59 Points, 2^63 bytes, which no
     // int holds.
     p := Point.{1, 2};
     array_add(*a, *p);
