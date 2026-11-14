@@ -63,6 +63,8 @@
 //                                                 (a data constant's bytes, NAME :: "hi", read-only)
 //   foreign proc @puts(ptr) -> i32
 //   foreign proc @printf(ptr, ...) -> i32       a variadic one, called as @printf(%0, %1, %2)
+//   foreign proc @c_free(ptr) "free"            one with a C name of its own, its symbol;
+//                                               calls and values still name @c_free
 //   proc @max(i64, i64) -> i64 {
 //   b0:
 //     %2 = cmp sgt i64 %0, %1
@@ -351,6 +353,8 @@ struct Ir_Proc {
     Array<Ir_Param> params;    // the parameters are the values %0 ... %(count-1) (ir_add_param)
     Array<Ir_Param> results;   // none, one, or several (several only for Rig procedures)
     bool is_foreign;           // declared, defined elsewhere (libc); no blocks
+    String c_name;             // a foreign one's C function's name when it isn't `name`
+                               // (#foreign libc "free"); empty otherwise (ir_c_name)
     bool is_variadic;          // a foreign one declared with '..', C's '...': a call passes
                                // more arguments after params, each already widened by C's
                                // default argument promotions (types.h's type_c_promoted)
@@ -389,6 +393,11 @@ struct Ir_Module {
 
 // Whether t is f32 or f64.
 inline bool ir_is_float(Ir_Type t) { return t == IR_F32 || t == IR_F64; }
+
+// The name of the C function foreign procedure p is: its C name when it has
+// one, otherwise its own. What links it (the backend's symbol) and what the
+// interpreter looks up; p->name stays its Rig name everywhere else.
+inline String ir_c_name(Ir_Proc *p) { return p->c_name.count ? p->c_name : p->name; }
 
 // Building a module. Structs live in the arena, Arrays on the heap, as long
 // as the compilation (like the tree's).

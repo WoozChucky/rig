@@ -1,0 +1,3 @@
+nothing :: () #foreign libc "";
+c_free :: (p: *void) #foreign libc "fr ee";
+main :: () { c_free(null); }

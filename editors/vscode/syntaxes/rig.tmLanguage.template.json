@@ -129,7 +129,7 @@
         "directives": {
             "patterns": [
                 {
-                    "comment": "#foreign names the library after it: #foreign libc.",
+                    "comment": "#foreign names the library after it: #foreign libc. A C name after the library, #foreign libc \"free\", is a string, which the strings rule colours.",
                     "match": "(#foreign)\\s+([A-Za-z_][A-Za-z0-9_]*)",
                     "captures": {
                         "1": {
@@ -419,10 +419,13 @@
             ]
         },
         "type": {
-            "comment": "A type (spec 3.1): the prefixes *, [N] and [], a procedure type's (...) -> ..., #c_call, and names, each a type. The rule that starts the type says where it ends.",
+            "comment": "A type (spec 3.1): the prefixes *, [N] and [], a procedure type's (...) -> ..., #c_call, and names, each a type. The rule that starts the type says where it ends. A string is no type, but a foreign procedure's results run on to its ';', past #foreign libc and the C name after it, -> *void #foreign libc \"malloc\";, which stays a string.",
             "patterns": [
                 {
                     "include": "#comments"
+                },
+                {
+                    "include": "#strings"
                 },
                 {
                     "include": "#directives"

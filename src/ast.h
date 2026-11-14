@@ -152,6 +152,10 @@ struct Ast_Proc : Ast {
     bool is_broken;             // the parser gave up on it
     String foreign_library;     // #foreign's library name
     Position library_pos;       // where that name is written
+    bool has_c_name;            // #foreign libc "free": a string after the library names the C
+                                // function (spec 7.6); without one, its name is the procedure's
+    String c_name;              // that string's bytes, escapes decoded; empty without one
+    Position c_name_pos;        // where that string is written
     Ast_Resolve resolve;        // its signature's: checked in source order, or earlier by a call
                                 // in a global's value (checker.cpp's resolve_signature)
 };
@@ -478,6 +482,8 @@ Token_Kind compound_operator(Token_Kind op);
 //   (proc f (params) (no_abc) (block ...))   f :: () #no_abc { ... }
 //   (proc printf (params (format (ptr u8)) ..) (returns s32) (foreign libc))
 //                                            printf :: (format: *u8, ..) -> s32 #foreign libc;
+//   (proc c_free (params (p (ptr void))) (foreign libc "free"))
+//                                            c_free :: (p: *void) #foreign libc "free";
 //   (proc cmp (params (a (ptr void))) (returns s32) (c_call) (block ...))
 //                                            cmp :: (a: *void) -> s32 #c_call { ... }
 //   (proc-type (params int int) (returns int))   (int, int) -> int

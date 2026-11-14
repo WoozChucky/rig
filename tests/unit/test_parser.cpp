@@ -1211,6 +1211,42 @@ TEST(parses_void_pointer_type) {
     arena_free(&a);
 }
 
+// Issue #135: a string after #foreign's library names the C function, when
+// it isn't the procedure's own name.
+TEST(parses_a_foreign_c_name) {
+    Arena a = arena_make();
+    String errors;
+    // With and without the name; an empty one parses too, and the checker
+    // reports it. The dump shows the string as Rig writes it.
+    CHECK_STR(parse_src(&a,
+                        "c_free :: (p: *void) #foreign libc \"free\";\n"
+                        "free :: (p: *void) #foreign libc;\n"
+                        "odd :: () -> s32 #foreign libc \"\";\n"
+                        "tab :: () #foreign libc \"a\\tb\";\n",
+                        &errors),
+              "(proc c_free (params (p (ptr void))) (foreign libc \"free\"))\n"
+              "(proc free (params (p (ptr void))) (foreign libc))\n"
+              "(proc odd (params) (returns s32) (foreign libc \"\"))\n"
+              "(proc tab (params) (foreign libc \"a\\tb\"))\n");
+    CHECK_STR(errors, "");
+    Token_List *list = src("c_free :: (p: *void) #foreign libc \"free\";\nfree :: (p: *void) #foreign libc;\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK(file->procs[0]->has_c_name);
+    CHECK_STR(file->procs[0]->c_name, "free");
+    CHECK_EQ(file->procs[0]->c_name_pos.line, 1);
+    CHECK_EQ(file->procs[0]->c_name_pos.col, 36);
+    CHECK(!file->procs[1]->has_c_name);
+    CHECK_EQ(file->procs[1]->c_name.count, 0);
+    token_list_free(list);
+    // Only a string names it: anything else after the library is where the
+    // ';' should be.
+    parse_src(&a, "c_free :: (p: *void) #foreign libc free;\n", &errors);
+    CHECK_STR(errors, "1:36: expected ';', found identifier 'free'\n");
+    parse_src(&a, "c_free :: (p: *void) #foreign libc \"free\" \"again\";\n", &errors);
+    CHECK_STR(errors, "1:43: expected ';', found string literal\n");
+    arena_free(&a);
+}
+
 TEST(dereferences_nest_up_to_a_thousand_levels) {
     // Each .* is a level above its operand (MAX_DEPTH), as a call is, though
     // the parser reads a chain of them in a loop.

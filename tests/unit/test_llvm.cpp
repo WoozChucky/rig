@@ -418,6 +418,97 @@ TEST(llvm_runtime_names_win_over_the_programs) {
     arena_free(&a);
 }
 
+// Issue #135: a foreign procedure's C name, `#foreign libc "free"`.
+
+TEST(llvm_foreign_c_name_is_one_symbol) {
+    // Two foreign procedures naming one C function are one declaration,
+    // under the C name: both calls, and the procedure value, are @free.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "free :: (p: *void) #foreign libc;\n"
+                                "c_free :: (p: *void) #foreign libc \"free\";\n"
+                                "main :: () {\n"
+                                "    free(null);\n"
+                                "    c_free(null);\n"
+                                "    f := c_free;\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK_EQ(count_of(text, "declare void @free(ptr)"), 1);
+        CHECK(!contains(text, "@free."));
+        CHECK(!contains(text, "c_free"));
+        CHECK_EQ(count_of(text, "call void @free(ptr null)"), 2);
+        CHECK(contains(text, "store ptr @free, ptr %"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_foreign_c_name_wins_over_the_programs_names) {
+    // The C names are declared before the program's globals and its own
+    // procedures, as the runtime's are, so a procedure of the program called
+    // free, or a global called malloc, is the one LLVM renames (malloc.1,
+    // free.2: LLVM numbers its renamings across the module): internal, it
+    // works the same under any name. The C names stay C's, whichever comes
+    // first in the source.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "malloc : int = 7;\n"
+                                "free :: (p: *void) -> int { c_free(p); return malloc; }\n"
+                                "c_free :: (p: *void) #foreign libc \"free\";\n"
+                                "c_malloc :: (size: u64) -> *void #foreign libc \"malloc\";\n"
+                                "main :: () {\n"
+                                "    n := free(c_malloc(16));\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "declare void @free(ptr)"));
+        CHECK(contains(text, "declare ptr @malloc(i64)"));
+        CHECK(contains(text, "@malloc.1 = internal global i64 7"));
+        CHECK(contains(text, "define internal i64 @free.2(ptr %0)"));
+        CHECK(contains(text, "call void @free(ptr %"));
+        CHECK(contains(text, "call ptr @malloc(i64 16)"));
+        CHECK(contains(text, "call i64 @free.2(ptr %"));
+        CHECK(contains(text, "load i64, ptr @malloc.1"));
+        // A debugger still knows them by their names in the source.
+        CHECK(contains(text, "!DISubprogram(name: \"free\""));
+        CHECK(contains(text, "!DIGlobalVariable(name: \"malloc\""));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_foreign_c_name_calls_through_each_declaration) {
+    // One C function declared twice with different signatures: each call
+    // goes through its own declaration's function type and attributes, and
+    // the module verifies. Whether the two agree with C is the program's
+    // business, as in C. The function itself is declared, and marked, as
+    // the first declaration says: on Linux the s8 one's signext, which the
+    // u8 one's zeroext would contradict on the same parameter.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "length :: (s: *u8) -> u64 #foreign libc \"strlen\";\n"
+                                "short_length :: (s: *u8) -> u32 #foreign libc \"strlen\";\n"
+                                "abs_s8 :: (n: s8) -> s32 #foreign libc \"abs\";\n"
+                                "abs_u8 :: (n: u8) -> s32 #foreign libc \"abs\";\n"
+                                "main :: () {\n"
+                                "    a := length(\"four\");\n"
+                                "    b := short_length(\"four\");\n"
+                                "    c := abs_s8(-3);\n"
+                                "    d := abs_u8(3);\n"
+                                "}\n");
+    String text = llvm_text(&a, m, TARGET_LINUX_X64);
+    CHECK_EQ(count_of(text, "declare i64 @strlen(ptr)"), 1);
+    CHECK(!contains(text, "@strlen."));
+    CHECK(contains(text, "call i64 @strlen(ptr "));
+    CHECK(contains(text, "call i32 @strlen(ptr "));
+    CHECK_EQ(count_of(text, "declare i32 @abs(i8 signext)"), 1);
+    CHECK(contains(text, "call i32 @abs(i8 signext -3)"));
+    CHECK(contains(text, "call i32 @abs(i8 zeroext 3)"));
+    text = llvm_text(&a, m, TARGET_WINDOWS_X64);
+    CHECK_EQ(count_of(text, "declare i32 @abs(i8)"), 1);
+    CHECK(contains(text, "call i32 @strlen(ptr "));
+    arena_free(&a);
+}
+
 TEST(llvm_bool_is_zeroext_on_both_targets) {
     // clang marks C's _Bool zeroext on Linux and on Windows alike (see
     // mark_extensions), so an i1 parameter or result is marked on both.

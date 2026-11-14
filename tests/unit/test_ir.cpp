@@ -26,6 +26,29 @@ TEST(ir_of_hello_world) {
     arena_free(&a);
 }
 
+TEST(ir_of_a_foreign_c_name) {
+    // Issue #135: a foreign procedure keeps its Rig name in the IR, which
+    // calls and procedure values use, and its declaration shows the C
+    // function's name after it, as the source writes it, when it has one.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "c_free :: (p: *void) #foreign libc \"free\";\n"
+                                          "free :: (p: *void) #foreign libc;\n"
+                                          "c_puts :: (s: *u8) -> s32 #foreign libc \"puts\";\n"
+                                          "main :: () {\n"
+                                          "    c_free(null);\n"
+                                          "    free(null);\n"
+                                          "    f := c_free;\n"
+                                          "}\n"));
+    CHECK(contains(ir, "foreign proc @c_free(ptr) \"free\"\n"));
+    CHECK(contains(ir, "foreign proc @free(ptr)\n"));
+    CHECK(contains(ir, "foreign proc @c_puts(ptr) -> i32 \"puts\"\n"));
+    CHECK(contains(ir, "call @c_free(%"));
+    CHECK(contains(ir, "call @free(%"));
+    CHECK(contains(ir, "procaddr @c_free\n"));
+    arena_free(&a);
+}
+
 TEST(ir_of_internal_call) {
     Arena a = arena_make();
     CHECK_STR(ir_print(&a, lower_tokens(&a, "IDENT:puts :: ( IDENT:s : * IDENT:u8 ) -> IDENT:s32 #foreign IDENT:libc ; | "

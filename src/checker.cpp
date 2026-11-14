@@ -1480,8 +1480,61 @@ static Type *proc_type_of_signature(Ast_Proc *proc) {
     return t;
 }
 
+// A C name as Rig writes it in a string, for a message: \t \n \r \0 and \\
+// escaped, any other control byte as \xHH (Rig has no such escape, but C
+// does), so none of them reaches the terminal or breaks the message's line.
+static String shown_c_name(Arena *a, String name) {
+    Array<u8> text = {};
+    for (s64 i = 0; i < name.count; i++) {
+        u8 b = name.data[i];
+        const char *escape = b == '\t' ? "\\t" : b == '\n' ? "\\n" : b == '\r' ? "\\r" : b == 0 ? "\\0"
+                           : b == '\\' ? "\\\\" : nullptr;
+        char hex[8];
+        if (!escape && (b < 0x20 || b == 0x7f)) {
+            snprintf(hex, sizeof hex, "\\x%02x", b);
+            escape = hex;
+        }
+        if (!escape) {
+            array_add(&text, b);
+            continue;
+        }
+        for (const char *e = escape; *e; e++) array_add(&text, (u8)*e);
+    }
+    String shown = string_copy(a, {text.data, text.count});
+    array_free(&text);
+    return shown;
+}
+
+// A foreign procedure's C name, `#foreign libc "free"` (spec 7.6), at the
+// string: at least one byte ("a foreign procedure's C name can't be
+// empty"), and no zero byte, where an object file's symbol names end
+// ("'fr\0ee' can't be a C function's name: it has a zero byte"), or white
+// space, which no C function's name has ("'fr ee' can't be a C function's
+// name: it has white space"). Any other
+// byte is the linker's business: a C name isn't a Rig name, and needn't be
+// one, nor ASCII. Nor is it declared in Rig: two foreign procedures may
+// name one C function, and a procedure of the program may be called as a
+// C function is (free :: (a: Allocator, p: *void) { ... c_free(p); ... }).
+static void check_c_name(Checker *c, Ast_Proc *proc) {
+    String name = proc->c_name;
+    if (name.count == 0) {
+        diag_error(c->diag, proc->c_name_pos, "a foreign procedure's C name can't be empty");
+        return;
+    }
+    bool zero = false, space = false;
+    for (s64 i = 0; i < name.count; i++) {
+        u8 b = name.data[i];
+        zero = zero || b == 0;
+        space = space || b == ' ' || (b >= '\t' && b <= '\r');  // \t \n \v \f \r, C's isspace
+    }
+    if (!zero && !space) return;
+    diag_error(c->diag, proc->c_name_pos, "'" STR_FMT "' can't be a C function's name: it has %s",
+               STR_ARG(shown_c_name(c->arena, name)), zero ? "a zero byte" : "white space");
+}
+
 // A procedure's signature: its parameters' types and its results' types,
-// each stored on its node (Ast_Param.type, Ast_Type.type), and its library.
+// each stored on its node (Ast_Param.type, Ast_Type.type), and its library
+// and C name.
 // A foreign procedure, which C implements, and a #c_call one, which C may
 // call, take and return only what C does (check_c_part), and one result at
 // most.
@@ -1526,6 +1579,7 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
         diag_error(c->diag, proc->library_pos, "unknown library '" STR_FMT "'; the only one so far is 'libc'",
                    STR_ARG(proc->foreign_library));
     }
+    if (proc->has_c_name) check_c_name(c, proc);
     proc->type = proc_type_of_signature(proc);
 }
 

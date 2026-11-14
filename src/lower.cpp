@@ -2608,6 +2608,10 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         RIG_ASSERT(!source->is_broken);
         Ir_Proc *p = ir_new_proc(m, a, source->name);
         p->is_foreign = source->is_foreign;
+        // #foreign libc "free": the symbol, the Rig name staying p's. The
+        // string's bytes are the lexer's, so the module keeps its own copy,
+        // as it does a literal's.
+        if (source->has_c_name) p->c_name = string_copy(a, source->c_name);
         p->is_variadic = source->is_variadic;  // a foreign one: the checker made sure
         // An aggregate result is a hidden ptr parameter, before the visible
         // ones; an aggregate parameter a ptr to the caller's copy. The IR's
