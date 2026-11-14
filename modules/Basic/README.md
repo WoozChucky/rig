@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, allocators (the heap, an arena and a pool), a string builder, and printing to standard output; later parts add growable arrays and hash tables (issue #134).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, allocators (the heap, an arena and a pool), a string builder, a growable array, and printing to standard output; a later part adds hash tables (issue #134).
 
 ## Loading it
 
@@ -117,6 +117,22 @@ Text put together a piece at a time, in memory of the builder's own from the all
 - `builder_to_string(builder: *String_Builder, allocator: Allocator) -> string`: a copy of the text in memory from `allocator`, which the caller gives back with `free(s.data, allocator)`; an empty builder gives the zeroed string (count 0, data null) and allocates nothing.
 - `builder_reset(builder: *String_Builder)`: empties the builder, keeping its memory.
 - `builder_free(builder: *String_Builder)`: gives the memory back; the builder is empty, with no memory, and keeps its allocator.
+
+## Growable array (`array.rig`)
+
+Elements of one size, one after another in memory from the allocator the array is given, growing as they are added. The array is untyped: it knows only its element's size, copies elements in and out by that many bytes, and hands out an element's address as a `*void` for the caller to cast, valid until the array next grows. When the elements fill the capacity, it becomes the larger of 8 and twice the old one, and the memory moves with `resize`. Elements of 0 bytes take no memory, and their address is null. An index outside the elements stops the program with the language's own bounds check (unless built with `--no-bounds-checks`), and an allocator that has no memory to give stops it at the next element reached, with the language's `null pointer dereference`.
+
+- `check_index(index: int, count: int)`: stops the program with the language's `index I is out of bounds (count C)` unless `index` is at least 0 and less than `count`.
+- `Array`: `element_size: int`, `count: int` (the elements held), `capacity: int` (the elements `data` has room for), `data: *u8` and `allocator: Allocator`.
+- `array_init(array: *Array, element_size: int, allocator: Allocator)`: an empty array of elements of `element_size` bytes, whose memory comes from `allocator`, taken at the first add.
+- `array_add(array: *Array, item: *void) -> *void`: adds a copy of the bytes at `item` as the last element, or a zeroed element for null, and gives its address.
+- `array_get(array: Array, index: int) -> *void`: the address of element `index`.
+- `array_pop(array: *Array, item: *void)`: copies the last element into `item`, unless null, and removes it; an empty array stops the program.
+- `array_insert(array: *Array, index: int, item: *void) -> *void`: inserts a copy of the bytes at `item`, or a zeroed element for null, as element `index`, from 0 to the count, moving the later elements up, and gives its address. `item` may be one of the array's own elements: it is copied from where the move and any growing put it.
+- `array_remove_ordered(array: *Array, index: int)`: removes element `index`, moving the later elements down, in order.
+- `array_remove_unordered(array: *Array, index: int)`: removes element `index` by moving the last element into its place.
+- `array_reset(array: *Array)`: empties the array, keeping its memory.
+- `array_free(array: *Array)`: gives the memory back; the array is empty, with no memory, and keeps its element size and allocator.
 
 ## Print (`print.rig`)
 
