@@ -54,11 +54,11 @@
    - An array's `.count` is an untyped constant (`check_expr.cpp:1643-1646`).
    - A string's `.count` is a run-time `int` (`1642`).
    - The constant-index check is for arrays only (`1596-1607`).
-   - `check_member` finds a field at `1683`.
+   - `check_member` finds a field at `1677` (`type_field_index`), and makes a late one's type at `1683`.
    - `[N]T` needs `N` to be `is_constant` (`checker.cpp:34-54`).
 6. **Places:**
    - `expr_is_place` makes any element of a string a place (`check_expr.cpp:1487`).
-   - `is_place` recurses through members and indexes to `name_is_place` (`1429-1462`), which reports at the name. So `PRIMES[0] = 1`, `ORIGIN.x = 1`, `*PRIMES[0]`, `NAME.count = 1` and `PRIMES.data` already give the constant's message.
+   - `is_place` (`1497-1517`) recurses through members and indexes to `name_is_place` (`1429-1462`), which reports at the name. So `PRIMES[0] = 1`, `ORIGIN.x = 1`, `*PRIMES[0]`, `NAME.count = 1` and `PRIMES.data` already give the constant's message.
    - `for *` asks for a place only for arrays (`checker.cpp:1112`).
 7. **Globals:**
    - `check_global_value` (`checker.cpp:322-335`) accepts `is_constant`, literals of such values, `literal_address` and `procedure_address`.
@@ -76,13 +76,14 @@
      - `llvm_backend.cpp:1324` (IR_PANIC), `1704` and `1765`;
      - `interp.cpp:409-410` and `806` (IR_PANIC);
      - `lower.cpp:2138` and `2444`;
-     - `tests/unit/helpers.cpp:312`, and `tests/unit/test_interp.cpp:711`.
+     - `tests/unit/helpers.cpp:312`, and `tests/unit/test_interp.cpp:711`;
+     - and in `ir.h`'s comments (`266-279`).
    - `byte_global` (`llvm_backend.cpp:1602-1659`) needs no change for read-only data.
    - Debug info is made only for a global with `rig_type` (`1726-1741`).
    - The interpreter maps every global writable (`interp.cpp:393-446`).
 10. **Tests:**
     - Every `tests/run` program also runs interpreted, held to the same `.out`/`.err`/`.exit`. The interpreter keeps constants writable, so no program may write through a constant's view.
-    - Checker tests use `check_source`, `check_src`, `global_named`, `local_named`, `value_of` and `type_of` (`test_checker.cpp:308-371, 851, 1552`).
+    - Checker tests use `check_source` (`helpers.cpp:142`), and `check_src`, `global_named`, `local_named`, `value_of` and `type_of` (`test_checker.cpp:308-371, 851, 1552`).
     - Old-rule expectations sit in `local_constant_must_be_constant` (:709), `null_converts_to_pointers` (:2243), `global_struct_literal_must_be_constant` (:3012) and `tests/errors/constant_kinds`.
     - `string_members_and_index` (:3821) asserts `"abc".count` isn't constant.
 11. **Stale citations** in code this plan touches, with the right sections:
@@ -154,8 +155,9 @@ Ast *data;     // is_data: the node holding its value (constant_data): a string 
 // A field's or element's value node that is itself constant data is
 // followed in turn. So *value is a string or struct or array literal, or a
 // scalar field's value node (a constant, a procedure, or the string literal
-// a *u8 holds); or null when a literal leaves the field out (zero). A
-// string's element is a byte that no node holds: not constant data.
+// a *u8 holds); or null when a literal leaves the field out (zero), and so
+// for any field or element of such a null part. A string's element is a
+// byte that no node holds: not constant data.
 bool constant_data(Ast *e, Ast **value);
 // The value struct literal `literal`, of struct type t, gives field `field`,
 // by name or by position; null when it leaves it out.
@@ -171,7 +173,8 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
   2. `t` is `TYPE_VIEW` (the slot's type: an array literal in a view field is typed `[N]T`) → the view message.
   3. `t` is a string, a struct or an array:
      - an `AST_LITERAL` recurses into each value, with its field's or element's type;
-     - an `AST_STRING`, or anything `constant_data` accepts, is fine;
+     - an `AST_STRING` is fine;
+     - anything else `constant_data` accepts is fine when its `*value` is null, and is otherwise checked as that `*value` (so a view inside `cast(Holder) Holder.{v = int.[1]}` is still found);
      - anything else gets the not-known message.
   4. `t` is a pointer or null's type:
      - `null` (`is_constant`) or `literal_address` is fine;
@@ -183,7 +186,7 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
   - On failure, `type` becomes null.
   - Otherwise, an `is_constant` value sets `is_constant`/`constant` as today.
   - Anything else sets `is_data`, with `data` = `literal_address(value)` for a pointer, or else `constant_data`'s `*value`.
-- `literal_address` and `procedure_address`: where the walk meets neither a cast nor its end, `constant_data` is followed. For `literal_address`, the node must be an `AST_STRING`. For `procedure_address`, the walk goes on from the value node.
+- `literal_address` and `procedure_address`: where the walk meets neither a cast nor its end, `constant_data` is followed. For `literal_address`, the node must be an `AST_STRING`. For `procedure_address`, the walk goes on from the value node. A null `*value` (a part left out) gives null for both.
 - Two more callers:
   - `check_convert`: `e->type == &type_string && literal_address(e) && is_c_string(to)`.
   - `check_extra_argument`: a string passes C's `..` when `literal_address(arg)`.
@@ -212,7 +215,7 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
     - It has no messages.
     - `NAME`, `ORIGIN`, `PRIMES`, `LINE`, `OPS`, `GREETING`, `COPY`, `T` and `S` are each `is_data` and not `is_constant`. A name using one (`value_of(&c, "S")`) is not `is_constant`.
     - `NAME`'s `data` is an `AST_STRING`. `COPY`'s `data` is `PRIMES`'s, and `S`'s is `NAME`'s.
-    - `GREETING`'s `data` is an `AST_STRING` with value `hi`, of type `*u8`.
+    - `GREETING` is of type `*u8`, and its `data` is an `AST_STRING` with value `hi`.
     - `OP`'s `proc` is `add`.
     - `NOWHERE` is `is_constant` (0, `*void`), and `NOTHING` is `is_constant` (type `null`). Neither is `is_data`.
   - `constant_data_resolves`:
@@ -534,7 +537,8 @@ static s32 constant_global(Lowering *l, Ast_Const *constant);
   - `extra_argument_type` tests `arg->type == &type_string && literal_address(arg)`.
 - **Views:** `lower_view_of` gives `view_of_array(l, e->type, lower_expr(l, e))`, with no copy, when `constant_root(e)`.
 - **Global values:**
-  - In `constant_bytes` and `constant_extent`, an aggregate value that isn't an `AST_LITERAL` is resolved by `constant_data` first. Null writes nothing, and its extent is 0.
+  - In `constant_bytes` and `constant_extent`, an aggregate value that isn't an `AST_LITERAL` is resolved by `constant_data` first, before the string literal, procedure and view cases (so `g : []int = PRIMES;` gives `add_global_array` the literal, typed `[5]int`). Null writes nothing, and its extent is 0.
+  - `constant_global` calls `global_value(l, &g, constant->type, constant->value)`: the value node, not `data`, which is null for a part left out.
   - `constant_bytes`' named-field loop uses `literal_field_value`.
   - Its literals go through `literal_global`, as `literal_bytes`' do.
 - `lower_statement`'s `AST_CONST` stays `break`: a constant is made where it's used.
@@ -597,6 +601,7 @@ static s32 constant_global(Lowering *l, Ast_Const *constant);
     - Program: the top-level declarations of `constants_hold_data` (all but its `main`), with `ORIGIN :: Vec2.{3, 4};`, then these globals and `main :: () { }`:
       ```
       origin := ORIGIN;
+      line := Line.{a = ORIGIN};
       view : []int = PRIMES;
       name : *u8 = NAME;
       second := OPS[1];
@@ -604,6 +609,7 @@ static s32 constant_global(Lowering *l, Ast_Const *constant);
       ```
     - The IR has no `@const.`. It contains:
       - `global @origin: 16 align 8 = "\03`, seven `\00`, `\04`, seven `\00`, `"`;
+      - `global @line: 32 align 8 = "\03`, seven `\00`, `\04`, seven `\00` (constant data inside a global's literal);
       - `global @array.0: 40 align 8 = `;
       - `reloc 8 @array.0`;
       - `global @name: 8 align 8 = zero reloc 0 @str.`;
