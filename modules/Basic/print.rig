@@ -5,8 +5,10 @@
 //
 // A string is bytes, and they're written as they are: no encoding is
 // checked or changed, so UTF-8 text prints as UTF-8. There's no portable
-// way to reach standard error from Rig yet (a C FILE * isn't reachable
-// without a foreign variable), so Basic prints only to standard output.
+// way to reach standard error from Rig yet (its C FILE * is a call,
+// __acrt_iob_func(2), on Windows but a data symbol, stderr, in glibc,
+// which Rig can't declare, and there's no #if to choose between them),
+// so Basic prints only to standard output.
 #load "libc.rig";
 
 // Writes the bytes of s, and nothing else. An empty string, or a zeroed
