@@ -4139,7 +4139,8 @@ TEST(baked_views_and_strings_in_constants_and_globals) {
     // A #run's baked view in a global sees a writable array.N of its own,
     // and a baked string there writable bytes of its own, string.N, so the
     // program may change them. A constant's view sees read-only elements, a
-    // const.N as the constant's own bytes are.
+    // const.N as the constant's own bytes are, and so does an expression
+    // #run's view used in a body.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_source(&a,
                                           "store : [3]int;\n"
@@ -4148,10 +4149,19 @@ TEST(baked_views_and_strings_in_constants_and_globals) {
                                           "VIEW :: #run make();\n"
                                           "g : []int = #run make();\n"
                                           "s := #run name();\n"
-                                          "main :: () { i := 1; x := VIEW[i]; g[0] = 1; s[0] = 82; }\n"));
+                                          "main :: () { i := 1; x := VIEW[i]; g[0] = 1; s[0] = 82; }\n"
+                                          "Named :: struct { name: string; items: []int; }\n"
+                                          "named :: () -> Named { return .{name(), make()}; }\n"
+                                          "NAME :: #run name();\n"
+                                          "NAMED :: #run named();\n"
+                                          "t := NAME;\n"
+                                          "n := NAMED;\n"
+                                          "use :: () { i := 1; v := #run make(); y := v[i]; m := NAMED; }\n"));
     const char *elements = "\\07\\00\\00\\00\\00\\00\\00\\00"
                            "\\08\\00\\00\\00\\00\\00\\00\\00"
                            "\\09\\00\\00\\00\\00\\00\\00\\00\"\n";
+    const char *count = "\\03\\00\\00\\00\\00\\00\\00\\00"
+                        "\\00\\00\\00\\00\\00\\00\\00\\00";
     const char *three = "\\03\\00\\00\\00\\00\\00\\00\\00"
                         "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @";
     CHECK(contains(ir, string_cstr(&a, string_printf(&a, "global @array.0: 24 align 8 = \"%s", elements))));
@@ -4161,5 +4171,30 @@ TEST(baked_views_and_strings_in_constants_and_globals) {
     CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.1: 24 align 8 = \"%s", elements))));
     CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.0: 16 align 8 = \"%sconst.1\n", three))));
     CHECK(contains(proc_ir(ir, "main"), "addr @const.0"));
+
+    // A global made from a constant holding a baked string gets its own
+    // bytes too, and so does one holding a baked struct, its string's and
+    // its view's.
+    CHECK(contains(ir, "global @string.1: 4 align 1 = \"rig\\00\"\n"));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "global @t: 16 align 8 = \"%sstring.1\n", three))));
+    CHECK(contains(ir, "global @string.2: 4 align 1 = \"rig\\00\"\n"));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "global @array.1: 24 align 8 = \"%s", elements))));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a,
+                                                     "global @n: 32 align 8 = \"%s%s\" reloc 8 @string.2 "
+                                                     "reloc 24 @array.1\n",
+                                                     count, count))));
+
+    // An expression #run's aggregate used in a body is a read-only const.N
+    // of its own, its view's elements another. A constant's baked string
+    // stays a read-only str.N, as a written literal's does.
+    String use = proc_ir(ir, "use");
+    CHECK(contains(use, "addr @const.2"));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.3: 24 align 8 = \"%s", elements))));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.2: 16 align 8 = \"%sconst.3\n", three))));
+    CHECK(contains(use, "addr @const.4"));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.5: 24 align 8 = \"%s", elements))));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.4: 32 align 8 = \"%s%s\" reloc 8 @str.",
+                                                     count, count))));
+    CHECK(contains(ir, " reloc 24 @const.5\n"));
     arena_free(&a);
 }

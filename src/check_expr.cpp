@@ -377,10 +377,18 @@ bool constant_data(Ast *e, Ast **value) {
     case AST_CAST: {
         // To its own type (cast(Vec2) .{1, 2}), or between string and []u8,
         // the same bytes: the value is the same. Any other cast makes
-        // another value, a pointer or a view of it.
+        // another value, a pointer or a view of it. A string's data is a
+        // string literal, though: a #run's baked []u8 is the array literal
+        // of its elements, which no string's slot can hold, so a cast of it
+        // to a string is none.
         Ast *from = ((Ast_Cast *)e)->value;
         bool same = from->type == t || is_bytes_retyped(from->type, t);
-        return same && constant_data(from, value);
+        if (!same || !constant_data(from, value)) return false;
+        if (t == &type_string && *value && (*value)->kind != AST_STRING) {
+            *value = nullptr;
+            return false;
+        }
+        return true;
     }
     case AST_RUN: {
         // A #run's baked value (run.cpp) that isn't a number: the node

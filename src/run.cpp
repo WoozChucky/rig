@@ -91,9 +91,10 @@ static void make_parts(Compile_Time *ct) {
 }
 
 // One result being baked: the run it's of, and why it can't be, once a
-// part of it is refused. Nothing is said while the value is baked: the
-// refusal is said at the #run once baking has stopped (compile_time_run),
-// and the value is kept only when there's none.
+// part of it is refused. A refusal isn't said while the value is baked: it
+// is said at the #run once baking has stopped (compile_time_run), and the
+// value is kept only when there's none. (An array type too big for a
+// view's elements is said by check_array_type as it's made.)
 struct Baking {
     Compile_Time *ct;
     Checker *c;
@@ -219,11 +220,13 @@ static u64 read_bits(const u8 *at, s64 size) {
 // A struct or array literal of type t to hold `count` baked values, made as
 // the checker would find a written one of constant data: is_data already,
 // with no type written and no names, a struct's values its fields' in
-// order (literal_field_value).
+// order (literal_field_value); and is_baked, so a constant may hold it in a
+// view's slot (checker.cpp's check_constant_value).
 static Ast_Literal *baked_literal(Baking *b, Type *t, s64 count) {
     Ast_Literal *literal = baked_node<Ast_Literal>(b, AST_LITERAL, t);
     literal->is_array = t->kind == TYPE_ARRAY;
     literal->is_data = 1;
+    literal->is_baked = true;
     array_reserve(&literal->values, count);
     return literal;
 }
@@ -250,10 +253,12 @@ static Ast *bake_elements(Baking *b, Type *array, const u8 *at) {
 // - A string is a string literal (Ast_String) of its count of bytes from
 //   its data, copied, is_baked. A count below zero is "#run failed: its
 //   result holds a string with a negative count".
-// - A struct is a literal of its fields' values. A field's type may be a
-//   late one not made yet, by a #run in the declaration pass, before
-//   resolve_late_fields (check_late_field makes it); one still without a
-//   type had an error, said, and stops the baking.
+// - A struct is a literal of its fields' values. Every field's type is
+//   made, a late one's too, even for a #run in the declaration pass,
+//   before resolve_late_fields: the walk of what the run reaches made them
+//   all through the run's type, before it ran (check_run.cpp's walk_type),
+//   for every struct held by value through arrays and views, the only
+//   ones baking meets (a pointer isn't followed).
 // - An array [N]T is a literal of its N elements.
 // - A view []T is the array literal of its elements, a [count]T
 //   (check_array_type, which says so when that's too big, and stops the
@@ -287,13 +292,10 @@ static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
     }
     case TYPE_ARRAY: return bake_elements(b, t, at);
     case TYPE_STRUCT: {
-        for (s64 i = 0; i < t->fields.count; i++) {
-            check_late_field(b->c, t, (s32)i);
-            if (!t->fields[i].type) return nullptr;
-        }
         Ast_Literal *literal = baked_literal(b, t, t->fields.count);
         for (s64 i = 0; i < t->fields.count; i++) {
             Type_Field *field = &t->fields[i];
+            RIG_ASSERT(field->type);  // made by the walk (check_run.cpp's walk_type)
             Ast *value = bake_value(b, field->type, at + field->offset);
             if (!value) return nullptr;
             array_add(&literal->values, value);
