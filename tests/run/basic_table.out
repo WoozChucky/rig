@@ -7,7 +7,7 @@ apple: 100, count 20
 remove: true false true 19
 empty key: true 20
 key copied: true true 21
-iteration: 21 entries, sum 296
+iteration: 21 entries, sum 296, keys found true
 capacity 32
 freed: 0 0
 fnv-1a: true true true true true
@@ -16,10 +16,12 @@ k1 set again: 100, count 3
 int remove: true false
 past a removed key: 3
 removed key missing: true
-100 22 3, count 3
+set past a removed key: 33, count 2, removed 1, k2's entry false 0 true
+100 22 33, count 3
 10 11 12, count 6
-entries: 6
+entries: 6, sum 188, keys found true
 removed entry taken again: 0
+string set past a removed key: true 3, count 1, removed 1
 1000 keys: true, capacity 2048
 after removing 500: 500 true true
 after adding 500 more: 1000, capacity 2048
