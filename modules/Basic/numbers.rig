@@ -6,7 +6,8 @@
 // here allocates and a number can be printed or appended without an
 // allocator. A buffer of INT_TEXT_MAX or FLOAT_TEXT_MAX bytes is always
 // enough; a smaller one that turns out too short stops the program at the
-// language's own bounds check, before any byte is written past its end.
+// language's own bounds check, before any byte is written past its end,
+// unless the program is built with --no-bounds-checks.
 //
 // Parsing takes the whole string or nothing: a number with anything around
 // it, spaces included, isn't one, and the bool result says which it was.
@@ -117,11 +118,16 @@ parse_int :: (s: string, base: int) -> int, bool {
 //   rounds to zero, as C's printf does: -0.001 with 2 decimals is "-0.00".
 // - The last decimal is rounded half away from zero, on the float64's own
 //   value: 0.125 with 2 decimals is "0.13", but 2.675 is "2.67", since the
-//   float64 nearest to 2.675 is a little below it.
+//   float64 nearest to 2.675 is a little below it. But the decimals come
+//   from a float64 multiply and an add of 0.5, each of which rounds, so a
+//   value within about a unit in the last place of a tie can round the
+//   other way: 1.805 with 2 decimals is "1.81", where C's printf gives
+//   "1.80".
 //
 // Below 1e18 the whole digits are exact for the value given. From 1e18 up,
-// only the first 18 digits or so come from the value, the last of them
-// approximate, and the rest are written as zeros.
+// 18 digits are written and the rest are zeros, but the value is brought
+// below 1e18 by divisions by 10 that each round, so only about the first 15
+// or 16 digits are the value's.
 format_float :: (buffer: []u8, value: float64, decimals: int) -> string {
     LARGEST :: 1.7976931348623157e308; // float64's largest finite value
     count := 0;
@@ -169,10 +175,11 @@ format_float :: (buffer: []u8, value: float64, decimals: int) -> string {
         // Below 1e18 the whole part fits in a u64 and is exact, and so is
         // the fraction taken away from it: both are parts of one float64,
         // and subtracting the whole part only clears bits. The decimals
-        // are the fraction times 10^places, one multiply that rounds once,
-        // then rounded half up by adding 0.5 and cutting off. A fraction
-        // that rounds up to a whole one, as 0.999 to 2 decimals does,
-        // carries into the whole part.
+        // are the fraction times 10^places, rounded half up by adding 0.5
+        // and cutting off; the multiply and the add each round to a
+        // float64 too, so a value close to a tie can round the other way.
+        // A fraction that rounds up to a whole one, as 0.999 to 2 decimals
+        // does, carries into the whole part.
         whole = cast(u64) magnitude;
         fraction := magnitude - cast(float64) whole;
         scaled = cast(u64) (fraction * cast(float64) scale + 0.5);
@@ -183,8 +190,9 @@ format_float :: (buffer: []u8, value: float64, decimals: int) -> string {
     } else {
         // From 1e18 up, the number is brought below 1e18 by dividing by
         // 10, and each division is a zero written after its digits. Each
-        // division rounds, so the last digits kept are approximate, and a
-        // float64 that large has no fraction, so the decimals are zeros.
+        // division rounds and the errors add up, so only about the first
+        // 15 or 16 digits kept are the value's, and a float64 that large has
+        // no fraction, so the decimals are zeros.
         while magnitude >= 1e18 {
             magnitude /= 10;
             zeros += 1;
@@ -294,9 +302,11 @@ parse_float :: (s: string) -> float64, bool {
     if digits == 0 { return 0, false; }
 
     // The exponent's digits are read whole, but its value stops growing at
-    // 100000: any power of ten that far out is already past a float64's
-    // range either way, and the int can't overflow however many digits
-    // there are.
+    // the string's length plus 400. Each digit before it moves the exponent
+    // by one at most, so by less than the string's length in all, and a
+    // power of ten written past that is out of a float64's range whatever
+    // the digits are. And the int can't overflow however many digits there
+    // are.
     if i < s.count && (s[i] == "e"[0] || s[i] == "E"[0]) {
         i += 1;
         exponent_negative := false;
@@ -305,12 +315,13 @@ parse_float :: (s: string) -> float64, bool {
             i += 1;
         }
         written := 0;
+        written_limit := s.count + 400;
         exponent_digits := 0;
         while i < s.count {
             digit := digit_value(s[i]);
             if digit < 0 || digit > 9 { break; }
             written = written * 10 + digit;
-            if written > 100000 { written = 100000; }
+            if written > written_limit { written = written_limit; }
             exponent_digits += 1;
             i += 1;
         }
@@ -322,6 +333,7 @@ parse_float :: (s: string) -> float64, bool {
         }
     }
     if i != s.count { return 0, false; }
+    power := exponent; // as read, for the overflow check at the end
 
     // A mantissa up to 2^53 converts to a float64 exactly, and so is each
     // power up to 1e22, so one multiply or divide by it rounds once, to the
@@ -343,6 +355,21 @@ parse_float :: (s: string) -> float64, bool {
         value *= POWERS[exponent];
     } else if exponent < 0 && exponent >= -22 {
         value /= POWERS[-exponent];
+    }
+
+    // Each multiply above rounds, so a number just below the point where a
+    // float64 overflows can still come out as an infinity, as LARGEST does
+    // written 1.7976931348623157000e308. That point is LARGEST plus half a
+    // unit in its last place, 1.797693134862315807937...e308, and a number
+    // below it rounds to LARGEST. So an infinity is checked on the decimal
+    // digits instead: the number's first digit is at 10^(kept - 1 + power),
+    // and when that is 10^308, its first 19 digits, the mantissa padded with
+    // zeros, are held against the point's, 1797693134862315807. A number
+    // that differs from the point only after those 19 counts as below it.
+    if value > LARGEST && kept - 1 + power == 308 {
+        padded := mantissa;
+        while padded < 1000000000000000000 { padded *= 10; }
+        if padded <= 1797693134862315807 { value = LARGEST; }
     }
 
     if negative { value = -value; }
