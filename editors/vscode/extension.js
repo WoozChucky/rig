@@ -117,11 +117,12 @@ function searchPath(name) {
 
 // A path setting's value (rig.compilerPath, rig.main) with what it may
 // stand for spelled out: ${workspaceFolder} as `folder`'s path, and a ~
-// alone or before a slash, of either kind, as the home directory.
-// Nothing else is done to it: what a relative path is from, a setting that
-// uses ${workspaceFolder} outside a folder (`folder` is used only when it
-// does) and whether the file is there are each caller's to judge, so the
-// two settings expand alike and judge as they need.
+// alone or before a slash, of either kind, as the home directory (a ~
+// path comes back joined to it, and so normalised). Nothing else is done
+// to it: what a relative path is from, a setting that uses
+// ${workspaceFolder} outside a folder (`folder` is used only when it does)
+// and whether the file is there are each caller's to judge, so the two
+// settings expand alike and judge as they need.
 function expandPath(setting, folder) {
     // A function as the replacement, so a $ in the folder's path is taken
     // as it is, not as one of replace's patterns.
