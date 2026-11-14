@@ -8,9 +8,9 @@
 //                    ^
 //
 // Errors are collected, not printed at once: the compiler keeps going after
-// one (an editor's live check needs that: rig check --stdin, spec 10.1)
-// and prints them all at the end, sorted by file (in load order), then
-// line and column (diag_sort).
+// one (an editor's live check needs that: rig check --stdin or
+// --stdin-for, spec 10.1) and prints them all at the end, sorted by file
+// (in load order), then line and column (diag_sort).
 
 #pragma once
 

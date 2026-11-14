@@ -13,19 +13,23 @@
 //   (rig.buildFile, rig.runFile), which start those same tasks, so a build
 //   shows its output and errors in one place however it was started;
 // - the live check: `rig check FILE --stdin` on an open .rig file as you
-//   type, its errors shown as squiggles and in the Problems panel without
-//   building (the setting rig.check). While it's on, the tasks use the
-//   problem matcher `$rig-runtime` instead, which takes only a program's
-//   runtime errors, so a build doesn't list the compile errors twice;
+//   type, or for a file a program loads, `rig check MAIN --stdin-for FILE`
+//   with the program's main file (the setting rig.main, else one found in
+//   the workspace folder), its errors shown as squiggles and in the
+//   Problems panel without building (the setting rig.check). While it's on,
+//   the tasks use the problem matcher `$rig-runtime` instead, which takes
+//   only a program's runtime errors, so a build doesn't list the compile
+//   errors twice;
 // - debugging: the debug type `rig`, which builds the file with the build
 //   task and then debugs the program with Microsoft's C/C++ extension
 //   (Visual Studio's debugger on Windows, gdb on Linux), and the command
 //   "Rig: Debug Current File" (rig.debugFile), which starts it.
 //
 // It's CommonJS and requires only VS Code's API, Node's built-in modules and
-// two files beside it that need no VS Code: debug.js (the C/C++ extension's
-// launch configuration for a program) and diagnostics.js (reading rig's
-// output). No npm packages, no build step: VS Code loads it as it is.
+// three files beside it that need no VS Code: debug.js (the C/C++ extension's
+// launch configuration for a program), diagnostics.js (reading rig's
+// output) and program.js (finding the program a loaded file belongs to).
+// No npm packages, no build step: VS Code loads it as it is.
 
 'use strict';
 
@@ -42,6 +46,7 @@ const {
     launchConfiguration,
 } = require('./debug');
 const { samePath, parseDiagnostics, otherFilesError, characterOfByteColumn } = require('./diagnostics');
+const { declaresMain, pathOrder, searchable, doesntLoad, tooOld } = require('./program');
 
 const windows = process.platform === 'win32';
 
@@ -78,6 +83,24 @@ function isProgram(file) {
         return true;
     } catch {
         return false;
+    }
+}
+
+// Whether `file` exists and is a file, not a directory.
+function isFile(file) {
+    try {
+        return fs.statSync(file).isFile();
+    } catch {
+        return false; // not there, or not to be looked at: no file either way
+    }
+}
+
+// When `file` was last modified, in ms, or undefined when it can't be told.
+function modifiedTime(file) {
+    try {
+        return fs.statSync(file).mtimeMs;
+    } catch {
+        return undefined;
     }
 }
 
@@ -218,11 +241,16 @@ function buildDirectory(file, folder) {
     return folder ? folder.uri.fsPath : path.dirname(file);
 }
 
+// Shows `message` with a button that opens the setting `setting`.
+function settingError(message, setting) {
+    vscode.window.showErrorMessage(message, 'Open Settings').then((choice) => {
+        if (choice) vscode.commands.executeCommand('workbench.action.openSettings', setting);
+    });
+}
+
 // Shows an error with a button that opens the setting rig.compilerPath.
 function compilerError(message) {
-    vscode.window.showErrorMessage(message, 'Open Settings').then((choice) => {
-        if (choice) vscode.commands.executeCommand('workbench.action.openSettings', 'rig.compilerPath');
-    });
+    settingError(message, 'rig.compilerPath');
 }
 
 // --- Starting processes -----------------------------------------------------
@@ -781,6 +809,34 @@ function checkSetting(uri) {
     return vscode.workspace.getConfiguration('rig', uri).get('check', 'onType');
 }
 
+// The setting rig.main for `file`, in the workspace folder `folder` (the live
+// check reads it only for a file in one): {} when it's empty, { file } with
+// the main file's absolute path, normalised, or { error } saying what's wrong
+// with it. As in rig.compilerPath (findCompiler), ${workspaceFolder} is the
+// folder, a leading ~ the home directory, and a relative path is from the
+// folder. It must name a .rig file, in any case, as rig takes one: the
+// setting is said to be wrong for that whether or not the file exists, and
+// otherwise when there's no file there (a directory, or nothing).
+function mainSetting(file, folder) {
+    const setting = vscode.workspace
+        .getConfiguration('rig', vscode.Uri.file(file))
+        .get('main', '')
+        .trim();
+    if (!setting) return {};
+    // A function as the replacement, so a $ in the folder's path is taken
+    // as it is.
+    let wanted = setting.replace(/\$\{workspaceFolder\}/g, () => folder.uri.fsPath);
+    if (wanted === '~' || wanted.startsWith('~/') || wanted.startsWith('~\\')) {
+        wanted = path.join(os.homedir(), wanted.slice(1));
+    }
+    // From the folder when relative; either way absolute and normalised, with
+    // one kind of slash and no `..`, as the message and rig are given it.
+    wanted = path.resolve(folder.uri.fsPath, wanted);
+    if (!/\.rig$/i.test(wanted)) return { error: `The setting rig.main is "${setting}", but ${wanted} isn't a .rig file.` };
+    if (!isFile(wanted)) return { error: `The setting rig.main is "${setting}", but there's no file ${wanted}.` };
+    return { file: wanted };
+}
+
 // One rig diagnostic ({ line, column, severity, message }, from
 // parseDiagnostics, or otherFilesError's count of the other files' errors,
 // at line 1, column 1) as VS Code's, in `document`. rig's column counts
@@ -805,23 +861,78 @@ function toDiagnostic(document, d) {
     return diagnostic;
 }
 
-// The live check: runs `rig check FILE --stdin` on open .rig files, with the
-// document's text on its standard input, so what's checked is what's on
-// screen, saved or not, and puts the errors in a diagnostic collection, the
-// extension's own list of problems, which VS Code shows as squiggles and in
-// the Problems panel. Each check replaces the document's list. rig also
-// checks the files the document #loads; their errors aren't listed under
-// their own names, but counted in one error on the document's first line.
+// Whether `document` is in the workspace folder `folder`.
+function inFolder(document, folder) {
+    const its = vscode.workspace.getWorkspaceFolder(document.uri);
+    return Boolean(its) && its.uri.toString() === folder.uri.toString();
+}
+
+// The live check: runs rig on open .rig files, with the document's text on
+// its standard input, so what's checked is what's on screen, saved or not,
+// and puts the errors in a diagnostic collection, the extension's own list
+// of problems, which VS Code shows as squiggles and in the Problems panel.
+// Each check replaces the document's list.
+//
+// A document is checked as part of its program. One that declares main is a
+// program's main file, and is checked as one: `rig check FILE --stdin`. One
+// that doesn't is most likely a file a program #loads, which checked alone
+// would show main as missing and the names of the program's other files as
+// unknown. So it's checked with the program's main file, MAIN, as
+// `rig check MAIN --stdin-for FILE`: rig reads the program from disk, except
+// FILE, whose text is the document's. MAIN is the setting rig.main when its
+// program loads FILE, else the first file of the workspace folder, in path
+// order (candidates), that declares main and whose program does. When none
+// does, or the document is in no folder, it's checked alone after all. A
+// rig from before --stdin-for can't check it with its program: then it's
+// checked alone too, and the rig is said to be too old, once.
+//
+// The search runs a whole check for each main file it tries, so its answer
+// is remembered for the document (this.programs), and the next check tries
+// that main file alone. What the search saw may change, though: a main file
+// added, deleted, or edited to #load the document or not. So when a .rig
+// file is created, changed, deleted or saved, the answers of the documents
+// it concerns are forgotten: those of its workspace folder, where the
+// search looks, and those with a rig.main, whose program may load files
+// anywhere (concerned). All of them are forgotten when the workspace
+// folders change. A remembered main file that's gone, or whose program no
+// longer loads the document, is forgotten too, and the search goes on
+// without it.
+//
+// The errors rig finds in the program's other files, the main file among
+// them, aren't listed under their own names, but counted in one error on
+// the document's first line.
 //
 // One check per document at a time: a newer one ends the older's process,
-// and the older's output, if any comes, is ignored. Checking writes no file,
-// so ending it halfway does no harm.
+// and the older's output, if any comes, is ignored; an older one still
+// looking for the main file stops where it is. Checking writes no file, so
+// ending it halfway does no harm.
 class LiveCheck {
     constructor() {
         this.collection = vscode.languages.createDiagnosticCollection('rig');
         this.timers = new Map();  // a document's uri (as a string) -> its pending onType check
         this.running = new Map(); // a document's uri -> the rig process checking it now
+        // A document's uri -> its checks so far, counted by stop(): a check
+        // notes the count when it starts, and once it has changed, a newer
+        // check (or a close) has taken over. A count is never dropped, even
+        // when its document closes: started over, it could match a stale
+        // check's again.
+        this.generations = new Map();
+        // A document's uri -> its program's main file, as the search found
+        // it, or null when no program of its folder loads it, so it's
+        // checked alone. Only an open document's; none when not known.
+        this.programs = new Map();
+        // A document's uri -> how many times forgetPrograms forgot its
+        // program. A check notes the count when it starts, and once it has
+        // changed, what the check's search saw may be out of date: it
+        // remembers nothing. Never dropped, as a generation isn't.
+        this.forgotten = new Map();
+        // A saved .rig file's uri -> its time of modification on disk just
+        // after the save, till the file is changed otherwise (changed), or
+        // created or deleted.
+        this.savedTimes = new Map();
         this.toldMissing = false; // said once that there's no compiler
+        this.toldMain = false;    // said once that rig.main is wrong
+        this.toldOld = false;     // said once that the compiler is too old for --stdin-for
     }
 
     // Whether a document is one to check: a .rig file on disk. An untitled
@@ -845,10 +956,12 @@ class LiveCheck {
     }
 
     // Ends the check of a document, if one is running, so its output is
-    // ignored, and drops its pending one.
+    // ignored, and drops its pending one. A check still looking for the main
+    // file sees its generation has changed, and stops.
     stop(key) {
         clearTimeout(this.timers.get(key));
         this.timers.delete(key);
+        this.generations.set(key, (this.generations.get(key) || 0) + 1);
         const child = this.running.get(key);
         if (child) {
             this.running.delete(key);
@@ -856,21 +969,100 @@ class LiveCheck {
         }
     }
 
-    // A document closed, or no longer to be checked: no check, no problems.
+    // A document closed, or no longer to be checked: no check, no problems,
+    // and its program isn't remembered (it may have changed by the time
+    // the document is open again).
     forget(document) {
         if (!document || !document.uri) return;
         this.stop(document.uri.toString());
+        this.programs.delete(document.uri.toString());
         this.collection.delete(document.uri);
     }
 
-    // Checks `document` now. Resolves when the check is done (or ended by a
-    // newer one); nothing waits for that but test/check.js.
-    run(document) {
-        if (!this.wanted(document)) return Promise.resolve();
+    // The open documents to check whose program the .rig file at `uri` may
+    // be part of, a main file or a file it loads: those of its workspace
+    // folder, where the search looks, and those with a rig.main, whose
+    // program may load files of any folder, or of none (~/game/lib.rig),
+    // as well as rig.main itself. A main file of a document's folder may
+    // load a file of another folder too, through "../", but that's rare,
+    // and isn't followed: such a file concerns the document only when it
+    // has a rig.main.
+    concerned(uri) {
+        const folder = vscode.workspace.getWorkspaceFolder(uri);
+        return vscode.workspace.textDocuments.filter((document) => {
+            if (!this.wanted(document)) return false;
+            if (folder && inFolder(document, folder)) return true;
+            const its = vscode.workspace.getWorkspaceFolder(document.uri);
+            return Boolean(its && mainSetting(document.uri.fsPath, its).file);
+        });
+    }
+
+    // A .rig file at `uri` was created, changed, deleted or saved, which
+    // may change which program loads each document it concerns: their
+    // programs are forgotten, and searched for again on their next check.
+    // A check of one that's already under way may have searched before the
+    // change, so it remembers nothing (this.forgotten). Returns those
+    // documents.
+    forgetPrograms(uri) {
+        this.savedTimes.delete(uri.toString());
+        const concerned = this.concerned(uri);
+        for (const document of concerned) {
+            const key = document.uri.toString();
+            this.programs.delete(key);
+            this.forgotten.set(key, (this.forgotten.get(key) || 0) + 1);
+        }
+        return concerned;
+    }
+
+    // The file system watcher saw the .rig file at `uri` change. It sees
+    // the files VS Code saves as well as those changed outside it, so this
+    // may be a save's own write, which saved() has handled already: when
+    // the file's time of modification is still the save's, nothing more is
+    // forgotten, and the programs the save's checks found are kept.
+    changed(uri) {
+        const time = this.savedTimes.get(uri.toString());
+        if (time !== undefined && time === modifiedTime(uri.fsPath)) return [];
+        return this.forgetPrograms(uri);
+    }
+
+    // `document` was saved. A .rig file may be part of the program of the
+    // other open documents it concerns, so they're all checked again, with
+    // their programs searched for again, as rig reads the file from disk.
+    // Its time of modification is noted, for changed(). Resolves when the
+    // checks are done, which only test/check.js waits for.
+    saved(document) {
+        if (!this.wanted(document)) return this.run(document);
+        const key = document.uri.toString();
+        const others = this.forgetPrograms(document.uri).filter((other) => other.uri.toString() !== key);
+        const time = modifiedTime(document.uri.fsPath);
+        if (time !== undefined) this.savedTimes.set(key, time);
+        return Promise.all([document, ...others].map((d) => this.run(d)));
+    }
+
+    // Checks `document` now. Resolves when the check is done, or a newer one
+    // has taken over; nothing waits for that but test/check.js.
+    async run(document) {
+        if (!this.wanted(document)) return;
         const key = document.uri.toString();
         this.stop(key);
+        // Each `await` below gives a newer check of the document the chance
+        // to start (stop() counts it). A check that isn't the newest anymore
+        // returns, starting, setting, remembering and saying nothing: it
+        // asks after each await, that of through() too, and again just
+        // before each rig it starts. through() asks after its own rig, but a
+        // newer check may start in the moment between that and run() going
+        // on after `await through(...)`, to the search, the next rig or the
+        // document alone.
+        const generation = this.generations.get(key);
+        const current = () => this.generations.get(key) === generation;
+        // `main` (or null) as the document's program, unless its program has
+        // been forgotten since the check started.
+        const forgotten = this.forgotten.get(key);
+        const remember = (main) => {
+            if (this.forgotten.get(key) === forgotten) this.programs.set(key, main);
+        };
         // Checking runs rig, so not in Restricted Mode, as building doesn't.
-        if (checkSetting(document.uri) === 'off' || !vscode.workspace.isTrusted) return Promise.resolve();
+        if (checkSetting(document.uri) === 'off' || !vscode.workspace.isTrusted) return;
         const file = document.uri.fsPath;
         const folder = vscode.workspace.getWorkspaceFolder(document.uri);
         const found = findCompiler(file, folder);
@@ -882,59 +1074,181 @@ class LiveCheck {
                 this.toldMissing = true;
                 compilerError(`Rig: ${found.error}`);
             }
-            return Promise.resolve();
+            return;
         }
 
         // rig runs where a build would, the file's workspace folder (or its
-        // directory), and gets the file's full path, which its diagnostics
-        // then name. The file needn't exist: with --stdin the text is
-        // stdin's, and the name is what the diagnostics call it and the
-        // file whose directory its #loads are found from.
+        // directory), and gets the file's full path. The file needn't exist:
+        // with --stdin or --stdin-for the text is stdin's. With --stdin the
+        // diagnostics name the file as given, and its #loads are found from
+        // its directory; with --stdin-for they name it by the path the
+        // program's #load of it gives (from the loading file's directory),
+        // which parseDiagnostics resolves from cwd and compares with
+        // samePath.
         const cwd = buildDirectory(file, folder);
-        return new Promise((resolve) => {
-            // The compiler couldn't be started (it was deleted, or isn't a
-            // program): no problems listed, and said once, like a missing
-            // compiler.
-            const couldntRun = (e) => {
+
+        // rig's answer as the document's diagnostics: its own, then one for
+        // the errors rig found in the program's other files, if any
+        // (otherFilesError). When the compiler couldn't be started (it was
+        // deleted, or isn't a program), no problems listed, and said once,
+        // like a missing compiler.
+        const show = (result) => {
+            if (result.error) {
                 this.collection.delete(document.uri);
                 if (!this.toldMissing) {
                     this.toldMissing = true;
-                    compilerError(`Rig: ${compilerFailure(found.compiler, e)}`);
+                    compilerError(`Rig: ${compilerFailure(found.compiler, result.error)}`);
                 }
-                resolve();
-            };
-            // Node says so in one of two ways (see startProcess): by throwing
-            // here, or with the 'error' event below.
-            const child = startProcess(found.compiler, ['check', file, '--stdin'], cwd);
-            if (child instanceof Error) return couldntRun(child);
+                return;
+            }
+            const diagnostics = parseDiagnostics(result.output, file, cwd);
+            const elsewhere = otherFilesError(result.output, file, cwd);
+            if (elsewhere) diagnostics.push(elsewhere);
+            this.collection.set(document.uri, diagnostics.map((d) => toDiagnostic(document, d)));
+        };
+
+        // Checks the document as part of `main`'s program. Resolves 'done'
+        // when that's the document's check, now shown (or a newer check has
+        // taken over), and remembers main as its program (remember), unless
+        // rig couldn't be started; 'elsewhere' when main's program doesn't load
+        // the document, and the next main file is to be tried; 'alone' when
+        // this rig is too old to know --stdin-for, which is said once, and
+        // the document is to be checked alone. Each rig gets the text as it
+        // is when it starts: what's on screen.
+        const through = async (main) => {
+            if (!current()) return 'done';
+            const args = ['check', main, '--stdin-for', file];
+            const result = await this.runRig(key, found.compiler, args, cwd, document.getText());
+            if (!current()) return 'done';
+            if (!result.error) {
+                if (doesntLoad(result.code, result.output)) return 'elsewhere';
+                if (tooOld(result.code, result.output)) {
+                    if (!this.toldOld) {
+                        this.toldOld = true;
+                        compilerError('Rig: this rig is too old to check a loaded file as part of its program; update it.');
+                    }
+                    return 'alone';
+                }
+                remember(main);
+            }
+            show(result);
+            return 'done';
+        };
+
+        // Finds the document's program and checks the document as part of
+        // it. Resolves 'done' when that's done (or a newer check has taken
+        // over), or 'alone' when the document is to be checked alone.
+        const asPart = async () => {
+            // A document that declares main, or that rig.main names, is its
+            // own program's main file. A wrong rig.main is said once, with
+            // the button to the setting, and the search goes on as if it
+            // were empty.
+            if (!folder || declaresMain(document.getText())) return 'alone';
+            const setting = mainSetting(file, folder);
+            if (setting.error && !this.toldMain) {
+                this.toldMain = true;
+                settingError(`Rig: ${setting.error}`, 'rig.main');
+            }
+            const main = setting.file;
+            if (main && samePath(main, file)) return 'alone';
+            // A remembered main file that's gone, deleted with no event for
+            // it (where the file system watcher doesn't look, or missed it),
+            // is forgotten: rig couldn't read it.
+            let known = this.programs.get(key);
+            if (known && !isFile(known)) {
+                this.programs.delete(key);
+                known = undefined;
+            }
+            if (known === null) return 'alone';
+
+            // The remembered main file, then rig.main, before the folder is
+            // searched at all: when there's one, it's normally the answer.
+            // One whose program doesn't load the document is forgotten, and
+            // not tried again in the search.
+            const tried = [];
+            for (const first of [known, main]) {
+                if (!first || tried.some((t) => samePath(t, first))) continue;
+                const answer = await through(first);
+                if (!current()) return 'done';
+                if (answer !== 'elsewhere') return answer;
+                if (first === known) this.programs.delete(key);
+                tried.push(first);
+            }
+            const candidates = await this.candidates(folder);
+            if (!current()) return 'done';
+            for (const candidate of candidates || []) {
+                if (samePath(candidate, file) || tried.some((t) => samePath(t, candidate))) continue;
+                const answer = await through(candidate);
+                if (!current()) return 'done';
+                if (answer !== 'elsewhere') return answer;
+            }
+            // No program of the folder loads it. That's remembered too, but
+            // not when VS Code couldn't search the folder: it may next time.
+            if (candidates) remember(null);
+            return 'alone';
+        };
+        if ((await asPart()) === 'done') return;
+
+        // Alone: a main file, a file no program in its folder loads, or one
+        // this rig can't check as part of its program.
+        if (!current()) return;
+        const result = await this.runRig(key, found.compiler, ['check', file, '--stdin'], cwd, document.getText());
+        if (current()) show(result);
+    }
+
+    // Runs rig as the check of `key`, with `args`, in `cwd`, and `text` on its
+    // standard input. this.running holds the process while it runs, so
+    // stop(key) ends it. Resolves { code, output } once it closes, `output`
+    // all it wrote to stderr and `code` null when it was killed, or { error }
+    // when it couldn't start: Node says so in one of two ways (see
+    // startProcess), by throwing here or with the 'error' event.
+    runRig(key, compiler, args, cwd, text) {
+        return new Promise((resolve) => {
+            const child = startProcess(compiler, args, cwd);
+            if (child instanceof Error) return resolve({ error: child });
             this.running.set(key, child);
+            const end = (result) => {
+                if (this.running.get(key) === child) this.running.delete(key);
+                resolve(result);
+            };
             let output = '';
             child.stderr.setEncoding('utf8'); // whole UTF-8 characters, even split across reads
-            child.stderr.on('data', (text) => (output += text));
+            child.stderr.on('data', (chunk) => (output += chunk));
             child.stdout.resume(); // rig check writes nothing there, but a pipe must be drained
             child.stdin.on('error', () => {}); // rig ended (or was ended) before reading it all
-            child.stdin.end(document.getText());
-            // The other way of not starting: handled as above, unless a newer
-            // check has taken over this document, whose results are the ones
-            // to keep.
-            child.on('error', (e) => {
-                if (this.running.get(key) !== child) return resolve();
-                this.running.delete(key);
-                couldntRun(e);
-            });
-            child.on('close', () => {
-                if (this.running.get(key) === child) {
-                    this.running.delete(key);
-                    // The document's own, then one for the errors rig found
-                    // in the files it #loads, if any (otherFilesError).
-                    const found = parseDiagnostics(output, file, cwd);
-                    const elsewhere = otherFilesError(output, file, cwd);
-                    if (elsewhere) found.push(elsewhere);
-                    this.collection.set(document.uri, found.map((d) => toDiagnostic(document, d)));
-                }
-                resolve();
-            });
+            child.stdin.end(text);
+            child.on('error', (e) => end({ error: e }));
+            child.on('close', (code) => end({ code, output }));
         });
+    }
+
+    // The files of workspace folder `folder` that may be its program's main
+    // file, in the order the live check tries them: the .rig files, at any
+    // depth, but none under a .build directory (searchable), that declare
+    // main (declaresMain), in path order (pathOrder). They're judged by their
+    // text on disk, not an editor's, since that's what rig reads. findFiles
+    // leaves out what the setting files.exclude does. null when VS Code
+    // couldn't search the folder: then the document is checked alone.
+    async candidates(folder) {
+        let uris;
+        try {
+            uris = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, '**/*.rig'));
+        } catch {
+            return null;
+        }
+        const searched = uris.filter((uri) => searchable(path.relative(folder.uri.fsPath, uri.fsPath)));
+        const decoder = new TextDecoder(); // UTF-8, as rig reads a file
+        const declared = await Promise.all(
+            searched.map(async (uri) => {
+                try {
+                    return declaresMain(decoder.decode(await vscode.workspace.fs.readFile(uri)));
+                } catch {
+                    return false; // gone since it was found, or unreadable: rig couldn't read it either
+                }
+            }),
+        );
+        const mains = searched.filter((uri, i) => declared[i]).map((uri) => uri.fsPath);
+        return pathOrder(folder.uri.fsPath, mains);
     }
 
     // Every open document again, after the settings or the workspace's
@@ -947,15 +1261,26 @@ class LiveCheck {
         }
     }
 
+    // Every check ends, a pending one or one looking for the main file too,
+    // which then starts nothing: stop() counts a generation for each.
     dispose() {
-        for (const key of [...this.timers.keys(), ...this.running.keys()]) this.stop(key);
+        const keys = new Set([...this.timers.keys(), ...this.running.keys(), ...this.generations.keys()]);
+        for (const key of keys) this.stop(key);
         this.collection.dispose();
     }
 }
 
 function activate(context) {
     const live = new LiveCheck();
+    // A .rig file created, changed or deleted, in VS Code or outside it,
+    // may change the program of the documents it concerns. A change may be
+    // a save's own, which forgets nothing more (changed).
+    const rigFiles = vscode.workspace.createFileSystemWatcher('**/*.rig');
     context.subscriptions.push(
+        rigFiles,
+        rigFiles.onDidCreate((uri) => live.forgetPrograms(uri)),
+        rigFiles.onDidChange((uri) => live.changed(uri)),
+        rigFiles.onDidDelete((uri) => live.forgetPrograms(uri)),
         vscode.tasks.registerTaskProvider('rig', taskProvider),
         vscode.commands.registerCommand('rig.buildFile', (uri) => runFile('build', uri)),
         vscode.commands.registerCommand('rig.runFile', (uri) => runFile('run', uri)),
@@ -964,22 +1289,45 @@ function activate(context) {
         live,
         // On open and save with onType and onSave alike; on each change,
         // after a pause, with onType only. (A change event with no changes
-        // is the document becoming dirty or clean: nothing to check.)
+        // is the document becoming dirty or clean: nothing to check.) A save
+        // checks the other open documents it concerns too.
         vscode.workspace.onDidOpenTextDocument((document) => live.run(document)),
-        vscode.workspace.onDidSaveTextDocument((document) => live.run(document)),
+        vscode.workspace.onDidSaveTextDocument((document) => live.saved(document)),
         vscode.workspace.onDidChangeTextDocument((event) => {
             const document = event.document;
             if (!event.contentChanges.length || !live.wanted(document)) return;
             if (checkSetting(document.uri) === 'onType') live.schedule(document);
         }),
         vscode.workspace.onDidCloseTextDocument((document) => live.forget(document)),
+        // A setting that changes what's checked, or how, checks every open
+        // document again. A new compiler or main file may be wrong in a new
+        // way, and is said to be once more; a new main file is each loaded
+        // document's program to find again.
         vscode.workspace.onDidChangeConfiguration((event) => {
-            if (event.affectsConfiguration('rig.compilerPath')) live.toldMissing = false;
-            if (event.affectsConfiguration('rig.check') || event.affectsConfiguration('rig.compilerPath')) {
+            if (event.affectsConfiguration('rig.compilerPath')) {
+                live.toldMissing = false;
+                live.toldOld = false;
+            }
+            if (event.affectsConfiguration('rig.main')) {
+                live.toldMain = false;
+                live.programs.clear();
+            }
+            if (
+                event.affectsConfiguration('rig.check') ||
+                event.affectsConfiguration('rig.compilerPath') ||
+                event.affectsConfiguration('rig.main')
+            ) {
                 live.refreshAll();
             }
         }),
         vscode.workspace.onDidGrantWorkspaceTrust(() => live.refreshAll()),
+        // A folder added or removed changes which folder a document is in,
+        // and so where its program is looked for: every program is found
+        // again, at once.
+        vscode.workspace.onDidChangeWorkspaceFolders(() => {
+            live.programs.clear();
+            live.refreshAll();
+        }),
     );
     // The documents open before the extension started (the one whose
     // opening started it, among them) had no open event for it.
@@ -991,4 +1339,4 @@ function deactivate() {}
 // VS Code needs activate and deactivate. forTests is for test/check.js,
 // which loads this file with a stand-in for VS Code's API and checks the
 // helpers' behaviour.
-module.exports = { activate, deactivate, forTests: { isInside, findCompiler, taskFile, RigTerminal } };
+module.exports = { activate, deactivate, forTests: { isInside, findCompiler, mainSetting, taskFile, RigTerminal } };

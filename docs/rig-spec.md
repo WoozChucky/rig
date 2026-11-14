@@ -1710,7 +1710,7 @@ This section describes the compiler in this repository: how it compiles a Rig pr
 
 ```text
 rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]
-rig check FILE.rig [--stdin]
+rig check FILE.rig [--stdin | --stdin-for FILE.rig]
 rig version [--verbose]
 ```
 
@@ -1722,7 +1722,7 @@ rig version [--verbose]
 - The object file, one for the whole program, is written to a directory `.build` in the current directory, made if needed, named after the main file: `.build/hello.obj` on Windows, `.build/hello.o` on Linux.
 - On Windows the program's debug information is written beside it: the executable's name with `.pdb` for its `.exe` (in any case), `hello.pdb` for `hello.exe`, or with `.pdb` added to a name with another extension, `out.bin.pdb` for `out.bin` (section 10.7).
 
-**`rig check`** reads and checks the program as `rig build` does, the files it loads included, prints the same diagnostics, and stops: it writes no file. With `--stdin` it reads the main file from standard input, which lets an editor check text that is not saved. `FILE.rig` is then the name its diagnostics give it, and its `#load`s are found from `FILE.rig`'s directory, as if the text were in that file; the file need not exist. The files it loads are read from disk.
+**`rig check`** reads and checks the program as `rig build` does, the files it loads included, prints the same diagnostics, and stops: it writes no file. With `--stdin` it reads the main file from standard input, which lets an editor check text that is not saved. `FILE.rig` is then the name its diagnostics give it, and its `#load`s are found from `FILE.rig`'s directory, as if the text were in that file; the file need not exist. The files it loads are read from disk. With `--stdin-for LOADED.rig` (the usage's second `FILE.rig`) the program is `FILE.rig`'s, read from disk, but for `LOADED.rig`, whose text is read from standard input wherever the program loads it, which lets an editor check a file a program loads as part of that program: checked alone, it would have no `main`, and the names the program's other files declare would be unknown. `LOADED.rig`, like `FILE.rig`, is a path from the current directory, not from `FILE.rig`'s; it is then known as `#load` knows a file (section 2.13), so the `#load` may write its path otherwise (`./b.rig` or `sub/../b.rig` for `b.rig`, and on Windows `B.RIG`), and it need not exist. Its diagnostics name it as its `#load` does. When `LOADED.rig` is `FILE.rig` itself, the option is `--stdin`.
 
 **`rig version`** says which compiler this is, on one line: its version, the commit of Rig's repository it was built from with that commit's date, and the version of the LLVM linked into it:
 
@@ -1746,9 +1746,9 @@ target: x86_64-pc-linux-gnu
 build: release
 ```
 
-Both `build` and `check` take only a source file whose name ends in `.rig`, in any case: `rig: error: 'hello.txt' isn't a .rig file`. A main file that cannot be read is `rig: error: cannot read 'hello.rig': MESSAGE`, with the system's reason (`rig: error: cannot read standard input: MESSAGE` with `--stdin`). A loaded file that cannot be read, or isn't a `.rig` file, is a diagnostic at its `#load`'s string instead (section 2.13).
+Both `build` and `check` take only a source file whose name ends in `.rig`, in any case: `rig: error: 'hello.txt' isn't a .rig file`. So does `--stdin-for`, its file's name judged after the main file's, and both before anything is read. A main file that cannot be read is `rig: error: cannot read 'hello.rig': MESSAGE`, with the system's reason (`rig: error: cannot read standard input: MESSAGE` with `--stdin`). With `--stdin-for` the main file is read from disk first, and standard input only once it has been, so a main file that cannot be read is said without waiting for standard input; standard input that cannot be read is then `rig: error: cannot read standard input: MESSAGE`. A loaded file that cannot be read, or isn't a `.rig` file, is a diagnostic at its `#load`'s string instead (section 2.13). A program that never loads the `--stdin-for` file is `rig: error: 'main.rig' doesn't load 'helper.rig'`, the two files named as the command line names them, alone: nothing is checked, and what loading the program found isn't printed, since that file isn't part of it.
 
-The exit status is 0 on success; 1 when the program has errors, cannot be read, or cannot be built or linked; and 2 when the command line is malformed (no command or an unknown one, no file, two files, an option given twice, `-o` without a name or with an empty one, `-o` or `--no-bounds-checks` given to `rig check`, or anything but `--verbose` after `rig version`), in which case the usage is printed. A word that is not an option is taken as the file's name: an unknown option alone is a file that isn't a `.rig` file, and beside the file it is a second file.
+The exit status is 0 on success; 1 when the program has errors, cannot be read, doesn't load the `--stdin-for` file, or cannot be built or linked; and 2 when the command line is malformed (no command or an unknown one, no file, two files, an option given twice, `-o` or `--stdin-for` without a name or with an empty one, `--stdin` with `--stdin-for`, `-o` or `--no-bounds-checks` given to `rig check`, `--stdin-for` given to `rig build`, even as `-o`'s name, or anything but `--verbose` after `rig version`), in which case the usage is printed. A word that is not an option is taken as the file's name: an unknown option alone is a file that isn't a `.rig` file, and beside the file it is a second file. The word after `-o` or `--stdin-for` is its name, whatever it is: `--stdin-for --stdin` names a file `--stdin`, which isn't a `.rig` file.
 
 ### 10.2 The compiler's stages
 

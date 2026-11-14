@@ -1,5 +1,6 @@
 // driver.cpp: rig build, every stage in order, and rig check, the stages up
-// to the diagnostics (command_check, at the end).
+// to the diagnostics, of a program's files as they are on disk or with one
+// file's text from standard input, an editor's (command_check, at the end).
 //
 // rig build FILE.rig [-o OUTPUT] [--no-bounds-checks] reads the file and the
 // files it #loads, lexes, parses and checks them, and stops there with the
@@ -63,7 +64,17 @@ String executable_path(Arena *a, String output, String name, Target t) {
 // build asks, a program without errors is also lowered into *lowered, its
 // indexes bounds-checked when bounds_checks is set; rig check passes
 // nullptr and stops at the checker.
-static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Module **lowered, bool bounds_checks) {
+//
+// stdin_for, when not empty, is the file whose text is read from standard
+// input once the main file has been read (rig check --stdin-for): one the
+// program #loads, never the main file (command_check runs that as --stdin),
+// and it needn't exist. The loader puts that text in its place wherever the
+// program loads it (load.h). A program that never loads it isn't checked:
+// rig says so alone, exit 1, since the loader's errors, if any, are about a
+// program the file isn't part of, and an editor checking that file must not
+// take a clean exit as its program's verdict.
+static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Module **lowered, bool bounds_checks,
+                                String stdin_for = {}) {
     String text = {};
     bool read = from_stdin ? os_read_stdin(a, &text) : os_read_file(a, path, &text);
     if (!read) {
@@ -75,6 +86,13 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Modul
         }
         return nullptr;
     }
+    // Read after the main file, so a main file that can't be read is said
+    // first, and an editor's text isn't waited for in vain.
+    String stdin_text = {};
+    if (stdin_for.count && !os_read_stdin(a, &stdin_text)) {
+        fprintf(stderr, "rig: error: cannot read standard input: " STR_FMT "\n", STR_ARG(os_error_message(a)));
+        return nullptr;
+    }
 
     // The diagnostics are freed here, the tree and the module kept: they
     // live in the arena. The loader lexes and parses this file and every
@@ -83,7 +101,13 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Modul
     // loads it, load.h), the debug information by its absolute path, from
     // the directory rig runs in (ir_lower).
     Diagnostics d = {};
-    Ast_File *tree = load_program(a, &d, path, text);
+    bool reached = false;
+    Ast_File *tree = load_program(a, &d, path, text, stdin_for, stdin_text, &reached);
+    if (stdin_for.count && !reached) {
+        fprintf(stderr, "rig: error: '" STR_FMT "' doesn't load '" STR_FMT "'\n", STR_ARG(path), STR_ARG(stdin_for));
+        diag_free(&d);
+        return nullptr;
+    }
     check(tree, a, &d);
     bool ok = d.error_count == 0;
     if (!ok) {
@@ -153,11 +177,19 @@ static bool source_named_rig(String path) {
 // rig build's command line: the words after "build", FILE.rig [-o OUTPUT]
 // [--no-bounds-checks], in any order. Returns the exit code; 2 with the
 // usage for a malformed line (no file, two files, -o with no name or an
-// empty one, -o twice, --no-bounds-checks twice).
+// empty one, -o twice, --no-bounds-checks twice, or rig check's
+// --stdin-for anywhere, -o's name included: a build is of the files on
+// disk, and the word is a mistake for rig check, not a file's name).
 // A source not ending in .rig is refused (source_named_rig), and so is an
 // output ending in .rig: it's a mistake for the source's name, and the
 // linker would overwrite the source with the program.
 int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
+    for (s64 i = 0; i < words.count; i++) {
+        if (string_eq(words[i], str("--stdin-for"))) {
+            print_usage();
+            return 2;
+        }
+    }
     String path = {}, output = {};
     bool have_path = false, have_output = false, bounds_checks = true;
     for (s64 i = 0; i < words.count; i++) {
@@ -194,26 +226,47 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
     return build(a, path, output, bounds_checks);
 }
 
-// rig check's command line: the words after "check", FILE.rig [--stdin], in
-// either order. Returns the exit code: 1 if the program has errors (printed
-// as rig build prints them), can't be read or isn't named .rig (as rig build
-// refuses it, source_named_rig), else 0; 2 for a malformed line (no file,
-// two files, --stdin twice, or -o: check writes nothing, so there is no
-// output to name, nor --no-bounds-checks: nothing is lowered), with the
-// usage.
+// rig check's command line: the words after "check", FILE.rig [--stdin |
+// --stdin-for FILE.rig], in any order. Returns the exit code: 1 if the
+// program has errors (printed as rig build prints them), can't be read,
+// doesn't load the --stdin-for file, or a file isn't named .rig (as rig
+// build refuses it, source_named_rig: the main file's name first, then the
+// --stdin-for one's), else 0; 2 for a malformed line (no file, two files,
+// --stdin twice, --stdin-for with no name or an empty one, twice, or with
+// --stdin, or -o: check writes nothing, so there is no output to name, nor
+// --no-bounds-checks: nothing is lowered), with the usage. The word after
+// --stdin-for is its file whatever it is, as -o's is its output: in
+// --stdin-for --stdin, the file is named --stdin, which isn't a .rig file.
 //
 // It runs read_and_check, rig build's front half, and stops: nothing is
 // lowered, LLVM and the linker aren't involved, and no file or .build
 // directory is written. That makes it quick and harmless to run on every
-// keystroke, which is what an editor does with it: --stdin reads the source
-// from standard input, so the editor can send what's on screen, saved or
-// not, and FILE.rig is then the name the diagnostics give it and the file
-// whose directory its #loads are found from (it needn't exist).
+// keystroke, which is what an editor does with it:
+// - --stdin reads the source from standard input, so the editor can send
+//   what's on screen, saved or not, and FILE.rig is then the name the
+//   diagnostics give it and the file whose directory its #loads are found
+//   from (it needn't exist);
+// - --stdin-for FILE.rig checks the program whose main file is the first
+//   FILE.rig, as on disk but for the --stdin-for file, whose text is read
+//   from standard input instead, wherever the program #loads it, however
+//   its #load names it (load.h). That's what the editor sends for a file
+//   the program loads: checked alone, it would be missing main and the
+//   names the other files declare. It needn't exist either, and the
+//   diagnostics name it as its #load does. When it is the main file
+//   (load_same_file, asked before anything is read, since the main file
+//   needn't exist then either), this is --stdin.
 int command_check(Arena *a, Array<String> words, void (*print_usage)()) {
-    String path = {};
-    bool have_path = false, from_stdin = false;
+    String path = {}, stdin_for = {};
+    bool have_path = false, from_stdin = false, have_stdin_for = false;
     for (s64 i = 0; i < words.count; i++) {
-        if (string_eq(words[i], str("--stdin")) && !from_stdin) {
+        if (string_eq(words[i], str("--stdin-for"))) {
+            if (i + 1 >= words.count || have_stdin_for || from_stdin || words[i + 1].count == 0) {
+                print_usage();
+                return 2;
+            }
+            stdin_for = words[++i];
+            have_stdin_for = true;
+        } else if (string_eq(words[i], str("--stdin")) && !from_stdin && !have_stdin_for) {
             from_stdin = true;
         } else if (string_eq(words[i], str("--stdin")) || string_eq(words[i], str("-o")) ||
                    string_eq(words[i], str("--no-bounds-checks")) || have_path) {
@@ -229,5 +282,10 @@ int command_check(Arena *a, Array<String> words, void (*print_usage)()) {
         return 2;
     }
     if (!source_named_rig(path)) return 1;
-    return read_and_check(a, path, from_stdin, nullptr, true) ? 0 : 1;
+    if (have_stdin_for && !source_named_rig(stdin_for)) return 1;
+    if (have_stdin_for && load_same_file(path, stdin_for)) {
+        from_stdin = true;
+        stdin_for = {};
+    }
+    return read_and_check(a, path, from_stdin, nullptr, true, stdin_for) ? 0 : 1;
 }

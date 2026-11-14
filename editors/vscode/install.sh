@@ -23,7 +23,7 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # The extension's files, from this directory: what the .vsix holds under
 # extension/. install.bat has the same list, and test/check.js checks the
 # two agree and hold every file package.json names.
-files="package.json language-configuration.json README.md extension.js debug.js diagnostics.js syntaxes/rig.tmLanguage.json snippets/rig.json"
+files="package.json language-configuration.json README.md extension.js debug.js diagnostics.js program.js syntaxes/rig.tmLanguage.json snippets/rig.json"
 
 vsix_only=
 if [ "$1" = --vsix ]; then
