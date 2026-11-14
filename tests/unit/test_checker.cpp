@@ -5011,11 +5011,14 @@ TEST(constant_data_folds) {
     // field a literal leaves out is zero, read through a field left out
     // too, and so is an element of an array left out, and a string left out
     // has no bytes, its .count 0. So a constant can name one and size an
-    // array. A pointer or a procedure field left out, or given as null, is
-    // null, known too. An aggregate part, even one left out, isn't a number;
-    // nor is a pointer or a procedure a literal gives, and an element or a
-    // byte at an index known only at run time is read then, as is a field
-    // reached through a pointer field, whose struct is elsewhere.
+    // array. A float, or a narrow integer, has the bits of its field's or
+    // element's type: an untyped 2 given a float64 is 2.0, a -1 given an s8
+    // is sign-extended. A pointer or a procedure field or element left out,
+    // or given as null, is null, known too. An aggregate part, even one left
+    // out, isn't a number; nor is a pointer or a procedure a literal gives,
+    // a string's .data the address of its bytes, and an element or a byte at
+    // an index known only at run time is read then, as is a field reached
+    // through a pointer field, whose struct is elsewhere.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "Vec2 :: struct { x: int; y: int; }\n"
@@ -5024,7 +5027,13 @@ TEST(constant_data_folds) {
                           "Grid :: struct { a: [3]int; rows: [2][2]int; }\n"
                           "add :: (a: int, b: int) -> int { return a + b; }\n"
                           "Op :: struct { symbol: *u8; run: (int, int) -> int; }\n"
+                          "Table :: struct { texts: [2]*u8; runs: [2](int, int) -> int; }\n"
+                          "V :: struct { x: float32; y: float64; s: s8; }\n"
                           "Holder :: struct { v: *Named; }\n"
+                          "K :: 3;\n"
+                          "P :: V.{1, 2.5, -1};\n"
+                          "F :: float64.[2, K];\n"
+                          "T :: Table.{.[\"+\", null], .[add, null]};\n"
                           "NAME :: \"rig\";\n"
                           "ORIGIN :: Vec2.{3, 4};\n"
                           "PRIMES :: int.[2, 3, 5, 7, 11];\n"
@@ -5069,6 +5078,17 @@ TEST(constant_data_folds) {
                           "    bare_run := BARE.run;\n"
                           "    null_symbol := NULLS.symbol;\n"
                           "    null_run := NULLS.run;\n"
+                          "    px := P.x;\n"
+                          "    py := P.y;\n"
+                          "    ps := P.s;\n"
+                          "    f0 := F[0];\n"
+                          "    f1 := F[1];\n"
+                          "    text := T.texts[0];\n"
+                          "    table_run := T.runs[0];\n"
+                          "    null_text := T.texts[1];\n"
+                          "    null_table_run := T.runs[1];\n"
+                          "    data := NAME.data;\n"
+                          "    field_data := C.name.data;\n"
                           "    through := H.v.n;\n"
                           "    i := 1;\n"
                           "    varying := PRIMES[i];\n"
@@ -5116,10 +5136,59 @@ TEST(constant_data_folds) {
     CHECK_STR(type_name(&a, value_of(&c, "null_symbol")->type), "*u8");
     CHECK(folds_to(&c, "null_run", 0));
     CHECK_STR(type_name(&a, value_of(&c, "null_run")->type), "(int, int) -> int");
+    Ast *px = value_of(&c, "px");
+    CHECK(px->is_constant && float_value(px) == 1.0);
+    CHECK_STR(type_name(&a, px->type), "float32");
+    Ast *py = value_of(&c, "py");
+    CHECK(py->is_constant && float_value(py) == 2.5);
+    CHECK_STR(type_name(&a, py->type), "float64");
+    CHECK(folds_to(&c, "ps", (u64)-1));
+    CHECK_STR(type_name(&a, value_of(&c, "ps")->type), "s8");
+    Ast *f0 = value_of(&c, "f0");
+    CHECK(f0->is_constant && float_value(f0) == 2.0);
+    CHECK_STR(type_name(&a, f0->type), "float64");
+    Ast *f1 = value_of(&c, "f1");
+    CHECK(f1->is_constant && float_value(f1) == 3.0);
+    CHECK(!value_of(&c, "text")->is_constant);
+    CHECK(!value_of(&c, "table_run")->is_constant);
+    CHECK(folds_to(&c, "null_text", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "null_text")->type), "*u8");
+    CHECK(folds_to(&c, "null_table_run", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "null_table_run")->type), "(int, int) -> int");
+    CHECK(!value_of(&c, "data")->is_constant);
+    CHECK_STR(type_name(&a, value_of(&c, "data")->type), "*u8");
+    CHECK(!value_of(&c, "field_data")->is_constant);
+    CHECK_STR(type_name(&a, value_of(&c, "field_data")->type), "*u8");
     CHECK(!value_of(&c, "through")->is_constant);
     CHECK(!value_of(&c, "varying")->is_constant);
     CHECK(!value_of(&c, "varying_letter")->is_constant);
     token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(mistyped_constant_data_doesnt_fold) {
+    // A literal given a value of the wrong type, reported, keeps its own
+    // type, so a field or an element of the part it got wrong is no part of
+    // data: it's left unfolded, and a constant naming it isn't known.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: int; y: int; }\n"
+                           "Line :: struct { a: Vec2; b: Vec2; }\n"
+                           "Grid :: struct { rows: [2][2]int; }\n"
+                           "X :: Line.{a = 5}.a.x;\n"
+                           "main :: () {\n"
+                           "    a := Line.{a = 5}.a.x;\n"
+                           "    b := Line.{\"hi\"}.a.x;\n"
+                           "    c := Vec2.[1, 2][0].x;\n"
+                           "    d := Grid.{rows = 5}.rows[0][1];\n"
+                           "}\n"),
+              "4:6: the value of constant 'X' isn't known while compiling\n"
+              "4:16: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
+              "6:20: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
+              "7:16: a value of type 'string' doesn't convert to 'Vec2' implicitly\n"
+              "8:16: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
+              "8:19: a value of type 'int' doesn't convert to 'Vec2' implicitly\n"
+              "9:23: a value of type 'int' doesn't convert to '[2][2]int' implicitly\n");
     arena_free(&a);
 }
 
@@ -5131,7 +5200,9 @@ TEST(constant_parts_arent_places) {
     // can't point into them. A string constant's .data is its bytes'
     // address, a *u8, as a literal's is. What a pointer field points at is
     // elsewhere, a struct's fields and a string's bytes reached through it
-    // too, and a string literal's bytes stay places, as they were.
+    // too, and a string literal's bytes stay places, as they were. A part of
+    // a constant is reached through its fields and elements, not through a
+    // cast: writing through cast([]u8) NAME isn't refused, but undefined.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "Vec2 :: struct { x: int; y: int; }\n"
@@ -5161,6 +5232,8 @@ TEST(constant_parts_arent_places) {
                            "    H.v.n = 3;\n"
                            "    for * H.v.name { }\n"
                            "    t := NAME.data;\n"
+                           "    (cast(string) NAME)[0] = 65;\n"
+                           "    (cast([]u8) NAME)[0] = 65;\n"
                            "    \"abc\"[0] = 65;\n"
                            "    for * \"abc\" { }\n"
                            "}\n"),
