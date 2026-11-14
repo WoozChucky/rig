@@ -90,9 +90,10 @@ function otherFilesError(output, file, cwd) {
 // The file at `other`, an absolute path (diagnosticLines), as a #load in
 // `file` would name it: its path from file's directory, with '/' between
 // the names. rig's own name for it can be long and, on Windows, mixed: the
-// live check gives rig the document's full path, so a file it loads is
-// named by the directory's path, with '\', then the #load's, with '/'
-// (C:\x\src\world/map.rig).
+// live check gives rig a full path, the document's or (with --stdin-for)
+// the main file's, so a file of the program is named by its loading file's
+// directory, as rig names it (with '\' in the path it was given), then the
+// #load's path, with '/' (C:\x\src\world/map.rig).
 function nameFrom(file, other) {
     const relative = path.relative(path.dirname(file), other);
     return windows ? relative.replace(/\\/g, '/') : relative;
