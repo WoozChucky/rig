@@ -1,8 +1,11 @@
-// exit() in a #run ends the compiler there (spec 7.8), after printing
-// the errors found so far: here the syntax error in broken, which the
-// #run doesn't reach.
+// exit() in a #run ends the compiler there (spec 7.8), after printing the
+// errors found so far, sorted: f's unknown type, then the syntax error in
+// broken, which the parser found first. The #run doesn't reach broken.
+// main's body is checked after the declarations, so its error is never
+// found.
 exit :: (status: s32) #foreign libc;
+f :: (x: nosuch) { }
 broken :: () { x := ; }
 stop :: () -> int { exit(1); return 0; }
 N :: #run stop();
-main :: () { }
+main :: () { y : int = "s"; }

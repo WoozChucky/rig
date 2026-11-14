@@ -3199,14 +3199,18 @@ TEST(interpret_mode_runs_a_program_of_several_files) {
 }
 
 TEST(interpret_mode_reports_a_programs_errors) {
-    // A program that doesn't check isn't run: its diagnostics, as rig
-    // build prints them, and exit status 1.
+    // A program that doesn't check isn't run, nor are its top-level #runs
+    // (spec 7.8), so nothing is printed: its diagnostics, as rig build
+    // prints them, and exit status 1.
     Arena a = arena_make();
-    String path = interpret_test_file(&a, "broken", "main :: () { putz(\"hi\"); }\n");
+    String path = interpret_test_file(&a, "broken",
+                                      "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                      "#run puts(\"must not print\");\n"
+                                      "main :: () { putz(\"hi\"); }\n");
     Process_Result r = interpret_test_run(&a, &path, 1, false);
     CHECK_STR(r.out, "");
     CHECK_STR(r.err,
-              ".build/tests/interp/broken.rig:1:14: error: unknown identifier 'putz'\n"
+              ".build/tests/interp/broken.rig:3:14: error: unknown identifier 'putz'\n"
               "    main :: () { putz(\"hi\"); }\n"
               "                 ^\n");
     CHECK_EQ(r.exit_code, 1);

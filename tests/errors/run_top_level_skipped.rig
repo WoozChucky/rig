@@ -1,0 +1,7 @@
+// The top-level #runs run only once the whole program checks with no
+// errors (spec 7.8): here main's type error stops them, so the first prints
+// nothing, and the second, which would fail, isn't run.
+puts :: (s: *u8) -> s32 #foreign libc;
+#run puts("must not print");
+#run { a : [1]int; i := 4; a[i] = 0; }
+main :: () { y : int = "s"; }
