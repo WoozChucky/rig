@@ -2602,7 +2602,9 @@ TEST(parse_into_appends) {
 
 // Issue #115: #run (spec 7.8). As an expression it's a prefix operator; at
 // the top level, #run e; and #run { ... } are declarations of their own,
-// kept in Ast_File.runs. Every recovery rule a #load has, a #run has too.
+// kept in Ast_File.runs. A #run starting a line is where the recovery
+// resumes, as at a #load, and one in column 1 is among the column-1
+// declarations a body never closed is taken to end before.
 
 TEST(parse_run_as_a_prefix_operator) {
     // #run binds as - and ! do: it takes the operand after it, and the
@@ -2624,6 +2626,22 @@ TEST(parse_run_as_a_prefix_operator) {
     CHECK_STR(parse_src(&a, "N :: #run f();\ng : [#run f()]int;\n", &errors),
               "(const N (run (call f)))\n(var g (array (run (call f)) int))\n");
     CHECK_STR(errors, "");
+    // The prefix operator's run isn't a top-level one: it runs for its
+    // value, and has no procedure of its own.
+    Token_List *list = src("N :: #run f();\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK_EQ(file->runs.count, 0);
+    CHECK_EQ(file->globals.count, 1);
+    if (file->globals.count == 1 && file->globals[0]->kind == AST_CONST) {
+        Ast *value = ((Ast_Const *)file->globals[0])->value;
+        CHECK(value != nullptr && value->kind == AST_RUN);
+        if (value && value->kind == AST_RUN) {
+            CHECK(!((Ast_Run *)value)->is_top_level);
+            CHECK(((Ast_Run *)value)->proc == nullptr);
+        }
+    }
+    token_list_free(list);
     arena_free(&a);
 }
 
@@ -2660,6 +2678,33 @@ TEST(parse_top_level_runs) {
     }
     if (file->procs.count == 2) CHECK(file->procs[1]->body->proc == file->procs[1]);
     token_list_free(list);
+
+    // Runs and loads, two lists of their own, are merged into the dump by
+    // position: before the first declaration, between two, and after the
+    // last, a run before a load and a load before a run alike.
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "#run a();\n#load \"x.rig\";\n#run b();\nmain :: () {}\n"
+                        "#load \"y.rig\";\n#run c();\n#load \"z.rig\";\n#run d();\n",
+                        &errors),
+              "(run (call a))\n(load \"x.rig\")\n(run (call b))\n(proc main (params) (block))\n"
+              "(load \"y.rig\")\n(run (call c))\n(load \"z.rig\")\n(run (call d))\n");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(parse_run_at_the_top_level_broken) {
+    // A top-level #run that fails is a broken entry with no name, as a
+    // failed #load is, and the recovery goes on after it.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "#run f()\nmain :: () {}\n", &errors), "(broken)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "2:1: expected ';', found identifier 'main'\n");
+    CHECK_STR(parse_src(&a, "#run {\n    g();\n", &errors), "(broken)\n");
+    CHECK_STR(errors, "3:1: expected '}', found end of file\n");
+    // Read as a stray '#' before a name, `#run ::` keeps the name run.
+    CHECK_STR(parse_src(&a, "#run :: () {}\n", &errors), "(broken run)\n");
+    CHECK_STR(errors, "1:6: expected an expression, found '::'\n");
     arena_free(&a);
 }
 
@@ -2669,6 +2714,10 @@ TEST(parse_run_block_only_at_the_top_level) {
     String errors;
     CHECK_STR(parse_src(&a, "main :: () { x := #run { }; }", &errors), "(broken main)\n");
     CHECK_STR(errors, "1:24: expected an expression, found '{'\n");
+    // As a statement, indented, it doesn't end the body as a #run { in
+    // column 1 would.
+    CHECK_STR(parse_src(&a, "main :: () {\n    #run { g(); }\n}\n", &errors), "(broken main)\n");
+    CHECK_STR(errors, "2:10: expected an expression, found '{'\n");
     arena_free(&a);
 }
 
@@ -2743,5 +2792,14 @@ TEST(parse_run_after_a_body_never_closed) {
     CHECK_STR(parse_src(&a, "S :: struct {\n    x: int;\n    #run g();\n}\nmain :: () {}\n", &errors),
               "(broken S)\n(proc main (params) (block))\n");
     CHECK_STR(errors, "3:5: expected a field's name, found directive\n");
+
+    // After an error in a body, the skipping passes over a #run g(); in
+    // column 1, a statement of the body given up, and resumes after the
+    // body closes; but stops at a #run { in column 1, which ends the body.
+    CHECK_STR(parse_src(&a, "main :: () {\n    x := ;\n#run g();\n}\nh :: () { y := ; }", &errors),
+              "(broken main)\n(broken h)\n");
+    CHECK_STR(errors, "2:10: expected an expression, found ';'\n5:16: expected an expression, found ';'\n");
+    CHECK_STR(parse_src(&a, "main :: () {\n    x := ;\n#run {\n    y := ;\n}", &errors), "(broken main)\n(broken)\n");
+    CHECK_STR(errors, "2:10: expected an expression, found ';'\n4:10: expected an expression, found ';'\n");
     arena_free(&a);
 }

@@ -203,8 +203,9 @@
 // parsed as an expression statement (the checker says it must be a
 // value). Unlike a #load, a #run is never misplaced: it's a value
 // wherever a value goes, and anywhere else, where a ';', a ')', a type or
-// a field's name is expected, the error is the usual one, "expected ';',
-// found directive". The recovery treats it as it treats a #load (below):
+// a field's name is expected, the error is the usual one for what was
+// expected ("expected ';', found directive", "expected a type, found
+// directive"). The recovery treats it as it treats a #load (below):
 // it resumes at a #run that starts a line outside any braces; a #run in
 // column 1 is among the column-1 declarations a body never closed is taken
 // to end before; a #run { in column 1 ends a body as a procedure's
