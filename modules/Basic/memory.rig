@@ -38,6 +38,8 @@ copy_memory :: (destination: *void, source: *void, count: int) {
 set_memory :: (destination: *void, value: u8, count: int) {
     if count <= 0 { return; }
     to := cast(*u8) destination;
+    // tests/run/basic_table_overflow.err names this line and column, the
+    // [, where null memory stops the program.
     for i: 0..count - 1 { to[i] = value; }
 }
 

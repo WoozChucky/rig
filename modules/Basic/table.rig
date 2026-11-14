@@ -40,8 +40,8 @@ TABLE_REMOVED :: 2;
 // each byte is mixed in with an exclusive or and spread over the hash's
 // bits with a multiply by the FNV prime, which wraps. It is short, needs no
 // tables, and keys that differ in one byte, such as "key1" and "key2", get
-// hashes far apart. A count of 0 or less hashes no bytes, and gives the
-// offset basis.
+// different low bits, so their probes start at different entries. A count
+// of 0 or less hashes no bytes, and gives the offset basis.
 hash_bytes :: (data: *u8, count: int) -> u64 {
     hash : u64 = 14695981039346656037; // the offset basis, 0xcbf29ce484222325
     if count <= 0 { return hash; }
@@ -248,7 +248,9 @@ table_init :: (table: *Table, value_size: int, allocator: Allocator) {
 
 // Sets key's value to a copy of the value_size bytes at value, or to zeroed
 // bytes when value is null, and returns the value's address in the table,
-// valid until the table next grows. A key that isn't there yet is added:
+// valid until the table's next set or free: a set may rehash the table,
+// which moves every value even when the capacity stays the same, and a
+// remove moves none. A key that isn't there yet is added:
 // the table keeps a copy of it, in memory from its allocator, so the bytes
 // key views may change or go once the set is done. A new key takes the
 // first removed entry its probe passed, if any, and an empty one if not.
@@ -290,9 +292,9 @@ table_set :: (table: *Table, key: string, value: *void) -> *void {
     return to;
 }
 
-// The address of key's value in the table, valid until the table next
-// grows, or null when key isn't there. A table with no entries, before its
-// first set or after table_free, has no keys.
+// The address of key's value in the table, valid until the table's next
+// set or free, or null when key isn't there. A table with no entries,
+// before its first set or after table_free, has no keys.
 table_find :: (table: Table, key: string) -> *void {
     wanted := key;
     found, slot := table_probe(table.entries, table.capacity, table.entry_size, hash_string(key), *wanted, table_same_key);
@@ -321,11 +323,13 @@ table_remove :: (table: *Table, key: string) -> bool {
 // Entry index of the table, for going over every key and value: whether it
 // holds a key, the key and the value's address. One that holds none gives
 // false, the zeroed string and null. index must be from 0 to the capacity
-// less one, or the program stops, so a table with no entries has none to
-// give.
+// less one, or the program stops with the language's own bounds check,
+// through check_index, so a table with no entries has none to give. Built
+// with --no-bounds-checks, nothing is checked.
 //
 // The key is the table's own copy, valid until it is removed or the table
-// freed, and the value's address is valid until the table next grows.
+// freed, and the value's address is valid until the table's next set or
+// free.
 table_entry :: (table: Table, index: int) -> bool, string, *void {
     check_index(index, table.capacity);
     entry := cast(*Table_Entry) (table.entries + index * table.entry_size);

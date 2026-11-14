@@ -37,9 +37,9 @@ check_index :: (index: int, count: int) {
     bounds.count = count;
     // tests/run/basic_array_bounds.err, basic_array_pop_empty.err,
     // basic_array_insert_past_end.err, basic_array_insert_negative.err,
-    // basic_array_remove_ordered_empty.err,
-    // basic_array_remove_unordered_past_end.err and
-    // basic_array_get_no_bytes.err name this line and column, the [.
+    // basic_array_remove_ordered_empty.err, basic_array_get_no_bytes.err,
+    // basic_array_remove_unordered_past_end.err, basic_table_entry_bounds.err
+    // and basic_int_table_entry_empty.err name this line and column, the [.
     element := *bounds[index];
 }
 
