@@ -2,7 +2,7 @@
     "name": "rig-language",
     "displayName": "Rig",
     "description": "The Rig programming language: syntax highlighting, snippets, errors as you type, build and run commands, debugging",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "publisher": "woozchucky",
     "license": "MIT",
     "homepage": "https://woozchucky.github.io/rig/",

@@ -24,9 +24,10 @@
 //   lowering lowers every body a run reaches before the run), fails: "call
 //   of an address that isn't a procedure".
 //
-// C is called for real. A foreign procedure is found by its name the first
-// time it's needed (called, its value taken, a global's relocation
-// written), and its value is that native address:
+// C is called for real. A foreign procedure is found by its C name (the
+// one #foreign libc "free" gives, or else its own) the first time it's
+// needed (called, its value taken, a global's relocation written), and its
+// value is that native address:
 // - on Windows, a standard C function is the compiler's own copy
 //   (interp_c_library_function): the compiler's C runtime is linked in
 //   statically, and compile-time printf must write into its stdout buffer,

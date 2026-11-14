@@ -133,6 +133,10 @@ static void dump(Array<u8> *buffer, Ast *node) {
         if (proc->is_foreign) {
             out(buffer, " (foreign ");
             out(buffer, proc->foreign_library);
+            if (proc->has_c_name) {
+                out(buffer, " ");
+                out_quoted(buffer, proc->c_name);
+            }
             out(buffer, ")");
         }
         if (proc->body) {

@@ -13,8 +13,9 @@
 //               | '#load' STRING ';'                                another file of the program
 //               | run                                               code run while compiling
 //   run         = '#run' block | '#run' expression ';'
-//   procedure   ='(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
-//                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT ';')
+//   procedure   = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
+//                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';')
+//                                                                  (the STRING: the C function's name)
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
 //   param       = IDENT ':' type
 //   type        = '*' type | '[' expression ']' type | '[' ']' type | proc_type | IDENT
