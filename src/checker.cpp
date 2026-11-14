@@ -352,15 +352,32 @@ static bool is_known(Ast *e) {
     return e->is_constant || procedure_address(e) || literal_address(e) || constant_data(e, &data);
 }
 
+// Whether e is a field or an element of constant data whose literal gave
+// the part it's taken of a value of the wrong type, as Line.{a = 5}.a.x's
+// gave its a: reported where the value didn't convert, and so no data
+// (constant_data).
+static bool part_of_mistyped(Ast *e) {
+    Ast *operand = nullptr;
+    if (e->kind == AST_MEMBER && ((Ast_Member *)e)->index >= 0) operand = ((Ast_Member *)e)->operand;
+    if (e->kind == AST_INDEX && ((Ast_Index *)e)->index->is_constant) operand = ((Ast_Index *)e)->operand;
+    Type *t = operand ? operand->type : nullptr;
+    if (!t || (t->kind != TYPE_STRUCT && t->kind != TYPE_ARRAY)) return false;
+    Ast *whole;
+    if (!constant_data(operand, &whole) || !whole) return false;
+    return whole->kind != AST_LITERAL || whole->type != t;
+}
+
 // The first value inside e, which isn't known while compiling, that isn't
 // either: through a cast, a field's struct, an element's array or string,
 // and a literal's values, to the first that isn't (spec 4.2), so in
 // cast(Holder) Holder.{n = count} or int.[1, count][0] it's count. e
 // itself when none of them is: what it's made of is known, but not it.
-// Null for a value with no type, whose own error was reported.
+// Null for a value with no type, whose own error was reported, and for a
+// field or an element of a part a literal gave the wrong type, reported
+// too (part_of_mistyped).
 static Ast *unknown_part(Ast *e) {
     for (;;) {
-        if (!e->type) return nullptr;
+        if (!e->type || part_of_mistyped(e)) return nullptr;
         Ast *inner = nullptr;
         if (e->kind == AST_CAST) inner = ((Ast_Cast *)e)->value;
         if (e->kind == AST_MEMBER) inner = ((Ast_Member *)e)->operand;

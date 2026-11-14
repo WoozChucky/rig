@@ -515,7 +515,8 @@ Ast_String *literal_address(Ast *e);
 // - a string literal;
 // - a struct or array literal whose every value is is_constant, a procedure
 //   (procedure_address), a string literal's address (literal_address) or
-//   constant data;
+//   constant data, found the first time it's asked and kept
+//   (Ast_Literal.is_data);
 // - the name of a constant with is_data (its `data`);
 // - a field of constant data (a struct's, not reached through a pointer),
 //   or an element of it (an array's) at an is_constant index;
