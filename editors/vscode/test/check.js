@@ -1679,10 +1679,12 @@ check('a build whose compiler Node can\'t start says so and fails', async () => 
 //
 // A document that doesn't declare main is checked as part of the program
 // that loads it: rig.main's, else that of the first file of its folder, in
-// path order, that declares main and whose program loads it. The document
-// is helper.rig, with the text `putz();` and not on disk (loaded); the .rig
-// files a check names are written to disk, since that's where the
-// extension and rig read them.
+// path order, that declares main and whose program loads it. Most checks'
+// document is helper.rig, with the text `putz();` (`putz(); // slow` where
+// the stand-in is to answer slowly), and not on disk (loaded); those whose
+// document is another file, has another text or is on disk say so. The
+// other .rig files a check names are written to disk, since that's where
+// the extension and rig read them.
 
 // Fires `event` (with `doc`, unless `value` is given) and waits for the
 // document's check to set its diagnostics: what calls(dir) gained meanwhile,
@@ -2282,12 +2284,10 @@ check('a document\'s program is remembered until a .rig file in its folder is cr
 check('saving a rig.main in no folder forgets the programs and re-checks the documents', async () => {
     loadExtension();
     const live = activated.collections.rig;
-    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-vscode-check-'));
-    try {
+    // With the stand-in for the check of the saved file, which runs in its
+    // directory.
+    await withOtherDir(async (outside) => {
         await withStandIn(async (dir) => {
-            // The stand-in for the check of the saved file, which runs in
-            // its directory.
-            fs.writeFileSync(path.join(outside, 'check.js'), STAND_IN);
             const file = path.join(dir, 'helper.rig');
             const doc = fakeDocument(file, 'putz();\n');
             stub.document = doc;
@@ -2309,9 +2309,7 @@ check('saving a rig.main in no folder forgets the programs and re-checks the doc
             assert.deepStrictEqual((await checked(dir, doc, 'change', change)).calls, [through], 'remembered again');
             assert.deepStrictEqual(stub.errors, []);
         });
-    } finally {
-        fs.rmSync(outside, { recursive: true, force: true });
-    }
+    });
 });
 
 // Saving a file may change the program of every open document of its
@@ -2661,7 +2659,6 @@ check('a rig too old for --stdin-for is said once, and the file is checked alone
         }
         const message = 'Rig: this rig is too old to check a loaded file as part of its program; update it.';
         assert.deepStrictEqual(stub.errors, [message]);
-        assert.match(stub.errors[0], /too old to check a loaded file/);
         await until('the button\'s command', () => stub.commands.length > 0);
         assert.deepStrictEqual(stub.commands, [['workbench.action.openSettings', 'rig.compilerPath']]);
 

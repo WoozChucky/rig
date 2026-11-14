@@ -394,9 +394,9 @@ static bool interp_call_c(Interp *in, void *target, Ir_Type result, u64 *out) {
 // the backend makes them: each allocated first, then the relocations
 // written, since one may name any global, a later one too. Every global is
 // writable here, a string literal's and a data constant's too, which the
-// compiled program keeps read-only. False, with nothing mapped, when a relocation can't be
-// written, as it names a C function that is nowhere: its message in *error,
-// in `a`.
+// compiled program keeps read-only. False, with nothing mapped, when a
+// relocation can't be written, as it names a C function that is nowhere:
+// its message in *error, in `a`.
 static bool interp_map_globals(Interp *in, Arena *a, String *error) {
     Ir_Module *m = in->module;
     s64 first = in->globals.count;
