@@ -893,10 +893,11 @@ static void lay_out(Checker *c, Ast_Struct *s, s32 base) {
 }
 
 // Whether the circle that `decl` closes (decl and every declaration needed
-// since, to the end of c->resolving) runs through a global, a constant or a
-// late field's type: a struct's size then depends on itself through a
-// value (S :: struct { a: [g.count]int; } g : [2]S;), not by holding a copy
-// of itself.
+// since, to the end of c->resolving) runs through anything but a struct's
+// layout (a global, a constant, a late field's type, a signature, or a body
+// a #run reaches): a struct's size then depends on itself through a value
+// (S :: struct { a: [g.count]int; } g : [2]S;), not by holding a copy of
+// itself.
 static bool circle_through_a_value(Checker *c, Ast *decl) {
     s64 i = c->resolving.count - 1;
     while (c->resolving[i] != decl) i--;
@@ -909,13 +910,15 @@ static bool circle_through_a_value(Checker *c, Ast *decl) {
 // A struct's layout, worked out the first time it's needed; its type, or
 // null when it contains itself: "'Node' contains itself; it can hold a
 // pointer to itself, *Node", once per circle, at the struct whose layout
-// was under way when the circle closed. When the circle runs through a
-// global, a constant or a field's type (circle_through_a_value), the struct
-// doesn't hold itself, its size depends on itself: "'S' is defined in terms
-// of itself", as for a global. Every struct in the circle then has no type
-// (Ast_Struct.declared is null), so nothing more is said about it or its
-// uses checked after; a struct that only holds one in a circle isn't in
-// it, and keeps its type, the field that holds it having none. A global or
+// was under way when the circle closed. When the circle runs through
+// anything but a struct's layout (a global, a constant, a late field's
+// type, a signature, or a body a #run reaches: circle_through_a_value),
+// the struct doesn't hold itself, its size depends on itself: "'S' is
+// defined in terms of itself", as for a global. Every struct in the circle
+// then has no type (Ast_Struct.declared is null), so nothing more is said
+// about it or its uses checked after; a struct that only holds one in a
+// circle isn't in it, and keeps its type, the field that holds it having
+// none. A global or
 // a signature before it in source order may have taken it behind a
 // pointer already (*Node), and what its value says, true of the pointer
 // whatever the struct, stays said (`h : int = g;` with g a *Node); its
@@ -996,6 +999,25 @@ bool check_layout(Checker *c, Type *t) {
     if (!s) return true;
     if (s->resolve == RESOLVE_NOT_YET) resolve_struct(c, s);
     return s->resolve != RESOLVE_NOT_YET && s->declared == t;
+}
+
+// check_layout takes a struct under way as it is, its fields so far: a
+// count may need a field laid out before it (`b: [g.*.a.count]int;`). A
+// #run's code can't: it would be lowered with the struct's size not known
+// yet, and only some of its fields. Its circle runs through the #run's code,
+// a value, so it's said as one through a value is (resolve_struct), though
+// the bodies the walk checked are done, off c->resolving, by the time it
+// meets the struct.
+bool check_finished_layout(Checker *c, Type *t) {
+    Ast_Struct *s = t->decl;
+    if (s && (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE)) {
+        if (s->resolve == RESOLVE_UNDER_WAY) {
+            diag_error(c->diag, s->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(s->name));
+        }
+        mark_circle(c, s);
+        return false;
+    }
+    return check_layout(c, t);
 }
 
 void check_late_field(Checker *c, Type *t, s32 index) {
@@ -1547,10 +1569,12 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 // needed, as a global is (resolve_global): a level below what needs it
 // (open_declaration), since a chain of bodies each running the next (f1's
 // running f2, f2's f3, ...) recurses on the stack, a body inside the one
-// before. Its own levels aren't counted: a body's expressions are bounded
-// by the parser, and a global one needs starts from where the body does,
-// as in a body checked in its own turn. A body that is too deep there is
-// said once, left to its own turn, and its #run says nothing more.
+// before, each through its own blocks and expressions to the #run that
+// reaches the next. So its own levels count too, as a global's do: its
+// blocks and the expressions in them together (Ast_Proc.body_levels, from
+// the parser), and what it needs, a global or another body, starts a level
+// below its deepest. A body that is too deep there is said once, left to
+// its own turn, and its #run says nothing more.
 //
 // A body found under way is a circle (spec 4.8 and 7.8): the #run needs
 // the code of a body that isn't all checked yet, its own or one that needs
@@ -1570,7 +1594,7 @@ bool check_reached_body(Checker *c, Ast_Proc *proc, Position at) {
     }
     if (proc->body_resolve == RESOLVE_NOT_YET) {
         s32 outer;
-        if (!open_declaration(c, proc, proc->name, 0, &outer)) return false;
+        if (!open_declaration(c, proc, proc->name, proc->body_levels, &outer)) return false;
         check_body(c, proc);
         c->levels = outer;
     }

@@ -22,6 +22,8 @@ struct Parser {
     s32 type_levels;            // the type levels (*, [], [N] and a procedure type's '(') open around
                                 // the next token
     s32 deepest;                // the most levels reached since take_deepest last restarted it
+    s32 body_deepest;           // the most levels reached in the body being read, the blocks open
+                                // around each counted too (reach_in_body)
     // After a body or a struct's braces found never closed: the token where
     // the top level resumes (parse_block_rest, parse_struct), or -1.
     s64 resume;
@@ -76,7 +78,11 @@ struct Parser {
 // is worked out inside it, a level below all of them (checker.cpp's
 // open_declaration). A struct's fields and a procedure's parameters and
 // results are worked out one at a time, so each type keeps its own
-// (parse_whole_type).
+// (parse_whole_type). A body is worked out inside a #run that reaches it
+// (checker.cpp's check_reached_body), so its levels are kept too
+// (Ast_Proc.body_levels): the most its blocks and the expressions and types
+// in them reach together (p->body_deepest), as the stages recurse through
+// both.
 
 static Token *peek(Parser *p, s64 ahead = 0) {
     s64 i = p->next + ahead;
@@ -162,13 +168,26 @@ static s32 open_levels(Parser *p) {
     return p->levels + p->type_levels;
 }
 
+// A body's text reaches `levels` levels, its blocks and the expression or
+// type there together: kept in p->body_deepest if it's the most so far,
+// counted as MAX_DEPTH at most. Blocks and expressions each have a limit of
+// their own, so the two together may reach twice it, which the stack still
+// holds (the limit's comment above): such a body is worked out only where
+// nothing is around it, at level 0, and nothing is worked out inside it.
+static void reach_in_body(Parser *p, s32 levels) {
+    if (levels > MAX_DEPTH) levels = MAX_DEPTH;
+    if (levels > p->body_deepest) p->body_deepest = levels;
+}
+
 // The text read reaches `levels` levels: kept in p->deepest if it's the
-// most so far. A name read a level down by size_of or a cast
-// (parse_type_below) is at that level, which the limit doesn't check, so
-// it's counted as MAX_DEPTH at most: a struct it names is then too deep to
-// work out there, and that's the checker's to say.
+// most so far, and in p->body_deepest with the blocks open around it. A
+// name read a level down by size_of or a cast (parse_type_below) is at that
+// level, which the limit doesn't check, so it's counted as MAX_DEPTH at
+// most: a struct it names is then too deep to work out there, and that's
+// the checker's to say.
 static void reach(Parser *p, s32 levels) {
     if (levels > p->deepest) p->deepest = levels;
+    reach_in_body(p, p->blocks + levels);
 }
 
 // The most levels reached since the last call (0 at the start): a
@@ -1101,6 +1120,7 @@ static Ast_Block *parse_block(Parser *p) {
         return nullptr;
     }
     p->blocks++;
+    reach_in_body(p, p->blocks);
     Ast_Block *block = parse_block_rest(p, open);
     p->blocks--;
     return block;
@@ -1405,9 +1425,11 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
         proc->library_pos = library->pos;
         return proc;
     }
+    p->body_deepest = 0;
     proc->body = parse_block(p);
     if (!proc->body) return nullptr;
     proc->body->proc = proc;
+    proc->body_levels = p->body_deepest;
     return proc;
 }
 
@@ -1542,9 +1564,11 @@ static Ast *parse_run(Parser *p) {
     if (peek(p)->kind == TOKEN_LBRACE) {
         Ast_Proc *proc = ast_new<Ast_Proc>(p->arena, AST_PROC, directive->pos);
         proc->name = str("#run");
+        p->body_deepest = 0;
         proc->body = parse_block(p);
         if (!proc->body) return nullptr;
         proc->body->proc = proc;
+        proc->body_levels = p->body_deepest;
         run->proc = proc;
         return run;
     }
@@ -1911,7 +1935,7 @@ static Ast_Proc *broken_entry(Parser *p, s64 start) {
 
 void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
-    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, 0, -1, 0, false};
+    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, 0, 0, -1, 0, false};
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;
         p.declaration = start;

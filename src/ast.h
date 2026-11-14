@@ -165,6 +165,10 @@ struct Ast_Proc : Ast {
                                 // reaches it (checker.cpp's check_body); `resolve` is the signature's
     bool had_errors;            // its signature's check or its body's reported an error: a #run reaching
                                 // it doesn't run
+    s32 body_levels;            // the deepest levels of its body, its blocks and the expressions and
+                                // types in them together (MAX_DEPTH, counted as that at most): checked
+                                // where a #run reaches it, what it needs starts a level below
+                                // (checker.cpp's check_reached_body)
 };
 
 // A variable: `x : T = e;`, `x := e;` (its type is e's), `x : T;` (zeroed)

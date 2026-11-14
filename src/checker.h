@@ -9,7 +9,8 @@
 // and layout, Ast_Struct.declared), so the stages after it never look
 // anything up again.
 // checker.cpp checks declarations and statements, check_expr.cpp
-// expressions; check.h is what they share.
+// expressions, check_run.cpp #run and what it reaches; check.h is what
+// they share.
 //
 // The rules (spec 6.1, 6.4 and 6.5, which record the calls made here):
 //
@@ -483,10 +484,13 @@
 //   one whose value the body needs, through a constant say) is a circle,
 //   "'f' is defined in terms of itself", at the #run, as a global's is
 //   (spec 4.8): the bodies in it have errors, and the globals in it no
-//   type. Bodies checked inside one another nest as declarations do (at
-//   most MAX_DEPTH levels deep, open_declaration): the one too many is
-//   "'f' is nested too deeply in the declarations that need it (more than
-//   1000 levels)", at its name, and is checked in its own turn.
+//   type. So is a struct a #run in one of its counts reaches, by value,
+//   while its layout is under way: "'S' is defined in terms of itself", at
+//   the struct. Bodies checked inside one another nest as declarations do (at
+//   most MAX_DEPTH levels deep, open_declaration), a body's own levels its
+//   blocks and the expressions in them together: the one too many is "'f'
+//   is nested too deeply in the declarations that need it (more than 1000
+//   levels)", at its name, and is checked in its own turn.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
