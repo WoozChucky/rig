@@ -6,12 +6,13 @@
 #
 # It does what the website's Install page does by hand
 # (https://woozchucky.github.io/rig/install): downloads a release's
-# rig-linux-x64.tar.gz and SHA256SUMS, checks the archive's SHA-256, unpacks
-# it into ~/.local/share/rig and links ~/.local/bin/rig to it. Then it puts ~/.local/bin on the PATH if it isn't
-# there yet, installs the VS Code extension when `code` is on the PATH, and
-# builds hello world with the installed rig to check that the system has
-# what linking needs. Running it again upgrades: the files are overwritten.
-# `--help` lists the options. It asks nothing, and needs no root or sudo.
+# rig-linux-x64.tar.gz and SHA256SUMS, checks the archive's SHA-256, unpacks it
+# into ~/.local/share/rig and links ~/.local/bin/rig to it. Then it puts
+# ~/.local/bin on the PATH if it isn't there yet, installs the VS Code
+# extension when `code` is on the PATH, and builds hello world with the
+# installed rig to check that the system has what linking needs. Running it
+# again upgrades: the files are overwritten. `--help` lists the options. It
+# asks nothing, and needs no root or sudo.
 #
 # RIG_INSTALL_BASE_URL, if set, replaces the releases' URL (release_base
 # below), for tests: a release's files are then fetched from
