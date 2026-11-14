@@ -354,13 +354,16 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr, bool debug) {
 // A variable of bytes: its size and alignment, then `zero` when its bytes
 // are all zeros, or else its `size` bytes (the ones it was given, then
 // zeros), and where each address goes (a global's, or a procedure's),
-// which the linker writes over the bytes there:
+// which the linker writes over the bytes there. A data constant's bytes
+// print the same, as `const`, since the program never writes them:
 //   global @origin: 16 align 8 = zero
 //   global @greeting: 16 align 8 = "\02\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00" reloc 8 @str.0
 //   global @op: 8 align 8 = zero reloc 0 @add
+//   const @const.0: 16 align 8 = "\02\00\00\00\00\00\00\00\00\00\00\00\00\00\00\00" reloc 8 @str.0
 static void out_byte_global(Printer *p, Ir_Module *m, Ir_Global *g) {
     RIG_ASSERT(g->bytes.count <= g->size);
-    out(p, "global @" STR_FMT ": %lld align %u = ", STR_ARG(g->name), (long long)g->size, g->align);
+    out(p, "%s @" STR_FMT ": %lld align %u = ", g->is_read_only ? "const" : "global", STR_ARG(g->name),
+        (long long)g->size, g->align);
     bool all_zero = true;
     for (s64 i = 0; i < g->bytes.count && all_zero; i++) all_zero = g->bytes.data[i] == 0;
     if (all_zero) {
@@ -431,7 +434,7 @@ static String print_module(Arena *a, Ir_Module *m, bool debug) {
     }
     for (s64 i = 0; i < m->globals.count; i++) {
         Ir_Global *g = &m->globals[i];
-        if (g->type == IR_VOID && g->is_variable) {
+        if (g->type == IR_VOID && g->has_layout) {
             out_byte_global(&p, m, g);
         } else if (g->type == IR_VOID) {
             // A string literal's constant bytes.

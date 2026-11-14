@@ -661,6 +661,26 @@ TEST(ir_prints_byte_globals) {
     arena_free(&a);
 }
 
+TEST(ir_prints_read_only_globals) {
+    // A data constant's bytes print as a variable of bytes does, but as
+    // `const`: the program never writes them. Here @const.0 is 24 bytes, as
+    // @table is above: a count (3), the address of @str.0, and 8 zeros.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    s32 text = add_string(m, "str.0", "abc");
+    s32 constant = add_read_only_global(m, "const.0", 24, 8);
+    u8 *bytes = (u8 *)arena_alloc(&a, 24, 1);  // zeroed
+    bytes[0] = 3;
+    m->globals[constant].bytes = {bytes, 24};
+    array_add(&m->globals[constant].relocs, {8, text, false});
+    CHECK_STR(ir_print(&a, m),
+              "global @str.0 = \"abc\\00\"\n"
+              "const @const.0: 24 align 8 = "
+              "\"\\03\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\""
+              " reloc 8 @str.0\n");
+    arena_free(&a);
+}
+
 TEST(ir_knows_when_a_block_has_ended) {
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);

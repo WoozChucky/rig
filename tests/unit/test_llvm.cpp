@@ -1676,6 +1676,36 @@ TEST(llvm_globals_have_debug_info) {
     arena_free(&a);
 }
 
+TEST(llvm_read_only_global) {
+    // A data constant's bytes are an LLVM constant, laid out as a variable
+    // of bytes is (a packed struct around each address, or an array of
+    // bytes), private and aligned as the IR says. Unlike a string literal's
+    // bytes it isn't unnamed_addr, and, as the compiler makes it, it has no
+    // debug information, though the module has some.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, "main :: () { }\n");
+    s32 text = add_string(m, "str.0", "abc");
+    s32 constant = add_read_only_global(m, "const.0", 24, 8);
+    u8 *bytes = (u8 *)arena_alloc(&a, 24, 1);  // zeroed
+    bytes[0] = 3;
+    m->globals[constant].bytes = {bytes, 24};
+    array_add(&m->globals[constant].relocs, {8, text, false});
+    add_read_only_global(m, "zeros", 16, 8);
+    for (int t = 0; t < 2; t++) {
+        String llvm = llvm_text(&a, m, (Target)t);
+        CHECK(contains(llvm, "!DICompileUnit("));
+        String table = line_with(llvm, "@const.0 = ");
+        CHECK(contains(table, "@const.0 = private constant <{ [8 x i8], ptr, [8 x i8] }> "
+                              "<{ [8 x i8] c\"\\03\\00\\00\\00\\00\\00\\00\\00\", ptr @str.0, "
+                              "[8 x i8] zeroinitializer }>, align 8"));
+        String zeros = line_with(llvm, "@zeros = ");
+        CHECK(contains(zeros, "@zeros = private constant [16 x i8] zeroinitializer, align 8"));
+        CHECK(!contains(table, "unnamed_addr") && !contains(table, "!dbg"));
+        CHECK(!contains(zeros, "unnamed_addr") && !contains(zeros, "!dbg"));
+    }
+    arena_free(&a);
+}
+
 // Issue #112: a program of several files has a DIFile for each, with its
 // own checksum, in the directory rig ran in, and each node that names a
 // file names the one its declaration is in: a procedure's subprogram, its

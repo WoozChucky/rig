@@ -2135,7 +2135,7 @@ static s32 add_global_array(Lowering *l, Type *array, Ast *literal) {
     Ir_Global g = {};
     g.name = string_printf(l->arena, "array.%d", l->array_count++);
     g.type = IR_VOID;
-    g.is_variable = true;
+    g.has_layout = true;
     g.size = array->size;
     g.align = (u32)array->align;
     global_value(l, &g, array, literal);
@@ -2441,7 +2441,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         bool address = var->value && (literal_address(var->value) || procedure_address(var->value));
         if (type_is_aggregate(var->type) || address) {
             g.type = IR_VOID;
-            g.is_variable = true;
+            g.has_layout = true;
             g.size = var->type->size;
             g.align = (u32)var->type->align;
             if (var->value) global_value(&l, &g, var->type, var->value);

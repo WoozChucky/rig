@@ -309,11 +309,19 @@ static s32 add_byte_global(Ir_Module *m, const char *name, s64 size, u32 align) 
     Ir_Global g = {};
     g.name = str(name);
     g.type = IR_VOID;
-    g.is_variable = true;
+    g.has_layout = true;
     g.size = size;
     g.align = align;
     array_add(&m->globals, g);
     return (s32)(m->globals.count - 1);
+}
+
+// A read-only global of `size` bytes aligned to `align`, all zero, with no
+// relocations, as lowering makes a data constant's; its index.
+static s32 add_read_only_global(Ir_Module *m, const char *name, s64 size, u32 align) {
+    s32 g = add_byte_global(m, name, size, align);
+    m->globals[g].is_read_only = true;
+    return g;
 }
 
 // A procedure returning one value of type `result`, or nothing (IR_VOID).
