@@ -271,14 +271,15 @@ Ast_String *literal_address(Ast *e) {
     }
 }
 
-// Whether string e is a string literal's bytes, with the zero after them, so
-// it converts to a *u8 and passes C's '...' as the literal does (spec 3.8):
-// the literal itself, or constant data holding it (literal_address), as
-// NAME for NAME :: "rig"; or a string field of a constant. A cast isn't,
-// cast(string) "hi" included: only the literal as it's written, or
-// constant data holding it, converts.
-static bool is_literal_string(Ast *e) {
+bool is_literal_string(Ast *e) {
     return e->type == &type_string && e->kind != AST_CAST && literal_address(e);
+}
+
+// Whether a cast from `from` to `to` is between string and []u8, either
+// way: the same view, retyped (spec 3.14), the same bytes.
+static bool is_bytes_retyped(Type *from, Type *to) {
+    Type *bytes = type_view_of(type_from_name(str("u8")));
+    return (from == &type_string && to == bytes) || (from == bytes && to == &type_string);
 }
 
 Ast *literal_field_value(Ast_Literal *literal, Type *t, s32 field) {
@@ -375,9 +376,7 @@ bool constant_data(Ast *e, Ast **value) {
         // the same bytes: the value is the same. Any other cast makes
         // another value, a pointer or a view of it.
         Ast *from = ((Ast_Cast *)e)->value;
-        Type *bytes = type_view_of(type_from_name(str("u8")));
-        bool same = from->type == t || (from->type == &type_string && t == bytes) ||
-                    (from->type == bytes && t == &type_string);
+        bool same = from->type == t || is_bytes_retyped(from->type, t);
         return same && constant_data(from, value);
     }
     default: return false;
@@ -1501,7 +1500,7 @@ static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to
 //   check_pointer_cast.
 // - A procedure value to or from *void: check_proc_cast.
 // - A string to a []u8 and a []u8 to a string: the same view, retyped
-//   (spec 3.14), the same bytes.
+//   (spec 3.14), the same bytes (is_bytes_retyped).
 // - Anything else casts only where it converts implicitly: to its own
 //   type, null to a pointer, an array to a view of it, or a string literal,
 //   or constant data holding one (is_literal_string, spec 3.8), to *u8.
@@ -1546,8 +1545,7 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
                    STR_ARG(type_name(c->arena, from)));
         return nullptr;
     }
-    Type *bytes = type_view_of(type_from_name(str("u8")));
-    if ((from == &type_string && to == bytes) || (from == bytes && to == &type_string)) return to;
+    if (is_bytes_retyped(from, to)) return to;
     bool bool_to_integer = from == &type_bool && to->kind == TYPE_INTEGER;
     if (!bool_to_integer && !check_convert(c, value, to)) {
         diag_error(c->diag, cast->pos, "can't cast '" STR_FMT "' to '" STR_FMT "'" STR_FMT,
@@ -1732,6 +1730,24 @@ static Type *check_deref(Checker *c, Ast_Deref *deref) {
     return t->pointee;
 }
 
+// Gives `part`, a field (check_member) or an element (check_index), its type
+// t, and folds it when it's a part of constant data that is a number, a
+// bool or null (spec 5.9): the value its literal gives, or zero when a
+// literal leaves it out (constant_data, which also tells that only a
+// struct's field and an array's element can be: one reached through a
+// pointer, or a view's, never is). The type is set here, though
+// check_expression sets it once the check returns, since constant_data
+// reads it. An aggregate part, or a pointer to a string literal's bytes or a
+// procedure, doesn't fold: it stays a part of the data.
+static void fold_constant_part(Ast *part, Type *t) {
+    part->type = t;
+    Ast *value;
+    if (t && !type_is_aggregate(t) && constant_data(part, &value)) {
+        part->is_constant = !value || value->is_constant;
+        part->constant = value ? value->constant : 0;
+    }
+}
+
 // a[i] (spec 5.11): element i of array, view or string a (a string's, a
 // u8), or the T i T's on from where pointer a points (C's a[i], p.* moved by
 // i, unchecked). i is any integer, read by its own sign; an untyped one
@@ -1807,14 +1823,7 @@ static Type *check_index(Checker *c, Ast_Index *ix) {
         ix->constant = ((Ast_String *)bytes)->value.data[i->constant];
         return element;
     }
-    // constant_data reads the element's own type, which check_expression
-    // sets only once this returns.
-    ix->type = element;
-    Ast *value;
-    if (t->kind == TYPE_ARRAY && !type_is_aggregate(element) && constant_data(ix, &value)) {
-        ix->is_constant = !value || value->is_constant;
-        ix->constant = value ? value->constant : 0;
-    }
+    fold_constant_part(ix, element);
     return element;
 }
 
@@ -1912,14 +1921,7 @@ static Type *check_member(Checker *c, Ast_Member *m) {
     }
     check_late_field(c, s, m->index);
     Type *field = s->fields[m->index].type;
-    // constant_data reads the field's own type, which check_expression sets
-    // only once this returns.
-    m->type = field;
-    Ast *value;
-    if (field && !type_is_aggregate(field) && constant_data(m, &value)) {
-        m->is_constant = !value || value->is_constant;
-        m->constant = value ? value->constant : 0;
-    }
+    fold_constant_part(m, field);
     return field;
 }
 
