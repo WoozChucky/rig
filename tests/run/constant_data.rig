@@ -49,7 +49,8 @@ second :: (i: int) -> int {
 
 main :: () {
     // A string: a *u8 for C, a string with its count, a string parameter,
-    // its bytes one by one, a comparison and a byte at a variable index.
+    // its bytes one by one, a comparison, a byte at a variable index, and
+    // its bytes as a []u8, cast.
     puts(NAME);
     printf("%s %lld\n", NAME, NAME.count);
     print(NAME);
@@ -58,6 +59,8 @@ main :: () {
     printf("%d\n", NAME == "rig");
     i := 1;
     printf("%c\n", cast(s32) NAME[i]);
+    raw := cast([]u8) NAME;
+    printf("%lld %c\n", raw.count, cast(s32) raw[i]);
 
     // A string as a *u8: cast, its .data read at run time, a *u8 constant
     // (the literal's bytes, as is) given to C and copied, and a struct

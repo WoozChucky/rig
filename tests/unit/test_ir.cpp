@@ -3823,18 +3823,20 @@ TEST(pointer_constant_is_its_literal_bytes) {
 TEST(string_constant_shares_its_bytes) {
     // A string constant's literal has one str.N, whatever reaches it: each
     // *u8 use is its address, and the string itself, a view, is a
-    // read-only global of its count and a relocation to those bytes.
+    // read-only global of its count and a relocation to those bytes. A cast
+    // to []u8 is the same view, read from that global as the string is.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_source(&a,
                                           "puts :: (s: *u8) -> s32 #foreign libc;\n"
                                           "NAME :: \"rig\";\n"
-                                          "main :: () { puts(NAME); puts(NAME); s := NAME; }\n"));
+                                          "main :: () { puts(NAME); puts(NAME); s := NAME; b := cast([]u8) NAME; }\n"));
     CHECK_EQ(count_of(ir, "\"rig\\00\""), 1);
+    CHECK_EQ(count_of(ir, "const @const."), 1);
     CHECK(contains(ir, "const @const.0: 16 align 8 = \"\\03"
                        "\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @str.0"));
     String main = proc_ir(ir, "main");
     CHECK_EQ(count_of(main, "addr @str.0"), 2);
-    CHECK_EQ(count_of(main, "addr @const.0"), 1);
+    CHECK_EQ(count_of(main, "addr @const.0"), 2);
     arena_free(&a);
 }
 
@@ -3961,6 +3963,39 @@ TEST(left_out_parts_of_constants_are_zero) {
     String main = proc_ir(ir, "main");
     CHECK(contains(main, "addr @const.0"));
     CHECK(!contains(main, "local 24 align 8"));
+    arena_free(&a);
+}
+
+TEST(global_view_from_constant_data_is_its_array) {
+    // A global view given a view that is itself a part of constant data
+    // sees the array holding it: a view field a constant's literal leaves
+    // out, or a string field cast to []u8, is the empty view, all zeros
+    // with no array.N, and a struct literal's view field is that field's
+    // array literal, in an array.N of its own.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "Holder :: struct { v: []int; n: int; }\n"
+                                          "Named :: struct { name: string; n: int; }\n"
+                                          "NO_VIEW :: Holder.{n = 1};\n"
+                                          "UNNAMED :: Named.{n = 1};\n"
+                                          "empty : []int = NO_VIEW.v;\n"
+                                          "holder := Holder.{v = NO_VIEW.v, n = 2};\n"
+                                          "nameless : []u8 = cast([]u8) UNNAMED.name;\n"
+                                          "pair : []int = Holder.{v = int.[5, 6]}.v;\n"
+                                          "main :: () { }\n"));
+    CHECK(contains(ir, "global @empty: 16 align 8 = zero\n"));
+    CHECK(contains(ir, "global @holder: 24 align 8 = \""
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\02\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    CHECK(contains(ir, "global @nameless: 16 align 8 = zero\n"));
+    CHECK_EQ(count_of(ir, "@array."), 2);
+    CHECK(contains(ir, "global @array.0: 16 align 8 = \""
+                       "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\06\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    CHECK(contains(ir, "global @pair: 16 align 8 = \"\\02\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @array.0\n"));
+    CHECK(!contains(ir, "@const."));
     arena_free(&a);
 }
 
