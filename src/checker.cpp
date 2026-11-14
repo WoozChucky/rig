@@ -1480,8 +1480,84 @@ static Type *proc_type_of_signature(Ast_Proc *proc) {
     return t;
 }
 
+// A C name as Rig writes it in a string, for a message: \t \n \r \0 \\ and
+// \" escaped, any other control byte as \xHH (Rig has no such escape, but
+// C does), so none of them reaches the terminal or breaks the message's
+// line.
+static String shown_c_name(Arena *a, String name) {
+    Array<u8> text = {};
+    for (s64 i = 0; i < name.count; i++) {
+        u8 b = name.data[i];
+        const char *escape = b == '\t' ? "\\t" : b == '\n' ? "\\n" : b == '\r' ? "\\r" : b == 0 ? "\\0"
+                           : b == '\\' ? "\\\\" : b == '"' ? "\\\"" : nullptr;
+        char hex[8];
+        if (!escape && (b < 0x20 || b == 0x7f)) {
+            snprintf(hex, sizeof hex, "\\x%02x", b);
+            escape = hex;
+        }
+        if (!escape) {
+            array_add(&text, b);
+            continue;
+        }
+        for (const char *e = escape; *e; e++) array_add(&text, (u8)*e);
+    }
+    String shown = string_copy(a, {text.data, text.count});
+    array_free(&text);
+    return shown;
+}
+
+// A foreign procedure's C name, `#foreign libc "free"` (spec 7.6), at the
+// string: at least one byte ("a foreign procedure's C name can't be
+// empty"), and no zero byte, where an object file's symbol names end
+// ("'fr\0ee' can't be a C function's name: it has a zero byte"), or white
+// space, which no C function's name has ("'fr ee' can't be a C function's
+// name: it has white space"). Any other byte is the linker's business: a C
+// name isn't a Rig name, and needn't be one, nor ASCII. Nor is it declared
+// in Rig: two foreign procedures may name one C function, and a procedure
+// of the program may be called as a C function is (free :: (a: Allocator,
+// p: *void) { ... c_free(p); ... }).
+//
+// Nor may it be the name of a function the compiler defines itself:
+// - main, the program's entry point, which is Rig's main (lower.cpp): a
+//   foreign main would leave the program without one, as LLVM renames the
+//   definition that comes second (main.1), and it wouldn't link. "'main'
+//   can't be a C function's name: it's where the program starts";
+// - the runtime's procedures, all named __rig_ (llvm_backend.cpp's
+//   __rig_panic, lower.cpp's __rig_bounds_failed and __rig_string_equal):
+//   "'__rig_panic' can't be a C function's name: names starting with __rig_
+//   are the compiler's own". A program's own procedure called free is
+//   renamed and keeps working, being internal; a foreign one can't be.
+// These are checked for a foreign procedure without a string too, whose own
+// name is its C name, at that name. A foreign main is reported as needing
+// a body already, so only __rig_ is checked there.
+static void check_c_name(Checker *c, Ast_Proc *proc) {
+    String name = proc->has_c_name ? proc->c_name : proc->name;
+    Position at = proc->has_c_name ? proc->c_name_pos : proc->pos;
+    if (proc->has_c_name && name.count == 0) {
+        diag_error(c->diag, at, "a foreign procedure's C name can't be empty");
+        return;
+    }
+    bool zero = false, space = false;
+    for (s64 i = 0; i < name.count; i++) {
+        u8 b = name.data[i];
+        zero = zero || b == 0;
+        space = space || b == ' ' || (b >= '\t' && b <= '\r');  // \t \n \v \f \r, C's isspace
+    }
+    if (zero || space) {
+        diag_error(c->diag, at, "'" STR_FMT "' can't be a C function's name: it has %s",
+                   STR_ARG(shown_c_name(c->arena, name)), zero ? "a zero byte" : "white space");
+    } else if (proc->has_c_name && string_eq(name, str("main"))) {
+        diag_error(c->diag, at, "'main' can't be a C function's name: it's where the program starts");
+    } else if (name.count >= 6 && string_eq(string_slice(name, 0, 6), str("__rig_"))) {
+        diag_error(c->diag, at,
+                   "'" STR_FMT "' can't be a C function's name: names starting with __rig_ are the compiler's own",
+                   STR_ARG(name));
+    }
+}
+
 // A procedure's signature: its parameters' types and its results' types,
-// each stored on its node (Ast_Param.type, Ast_Type.type), and its library.
+// each stored on its node (Ast_Param.type, Ast_Type.type), and its library
+// and C name.
 // A foreign procedure, which C implements, and a #c_call one, which C may
 // call, take and return only what C does (check_c_part), and one result at
 // most.
@@ -1526,6 +1602,7 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
         diag_error(c->diag, proc->library_pos, "unknown library '" STR_FMT "'; the only one so far is 'libc'",
                    STR_ARG(proc->foreign_library));
     }
+    if (proc->is_foreign) check_c_name(c, proc);
     proc->type = proc_type_of_signature(proc);
 }
 

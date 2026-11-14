@@ -1549,6 +1549,92 @@ TEST(foreign_returns_one_value) {
     arena_free(&a);
 }
 
+TEST(foreign_c_names) {
+    // Issue #135: #foreign's string is the C function's name, at least one
+    // byte with no white space or zero byte, reported at the string. The
+    // name is shown as Rig writes it, its \t, \n, \r and \0 escaped.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "a :: () #foreign libc \"\";\n"
+                           "b :: () #foreign libc \"fr ee\";\n"
+                           "c :: () #foreign libc \"fr\\tee\";\n"
+                           "d :: () #foreign libc \"free\\n\";\n"
+                           "e :: () #foreign libc \"fr\\0ee\";\n"
+                           "f :: () #foreign libc \"\\r\\0\";\n"
+                           "main :: () { }\n"),
+              "1:23: a foreign procedure's C name can't be empty\n"
+              "2:23: 'fr ee' can't be a C function's name: it has white space\n"
+              "3:23: 'fr\\tee' can't be a C function's name: it has white space\n"
+              "4:23: 'free\\n' can't be a C function's name: it has white space\n"
+              "5:23: 'fr\\0ee' can't be a C function's name: it has a zero byte\n"
+              "6:23: '\\r\\0' can't be a C function's name: it has a zero byte\n");
+    // A quote and a backslash shown escaped too, and a raw vertical tab or
+    // form feed, white space as C's isspace says, as \xHH: Rig has no
+    // escape for either.
+    CHECK_STR(check_source(&a,
+                           "g :: () #foreign libc \"fr \\\"ee\";\n"
+                           "h :: () #foreign libc \"a\\\\b c\";\n"
+                           "i :: () #foreign libc \"a\vb\";\n"
+                           "j :: () #foreign libc \"a\fb\";\n"
+                           "main :: () { }\n"),
+              "1:23: 'fr \\\"ee' can't be a C function's name: it has white space\n"
+              "2:23: 'a\\\\b c' can't be a C function's name: it has white space\n"
+              "3:23: 'a\\x0bb' can't be a C function's name: it has white space\n"
+              "4:23: 'a\\x0cb' can't be a C function's name: it has white space\n");
+    // The names of what the compiler defines itself: main, the program's
+    // entry point, and the runtime's procedures, all named __rig_. A
+    // foreign procedure naming one would take or lose the symbol, and the
+    // program wouldn't link. At the string, or at a foreign procedure's own
+    // name when it has no string (a foreign main is reported as needing a
+    // body, as before, and only so).
+    CHECK_STR(check_source(&a,
+                           "m :: () -> s32 #foreign libc \"main\";\n"
+                           "p :: () #foreign libc \"__rig_panic\";\n"
+                           "__rig_string_equal :: () #foreign libc;\n"
+                           "__rig :: () #foreign libc;\n"
+                           "q :: () #foreign libc \"__rigs\";\n"
+                           "main :: () { }\n"),
+              "1:30: 'main' can't be a C function's name: it's where the program starts\n"
+              "2:23: '__rig_panic' can't be a C function's name: names starting with __rig_ are the compiler's own\n"
+              "3:1: '__rig_string_equal' can't be a C function's name: names starting with __rig_ are the "
+              "compiler's own\n");
+    CHECK_STR(check_source(&a, "main :: () #foreign libc;\n"),
+              "1:1: 'main' must have a body: it's where the program starts\n");
+    // Any other bytes are the linker's business: a C name needn't be a Rig
+    // name, nor ASCII. Nor is it a Rig name: two foreign procedures may
+    // name one C function, a procedure of the program may have a C
+    // function's name as its own, and the Rig name is what a call, a
+    // procedure value and a message use.
+    CHECK_STR(check_source(&a,
+                           "c_free :: (p: *void) #foreign libc \"free\";\n"
+                           "also_free :: (p: *u8) #foreign libc \"free\";\n"
+                           "free :: (p: *void) -> int { c_free(p); return 1; }\n"
+                           "odd :: () #foreign libc \"?odd@@YAXXZ\";\n"
+                           "main :: () {\n"
+                           "    f : (*void) #c_call = c_free;\n"
+                           "    f(null);\n"
+                           "    also_free(null);\n"
+                           "    n := free(null);\n"
+                           "    odd();\n"
+                           "}\n"),
+              "");
+    CHECK_STR(check_source(&a,
+                           "c_free :: (p: *void) #foreign libc \"free\";\n"
+                           "main :: () {\n"
+                           "    c_free(null, null);\n"
+                           "    x : int = c_free;\n"
+                           "}\n"),
+              "3:5: 'c_free' takes 1 argument, but 2 were given\n"
+              "4:15: a value of type '(*void) #c_call' doesn't convert to 'int' implicitly\n");
+    // The string is checked whatever the library: both are reported.
+    CHECK_STR(check_source(&a,
+                           "g :: () #foreign m \"\";\n"
+                           "main :: () { }\n"),
+              "1:18: unknown library 'm'; the only one so far is 'libc'\n"
+              "1:20: a foreign procedure's C name can't be empty\n");
+    arena_free(&a);
+}
+
 // The global variable or top-level constant called `name`, which must exist.
 static Ast *global_named(Checked *c, const char *name) {
     for (s64 i = 0; i < c->file->globals.count; i++) {

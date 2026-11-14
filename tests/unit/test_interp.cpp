@@ -2510,6 +2510,41 @@ TEST(interp_calls_c) {
     arena_free(&a);
 }
 
+TEST(interp_calls_c_by_its_c_name) {
+    // Issue #135: a foreign procedure with a C name of its own is found by
+    // that name, called or through its value, beside another declaration of
+    // the same C function under its own name, each called as it declares
+    // it. One the C library doesn't have fails under the C name, which is
+    // what was looked for, its frame the Rig procedure calling it.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "length :: (s: *u8) -> u64 #foreign libc \"strlen\";\n"
+                                "strlen :: (s: *u8) -> u32 #foreign libc;\n"
+                                "nope :: () #foreign libc \"nope_not_a_function\";\n"
+                                "lengths :: () -> u64, u32, u64 {\n"
+                                "    f := length;\n"
+                                "    return length(\"four\"), strlen(\"three\"), f(\"hello!\");\n"
+                                "}\n"
+                                "missing :: () {\n"
+                                "    nope();\n"
+                                "}\n"
+                                "main :: () { }\n");
+    Interp *in = interp_new(m);
+    Interp_Result r = {};
+    interp_test_run(in, m, "lengths", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 3);
+    if (r.results.count == 3) {
+        CHECK_EQ(r.results[0], 4);
+        CHECK_EQ(r.results[1], 5);
+        CHECK_EQ(r.results[2], 6);
+    }
+    interp_test_free(&r);
+    interp_test_fails_at(in, m, "missing", &a, INTERP_TEST_NOPE, 9, 5);
+    interp_free(in);
+    arena_free(&a);
+}
+
 TEST(interp_calls_c_with_narrow_types) {
     // A C function's narrow result and argument, typed by the foreign
     // procedure's declaration:
