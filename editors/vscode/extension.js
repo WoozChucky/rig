@@ -95,6 +95,15 @@ function isFile(file) {
     }
 }
 
+// When `file` was last modified, in ms, or undefined when it can't be told.
+function modifiedTime(file) {
+    try {
+        return fs.statSync(file).mtimeMs;
+    } catch {
+        return undefined;
+    }
+}
+
 // The compiler named by a bare name ("rig"), as a shell finds it: the first
 // directory on the PATH that has it. On Windows only NAME.exe counts, since
 // Node can't start a .bat or .cmd without a shell.
@@ -882,10 +891,12 @@ function inFolder(document, folder) {
 // that main file alone. What the search saw may change, though: a main file
 // added, deleted, or edited to #load the document or not. So when a .rig
 // file is created, changed, deleted or saved, the answers of the documents
-// whose program it may be part of (concerned) are forgotten, and all of them
-// when the workspace folders change. A remembered main file that's gone, or
-// whose program no longer loads the document, is forgotten too, and the
-// search goes on without it.
+// it concerns are forgotten: those of its workspace folder, where the
+// search looks, and those with a rig.main, whose program may load files
+// anywhere (concerned). All of them are forgotten when the workspace
+// folders change. A remembered main file that's gone, or whose program no
+// longer loads the document, is forgotten too, and the search goes on
+// without it.
 //
 // The errors rig finds in the program's other files, the main file among
 // them, aren't listed under their own names, but counted in one error on
@@ -915,6 +926,10 @@ class LiveCheck {
         // changed, what the check's search saw may be out of date: it
         // remembers nothing. Never dropped, as a generation isn't.
         this.forgotten = new Map();
+        // A saved .rig file's uri -> its time of modification on disk just
+        // after the save, till the file is changed otherwise (changed), or
+        // created or deleted.
+        this.savedTimes = new Map();
         this.toldMissing = false; // said once that there's no compiler
         this.toldMain = false;    // said once that rig.main is wrong
         this.toldOld = false;     // said once that the compiler is too old for --stdin-for
@@ -966,18 +981,19 @@ class LiveCheck {
 
     // The open documents to check whose program the .rig file at `uri` may
     // be part of, a main file or a file it loads: those of its workspace
-    // folder, where the search looks, and those whose rig.main names it,
-    // which may be in another folder. rig.main may also name a file in no
-    // folder (~/game/main.rig), and that file load others there, any
-    // folder's for all this knows: a file in no folder concerns them all.
+    // folder, where the search looks, and those with a rig.main, whose
+    // program may load files of any folder, or of none (~/game/lib.rig),
+    // as well as rig.main itself. A main file of a document's folder may
+    // load a file of another folder too, through "../", but that's rare,
+    // and isn't followed: such a file concerns the document only when it
+    // has a rig.main.
     concerned(uri) {
         const folder = vscode.workspace.getWorkspaceFolder(uri);
         return vscode.workspace.textDocuments.filter((document) => {
             if (!this.wanted(document)) return false;
-            if (!folder || inFolder(document, folder)) return true;
+            if (folder && inFolder(document, folder)) return true;
             const its = vscode.workspace.getWorkspaceFolder(document.uri);
-            const main = its && mainSetting(document.uri.fsPath, its).file;
-            return Boolean(main) && samePath(main, uri.fsPath);
+            return Boolean(its && mainSetting(document.uri.fsPath, its).file);
         });
     }
 
@@ -988,6 +1004,7 @@ class LiveCheck {
     // change, so it remembers nothing (this.forgotten). Returns those
     // documents.
     forgetPrograms(uri) {
+        this.savedTimes.delete(uri.toString());
         const concerned = this.concerned(uri);
         for (const document of concerned) {
             const key = document.uri.toString();
@@ -997,14 +1014,28 @@ class LiveCheck {
         return concerned;
     }
 
+    // The file system watcher saw the .rig file at `uri` change. It sees
+    // the files VS Code saves as well as those changed outside it, so this
+    // may be a save's own write, which saved() has handled already: when
+    // the file's time of modification is still the save's, nothing more is
+    // forgotten, and the programs the save's checks found are kept.
+    changed(uri) {
+        const time = this.savedTimes.get(uri.toString());
+        if (time !== undefined && time === modifiedTime(uri.fsPath)) return [];
+        return this.forgetPrograms(uri);
+    }
+
     // `document` was saved. A .rig file may be part of the program of the
     // other open documents it concerns, so they're all checked again, with
     // their programs searched for again, as rig reads the file from disk.
-    // Resolves when the checks are done, which only test/check.js waits for.
+    // Its time of modification is noted, for changed(). Resolves when the
+    // checks are done, which only test/check.js waits for.
     saved(document) {
         if (!this.wanted(document)) return this.run(document);
         const key = document.uri.toString();
         const others = this.forgetPrograms(document.uri).filter((other) => other.uri.toString() !== key);
+        const time = modifiedTime(document.uri.fsPath);
+        if (time !== undefined) this.savedTimes.set(key, time);
         return Promise.all([document, ...others].map((d) => this.run(d)));
     }
 
@@ -1242,12 +1273,13 @@ class LiveCheck {
 function activate(context) {
     const live = new LiveCheck();
     // A .rig file created, changed or deleted, in VS Code or outside it,
-    // may change the program of the documents it concerns.
+    // may change the program of the documents it concerns. A change may be
+    // a save's own, which forgets nothing more (changed).
     const rigFiles = vscode.workspace.createFileSystemWatcher('**/*.rig');
     context.subscriptions.push(
         rigFiles,
         rigFiles.onDidCreate((uri) => live.forgetPrograms(uri)),
-        rigFiles.onDidChange((uri) => live.forgetPrograms(uri)),
+        rigFiles.onDidChange((uri) => live.changed(uri)),
         rigFiles.onDidDelete((uri) => live.forgetPrograms(uri)),
         vscode.tasks.registerTaskProvider('rig', taskProvider),
         vscode.commands.registerCommand('rig.buildFile', (uri) => runFile('build', uri)),
