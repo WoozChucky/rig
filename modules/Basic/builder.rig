@@ -63,8 +63,9 @@ append_string :: (builder: *String_Builder, s: string) {
         // many gives null.
         needed := LARGEST;
         if s.count <= LARGEST - builder.count { needed = builder.count + s.count; }
-        // Doubling past half of int's largest would wrap, so from there the
-        // capacity is what is needed.
+        // Doubling past half of int's largest would wrap, so an old capacity
+        // past it becomes int's largest, and one the loop has doubled past
+        // it becomes what is needed.
         capacity := 64;
         if builder.capacity > 32 {
             capacity = LARGEST;
@@ -81,8 +82,8 @@ append_string :: (builder: *String_Builder, s: string) {
         builder.capacity = capacity;
         if own { source = builder.data + offset; }
     }
-    // tests/run/basic_builder_overflow.err and
-    // basic_builder_overflow_append.err name this line.
+    // tests/run/basic_builder_overflow.err, basic_builder_overflow_append.err
+    // and basic_builder_overflow_doubling.err name this line.
     copy_memory(*builder.data[builder.count], source, s.count);
     builder.count += s.count;
 }

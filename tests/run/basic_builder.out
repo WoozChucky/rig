@@ -7,9 +7,11 @@ one big append: 100 128
 freed: 0 0 true
 empty: 0 true, allocations 0
 used again after free: 5 64
+init again: 0 0 true
 exact fit: 64 64, one more: 65 128
 copied out of another allocator: 1 65 true, frees 1
 empty appends: 0 0 true, reset and freed: 0 0 true
-own text appended: 180 256 true 123452.500
+own text appended: 140 256 true 123452.500
 own allocator: allocations 1 of 64, resizes 2, frees 0, after builder_free 1
+longest: 65 true 320 true
 -9223372036854775808 z 11111111 -1

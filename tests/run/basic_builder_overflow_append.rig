@@ -1,7 +1,8 @@
 // Basic's string builder (issue #134) given an append longer than int's
 // largest value less what it holds: the bytes needed are taken as int's
-// largest, not a sum that wraps, and the capacity doubles from 64 until a
-// doubling would pass half of int's largest, and is then what is needed.
+// largest, not a sum that wraps, and the capacity doubles from 128, twice
+// the 64 the first append took, until it is past half of int's largest,
+// where another doubling would wrap, and is then what is needed.
 // No allocator has that many bytes, and given null the builder stops the
 // program at its copy with the language's null pointer dereference, at the
 // line of builder.rig this .err names.
