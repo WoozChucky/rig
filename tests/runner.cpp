@@ -1318,10 +1318,10 @@ static String check_stdin_for_reads_the_main_file_first_test(Arena *a, String ri
 }
 
 // rig check's command line, right and wrong, as COMMAND_CASES rig build's,
-// and some of rig build's too, run with rig check's tests since they're
-// about rig check's options: the rule the two share, that the source file's
-// name ends in .rig, and rig build's refusal of rig check's --stdin-for,
-// wherever it stands.
+// and some of rig build's too: the rule the two share, that the source
+// file's name ends in .rig, tested here for both; and rig build's refusal
+// of rig check's --stdin-for, wherever it stands, which is about rig
+// check's option.
 static const Command_Case CHECK_CASES[] = {
     {"rig check with no file",
      {"check"},
