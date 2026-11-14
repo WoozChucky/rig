@@ -1931,7 +1931,10 @@ check('the tasks use $rig-runtime while rig.check is on, $rig when it is off', (
 //
 // Except for that doesn't-load answer, which is its line alone as rig's is,
 // it adds a warning about another file. Either way it answers slowly if
-// stdin's text says `slow`. When there's a file named old-rig where it runs,
+// stdin's text says `slow`, or with --stdin-for if MAIN's does, and as it
+// answers it writes its arguments to answers.log as to calls.log, so a
+// check can tell that a rig it ended never answered (answers). When
+// there's a file named old-rig where it runs,
 // it's a rig from before --stdin-for instead: given that option, it answers
 // at once, without reading stdin, with that rig's usage and exit code 2, as
 // it takes the option for a second file. The documents are stand-ins too,
@@ -1973,7 +1976,10 @@ if (args[1] === '--stdin-for' && fs.existsSync('old-rig')) {
 }
 
 function answer() {
+    let slow = text.includes('slow');
+    if (args[1] === '--stdin-for' && fs.readFileSync(args[0], 'utf8').includes('slow')) slow = true;
     setTimeout(() => {
+        fs.appendFileSync('answers.log', JSON.stringify(args) + '\\n');
         let errors = 0;
         if (args[1] === '--stdin-for') {
             const main = args[0];
@@ -1997,20 +2003,26 @@ function answer() {
         }
         process.stderr.write('other.rig:1:1: warning: not this file\\n');
         process.exitCode = errors ? 1 : 0;
-    }, text.includes('slow') ? 1500 : 0);
+    }, slow ? 1500 : 0);
 }
 `;
 
 // The command lines the stand-in compiler was started with in `dir`, in
 // order, each the list of words after `check`.
-function calls(dir) {
-    const log = path.join(dir, 'calls.log');
+function calls(dir, log = 'calls.log') {
+    log = path.join(dir, log);
     if (!fs.existsSync(log)) return [];
     return fs
         .readFileSync(log, 'utf8')
         .split('\n')
         .filter((line) => line)
         .map((line) => JSON.parse(line));
+}
+
+// The command lines of the stand-ins that answered in `dir`, in the order
+// they answered: one ended before it answered isn't there.
+function answers(dir) {
+    return calls(dir, 'answers.log');
 }
 
 function fakeDocument(file, text) {
@@ -2225,10 +2237,18 @@ check('rig.checkTimeout reads as its default when it isn\'t a number of at least
 const TIMED_OUT = 'Rig: a check took more than 1 second and was stopped; a #run may never finish.';
 
 // A configuration event for the setting rig.checkTimeout. The extension is
-// loaded once for every check, and says a check was stopped once until the
-// setting changes, so each check that expects it to be said fires this
-// first, before any document is open.
+// loaded once, for all the checks (loadExtension), and says a check was
+// stopped once until the setting changes, so each check that expects it to
+// be said fires this first, before any document is open.
 const TIMEOUT_CHANGED = { affectsConfiguration: (section) => section === 'rig.checkTimeout' || section === 'rig' };
+
+// Waits until the `count`th rig started in `dir`, a slow stand-in, would
+// have answered, had it not been ended: it answers 1.5 s after it starts,
+// which is when it writes to calls.log.
+async function pastAnswer(dir, count) {
+    await until(`rig number ${count}`, () => calls(dir).length === count);
+    await sleep(1800);
+}
 
 // A #run runs code while checking, which may never finish, so a check that
 // runs past rig.checkTimeout is ended. That's said once, with the button to
@@ -2250,26 +2270,31 @@ check('a check that runs past rig.checkTimeout is stopped and said once', async 
         assert.deepStrictEqual(stub.errors, [TIMED_OUT]);
         await until('the button\'s command', () => stub.commands.length > 0);
         assert.deepStrictEqual(stub.commands, [['workbench.action.openSettings', 'rig.checkTimeout']]);
-        await sleep(500); // the stopped check's answer would have come by now
+        // Its rig was ended: it never answers.
+        await pastAnswer(dir, 1);
+        assert.deepStrictEqual(answers(dir), [], 'a stopped check\'s rig answered');
+        assert.ok(!live.has(key), 'a stopped check set problems');
 
         // Stopped again, but said once.
         fire('save', doc);
-        await sleep(1300);
+        await pastAnswer(dir, 2);
+        assert.deepStrictEqual(answers(dir), [], 'a stopped check\'s rig answered');
         assert.ok(!live.has(key), 'a stopped check set problems');
         assert.deepStrictEqual(stub.errors, [TIMED_OUT]);
 
         // No limit: the slow check finishes, and its problem shows.
         stub.checkTimeout = 0;
         fire('save', doc);
-        await sleep(1800);
-        assert.deepStrictEqual((live.get(key) || []).map((d) => d.message), ["unknown identifier 'putz'"]);
+        await until('the check under no limit', () => live.has(key));
+        assert.deepStrictEqual(live.get(key).map((d) => d.message), ["unknown identifier 'putz'"]);
 
         // A stopped check leaves that problem shown, though the text has none
         // now, and says nothing more.
         stub.checkTimeout = 1;
         doc.text = 'slow';
         fire('save', doc);
-        await sleep(1300);
+        await pastAnswer(dir, 4);
+        assert.strictEqual(answers(dir).length, 1, 'a stopped check\'s rig answered');
         assert.deepStrictEqual(live.get(key).map((d) => d.message), ["unknown identifier 'putz'"]);
         assert.deepStrictEqual(stub.errors, [TIMED_OUT]);
     });
@@ -2277,6 +2302,7 @@ check('a check that runs past rig.checkTimeout is stopped and said once', async 
 
 // A new rig.checkTimeout may stop checks again, which is said again, and
 // checks every open document again: one the old limit stopped may finish.
+// A limit other than 1 is said in seconds, even when it's less than 1.
 check('changing rig.checkTimeout checks again, and may say so again', async () => {
     loadExtension();
     const live = activated.collections.rig;
@@ -2292,13 +2318,16 @@ check('changing rig.checkTimeout checks again, and may say so again', async () =
         fire('configuration', TIMEOUT_CHANGED);
         await until('the check under no limit', () => live.has(key));
         assert.deepStrictEqual(live.get(key).map((d) => d.message), ["unknown identifier 'putz'"]);
-        stub.checkTimeout = 1;
+        stub.checkTimeout = 0.5;
         fire('configuration', TIMEOUT_CHANGED);
         await until('the message again', () => stub.errors.length > 1);
-        // The stopped check's answer would have come by now (and its rig has
-        // ended, so the folder can go).
-        await sleep(800);
-        assert.deepStrictEqual(stub.errors, [TIMED_OUT, TIMED_OUT]);
+        // Only the check under no limit answered.
+        await pastAnswer(dir, 3);
+        assert.strictEqual(answers(dir).length, 1, 'a stopped check\'s rig answered');
+        assert.deepStrictEqual(stub.errors, [
+            TIMED_OUT,
+            'Rig: a check took more than 0.5 seconds and was stopped; a #run may never finish.',
+        ]);
         assert.deepStrictEqual(live.get(key).map((d) => d.message), ["unknown identifier 'putz'"]);
     });
 });
@@ -2707,31 +2736,36 @@ check('a compiler Node can\'t start ends the search at the first main file', asy
 
 // A check through a main file that runs past rig.checkTimeout is the
 // search's answer too: it ends there, trying neither the next main file
-// nor the document alone, and sets no problems. With no limit, the next
-// check searches again from the start.
+// nor the document alone, and sets no problems. That main file isn't
+// remembered as the document's program: with no limit, the next check
+// searches again from the start.
 check('a check through a main file that runs past rig.checkTimeout ends the search', async () => {
     loadExtension();
     const live = activated.collections.rig;
     await withStandIn(async (dir) => {
         fire('configuration', TIMEOUT_CHANGED);
         writeMains(dir);
+        // b.rig's rig answers slowly; a.rig's, that its program doesn't load
+        // the document, at once.
+        fs.writeFileSync(path.join(dir, 'b.rig'), '#load "helper.rig"; // slow\nmain :: () { putz(); }\n');
         stub.checkTimeout = 1;
         const file = path.join(dir, 'helper.rig');
-        const doc = fakeDocument(file, 'putz(); // slow\n');
+        const a = [path.join(dir, 'a.rig'), '--stdin-for', file];
+        const b = [path.join(dir, 'b.rig'), '--stdin-for', file];
+        const doc = fakeDocument(file, 'putz();\n');
         stub.document = doc;
         fire('open', doc);
         await until('the message', () => stub.errors.length > 0);
-        await sleep(500); // the stopped check's answer would have come by now
-        assert.deepStrictEqual(calls(dir), [[path.join(dir, 'a.rig'), '--stdin-for', file]]);
+        await pastAnswer(dir, 2);
+        assert.deepStrictEqual(calls(dir), [a, b]);
+        assert.deepStrictEqual(answers(dir), [a], 'a stopped check\'s rig answered');
         assert.deepStrictEqual(stub.errors, [TIMED_OUT]);
         assert.ok(!live.has(doc.uri.toString()), 'a stopped check set problems');
 
+        // A change, which forgets no program as a save does.
         stub.checkTimeout = 0;
-        const result = await checked(dir, doc, 'save');
-        assert.deepStrictEqual(result.calls, [
-            [path.join(dir, 'a.rig'), '--stdin-for', file],
-            [path.join(dir, 'b.rig'), '--stdin-for', file],
-        ]);
+        const result = await checked(dir, doc, 'change', { document: doc, contentChanges: [{}] });
+        assert.deepStrictEqual(result.calls, [a, b]);
         assert.deepStrictEqual(result.diagnostics, [
             [0, 0, "unknown identifier 'putz'"],
             [0, 0, "an error in another file of the program: b.rig:2:14: unknown identifier 'putz'"],
