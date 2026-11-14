@@ -109,7 +109,7 @@ Text put together a piece at a time, in memory of the builder's own from the all
 
 - `String_Builder`: `allocator: Allocator`, `data: *u8`, `count: int` (the bytes built) and `capacity: int` (the bytes `data` has room for).
 - `builder_init(builder: *String_Builder, allocator: Allocator)`: an empty builder whose memory comes from `allocator`, taken at the first append that needs it.
-- `append_string(builder: *String_Builder, s: string)`: appends the bytes of `s`; an empty or zeroed string appends nothing and takes no memory.
+- `append_string(builder: *String_Builder, s: string)`: appends the bytes of `s`; an empty or zeroed string appends nothing and takes no memory. `s` may be a view of the builder's own text: when the append grows the builder, the bytes are copied from where they moved to.
 - `append_byte(builder: *String_Builder, byte: u8)`: appends the byte itself, not its number.
 - `append_int(builder: *String_Builder, value: int, base: int)`: appends `value` as `format_int` writes it.
 - `append_float(builder: *String_Builder, value: float64, decimals: int)`: appends `value` as `format_float` writes it.

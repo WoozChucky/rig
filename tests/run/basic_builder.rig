@@ -1,21 +1,35 @@
 // Basic's string builder (issue #134): appends of each kind, how its memory
-// grows, copies out that the builder's later changes don't touch, and a
-// builder with nothing in it, which allocates nothing.
+// grows, copies out that the builder's later changes don't touch, a builder
+// with nothing in it, which allocates nothing, the builder's own text
+// appended to itself, and memory that comes from the builder's allocator
+// and goes back to it.
 #load "../../modules/Basic/module.rig";
 
 // int's most negative value.
 INT_SMALLEST :: -9223372036854775808;
 
-// What a counting allocator was asked to do: how many allocations and
-// frees, and how many bytes the last allocation was for.
-Counter :: struct { allocations: int; frees: int; last_size: int; }
+// What a counting allocator was asked to do: how many allocations, resizes
+// and frees, and how many bytes the last allocation was for.
+Counter :: struct { allocations: int; resizes: int; frees: int; last_size: int; }
 
-// Passes every call on to the heap, counting allocations and frees.
+// Passes allocations and frees on to the heap, counting them. A resize is
+// counted too, and always moves the bytes: they are copied into new memory,
+// and the old ones written over with '#' before the heap has them back, so
+// a view left pointing at them doesn't read the text.
 counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     counter := cast(*Counter) data;
     if mode == ALLOCATE {
         counter.allocations += 1;
         counter.last_size = size;
+    }
+    if mode == RESIZE {
+        counter.resizes += 1;
+        memory := alloc(size, HEAP_ALLOCATOR);
+        if memory == null { return null; }
+        copy_memory(memory, old_memory, min_int(old_size, size));
+        set_memory(old_memory, "#"[0], old_size);
+        free(old_memory, HEAP_ALLOCATOR);
+        return memory;
     }
     if mode == FREE { counter.frees += 1; }
     return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
@@ -93,13 +107,17 @@ main :: () {
 
     // A builder with nothing in it gives the zeroed string, and allocates
     // nothing for it.
+    counter : Counter;
+    counting := Allocator.{counting_allocator_proc, *counter};
     e : String_Builder;
     builder_init(*e, HEAP_ALLOCATOR);
-    empty := builder_to_string(*e, HEAP_ALLOCATOR);
+    empty := builder_to_string(*e, counting);
     print_string("empty: ");
     print_int(empty.count);
     print_byte(32);
     print_bool(empty.data == null);
+    print_string(", allocations ");
+    print_int(counter.allocations);
     print_byte(10);
 
     // A freed builder keeps its allocator, so it can be used again.
@@ -124,9 +142,7 @@ main :: () {
     print_byte(10);
 
     // A copy out comes from the allocator given, not the builder's.
-    counter : Counter;
-    counting := Allocator.{counting_allocator_proc, *counter};
-    u := builder_to_string(*d, counting);
+    u :=builder_to_string(*d, counting);
     print_string("copied out of another allocator: ");
     print_int(counter.allocations);
     print_byte(32);
@@ -156,6 +172,54 @@ main :: () {
     show_sizes(e);
     print_byte(32);
     print_bool(e.data == null);
+    print_byte(10);
+
+    // A builder's memory comes from its own allocator and goes back to it.
+    // 90 bytes: 40, a number of each kind, which is written on the stack
+    // and allocates nothing, and 40 more. The first append takes 64 bytes,
+    // and the last grows them to 128 with a resize.
+    own_counter : Counter;
+    g : String_Builder;
+    builder_init(*g, Allocator.{counting_allocator_proc, *own_counter});
+    forty := hundred_view;
+    forty.count = 40;
+    append_string(*g, cast(string) forty);
+    append_int(*g, 12345, 10);
+    append_float(*g, 2.5, 3);
+    append_string(*g, cast(string) forty);
+
+    // The builder's own text appended to itself grows it to 256, and the
+    // counting allocator's resize moves the bytes: they are read where they
+    // moved to, not where they were.
+    own : string;
+    own.data = g.data;
+    own.count = g.count;
+    append_string(*g, own);
+    text : string;
+    text.data = g.data;
+    text.count = g.count;
+    print_string("own text appended: ");
+    show_sizes(g);
+    print_byte(32);
+    print_bool(slice(text, 0, 90) == slice(text, 90, 90));
+    print_byte(32);
+    print_line(slice(text, 130, 10));
+
+    // A reset keeps the memory, so text that fits takes none; builder_free
+    // gives it back, with one free.
+    builder_reset(*g);
+    append_string(*g, "again");
+    print_string("own allocator: allocations ");
+    print_int(own_counter.allocations);
+    print_string(" of ");
+    print_int(own_counter.last_size);
+    print_string(", resizes ");
+    print_int(own_counter.resizes);
+    print_string(", frees ");
+    print_int(own_counter.frees);
+    builder_free(*g);
+    print_string(", after builder_free ");
+    print_int(own_counter.frees);
     print_byte(10);
 
     // Numbers at their longest and in other bases.

@@ -41,6 +41,10 @@ builder_init :: (builder: *String_Builder, allocator: Allocator) {
 // needs, means n bytes appended one at a time are moved about n times in
 // all, not about n * n / 2.
 //
+// s may be a view of the builder's own text, to append again what it holds
+// already. Growing can move that text and give back the memory it was in,
+// so the bytes are then copied from where they moved to.
+//
 // An allocator that has no more memory gives null, and the builder doesn't
 // test for it: its data is then null, and the copy below, which takes the
 // address of an element of data, stops the program with the language's
@@ -49,7 +53,12 @@ append_string :: (builder: *String_Builder, s: string) {
     LARGEST :: 9223372036854775807; // int's largest value
     HALF :: LARGEST / 2;
     if s.count <= 0 { return; }
+    source := s.data;
     if s.count > builder.capacity - builder.count {
+        // Whether s starts in the builder's text, and how far into it.
+        own := s.data >= builder.data && s.data < builder.data + builder.count;
+        offset := s.data - builder.data;
+
         // Past int's largest, no memory holds the bytes: asking for that
         // many gives null.
         needed := LARGEST;
@@ -70,8 +79,11 @@ append_string :: (builder: *String_Builder, s: string) {
         }
         builder.data = cast(*u8) resize(builder.data, builder.capacity, capacity, builder.allocator);
         builder.capacity = capacity;
+        if own { source = builder.data + offset; }
     }
-    copy_memory(*builder.data[builder.count], s.data, s.count);
+    // tests/run/basic_builder_overflow.err and
+    // basic_builder_overflow_append.err name this line.
+    copy_memory(*builder.data[builder.count], source, s.count);
     builder.count += s.count;
 }
 
