@@ -37,7 +37,7 @@
 - **Work flow:**
   - Branch `issue/121-live-check-loaded`. The plan is its first commit, already pushed. If no PR is open, open a draft one: `Closes #121`, labels `editor` and `enhancement`, milestone `3: Compile-time execution`.
   - Push after each commit.
-  - Commits are a short imperative summary, plus an optional body, and nothing else. No AI attribution of any kind: no session line, no link, no `Co-Authored-By`, and no mention of Claude or AI.
+  - Commits are a short imperative summary, plus an optional body, and nothing else: no trailers or attribution lines.
   - Before the PR is marked ready, an independent review. Every finding in production code and tests is fixed, minor ones included. Wrong comments and docs are fixed too. Comment or doc polish never holds the PR up: it becomes a GitHub issue labelled `documentation`.
 
 ## Facts (file:line on `main` at 532f788, this branch's base)
