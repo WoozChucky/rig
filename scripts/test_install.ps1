@@ -230,10 +230,23 @@ try {
     Pass 'an unknown option stops it'
 
     Reset-AppData
-    $output = Invoke-Child "& ([scriptblock]::Create((irm $url))) -Version 9.9.9 -NoModifyPath"
+    # A release that doesn't exist: first on the local server, whose 404 is
+    # certain, then on GitHub. Windows PowerShell 5.1 sometimes gets no
+    # answer at all for GitHub's 404 (the connection closed), for every
+    # request a process makes, so install.ps1's message for that case, which
+    # names the release too, passes there.
+    Reset-AppData
+    $env:RIG_INSTALL_BASE_URL = "http://localhost:$port"
+    $output = Invoke-Child "& ([scriptblock]::Create((irm $url))) -Version 9.9.9 -NoModifyPath -NoVSCode"
+    $env:RIG_INSTALL_BASE_URL = $null
     if ($output -notmatch 'THROWN: there is no Rig 9\.9\.9') { Fail '-Version 9.9.9' $output }
     Assert-NothingInstalled '-Version 9.9.9' $output
     Assert-SessionKept '-Version 9.9.9' $output
+
+    Reset-AppData
+    $output = Invoke-Child "& ([scriptblock]::Create((irm $url))) -Version 9.9.9 -NoModifyPath -NoVSCode"
+    if ($output -notmatch 'THROWN: (there is no Rig 9\.9\.9|.*and that there is a Rig 9\.9\.9)') { Fail '-Version 9.9.9 from GitHub' $output }
+    Assert-NothingInstalled '-Version 9.9.9 from GitHub' $output
     Pass '-Version 9.9.9 stops it: no such release'
 
     Reset-AppData

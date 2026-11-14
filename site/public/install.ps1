@@ -149,6 +149,12 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
                 throw "$url isn't there: the latest release of Rig may be being published; try again in a few minutes"
             }
             if ($status) { throw "couldn't download $url (HTTP status $status)" }
+            # No answer at all. Windows PowerShell 5.1 sometimes gets that
+            # for GitHub's 404 too, the connection closed without one, so
+            # with -Version the release may be what is wrong.
+            if ($Version) {
+                throw "couldn't download $url ($($_.Exception.Message)): check your network connection, and that there is a Rig $Version (the releases are listed at https://github.com/WoozChucky/rig/releases)"
+            }
             throw "couldn't download $url ($($_.Exception.Message)): check your network connection"
         }
     }
