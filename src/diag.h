@@ -83,7 +83,8 @@ void diag_sort(Diagnostics *d);
 // sorted), in the format above.
 String diag_render(Arena *a, Diagnostics *d);
 
-// diag_render, written to stderr.
+// diag_render, written to stderr, after stdout is flushed: what the #runs
+// printed comes out first, as it came first, where both go to one pipe.
 void diag_print(Diagnostics *d);
 
 // Until called again with null: a process that ends before rig prints its

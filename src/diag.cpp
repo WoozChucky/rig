@@ -119,6 +119,9 @@ String diag_render(Arena *a, Diagnostics *d) {
 void diag_print(Diagnostics *d) {
     Arena a = arena_make();
     String text = diag_render(&a, d);
+    // stdout is buffered when it's a pipe: the #runs' output still in the
+    // buffer would otherwise come out after the diagnostics.
+    fflush(stdout);
     fwrite(text.data, 1, (size_t)text.count, stderr);
     fflush(stderr);
     arena_free(&a);
@@ -131,7 +134,8 @@ static Diagnostics *printed_at_exit;
 // The atexit handler. A #run's code that calls C's exit() ends the process
 // from inside the checker or a top-level run, where rig would print what it
 // found only later: they come out here instead, before the C runtime's own
-// end flushes the streams. It runs too when rig itself exits meanwhile (out
+// end flushes the streams, and after what the runs printed (diag_print
+// flushes stdout first). It runs too when rig itself exits meanwhile (out
 // of memory, say), and printing allocates: the pointer is cleared first, so
 // an exit from inside it (out of memory again) prints nothing more.
 static void print_at_exit() {

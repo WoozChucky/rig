@@ -3216,3 +3216,46 @@ TEST(interpret_mode_reports_a_programs_errors) {
     CHECK_EQ(r.exit_code, 1);
     arena_free(&a);
 }
+
+TEST(interpret_mode_reports_a_failed_top_level_run) {
+    // A top-level #run that fails is the program's error, as in rig build:
+    // its diagnostic, with its frame, then exit status 1, and main isn't
+    // run. In one pipe, what the run printed comes out before it.
+    Arena a = arena_make();
+    String path = interpret_test_file(&a, "run_fails",
+                                      "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                      "#run { puts(\"the run's line\"); a : [1]int; i := 2; a[i] = 0; }\n"
+                                      "main :: () { puts(\"main must not run\"); }\n");
+    const char *failure =
+        ".build/tests/interp/run_fails.rig:2:1: error: #run failed: runtime error: index 2 is out of bounds (count 1)\n"
+        "    #run { puts(\"the run's line\"); a : [1]int; i := 2; a[i] = 0; }\n"
+        "    ^\n"
+        "    in #run (.build/tests/interp/run_fails.rig:2:53)\n";
+    Process_Result r = interpret_test_run(&a, &path, 1, false);
+    CHECK_STR(r.out, "the run's line\n");
+    CHECK_STR(r.err, failure);
+    CHECK_EQ(r.exit_code, 1);
+    r = interpret_test_run(&a, &path, 1, true);
+    CHECK_STR(r.out, string_cstr(&a, string_printf(&a, "the run's line\n%s", failure)));
+    CHECK_EQ(r.exit_code, 1);
+
+    // A later top-level run that calls C's exit ends the mode there, with
+    // its status: the diagnostics found by then are printed as it ends
+    // (diag_print_at_exit), after what the runs printed.
+    path = interpret_test_file(&a, "run_fails_then_exits",
+                               "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                               "exit :: (status: s32) #foreign libc;\n"
+                               "#run { puts(\"the run's line\"); a : [1]int; i := 2; a[i] = 0; }\n"
+                               "#run { puts(\"before exit\"); exit(3); }\n"
+                               "main :: () { puts(\"main must not run\"); }\n");
+    r = interpret_test_run(&a, &path, 1, true);
+    CHECK_STR(r.out, "the run's line\n"
+                     "before exit\n"
+                     ".build/tests/interp/run_fails_then_exits.rig:3:1: error: #run failed: runtime error: index 2 is out "
+                     "of bounds (count 1)\n"
+                     "    #run { puts(\"the run's line\"); a : [1]int; i := 2; a[i] = 0; }\n"
+                     "    ^\n"
+                     "    in #run (.build/tests/interp/run_fails_then_exits.rig:3:53)\n");
+    CHECK_EQ(r.exit_code, 3);
+    arena_free(&a);
+}

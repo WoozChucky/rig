@@ -4,10 +4,14 @@
 //
 // The numbers are shown before they're sorted as well: the interpreter
 // refuses the first qsort (qsort_callback.interp.err), and the line it has
-// printed by then is what the runner holds to the start of the .out.
+// printed by then is what the runner holds to the start of the .out. Its
+// top-level #run prints a line while compiling (qsort_callback.build.out),
+// which comes before that, in the interpreted run as well.
 qsort :: (base: *void, count: u64, size: u64, compare: (a: *void, b: *void) -> s32 #c_call) #foreign libc;
 printf :: (format: *u8, ..) -> s32 #foreign libc;
 puts :: (s: *u8) -> s32 #foreign libc;
+
+#run puts("sorted with C's qsort");
 
 ascending :: (a: *void, b: *void) -> s32 #c_call {
     x := (cast(*int) a).*;

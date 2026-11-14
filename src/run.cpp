@@ -364,7 +364,8 @@ static void report_failure(Compile_Time *ct, Ast_Run *run, Interp_Result *result
 // 2. The run's procedure, lowered with everything it reaches.
 // 3. What the compiler printed so far is written out first (fflush), so it
 //    comes before what the run prints, in order. Then the run, given `args`,
-//    its result in *result, its strings and frames in `scratch`.
+//    its result in *result: its strings in `scratch`, its arrays (results,
+//    frames) on the heap, for the caller to free.
 // 4. A failure is said, with its frames.
 static void run_procedure(Compile_Time *ct, Ast_Run *run, Array<u64> args, Arena *scratch, Interp_Result *result) {
     if (!ct->module) make_parts(ct);
