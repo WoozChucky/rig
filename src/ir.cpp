@@ -472,6 +472,11 @@ static String print_module(Arena *a, Ir_Module *m, bool debug) {
             out_param(&p, proc->results[k]);
         }
         if (proc->is_foreign) {
+            if (proc->c_name.count) {
+                out(&p, " \"");
+                out_bytes(&p, proc->c_name);
+                out(&p, "\"");
+            }
             out(&p, "\n");
             continue;
         }
