@@ -361,7 +361,7 @@ check('program.js: declaresMain finds main :: at the top level only', () => {
         's :: "{"; main :: () {}',       // a brace in a string isn't counted
         '// x\nmain :: () {}',           // a line comment ends at its line
         '}\nmain :: () {}',              // a stray } doesn't make the rest nested
-        'main\r\n::\t() {}',             // Windows line ends and tabs are white space
+        'main\t\r\n::\t() {}',         // Windows line ends and tabs are white space
         'helper :: () { putz(); }\nmain :: () {}',  // a closed body before main
         'S :: struct { a: int; }\nf :: () { if x { } }\nmain :: () {}',
         '\uFEFFmain :: () {}',           // a byte-order mark first isn't part of the name
@@ -398,8 +398,9 @@ check('program.js: pathOrder sorts by the path from the folder, with / between n
     assert.deepStrictEqual(files, given, 'pathOrder changed the array it was given');
 });
 
-// rig writes its programs to .build, where this repository's tests write
-// scratch programs that declare main: none of them is a program's main file.
+// rig writes its object files to .build, and this repository's tests write
+// scratch programs that declare main there: none of them is a program's main
+// file.
 check('program.js: searchable leaves out what is under a .build directory', () => {
     const { searchable } = program();
     for (const relative of ['a.rig', 'sub/a.rig', '.builder/a.rig']) {
