@@ -16,7 +16,8 @@
 //   type, or for a file a program loads, `rig check MAIN --stdin-for FILE`
 //   with the program's main file (the setting rig.main, else one found in
 //   the workspace folder), its errors shown as squiggles and in the
-//   Problems panel without building (the setting rig.check). While it's on,
+//   Problems panel without building (the setting rig.check), and a check
+//   that runs too long stopped (rig.checkTimeout). While it's on,
 //   the tasks use the problem matcher `$rig-runtime` instead, which takes
 //   only a program's runtime errors, so a build doesn't list the compile
 //   errors twice;
@@ -822,6 +823,22 @@ function checkSetting(uri) {
     return vscode.workspace.getConfiguration('rig', uri).get('check', 'onType');
 }
 
+// The longest a timer waits, in ms: Node fires a longer one at once.
+const LONGEST_TIMER = 2 ** 31 - 1;
+
+// The setting rig.checkTimeout for a document (its uri): the seconds a
+// check may run before it's stopped, 0 for no limit. A #run runs code while
+// checking (spec 7.8), and that code may never finish; rig check itself has
+// no limit. The settings editor holds the setting to a number of at least
+// 0, but settings.json may hold anything: what isn't such a number is the
+// default, 10, and a limit longer than a timer can wait (about 24 days) is
+// none.
+function checkTimeout(uri) {
+    const seconds = vscode.workspace.getConfiguration('rig', uri).get('checkTimeout', 10);
+    if (typeof seconds !== 'number' || !(seconds >= 0)) return 10;
+    return seconds * 1000 > LONGEST_TIMER ? 0 : seconds;
+}
+
 // The setting rig.main for `file`, in the workspace folder `folder` (the live
 // check reads it only for a file in one): {} when it's empty, { file } with
 // the main file's absolute path, normalised, or { error } saying what's wrong
@@ -918,6 +935,15 @@ function inFolder(document, folder) {
 // and the older's output, if any comes, is ignored; an older one still
 // looking for the main file stops where it is. Checking writes no file, so
 // ending it halfway does no harm.
+//
+// A check runs the program's #runs (spec 7.8), whose code may never finish,
+// so one that runs longer than the setting rig.checkTimeout (checkTimeout)
+// is ended too. The document's problems stay as they were, as the stopped
+// check found nothing, and its program isn't remembered. In the search for
+// the main file, it ends the search, as a compiler that can't start does:
+// neither the next main file nor the document alone is tried. It's said
+// once, with the button to the setting, and again only once the setting
+// changes.
 class LiveCheck {
     constructor() {
         this.collection = vscode.languages.createDiagnosticCollection('rig');
@@ -945,6 +971,7 @@ class LiveCheck {
         this.toldMissing = false; // said once that there's no compiler
         this.toldMain = false;    // said once that rig.main is wrong
         this.toldOld = false;     // said once that the compiler is too old for --stdin-for
+        this.toldTimeout = false; // said once that a check ran past rig.checkTimeout
     }
 
     // Whether a document is one to check: a .rig file on disk. An untitled
@@ -1098,13 +1125,27 @@ class LiveCheck {
         // which parseDiagnostics resolves from cwd and compares with
         // samePath.
         const cwd = buildDirectory(file, folder);
+        // How long each rig of this check may run, in seconds; 0 for ever.
+        const seconds = checkTimeout(document.uri);
 
         // rig's answer as the document's diagnostics: its own, then one for
         // the errors rig found in the program's other files, if any
         // (otherFilesError). When the compiler couldn't be started (it was
         // deleted, or isn't a program), no problems listed, and said once,
-        // like a missing compiler.
+        // like a missing compiler. When it ran past the time limit, the
+        // problems stay as they were, and that's said once.
         const show = (result) => {
+            if (result.timedOut) {
+                if (!this.toldTimeout) {
+                    this.toldTimeout = true;
+                    const limit = `${result.seconds} second${result.seconds === 1 ? '' : 's'}`;
+                    settingError(
+                        `Rig: a check took more than ${limit} and was stopped; a #run may never finish.`,
+                        'rig.checkTimeout',
+                    );
+                }
+                return;
+            }
             if (result.error) {
                 this.collection.delete(document.uri);
                 if (!this.toldMissing) {
@@ -1122,17 +1163,17 @@ class LiveCheck {
         // Checks the document as part of `main`'s program. Resolves 'done'
         // when that's the document's check, now shown (or a newer check has
         // taken over), and remembers main as its program (remember), unless
-        // rig couldn't be started; 'elsewhere' when main's program doesn't load
-        // the document, and the next main file is to be tried; 'alone' when
-        // this rig is too old to know --stdin-for, which is said once, and
-        // the document is to be checked alone. Each rig gets the text as it
-        // is when it starts: what's on screen.
+        // rig couldn't be started or was stopped; 'elsewhere' when main's
+        // program doesn't load the document, and the next main file is to be
+        // tried; 'alone' when this rig is too old to know --stdin-for, which
+        // is said once, and the document is to be checked alone. Each rig
+        // gets the text as it is when it starts: what's on screen.
         const through = async (main) => {
             if (!current()) return 'done';
             const args = ['check', main, '--stdin-for', file];
-            const result = await this.runRig(key, found.compiler, args, cwd, document.getText());
+            const result = await this.runRig(key, found.compiler, args, cwd, document.getText(), seconds);
             if (!current()) return 'done';
-            if (!result.error) {
+            if (!result.error && !result.timedOut) {
                 if (doesntLoad(result.code, result.output)) return 'elsewhere';
                 if (tooOld(result.code, result.output)) {
                     if (!this.toldOld) {
@@ -1204,7 +1245,8 @@ class LiveCheck {
         // Alone: a main file, a file no program in its folder loads, or one
         // this rig can't check as part of its program.
         if (!current()) return;
-        const result = await this.runRig(key, found.compiler, ['check', file, '--stdin'], cwd, document.getText());
+        const args = ['check', file, '--stdin'];
+        const result = await this.runRig(key, found.compiler, args, cwd, document.getText(), seconds);
         if (current()) show(result);
     }
 
@@ -1213,20 +1255,35 @@ class LiveCheck {
     // stop(key) ends it. Resolves { code, output } once it closes, `output`
     // all it wrote to stderr and `code` null when it was killed, or { error }
     // when it couldn't start: Node says so in one of two ways (see
-    // startProcess), by throwing here or with the 'error' event.
-    runRig(key, compiler, args, cwd, text) {
+    // startProcess), by throwing here or with the 'error' event. With
+    // `seconds` > 0, a rig still running after that long is ended, and it
+    // resolves { timedOut: true, seconds } at once, whatever comes after.
+    runRig(key, compiler, args, cwd, text, seconds) {
         return new Promise((resolve) => {
             const child = startProcess(compiler, args, cwd);
             if (child instanceof Error) return resolve({ error: child });
             this.running.set(key, child);
+            let timer;
+            // The first call settles it; a later one, the 'close' of a rig
+            // ended by the timer, changes nothing.
             const end = (result) => {
+                clearTimeout(timer);
                 if (this.running.get(key) === child) this.running.delete(key);
                 resolve(result);
             };
+            if (seconds > 0) {
+                timer = setTimeout(() => {
+                    child.kill();
+                    end({ timedOut: true, seconds });
+                }, seconds * 1000);
+            }
             let output = '';
             child.stderr.setEncoding('utf8'); // whole UTF-8 characters, even split across reads
             child.stderr.on('data', (chunk) => (output += chunk));
-            child.stdout.resume(); // rig check writes nothing there, but a pipe must be drained
+            // rig check writes there only what a #run prints (spec 10.1),
+            // which isn't a diagnostic, but a pipe must be drained, or a run
+            // that prints much would wait on it forever.
+            child.stdout.resume();
             child.stdin.on('error', () => {}); // rig ended (or was ended) before reading it all
             child.stdin.end(text);
             child.on('error', (e) => end({ error: e }));
@@ -1315,7 +1372,10 @@ function activate(context) {
         // A setting that changes what's checked, or how, checks every open
         // document again. A new compiler or main file may be wrong in a new
         // way, and is said to be once more; a new main file is each loaded
-        // document's program to find again.
+        // document's program to find again. A new time limit may let a check
+        // it stopped finish, or stop checks again, which is said once more.
+        // (rig.check doesn't cover rig.checkTimeout: a setting's section
+        // ends at a dot.)
         vscode.workspace.onDidChangeConfiguration((event) => {
             if (event.affectsConfiguration('rig.compilerPath')) {
                 live.toldMissing = false;
@@ -1325,8 +1385,10 @@ function activate(context) {
                 live.toldMain = false;
                 live.programs.clear();
             }
+            if (event.affectsConfiguration('rig.checkTimeout')) live.toldTimeout = false;
             if (
                 event.affectsConfiguration('rig.check') ||
+                event.affectsConfiguration('rig.checkTimeout') ||
                 event.affectsConfiguration('rig.compilerPath') ||
                 event.affectsConfiguration('rig.main')
             ) {
@@ -1352,4 +1414,4 @@ function deactivate() {}
 // VS Code needs activate and deactivate. forTests is for test/check.js,
 // which loads this file with a stand-in for VS Code's API and checks the
 // helpers' behaviour.
-module.exports = { activate, deactivate, forTests: { isInside, findCompiler, mainSetting, taskFile, RigTerminal } };
+module.exports = { activate, deactivate, forTests: { isInside, findCompiler, mainSetting, checkTimeout, taskFile, RigTerminal } };

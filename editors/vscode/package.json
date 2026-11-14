@@ -2,7 +2,7 @@
     "name": "rig-language",
     "displayName": "Rig",
     "description": "The Rig programming language: syntax highlighting, snippets, errors as you type, build and run commands, debugging",
-    "version": "0.3.1",
+    "version": "0.4.0",
     "publisher": "woozchucky",
     "license": "MIT",
     "homepage": "https://woozchucky.github.io/rig/",
@@ -185,6 +185,13 @@
                     ],
                     "default": "onType",
                     "markdownDescription": "When to run `rig check` on an open `.rig` file and show its errors in the editor and the Problems panel, without building. While it's on, the build and run tasks list only a program's runtime errors, since the compile errors are already there."
+                },
+                "rig.checkTimeout": {
+                    "type": "number",
+                    "default": 10,
+                    "minimum": 0,
+                    "scope": "resource",
+                    "markdownDescription": "The seconds a check (`rig.check`) may run before the extension stops it, since a `#run` runs code while checking, and that code may never finish (section 7.8 of the specification). A stopped check leaves the file's errors as they were, and is said once. `0`: no limit."
                 },
                 "rig.main": {
                     "type": "string",
