@@ -679,11 +679,16 @@ static const Command_Case COMMAND_CASES[] = {
 // The program CHECK_CASES' "-o --stdin-for" case would build in the
 // repository's root if rig took --stdin-for for -o's name: that case can't
 // aim it into .build/tests, as the others aim theirs, since the word is the
-// name. Whoever writes it is told so, and it's removed.
+// name. On Windows the linker writes a PDB beside it, there too. Whoever
+// writes them is told so, and they're removed.
 static String command_test(Arena *a, String rig, const Command_Case *c) {
     remove(".build/tests/output.RIG");  // what the last case must not write
-    String stray = string_printf(a, "--stdin-for%s", EXE);
-    remove(string_cstr(a, stray));
+#ifdef _WIN32
+    const char *strays[] = {"--stdin-for.exe", "--stdin-for.pdb"};
+#else
+    const char *strays[] = {"--stdin-for"};
+#endif
+    for (const char *stray : strays) remove(stray);
     Array<String> argv = {};
     array_add(&argv, rig);
     for (s64 i = 0; i < 7 && c->args[i]; i++) array_add(&argv, str(c->args[i]));
@@ -692,10 +697,13 @@ static String command_test(Arena *a, String rig, const Command_Case *c) {
     bool started = run(a, argv, {}, &result, &why);
     array_free(&argv);
     if (!started) return why;
-    if (os_file_exists(stray)) {
-        remove(string_cstr(a, stray));
-        return string_printf(a, "rig wrote " STR_FMT, STR_ARG(stray));
+    String wrote = {};
+    for (const char *stray : strays) {
+        if (!os_file_exists(str(stray))) continue;
+        remove(stray);
+        wrote = wrote.count ? string_printf(a, STR_FMT " and %s", STR_ARG(wrote), stray) : str(stray);
     }
+    if (wrote.count) return string_printf(a, "rig wrote " STR_FMT, STR_ARG(wrote));
     if (result.exit_code != c->exit_code) {
         return with_stderr(a,
                            string_printf(a, "rig exited with " STR_FMT ", expected %d",
