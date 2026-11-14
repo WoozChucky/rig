@@ -708,7 +708,7 @@ TEST(interp_globals_and_relocations) {
         // bytes at its own, a scalar at its size.
         for (s32 k = 0; k < (s32)m->globals.count; k++) {
             Ir_Global *g = &m->globals[k];
-            u64 align = g->type != IR_VOID ? interp_size(g->type) : g->is_variable ? g->align : 1;
+            u64 align = g->type != IR_VOID ? interp_size(g->type) : g->has_layout ? g->align : 1;
             CHECK_EQ((u64)(uintptr_t)interp_global(in, k) % align, 0);
         }
     }
@@ -760,6 +760,37 @@ TEST(interp_globals_and_relocations) {
         CHECK(memcmp(bytes_held, first_bytes, sizeof first_bytes) == 0);
         memcpy(&held, bytes_held + 8, sizeof held);
         CHECK(held == (u64)(uintptr_t)interp_global(in, holder + 1));
+    }
+    interp_test_free(&r);
+    interp_free(in);
+    arena_free(&a);
+}
+
+TEST(interp_maps_read_only_globals) {
+    // A data constant's bytes, read-only in the compiled program, are
+    // mapped as a variable of bytes is: at their alignment, the bytes given
+    // and then zeros, each relocation written, and writable, as a string
+    // literal's are (spec 10.8). Here @const.0 is 24 bytes: a count (3),
+    // the address of @str.0, and 8 zeros.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, "main :: () { }\n");
+    s32 text = add_string(m, "str.0", "abc");
+    s32 constant = add_read_only_global(m, "const.0", 24, 8);
+    u8 *bytes = (u8 *)arena_alloc(&a, 24, 1);  // zeroed
+    bytes[0] = 3;
+    m->globals[constant].bytes = {bytes, 24};
+    array_add(&m->globals[constant].relocs, {8, text, false});
+    Interp *in = interp_new(m);
+    Interp_Result r = {};
+    interp_test_run(in, m, "main", &a, &r);
+    CHECK(r.ok);
+    if (r.ok) {
+        u8 *held = interp_global(in, constant);
+        CHECK_EQ((u64)(uintptr_t)held % 8, 0);
+        CHECK_EQ(held[0], 3);
+        u64 address = 0;
+        memcpy(&address, held + 8, sizeof address);
+        CHECK(address == (u64)(uintptr_t)interp_global(in, text));
     }
     interp_test_free(&r);
     interp_free(in);
