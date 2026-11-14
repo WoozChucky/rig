@@ -4,14 +4,18 @@
 // must be checked, and free of errors: the walk here (reach_run) goes
 // through the code it reaches, checks the bodies it meets on demand
 // (checker.cpp's check_reached_body), and stops at the first error it finds
-// there, saying nothing new: the error was said where it is.
+// there. An error already in that code was said where it is, and the walk
+// says nothing more about it. What the walk finds itself it says: a call of
+// main or a circle through a body at the #run, a circle through a struct at
+// the struct, a body nested too deeply at its name.
 //
 // The walk is conservative: it follows every name lowering can follow
 // (calls, procedure values, constants and their data, globals' values), so
 // whatever the #run's code is lowered with is checked, whether or not it
-// runs. And it fails where lowering couldn't go on: a value with no type, a
-// #run with no value, a procedure that is broken or had errors, a struct
-// field whose type is still unknown.
+// runs. And it fails where lowering couldn't go on: a value, a parameter or
+// a result with no type, a #run with no value, a procedure that is broken
+// or had errors, a struct still being laid out, a struct field whose type
+// is still unknown.
 
 #include "check.h"
 
@@ -132,26 +136,45 @@ static bool uses_no_locals(Checker *c, Ast *operand) {
 // A procedure reached, by a call or as a value: its signature and its body
 // checked (check_reached_body, which checks a body not checked yet, and
 // finds a circle), neither with errors; then its body walked, and its
-// parameters' and results' types reached. A foreign one has no body: C's
-// code is called as it is.
+// parameters' and results' types reached. Each must have one: a type with
+// an error counted to another declaration (`a: [K]int`, K's value wrong)
+// leaves the procedure without errors of its own, but its parameter with
+// no type. A foreign one has no body: C's code is called as it is.
 static bool walk_proc(Reach *r, Ast_Proc *proc) {
     if (proc->is_broken || !check_proc_signature(r->c, proc) || proc->had_errors) return false;
     if (!check_reached_body(r->c, proc, r->run->pos)) return false;
-    for (s64 i = 0; i < proc->params.count; i++) reach_type(r, proc->params[i]->type);
-    for (s64 i = 0; i < proc->results.count; i++) reach_type(r, proc->results[i]->type);
+    for (s64 i = 0; i < proc->params.count; i++) {
+        if (!proc->params[i]->type) return false;
+        reach_type(r, proc->params[i]->type);
+    }
+    for (s64 i = 0; i < proc->results.count; i++) {
+        if (!proc->results[i]->type) return false;
+        reach_type(r, proc->results[i]->type);
+    }
     if (proc->body) array_add(&r->nodes, proc->body);
     return true;
 }
 
 // An expression reached. Every one must have a type: one without had an
-// error, said. A name reaches its declaration: a procedure, a global or a
-// constant (a local variable or a parameter is in the body being walked). A
-// call of a procedure reaches the procedure, but never main, where the
-// program starts: "main is where the program starts; #run can't call it",
-// at the #run. A #run is walked through its value: one with none failed, or
-// reached errors, said already.
+// error, said. Its type is reached, so a struct it is (p.*, p[i], a copy
+// through two pointers) is laid out, as is the struct a pointer it moves
+// points at (p + 1): lowering needs their sizes. A name reaches its
+// declaration: a procedure, a global or a constant (a local variable or a
+// parameter is in the body being walked). A call of a procedure reaches the
+// procedure, but never main, where the program starts: "main is where the
+// program starts; #run can't call it", at the #run. A #run is walked
+// through its value: one with none failed, or reached errors, said already.
 static bool walk_expression(Reach *r, Ast *e) {
     if (!e->type) return false;
+    reach_type(r, e->type);
+    if (e->kind == AST_BINARY) {
+        // Pointer arithmetic's operands are taken at the pointer's type
+        // (Ast_Binary.operand_type); a comparison's may be too, but needs no
+        // size.
+        Ast_Binary *b = (Ast_Binary *)e;
+        bool moves = b->op == TOKEN_PLUS || b->op == TOKEN_MINUS;
+        if (moves && b->operand_type && type_is_pointer(b->operand_type)) reach_type(r, b->operand_type->pointee);
+    }
     switch (e->kind) {
     case AST_NAME: {
         Ast *decl = ((Ast_Name *)e)->decl;
@@ -231,7 +254,11 @@ static bool walk_node(Reach *r, Ast *node) {
         return true;
     }
     case AST_ASSIGN: {
+        // p += n and p -= n move a pointer, as p + n does (walk_expression).
         Ast_Assign *assign = (Ast_Assign *)node;
+        Type *to = assign->targets[0]->type;
+        bool moves = assign->op == TOKEN_PLUS_EQUAL || assign->op == TOKEN_MINUS_EQUAL;
+        if (moves && to && type_is_pointer(to)) reach_type(r, to->pointee);
         array_add(nodes, assign->value);
         for (s64 i = assign->targets.count - 1; i >= 0; i--) array_add(nodes, assign->targets[i]);
         return true;
@@ -278,10 +305,11 @@ static bool walk_node(Reach *r, Ast *node) {
 // views, has every field's type made now (check_late_field). The #run may
 // come in the declaration pass, before resolve_late_fields has made a late
 // field's type, and lowering and baking need them all. A pointer's target
-// isn't looked behind: lowering needs no more than its address. False when
-// a struct has no layout (a circle, too big, too deep), or is still being
-// laid out (a circle through this #run, check_finished_layout), or a field
-// has no type: errors, said.
+// isn't looked behind: holding one needs no more than its address (code
+// that moves it reaches its target where it does, walk_expression). False
+// when a struct has no layout (a circle, too big, too deep), or is still
+// being laid out (a circle through this #run, check_finished_layout), or a
+// field has no type: errors, said.
 static bool walk_type(Reach *r, Type *t) {
     if (t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW) {
         reach_type(r, t->element);
@@ -334,9 +362,9 @@ static bool reach_run(Checker *c, Ast_Run *run, Type *t) {
 //    typed int, as `x := 7;` is.
 // 3. An operand that is a constant already runs nothing: the #run is that
 //    constant, and its value the operand.
-// 4. Anything else must reach no errors (reach_run), its operand's own
-//    included; if it does, it has no value, and what needs it says nothing
-//    more (has_failed_run).
+// 4. Anything else must reach no errors (reach_run); if it does, it has no
+//    value, and what needs it says nothing more (has_failed_run). One whose
+//    operand had errors isn't walked: only the locals in it are said.
 // 5. Then it runs, once the compile-time world can run it (issue #115's
 //    next steps). Until then it has no value either.
 Type *check_run(Checker *c, Ast_Run *run) {
@@ -354,8 +382,14 @@ Type *check_run(Checker *c, Ast_Run *run) {
         run->value = operand;
         return t;
     }
-    bool operand_fine = c->diag->error_count == errors;
-    if (!reach_run(c, run, t) || !operand_fine) return t;
+    if (c->diag->error_count != errors) {
+        // Its operand's error was said; what it reaches isn't walked, as a
+        // top-level #run's isn't, so nothing more is said about it (main, a
+        // circle). Only its locals are, mistakes of its own.
+        uses_no_locals(c, operand);
+        return t;
+    }
+    if (!reach_run(c, run, t)) return t;
     // 5: it would run here; it has no value until it does.
     return t;
 }

@@ -779,9 +779,12 @@ static void resolve_global(Checker *c, Ast *decl) {
 // resolve_late_fields gets to it, and it's made then (make_late_field,
 // check_late_field). A late field's type, a global's or a signature's can
 // take a struct's Type before its layout is known (*Bad), and that layout
-// may still fail (a circle, too big), leaving the struct no type; so a
-// type made before every layout is done is made again at the end
-// (made_again).
+// may still fail (a circle, too big), leaving the struct no type; so such
+// a type is made again at the end (made_again). A body a #run reaches is
+// worked out in the pass too (check_reached_body), and its locals' types
+// can take a struct behind a pointer the same way; those aren't made
+// again, and what the body says of them stays said, as a global's value's
+// does.
 
 // The field of struct s before its i-th with the same name, or null.
 static Ast_Field *earlier_field(Ast_Struct *s, s64 i) {
@@ -922,7 +925,9 @@ static bool circle_through_a_value(Checker *c, Ast *decl) {
 // a signature before it in source order may have taken it behind a
 // pointer already (*Node), and what its value says, true of the pointer
 // whatever the struct, stays said (`h : int = g;` with g a *Node); its
-// type is then made again (made_again), so later uses say nothing. A struct larger than any type
+// type is then made again (made_again), so later uses say nothing. So may
+// a local of a body a #run reaches before it, whose messages stay said
+// too, but whose type isn't made again. A struct larger than any type
 // may be (TYPE_MAX_SIZE), its fields each fine, is "'Huge' is too big", at
 // its name, and has no type either.
 static Type *resolve_struct(Checker *c, Ast_Struct *s) {
@@ -1575,6 +1580,13 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 // the parser), and what it needs, a global or another body, starts a level
 // below its deepest. A body that is too deep there is said once, left to
 // its own turn, and its #run says nothing more.
+//
+// A body checked in its own turn (check()'s last pass) isn't opened so, nor
+// is a top-level #run's expression (check_top_level_run): c->levels stays
+// 0 inside them, and a body their #runs need starts at 0, however deep in
+// them the #run is. So at most one of them, a body's blocks and
+// expressions up to twice MAX_DEPTH deep (parser.cpp's reach_in_body), is
+// on the stack under a chain that is counted, which the stack holds.
 //
 // A body found under way is a circle (spec 4.8 and 7.8): the #run needs
 // the code of a body that isn't all checked yet, its own or one that needs

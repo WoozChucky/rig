@@ -5433,11 +5433,13 @@ TEST(run_cant_use_locals) {
     // Code run while compiling runs before any call of the procedure it's
     // in: its locals, its parameters and its loops' iterators don't exist
     // yet. A local constant is known while compiling, and is fine. A local
-    // inside a #run inside the operand is said once, by the inner #run.
+    // inside a #run inside the operand is said once, by the inner #run. One
+    // is found wherever it is in the operand: an element's array or index, a
+    // field's struct, an operator's operand.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "f :: (n: int) -> int { return n; }\n"
-                           "g :: (n: int) -> int {\n"
+                           "g :: (n: int, arr: []int) -> int {\n"
                            "    x := 1;\n"
                            "    L :: 2;\n"
                            "    a := #run f(x);\n"
@@ -5445,6 +5447,9 @@ TEST(run_cant_use_locals) {
                            "    for 0..1 { c := #run f(it); d := #run f(it_index); }\n"
                            "    e := #run f(#run f(x));\n"
                            "    h := #run f(cast(int) x);\n"
+                           "    for v: arr { i := #run f(v); }\n"
+                           "    j := #run f(arr[0] + int.[1, 2][x]);\n"
+                           "    k := #run f(-arr.count);\n"
                            "    return 0;\n"
                            "}\n"
                            "main :: () { }\n"),
@@ -5453,7 +5458,11 @@ TEST(run_cant_use_locals) {
               "7:28: #run can't use 'it': it's the loop's iterator, which doesn't exist while compiling\n"
               "7:45: #run can't use 'it_index': it's the loop's index, which doesn't exist while compiling\n"
               "8:24: #run can't use 'x': it's a local, which doesn't exist while compiling\n"
-              "9:27: #run can't use 'x': it's a local, which doesn't exist while compiling\n");
+              "9:27: #run can't use 'x': it's a local, which doesn't exist while compiling\n"
+              "10:30: #run can't use 'v': it's the loop's iterator, which doesn't exist while compiling\n"
+              "11:17: #run can't use 'arr': it's a parameter, which doesn't exist while compiling\n"
+              "11:37: #run can't use 'x': it's a local, which doesn't exist while compiling\n"
+              "12:18: #run can't use 'arr': it's a parameter, which doesn't exist while compiling\n");
     arena_free(&a);
 }
 
@@ -5467,6 +5476,20 @@ TEST(run_cant_reach_main) {
                            "main :: () { x := #run helper(); }\n"),
               "2:6: main is where the program starts; #run can't call it\n"
               "3:19: main is where the program starts; #run can't call it\n");
+    // A #run whose operand has an error says nothing more about what it
+    // reaches, in an expression as at the top level; a local in its operand
+    // is still said.
+    Checked c = check_src(&a,
+                          "helper :: () -> int { main(); return 1; }\n"
+                          "N :: #run helper(1);\n"
+                          "#run helper(1);\n"
+                          "main :: () { x := 1; y := #run helper(x); }\n");
+    CHECK_STR(sorted_messages(&a, &c),
+              "2:11: 'helper' takes 0 arguments, but 1 was given\n"
+              "3:6: 'helper' takes 0 arguments, but 1 was given\n"
+              "4:32: 'helper' takes 0 arguments, but 1 was given\n"
+              "4:39: #run can't use 'x': it's a local, which doesn't exist while compiling\n");
+    token_list_free(c.list);
     arena_free(&a);
 }
 
@@ -5535,7 +5558,29 @@ TEST(run_body_circles) {
                            "f :: () -> int { x : S; return 1; }\n"
                            "main :: () { }\n"),
               "1:1: 'S' is defined in terms of itself\n");
+    // So is code that needs S's size without holding an S: moving a pointer
+    // to one, indexing through it, copying one through two.
+    const char *sized[] = {"q := p + 1;", "p += 1;", "n := p[1].a;", "p.* = p[1];"};
+    for (s64 i = 0; i < 4; i++) {
+        CHECK_STR(check_source(&a, joined(&a, "S :: struct { a: int; b: [#run f()]int; }\n"
+                                              "f :: () -> int { p : *S = null; ",
+                                          sized[i], " return 1; }\nmain :: () { }\n")),
+                  "1:1: 'S' is defined in terms of itself\n");
+    }
     arena_free(&a);
+}
+
+// Whether what the #run that is constant `name`'s value reaches is free of
+// errors, so it would run: check_run.cpp's walk (reach_run), done again
+// once the check is, when every declaration and body it meets is done and
+// it only looks.
+static bool reaches_clean(Arena *a, Checked *c, const char *name) {
+    Ast *run = ((Ast_Const *)global_named(c, name))->value;
+    RIG_ASSERT(run->kind == AST_RUN);
+    Checker checker = {};
+    checker.arena = a;
+    checker.diag = &c->list->diag;
+    return reach_run(&checker, (Ast_Run *)run, run->type);
 }
 
 TEST(run_stops_at_errors_it_reaches) {
@@ -5575,7 +5620,8 @@ TEST(run_stops_at_errors_it_reaches) {
     CHECK(c.file->procs[5]->had_errors);   // bad
     token_list_free(c.list);
     // A #run with no value says nothing more wherever it's needed: inside
-    // an operator, a cast or a literal, in a constant, a global's value or
+    // an operator, a cast, a literal, an element's index, a field's struct,
+    // a dereference or a call's argument, in a constant, a global's value or
     // an array's count.
     CHECK_STR(check_source(&a,
                            "f :: () -> int { return unknown; }\n"
@@ -5585,8 +5631,34 @@ TEST(run_stops_at_errors_it_reaches) {
                            "grid : [#run f()]int;\n"
                            "Q :: cast(u8) #run f();\n"
                            "R :: int.[#run f()];\n"
+                           "T :: int.[1, 2];\n"
+                           "i : int = T[#run f()];\n"
+                           "Pair :: struct { a: int; }\n"
+                           "s :: () -> Pair { return Pair.{f()}; }\n"
+                           "m : int = (#run s()).a;\n"
+                           "p :: () -> *int { n := f(); return null; }\n"
+                           "d : int = (#run p()).*;\n"
+                           "id :: (n: int) -> int { return n; }\n"
+                           "k : int = id(#run f());\n"
                            "main :: () { }\n"),
               "1:25: unknown identifier 'unknown'\n");
+    // A parameter whose type had an error counted to another declaration:
+    // K's sizes it, so h itself had none, but a has no type, and the #run
+    // that reaches h through use_h fails. Until #run runs, the walk's
+    // verdict is seen only by walking again (reaches_clean).
+    c = check_src(&a,
+                  "K :: unknown_thing;\n"
+                  "h :: (a: [K]int) -> int { return 1; }\n"
+                  "use_h :: () -> int { x : [2]int; return h(x); }\n"
+                  "M :: #run use_h();\n"
+                  "one :: () -> int { return 1; }\n"
+                  "L :: #run one();\n"
+                  "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "1:6: unknown identifier 'unknown_thing'\n");
+    CHECK(!c.file->procs[0]->had_errors);
+    CHECK(!reaches_clean(&a, &c, "M"));
+    CHECK(reaches_clean(&a, &c, "L"));
+    token_list_free(c.list);
     arena_free(&a);
 }
 
@@ -5623,9 +5695,17 @@ TEST(bodies_are_checked_once_on_demand) {
 TEST(bodies_checked_on_demand_have_their_own_scopes_and_loops) {
     // A body a #run reaches, and a declaration worked out where it's needed,
     // see none of the names in scope where the #run is, nor its loops: f's x
-    // is unknown in g's body, in M's value and in S's count, and g's break
-    // is in no loop.
+    // is unknown in g's body, in M's value, in S's count (needed through K,
+    // or by f's body itself), in a parameter's or a result's type of a
+    // procedure f's body calls, and in a late field's type f's body needs,
+    // and g's break is in no loop. Once g's body is done, the checker is
+    // back in f's: f's return is f's, not g's.
     Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: () -> int { a := #run g(); return 1; }\n"
+                           "g :: () -> bool { return true; }\n"
+                           "main :: () { }\n"),
+              "");
     CHECK_STR(check_source(&a,
                            "f :: () -> int { x := 1; return #run g(); }\n"
                            "g :: () -> int { return x; }\n"
@@ -5644,6 +5724,30 @@ TEST(bodies_checked_on_demand_have_their_own_scopes_and_loops) {
                            "K :: size_of(S);\n"
                            "main :: () { }\n"),
               "3:19: unknown identifier 'x'\n");
+    CHECK_STR(check_source(&a,
+                           "N :: #run f();\n"
+                           "f :: () -> int { x := 2; y : S; return x; }\n"
+                           "S :: struct { a: [x]int; }\n"
+                           "main :: () { }\n"),
+              "3:19: unknown identifier 'x'\n");
+    CHECK_STR(check_source(&a,
+                           "N :: #run f();\n"
+                           "f :: () -> int { x := 2; k(0); return x; }\n"
+                           "k :: (a: [x]int) { }\n"
+                           "main :: () { }\n"),
+              "3:11: unknown identifier 'x'\n");
+    CHECK_STR(check_source(&a,
+                           "N :: #run f();\n"
+                           "f :: () -> int { x := 2; g(); return x; }\n"
+                           "g :: () -> [x]int { y : [2]int; return y; }\n"
+                           "main :: () { }\n"),
+              "3:13: unknown identifier 'x'\n");
+    CHECK_STR(check_source(&a,
+                           "N :: #run f();\n"
+                           "f :: () -> int { x := 2; t : T; q := t.p; return x; }\n"
+                           "T :: struct { p: *[x]int; }\n"
+                           "main :: () { }\n"),
+              "3:20: unknown identifier 'x'\n");
     CHECK_STR(check_source(&a,
                            "f :: () -> int { for 0..1 { a := #run g(); } return 0; }\n"
                            "g :: () -> int { break; return 1; }\n"

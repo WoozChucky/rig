@@ -172,8 +172,12 @@ static s32 open_levels(Parser *p) {
 // type there together: kept in p->body_deepest if it's the most so far,
 // counted as MAX_DEPTH at most. Blocks and expressions each have a limit of
 // their own, so the two together may reach twice it, which the stack still
-// holds (the limit's comment above): such a body is worked out only where
-// nothing is around it, at level 0, and nothing is worked out inside it.
+// holds (the limit's comment above): where a #run needs such a body, it's
+// worked out only at level 0, and nothing is worked out inside it. A body
+// checked in its own turn isn't counted (checker.cpp's check_reached_body),
+// so a body one of its #runs needs is at level 0 however deep in it the
+// #run is: at most one body that isn't counted, its blocks and expressions
+// up to twice the limit deep, is on the stack under the ones that are.
 static void reach_in_body(Parser *p, s32 levels) {
     if (levels > MAX_DEPTH) levels = MAX_DEPTH;
     if (levels > p->body_deepest) p->body_deepest = levels;
