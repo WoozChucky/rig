@@ -297,7 +297,7 @@
 // - A struct larger than any type may be, 2^40 bytes (TYPE_MAX_SIZE), is
 //   "'Huge' is too big", at its name.
 //
-// Arrays and views (spec 6.5, Jai's).
+// Arrays and views (spec 3.6 and 3.7, Jai's).
 // - [N]T is N T's one after another; N is an integer known while compiling,
 //   from 0 up: "an array's count must be an integer, not 'float32'", "an
 //   array's count must be known while compiling", "an array's count can't
@@ -364,7 +364,7 @@
 //   take a '[3]int'; pass its .data", and returns none ("... can't return a
 //   '[]int' yet").
 //
-// Strings (spec 6.5).
+// Strings (spec 3.8).
 // - string is a view of bytes, laid out as []u8, { count: int; data: *u8; },
 //   not ended by a zero. A string literal is one, its count the bytes
 //   without the zero after them (x := "hi"; x.count is 2). .count and .data,
@@ -372,13 +372,14 @@
 //   for a string that is constant data: its .count and a byte at a constant
 //   index fold (above), and when it's part of a constant its bytes are no
 //   place, so for * NAME is refused (a[i] above).
-// - Only a literal converts to *u8, since only its bytes are known to end
-//   with a zero, and so does constant data holding one (literal_address):
-//   a constant, or a string field or element of one (NAME for
-//   `NAME :: "rig";`, NAMED.name, NAMES[1]); any other string doesn't:
-//   "a value of type 'string' doesn't convert to '*u8' implicitly; its
-//   .data may not end with a zero" (an argument's message ends the same
-//   way).
+// - A string literal converts to *u8, its bytes being known to end with a
+//   zero, and so does constant data holding one, a constant or a string
+//   field or element of one (NAME for `NAME :: "rig";`, NAMED.name,
+//   NAMES[1]): is_literal_string. No other string does, its bytes possibly
+//   going on past its count; nor does a cast of a literal, a string like
+//   any other (spec 3.8): "a value of type 'string' doesn't convert to
+//   '*u8' implicitly; its .data may not end with a zero" (an argument's
+//   message ends the same way).
 // - == and != compare two strings by their bytes; a string meets no other
 //   type ("mismatched types 'string' and '*u8' for '=='"), and has no order
 //   or arithmetic ("'<' needs numbers, not 'string'").
@@ -444,10 +445,10 @@
 //   and a string literal (or constant data holding one: a constant, or a
 //   string field or element of one) is passed as a C string, its bytes'
 //   address, as it is to a *u8 parameter. A struct, an array, a view or
-//   any other string is "argument 2 of 'printf' has type 'Vec2', which C's '...'
-//   can't take; pass a pointer to it" (an array's or a view's: "pass its
-//   .data"; a string's: "pass its .data, which may not end with a zero, or
-//   a literal").
+//   any other string is "argument 2 of 'printf' has type 'Vec2', which C's
+//   '...' can't take; pass a pointer to it" (an array's or a view's: "pass
+//   its .data"; a string's: "pass its .data, which may not end with a zero,
+//   or a literal").
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
@@ -484,11 +485,10 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d);
 // not a loop's iterator or index; p.*; a field of a place, or of a struct
 // reached through a pointer; an element of a place's array, or of a view's,
 // a pointer's or a string's, unless that string is part of a constant
-// (constant_root). An array's .count and .data never are. The one
-// statement of the rule: the checker asks it before taking an address or
-// assigning (and says why not), and lowering asks it what an array
-// converted to a view is seen through (lower_view_of): the array itself, or
-// a copy of it.
+// (constant_root). An array's .count and .data never are. The one statement
+// of the rule: the checker asks it before taking an address or assigning
+// (and says why not), and lowering asks it what an array converted to a
+// view is seen through (lower_view_of): the array itself, or a copy of it.
 bool expr_is_place(Ast *e);
 
 // The name of the constant holding data that e, checked, is part of: e
@@ -504,11 +504,23 @@ Ast_Name *constant_root(Ast *e);
 // to []u8 or between pointers (cast(*void) cast(*u8) "x"), or constant data
 // holding it (constant_data: NAME for NAME :: "rig";, a *u8 field of a
 // constant, OPS[0].symbol), and casts of that, and the .data of any of
-// them (NAME.data); null for anything else, a cast of it to an integer too. A global and a constant may hold one, its
-// address written there by the linker: the checker asks this to allow it,
-// and where a string converts to a *u8 as a literal does; lowering, to
-// write it (constant_bytes).
+// them (NAME.data); null for anything else, a cast of it to an integer too.
+// A global and a constant may hold one, its address written there by the
+// linker: the checker asks this to allow it, and where a string converts to
+// a *u8 as a literal does (is_literal_string); lowering, to write it
+// (constant_bytes).
 Ast_String *literal_address(Ast *e);
+
+// Whether string e, checked, is a string literal's bytes, with the zero
+// after them, so it converts to a *u8 and passes C's '...' as the literal
+// does (spec 3.8): the literal itself, or constant data holding it
+// (literal_address), as NAME for NAME :: "rig"; or a string field or
+// element of a constant. A cast isn't, cast(string) "hi" included: only the
+// literal as it's written, or constant data holding it, converts. The one
+// statement of the rule: the checker asks it where a string meets a *u8 or
+// C's '...', and lowering what such an argument is passed as
+// (extra_argument_type).
+bool is_literal_string(Ast *e);
 
 // Whether e, checked, is constant data (spec 5.9), and in *value the node
 // holding its value, following names, fields, elements and casts:

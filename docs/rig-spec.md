@@ -630,7 +630,7 @@ A constant that names a procedure, `OP :: add;` (or `OP :: OTHER;`, where `OTHER
 
 A constant has the type of its value: untyped when the value is an untyped constant, so `LIMIT :: 100;` meets types as the literal `100` does, and typed otherwise (`MASK :: cast(u8) 0xF0;` is a `u8`, `NAME :: "rig";` a `string`).
 
-A constant that is a number, a `bool`, a pointer or a procedure occupies no storage of its own: each use is its value, a string literal's address pointing at the literal's bytes (section 3.8). Nor does constant data that the program uses only through what folds (section 5.9): its fields, its elements at constant indexes, its `.count` (`N :: PRIMES[2];`, `[PRIMES.count]int`). Constant data used at run time, indexed by a variable, gone over by `for`, seen as a view, passed or copied whole, lives once in the program's read-only data (section 10.3), however many uses read it, and each use reads it there.
+A constant that is a number, a `bool`, a pointer or a procedure occupies no storage of its own: each use is its value, a string literal's address pointing at the literal's bytes (section 3.8). Nor does constant data that the program uses only through what folds (section 5.9): its fields, its elements at constant indexes, its `.count` (`N :: PRIMES[2];`, `[PRIMES.count]int`); nor does a string constant, or a string part of constant data, used only where it converts to a `*u8` (`puts(NAME)`, section 3.8): each such use is its literal's address, and needs only the literal's bytes. Constant data used at run time otherwise, indexed by a variable, gone over by `for`, seen as a view, passed or copied whole, lives once in the program's read-only data (section 10.3), however many uses read it, and each use reads it there.
 
 No part of a constant can be assigned to or have its address taken: a constant is not a place (section 5.1), nor is any field or element of one, a string constant's bytes included. `PRIMES[0] = 1;` is `can't assign to 'PRIMES': it's a constant`, as `N = 1;` is `can't assign to 'N': it's a constant`, and `*ORIGIN.x` is `can't take the address of 'ORIGIN': it's a constant`.
 
@@ -924,7 +924,7 @@ A constant expression is one whose value is known while compiling. The compiler 
 - a cast of a constant to a number type or `bool`, and a cast of `null` to a pointer type;
 - a part of constant data (below) that is a number, a `bool` or `null`: a field (`ORIGIN.y`), an element at a constant index (`PRIMES[2]`), a string's byte at a constant index (`NAME[1]`, a `u8`), or a string's `.count` (`NAME.count`, an `int`). A literal's parts fold too: `Vec2.{5, 6}.y` is 6, `"abc"[0]` is 97 and `"abc".count` is 3. A field or element that a literal leaves out is 0, `false` or `null`, and a string it leaves out is the empty string: its `.count` is 0 and its `.data` is `null`.
 
-**Constant data** is a value known while compiling that is a string, a struct or an array:
+**Constant data** is a value known while compiling that is a string, a struct or an array, or a string's bytes seen as a `[]u8`:
 
 - a string literal;
 - a struct or array literal whose every value is a constant, a procedure (its name, or a constant naming one, section 3.15), a string literal's address (section 3.8) or constant data, nested to any depth;
