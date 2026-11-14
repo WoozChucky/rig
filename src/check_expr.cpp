@@ -225,6 +225,9 @@ void report_no_conversion(Checker *c, Ast *value, Type *to) {
                STR_ARG(conversion_hint(c, value, value->type, to)));
 }
 
+// Casts are walked through; a field or an element of constant data goes on
+// from the node holding its value (constant_data), a procedure's name in a
+// literal, or a cast of one.
 Ast_Proc *procedure_address(Ast *e) {
     for (;;) {
         Type *t = e->type;
@@ -234,18 +237,130 @@ Ast_Proc *procedure_address(Ast *e) {
             if (decl->kind == AST_PROC) return (Ast_Proc *)decl;
             return decl->kind == AST_CONST ? ((Ast_Const *)decl)->proc : nullptr;
         }
-        if (e->kind != AST_CAST) return nullptr;
-        e = ((Ast_Cast *)e)->value;
+        if (e->kind == AST_CAST) {
+            e = ((Ast_Cast *)e)->value;
+            continue;
+        }
+        Ast *value;
+        if (!constant_data(e, &value) || !value) return nullptr;
+        e = value;
     }
 }
 
+// Casts are walked through; constant data goes on from the node holding
+// its value (constant_data): a string constant's literal, or the value a
+// *u8 field of a constant holds, which may be a cast of a literal.
 Ast_String *literal_address(Ast *e) {
     for (;;) {
         Type *t = e->type;
         if (!t || (!type_is_view_or_string(t) && !type_is_pointer(t))) return nullptr;
         if (e->kind == AST_STRING) return (Ast_String *)e;
-        if (e->kind != AST_CAST) return nullptr;
-        e = ((Ast_Cast *)e)->value;
+        if (e->kind == AST_CAST) {
+            e = ((Ast_Cast *)e)->value;
+            continue;
+        }
+        Ast *value;
+        if (!constant_data(e, &value) || !value) return nullptr;
+        e = value;
+    }
+}
+
+// Whether string e is a string literal's bytes, with the zero after them, so
+// it converts to a *u8 and passes C's '...' as the literal does (spec 3.8):
+// the literal itself, or constant data holding it (literal_address), as
+// NAME for NAME :: "rig"; or a string field of a constant. A cast isn't,
+// cast(string) "hi" included: only the literal as it's written, or
+// constant data holding it, converts.
+static bool is_literal_string(Ast *e) {
+    return e->type == &type_string && e->kind != AST_CAST && literal_address(e);
+}
+
+Ast *literal_field_value(Ast_Literal *literal, Type *t, s32 field) {
+    if (!literal->names.count) return field < literal->values.count ? literal->values[field] : nullptr;
+    // The first value given for it: one given twice is an error, reported,
+    // and the second was never checked against the field.
+    for (s64 i = 0; i < literal->names.count; i++) {
+        if (string_eq(literal->names[i], t->fields[field].name)) return literal->values[i];
+    }
+    return nullptr;
+}
+
+// A literal's value, `part`, as constant_data reads it: the node holding its
+// value, `part` itself when that's a scalar (a constant, a procedure, a
+// string literal's address), which constant_data doesn't follow.
+static Ast *part_value(Ast *part) {
+    Ast *value;
+    return constant_data(part, &value) ? value : part;
+}
+
+bool constant_data(Ast *e, Ast **value) {
+    *value = nullptr;
+    Type *t = e->type;
+    if (!t) return false;
+    switch (e->kind) {
+    case AST_STRING: *value = e; return true;
+    case AST_LITERAL: {
+        if (t->kind != TYPE_STRUCT && t->kind != TYPE_ARRAY) return false;
+        Ast_Literal *literal = (Ast_Literal *)e;
+        for (s64 i = 0; i < literal->values.count; i++) {
+            Ast *part = literal->values[i];
+            Ast *ignored;
+            bool known = part->is_constant || procedure_address(part) || literal_address(part) ||
+                         constant_data(part, &ignored);
+            if (!known) return false;
+        }
+        *value = e;
+        return true;
+    }
+    case AST_NAME: {
+        Ast *decl = ((Ast_Name *)e)->decl;
+        if (decl->kind != AST_CONST || !((Ast_Const *)decl)->is_data) return false;
+        *value = ((Ast_Const *)decl)->data;
+        return true;
+    }
+    case AST_MEMBER: {
+        // A struct's field, not a pointer's (whose struct is elsewhere), nor
+        // an array's or a string's .count or .data (index -1).
+        Ast_Member *m = (Ast_Member *)e;
+        Type *s = m->operand->type;
+        Ast *whole;
+        if (!s || s->kind != TYPE_STRUCT || m->index < 0 || !constant_data(m->operand, &whole)) return false;
+        if (!whole) return true;  // a struct left out: its fields are zero too
+        RIG_ASSERT(whole->kind == AST_LITERAL);
+        Ast *part = literal_field_value((Ast_Literal *)whole, s, m->index);
+        *value = part ? part_value(part) : nullptr;
+        return true;
+    }
+    case AST_INDEX: {
+        // An array's element at a constant index, which check_index has
+        // found within its count. A string's element is a byte no node
+        // holds.
+        Ast_Index *ix = (Ast_Index *)e;
+        Type *array = ix->operand->type;
+        Ast *whole;
+        if (!array || array->kind != TYPE_ARRAY || !ix->index->is_constant || !constant_data(ix->operand, &whole)) {
+            return false;
+        }
+        if (!whole) return true;  // an array left out: its elements are zero too
+        RIG_ASSERT(whole->kind == AST_LITERAL);
+        Ast_Literal *literal = (Ast_Literal *)whole;
+        // A literal that gives too few elements has been reported; the ones
+        // it lacks are taken as zero, as left out.
+        u64 i = ix->index->constant;
+        *value = i < (u64)literal->values.count ? part_value(literal->values[i]) : nullptr;
+        return true;
+    }
+    case AST_CAST: {
+        // To its own type (cast(Vec2) .{1, 2}), or between string and []u8,
+        // the same bytes: the value is the same. Any other cast makes
+        // another value, a pointer or a view of it.
+        Ast *from = ((Ast_Cast *)e)->value;
+        Type *bytes = type_view_of(type_from_name(str("u8")));
+        bool same = from->type == t || (from->type == &type_string && t == bytes) ||
+                    (from->type == bytes && t == &type_string);
+        return same && constant_data(from, value);
+    }
+    default: return false;
     }
 }
 
@@ -342,11 +457,12 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
         return true;
     }
     // A string literal's bytes are stored with a zero after them, so C can
-    // read them through a *u8 (milestone 1's rule): the literal converts to
-    // its bytes' address, though its type stays string (lowering looks at
-    // where it goes). Any other string's bytes may go on past its count, so
-    // it doesn't (type_converts).
-    if (e->kind == AST_STRING && is_c_string(to)) return true;
+    // read them through a *u8 (spec 3.8): the literal converts to its bytes'
+    // address, though its type stays string (lowering looks at where it
+    // goes), and so does a constant holding one (is_literal_string). Any
+    // other string's bytes may go on past its count, so it doesn't
+    // (type_converts).
+    if (is_literal_string(e) && is_c_string(to)) return true;
     return type_converts(from, to);
 }
 
@@ -358,9 +474,9 @@ bool type_converts(Type *from, Type *to) {
     // pointer becomes another without a cast: a *u8 isn't a *int, and a
     // **int isn't a **void (what it points at, a *int, isn't a *void).
     if (type_is_pointer(from) && type_is_pointer(to)) return from->pointee == &type_void || to->pointee == &type_void;
-    // An array is seen through a view of its elements (spec 6.5): [N]T
-    // becomes the []T of its N T's, wherever it is (lowering). Never the
-    // other way: a view's count isn't known while compiling.
+    // An array is seen through a view of its elements (spec 3.13 and
+    // 5.17): [N]T becomes the []T of its N T's, wherever it is (lowering).
+    // Never the other way: a view's count isn't known while compiling.
     if (from->kind == TYPE_ARRAY && to->kind == TYPE_VIEW) return from->element == to->element;
     // Every float32 value is a float64 one, so a float32 widens; the other
     // way loses precision, and takes a cast.
@@ -512,7 +628,8 @@ static void give_extra_argument_a_type(Checker *c, Ast *arg) {
 // C can take: a number, a bool or a pointer, which lowering passes after
 // C's default argument promotions (type_c_promoted). A string literal goes
 // as a C string, its bytes' address, as it does to a *u8 (lowering looks
-// at the literal, whose type stays string). C passes structs by rules Rig
+// at the literal, whose type stays string), and so does a constant holding
+// one (is_literal_string). C passes structs by rules Rig
 // doesn't follow, and has no views or Rig strings: each is refused, with
 // what to pass instead. So is a compound literal without its type: being
 // told to write its type would only lead to the same refusal.
@@ -531,7 +648,7 @@ static void check_extra_argument(Checker *c, Ast_Proc *proc, Ast *arg, s64 index
     }
     give_extra_argument_a_type(c, arg);
     t = arg->type;
-    if (t && type_is_aggregate(t) && arg->kind != AST_STRING) {
+    if (t && type_is_aggregate(t) && !is_literal_string(arg)) {
         const char *hint = t->kind == TYPE_STRUCT   ? "pass a pointer to it"
                            : t->kind == TYPE_STRING ? "pass its .data, which may not end with a zero, or a literal"
                                                     : "pass its .data";

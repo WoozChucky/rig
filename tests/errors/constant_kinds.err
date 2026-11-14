@@ -1,9 +1,15 @@
-tests/errors/constant_kinds.rig:5:13: error: a constant can only be a number, a bool or a procedure, for now
-    GREETING :: "hi";
-                ^
-tests/errors/constant_kinds.rig:6:11: error: a constant can only be a number, a bool or a procedure, for now
-    ORIGIN :: Vec2.{0, 0};
-              ^
-tests/errors/constant_kinds.rig:7:12: error: a constant can only be a number, a bool or a procedure, for now
-    NOWHERE :: cast(*void) null;
-               ^
+tests/errors/constant_kinds.rig:8:9: error: a constant can't hold a view; only a string or an array can be one
+    VIEW :: cast([]u8) "hi";
+            ^
+tests/errors/constant_kinds.rig:9:26: error: a constant can't hold a view; only a string or an array can be one
+    WITH_VIEW :: Holder.{v = int.[1]};
+                             ^
+tests/errors/constant_kinds.rig:10:7: error: a constant's pointer can only be null or a string literal's address
+    AT :: cast(*int) 4096;
+          ^
+tests/errors/constant_kinds.rig:11:25: error: a constant's pointer can only be null or a string literal's address
+    CALLBACK :: Holder.{p = cast(*int) cast(*void) add};
+                            ^
+tests/errors/constant_kinds.rig:12:21: error: the value of constant 'LIVE' isn't known while compiling
+    LIVE :: Holder.{n = value};
+                        ^

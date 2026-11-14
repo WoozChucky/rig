@@ -319,6 +319,12 @@ static void check_var(Checker *c, Ast_Var *var) {
 // literal. A procedure's address is the same (procedure_address): a
 // global, a field or an element may hold a procedure, or a constant naming
 // one, as it is or cast to *void.
+//
+// Constant data is known while compiling too (constant_data, spec 4.3): a
+// constant holding a string, a struct or an array (`origin := ORIGIN;`), a
+// field or an element of one, or casts of them. Its bytes are written into
+// the global's, a copy the global may change; a view of a constant array
+// gets an array of its own, as a view's array literal does.
 static bool check_global_value(Checker *c, Ast *value) {
     if (value->is_constant) return true;
     if (!value->type) return false;  // a value inside a literal whose own error was reported
@@ -329,7 +335,8 @@ static bool check_global_value(Checker *c, Ast *value) {
         }
         return true;
     }
-    if (literal_address(value) || procedure_address(value)) return true;
+    Ast *data;
+    if (literal_address(value) || procedure_address(value) || constant_data(value, &data)) return true;
     diag_error(c->diag, value->start, "a global's value must be known while compiling, for now");
     return false;
 }
@@ -338,46 +345,148 @@ static void check_global_var(Checker *c, Ast_Var *var) {
     if (check_var_value(c, var)) check_global_value(c, var->value);
 }
 
-// N :: e; the value must be a number or a bool known while compiling, and
-// the constant keeps it, with its type: untyped when e is, so N meets types
-// as a literal does. Only numbers and bools fold so far, so a string
-// literal, though known while compiling, can't be a constant yet, nor a
-// struct literal (whose type must be written: .{1, 2} meets none here). A
-// constant may also name a procedure (OP :: add;, procedure_address), of
-// its procedure type: it keeps the procedure, and a use of it is that
-// procedure, as the procedure's own name is, a call of it included. So
-// its type must be the procedure's own: casts may end there, as
-// cast((int, int) -> int) cast(*void) add does, but not reach it from
+// "the value of constant 'N' isn't known while compiling", at `value`, the
+// constant's own value or the first value inside it that isn't.
+static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value) {
+    diag_error(c->diag, value->start, "the value of constant '" STR_FMT "' isn't known while compiling",
+               STR_ARG(constant->name));
+}
+
+// `value`, for a slot of type t in constant `constant` (its own value, or a
+// field or element inside it), checked against spec 4.2; false after
+// reporting the first value that isn't constant data. t is the slot's
+// type, which may differ from the value's: a string literal in a *u8 field
+// stays a string, an array literal in a view field is an array.
+// - A view is never constant data, though its array would be: it would see
+//   memory of its own, a copy for each use or one that isn't read-only. "a
+//   constant can't hold a view; only a string or an array can be one".
+// - A string, a struct or an array is a literal whose values are checked in
+//   turn, a string literal, or anything else constant_data finds a value
+//   for: a constant holding it, a field or an element of one, a cast. The
+//   node holding that value is checked too, unless it's zero (left out) or
+//   the walk went through a constant's name, checked already: a cast of a
+//   literal, cast(Holder) Holder.{v = int.[1]}, isn't.
+// - A pointer is null or a string literal's address: one cast from a
+//   number or a procedure's address is "a constant's pointer can only be
+//   null or a string literal's address"; anything else isn't known.
+// - A procedure value is a procedure (procedure_address) or null.
+// - A number or a bool is is_constant.
+// A value with no type had its own error, reported: nothing more is said.
+// Nor about a string, a struct or an array that didn't convert to its
+// slot's type, or a literal whose values didn't all meet a field or an
+// element (too many, a field named twice or not at all, an array's count
+// missed).
+static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Type *t) {
+    if (!value->type) return false;
+    if (t->kind == TYPE_VIEW) {
+        diag_error(c->diag, value->start, "a constant can't hold a view; only a string or an array can be one");
+        return false;
+    }
+    if (t == &type_string || t->kind == TYPE_STRUCT || t->kind == TYPE_ARRAY) {
+        if (value->type != t) return false;  // it doesn't convert to the slot's type: reported
+        if (value->kind == AST_LITERAL) {
+            Ast_Literal *literal = (Ast_Literal *)value;
+            if (t->kind == TYPE_ARRAY ? literal->values.count != t->count
+                                      : !literal->names.count && literal->values.count > t->fields.count) {
+                return false;
+            }
+            for (s64 i = 0; i < literal->values.count; i++) {
+                Type *part = nullptr;
+                if (t->kind == TYPE_ARRAY) {
+                    part = t->element;
+                } else if (!literal->names.count) {
+                    part = t->fields[i].type;
+                } else {
+                    s32 field = type_field_index(t, literal->names[i]);
+                    if (field < 0 || literal_field_value(literal, t, field) != literal->values[i]) return false;
+                    part = t->fields[field].type;
+                }
+                if (!part || !check_constant_value(c, constant, literal->values[i], part)) return false;
+            }
+            return true;
+        }
+        if (value->kind == AST_STRING) return true;
+        Ast *data;
+        if (constant_data(value, &data)) {
+            return !data || value->kind == AST_NAME || check_constant_value(c, constant, data, t);
+        }
+        report_unknown_constant(c, constant, value);
+        return false;
+    }
+    if (type_is_pointer(t) || t == &type_null) {
+        if (value->is_constant || literal_address(value)) return true;
+        if (value->kind == AST_CAST || procedure_address(value)) {
+            diag_error(c->diag, value->start, "a constant's pointer can only be null or a string literal's address");
+        } else {
+            report_unknown_constant(c, constant, value);
+        }
+        return false;
+    }
+    if (t->kind == TYPE_PROC) {
+        if (value->is_constant || procedure_address(value)) return true;
+        report_unknown_constant(c, constant, value);
+        return false;
+    }
+    if (value->is_constant) return true;
+    report_unknown_constant(c, constant, value);
+    return false;
+}
+
+// N :: e; the value must be known while compiling (spec 4.2), and the
+// constant keeps it, with its type: untyped when e is, so N meets types as
+// a literal does. A struct literal's type must be written: .{1, 2} meets
+// none here.
+//
+// A number, a bool or null folds into the constant's own is_constant and
+// constant. A constant may also name a procedure (OP :: add;,
+// procedure_address), of its procedure type: it keeps the procedure, and a
+// use of it is that procedure, as the procedure's own name is, a call of it
+// included. So its type must be the procedure's own: casts may end there,
+// as cast((int, int) -> int) cast(*void) add does, but not reach it from
 // another type, or OP(1, 2) would call add as add, while OP's value would
 // say it takes one int: "'add' is a '(int, int) -> int', so a constant
 // can't name it as a '(int) -> int'".
+//
+// Anything else is data, checked by check_constant_value: a string, a
+// struct or an array of constant data, or a pointer to a string literal's
+// bytes (GREETING :: cast(*u8) "hi";). The constant is marked is_data, and
+// keeps the node holding its value (constant_data, or the pointer's
+// literal), never is_constant: Ast.constant holds one scalar.
 static void check_const_value(Checker *c, Ast_Const *constant) {
-    Type *t = check_value(c, constant->value);
+    Ast *value = constant->value;
+    Type *t = check_value(c, value);
     if (t == &type_untyped_literal) {
-        check_default_type(c, constant->value);
+        check_default_type(c, value);
         t = nullptr;
     }
     bool procedure = t && t->kind == TYPE_PROC;
-    Ast_Proc *named = procedure ? procedure_address(constant->value) : nullptr;
+    Ast_Proc *named = procedure ? procedure_address(value) : nullptr;
     if (named && named->type != t) {
-        diag_error(c->diag, constant->value->start,
+        diag_error(c->diag, value->start,
                    "'" STR_FMT "' is a '" STR_FMT "', so a constant can't name it as a '" STR_FMT "'",
                    STR_ARG(named->name), STR_ARG(type_name(c->arena, named->type)), STR_ARG(type_name(c->arena, t)));
         constant->type = nullptr;
         return;
     }
     constant->proc = named;
-    if (t && !type_is_number(t) && t != &type_bool && !procedure) {
-        diag_error(c->diag, constant->value->start, "a constant can only be a number, a bool or a procedure, for now");
+    if (procedure) {
+        if (!value->is_constant && !named) {
+            report_unknown_constant(c, constant, value);
+            t = nullptr;
+        }
+    } else if (t && !check_constant_value(c, constant, value, t)) {
         t = nullptr;
-    } else if (t && !constant->value->is_constant && !constant->proc) {
-        diag_error(c->diag, constant->value->start, "the value of constant '" STR_FMT "' isn't known while compiling",
-                   STR_ARG(constant->name));
-        t = nullptr;
+    } else if (t && !value->is_constant) {
+        constant->is_data = true;
+        if (type_is_pointer(t)) {
+            constant->data = literal_address(value);
+        } else {
+            constant_data(value, &constant->data);
+        }
     }
-    if (t && !constant->proc) {
+    if (t && value->is_constant) {
         constant->is_constant = true;
-        constant->constant = constant->value->constant;
+        constant->constant = value->constant;
     }
     constant->type = t;
 }
@@ -528,6 +637,10 @@ static void resolve_global(Checker *c, Ast *decl) {
     if (*state == RESOLVE_CYCLE) {
         decl->type = nullptr;
         decl->is_constant = false;
+        if (!is_var) {
+            ((Ast_Const *)decl)->is_data = false;
+            ((Ast_Const *)decl)->data = nullptr;
+        }
     }
     *state = RESOLVE_DONE;
 }
