@@ -1,0 +1,17 @@
+// Basic's growable array (issue #134) given an ordered remove when it is
+// empty: there is no element 0 of a count of 0, and the program stops with
+// the language's own message for it, at check_index in array.rig, whose
+// line and column basic_array_remove_ordered_empty.err names. Edit one,
+// edit the other.
+#load "../../modules/Basic/module.rig";
+
+main :: () {
+    a : Array;
+    array_init(*a, size_of(int), HEAP_ALLOCATOR);
+    value := 1;
+    array_add(*a, *value);
+    array_remove_ordered(*a, 0);
+    print_line("removed the one element");
+    array_remove_ordered(*a, 0);
+    print_line("not reached");
+}

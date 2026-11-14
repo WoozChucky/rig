@@ -1,0 +1,357 @@
+// Basic's growable array (issue #134): an untyped array, which knows only
+// its element's size and hands out each element's address as a *void that
+// the caller casts to a pointer to its own type. It shows adding, getting,
+// inserting, removing and popping, how the memory grows, elements of 3
+// bytes and of none, elements of the array itself added to it while it
+// moves, and memory that comes from the array's allocator and goes back to
+// it.
+#load "../../modules/Basic/module.rig";
+
+Point :: struct { x: int; y: int; }
+
+// 3 bytes, which isn't a multiple of 8: its elements lie 3 bytes apart.
+Rgb :: struct { r: u8; g: u8; b: u8; }
+
+// No bytes at all.
+Empty :: struct {}
+
+// What a counting allocator was asked to do.
+Counter :: struct { allocations: int; resizes: int; frees: int; }
+
+// Passes allocations and frees on to the heap, counting them. A resize is
+// counted too, and always moves the bytes: they are copied into new memory,
+// and the old ones set to 255 before the heap has them back, so an address
+// left pointing at them doesn't read the elements.
+counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE { counter.allocations += 1; }
+    if mode == RESIZE {
+        counter.resizes += 1;
+        memory := alloc(size, HEAP_ALLOCATOR);
+        if memory == null { return null; }
+        copy_memory(memory, old_memory, min_int(old_size, size));
+        set_memory(old_memory, 255, old_size);
+        free(old_memory, HEAP_ALLOCATOR);
+        return memory;
+    }
+    if mode == FREE { counter.frees += 1; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+// Prints the Point at p as (x, y).
+show_point :: (p: *void) {
+    point := cast(*Point) p;
+    print_byte("("[0]);
+    print_int(point.x);
+    print_string(", ");
+    print_int(point.y);
+    print_byte(")"[0]);
+}
+
+// Prints the Rgb at p as (r, g, b).
+show_rgb :: (p: *void) {
+    color := cast(*Rgb) p;
+    print_byte("("[0]);
+    print_int(color.r);
+    print_string(", ");
+    print_int(color.g);
+    print_string(", ");
+    print_int(color.b);
+    print_byte(")"[0]);
+}
+
+// Prints an array's count and capacity, separated by a space.
+show_sizes :: (array: Array) {
+    print_int(array.count);
+    print_byte(32);
+    print_int(array.capacity);
+}
+
+// The int at element index of an array of ints.
+int_at :: (array: Array, index: int) -> int {
+    return (cast(*int) array_get(array, index)).*;
+}
+
+main :: () {
+    a : Array;
+    array_init(*a, size_of(Point), HEAP_ALLOCATOR);
+    for 1..20 {
+        p := Point.{it, it * it};
+        array_add(*a, *p);
+    }
+
+    // 20 elements: the capacity went from 8 to 16 and 32 as it filled.
+    print_string("count ");
+    print_int(a.count);
+    print_string(", capacity ");
+    print_int(a.capacity);
+    print_byte(10);
+
+    show_point(array_get(a, 19));
+    print_byte(10);
+    show_point(array_get(a, 0));
+    print_byte(10);
+
+    // Inserting at 0 moves every element up one.
+    origin := Point.{0, 0};
+    array_insert(*a, 0, *origin);
+    show_point(array_get(a, 0));
+    print_byte(32);
+    show_point(array_get(a, 1));
+    print_byte(32);
+    print_int(a.count);
+    print_byte(10);
+
+    // Inserting at the count adds at the end.
+    end := Point.{99, 99};
+    array_insert(*a, a.count, *end);
+    show_point(array_get(a, 21));
+    print_byte(32);
+    print_int(a.count);
+    print_byte(10);
+
+    // An ordered remove moves the later elements down; an unordered one
+    // moves the last element into the hole.
+    array_remove_ordered(*a, 0);
+    show_point(array_get(a, 0));
+    print_byte(32);
+    print_int(a.count);
+    print_byte(10);
+    array_remove_unordered(*a, 0);
+    show_point(array_get(a, 0));
+    print_byte(32);
+    print_int(a.count);
+    print_byte(10);
+
+    popped : Point;
+    array_pop(*a, *popped);
+    show_point(*popped);
+    print_byte(32);
+    print_int(a.count);
+    print_byte(10);
+
+    // Adding null adds a zeroed element, to be filled in through the
+    // address array_add gives.
+    slot := cast(*Point) array_add(*a, null);
+    slot.x = 7;
+    show_point(array_get(a, 19));
+    print_byte(32);
+    print_int(a.count);
+    print_byte(10);
+
+    // A reset keeps the memory.
+    array_reset(*a);
+    print_string("reset: ");
+    show_sizes(a);
+    print_byte(10);
+
+    array_free(*a);
+    print_string("freed: ");
+    show_sizes(a);
+    print_byte(32);
+    print_bool(a.data == null);
+    print_byte(10);
+
+    // A freed array keeps its element size and its allocator, and grows
+    // again from no memory when added to.
+    again := Point.{5, 6};
+    print_string("added after free: ");
+    show_point(array_add(*a, *again));
+    print_byte(32);
+    print_int(a.element_size);
+    print_byte(10);
+    array_free(*a);
+
+    // Elements of one byte: the array's bytes are the text.
+    h : Array;
+    array_init(*h, 1, HEAP_ALLOCATOR);
+    for "hello" {
+        byte := it;
+        array_add(*h, *byte);
+    }
+    hello : string;
+    hello.data = h.data;
+    hello.count = h.count;
+    print_line(hello);
+    array_free(*h);
+
+    // Elements of 3 bytes lie 3 bytes apart.
+    colors : Array;
+    array_init(*colors, size_of(Rgb), HEAP_ALLOCATOR);
+    for i: 1..10 {
+        color := Rgb.{cast(u8) i, cast(u8) (2 * i), cast(u8) (3 * i)};
+        array_add(*colors, *color);
+    }
+    print_string("rgb: ");
+    show_sizes(colors);
+    print_byte(32);
+    show_rgb(array_get(colors, 8));
+    print_byte(10);
+
+    // An element added from the array itself, while the array grows and
+    // its counting allocator moves the elements and spoils where they
+    // were: the element is read from where it moved to. 8 ints fill 8, and
+    // the ninth, a copy of element 2, grows them to 16.
+    counter : Counter;
+    n : Array;
+    array_init(*n, size_of(int), Allocator.{counting_allocator_proc, *counter});
+    for 1..8 {
+        value := it;
+        array_add(*n, *value);
+    }
+    array_add(*n, array_get(n, 2));
+    print_string("own element added: ");
+    show_sizes(n);
+    print_byte(32);
+    print_int(int_at(n, 8));
+    print_byte(10);
+
+    // An element inserted from the array itself, while the array grows: 16
+    // ints, 10 to 160, fill 16, and element 5, 60, inserted at 1 grows them
+    // to 32. Element 5 is at or past where the insert opens room, so it
+    // moved up one element too, to 6, and is read from there.
+    array_reset(*n);
+    for 1..16 {
+        value := it * 10;
+        array_add(*n, *value);
+    }
+    array_insert(*n, 1, array_get(n, 5));
+    print_string("own element inserted: ");
+    show_sizes(n);
+    print_byte(32);
+    print_int(int_at(n, 0));
+    print_byte(32);
+    print_int(int_at(n, 1));
+    print_byte(32);
+    print_int(int_at(n, 2));
+    print_byte(32);
+    print_int(int_at(n, 6));
+    print_byte(10);
+
+    // An element before where the insert opens room stays where it was:
+    // element 3, 30, inserted at 10, where 100 was, which moves up to 11.
+    array_insert(*n, 10, array_get(n, 3));
+    print_string("from below: ");
+    print_int(n.count);
+    print_byte(32);
+    print_int(int_at(n, 10));
+    print_byte(32);
+    print_int(int_at(n, 11));
+    print_byte(10);
+
+    // The array's memory came from its own allocator: one allocation, two
+    // resizes, and one free when the array is freed.
+    array_free(*n);
+    print_string("own allocator: allocations ");
+    print_int(counter.allocations);
+    print_string(", resizes ");
+    print_int(counter.resizes);
+    print_string(", frees ");
+    print_int(counter.frees);
+    print_byte(10);
+
+    // The last element added from the array itself, while the array grows:
+    // the freed array, given 8 ints again, fills 8, and a copy of element
+    // 7, 8, grows them to 16. The item ends where the elements end, so it
+    // is still one of the array's own, and is read from where it moved to.
+    for 1..8 {
+        value := it;
+        array_add(*n, *value);
+    }
+    array_add(*n, array_get(n, n.count - 1));
+    print_string("last element added: ");
+    show_sizes(n);
+    print_byte(32);
+    print_int(int_at(n, 8));
+    print_byte(10);
+    array_free(*n);
+
+    // An item whose bytes start inside one element and end in the next, 3
+    // bytes from byte 1 of element 2 of the colors, (3, 6, 9) and
+    // (4, 8, 12), inserted at 3: its first 2 bytes, 6 and 9, stay where
+    // they were, and its last, 4, moves up with element 3.
+    array_insert(*colors, 3, cast(*u8) array_get(colors, 2) + 1);
+    print_string("straddling item: ");
+    show_rgb(array_get(colors, 3));
+    print_byte(32);
+    show_rgb(array_get(colors, 4));
+    print_byte(10);
+    array_free(*colors);
+
+    // Inserting null inserts a zeroed element. Popping into null drops the
+    // last element; removing the last element, either way, just drops it.
+    e : Array;
+    array_init(*e, size_of(Point), HEAP_ALLOCATOR);
+    for 1..5 {
+        p := Point.{it, it * it};
+        array_add(*e, *p);
+    }
+    array_insert(*e, 1, null);
+    array_pop(*e, null);
+    array_remove_ordered(*e, e.count - 1);
+    array_remove_unordered(*e, e.count - 1);
+    print_string("edges: ");
+    show_point(array_get(e, 0));
+    print_byte(32);
+    show_point(array_get(e, 1));
+    print_byte(32);
+    show_point(array_get(e, 2));
+    print_byte(32);
+    print_int(e.count);
+    print_byte(10);
+    array_free(*e);
+
+    // Elements of no bytes take no memory: the array counts them, and the
+    // allocator is never asked for any.
+    empty_counter : Counter;
+    z : Array;
+    array_init(*z, size_of(Empty), Allocator.{counting_allocator_proc, *empty_counter});
+    nothing : Empty;
+    for 1..10 { array_add(*z, *nothing); }
+    array_insert(*z, 3, null);
+    array_pop(*z, *nothing);
+    array_remove_ordered(*z, 0);
+    array_remove_unordered(*z, 0);
+    print_string("no bytes: ");
+    show_sizes(z);
+    print_byte(32);
+    print_bool(z.data == null);
+    print_byte(32);
+    print_int(empty_counter.allocations);
+    print_byte(10);
+
+    // Doubling a capacity past half of int's largest value would wrap, so
+    // it becomes int's largest instead. No array of elements with bytes
+    // can be this full, so the fields are set as if it were; one of no
+    // bytes takes no memory however many it counts.
+    z.capacity = 4611686018427387904;
+    z.count = z.capacity;
+    array_add(*z, null);
+    print_string("no bytes, past half: ");
+    show_sizes(z);
+    print_byte(10);
+
+    // A capacity of exactly half of int's largest value doubles without
+    // wrapping, to one less than int's largest.
+    z.capacity = 4611686018427387903;
+    z.count = z.capacity;
+    array_add(*z, null);
+    print_string("no bytes, at half: ");
+    show_sizes(z);
+    print_byte(10);
+    array_free(*z);
+
+    // A negative element size is taken as 0: the array counts its
+    // elements, and takes no memory for them.
+    w : Array;
+    array_init(*w, -4, HEAP_ALLOCATOR);
+    array_add(*w, null);
+    print_string("negative size: ");
+    print_int(w.element_size);
+    print_byte(32);
+    show_sizes(w);
+    print_byte(32);
+    print_bool(w.data == null);
+    print_byte(10);
+    array_free(*w);
+}

@@ -1,0 +1,33 @@
+// Basic's growable array (issue #134) grown from a capacity past half of
+// int's largest value, where doubling would wrap: the capacity becomes
+// int's largest instead, and so do its bytes, at 1 each. No allocator has
+// that many, and given null the array stops the program where it next
+// reaches an element, with the language's null pointer dereference, at the
+// line of array.rig this .err names.
+#load "../../modules/Basic/module.rig";
+
+// Prints the size of each allocation asked for, and gives none.
+refusing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE || mode == RESIZE {
+        print_string("asked for ");
+        print_int(size);
+        print_byte(10);
+    }
+    return null;
+}
+
+main :: () {
+    // An array can't be this full, so its fields are set as if it were:
+    // 2^62 elements of 1 byte in room for 2^62. Its data stays null: the
+    // add stops before reaching it.
+    a : Array;
+    array_init(*a, 1, Allocator.{refusing_allocator_proc, null});
+    a.capacity = 4611686018427387904;
+    a.count = a.capacity;
+
+    // One more would double the capacity to 2^63, which no int holds, so
+    // it becomes int's largest, and so many bytes are asked for.
+    byte : u8 = 1;
+    array_add(*a, *byte);
+    print_string("not reached");
+}

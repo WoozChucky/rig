@@ -1,0 +1,10 @@
+is_digit 110000
+is_alpha 1111000000
+is_alnum 1111000
+is_space 111100
+is_upper 110000
+is_lower 110000
+true true false
+HELLO, WORLD! 09 AZ{@[
+hello, world! 09 az{@[
+false true

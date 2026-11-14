@@ -1,0 +1,176 @@
+// Basic's strings: comparing, finding, trimming, slicing and splitting.
+//
+// A string is a view, a count and a pointer to bytes (spec 3.8), so every
+// string these procedures return is a view into the string they were given:
+// nothing is copied and nothing is allocated, and the result lives as long
+// as the bytes it views. Indexes and counts are in bytes, and the bytes are
+// compared as they are, unsigned, with no knowledge of UTF-8, so a search
+// for an ASCII byte never lands inside a UTF-8 character, whose bytes are
+// all from 128 up.
+//
+// A zeroed string, with count 0 and data null, is the empty string
+// everywhere here: its count of 0 stops every loop before a byte is read,
+// and a view of it starts at offset 0, so its null data is never moved.
+//
+// Every result is the string given or a view cut out of it by slice, which
+// clamps what it is asked for to the string it is given, so no procedure
+// here can return a view that reaches outside its string.
+#load "char.rig";
+#load "memory.rig";
+
+// Whether a and b hold the same bytes, as a == b: the same count, and the
+// same byte at every index. It is here as a named procedure, so that a
+// procedure value of type (string, string) -> bool can name it.
+strings_equal :: (a: string, b: string) -> bool {
+    return a == b;
+}
+
+// Compares a and b byte by byte: -1 when a sorts first, 1 when b does, and
+// 0 when they're equal. The first byte that differs decides, compared
+// unsigned, so "é" (0xC3 0xA9) sorts after "z" (0x7A). When one is a prefix
+// of the other, no byte differs, and the shorter sorts first.
+compare_strings :: (a: string, b: string) -> int {
+    shorter := a.count;
+    if b.count < shorter { shorter = b.count; }
+    order := compare_memory(a.data, b.data, shorter);
+    if order != 0 { return order; }
+    if a.count < b.count { return -1; }
+    if a.count > b.count { return 1; }
+    return 0;
+}
+
+// The index of the first byte of s equal to byte, or -1 when there's none.
+find_byte :: (s: string, byte: u8) -> int {
+    for s {
+        if it == byte { return it_index; }
+    }
+    return -1;
+}
+
+// The index of the last byte of s equal to byte, or -1 when there's none.
+find_byte_from_end :: (s: string, byte: u8) -> int {
+    i := s.count;
+    while i > 0 {
+        i -= 1;
+        if s[i] == byte { return i; }
+    }
+    return -1;
+}
+
+// The index at which needle first occurs in s, or -1 when it doesn't. The
+// empty needle occurs everywhere, so it is found at 0, in the empty string
+// too. Each place needle could start, from 0 to the last that leaves room
+// for all of it, is compared with it in turn.
+find_string :: (s: string, needle: string) -> int {
+    if needle.count > s.count { return -1; }
+    for i: 0..s.count - needle.count {
+        if compare_memory(s.data + i, needle.data, needle.count) == 0 { return i; }
+    }
+    return -1;
+}
+
+// The index at which needle last occurs in s, or -1 when it doesn't. The
+// empty needle is found at s.count, past the last byte, as the last of the
+// places it occurs. The places are tried from the last down, so the first
+// match is the answer.
+find_string_from_end :: (s: string, needle: string) -> int {
+    if needle.count > s.count { return -1; }
+    i := s.count - needle.count;
+    while i >= 0 {
+        if compare_memory(s.data + i, needle.data, needle.count) == 0 { return i; }
+        i -= 1;
+    }
+    return -1;
+}
+
+// Whether s begins with prefix. Every string begins with "".
+starts_with :: (s: string, prefix: string) -> bool {
+    if prefix.count > s.count { return false; }
+    return compare_memory(s.data, prefix.data, prefix.count) == 0;
+}
+
+// Whether s ends with suffix. Every string ends with "".
+ends_with :: (s: string, suffix: string) -> bool {
+    if suffix.count > s.count { return false; }
+    return compare_memory(s.data + (s.count - suffix.count), suffix.data, suffix.count) == 0;
+}
+
+// s without the white space (is_space) at its start. A string of nothing
+// but white space gives an empty view at its end.
+trim_left :: (s: string) -> string {
+    start := 0;
+    while start < s.count && is_space(s[start]) { start += 1; }
+    return advance(s, start);
+}
+
+// s without the white space (is_space) at its end.
+trim_right :: (s: string) -> string {
+    count := s.count;
+    while count > 0 && is_space(s[count - 1]) { count -= 1; }
+    return slice(s, 0, count);
+}
+
+// s without the white space (is_space) at either end.
+trim :: (s: string) -> string {
+    return trim_right(trim_left(s));
+}
+
+// The count bytes of s from index start on, clamped so the view never
+// leaves s: start is clamped to 0..s.count, and then count to
+// 0..s.count - start, what is left from start. So slice("hello", 3, 10) is
+// "lo", and a start past the end or a negative count gives an empty view.
+//
+// Clamping start before count means neither limit can overflow: start ends
+// within 0..s.count, so s.count - start can't wrap. A zeroed string's
+// start is clamped to 0, and its null data is moved by nothing.
+slice :: (s: string, start: int, count: int) -> string {
+    first := start;
+    if first < 0 { first = 0; }
+    if first > s.count { first = s.count; }
+    length := count;
+    if length < 0 { length = 0; }
+    if length > s.count - first { length = s.count - first; }
+
+    view := s;
+    view.data = s.data + first;
+    view.count = length;
+    return view;
+}
+
+// s without its first amount bytes, clamped as slice is: an amount past the
+// end gives an empty view, and a negative one gives s.
+advance :: (s: string, amount: int) -> string {
+    return slice(s, amount, s.count);
+}
+
+// Splits s at each byte equal to separator, writing the pieces between them
+// into parts in order, and returns how many it wrote. Separators side by
+// side, or at either end, make empty pieces: "a,,b" is "a", "" and "b", and
+// "" is one empty piece. When parts runs out, its last element holds the
+// rest of s, separators and all, as Go's SplitN does, so no byte is lost:
+// "a,b,c" into two parts is "a" and "b,c". An empty parts gets nothing, and
+// 0 comes back.
+split :: (s: string, separator: u8, parts: []string) -> int {
+    if parts.count <= 0 { return 0; }
+    written := 0;
+    rest := s;
+    while written < parts.count - 1 {
+        at := find_byte(rest, separator);
+        if at < 0 { break; }
+        parts[written] = slice(rest, 0, at);
+        written += 1;
+        rest = advance(rest, at + 1);
+    }
+    parts[written] = rest;
+    return written + 1;
+}
+
+// Splits s at the first byte equal to separator: whether there is one, the
+// bytes before it and the bytes after it, without it. Without a separator,
+// it is false, s and an empty view at the end of s, so that every result is
+// a view into s. So "key=value=x" at "=" is true, "key" and "value=x".
+split_from_left :: (s: string, separator: u8) -> bool, string, string {
+    at := find_byte(s, separator);
+    if at < 0 { return false, s, advance(s, s.count); }
+    return true, slice(s, 0, at), advance(s, at + 1);
+}

@@ -1,0 +1,234 @@
+// Basic's numbers (issue #134): integers to text in any base and back,
+// with int's extremes and overflow; floats to text with a number of
+// decimals, their rounding, -0, infinities and NaN, and back.
+#load "../../modules/Basic/module.rig";
+
+show_int :: (value: int, base: int) {
+    buffer : [INT_TEXT_MAX]u8;
+    print_line(format_int(buffer, value, base));
+}
+
+show_parse_int :: (s: string, base: int) {
+    value, ok := parse_int(s, base);
+    print_byte("["[0]);
+    print_string(s);
+    print_string("] ");
+    print_int(base);
+    print_string(" -> ");
+    print_int(value);
+    print_byte(32);
+    print_bool(ok);
+    print_byte(10);
+}
+
+show_float :: (value: float64, decimals: int) {
+    buffer : [FLOAT_TEXT_MAX]u8;
+    print_line(format_float(buffer, value, decimals));
+}
+
+show_parse_float :: (s: string) {
+    value, ok := parse_float(s);
+    print_byte("["[0]);
+    print_string(s);
+    print_string("] -> ");
+    print_float(value, 3);
+    print_byte(32);
+    print_bool(ok);
+    print_byte(10);
+}
+
+// Whether a parse gave float64's largest finite value, or one within a few
+// units in its last place below it: a number below the point where a
+// float64 overflows, however many zeros it's written with, mustn't be an
+// infinity.
+near_largest :: (value: float64, ok: bool) -> bool {
+    return ok && value <= 1.7976931348623157e308 && value >= 1.7976931348623137e308;
+}
+
+// parse_float of head, then zeros "0"s, then tail, built in a buffer: a
+// digit string longer than any fixed cap on the exponent written after it.
+parse_long :: (head: string, zeros: int, tail: string) -> float64, bool {
+    buffer : [100020]u8;
+    count := 0;
+    for head {
+        buffer[count] = it;
+        count += 1;
+    }
+    for 1..zeros {
+        buffer[count] = "0"[0];
+        count += 1;
+    }
+    for tail {
+        buffer[count] = it;
+        count += 1;
+    }
+    bytes : []u8 = buffer;
+    text := cast(string) bytes;
+    text.count = count;
+    value, ok := parse_float(text);
+    return value, ok;
+}
+
+main :: () {
+    show_int(0, 10);
+    show_int(42, 10);
+    show_int(-9223372036854775808, 10);
+    show_int(9223372036854775807, 10);
+    show_int(9223372036854775807, 2);
+    show_int(-1, 2);
+    show_int(-9223372036854775808, 2);
+    show_int(-255, 16);
+    show_int(35, 36);
+    show_int(36, 36);
+    show_int(5, 1);
+    show_int(5, 37);
+    print_int(-12345);
+    print_byte(10);
+
+    show_parse_int("123", 10);
+    show_parse_int("-9223372036854775808", 10);
+    show_parse_int("9223372036854775807", 10);
+    show_parse_int("9223372036854775808", 10);
+    show_parse_int("-9223372036854775809", 10);
+    show_parse_int("99999999999999999999999", 10);
+    show_parse_int("", 10);
+    show_parse_int("-", 10);
+    show_parse_int("+7", 10);
+    show_parse_int("12a", 10);
+    show_parse_int(" 12", 10);
+    show_parse_int("ff", 16);
+    show_parse_int("FF", 16);
+    show_parse_int("zz", 36);
+    show_parse_int("101", 2);
+    show_parse_int("2", 2);
+    show_parse_int("7fffffffffffffff", 16);
+    show_parse_int("-8000000000000000", 16);
+    show_parse_int("1", 1);
+    show_parse_int("1", 37);
+    print_string("digits:");
+    for "/09:@AZ[`az{" {
+        print_byte(32);
+        print_int(digit_value(it));
+    }
+    print_byte(10);
+
+    show_float(3.14159, 2);
+    show_float(3.14159, 3);
+    show_float(2.675, 2);
+    show_float(0.125, 2);
+    show_float(1.805, 2);
+    show_float(0.5, 0);
+    show_float(2.5, 0);
+    show_float(0.999, 2);
+    show_float(-0.001, 2);
+    show_float(-0.0, 2);
+    show_float(1.5, -1);
+    show_float(100.0, 20);
+    show_float(0.1, 9);
+    show_float(1.0 / 3.0, 9);
+    show_float(123.456, 1);
+    show_float(9007199254740993.0, 1);
+    show_float(1e18, 1);
+    show_float(123456789012345678901234567890.0, 0);
+    show_float(1.7976931348623157e308, 0);
+    show_float(-1.7976931348623157e308, 9);
+    zero : float64 = 0;
+    show_float(1.0 / zero, 2);
+    show_float(-1.0 / zero, 2);
+    show_float(zero / zero, 2);
+    small : float32 = 0.1;
+    show_float(small, 9);
+    print_float(-2.5, 1);
+    print_byte(10);
+
+    show_parse_float("3.14");
+    show_parse_float("-0.5e2");
+    show_parse_float("+.5");
+    show_parse_float("5.");
+    show_parse_float("12.5e-3");
+    show_parse_float("0.0125");
+    show_parse_float("0000000000000000000000001");
+    show_parse_float("0.12345678901234567890123");
+    show_parse_float("1e400");
+    show_parse_float("1e-400");
+    show_parse_float("1e18446744073709551617");
+    show_parse_float("1.7976931348623159e308");
+    show_parse_float("");
+    show_parse_float(".");
+    show_parse_float("1e");
+    show_parse_float("1E5");
+    show_parse_float("1e+5");
+    show_parse_float("2.5e+2");
+    show_parse_float("1e+");
+    show_parse_float("1e-");
+    show_parse_float("1e5x");
+    show_parse_float("1.5x");
+    show_parse_float("abc");
+    show_parse_float("-");
+    a, ok_a := parse_float("3.14");
+    b, ok_b := parse_float("123456789.125");
+    c, ok_c := parse_float("0.1");
+    print_string("exact: ");
+    print_bool(a == 3.14);
+    print_byte(32);
+    print_bool(b == 123456789.125);
+    print_byte(32);
+    print_bool(c == 0.1);
+    print_byte(10);
+    d, ok_d := parse_float("12345678901234567890123");
+    print_string("long: ");
+    print_bool(ok_d && d > 1.2345678901e22 && d < 1.2345678902e22);
+    print_byte(10);
+    // The same numbers with trailing zeros, which push the first one's
+    // mantissa past 2^53 and the second one's power below -22, are the
+    // same float64s.
+    e, ok_e := parse_float("810418677566.4278000");
+    f, ok_f := parse_float("556235117721632.0e-22");
+    print_string("zeros: ");
+    print_bool(ok_e && e == 810418677566.4278);
+    print_byte(32);
+    print_bool(ok_f && f == 556235117721632e-22);
+    print_byte(10);
+
+    // float64's largest value written three ways, the last two with its
+    // digits padded by zeros to a 19-digit mantissa, and two numbers still
+    // below the point where a float64 overflows, 1.797693134862315807937...
+    // e308: 1.7976931348623158e308, and 1.797693134862315807e308, whose 19
+    // digits are the point's. Those past the point are infinities, however
+    // the multiplies round: 1.797693134862315808e308 is just past it in 19
+    // digits, and 1.79769313486231581e308 and 1.79769313486231585e308,
+    // written with fewer digits, are further past it.
+    short, ok_short := parse_float("1.7976931348623157e308");
+    padded, ok_padded := parse_float("1.7976931348623157000e308");
+    whole, ok_whole := parse_long("17976931348623157", 292, "");
+    above, ok_above := parse_float("1.7976931348623158e308");
+    edge, ok_edge := parse_float("1.797693134862315807e308");
+    print_string("largest: ");
+    print_bool(near_largest(short, ok_short));
+    print_byte(32);
+    print_bool(near_largest(padded, ok_padded));
+    print_byte(32);
+    print_bool(near_largest(whole, ok_whole));
+    print_byte(32);
+    print_bool(near_largest(above, ok_above));
+    print_byte(32);
+    print_bool(near_largest(edge, ok_edge));
+    print_byte(10);
+    show_parse_float("1.797693134862315808e308");
+    show_parse_float("1.79769313486231581e308");
+    show_parse_float("1.79769313486231585e308");
+
+    // Exactly 1 and 1e9, each with a digit exponent that cancels a written
+    // one past 100000.
+    one, ok_one := parse_long("1", 100005, "e-100005");
+    print_string("long digits: ");
+    print_float(one, 3);
+    print_byte(32);
+    print_bool(ok_one);
+    print_byte(32);
+    billion, ok_billion := parse_long("0.", 100000, "1e100010");
+    print_float(billion, 3);
+    print_byte(32);
+    print_bool(ok_billion);
+    print_byte(10);
+}
