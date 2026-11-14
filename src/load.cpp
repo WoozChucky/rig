@@ -16,54 +16,88 @@ static const bool HOST_IS_WINDOWS = true;
 static const bool HOST_IS_WINDOWS = false;
 #endif
 
+// How the loader knows a file (load.h). By its id (os_file_id) when it has
+// one, `bytes` the id's 24 bytes. One with none is known by its path made
+// absolute (path_absolute), its case folded as the system folds names'
+// (os_fold_case: on Windows, where a name's case doesn't matter, Ä.rig is
+// ä.rig): that's a file that isn't there, as the main file under rig check
+// --stdin needn't be, or one on a file system with no ids to give (os.h).
+// Its path is the best there is: ./x.rig and sub/../x.rig are x.rig,
+// though a link to it isn't. An id and a path are never one key, even
+// with the same bytes.
+struct File_Key {
+    bool by_id;
+    String bytes;
+};
+
+// The key of the file at `path`, from `directory`, the directory rig runs
+// in, made in `a`.
+static File_Key file_key(Arena *a, String directory, String path) {
+    u64 id[3];
+    if (os_file_id(path, id)) return {true, string_copy(a, {(const u8 *)id, (s64)sizeof id})};
+    return {false, os_fold_case(a, path_absolute(a, directory, path, HOST_IS_WINDOWS))};
+}
+
+static bool same_key(File_Key x, File_Key y) {
+    return x.by_id == y.by_id && string_eq(x.bytes, y.bytes);
+}
+
+bool load_same_file(String a, String b) {
+    Arena scratch = arena_make(1024);
+    String directory = os_current_directory(&scratch);
+    bool same = same_key(file_key(&scratch, directory, a), file_key(&scratch, directory, b));
+    arena_free(&scratch);
+    return same;
+}
+
 // The files named so far, the main file and every #load's, read or not: a
 // file that can't be read is recorded too, so it's reported at its first
-// #load alone (load.h). A file is known by its id (os_file_id) when it has
-// one, in `ids`, whose keys are the ids' 24 bytes. One with none is known
-// by its path made absolute (path_absolute), in `paths`, its case folded
-// as the system folds names' (os_fold_case: on Windows, where a name's
-// case doesn't matter, Ä.rig is ä.rig): that's a file that isn't there, as
-// the main file under rig check --stdin needn't be, or one on a file
-// system with no ids to give (os.h). Its path is the best there is: ./x.rig
-// and sub/../x.rig are x.rig, though a link to it isn't.
+// #load alone (load.h). The keys (File_Key) of those known by their ids
+// are in `ids`, of those known by their paths in `paths`.
 struct Seen_Files {
     Table<bool> ids;
     Table<bool> paths;
 };
 
-// Records the file at `path`, from the directory rig runs in, as seen.
-// False when it was named already. A key is looked up where it was made,
-// and copied into `keys` only when it's new, to stay in the table.
-static bool first_time_seen(Arena *keys, Seen_Files *seen, String directory, String path) {
-    u64 id[3];
-    if (os_file_id(path, id)) {
-        String key = {(const u8 *)id, (s64)sizeof id};
-        if (table_get(&seen->ids, key)) return false;
-        table_put(&seen->ids, string_copy(keys, key), true);
-        return true;
-    }
-    Arena scratch = arena_make(1024);
-    String key = os_fold_case(&scratch, path_absolute(&scratch, directory, path, HOST_IS_WINDOWS));
-    bool first = table_get(&seen->paths, key) == nullptr;
-    if (first) table_put(&seen->paths, string_copy(keys, key), true);
-    arena_free(&scratch);
-    return first;
+// Records the file known by `key` as seen. False when it was named
+// already. The table keeps the key's bytes, which stay where they are.
+static bool first_time_seen(Seen_Files *seen, File_Key key) {
+    Table<bool> *table = key.by_id ? &seen->ids : &seen->paths;
+    if (table_get(table, key.bytes)) return false;
+    table_put(table, key.bytes, true);
+    return true;
 }
 
-Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text) {
+Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, String stdin_for, String stdin_text,
+                       bool *stdin_for_reached) {
     Ast_File *tree = arena_new<Ast_File>(a);
     // What the loading alone needs is in an arena of its own, freed at its
-    // end: the tables' keys, the directory rig runs in, each #load's path
-    // and the system's reasons for failing. d keeps copies of what it needs
-    // of them (diag_add_file, diag_locate_file, diag_error).
+    // end: the directory rig runs in, each #load's path and key (the tables
+    // keep the keys of the files first seen), and the system's reasons for
+    // failing. d keeps copies of what it needs of them (diag_add_file,
+    // diag_locate_file, diag_error).
     Arena loading = arena_make();
     String directory = os_current_directory(&loading);
     Seen_Files seen = {};
 
+    // The file given with its text (rig check --stdin-for), known by its
+    // key as any file is, so it's found however the program names it. It's
+    // keyed once, from the same directory as every file, before any file is
+    // read.
+    bool substitute = stdin_for.count > 0;
+    File_Key stdin_key = substitute ? file_key(&loading, directory, stdin_for) : File_Key{};
+    bool reached = false;
+
     // The main file first, known before its #loads are followed, so a file
     // that loads it back loads nothing: by its id, or, when it isn't there
-    // (rig check --stdin), by its path.
-    first_time_seen(&loading, &seen, directory, path);
+    // (rig check --stdin), by its path. When it's the file given with its
+    // text, that text is its text, as for any file the program loads.
+    File_Key main_key = file_key(&loading, directory, path);
+    first_time_seen(&seen, main_key);
+    if (substitute && same_key(main_key, stdin_key)) {
+        text = stdin_text;
+        reached = true;
+    }
     s32 main_file = diag_add_file(d, path, text);
     diag_locate_file(d, main_file, directory, HOST_IS_WINDOWS);
 
@@ -103,10 +137,16 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text) {
                 continue;
             }
             // A file that can't be read is reported at its first #load
-            // alone, as a file that can is read at its first alone.
-            if (!first_time_seen(&loading, &seen, directory, loaded)) continue;
+            // alone, as a file that can is read at its first alone. The
+            // file given with its text isn't read: it may not be there, and
+            // what's there isn't its text.
+            File_Key key = file_key(&loading, directory, loaded);
+            if (!first_time_seen(&seen, key)) continue;
             String loaded_text = {};
-            if (!os_read_file(a, loaded, &loaded_text)) {
+            if (substitute && same_key(key, stdin_key)) {
+                loaded_text = stdin_text;
+                reached = true;
+            } else if (!os_read_file(a, loaded, &loaded_text)) {
                 diag_error(d, load->path_pos, "cannot read '" STR_FMT "': " STR_FMT, STR_ARG(loaded),
                            STR_ARG(os_error_message(&loading)));
                 tree->lost_a_file = true;
@@ -119,5 +159,6 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text) {
     table_free(&seen.ids);
     table_free(&seen.paths);
     arena_free(&loading);
+    if (stdin_for_reached) *stdin_for_reached = reached;
     return tree;
 }

@@ -21,6 +21,12 @@
 //   loading one already loaded, the main file included, loads nothing: a
 //   cycle of loads is harmless, and no error. A file that can't be read is
 //   reported at its first #load alone.
+// - A file can be given with its text, in place of what's on disk (rig
+//   check --stdin-for: an editor's text, not yet saved). It's known by the
+//   same identity, so wherever the program loads it, however it's named,
+//   the main file included, that text is its text, taken at its first
+//   #load as a file on disk is read there. It needn't exist, and it keeps
+//   the name its #load gives it.
 // - The order is the main file's, then each loaded file's in the order its
 //   first #load was met, the files walked in that same order: a queue, not
 //   a recursion, so a chain of loads of any length takes no more stack
@@ -51,4 +57,20 @@
 // read are in the arena; the files' paths are copied into `d`
 // (diag_add_file), so they last as long as it does; each file's tokens are
 // freed once it's parsed.
-Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text);
+//
+// With stdin_for (when not empty), a file whose text is stdin_text instead
+// of what's on disk, wherever the program loads it, the main file included
+// (then `text` is unused). It needn't exist. It keeps the name its #load
+// gives it (load_path), or `path` for the main file. stdin_text, as `text`,
+// isn't copied: the caller keeps it alive as long as `d`.
+// *stdin_for_reached, when given, says whether the program reached it.
+Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, String stdin_for = {},
+                       String stdin_text = {}, bool *stdin_for_reached = nullptr);
+
+// Whether paths a and b, each from the directory rig runs in, name one file
+// by the loader's rules: the same id (os_file_id) when both have one, else,
+// when neither has, the same path made absolute with its case folded
+// (os_fold_case). A path with an id never names the same file as one
+// without. rig check --stdin-for asks it before reading anything, to know
+// whether the file it's given is the main file, which needn't exist then.
+bool load_same_file(String a, String b);
