@@ -63,10 +63,10 @@
    - `command_build` is at 160-195. Today `rig build --stdin-for` alone is "isn't a .rig file", exit 1, and beside a file it is a second file, exit 2.
    - The usage is at `src/main.cpp:5-10`.
 4. **The runner.**
-   - `run_check` (`tests/runner.cpp:942-952`) builds `check FILE [--stdin]`, and `run_with_input` (923) puts input on stdin. `check_result` (958-969) also fails on any stdout.
+   - `run_check` (`tests/runner.cpp:942-952`) builds `check FILE [--stdin]`, and `run_with_input` (924) puts input on stdin. `check_result` (956-968) also fails on any stdout.
    - The fixed tests are `check_stdin_without_a_file_test` (1048-1066, in `CHECK_DIR`) and `check_stdin_of_another_text_test` (1076-1096). Its `typed` text gives exactly `tests/run/load_files.rig:3:29: error: unknown identifier 'putz'` and its source lines.
    - `CHECK_CASES` is at 1100-1125. `Command_Case.args` has 7 slots (650-655). `command_test` (679) runs with empty stdin (`os_run_for`, `src/os.h:95-101`).
-   - `check_tests` (1128-1159) reports each test. The header comments are at 45-47 and 911-917.
+   - `check_tests` (1128-1158) reports each test. The header comments are at 45-47 and 911-917.
 5. **The fixtures.**
    - `tests/run/load_runtime_error.rig` has `#load "load/divide.rig";`. `tests/run/load/divide.rig` is 4 lines with no `main`, and its line 3 is `    return a / b;`.
    - `tests/errors/load_missing.rig` loads the missing `load/nope.rig`, and uses `Vec2`, `make`, `show`, `scale` and `count` from it. Its `.err` is three errors: the `cannot read`, then `13:14 256 doesn't fit in 'u8'` and `14:5 's64' isn't a procedure`, each with its two source lines.
@@ -75,20 +75,20 @@
    - `stop` (849-857) only kills the process and clears the timer.
    - `refreshAll` is at 942-948, `activate` at 956-987, and the save listener at 969. The configuration listener (976-981) handles `rig.compilerPath` and `rig.check`.
    - `findCompiler` (107-168) is the model for expanding a path setting. `compilerError` (222-226) opens `rig.compilerPath`. `buildDirectory` is at 217-219.
-   - The comments that describe `--stdin` are at 15-19 and 808-818. `forTests` is at 994.
+   - The comments that describe `--stdin` are at 15-19 and 808-818, and the header names the two modules it requires at 25-28 (`diagnostics.js`'s comments at 4 and 65-70 speak of the files a document loads). `forTests` is at 994.
    - `samePath` is at `diagnostics.js:31-35`.
    - The only setting with a path, `rig.compilerPath`, is at `package.json:168-173`; `restrictedConfigurations` is at 28-30.
    - The version is `0.2.2`, in `package.json:5` and `vsix/extension.vsixmanifest:6`.
 7. **The extension's checks** (`editors/vscode/test/check.js`):
-   - The module lists are at 618, 622 and 632. The install lists are at `install.sh:26` and `install.bat:26`, checked at 650-668.
+   - The module lists are at 618, 622 and 632, and the comment above them (611-613) names `debug.js` and `diagnostics.js`. The install lists are at `install.sh:26` and `install.bat:26`, checked at 650-668.
    - `restrictedConfigurations` is asserted at 705.
    - The vscode stand-in is at 710-935:
      - `textDocuments` (834) is `[stub.document]` alone;
      - `getConfiguration` (838) ignores its scope;
      - there is no `RelativePattern`, `findFiles`, `fs`, `createFileSystemWatcher` or `onDidChangeWorkspaceFolders`;
      - `activate` runs once, for every check (`loadExtension`).
-   - `STAND_IN` (1115-1139) reads `argv[2]` as the file. `withStandIn` (1188-1201) makes the scratch folder the one workspace folder, with `rig.compilerPath` set to Node.
-   - Existing live-check documents have no `main` and nothing on disk loads them. With the search, they are checked alone, as now.
+   - `STAND_IN` (1115-1139, described by the comment at 1104-1113) reads `argv[2]` as the file: rig's `check` is Node's script name, so `argv.slice(2)` is what follows `check`. `withStandIn` (1188-1201) makes the scratch folder the one workspace folder, with `rig.compilerPath` set to Node, and writes no `.rig` file.
+   - Existing live-check documents either declare `main` (`a.rig` and `m.rig` in the first two checks), or are in a folder with no `.rig` file on disk, so the search finds no candidate. Either way they are checked alone, as now.
 
 ## Decisions this plan makes
 
@@ -176,10 +176,11 @@ Added by this plan:
 - How it works (the tests don't determine this):
   - Compute FILE's key once, before the queue: its kind (id or path) and bytes, from the same `directory`.
   - A `#load` whose `first_time_seen` is true and whose key equals FILE's skips `os_read_file` and registers `stdin_text`.
+  - The main file is compared too: when its key equals FILE's, its text is `stdin_text` and FILE is reached.
   - `first_time_seen` keeps its behaviour, built on the shared key function.
 
-- [ ] **Step 1: Write the failing tests** in `test_load.cpp`. Each uses its own `load_test_directory`, and calls `load_program` with `stdin_for` and `&reached`.
-  - `load_same_file_by_identity`, with `a.rig` written and `gone.rig` absent:
+- [ ] **Step 1: Write the failing tests** in `test_load.cpp`. Each uses its own `load_test_directory`, and each but the first calls `load_program` with `stdin_for` and `&reached`. Paths are from the directory the tests run in, `DIR` the test's directory. A directory stays from one run to the next, so a case that needs a file absent never shares a directory with one that writes it.
+  - `load_same_file_by_identity`, with `DIR/a.rig` written and `DIR/gone.rig` absent (the names below are in `DIR`):
     - `a.rig` and `./a.rig` are the same file, and so are `gone.rig` and `sub/../gone.rig`;
     - `a.rig` and `gone.rig` are not;
     - on Windows, `DIR\A.RIG` and `a.rig` are the same file, and so are `GONE.RIG` and `gone.rig`;
@@ -190,14 +191,15 @@ Added by this plan:
     - expect `reached`, no messages, 2 files, and `files[1].path` is `DIR/h.rig`;
     - `files[1].text` is the stdin text, and the procedures are `main` and `greet`.
   - `load_stdin_for_a_missing_file`: as above with no `h.rig` on disk. No `cannot read`, `reached`, and `tree->lost_a_file` is false.
-  - `load_stdin_for_another_spelling`: the cases above, with FILE given as `DIR/./h.rig` and `DIR/sub/../h.rig`, and on Windows `DIR\H.RIG` too.
+  - `load_stdin_for_another_spelling`: the cases above, with FILE given as `DIR/./h.rig` and `DIR/sub/../h.rig`, and on Windows `DIR\H.RIG` too. The cases with `h.rig` on disk and those without use two directories.
+    - `DIR/sub` is made in both. On Linux the system resolves `sub/..` through `sub`, so without it `DIR/sub/../h.rig` has no id while the `#load`'s `DIR/h.rig` has one, and they aren't the same file.
     - Expect each to be `reached`, with `files[1].path` still `DIR/h.rig`, both with `h.rig` on disk and without.
     - On Linux, `DIR/H.RIG` is not reached: the disk `h.rig` is read, and the missing one is `cannot read`.
   - `load_stdin_for_loads_from_its_directory`:
     - `main.rig` is `#load "sub/h.rig";\n#load "b.rig";\nmain :: () { helper(); }\n`, and `b.rig` on disk is `#load "sub/h.rig";\nb :: () {}\n`. `sub/h.rig` isn't on disk.
     - FILE is `DIR/sub/h.rig`, with the text `#load "c.rig";\n#load "../main.rig";\n#load "h.rig";\nhelper :: () { c(); }\n`. `sub/c.rig` on disk is `c :: () {}\n`.
     - Expect no messages, and the files `DIR/main.rig`, `DIR/sub/h.rig`, `DIR/b.rig` and `DIR/sub/c.rig`, in that order, each once. That shows FILE's text was taken once, though two files load it, and its `#load`s are found from `sub/`.
-  - `load_stdin_for_never_reached`: `main.rig` loads `b.rig` alone. FILE `DIR/h.rig` gives `reached == false`, and the files and texts are as without the substitution.
+  - `load_stdin_for_never_reached`: `main.rig` loads `b.rig` alone, which is on disk and loads nothing. FILE `DIR/h.rig` gives `reached == false`, and the files and texts are as without the substitution.
   - `load_stdin_for_the_main_file`: FILE is `DIR/./main.rig`. Expect `reached`, and `files[0].text` is the stdin text, `files[0].path` the `path` given.
 - [ ] **Step 2: Run `build.bat` and expect it to FAIL:** `load_same_file` isn't declared, and `load_program` has too many arguments.
 - [ ] **Step 3: Implement** as in the interfaces. Update `load.h`'s rules: a file given in place of its disk text (`rig check --stdin-for`) is known by the same identity.
@@ -236,6 +238,7 @@ Added by this plan:
 
 - [ ] **Step 1: Write the failing tests** in `runner.cpp`, each reported by `check_tests`:
   - `check_stdin_for_a_loaded_file_test`, reported as `rig check --stdin-for a loaded file`, from the root, MAIN `tests/run/load_runtime_error.rig`:
+    - First it removes `.build/load_runtime_error` with `OBJ`, which rig build wrote earlier, as `check_stdin_of_another_text_test` does for its file.
     - FILE `tests/run/load/divide.rig` with its own disk text exits 0 with nothing on stderr (`check_result`). `check_wrote(a, str("load_runtime_error"))` is empty.
     - The text with `a / b` changed to `a / c` exits 1 with exactly `tests/run/load/divide.rig:3:16: error: unknown identifier 'c'\n        return a / c;\n                   ^\n`.
     - The same, with FILE spelled `tests/run/./load/divide.rig` and `tests/run/load/../load/divide.rig`, and on Windows `tests\run\LOAD\Divide.rig`, gives the same stderr, still naming `tests/run/load/divide.rig`.
@@ -274,7 +277,7 @@ Added by this plan:
 **Files:**
 - Create: `editors/vscode/program.js` (plain Node: `path` only)
 - Modify: `editors/vscode/install.sh:26`, `install.bat:26` (add `program.js`)
-- Test: `editors/vscode/test/check.js` (the lists at 622 and 632 gain `program.js`, and 618's waits for Task 4; the check's name becomes `node --check extension.js, debug.js, diagnostics.js and program.js`)
+- Test: `editors/vscode/test/check.js` (the lists at 622 and 632 gain `program.js`, and 618's waits for Task 4; the check's name becomes `node --check extension.js, debug.js, diagnostics.js and program.js`; the comment at 611-613 names `program.js` too)
 
 **Interfaces:**
 - Produces (`module.exports = { declaresMain, pathOrder, searchable, doesntLoad, tooOld }`):
@@ -297,9 +300,9 @@ Added by this plan:
   function tooOld(code, output) // -> boolean
   ```
 
-- [ ] **Step 1: Write the failing checks** in `check.js`, requiring `../program`:
+- [ ] **Step 1: Write the failing checks** in `check.js`, requiring `../program`. Each text below is a JavaScript string literal's contents, so `\n` is a line break and `\\` one backslash:
   - `program.js: declaresMain finds main :: at the top level only`:
-    - true: `main :: () {}`, `main::(){}`, `x :: 1;\nmain :: () {\n}`, `/* a */ main :: () {}`, `main\n::\n() {}`, and `s :: "abc\nmain :: () {}` (the unclosed string ends at its line);
+    - true: `main :: () {}`, `main::(){}`, `x :: 1;\nmain :: () {\n}`, `/* a */ main :: () {}`, `main\n::\n() {}`, `s :: "abc\nmain :: () {}` (the unclosed string ends at its line), and `s :: "\\\\"; main :: () {}` (an escaped backslash, then the closing quote);
     - false: ``, `// main :: () {}`, `/* /* */ main :: () {} */`, `s :: "main :: ()";`, `s :: "\\" main :: ";`, `f :: () { main :: () {} }`, `domain :: () {}`, `main2 :: () {}`, `main : int = 0;`, `/* main :: () {}` (unclosed).
   - `program.js: pathOrder sorts by the path from the folder, with / between names`: in `w = path.resolve('w')`, the files `b.rig`, `sub/a.rig`, `sub0.rig`, `a.rig`, `B.rig`, `a0.rig` and `a-b.rig` (joined with `path.join`) come out as `B.rig`, `a-b.rig`, `a.rig`, `a0.rig`, `b.rig`, `sub/a.rig`, `sub0.rig`. On Windows, `\` would put `sub0.rig` first.
   - `program.js: searchable leaves out what is under a .build directory`: true for `a.rig`, `sub/a.rig` and `.builder/a.rig`; false for `.build/a.rig`, `x/.build/y/a.rig` and `x\\.build\\a.rig`.
@@ -318,10 +321,11 @@ Added by this plan:
 - Modify: `editors/vscode/extension.js`:
   - `LiveCheck` and `activate`;
   - `settingError` and `mainSetting`;
-  - the comments at 15-19 and 808-818;
+  - the comments at 15-19 and 808-818, and the header's list of the modules it requires (25-28), which gains `program.js`;
   - `forTests` gains `mainSetting`.
+- Modify: `editors/vscode/diagnostics.js` (comments only: at 4, `rig check FILE --stdin` gains `--stdin-for`; at 65-70, the other files are the program's, the main file among them, not only those the document loads)
 - Modify: `editors/vscode/package.json` (`rig.main`; version `0.3.0`), `vsix/extension.vsixmanifest` (`Version="0.3.0"`)
-- Test: `editors/vscode/test/check.js` (the stub, the stand-in, new checks; `ownModules()` becomes `['debug.js', 'diagnostics.js', 'program.js']`)
+- Test: `editors/vscode/test/check.js` (the stub, the stand-in and its comment at 1104-1113, new checks; `ownModules()` becomes `['debug.js', 'diagnostics.js', 'program.js']`)
 
 **Interfaces:**
 - Consumes: Task 2's option, and Task 3's module.
@@ -335,12 +339,16 @@ Added by this plan:
   // empty, { file } as an absolute normalised path, or { error } with one of
   // the two rig.main messages (without the "Rig: " prefix). ${workspaceFolder}
   // and ~ expand, and a relative path is from the folder, as in findCompiler.
+  // A path not ending in .rig (any case) is the .rig message, whether or not
+  // it exists; else a path that isn't a file is the "no file" one.
   function mainSetting(file, folder)
 
   class LiveCheck {
       // As now, plus:
       //   this.generations: Map<uri string, number>, bumped by stop(key);
       //   this.toldMain: a bad rig.main said once.
+      // dispose() also stops every key in this.generations, so a search
+      // waiting on findFiles or readFile starts nothing once it's disposed.
       async run(document)  // resolves when the check is done or overtaken
       // Runs rig as the check of `key`: this.running holds it while it runs, so
       // stop(key) ends it. Resolves { code, output } once it closes (code null
@@ -373,12 +381,12 @@ Added by this plan:
   ```
   `restrictedConfigurations` stays `["rig.compilerPath"]`.
 - **The stub**, with `reset()` gaining `mains: {}` and `documents: []`:
-  - `RelativePattern(base, pattern)`;
-  - `workspace.findFiles(include)` walks `include.base`'s folder for `*.rig` (any case), and resolves the uris in reverse path order, unordered on purpose;
+  - `RelativePattern(base, pattern)`, `base` a WorkspaceFolder or a Uri, as VS Code takes it;
+  - `workspace.findFiles(include)` walks the folder `include.base` names (its `uri.fsPath`, or its `fsPath`) for `*.rig` (any case), and resolves the uris in reverse path order, unordered on purpose;
   - `workspace.fs.readFile(uri)` is `fs.promises.readFile(uri.fsPath)`;
   - `createFileSystemWatcher()` gives `onDidCreate: listen('fsCreate')`, `onDidChange: listen('fsChange')`, `onDidDelete: listen('fsDelete')` and `dispose`;
   - `onDidChangeWorkspaceFolders: listen('folders')`;
-  - `getConfiguration(section, scope)` gives `main` as `stub.mains[fsPath of the folder holding scope] || ''`;
+  - `getConfiguration(section, scope)` gives `main` as `stub.mains[F] || ''`, F the `fsPath` of the workspace folder that is `scope` (a WorkspaceFolder, or its Uri) or holds it (a file's Uri); `compilerPath` and `check` stay as now;
   - `textDocuments` is `stub.documents` plus `stub.document` when it isn't among them;
   - `withStandIn` closes every one of them at the end.
 - **The stand-in:**
@@ -390,8 +398,9 @@ Added by this plan:
     - it ends with the usual warning, and exits 1 if there were errors.
   - `check FILE --stdin` is as now. A helper `calls(dir)` returns `calls.log`'s lines, parsed, or `[]`.
 
-- [ ] **Step 1: Write the failing checks.** Each opens a `fakeDocument` of `helper.rig` with the text `putz();\n` (not on disk) in `withStandIn`. The `.rig` files named are written to disk.
+- [ ] **Step 1: Write the failing checks.** Each opens a `fakeDocument` of `helper.rig` with the text `putz();\n` (not on disk) in `withStandIn`, as `stub.document`. The `.rig` files named are written to disk. "The calls" after a step are those `calls(dir)` gained in it.
   - `the setting rig.main is declared and read`: type `string`, default `''`, scope `resource`, a `markdownDescription`, and `extension.js` includes `'main'`.
+  - `rig.main expands ${workspaceFolder} and ~, and is from the folder`, through `forTests.mainSetting(file, folder)` with `stub.mains` set: `''` is `{}`; `${workspaceFolder}/sub/../m.rig`, `m.rig` and `./m.rig` are `{ file: path.join(dir, 'm.rig') }` with `m.rig` on disk; `~/m.rig` names `path.join(os.homedir(), 'm.rig')` (the `no file` error, unless it is there).
   - `a loaded file is checked through the first main file in path order that loads it`:
     - the files are `a.rig` = `main :: () {}\n`, `b.rig` = `#load "helper.rig";\nmain :: () { putz(); }\n`, `c.rig` the same as `b.rig`, `lib.rig` = `x :: 1;\n`, and `.build/x.rig` = `#load "../helper.rig";\nmain :: () {}\n`;
     - `calls(dir)` is `[[a, '--stdin-for', doc], [b, '--stdin-for', doc]]`, with absolute `a` and `b`;
@@ -401,6 +410,7 @@ Added by this plan:
     - then `stub.mains[dir] = 'a.rig'` and `fire('configuration', rig.main)`: the calls are `a` (doesn't load), then `b`.
   - `a main file, a file no program loads and a file in no folder are checked alone`. Each case's only call, or last, is `[doc, '--stdin']`:
     - the doc's text `main :: () { putz(); }\n` makes one call, with `b.rig` present;
+    - `stub.mains[dir] = 'helper.rig'`, the document itself, makes one call, with `b.rig` present;
     - with only `a.rig`, the calls are `a`, then alone;
     - with `stub.folders = []`, `calls.log` is in the doc's directory, and the call is alone.
   - `a bad rig.main is said once, with a button to the setting, and the search is used`:
@@ -429,8 +439,9 @@ Added by this plan:
   // this.programs: Map<document uri string, string | null>: the main file found, or null for "alone".
   // this.toldOld: said once that the rig is too old.
   forgetPrograms(uri)  // drops the entries of the documents in uri's workspace folder (none outside one)
-  saved(document)      // forgetPrograms, then run(document) and every other wanted open
-                       // document of its folder (vscode.workspace.textDocuments)
+  saved(document)      // for a wanted document (a .rig file on disk): forgetPrograms, then
+                       // run(document) and every other wanted open document of its folder
+                       // (vscode.workspace.textDocuments); for another, run(document) alone, as now
   ```
 - `run` uses `this.programs`:
   - a cached main is tried alone first. If it answers `doesntLoad`, it is dropped, and the search runs without it;
@@ -446,12 +457,15 @@ Added by this plan:
   - `rig.main`'s configuration event also clears `programs`, and `rig.compilerPath`'s also resets `toldOld`.
 
 - [ ] **Step 1: Write the failing checks:**
-  - `a document's program is remembered until a .rig file in its folder is created, deleted or saved`:
+  - `a document's program is remembered until a .rig file in its folder is created, changed, deleted or saved, or the folders change`:
     1. With `a.rig` (doesn't load) and `b.rig` (loads), opening gives the calls `a`, `b`.
     2. A change (`onType`, after the pause) adds exactly one call, `b`'s.
     3. Writing `a0.rig`, which loads `helper.rig`, and firing `fsCreate` with its uri: the next change's calls are `a`, then `a0`.
     4. Rewriting `a.rig` to load `helper.rig` and firing `save` with a `fakeDocument` of it: the doc's next check names `a`.
-    5. `fsDelete` of `a.rig`, after removing it, makes the next check search again.
+    5. `fsDelete` of `a.rig`, after removing it, makes the next check search again: its call is `a0`.
+    6. Rewriting `a0.rig` not to load `helper.rig`, firing nothing: the next change's calls are `a0` (doesn't load, so it is dropped), then `b`, the search without `a0`.
+    7. Writing `a.rig` again, loading `helper.rig`, and firing `fsChange` with its uri (an edit outside VS Code): the next change's calls are `a`.
+    8. Writing `0.rig`, which loads `helper.rig`, firing nothing, then `folders`: the doc is checked at once, with no change, and its call is `0.rig`'s, not the remembered `a`.
   - `saving a .rig file re-checks the other open documents of its folder`:
     - `stub.documents` holds the doc and `other.rig` (`putz();`, loaded by nothing), and `b.rig` loads the doc and has a `putz`;
     - once checked, the doc has two diagnostics;
@@ -460,7 +474,8 @@ Added by this plan:
   - `a rig too old for --stdin-for is said once, and the file is checked alone`:
     - with `old-rig` written and `b.rig` loading the doc, two checks give one message, matching `/too old to check a loaded file/`;
     - the calls are `[b, '--stdin-for', doc]`, `[doc, '--stdin']`, twice over;
-    - the diagnostics are the doc's `putz`.
+    - the diagnostics are the doc's `putz`;
+    - a `rig.compilerPath` configuration event (`toldOld` reset) re-checks, and the message is said a second time.
 - [ ] **Step 2: Run `node editors/vscode/test/check.js`** and expect these checks to FAIL.
 - [ ] **Step 3: Implement** as in the interfaces.
 - [ ] **Step 4: Run it** on both hosts and expect every check to PASS.
@@ -471,7 +486,7 @@ Added by this plan:
 **Files:**
 - Modify: `docs/rig-spec.md` (10.1: the usage block at 1675, the `rig check` paragraph at 1687, the messages at 1711, the exit-2 list at 1713)
 - Modify: `CONTRIBUTING.md` (the usage at 41, the `rig check` item at 48)
-- Modify: `editors/vscode/README.md` (the file list at 9; the "Errors as you type" paragraph at 37, whose #121 sentences go; a new `rig.main` section beside `rig.compilerPath`'s; "Checking it" at 148)
+- Modify: `editors/vscode/README.md` (the file list at 9; the "Errors as you type" paragraph at 37, whose #121 sentences go; a new `rig.main` section beside `rig.compilerPath`'s; "Checking it" at 142)
 
 - [ ] **Step 1: Write 10.1**, in the spec's style:
   - the usage line `rig check FILE.rig [--stdin | --stdin-for FILE.rig]`;
@@ -490,7 +505,7 @@ Added by this plan:
     - only the document's text comes from the editor, and the program's other files are read from disk, so unsaved edits in them aren't seen until they are saved, which re-checks the folder's open documents;
     - a document opened through a link or an 8.3 alias whose name differs from the `#load`'s isn't matched to its diagnostics.
   - The `rig.main` section: the setting, per workspace folder, relative to it, with `${workspaceFolder}` and `~`; a bad one said once, with a button.
-  - "Checking it": the `program.js` checks, the `rig.main` setting, and the live check's new behaviours from Tasks 4 and 5.
+  - "Checking it": `program.js` among the modules `extension.js` requires and `node --check` parses, the `program.js` checks, the `rig.main` setting, and the live check's new behaviours from Tasks 4 and 5.
 - [ ] **Step 4: Run all tests** on both hosts (`bin/run-tests` builds the spec's examples) and `node editors/vscode/test/check.js`. Expect everything to PASS.
 - [ ] **Step 5: Commit** `Document checking a loaded file as part of its program`. Then the independent review: fix every finding, and mark the PR ready.
 
