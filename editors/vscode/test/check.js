@@ -357,6 +357,12 @@ check('program.js: declaresMain finds main :: at the top level only', () => {
         'main\n::\n() {}',
         's :: "abc\nmain :: () {}',      // the unclosed string ends at its line
         's :: "\\\\"; main :: () {}',    // an escaped backslash, then the closing quote
+        's :: "abc\\\nmain :: () {}',    // a backslash at the line's end doesn't take the break
+        's :: "{"; main :: () {}',       // a brace in a string isn't counted
+        '// x\nmain :: () {}',           // a line comment ends at its line
+        '}\nmain :: () {}',              // a stray } doesn't make the rest nested
+        'main\t::\r\n() {}',             // tabs and Windows line ends are white space
+        '﻿main :: () {}',           // a byte-order mark first isn't part of the name
     ];
     for (const text of yes) assert.strictEqual(declaresMain(text), true, JSON.stringify(text));
     const no = [
@@ -368,6 +374,8 @@ check('program.js: declaresMain finds main :: at the top level only', () => {
         'f :: () { main :: () {} }',
         'domain :: () {}',
         'main2 :: () {}',
+        'émain :: () {}',                 // as in função, a name beyond ASCII is one name
+        'mainé :: () {}',
         'main : int = 0;',
         '/* main :: () {}',               // an unclosed comment runs to the end
     ];
