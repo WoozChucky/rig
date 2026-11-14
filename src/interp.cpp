@@ -320,9 +320,10 @@ static bool interp_in_proc_range(Interp *in, u64 address) {
 // ---------------------------------------------------------------------------
 // Calling C
 
-// Foreign procedure k's C function, found by its name the first time it's
-// needed and kept: the compiler's own copy of a standard C function
-// (interp_c_library_function: any of them on Windows, what
+// Foreign procedure k's C function, found by its C name (ir_c_name: the
+// one #foreign libc "free" gives, or else the procedure's own) the first
+// time it's needed and kept: the compiler's own copy of a standard C
+// function (interp_c_library_function: any of them on Windows, what
 // libc_nonshared.a links in on Linux), or else the system's
 // (os_find_c_function). Null when neither has it, which isn't kept, so a
 // later run looks again.
@@ -331,15 +332,17 @@ static void *interp_c_function(Interp *in, s32 k) {
     if (f) return f;
     Ir_Proc *p = in->module->procs[k];
     RIG_ASSERT(p->is_foreign);
-    f = interp_c_library_function(p->name);
-    if (!f) f = os_find_c_function(p->name);
+    f = interp_c_library_function(ir_c_name(p));
+    if (!f) f = os_find_c_function(ir_c_name(p));
     in->c_functions[k] = f;
     return f;
 }
 
-// The failure of a foreign procedure whose C function is nowhere, in `a`.
-static String interp_not_in_c(Arena *a, String name) {
-    return string_printf(a, "'" STR_FMT "' isn't in the C library at compile time", STR_ARG(name));
+// The failure of foreign procedure p, whose C function is nowhere, in `a`.
+// It names the C function, which is what was looked for: c_free's is
+// 'free'.
+static String interp_not_in_c(Arena *a, Ir_Proc *p) {
+    return string_printf(a, "'" STR_FMT "' isn't in the C library at compile time", STR_ARG(ir_c_name(p)));
 }
 
 // Starts gathering a C call's arguments.
@@ -433,7 +436,7 @@ static bool interp_map_globals(Interp *in, Arena *a, String *error) {
                 // A C function's value is its native address.
                 void *f = interp_c_function(in, reloc->global);
                 if (!f) {
-                    *error = interp_not_in_c(a, m->procs[reloc->global]->name);
+                    *error = interp_not_in_c(a, m->procs[reloc->global]);
                     in->globals.count = first;  // the arena keeps their bytes until interp_free
                     return false;
                 }
@@ -481,7 +484,7 @@ static void interp_fail(Interp *in, Interp_Record *frame, s32 block, s32 index, 
 static void interp_fail_not_in_c(Interp *in, Interp_Record *frame, s32 block, s32 index, Arena *a,
                                  Interp_Result *result, s32 k) {
     interp_fail(in, frame, block, index, a, result, {});
-    result->message = interp_not_in_c(a, in->module->procs[k]->name);
+    result->message = interp_not_in_c(a, in->module->procs[k]);
 }
 
 // ---------------------------------------------------------------------------
@@ -884,7 +887,7 @@ void interp_run(Interp *in, s32 proc, Array<u64> args, Arena *a, Interp_Result *
         // Rig procedure around it.
         void *f = interp_c_function(in, proc);
         if (!f) {
-            result->message = interp_not_in_c(a, p->name);
+            result->message = interp_not_in_c(a, p);
             return;
         }
         interp_c_start(in);
