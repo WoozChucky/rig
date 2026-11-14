@@ -207,6 +207,18 @@ static s64 count_of(String haystack, const char *needle) {
     }
 }
 
+// The first line of `text` containing `needle`, without its "\n"; {} when
+// there's none. A needle starting with "\n" finds the line after that one.
+static String line_with(String text, const char *needle) {
+    s64 at = index_of(text, needle);
+    if (at < 0) return {};
+    if (needle[0] == '\n') at++;
+    s64 start = at, end = at;
+    while (start > 0 && text.data[start - 1] != '\n') start--;
+    while (end < text.count && text.data[end] != '\n') end++;
+    return string_slice(text, start, end - start);
+}
+
 // Hand-built IR, for the tests of the IR's printing, the backend, the
 // interpreter and the runtime that come before lowering can make what they
 // need, or need IR it never makes. Each returns the value's number.
@@ -309,11 +321,19 @@ static s32 add_byte_global(Ir_Module *m, const char *name, s64 size, u32 align) 
     Ir_Global g = {};
     g.name = str(name);
     g.type = IR_VOID;
-    g.is_variable = true;
+    g.has_layout = true;
     g.size = size;
     g.align = align;
     array_add(&m->globals, g);
     return (s32)(m->globals.count - 1);
+}
+
+// A read-only global of `size` bytes aligned to `align`, all zero, with no
+// relocations, as lowering makes a data constant's; its index.
+static s32 add_read_only_global(Ir_Module *m, const char *name, s64 size, u32 align) {
+    s32 g = add_byte_global(m, name, size, align);
+    m->globals[g].is_read_only = true;
+    return g;
 }
 
 // A procedure returning one value of type `result`, or nothing (IR_VOID).
