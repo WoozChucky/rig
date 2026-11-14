@@ -1,0 +1,42 @@
+// Top-level #runs (issue #115, spec 7.8) run while compiling, for their
+// effect, after the whole program checks, in order, file by file in load
+// order: this file's first, then the one it #loads. What they print is rig
+// build's output (run_top_level.build.out), not the program's. They share
+// the compile-time globals with the #runs in the constants, which ran while
+// checking, before them. The program's own globals start from their
+// written values, whatever the runs did to them.
+#load "load/run_top_level.rig";
+
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+puts :: (s: *u8) -> s32 #foreign libc;
+
+counter := 0;
+runs := 0;
+bump :: () -> int {
+    runs += 1;
+    return runs;
+}
+
+FIRST :: #run bump();
+SECOND :: #run bump();
+
+setup :: () { counter = 41; }
+say :: () { puts("a void call runs"); }
+
+#run setup();
+#run {
+    counter += 1;
+    printf("counter is %lld while compiling\n", counter);
+}
+#run say();
+#run {
+    if counter > 0 {
+        puts("return ends a block's run");
+        return;
+    }
+    puts("never printed");
+}
+
+main :: () {
+    printf("counter is %lld, runs %lld %lld\n", counter, FIRST, SECOND);
+}

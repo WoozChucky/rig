@@ -124,6 +124,29 @@ void diag_print(Diagnostics *d) {
     arena_free(&a);
 }
 
+// The diagnostics a process ending now must print (diag_print_at_exit), or
+// null: rig printed them itself, or there's no compilation under way.
+static Diagnostics *printed_at_exit;
+
+// The atexit handler. A #run's code that calls C's exit() ends the process
+// from inside the checker or a top-level run, where rig would print what it
+// found only later: they come out here instead, before the C runtime's own
+// end flushes the streams.
+static void print_at_exit() {
+    if (!printed_at_exit) return;
+    diag_sort(printed_at_exit);
+    diag_print(printed_at_exit);
+}
+
+void diag_print_at_exit(Diagnostics *d) {
+    static bool registered = false;
+    if (!registered) {
+        atexit(print_at_exit);
+        registered = true;
+    }
+    printed_at_exit = d;
+}
+
 void diag_free(Diagnostics *d) {
     array_free(&d->files);
     array_free(&d->messages);

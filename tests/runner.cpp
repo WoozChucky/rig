@@ -7,7 +7,11 @@
 // on any number of lines: add_flags), and run; its
 // stdout must equal NAME.out, its exit code the number in NAME.exit (0 when
 // there's none), and its stderr NAME.err (a runtime error's message, say),
-// or be empty when there's no NAME.err.
+// or be empty when there's no NAME.err. What rig build itself prints to
+// stdout, what the program's top-level #runs print while compiling (spec
+// 7.8), must equal NAME.build.out, or be empty when there's none. A
+// program prints while compiling only from its top-level #runs: rig check
+// runs its expression #runs too, and must print nothing (check_tests).
 // On Windows the program's newlines are normalised first, since C's
 // text-mode streams write \r\n for each \n: every \r\n in its stdout and
 // stderr becomes \n (normalise_newlines). The rest is compared byte for
@@ -18,12 +22,15 @@
 // runs it on the compiler's IR interpreter (tests/unit/interpret_mode.cpp;
 // the runner has no compiler in it), which must give what the compiled
 // program gives, held to the same NAME.out, NAME.exit and NAME.err (or
-// nothing on stderr), its newlines normalised alike (interpreted_test). It
+// nothing on stderr), its newlines normalised alike (interpreted_test).
+// Interpret mode runs the top-level #runs too, before main, so its stdout
+// is NAME.build.out followed by NAME.out. It
 // is reported as `interpreted tests/run/NAME`. A program the interpreter
 // can't run, one that hands C a Rig procedure (qsort_callback), has a
 // NAME.interp.err instead: its stderr must be that, its exit code 101, and
-// its stdout what it printed before it stopped, the first lines of
-// NAME.out, whole, and one at least (its NAME.exit is the compiled run's).
+// its stdout what it printed before it stopped, its NAME.build.out, then
+// the first lines of NAME.out, whole, and one at least (its NAME.exit is
+// the compiled run's).
 // The interpreter is always bin/unit-tests's, whatever RIG is given.
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
@@ -44,7 +51,12 @@
 //
 // Then rig check on every program of both directories, from a file and
 // from stdin under the file's name, a loaded file's text from stdin within
-// its program (--stdin-for), and its own command line (check_tests).
+// its program (--stdin-for), and its own command line (check_tests). A
+// program of tests/run must check with nothing to say, exit 0; one of
+// tests/errors exit 1 and print its NAME.err, unless it has a
+// NAME.check.err: what rig check prints instead, for a program whose
+// errors only rig build finds (a top-level #run that fails, which checking
+// never runs). An empty one means exit 0 with nothing on stderr.
 //
 // Then the specification's examples (spec_tests): every ```rig block of
 // docs/rig-spec.md but a file= one (below; its section 1.4 says so too),
@@ -325,8 +337,9 @@ static void add_flags(Arena *a, Array<String> *argv, String name) {
 
 // Runs rig build's command line `argv` (which it frees) in `directory` ({}
 // for this one), which must write `program` (a path from this one). {} when
-// it did, otherwise why not.
-static String build_program(Arena *a, Array<String> argv, String directory, String program) {
+// it did, otherwise why not. With `out`, what rig build wrote to stdout is
+// put there (what the program's top-level #runs printed while compiling).
+static String build_program(Arena *a, Array<String> argv, String directory, String program, String *out = nullptr) {
     // The last run's program, gone: if rig wrote this one somewhere else, it
     // mustn't be found and run in its place.
     remove(string_cstr(a, program));
@@ -340,7 +353,17 @@ static String build_program(Arena *a, Array<String> argv, String directory, Stri
                            built.err);
     }
     if (!os_file_exists(program)) return string_printf(a, "rig build exited with 0 but wrote no " STR_FMT, STR_ARG(program));
+    if (out) *out = built.out;
     return {};
+}
+
+// tests/run/NAME.build.out, what rig build must print to stdout: what the
+// program's top-level #runs print while compiling. Nothing when there's
+// none.
+static String read_build_out(Arena *a, String name) {
+    String text = {};
+    if (!os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".build.out", STR_ARG(name)), &text)) return {};
+    return text;
 }
 
 // tests/run/NAME's .out, and the number in its .exit (0 when there's
@@ -364,12 +387,15 @@ static String read_expected(Arena *a, String name, String *expected_out, s32 *ex
 }
 
 // A run of tests/run/NAME, compiled or interpreted, held to its .out, .exit
-// and .err. {} when it passes, otherwise why not.
-static String held_to_expected(Arena *a, String name, Process_Result *ran) {
+// and .err; its stdout to `before` then the .out (an interpreted run prints
+// its .build.out first, as it compiles). {} when it passes, otherwise why
+// not.
+static String held_to_expected(Arena *a, String name, Process_Result *ran, String before = {}) {
     String expected_out = {};
     s32 expected_exit = 0;
     String why = read_expected(a, name, &expected_out, &expected_exit);
     if (why.count) return why;
+    if (before.count) expected_out = string_printf(a, STR_FMT STR_FMT, STR_ARG(before), STR_ARG(expected_out));
     if (!string_eq(ran->out, expected_out)) {
         return with_stderr(a, first_difference(a, "stdout", expected_out, ran->out), ran->err);
     }
@@ -390,14 +416,19 @@ static String held_to_expected(Arena *a, String name, Process_Result *ran) {
     return {};
 }
 
-// A program that must build, run and print its .out. {} when it passes,
-// otherwise why not.
+// A program that must build, printing its .build.out (nothing without
+// one), run and print its .out. {} when it passes, otherwise why not.
 static String run_test(Arena *a, String rig, String name) {
     String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
     Array<String> argv = build_command(a, rig, "tests/run", name, program);
     add_flags(a, &argv, name);
-    String why = build_program(a, argv, {}, program);
+    String build_out = {};
+    String why = build_program(a, argv, {}, program, &build_out);
     if (why.count) return why;
+    String expected_build_out = read_build_out(a, name);
+    if (!string_eq(build_out, expected_build_out)) {
+        return first_difference(a, "rig build's stdout", expected_build_out, build_out);
+    }
 
     Array<String> command = {};
     array_add(&command, program);
@@ -409,10 +440,11 @@ static String run_test(Arena *a, String rig, String name) {
 }
 
 // A program of tests/run interpreted by `unit_tests`, bin/unit-tests
-// --interpret, which must give what the compiled program gives; or, with a
-// NAME.interp.err, stop with that on stderr and 101, having printed the
-// first lines of its .out, one at least. {} when it passes, otherwise why
-// not.
+// --interpret, which must give what the compiled program gives, its
+// .build.out first (its top-level #runs print it before main starts); or,
+// with a NAME.interp.err, stop with that on stderr and 101, having printed
+// its .build.out and the first lines of its .out, one at least. {} when it
+// passes, otherwise why not.
 static String interpreted_test(Arena *a, String unit_tests, String name) {
     Array<String> argv = {};
     array_add(&argv, unit_tests);
@@ -425,9 +457,10 @@ static String interpreted_test(Arena *a, String unit_tests, String name) {
     array_free(&argv);
     if (!started) return why;
 
+    String build_out = read_build_out(a, name);
     String refusal = {};
     if (!os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".interp.err", STR_ARG(name)), &refusal)) {
-        return held_to_expected(a, name, &ran);
+        return held_to_expected(a, name, &ran, build_out);
     }
     if (!string_eq(ran.err, refusal)) return first_difference(a, "stderr", refusal, ran.err);
     if (ran.exit_code != 101) {
@@ -442,17 +475,20 @@ static String interpreted_test(Arena *a, String unit_tests, String name) {
     // A program that prints nothing compiled would leave the check below
     // nothing to hold its stdout to.
     if (!expected_out.count) return str("its .out is empty: a program with a .interp.err must print a line first");
-    // What it printed before it stopped: the .out's whole lines, from its
-    // first, through the one stdout ends in. So a stdout that's empty, that
-    // ends inside a line, or that goes on past the whole .out, differs
-    // from them: the program's output before the refusal must come out.
-    // One byte at least, so an empty stdout is held to the whole first
-    // line.
-    s64 end = ran.out.count > 0 ? ran.out.count : 1;
-    if (end > expected_out.count) end = expected_out.count;
-    while (end < expected_out.count && expected_out.data[end - 1] != '\n') end++;
-    String start = string_slice(expected_out, 0, end);
-    if (!string_eq(ran.out, start)) return first_difference(a, "stdout (the start of the .out)", start, ran.out);
+    // What it printed before it stopped: the .build.out, whole, then the
+    // .out's whole lines, from its first, through the one stdout ends in.
+    // So a stdout that ends inside a line, or that goes on past the whole
+    // .out, differs from them: the program's output before the refusal
+    // must come out. One byte of the .out at least, so a stdout that stops
+    // after the .build.out is held to the .out's whole first line.
+    String whole = string_printf(a, STR_FMT STR_FMT, STR_ARG(build_out), STR_ARG(expected_out));
+    s64 end = ran.out.count > build_out.count ? ran.out.count : build_out.count + 1;
+    if (end > whole.count) end = whole.count;
+    while (end < whole.count && whole.data[end - 1] != '\n') end++;
+    String start = string_slice(whole, 0, end);
+    if (!string_eq(ran.out, start)) {
+        return first_difference(a, "stdout (the .build.out, then the start of the .out)", start, ran.out);
+    }
     return {};
 }
 
@@ -1056,15 +1092,25 @@ static String check_both_ways(Arena *a, String rig, const char *dir, String name
     return {};
 }
 
-// A program of tests/errors: exit 1 and its .err, as rig build gives.
+// A program of tests/errors: exit 1 and its .err, as rig build gives. But
+// one whose errors only rig build finds (a top-level #run that fails, which
+// rig check never runs) has a NAME.check.err, what rig check gives instead:
+// exit 0 when it's empty, 1 otherwise, and it on stderr (its @NO_SUCH_FILE@
+// replaced too).
 static String check_error_test(Arena *a, String rig, String name) {
     String expected = {};
+    if (os_read_file(a, string_printf(a, "tests/errors/" STR_FMT ".check.err", STR_ARG(name)), &expected)) {
+        expected = replace_all(a, expected, "@NO_SUCH_FILE@", no_such_file_message(a));
+        return check_both_ways(a, rig, "tests/errors", name, expected.count ? 1 : 0, expected);
+    }
     if (!read_expected_errors(a, name, &expected)) return str("no .err file");
     return check_both_ways(a, rig, "tests/errors", name, 1, expected);
 }
 
-// A program of tests/run: nothing to say, exit 0. (One that fails when it
-// runs still checks clean: checking never runs it.)
+// A program of tests/run: nothing to say, exit 0. Checking runs its
+// expression #runs (which print nothing: rig check's stdout must be empty),
+// never the program or its top-level runs, so one that fails when it runs
+// still checks clean.
 static String check_run_test(Arena *a, String rig, String name) {
     return check_both_ways(a, rig, "tests/run", name, 0, {});
 }

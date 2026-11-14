@@ -26,3 +26,10 @@ void compile_time_free(Compile_Time *ct);
 // and a result that can't be baked (a pointer, a negative count) at the
 // #run; either leaves it with no value. True when it has one.
 bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run);
+
+// The program's top-level #runs (Ast_File.runs), once it checked with no
+// errors (rig build, and interpret mode; never rig check): each in turn, in
+// order (file by file in load order, source order within a file), its result
+// thrown away. A failure is reported at its #run, with its frames, as an
+// expression run's is; the runs after it still run.
+void compile_time_run_top_level(Compile_Time *ct, Ast_File *file);

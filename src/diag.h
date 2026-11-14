@@ -86,5 +86,10 @@ String diag_render(Arena *a, Diagnostics *d);
 // diag_render, written to stderr.
 void diag_print(Diagnostics *d);
 
+// Until called again with null: a process that ends before rig prints its
+// diagnostics (exit() in a #run, spec 7.8) prints d's first, sorted, as
+// diag_print does, from an atexit handler registered once.
+void diag_print_at_exit(Diagnostics *d);
+
 // Frees the messages and the file list.
 void diag_free(Diagnostics *d);
