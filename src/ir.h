@@ -357,10 +357,13 @@ struct Ir_Proc {
     bool is_export;            // visible to the linker; otherwise internal
     Array<Ir_Block *> blocks;  // blocks[0] is the entry
     s32 value_count;           // the values numbered so far
-    // For a debugger. A procedure the compiler makes has none of them.
-    String source_name;        // its name in the source ("main", "sort"); empty for one the compiler makes
-    Position pos;              // its declaration: its name
-    Position body;             // its body's '{'
+    // For a debugger. A procedure the compiler makes has none of them,
+    // but for a run's, run.N (ir_lower_run), which stands for its #run.
+    String source_name;        // its name in the source ("main", "sort"); empty for one the compiler
+                               // makes; "#run" for a run's
+    Position pos;              // its declaration: its name; a run's: the #run
+    Position body;             // its body's '{'; a run's: its block's '{', or the #run of an expression
+                               // run
     Array<Ir_Scope> scopes;    // scope 0 is the body; empty without a source_name
     Array<Ir_Var> vars;        // in the order they're declared, the parameters first
     Array<Type *> source_results;  // its results' Rig types, in order, aggregates too (each of
@@ -466,8 +469,10 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a);
 // its IR result, an aggregate copied through the hidden pointer, its
 // parameter 0. A top-level #run e; evaluates e and returns nothing (nothing
 // at all when e is a constant); a top-level #run { } is its block lowered
-// as a body. Its source_name is "#run", and what it emits itself is at
-// the #run. The checker made sure everything it reaches checked cleanly
+// as a body. Its source_name is "#run", so a failure's outer frame is
+// named #run. An expression run's instructions are at the #run, but for a
+// failing check, at the check as everywhere; a block run's statements are
+// each at their own place. The checker made sure everything it reaches checked cleanly
 // (check_run.cpp's walk).
 s32 ir_lower_run(Lowering *l, Ast_Run *run);
 
