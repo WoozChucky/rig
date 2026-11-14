@@ -227,6 +227,8 @@ Line numbers are 96847c7's. The merge of main at a7e9c30 moved some by a few lin
 21. **Without a `NAME.build.out`, `rig build` must print nothing to stdout,** as it does today for every program.
 22. **The extension's message says `1 second` for 1,** as the checker's counted messages do. A check stopped by the limit leaves the document's problems as they were. It isn't remembered as the document's program, and it ends the main-file search.
 
+23. **Bodies checked on demand count against the nesting limit (the maintainer's call).** A chain of bodies each holding a `#run` of the next (f1's body runs f2, f2's runs f3, ...) recurses on the C++ stack: check_body, check_run, the walk, check_reached_body, check_body. So a body checked on demand opens a declaration level with `open_declaration`, as globals, constants and signatures do. Past MAX_DEPTH it gives the existing message, `'f' is nested too deeply in the declarations that need it (more than 1000 levels)`, at the procedure's name, once. The `#run` that needed it then doesn't run and says nothing more (decision 5's rule). Task 2 tests it with a generated chain of 1100 procedures, as the existing too-deep tests for constants do.
+
 ## Review Focus
 
 1. **A baked value is a snapshot.** A later `#run` that changes the global a baked view pointed into leaves the baked value as it was. Task 5's `run_baked_data_is_a_copy`.
