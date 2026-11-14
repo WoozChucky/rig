@@ -231,9 +231,12 @@ check_requirements() {
 puts :: (s: *u8) -> s32 #foreign libc;
 main :: () { puts("Hello, World!"); }
 EOF
-    # In a subshell, so the cd doesn't outlive the check. rig writes the
-    # program, and its object files under .build, in the current folder.
-    if output=$(cd "$hello_dir" && "$share_dir/rig" build hello.rig 2>&1 && ./hello 2>&1) &&
+    # Each in a subshell, $(...), so the cd doesn't outlive it. rig writes
+    # the program, and its object files under .build, in the current
+    # folder. output is what the step that failed printed: the build's, or
+    # the program's.
+    if output=$(cd "$hello_dir" && "$share_dir/rig" build hello.rig 2>&1) &&
+        output=$(cd "$hello_dir" && ./hello 2>&1) &&
         [ "$output" = "Hello, World!" ]; then
         say "Built and ran hello world: Rig has what it needs."
         return 0
@@ -329,7 +332,9 @@ install_rig() {
     check_requirements
     say "$("$share_dir/rig" version)"
     say ""
-    if [ -n "$path_changed" ]; then
+    # The shell files are read when a shell starts: this terminal hasn't
+    # got the line, whether this run added it or an earlier one did.
+    if [ -n "$path_changed" ] || { ! bin_on_path && [ -z "$no_modify_path" ]; }; then
         say "Open a new terminal (this one hasn't got the new PATH), then build a program:"
     elif ! bin_on_path; then
         say "With ~/.local/bin on your PATH, build a program:"
