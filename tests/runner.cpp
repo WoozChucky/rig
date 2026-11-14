@@ -676,8 +676,14 @@ static const Command_Case COMMAND_CASES[] = {
      "rig: error: the output '.build/tests/output.RIG' ends in .rig; is it the source file?\n"},
 };
 
+// The program CHECK_CASES' "-o --stdin-for" case would build in the
+// repository's root if rig took --stdin-for for -o's name: that case can't
+// aim it into .build/tests, as the others aim theirs, since the word is the
+// name. Whoever writes it is told so, and it's removed.
 static String command_test(Arena *a, String rig, const Command_Case *c) {
     remove(".build/tests/output.RIG");  // what the last case must not write
+    String stray = string_printf(a, "--stdin-for%s", EXE);
+    remove(string_cstr(a, stray));
     Array<String> argv = {};
     array_add(&argv, rig);
     for (s64 i = 0; i < 7 && c->args[i]; i++) array_add(&argv, str(c->args[i]));
@@ -686,6 +692,10 @@ static String command_test(Arena *a, String rig, const Command_Case *c) {
     bool started = run(a, argv, {}, &result, &why);
     array_free(&argv);
     if (!started) return why;
+    if (os_file_exists(stray)) {
+        remove(string_cstr(a, stray));
+        return string_printf(a, "rig wrote " STR_FMT, STR_ARG(stray));
+    }
     if (result.exit_code != c->exit_code) {
         return with_stderr(a,
                            string_printf(a, "rig exited with " STR_FMT ", expected %d",
@@ -1260,7 +1270,8 @@ static String check_stdin_for_a_file_not_loaded_test(Arena *a, String rig) {
 }
 
 // rig check's command line, right and wrong, as COMMAND_CASES rig build's,
-// and the rule the two share: the source file's name ends in .rig.
+// the rule the two share: the source file's name ends in .rig, and rig
+// build's refusal of rig check's --stdin-for.
 static const Command_Case CHECK_CASES[] = {
     {"rig check with no file",
      {"check"},
