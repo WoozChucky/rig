@@ -1,12 +1,15 @@
-tests/errors/constant_data_index_out_of_bounds.rig:5:13: error: index 9 is out of bounds for '[5]int'
+tests/errors/constant_data_index_out_of_bounds.rig:8:13: error: index 9 is out of bounds for '[5]int'
     N :: PRIMES[9];
                 ^
-tests/errors/constant_data_index_out_of_bounds.rig:7:15: error: index 5 is out of bounds for a string of 3 bytes
+tests/errors/constant_data_index_out_of_bounds.rig:10:15: error: index 5 is out of bounds for a string of 3 bytes
         c := NAME[5];
                   ^
-tests/errors/constant_data_index_out_of_bounds.rig:8:14: error: index 1 is out of bounds for a string of 1 byte
+tests/errors/constant_data_index_out_of_bounds.rig:11:14: error: index 1 is out of bounds for a string of 1 byte
         d := "x"[1];
                  ^
-tests/errors/constant_data_index_out_of_bounds.rig:9:15: error: index -1 is out of bounds for a string of 3 bytes
+tests/errors/constant_data_index_out_of_bounds.rig:12:15: error: index -1 is out of bounds for a string of 3 bytes
         e := NAME[-1];
                   ^
+tests/errors/constant_data_index_out_of_bounds.rig:13:21: error: index 0 is out of bounds for a string of 0 bytes
+        f := EMPTY.name[0];
+                        ^
