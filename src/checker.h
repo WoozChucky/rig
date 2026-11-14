@@ -465,12 +465,21 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d);
 // Whether e, checked with no errors, is a place in memory: a variable, but
 // not a loop's iterator or index; p.*; a field of a place, or of a struct
 // reached through a pointer; an element of a place's array, or of a view's,
-// a string's or a pointer's. An array's .count and .data never are. The one
+// a pointer's or a string's, unless that string is part of a constant
+// (constant_root). An array's .count and .data never are. The one
 // statement of the rule: the checker asks it before taking an address or
 // assigning (and says why not), and lowering asks it what an array
 // converted to a view is seen through (lower_view_of): the array itself, or
 // a copy of it.
 bool expr_is_place(Ast *e);
+
+// The name of the constant holding data that e, checked, is part of: e
+// itself naming one (Ast_Const.is_data), or a field (a struct's, not through
+// a pointer) or an element (an array's or a string's) of such a part, any
+// number of times over; null for anything else. A part's bytes are the
+// constant's: no place (expr_is_place), and, lowered, in its read-only
+// global (lower_view_of).
+Ast_Name *constant_root(Ast *e);
 
 // The string literal whose address e, checked, is: the literal itself (as a
 // string, or where it meets a *u8), or a cast of it that keeps the address,

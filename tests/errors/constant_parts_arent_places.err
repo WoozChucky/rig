@@ -1,0 +1,15 @@
+tests/errors/constant_parts_arent_places.rig:8:5: error: can't assign to 'PRIMES': it's a constant
+        PRIMES[0] = 1;
+        ^
+tests/errors/constant_parts_arent_places.rig:9:5: error: can't assign to 'ORIGIN': it's a constant
+        ORIGIN.x = 1;
+        ^
+tests/errors/constant_parts_arent_places.rig:10:5: error: can't assign to 'NAME': it's a constant
+        NAME[0] = 65;
+        ^
+tests/errors/constant_parts_arent_places.rig:11:11: error: can't take the address of 'PRIMES': it's a constant
+        p := *PRIMES[0];
+              ^
+tests/errors/constant_parts_arent_places.rig:12:11: error: can't take the address of 'NAME': it's a constant
+        for * NAME { }
+              ^

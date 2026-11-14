@@ -1554,7 +1554,7 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
     case AST_VAR: {
         // A variable has a slot, its place in memory (a global's in the
         // program's file), but a for loop's iterator and it_index are
-        // read-only (spec 6.1): the loop sets them, each iteration, and a
+        // read-only (spec 6.7): the loop sets them, each iteration, and a
         // pointer to one would let the body change it.
         Ast_Var *var = (Ast_Var *)decl;
         // it_index is the only one by that name: check_for reports an
@@ -1562,9 +1562,12 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
         what = string_eq(var->name, str("it_index")) ? "the loop's index" : "the loop's iterator";
         break;
     }
-    // A constant is a value known while compiling, kept nowhere.
+    // A constant is a value known while compiling (spec 4.2): a scalar one
+    // is kept nowhere, and one holding data is kept, if a use needs it, in
+    // the program's read-only data, no part of which is a place
+    // (constant_root).
     case AST_CONST: what = "a constant"; break;
-    // Read-only (spec 6.1): copy it into a variable to change it. Lowering
+    // Read-only (spec 7.2): copy it into a variable to change it. Lowering
     // gives a parameter no slot: it's the value the caller passed (for an
     // aggregate, a pointer to the caller's copy, which mustn't change).
     case AST_PARAM: what = "a parameter"; break;
@@ -1586,9 +1589,12 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
 // element is one when its array is; a view's, a string's or a pointer's
 // always is, its elements lying elsewhere (v[0] = 1 for a view parameter v
 // changes the elements it sees, not v; s[0] = 1 on a literal writes its
-// read-only bytes, a memory error, spec 6.4). A view's or a string's count
-// and data are fields like a struct's. An array's .count is a constant and
-// its .data an address worked out on the spot, so neither is a place.
+// read-only bytes, a memory error, spec 3.8 and 8.6), except a string's
+// that is part of a constant (constant_root): its bytes are the constant's,
+// and no part of a constant is a place, so NAME[0] = 65 is refused, said of
+// NAME (is_place). A view's or a string's count and data are fields like a
+// struct's. An array's .count is a constant and its .data an address worked
+// out on the spot, so neither is a place.
 bool expr_is_place(Ast *e) {
     switch (e->kind) {
     case AST_NAME: {
@@ -1604,9 +1610,39 @@ bool expr_is_place(Ast *e) {
     }
     case AST_INDEX: {
         Ast *operand = ((Ast_Index *)e)->operand;
+        if (operand->type == &type_string && constant_root(operand)) return false;
         return operand->type->kind != TYPE_ARRAY || expr_is_place(operand);
     }
     default: return false;
+    }
+}
+
+Ast_Name *constant_root(Ast *e) {
+    for (;;) {
+        switch (e->kind) {
+        case AST_NAME: {
+            Ast *decl = ((Ast_Name *)e)->decl;
+            return decl && decl->kind == AST_CONST && ((Ast_Const *)decl)->is_data ? (Ast_Name *)e : nullptr;
+        }
+        case AST_MEMBER: {
+            // A struct's field: one reached through a pointer is elsewhere,
+            // and a sequence's .count and .data aren't its bytes.
+            Ast *operand = ((Ast_Member *)e)->operand;
+            if (!operand->type || operand->type->kind != TYPE_STRUCT) return nullptr;
+            e = operand;
+            break;
+        }
+        case AST_INDEX: {
+            // An array's or a string's element: a view's or a pointer's is
+            // elsewhere.
+            Ast *operand = ((Ast_Index *)e)->operand;
+            Type *t = operand->type;
+            if (!t || (t->kind != TYPE_ARRAY && t != &type_string)) return nullptr;
+            e = operand;
+            break;
+        }
+        default: return nullptr;
+        }
     }
 }
 
@@ -1677,16 +1713,26 @@ static Type *check_deref(Checker *c, Ast_Deref *deref) {
     return t->pointee;
 }
 
-// a[i] (spec 6.5): element i of array, view or string a (a string's, a
+// a[i] (spec 5.11): element i of array, view or string a (a string's, a
 // u8), or the T i T's on from where pointer a points (C's a[i], p.* moved by
 // i, unchecked). i is any integer, read by its own sign; an untyped one
 // becomes an int. Reported at the '[': "'[]' needs an array, a view, a
 // string or a pointer, not 'int'", or "can't index a '*void'; ..." (it
 // points at nothing with a size); at i: "an index must be an integer, not
 // 'float32'". A constant i of an array is checked here, by its sign: "index
-// 3 is out of bounds for '[3]int'". Any other index of an array, a view or a
-// string is checked at run time (lowering), unless the procedure says
-// #no_abc or the build --no-bounds-checks.
+// 3 is out of bounds for '[3]int'"; and so is one of a string that is
+// constant data, whose bytes are known: "index 5 is out of bounds for a
+// string of 3 bytes". Any other index of an array, a view or a string is
+// checked at run time (lowering), unless the procedure says #no_abc or the
+// build --no-bounds-checks.
+//
+// An element of constant data at a constant index is known while compiling
+// (spec 5.9) when it's a number, a bool or null: an array's, the value its
+// literal gives (zero when it leaves it out, constant_data), and a string's,
+// its byte, a u8. So it folds, as a constant's name does: N :: PRIMES[2];
+// can size an array. An aggregate element, or a pointer to a string
+// literal's bytes or a procedure, stays a part of the data, read where it's
+// used.
 static Type *check_index(Checker *c, Ast_Index *ix) {
     Type *t = check_operand(c, ix->operand);
     Type *index = check_operand(c, ix->index);
@@ -1713,17 +1759,42 @@ static Type *check_index(Checker *c, Ast_Index *ix) {
                    STR_ARG(type_name(c->arena, i->type)));
         return nullptr;
     }
-    if (t->kind == TYPE_ARRAY && i->is_constant) {
+    // A string's bytes are known when it's constant data: those of the
+    // string literal holding it, or none when a literal leaves it out.
+    Ast *bytes = nullptr;
+    bool known_string = t == &type_string && i->is_constant && constant_data(ix->operand, &bytes) &&
+                        (!bytes || bytes->kind == AST_STRING);
+    if (i->is_constant && (t->kind == TYPE_ARRAY || known_string)) {
+        s64 count = t->kind == TYPE_ARRAY ? t->count : bytes ? ((Ast_String *)bytes)->value.count : 0;
         bool is_signed = i->type->is_signed;
         u64 v = i->constant;
-        bool outside = is_signed ? (s64)v < 0 || (s64)v >= t->count : v >= (u64)t->count;
+        bool outside = is_signed ? (s64)v < 0 || (s64)v >= count : v >= (u64)count;
         if (outside) {
             String number = is_signed ? string_printf(c->arena, "%lld", (long long)v)
                                       : string_printf(c->arena, "%llu", (unsigned long long)v);
-            diag_error(c->diag, i->start, "index " STR_FMT " is out of bounds for '" STR_FMT "'", STR_ARG(number),
-                       STR_ARG(type_name(c->arena, t)));
+            if (t->kind == TYPE_ARRAY) {
+                diag_error(c->diag, i->start, "index " STR_FMT " is out of bounds for '" STR_FMT "'",
+                           STR_ARG(number), STR_ARG(type_name(c->arena, t)));
+            } else {
+                diag_error(c->diag, i->start, "index " STR_FMT " is out of bounds for a string of %lld byte%s",
+                           STR_ARG(number), (long long)count, count == 1 ? "" : "s");
+            }
             return nullptr;
         }
+    }
+    if (known_string) {
+        // Within its count, so the literal is there.
+        ix->is_constant = true;
+        ix->constant = ((Ast_String *)bytes)->value.data[i->constant];
+        return element;
+    }
+    // constant_data reads the element's own type, which check_expression
+    // sets only once this returns.
+    ix->type = element;
+    Ast *value;
+    if (t->kind == TYPE_ARRAY && !type_is_aggregate(element) && constant_data(ix, &value)) {
+        ix->is_constant = !value || value->is_constant;
+        ix->constant = value ? value->constant : 0;
     }
     return element;
 }
@@ -1743,14 +1814,16 @@ static Type *check_size_of(Checker *c, Ast_Size_Of *size_of) {
     return &type_untyped_int;
 }
 
-// a.count and a.data of an array, a view or a string a (spec 6.5), the only
+// a.count and a.data of an array, a view or a string a (spec 5.12), the only
 // two names they have ("'[3]int' has no field 'size'", at the name);
 // m->index stays -1, lowering knowing them by name. A view's are its fields:
-// an int and a *T; a string's an int and a *u8. An array's .count is its N,
-// an untyped integer constant as size_of is (so b : u8 = a.count; takes it),
-// a isn't evaluated for it; its .data, a *T, is the address of its first
-// element, so a must have one, as for *a[0] ("can't take the address of 'a':
-// it's a parameter").
+// an int and a *T; a string's an int and a *u8. A string's .count is known
+// while compiling when the string is constant data (spec 5.9), its literal's
+// count, or 0 when a literal leaves it out: it folds, still an int. An
+// array's .count is its N, an untyped integer constant as size_of is (so
+// b : u8 = a.count; takes it), a isn't evaluated for it; its .data, a *T, is
+// the address of its first element, so a must have one, as for *a[0]
+// ("can't take the address of 'a': it's a parameter").
 static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
     m->index = -1;
     bool count = string_eq(m->name, str("count"));
@@ -1758,6 +1831,11 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
         diag_error(c->diag, m->pos, "'" STR_FMT "' has no field '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
                    STR_ARG(m->name));
         return nullptr;
+    }
+    Ast *bytes;
+    if (count && t == &type_string && constant_data(m->operand, &bytes) && (!bytes || bytes->kind == AST_STRING)) {
+        m->is_constant = true;
+        m->constant = bytes ? (u64)((Ast_String *)bytes)->value.count : 0;
     }
     if (type_is_view_or_string(t)) return count ? &type_int : type_pointer_to(t->element);
     if (count) {
@@ -1777,6 +1855,13 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
 // check_sequence_member's, not reached through a pointer: on a pointer to
 // one, "'.count' isn't reached through a pointer, '*string'; write
 // .*.count".
+//
+// A field of constant data is known while compiling (spec 5.9) when it's a
+// number, a bool or null: the value its literal gives, or zero when it
+// leaves it out, or leaves out the struct holding it (constant_data). So it
+// folds, as a constant's name does: ORIGIN.y, LINE.b.y, Vec2.{5, 6}.y. An
+// aggregate field, or a pointer to a string literal's bytes or a procedure,
+// stays a part of the data, read where it's used.
 static Type *check_member(Checker *c, Ast_Member *m) {
     Type *t = check_operand(c, m->operand);
     if (!t) return nullptr;
@@ -1801,7 +1886,16 @@ static Type *check_member(Checker *c, Ast_Member *m) {
         return nullptr;
     }
     check_late_field(c, s, m->index);
-    return s->fields[m->index].type;
+    Type *field = s->fields[m->index].type;
+    // constant_data reads the field's own type, which check_expression sets
+    // only once this returns.
+    m->type = field;
+    Ast *value;
+    if (field && !type_is_aggregate(field) && constant_data(m, &value)) {
+        m->is_constant = !value || value->is_constant;
+        m->constant = value ? value->constant : 0;
+    }
+    return field;
 }
 
 // The value of field `field_type` given by `value`, in a literal: checked,

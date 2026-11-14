@@ -1213,8 +1213,10 @@ static Type *check_range(Checker *c, Ast_For *loop) {
 // which the body can change it. So `for * a` needs a's elements to have an
 // address, as *a[i] does: an array's when the array has one (not a
 // parameter's, nor a call's or a literal's: "can't take the address of 'a':
-// it's a parameter"), a view's or a string's always. Anything else is
-// "'for' needs a range, an array, a view or a string, not 'int'", at it.
+// it's a parameter"), a view's always, and a string's unless it's part of a
+// constant (constant_root), whose bytes are no place: "can't take the
+// address of 'NAME': it's a constant". Anything else is "'for' needs a
+// range, an array, a view or a string, not 'int'", at it.
 static Type *check_sequence(Checker *c, Ast_For *loop) {
     Ast *sequence = loop->sequence;
     Type *t = check_operand(c, sequence);
@@ -1226,7 +1228,8 @@ static Type *check_sequence(Checker *c, Ast_For *loop) {
         return nullptr;
     }
     if (!loop->by_pointer) return t->element;
-    if (t->kind == TYPE_ARRAY && !is_place(c, sequence, false)) return nullptr;
+    bool constant_string = t == &type_string && constant_root(sequence);
+    if ((t->kind == TYPE_ARRAY || constant_string) && !is_place(c, sequence, false)) return nullptr;
     return type_pointer_to(t->element);
 }
 
