@@ -470,9 +470,12 @@ main :: () {
     // A value set from one of the table's own values, while the set grows
     // the table: 12 keys fill 16 entries, and the 13th, set to key 5's
     // value, grows them to 32. The value is copied before the old entries
-    // go back, and the spoiling allocator sets their bytes to 255.
+    // go back, and the spoiling allocator sets their bytes to 255. Both
+    // allocations, the old entries and the grown ones, are given back by
+    // the time the table is freed.
+    spoiled_ints : Counter;
     s : Int_Table;
-    int_table_init(*s, size_of(int), Allocator.{spoiling_allocator_proc, null});
+    int_table_init(*s, size_of(int), Allocator.{spoiling_allocator_proc, *spoiled_ints});
     for 0..11 {
         value := it * 10;
         int_table_set(*s, it, *value);
@@ -482,8 +485,12 @@ main :: () {
     print_int(int_value(int_table_find(s, 12)));
     print_byte(32);
     print_int(s.capacity);
-    print_byte(10);
     int_table_free(*s);
+    print_string(", allocations ");
+    print_int(spoiled_ints.allocations);
+    print_string(", frees ");
+    print_int(spoiled_ints.frees);
+    print_byte(10);
 
     // The same for a string table, which sets its keys its own way. A key
     // set again after its removal takes back its removed entry. Then 12

@@ -27,7 +27,7 @@ after removing 500: 500 true true
 after adding 500 more: 1000, capacity 2048
 bool values: entry size 32, aligned true
 removed entries cleared: 3 16 0 true
-own value set while growing: 50 32
+own value set while growing: 50 32, allocations 2, frees 2
 string removed entry taken again: 1 0 4
 own string value set while growing: 50 32, allocations 16, frees 16
 no entries: false true false

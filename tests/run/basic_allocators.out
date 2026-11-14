@@ -17,6 +17,7 @@ arena free_all: parent frees 4
 arena after free_all: parent allocations 5
 arena: allocations 7, frees 7
 arena of block size 0: 4096, parent asked for 4112
+arena of block size -1: 4096, parent asked for 4112
 arena on a failing parent: true
 pool slots: 24 24, parent allocations 1
 pool exhausted: true
@@ -28,5 +29,6 @@ pool hands out the last freed: true
 pool after free_all: true
 pool: allocations 2, frees 2
 pool of slot size 0: 8, allocates: true
+pool of slot size int's largest: 9223372036854775800
 pool too big for an int: true
 pool on a failing parent: true

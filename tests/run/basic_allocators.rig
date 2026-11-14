@@ -206,6 +206,18 @@ main :: () {
     print_byte(10);
     free_all(arena_allocator(*arena3));
 
+    // So does a negative one.
+    counter5 : Counter;
+    arena5 : Arena;
+    arena_init(*arena5, -1, Allocator.{counting_allocator_proc, *counter5});
+    alloc(1, arena_allocator(*arena5));
+    print_string("arena of block size -1: ");
+    print_int(arena5.block_size);
+    print_string(", parent asked for ");
+    print_int(counter5.last_size);
+    print_byte(10);
+    free_all(arena_allocator(*arena5));
+
     // A parent's null is passed on, and the arena takes no block.
     failing := Allocator.{failing_allocator_proc, null};
     arena4 : Arena;
@@ -287,6 +299,14 @@ main :: () {
     print_bool(alloc(8, pool_allocator(*pool0)) != null);
     print_byte(10);
     free_all(pool_allocator(*pool0));
+
+    // A slot_size within 7 of int's largest can't be rounded up to a
+    // multiple of 8 without wrapping: it is lowered to the largest one.
+    pool_largest : Pool;
+    pool_init(*pool_largest, 9223372036854775807, 1, HEAP_ALLOCATOR);
+    print_string("pool of slot size int's largest: ");
+    print_int(pool_largest.slot_size);
+    print_byte(10);
 
     // 2^61 + 1 slots of 8 bytes have no int size, so nothing is allocated.
     huge : Pool;
