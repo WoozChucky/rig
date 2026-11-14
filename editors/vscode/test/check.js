@@ -362,7 +362,7 @@ check('program.js: declaresMain finds main :: at the top level only', () => {
         '// x\nmain :: () {}',           // a line comment ends at its line
         '}\nmain :: () {}',              // a stray } doesn't make the rest nested
         'main\t::\r\n() {}',             // tabs and Windows line ends are white space
-        '﻿main :: () {}',           // a byte-order mark first isn't part of the name
+        '\uFEFFmain :: () {}',           // a byte-order mark first isn't part of the name
     ];
     for (const text of yes) assert.strictEqual(declaresMain(text), true, JSON.stringify(text));
     const no = [
@@ -414,12 +414,15 @@ check('program.js: doesntLoad and tooOld read rig\'s answer', () => {
     assert.strictEqual(doesntLoad(1, `m.rig:1:1: warning: w\n    x\n    ^\n${line}`), true);
     assert.strictEqual(doesntLoad(1, line.replace('\n', '\r\n')), true);
     assert.strictEqual(doesntLoad(0, line), false);
+    assert.strictEqual(doesntLoad(2, line), false);
+    assert.strictEqual(doesntLoad(null, line), false);   // a check that was killed
     assert.strictEqual(doesntLoad(1, "h.rig:3:16: error: unknown identifier 'c'\n        return a / c;\n                   ^\n"), false);
     // A source line quoted under an error is indented: it isn't rig's answer.
     assert.strictEqual(doesntLoad(1, `h.rig:1:6: error: x\n    ${line}`), false);
     assert.strictEqual(tooOld(2, 'usage: rig build FILE.rig ...\n'), true);
     assert.strictEqual(tooOld(1, 'usage: ...'), false);
     assert.strictEqual(tooOld(2, "rig: error: x\n"), false);
+    assert.strictEqual(tooOld(2, 'rig: error: x\nusage: rig build FILE.rig ...\n'), false);
 });
 
 // --- Snippets --------------------------------------------------------------

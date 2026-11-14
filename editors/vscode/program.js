@@ -43,7 +43,7 @@ function declaresMain(text) {
     let depth = 0;   // the braces open here: 0 is the top level
     // A byte-order mark first, which some Windows editors write, isn't part of
     // the text for rig (src/lexer.cpp), so it can't start a name here either.
-    let i = text.startsWith('﻿') ? 1 : 0;
+    let i = text.startsWith('\uFEFF') ? 1 : 0;
     while (i < text.length) {
         const ch = text[i];
         if (text.startsWith('//', i)) {
