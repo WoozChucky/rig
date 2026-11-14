@@ -1,0 +1,56 @@
+// Basic's char: the class and the case of a byte. A char here is a u8, one
+// byte of a string, and the classes are ASCII's, as C's <ctype.h> gives
+// them in the "C" locale. Every byte from 128 up, a part of some UTF-8
+// character, is in none of the classes, and its case doesn't change, so a
+// procedure here never splits or alters a UTF-8 character.
+//
+// Each class is one or two ranges of ASCII, tested by comparison, so no
+// table is needed and every procedure can be passed as a value.
+
+// Whether c is a decimal digit, "0" to "9".
+is_digit :: (c: u8) -> bool {
+    return c >= "0"[0] && c <= "9"[0];
+}
+
+// Whether c is an ASCII letter, "a" to "z" or "A" to "Z".
+is_alpha :: (c: u8) -> bool {
+    return is_lower(c) || is_upper(c);
+}
+
+// Whether c is an ASCII letter or a decimal digit. "_" is neither.
+is_alnum :: (c: u8) -> bool {
+    return is_alpha(c) || is_digit(c);
+}
+
+// Whether c is white space as C's isspace has it: a space, a tab, a line
+// feed, a vertical tab, a form feed or a carriage return. Zero isn't.
+is_space :: (c: u8) -> bool {
+    return c == " "[0] || c == "\t"[0] || c == "\n"[0] || c == "\r"[0] ||
+        c == 11 || // vertical tab
+        c == 12;   // form feed
+}
+
+// Whether c is an uppercase ASCII letter, "A" to "Z".
+is_upper :: (c: u8) -> bool {
+    return c >= "A"[0] && c <= "Z"[0];
+}
+
+// Whether c is a lowercase ASCII letter, "a" to "z".
+is_lower :: (c: u8) -> bool {
+    return c >= "a"[0] && c <= "z"[0];
+}
+
+// The uppercase of c when it is a lowercase ASCII letter. Any other byte
+// comes back unchanged. ASCII puts each lowercase letter 32 places after
+// its uppercase one, so the case is a fixed distance away.
+to_upper :: (c: u8) -> u8 {
+    if is_lower(c) { return c - ("a"[0] - "A"[0]); }
+    return c;
+}
+
+// The lowercase of c when it is an uppercase ASCII letter. Any other byte
+// comes back unchanged.
+to_lower :: (c: u8) -> u8 {
+    if is_upper(c) { return c + ("a"[0] - "A"[0]); }
+    return c;
+}

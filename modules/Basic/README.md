@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is numbers to text and back, and printing to standard output; later parts add characters, math, memory, strings, allocators, a string builder, and growable arrays and hash tables (issue #134).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, numbers to text and back, and printing to standard output; later parts add memory, strings, allocators, a string builder, and growable arrays and hash tables (issue #134).
 
 ## Loading it
 
@@ -17,6 +17,29 @@ Rig has no `#import` yet, so a program loads Basic with `#load`, by the path fro
 `libc.rig` declares the only C functions Basic calls, each under a name of its own that starts with `c_` (`#foreign libc "NAME"`, spec 7.6). So a program that loads Basic keeps C's own names: it may declare C's `putchar`, `malloc` and `realloc` itself. `free` is the exception, since Basic's allocators will take that name for their own helper and `c_free` is taken too, so such a program declares C's `free` under another name, as in `libc_free :: (p: *void) #foreign libc "free";`.
 
 - `c_putchar(c: s32) -> s32`: C's `putchar`, the one call that writes a byte to standard output.
+
+## Characters (`char.rig`)
+
+A char is a `u8`, one byte of a string, and the classes are ASCII's, as C's `<ctype.h>` has them in the "C" locale. Every byte from 128 up is in none of them, and its case doesn't change, so UTF-8 text passes through unharmed.
+
+- `is_digit(c: u8) -> bool`: `0` to `9`.
+- `is_alpha(c: u8) -> bool`: `a` to `z` and `A` to `Z`.
+- `is_alnum(c: u8) -> bool`: a letter or a digit; `_` isn't.
+- `is_space(c: u8) -> bool`: a space, tab, line feed, vertical tab (11), form feed (12) or carriage return.
+- `is_upper(c: u8) -> bool`: `A` to `Z`.
+- `is_lower(c: u8) -> bool`: `a` to `z`.
+- `to_upper(c: u8) -> u8`: the uppercase of a lowercase letter; any other byte unchanged.
+- `to_lower(c: u8) -> u8`: the lowercase of an uppercase letter; any other byte unchanged.
+
+## Math (`math.rig`)
+
+One procedure per type, named by it: `int` and `u64` (every other integer type widens to one of them), `float32` and `float64`. `min` and `max` return their first operand unless the second is strictly smaller or larger, so a NaN first operand comes back from both and a NaN second one never does.
+
+- `min_int`, `min_u64`, `min_float32`, `min_float64` `(a: T, b: T) -> T`: the smaller of `a` and `b`; `a` when they're equal.
+- `max_int`, `max_u64`, `max_float32`, `max_float64` `(a: T, b: T) -> T`: the larger of `a` and `b`; `a` when they're equal.
+- `clamp_int`, `clamp_u64`, `clamp_float32`, `clamp_float64` `(value: T, low: T, high: T) -> T`: `low` for a value below it, `high` for one above it, otherwise `value`.
+- `abs_int(value: int) -> int`: the magnitude; the most negative `int` is itself, since its negation wraps.
+- `abs_float32(value: float32) -> float32`, `abs_float64(value: float64) -> float64`: the value with its sign bit cleared, so `-0.0` gives `0.0` and NaN stays NaN.
 
 ## Numbers (`numbers.rig`)
 
