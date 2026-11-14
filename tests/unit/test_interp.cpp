@@ -1674,8 +1674,8 @@ TEST(interp_runs_lowered_runs_in_one_world) {
 
 TEST(interp_fails_a_call_of_a_procedure_not_lowered) {
     // A Rig procedure with no blocks is only declared: its body was never
-    // lowered. A call of it fails at the call, before any frame is pushed
-    // for it.
+    // lowered. A call of it, direct or through its value, fails at the
+    // call, before any frame is pushed for it.
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
     new_proc_returning(m, &a, "empty", IR_VOID);
@@ -1684,8 +1684,19 @@ TEST(interp_fails_a_call_of_a_procedure_not_lowered) {
     s32 b = ir_new_block(&a, starts);
     ir_emit_call(m, starts, b, interp_test_proc(m, "empty"), {})->pos = {0, 3, 5};
     emit_ret(starts, b, -1);
+
+    // through: empty called through its value, as () -> ().
+    Ir_Proc *through = new_proc_returning(m, &a, "through", IR_VOID);
+    through->source_name = str("through");
+    b = ir_new_block(&a, through);
+    Ir_Instr *address = ir_emit(through, b, IR_PROC_ADDR, IR_PTR);
+    address->target = interp_test_proc(m, "empty");
+    ir_emit_call_indirect(through, b, address->result, arena_new<Ir_Proc>(&a), {})->pos = {0, 7, 9};
+    emit_ret(through, b, -1);
+
     Interp *in = interp_new(m);
     interp_test_fails_at(in, m, "main", &a, "call of an address that isn't a procedure", 3, 5);
+    interp_test_fails_at(in, m, "through", &a, "call of an address that isn't a procedure", 7, 9);
     interp_free(in);
     arena_free(&a);
 }
@@ -1693,12 +1704,14 @@ TEST(interp_fails_a_call_of_a_procedure_not_lowered) {
 TEST(interp_finds_foreign_procedures_by_address) {
     // A foreign procedure's value is its C function's address, which leads
     // back to the procedure once the interpreter has found it; nothing else
-    // does, null included.
+    // does, null included. strlen comes after puts, so its index isn't 0.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
+                                "puts :: (s: *u8) -> s32 #foreign libc;\n"
                                 "strlen :: (s: *u8) -> u64 #foreign libc;\n"
                                 "get :: () -> *void { return cast(*void) strlen; }\n"
                                 "main :: () { }\n");
+    CHECK_EQ(interp_test_proc(m, "strlen"), 1);
     Interp *in = interp_new(m);
     CHECK_EQ(interp_c_function_at(in, 1), -1);
     Interp_Result r = {};

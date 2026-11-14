@@ -4073,21 +4073,64 @@ TEST(lowering_on_demand_takes_what_a_run_reaches) {
     CHECK(!contains(ir, "@other"));
     CHECK(contains(ir, "global @counter: i64 = 5\n"));
     // The bounds buffer fits the longest prefix any file can give:
-    // test.rig's 8, 39 more, and the usual 73.
+    // test.rig's 8, 39 more, and the usual 73. __rig_string_equal has its
+    // body, though no run compares strings.
     CHECK(contains(proc_ir(ir, "__rig_bounds_failed"), "local 120 align 1"));
-    Ast_Proc *twice = nullptr;
+    CHECK(contains(proc_ir(ir, "__rig_string_equal"), "b0:\n"));
+    Ast_Proc *twice = nullptr, *add = nullptr;
     for (s64 i = 0; i < r.file->procs.count; i++) {
         if (string_eq(r.file->procs[i]->name, str("twice"))) twice = r.file->procs[i];
+        if (string_eq(r.file->procs[i]->name, str("add"))) add = r.file->procs[i];
     }
     CHECK(twice != nullptr);
+    CHECK(add != nullptr);
     CHECK(ir_lowering_source(r.lowering, 3) == twice);
+    CHECK(ir_lowering_source(r.lowering, 4) == add);
     CHECK(ir_lowering_source(r.lowering, 0) == nullptr);
     CHECK(ir_lowering_source(r.lowering, 2) == nullptr);
+    // run.2, made after the last procedure of the source.
+    CHECK(ir_lowering_source(r.lowering, 6) == nullptr);
 
     // The program's own lowering of the same file is whole, and has no runs.
     String program = ir_print(&a, ir_lower(r.file, &r.list->diag, &a, true));
     CHECK(contains(program, "proc @unused("));
     CHECK(!contains(program, "@run."));
     lowered_runs_free(&r);
+    arena_free(&a);
+}
+
+TEST(lowering_on_demand_keeps_no_abc) {
+    // Bounds checks are always on at compile time, but #no_abc, part of
+    // what a procedure means, still holds: peek's a[i] is unchecked, its
+    // unmarked twin look's checked.
+    Arena a = arena_make();
+    Lowered_Runs r = lower_runs_of(&a,
+                                   "peek :: (i: int) -> int #no_abc { a : [3]int; return a[i]; }\n"
+                                   "look :: (i: int) -> int { a : [3]int; return a[i]; }\n"
+                                   "#run { x := peek(1) + look(1); }\n"
+                                   "main :: () { }\n");
+    ir_lower_run(r.lowering, r.file->runs[0]);
+    String ir = ir_print(&a, r.module);
+    String peek = proc_ir(ir, "peek"), look = proc_ir(ir, "look");
+    CHECK(contains(peek, "b0:\n"));
+    CHECK(!contains(peek, "__rig_bounds_failed"));
+    CHECK(contains(look, "call @__rig_bounds_failed("));
+    lowered_runs_free(&r);
+    arena_free(&a);
+}
+
+TEST(lowering_on_demand_sizes_the_bounds_buffer_for_the_longest_path) {
+    // Any file's check may fail at compile time, a #load-ed one's too: the
+    // buffer fits the longest path, here the second file's 26, with 39
+    // more and the usual 73.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    diag_add_file(&d, str("main.rig"), str(""));
+    diag_add_file(&d, str("some/deeper/dir/loaded.rig"), str(""));
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Lowering *l = ir_lowering_new(m, &d, &a);
+    CHECK(contains(proc_ir(ir_print(&a, m), "__rig_bounds_failed"), "local 138 align 1"));
+    ir_lowering_free(l);
+    diag_free(&d);
     arena_free(&a);
 }

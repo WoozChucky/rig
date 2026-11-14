@@ -20,9 +20,9 @@
 //   back to the procedure: distinct, stable and non-null, as the program's
 //   own procedure values are, and of no use to C, which faults if it calls
 //   one. A call of an address in that range that is no procedure's, or of
-//   a procedure only declared, with no blocks (a module lowered on demand
-//   that never got its body), fails: "call of an address that isn't a
-//   procedure".
+//   a procedure only declared, with no blocks (IR made by hand: on-demand
+//   lowering lowers every body a run reaches before the run), fails: "call
+//   of an address that isn't a procedure".
 //
 // C is called for real. A foreign procedure is found by its name the first
 // time it's needed (called, its value taken, a global's relocation

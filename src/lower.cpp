@@ -2859,8 +2859,10 @@ s32 ir_lower_run(Lowering *l, Ast_Run *run) {
     } else {
         // #run e: e's value, the run's type, is its one result, as a
         // procedure returning it gives it (declare_proc); a top-level
-        // one's is thrown away. Everything here is at the #run, so a
-        // failure in what it calls has the run as its outer frame.
+        // one's is thrown away. Its instructions are at the #run, so a
+        // failure in what it calls has the run's place in its outer frame;
+        // a failing check is at the check, as everywhere (emit_bounds_check,
+        // emit_runtime_check).
         Type *t = run->is_top_level ? nullptr : run->type;
         bool aggregate = t && type_is_aggregate(t);
         if (aggregate) ir_add_param(p, IR_PTR, IR_EXT_NONE);
