@@ -1,0 +1,426 @@
+// Basic's hash tables (issue #134): both kinds of key, strings and ints,
+// how the entries grow, removal across a collision chain, going over the
+// entries, and values whose size isn't a multiple of 8. It also shows the
+// empty-string key, a key that is a prefix of another, int's extreme
+// values as keys, a rehash that only clears removed entries, and memory
+// that comes from the table's allocator and goes back to it, keys included.
+#load "../../modules/Basic/module.rig";
+
+WORDS :: string.["apple", "banana", "cherry", "date", "elderberry", "fig", "grape", "honeydew", "kiwi", "lemon", "mango", "nectarine", "orange", "papaya", "quince", "raspberry", "strawberry", "tangerine", "ugli", "vanilla"];
+
+// What a counting allocator was asked to do.
+Counter :: struct { allocations: int; frees: int; }
+
+// Passes everything on to the heap, counting allocations and frees.
+counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE { counter.allocations += 1; }
+    if mode == FREE { counter.frees += 1; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+// Takes memory from the heap with 8 bytes more in front, which hold its
+// size, so that a free can set every byte to 255 before the heap has them
+// back: an address left pointing at freed memory doesn't read what was
+// there.
+spoiling_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE {
+        memory := cast(*int) alloc(size + 8, HEAP_ALLOCATOR);
+        memory.* = size;
+        return memory + 1;
+    }
+    if mode == FREE {
+        memory := cast(*int) old_memory - 1;
+        set_memory(old_memory, 255, memory.*);
+        free(memory, HEAP_ALLOCATOR);
+    }
+    return null;
+}
+
+// The first key k from start on whose hash starts its probe at the same
+// entry as key's, in a table of 16 entries: the two then share a chain.
+same_slot_after :: (key: int, start: int) -> int {
+    k := start;
+    while (hash_int(k) & 15) != (hash_int(key) & 15) { k += 1; }
+    return k;
+}
+
+// The int at value, an int table's value that is there.
+int_value :: (value: *void) -> int {
+    return (cast(*int) value).*;
+}
+
+// Whether value is there and holds the int expected.
+holds_int :: (value: *void, expected: int) -> bool {
+    return value != null && (cast(*int) value).* == expected;
+}
+
+// Prints a table's count and capacity, separated by a space.
+show_sizes :: (count: int, capacity: int) {
+    print_int(count);
+    print_byte(32);
+    print_int(capacity);
+}
+
+main :: () {
+    t : Table;
+    table_init(*t, size_of(int), HEAP_ALLOCATOR);
+
+    // A table with no entries yet is found in without touching any.
+    print_string("empty table: ");
+    print_bool(table_find(t, "apple") == null);
+    print_byte(10);
+
+    // 20 keys: the capacity went from 16 to 32 at the 13th.
+    for WORDS {
+        value := it_index;
+        table_set(*t, it, *value);
+    }
+    print_string("count ");
+    print_int(t.count);
+    print_string(", capacity ");
+    print_int(t.capacity);
+    print_byte(10);
+
+    all := true;
+    for WORDS {
+        if !holds_int(table_find(t, it), it_index) { all = false; }
+    }
+    print_string("all 20 found: ");
+    print_bool(all);
+    print_byte(10);
+
+    // A key that is longer than one there, the empty key and a prefix of
+    // one there are each another key.
+    print_string("missing: ");
+    print_bool(table_find(t, "cherry2") == null);
+    print_byte(32);
+    print_bool(table_find(t, "") == null);
+    print_byte(32);
+    print_bool(table_find(t, "app") == null);
+    print_byte(10);
+
+    // Setting a key that is there changes its value, and adds nothing.
+    hundred := 100;
+    table_set(*t, "apple", *hundred);
+    print_string("apple: ");
+    print_int(int_value(table_find(t, "apple")));
+    print_string(", count ");
+    print_int(t.count);
+    print_byte(10);
+
+    print_string("remove: ");
+    print_bool(table_remove(*t, "banana"));
+    print_byte(32);
+    print_bool(table_remove(*t, "banana"));
+    print_byte(32);
+    print_bool(table_find(t, "banana") == null);
+    print_byte(32);
+    print_int(t.count);
+    print_byte(10);
+
+    // The empty string is a key like any other.
+    zero := 0;
+    table_set(*t, "", *zero);
+    print_string("empty key: ");
+    print_bool(holds_int(table_find(t, ""), 0));
+    print_byte(32);
+    print_int(t.count);
+    print_byte(10);
+
+    // The table keeps a copy of a new key, so changing the bytes the key
+    // was set from changes nothing in the table.
+    buffer := u8.["z"[0], "e"[0], "s"[0], "t"[0]];
+    view : []u8 = buffer;
+    seven := 7;
+    table_set(*t, cast(string) view, *seven);
+    buffer[0] = "b"[0];
+    print_string("key copied: ");
+    print_bool(holds_int(table_find(t, "zest"), 7));
+    print_byte(32);
+    print_bool(table_find(t, "best") == null);
+    print_byte(32);
+    print_int(t.count);
+    print_byte(10);
+
+    // 190 for indexes 0 to 19, less banana's 1, plus 100 for apple's 0,
+    // plus 0 for "", plus 7 for zest.
+    used_count := 0;
+    sum := 0;
+    for i: 0..t.capacity - 1 {
+        used, key, value := table_entry(t, i);
+        if used {
+            used_count += 1;
+            sum += int_value(value);
+        }
+    }
+    print_string("iteration: ");
+    print_int(used_count);
+    print_string(" entries, sum ");
+    print_int(sum);
+    print_byte(10);
+
+    print_string("capacity ");
+    print_int(t.capacity);
+    print_byte(10);
+
+    table_free(*t);
+    print_string("freed: ");
+    show_sizes(t.count, t.capacity);
+    print_byte(10);
+
+    // FNV-1a's offset basis is the hash of no bytes.
+    print_string("fnv-1a: ");
+    print_bool(hash_string("") == 14695981039346656037);
+    print_byte(32);
+    print_bool(hash_string("a") == 0xaf63dc4c8601ec8c);
+    print_byte(10);
+
+    // Three keys whose probes start at the same entry of 16: the second
+    // and third are found by stepping past the first.
+    n : Int_Table;
+    int_table_init(*n, size_of(int), HEAP_ALLOCATOR);
+    k1 := 0;
+    k2 := same_slot_after(k1, 1);
+    k3 := same_slot_after(k1, k2 + 1);
+    one := 1;
+    two := 2;
+    three := 3;
+    int_table_set(*n, k1, *one);
+    int_table_set(*n, k2, *two);
+    int_table_set(*n, k3, *three);
+    print_string("same slot: ");
+    print_bool((hash_int(k2) & 15) == (hash_int(k1) & 15));
+    print_byte(32);
+    print_bool((hash_int(k3) & 15) == (hash_int(k1) & 15));
+    print_byte(10);
+
+    // k2's entry is marked removed rather than emptied, so a find of k3
+    // steps past it rather than stopping there.
+    int_table_remove(*n, k2);
+    print_string("past a removed key: ");
+    print_int(int_value(int_table_find(n, k3)));
+    print_byte(10);
+
+    print_string("removed key missing: ");
+    print_bool(int_table_find(n, k2) == null);
+    print_byte(10);
+
+    twenty_two := 22;
+    int_table_set(*n, k2, *twenty_two);
+    print_int(int_value(int_table_find(n, k1)));
+    print_byte(32);
+    print_int(int_value(int_table_find(n, k2)));
+    print_byte(32);
+    print_int(int_value(int_table_find(n, k3)));
+    print_string(", count ");
+    print_int(n.count);
+    print_byte(10);
+
+    ten := 10;
+    eleven := 11;
+    twelve := 12;
+    int_table_set(*n, -1, *ten);
+    int_table_set(*n, -9223372036854775808, *eleven);
+    int_table_set(*n, 9223372036854775807, *twelve);
+    print_int(int_value(int_table_find(n, -1)));
+    print_byte(32);
+    print_int(int_value(int_table_find(n, -9223372036854775808)));
+    print_byte(32);
+    print_int(int_value(int_table_find(n, 9223372036854775807)));
+    print_string(", count ");
+    print_int(n.count);
+    print_byte(10);
+
+    entries := 0;
+    for i: 0..n.capacity - 1 {
+        used, key, value := int_table_entry(n, i);
+        if used { entries += 1; }
+    }
+    print_string("entries: ");
+    print_int(entries);
+    print_byte(10);
+
+    // The new k2 took the entry the old one was removed from.
+    print_string("removed entry taken again: ");
+    print_int(n.removed);
+    print_byte(10);
+    int_table_free(*n);
+
+    // Values of one byte: each entry is its 24-byte header and 8 bytes for
+    // the value, so the next entry's header, and its value, stay aligned.
+    g : Int_Table;
+    int_table_init(*g, size_of(bool), HEAP_ALLOCATOR);
+    for 0..999 {
+        yes := it % 3 == 0;
+        int_table_set(*g, it * 7, *yes);
+    }
+    all = true;
+    for 0..999 {
+        found := int_table_find(g, it * 7);
+        if found == null || (cast(*bool) found).* != (it % 3 == 0) { all = false; }
+    }
+    print_string("1000 keys: ");
+    print_bool(all);
+    print_string(", capacity ");
+    print_int(g.capacity);
+    print_byte(10);
+
+    for 0..999 {
+        if it % 2 == 0 { int_table_remove(*g, it * 7); }
+    }
+    odd_found := true;
+    even_missing := true;
+    for 0..999 {
+        found := int_table_find(g, it * 7);
+        if it % 2 == 0 {
+            if found != null { even_missing = false; }
+        } else {
+            if found == null || (cast(*bool) found).* != (it % 3 == 0) { odd_found = false; }
+        }
+    }
+    print_string("after removing 500: ");
+    print_int(g.count);
+    print_byte(32);
+    print_bool(odd_found);
+    print_byte(32);
+    print_bool(even_missing);
+    print_byte(10);
+
+    // New keys take removed entries or empty ones, and the used and
+    // removed entries together stay under three quarters of 2048, so the
+    // table doesn't grow.
+    for 0..499 {
+        yes := true;
+        int_table_set(*g, it * 7 + 1, *yes);
+    }
+    print_string("after adding 500 more: ");
+    print_int(g.count);
+    print_string(", capacity ");
+    print_int(g.capacity);
+    print_byte(10);
+
+    aligned := true;
+    for i: 0..g.capacity - 1 {
+        used, key, value := int_table_entry(g, i);
+        if used && cast(int) value % 8 != 0 { aligned = false; }
+    }
+    print_string("bool values: entry size ");
+    print_int(g.entry_size);
+    print_string(", aligned ");
+    print_bool(aligned);
+    print_byte(10);
+    int_table_free(*g);
+
+    // 12 keys fill 16 entries as far as they may be filled, and removing 10
+    // leaves 10 removed entries. The next set rehashes, and with 3 keys to
+    // hold the capacity stays 16: the rehash only clears the removed ones.
+    r : Int_Table;
+    int_table_init(*r, size_of(int), HEAP_ALLOCATOR);
+    for 0..11 {
+        value := it;
+        int_table_set(*r, it, *value);
+    }
+    for 0..9 { int_table_remove(*r, it); }
+    hundred_and_one := 101;
+    int_table_set(*r, 100, *hundred_and_one);
+    print_string("removed entries cleared: ");
+    show_sizes(r.count, r.capacity);
+    print_byte(32);
+    print_int(r.removed);
+    print_byte(32);
+    print_bool(holds_int(int_table_find(r, 10), 10) && holds_int(int_table_find(r, 11), 11) && holds_int(int_table_find(r, 100), 101));
+    print_byte(10);
+    int_table_free(*r);
+
+    // A value set from one of the table's own values, while the set grows
+    // the table: 12 keys fill 16 entries, and the 13th, set to key 5's
+    // value, grows them to 32. The value is copied before the old entries
+    // go back, and the spoiling allocator sets their bytes to 255.
+    s : Int_Table;
+    int_table_init(*s, size_of(int), Allocator.{spoiling_allocator_proc, null});
+    for 0..11 {
+        value := it * 10;
+        int_table_set(*s, it, *value);
+    }
+    int_table_set(*s, 12, int_table_find(s, 5));
+    print_string("own value set while growing: ");
+    print_int(int_value(int_table_find(s, 12)));
+    print_byte(32);
+    print_int(s.capacity);
+    print_byte(10);
+    int_table_free(*s);
+
+    // A table that was never set, or was freed, has no entries: a find or
+    // a remove touches none. A null value sets a zeroed one, at the address
+    // set returns and find gives.
+    e : Table;
+    table_init(*e, size_of(int), HEAP_ALLOCATOR);
+    z : Int_Table;
+    int_table_init(*z, size_of(int), HEAP_ALLOCATOR);
+    print_string("no entries: ");
+    print_bool(table_remove(*e, "x"));
+    print_byte(32);
+    print_bool(int_table_find(z, 0) == null);
+    print_byte(32);
+    print_bool(int_table_remove(*z, 0));
+    print_byte(10);
+    set_at := table_set(*e, "x", null);
+    print_string("null value: ");
+    print_bool(holds_int(set_at, 0));
+    print_byte(32);
+    print_bool(set_at == table_find(e, "x"));
+    print_byte(10);
+
+    // An entry that holds no key gives false, the empty string and null.
+    unused := 0;
+    while unused < e.capacity {
+        used, key, value := table_entry(e, unused);
+        if !used { break; }
+        unused += 1;
+    }
+    used, key, value := table_entry(e, unused);
+    print_string("unused entry: ");
+    print_bool(used);
+    print_byte(32);
+    print_int(key.count);
+    print_byte(32);
+    print_bool(key.data == null);
+    print_byte(32);
+    print_bool(value == null);
+    print_byte(10);
+    table_free(*e);
+    int_table_free(*z);
+
+    // The entries and every key's copy come from the table's allocator, and
+    // go back to it: a removed key's at once, the rest when the table is
+    // freed. The empty key's copy has no bytes, so it takes no memory.
+    counter : Counter;
+    c : Table;
+    table_init(*c, size_of(int), Allocator.{counting_allocator_proc, *counter});
+    keys := string.["one", "two", "three", ""];
+    for keys {
+        value := it_index;
+        table_set(*c, it, *value);
+    }
+    table_remove(*c, "two");
+    print_string("own allocator: allocations ");
+    print_int(counter.allocations);
+    print_string(", frees ");
+    print_int(counter.frees);
+    table_free(*c);
+    print_string(", after free ");
+    print_int(counter.frees);
+    print_byte(10);
+
+    // A freed table keeps its value size and its allocator, and takes
+    // entries again when set.
+    four := 4;
+    table_set(*c, "four", *four);
+    print_string("set after free: ");
+    print_int(int_value(table_find(c, "four")));
+    print_byte(32);
+    show_sizes(c.count, c.capacity);
+    print_byte(10);
+    table_free(*c);
+}
