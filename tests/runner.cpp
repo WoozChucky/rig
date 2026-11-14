@@ -34,7 +34,8 @@
 // The interpreter is always bin/unit-tests's, whatever RIG is given.
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
-// NAME.err, and it writes neither an object file nor a program. In a .err,
+// NAME.err, its stdout is empty (none prints from a top-level #run), and it
+// writes neither an object file nor a program. In a .err,
 // @NO_SUCH_FILE@ stands for the system's reason a file that isn't there, in
 // a directory that is, can't be read, which differs between systems and
 // languages (no_such_file_message asks the system).
@@ -514,8 +515,8 @@ static bool read_expected_errors(Arena *a, String name, String *expected) {
     return true;
 }
 
-// A program that must fail to build, with its .err on stderr, and leave
-// nothing behind.
+// A program that must fail to build, with its .err on stderr and nothing on
+// stdout, and leave nothing behind.
 static String error_test(Arena *a, String rig, String name) {
     String why = {};
     String expected = {};
@@ -535,6 +536,9 @@ static String error_test(Arena *a, String rig, String name) {
             built.err);
     }
     if (!string_eq(built.err, expected)) return first_difference(a, "stderr", expected, built.err);
+    // Nothing on stdout, as there's no .build.out here: so a top-level #run
+    // that prints, run when it mustn't be (the program has errors), shows.
+    if (built.out.count) return first_difference(a, "rig build's stdout", {}, built.out);
     if (os_file_exists(object)) return string_printf(a, "rig build failed but wrote " STR_FMT, STR_ARG(object));
     if (os_file_exists(program)) return string_printf(a, "rig build failed but wrote " STR_FMT, STR_ARG(program));
     return {};

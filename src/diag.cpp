@@ -131,11 +131,15 @@ static Diagnostics *printed_at_exit;
 // The atexit handler. A #run's code that calls C's exit() ends the process
 // from inside the checker or a top-level run, where rig would print what it
 // found only later: they come out here instead, before the C runtime's own
-// end flushes the streams.
+// end flushes the streams. It runs too when rig itself exits meanwhile (out
+// of memory, say), and printing allocates: the pointer is cleared first, so
+// an exit from inside it (out of memory again) prints nothing more.
 static void print_at_exit() {
-    if (!printed_at_exit) return;
-    diag_sort(printed_at_exit);
-    diag_print(printed_at_exit);
+    Diagnostics *d = printed_at_exit;
+    printed_at_exit = nullptr;
+    if (!d) return;
+    diag_sort(d);
+    diag_print(d);
 }
 
 void diag_print_at_exit(Diagnostics *d) {

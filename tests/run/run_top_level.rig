@@ -3,8 +3,8 @@
 // order: this file's first, then the one it #loads. What they print is rig
 // build's output (run_top_level.build.out), not the program's. They share
 // the compile-time globals with the #runs in the constants, which ran while
-// checking, before them. The program's own globals start from their
-// written values, whatever the runs did to them.
+// checking, before them: runs is 2 by then. The program's own globals start
+// from their written values, whatever the runs did to them.
 #load "load/run_top_level.rig";
 
 printf :: (format: *u8, ..) -> s32 #foreign libc;
@@ -26,7 +26,7 @@ say :: () { puts("a void call runs"); }
 #run setup();
 #run {
     counter += 1;
-    printf("counter is %lld while compiling\n", counter);
+    printf("counter is %lld while compiling, runs %lld\n", counter, runs);
 }
 #run say();
 #run {

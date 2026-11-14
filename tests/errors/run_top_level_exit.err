@@ -1,0 +1,4 @@
+tests/errors/run_top_level_exit.rig:5:1: error: #run failed: runtime error: index 2 is out of bounds (count 1)
+    #run { a : [1]int; i := 2; a[i] = 0; }
+    ^
+    in #run (tests/errors/run_top_level_exit.rig:5:29)
