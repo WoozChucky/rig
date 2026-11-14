@@ -5011,9 +5011,11 @@ TEST(constant_data_folds) {
     // field a literal leaves out is zero, read through a field left out
     // too, and so is an element of an array left out, and a string left out
     // has no bytes, its .count 0. So a constant can name one and size an
-    // array. An aggregate part, even one left out, isn't a number; nor is a
-    // pointer or a procedure inside data, and an element or a byte at an
-    // index known only at run time is read then.
+    // array. A pointer or a procedure field left out, or given as null, is
+    // null, known too. An aggregate part, even one left out, isn't a number;
+    // nor is a pointer or a procedure a literal gives, and an element or a
+    // byte at an index known only at run time is read then, as is a field
+    // reached through a pointer field, whose struct is elsewhere.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "Vec2 :: struct { x: int; y: int; }\n"
@@ -5022,11 +5024,15 @@ TEST(constant_data_folds) {
                           "Grid :: struct { a: [3]int; rows: [2][2]int; }\n"
                           "add :: (a: int, b: int) -> int { return a + b; }\n"
                           "Op :: struct { symbol: *u8; run: (int, int) -> int; }\n"
+                          "Holder :: struct { v: *Named; }\n"
                           "NAME :: \"rig\";\n"
                           "ORIGIN :: Vec2.{3, 4};\n"
                           "PRIMES :: int.[2, 3, 5, 7, 11];\n"
                           "LINE :: Line.{a = ORIGIN, on = true};\n"
                           "OPS :: Op.[.{\"+\", add}];\n"
+                          "BARE :: Op.{};\n"
+                          "NULLS :: Op.{null, null};\n"
+                          "H :: Holder.{};\n"
                           "EMPTY :: Named.{n = 1};\n"
                           "BLANK :: Grid.{};\n"
                           "C :: Named.{\"cfg\", 7};\n"
@@ -5059,6 +5065,11 @@ TEST(constant_data_folds) {
                           "    field := Vec2.{5, 6}.y;\n"
                           "    symbol := OPS[0].symbol;\n"
                           "    run := OPS[0].run;\n"
+                          "    bare_symbol := BARE.symbol;\n"
+                          "    bare_run := BARE.run;\n"
+                          "    null_symbol := NULLS.symbol;\n"
+                          "    null_run := NULLS.run;\n"
+                          "    through := H.v.n;\n"
                           "    i := 1;\n"
                           "    varying := PRIMES[i];\n"
                           "    varying_letter := NAME[i];\n"
@@ -5097,6 +5108,15 @@ TEST(constant_data_folds) {
     CHECK(folds_to(&c, "field", 6));
     CHECK(!value_of(&c, "symbol")->is_constant);
     CHECK(!value_of(&c, "run")->is_constant);
+    CHECK(folds_to(&c, "bare_symbol", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "bare_symbol")->type), "*u8");
+    CHECK(folds_to(&c, "bare_run", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "bare_run")->type), "(int, int) -> int");
+    CHECK(folds_to(&c, "null_symbol", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "null_symbol")->type), "*u8");
+    CHECK(folds_to(&c, "null_run", 0));
+    CHECK_STR(type_name(&a, value_of(&c, "null_run")->type), "(int, int) -> int");
+    CHECK(!value_of(&c, "through")->is_constant);
     CHECK(!value_of(&c, "varying")->is_constant);
     CHECK(!value_of(&c, "varying_letter")->is_constant);
     token_list_free(c.list);
@@ -5110,11 +5130,14 @@ TEST(constant_parts_arent_places) {
     // nor have their address taken, and for *
     // can't point into them. A string constant's .data is its bytes'
     // address, a *u8, as a literal's is. What a pointer field points at is
-    // elsewhere, and a string literal's bytes stay places, as they were.
+    // elsewhere, a struct's fields and a string's bytes reached through it
+    // too, and a string literal's bytes stay places, as they were.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "Vec2 :: struct { x: int; y: int; }\n"
-                           "Named :: struct { name: string; text: *u8; }\n"
+                           "Named :: struct { name: string; text: *u8; n: int; }\n"
+                           "Holder :: struct { v: *Named; }\n"
+                           "H :: Holder.{};\n"
                            "NAME :: \"rig\";\n"
                            "ORIGIN :: Vec2.{1, 2};\n"
                            "PRIMES :: int.[2, 3, 5, 7, 11];\n"
@@ -5134,22 +5157,25 @@ TEST(constant_parts_arent_places) {
                            "    for * NAMES[1] { }\n"
                            "    d := PRIMES.data;\n"
                            "    C.text[0] = 65;\n"
+                           "    H.v.name[0] = 65;\n"
+                           "    H.v.n = 3;\n"
+                           "    for * H.v.name { }\n"
                            "    t := NAME.data;\n"
                            "    \"abc\"[0] = 65;\n"
                            "    for * \"abc\" { }\n"
                            "}\n"),
-              "9:5: can't assign to 'PRIMES': it's a constant\n"
-              "10:5: can't assign to 'ORIGIN': it's a constant\n"
-              "11:5: can't assign to 'NAME': it's a constant\n"
-              "12:5: can't assign to 'C': it's a constant\n"
-              "13:5: can't assign to 'NAMES': it's a constant\n"
-              "14:11: can't take the address of 'PRIMES': it's a constant\n"
-              "15:11: can't take the address of 'PRIMES': it's a constant\n"
-              "16:11: can't take the address of 'NAME': it's a constant\n"
-              "17:11: can't take the address of 'NAME': it's a constant\n"
-              "18:11: can't take the address of 'PRIMES': it's a constant\n"
-              "19:11: can't take the address of 'NAMES': it's a constant\n"
-              "20:10: can't take the address of 'PRIMES': it's a constant\n");
+              "11:5: can't assign to 'PRIMES': it's a constant\n"
+              "12:5: can't assign to 'ORIGIN': it's a constant\n"
+              "13:5: can't assign to 'NAME': it's a constant\n"
+              "14:5: can't assign to 'C': it's a constant\n"
+              "15:5: can't assign to 'NAMES': it's a constant\n"
+              "16:11: can't take the address of 'PRIMES': it's a constant\n"
+              "17:11: can't take the address of 'PRIMES': it's a constant\n"
+              "18:11: can't take the address of 'NAME': it's a constant\n"
+              "19:11: can't take the address of 'NAME': it's a constant\n"
+              "20:11: can't take the address of 'PRIMES': it's a constant\n"
+              "21:11: can't take the address of 'NAMES': it's a constant\n"
+              "22:10: can't take the address of 'PRIMES': it's a constant\n");
     arena_free(&a);
 }
 
