@@ -6,7 +6,7 @@ A compiled systems programming language for 64-bit Windows and Linux.
 
 **Documentation: [woozchucky.github.io/rig](https://woozchucky.github.io/rig/)**, the language specification, searchable.
 
-Rig is in the spirit of Jai: no garbage collector, no virtual machine, C functions called directly, compile-time execution (planned), and one command that builds everything. A program compiles ahead of time to a native executable linked with the platform's C runtime, and manages its own memory. Rig is also a way to learn how a real language is built end to end, from the lexer to the debugger's line tables; its compiler is written in C-style C++23 over the C API of a pinned LLVM release (the version in `scripts/get_llvm.sh`).
+Rig is in the spirit of Jai: no garbage collector, no virtual machine, C functions called directly, compile-time execution (`#run`), and one command that builds everything. A program compiles ahead of time to a native executable linked with the platform's C runtime, and manages its own memory. Rig is also a way to learn how a real language is built end to end, from the lexer to the debugger's line tables; its compiler is written in C-style C++23 over the C API of a pinned LLVM release (the version in `scripts/get_llvm.sh`).
 
 ## Install
 
@@ -97,7 +97,7 @@ What works today, as [the specification](docs/rig-spec.md) describes it:
 
 ## Status
 
-Rig is early. Milestones 1 (hello world) and 2 (the core language) of 8 are done, released as [Rig 0.2.0](https://github.com/WoozChucky/rig/releases/tag/v0.2.0), the first release; milestone 3, compile-time execution, is under way, its first part, programs of several files (`#load`), done. The [roadmap](https://github.com/WoozChucky/rig/issues/85) has the milestones and where each stands.
+Rig is early. Milestones 1 (hello world) and 2 (the core language) of 8 are done, released as [Rig 0.2.0](https://github.com/WoozChucky/rig/releases/tag/v0.2.0), the first release; milestone 3, compile-time execution, is under way, with programs of several files (`#load`) and code run while compiling (`#run`, section 7.8 of [the specification](docs/rig-spec.md)) done. The [roadmap](https://github.com/WoozChucky/rig/issues/85) has the milestones and where each stands.
 
 ## Quick start
 
