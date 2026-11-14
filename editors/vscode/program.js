@@ -130,7 +130,8 @@ const DOESNT_LOAD = /^rig: error: '.*' doesn't load '.*'$/;
 // line `rig: error: '...' doesn't load '...'`.
 //
 // That answer means: try the next main file. Any other is FILE checked as
-// part of MAIN's program, clean or with errors. A source line quoted under
+// part of MAIN's program, clean or with errors, but for an old rig's usage
+// (tooOld) and a check that was killed. A source line quoted under
 // an error is indented, so it never reads as the answer.
 function doesntLoad(code, output) {
     return code === 1 && output.split(/\r?\n/).some((line) => DOESNT_LOAD.test(line));

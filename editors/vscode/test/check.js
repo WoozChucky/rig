@@ -361,7 +361,9 @@ check('program.js: declaresMain finds main :: at the top level only', () => {
         's :: "{"; main :: () {}',       // a brace in a string isn't counted
         '// x\nmain :: () {}',           // a line comment ends at its line
         '}\nmain :: () {}',              // a stray } doesn't make the rest nested
-        'main\t::\r\n() {}',             // tabs and Windows line ends are white space
+        'main\r\n::\t() {}',             // Windows line ends and tabs are white space
+        'helper :: () { putz(); }\nmain :: () {}',  // a closed body before main
+        'S :: struct { a: int; }\nf :: () { if x { } }\nmain :: () {}',
         '\uFEFFmain :: () {}',           // a byte-order mark first isn't part of the name
     ];
     for (const text of yes) assert.strictEqual(declaresMain(text), true, JSON.stringify(text));
@@ -372,8 +374,11 @@ check('program.js: declaresMain finds main :: at the top level only', () => {
         's :: "main :: ()";',
         's :: "\\" main :: ";',           // an escaped quote doesn't close the string
         'f :: () { main :: () {} }',
+        'f :: () { if x { } main :: () {} }',  // closing an inner brace leaves the body open
         'domain :: () {}',
         'main2 :: () {}',
+        'my_main :: () {}',               // '_' and digits are part of a name
+        'x2main :: () {}',
         'émain :: () {}',                 // as in função, a name beyond ASCII is one name
         'mainé :: () {}',
         'main : int = 0;',
