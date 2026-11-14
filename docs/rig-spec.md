@@ -85,7 +85,7 @@ Syntax is given in Extended Backus-Naur Form, explained in Appendix A, which hol
 
 Rig source is shown in blocks marked `rig`. The output of a program, and the messages of the compiler, are shown in blocks marked `text`, exactly as they are printed.
 
-**Examples.** Every `rig` block but a `file=` one (below) is an example that the test suite checks (`bin/run-tests`), saved as `example.rig`, the name its messages give. The word after `rig` on the block's opening line says what it is. Plain `rig` is a whole program: it is built and run, exits with status 0 (with `rig exit=N`, status N), writes nothing to standard error, and prints exactly its output, or nothing when it has none. `rig runtime-error` is a program stopped by a runtime error: status 101, with its output on standard error. `rig error` is a program the compiler rejects: `rig build` exits with status 1 and writes no file, and its output is the compiler's messages. `rig fragment` is top-level declarations alone, which `rig check` accepts once an empty `main` is added. `rig file=NAME.rig` is no example of its own but another file of the next example's program: it is saved as `NAME.rig` beside that example's `example.rig`, where `#load "NAME.rig";` in the example or in another of its files loads it (section 2.13). An example's output is the first `text` block after it, before the next heading or `rig` block.
+**Examples.** Every `rig` block but a `file=` one (below) is an example that the test suite checks (`bin/run-tests`), saved as `example.rig`, the name its messages give. The word after `rig` on the block's opening line says what it is. Plain `rig` is a whole program: it is built and run, exits with status 0 (with `rig exit=N`, status N), writes nothing to standard error, and prints exactly its output, or nothing when it has none. `rig runtime-error` is a program stopped by a runtime error: status 101, with its output on standard error. `rig error` is a program the compiler rejects: `rig build` exits with status 1 and writes no file, and its output is the compiler's messages. `rig fragment` is top-level declarations alone, which `rig check` accepts once an empty `main` is added. `rig file=NAME.rig` is no example of its own but another file of the next example's program: it is saved as `NAME.rig` beside that example's `example.rig`, where `#load "NAME.rig";` in the example or in another of its files loads it (section 2.13). An example's output is the first `text` block after it, before the next heading or `rig` block. It is the program's output alone: what `rig build` itself prints, the output of a top-level `#run` (section 7.8), is no example's output.
 
 A compile-time error is named by its message, in code type: an assignment to a constant is `can't assign to 'N': it's a constant`. Such a program is rejected: `rig build` writes nothing and exits with status 1 (section 9). A runtime error is a check that fails while the program runs, stopping it with a message and exit status 101 (section 8).
 
@@ -151,14 +151,15 @@ if        null      return    struct    true      union     using     while
 
 ### 2.7 Directives
 
-A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has four:
+A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has five:
 
 - `#foreign`, which declares a procedure implemented in C, followed by the library's name and, when the C function's name is not the procedure's own, by that name in a string: `#foreign libc` or `#foreign libc "free"` (section 7.6);
 - `#no_abc`, which turns off bounds checks in one procedure (section 7.7);
 - `#c_call`, which makes a procedure one that C can call, and marks a procedure type as such a procedure's (sections 3.15, 7.6);
-- `#load`, which makes another file part of the program (section 2.13).
+- `#load`, which makes another file part of the program (section 2.13);
+- `#run`, which runs code while compiling (section 7.8).
 
-The first three appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` is a top-level declaration of its own, and anywhere else it is `#load can only be at the top level`, right after a signature on the same line too (on the next line it is the next declaration, section 2.13). Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
+The first three appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` is a top-level declaration of its own, and anywhere else it is `#load can only be at the top level`, right after a signature on the same line too (on the next line it is the next declaration, section 2.13). `#run` is an expression, `#run e`, anywhere a value goes, or a top-level declaration of its own, `#run e;` or `#run { ... }` (section 7.8). In a body it is an expression only: a statement `#run f();` there is `#run in a body must be a value, as in x := #run f();`. Where neither a value nor a declaration goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive` (one starting the next line is the next declaration, section 9.2). Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
 
 ### 2.8 Integer literals
 
@@ -228,10 +229,11 @@ Appendix B lists each one with the section that defines it.
 
 ### 2.13 Program structure
 
-A source file is a sequence of top-level declarations: procedures, structs, constants and global variables (section 4), and `#load`s. They may come in any order. Statements appear only inside procedure bodies.
+A source file is a sequence of top-level declarations: procedures, structs, constants and global variables (section 4), `#load`s, and `#run`s, code run while compiling (section 7.8). They may come in any order. Statements appear only inside procedure bodies and a top-level `#run`'s block.
 
 ```ebnf
 LoadDecl = "#load" string_lit ";" .
+RunDecl  = "#run" ( Block | Expression ";" ) .
 ```
 
 A program is the file given to `rig build` or `rig check` (section 10.1), its **main file**, and every file it loads. `#load "PATH";` makes the file at `PATH` part of the program: its top-level declarations join the program's one top level, as if they were written in the file that loads it (section 4.6). So each file may use what the others declare, in both directions and in any order, as declarations in one file do. A loaded file's own `#load`s are followed in turn, so the program is every file reached from the main file.
@@ -366,7 +368,7 @@ An array converts implicitly to a view of its elements (section 3.13). Copying a
 
 `string` is a view of bytes: laid out as `[]u8`, `{ count: int; data: *u8; }`, 16 bytes aligned to 8, with the members `.count` and `.data`. A string is not ended by a zero byte, and its bytes may be any bytes. `string` and `[]u8` are different types that a cast turns into each other (section 3.14).
 
-A string literal is a `string` whose count is the number of bytes it stands for and whose data points at those bytes, which the program holds as read-only constant data, followed by a zero byte that the count does not include. Because of that zero, a string literal also converts implicitly to `*u8`, the type C uses for a string, so it can be passed to C. So does a string constant, `NAME :: "rig";` (section 4.2), which holds a literal, and so does a string field or element of constant data that holds a literal, such as `C.name` for a struct constant `C` (section 5.9): each converts as its literal does, to the literal's bytes. One that a literal leaves out holds no literal: it is the empty string, whose data is null, and does not convert. A cast does not: `cast(string) "hi"` is a string like any other. Any other `string` does not: `a value of type 'string' doesn't convert to '*u8' implicitly; its .data may not end with a zero`. A string constant, like any string, becomes a `[]u8` by a cast (section 3.14), a view of the same bytes.
+A string literal is a `string` whose count is the number of bytes it stands for and whose data points at those bytes, which the program holds as read-only constant data, followed by a zero byte that the count does not include. Because of that zero, a string literal also converts implicitly to `*u8`, the type C uses for a string, so it can be passed to C. So does a string constant, `NAME :: "rig";` (section 4.2), which holds a literal, and so does a string field or element of constant data that holds a literal, such as `C.name` for a struct constant `C` (section 5.9), and so does a `#run`'s string, whose bytes are baked into a literal (section 7.8): each converts as its literal does, to the literal's bytes. One that a literal leaves out holds no literal: it is the empty string, whose data is null, and does not convert. A cast does not: `cast(string) "hi"` is a string like any other. Any other `string` does not: `a value of type 'string' doesn't convert to '*u8' implicitly; its .data may not end with a zero`. A string constant, like any string, becomes a `[]u8` by a cast (section 3.14), a view of the same bytes.
 
 A literal's bytes are read-only memory, and so are a string constant's, which are its literal's. Writing them (`s := "abc"; s[0] = 65;`, or through `cast([]u8) NAME`) is a memory error that no check catches. Assigning to a string constant's byte directly, `NAME[0] = 65;`, is refused: `can't assign to 'NAME': it's a constant` (section 5.1).
 
@@ -454,7 +456,7 @@ A value converts implicitly to another type only in these cases:
 - `*void` to any pointer type, and any pointer type to `*void`.
 - A procedure value to its own procedure type only: the same parameter types, result types and `#c_call` mark (section 3.15).
 - `[N]T` to `[]T`, a view of the array's `N` elements (section 5.17 says which memory the view points at).
-- A string literal, or a string that is constant data holding one (a string constant, or a string field or element of constant data), to `*u8` (section 3.8).
+- A string literal, or a string that is constant data holding one (a string constant, a string field or element of constant data, or a `#run`'s string), to `*u8` (section 3.8).
 - `.{...}` to a struct type, and `.[...]` to an array or view type (section 5.17).
 
 Nothing else converts implicitly: not an integer to a narrower integer, not between integers and floats, not `float64` to `float32`, not between `bool` and any number, not between pointers to different types other than through `*void`, and not between procedure types, nor between a procedure value and a pointer. Such a value is `a value of type 'int' doesn't convert to 'float32' implicitly`. A value always converts to its own type.
@@ -592,7 +594,7 @@ main :: () {
 
 ### 4.1 Declarations
 
-A declaration of a name binds it to a constant, a variable, a procedure or a struct, and uses `:`. The top level also holds `#load`s, declarations that name no value but another file of the program (section 2.13). The forms of a declaration of a name are:
+A declaration of a name binds it to a constant, a variable, a procedure or a struct, and uses `:`. The top level also holds `#load`s, declarations that name no value but another file of the program (section 2.13), and `#run`s, which name nothing and run code while compiling (section 7.8). The forms of a declaration of a name are:
 
 | Form | Declares |
 |---|---|
@@ -625,11 +627,13 @@ ConstDecl = identifier "::" Expression ";" .
 - a procedure (below);
 - data: a string (`NAME :: "rig";`), or a struct or an array (`ORIGIN :: Vec2.{3, 4};`, `PRIMES :: int.[2, 3, 5, 7, 11];`) whose fields and elements hold these in turn, nested to any depth: numbers, `bool`s, pointers as above, procedure values, strings, structs and arrays. It is written as a literal of such values, as another constant holding data, or as a part of one (`COPY :: PRIMES;`, `LINE :: Line.{a = ORIGIN};`, `START :: LINE.a;`): constant data (section 5.9). A field a struct literal leaves out is zero, as in any literal (section 5.17).
 
-A value that isn't known while compiling is `the value of constant 'N' isn't known while compiling`, at the value, or at the first value inside its literals that isn't: in `LIVE :: Holder.{n = count};`, for a variable `count`, at `count`. A pointer, the constant's own or one inside its data, is `null` or a string literal's address; a cast that makes any other pointer, from a number, a procedure or a pointer variable (`cast(*int) 4096`, `cast(*void) add`), is `a constant's pointer can only be null or a string literal's address`. A constant holds no view, as its own value or inside its data, since a view would see memory of its own: `VIEW :: cast([]u8) "hi";` is `a constant can't hold a view; only a string or an array can be one`, at the value, and so is an array given to a view field. A view field that a struct literal leaves out is allowed: it is the empty view. Where a view is needed, an array constant converts to one, and a string constant is one already (section 3.13).
+A constant's value may also be a `#run`, worked out by running code while compiling (section 7.8): `LIMIT :: #run triangle(4);`, `PRIMES :: #run primes();`. It holds what the `#run` gives, baked into the program as if it had been written: any of the above but a pointer other than `null`, and views too, as its own value or inside its data, which a written constant can't hold (below). A view's elements are then read-only data of the constant's, as its strings' bytes are.
+
+A value that isn't known while compiling is `the value of constant 'N' isn't known while compiling`, at the value, or at the first value inside its literals that isn't: in `LIVE :: Holder.{n = count};`, for a variable `count`, at `count`. A pointer, the constant's own or one inside its data, is `null` or a string literal's address; a cast that makes any other pointer, from a number, a procedure or a pointer variable (`cast(*int) 4096`, `cast(*void) add`), is `a constant's pointer can only be null or a string literal's address`. A written constant holds no view, as its own value or inside its data, since a view would see memory of its own (a `#run`'s is copied, above): `VIEW :: cast([]u8) "hi";` is `a constant can't hold a view; only a string or an array can be one`, at the value, and so is an array given to a view field. A view field that a struct literal leaves out is allowed: it is the empty view. Where a view is needed, an array constant converts to one, and a string constant is one already (section 3.13).
 
 A constant that names a procedure, `OP :: add;` (or `OP :: OTHER;`, where `OTHER` names one), stands for that procedure: its type is the procedure's type (section 3.15), and `OP(1, 2)` calls `add` as `add(1, 2)` does. Casts may be written around the name when they end at the procedure's own type, as `cast((int, int) -> int) cast(*void) add` does; a constant that would name a procedure as another type is refused, since a call of it calls the procedure: `'add' is a '(int, int) -> int', so a constant can't name it as a '(int) -> int'`. A constant cannot name `main`, which is no value (section 7.4).
 
-A constant has the type of its value: untyped when the value is an untyped constant, so `LIMIT :: 100;` meets types as the literal `100` does, and typed otherwise (`MASK :: cast(u8) 0xF0;` is a `u8`, `NAME :: "rig";` a `string`).
+A constant has the type of its value: untyped when the value is an untyped constant, so `LIMIT :: 100;` meets types as the literal `100` does, and typed otherwise (`MASK :: cast(u8) 0xF0;` is a `u8`, `NAME :: "rig";` a `string`). A `#run`'s value is always typed, a number included: `LIMIT :: #run triangle(4);` is an `int` when `triangle` returns one, and `C :: #run 7;` an `int` too (section 7.8).
 
 A constant that is a number, a `bool`, a pointer or a procedure occupies no storage of its own: each use is its value, a string literal's address pointing at the literal's bytes (section 3.8). Nor does constant data that the program uses only through what folds (section 5.9): its fields, its elements at constant indexes, its `.count` (`N :: PRIMES[2];`, `[PRIMES.count]int`); nor does a string constant, or a string part of constant data, used only where it converts to a `*u8` (`puts(NAME)`, section 3.8): each such use is its literal's address, and needs only the literal's bytes. Constant data used at run time otherwise, indexed by a variable, gone over by `for`, seen as a view, passed or copied whole, lives once in the program's read-only data (section 10.3), however many uses read it, and each use reads it there.
 
@@ -689,10 +693,11 @@ A local variable is declared after its value is worked out, so `x := x + 1;` in 
 
 - a constant (section 5.9);
 - a struct or array literal whose values are all known while compiling, nested literals included;
-- constant data (sections 4.2, 5.9): a constant holding data, a field or an element of one, or any of these as a field or element of a literal (`origin := ORIGIN;`, `line := Line.{a = ORIGIN};`, `op : (int, int) -> int = OPS[0].run;`). The global gets a copy of the value, its own to change; a string's bytes stay its literal's, read-only;
+- constant data (sections 4.2, 5.9): a constant holding data, a field or an element of one, or any of these as a field or element of a literal (`origin := ORIGIN;`, `line := Line.{a = ORIGIN};`, `op : (int, int) -> int = OPS[0].run;`). The global gets a copy of the value, its own to change; a string's bytes stay its literal's, read-only, unless a `#run` gave them (below);
 - for a view, an array literal, or an array that is constant data (`primes : []int = PRIMES;`): the compiler makes a global array of its own for it, a copy, and the view points at it;
 - a string literal or a string constant, as a `string`, a `*u8` or a `[]u8`, or through casts that keep its address (`cast(*void) cast(*u8) "x"`), or as a field or element of one: the linker writes the literal's address into the global. A literal's address cast to an integer is not allowed;
-- a procedure's name, or a constant that names one, as a procedure value or cast to `*void`, or as a field or element of a literal: the linker writes the procedure's address (section 3.15).
+- a procedure's name, or a constant that names one, as a procedure value or cast to `*void`, or as a field or element of a literal: the linker writes the procedure's address (section 3.15);
+- a `#run` (section 7.8), or a constant holding one's value, or either as a field or element of a literal (`numbers : []int = #run make();`, `copy := NAME;` for `NAME :: #run name();`). The global gets its own copy of the value, writable, and unlike a literal's, its strings' bytes are copied too, as its views' elements are: into data of the global's own, which the program may change (`copy[0] = 82;`).
 
 A global with no value, or with `---`, starts at zero.
 
@@ -742,7 +747,7 @@ A struct's name is a type, not a value: used as a value it is `'Vec2' is a type,
 
 ### 4.6 The top level
 
-Procedures, structs, global variables and global constants make up the top level. There is one top level for the whole program: the declarations of every one of its files (section 2.13) are in it, as if they were written in one file. They share one set of names: a global cannot take a procedure's name, nor a struct a constant's, whether they are in one file or in two (`'x' is already declared at PATH:L:C`, naming where the first one is). The declarations are taken file by file in load order, so of two in different files the one in the file loaded later is reported, naming the one in the other file.
+Procedures, structs, global variables and global constants make up the top level, with the `#load`s and the `#run`s, which declare no name (sections 2.13, 7.8). There is one top level for the whole program: the declarations of every one of its files (section 2.13) are in it, as if they were written in one file. They share one set of names: a global cannot take a procedure's name, nor a struct a constant's, whether they are in one file or in two (`'x' is already declared at PATH:L:C`, naming where the first one is). The declarations are taken file by file in load order, so of two in different files the one in the file loaded later is reported, naming the one in the other file.
 
 Every top-level declaration is visible everywhere in the program, in every one of its files, before its declaration as well as after it: a procedure may call one declared after it or in another file, a struct may hold one declared after it, and a constant may be defined from one declared after it.
 
@@ -798,7 +803,11 @@ example.rig:1:1: error: 'A' is defined in terms of itself
     ^
 ```
 
-The same holds for a global variable's value, a struct's size (a struct cannot hold itself, section 3.9) and a procedure's signature whose array count needs a global whose value calls it. The chains of declarations worked out inside one another are limited to 1000 levels (section 9.4).
+The same holds for a global variable's value, a struct's size (a struct cannot hold itself, section 3.9) and a procedure's signature whose array count needs a global whose value calls it, and for a constant or a global whose `#run` reaches code that needs its value (section 7.8): `M :: #run k();`, where `k` returns `M`, is `'M' is defined in terms of itself`.
+
+A procedure's body is checked where a `#run` first reaches it, before the `#run` runs (section 7.8), so a body is worked out where it is needed too. A body needed while it is being checked, as `f`'s is by `x := #run f();` in its own body, or by a `#run` there that calls a procedure calling `f`, is a cycle of its own, reported at the `#run` that needed it: `'f' is defined in terms of itself`.
+
+The chains of declarations worked out inside one another, bodies included, are limited to 1000 levels (section 9.4).
 
 ## 5. Expressions
 
@@ -820,7 +829,7 @@ These are not places, and the messages say which they are: a constant, and every
 
 ```ebnf
 Expression = Unary { BinaryOp Unary } .
-Unary      = ( "-" | "~" | "!" | "*" ) Unary | Cast | Postfix .
+Unary      = ( "-" | "~" | "!" | "*" | "#run" ) Unary | Cast | Postfix .
 Postfix    = Primary { "(" [ Expression { "," Expression } ] ")"
                      | "[" Expression "]" | "." "*" | "." identifier } .
 ```
@@ -830,14 +839,14 @@ Postfix operators bind tightest, then prefix operators, then the binary operator
 | Level | Operators | Kind |
 |---|---|---|
 | postfix | `f(...)` `a[i]` `e.x` `p.*` | call, index, member, dereference |
-| prefix | `-` `~` `!` `*` `cast(T)` `cast,trunc(T)` | negation, complement, not, address, cast |
+| prefix | `-` `~` `!` `*` `#run` `cast(T)` `cast,trunc(T)` | negation, complement, not, address, run while compiling, cast |
 | 5 | `*` `/` `%` `<<` `>>` `&` | multiplicative |
 | 4 | `+` `-` `\|` `^` | additive |
 | 3 | `==` `!=` `<` `<=` `>` `>=` | comparison |
 | 2 | `&&` | logical and |
 | 1 | `\|\|` | logical or |
 
-These are Go's levels. Binary operators of the same level associate to the left: `a - b - c` is `(a - b) - c`. Postfix operators apply left to right: `a.b.c` is `(a.b).c`, `a[i].x[j]` is `((a[i]).x)[j]`, and `f(x).*` dereferences the call's result. A prefix operator applies to its whole postfix operand: `-a.b` is `-(a.b)`, `*a[0]` is `*(a[0])`, and `*p.*` is `*(p.*)`.
+These are Go's levels. Binary operators of the same level associate to the left: `a - b - c` is `(a - b) - c`. Postfix operators apply left to right: `a.b.c` is `(a.b).c`, `a[i].x[j]` is `((a[i]).x)[j]`, and `f(x).*` dereferences the call's result. A prefix operator applies to its whole postfix operand: `-a.b` is `-(a.b)`, `*a[0]` is `*(a[0])`, and `*p.*` is `*(p.*)`. So `#run f().x` runs the call and takes its field, while `#run f() + 1` runs `f()` alone, and adds 1 to its value (section 7.8).
 
 So the comparisons bind looser than arithmetic (`a + 1 < b` compares the sum), `&` is multiplicative (`x & 1 == 0` is `(x & 1) == 0`, unlike C), and `&&` binds tighter than `||` (`a || b && c` is `a || (b && c)`). A `*` where an operand is expected is the address operator; between two operands, a multiplication (`a * *b`).
 
@@ -911,6 +920,7 @@ Nothing else is compared: `'==' needs numbers, bools, pointers, procedure values
 | `~x` | an integer | the bitwise complement |
 | `!x` | a bool | the logical negation |
 | `*x` | a place | the address of `x` (section 5.13) |
+| `#run x` | a value | `x`'s value, worked out while compiling (section 7.8) |
 
 `-` on anything else is `'-' needs a number, not 'bool'`.
 
@@ -923,6 +933,7 @@ A constant expression is one whose value is known while compiling. The compiler 
 - `size_of(T)` and an array's `.count`;
 - `-`, `~` or `!`, or an arithmetic, bitwise, shift, comparison or logical operator, applied to constant operands (an address, `*x`, is never a constant);
 - a cast of a constant to a number type or `bool`, and a cast of `null` to a pointer type;
+- `#run e` whose value is a number, a `bool` or `null` (section 7.8): a call is never a constant, but a `#run` of one is, since its value is worked out while compiling. One whose value is a procedure value stands for that procedure, as a constant naming it does (section 4.2);
 - a part of constant data (below) that is a number, a `bool` or `null`: a field (`ORIGIN.y`), an element at a constant index (`PRIMES[2]`), a string's byte at a constant index (`NAME[1]`, a `u8`), or a string's `.count` (`NAME.count`, an `int`). A literal's parts fold too: `Vec2.{5, 6}.y` is 6, `"abc"[0]` is 97 and `"abc".count` is 3. A field or element that a literal leaves out is 0, `false` or `null`, and a string it leaves out is the empty string: its `.count` is 0 and its `.data` is `null`.
 
 **Constant data** is a value known while compiling that is a string, a struct or an array, or a string's bytes seen as a `[]u8`:
@@ -931,9 +942,10 @@ A constant expression is one whose value is known while compiling. The compiler 
 - a struct or array literal whose every value is a constant, a procedure (its name, or a constant naming one, section 3.15), a string literal's address (section 3.8) or constant data, nested to any depth;
 - the name of a constant holding data (section 4.2);
 - a field of constant data, of a struct and not reached through a pointer, and an element of an array that is constant data, at a constant index;
-- a cast of constant data to its own type, or between `string` and `[]u8`.
+- a cast of constant data to its own type, or between `string` and `[]u8`;
+- `#run e` whose value is a string, a struct, an array or a view (section 7.8), baked as if it had been written as a literal: its strings hold literals, as written ones do. A view's count and elements do not fold: they are read at run time, as any view's are.
 
-A part of constant data that is a string, a struct or an array is constant data too (`LINE.a`, `LINES[1]`). One that is a string literal's address or a procedure value is known while compiling, as a constant's value or a global's (sections 4.2, 4.3), but does not fold. A variable, a call and anything made from them are not constants: `Vec2.{i, 2}` is no constant data, and `PRIMES[i]`, for a variable `i`, is read at run time. Where a constant is required (a constant's value, an array's count) anything else is an error (sections 4.2, 3.6), with two exceptions, both a constant's value: it may name a procedure, as it is or through casts that end at its own type, since its address is known when the program is linked, and it may be constant data, or a string literal's address (section 4.2). A global variable's initial value accepts more than constants (section 4.3).
+A part of constant data that is a string, a struct or an array is constant data too (`LINE.a`, `LINES[1]`). One that is a string literal's address or a procedure value is known while compiling, as a constant's value or a global's (sections 4.2, 4.3), but does not fold. A variable, a call and anything made from them are not constants, unless a `#run` holds them: `Vec2.{i, 2}` is no constant data, and `PRIMES[i]`, for a variable `i`, is read at run time. Where a constant is required (a constant's value, an array's count) anything else is an error (sections 4.2, 3.6), with two exceptions, both a constant's value: it may name a procedure, as it is or through casts that end at its own type, since its address is known when the program is linked, and it may be constant data, or a string literal's address (section 4.2). A global variable's initial value accepts more than constants (section 4.3).
 
 Untyped constant expressions are exact (section 3.12). Typed constant expressions wrap as at run time; a division by the constant 0 is an error while compiling.
 
@@ -1134,7 +1146,7 @@ MultiVarDecl = identifier "," identifier { "," identifier } ":=" Expression ";" 
 
 ### 6.3 Expression statements
 
-An expression followed by `;` is a statement only when it is a call: `only a call can be a statement, for now` otherwise. The call's results, if any, are discarded.
+An expression followed by `;` is a statement only when it is a call: `only a call can be a statement, for now` otherwise. The call's results, if any, are discarded. A `#run` there is `#run in a body must be a value, as in x := #run f();`: code run while compiling for its effect is a top-level `#run` (section 7.8).
 
 ### 6.4 Assignments
 
@@ -1356,7 +1368,7 @@ A runtime error ends the program with status 101 (section 8.1).
 
 ### 7.5 Global initialisation
 
-Global variables hold their initial values when the program starts: the values are written into the program's file (section 4.3). No code of the program runs before `main`.
+Global variables hold their initial values when the program starts: the values are written into the program's file (section 4.3). No code of the program runs before `main` when the program runs. Code of it may have run while it was compiled (section 7.8), and a global's initial value may come from there, a `#run`'s value written into the file as any other is.
 
 ### 7.6 Foreign procedures
 
@@ -1531,6 +1543,141 @@ sum :: (values: []int) -> int #no_abc {
 main :: () {}
 ```
 
+### 7.8 Running code while compiling
+
+```ebnf
+RunDecl = "#run" ( Block | Expression ";" ) .
+Unary   = ( "-" | "~" | "!" | "*" | "#run" ) Unary | Cast | Postfix .
+```
+
+`#run` runs code of the program while the program is being compiled, on the compiler's interpreter (section 10.8), and puts what that code gives into the program as if it had been written there. It has two forms.
+
+**As an expression,** `#run e` is a prefix operator, binding as `-` and `!` do (section 5.2): `#run f() + 1` is `(#run f()) + 1`, which runs `f()` and adds 1 to what it gives, and `#run (f() + 1)` runs both. It may be written wherever a value may: a constant's value, a global's, a local's, an argument, an operand, an array's count (`[#run f()]int`). Its operand is any expression, and a call is its first result, as anywhere (section 5.10): a call that returns nothing is no value, so `x := #run setup();`, for a `setup` with no results, is `'setup' returns nothing, so it has no value`. The `#run`'s value is its operand's, worked out while compiling, and its type is the operand's, an untyped constant taking its default type (section 3.12): `#run 5` is an `int`, and `LIMIT :: #run triangle(4);`, for a `triangle` that returns an `int`, is a typed `int` constant (section 4.2), not an untyped one. An operand that is a constant already runs nothing: the `#run` is that constant. The block form is the top level's alone: `x := #run { ... };` is `expected an expression, found '{'`.
+
+**At the top level,** `#run e;` and `#run { ... }` are declarations of their own, which declare no name (section 4.6). They run for their effect, and what they give is thrown away. `#run e;` runs the whole expression up to its `;`, so `#run f() + 1;` runs the sum, and the expression may be a call that returns nothing. `#run { ... }` runs its block as the body of a procedure named `#run` with no parameters and no results: its statements run in order, and `return;` ends it.
+
+**In a body,** `#run` is an expression only. A statement `#run f();` is `#run in a body must be a value, as in x := #run f();`, at the `#run`: code run for its effect alone is a top-level `#run`. A `#run` in a body runs before any call of the procedure it is in, so its operand can't use what exists only while that procedure runs: a local variable, a parameter, a loop's iterator or its index. Each is `#run can't use 'x': it's a local, which doesn't exist while compiling`, at the name (`it's a parameter`, `it's the loop's iterator` or `it's the loop's index` for the others). A local constant is known while compiling, and may be used.
+
+```rig
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+is_prime :: (n: int) -> bool {
+    for d: 2..n - 1 {
+        if n % d == 0 { return false; }
+    }
+    return true;
+}
+
+// The first six primes, found while compiling.
+primes :: () -> [6]int {
+    found : [6]int;
+    count := 0;
+    n := 2;
+    while count < found.count {
+        if is_prime(n) {
+            found[count] = n;
+            count += 1;
+        }
+        n += 1;
+    }
+    return found;
+}
+
+triangle :: (n: int) -> int {
+    total := 0;
+    for 1..n { total += it; }
+    return total;
+}
+
+PRIMES :: #run primes();
+LIMIT :: #run triangle(4);
+
+main :: () {
+    grid : [LIMIT]int;
+    for PRIMES { printf("%lld ", it); }
+    printf("and %lld cells\n", grid.count);
+}
+```
+
+```text
+2 3 5 7 11 13 and 10 cells
+```
+
+`PRIMES` is an array constant whose elements were worked out while compiling, as if `int.[2, 3, 5, 7, 11, 13]` had been written, and `LIMIT` an `int` constant, 10, which sizes `grid`. The program itself calls neither `primes` nor `triangle`.
+
+**When it runs.**
+
+- An expression's `#run` runs when the checker first needs its value: a constant's or a global's when that declaration is worked out (section 4.8), one in a body when the body is checked. Each `#run` runs once, however often the code around it would run: one in a loop's body, or in a procedure called many times, runs once while compiling, and the program has its value every time. Every body is checked, so a `#run` in a procedure the program never calls runs too.
+- Before it runs, everything it reaches is checked: the procedures its operand calls or takes as values, the procedures those reach in turn, the constants and globals they name, and the structs of the values they use, whether or not the code would get to them when it runs. When any of that has errors, they are reported where they are, and the `#run` doesn't run. It says nothing more, and neither does what needs its value (an array's count, a constant made from it, an operator on it), so one mistake gives one message.
+- A `#run` whose value is needed while it is being worked out is a cycle (section 4.8): `M :: #run k();`, where `k` returns `M`, is `'M' is defined in terms of itself`, at `M`. So is a body a `#run` needs while that body is being checked, as `x := #run f();` in `f`'s own body: `'f' is defined in terms of itself`, at the `#run`.
+- `main`, where the program starts (section 7.4), is never run while compiling: a call of `main` anywhere in what a `#run` reaches is `main is where the program starts; #run can't call it`, at the `#run`. A `#run` in `main`'s body is fine.
+- The top-level `#run`s run in `rig build` only, once the whole program has checked with no errors, so after every expression's `#run`. They run file by file in load order (section 2.13), and in source order within a file: a loaded file's `#run`s run after every one of the file that loads it, not at its `#load`. `rig check` checks them as `rig build` does, what they reach and `main` included, but never runs them (section 10.1). A top-level `#run` that fails doesn't stop the ones after it, and every diagnostic is printed after the last of them.
+
+**One world.** Every `#run` of a compilation runs in one compile-time world: one interpreter, holding one copy of the program's globals, which start from their written values (section 4.3) and which every `#run` shares. So one `#run` can set up what a later one reads. The program's own globals are untouched: the program starts with their written values, whatever the `#run`s did to theirs.
+
+**Results.** The value of an expression's `#run` is baked into the program: made into the value it would be if it had been written in the source, which the program has as it has a constant's (section 4.2). It may be:
+
+- a number or a `bool`;
+- a procedure value, which is the procedure it names, a foreign one included, or `null`;
+- a pointer that is `null`;
+- a string, an array or a struct of these, nested to any depth, and a view of any of them.
+
+Strings and views are baked deeply: the bytes or elements they point at are copied as they are when the `#run` ends, wherever they lived while compiling (in a global, on the interpreter's stack, in memory `malloc` gave), and the baked string or view points at the copy. A later `#run` that changes that memory leaves the copy as it was. A view whose data isn't memory the compiler may read is a memory error that no check catches (section 8.6). Two kinds of result can't be baked, each said at the `#run`, which then has no value:
+
+- Any other pointer, the result itself or one inside it, points into the compiler's own memory, which the program won't have: `#run's result holds a pointer, which can't be baked, for now`. That includes a `*u8` pointing at a string's bytes, and a procedure value that names no procedure of the program (one made from an integer). A table of C strings can hold `string`s instead, or be a constant written as a literal (section 4.2).
+- A view or a string whose count is below zero has no elements to copy: `#run failed: its result holds a view with a negative count` (`a string with a negative count` for a string).
+
+A baked value is a constant, or constant data, as a written one is (section 5.9). A number or a `bool` folds, and so does a part of a string, a struct or an array that is one (a field, an element at a constant index, a string's byte or count); an integer sizes arrays. A procedure value stands for its procedure, as a constant naming it does. A string, at any depth, converts to `*u8` and passes C's `...` as a string literal does (sections 3.8, 7.6). A view's parts don't fold: its count and its elements are read at run time, as any view's are. A constant may hold a baked view, which a written constant can't (section 4.2).
+
+**Where baked data lives.** A `#run`'s value used in a constant, a local's value or anywhere else in a body is read-only data, as constant data is (section 4.2), the bytes of its strings and the elements of its views included: writing them, through the view or a pointer, is a memory error that no check catches (section 8.6). A `#run`'s value used as a global's, directly or through a constant holding it, is the global's own copy, writable, the bytes of its strings and the elements of its views included, each copied into data of the global's own (section 4.3). So after `numbers : []int = #run make();` and `text := #run name();`, the program may write `numbers[0] = 10;` and `text[0] = 82;`.
+
+**Failures.** A `#run` whose code fails while compiling is an error at the `#run`: a runtime check that fails (section 8.1), or anything else the interpreter stops at (section 10.8), such as the stack running out, a C function it can't find, or a Rig procedure handed to C. The message is `#run failed: runtime error: MESSAGE`, MESSAGE being the interpreter's (`index 10 is out of bounds (count 10)`, `stack overflow`, `'NAME' isn't in the C library at compile time`). After the source line and the caret come the calls that led there, innermost first, one per line, indented by four spaces: `in NAME (PATH:LINE:COL)`, each the procedure and the position the interpreter gives for it (section 10.8). The last is the `#run` itself, `in #run (PATH:LINE:COL)`: at the `#run`, or for a top-level `#run { ... }`, at the place in its block where it failed or made the call that did, as a procedure's frame is. Of more than 21 calls, as a recursion that never ends makes, only the 10 innermost and the 10 outermost are shown, with `    ... N more calls` between them. A `#run` that fails has no value, and what needs it says nothing more.
+
+```rig error
+squares :: (n: int) -> [4]int {
+    table : [4]int;
+    for 0..n - 1 { table[it] = it * it; }
+    return table;
+}
+
+make :: () -> [4]int { return squares(5); }
+
+SQUARES :: #run make();
+
+main :: () {}
+```
+
+```text
+example.rig:9:12: error: #run failed: runtime error: index 4 is out of bounds (count 4)
+    SQUARES :: #run make();
+               ^
+    in squares (example.rig:3:25)
+    in make (example.rig:7:24)
+    in #run (example.rig:9:12)
+```
+
+Bounds checks are always made while compiling: `rig build --no-bounds-checks` (section 10.1) leaves them out of the program only. `#no_abc` is part of a procedure's meaning, and turns them off in it while compiling too (section 7.7).
+
+**Ending the compiler.** C's `exit`, called by a `#run`'s code, ends the compiler there, with the status it gives, after printing the diagnostics found so far, sorted as always (section 9.1): nothing more is checked, run or built.
+
+**Output.** What a `#run`'s code prints goes to the compiler's own standard output and error (section 10.8), in order with what the compiler prints. Types can depend on an expression's `#run` (`[LIMIT]int`), so `rig check` runs those too, and what they print is `rig check`'s output (section 10.1). An editor runs `rig check` on every change, and code that should run only when the program is built, because it prints, writes files or starts programs, belongs in a top-level `#run`, which `rig check` never runs.
+
+```rig fragment
+exit :: (status: s32) #foreign libc;
+
+gcd :: (a: int, b: int) -> int {
+    if b == 0 { return a; }
+    return gcd(b, a % b);
+}
+
+// rig build stops here, with status 1, if gcd is wrong.
+#run {
+    if gcd(12, 18) != 6 || gcd(7, 5) != 1 { exit(1); }
+}
+```
+
+**No step limit.** The interpreter counts no steps (section 10.8): a `#run` that never ends keeps the compiler running until it is stopped, as the program would run. An editor may stop a check that runs too long: the VS Code extension stops one after the seconds its setting `rig.checkTimeout` gives, 10 unless set.
+
 ## 8. Runtime checks
 
 Some operations are checked while the program runs. A check that fails is a **runtime error**: it stops the program.
@@ -1641,7 +1788,7 @@ These are memory errors, which the program must avoid and no check catches:
 
 - using a pointer or a view to memory that is no longer valid: a local or a temporary of a procedure that has returned (section 5.17), or memory given back to the C library;
 - moving a pointer outside the memory it points into and using it, and indexing a pointer outside its memory;
-- writing the bytes of a string literal or a constant's data, which are read-only, through a view or a pointer to them (sections 3.8, 5.17): `cast([]u8) NAME`, a view of an array constant, or a string constant's `.data`;
+- writing the bytes of a string literal or a constant's data, which are read-only, through a view or a pointer to them (sections 3.8, 5.17): `cast([]u8) NAME`, a view of an array constant, or a string constant's `.data`; and so the data a `#run` baked into a constant or a local's value, its views' elements and its strings' bytes (section 7.8);
 - using a misaligned pointer made by a cast;
 - calling a procedure value made by a cast from a `*void` that doesn't hold the address of a procedure of that type (section 3.15);
 - calling a procedure value read from a variable declared with `---` before it is assigned: it holds no procedure, and need not be null, so the null check (section 8.4) may pass it;
@@ -1693,7 +1840,7 @@ example.rig:4:1: error: expected ';', found '}'
     ^
 ```
 
-An identifier found is named: `counter int = 0;` is `expected '::', found identifier 'int'`. After a syntax error the compiler gives up on the declaration it was in and goes on at the next one, so the errors in the rest of the file, and in the program's other files, are reported too, type errors included. The declaration given up on keeps its name when the text still looks like a declaration of it, and nothing more is reported about it or its uses, so one mistake gives one message. A missing `main` is not reported when a declaration with a syntax error might have been it. A `#load` that failed (section 2.13) is the same for the whole program: the file it names might have declared any name, so while one has failed no name anywhere is reported as unknown (`unknown identifier`, `unknown type`), nor `main` as missing.
+An identifier found is named: `counter int = 0;` is `expected '::', found identifier 'int'`. After a syntax error the compiler gives up on the declaration it was in and goes on at the next one, so the errors in the rest of the file, and in the program's other files, are reported too, type errors included. The declaration given up on keeps its name when the text still looks like a declaration of it, and nothing more is reported about it or its uses, so one mistake gives one message. A missing `main` is not reported when a declaration with a syntax error might have been it. A `#load` or a `#run` that starts a line is the next top-level declaration too, as section 2.13 says of a `#load`: the declaration left unfinished before it is given up there, and the run is kept, unless a value is still expected there (`N ::` on the line before), where the `#run` is that value. A body or a struct whose `}` is missing ends before the `#run`s in column 1 as it ends before the `#load`s, a `#run {` in column 1 ends a body as a procedure's declaration does, and any `#run` in column 1 ends a struct's fields, which can't hold one. A `#load` that failed (section 2.13) is the same for the whole program: the file it names might have declared any name, so while one has failed no name anywhere is reported as unknown (`unknown identifier`, `unknown type`), nor `main` as missing.
 
 ### 9.3 Representative messages
 
@@ -1718,6 +1865,11 @@ The sections defining each construct give its messages. Some of those met most o
 | `'notes.txt' isn't a .rig file` | 2.13 |
 | `a #load path can't be empty` | 2.13 |
 | `a #load path can't contain a zero byte` | 2.13 |
+| `#run in a body must be a value, as in x := #run f();` | 2.7, 7.8 |
+| `#run can't use 'x': it's a local, which doesn't exist while compiling` | 7.8 |
+| `main is where the program starts; #run can't call it` | 7.8 |
+| `#run failed: runtime error: index 10 is out of bounds (count 10)` | 7.8 |
+| `#run's result holds a pointer, which can't be baked, for now` | 7.8 |
 | `a foreign procedure's C name can't be empty` | 7.6 |
 | `'fr ee' can't be a C function's name: it has white space` | 7.6 |
 | `'main' can't be a C function's name: it's where the program starts` | 7.6 |
@@ -1730,7 +1882,7 @@ The compiler limits how deeply a program's constructs nest:
 - An expression nests at most 1000 levels: each parenthesis, prefix operator, cast, call, dereference, field, element, compound literal and binary operator is a level above what it holds, so a chain of 1001 `+` is too deep. Deeper is `this expression is nested too deeply (more than 1000 levels)`, at the start of the outermost expression.
 - Blocks nest at most 1000 levels, a procedure's body the first: `blocks are nested too deeply (more than 1000 levels)`, at the `{` one too many.
 - A written type nests at most 1000 levels, each `*`, `[]`, `[N]` and procedure type's `(` one: `types are nested too deeply (more than 1000 levels)`. Types and expressions inside each other count together: an array's count is inside its `[N]` level, and the type of `size_of` and of a cast is a level below the expression.
-- Top-level declarations worked out inside one another (a constant whose value names a constant declared after it, and so on) nest at most 1000 levels: `'A1001' is nested too deeply in the declarations that need it (more than 1000 levels)`. Declared in the order they are needed, a chain of any length compiles.
+- Top-level declarations worked out inside one another (a constant whose value names a constant declared after it, and so on) nest at most 1000 levels: `'A1001' is nested too deeply in the declarations that need it (more than 1000 levels)`. Declared in the order they are needed, a chain of any length compiles. A body a `#run` needs (section 7.8) is worked out inside the declaration or the body holding the `#run`, its blocks, expressions and types counted together from where that one is: a chain of bodies each running the next goes no deeper than 1000 levels either, and the body one too many is reported at its procedure's name, in the same words.
 
 An `else if` chain may have any number of arms.
 
@@ -1746,15 +1898,15 @@ rig check FILE.rig [--stdin | --stdin-for FILE.rig]
 rig version [--verbose]
 ```
 
-**`rig build`** compiles the program whose main file is `FILE.rig` into an executable: that file and every file it loads (section 2.13), each read from its path, which is relative to the current directory when it is not absolute. The options may come in any order.
+**`rig build`** compiles the program whose main file is `FILE.rig` into an executable: that file and every file it loads (section 2.13), each read from its path, which is relative to the current directory when it is not absolute. Once the program has checked with no errors, its top-level `#run`s run (section 7.8): what they print is `rig build`'s own output, and one that fails is an error, which stops the build once they have all run. The options may come in any order.
 
 - The executable is written to the current directory, named after the main file without its directory and its `.rig`: `hello.exe` on Windows, `hello` on Linux, for `src/hello.rig`.
 - `-o OUTPUT` names the executable otherwise. On Windows a name whose file name has no extension gets `.exe`. An output ending in `.rig` is refused: `rig: error: the output 'hello.rig' ends in .rig; is it the source file?`.
-- `--no-bounds-checks` leaves out every bounds check (section 8.5).
+- `--no-bounds-checks` leaves out every bounds check (section 8.5) of the program. The code that `#run`s run while compiling keeps them (section 7.8).
 - The object file, one for the whole program, is written to a directory `.build` in the current directory, made if needed, named after the main file: `.build/hello.obj` on Windows, `.build/hello.o` on Linux.
 - On Windows the program's debug information is written beside it: the executable's name with `.pdb` for its `.exe` (in any case), `hello.pdb` for `hello.exe`, or with `.pdb` added to a name with another extension, `out.bin.pdb` for `out.bin` (section 10.7).
 
-**`rig check`** reads and checks the program as `rig build` does, the files it loads included, prints the same diagnostics, and stops: it writes no file. With `--stdin` it reads the main file from standard input, which lets an editor check text that is not saved. `FILE.rig` is then the name its diagnostics give it, and its `#load`s are found from `FILE.rig`'s directory, as if the text were in that file; the file need not exist. The files it loads are read from disk. With `--stdin-for LOADED.rig` (the usage's second `FILE.rig`) the program is `FILE.rig`'s, read from disk, but for `LOADED.rig`, whose text is read from standard input wherever the program loads it, which lets an editor check a file a program loads as part of that program: checked alone, it would have no `main`, and the names the program's other files declare would be unknown. `LOADED.rig`, like `FILE.rig`, is a path from the current directory, not from `FILE.rig`'s; it is then known as `#load` knows a file (section 2.13), so the `#load` may write its path otherwise (`./b.rig` or `sub/../b.rig` for `b.rig`, and on Windows `B.RIG`), and it need not exist. Its diagnostics name it as its `#load` does. When `LOADED.rig` is `FILE.rig` itself, the option is `--stdin`.
+**`rig check`** reads and checks the program as `rig build` does, the files it loads included, prints the same diagnostics, and stops: it writes no file. Checking runs the program's expression `#run`s, since types can depend on them (`[LIMIT]int`), and what they print goes to `rig check`'s standard output; it never runs the top-level `#run`s, which it checks all the same (section 7.8), so a program whose only error is a top-level `#run` that fails checks with none. With `--stdin` it reads the main file from standard input, which lets an editor check text that is not saved. `FILE.rig` is then the name its diagnostics give it, and its `#load`s are found from `FILE.rig`'s directory, as if the text were in that file; the file need not exist. The files it loads are read from disk. With `--stdin-for LOADED.rig` (the usage's second `FILE.rig`) the program is `FILE.rig`'s, read from disk, but for `LOADED.rig`, whose text is read from standard input wherever the program loads it, which lets an editor check a file a program loads as part of that program: checked alone, it would have no `main`, and the names the program's other files declare would be unknown. `LOADED.rig`, like `FILE.rig`, is a path from the current directory, not from `FILE.rig`'s; it is then known as `#load` knows a file (section 2.13), so the `#load` may write its path otherwise (`./b.rig` or `sub/../b.rig` for `b.rig`, and on Windows `B.RIG`), and it need not exist. Its diagnostics name it as its `#load` does. When `LOADED.rig` is `FILE.rig` itself, the option is `--stdin`.
 
 **`rig version`** says which compiler this is, on one line: its version, the commit of Rig's repository it was built from with that commit's date, and the version of the LLVM linked into it:
 
@@ -1780,7 +1932,7 @@ build: release
 
 Both `build` and `check` take only a source file whose name ends in `.rig`, in any case: `rig: error: 'hello.txt' isn't a .rig file`. So does `--stdin-for`, its file's name judged after the main file's, and both before anything is read. A main file that cannot be read is `rig: error: cannot read 'hello.rig': MESSAGE`, with the system's reason (`rig: error: cannot read standard input: MESSAGE` with `--stdin`). With `--stdin-for` the main file is read from disk first, and standard input only once it has been, so a main file that cannot be read is said without waiting for standard input; standard input that cannot be read is then `rig: error: cannot read standard input: MESSAGE`. A loaded file that cannot be read, or isn't a `.rig` file, is a diagnostic at its `#load`'s string instead (section 2.13). A program that never loads the `--stdin-for` file is `rig: error: 'main.rig' doesn't load 'helper.rig'`, the two files named as the command line names them, alone: nothing is checked, and what loading the program found isn't printed, since that file isn't part of it.
 
-The exit status is 0 on success; 1 when the program has errors, cannot be read, doesn't load the `--stdin-for` file, or cannot be built or linked; and 2 when the command line is malformed (no command or an unknown one, no file, two files, an option given twice, `-o` or `--stdin-for` without a name or with an empty one, `--stdin` with `--stdin-for`, `-o` or `--no-bounds-checks` given to `rig check`, `--stdin-for` given to `rig build`, even as `-o`'s name, or anything but `--verbose` after `rig version`), in which case the usage is printed. A word that is not an option is taken as the file's name: an unknown option alone is a file that isn't a `.rig` file, and beside the file it is a second file. The word after `-o` or `--stdin-for` is its name, whatever it is: `--stdin-for --stdin` names a file `--stdin`, which isn't a `.rig` file.
+The exit status is 0 on success; 1 when the program has errors (a `#run` that fails among them), cannot be read, doesn't load the `--stdin-for` file, or cannot be built or linked; and 2 when the command line is malformed (no command or an unknown one, no file, two files, an option given twice, `-o` or `--stdin-for` without a name or with an empty one, `--stdin` with `--stdin-for`, `-o` or `--no-bounds-checks` given to `rig check`, `--stdin-for` given to `rig build`, even as `-o`'s name, or anything but `--verbose` after `rig version`), in which case the usage is printed. A word that is not an option is taken as the file's name: an unknown option alone is a file that isn't a `.rig` file, and beside the file it is a second file. The word after `-o` or `--stdin-for` is its name, whatever it is: `--stdin-for --stdin` names a file `--stdin`, which isn't a `.rig` file. A `#run` whose code calls C's `exit` ends `rig` there, `rig build` or `rig check`, with the status it gives, after the diagnostics found so far (section 7.8).
 
 ### 10.2 The compiler's stages
 
@@ -1789,14 +1941,14 @@ The compiler is a single program written in C++, with LLVM linked into it. It co
 1. **Lexer** (`src/lexer.cpp`): the source's bytes into tokens (section 2).
 2. **Parser** (`src/parser.cpp`): the tokens into a syntax tree, by recursive descent, with expressions read by precedence climbing (Appendix A).
 3. **Loader** (`src/load.cpp`): the main file and every file it `#load`s, each once, in load order (section 2.13), each through the lexer and the parser into the same tree, so the checker sees one program.
-4. **Checker** (`src/checker.cpp`, `src/check_expr.cpp`): resolves every name, works out every type and every struct's layout, folds the constant expressions, and checks the rules of sections 3 to 7. The checker runs even after syntax errors, so both kinds are reported together.
+4. **Checker** (`src/checker.cpp`, `src/check_expr.cpp`, `src/check_run.cpp`): resolves every name, works out every type and every struct's layout, folds the constant expressions, and checks the rules of sections 3 to 7. The checker runs even after syntax errors, so both kinds are reported together. It runs each expression's `#run` where it first needs its value (section 7.8), in the compile-time world (`src/run.cpp`): what the `#run` reaches is lowered (stage 5) into a compile-time module of the world's own, which grows as later `#run`s reach more, and run there on the interpreter (section 10.8), and the result is baked into the tree as if it had been written there.
 5. **Lowering** (`src/lower.cpp`): the checked tree into Rig's intermediate representation (`src/ir.h`), a list of procedures made of basic blocks of instructions on numbered values. Lowering adds the runtime checks of section 8 and the source positions and scopes that the debug information is made from.
 6. **LLVM** (`src/llvm_backend.cpp`): the IR into an LLVM module through LLVM's C API, which LLVM verifies and compiles into an object file for x86-64: COFF on Windows (target `x86_64-pc-windows-msvc`), ELF on Linux (`x86_64-pc-linux-gnu`), position-independent on Linux. The code is not optimised, and targets the baseline x86-64 processor.
 7. **Linker** (`src/link.cpp`): the object file into an executable with the platform's linker (section 10.6).
 
 No integer instruction carries LLVM's `nsw`, `nuw` or `exact` flags, and no float instruction carries fast-math flags: Rig's integers wrap and its floats are IEEE 754's. No pointer arithmetic is marked `inbounds`, copies are `memmove`s (the two sides may overlap), and no pointer is assumed non-null.
 
-After lowering, beside the LLVM and linker stages, a stage can run the IR rather than compile it: the **interpreter** (`src/interp.cpp`, calling C through `src/thunk.cpp`) runs a lowered program's procedures inside the compiler, for code run while compiling, which no construct uses yet (section 10.8). The interpreter optimises nothing away: every instruction of the IR runs, even one whose result is never used.
+After lowering, beside the LLVM and linker stages, a stage can run the IR rather than compile it: the **interpreter** (`src/interp.cpp`, calling C through `src/thunk.cpp`) runs lowered procedures inside the compiler, for code run while compiling (section 10.8). It runs the compile-time module, not the program's: the checker's `#run`s while it checks, and in `rig build` the top-level `#run`s once it has checked, before the program itself is lowered (section 7.8). The interpreter optimises nothing away: every instruction of the IR runs, even one whose result is never used.
 
 ### 10.3 Data representation
 
@@ -1806,8 +1958,8 @@ After lowering, beside the LLVM and linker stages, a stage can run the IR rather
 - **Structs** are laid out as C lays them out (section 3.9). A struct literal is built in zeroed memory, padding included.
 - **Arrays** are their elements one after another.
 - **Views and strings** are 16 bytes: the count, a 64-bit signed integer, at offset 0, and the data pointer at offset 8.
-- **String literals and constants' data** are private, read-only constant data in the object file. A string literal is its bytes followed by one zero byte, once for each literal written in the source that the program uses at run time, however many uses reach it, and not at all when it is only folded (`"abc".count`, `NAME[1]`, section 5.9). A constant holding data (section 4.2) is there once when the program uses it at run time, and not at all when it is only folded: its value, laid out as its type is, with relocations for the addresses inside it (a string literal's, a procedure's), which the linker resolves. A string constant is a 16-byte string there, whose data points at its literal's bytes; where it becomes a `*u8`, it is the literal's address itself.
-- **Global variables** are data local to the program, initialised with their values' bytes. A global holding a string literal's or an array's address gets it through a relocation, which the linker resolves.
+- **String literals and constants' data** are private, read-only constant data in the object file. A string literal is its bytes followed by one zero byte, once for each literal written in the source that the program uses at run time, however many uses reach it, and not at all when it is only folded (`"abc".count`, `NAME[1]`, section 5.9). A constant holding data (section 4.2) is there once when the program uses it at run time, and not at all when it is only folded: its value, laid out as its type is, with relocations for the addresses inside it (a string literal's, a procedure's), which the linker resolves. A string constant is a 16-byte string there, whose data points at its literal's bytes; where it becomes a `*u8`, it is the literal's address itself. A `#run`'s value (section 7.8) is constant data too, there once for each `#run` the program uses at run time, its views' elements in constant data of their own, which the view points at.
+- **Global variables** are data local to the program, initialised with their values' bytes. A global holding a string literal's or an array's address gets it through a relocation, which the linker resolves. The bytes of the strings a `#run` gave a global, and the elements of its views, are data local to the program too, writable, of that global's own (section 4.3).
 - **Local variables** live in their procedure's stack frame. Every stack slot is allocated once, at the procedure's start, however often the block that declares it runs.
 
 ### 10.4 Calling convention
@@ -1881,15 +2033,15 @@ Frame pointers are kept (section 10.4), so the stack can be walked without unwin
 
 ### 10.8 The interpreter
 
-The compiler can run a program's code itself, while compiling, on its interpreter (`src/interp.cpp`, section 10.2). No construct of the language uses it yet: it is what code run at compile time (`#run`) will run on. It runs the IR that lowering makes, the same the LLVM backend compiles, not the source and not a translation of it, and each instruction means what it means compiled: integers wrap, floats are IEEE 754's (a `float32` computed as one, never as a `float64`), a float converted to an integer saturates, copies are `memmove`s, and the runtime checks of section 8 are lowering's, so they are the same checks. A program gives the same results interpreted as compiled. The test suite holds it to that: every program of `tests/run` is run interpreted too, and must print the same output, exit with the same status and fail with the same runtime error as compiled, but for a program the interpreter refuses (one that hands C a Rig procedure, below), which must stop with that refusal instead, after printing the start of its output (`CONTRIBUTING.md` has the details).
+The compiler can run a program's code itself, while compiling, on its interpreter (`src/interp.cpp`, section 10.2): `#run`'s code runs there (section 7.8). There is one interpreter per compilation, made when the first `#run` runs, and every `#run` of the compilation runs on it, in the compile-time module the checker lowers what each `#run` reaches into, so they share its globals (below). It runs the IR that lowering makes, the same the LLVM backend compiles, not the source and not a translation of it, and each instruction means what it means compiled: integers wrap, floats are IEEE 754's (a `float32` computed as one, never as a `float64`), a float converted to an integer saturates, copies are `memmove`s, and the runtime checks of section 8 are lowering's, so they are the same checks. The bounds checks are always there in the compile-time module, whatever `rig build --no-bounds-checks` says, except in a procedure marked `#no_abc` (section 7.7). A program gives the same results interpreted as compiled. The test suite holds it to that: every program of `tests/run` is run interpreted too, its top-level `#run`s first, then `main`, and must print the same output, exit with the same status and fail with the same runtime error as compiled, but for a program the interpreter refuses (one that hands C a Rig procedure, below), which must stop with that refusal instead, after printing the start of its output (`CONTRIBUTING.md` has the details).
 
 **Memory.** The interpreter's memory is native memory of the compiler's own, laid out as the target's (section 10.3), so a pointer is a plain address, and C's functions (`malloc`, `memcpy`, `strlen`) work on interpreted data directly. So a memory error that no check catches (section 8.6), such as a write through a dangling pointer, or past a local array with bounds checks off, or by C given a bad pointer, is one in the compiler's own memory, which holds the interpreter's stack and globals and the compiler's own data: it may corrupt the compiler or stop it, as it would the compiled program.
 
-- **Globals** are made in memory from their bytes, and the addresses they hold (a string literal's, another global's, a procedure's) are written into them: a Rig procedure's is the address standing for it (below), a foreign one's its C function's. They are all writable, a string literal's bytes and a constant's data too, which a compiled program keeps read-only (writing them is a memory error no check catches, sections 3.8, 5.17 and 8.6). They last as long as the interpreter: what one run leaves in a global, the next run sees.
+- **Globals** are made in memory from their bytes, and the addresses they hold (a string literal's, another global's, a procedure's) are written into them: a Rig procedure's is the address standing for it (below), a foreign one's its C function's. They are all writable, a string literal's bytes and a constant's data too, which a compiled program keeps read-only (writing them is a memory error no check catches, sections 3.8, 5.17 and 8.6). A `#run` that writes them so has made that memory error too: the `#run`s after it may see what it wrote, but the program keeps the value the constant was written or baked with. They last as long as the interpreter: what one run leaves in a global, the next run sees, as every `#run` of a compilation shares them (section 7.8). The program's own globals are not these: it starts from their written values.
 - **Locals** live on the interpreter's own data stack, of 8 MB. Each call of a procedure gives it one slot per local and per temporary, at its start, however often the block that makes it runs, as the compiled program's frame has one per stack slot (section 10.3): a loop that declares a local, or makes a temporary, uses the same slot on every turn.
 - **Calls** keep their bookkeeping (each frame's values and the call it came from) on that stack too, so recursion that never ends runs out of it, however small its frames, and fails with the runtime error `stack overflow` (below), where the compiled program would crash. The interpreter keeps its frames there and never recurses itself, so deep recursion in Rig can't overflow the compiler's own stack.
 
-**Procedure values.** A Rig procedure has no machine code to point at, so its value at compile time is an address standing for it: one of a range of 1 MB that the interpreter reserves and never makes accessible, which a call through the value maps back to the procedure. A Rig procedure, the k-th of the lowered program (counting from 0, the compiler's and foreign ones included, though a foreign one's place is never handed out), stands at 16 × k bytes past the range's start: 16 bytes apart, as functions' code is aligned. These values behave as the compiled program's do (section 3.15): each procedure's is distinct, never null, and the same however it is taken, from the procedure's name, from a global holding it, or cast to `*void` and back. A call through an address of the range that is no procedure's (made from an integer) is the runtime error `call of an address that isn't a procedure`. The range limits an interpreted program to 65,536 procedures, its foreign ones and the compiler's included; a larger one doesn't run: `the program has N procedures, more than the 65536 the interpreter can give addresses to`. A foreign procedure's value is its C function's real address. A call through a non-null address outside the range, such as a foreign procedure's value, is a call of C, made through the thunk (below): one through an address that holds no C function, such as a global's, is a memory error no check catches (section 8.6), in the compiler's own memory.
+**Procedure values.** A Rig procedure has no machine code to point at, so its value at compile time is an address standing for it: one of a range of 1 MB that the interpreter reserves and never makes accessible, which a call through the value maps back to the procedure. A Rig procedure, the k-th of the lowered program or of the compile-time module (counting from 0, the compiler's and foreign ones included, though a foreign one's place is never handed out), stands at 16 × k bytes past the range's start: 16 bytes apart, as functions' code is aligned. These values behave as the compiled program's do (section 3.15): each procedure's is distinct, never null, and the same however it is taken, from the procedure's name, from a global holding it, or cast to `*void` and back. A call through an address of the range that is no procedure's (made from an integer) is the runtime error `call of an address that isn't a procedure`. The range limits an interpreted program to 65,536 procedures, its foreign ones and the compiler's included; a larger one doesn't run: `the program has N procedures, more than the 65536 the interpreter can give addresses to`. A foreign procedure's value is its C function's real address. A call through a non-null address outside the range, such as a foreign procedure's value, is a call of C, made through the thunk (below): one through an address that holds no C function, such as a global's, is a memory error no check catches (section 8.6), in the compiler's own memory.
 
 C can't call into the interpreter, so a Rig procedure can't be given to C at compile time. A call of C given one as any pointer argument, fixed or variadic, is the runtime error `a Rig procedure can't be passed to C at compile time, for now`, at the call: a `#c_call` procedure given to `qsort` as its comparison (section 7.6), and a procedure's value cast to `*void` too, since the IR doesn't tell a procedure value from any other pointer. An integer argument isn't checked, since a count or a size may lie in the range by chance. A Rig procedure that reaches C some other way, stored in memory or cast to an integer, can't run there: its address is never accessible, so a call of it by C faults and stops the compiler, rather than running anything else.
 
@@ -1900,7 +2052,7 @@ C can't call into the interpreter, so a Rig procedure can't be given to C at com
 
 A name found nowhere is the runtime error `'NAME' isn't in the C library at compile time`, NAME being the C name, at the call, or where the procedure's value is taken. When a global holds its value, the run fails before it starts, with no frames.
 
-What C writes at compile time goes to the compiler's own standard output and error. `exit` really exits the compiler, with its status, after the C runtime flushes its streams.
+What C writes at compile time goes to the compiler's own standard output and error. `exit` really exits the compiler, with its status, after the C runtime flushes its streams: a `#run`'s code that calls it ends the compilation there, the diagnostics found so far printed first (section 7.8).
 
 **Failures.** When interpreted code fails a runtime check (section 8.1), runs out of its stack, calls an address of the range that is no procedure's, calls a C function found nowhere or takes its value, hands C a Rig procedure, and when a program can't run at all (it has too many procedures, or a global holds a C function found nowhere), the run stops, but the compiler doesn't. The interpreter gives the failure to its caller: the message, without the `PATH:LINE:COL: runtime error: ` that a compiled program writes before it (`index 10 is out of bounds (count 10)`), and the chain of calls that led there, innermost first. Each frame is a procedure of the source and a position:
 
@@ -1910,16 +2062,16 @@ What C writes at compile time goes to the compiler's own standard output and err
 - When the call that fails is the one a failing bounds check makes of the compiler's own procedure, the position is the check's `[` instead.
 - Every other frame's position is the call it was waiting on, at its statement's first token, where the line table puts it (section 10.7).
 
-The procedures the compiler adds (section 10.5) are left out. A run that fails before its first frame is pushed has no frames: one of a program that can't run at all, one of a foreign procedure itself, which has no Rig frame, or one whose first procedure's frame is larger than the stack. The frames are given as text for the interpreter's caller to report (as `#run`'s error will), one per line, indented by four spaces, `in NAME (PATH:LINE:COL)`:
+The procedures the compiler adds (section 10.5) are left out. A run that fails before its first frame is pushed has no frames: one of a program that can't run at all, one of a foreign procedure itself, which has no Rig frame, or one whose first procedure's frame is larger than the stack. The frames are given as text for the interpreter's caller to report, one per line, indented by four spaces, `in NAME (PATH:LINE:COL)`:
 
 ```text
     in make_table (tables.rig:40:17)
     in main (tables.rig:52:5)
 ```
 
-Nothing writes them yet. The test mode that runs a program interpreted, `bin/unit-tests --interpret` (`CONTRIBUTING.md`), writes only the innermost frame's position before the message (the file alone when there is no frame), as a compiled program does: `tables.rig:40:17: runtime error: index 10 is out of bounds (count 10)`.
+A failing `#run` writes them after its message (section 7.8), the outermost frame being the `#run`'s own procedure, `in #run (PATH:LINE:COL)`. The test mode that runs a program interpreted, `bin/unit-tests --interpret` (`CONTRIBUTING.md`), writes only the innermost frame's position before the message (the file alone when there is no frame), as a compiled program does: `tables.rig:40:17: runtime error: index 10 is out of bounds (count 10)`.
 
-**No step limit.** The interpreter counts no steps: an endless loop runs until the compiler is stopped (Ctrl-C), as the compiled program would.
+**No step limit.** The interpreter counts no steps: an endless loop runs until the compiler is stopped (Ctrl-C), as the compiled program would. An editor checking as one types may stop it (section 7.8).
 
 ## Appendix A: Grammar
 
@@ -1968,8 +2120,9 @@ A number literal may not be followed directly by a letter or a digit (section 2.
 
 ```ebnf
 File          = { TopLevel } .
-TopLevel      = ProcDecl | StructDecl | ConstDecl | VarDecl | LoadDecl .
+TopLevel      = ProcDecl | StructDecl | ConstDecl | VarDecl | LoadDecl | RunDecl .
 LoadDecl      = "#load" string_lit ";" .
+RunDecl       = "#run" ( Block | Expression ";" ) .
 
 ProcDecl      = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#foreign" identifier [ string_lit ] ";" ) .
 Signature     = "(" [ Params ] ")" [ "->" Results ] .
@@ -1995,9 +2148,9 @@ ProcParam     = [ identifier ":" ] Type .
 ProcResults   = Type | "(" Type { "," Type } ")" .
 ```
 
-After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. `ProcDecl` and `StructDecl` appear only at the top level, and so does `LoadDecl`: a program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'`.
+After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. `ProcDecl` and `StructDecl` appear only at the top level, and so do `LoadDecl`, and `RunDecl`, whose `Block` is a procedure's body (section 7.8): a program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'`.
 
-In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{`, a directive other than `#c_call` or `#load`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file. A `#load` reached first begins the next declaration, so the `VarDecl` is missing its `;`. Otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
+In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{`, a directive other than `#c_call`, `#load` or `#run`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file. A `#load` or a `#run` reached first begins the next declaration, so the `VarDecl` is missing its `;`. Otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
 
 ### A.3 Statements
 
@@ -2030,7 +2183,7 @@ BinaryOp      = "||" | "&&"
               | "+" | "-" | "|" | "^"
               | "*" | "/" | "%" | "<<" | ">>" | "&" .
 
-Unary         = ( "-" | "~" | "!" | "*" ) Unary
+Unary         = ( "-" | "~" | "!" | "*" | "#run" ) Unary
               | Cast
               | Postfix .
 Cast          = "cast" [ "," "trunc" ] "(" Type ")" Unary .
@@ -2053,7 +2206,7 @@ Field         = [ identifier "=" ] Expression .
 ArrayBody     = "[" [ Expression { "," Expression } [ "," ] ] "]" .
 ```
 
-Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; the comparisons; `+ - | ^`; `* / % << >> &`. Each level associates to the left. A `TypedLiteral` follows only a `Primary` that is an identifier not in parentheses, which names the literal's type (section 5.17). In `Primary`, `size_of` is an identifier followed by `(`, and `trunc` in `Cast` is an identifier, not a keyword. In a `StructBody` the fields are all named or all unnamed; an `ArrayBody`'s values are never named.
+Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; the comparisons; `+ - | ^`; `* / % << >> &`. Each level associates to the left. A `TypedLiteral` follows only a `Primary` that is an identifier not in parentheses, which names the literal's type (section 5.17). In `Primary`, `size_of` is an identifier followed by `(`, and `trunc` in `Cast` is an identifier, not a keyword. A `#run` in `Unary` takes an expression only, never a `Block`, which only a `RunDecl` has (section 7.8). In a `StructBody` the fields are all named or all unnamed; an `ArrayBody`'s values are never named.
 
 ## Appendix B: Index of keywords and operators
 
@@ -2075,6 +2228,7 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `#c_call` | procedure that C can call; its procedure type | 7.6, 3.15 |
 | `#no_abc` | no bounds checks in a procedure | 7.7 |
 | `#load` | another file of the program | 2.13 |
+| `#run` | code run while compiling | 7.8 |
 | `size_of` | a type's size | 5.16 |
 | `it`, `it_index` | a loop's iterator and index | 6.7, 6.8 |
 | `+` `-` `*` `/` | arithmetic | 5.3, 5.4 |
