@@ -444,8 +444,10 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 //   only a string or an array can be one". A #run's baked view is the one
 //   a constant may hold, its elements read-only (lower.cpp): the #run's
 //   value, or constant data reaching it (V2 :: V, IT :: T.items, a cast to
-//   its own type), whose data is the baked array literal of its elements
-//   (Ast_Literal.is_baked).
+//   its own type), a value typed as the view whose data is the baked array
+//   literal of its elements (Ast_Literal.is_baked). A #run's array, baked
+//   too, is no view: a view of it is written, as a view of a written
+//   array is.
 // - A string, a struct or an array is a literal whose values are checked in
 //   turn, a string literal, or anything else constant_data finds a value
 //   for: a constant holding it, a field or an element of one, a cast. The
@@ -462,15 +464,20 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 // Nor about a value that didn't convert to its slot's type, or a literal
 // whose values didn't all meet a field or an element (too many, a field
 // named twice or not at all, an array's count missed).
-// A #run's value is fine once it has one: a baked one was judged when it
-// was baked (run.cpp), a view's included, and one that is its constant
-// operand is that constant. Without one, its failure was said.
+// A #run's value is fine once it has one, but in a view's slot, where it
+// must be a view: a baked one was judged when it was baked (run.cpp), and
+// one that is its constant operand is that constant. Without one, its
+// failure was said. A baked array literal gives all its elements, but of
+// no size: none (run.cpp's bake_elements).
 static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Type *t) {
-    if (value->kind == AST_RUN) return ((Ast_Run *)value)->value != nullptr;
+    if (value->kind == AST_RUN && (t->kind != TYPE_VIEW || !((Ast_Run *)value)->value)) {
+        return ((Ast_Run *)value)->value != nullptr;
+    }
     if (!value->type) return false;
     if (t->kind == TYPE_VIEW) {
         Ast *data;
-        if (constant_data(value, &data) && data && data->kind == AST_LITERAL && ((Ast_Literal *)data)->is_baked) {
+        if (value->type->kind == TYPE_VIEW && constant_data(value, &data) && data && data->kind == AST_LITERAL &&
+            ((Ast_Literal *)data)->is_baked) {
             return true;
         }
         diag_error(c->diag, value->start, "a constant can't hold a view; only a string or an array can be one");
@@ -480,7 +487,7 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
         if (value->type != t) return false;  // it doesn't convert to the slot's type: reported
         if (value->kind == AST_LITERAL) {
             Ast_Literal *literal = (Ast_Literal *)value;
-            if (t->kind == TYPE_ARRAY ? literal->values.count != t->count
+            if (t->kind == TYPE_ARRAY ? literal->values.count != t->count && !literal->is_baked
                                       : !literal->names.count && literal->values.count > t->fields.count) {
                 return false;
             }

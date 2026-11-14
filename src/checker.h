@@ -493,10 +493,11 @@
 //   passes C's '...' as a literal does (is_literal_string). A constant may
 //   hold a baked view, its elements read-only data, as the #run's value or
 //   reached through constant data (V2 :: V; IT :: T.items;), though not a
-//   written one ("a constant can't hold a view"). A baked []u8 cast to a
-//   string is no constant data: its value is the array of its elements,
-//   not a string literal. A global holding a baked view or string gets a
-//   writable copy of its elements or bytes (spec 4.3).
+//   written one ("a constant can't hold a view"), a view written of a
+//   baked array included (Holder.{ARR}). A baked []u8 cast to a string is
+//   the string literal of its bytes (Ast_Literal.text). A global holding a
+//   baked view or string gets a writable copy of its elements or bytes
+//   (spec 4.3).
 // - main is where the program starts: a #run that reaches a call of it is
 //   "main is where the program starts; #run can't call it", at the #run.
 // - A body a #run needs while that body is being checked (its own #run, or
@@ -602,9 +603,9 @@ bool is_literal_string(Ast *e);
 // - the name of a constant with is_data (its `data`);
 // - a field of constant data (a struct's, not reached through a pointer),
 //   or an element of it (an array's) at an is_constant index;
-// - a cast of constant data to its own type, or between string and []u8,
-//   but for a #run's baked []u8 cast to a string: its data is an array
-//   literal, which a string can't be;
+// - a cast of constant data to its own type, or between string and []u8:
+//   a #run's baked []u8 cast to a string is its bytes' string literal
+//   (Ast_Literal.text), not the array literal of its elements;
 // - a #run whose baked value isn't a number (Ast_Run.value): a procedure
 //   value's name, which procedure_address walks on from, a string literal,
 //   or a struct or array literal of constant data (is_data already); a

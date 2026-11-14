@@ -220,8 +220,8 @@ static u64 read_bits(const u8 *at, s64 size) {
 // A struct or array literal of type t to hold `count` baked values, made as
 // the checker would find a written one of constant data: is_data already,
 // with no type written and no names, a struct's values its fields' in
-// order (literal_field_value); and is_baked, so a constant may hold it in a
-// view's slot (checker.cpp's check_constant_value).
+// order (literal_field_value); and is_baked, so a constant may hold it as a
+// baked view's elements (checker.cpp's check_constant_value).
 static Ast_Literal *baked_literal(Baking *b, Type *t, s64 count) {
     Ast_Literal *literal = baked_node<Ast_Literal>(b, AST_LITERAL, t);
     literal->is_array = t->kind == TYPE_ARRAY;
@@ -233,12 +233,29 @@ static Ast_Literal *baked_literal(Baking *b, Type *t, s64 count) {
 
 static Ast *bake_value(Baking *b, Type *t, const u8 *at);
 
+// The string literal of the `count` bytes at `data`, copied, with a zero
+// after them as a written literal's have: is_baked, so a global holding it
+// gets bytes of its own (lower.cpp's string_copy_global).
+static Ast_String *baked_string(Baking *b, const u8 *data, s64 count) {
+    Ast_String *text = baked_node<Ast_String>(b, AST_STRING, &type_string);
+    u8 *bytes = (u8 *)arena_alloc(b->c->arena, (u64)count + 1, 1);
+    if (count) memcpy(bytes, data, (size_t)count);
+    text->value = {bytes, count};
+    text->is_baked = true;
+    return text;
+}
+
 // The elements of an array of type `array`, from its first at `at`: the
-// array literal holding them; null once one is refused.
+// array literal holding them; null once one is refused. Elements of no
+// size (an empty struct's, a [0]T's) hold nothing, all of them alike, and a
+// view of them may count more than memory holds nodes: the literal gives
+// none, as a literal's elements left out are zeros (lower.cpp's
+// constant_bytes).
 static Ast *bake_elements(Baking *b, Type *array, const u8 *at) {
-    Ast_Literal *literal = baked_literal(b, array, array->count);
     Type *element = array->element;
-    for (s64 i = 0; i < array->count; i++) {
+    s64 count = element->size ? array->count : 0;
+    Ast_Literal *literal = baked_literal(b, array, count);
+    for (s64 i = 0; i < count; i++) {
         Ast *value = bake_value(b, element, at + i * element->size);
         if (!value) return nullptr;
         array_add(&literal->values, value);
@@ -263,10 +280,11 @@ static Ast *bake_elements(Baking *b, Type *array, const u8 *at) {
 // - A view []T is the array literal of its elements, a [count]T
 //   (check_array_type, which says so when that's too big, and stops the
 //   baking), standing where the []T is (lower.cpp's constant_bytes reads
-//   an array value in a view's slot so). A count below zero is "#run
-//   failed: its result holds a view with a negative count". Data that
-//   isn't memory the compiler may read is a memory error (spec 8.6), not
-//   checked.
+//   an array value in a view's slot so). A []u8's literal holds its bytes
+//   as a string literal too (Ast_Literal.text), what a cast of it to a
+//   string is. A count below zero is "#run failed: its result holds a view
+//   with a negative count". Data that isn't memory the compiler may read
+//   is a memory error (spec 8.6), not checked.
 // What a view or a string points at is copied as it is now: a later run
 // that changes it leaves the baked value as it was.
 static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
@@ -281,14 +299,13 @@ static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
         }
         if (t->kind == TYPE_VIEW) {
             Type *array = check_array_type(b->c, t->element, (u64)count, b->run->pos);
-            return array ? bake_elements(b, array, data) : nullptr;
+            Ast *elements = array ? bake_elements(b, array, data) : nullptr;
+            if (elements && t->element == type_from_name(str("u8"))) {
+                ((Ast_Literal *)elements)->text = baked_string(b, data, count);
+            }
+            return elements;
         }
-        Ast_String *text = baked_node<Ast_String>(b, AST_STRING, t);
-        u8 *bytes = (u8 *)arena_alloc(b->c->arena, (u64)count + 1, 1);
-        if (count) memcpy(bytes, data, (size_t)count);
-        text->value = {bytes, count};
-        text->is_baked = true;
-        return text;
+        return baked_string(b, data, count);
     }
     case TYPE_ARRAY: return bake_elements(b, t, at);
     case TYPE_STRUCT: {

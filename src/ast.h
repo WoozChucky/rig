@@ -284,6 +284,8 @@ struct Ast_Member : Ast {
 // Or of an array: `T.[a, b]` is a [2]T, T being the element type; `.[a, b]`
 // takes its element type and count from where it's used, as .{a, b} takes
 // its struct. pos is the '.'; start is T's name when there is one.
+struct Ast_String;
+
 struct Ast_Literal : Ast {
     Ast_Type *type_expr;            // the T before the '.' (an array's element type), or null: the type
                                     // comes from where it's used
@@ -294,9 +296,14 @@ struct Ast_Literal : Ast {
     bool is_array;                  // T.[a, b] or .[a, b]: an array's elements, in order
     s8 is_data;                     // filled in by the checker once asked (constant_data): 1 when it's
                                     // constant data, -1 when it isn't, 0 not asked yet
-    bool is_baked;                  // made from a #run's result (run.cpp): in a view's slot, a baked
-                                    // view's elements, which a constant may hold, where a written
-                                    // view can't be held
+    bool is_baked;                  // made from a #run's result (run.cpp), a struct's, an array's or a
+                                    // view's elements: a view-typed value whose data is one is a baked
+                                    // view, which a constant may hold, where a written view can't be
+                                    // held; and of elements of no size it gives none, whatever the
+                                    // count
+    Ast_String *text;               // a baked []u8's elements (run.cpp): the same bytes as a string
+                                    // literal, is_baked, what the view cast to a string holds
+                                    // (constant_data); null for any other literal
 };
 
 // a[i]: element i of the array, view or string a, or what the pointer a

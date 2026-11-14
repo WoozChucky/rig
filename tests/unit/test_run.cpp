@@ -397,6 +397,79 @@ TEST(run_bakes_data) {
     arena_free(&a);
 }
 
+TEST(run_bakes_narrow_scalars_in_aggregates) {
+    // Each scalar in a baked struct or array is read at its own width, from
+    // its own offset: an unsigned one or a bool takes none of its
+    // neighbours' bytes, and a signed one is sign-extended from its width.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Narrow :: struct { a: s8; b: u8; c: s16; d: bool; z: bool; f: u16; e: float32; g: int; }\n"
+                          "narrow :: () -> [2]Narrow {\n"
+                          "    r : [2]Narrow;\n"
+                          "    r[0] = .{-1, 200, -300, true, false, 65000, 1.5, 7};\n"
+                          "    r[1] = .{5, 0, 0, false, true, 0, 0.0, -1};\n"
+                          "    return r;\n"
+                          "}\n"
+                          "NARROW :: #run narrow();\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    Ast_Literal *elements = literal_data(&a, &c, "NARROW", "[2]Narrow");
+    CHECK_EQ(elements ? elements->values.count : 0, 2);
+    if (!elements || elements->values.count != 2) {
+        token_list_free(c.list);
+        arena_free(&a);
+        return;
+    }
+    struct Field {
+        u64 value;
+        const char *type;
+    };
+    Field expected[2][8] = {
+        {{(u64)-1, "s8"}, {200, "u8"}, {(u64)-300, "s16"}, {1, "bool"}, {0, "bool"}, {65000, "u16"},
+         {f64_bits(1.5), "float32"}, {7, "int"}},
+        {{5, "s8"}, {0, "u8"}, {0, "s16"}, {0, "bool"}, {1, "bool"}, {0, "u16"}, {f64_bits(0.0), "float32"},
+         {(u64)-1, "int"}},
+    };
+    for (s64 i = 0; i < 2; i++) {
+        Ast *element = elements->values[i];
+        CHECK_EQ(element->kind, AST_LITERAL);
+        if (element->kind != AST_LITERAL) continue;
+        Ast_Literal *fields = (Ast_Literal *)element;
+        CHECK_EQ(fields->values.count, 8);
+        for (s64 f = 0; f < fields->values.count && f < 8; f++) {
+            CHECK(is_number(&a, fields->values[f], expected[i][f].value, expected[i][f].type));
+        }
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(run_bakes_zero_size_elements_of_any_count) {
+    // Elements of no size hold nothing, all of them alike: a view or an
+    // array of them is baked as a literal giving none, whatever its count,
+    // as a literal's elements left out are zeros. Constant data reaching
+    // one holds it as it is.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "E :: struct { }\n"
+                          "Wide :: struct { e: [1 << 40]E; n: int; }\n"
+                          "many :: () -> []E { v : []E; v.count = 1 << 40; return v; }\n"
+                          "wide :: () -> Wide { w : Wide; w.n = 7; return w; }\n"
+                          "M :: #run many();\n"
+                          "W :: #run wide();\n"
+                          "Z :: W.e;\n"
+                          "N :: W.n;\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    Ast_Literal *many = literal_data(&a, &c, "M", "[1099511627776]E");
+    CHECK_EQ(many ? many->values.count : 1, 0);
+    Ast_Literal *none = literal_data(&a, &c, "Z", "[1099511627776]E");
+    CHECK_EQ(none ? none->values.count : 1, 0);
+    CHECK(is_number(&a, global_named(&c, "N"), 7, "int"));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
 TEST(run_baked_data_is_a_copy) {
     // A baked view is a copy of what it saw, taken when its #run ran: a
     // later run changing the global it pointed into leaves it as it was.
@@ -450,8 +523,8 @@ TEST(run_bakes_structs_declared_later) {
 
 TEST(run_results_holding_pointers_are_refused) {
     // An address means something only in the compiler's memory: a result
-    // holding one, itself or in a field, is refused, and the constant has
-    // no type. A null pointer is fine.
+    // holding one, itself, in a field or in an element after a null one, is
+    // refused, and the constant has no type. A null pointer is fine.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "Holder :: struct { p: *int; n: int; }\n"
@@ -462,12 +535,16 @@ TEST(run_results_holding_pointers_are_refused) {
                           "P :: #run point();\n"
                           "H :: #run hold();\n"
                           "E :: #run empty();\n"
+                          "pair :: () -> [2]*int { r : [2]*int; r[1] = *x; return r; }\n"
+                          "A :: #run pair();\n"
                           "main :: () { }\n");
     CHECK_STR(sorted_messages(&a, &c), "6:6: #run's result holds a pointer, which can't be baked, for now\n"
-                                       "7:6: #run's result holds a pointer, which can't be baked, for now\n");
+                                       "7:6: #run's result holds a pointer, which can't be baked, for now\n"
+                                       "10:6: #run's result holds a pointer, which can't be baked, for now\n");
     CHECK(((Ast_Const *)global_named(&c, "E"))->is_data);
     CHECK(!global_named(&c, "P")->type);
     CHECK(!global_named(&c, "H")->type);
+    CHECK(!global_named(&c, "A")->type);
     token_list_free(c.list);
     arena_free(&a);
 }
@@ -505,23 +582,54 @@ TEST(run_strings_convert_as_literals) {
     arena_free(&a);
 }
 
-TEST(run_bytes_cast_to_a_string_are_not_constant_data) {
-    // A baked []u8 is the array of its elements, not a string literal: cast
-    // to a string, it's no string a constant or a global can hold, as its
-    // own value or in a struct literal's field. In a body the cast is made
-    // at run time.
+TEST(run_bytes_cast_to_a_string_are_constant_data) {
+    // A baked []u8 cast to a string is the string literal of its bytes, as
+    // a written string cast to a []u8 and back is: a constant or a global
+    // may hold it, as its own value or in a struct literal's field, and its
+    // count folds.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Named :: struct { name: string; }\n"
+                          "store : [3]u8;\n"
+                          "bytes :: () -> []u8 { store[0] = 97; store[1] = 98; store[2] = 99; return store; }\n"
+                          "S :: cast(string) #run bytes();\n"
+                          "N :: Named.{name = cast(string) #run bytes()};\n"
+                          "g := cast(string) #run bytes();\n"
+                          "main :: () { s := cast(string) #run bytes(); c := S.count; }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    Ast *text = data_of(&c, "S");
+    CHECK(text && text->kind == AST_STRING);
+    if (text && text->kind == AST_STRING) {
+        CHECK_STR(((Ast_String *)text)->value, "abc");
+        CHECK(((Ast_String *)text)->is_baked);
+    }
+    CHECK(is_number(&a, value_of(&c, "c"), 3, "int"));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(run_baked_arrays_in_view_slots_are_written_views) {
+    // Only a view a #run baked may be held by a constant: a view written in
+    // the source of a #run's array, its baked [N]T itself or a field of a
+    // baked struct holding one, is refused as a view of a written array is.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
-                           "Named :: struct { name: string; }\n"
-                           "store : [3]u8;\n"
-                           "bytes :: () -> []u8 { store[0] = 97; store[1] = 98; store[2] = 99; return store; }\n"
-                           "S :: cast(string) #run bytes();\n"
-                           "N :: Named.{name = cast(string) #run bytes()};\n"
-                           "g := cast(string) #run bytes();\n"
-                           "main :: () { s := cast(string) #run bytes(); }\n"),
-              "4:6: the value of constant 'S' isn't known while compiling\n"
-              "5:20: the value of constant 'N' isn't known while compiling\n"
-              "6:6: a global's value must be known while compiling, for now\n");
+                           "Holder :: struct { items: []int; n: int; }\n"
+                           "Box :: struct { arr: [3]int; }\n"
+                           "squares :: () -> [3]int { a : [3]int; for 0..2 { a[it] = it * it; } return a; }\n"
+                           "box :: () -> Box { return .{squares()}; }\n"
+                           "ARR :: #run squares();\n"
+                           "B :: #run box();\n"
+                           "H1 :: Holder.{ARR, 3};\n"
+                           "H2 :: Holder.{items = #run squares()};\n"
+                           "H3 :: Holder.{B.arr, 3};\n"
+                           "WRITTEN :: int.[1, 2, 3];\n"
+                           "H4 :: Holder.{WRITTEN, 3};\n"
+                           "main :: () { }\n"),
+              "7:15: a constant can't hold a view; only a string or an array can be one\n"
+              "8:23: a constant can't hold a view; only a string or an array can be one\n"
+              "9:15: a constant can't hold a view; only a string or an array can be one\n"
+              "11:15: a constant can't hold a view; only a string or an array can be one\n");
     arena_free(&a);
 }
 
