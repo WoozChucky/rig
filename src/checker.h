@@ -484,13 +484,16 @@
 //   one whose value the body needs, through a constant say) is a circle,
 //   "'f' is defined in terms of itself", at the #run, as a global's is
 //   (spec 4.8): the bodies in it have errors, and the globals in it no
-//   type. So is a struct a #run in one of its counts reaches, by value,
-//   while its layout is under way: "'S' is defined in terms of itself", at
+//   type. So is a struct a #run in one of its counts reaches, by value or
+//   through a pointer it moves or indexes, while its layout is under way:
+//   "'S' is defined in terms of itself", at
 //   the struct. Bodies checked inside one another nest as declarations do (at
 //   most MAX_DEPTH levels deep, open_declaration), a body's own levels its
 //   blocks and the expressions in them together: the one too many is "'f'
 //   is nested too deeply in the declarations that need it (more than 1000
-//   levels)", at its name, and is checked in its own turn.
+//   levels)", at its name, and is checked in its own turn. A body checked
+//   in its own turn, and a top-level #run's expression, aren't counted so:
+//   a body their #runs need starts at level 0.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
