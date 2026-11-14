@@ -939,9 +939,11 @@ class LiveCheck {
         // Each `await` below gives a newer check of the document the chance
         // to start (stop() counts it). A check that isn't the newest anymore
         // returns, starting, setting and saying nothing: it asks after each
-        // await, and again just before each rig it starts, since a newer
-        // check may start in the moment between an await's end and the code
-        // after it, which goes on to the next rig.
+        // await, that of through() too, and again just before each rig it
+        // starts. through() asks after its own rig, but a newer check may
+        // start in the moment between that and run() going on after
+        // `await through(...)`, to the search, the next rig or the document
+        // alone.
         const generation = this.generations.get(key);
         const current = () => this.generations.get(key) === generation;
         // Checking runs rig, so not in Restricted Mode, as building doesn't.
@@ -964,9 +966,10 @@ class LiveCheck {
         // directory), and gets the file's full path. The file needn't exist:
         // with --stdin or --stdin-for the text is stdin's. With --stdin the
         // diagnostics name the file as given, and its #loads are found from
-        // its directory; with --stdin-for they name it by the path MAIN's
-        // #load gives it, which parseDiagnostics resolves from cwd and
-        // compares with samePath.
+        // its directory; with --stdin-for they name it by the path the
+        // program's #load of it gives (from the loading file's directory),
+        // which parseDiagnostics resolves from cwd and compares with
+        // samePath.
         const cwd = buildDirectory(file, folder);
 
         // rig's answer as the document's diagnostics: its own, then one for
@@ -1018,6 +1021,7 @@ class LiveCheck {
                 // rig.main first, before the folder is searched at all: when
                 // set, it's normally the answer.
                 if (main && (await through(main))) return;
+                if (!current()) return;
                 const candidates = await this.candidates(folder);
                 if (!current()) return;
                 for (const candidate of candidates) {

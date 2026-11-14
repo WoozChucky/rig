@@ -1750,7 +1750,10 @@ check('rig.main names the program, and one that doesn\'t load the file falls bac
         stub.mains[dir] = 'c.rig';
         const first = await checked(dir, doc, 'open');
         assert.deepStrictEqual(first.calls, [[path.join(dir, 'c.rig'), '--stdin-for', file]]);
-        assert.strictEqual(first.diagnostics.length, 2);
+        assert.deepStrictEqual(first.diagnostics, [
+            [0, 0, "unknown identifier 'putz'"],
+            [0, 0, "an error in another file of the program: c.rig:2:14: unknown identifier 'putz'"],
+        ]);
 
         stub.mains[dir] = 'a.rig';
         const second = await checked(dir, doc, 'configuration', MAIN_CHANGED);
@@ -1828,6 +1831,78 @@ check('a bad rig.main is said once, with a button to the setting, and the search
     });
 });
 
+// A compiler Node can't start is the answer of the first main file tried,
+// as it is of a document checked alone: said once, no problems listed, and
+// nothing else tried, neither the next main file nor the document alone.
+check('a compiler Node can\'t start ends the search at the first main file', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        writeMains(dir);
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        await withUnstartable(dir, async (program) => {
+            // Each start of the compiler: the words after `check`.
+            const child_process = require('child_process');
+            const spawn = child_process.spawn;
+            const started = [];
+            child_process.spawn = (command, args, ...rest) => {
+                if (command === program) started.push(args.slice(1));
+                return spawn.call(child_process, command, args, ...rest);
+            };
+            try {
+                // Setting the compiler checks the open document.
+                stub.compilerPath = program;
+                stub.document = doc;
+                fire('configuration', { affectsConfiguration: (section) => section === 'rig.compilerPath' || section === 'rig' });
+                await until('the error', () => stub.errors.length > 0);
+                await sleep(300);
+            } finally {
+                child_process.spawn = spawn;
+            }
+            assert.deepStrictEqual(started, [[path.join(dir, 'a.rig'), '--stdin-for', file]]);
+            assert.strictEqual(stub.errors.length, 1, stub.errors.join('\n'));
+            assert.ok(stub.errors[0].includes(`couldn't run ${program}`), stub.errors[0]);
+            assert.ok(!live.has(doc.uri.toString()), 'the document got diagnostics');
+        });
+    });
+});
+
+// When VS Code can't search the folder, the document is checked alone; a
+// file it can't read isn't a main file to try, as rig couldn't read it.
+check('a folder VS Code can\'t search, or a file it can\'t read, is no main file to try', async () => {
+    loadExtension();
+    const { findFiles, fs: files } = vscodeStub.workspace;
+    const readFile = files.readFile;
+    await withStandIn(async (dir) => {
+        writeMains(dir);
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        try {
+            vscodeStub.workspace.findFiles = async () => {
+                throw new Error('no search');
+            };
+            const unsearched = await checked(dir, doc, 'open');
+            assert.deepStrictEqual(unsearched.calls, [[file, '--stdin']]);
+            assert.deepStrictEqual(unsearched.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
+
+            vscodeStub.workspace.findFiles = findFiles;
+            files.readFile = (uri) =>
+                path.basename(uri.fsPath) === 'b.rig' ? Promise.reject(new Error('unreadable')) : readFile(uri);
+            const unread = await checked(dir, doc, 'save');
+            assert.deepStrictEqual(unread.calls, [
+                [path.join(dir, 'a.rig'), '--stdin-for', file],
+                [path.join(dir, 'c.rig'), '--stdin-for', file],
+            ]);
+            assert.deepStrictEqual(stub.errors, []);
+        } finally {
+            vscodeStub.workspace.findFiles = findFiles;
+            files.readFile = readFile;
+        }
+    });
+});
+
 // A check that starts while an older one is still searching (waiting for
 // findFiles or a file's text) takes over: the older one must then start no
 // rig and set nothing, or its answer could replace the newer one's.
@@ -1891,17 +1966,20 @@ check('a check overtaken while its rig --stdin-for runs sets nothing and tries n
 
 // A newer check may also start in the moment between one rig answering
 // that its program doesn't load the document and the older check going on,
-// to the next main file or to checking the document alone: when run() is
-// called from a promise's continuation, say. The older check must then
-// start nothing, so the rigs started from then on are the newer check's
-// alone. That moment is some promise steps after the first rig closes, so
-// the newer check is started 0 to 3 steps after it, each in turn, with
-// another main file to go on to (b.rig) and with none.
-check('a check overtaken between two rigs starts no other', async () => {
+// to the search for main files, to the next main file or to checking the
+// document alone: when run() is called from a promise's continuation, say.
+// The older check must then start nothing and search no more, so the rigs
+// started and the searches made from then on are the newer check's alone.
+// That moment is some promise steps after the first rig closes, so the
+// newer check is started 0 to 3 steps after it, each in turn: with another
+// main file to go on to (b.rig), with that and rig.main naming the first
+// (a.rig), whose rig is then started before the search, and with none.
+check('a check overtaken between two rigs starts no other and searches no more', async () => {
     loadExtension();
     const live = activated.collections.rig;
     const child_process = require('child_process');
     const spawn = child_process.spawn;
+    const findFiles = vscodeStub.workspace.findFiles;
     await withStandIn(async (dir) => {
         const file = path.join(dir, 'helper.rig');
         const doc = fakeDocument(file, 'putz();\n');
@@ -1911,10 +1989,12 @@ check('a check overtaken between two rigs starts no other', async () => {
         const a = [path.join(dir, 'a.rig'), '--stdin-for', file];
         const b = [path.join(dir, 'b.rig'), '--stdin-for', file];
 
-        // Each rig started: the words after `check`. When `steps` isn't
-        // null, the next rig to close starts the newer check that many
-        // promise steps later, and started is emptied for it.
+        // Each rig started: the words after `check`, and how many searches
+        // for main files were made. When `steps` isn't null, the next rig to
+        // close starts the newer check that many promise steps later, and
+        // started and searches are emptied for it.
         let started = [];
+        let searches = 0;
         let steps = null;
         child_process.spawn = (program, args, ...rest) => {
             const child = spawn.call(child_process, program, args, ...rest);
@@ -1927,29 +2007,40 @@ check('a check overtaken between two rigs starts no other', async () => {
                     for (let i = 0; i < n; i++) step = step.then(() => {});
                     step.then(() => {
                         started = [];
+                        searches = 0;
                         fire('save', doc);
                     });
                 });
             }
             return child;
         };
+        vscodeStub.workspace.findFiles = (...args) => {
+            searches++;
+            return findFiles(...args);
+        };
         try {
-            for (const [loader, expected] of [
-                ['#load "helper.rig";\nmain :: () {}\n', [a, b]],
-                [null, [a, [file, '--stdin']]],
+            const loader = '#load "helper.rig";\nmain :: () {}\n';
+            for (const [bRig, main, expected] of [
+                [loader, '', [a, b]],
+                [loader, 'a.rig', [a, b]],
+                [null, '', [a, [file, '--stdin']]],
             ]) {
-                if (loader) fs.writeFileSync(path.join(dir, 'b.rig'), loader);
+                if (bRig) fs.writeFileSync(path.join(dir, 'b.rig'), bRig);
                 else fs.rmSync(path.join(dir, 'b.rig'));
+                stub.mains[dir] = main;
                 for (let n = 0; n <= 3; n++) {
+                    const what = `${n} steps, ${bRig ? 'b.rig' : 'no b.rig'}, rig.main "${main}"`;
                     live.delete(key);
                     steps = n;
                     fire('save', doc);
                     await until('the newer check', () => live.has(key));
-                    assert.deepStrictEqual(started, expected, `${n} steps, ${loader ? 'b.rig' : 'no b.rig'}`);
+                    assert.deepStrictEqual(started, expected, what);
+                    assert.strictEqual(searches, 1, what);
                 }
             }
         } finally {
             child_process.spawn = spawn;
+            vscodeStub.workspace.findFiles = findFiles;
         }
     });
 });
