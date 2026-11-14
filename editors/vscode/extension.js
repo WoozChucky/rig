@@ -937,8 +937,11 @@ class LiveCheck {
         const key = document.uri.toString();
         this.stop(key);
         // Each `await` below gives a newer check of the document the chance
-        // to start (stop() counts it); after each, a check that isn't the
-        // newest anymore returns, starting, setting and saying nothing.
+        // to start (stop() counts it). A check that isn't the newest anymore
+        // returns, starting, setting and saying nothing: it asks after each
+        // await, and again just before each rig it starts, since a newer
+        // check may start in the moment between an await's end and the code
+        // after it, which goes on to the next rig.
         const generation = this.generations.get(key);
         const current = () => this.generations.get(key) === generation;
         // Checking runs rig, so not in Restricted Mode, as building doesn't.
@@ -958,10 +961,12 @@ class LiveCheck {
         }
 
         // rig runs where a build would, the file's workspace folder (or its
-        // directory), and gets the file's full path, which its diagnostics
-        // then name. The file needn't exist: with --stdin or --stdin-for the
-        // text is stdin's, and the name is what the diagnostics call it and
-        // the file whose directory its #loads are found from.
+        // directory), and gets the file's full path. The file needn't exist:
+        // with --stdin or --stdin-for the text is stdin's. With --stdin the
+        // diagnostics name the file as given, and its #loads are found from
+        // its directory; with --stdin-for they name it by the path MAIN's
+        // #load gives it, which parseDiagnostics resolves from cwd and
+        // compares with samePath.
         const cwd = buildDirectory(file, folder);
 
         // rig's answer as the document's diagnostics: its own, then one for
@@ -990,6 +995,7 @@ class LiveCheck {
         // main file is to be tried. Each rig gets the text as it is when it
         // starts: what's on screen.
         const through = async (main) => {
+            if (!current()) return true;
             const args = ['check', main, '--stdin-for', file];
             const result = await this.runRig(key, found.compiler, args, cwd, document.getText());
             if (!current()) return true;
@@ -1022,6 +1028,7 @@ class LiveCheck {
         }
 
         // Alone: a main file, or a file no program in its folder loads.
+        if (!current()) return;
         const result = await this.runRig(key, found.compiler, ['check', file, '--stdin'], cwd, document.getText());
         if (current()) show(result);
     }

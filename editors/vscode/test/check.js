@@ -1288,7 +1288,8 @@ check('the tasks use $rig-runtime while rig.check is on, $rig when it is off', (
 //   (MAIN's directory as MAIN names it, then REL), and MAIN's own under
 //   MAIN.
 //
-// Either way it adds a warning about another file, and answers slowly if
+// Except for that doesn't-load answer, which is its line alone as rig's is,
+// it adds a warning about another file. Either way it answers slowly if
 // stdin's text says `slow`. The documents are stand-ins too, never saved:
 // what's checked is their text.
 
@@ -1678,12 +1679,20 @@ check('rig.main expands ${workspaceFolder} and ~, and is from the folder', () =>
             stub.mains[dir] = setting;
             assert.deepStrictEqual(mainSetting(file, folder), { file: m }, setting);
         }
-        stub.mains[dir] = '~/m.rig';
+        // .rig in any case, as rig takes it. (On Windows M.RIG is m.rig.)
+        const upper = path.join(dir, 'M.RIG');
+        fs.writeFileSync(upper, 'main :: () {}\n');
+        stub.mains[dir] = 'M.RIG';
+        assert.deepStrictEqual(mainSetting(file, folder), { file: upper });
+        // ~ with either slash on Windows, where both separate names.
         const home = path.join(os.homedir(), 'm.rig');
-        const expected = fs.existsSync(home)
-            ? { file: home }
-            : { error: `The setting rig.main is "~/m.rig", but there's no file ${home}.` };
-        assert.deepStrictEqual(mainSetting(file, folder), expected);
+        for (const setting of process.platform === 'win32' ? ['~/m.rig', '~\\m.rig'] : ['~/m.rig']) {
+            stub.mains[dir] = setting;
+            const expected = fs.existsSync(home)
+                ? { file: home }
+                : { error: `The setting rig.main is "${setting}", but there's no file ${home}.` };
+            assert.deepStrictEqual(mainSetting(file, folder), expected, setting);
+        }
     });
 });
 
@@ -1691,7 +1700,9 @@ check('a loaded file is checked through the first main file in path order that l
     loadExtension();
     await withStandIn(async (dir) => {
         writeMains(dir);
-        fs.writeFileSync(path.join(dir, 'lib.rig'), 'x :: 1;\n');
+        // Between a.rig and b.rig in path order, and it loads the document,
+        // but it doesn't declare main: never tried, as rig would refuse it.
+        fs.writeFileSync(path.join(dir, 'a0.rig'), '#load "helper.rig";\nx :: 1;\n');
         // Under .build, where rig writes: never a candidate, though it loads the document.
         fs.mkdirSync(path.join(dir, '.build'));
         fs.writeFileSync(path.join(dir, '.build', 'x.rig'), '#load "../helper.rig";\nmain :: () {}\n');
@@ -1707,6 +1718,24 @@ check('a loaded file is checked through the first main file in path order that l
             [0, 0, "unknown identifier 'putz'"],
             [0, 0, "an error in another file of the program: b.rig:2:14: unknown identifier 'putz'"],
         ]);
+        assert.deepStrictEqual(stub.errors, []);
+    });
+});
+
+// The document's file on disk may declare main while its text no longer
+// does (main deleted, not yet saved). It's still not a candidate, though
+// it comes first in path order: rig would be given it as MAIN and FILE.
+check('the document is never a candidate, even when its file on disk declares main', async () => {
+    loadExtension();
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'a.rig');
+        fs.writeFileSync(file, 'main :: () {}\n');
+        fs.writeFileSync(path.join(dir, 'b.rig'), '#load "a.rig";\nmain :: () {}\n');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        const result = await checked(dir, doc, 'open');
+        assert.deepStrictEqual(result.calls, [[path.join(dir, 'b.rig'), '--stdin-for', file]]);
+        assert.deepStrictEqual(result.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
         assert.deepStrictEqual(stub.errors, []);
     });
 });
@@ -1820,6 +1849,131 @@ check('a search a newer check overtakes starts no process', async () => {
         await sleep(500);
         assert.deepStrictEqual(live.get(key), []);
         assert.strictEqual(calls(dir).length, 1);
+    });
+});
+
+// The same while the older check's `rig check MAIN --stdin-for FILE` runs:
+// its process is ended, and what it answers (nothing, or part of an
+// answer) is ignored, by a newer check and by the document closing alike.
+// Nothing else is tried for it either: no other main file, and not the
+// document alone.
+check('a check overtaken while its rig --stdin-for runs sets nothing and tries nothing else', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        fs.writeFileSync(path.join(dir, 'b.rig'), '#load "helper.rig";\nmain :: () {}\n');
+        const file = path.join(dir, 'helper.rig');
+        const b = [path.join(dir, 'b.rig'), '--stdin-for', file];
+        const doc = fakeDocument(file, 'putz(); // slow\n');
+        const key = doc.uri.toString();
+        stub.document = doc;
+
+        // A newer check, once the slow one's rig has started.
+        fire('save', doc);
+        await until('the slow check\'s rig', () => calls(dir).length === 1);
+        doc.text = 'putz();\n';
+        const newer = await checked(dir, doc, 'save');
+        assert.deepStrictEqual(newer.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
+        await sleep(300);
+        assert.deepStrictEqual(calls(dir), [b, b]);
+
+        // The document closing.
+        doc.text = 'putz(); // slow\n';
+        fire('save', doc);
+        await until('the slow check\'s rig', () => calls(dir).length === 3);
+        fire('close', doc);
+        // The slow answer would have come by now, had its rig not been ended.
+        await sleep(1800);
+        assert.ok(!live.has(key), 'a closed document got diagnostics');
+        assert.deepStrictEqual(calls(dir), [b, b, b]);
+    });
+});
+
+// A newer check may also start in the moment between one rig answering
+// that its program doesn't load the document and the older check going on,
+// to the next main file or to checking the document alone: when run() is
+// called from a promise's continuation, say. The older check must then
+// start nothing, so the rigs started from then on are the newer check's
+// alone. That moment is some promise steps after the first rig closes, so
+// the newer check is started 0 to 3 steps after it, each in turn, with
+// another main file to go on to (b.rig) and with none.
+check('a check overtaken between two rigs starts no other', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    const child_process = require('child_process');
+    const spawn = child_process.spawn;
+    await withStandIn(async (dir) => {
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        fs.writeFileSync(path.join(dir, 'a.rig'), 'main :: () {}\n');
+        const a = [path.join(dir, 'a.rig'), '--stdin-for', file];
+        const b = [path.join(dir, 'b.rig'), '--stdin-for', file];
+
+        // Each rig started: the words after `check`. When `steps` isn't
+        // null, the next rig to close starts the newer check that many
+        // promise steps later, and started is emptied for it.
+        let started = [];
+        let steps = null;
+        child_process.spawn = (program, args, ...rest) => {
+            const child = spawn.call(child_process, program, args, ...rest);
+            started.push(args.slice(1));
+            if (steps !== null) {
+                const n = steps;
+                steps = null;
+                child.on('close', () => {
+                    let step = Promise.resolve();
+                    for (let i = 0; i < n; i++) step = step.then(() => {});
+                    step.then(() => {
+                        started = [];
+                        fire('save', doc);
+                    });
+                });
+            }
+            return child;
+        };
+        try {
+            for (const [loader, expected] of [
+                ['#load "helper.rig";\nmain :: () {}\n', [a, b]],
+                [null, [a, [file, '--stdin']]],
+            ]) {
+                if (loader) fs.writeFileSync(path.join(dir, 'b.rig'), loader);
+                else fs.rmSync(path.join(dir, 'b.rig'));
+                for (let n = 0; n <= 3; n++) {
+                    live.delete(key);
+                    steps = n;
+                    fire('save', doc);
+                    await until('the newer check', () => live.has(key));
+                    assert.deepStrictEqual(started, expected, `${n} steps, ${loader ? 'b.rig' : 'no b.rig'}`);
+                }
+            }
+        } finally {
+            child_process.spawn = spawn;
+        }
+    });
+});
+
+// Disposing of the live check ends a check still looking for the main file
+// too, which then starts no rig. A second activation, on a context of its
+// own, has the document to check (it checks the open documents at once),
+// and is disposed of while that check waits for findFiles.
+check('disposing of the live check stops a search', async () => {
+    const { activate } = loadExtension();
+    const collection = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        fs.writeFileSync(path.join(dir, 'b.rig'), '#load "helper.rig";\nmain :: () {}\n');
+        stub.document = fakeDocument(path.join(dir, 'helper.rig'), 'putz();\n');
+        const context = { subscriptions: [] };
+        try {
+            activate(context);
+            for (const subscription of context.subscriptions) subscription.dispose();
+            await sleep(500);
+            assert.deepStrictEqual(calls(dir), []);
+        } finally {
+            // The first activation's collection is the one the other checks read.
+            activated.collections.rig = collection;
+        }
     });
 });
 
