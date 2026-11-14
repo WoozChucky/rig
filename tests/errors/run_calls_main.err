@@ -1,0 +1,3 @@
+tests/errors/run_calls_main.rig:9:6: error: main is where the program starts; #run can't call it
+    N :: #run helper();
+         ^

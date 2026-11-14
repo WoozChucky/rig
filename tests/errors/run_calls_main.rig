@@ -1,0 +1,11 @@
+// main is where the program starts (spec 7.8): no code run while compiling
+// calls it, directly or through the procedures a #run reaches. Said at the
+// #run.
+helper :: () -> int {
+    main();
+    return 1;
+}
+
+N :: #run helper();
+
+main :: () { }

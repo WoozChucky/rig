@@ -22,6 +22,8 @@ struct Parser {
     s32 type_levels;            // the type levels (*, [], [N] and a procedure type's '(') open around
                                 // the next token
     s32 deepest;                // the most levels reached since take_deepest last restarted it
+    s32 body_deepest;           // the most levels reached in the body being read, the blocks open
+                                // around each counted too (reach_in_body)
     // After a body or a struct's braces found never closed: the token where
     // the top level resumes (parse_block_rest, parse_struct), or -1.
     s64 resume;
@@ -76,7 +78,11 @@ struct Parser {
 // is worked out inside it, a level below all of them (checker.cpp's
 // open_declaration). A struct's fields and a procedure's parameters and
 // results are worked out one at a time, so each type keeps its own
-// (parse_whole_type).
+// (parse_whole_type). A body is worked out inside a #run that reaches it
+// (checker.cpp's check_reached_body), so its levels are kept too
+// (Ast_Proc.body_levels): the most its blocks and the expressions and types
+// in them reach together (p->body_deepest), as the stages recurse through
+// both.
 
 static Token *peek(Parser *p, s64 ahead = 0) {
     s64 i = p->next + ahead;
@@ -162,13 +168,30 @@ static s32 open_levels(Parser *p) {
     return p->levels + p->type_levels;
 }
 
+// A body's text reaches `levels` levels, its blocks and the expression or
+// type there together: kept in p->body_deepest if it's the most so far,
+// counted as MAX_DEPTH at most. Blocks and expressions each have a limit of
+// their own, so the two together may reach twice it, which the stack still
+// holds (the limit's comment above): where a #run needs such a body, it's
+// worked out only at level 0, and nothing is worked out inside it. A body
+// checked in its own turn isn't counted (checker.cpp's check_reached_body),
+// so a body one of its #runs needs is at level 0 however deep in it the
+// #run is: at most one body that isn't counted, its blocks and expressions
+// up to twice the limit deep, is on the stack under the ones that are.
+static void reach_in_body(Parser *p, s32 levels) {
+    if (levels > MAX_DEPTH) levels = MAX_DEPTH;
+    if (levels > p->body_deepest) p->body_deepest = levels;
+}
+
 // The text read reaches `levels` levels: kept in p->deepest if it's the
-// most so far. A name read a level down by size_of or a cast
-// (parse_type_below) is at that level, which the limit doesn't check, so
-// it's counted as MAX_DEPTH at most: a struct it names is then too deep to
-// work out there, and that's the checker's to say.
+// most so far, and in p->body_deepest with the blocks open around it. A
+// name read a level down by size_of or a cast (parse_type_below) is at that
+// level, which the limit doesn't check, so it's counted as MAX_DEPTH at
+// most: a struct it names is then too deep to work out there, and that's
+// the checker's to say.
 static void reach(Parser *p, s32 levels) {
     if (levels > p->deepest) p->deepest = levels;
+    reach_in_body(p, p->blocks + levels);
 }
 
 // The most levels reached since the last call (0 at the start): a
@@ -495,24 +518,36 @@ static Ast *parse_cast(Parser *p) {
     return cast->value && set_height(p, p->height + 1) ? cast : nullptr;
 }
 
-// unary = ('-' | '~' | '!' | '*') unary | cast | postfix
+// unary = ('-' | '~' | '!' | '*' | '#run') unary | cast | postfix
 //
 // A prefix operator applies to everything after it that binds tighter than
 // any binary operator: -f(x) + 1 is (-(f(x))) + 1, !a && b is (!a) && b,
 // and cast(s32) n % 10 is (cast(s32) n) % 10. A '*' here, where an operand
 // is expected, is an address (*x + 1 is (*x) + 1); between two operands, the
 // Pratt loop reads it as a multiplication (a * *b).
+//
+// #run is one too (spec 7.8), a level as the others are: #run f() + 1 runs
+// f() while compiling and adds 1 to its value, and #run (f() + 1) runs the
+// sum. Its node is an Ast_Run, at the '#run'. A block isn't an expression,
+// so #run { ... } is only the top level's (parse_run): here the '{' is
+// "expected an expression".
 static Ast *parse_unary(Parser *p) {
     Token *op = peek(p);
     if (op->kind == TOKEN_CAST) return parse_cast(p);
+    bool run = is_directive(op, "run");
     bool prefix = op->kind == TOKEN_MINUS || op->kind == TOKEN_TILDE || op->kind == TOKEN_BANG ||
-                  op->kind == TOKEN_STAR;
+                  op->kind == TOKEN_STAR || run;
     if (!prefix) return parse_postfix(p);
     advance(p);
     if (!open_level(p)) return nullptr;
     Ast *operand = parse_unary(p);
     p->levels--;
     if (!operand || !set_height(p, p->height + 1)) return nullptr;
+    if (run) {
+        Ast_Run *node = ast_new<Ast_Run>(p->arena, AST_RUN, op->pos);
+        node->operand = operand;
+        return node;
+    }
     Ast_Unary *unary = ast_new<Ast_Unary>(p->arena, AST_UNARY, op->pos);
     unary->op = op->kind;
     unary->operand = operand;
@@ -614,13 +649,16 @@ static bool procedure_follows(Parser *p, s64 ahead) {
 
 // Whether the next tokens are a procedure's or a struct's declaration with
 // the name in column 1, IDENT '::' '(' ... or IDENT '::' 'struct', the way
-// a top-level one starts: inside a body (or a struct's braces), a body
-// that was never closed. A constant (`N :: 5;`) isn't, in column 1 or not:
-// it's a local constant, a statement of the body, and indentation means
-// nothing to the language. Procedures and structs are declared only at
-// the top level, so neither can be a statement.
+// a top-level one starts, or a #run { in column 1: inside a body (or a
+// struct's braces), a body that was never closed. A constant (`N :: 5;`)
+// isn't, in column 1 or not: it's a local constant, a statement of the
+// body, and indentation means nothing to the language. Procedures and
+// structs are declared only at the top level, so neither can be a
+// statement; nor can #run { ... }, which only the top level has (a #run in
+// a body takes an expression, and a block isn't one).
 static bool starts_declaration(Parser *p) {
     Token *t = peek(p);
+    if (is_directive(t, "run")) return t->pos.col == 1 && peek(p, 1)->kind == TOKEN_LBRACE;
     return t->kind == TOKEN_IDENT && t->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON &&
            (procedure_follows(p, 2) || peek(p, 2)->kind == TOKEN_STRUCT);
 }
@@ -969,13 +1007,13 @@ static Ast *parse_statement(Parser *p) {
 
 // Whether the next tokens declare something in column 1 that the top level
 // could also declare: a global (IDENT ':' or ':='), a constant (IDENT
-// '::') or a load (#load). Inside a body that's a local, unindented, or a
-// misplaced load.
+// '::'), a load (#load) or a run (#run). Inside a body that's a local,
+// unindented, a misplaced load, or a #run as a statement.
 static bool declares_in_column_1(Parser *p) {
     Token *t = peek(p);
     Token_Kind after = peek(p, 1)->kind;
     return starts_global(p) || (t->kind == TOKEN_IDENT && t->pos.col == 1 && after == TOKEN_COLON_COLON) ||
-           (is_directive(t, "load") && t->pos.col == 1);
+           ((is_directive(t, "load") || is_directive(t, "run")) && t->pos.col == 1);
 }
 
 // A #load where a statement or a struct's field starts: "#load can only be
@@ -1009,15 +1047,16 @@ static void report_misplaced_loads(Parser *p, Array<Position> *loads) {
 // The statements of the block that `open` began, and its '}'.
 //
 // The end of the file, or a procedure's declaration at the start of a line
-// (`name :: (` in column 1, starts_declaration), before the '}' means the
-// block was never closed: an if's '}' forgotten, say. Everything up to
-// there has been read as the block's statements, globals in column 1
-// included, which belong after the body; read as its locals, they'd be
-// lost with it, and every use of them unknown. So the block is taken to
-// end before the run of statements in column 1 that declare something
-// (declares_in_column_1) right before the end, at this block's own level:
-// "expected '}'" is reported at the first of them, and the top level
-// resumes there (p->resume), reading them again as globals and constants.
+// (`name :: (` in column 1, or `#run {`: starts_declaration), before the
+// '}' means the block was never closed: an if's '}' forgotten, say.
+// Everything up to there has been read as the block's statements, globals
+// in column 1 included, which belong after the body; read as its locals,
+// they'd be lost with it, and every use of them unknown. So the block is
+// taken to end before the run of statements in column 1 that declare
+// something (declares_in_column_1) right before the end, at this block's
+// own level: "expected '}'" is reported at the first of them, and the top
+// level resumes there (p->resume), reading them again as globals and
+// constants.
 // Without such a run, it's reported at the end itself, where the top level
 // resumes. A local that wasn't indented, followed by any other statement,
 // starts no run, so only the declarations next to the end are taken.
@@ -1030,6 +1069,12 @@ static void report_misplaced_loads(Parser *p, Array<Position> *loads) {
 // are sorted by position before they're shown, so reporting it later
 // changes nothing.
 // One not in column 1 never starts a run, and is reported at once.
+//
+// A #run in column 1 (`#run g();`) is one of those declarations too: at
+// the end of such a run, it's read again at the top level as the
+// top-level #run it was meant to be. When the block goes on, or closes, it
+// stays a statement of the block, as an unindented local does: the parser
+// has nothing to report about it.
 static Ast_Block *parse_block_rest(Parser *p, Token *open) {
     Ast_Block *block = ast_new<Ast_Block>(p->arena, AST_BLOCK, open->pos);
     s64 run = -1;                // where the run of column-1 declarations up to here starts, or -1
@@ -1079,6 +1124,7 @@ static Ast_Block *parse_block(Parser *p) {
         return nullptr;
     }
     p->blocks++;
+    reach_in_body(p, p->blocks);
     Ast_Block *block = parse_block_rest(p, open);
     p->blocks--;
     return block;
@@ -1307,8 +1353,9 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // #c_call before #foreign is "a foreign procedure is C's already: it takes
 // no '#c_call'", #no_abc "expected '{'". A #load there is "#load can only be
 // at the top level", unless the recovery resumes at it: the '{' is then
-// what's missing (error_expected_or_load). Any other directive but these is
-// "unknown directive '#foo'".
+// what's missing (error_expected_or_load). A #run there is "expected '{'"
+// (on the next line, it's the top-level run the recovery resumes at). Any
+// other directive but these is "unknown directive '#foo'".
 //
 // Each element of the parameter list is a parameter or, last, the '..' of
 // a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign libc;).
@@ -1359,7 +1406,9 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
             advance(p);
             continue;
         }
-        if (is_directive(t, "load")) break;  // where the '{' should be: parse_block reports it
+        // Where the '{' should be: parse_block reports it. A #run starting
+        // the next line is where the recovery resumes, as a #load is.
+        if (is_directive(t, "load") || is_directive(t, "run")) break;
         if (!string_eq(t->text, str("foreign"))) {
             diag_error(p->diag, t->pos, "unknown directive '#" STR_FMT "'", STR_ARG(t->text));
             return nullptr;
@@ -1380,19 +1429,25 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
         proc->library_pos = library->pos;
         return proc;
     }
+    p->body_deepest = 0;
     proc->body = parse_block(p);
-    return proc->body ? proc : nullptr;
+    if (!proc->body) return nullptr;
+    proc->body->proc = proc;
+    proc->body_levels = p->body_deepest;
+    return proc;
 }
 
 // struct = 'struct' '{' {IDENT ':' type ';'} '}'
 //
 // A struct's fields, after IDENT '::' (the caller read them, and saw
 // 'struct'). Every field ends with its ';', the last too. A column-1
-// declaration of a procedure or a struct (starts_declaration) before the
-// '}' means the braces were never closed: "expected '}'" there, where the
-// top level resumes (p->resume). A #load among the fields is reported and
-// skipped, as in a body (skip_misplaced_load), and the fields after it are
-// kept.
+// declaration of a procedure or a struct, or a #run { (starts_declaration),
+// before the '}' means the braces were never closed: "expected '}'" there,
+// where the top level resumes (p->resume). So does any #run in column 1: a
+// struct holds no code, so it can only be the top level's. A #run anywhere
+// else among the fields is "expected a field's name". A #load among the
+// fields is reported and skipped, as in a body (skip_misplaced_load), and
+// the fields after it are kept.
 //
 // The #loads in column 1 right before such an end are read again at the
 // top level, as after a body never closed (parse_block_rest): "expected
@@ -1411,7 +1466,8 @@ static Ast *parse_struct(Parser *p, Token *name) {
     s64 run = -1;                // where the column-1 loads up to here start, or -1
     Array<Position> loads = {};  // those loads, not reported yet
     while (peek(p)->kind != TOKEN_RBRACE) {
-        if (peek(p)->kind == TOKEN_EOF || starts_declaration(p)) {
+        bool top_level_run = is_directive(peek(p), "run") && peek(p)->pos.col == 1;  // a #run in column 1
+        if (peek(p)->kind == TOKEN_EOF || starts_declaration(p) || top_level_run) {
             // The run's loads are the top level's, read again there.
             array_free(&loads);
             if (run >= 0) p->next = run;
@@ -1494,12 +1550,44 @@ static Ast *parse_load(Parser *p) {
     return load;
 }
 
+// run = '#run' block | '#run' expression ';'
+//
+// Code the top level runs while compiling, for its effect (spec 7.8): a
+// declaration of its own, which declares no name. The caller saw the
+// '#run'. #run e; takes any expression, the whole of it up to the ';', its
+// value thrown away: here #run isn't the prefix operator, so #run f() + 1;
+// runs f() + 1. #run { ... } runs a block, which only the top level can:
+// it runs as a procedure with no parameters or results, named #run, at the
+// '#run', so `return;` in it ends it. Either way the node is an Ast_Run,
+// is_top_level set. After an error it's null, as any declaration's is, and
+// parse_into's recovery follows.
+static Ast *parse_run(Parser *p) {
+    Token *directive = advance(p);
+    Ast_Run *run = ast_new<Ast_Run>(p->arena, AST_RUN, directive->pos);
+    run->is_top_level = true;
+    if (peek(p)->kind == TOKEN_LBRACE) {
+        Ast_Proc *proc = ast_new<Ast_Proc>(p->arena, AST_PROC, directive->pos);
+        proc->name = str("#run");
+        p->body_deepest = 0;
+        proc->body = parse_block(p);
+        if (!proc->body) return nullptr;
+        proc->body->proc = proc;
+        proc->body_levels = p->body_deepest;
+        run->proc = proc;
+        return run;
+    }
+    run->operand = parse_expression(p, 1);
+    if (!run->operand || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+    return run;
+}
+
 // top_level = IDENT '::' procedure
 //           | IDENT '::' struct
 //           | IDENT '::' expression ';'                       a constant
 //           | IDENT ':' type ['=' (expression | '---')] ';'   a global variable
 //           | IDENT ':=' expression ';'                       a global variable
 //           | load
+//           | run
 //
 // After '::', a procedure's parameters start with '(' ')', '(' IDENT ':' or
 // '(' '..'. Any other '(' begins a constant's value in parentheses:
@@ -1517,6 +1605,7 @@ static Ast *parse_load(Parser *p) {
 static bool variable_follows(Parser *p, s64 open);
 
 static Ast *parse_declaration(Parser *p) {
+    if (is_directive(peek(p), "run")) return parse_run(p);
     if (is_directive(peek(p), "load")) return parse_load(p);
     Token *name = expect(p, TOKEN_IDENT);
     if (!name) return nullptr;
@@ -1591,6 +1680,18 @@ static bool starts_load(Parser *p) {
     return is_directive(t, "load") && p->tokens[p->next - 1].pos.line != t->pos.line;
 }
 
+// Whether the next token is a #run that starts a line, as starts_load asks
+// of a #load: the top-level run the recovery resumes at, outside any
+// braces, so it's still run. Asked by the recovery only, after a top-level
+// declaration's first token, so a token came before it. (Nothing asks it
+// while a declaration is read, as load_resumes_here asks of a #load: a
+// #run is a value, so where a value is expected it's read as one.)
+static bool starts_run(Parser *p) {
+    RIG_ASSERT(p->next > 0);
+    Token *t = peek(p);
+    return is_directive(t, "run") && p->tokens[p->next - 1].pos.line != t->pos.line;
+}
+
 // Whether the recovery, once the top-level declaration being read fails
 // here, resumes at the next token: a #load starting a line (starts_load)
 // outside every brace opened since the declaration began, as
@@ -1608,16 +1709,19 @@ static bool load_resumes_here(Parser *p) {
 
 // After an error in a declaration that began at token `start`: skips to the
 // next token that starts a line and begins a declaration (IDENT '::', a
-// global variable's IDENT ':' or ':=' in column 1, or a #load outside every
-// brace, starts_load), or to the end. A declaration the failed one stopped
-// right at (an unclosed block, a missing ';') is kept; otherwise at least
-// one token is skipped, so parse_into always moves on.
+// global variable's IDENT ':' or ':=' in column 1, or a #load or a #run
+// outside every brace, starts_load and starts_run), or to the end. A
+// declaration the failed one stopped right at (an unclosed block, a missing
+// ';') is kept; otherwise at least one token is skipped, so parse_into
+// always moves on.
 //
 // Inside a body, `N :: 5;` starting a line is a local constant, not the next
 // declaration, so the skipping counts braces from `start` on: an IDENT '::'
 // inside braces still open is passed over, unless it's a procedure's in
-// column 1 (starts_declaration), which parse_block takes for a top-level
-// declaration after a body never closed. A constant in column 1 is passed
+// column 1, or a #run { there (starts_declaration), which parse_block takes
+// for a top-level declaration after a body never closed. A #run without
+// its block inside braces is passed over too, as a statement of the body
+// given up (`#run g();` is one). A constant in column 1 is passed
 // over there, as an indented one is. A global variable is taken only outside
 // every brace and parameter list still open, even right where the failed
 // declaration stopped: an unindented local (`y : int;` in column 1 of a
@@ -1635,14 +1739,16 @@ static void skip_to_next_declaration(Parser *p, s64 start) {
     s64 parens = 0;  // the same for a parameter list's parentheses
     for (s64 i = start; i < p->next; i++) count_open(p, i, &depth, &parens);
     // Where the failed declaration stopped, the declaration there is kept:
-    // a procedure's in column 1 (inside braces too: a body never closed);
-    // outside every brace, any IDENT '::' in column 1, a constant's too, and
-    // a #load; and a global's outside every brace and parameter list.
+    // a procedure's in column 1, or a #run { (inside braces too: a body
+    // never closed); outside every brace, any IDENT '::' in column 1, a
+    // constant's too, and a #load or a #run starting a line; and a global's
+    // outside every brace and parameter list.
     Token *stop = peek(p);
     bool in_column_1 = stop->kind == TOKEN_IDENT && stop->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON;
     bool outside = depth <= 0;
-    if (p->next > start && (starts_declaration(p) || (outside && (in_column_1 || starts_load(p))) ||
-                            (outside && parens <= 0 && starts_global(p)))) {
+    if (p->next > start &&
+        (starts_declaration(p) || (outside && (in_column_1 || starts_load(p) || starts_run(p))) ||
+         (outside && parens <= 0 && starts_global(p)))) {
         return;
     }
     // At least one token is skipped, whatever it is.
@@ -1655,7 +1761,7 @@ static void skip_to_next_declaration(Parser *p, s64 start) {
             return;
         }
         if (!first && starts_line && depth <= 0 && parens <= 0 && starts_global(p)) return;
-        if (!first && depth <= 0 && starts_load(p)) return;
+        if (!first && depth <= 0 && (starts_load(p) || starts_run(p))) return;
         if (is_directive(t, "load")) p->lost_a_file = true;
         count_open(p, p->next, &depth, &parens);
         advance(p);
@@ -1710,11 +1816,12 @@ static Token_Kind first_on_line(Parser *p, s64 start, s64 from, const Token_Kind
 // Whether the '(' at token `open` and its ')' are a signature's parameter
 // list, not a call's arguments: the ')' that closes it, on whatever line,
 // is followed by what only follows parameters, a body's '{', a return
-// type's '->' or a directive (`#foreign`) other than #load, which begins
-// the next declaration. A call is followed by its ';' (`foo("x");`,
-// `foo(#run);`), or by the next line's code if the ';' is missing, a #load
-// too. A '(' never closed before the next declaration (an identifier
-// starting a line, then '::') or the end shows no signature.
+// type's '->' or a directive (`#foreign`) other than #load and #run, which
+// begin the next declaration. A call is followed by its ';' (`foo("x");`,
+// `foo(#run);`, a directive inside its parentheses), or by the next line's
+// code if the ';' is missing, a #load or a #run too. A '(' never closed
+// before the next declaration (an identifier starting a line, then '::')
+// or the end shows no signature.
 static bool parameters_follow(Parser *p, s64 open) {
     s64 depth = 0;
     for (s64 i = open; p->tokens[i].kind != TOKEN_EOF; i++) {
@@ -1727,7 +1834,7 @@ static bool parameters_follow(Parser *p, s64 open) {
         if (t->kind == TOKEN_RPAREN && --depth == 0) {
             Token *next = &p->tokens[i + 1];  // a token follows: the last is TOKEN_EOF
             return next->kind == TOKEN_LBRACE || next->kind == TOKEN_ARROW ||
-                   (next->kind == TOKEN_DIRECTIVE && !is_directive(next, "load"));
+                   (next->kind == TOKEN_DIRECTIVE && !is_directive(next, "load") && !is_directive(next, "run"));
         }
     }
     return false;
@@ -1738,7 +1845,7 @@ static bool parameters_follow(Parser *p, s64 open) {
 // not a procedure's signature with its '::' mistyped (`greet : () {`):
 // outside every parenthesis and bracket, its '=' or ';' comes before a
 // body's '{' or a directive other than #c_call (`#foreign`, `#no_abc`), or
-// a #load comes first: that begins the next declaration, as
+// a #load or a #run comes first: that begins the next declaration, as
 // parameters_follow takes it, and the variable is missing its ';' or its
 // value. Reaching none of them before the next declaration (an identifier
 // starting a line, followed by '::') or the end, it's taken for a
@@ -1761,7 +1868,7 @@ static bool variable_follows(Parser *p, s64 open) {
             if (depth <= 0) return false;
             break;
         case TOKEN_DIRECTIVE:
-            if (depth <= 0 && is_directive(t, "load")) return true;
+            if (depth <= 0 && (is_directive(t, "load") || is_directive(t, "run"))) return true;
             if (depth <= 0 && !is_directive(t, "c_call")) return false;
             break;
         case TOKEN_EQUAL:
@@ -1832,7 +1939,7 @@ static Ast_Proc *broken_entry(Parser *p, s64 start) {
 
 void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
-    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, 0, -1, 0, false};
+    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, 0, 0, -1, 0, false};
     while (peek(&p)->kind != TOKEN_EOF) {
         s64 start = p.next;
         p.declaration = start;
@@ -1863,10 +1970,11 @@ void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
                 continue;
             }
             // Whatever the declaration was meant to be, a procedure, a
-            // struct, a global, a constant or a load, its entry is a broken
-            // Ast_Proc: only its name matters. A failed load's usually has
-            // none (broken_entry), as a load declares no name: only `#load
-            // ::`, read as a stray '#' before a name, keeps the name load.
+            // struct, a global, a constant, a load or a run, its entry is a
+            // broken Ast_Proc: only its name matters. A failed load's or
+            // run's usually has none (broken_entry), as neither declares a
+            // name: only `#load ::`, read as a stray '#' before a name, keeps
+            // the name load (and `#run ::` the name run).
             decl = broken_entry(&p, start);
             skip_to_next_declaration(&p, start);
         }
@@ -1874,6 +1982,8 @@ void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
             array_add(&file->procs, (Ast_Proc *)decl);
         } else if (decl->kind == AST_LOAD) {
             array_add(&file->loads, (Ast_Load *)decl);
+        } else if (decl->kind == AST_RUN) {
+            array_add(&file->runs, (Ast_Run *)decl);
         } else {
             array_add(&file->globals, decl);
         }

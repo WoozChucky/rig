@@ -1,0 +1,3 @@
+tests/errors/run_reaches_errors.rig:4:25: error: unknown identifier 'unknown'
+    f :: () -> int { return unknown; }
+                            ^

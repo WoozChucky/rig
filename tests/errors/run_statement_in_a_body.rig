@@ -1,0 +1,10 @@
+// A #run in a body gives a value while compiling (spec 7.8), to put where a
+// value goes, as in x := #run f();. Code run for its effect alone is a
+// top-level #run.
+f :: () -> int {
+    return 1;
+}
+
+main :: () {
+    #run f();
+}

@@ -1,7 +1,8 @@
-// check.h: what the checker's two files share. checker.cpp checks
+// check.h: what the checker's three files share. checker.cpp checks
 // declarations and statements and keeps the scopes; check_expr.cpp checks
 // expressions: their types, the constants it folds, and the implicit
-// conversions (checker.h has the rules).
+// conversions; check_run.cpp checks #run and walks what it reaches
+// (checker.h has the rules).
 
 #pragma once
 
@@ -14,13 +15,18 @@ struct Checker {
                                  // struct, by name: visible everywhere (Ast_Proc, Ast_Var,
                                  // Ast_Const, Ast_Struct)
     Array<Table<Ast *>> scopes;  // the blocks being checked, innermost last: the names
-                                 // declared in each so far (Ast_Var, Ast_Const, Ast_Param)
+                                 // declared in each so far (Ast_Var, Ast_Const, Ast_Param); only the
+                                 // innermost body's, a body checked on demand and a declaration
+                                 // worked out where it's needed setting the outer ones aside
+                                 // (checker.cpp's check_body, leave_scopes)
     Ast_Proc *proc;              // the procedure whose body is being checked
     Array<Ast *> loops;          // the loops around the statement being checked, innermost
                                  // last (Ast_While, Ast_For): what break and continue act on
-    Array<Ast *> resolving;      // the globals, constants, structs' layouts and late fields' types
-                                 // under way, each needed by the one before it (resolve_global,
-                                 // resolve_struct, make_late_field): a circle is the end of this list
+    Array<Ast *> resolving;      // the globals, constants, structs' layouts, late fields' types,
+                                 // signatures and bodies under way, each needed by the one before it
+                                 // (resolve_global, resolve_struct, make_late_field,
+                                 // resolve_signature, check_body: a body by its Ast_Block): a circle is
+                                 // the end of this list
     s32 levels;                  // where a declaration worked out now starts (MAX_DEPTH): a level
                                  // below the levels of the type or value that needs it, 0 in a
                                  // declaration's own turn (checker.cpp's open_declaration)
@@ -62,6 +68,14 @@ void check_late_field(Checker *c, Type *t, s32 index);
 // worked out yet (nested too deeply: reported).
 bool check_layout(Checker *c, Type *t);
 
+// check_layout, for the code a #run reaches (check_run.cpp's walk), which
+// needs every struct whole: one whose layout is still under way, a #run in
+// one of its counts reaching code that holds it, is a circle, "'S' is
+// defined in terms of itself", at the struct, once (one in a circle already
+// says nothing more), and it and everything needed since are marked, as
+// resolve_struct marks them: false.
+bool check_finished_layout(Checker *c, Type *t);
+
 // Makes sure procedure proc's signature is checked, its parameters' and
 // results' types known, before a call is checked against it: a call in a
 // global's value may come before its turn in source order (checker.cpp's
@@ -69,6 +83,15 @@ bool check_layout(Checker *c, Type *t);
 // with the call (reported) or nested too deeply to check there (reported),
 // the call then having no type. A broken entry's is never checked: true.
 bool check_proc_signature(Checker *c, Ast_Proc *proc);
+
+// The body of procedure proc, needed by the #run at `at`: checked now if it
+// isn't yet (checker.cpp's check_body). A body found under way is a circle:
+// "'f' is defined in terms of itself" at `at`, once (a body already in one,
+// RESOLVE_CYCLE, says nothing more), and mark_circle from the body's entry.
+// True when the body is done and neither it nor the signature had errors; a
+// foreign procedure has no body (its signature's errors count); a broken
+// one is false, and so is one nested too deeply to check here (said).
+bool check_reached_body(Checker *c, Ast_Proc *proc, Position at);
 
 // [count]element (type_array_of), or null after "'[N]T' is too big", at
 // `at`: larger than any type may be (TYPE_MAX_SIZE), its count read as
@@ -182,3 +205,19 @@ bool is_division(Token_Kind op);
 // Whether op is + - * /: the arithmetic operators that take floats as well
 // as integers (spec 6.4). The others, % & | ^ << >>, take integers only.
 bool takes_floats(Token_Kind op);
+
+// check_run.cpp
+
+// An expression #run (spec 7.8): its type, and its value once it ran.
+Type *check_run(Checker *c, Ast_Run *run);
+
+// A top-level #run, in check()'s last pass: its block checked as a
+// procedure's body (check_reached_body), or its expression (any, its value
+// thrown away, a void call too; an untyped one gets its default type), then
+// what it reaches walked, as for an expression #run. Never run here.
+void check_top_level_run(Checker *c, Ast_Run *run);
+
+// Whether e is, or holds through its operands, a #run that was checked and
+// has no value: its failure (or its reached errors) was said already, so a
+// value needing it says nothing more.
+bool has_failed_run(Ast *e);
