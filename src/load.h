@@ -62,7 +62,8 @@
 // of what's on disk, wherever the program loads it, the main file included
 // (then `text` is unused). It needn't exist. It keeps the name its #load
 // gives it (load_path), or `path` for the main file. stdin_text, as `text`,
-// isn't copied: the caller keeps it alive as long as `d`.
+// isn't copied: the tree's names and `d` point into it, so the caller keeps
+// it alive as long as both.
 // *stdin_for_reached, when given, says whether the program reached it.
 Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, String stdin_for = {},
                        String stdin_text = {}, bool *stdin_for_reached = nullptr);

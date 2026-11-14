@@ -3,8 +3,8 @@
 // file given with its text in place of what's on disk (rig check
 // --stdin-for).
 // Each test writes its files under .build/tests/load/NAME/, NAME the
-// test's, and loads them from there. Uses test_os.cpp's SEPARATOR and
-// reason.
+// test's (or the test's with a suffix, when it needs a second directory),
+// and loads them from there. Uses test_os.cpp's SEPARATOR and reason.
 
 #include "test.h"
 
@@ -894,6 +894,51 @@ TEST(load_stdin_for_another_spelling) {
     Arena a = arena_make();
     check_another_spelling(&a, load_test_directory(&a, "load_stdin_for_another_spelling"), true);
     check_another_spelling(&a, load_test_directory(&a, "load_stdin_for_another_spelling_missing"), false);
+    arena_free(&a);
+}
+
+TEST(load_stdin_for_a_link) {
+    // The file given is the #load's file by its id, not by its path: named
+    // through a link to it, a hard link on Windows and a symbolic one on
+    // Linux, a name only the id can know it by, it's the file the #load
+    // names all the same. Both ways round: given as link.rig with the #load
+    // naming h.rig, and as h.rig with the #load naming link.rig. Either way
+    // it keeps the name its #load gives it.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "load_stdin_for_a_link");
+    write_source(&a, dir, "h.rig", DISK_H);
+    String h = str(in_directory(&a, dir, "h.rig"));
+    String link = str(in_directory(&a, dir, "link.rig"));
+#ifdef _WIN32
+    DeleteFileA(string_cstr(&a, link));
+    CHECK(CreateHardLinkA(string_cstr(&a, link), string_cstr(&a, h), nullptr));
+#else
+    unlink(string_cstr(&a, link));
+    CHECK(symlink("h.rig", string_cstr(&a, link)) == 0);
+#endif
+    CHECK(load_same_file(link, h));
+    {
+        write_source(&a, dir, "main.rig", "#load \"h.rig\";\nmain :: () { greet(); }\n");
+        Diagnostics d = {};
+        bool reached = false;
+        Ast_File *tree = load_main_with_stdin_for(&a, &d, dir, link, STDIN_H, &reached);
+        check_h_from_stdin(&a, &d, dir, tree, reached);
+        diag_free(&d);
+    }
+    {
+        write_source(&a, dir, "main.rig", "#load \"link.rig\";\nmain :: () { greet(); }\n");
+        Diagnostics d = {};
+        bool reached = false;
+        load_main_with_stdin_for(&a, &d, dir, h, STDIN_H, &reached);
+        CHECK(reached);
+        CHECK_STR(messages(&a, &d), "");
+        CHECK_EQ(d.files.count, 2);
+        if (d.files.count == 2) {
+            CHECK_STR(d.files[1].path, in_directory(&a, dir, "link.rig"));
+            CHECK_STR(d.files[1].text, STDIN_H);
+        }
+        diag_free(&d);
+    }
     arena_free(&a);
 }
 
