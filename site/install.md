@@ -37,7 +37,7 @@ Either one installs the latest release for your user alone, with no administrato
    For another shell, such as fish, it says what to add.
 4. It installs the [VS Code extension](#vs-code-extension), if `code` is on your `PATH`.
 5. It builds and runs hello world, to check that your system has what Rig needs. If it can't, Rig stays installed, and the script says what to install: the [requirements](#requirements) below.
-6. It prints `rig version`'s line, such as `rig 0.2.0 (89de631d10c7 2026-11-13) LLVM 23.1.5`. If it says the `PATH` changed, open a new terminal (one opened before doesn't see the change); then build a program with `rig build hello.rig`.
+6. It prints `rig version`'s line, such as `rig 0.2.0 (89de631d10c7 2026-11-13) LLVM 23.1.5`. If it says to, open a new terminal (one opened before doesn't see the new `PATH`); then build a program with `rig build hello.rig`.
 
 **To upgrade**, run the command again: it overwrites the files, and adds nothing to the `PATH` the second time.
 
@@ -58,7 +58,7 @@ curl -fsSL https://woozchucky.github.io/rig/install.sh | sh -s -- --version 0.2.
 | Linux | Windows | |
 |---|---|---|
 | `--version 0.2.0` | `-Version 0.2.0` | Install that release instead of the latest. |
-| `--no-modify-path` | `-NoModifyPath` | Leave the `PATH` alone (on Linux, the shell files). |
+| `--no-modify-path` | `-NoModifyPath` | Leave your `PATH` alone: the user `PATH` on Windows, the shell files on Linux. |
 | `--no-vscode` | `-NoVSCode` | Don't install the VS Code extension (with the uninstall option: don't remove it). |
 | `--uninstall` | `-Uninstall` | Remove Rig. |
 | `--help` | `-Help` | Say what the script does, and list the options. |
