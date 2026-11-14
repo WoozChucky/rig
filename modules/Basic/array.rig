@@ -56,9 +56,11 @@ Array :: struct {
 // doesn't give back memory an array already had: array_free does.
 //
 // Elements of 0 bytes, of a struct with no fields, take no memory: the
-// array counts them, and every element's address is data, null.
+// array counts them, and every element's address is data, null. A negative
+// element_size, which no type has, is taken as 0.
 array_init :: (array: *Array, element_size: int, allocator: Allocator) {
     array.element_size = element_size;
+    if element_size < 0 { array.element_size = 0; }
     array.count = 0;
     array.capacity = 0;
     array.data = null;
@@ -76,7 +78,8 @@ array_init :: (array: *Array, element_size: int, allocator: Allocator) {
 array_get :: (array: Array, index: int) -> *void {
     check_index(index, array.count);
     if array.element_size == 0 { return array.data; }
-    // tests/run/basic_array_overflow.err names this line.
+    // tests/run/basic_array_overflow.err and
+    // basic_array_overflow_doubling.err name this line.
     return *array.data[index * array.element_size];
 }
 
