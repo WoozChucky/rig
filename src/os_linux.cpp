@@ -219,9 +219,11 @@ bool os_run_for(Arena *a, Array<String> argv, String directory, s32 seconds, Pro
 }
 
 // os_run_with_input, and with `merge` os_run_merged: the program's stderr
-// is then its stdout's pipe too.
+// is then its stdout's pipe too. With `hold_stdin`, os_run_with_stdin_open:
+// the input pipe is made, but nothing is written to it, and the parent's
+// end closes only once the program has ended.
 static bool run_process(Arena *a, Array<String> argv, String directory, s32 seconds, String input, bool merge,
-                        Process_Result *result) {
+                        bool hold_stdin, Process_Result *result) {
     RIG_ASSERT(argv.count > 0 && seconds >= 0);
     result->timed_out = false;
     char **cargv = arena_new_array<char *>(a, argv.count + 1);
@@ -247,7 +249,7 @@ static bool run_process(Arena *a, Array<String> argv, String directory, s32 seco
         close(out_pipe[1]);
         return false;
     }
-    if (input.count && pipe2(in_pipe, O_CLOEXEC) < 0) {
+    if ((input.count || hold_stdin) && pipe2(in_pipe, O_CLOEXEC) < 0) {
         os_fail();
         close(out_pipe[0]);
         close(out_pipe[1]);
@@ -258,12 +260,12 @@ static bool run_process(Arena *a, Array<String> argv, String directory, s32 seco
 
     // The child's stdout and stderr are the pipes' write ends (both the
     // first one's when merged: the second pipe then sees no writer and ends
-    // at once), its stdin is /dev/null, or with input the read end of a
-    // third pipe. dup2 clears O_CLOEXEC on the copies, so only they survive
-    // into the program.
+    // at once), its stdin is /dev/null, or with input (or held open) the
+    // read end of a third pipe. dup2 clears O_CLOEXEC on the copies, so only
+    // they survive into the program.
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
-    if (input.count) posix_spawn_file_actions_adddup2(&actions, in_pipe[0], 0);
+    if (in_pipe[0] >= 0) posix_spawn_file_actions_adddup2(&actions, in_pipe[0], 0);
     else posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
     posix_spawn_file_actions_adddup2(&actions, out_pipe[1], 1);
     posix_spawn_file_actions_adddup2(&actions, merge ? out_pipe[1] : err_pipe[1], 2);
@@ -318,9 +320,10 @@ static bool run_process(Arena *a, Array<String> argv, String directory, s32 seco
     // than what's left of it, and then kills the group; the pipes then end
     // too. The input, if any, is written in the same loop whenever its pipe
     // has room (POLLOUT), and its pipe closed once it's all written, or when
-    // the program can no longer read it.
+    // the program can no longer read it. A held pipe isn't polled.
     Array<u8> out = {}, err = {};
-    struct pollfd fds[3] = {{out_pipe[0], POLLIN, 0}, {err_pipe[0], POLLIN, 0}, {in_pipe[1], POLLOUT, 0}};
+    struct pollfd fds[3] = {
+        {out_pipe[0], POLLIN, 0}, {err_pipe[0], POLLIN, 0}, {hold_stdin ? -1 : in_pipe[1], POLLOUT, 0}};
     Array<u8> *buffers[2] = {&out, &err};
     int open_count = 2;
     s64 written = 0;
@@ -384,6 +387,7 @@ static bool run_process(Arena *a, Array<String> argv, String directory, s32 seco
         while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
         }
     }
+    if (hold_stdin) close(in_pipe[1]);
     // A program killed by a signal reports 128 + the signal, as shells do.
     result->exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
     result->out = string_copy(a, {out.data, out.count});
@@ -395,11 +399,15 @@ static bool run_process(Arena *a, Array<String> argv, String directory, s32 seco
 
 bool os_run_with_input(Arena *a, Array<String> argv, String directory, s32 seconds, String input,
                        Process_Result *result) {
-    return run_process(a, argv, directory, seconds, input, false, result);
+    return run_process(a, argv, directory, seconds, input, false, false, result);
+}
+
+bool os_run_with_stdin_open(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result) {
+    return run_process(a, argv, directory, seconds, {}, false, true, result);
 }
 
 bool os_run_merged(Arena *a, Array<String> argv, String directory, s32 seconds, Process_Result *result) {
-    return run_process(a, argv, directory, seconds, {}, true, result);
+    return run_process(a, argv, directory, seconds, {}, true, false, result);
 }
 
 // The arena is in os.h's signature for Windows, which converts its UTF-16

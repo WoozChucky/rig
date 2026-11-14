@@ -1788,6 +1788,38 @@ check('a loaded file is checked through the first main file in path order that l
         // that VS Code leaves out what files.exclude does (the README says so).
         assert.ok(stub.searches.length > 0, 'the folder was never searched');
         assert.ok(stub.searches.every((args) => args[1] === undefined), 'findFiles was given an exclude');
+        // And at any depth, from the document's folder: the stub's findFiles
+        // finds every .rig file whatever the pattern, so it's checked here.
+        for (const [include] of stub.searches) {
+            assert.strictEqual(include.pattern, '**/*.rig');
+            assert.strictEqual((include.base.uri || include.base).fsPath, dir);
+        }
+    });
+});
+
+// A main file below the folder's top level is a candidate too, in path
+// order: sub/m.rig comes after b.rig, and before sub0.rig ('/' sorts before
+// '0'), which is then never tried.
+check('a main file in a subdirectory is found, in path order', async () => {
+    loadExtension();
+    await withStandIn(async (dir) => {
+        fs.writeFileSync(path.join(dir, 'a.rig'), 'main :: () {}\n');
+        fs.writeFileSync(path.join(dir, 'b.rig'), 'main :: () {}\n');
+        fs.mkdirSync(path.join(dir, 'sub'));
+        const m = path.join(dir, 'sub', 'm.rig');
+        fs.writeFileSync(m, '#load "../helper.rig";\nmain :: () {}\n');
+        fs.writeFileSync(path.join(dir, 'sub0.rig'), '#load "helper.rig";\nmain :: () {}\n');
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        const result = await checked(dir, doc, 'open');
+        assert.deepStrictEqual(result.calls, [
+            [path.join(dir, 'a.rig'), '--stdin-for', file],
+            [path.join(dir, 'b.rig'), '--stdin-for', file],
+            [m, '--stdin-for', file],
+        ]);
+        assert.deepStrictEqual(result.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
+        assert.deepStrictEqual(stub.errors, []);
     });
 });
 
@@ -1835,6 +1867,11 @@ check('rig.main names the program, and one that doesn\'t load the file falls bac
             [path.join(dir, 'b.rig'), '--stdin-for', file],
         ]);
         assert.deepStrictEqual(stub.errors, []);
+
+        // The search's b.rig is remembered, and tried before rig.main: the
+        // next keystroke's check runs rig once, through b.rig alone.
+        const third = await checked(dir, doc, 'change', { document: doc, contentChanges: [{}] });
+        assert.deepStrictEqual(third.calls, [[path.join(dir, 'b.rig'), '--stdin-for', file]]);
     });
 });
 

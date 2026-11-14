@@ -1277,6 +1277,39 @@ static String check_stdin_for_a_file_not_loaded_test(Arena *a, String rig) {
                         str("rig: error: 'tests/errors/load_missing.rig' doesn't load 'tests/run/load/divide.rig'\n"));
 }
 
+// --stdin-for with a main file that isn't there, and a standard input that
+// stays open with nothing written to it, as an editor's whose write stalls:
+// rig reads the main file first, so it says it cannot read it without
+// waiting for standard input. Reading standard input first, it would wait
+// until it's killed.
+static String check_stdin_for_reads_the_main_file_first_test(Arena *a, String rig) {
+    Array<String> argv = {};
+    array_add(&argv, rig);
+    array_add(&argv, str("check"));
+    array_add(&argv, str("tests/missing.rig"));
+    array_add(&argv, str("--stdin-for"));
+    array_add(&argv, str("tests/run/load/divide.rig"));
+    Process_Result r = {};
+    bool started = os_run_with_stdin_open(a, argv, {}, TIMEOUT, &r);
+    array_free(&argv);
+    if (!started) {
+        return string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(rig), STR_ARG(os_error_message(a)));
+    }
+    if (r.timed_out) return str("rig check --stdin-for waited for standard input before reading the main file");
+    String err = normalise_newlines(a, r.err);
+    if (r.exit_code != 1) {
+        String exited = string_printf(a, "rig check --stdin-for exited with " STR_FMT ", expected 1",
+                                      STR_ARG(exit_code_text(a, r.exit_code)));
+        return with_stderr(a, exited, err);
+    }
+    if (r.out.count) return string_printf(a, "rig check --stdin-for wrote to stdout: \"" STR_FMT "\"", STR_ARG(r.out));
+    const char *expected = "rig: error: cannot read 'tests/missing.rig': ";
+    if (!starts_with(err, expected)) {
+        return string_printf(a, "stderr: expected \"%s...\", got \"" STR_FMT "\"", expected, STR_ARG(err));
+    }
+    return {};
+}
+
 // rig check's command line, right and wrong, as COMMAND_CASES rig build's,
 // the rule the two share: the source file's name ends in .rig, and rig
 // build's refusal of rig check's --stdin-for.
@@ -1335,6 +1368,7 @@ static const Command_Case CHECK_CASES[] = {
     // rig reads standard input only once the main file is read, so that an
     // editor's text isn't waited for in vain; this doesn't show that order:
     // stdin is empty here, and rig reading it first would say the same.
+    // check_stdin_for_reads_the_main_file_first_test shows it.
     {"--stdin-for with a main file that isn't there",
      {"check", "tests/missing.rig", "--stdin-for", "tests/run/load/divide.rig"},
      1,
@@ -1401,6 +1435,8 @@ static void check_tests(Arena *a, String rig, s64 *passed, s64 *failed) {
            failed);
     report("rig check --stdin-for the main file", check_stdin_for_the_main_file_test(a, rig), passed, failed);
     report("rig check --stdin-for a file the program doesn't load", check_stdin_for_a_file_not_loaded_test(a, rig),
+           passed, failed);
+    report("rig check --stdin-for reads the main file first", check_stdin_for_reads_the_main_file_first_test(a, rig),
            passed, failed);
     report("rig check writes nothing, not even .build", check_writes_nothing_test(a, rig), passed, failed);
     for (const Command_Case &c : CHECK_CASES) {

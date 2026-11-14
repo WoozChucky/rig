@@ -364,6 +364,28 @@ TEST(os_run_with_input_survives_a_program_that_never_reads_it) {
     arena_free(&a);
 }
 
+TEST(os_run_with_stdin_open_keeps_a_reader_waiting) {
+    // A program that reads its stdin never sees its end, and is killed
+    // when its time is up; one that doesn't read it ends as it would.
+    Arena a = arena_make();
+    Array<String> argv = {};
+    array_add(&argv, unit_tests_path(&a));
+    array_add(&argv, str("--echo-stdin"));
+    Process_Result result = {};
+    time_t start = time(nullptr);
+    CHECK(os_run_with_stdin_open(&a, argv, {}, 1, &result));
+    CHECK(result.timed_out);
+    CHECK(time(nullptr) - start < 30);
+    argv[1] = str("--fail-with");
+    array_add(&argv, str("5"));
+    CHECK(os_run_with_stdin_open(&a, argv, {}, 30, &result));
+    CHECK(!result.timed_out);
+    CHECK_EQ(result.exit_code, 5);
+    CHECK_STR(result.err, "oops\n");
+    array_free(&argv);
+    arena_free(&a);
+}
+
 TEST(os_run_reports_missing_program) {
     Arena a = arena_make();
     Array<String> argv = {};
