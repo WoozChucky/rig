@@ -5,13 +5,13 @@
 #
 # It does what the website's Install page does by hand
 # (https://woozchucky.github.io/rig/install): downloads a release's
-# rig-windows-x64.zip and SHA256SUMS, checks the archive's SHA-256, unpacks
-# it into %LOCALAPPDATA%\Programs\rig and adds that folder to the user PATH
-# if it isn't there yet. Then it
-# installs the VS Code extension when `code` is on the PATH, and builds hello
-# world with the installed rig.exe to check that the computer has what
-# linking needs. Running it again upgrades: the files are overwritten.
-# -Help lists the options. It asks nothing, and needs no administrator.
+# rig-windows-x64.zip and SHA256SUMS, checks the archive's SHA-256, unpacks it
+# into %LOCALAPPDATA%\Programs\rig and adds that folder to the user PATH if it
+# isn't there yet. Then it installs the VS Code extension when `code` is on the
+# PATH, and builds hello world with the installed rig.exe to check that the
+# computer has what linking needs. Running it again upgrades: the files are
+# overwritten. -Help lists the options. It asks nothing, and needs no
+# administrator.
 #
 # RIG_INSTALL_BASE_URL, if set, replaces the releases' URL ($releaseBase
 # below), for tests: a release's files are then fetched from
