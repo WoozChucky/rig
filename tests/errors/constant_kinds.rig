@@ -1,10 +1,14 @@
-// A constant is a number, a bool or a procedure: a string, a struct or a
-// pointer isn't one yet.
-Vec2 :: struct { x: int; y: int; }
+// A constant holds a number, a bool, a procedure, a string, or a struct or
+// an array of constant data (spec 4.2): a pointer in it is only null or a
+// string literal's address, and no part of it is a view.
+Holder :: struct { p: *int; v: []int; n: int; }
+add :: (a: int, b: int) -> int { return a + b; }
+value := 3;
 
-GREETING :: "hi";
-ORIGIN :: Vec2.{0, 0};
-NOWHERE :: cast(*void) null;
-LIMIT :: 10;
+VIEW :: cast([]u8) "hi";
+WITH_VIEW :: Holder.{v = int.[1]};
+AT :: cast(*int) 4096;
+CALLBACK :: Holder.{p = cast(*int) cast(*void) add};
+LIVE :: Holder.{n = value};
 
 main :: () { }

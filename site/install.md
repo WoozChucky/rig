@@ -10,7 +10,66 @@ Each release of Rig has the compiler built for 64-bit Windows and Linux, each wi
 
 Rig is early: the language will change from one release to the next.
 
-## Download
+## Install with one command
+
+On **Linux** (x86-64), in a terminal:
+
+```sh
+curl -fsSL https://woozchucky.github.io/rig/install.sh | sh
+```
+
+On **Windows** (x64), in PowerShell (Windows PowerShell, which comes with Windows, or PowerShell 7):
+
+```powershell
+irm https://woozchucky.github.io/rig/install.ps1 | iex
+```
+
+Either one installs the latest release for your user alone, with no administrator rights and no questions asked. It does what the [steps by hand](#install-by-hand) below do:
+
+1. It downloads the archive and `SHA256SUMS`, and checks the archive's SHA-256. If it doesn't match, the script stops, with nothing installed.
+2. It unpacks the archive into `%LOCALAPPDATA%\Programs\rig` on Windows, or into `~/.local/share/rig` on Linux, linked as `~/.local/bin/rig`, overwriting the files already there.
+3. It puts Rig on your `PATH`, unless it is there already. On Windows, it adds the folder to your user `PATH` as [step 4 for Windows](#windows) does. On Linux, when `~/.local/bin` isn't on the `PATH`, it adds this line to the end of `~/.profile` and `~/.bashrc`, and of `~/.zshrc` if you have one, once:
+
+   ```sh
+   export PATH="$HOME/.local/bin:$PATH"  # added by Rig's installer
+   ```
+
+   For another shell, such as fish, it says what to add.
+4. It installs the [VS Code extension](#vs-code-extension), if `code` is on your `PATH`.
+5. It builds and runs hello world, to check that your system has what Rig needs. If the build fails, Rig stays installed, and the script says what to install: the [requirements](#requirements) below. If hello world builds but doesn't run, the requirements are there, and the script says so: something else stopped the program, such as a temporary folder that doesn't let programs run, or an antivirus.
+6. It prints `rig version`'s line, such as `rig 0.2.0 (89de631d10c7 2026-11-13) LLVM 23.1.5`. If it says to, open a new terminal (one opened before doesn't see the new `PATH`); then build a program with `rig build hello.rig`.
+
+**To upgrade**, run the command again: it overwrites the files, and adds nothing to the `PATH` the second time.
+
+**To uninstall**, run it with `--uninstall` on Linux, or `-Uninstall` on Windows, as the next section shows. It removes the folder (and on Linux the link), its entry in your user `PATH` (Windows) or the line it added to each shell file (Linux), and the VS Code extension when `code` is on your `PATH`.
+
+### Options
+
+On Linux, the options go after `sh -s --`; on Windows, the script is run as a script block to take them:
+
+```sh
+curl -fsSL https://woozchucky.github.io/rig/install.sh | sh -s -- --version 0.2.0
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://woozchucky.github.io/rig/install.ps1))) -Version 0.2.0
+```
+
+| Linux | Windows | |
+|---|---|---|
+| `--version 0.2.0` | `-Version 0.2.0` | Install that release instead of the latest. |
+| `--no-modify-path` | `-NoModifyPath` | Leave your `PATH` alone: the user `PATH` on Windows, the shell files on Linux. |
+| `--no-vscode` | `-NoVSCode` | Don't install the VS Code extension (with the uninstall option: don't remove it). |
+| `--uninstall` | `-Uninstall` | Remove Rig. |
+| `--help` | `-Help` | Say what the script does, and list the options. |
+
+The scripts are in the repository, to read before you run them: [install.sh](https://github.com/WoozChucky/rig/blob/main/site/public/install.sh) and [install.ps1](https://github.com/WoozChucky/rig/blob/main/site/public/install.ps1).
+
+## Install by hand
+
+The steps the scripts take, one at a time, for those who would rather see each one. (The scripts also build hello world, to check the [requirements](#requirements); that section says how.)
+
+### Download
 
 | For | File |
 |---|---|
@@ -21,7 +80,7 @@ Rig is early: the language will change from one release to the next.
 
 The links always get the latest release. The commands below download it, check it, and install it for your user alone, with no administrator rights. Each archive's files are at its top level: the linker must stay in the same folder as `rig`, which runs it from there.
 
-## Windows
+### Windows
 
 In PowerShell (Windows PowerShell, which comes with Windows, or PowerShell 7):
 
@@ -53,12 +112,13 @@ In PowerShell (Windows PowerShell, which comes with Windows, or PowerShell 7):
    $rig = "$env:LOCALAPPDATA\Programs\rig"
    $path = (Get-Item HKCU:\Environment).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
    if (($path -split ';') -notcontains $rig) {
-       New-ItemProperty HKCU:\Environment Path -PropertyType ExpandString -Force -Value ("$path".TrimEnd(';') + ";$rig").TrimStart(';') > $null
-       [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', '1', 'User'); [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', $null, 'User')
+       $new = if (-not $path) { $rig } elseif ($path.EndsWith(';')) { "$path$rig;" } else { "$path;$rig" }
+       New-ItemProperty HKCU:\Environment Path -PropertyType ExpandString -Force -Value $new > $null
+       [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', '1', 'User'); [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', [NullString]::Value, 'User')
    }
    ```
 
-   This edits the user `PATH` as stored, so its other entries stay exactly as they are: one written with a variable, such as `%USERPROFILE%\.dotnet\tools`, keeps the variable. The last line only tells Windows that the environment changed (setting and removing a variable broadcasts that), so the terminals you open next see the new `PATH`.
+   This edits the user `PATH` as stored, so its other entries stay exactly as they are: one written with a variable, such as `%USERPROFILE%\.dotnet\tools`, keeps the variable. The folder goes at the end, before the `;` the `PATH` may end with, so that taking it off again gives back the `PATH` you had. The last line only tells Windows that the environment changed (setting and removing a variable broadcasts that; `[NullString]::Value` removes it in PowerShell 7 too, where `$null` would leave it set to nothing), so the terminals you open next see the new `PATH`.
 
 5. Open a new terminal (one opened before doesn't see the new `PATH`), and check:
 
@@ -76,10 +136,10 @@ In PowerShell (Windows PowerShell, which comes with Windows, or PowerShell 7):
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\rig"
 $path = (Get-Item HKCU:\Environment).GetValue('Path', '', 'DoNotExpandEnvironmentNames')
 New-ItemProperty HKCU:\Environment Path -PropertyType ExpandString -Force -Value ((($path -split ';') -ne "$env:LOCALAPPDATA\Programs\rig") -join ';') > $null
-[Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', '1', 'User'); [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', $null, 'User')
+[Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', '1', 'User'); [Environment]::SetEnvironmentVariable('RIG_PATH_CHANGED', [NullString]::Value, 'User')
 ```
 
-## Linux
+### Linux
 
 In a terminal:
 
@@ -165,7 +225,7 @@ Both print `Hello, World!`. `rig build` writes the program in the current folder
 
 ## VS Code extension
 
-The extension highlights `.rig` files, shows the compiler's errors as you type, and builds, runs and debugs the current file. Download [rig-vscode.vsix](https://github.com/WoozChucky/rig/releases/latest/download/rig-vscode.vsix) and install it from the folder it is in:
+The extension highlights `.rig` files, shows the compiler's errors as you type, and builds, runs and debugs the current file. The [one-line install](#install-with-one-command) installs it when `code` is on your `PATH`; to install it yourself, download [rig-vscode.vsix](https://github.com/WoozChucky/rig/releases/latest/download/rig-vscode.vsix) and install it from the folder it is in:
 
 ```sh
 code --install-extension rig-vscode.vsix

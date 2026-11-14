@@ -1,0 +1,108 @@
+// Constants holding data (issue #113, spec 4.2): a string, structs and
+// arrays, nested, top-level and local. What's known while compiling folds
+// (a field, an element at a constant index, a .count). Anything else reads
+// the constant's bytes at run time from the one read-only copy the program
+// keeps of them, but a *u8 (a pointer constant, or a string met as one) is
+// only the address of its literal's bytes.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+puts :: (s: *u8) -> s32 #foreign libc;
+putchar :: (c: s32) -> s32 #foreign libc;
+
+Vec2 :: struct { x: int; y: int; }
+Line :: struct { a: Vec2; b: Vec2; }
+Host :: struct { name: string; port: int; }
+
+NAME :: "rig";
+GREETING :: cast(*u8) "hi";
+HOST :: Host.{"localhost", 80};
+ORIGIN :: Vec2.{3, 4};
+LINE :: Line.{a = ORIGIN, b = .{5, 6}};
+PRIMES :: int.[2, 3, 5, 7, 11];
+N :: PRIMES[2];
+LINES :: Line.[LINE, .{a = .{1, 1}}];
+
+print :: (s: string) {
+    for s { putchar(it); }
+    putchar(10);
+}
+
+length :: (l: Line) -> int {
+    return (l.b.x - l.a.x) + (l.b.y - l.a.y);
+}
+
+sum :: (v: []int) -> int {
+    total := 0;
+    for v { total += it; }
+    return total;
+}
+
+// Two local constants of one name are two constants, each with its own data.
+first :: (i: int) -> int {
+    T :: int.[1, 2];
+    return T[i];
+}
+
+second :: (i: int) -> int {
+    T :: int.[3, 4];
+    return T[i];
+}
+
+main :: () {
+    // A string: a *u8 for C, a string with its count, a string parameter,
+    // its bytes one by one, a comparison, a byte at a variable index, and
+    // its bytes as a []u8, cast.
+    puts(NAME);
+    printf("%s %lld\n", NAME, NAME.count);
+    print(NAME);
+    for NAME { printf("%c.", cast(s32) it); }
+    printf("\n");
+    printf("%d\n", NAME == "rig");
+    i := 1;
+    printf("%c\n", cast(s32) NAME[i]);
+    raw := cast([]u8) NAME;
+    printf("%lld %c\n", raw.count, cast(s32) raw[i]);
+
+    // A string as a *u8: cast, its .data read at run time, a *u8 constant
+    // (the literal's bytes, as is) given to C and copied, and a struct
+    // constant's string field given to C.
+    puts(cast(*u8) NAME);
+    printf("%c\n", cast(s32) NAME.data[i]);
+    puts(GREETING);
+    p := GREETING;
+    puts(p);
+    puts(HOST.name);
+    printf("%s:%lld\n", HOST.name, HOST.port);
+
+    // Structs: fields, a constant passed by value, and a field copied out
+    // and changed while the constant keeps its own: LINE.b.x folds, so the
+    // constant is passed again, its bytes read at run time.
+    printf("%lld %lld\n", ORIGIN.x, ORIGIN.y);
+    printf("%lld\n", length(LINE));
+    b := LINE.b;
+    b.x = 50;
+    printf("%lld %lld %lld\n", b.x, LINE.b.x, length(LINE));
+
+    // Arrays: seen through a view, gone through, an element at a variable
+    // index, and sizes folded from them.
+    printf("%lld\n", sum(PRIMES));
+    product := 1;
+    for PRIMES { product *= it; }
+    printf("%lld\n", product);
+    k := 4;
+    printf("%lld\n", PRIMES[k]);
+    grid : [N]int;
+    bytes : [PRIMES.count]u8;
+    printf("%lld %lld\n", grid.count, bytes.count);
+
+    // Nested: an array of structs, one of them with a field left out (zero).
+    j := 1;
+    printf("%lld %lld %lld\n", LINES[j].a.x, LINES[j].b.y, LINES[0].b.x);
+    printf("%lld\n", length(LINES[j]));
+
+    // Local constants are kept as top-level ones are.
+    T :: int.[10, 20];
+    L :: "local";
+    printf("%lld %s\n", T[i], L);
+    print(L);
+    printf("%lld %lld\n", first(i), second(i));
+}

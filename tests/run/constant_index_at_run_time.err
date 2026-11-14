@@ -1,0 +1,1 @@
+tests/run/constant_index_at_run_time.rig:8:16: runtime error: index 5 is out of bounds (count 5)
