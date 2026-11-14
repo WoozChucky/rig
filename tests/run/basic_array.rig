@@ -330,6 +330,15 @@ main :: () {
     print_string("no bytes, past half: ");
     show_sizes(z);
     print_byte(10);
+
+    // A capacity of exactly half of int's largest value doubles without
+    // wrapping, to one less than int's largest.
+    z.capacity = 4611686018427387903;
+    z.count = z.capacity;
+    array_add(*z, null);
+    print_string("no bytes, at half: ");
+    show_sizes(z);
+    print_byte(10);
     array_free(*z);
 
     // A negative element size is taken as 0: the array counts its
