@@ -69,3 +69,33 @@ jobs:
       # the compiler's, and needing nothing but the Node the runner has.
       - name: VS Code extension
         run: node --version && node editors/vscode/test/check.js
+
+  # The one-line installers, site/public/install.sh and install.ps1,
+  # against the releases on GitHub. scripts/test_install.sh runs install.sh
+  # as its users do, piped into sh, in a throwaway HOME: the latest release
+  # installed, run again, --version 0.2.0, --uninstall, and the failures.
+  # install.ps1 runs on Windows only, which has no runner here
+  # (scripts/test_install.ps1 checks it locally); PowerShell 7, on the
+  # image as shellcheck is, checks that it parses.
+  install-script:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: shellcheck
+        run: shellcheck --version | head -2 && shellcheck site/public/install.sh scripts/test_install.sh
+
+      - name: install.sh
+        run: scripts/test_install.sh
+
+      - name: install.ps1 parses
+        shell: pwsh
+        run: |
+          $PSVersionTable.PSVersion.ToString()
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/site/public/install.ps1", [ref]$null, [ref]$errors) > $null
+          foreach ($e in $errors) { Write-Host "site/public/install.ps1:$($e.Extent.StartLineNumber): $($e.Message)" }
+          if ($errors) { exit 1 }

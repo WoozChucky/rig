@@ -2,3 +2,8 @@
 *.bat text eol=crlf
 # Kept byte for byte: the lexer test of CRLF line endings.
 tests/run/crlf.rig -text
+# The one-line installers, served by the website as they are committed:
+# install.sh is piped into sh, which a CR at a line's end would break, and
+# install.ps1 is read by PowerShell, which takes LF.
+site/public/install.sh text eol=lf
+site/public/install.ps1 text eol=lf
