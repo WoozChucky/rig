@@ -7,9 +7,13 @@
 MAX :: 9223372036854775807;
 MIN :: -9223372036854775808;
 
-// Prints s between brackets, so an empty string shows as [], and a line
-// feed.
+// Prints the count of s, then s between brackets, so an empty string shows
+// as 0 [], and a line feed. The count is printed too because print_string
+// writes nothing for a negative count, so a view clamped wrongly would
+// otherwise show as [] like an empty one.
 show :: (s: string) {
+    print_int(s.count);
+    print_byte(32);
     print_byte("["[0]);
     print_string(s);
     print_byte("]"[0]);
@@ -45,8 +49,8 @@ main :: () {
     print_bool(strings_equal("ab", "abc"));
     print_byte(10);
 
-    // A prefix sorts first, and bytes compare unsigned: "é" starts with
-    // 0xC3, above "z".
+    // A prefix sorts first, by -1 or 1 however much shorter it is, and bytes
+    // compare unsigned: "é" starts with 0xC3, above "z".
     print_int(compare_strings("abc", "abd"));
     print_byte(32);
     print_int(compare_strings("abd", "abc"));
@@ -60,8 +64,15 @@ main :: () {
     print_int(compare_strings("", ""));
     print_byte(32);
     print_int(compare_strings("é", "z"));
+    print_byte(32);
+    print_int(compare_strings("a", "abcd"));
+    print_byte(32);
+    print_int(compare_strings("abcd", "a"));
     print_byte(10);
 
+    // Each search also finds a match at the edge of the places it tries:
+    // index 0 when searching from the end, and the last place a needle fits
+    // when searching from the start.
     print_int(find_byte("hello", "l"[0]));
     print_byte(32);
     print_int(find_byte_from_end("hello", "l"[0]));
@@ -69,6 +80,10 @@ main :: () {
     print_int(find_byte("hello", "z"[0]));
     print_byte(32);
     print_int(find_byte(empty, "a"[0]));
+    print_byte(32);
+    print_int(find_byte_from_end("hello", "h"[0]));
+    print_byte(32);
+    print_int(find_byte_from_end("hello", "z"[0]));
     print_byte(10);
 
     print_int(find_string("hello world", "o w"));
@@ -82,6 +97,10 @@ main :: () {
     print_int(find_string(empty, "a"));
     print_byte(32);
     print_int(find_string(empty, ""));
+    print_byte(32);
+    print_int(find_string("hello", "lo"));
+    print_byte(32);
+    print_int(find_string("hello", "hello"));
     print_byte(10);
 
     print_int(find_string_from_end("aaa", "aa"));
@@ -91,6 +110,12 @@ main :: () {
     print_int(find_string_from_end("abcabc", "abc"));
     print_byte(32);
     print_int(find_string_from_end("abc", "abcd"));
+    print_byte(32);
+    print_int(find_string_from_end("abc", "abc"));
+    print_byte(32);
+    print_int(find_string_from_end("abcab", "ab"));
+    print_byte(32);
+    print_int(find_string_from_end("abcd", "ab"));
     print_byte(10);
 
     print_bool(starts_with("hello", "he"));
@@ -110,6 +135,8 @@ main :: () {
     show(trim_left("  x  "));
     show(trim_right("  x  "));
     show(trim("   "));
+    show(trim_left("   "));
+    show(trim_right("   "));
     show(trim(empty));
 
     // A slice is clamped to its string: start to 0..count, then count to
@@ -148,14 +175,26 @@ main :: () {
     print_string(after);
     print_line("]");
 
-    // A slice views its string's own bytes: nothing is copied.
+    // A slice views its string's own bytes: nothing is copied. A start past
+    // the end gives an empty view at the string's end, and so does
+    // split_from_left for the bytes after a separator it doesn't find.
     s := "hello";
     part := slice(s, 1, 3);
     print_bool(part.data == s.data + 1);
+    print_byte(32);
+    part = slice(s, 9, 1);
+    print_bool(part.data == s.data + s.count);
+    print_byte(32);
+    part = slice(s, MAX, MAX);
+    print_bool(part.data == s.data + s.count);
+    print_byte(32);
+    found, before, after = split_from_left(s, "="[0]);
+    print_bool(after.data == s.data + s.count);
     print_byte(10);
 
-    // A zeroed string through the procedures not yet given one: it is the
-    // empty string, and nothing reads through its null data.
+    // A zeroed string through the procedures not yet given one, and as the
+    // needle, prefix and suffix: it is the empty string, and nothing reads
+    // through its null data.
     print_int(compare_strings(empty, ""));
     print_byte(32);
     print_int(compare_strings(empty, "a"));
@@ -173,6 +212,14 @@ main :: () {
     print_bool(starts_with(empty, "a"));
     print_byte(32);
     print_bool(ends_with(empty, "a"));
+    print_byte(10);
+    print_int(find_string("hello", empty));
+    print_byte(32);
+    print_int(find_string_from_end("hello", empty));
+    print_byte(32);
+    print_bool(starts_with("hello", empty));
+    print_byte(32);
+    print_bool(ends_with("hello", empty));
     print_byte(10);
     show(trim_left(empty));
     show(trim_right(empty));
