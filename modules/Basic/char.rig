@@ -4,8 +4,10 @@
 // character, is in none of the classes, and its case doesn't change, so a
 // procedure here never splits or alters a UTF-8 character.
 //
-// Each class is one or two ranges of ASCII, tested by comparison, so no
-// table is needed and every procedure can be passed as a value.
+// Each class is a few ranges or single bytes of ASCII, tested by
+// comparison, so no 256-entry table is needed. And each is a procedure
+// taking a u8, not a macro or a function of int as in C's <ctype.h>, so it
+// can be passed as a value of type (u8) -> bool.
 
 // Whether c is a decimal digit, "0" to "9".
 is_digit :: (c: u8) -> bool {

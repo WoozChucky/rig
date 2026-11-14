@@ -1,5 +1,6 @@
 // Basic's math (issue #134): min, max, abs and clamp for each type, with
-// int's and u64's extremes, -0.0 and NaN.
+// int's and u64's extremes, positive and negative arguments to abs, -0.0,
+// the infinities and NaN.
 #load "../../modules/Basic/module.rig";
 
 MIN :: -9223372036854775808;
@@ -19,6 +20,8 @@ main :: () {
     print_int(abs_int(-5));
     print_byte(32);
     print_int(abs_int(MIN));
+    print_byte(32);
+    print_int(abs_int(5));
     print_byte(10);
 
     print_int(clamp_int(15, 0, 10));
@@ -33,6 +36,8 @@ main :: () {
     print_bool(min_u64(0, 18446744073709551615) == 0);
     print_byte(32);
     print_bool(clamp_u64(7, 10, 20) == 10);
+    print_byte(32);
+    print_bool(clamp_u64(18446744073709551615, 10, 20) == 20);
     print_byte(10);
 
     print_float(min_float64(1.5, -2.25), 2);
@@ -45,11 +50,15 @@ main :: () {
     print_float(abs_float64(-0.0), 2);
     print_byte(32);
     print_float(-0.0, 2);
+    print_byte(32);
+    print_float(abs_float64(2.5), 2);
     print_byte(10);
 
     print_float(clamp_float64(7.5, 0, 5), 2);
     print_byte(32);
     print_float(clamp_float64(-1, 0, 5), 2);
+    print_byte(32);
+    print_float(clamp_float64(2.5, 0, 5), 2);
     print_byte(10);
 
     zero : float64 = 0;
@@ -57,6 +66,32 @@ main :: () {
     print_float(min_float64(nan, 1), 2);
     print_byte(32);
     print_float(min_float64(1, nan), 2);
+    print_byte(32);
+    print_float(max_float64(nan, 1), 2);
+    print_byte(32);
+    print_float(max_float64(1, nan), 2);
+    print_byte(32);
+    print_float(clamp_float64(nan, 0, 5), 2);
+    print_byte(10);
+
+    inf := 1 / zero;
+    print_float(abs_float64(-inf), 2);
+    print_byte(32);
+    print_float(min_float64(-inf, inf), 2);
+    print_byte(32);
+    print_float(max_float64(-inf, inf), 2);
+    print_byte(32);
+    print_float(abs_float64(nan), 2);
+    print_byte(10);
+
+    // Of two equal operands the first comes back, and 0.0 and -0.0 are equal.
+    print_float(min_float64(-0.0, 0), 2);
+    print_byte(32);
+    print_float(min_float64(0, -0.0), 2);
+    print_byte(32);
+    print_float(max_float64(-0.0, 0), 2);
+    print_byte(32);
+    print_float(max_float64(0, -0.0), 2);
     print_byte(10);
 
     print_float(min_float32(0.5, 0.25), 2);
@@ -66,5 +101,19 @@ main :: () {
     print_float(abs_float32(-1.5), 2);
     print_byte(32);
     print_float(clamp_float32(0.75, 0, 1), 2);
+    print_byte(10);
+
+    minus_zero32 : float32 = -0.0;
+    zero32 : float32 = 0;
+    nan32 := zero32 / zero32;
+    print_float(abs_float32(1.5), 2);
+    print_byte(32);
+    print_float(abs_float32(minus_zero32), 2);
+    print_byte(32);
+    print_float(abs_float32(nan32), 2);
+    print_byte(32);
+    print_float(min_float32(nan32, 1), 2);
+    print_byte(32);
+    print_float(max_float32(1, nan32), 2);
     print_byte(10);
 }
