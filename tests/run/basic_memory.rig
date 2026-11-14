@@ -2,6 +2,11 @@
 // and copies of no bytes, and compares that read bytes as unsigned.
 #load "../../modules/Basic/module.rig";
 
+// int's most negative value. As a count, count - 1 wraps to int's largest,
+// so a loop over 0..count - 1 would run on through all of memory: only the
+// count <= 0 check stops it.
+MIN :: -9223372036854775808;
+
 // Prints the buffer's bytes as a string, the same view of them, and a line
 // feed.
 show :: (buffer: []u8) {
@@ -31,13 +36,34 @@ main :: () {
     copy_memory(buffer.data, s.data, -1);
     show(buffer);
 
+    // Nor does the most negative count. The destination is below the
+    // source, so the copy would go forward, over 0..count - 1.
+    copy_memory(buffer.data, buffer.data + 2, MIN);
+    show(buffer);
+
     set_memory(buffer.data + 10, "x"[0], 3);
     show(buffer);
 
     // A count of 0 or less sets nothing.
     set_memory(buffer.data, "y"[0], 0);
     set_memory(buffer.data, "y"[0], -1);
+    set_memory(buffer.data, "y"[0], MIN);
     show(buffer);
+
+    // A count of 0 or less reads and writes nothing, so a null pointer with
+    // no bytes behind it is fine.
+    copy_memory(null, null, 0);
+    copy_memory(null, null, -1);
+    copy_memory(null, null, MIN);
+    set_memory(null, "y"[0], 0);
+    set_memory(null, "y"[0], -1);
+    set_memory(null, "y"[0], MIN);
+    print_int(compare_memory(null, null, 0));
+    print_byte(32);
+    print_int(compare_memory(null, null, -1));
+    print_byte(32);
+    print_int(compare_memory(null, null, MIN));
+    print_byte(10);
 
     abc := "abc";
     abd := "abd";
@@ -63,5 +89,7 @@ main :: () {
     print_int(compare_memory(abc.data, abd.data, 0));
     print_byte(32);
     print_int(compare_memory(abc.data, abd.data, -1));
+    print_byte(32);
+    print_int(compare_memory(abc.data, abd.data, MIN));
     print_byte(10);
 }
