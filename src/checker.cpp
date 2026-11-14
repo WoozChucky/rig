@@ -364,11 +364,12 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 //   turn, a string literal, or anything else constant_data finds a value
 //   for: a constant holding it, a field or an element of one, a cast. The
 //   node holding that value is checked too, unless it's zero (left out) or
-//   the walk went through a constant's name, checked already: a cast of a
-//   literal, cast(Holder) Holder.{v = int.[1]}, isn't.
-// - A pointer is null or a string literal's address: one cast from a
-//   number or a procedure's address is "a constant's pointer can only be
-//   null or a string literal's address"; anything else isn't known.
+//   the value is a constant's name, checked already: a cast of a literal,
+//   cast(Holder) Holder.{v = int.[1]}, isn't.
+// - A pointer is null or a string literal's address: any cast (from a
+//   number, a procedure's address or a pointer variable) or a procedure's
+//   address is "a constant's pointer can only be null or a string literal's
+//   address"; anything else isn't known.
 // - A procedure value is a procedure (procedure_address) or null.
 // - A number or a bool is is_constant.
 // A value with no type had its own error, reported: nothing more is said.

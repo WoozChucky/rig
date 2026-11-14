@@ -4740,9 +4740,14 @@ TEST(constants_hold_data) {
     // holding it (Ast_Const.data), and is never is_constant, which holds one
     // scalar: lowering would emit it as one. Nor is a use of it. A pointer
     // constant that is null stays a scalar constant, and one that is a
-    // string literal's address holds data, that literal.
+    // string literal's address holds data, that literal, reached through a
+    // field or an element of constant data too. A null pointer or procedure
+    // inside data is constant.
     Arena a = arena_make();
-    Checked c = check_src(&a, DATA_CONSTANTS "main :: () { T :: int.[1, 2]; S :: NAME; }\n");
+    Checked c = check_src(&a, DATA_CONSTANTS
+                          "SYMBOL :: OPS[1].symbol;\n"
+                          "NO_OP :: Op.{null, null};\n"
+                          "main :: () { T :: int.[1, 2]; S :: NAME; }\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     CHECK(holds_data(global_named(&c, "NAME")));
     CHECK(holds_data(global_named(&c, "ORIGIN")));
@@ -4762,6 +4767,10 @@ TEST(constants_hold_data) {
     CHECK_STR(type_name(&a, greeting->type), "*u8");
     CHECK_EQ(greeting->data->kind, AST_STRING);
     CHECK_STR(((Ast_String *)greeting->data)->value, "hi");
+    Ast_Const *symbol = (Ast_Const *)global_named(&c, "SYMBOL");
+    CHECK(holds_data(symbol));
+    CHECK(symbol->data == name->data);
+    CHECK(holds_data(global_named(&c, "NO_OP")));
     Ast_Proc *op = ((Ast_Const *)global_named(&c, "OP"))->proc;
     CHECK(op && string_eq(op->name, str("add")));
     Ast_Const *nowhere = (Ast_Const *)global_named(&c, "NOWHERE");
@@ -4781,7 +4790,8 @@ TEST(constant_data_resolves) {
     // constant_data follows names, fields, elements and casts to the node
     // holding a value: a literal, a string literal, or null for a field a
     // literal leaves out, which is zero. An element needs a constant index,
-    // and a literal's every value must be constant.
+    // and a literal's every value must be constant. A string's element, a
+    // byte, isn't constant data: no node holds it.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "Vec2 :: struct { x: int; y: int; }\n"
@@ -4799,6 +4809,7 @@ TEST(constant_data_resolves) {
                           "    e := LINES[i];\n"
                           "    f := Vec2.{1, 2};\n"
                           "    g := Vec2.{i, 2};\n"
+                          "    h := NAME[0];\n"
                           "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     Ast *value = nullptr;
@@ -4815,6 +4826,7 @@ TEST(constant_data_resolves) {
     CHECK(constant_data(value_of(&c, "f"), &value));
     CHECK(value == value_of(&c, "f"));
     CHECK(!constant_data(value_of(&c, "g"), &value));
+    CHECK(!constant_data(value_of(&c, "h"), &value));
     token_list_free(c.list);
     arena_free(&a);
 }
@@ -4822,10 +4834,11 @@ TEST(constant_data_resolves) {
 TEST(constant_data_rules) {
     // A constant's value, and every value inside it, must be known while
     // compiling, reported at the first one that isn't. A pointer in it is
-    // null or a string literal's address: one cast from a number or a
-    // procedure gets its own message. No part of it is a view, which would
-    // point at memory of its own; a view field a literal leaves out is
-    // zero, and fine.
+    // null or a string literal's address: any cast, from a number, a
+    // procedure or a pointer variable, gets its own message. A procedure in
+    // it is a procedure or null. No part of it is a view, which would point
+    // at memory of its own, not even one inside a cast or a field of a
+    // literal; a view field a literal leaves out is zero, and fine.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "Holder :: struct { p: *int; v: []int; n: int; }\n"
@@ -4843,6 +4856,13 @@ TEST(constant_data_rules) {
                            "NAMED :: Named.{text, 1};\n"
                            "DEEP :: Holder.[.{n = 1}, .{n = value}];\n"
                            "HELD :: pointer;\n"
+                           "Wrapper :: struct { h: Holder; }\n"
+                           "Op :: struct { symbol: *u8; run: (int, int) -> int; }\n"
+                           "callback : (int, int) -> int;\n"
+                           "CASTED :: cast(Holder) Holder.{v = int.[1]};\n"
+                           "INNER :: Wrapper.{h = Holder.{v = int.[1]}}.h;\n"
+                           "LIVE_RUN :: Op.{\"+\", callback};\n"
+                           "CAST_HELD :: cast(*int) pointer;\n"
                            "main :: () { }\n"),
               "7:9: a constant can't hold a view; only a string or an array can be one\n"
               "8:26: a constant can't hold a view; only a string or an array can be one\n"
@@ -4851,33 +4871,43 @@ TEST(constant_data_rules) {
               "12:21: the value of constant 'LIVE' isn't known while compiling\n"
               "13:17: the value of constant 'NAMED' isn't known while compiling\n"
               "14:33: the value of constant 'DEEP' isn't known while compiling\n"
-              "15:9: the value of constant 'HELD' isn't known while compiling\n");
+              "15:9: the value of constant 'HELD' isn't known while compiling\n"
+              "19:36: a constant can't hold a view; only a string or an array can be one\n"
+              "20:35: a constant can't hold a view; only a string or an array can be one\n"
+              "21:22: the value of constant 'LIVE_RUN' isn't known while compiling\n"
+              "22:14: a constant's pointer can only be null or a string literal's address\n");
     arena_free(&a);
 }
 
 TEST(string_constants_convert_as_literals) {
     // A string constant is a string literal's bytes, with the zero after
     // them, so it converts to *u8 and passes C's '...' as the literal
-    // does. A string variable holding the same bytes doesn't.
+    // does, and so does a string field or element of constant data. A
+    // string variable holding the same bytes doesn't.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "puts :: (s: *u8) -> s32 #foreign libc;\n"
                           "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                          "Named :: struct { name: string; n: int; }\n"
                           "NAME :: \"rig\";\n"
+                          "NAMED :: Named.{\"x\", 1};\n"
+                          "NAMES :: string.[\"a\", NAME];\n"
                           "main :: () {\n"
                           "    puts(NAME);\n"
                           "    p : *u8 = NAME;\n"
                           "    q := cast(*u8) NAME;\n"
                           "    b := cast([]u8) NAME;\n"
                           "    printf(\"%s\\n\", NAME);\n"
+                          "    puts(NAMED.name);\n"
+                          "    printf(\"%s\\n\", NAMES[1]);\n"
                           "    s := \"rig\";\n"
                           "    puts(s);\n"
                           "    printf(\"%s\\n\", s);\n"
                           "}\n");
     CHECK_STR(messages(&a, &c.list->diag),
-              "11:10: argument 1 of 'puts' has type 'string', which can't be converted to '*u8'; its .data may not "
+              "16:10: argument 1 of 'puts' has type 'string', which can't be converted to '*u8'; its .data may not "
               "end with a zero\n"
-              "12:20: argument 2 of 'printf' has type 'string', which C's '...' can't take; pass its .data, which "
+              "17:20: argument 2 of 'printf' has type 'string', which C's '...' can't take; pass its .data, which "
               "may not end with a zero, or a literal\n");
     CHECK_STR(type_of(&a, &c, "q"), "*u8");
     CHECK_STR(type_of(&a, &c, "b"), "[]u8");
