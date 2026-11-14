@@ -115,6 +115,23 @@ function searchPath(name) {
     return null;
 }
 
+// A path setting's value (rig.compilerPath, rig.main) with what it may
+// stand for spelled out: ${workspaceFolder} as `folder`'s path, and a ~
+// alone or before a slash, of either kind, as the home directory.
+// Nothing else is done to it: what a relative path is from, a setting that
+// uses ${workspaceFolder} outside a folder (`folder` is used only when it
+// does) and whether the file is there are each caller's to judge, so the
+// two settings expand alike and judge as they need.
+function expandPath(setting, folder) {
+    // A function as the replacement, so a $ in the folder's path is taken
+    // as it is, not as one of replace's patterns.
+    const wanted = setting.replace(/\$\{workspaceFolder\}/g, () => folder.uri.fsPath);
+    if (wanted === '~' || wanted.startsWith('~/') || wanted.startsWith('~\\')) {
+        return path.join(os.homedir(), wanted.slice(1));
+    }
+    return wanted;
+}
+
 // Where the compiler is, for a build of `file` in workspace folder `folder`
 // (undefined outside one): { compiler } or { error } saying what was tried.
 //
@@ -143,12 +160,7 @@ function findCompiler(file, folder) {
                 error: `The setting rig.compilerPath is "${setting}", which uses \${workspaceFolder}, but ${file} isn't in a workspace folder.`,
             };
         }
-        // A function as the replacement, so a $ in the folder's path is
-        // taken as it is, not as one of replace's patterns.
-        let wanted = setting.replace(/\$\{workspaceFolder\}/g, () => folder.uri.fsPath);
-        if (wanted === '~' || wanted.startsWith('~/') || wanted.startsWith('~\\')) {
-            wanted = path.join(os.homedir(), wanted.slice(1));
-        }
+        let wanted = expandPath(setting, folder);
         if (!/[\\/]/.test(wanted)) {
             const found = searchPath(wanted);
             if (found) return { compiler: found };
@@ -813,25 +825,20 @@ function checkSetting(uri) {
 // check reads it only for a file in one): {} when it's empty, { file } with
 // the main file's absolute path, normalised, or { error } saying what's wrong
 // with it. As in rig.compilerPath (findCompiler), ${workspaceFolder} is the
-// folder, a leading ~ the home directory, and a relative path is from the
-// folder. It must name a .rig file, in any case, as rig takes one: the
-// setting is said to be wrong for that whether or not the file exists, and
-// otherwise when there's no file there (a directory, or nothing).
+// folder, a leading ~ the home directory (expandPath, which the two share),
+// and a relative path is from the folder. It must name a .rig file, in any
+// case, as rig takes one: the setting is said to be wrong for that whether
+// or not the file exists, and otherwise when there's no file there (a
+// directory, or nothing).
 function mainSetting(file, folder) {
     const setting = vscode.workspace
         .getConfiguration('rig', vscode.Uri.file(file))
         .get('main', '')
         .trim();
     if (!setting) return {};
-    // A function as the replacement, so a $ in the folder's path is taken
-    // as it is.
-    let wanted = setting.replace(/\$\{workspaceFolder\}/g, () => folder.uri.fsPath);
-    if (wanted === '~' || wanted.startsWith('~/') || wanted.startsWith('~\\')) {
-        wanted = path.join(os.homedir(), wanted.slice(1));
-    }
     // From the folder when relative; either way absolute and normalised, with
     // one kind of slash and no `..`, as the message and rig are given it.
-    wanted = path.resolve(folder.uri.fsPath, wanted);
+    const wanted = path.resolve(folder.uri.fsPath, expandPath(setting, folder));
     if (!/\.rig$/i.test(wanted)) return { error: `The setting rig.main is "${setting}", but ${wanted} isn't a .rig file.` };
     if (!isFile(wanted)) return { error: `The setting rig.main is "${setting}", but there's no file ${wanted}.` };
     return { file: wanted };
@@ -881,10 +888,13 @@ function inFolder(document, folder) {
 // `rig check MAIN --stdin-for FILE`: rig reads the program from disk, except
 // FILE, whose text is the document's. MAIN is the setting rig.main when its
 // program loads FILE, else the first file of the workspace folder, in path
-// order (candidates), that declares main and whose program does. When none
-// does, or the document is in no folder, it's checked alone after all. A
-// rig from before --stdin-for can't check it with its program: then it's
-// checked alone too, and the rig is said to be too old, once.
+// order (candidates), that declares main and whose program does.
+//
+// A document is checked alone, as a program by itself, when it declares
+// main or rig.main names it, both a main file; when it's in no workspace
+// folder; when no program of its folder loads it, or VS Code couldn't
+// search the folder; and when rig is from before --stdin-for, which can't
+// check it with its program, and is said to be too old, once.
 //
 // The search runs a whole check for each main file it tries, so its answer
 // is remembered for the document (this.programs), and the next check tries
@@ -894,9 +904,10 @@ function inFolder(document, folder) {
 // it concerns are forgotten: those of its workspace folder, where the
 // search looks, and those with a rig.main, whose program may load files
 // anywhere (concerned). All of them are forgotten when the workspace
-// folders change. A remembered main file that's gone, or whose program no
-// longer loads the document, is forgotten too, and the search goes on
-// without it.
+// folders change, or the setting rig.main does. A document's own is
+// forgotten when it closes, or rig.check turns off for it (forget). A
+// remembered main file that's gone, or whose program no longer loads the
+// document, is forgotten too, and the search goes on without it.
 //
 // The errors rig finds in the program's other files, the main file among
 // them, aren't listed under their own names, but counted in one error on
@@ -1251,8 +1262,9 @@ class LiveCheck {
         return pathOrder(folder.uri.fsPath, mains);
     }
 
-    // Every open document again, after the settings or the workspace's
-    // trust changed: checked, or with rig.check off, forgotten.
+    // Every open document again, when the extension starts, and after the
+    // settings, the workspace's trust or the workspace folders changed:
+    // checked, or with rig.check off, forgotten.
     refreshAll() {
         for (const document of vscode.workspace.textDocuments) {
             if (!this.wanted(document)) continue;
