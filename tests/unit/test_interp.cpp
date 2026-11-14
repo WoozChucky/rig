@@ -1632,6 +1632,113 @@ TEST(interp_globals_survive_between_runs) {
     arena_free(&a);
 }
 
+// Issue #115: runs lowered on demand into one compile-time module, run in
+// one interpreter.
+
+// The int the compile-time bytes of m's global `name` hold.
+static s64 interp_test_int_global(Interp *in, Ir_Module *m, const char *name) {
+    s64 value = 0;
+    memcpy(&value, interp_global(in, interp_test_global(m, name)), sizeof value);
+    return value;
+}
+
+TEST(interp_runs_lowered_runs_in_one_world) {
+    // test_ir.cpp's program: each run lowered, then run, the module growing
+    // between them, and counter carrying over from one run to the next.
+    Arena a = arena_make();
+    Lowered_Runs lowered = lower_runs_of(&a, LOWERING_ON_DEMAND_PROGRAM);
+    Ir_Module *m = lowered.module;
+    Interp *in = interp_new(m);
+    Interp_Result r = {};
+    interp_run(in, ir_lower_run(lowered.lowering, lowered.file->runs[0]), {}, &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 0);
+    if (r.ok) CHECK_EQ(interp_test_int_global(in, m, "counter"), 6);
+    interp_test_free(&r);
+
+    interp_run(in, ir_lower_run(lowered.lowering, lowered.file->runs[1]), {}, &a, &r);
+    CHECK(r.ok);
+    if (r.ok) CHECK_EQ(interp_test_int_global(in, m, "counter"), 7);
+    interp_test_free(&r);
+
+    interp_run(in, ir_lower_run(lowered.lowering, constant_run(lowered.file, "N")), {}, &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 6);
+    if (r.ok) CHECK_EQ(interp_test_int_global(in, m, "counter"), 8);
+    interp_test_free(&r);
+    interp_free(in);
+    lowered_runs_free(&lowered);
+    arena_free(&a);
+}
+
+TEST(interp_fails_a_call_of_a_procedure_not_lowered) {
+    // A Rig procedure with no blocks is only declared: its body was never
+    // lowered. A call of it fails at the call, before any frame is pushed
+    // for it.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    new_proc_returning(m, &a, "empty", IR_VOID);
+    Ir_Proc *starts = new_proc_returning(m, &a, "main", IR_VOID);
+    starts->source_name = str("main");
+    s32 b = ir_new_block(&a, starts);
+    ir_emit_call(m, starts, b, interp_test_proc(m, "empty"), {})->pos = {0, 3, 5};
+    emit_ret(starts, b, -1);
+    Interp *in = interp_new(m);
+    interp_test_fails_at(in, m, "main", &a, "call of an address that isn't a procedure", 3, 5);
+    interp_free(in);
+    arena_free(&a);
+}
+
+TEST(interp_finds_foreign_procedures_by_address) {
+    // A foreign procedure's value is its C function's address, which leads
+    // back to the procedure once the interpreter has found it; nothing else
+    // does, null included.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "strlen :: (s: *u8) -> u64 #foreign libc;\n"
+                                "get :: () -> *void { return cast(*void) strlen; }\n"
+                                "main :: () { }\n");
+    Interp *in = interp_new(m);
+    CHECK_EQ(interp_c_function_at(in, 1), -1);
+    Interp_Result r = {};
+    interp_test_run(in, m, "get", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) {
+        u64 address = r.results[0];
+        CHECK_EQ(interp_c_function_at(in, address), interp_test_proc(m, "strlen"));
+        CHECK_EQ(interp_c_function_at(in, address + 1), -1);
+        CHECK_EQ(interp_c_function_at(in, 0), -1);
+    }
+    interp_test_free(&r);
+    interp_free(in);
+    arena_free(&a);
+}
+
+TEST(interp_bounds_checks_are_on_at_compile_time) {
+    // A run's code is always bounds checked: its failure is in the run's
+    // own procedure, #run, at the '[' (the check's place), and
+    // __rig_bounds_failed, the compiler's, is left out of the frames.
+    Arena a = arena_make();
+    Lowered_Runs lowered = lower_runs_of(&a, "#run { a : [3]int; i := 5; x := a[i]; }\nmain :: () { }\n");
+    Interp *in = interp_new(lowered.module);
+    Interp_Result r = {};
+    interp_run(in, ir_lower_run(lowered.lowering, lowered.file->runs[0]), {}, &a, &r);
+    CHECK(!r.ok);
+    CHECK_STR(r.message, "index 5 is out of bounds (count 3)");
+    CHECK_EQ(r.frames.count, 1);
+    if (r.frames.count == 1) {
+        CHECK_STR(r.frames[0].proc, "#run");
+        CHECK_EQ(r.frames[0].pos.line, 1);
+        CHECK_EQ(r.frames[0].pos.col, 34);
+    }
+    interp_test_free(&r);
+    interp_free(in);
+    lowered_runs_free(&lowered);
+    arena_free(&a);
+}
+
 // ---------------------------------------------------------------------------
 // The call thunks (thunk.h): C functions called with canonical values laid
 // out by the host's convention, as the interpreter calls C.
