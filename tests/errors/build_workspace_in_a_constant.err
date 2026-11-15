@@ -1,0 +1,3 @@
+tests/errors/build_workspace_in_a_constant.rig:8:11: error: workspace 'game' has no files
+    W :: #run create_workspace("game");
+              ^

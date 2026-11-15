@@ -91,9 +91,12 @@ String executable_path(Arena *a, String output, String name, Target t) {
 
 // One compilation, from its files to its diagnostics: rig build's (an
 // ordinary program's, a build program's, or one of its workspaces'), rig
-// check's, and interpret mode's. Its steps, in order, each false when
-// there are errors so far (said, or to be printed by compilation_print).
-// Zeroed, with `arena` set, it's ready for the first; compilation_free
+// check's, and interpret mode's. Its steps, in order: compilation_load is
+// false when nothing could be loaded (said), and the loader's errors, if
+// any, are in d, which compilation_check counts; compilation_check and
+// compilation_run are false when there are errors so far, and
+// compilation_lower is null, those errors to be printed by
+// compilation_print. Zeroed, with `arena` set, it's ready for the first; compilation_free
 // ends it, after any step.
 //
 // The tree, the texts and the module live in the arena; the rest is the
