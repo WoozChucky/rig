@@ -1,7 +1,7 @@
 // Basic's string views (issue #134): comparing, finding, trimming, slicing
 // and splitting, with empty strings, zeroed strings (count 0, data null)
 // and the clamps that keep a slice inside its string.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 // int's largest and most negative values, for the clamps.
 MAX :: 9223372036854775807;

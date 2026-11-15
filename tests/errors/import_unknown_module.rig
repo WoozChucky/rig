@@ -1,0 +1,7 @@
+// An #import of a module that ships with rig in neither of its places
+// (spec 2.14): the error is at the name, and says where it looked, beside
+// rig and above it. The program lacks the module, so main isn't reported
+// missing, as the module might have declared it.
+#import "Nope";
+
+main :: () {}

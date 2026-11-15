@@ -109,13 +109,18 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Modul
 
     // The diagnostics are freed here, the tree and the module kept: they
     // live in the arena. The loader lexes and parses this file and every
-    // file it #loads into the one tree, and registers each with d: messages
-    // name a file by its path as given (a loaded one's from the file that
-    // loads it, load.h), the debug information by its absolute path, from
-    // the directory rig runs in (ir_lower).
+    // file it #loads or #imports into the one tree, and registers each with
+    // d: messages name a file by its path as given (a loaded one's from the
+    // file that loads it, an imported one's absolute, load.h), the debug
+    // information by its absolute path, from the directory rig runs in
+    // (ir_lower). #import looks in rig's own places (module_places).
     Diagnostics d = {};
     bool reached = false;
-    Ast_File *tree = load_program(a, &d, path, text, stdin_for, stdin_text, &reached);
+    Load_Options options = {};
+    options.stdin_for = stdin_for;
+    options.stdin_text = stdin_text;
+    options.stdin_for_reached = &reached;
+    Ast_File *tree = load_program(a, &d, path, text, &options);
     if (stdin_for.count && !reached) {
         fprintf(stderr, "rig: error: '" STR_FMT "' doesn't load '" STR_FMT "'\n", STR_ARG(path), STR_ARG(stdin_for));
         diag_free(&d);

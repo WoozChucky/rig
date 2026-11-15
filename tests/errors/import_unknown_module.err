@@ -1,0 +1,3 @@
+tests/errors/import_unknown_module.rig:5:9: error: there's no module 'Nope' (looked in @BIN_MODULES@ and @MODULES@)
+    #import "Nope";
+            ^

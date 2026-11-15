@@ -39,6 +39,16 @@
 // that is, can't be read, which differs between systems and languages
 // (no_such_file_message asks the system).
 //
+// rig names a module's file (spec 2.14) by its absolute path, so in a .err,
+// .interp.err or .check.err, @MODULES@ stands for <RIG's directory>/../modules,
+// the repository's modules/, and @BIN_MODULES@ for <RIG's directory>/modules,
+// each absolute: the places rig looks for a module in. Before comparing, the
+// runner puts the placeholders in place of the places in what was printed
+// (bin/unit-tests's places for an interpreted run), and on Windows makes each
+// '\' in the rest of such a path '/', so `@MODULES@/Basic/array.rig:43:23:`
+// serves both hosts (with_module_placeholders). The tests assume the
+// repository's layout, bin/ beside modules/.
+//
 // Only the NAME.rig files directly in tests/run, tests/errors and
 // tests/debug (below) are programs: their subdirectories, load/, hold the
 // files the programs #load, which aren't built on their own.
@@ -232,6 +242,72 @@ static String replace_all(Arena *a, String s, const char *from, String to) {
         }
     }
     return string_printf(a, STR_FMT STR_FMT, STR_ARG(out), STR_ARG(string_slice(s, start, s.count - start)));
+}
+
+// The places rig looks for a module in (src/load.h's Module_Places): RIG's
+// MODULES (<RIG's directory>/../modules, the repository's) and BIN_MODULES
+// (<RIG's directory>/modules, a release archive's); and the same pair for
+// bin/unit-tests, whose loader the interpreted runs use. main sets them.
+// A module's file is named by its absolute path, which differs from one
+// checkout to the next, so the runner puts @MODULES@ and @BIN_MODULES@ in
+// their place before comparing a stderr with an expectation file
+// (with_module_placeholders).
+static String MODULES;
+static String BIN_MODULES;
+static String UNIT_TESTS_MODULES;
+static String UNIT_TESTS_BIN_MODULES;
+
+#ifdef _WIN32
+static const bool HOST_IS_WINDOWS = true;
+#else
+static const bool HOST_IS_WINDOWS = false;
+#endif
+
+// The places of the program at `program`, a path from here, as rig makes
+// its own (module_places): modules beside it, then modules above it, each
+// made absolute from the directory the runner runs in.
+static void module_places_of(Arena *a, String program, String *modules, String *bin_modules) {
+    String here = os_current_directory(a);
+    *bin_modules = path_absolute(a, here, load_path(a, program, str("modules"), HOST_IS_WINDOWS), HOST_IS_WINDOWS);
+    *modules = path_absolute(a, here, load_path(a, program, str("../modules"), HOST_IS_WINDOWS), HOST_IS_WINDOWS);
+}
+
+// `text` with each place's text made its placeholder, @MODULES@ or
+// @BIN_MODULES@. Neither place's text is inside the other's (.../modules
+// and .../bin/modules), so the order they're tried in doesn't matter. On
+// Windows the rest of that path, up to the first ':', '\'', ')', space or
+// line break, has each '\' made '/', so one expectation serves both hosts:
+// @MODULES@/Basic/array.rig:43:23: runtime error: ...
+static String with_module_placeholders(Arena *a, String text, String modules, String bin_modules) {
+    String places[2] = {bin_modules, modules};
+    const char *holders[2] = {"@BIN_MODULES@", "@MODULES@"};
+    Array<u8> out = {};
+    for (s64 i = 0; i < text.count;) {
+        s64 found = -1;
+        for (s64 k = 0; k < 2 && found < 0; k++) {
+            String place = places[k];
+            if (place.count && i + place.count <= text.count &&
+                memcmp(text.data + i, place.data, (size_t)place.count) == 0) {
+                found = k;
+            }
+        }
+        if (found < 0) {
+            array_add(&out, text.data[i++]);
+            continue;
+        }
+        for (const char *c = holders[found]; *c; c++) array_add(&out, (u8)*c);
+        i += places[found].count;
+        if (HOST_IS_WINDOWS) {
+            for (; i < text.count; i++) {
+                u8 c = text.data[i];
+                if (c == ':' || c == '\'' || c == ')' || c == ' ' || c == '\n' || c == '\r') break;
+                array_add(&out, c == '\\' ? (u8)'/' : c);
+            }
+        }
+    }
+    String result = string_copy(a, {out.data, out.count});
+    array_free(&out);
+    return result;
 }
 
 // Line `index` (from 0) of s, without its "\n"; {} past the end.
@@ -436,6 +512,8 @@ static String run_test(Arena *a, String rig, String name) {
     bool started = run(a, command, {}, &ran, &why);
     array_free(&command);
     if (!started) return why;
+    // A runtime error in a module names its file as rig found it.
+    ran.err = with_module_placeholders(a, ran.err, MODULES, BIN_MODULES);
     return held_to_expected(a, name, &ran);
 }
 
@@ -456,6 +534,8 @@ static String interpreted_test(Arena *a, String unit_tests, String name) {
     bool started = run_within(a, argv, {}, INTERPRETED_TIMEOUT, &ran, &why);
     array_free(&argv);
     if (!started) return why;
+    // A module's file named as bin/unit-tests's loader found it.
+    ran.err = with_module_placeholders(a, ran.err, UNIT_TESTS_MODULES, UNIT_TESTS_BIN_MODULES);
 
     String build_out = read_build_out(a, name);
     String refusal = {};
@@ -529,6 +609,7 @@ static String error_test(Arena *a, String rig, String name) {
     bool started = run(a, argv, {}, &built, &why);
     array_free(&argv);
     if (!started) return why;
+    built.err = with_module_placeholders(a, built.err, MODULES, BIN_MODULES);
     if (built.exit_code != 1) {
         return with_stderr(
             a, string_printf(a, "rig build exited with " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, built.exit_code))),
@@ -1170,12 +1251,14 @@ static String check_both_ways(Arena *a, String rig, const char *dir, String name
     Process_Result r = {};
     String why = {};
     if (!run_check(a, rig, file, false, {}, {}, &r, &why)) return why;
+    r.err = with_module_placeholders(a, r.err, MODULES, BIN_MODULES);
     why = check_result(a, "rig check", &r, exit_code, err);
     if (why.count) return why;
     String wrote = check_wrote(a, name);
     if (wrote.count) return string_printf(a, "rig check wrote " STR_FMT, STR_ARG(wrote));
 
     if (!run_check(a, rig, file, true, source, {}, &r, &why)) return why;
+    r.err = with_module_placeholders(a, r.err, MODULES, BIN_MODULES);
     why = check_result(a, "rig check --stdin", &r, exit_code, err);
     if (why.count) return why;
     wrote = check_wrote(a, name);
@@ -2195,11 +2278,13 @@ int main(int argc, char **argv) {
     Array<String> args = os_arguments(&a, argc, argv);
     String rig = args.count >= 2 ? args[1] : string_printf(&a, "bin/rig%s", EXE);
     array_free(&args);
+    String unit_tests = string_printf(&a, "bin/unit-tests%s", EXE);
+    module_places_of(&a, rig, &MODULES, &BIN_MODULES);
+    module_places_of(&a, unit_tests, &UNIT_TESTS_MODULES, &UNIT_TESTS_BIN_MODULES);
     os_make_directory(str(".build"));
     os_make_directory(str(".build/tests"));
     s64 passed = 0, failed = 0;
     run_directory(&a, rig, "", "tests/run", run_test, &passed, &failed);
-    String unit_tests = string_printf(&a, "bin/unit-tests%s", EXE);
     run_directory(&a, unit_tests, "interpreted ", "tests/run", interpreted_test, &passed, &failed);
     report("rig build without -o, from another directory", default_output_test(&a, rig), &passed, &failed);
     report("a runtime error after the program's output, both in one pipe", merged_output_test(&a, rig), &passed,

@@ -5,14 +5,17 @@
 // allocators (the heap, an arena and a pool), a string builder, a growable
 // array, hash tables, and printing to standard output.
 //
-// A program loads all of it through this file, by its path from the
-// program's own directory, until Rig has #import: from tests/run that is
+// Basic ships with rig, so a program imports all of it through this file
+// by the module's name (spec 2.14):
 //
-//     #load "../../modules/Basic/module.rig";
+//     #import "Basic";
 //
-// Loading is #load (spec 2.13), so every name Basic declares joins the
-// program's one top level: a program that loads Basic can't declare a
-// procedure, struct or constant of a name Basic uses. README.md lists them.
+// A #load of this file by its path still works (from tests/run that is
+// #load "../../modules/Basic/module.rig";), and with an #import too the
+// files are read once. Either way every name Basic declares joins the
+// program's one top level (spec 2.13): a program that imports Basic can't
+// declare a procedure, struct or constant of a name Basic uses. README.md
+// lists them.
 //
 // Each part loads the parts it uses itself, and a file is read once however
 // often it is named, so the order here is only the reading order.

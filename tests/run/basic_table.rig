@@ -4,7 +4,7 @@
 // empty-string key, a key that is a prefix of another, int's extreme
 // values as keys, a rehash that only clears removed entries, and memory
 // that comes from the table's allocator and goes back to it, keys included.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 WORDS :: string.["apple", "banana", "cherry", "date", "elderberry", "fig", "grape", "honeydew", "kiwi", "lemon", "mango", "nectarine", "orange", "papaya", "quince", "raspberry", "strawberry", "tangerine", "ugli", "vanilla"];
 
