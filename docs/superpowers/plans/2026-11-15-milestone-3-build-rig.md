@@ -78,16 +78,16 @@
 3. **AST:**
    - `Ast_Proc` (`ast.h:146-180`): `body` is null for a foreign procedure, and the struct has `is_foreign`, `is_c_call` with `c_call_pos`, `body_resolve` and `had_errors`.
    - `Ast_Load` (`ast.h:438-442`): `path` and `path_pos`.
-   - `Ast_File` (`ast.h:470-476`): `procs`, `globals`, `loads`, `runs` and `lost_a_file`.
+   - `Ast_File` (`ast.h:479-485`, its comment above): `procs`, `globals`, `loads`, `runs` and `lost_a_file`.
    - `ast.cpp` dumps a procedure (`110-147`, `(foreign libc)` at `133-141`) and a load (`434-438`, `(load "a.rig")`).
 4. **Loader** (`load.cpp`, its rules in `load.h:1-46`):
    - `load_program(a, d, path, text, stdin_for = {}, stdin_text = {}, stdin_for_reached = nullptr)` (`load.h:72`). It has eight call sites: `driver.cpp:118`, `tests/unit/interpret_mode.cpp:93`, `test_ir.cpp:3357`, and `test_load.cpp:40, 194, 714, 740, 801`.
-   - The queue loop is at `load.cpp:186-239`. Each new `tree->loads[k]` is resolved with `load_path` (`214`).
-   - File identity is `file_key` and `first_time_seen` (`109-150`). A file named twice is skipped silently (`225`).
-   - Each added file gets `diag_add_file` and `diag_locate_file` (`236-237`).
+   - The queue loop is at `load.cpp:107-158`, its loop over each file's new loads at `118`. Each new `tree->loads[k]` is resolved with `load_path` (`133`).
+   - File identity is `File_Key`, `file_key` and `first_time_seen` (`19-69`). A file named twice is skipped silently (`144`).
+   - Each added file gets `diag_add_file` and `diag_locate_file` (`155-156`; the main file's at `102-103`).
 5. **Paths and the OS:**
    - `os_executable_directory(Arena *)` (`os.h:58-59`): Windows' is `GetModuleFileNameW`'s directory; Linux's is `/proc/self/exe` with its links resolved.
-   - `path_absolute` and `load_path` (`base.h:322-353`): they work on the text alone, and on Windows give `\` only.
+   - `path_absolute` and `load_path` (`base.h:322-353`): they work on the text alone. On Windows `path_absolute` gives `\` only; `load_path` keeps the text as written (`from` up to its last separator, then `written`), and normalises only after a `\\?\` prefix.
    - `os_list_directory` (`os.h:56`) lists a directory's names, sorted.
    - `Source_File` (`diag.h:31-41`): `path`, `text`, `absolute_path` and `directory`.
 6. **Checker:**
@@ -162,7 +162,7 @@
    - A file is a module's when its path is inside the modules directory found in decision 1, whether `#import` or `#load` reached it.
    - `#compiler` outside such a file is `#compiler is only for the modules that ship with rig`, at the directive.
 6. **Build programs.**
-   - A build program is a program that reaches the Compiler module's `module.rig`, through `#import` or `#load`, and declares no procedure called `main`. A global variable or constant named `main` doesn't count: it already gets its own error.
+   - A build program is a program that reaches the Compiler module's `module.rig`, through `#import` or `#load`, and declares no procedure called `main`. A global variable or constant named `main` doesn't count: it is no procedure, as the `main` rule already has it (`checker.cpp:1962-1966`). (It has no error of its own: in an ordinary program it gets `a procedure called 'main' is needed`, a rule a build program skips, so in a build program it is an ordinary global.)
    - The command-line refusals (`-o`, `--no-bounds-checks`) come after checking, before the top-level `#run`s. A program with errors reports them, with status 1, before any refusal.
 7. **`#compiler` procedures.**
    - The checker exempts them from the C rules for foreign procedures: they take and return Rig structs and strings.
@@ -370,7 +370,7 @@ struct Load_Options {
 Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const Load_Options *options = nullptr);
 ```
 
-- **The loader's `#import` branch,** in the loop at `load.cpp:199`. When `load->is_import`:
+- **The loader's `#import` branch,** in the loop at `load.cpp:118`. When `load->is_import`:
   1. A name that isn't a module's is `'NAME' isn't a module's name`. `""`, `../x`, `a/b`, `9lives` and a zero byte are all refused. `lost_a_file` is set.
   2. If `module_lookup` gives `{}`, the error is `there's no module 'NAME' (looked in P0 and P1)`, and `lost_a_file` is set.
   3. Otherwise the found path goes down the `#load` path from `file_key` on: the same identity, read once, the same read error. It is named by that absolute path.
@@ -597,11 +597,12 @@ String compiler_module_call(void *context, Ir_Proc *proc, Array<u64> args, u64 *
       ```
     - It gives `2:6: #run failed: runtime error: 'twice' can only be called while compiling\n    in #run (test.rig:2:11)\n`.
   - `test_compiler_module.cpp`:
-    - A helper, `run_build_program(Arena *a, const char *name, const char *text, Build_State *state, const Module_Places *places = nullptr)`:
+    - A helper, `run_build_program(Arena *a, const char *name, const char *text, Build_State *state, const Module_Places *places = nullptr, Ast_File **tree = nullptr)`:
       - it writes `text` to `.build/tests/compiler/NAME/build.rig` (made fresh), sets `state->program_path` to that path, and loads it with `places` (null: rig's own);
       - it makes a world with `compile_time_set_compiler(world, compiler_module_call, state)`, checks, and runs the top-level runs when the check is clean;
-      - it returns the sorted `messages`, with every occurrence of the path replaced by `PATH`.
+      - it returns the sorted `messages`, with every occurrence of the path replaced by `PATH`, and the tree (in `a`) through `tree` when given.
       - A test writes any other files it needs into the directory first.
+      - The state's `is_build_program` is the test's to set, so the helper doesn't need the program to be a build program. Until Task 5 skips the `main` rule for build programs, a program without `main` gets `a procedure called 'main' is needed`, and its top-level runs never run. So every program of these tests ends with a last line `main :: () {}` (after the lines shown, so no position below moves).
     - `compiler_procedures_make_workspaces`:
       - `is_build_program` is set, and `src/main.rig` and `src/more.rig` exist. Program:
         ```
@@ -623,13 +624,13 @@ String compiler_module_call(void *context, Ir_Proc *proc, Array<u64> args, u64 *
       - The second is `tools`, with no files, `output_name` empty, `optimize` false and `bounds_checks` true.
     - `build_options_start_as_rig_build_has_them`:
       - Program: `#import "Compiler";`, then a procedure `defaults :: () -> int` returning `o.output_name.count * 100`, plus 10 if `o.optimize`, plus 1 if `o.bounds_checks`, of a new workspace's options, then `D :: #run defaults();`.
-      - `D` is the constant 1.
+      - `D` is the constant 1 (read from the tree the helper gives back).
     - `build_options_keep_their_own_copy_of_the_name`:
       - Program: a top-level `#run { }` that fills a local `bytes : [4]u8` with `game` and views it as a string (`name.data = *bytes[0]; name.count = 4;`).
       - It creates workspace `name`, sets `output_name = name`, then overwrites `bytes[0] = 120`.
       - The workspace's name and its `output_name` are both `game`.
     - `compiler_procedures_fail_like_runtime_errors`. One program each, `is_build_program` set; the messages exactly:
-      - `#import "Compiler";\n#run { w : Workspace; w.id = 7; add_build_file(w, "x.rig"); }\n` gives `2:1: #run failed: runtime error: there's no workspace with id 7\n    in #run (PATH:2:33)\n`;
+      - `#import "Compiler";\n#run { w : Workspace; w.id = 7; add_build_file(w, "x.rig"); }\nmain :: () {}\n` gives `2:1: #run failed: runtime error: there's no workspace with id 7\n    in #run (PATH:2:33)\n`;
       - two `create_workspace("game");` statements in one `#run { }` give `there's already a workspace 'game'`, its frame at the second call's name;
       - `add_build_file(w, "src/missing.rig")` gives `there's no file 'src/missing.rig'`;
       - `add_build_file(w, "notes.txt")` gives `'notes.txt' isn't a .rig file`;
@@ -638,7 +639,7 @@ String compiler_module_call(void *context, Ir_Proc *proc, Array<u64> args, u64 *
     - `create_workspace_needs_a_build_program`: `is_build_program` clear, and `#run { create_workspace("x"); }` gives `#run failed: runtime error: a program with 'main' can't create workspaces`.
     - `compiler_procedures_unknown_to_the_compiler_fail`:
       - a fixture place holds `Fake/module.rig` with `nothing :: () #compiler;`;
-      - a build program `#import "Fake"; #run nothing();`, loaded with those places, gives `the compiler has no procedure 'nothing'`.
+      - a program `#import "Fake"; #run nothing(); main :: () {}`, loaded with those places, gives `the compiler has no procedure 'nothing'`. (Those places hold no Compiler module, so it is never a build program: without `main` it would get the `main` error, and its run wouldn't run, after Task 5 too.)
   - `tests/errors/main_creates_workspace`:
     - Header: a program with `main` can't make workspaces, even while compiling (spec 7.9).
     - `#import "Compiler";`, `#run { create_workspace("tools"); }` and `main :: () {}`.
@@ -662,7 +663,7 @@ String compiler_module_call(void *context, Ir_Proc *proc, Array<u64> args, u64 *
   - `command_build`'s no-file rule;
   - the header comment.
 - Modify: `src/main.cpp` (the usage), `tests/unit/interpret_mode.cpp` (it calls the `Compilation` steps, and refuses a build program)
-- Modify: `tests/runner.cpp` (`error_test` and decision 18, `COMMAND_CASES`, the interpret-mode fixed case, the header)
+- Modify: `tests/runner.cpp` (`error_test` and decision 18, `COMMAND_CASES`, `CHECK_CASES`' usage start, the interpret-mode fixed case, the header)
 - Modify: `CONTRIBUTING.md` (the tests list: build programs in `tests/errors`)
 - Test: `tests/unit/test_load.cpp`
 - Create, each `.rig` and `.err`:
@@ -735,7 +736,7 @@ static void compilation_free(Compilation *c);
     - `build_two_workspaces_one_name.rig`: `#run failed: runtime error: there's already a workspace 'game'` and its frame.
     - `build_type_error.rig`: a build program with `x : int = "text";`. The `.err` is the checker's message, which rig check prints too.
   - `COMMAND_CASES`:
-    - the three usage starts become `usage: rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks]\n`;
+    - the two other usage starts (`no command`, `an unknown command`) become `usage: rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks]\n`, and so does the first line of `CHECK_CASES`' `rig check with no file` (`runner.cpp:1463-1466`), whose start is both lines of the usage;
     - `rig build with no file` becomes `{"build"}, 1, "rig: error: no file given and no build.rig in the current directory\n"`;
     - `--no-bounds-checks with no file` becomes status 1 with the same message;
     - new: `-o with a build program`, `{"build", "tests/errors/build_no_workspace.rig", "-o", ".build/tests/output"}`, 2, with the `-o` message whole;
