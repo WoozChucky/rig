@@ -1173,6 +1173,50 @@ TEST(import_finds_a_module_in_the_first_place_that_has_it) {
     arena_free(&a);
 }
 
+TEST(import_skips_a_place_whose_module_has_no_module_rig) {
+    // A place's entry named NAME is the module only if its module.rig is
+    // there: first/Gamma, empty, is passed over for second/Gamma's; and
+    // first/Delta, which holds another file, is no module, so with no Delta
+    // in second/ there's none.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "import_skips_a_place_whose_module_has_no_module_rig");
+    Module_Places places = test_places(&a, dir);
+    CHECK(os_make_directory(string_printf(&a, STR_FMT "%cGamma", STR_ARG(places.places[0]), SEPARATOR)));
+    write_module(&a, places.places[1], "Gamma", "gamma :: () {}\n");
+    load_main_importing(&a, &d, dir, "#import \"Gamma\";\nmain :: () { gamma(); }\n", &places);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 2);
+    if (d.files.count == 2) CHECK_STR(d.files[1].path, module_file(&a, places.places[1], "Gamma", "module.rig"));
+    diag_free(&d);
+
+    d = {};
+    CHECK(os_make_directory(string_printf(&a, STR_FMT "%cDelta", STR_ARG(places.places[0]), SEPARATOR)));
+    CHECK(os_write_file(str(module_file(&a, places.places[0], "Delta", "notes.txt")), str("not a module\n")));
+    load_main_importing(&a, &d, dir, "#import \"Delta\";\nmain :: () {}\n", &places);
+    String expected = string_printf(&a, "1:9: there's no module 'Delta' (looked in " STR_FMT " and " STR_FMT ")\n",
+                                    STR_ARG(places.places[0]), STR_ARG(places.places[1]));
+    CHECK_STR(messages(&a, &d), string_cstr(&a, expected));
+    CHECK_EQ(d.files.count, 1);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(import_takes_letters_digits_and_underscores) {
+    // After its first letter, a module's name may have digits and '_'.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "import_takes_letters_digits_and_underscores");
+    Module_Places places = test_places(&a, dir);
+    write_module(&a, places.places[0], "My_Mod2", "my_mod :: () {}\n");
+    load_main_importing(&a, &d, dir, "#import \"My_Mod2\";\nmain :: () { my_mod(); }\n", &places);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 2);
+    if (d.files.count == 2) CHECK_STR(d.files[1].path, module_file(&a, places.places[0], "My_Mod2", "module.rig"));
+    diag_free(&d);
+    arena_free(&a);
+}
+
 TEST(import_loads_a_module_once) {
     // A module imported twice, and loaded by its path too, is one file,
     // read once, named as whichever reached it first named it: by its
@@ -1246,7 +1290,9 @@ TEST(import_reports_names_and_missing_modules) {
                                     STR_ARG(places.places[0]), STR_ARG(places.places[1]));
     CHECK_STR(import_messages(&a, dir, "#import \"Nope\";\n", &places, &lost), string_cstr(&a, expected));
     CHECK(lost);
-    const char *names[] = {"../x", "", "a/b", "9lives"};
+    // A name starting with '_' isn't one, nor one with a letter that isn't
+    // ASCII (here Ä, in UTF-8).
+    const char *names[] = {"../x", "", "a/b", "9lives", "_x", "\xC3\x84"};
     for (const char *name : names) {
         String text = string_printf(&a, "#import \"%s\";\n", name);
         expected = string_printf(&a, "1:9: '%s' isn't a module's name\n", name);

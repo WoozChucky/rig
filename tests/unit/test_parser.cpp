@@ -2911,3 +2911,68 @@ TEST(parse_import_errors) {
     token_list_free(list);
     arena_free(&a);
 }
+
+TEST(parse_import_misplaced) {
+    // #load's misplaced cases, made with #import: where an expression, a
+    // token or a type is expected, and later on a declaration's line, the
+    // message names #import and the program lacks the module; a recovery
+    // that passes over an #import, in a broken body or on the way to a
+    // declaration later on its line, loses it too; and after a value or a
+    // procedure type in parentheses, the #import on the next line begins the
+    // next declaration and is kept.
+    Arena a = arena_make();
+    struct Case {
+        const char *text;
+        const char *errors;
+        const char *dump;
+        bool lost;
+    };
+    Case cases[] = {
+        {"main :: () {\n    x := #import \"Basic\";\n}\n", "2:10: #import can only be at the top level\n",
+         "(broken main)\n", true},
+        {"main :: () {\n    x := 1 #import \"Basic\";\n}\n", "2:12: #import can only be at the top level\n",
+         "(broken main)\n", true},
+        {"main :: () {\n    f(1 #import \"Basic\");\n}\n", "2:9: #import can only be at the top level\n",
+         "(broken main)\n", true},
+        {"main :: () {\n    x := a.#import \"Basic\";\n}\n", "2:12: #import can only be at the top level\n",
+         "(broken main)\n", true},
+        {"main :: () {\n    for 0 #import \"Basic\";\n}\n", "2:11: #import can only be at the top level\n",
+         "(broken main)\n", true},
+        {"main :: () {\n    for a #import \"Basic\";\n}\n", "2:11: #import can only be at the top level\n",
+         "(broken main)\n", true},
+        {"S :: struct { a: int #import \"Basic\"; }\n", "1:22: #import can only be at the top level\n", "(broken S)\n",
+         true},
+        {"#import \"Alpha\" #import \"Beta\";\n", "1:17: #import can only be at the top level\n",
+         "(import \"Alpha\")\n", true},
+        {"g : #import \"Basic\";\nmain :: () {}\n", "1:5: #import can only be at the top level\n",
+         "(broken g)\n(proc main (params) (block))\n", true},
+        {"S :: struct {\n    x: #import \"Basic\";\n}\nmain :: () {}\n", "2:8: #import can only be at the top level\n",
+         "(broken S)\n(proc main (params) (block))\n", true},
+        {"f :: (a: #import \"Basic\") {}\n", "1:10: #import can only be at the top level\n", "(broken f)\n", true},
+        {"f :: (a: int, #import \"Basic\") {}\n", "1:15: #import can only be at the top level\n", "(broken f)\n",
+         true},
+        {"main :: () #import \"Basic\" {}\n", "1:12: #import can only be at the top level\n", "(broken main)\n",
+         true},
+        {"N :: 1 #import \"Basic\";\nmain :: () {}\n", "1:8: #import can only be at the top level\n",
+         "(broken N)\n(proc main (params) (block))\n", true},
+        {"op : (int) -> int #import \"Basic\";\nmain :: () {}\n", "1:19: #import can only be at the top level\n",
+         "(broken op)\n(proc main (params) (block))\n", true},
+        {"f :: () {\n    x := ;\n#import \"Basic\";\n}\nmain :: () {}\n", "2:10: expected an expression, found ';'\n",
+         "(broken f)\n(proc main (params) (block))\n", true},
+        {"* #import \"Basic\"; main :: () {}\n", "1:1: expected identifier, found '*'\n",
+         "(proc main (params) (block))\n", true},
+        {"x := (1 + 2)\n#import \"Basic\";\nmain :: () {}\n", "2:1: expected ';', found directive\n",
+         "(broken x)\n(import \"Basic\")\n(proc main (params) (block))\n", false},
+        {"op : (int) -> int\n#import \"Basic\";\nmain :: () {}\n", "2:1: expected ';', found directive\n",
+         "(broken op)\n(import \"Basic\")\n(proc main (params) (block))\n", false},
+    };
+    for (s64 i = 0; i < (s64)(sizeof cases / sizeof cases[0]); i++) {
+        Token_List *list = src(cases[i].text);
+        Ast_File *file = parse(list->tokens, &a, &list->diag);
+        CHECK_STR(messages(&a, &list->diag), cases[i].errors);
+        CHECK_STR(ast_dump(&a, file), cases[i].dump);
+        CHECK_EQ(file->lost_a_file, cases[i].lost);
+        token_list_free(list);
+    }
+    arena_free(&a);
+}

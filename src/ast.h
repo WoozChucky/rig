@@ -67,7 +67,7 @@ enum Ast_Kind : u8 {
     AST_MEMBER,        // Ast_Member: e.x
     AST_LITERAL,       // Ast_Literal: Vec2.{1, 2}  Vec2.{y = 2}  .{1, 2}  int.[1, 2]  .[1, 2]
     AST_INDEX,         // Ast_Index: a[i]
-    AST_LOAD,          // Ast_Load: #load "PATH";
+    AST_LOAD,          // Ast_Load: #load "PATH"; or #import "NAME";
     AST_RUN,           // Ast_Run: #run e (an expression), or a top-level #run e; or #run { ... }
 };
 
