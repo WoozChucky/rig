@@ -38,6 +38,8 @@ struct Source_File {
     // empty until then.
     String absolute_path;  // path made absolute (path_absolute)
     String directory;      // the directory rig ran in, which a relative path starts from
+    bool in_module;  // inside one of the modules' places (load.h, spec 2.14): a file of a module that ships
+                     // with rig, which may declare #compiler procedures; set by the loader
 };
 
 struct Diagnostic {

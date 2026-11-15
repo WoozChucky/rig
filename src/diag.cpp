@@ -3,7 +3,7 @@
 #include "diag.h"
 
 s32 diag_add_file(Diagnostics *d, String path, String text) {
-    array_add(&d->files, {string_copy(&d->arena, path), text, {}, {}});
+    array_add(&d->files, {string_copy(&d->arena, path), text, {}, {}, false});
     return (s32)(d->files.count - 1);
 }
 

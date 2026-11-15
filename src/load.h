@@ -57,6 +57,12 @@
 // at the #import's string, each also losing the file:
 //   '../x' isn't a module's name
 //   there's no module 'Nope' (looked in DIR1 and DIR2)   (the places, as Module_Places has them)
+//
+// A file whose absolute path is inside one of the places, at any depth, is
+// a module's, whether an #import reached it or a #load did, the main file
+// included (Source_File.in_module): only such a file may declare #compiler
+// procedures (spec 7.9), which the checker says. On Windows the case of
+// the path doesn't count there, as it doesn't in a file's name.
 
 #pragma once
 
@@ -88,7 +94,8 @@ struct Load_Options {
     String stdin_for;
     String stdin_text;
     bool *stdin_for_reached;       // when given, set to whether the program reached stdin_for
-    const Module_Places *modules;  // where #import looks; null: module_places(), rig's own
+    const Module_Places *modules;  // where #import looks, and where a module's files are (in_module); null:
+                                   // module_places(), rig's own
 };
 
 // Lexes and parses `text`, the main file, named `path` (which need not
@@ -96,8 +103,9 @@ struct Load_Options {
 // path only names it and says where its #loads are), then every file it
 // #loads or #imports, transitively, each once, in load order, into one
 // tree: every file's declarations, broken ones included. Every file is
-// registered with `d` (diag_add_file) and located from the directory rig
-// runs in (diag_locate_file, os_current_directory), the main file first.
+// registered with `d` (diag_add_file), located from the directory rig
+// runs in (diag_locate_file, os_current_directory), and marked when it's
+// a module's (Source_File.in_module), the main file first.
 // Errors go to `d`; the tree is returned even with errors, never null, so
 // the checker still runs and reports what it finds in the rest. The tree
 // and the texts read are in the arena; the files' paths are copied into
@@ -111,8 +119,9 @@ struct Load_Options {
 // `path` for the main file. stdin_text, as `text`, isn't copied: the tree's
 // names and `d` point into it, so the caller keeps it alive as long as
 // both. *stdin_for_reached, when given, says whether the program reached
-// it. modules, when given, are the places #import looks in, in place of
-// rig's own (module_places): the tests' own modules.
+// it. modules, when given, are the places #import looks in, and that say
+// which files are a module's, in place of rig's own (module_places): the
+// tests' own modules.
 Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const Load_Options *options = nullptr);
 
 // Whether paths a and b, each from the directory rig runs in, name one file

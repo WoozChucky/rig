@@ -92,8 +92,9 @@ bool check_proc_signature(Checker *c, Ast_Proc *proc);
 // "'f' is defined in terms of itself" at `at`, once (a body already in one,
 // RESOLVE_CYCLE, says nothing more), and mark_circle from the body's entry.
 // True when the body is done and neither it nor the signature had errors; a
-// foreign procedure has no body (its signature's errors count); a broken
-// one is false, and so is one nested too deeply to check here (said).
+// foreign or #compiler procedure has no body (its signature's errors
+// count); a broken one is false, and so is one nested too deeply to check
+// here (said).
 bool check_reached_body(Checker *c, Ast_Proc *proc, Position at);
 
 // [count]element (type_array_of), or null after "'[N]T' is too big", at

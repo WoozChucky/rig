@@ -516,6 +516,19 @@
 //   turn, and a top-level #run's expression, aren't counted so: a body
 //   their #runs need starts at level 0.
 //
+// Procedures the compiler does (issue #116, spec 7.9).
+// - A #compiler procedure has no body: the compiler does it itself, while
+//   compiling. Only a module that ships with rig may declare one, a file
+//   inside one of the modules' places (Source_File.in_module, load.h):
+//   anywhere else it's "#compiler is only for the modules that ship with
+//   rig", at the directive.
+// - It's no C function, so the C rules a foreign procedure's signature
+//   follows aren't its: it takes and returns Rig's structs and strings.
+// - It can be called, but isn't a value: "'create_workspace' can't be a
+//   value: the compiler does it", at the name. Its calls run only while
+//   compiling: the program's lowering refuses one its executable would
+//   make (lower.cpp), so rig check, which never lowers, says nothing of it.
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - A string after the library is the C function's name (issue #135),

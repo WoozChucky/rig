@@ -2976,3 +2976,37 @@ TEST(parse_import_misplaced) {
     }
     arena_free(&a);
 }
+
+// Issue #116: #compiler procedures (spec 7.9). A procedure the compiler
+// implements is declared with #compiler after its signature, and no body.
+
+TEST(parse_compiler_procedures) {
+    // The directive is kept, where it's written, and the body stays null.
+    Arena a = arena_make();
+    Token_List *list = src("make :: (name: string) -> Workspace #compiler;\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK_STR(ast_dump(&a, file), "(proc make (params (name string)) (returns Workspace) (compiler))\n");
+    CHECK_EQ(file->procs.count, 1);
+    if (file->procs.count == 1) {
+        Ast_Proc *proc = file->procs[0];
+        CHECK(proc->is_compiler);
+        CHECK(!proc->is_foreign);
+        CHECK_EQ(proc->compiler_pos.line, 1);
+        CHECK_EQ(proc->compiler_pos.col, 37);
+        CHECK(proc->body == nullptr);
+    }
+    token_list_free(list);
+
+    // The compiler's procedure is no C function, so #c_call has no place
+    // before it, as before #foreign; #no_abc is a body's, and none follows.
+    String errors;
+    parse_src(&a, "f :: () #c_call #compiler;\n", &errors);
+    CHECK_STR(errors, "1:9: a #compiler procedure is the compiler's: it takes no '#c_call'\n");
+    parse_src(&a, "f :: () #no_abc #compiler;\n", &errors);
+    CHECK_STR(errors, "1:17: expected '{', found directive\n");
+    // A body after it is no part of it: the ';' must come next.
+    parse_src(&a, "f :: () #compiler {}\n", &errors);
+    CHECK_STR(errors, "1:19: expected ';', found '{'\n");
+    arena_free(&a);
+}

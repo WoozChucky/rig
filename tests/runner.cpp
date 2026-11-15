@@ -66,7 +66,8 @@
 // tests/errors exit 1 and print its NAME.err, unless it has a
 // NAME.check.err: what rig check prints instead, for a program whose
 // errors only rig build finds (a top-level #run that fails, which checking
-// never runs). An empty one means exit 0 with nothing on stderr.
+// never runs, or a #compiler call, which only lowering finds). An empty
+// one means exit 0 with nothing on stderr.
 //
 // Then the specification's examples (spec_tests): every ```rig block of
 // docs/rig-spec.md but a file= one (below; its section 1.4 says so too),
@@ -1268,7 +1269,8 @@ static String check_both_ways(Arena *a, String rig, const char *dir, String name
 
 // A program of tests/errors: exit 1 and its .err, as rig build gives. But
 // one whose errors only rig build finds (a top-level #run that fails, which
-// rig check never runs) has a NAME.check.err, what rig check gives instead:
+// rig check never runs, or a #compiler call, which only lowering finds) has
+// a NAME.check.err, what rig check gives instead:
 // exit 0 when it's empty, 1 otherwise, and it on stderr (its @NO_SUCH_FILE@
 // replaced too).
 static String check_error_test(Arena *a, String rig, String name) {

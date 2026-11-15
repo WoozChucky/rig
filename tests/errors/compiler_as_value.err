@@ -1,0 +1,3 @@
+tests/errors/compiler_as_value.rig:4:19: error: 'create_workspace' can't be a value: the compiler does it
+    main :: () { f := create_workspace; }
+                      ^

@@ -1,0 +1,4 @@
+// A #compiler procedure (spec 7.9) has no code in the program, so it has
+// no address to be a value: the error is at its name.
+#import "Compiler";
+main :: () { f := create_workspace; }

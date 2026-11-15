@@ -151,6 +151,13 @@
 //   (constant_bytes).
 // - Rig's main is C's main (ir.h): exported, its every return a ret of C's
 //   int 0, so the program needs no wrapper around it.
+// - A #compiler procedure (spec 7.9) is declared as any procedure is, its
+//   struct and string parameters and results passed as a Rig procedure's
+//   are (above), but with no body: the compiler does it, while compiling,
+//   reading and writing them where the interpreter keeps them. A call of
+//   one is at the callee's name. The program's own lowering (ir_lower)
+//   refuses each call, the one error lowering reports: "'create_workspace'
+//   can only be called while compiling" (lower_call_results).
 // - What a debugger needs (ir.h's "Debug information") is kept as the code
 //   is lowered: each instruction is stamped with the position and scope of
 //   the statement being lowered (Lowering.pos and scope, emit_in);
@@ -222,7 +229,8 @@ struct Loop {
 
 struct Lowering {
     Arena *arena;
-    Diagnostics *diag;        // only for the source files' paths, which runtime errors name
+    Diagnostics *diag;        // the source files' paths, which runtime errors name, and the one error
+                              // lowering reports: a #compiler call in the program (lower_call_results)
     Ir_Module *module;
     Table<s32> proc_index;    // a Rig or foreign procedure's index in module->procs, by name
     Table<s32> global_index;  // a global variable's index in module->globals, by name
@@ -1541,6 +1549,12 @@ static Ir_Proc *signature_of(Lowering *l, Type *t) {
 //   runtime error at the call's '(' (spec 8.4: "null procedure call"); then
 //   the call of the value, as the procedure it holds expects to be called
 //   (signature_of).
+// - A #compiler procedure's call (spec 7.9) is made as any procedure's, but
+//   at the callee's name: the compile-time world's interpreter has the
+//   compiler do it (interp.h). Lowered whole, for the program's
+//   executable, it's an error there, "'create_workspace' can only be
+//   called while compiling": only lowering sees every call the executable
+//   would make, one in a procedure nothing calls too.
 // - A variadic foreign procedure's arguments after its fixed parameters
 //   have none to convert to: each is passed as C's default argument
 //   promotions make its own type (extra_argument_type): an s8 or s16
@@ -1592,7 +1606,21 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
         array_add(&args, value);
     }
     s32 next;
-    if (proc) {
+    if (proc && proc->is_compiler) {
+        // A #compiler procedure (spec 7.9), which the compiler does: the
+        // call is at the callee's name, as a runtime check is at its own
+        // place, so a failure's innermost frame, and the place the
+        // compiler is told of, are the name. The program's own executable
+        // can't make it: lowered whole, as rig build lowers a program, the
+        // call is refused there, and still emitted, so the IR stays whole.
+        Position outer = l->pos;
+        l->pos = call->callee->pos;
+        if (!l->on_demand) {
+            diag_error(l->diag, l->pos, "'" STR_FMT "' can only be called while compiling", STR_ARG(proc->name));
+        }
+        next = emit_call(l, proc_index_of(l, proc), args)->result;
+        l->pos = outer;
+    } else if (proc) {
         next = emit_call(l, proc_index_of(l, proc), args)->result;
     } else {
         // Right before the call, once the arguments are worked out: a null
@@ -2734,6 +2762,10 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
     RIG_ASSERT(!source->is_broken);
     Ir_Proc *p = ir_new_proc(l->module, l->arena, source->name);
     p->is_foreign = source->is_foreign;
+    // A #compiler procedure (spec 7.9) is declared alone, as a foreign one
+    // is: it has no body here, since the compiler does it.
+    p->is_compiler = source->is_compiler;
+    bool has_body = !source->is_foreign && !source->is_compiler;
     // #foreign libc "free": the symbol, the Rig name staying p's. The module
     // keeps its own copy of the string's bytes, as it does a literal's
     // (add_bytes), so it doesn't depend on the arena the lexer decoded them
@@ -2763,11 +2795,11 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
     // hands to exit. (The checker made sure it takes and returns nothing in
     // Rig; a Rig call of main ignores the int.) So a debugger's `break
     // main` stops in the program's own main.
-    if (!source->is_foreign && string_eq(source->name, str("main"))) {
+    if (has_body && string_eq(source->name, str("main"))) {
         p->is_export = true;
         array_add(&p->results, {IR_I32, IR_EXT_NONE});
     }
-    if (!source->is_foreign) {
+    if (has_body) {
         p->source_name = source->name;
         p->pos = source->pos;
         p->body = source->body->pos;
@@ -2776,12 +2808,12 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
     s32 index = (s32)(l->module->procs.count - 1);
     table_put(&l->proc_index, source->name, index);
     set_source(l, index, source);
-    if (l->on_demand && !source->is_foreign) array_add(&l->waiting, index);
+    if (l->on_demand && has_body) array_add(&l->waiting, index);
     return index;
 }
 
-// The body of procedure `source` (not a foreign one), lowered into
-// module->procs[index]: the procedure declare_proc made for it, or the
+// The body of procedure `source` (not a foreign or #compiler one), lowered
+// into module->procs[index]: the procedure declare_proc made for it, or the
 // run.N of a #run { } (ir_lower_run).
 static void lower_body(Lowering *l, Ast_Proc *source, s32 index) {
     l->proc = l->module->procs[index];
@@ -2889,9 +2921,10 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         RIG_ASSERT(index == i);
     }
 
-    // Then the bodies.
+    // Then the bodies: a foreign procedure's is C's, and a #compiler one's
+    // the compiler's own.
     for (s64 i = 0; i < f->procs.count; i++) {
-        if (!f->procs[i]->is_foreign) lower_body(&l, f->procs[i], (s32)i);
+        if (!f->procs[i]->is_foreign && !f->procs[i]->is_compiler) lower_body(&l, f->procs[i], (s32)i);
     }
 
     // __rig_bounds_failed, if a check calls it: after every body, so the

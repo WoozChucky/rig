@@ -1616,7 +1616,7 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 // their types and the bodies in it have errors.
 bool check_reached_body(Checker *c, Ast_Proc *proc, Position at) {
     if (proc->is_broken) return false;
-    if (!proc->body) return !proc->had_errors;  // a foreign procedure: C's code
+    if (!proc->body) return !proc->had_errors;  // a foreign procedure, C's code, or a #compiler one
     if (proc->body_resolve == RESOLVE_UNDER_WAY || proc->body_resolve == RESOLVE_CYCLE) {
         if (proc->body_resolve == RESOLVE_UNDER_WAY) {
             diag_error(c->diag, at, "'" STR_FMT "' is defined in terms of itself", STR_ARG(proc->name));
@@ -1741,6 +1741,14 @@ static void check_c_name(Checker *c, Ast_Proc *proc) {
 // procedure would have no way to reach the arguments it doesn't name (Rig
 // has no va_list), and takes a view of them instead.
 //
+// A #compiler procedure, which the compiler does itself (spec 7.9), is no
+// C function: it takes and returns Rig's own structs and strings, which the
+// compiler reads and writes where the interpreter keeps them, so the C
+// rules aren't its. Only a module that ships with rig may declare one, a
+// file inside one of the modules' places (Source_File.in_module): anywhere
+// else it's "#compiler is only for the modules that ship with rig", at the
+// directive.
+//
 // Each type starts where the signature does, at `base`: a global it needs
 // (an array's count) starts a level below its own levels (Ast_Type.levels,
 // open_declaration).
@@ -1778,6 +1786,9 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
                    STR_ARG(proc->foreign_library));
     }
     if (proc->is_foreign) check_c_name(c, proc);
+    if (proc->is_compiler && !c->diag->files[proc->compiler_pos.file].in_module) {
+        diag_error(c->diag, proc->compiler_pos, "#compiler is only for the modules that ship with rig");
+    }
     proc->type = proc_type_of_signature(proc);
 }
 

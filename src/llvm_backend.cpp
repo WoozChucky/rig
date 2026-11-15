@@ -1859,10 +1859,12 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, bool optimize, Are
     }
 
     // Every function of the program first, so a body can call one defined
-    // after it. (The foreign ones are declared already.)
+    // after it. (The foreign ones are declared already.) A #compiler
+    // procedure is none: the compiler does it while compiling, and lowering
+    // refused every call the program would make, so nothing names it.
     for (s64 i = 0; i < m->procs.count; i++) {
         Ir_Proc *p = m->procs[i];
-        if (p->is_foreign) continue;
+        if (p->is_foreign || p->is_compiler) continue;
         functions[i] = LLVMAddFunction(b->module, string_cstr(a, p->name), function_type(c, p, a));
         if (!p->is_export) LLVMSetLinkage(functions[i], LLVMInternalLinkage);
         mark_definition(b, functions[i]);
@@ -1889,7 +1891,8 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, bool optimize, Are
         LLVMSetInitializer(globals[i], init);
     }
     for (s64 i = 0; i < m->procs.count; i++) {
-        if (!m->procs[i]->is_foreign) build_body(b, a, m, m->procs[i], functions[i], functions, globals);
+        Ir_Proc *p = m->procs[i];
+        if (!p->is_foreign && !p->is_compiler) build_body(b, a, m, p, functions[i], functions, globals);
     }
 
     // The debug information is complete: the builder resolves what it left

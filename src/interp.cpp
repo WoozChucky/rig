@@ -522,7 +522,9 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
         case IR_ADDR: v[instr->result] = (u64)in->globals.data[instr->target]; break;
         case IR_PROC_ADDR:
             // A C function's value is its native address, a Rig
-            // procedure's the address standing for it.
+            // procedure's the address standing for it. A #compiler
+            // procedure has none: the checker refuses it as a value.
+            RIG_ASSERT(!m->procs.data[instr->target]->is_compiler);
             if (m->procs.data[instr->target]->is_foreign) {
                 void *f = interp_c_function(in, instr->target);
                 if (!f) {

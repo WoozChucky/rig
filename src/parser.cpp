@@ -1351,7 +1351,7 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 }
 
 // procedure = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
-//               ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';')
+//               ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
 // params    = param {',' param} [',' '..']
 //
 // Several results are written as a list after the arrow, with or without
@@ -1370,7 +1370,12 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // other directive but these is "unknown directive '#foo'". A string after
 // #foreign's library is the C function's name, when it isn't the
 // procedure's own (c_free :: (p: *void) #foreign libc "free";): the
-// procedure keeps its name in Rig.
+// procedure keeps its name in Rig. #compiler, Jai's directive, declares a
+// procedure the compiler does itself, while compiling (spec 7.9), with no
+// body: `create_workspace :: (name: string) -> Workspace #compiler;`. It's
+// no C function, so it takes no #c_call either ("a #compiler procedure is
+// the compiler's: it takes no '#c_call'"), #no_abc before it is "expected
+// '{'", as before #foreign, and the ';' must follow it.
 //
 // Each element of the parameter list is a parameter or, last, the '..' of
 // a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign libc;).
@@ -1424,7 +1429,8 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
         // Where the '{' should be: parse_block reports it. A #run starting
         // the next line is where the recovery resumes, as a #load is.
         if (is_load_or_import(t) || is_directive(t, "run")) break;
-        if (!string_eq(t->text, str("foreign"))) {
+        bool compiler = is_directive(t, "compiler");
+        if (!compiler && !string_eq(t->text, str("foreign"))) {
             diag_error(p->diag, t->pos, "unknown directive '#" STR_FMT "'", STR_ARG(t->text));
             return nullptr;
         }
@@ -1433,10 +1439,20 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
             return nullptr;
         }
         if (proc->is_c_call) {
-            diag_error(p->diag, proc->c_call_pos, "a foreign procedure is C's already: it takes no '#c_call'");
+            diag_error(p->diag, proc->c_call_pos,
+                       compiler ? "a #compiler procedure is the compiler's: it takes no '#c_call'"
+                                : "a foreign procedure is C's already: it takes no '#c_call'");
             return nullptr;
         }
-        advance(p);
+        Position directive = advance(p)->pos;
+        if (compiler) {
+            // The compiler does it (spec 7.9): a declaration alone, which
+            // the checker allows only in a module that ships with rig.
+            if (!expect(p, TOKEN_SEMICOLON)) return nullptr;
+            proc->is_compiler = true;
+            proc->compiler_pos = directive;
+            return proc;
+        }
         Token *library = expect(p, TOKEN_IDENT);
         if (!library) return nullptr;
         // The C function's name, when it isn't the procedure's: any string

@@ -1342,6 +1342,31 @@ TEST(module_places_are_beside_rig_and_above_it) {
     arena_free(&a);
 }
 
+TEST(files_inside_the_places_are_modules) {
+    // A file inside one of the places is a module's (Source_File.in_module),
+    // which may declare #compiler procedures (spec 7.9), whether an #import
+    // reached it or a #load by a relative path; the main file, outside
+    // them, isn't.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "files_inside_the_places_are_modules");
+    Module_Places places = test_places(&a, dir);
+    write_module(&a, places.places[0], "Alpha", "alpha :: () {}\n");
+    CHECK(os_write_file(str(module_file(&a, places.places[0], "Alpha", "other.rig")), str("other :: () {}\n")));
+    load_main_importing(&a, &d, dir, "#import \"Alpha\";\n#load \"first/Alpha/other.rig\";\nmain :: () {}\n",
+                        &places);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 3);
+    if (d.files.count == 3) {
+        CHECK(!d.files[0].in_module);
+        CHECK(d.files[1].in_module);
+        CHECK_STR(d.files[2].path, in_directory(&a, dir, "first/Alpha/other.rig"));
+        CHECK(d.files[2].in_module);
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
+
 TEST(import_finds_basic_with_rigs_own_places) {
     // With no places given, the loader looks in rig's own: the running
     // program's, bin/unit-tests's, which find the repository's Basic.

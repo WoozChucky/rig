@@ -611,7 +611,8 @@ static void report_undeclared(Checker *c, Ast_Name *name, bool called) {
 // procedure type (a constant naming one too). A variadic procedure has no
 // procedure type: "'printf' can't be a value: it takes more arguments
 // with '..', which no procedure type can say". Nor is main a value: "'main'
-// can't be a value: it's where the program starts".
+// can't be a value: it's where the program starts"; nor a #compiler one:
+// "'create_workspace' can't be a value: the compiler does it".
 static Type *check_name(Checker *c, Ast_Name *name) {
     Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
@@ -637,6 +638,13 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         // would call it as the wrong function. A direct call knows.
         if (string_eq(proc->name, str("main"))) {
             diag_error(c->diag, name->pos, "'main' can't be a value: it's where the program starts");
+            return nullptr;
+        }
+        // A #compiler procedure (spec 7.9) has no code in any module, so it
+        // has no address: only a direct call, which the compiler does, can
+        // name it.
+        if (proc->is_compiler) {
+            diag_error(c->diag, name->pos, "'" STR_FMT "' can't be a value: the compiler does it", STR_ARG(proc->name));
             return nullptr;
         }
         if (proc->is_variadic) {

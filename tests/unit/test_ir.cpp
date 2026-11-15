@@ -4221,3 +4221,50 @@ TEST(baked_views_and_strings_in_constants_and_globals) {
     CHECK(contains(ir, " reloc 24 @const.5\n"));
     arena_free(&a);
 }
+
+// Issue #116: #compiler procedures (spec 7.9). The compiler does them while
+// compiling, so the program's own lowering declares them and refuses every
+// call of one, each a diagnostic at the callee's name.
+
+// The messages for `text`, a module's file (Source_File.in_module), which
+// must check cleanly, from lowering it as rig build does, in source order;
+// the module, which lives in the arena, in *module.
+static String lower_messages(Arena *a, const char *text, Ir_Module **module) {
+    Token_List *list = src(text);
+    list->diag.files[0].in_module = true;
+    Ast_File *file = parse(list->tokens, a, &list->diag);
+    bool ok = check(file, a, &list->diag);
+    if (!ok) fprintf(stderr, "lower_messages: doesn't check:\n%.*s", STR_ARG(messages(a, &list->diag)));
+    RIG_ASSERT(ok);
+    *module = ir_lower(file, &list->diag, a, true);
+    diag_sort(&list->diag);
+    String result = messages(a, &list->diag);
+    token_list_free(list);
+    return result;
+}
+
+TEST(lowering_refuses_compiler_calls) {
+    // Every call is refused, one in a procedure nothing calls too: the
+    // program as a whole can't be built.
+    Arena a = arena_make();
+    const char *declarations = "Workspace :: struct { id: s64; }\n"
+                               "create_workspace :: (name: string) -> Workspace #compiler;\n";
+    Ir_Module *m = nullptr;
+    CHECK_STR(lower_messages(&a,
+                             string_cstr(&a, string_printf(&a,
+                                                           "%s"
+                                                           "helper :: () { w := create_workspace(\"never called\"); }\n"
+                                                           "main :: () { w := create_workspace(\"game\"); }\n",
+                                                           declarations)),
+                             &m),
+              "3:21: 'create_workspace' can only be called while compiling\n"
+              "4:19: 'create_workspace' can only be called while compiling\n");
+
+    // Declared all the same, called or not, as every procedure is: its
+    // result's hidden pointer, then the string's. It has no body.
+    CHECK_STR(lower_messages(&a, string_cstr(&a, string_printf(&a, "%smain :: () {}\n", declarations)), &m), "");
+    String ir = ir_print(&a, m);
+    CHECK(contains(ir, "compiler proc @create_workspace(ptr, ptr)\n"));
+    CHECK(!contains(ir, "@create_workspace(ptr, ptr) {"));
+    arena_free(&a);
+}

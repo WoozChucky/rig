@@ -130,6 +130,7 @@ static void dump(Array<u8> *buffer, Ast *node) {
         dump_results(buffer, proc->results);
         if (proc->is_c_call) out(buffer, " (c_call)");
         if (proc->no_bounds_checks) out(buffer, " (no_abc)");
+        if (proc->is_compiler) out(buffer, " (compiler)");
         if (proc->is_foreign) {
             out(buffer, " (foreign ");
             out(buffer, proc->foreign_library);

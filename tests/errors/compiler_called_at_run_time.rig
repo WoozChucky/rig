@@ -1,0 +1,6 @@
+// A #compiler procedure (spec 7.9) is done by the compiler, while
+// compiling: a call of one in the program's own code is an error at the
+// procedure's name, found when the program is lowered, so rig check, which
+// never lowers it, has nothing to say.
+#import "Compiler";
+main :: () { w := create_workspace("game"); }

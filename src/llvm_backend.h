@@ -6,12 +6,14 @@
 // for it. Rig's procedures are internal, the entry point and foreign
 // procedures external, each foreign one declared under its C name
 // (#foreign libc "free"), one declaration per C function; a procedure with
-// several results returns them as one LLVM struct. Constant bytes are
-// private constant arrays, Rig's global variables internal globals. No
-// instruction carries nsw, nuw or exact: Rig's integers wrap (spec 6.4). On
-// Linux, i8 and i16 parameters and results are marked signext or zeroext,
-// on every function and call, as clang marks them; on Windows they aren't;
-// an i1 is zeroext on both.
+// several results returns them as one LLVM struct. A #compiler procedure
+// (spec 7.9) is no function of the module: the compiler does it, while
+// compiling, and a module that reaches the backend calls none (lowering
+// refuses such a call). Constant bytes are private constant arrays, Rig's
+// global variables internal globals. No instruction carries nsw, nuw or
+// exact: Rig's integers wrap (spec 6.4). On Linux, i8 and i16 parameters
+// and results are marked signext or zeroext, on every function and call,
+// as clang marks them; on Windows they aren't; an i1 is zeroext on both.
 //
 // A module with a panic also gets the runtime's __rig_panic, which writes
 // the message to stderr with C's write (_write on Windows) and exits with
