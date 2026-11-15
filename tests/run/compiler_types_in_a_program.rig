@@ -1,0 +1,17 @@
+// A program with main may import Compiler (spec 7.9) for its types alone:
+// it calls none of the module's #compiler procedures, which the compiler
+// does itself and which have no code in the program, so the program is
+// built and run as any other, with nothing made of them.
+#import "Compiler";
+
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+main :: () {
+    w: Workspace;
+    o: Build_Options;
+    o.output_name = "game";
+    o.optimize = true;
+    printf("%lld %.*s %lld\n", w.id, cast(s32) o.output_name.count, o.output_name.data, o.output_name.count);
+    if o.optimize { printf("optimized\n"); }
+    if !o.bounds_checks { printf("no bounds checks in a zeroed Build_Options\n"); }
+}

@@ -7,7 +7,10 @@
 // files it #loads, lexes, parses and checks them, and stops there with the
 // diagnostics on stderr if anything was wrong (exit 1). Otherwise it lowers
 // the program (without the bounds checks of a[i] with --no-bounds-checks,
-// spec 8.5), has LLVM write the object file .build/NAME.obj (Windows) or
+// spec 8.5). Lowering finds errors of its own, a call of a #compiler
+// procedure the program would make (spec 7.9), printed as the others are,
+// and then rig stops there too, writing no object (exit 1). Otherwise it
+// has LLVM write the object file .build/NAME.obj (Windows) or
 // .build/NAME.o (Linux) in the current directory, and links it into OUTPUT,
 // by default NAME.exe or NAME in the current directory, NAME being FILE.rig's
 // name (the main file's) without its directory and .rig (exit 0).

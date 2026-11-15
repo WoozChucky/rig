@@ -3437,7 +3437,9 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
     // one of its scopes; so is each variable, and each scope is in its file.
     // The prologue's work is the exception: each scalar parameter's slot and
     // the store into it, first in the entry block, have no position. A
-    // procedure the compiler makes has no positions at all.
+    // procedure the compiler makes has no positions at all; a #compiler one
+    // (compiler_types_in_a_program imports Compiler), as a foreign one, has
+    // no blocks, nor a source name, which only a body brings.
     Arena a = arena_make();
     Array<String> names = {};
     CHECK(os_list_directory(&a, str("tests/run"), &names));
@@ -3457,7 +3459,7 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
             bool from_source = p->source_name.count > 0;
             bool compiler_made = string_eq(p->name, str("__rig_bounds_failed")) ||
                                  string_eq(p->name, str("__rig_string_equal"));
-            if (!p->is_foreign) CHECK(from_source != compiler_made);
+            if (!p->is_foreign && !p->is_compiler) CHECK(from_source != compiler_made);
             // A procedure of the program's is m->procs[k] for
             // tree->procs[k], whichever file it's in: its lines run from its
             // name's to its body's '}', in that file. Its position is the
