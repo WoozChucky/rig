@@ -12,10 +12,10 @@
 // --no-bounds-checks, running its #runs as rig build does, the top-level
 // ones too; a program with errors (a failed top-level run's among them)
 // gets its diagnostics on stderr, as rig build prints them, and exit status
-// 1, and isn't run. Otherwise it
-// interprets main, and exits with main's status, 0, unless the program
-// calls C's exit, which ends the process with its own. A run that fails
-// exits with 101, as a compiled program's runtime error does, after:
+// 1, and isn't run. Otherwise it interprets main, and exits with main's
+// status, 0, unless the program calls C's exit, which ends the process with
+// its own. A run that fails exits with 101, as a compiled program's runtime
+// error does, after:
 // 1. fflush(NULL), so what the program printf'd comes out first, as the
 //    runtime flushes its streams before writing the message;
 // 2. the message on stderr: a panic's own text, exactly as the compiled
@@ -83,12 +83,13 @@ static void interpret_mode(void *data) {
     // printing what rig build prints (the runner holds it to
     // NAME.build.out, before NAME.out); the diagnostics are printed after
     // them, or as a run's exit() ends the process (diag_print_at_exit). The
-    // world is freed before the program is lowered, so main's interpreter,
-    // one of its own, starts from the globals' written values. It can't
-    // call read_and_check, which frees the diagnostics, and with them the
-    // paths of the program's files, which a failure's frames name by index
-    // (a loaded file's as its #load made it); so it has one more step: the
-    // paths are copied before the diagnostics go.
+    // world is freed before the program is lowered, and main's interpreter
+    // is one of its own, running the program's module, lowered afresh, so
+    // the globals start from their written values whatever the runs did. It
+    // can't call read_and_check, which frees the diagnostics, and with them
+    // the paths of the program's files, which a failure's frames name by
+    // index (a loaded file's as its #load made it); so it has one more step:
+    // the paths are copied before the diagnostics go.
     Diagnostics d = {};
     Ast_File *tree = load_program(&a, &d, path, text);
     diag_print_at_exit(&d);

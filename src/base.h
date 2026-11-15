@@ -311,6 +311,13 @@ void table_free(Table<V> *t) {
     *t = {};
 }
 
+// An address as a Table key, for a table keyed by a node or a type: the 8
+// bytes of the pointer at `pointer`, where they are. A lookup's key is
+// needed only while it looks, so the caller's own pointer will do; the key
+// table_put keeps must last as long as the table, so it's copied into an
+// arena (string_copy), only when the lookup finds nothing.
+String pointer_key(const void *const *pointer);
+
 // ---------------------------------------------------------------------------
 // Paths and checksums. The debug information (milestone 2c) names each
 // source file of the program by its absolute path (path_absolute), so an

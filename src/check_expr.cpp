@@ -397,11 +397,12 @@ bool constant_data(Ast *e, Ast **value) {
         return true;
     }
     case AST_RUN: {
-        // A #run's baked value (run.cpp) that isn't a number: the node
-        // holding it, a name bound to a procedure, a string literal, or a
-        // struct or array literal of constant data; a view's is the array
-        // literal of its elements. A number is a constant (Ast.constant),
-        // and a #run with no value has none to give.
+        // A #run's baked value (run.cpp) that isn't a number, a bool or
+        // null: the node holding it, a name bound to a procedure, a string
+        // literal, or a struct or array literal of constant data; a view's
+        // is the array literal of its elements. A number, a bool or null is
+        // a constant (Ast.constant), and a #run with no value has none to
+        // give.
         Ast_Run *run = (Ast_Run *)e;
         if (!run->value || run->is_constant) return false;
         *value = run->value;
@@ -1587,6 +1588,12 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
     return to;
 }
 
+const char *loop_variable_kind(Ast_Var *var) {
+    // it_index is the only one by that name: check_for reports an iterator
+    // called it_index and doesn't declare it.
+    return string_eq(var->name, str("it_index")) ? "the loop's index" : "the loop's iterator";
+}
+
 // Whether the name `name`, whose declaration is known (Ast_Name.decl), is a
 // place in memory (expr_is_place: a variable, but not a loop's iterator or
 // index); otherwise false, after saying what it is instead, for an
@@ -1601,10 +1608,7 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
         // program's file), but a for loop's iterator and it_index are
         // read-only (spec 6.7): the loop sets them, each iteration, and a
         // pointer to one would let the body change it.
-        Ast_Var *var = (Ast_Var *)decl;
-        // it_index is the only one by that name: check_for reports an
-        // iterator called it_index and doesn't declare it.
-        what = string_eq(var->name, str("it_index")) ? "the loop's index" : "the loop's iterator";
+        what = loop_variable_kind((Ast_Var *)decl);
         break;
     }
     // A constant is a value known while compiling (spec 4.2): a scalar one

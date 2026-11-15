@@ -19,14 +19,6 @@
 
 #include "check.h"
 
-// A node's or a type's address as a Table key: the 8 bytes of the pointer
-// at `address`, where they are, as lower.cpp's node_key. A lookup's key is
-// needed only while it looks; the key kept is copied into the walk's own
-// arena (first_time).
-static String address_key(const void *const *address) {
-    return {(const u8 *)address, (s64)sizeof *address};
-}
-
 // What a #run reaches, being walked (reach_run): a worklist, depth first
 // in source order, of the nodes and types still to look at.
 struct Reach {
@@ -40,9 +32,10 @@ struct Reach {
     Arena keys;           // seen's keys
 };
 
-// Whether `address` is met for the first time; it's seen from now on.
+// Whether `address` is met for the first time; it's seen from now on, its
+// key (base.h's pointer_key) copied into the walk's own arena.
 static bool first_time(Reach *r, const void *address) {
-    String key = address_key(&address);
+    String key = pointer_key(&address);
     if (table_get(&r->seen, key)) return false;
     table_put(&r->seen, string_copy(&r->keys, key), true);
     return true;
@@ -94,16 +87,13 @@ static void push_operands(Array<Ast *> *list, Ast *e) {
 
 // What a name whose declaration is `decl` is, when it doesn't exist while
 // compiling, in name_is_place's words: "a local", "a parameter", "the
-// loop's iterator" (a named one too), "the loop's index"; null for anything
-// else, which does.
+// loop's iterator" (a named one too), "the loop's index"
+// (loop_variable_kind); null for anything else, which does.
 static const char *local_kind(Ast *decl) {
     if (decl && decl->kind == AST_PARAM) return "a parameter";
     if (!decl || decl->kind != AST_VAR || ((Ast_Var *)decl)->is_global) return nullptr;
     Ast_Var *var = (Ast_Var *)decl;
-    if (!var->is_iterator) return "a local";
-    // it_index is the only one by that name: check_for reports an iterator
-    // called it_index and doesn't declare it.
-    return string_eq(var->name, str("it_index")) ? "the loop's index" : "the loop's iterator";
+    return var->is_iterator ? loop_variable_kind(var) : "a local";
 }
 
 // The operand of an expression #run runs while compiling, before any call
@@ -179,8 +169,7 @@ static bool walk_expression(Reach *r, Ast *e) {
     case AST_NAME: {
         Ast *decl = ((Ast_Name *)e)->decl;
         if (!decl) return false;
-        bool local = decl->kind == AST_PARAM || (decl->kind == AST_VAR && !((Ast_Var *)decl)->is_global);
-        if (!local) reach_decl(r, decl);
+        if (!local_kind(decl)) reach_decl(r, decl);
         return true;
     }
     case AST_CALL: {

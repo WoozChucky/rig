@@ -639,8 +639,10 @@ static void mark_circle(Checker *c, Ast *decl) {
 // Ast_Const.levels, from the parser); a struct's fields and a signature's
 // types are worked out one at a time, so each counts on its own
 // (Ast_Type.levels; layout_levels, check_signature), the deepest of them
-// being the declaration's. One worked out in its own turn, check()'s pass
-// in source order, starts at 0. c->levels is where the next one starts.
+// being the declaration's; and a body a #run reaches counts its blocks and
+// the expressions in them together (Ast_Proc.body_levels, from the parser;
+// check_reached_body). One worked out in its own turn, check()'s pass in
+// source order, starts at 0. c->levels is where the next one starts.
 //
 // So in `A0 :: A1; A1 :: A2; ...`, a name being no level, A0 is at 0 and
 // A1000 at 1000; A0 :: A1 + 1 is a level, so in a chain of those A1 is at
@@ -737,7 +739,6 @@ static void resolve_global(Checker *c, Ast *decl) {
         return;
     }
     Array<Table<Ast *>> scopes = leave_scopes(c);
-    RIG_ASSERT(c->scopes.count == 0);
     *state = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, decl);
     s64 errors = c->diag->error_count;
@@ -939,15 +940,14 @@ static bool circle_through_a_value(Checker *c, Ast *decl) {
 // then has no type (Ast_Struct.declared is null), so nothing more is said
 // about it or its uses checked after; a struct that only holds one in a
 // circle isn't in it, and keeps its type, the field that holds it having
-// none. A global or
-// a signature before it in source order may have taken it behind a
-// pointer already (*Node), and what its value says, true of the pointer
-// whatever the struct, stays said (`h : int = g;` with g a *Node); its
-// type is then made again (made_again), so later uses say nothing. So may
-// a local of a body a #run reaches before it, whose messages stay said
-// too, but whose type isn't made again. A struct larger than any type
-// may be (TYPE_MAX_SIZE), its fields each fine, is "'Huge' is too big", at
-// its name, and has no type either.
+// none. A global or a signature before it in source order may have taken
+// it behind a pointer already (*Node), and what its value says, true of
+// the pointer whatever the struct, stays said (`h : int = g;` with g a
+// *Node); its type is then made again (made_again), so later uses say
+// nothing. So may a local of a body a #run reaches before it, whose
+// messages stay said too, but whose type isn't made again. A struct larger
+// than any type may be (TYPE_MAX_SIZE), its fields each fine, is "'Huge'
+// is too big", at its name, and has no type either.
 static Type *resolve_struct(Checker *c, Ast_Struct *s) {
     if (s->resolve == RESOLVE_DONE) return s->declared;
     if (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE) {

@@ -4,10 +4,10 @@
 // tests/run/NAME.rig is built with `RIG build tests/run/NAME.rig -o
 // .build/tests/NAME`, followed by the words of NAME.flags when there is one
 // (`--no-bounds-checks`; words separated by spaces, tabs or line breaks,
-// on any number of lines: add_flags), and run; its
-// stdout must equal NAME.out, its exit code the number in NAME.exit (0 when
-// there's none), and its stderr NAME.err (a runtime error's message, say),
-// or be empty when there's no NAME.err. What rig build itself prints to
+// on any number of lines: add_flags), and run; its stdout must equal
+// NAME.out, its exit code the number in NAME.exit (0 when there's none),
+// and its stderr NAME.err (a runtime error's message, say), or be empty
+// when there's no NAME.err. What rig build itself prints to
 // stdout, what the program's top-level #runs print while compiling (spec
 // 7.8), must equal NAME.build.out, or be empty when there's none. A
 // program prints while compiling only from its top-level #runs: rig check
@@ -24,21 +24,20 @@
 // program gives, held to the same NAME.out, NAME.exit and NAME.err (or
 // nothing on stderr), its newlines normalised alike (interpreted_test).
 // Interpret mode runs the top-level #runs too, before main, so its stdout
-// is NAME.build.out followed by NAME.out. It
-// is reported as `interpreted tests/run/NAME`. A program the interpreter
-// can't run, one that hands C a Rig procedure (qsort_callback), has a
-// NAME.interp.err instead: its stderr must be that, its exit code 101, and
-// its stdout what it printed before it stopped, its NAME.build.out, then
-// the first lines of NAME.out, whole, and one at least (its NAME.exit is
-// the compiled run's).
+// is NAME.build.out followed by NAME.out. It is reported as `interpreted
+// tests/run/NAME`. A program the interpreter can't run, one that hands C a
+// Rig procedure (qsort_callback), has a NAME.interp.err instead: its
+// stderr must be that, its exit code 101, and its stdout what it printed
+// before it stopped, its NAME.build.out, then the first lines of NAME.out,
+// whole, and one at least (its NAME.exit is the compiled run's).
 // The interpreter is always bin/unit-tests's, whatever RIG is given.
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, its stdout is empty (none prints from a top-level #run), and it
-// writes neither an object file nor a program. In a .err,
-// @NO_SUCH_FILE@ stands for the system's reason a file that isn't there, in
-// a directory that is, can't be read, which differs between systems and
-// languages (no_such_file_message asks the system).
+// writes neither an object file nor a program. In a .err, @NO_SUCH_FILE@
+// stands for the system's reason a file that isn't there, in a directory
+// that is, can't be read, which differs between systems and languages
+// (no_such_file_message asks the system).
 //
 // Only the NAME.rig files directly in tests/run, tests/errors and
 // tests/debug (below) are programs: their subdirectories, load/, hold the
