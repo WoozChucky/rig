@@ -909,7 +909,7 @@ static String build_program_elsewhere_test(Arena *a, String rig);
   - what rig build does with a build program: its runs, then each workspace, a separate compilation in creation order;
   - several files in a workspace;
   - paths relative to the build program's directory: files, outputs, `.build`, and `#load` inside a workspace's file;
-  - every failure and its message, the runtime ones with frames;
+  - every failure and its message, the runtime ones with frames, among them `set_build_options`' `an output name can't contain a zero byte` (src/compiler_module.h), which the lists above leave out;
   - `exit(n)`;
   - `rig check` of a build program;
   - the `rig fragment` example.
@@ -921,7 +921,7 @@ static String build_program_elsewhere_test(Arena *a, String rig);
   - 7.4: the build-program exception.
   - 7.8: a build program's top-level runs come before its workspaces (7.9).
   - 9.2: an `#import` starting a line is where the recovery resumes.
-  - 9.3: rows for every new message, each with its section.
+  - 9.3: rows for every new message, each with its section, `an output name can't contain a zero byte` (7.9) among them.
   - 10.1:
     - the usage `rig build [FILE.rig] ...`;
     - no file means `build.rig`, or the new message;

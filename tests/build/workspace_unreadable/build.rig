@@ -3,9 +3,11 @@
 // rig says so, as for a main file it can't read, and the workspace fails,
 // whether the file is its first or a further one, leaving neither an
 // object nor a program; the workspace after them is still built, and rig
-// exits 1.
+// exits 1. What the build program's #run prints comes out first, before
+// what rig says (workspace_output_order_test).
 #import "Compiler";
 
+puts :: (s: *u8) -> s32 #foreign libc;
 remove :: (path: *u8) -> s32 #foreign libc;
 
 #run {
@@ -18,6 +20,7 @@ remove :: (path: *u8) -> s32 #foreign libc;
 
     remove("gone.rig");
     remove("gone_main.rig");
+    puts("removed gone.rig and gone_main.rig");
 
     fine := create_workspace("fine");
     add_build_file(fine, "fine.rig");

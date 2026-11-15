@@ -54,7 +54,8 @@ create_workspace  :: (name: string) -> Workspace #compiler;
 get_build_options :: (w: Workspace) -> Build_Options #compiler;
 
 // Builds workspace w's program with `options`. The output's name can't end
-// in .rig, since that names a source file.
+// in .rig, since that names a source file, or hold a zero byte, since the
+// system would end the name there.
 set_build_options :: (w: Workspace, options: Build_Options) #compiler;
 
 // Adds the .rig file at `path` to workspace w's program, which must exist

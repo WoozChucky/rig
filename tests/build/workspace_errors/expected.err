@@ -1,6 +1,10 @@
-build.rig:14:5: error: workspace 'empty' has no files
+build.rig:15:5: error: workspace 'empty' has no files
         create_workspace("empty");
         ^
 src/broken.rig:4:14: error: unknown identifier 'putz'
     main :: () { putz("hi"); }
                  ^
+failing.rig:4:1: error: #run failed: runtime error: index 2 is out of bounds (count 1)
+    #run { a : [1]int; i := 2; a[i] = 0; }
+    ^
+    in #run (failing.rig:4:29)
