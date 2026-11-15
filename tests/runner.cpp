@@ -98,7 +98,9 @@
 // with -o, --no-bounds-checks or both (refused on stderr before its
 // top-level #runs, -o's refusal alone when both are given, but after its
 // errors), the command line's mistakes, a .build/ or an object file rig
-// can't write, and rig version's output, by its shape (version_test: it
+// can't write, a workspace's .build/ that it can't make, said after what
+// the workspace's #run printed when both are in one pipe
+// (workspace_unwritable_test), and rig version's output, by its shape (version_test: it
 // names the commit rig was built from).
 //
 // Then rig check on every program of tests/run and tests/errors (not
@@ -1217,8 +1219,9 @@ static String checked_workspace_test(Arena *a, String rig) {
 // workspace is compiled, and so does a workspace's file that can't be read.
 // With errors_first, NAME's expected.err comes out before its
 // expected.build.out: workspace_errors's, where the build program's error
-// and then the broken and failing workspaces' come before what the fine
-// workspace's top-level #run prints. Otherwise after it:
+// about its empty workspace, then the broken and failing workspaces', and
+// then its error about the nested workspace, a build program, printed
+// right then, come before what the fine workspace's top-level #run prints. Otherwise after it:
 // workspace_unreadable's, where what the build program's #run prints comes
 // before the workspaces' files that can't be read are said. stdout is a
 // pipe, so C buffers it, and rig flushes it before writing to stderr. Exit
@@ -1402,6 +1405,62 @@ static String unwritable_test(Arena *a, String rig, bool object_blocked) {
     }
     if (!starts_with(built.err, expected)) {
         return string_printf(a, "stderr: expected \"%s...\", got \"" STR_FMT "\"", expected, STR_ARG(built.err));
+    }
+    return {};
+}
+
+// rig build sub/build.rig, run in .build/tests/objects-blocked (emptied
+// first), where sub/.build is a file: the build program's workspace, whose
+// top-level #run prints a line, can't have its object written, since its
+// .build is relative to the build program's directory (spec 7.9). Its
+// stdout and stderr in one pipe must be that line, then rig's error naming
+// sub/.build, and rig must exit 1. stdout is a pipe, so C buffers it, and
+// rig flushes it before saying the error. The files are written here, as a
+// case of tests/build has no .build file and its stderr has no reason in
+// it, which is the system's.
+static String workspace_unwritable_test(Arena *a, String rig) {
+    String dir = str(".build/tests/objects-blocked");
+    remove_tree(a, dir);
+    if (os_file_exists(dir)) return string_printf(a, "couldn't remove the last run's " STR_FMT, STR_ARG(dir));
+    String sub = string_printf(a, STR_FMT "/sub", STR_ARG(dir));
+    if (!os_make_directory(dir) || !os_make_directory(sub)) {
+        return string_printf(a, "couldn't make " STR_FMT ": " STR_FMT, STR_ARG(sub), STR_ARG(os_error_message(a)));
+    }
+    String build_program = string_printf(a, STR_FMT "/build.rig", STR_ARG(sub));
+    String program = string_printf(a, STR_FMT "/blocked.rig", STR_ARG(sub));
+    String nested_build = string_printf(a, STR_FMT "/.build", STR_ARG(sub));
+    if (!os_write_file(build_program, str("#import \"Compiler\";\n"
+                                          "\n"
+                                          "#run {\n"
+                                          "    w := create_workspace(\"blocked\");\n"
+                                          "    add_build_file(w, \"blocked.rig\");\n"
+                                          "}\n")) ||
+        !os_write_file(program, str("puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                    "\n"
+                                    "#run puts(\"compiling\");\n"
+                                    "\n"
+                                    "main :: () { }\n")) ||
+        !os_write_file(nested_build, str("a file, not a directory\n"))) {
+        return string_printf(a, "couldn't write the files in " STR_FMT, STR_ARG(sub));
+    }
+    const char *expected = "compiling\nrig: error: cannot create 'sub/.build': ";
+
+    Array<String> argv = {};
+    array_add(&argv, rig);
+    array_add(&argv, str("build"));
+    array_add(&argv, str("sub/build.rig"));
+    Process_Result built = {};
+    bool started = os_run_merged(a, argv, dir, TIMEOUT, &built);
+    array_free(&argv);
+    if (!started) return string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(rig), STR_ARG(os_error_message(a)));
+    if (built.timed_out) return string_printf(a, "rig build took longer than %d seconds", TIMEOUT);
+    built.out = normalise_newlines(a, built.out);
+    if (!starts_with(built.out, expected)) {
+        return string_printf(a, "stdout and stderr: expected \"%s...\", got \"" STR_FMT "\"", expected,
+                             STR_ARG(built.out));
+    }
+    if (built.exit_code != 1) {
+        return string_printf(a, "rig build exited with " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, built.exit_code)));
     }
     return {};
 }
@@ -2935,6 +2994,8 @@ int main(int argc, char **argv) {
            build_program_options_test(&a, rig, false, true, true), &passed, &failed);
     report("rig build of a build program with errors, given -o: the errors, not the refusal",
            build_program_options_test(&a, rig, true, true, false), &passed, &failed);
+    report("rig build of a build program with errors, given --no-bounds-checks: the errors, not the refusal",
+           build_program_options_test(&a, rig, true, false, true), &passed, &failed);
     report("a failed top-level #run's error after the runs' output, both in one pipe",
            run_output_order_test(&a, rig, false), &passed, &failed);
     report("a top-level #run's exit() after a failed one, the errors after the runs' output, in one pipe",
@@ -2943,6 +3004,8 @@ int main(int argc, char **argv) {
            check_run_output_test(&a, rig), &passed, &failed);
     report("rig build where .build is a file", unwritable_test(&a, rig, false), &passed, &failed);
     report("rig build where the object file's name is a directory", unwritable_test(&a, rig, true), &passed, &failed);
+    report("a workspace's #run output before its .build that can't be made, both in one pipe",
+           workspace_unwritable_test(&a, rig), &passed, &failed);
     for (const Command_Case &c : COMMAND_CASES) {
         report(string_cstr(&a, string_printf(&a, "rig: %s", c.what)), command_test(&a, rig, &c), &passed, &failed);
     }
