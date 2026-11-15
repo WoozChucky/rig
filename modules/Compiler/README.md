@@ -42,5 +42,5 @@ Compiler's procedures are declared with `#compiler` after the signature and no b
   - `bounds_checks: bool`: `true` by default.
 - `create_workspace(name: string) -> Workspace`: a new workspace named `name`, with no files and the default options. Two workspaces can't share a name.
 - `get_build_options(w: Workspace) -> Build_Options`: the options workspace `w`'s program will be built with.
-- `set_build_options(w: Workspace, options: Build_Options)`: builds workspace `w`'s program with `options`. The output's name can't end in `.rig`, since that names a source file.
+- `set_build_options(w: Workspace, options: Build_Options)`: builds workspace `w`'s program with `options`. The output's name can't end in `.rig`, since that names a source file, or hold a zero byte, since the system would end the name there.
 - `add_build_file(w: Workspace, path: string)`: adds the `.rig` file at `path` to workspace `w`'s program, which must exist when it's added. The first file added is the program's main file, and the others are loaded right after it, in the order they were added, before the files it `#load`s.

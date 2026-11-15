@@ -81,11 +81,12 @@ String program_name(String path) {
     return name;
 }
 
-// The executable's path: `output` (from -o), or by default NAME.exe or NAME
-// in the current directory. On Windows an output whose file name has no
-// extension gets .exe. Windows would run the file whatever its name, but the
-// command line and Explorer only find and run programs by their extension
-// (the PATHEXT variable lists them), so without .exe typing its name fails.
+// The executable's path: `output` when given (from -o, or a workspace's
+// output_name), else NAME, with .exe on Windows. On Windows an output whose
+// file name has no extension gets .exe. Windows would run the file whatever
+// its name, but the command line and Explorer only find and run programs by
+// their extension (the PATHEXT variable lists them), so without .exe typing
+// its name fails.
 String executable_path(Arena *a, String output, String name, Target t) {
     bool windows = t == TARGET_WINDOWS_X64;
     if (!output.count) return string_printf(a, STR_FMT "%s", STR_ARG(name), windows ? ".exe" : "");
@@ -284,6 +285,9 @@ static const char *object_extension(Target t) {
 // written; the rest are said as "rig: error: ...".
 static int emit_and_link(Compilation *c, bool bounds_checks, bool optimize, String objects, String object,
                          String executable) {
+    // stdout is buffered when it's a pipe: what the #runs printed comes out
+    // before any error said here, as diag_print has it.
+    fflush(stdout);
     Arena *a = c->arena;
     Ir_Module *module = compilation_lower(c, bounds_checks);
     if (!module) {
@@ -389,6 +393,10 @@ static bool workspace_steps(Compilation *build, Build_Workspace *w, Compilation 
 // right then, after the errors loading its files found, and isn't checked.
 // True when it built.
 static bool build_workspace(Compilation *build, Build_Workspace *w) {
+    // stdout is buffered when it's a pipe: what the build program's and the
+    // earlier workspaces' #runs printed comes out before a file of this one
+    // that can't be read is said, as diag_print has it.
+    fflush(stdout);
     Arena arena = arena_make();
     Compilation c = {};
     c.arena = &arena;

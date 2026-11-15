@@ -3,8 +3,9 @@
 // program added them, before the next workspace is compiled, and the
 // workspaces after it are still built. So is a workspace with no files: its
 // error, the build program's, comes first, before any workspace is built.
-// rig exits 1, since something failed, and the broken workspace leaves
-// neither an object nor a program.
+// And so is a workspace whose top-level #run fails. rig exits 1, since
+// something failed, and the broken and failing workspaces leave neither an
+// object nor a program.
 #import "Compiler";
 
 #run {
@@ -12,6 +13,9 @@
     add_build_file(broken, "src/broken.rig");
 
     create_workspace("empty");
+
+    failing := create_workspace("failing");
+    add_build_file(failing, "failing.rig");
 
     fine := create_workspace("fine");
     add_build_file(fine, "fine.rig");
