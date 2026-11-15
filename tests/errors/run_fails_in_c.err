@@ -1,0 +1,5 @@
+tests/errors/run_fails_in_c.rig:11:6: error: #run failed: runtime error: 'rig_no_such_function' isn't in the C library at compile time
+    C :: #run call_missing();
+         ^
+    in call_missing (tests/errors/run_fails_in_c.rig:7:5)
+    in #run (tests/errors/run_fails_in_c.rig:11:6)

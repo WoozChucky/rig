@@ -126,3 +126,21 @@ TEST(sorting_a_program_of_many_files) {
     }
     diag_free(&d);
 }
+
+TEST(diag_render_prints_lines_after_the_caret) {
+    // A failed #run's frames (issue #115) follow its message's source line
+    // and caret, and stay with it when the messages are sorted.
+    Diagnostics d = {};
+    s32 file = diag_add_file(&d, str("a.rig"), str("x := 1;\n"));
+    diag_error(&d, {file, 1, 6}, "boom");
+    diag_add_lines(&d, str("    in f (a.rig:1:1)\n"));
+    Arena a = arena_make();
+    CHECK_STR(diag_render(&a, &d), "a.rig:1:6: error: boom\n    x := 1;\n         ^\n    in f (a.rig:1:1)\n");
+    diag_error(&d, {file, 1, 1}, "first");
+    diag_sort(&d);
+    CHECK_STR(diag_render(&a, &d),
+              "a.rig:1:1: error: first\n    x := 1;\n    ^\n"
+              "a.rig:1:6: error: boom\n    x := 1;\n         ^\n    in f (a.rig:1:1)\n");
+    arena_free(&a);
+    diag_free(&d);
+}

@@ -9,7 +9,8 @@
 // and layout, Ast_Struct.declared), so the stages after it never look
 // anything up again.
 // checker.cpp checks declarations and statements, check_expr.cpp
-// expressions; check.h is what they share.
+// expressions, check_run.cpp #run and what it reaches; check.h is what
+// they share.
 //
 // The rules (spec 6.1, 6.4 and 6.5, which record the calls made here):
 //
@@ -169,9 +170,10 @@
 //   value inside e that isn't. A pointer, in data or alone, is null or a
 //   string literal's address: any cast (from a number, a procedure or a
 //   pointer variable) or a procedure is "a constant's pointer can only be
-//   null or a string literal's address". No part of a constant is a view,
-//   which would see memory of its own: "a constant can't hold a view; only
-//   a string or an array can be one".
+//   null or a string literal's address". No part of a constant written in
+//   the source is a view, which would see memory of its own: "a constant
+//   can't hold a view; only a string or an array can be one" (a #run's
+//   baked view is the exception, below).
 // - The condition of if and while is a bool: "the condition of 'if' must
 //   be a bool, not 'int'".
 // - for a..b: the ends are integers meeting as an arithmetic operator's
@@ -450,6 +452,69 @@
 //   its .data"; a string's: "pass its .data, which may not end with a zero,
 //   or a literal").
 //
+// Code run while compiling (issue #115, spec 7.8).
+// - #run e is an expression, of e's type: an untyped constant's default
+//   type, so `C :: #run 7;` is a typed int. e is a value (a call that
+//   returns nothing has none). An e that is a constant already runs
+//   nothing: the #run is that constant. Any other runs when the checker
+//   first needs its value, and has the value it gives.
+// - In a body, it's a value, never a statement: "#run in a body must be a
+//   value, as in x := #run f();". Its operand runs before any call of the
+//   procedure it's in, so it can't use that procedure's locals, parameters
+//   or loops' iterators: "#run can't use 'x': it's a local, which doesn't
+//   exist while compiling" ("it's a parameter", "it's the loop's
+//   iterator", "it's the loop's index"), at the name. Local constants are
+//   fine.
+// - At the top level, #run e; (any expression, its value thrown away, a
+//   call that returns nothing too) or #run { ... } (a body of its own, which
+//   return ends) runs for its effect once the whole program checks. It's
+//   checked after every body, and never run by the checker.
+// - Before a #run runs, everything it reaches is checked (check_run.cpp's
+//   walk): the procedures its code calls or names, whose bodies are checked
+//   there and then if their turn hasn't come (check_reached_body), the
+//   globals and constants it names, and the struct types of what it
+//   reaches. An error anywhere there stops it, saying nothing new: the
+//   error was said where it is. The #run keeps its type but has no value,
+//   and what needs that value (an array's count, a constant, a global)
+//   says nothing more either. Each body, global and constant records
+//   whether its own check had errors (Ast_Proc.had_errors,
+//   Ast_Var.had_errors, Ast_Const.had_errors).
+// - It runs in the compilation's one compile-time world (run.h), and its
+//   result is baked into the tree, a typed constant (run.cpp): a number as
+//   one, anything else as constant data (constant_data), a copy of what
+//   the run gave. A run that fails is "#run failed: runtime error:
+//   MESSAGE", at the #run, followed by the calls that led there; it has no
+//   value then, and what needs it says nothing more, as after an error it
+//   reaches. So is a result that can't be baked: one holding a pointer
+//   that isn't null, "#run's result holds a pointer, which can't be baked,
+//   for now", or a view or a string whose count is below zero, "#run
+//   failed: its result holds a view with a negative count" ("a string").
+// - A baked string is a string literal's bytes: it converts to a *u8 and
+//   passes C's '...' as a literal does (is_literal_string). A constant may
+//   hold a baked view, its elements read-only data, as the #run's value or
+//   reached through constant data (V2 :: V; IT :: T.items;), though not a
+//   written one ("a constant can't hold a view"), a view written of a
+//   baked array included (Holder.{ARR}). A baked []u8 cast to a string is
+//   the string literal of its bytes (Ast_Literal.text). A global holding a
+//   baked view or string gets a writable copy of its elements or bytes
+//   (spec 4.3).
+// - main is where the program starts: a #run that reaches a call of it is
+//   "main is where the program starts; #run can't call it", at the #run.
+// - A body a #run needs while that body is being checked (its own #run, or
+//   one whose value the body needs, through a constant say) is a circle,
+//   "'f' is defined in terms of itself", at the #run, as a global's is
+//   (spec 4.8): the bodies in it have errors, and the globals in it no
+//   type. So is a struct a #run in one of its counts reaches, by value or
+//   through a pointer it moves or indexes, while its layout is under way:
+//   "'S' is defined in terms of itself", at
+//   the struct. Bodies checked inside one another nest as declarations do (at
+//   most MAX_DEPTH levels deep, open_declaration), a body's own levels its
+//   blocks and the expressions in them together: the one too many is "'f'
+//   is nested too deeply in the declarations that need it (more than 1000
+//   levels)", at its name, and is checked in its own turn. A body checked
+//   in its own turn, and a top-level #run's expression, aren't counted so:
+//   a body their #runs need starts at level 0.
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - A string after the library is the C function's name (issue #135),
@@ -490,10 +555,16 @@
 #include "ast.h"
 #include "types.h"
 
+struct Compile_Time;  // run.h: the compile-time world
+
 // Checks the program, every file's declarations in one tree (load.h),
-// filling in types and the procedures calls refer to. True when the checker
-// reported no errors (the parser or the loader may have).
-bool check(Ast_File *file, Arena *a, Diagnostics *d);
+// filling in types and the procedures calls refer to: the declarations,
+// then the bodies, then the top-level #runs (checked, never run here). True
+// when the checker reported no errors (the parser or the loader may have).
+// Expression #runs run while it checks, where it first needs their values
+// (spec 7.8): in `world`, which the caller keeps for the top-level runs;
+// without one, check() makes one of its own and frees it before returning.
+bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world = nullptr);
 
 // Whether e, checked with no errors, is a place in memory: a variable, but
 // not a loop's iterator or index; p.*; a field of a place, or of a struct
@@ -546,14 +617,21 @@ bool is_literal_string(Ast *e);
 // - the name of a constant with is_data (its `data`);
 // - a field of constant data (a struct's, not reached through a pointer),
 //   or an element of it (an array's) at an is_constant index;
-// - a cast of constant data to its own type, or between string and []u8.
+// - a cast of constant data to its own type, or between string and []u8:
+//   a #run's baked []u8 cast to a string is its bytes' string literal
+//   (Ast_Literal.text), not the array literal of its elements;
+// - a #run whose baked value isn't a number (Ast_Run.value): a procedure
+//   value's name, which procedure_address walks on from, a string literal,
+//   or a struct or array literal of constant data (is_data already); a
+//   view's is the array literal of its elements, typed [count]T where the
+//   #run is a []T.
 // A field's or element's value node that is itself constant data is
 // followed in turn. So *value is a string or struct or array literal, or a
 // scalar field's or element's value node as the literal wrote it (a
 // constant, a procedure's name, a string literal, or a cast of one, which
-// literal_address and procedure_address walk on from); or null when a
-// literal leaves the field out (zero), and so for any field or element of
-// such a null part. A string's element is a byte that no node holds: not
+// literal_address and procedure_address walk on from); or a #run's baked
+// value, one of the same; or null when a literal leaves the field out
+// (zero), and so for any field or element of such a null part. A string's element is a byte that no node holds: not
 // constant data; nor is a field or an element of a value a literal gives
 // with the wrong type, reported (Line.{a = 5}.a.x).
 bool constant_data(Ast *e, Ast **value);
@@ -570,9 +648,9 @@ Type *call_result_type(Ast_Call *call, s64 i);
 
 // The procedure whose address e, checked, is: a procedure's name, a
 // constant that names one (OP :: add;), a field or an element of constant
-// data that holds one (OPS[0].run, constant_data), or a cast of any of
-// them that keeps the address, to *void or to a procedure type (cast(*void)
-// add); null for anything else, a field a literal leaves out too. A global
+// data that holds one (OPS[0].run, constant_data), a #run that gave one,
+// or a cast of any of them that keeps the address, to *void or to a
+// procedure type (cast(*void) add); null for anything else, a field a literal leaves out too. A global
 // and a constant may hold one, its address written there by the linker, as
 // a string literal's is: the checker asks this to allow it, and lowering
 // to write it (constant_bytes).

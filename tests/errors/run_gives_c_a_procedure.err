@@ -1,0 +1,5 @@
+tests/errors/run_gives_c_a_procedure.rig:20:10: error: #run failed: runtime error: a Rig procedure can't be passed to C at compile time, for now
+    FIRST :: #run sorted();
+             ^
+    in sorted (tests/errors/run_gives_c_a_procedure.rig:16:5)
+    in #run (tests/errors/run_gives_c_a_procedure.rig:20:10)

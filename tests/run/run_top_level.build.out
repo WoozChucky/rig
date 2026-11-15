@@ -1,0 +1,5 @@
+counter is 42 while compiling, runs 2
+a void call runs
+an aggregate result is thrown away
+return ends a block's run
+the loaded file's runs come after

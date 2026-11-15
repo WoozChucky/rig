@@ -9,8 +9,12 @@
 //                      ^
 //
 // a first line FILE:LINE:COLUMN: SEVERITY: MESSAGE, then the source line
-// and a caret, indented. Only the first line says anything new; the other
-// two are for people reading a terminal.
+// and a caret, indented. A #run that failed while compiling has more
+// indented lines after the caret, the calls that led there, one a line
+// (`    in NAME (PATH:L:C)`), and between the innermost and outermost ten,
+// when there are many, `    ... N more calls`. The live check reads the
+// first line only: the
+// indented ones are for people reading a terminal, and it skips them.
 
 'use strict';
 

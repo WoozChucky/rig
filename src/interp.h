@@ -19,7 +19,10 @@
 //   made accessible (os_reserve_inaccessible), which the interpreter maps
 //   back to the procedure: distinct, stable and non-null, as the program's
 //   own procedure values are, and of no use to C, which faults if it calls
-//   one.
+//   one. A call of an address in that range that is no procedure's, or of
+//   a procedure only declared, with no blocks (IR made by hand: on-demand
+//   lowering lowers every body a run reaches before the run), fails: "call
+//   of an address that isn't a procedure".
 //
 // C is called for real. A foreign procedure is found by its C name (the
 // one #foreign libc "free" gives, or else its own) the first time it's
@@ -107,6 +110,12 @@ u64 interp_proc_address(Interp *in, s32 proc);
 
 // The Rig procedure whose compile-time value is `address`, or -1.
 s32 interp_proc_at(Interp *in, u64 address);
+
+// The first foreign procedure, from m->procs[from] on, whose C function,
+// found so far (called, its value taken, or written into a global), is at
+// `address`; -1 when there is none. Two procedures may name one function,
+// so a caller wanting each of them starts again after the one it got.
+s32 interp_c_function_at(Interp *in, u64 address, s32 from);
 
 // A global's compile-time bytes, once a run has mapped it.
 u8 *interp_global(Interp *in, s32 global);

@@ -1632,6 +1632,129 @@ TEST(interp_globals_survive_between_runs) {
     arena_free(&a);
 }
 
+// Issue #115: runs lowered on demand into one compile-time module, run in
+// one interpreter.
+
+// The int the compile-time bytes of m's global `name` hold.
+static s64 interp_test_int_global(Interp *in, Ir_Module *m, const char *name) {
+    s64 value = 0;
+    memcpy(&value, interp_global(in, interp_test_global(m, name)), sizeof value);
+    return value;
+}
+
+TEST(interp_runs_lowered_runs_in_one_world) {
+    // test_ir.cpp's program: each run lowered, then run, the module growing
+    // between them, and counter carrying over from one run to the next.
+    Arena a = arena_make();
+    Lowered_Runs lowered = lower_runs_of(&a, LOWERING_ON_DEMAND_PROGRAM);
+    Ir_Module *m = lowered.module;
+    Interp *in = interp_new(m);
+    Interp_Result r = {};
+    interp_run(in, ir_lower_run(lowered.lowering, lowered.file->runs[0]), {}, &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 0);
+    if (r.ok) CHECK_EQ(interp_test_int_global(in, m, "counter"), 6);
+    interp_test_free(&r);
+
+    interp_run(in, ir_lower_run(lowered.lowering, lowered.file->runs[1]), {}, &a, &r);
+    CHECK(r.ok);
+    if (r.ok) CHECK_EQ(interp_test_int_global(in, m, "counter"), 7);
+    interp_test_free(&r);
+
+    interp_run(in, ir_lower_run(lowered.lowering, constant_run(lowered.file, "N")), {}, &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) CHECK_EQ(r.results[0], 6);
+    if (r.ok) CHECK_EQ(interp_test_int_global(in, m, "counter"), 8);
+    interp_test_free(&r);
+    interp_free(in);
+    lowered_runs_free(&lowered);
+    arena_free(&a);
+}
+
+TEST(interp_fails_a_call_of_a_procedure_not_lowered) {
+    // A Rig procedure with no blocks is only declared: its body was never
+    // lowered. A call of it, direct or through its value, fails at the
+    // call, before any frame is pushed for it.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    new_proc_returning(m, &a, "empty", IR_VOID);
+    Ir_Proc *starts = new_proc_returning(m, &a, "main", IR_VOID);
+    starts->source_name = str("main");
+    s32 b = ir_new_block(&a, starts);
+    ir_emit_call(m, starts, b, interp_test_proc(m, "empty"), {})->pos = {0, 3, 5};
+    emit_ret(starts, b, -1);
+
+    // through: empty called through its value, as () -> ().
+    Ir_Proc *through = new_proc_returning(m, &a, "through", IR_VOID);
+    through->source_name = str("through");
+    b = ir_new_block(&a, through);
+    Ir_Instr *address = ir_emit(through, b, IR_PROC_ADDR, IR_PTR);
+    address->target = interp_test_proc(m, "empty");
+    ir_emit_call_indirect(through, b, address->result, arena_new<Ir_Proc>(&a), {})->pos = {0, 7, 9};
+    emit_ret(through, b, -1);
+
+    Interp *in = interp_new(m);
+    interp_test_fails_at(in, m, "main", &a, "call of an address that isn't a procedure", 3, 5);
+    interp_test_fails_at(in, m, "through", &a, "call of an address that isn't a procedure", 7, 9);
+    interp_free(in);
+    arena_free(&a);
+}
+
+TEST(interp_finds_foreign_procedures_by_address) {
+    // A foreign procedure's value is its C function's address, which leads
+    // back to the procedure once the interpreter has found it; nothing else
+    // does, null included, nor a search that starts after it. strlen comes
+    // after puts, so its index isn't 0.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                "strlen :: (s: *u8) -> u64 #foreign libc;\n"
+                                "get :: () -> *void { return cast(*void) strlen; }\n"
+                                "main :: () { }\n");
+    CHECK_EQ(interp_test_proc(m, "strlen"), 1);
+    Interp *in = interp_new(m);
+    CHECK_EQ(interp_c_function_at(in, 1, 0), -1);
+    Interp_Result r = {};
+    interp_test_run(in, m, "get", &a, &r);
+    CHECK(r.ok);
+    CHECK_EQ(r.results.count, 1);
+    if (r.results.count == 1) {
+        u64 address = r.results[0];
+        CHECK_EQ(interp_c_function_at(in, address, 0), interp_test_proc(m, "strlen"));
+        CHECK_EQ(interp_c_function_at(in, address, interp_test_proc(m, "strlen")), interp_test_proc(m, "strlen"));
+        CHECK_EQ(interp_c_function_at(in, address, interp_test_proc(m, "strlen") + 1), -1);
+        CHECK_EQ(interp_c_function_at(in, address + 1, 0), -1);
+        CHECK_EQ(interp_c_function_at(in, 0, 0), -1);
+    }
+    interp_test_free(&r);
+    interp_free(in);
+    arena_free(&a);
+}
+
+TEST(interp_bounds_checks_are_on_at_compile_time) {
+    // A run's code is always bounds checked: its failure is in the run's
+    // own procedure, #run, at the '[' (the check's place), and
+    // __rig_bounds_failed, the compiler's, is left out of the frames.
+    Arena a = arena_make();
+    Lowered_Runs lowered = lower_runs_of(&a, "#run { a : [3]int; i := 5; x := a[i]; }\nmain :: () { }\n");
+    Interp *in = interp_new(lowered.module);
+    Interp_Result r = {};
+    interp_run(in, ir_lower_run(lowered.lowering, lowered.file->runs[0]), {}, &a, &r);
+    CHECK(!r.ok);
+    CHECK_STR(r.message, "index 5 is out of bounds (count 3)");
+    CHECK_EQ(r.frames.count, 1);
+    if (r.frames.count == 1) {
+        CHECK_STR(r.frames[0].proc, "#run");
+        CHECK_EQ(r.frames[0].pos.line, 1);
+        CHECK_EQ(r.frames[0].pos.col, 34);
+    }
+    interp_test_free(&r);
+    interp_free(in);
+    lowered_runs_free(&lowered);
+    arena_free(&a);
+}
+
 // ---------------------------------------------------------------------------
 // The call thunks (thunk.h): C functions called with canonical values laid
 // out by the host's convention, as the interpreter calls C.
@@ -3111,16 +3234,63 @@ TEST(interpret_mode_runs_a_program_of_several_files) {
 }
 
 TEST(interpret_mode_reports_a_programs_errors) {
-    // A program that doesn't check isn't run: its diagnostics, as rig
-    // build prints them, and exit status 1.
+    // A program that doesn't check isn't run, nor are its top-level #runs
+    // (spec 7.8), so nothing is printed: its diagnostics, as rig build
+    // prints them, and exit status 1.
     Arena a = arena_make();
-    String path = interpret_test_file(&a, "broken", "main :: () { putz(\"hi\"); }\n");
+    String path = interpret_test_file(&a, "broken",
+                                      "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                      "#run puts(\"must not print\");\n"
+                                      "main :: () { putz(\"hi\"); }\n");
     Process_Result r = interpret_test_run(&a, &path, 1, false);
     CHECK_STR(r.out, "");
     CHECK_STR(r.err,
-              ".build/tests/interp/broken.rig:1:14: error: unknown identifier 'putz'\n"
+              ".build/tests/interp/broken.rig:3:14: error: unknown identifier 'putz'\n"
               "    main :: () { putz(\"hi\"); }\n"
               "                 ^\n");
     CHECK_EQ(r.exit_code, 1);
+    arena_free(&a);
+}
+
+TEST(interpret_mode_reports_a_failed_top_level_run) {
+    // A top-level #run that fails is the program's error, as in rig build:
+    // its diagnostic, with its frame, then exit status 1, and main isn't
+    // run. In one pipe, what the run printed comes out before it.
+    Arena a = arena_make();
+    String path = interpret_test_file(&a, "run_fails",
+                                      "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                      "#run { puts(\"the run's line\"); a : [1]int; i := 2; a[i] = 0; }\n"
+                                      "main :: () { puts(\"main must not run\"); }\n");
+    const char *failure =
+        ".build/tests/interp/run_fails.rig:2:1: error: #run failed: runtime error: index 2 is out of bounds (count 1)\n"
+        "    #run { puts(\"the run's line\"); a : [1]int; i := 2; a[i] = 0; }\n"
+        "    ^\n"
+        "    in #run (.build/tests/interp/run_fails.rig:2:53)\n";
+    Process_Result r = interpret_test_run(&a, &path, 1, false);
+    CHECK_STR(r.out, "the run's line\n");
+    CHECK_STR(r.err, failure);
+    CHECK_EQ(r.exit_code, 1);
+    r = interpret_test_run(&a, &path, 1, true);
+    CHECK_STR(r.out, string_cstr(&a, string_printf(&a, "the run's line\n%s", failure)));
+    CHECK_EQ(r.exit_code, 1);
+
+    // A later top-level run that calls C's exit ends the mode there, with
+    // its status: the diagnostics found by then are printed as it ends
+    // (diag_print_at_exit), after what the runs printed.
+    path = interpret_test_file(&a, "run_fails_then_exits",
+                               "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                               "exit :: (status: s32) #foreign libc;\n"
+                               "#run { puts(\"the run's line\"); a : [1]int; i := 2; a[i] = 0; }\n"
+                               "#run { puts(\"before exit\"); exit(3); }\n"
+                               "main :: () { puts(\"main must not run\"); }\n");
+    r = interpret_test_run(&a, &path, 1, true);
+    CHECK_STR(r.out, "the run's line\n"
+                     "before exit\n"
+                     ".build/tests/interp/run_fails_then_exits.rig:3:1: error: #run failed: runtime error: index 2 is out "
+                     "of bounds (count 1)\n"
+                     "    #run { puts(\"the run's line\"); a : [1]int; i := 2; a[i] = 0; }\n"
+                     "    ^\n"
+                     "    in #run (.build/tests/interp/run_fails_then_exits.rig:3:53)\n");
+    CHECK_EQ(r.exit_code, 3);
     arena_free(&a);
 }

@@ -1,0 +1,22 @@
+// C can't call back into code run while compiling (spec 7.8, 10.8): a #run
+// whose code passes a Rig procedure to C fails at the C call, an error at
+// the #run with the calls that led there.
+qsort :: (base: *void, count: u64, size: u64, compare: (a: *void, b: *void) -> s32 #c_call) #foreign libc;
+
+ascending :: (a: *void, b: *void) -> s32 #c_call {
+    x := (cast(*int) a).*;
+    y := (cast(*int) b).*;
+    if x < y { return -1; }
+    if x > y { return 1; }
+    return 0;
+}
+
+sorted :: () -> int {
+    a := int.[3, 1, 2];
+    qsort(a.data, 3, size_of(int), ascending);
+    return a[0];
+}
+
+FIRST :: #run sorted();
+
+main :: () { }

@@ -1,0 +1,3 @@
+tests/errors/run_statement_in_a_body.rig:9:5: error: #run in a body must be a value, as in x := #run f();
+        #run f();
+        ^

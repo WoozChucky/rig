@@ -1,0 +1,14 @@
+// A #run whose code fails while compiling is an error at the #run (spec
+// 7.8): the interpreter's message, then the calls that led there, innermost
+// first, the #run itself last.
+table :: () -> int {
+    a : [10]int;
+    i := 10;
+    return a[i];
+}
+
+fill :: () -> int { return table(); }
+
+A :: #run fill();
+
+main :: () { }

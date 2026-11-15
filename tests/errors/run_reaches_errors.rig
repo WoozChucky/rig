@@ -1,0 +1,8 @@
+// A #run doesn't run code with errors in what it reaches (spec 7.8): the
+// error is said once, where it is, and neither the #run nor the array whose
+// count needs it says anything more.
+f :: () -> int { return unknown; }
+N :: #run f();
+grid : [N]int;
+
+main :: () { }

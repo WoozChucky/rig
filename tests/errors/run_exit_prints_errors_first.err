@@ -1,0 +1,6 @@
+tests/errors/run_exit_prints_errors_first.rig:7:10: error: unknown type 'nosuch'
+    f :: (x: nosuch) { }
+             ^
+tests/errors/run_exit_prints_errors_first.rig:8:21: error: expected an expression, found ';'
+    broken :: () { x := ; }
+                        ^
