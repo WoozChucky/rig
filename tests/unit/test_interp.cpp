@@ -958,7 +958,8 @@ TEST(interp_procedure_values) {
     CHECK_EQ(interp_proc_at(in, 0), -1);
     CHECK_EQ(interp_proc_at(in, (u64)(uintptr_t)&r), -1);
     // Torn down, the interpreter gives its range back, or each Interp would
-    // leak its addresses (#115's #run will make them per compile). Asked as
+    // leak its addresses (a compilation's compile-time world makes one once
+    // a #run runs, and the unit tests make many). Asked as
     // os_reserve_inaccessible_gives_untouchable_addresses asks.
     interp_free(in);
     u8 *range = (u8 *)(uintptr_t)base;
