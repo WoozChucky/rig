@@ -1,0 +1,11 @@
+// add_build_file (spec 7.9) of a file that isn't there fails when it's
+// called: a runtime error at the call's name, which fails the #run, and
+// nothing is built. The path is relative to the build program's directory,
+// and the message names it as given. rig check never runs a top-level #run,
+// so it has nothing to say.
+#import "Compiler";
+
+#run {
+    w := create_workspace("game");
+    add_build_file(w, "src/missing.rig");
+}

@@ -1,0 +1,4 @@
+tests/errors/build_two_workspaces_one_name.rig:7:1: error: #run failed: runtime error: there's already a workspace 'game'
+    #run {
+    ^
+    in #run (tests/errors/build_two_workspaces_one_name.rig:9:5)

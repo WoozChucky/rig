@@ -482,13 +482,25 @@ struct Ast_Run : Ast {
 // that file, so what it declares is unknown, as it is for a broken entry
 // whose name was lost, and the checker doesn't report a name as unknown,
 // or main as missing, because of it (checker.h).
+//
+// reaches_compiler and compiler_pos are the loader's (load.h): whether the
+// program reached the Compiler module, which with no main makes it a build
+// program (ast_is_build_program, spec 7.9).
 struct Ast_File {
     Array<Ast_Proc *> procs;
     Array<Ast *> globals;
     Array<Ast_Load *> loads;
     Array<Ast_Run *> runs;  // the top-level #runs, in source order, file by file in load order
     bool lost_a_file;
+    bool reaches_compiler;  // the loader added the Compiler module's module.rig (by #import or #load)
+    Position compiler_pos;  // the #import or #load that first named it; the main file's 1:1 when it is that file
 };
+
+// Whether the program is a build program (spec 7.9): it reaches the Compiler
+// module and has no procedure called main, a broken one included (a broken
+// main is the main of an ordinary program the parser gave up on). A global
+// called main is no procedure, and doesn't count.
+bool ast_is_build_program(Ast_File *file);
 
 // The program's declarations (every file's: parse_into), procedures (broken
 // entries included) and globals together, in source order, file by file in

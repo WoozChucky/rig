@@ -1,0 +1,10 @@
+// Two workspaces (spec 7.9) can't share a name: the second create_workspace
+// fails, a runtime error at the call's name, which fails the #run, and
+// nothing is built. rig check never runs a top-level #run, so it has
+// nothing to say.
+#import "Compiler";
+
+#run {
+    create_workspace("game");
+    create_workspace("game");
+}

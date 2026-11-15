@@ -63,6 +63,15 @@
 // included (Source_File.in_module): only such a file may declare #compiler
 // procedures (spec 7.9), which the checker says. On Windows the case of
 // the path doesn't count there, as it doesn't in a file's name.
+//
+// A program that reaches the Compiler module's module.rig (the one
+// module_lookup finds for "Compiler" in the places), by an #import or by a
+// #load of any spelling of its path, the main file being that file
+// included, is recorded as reaching it (Ast_File.reaches_compiler), at the
+// #import or #load that first named it (compiler_pos; the main file's 1:1
+// when it's the main file). Without a procedure called main, such a
+// program is a build program (ast_is_build_program, spec 7.9): it builds
+// others, and isn't an executable itself.
 
 #pragma once
 

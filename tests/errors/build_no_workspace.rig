@@ -1,0 +1,7 @@
+// A build program (spec 7.9) whose #runs create no workspace has nothing
+// to build: the error is at its #import of the Compiler module, which made
+// it a build program. rig check never runs a top-level #run, so it has
+// nothing to say.
+#import "Compiler";
+
+#run { }

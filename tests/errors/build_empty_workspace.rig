@@ -1,0 +1,7 @@
+// A workspace (spec 7.9) is a program to build, so it needs a file: one
+// the build program made and gave none is an error at the create_workspace
+// call that made it, the callee's name. rig check never runs a top-level
+// #run, so it has nothing to say.
+#import "Compiler";
+
+#run { create_workspace("game"); }

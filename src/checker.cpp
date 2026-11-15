@@ -1971,10 +1971,13 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // A broken main, a broken declaration whose name was lost, or a file a
     // #load failed to load (Ast_File.lost_a_file) has nothing to say about
     // main: what it declares is unknown. A global called main is no
-    // procedure, so it's as if there were none.
+    // procedure, so it's as if there were none. A build program (spec 7.9)
+    // needs none: it builds others, and is never an executable itself.
     Ast **main_decl = table_get(&c.top_level, str("main"));
     if (!main_decl || (*main_decl)->kind != AST_PROC) {
-        if (!lost_a_name && !c.lost_a_file) diag_error(d, {0, 1, 1}, "a procedure called 'main' is needed");
+        if (!lost_a_name && !c.lost_a_file && !ast_is_build_program(file)) {
+            diag_error(d, {0, 1, 1}, "a procedure called 'main' is needed");
+        }
     } else if (!((Ast_Proc *)*main_decl)->is_broken) {
         Ast_Proc *m = (Ast_Proc *)*main_decl;
         if (m->params.count > 0 || m->results.count) {
