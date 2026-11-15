@@ -222,10 +222,11 @@
 // up in, or a procedure's, `name :: (`, in column 1; a global variable's
 // name in column 1, followed by ':' or ':=', outside any braces or
 // parameter list; or a #load or a #run starting a line outside any braces)
-// and goes on. Stray tokens in front of a declaration's name (`*greet :: () {}`) are
-// reported and skipped, and the declaration after them is parsed whole; so
-// is a declaration later on the line of a global that failed
-// (`counter : int = 1 2; f :: () {}`), the global keeping its name.
+// and goes on. Stray tokens in front of a declaration's name
+// (`*greet :: () {}`) are reported and skipped, and the declaration after
+// them is parsed whole; so is a declaration later on the line of a global
+// that failed (`counter : int = 1 2; f :: () {}`), the global keeping its
+// name.
 //
 // A body never closed ends at the end of the file or at a procedure's or a
 // struct's declaration in column 1 (`name :: (` or `Name :: struct`), or a

@@ -17,10 +17,10 @@
 //   with the program's main file (the setting rig.main, else one found in
 //   the workspace folder), its errors shown as squiggles and in the
 //   Problems panel without building (the setting rig.check), and a check
-//   that runs too long stopped (rig.checkTimeout). While it's on,
-//   the tasks use the problem matcher `$rig-runtime` instead, which takes
-//   only a program's runtime errors, so a build doesn't list the compile
-//   errors twice;
+//   that runs too long stopped (rig.checkTimeout). While the live check is
+//   on, the tasks use the problem matcher `$rig-runtime` instead, which
+//   takes only a program's runtime errors, so a build doesn't list the
+//   compile errors twice;
 // - debugging: the debug type `rig`, which builds the file with the build
 //   task and then debugs the program with Microsoft's C/C++ extension
 //   (Visual Studio's debugger on Windows, gdb on Linux), and the command
@@ -1273,12 +1273,13 @@ class LiveCheck {
 
     // Runs rig as the check of `key`, with `args`, in `cwd`, and `text` on its
     // standard input. this.running holds the process while it runs, so
-    // stop(key) ends it, with what it started (endProcess). Resolves { code, output } once it closes, `output`
-    // all it wrote to stderr and `code` null when it was killed, or { error }
-    // when it couldn't start: Node says so in one of two ways (see
-    // startProcess), by throwing here or with the 'error' event. With
-    // `seconds` > 0, a rig still running after that long is ended, and it
-    // resolves { timedOut: true, seconds } at once, whatever comes after.
+    // stop(key) ends it, with what it started (endProcess). Resolves
+    // { code, output } once it closes, `output` all it wrote to stderr and
+    // `code` null when it was killed, or { error } when it couldn't start:
+    // Node says so in one of two ways (see startProcess), by throwing here
+    // or with the 'error' event. With `seconds` > 0, a rig still running
+    // after that long is ended, and it resolves { timedOut: true, seconds }
+    // at once, whatever comes after.
     runRig(key, compiler, args, cwd, text, seconds) {
         return new Promise((resolve) => {
             const child = startProcess(compiler, args, cwd, true);

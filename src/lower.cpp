@@ -46,17 +46,18 @@
 //   (puts(NAME)) needs none: each is its literal's str.N address.
 // - A #run's result (#115, spec 7.8) was baked while checking into the
 //   tree a written value would make (run.cpp), so it's lowered as one: a
-//   number is a constant, a procedure value its procedure's address, and a
-//   constant holding data from one is a data constant as above. An
-//   expression #run's aggregate used at run time is a const.N of its own,
-//   one per #run (run_global). A view a constant or a #run holds (a baked
-//   one: no written constant may) is 16 bytes whose data is a relocation to
-//   its elements, a read-only const.N too; a global variable's view sees a
-//   writable array.N instead. A global variable holding a baked string,
-//   given by a #run or by a constant made from one, gets bytes of its own,
-//   writable, string.N (string_copy_global), where a written literal's
-//   are its one read-only str.N: the global is the program's to change,
-//   and the run's string is a value it was given, not a literal it wrote.
+//   number, a bool or null is a constant, a procedure value its
+//   procedure's address, and a constant holding data from one is a data
+//   constant as above. An expression #run's aggregate used at run time is
+//   a const.N of its own, one per #run (run_global). A view a constant or
+//   a #run holds (a baked one: no written constant may) is 16 bytes whose
+//   data is a relocation to its elements, a read-only const.N too; a global
+//   variable's view sees a writable array.N instead. A global variable
+//   holding a baked string, given by a #run or by a constant made from one,
+//   gets bytes of its own, writable, string.N (string_copy_global), where a
+//   written literal's are its one read-only str.N: the global is the
+//   program's to change, and the run's string is a value it was given, not
+//   a literal it wrote.
 // - Several results: a return gives one value per result, a call numbers
 //   one value per result (its first is the call's value where one is
 //   wanted), and names or targets receiving them are stored from those
@@ -159,7 +160,7 @@
 //   Each block that's a scope adds an Ir_Scope (lower_scoped_block, and the
 //   loops, which are one), and so does a declaration that hides a variable,
 //   for the rest of its block (lower_statement); each declaration adds an
-//   Ir_Var (add_local_var, and the parameters in ir_lower).
+//   Ir_Var (add_local_var, and the parameters in lower_body).
 //
 // Blocks are numbered in the order they're made, and made in the order
 // their code comes in the source, so the printed IR reads like the program.
@@ -193,8 +194,9 @@
 //   evaluates e; a top-level #run { } is its block, lowered as a body. Its
 //   source_name is #run, so a failure's outer frame reads "in #run".
 // - Compile-time code never reaches the program: it is lowered into its
-//   own module, and the program's ir_lower never sees a run. What a #run
-//   gives the program is its value, baked into the tree.
+//   own module, and the program's ir_lower never lowers a run's code. What
+//   a #run gives the program is its value, baked into the tree, which
+//   ir_lower lowers as it would a constant's (lower_expr's AST_RUN).
 
 #include "checker.h"
 #include "ir.h"
@@ -225,10 +227,10 @@ struct Lowering {
     Table<s32> proc_index;    // a Rig or foreign procedure's index in module->procs, by name
     Table<s32> global_index;  // a global variable's index in module->globals, by name
     s32 string_count;         // the str.N globals made so far: string literals and panic messages
-    // Each string literal node's str.N, by node_key: one per literal,
+    // Each string literal node's str.N, by pointer_key: one per literal,
     // however many uses and constants reach it (literal_global).
     Table<s32> literal_globals;
-    // Each data constant's const.N, by node_key, once a use needs it
+    // Each data constant's const.N, by pointer_key, once a use needs it
     // (constant_global), and each expression #run's baked aggregate's
     // (run_global).
     Table<s32> constant_globals;
@@ -260,13 +262,13 @@ struct Lowering {
     s32 scope;                // an index in proc->scopes; -1 in the procedures the compiler makes
     bool is_entry;            // the procedure being lowered is Rig's main, C's main: its returns
                               // give C's int, 0
+    Array<Ast_Proc *> sources;  // by index in module->procs, whole or on demand: the procedure of the
+                                // source each lowers; null, or past its end, for the compiler's own
+                                // and the runs' (set_source, ir_lowering_source)
     // Lowering on demand (ir_lowering_new): the compile-time module, which
     // gains a procedure or a global the first time something lowered needs
     // it, rather than the whole program up front.
     bool on_demand;
-    Array<Ast_Proc *> sources;  // by index in module->procs: the procedure of the source each lowers;
-                                // null, or past its end, for the compiler's own and the runs'
-                                // (set_source, ir_lowering_source)
     Array<s32> waiting;         // on demand: procedures declared whose bodies wait to be lowered,
                                 // first in, first out (ir_lower_run)
     s32 run_count;              // the run.N procedures made so far
@@ -449,22 +451,13 @@ static s32 add_bytes(Lowering *l, String bytes) {
     return (s32)(l->module->globals.count - 1);
 }
 
-// A node's address as a Table key: the 8 bytes of the pointer at `node`,
-// where they are. A lookup's key is needed only while it looks, so the
-// caller's own pointer will do; the key table_put keeps must last as long
-// as the table, so it's copied into the arena (string_copy), only when the
-// lookup finds nothing.
-static String node_key(const void *const *node) {
-    return {(const u8 *)node, (s64)sizeof *node};
-}
-
 // String literal `literal`'s bytes' global, str.N (add_bytes): made the
 // first time, the same after. So a literal has one global however often
 // it's reached: `NAME :: "rig";` used as a *u8 twice, and as a string
 // (whose const.N has a relocation to it), is one "rig".
 static s32 literal_global(Lowering *l, Ast_String *literal) {
     const void *node = literal;
-    String key = node_key(&node);
+    String key = pointer_key(&node);
     s32 *found = table_get(&l->literal_globals, key);
     if (found) return *found;
     s32 global = add_bytes(l, literal->value);
@@ -1400,11 +1393,11 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         // parameter, as a variable, is read from its slot, here, at the
         // statement reading it.
         // A procedure, or a constant naming one, is its address. A constant
-        // holding data (a number's never gets here: it's a constant) is the
-        // address of its value: a string's, a struct's, an array's or a
-        // baked view's read-only global, as any aggregate's value is its
-        // bytes' address, or, a pointer, the string literal's bytes it
-        // points at.
+        // holding data (a number's, a bool's or null never gets here: it's
+        // a constant) is the address of its value: a string's, a struct's,
+        // an array's or a baked view's read-only global, as any aggregate's
+        // value is its bytes' address, or, a pointer, the string literal's
+        // bytes it points at.
         Ast *decl = ((Ast_Name *)e)->decl;
         if (decl->kind == AST_PARAM) {
             s32 value = local_of(l, decl)->value;
@@ -1513,7 +1506,7 @@ static Type *extra_argument_type(Ast *arg) {
 
 // What a procedure of procedure type t takes and gives in the IR, for a
 // call through a value of t (IR_CALL_INDIRECT): the parameters and results
-// a procedure of that signature has (ir_lower makes the program's own the
+// a procedure of that signature has (declare_proc makes a procedure's the
 // same way), so the call passes what the procedure expects, whichever it
 // is. The Rig results are kept too, for the backend's sret.
 static Ir_Proc *signature_of(Lowering *l, Type *t) {
@@ -2060,7 +2053,7 @@ static Position statement_position(Ast *s) {
     }
 }
 
-// The return of Rig's main, which is C's: C's int, 0 (ir_lower).
+// The return of Rig's main, which is C's: C's int, 0 (declare_proc).
 static void emit_entry_return(Lowering *l) {
     s32 zero = emit_constant(l, IR_I32, 0);
     array_add(&emit(l, IR_RET, IR_VOID)->args, zero);
@@ -2366,11 +2359,11 @@ static void global_value(Lowering *l, Ir_Global *g, Type *t, Ast *value, bool wr
 // literal's or constant data's (the literal holding it, literal_of; zeros
 // for a part a literal leaves out); its index. A global variable's view
 // (`writable`) sees `array.N`, a variable: the view may write its elements.
-// A view a constant holds (a #run's baked view, the only one a constant
-// may hold) sees `const.N`, read-only, counted with the constants' own: a
-// write through it is a memory error (spec 8.6), as one through a
-// constant's own bytes is. Either name can't be a Rig global's, which has
-// no '.'.
+// A view in read-only data, a constant's or an expression #run's baked
+// value (run_global), sees `const.N`, read-only, counted with the
+// constants' own (a baked view: the only one a constant may hold): a write
+// through it is a memory error (spec 8.6), as one through a constant's own
+// bytes is. Either name can't be a Rig global's, which has no '.'.
 static s32 add_global_array(Lowering *l, Type *array, Ast *value, bool writable) {
     Ir_Global g = {};
     g.name = writable ? string_printf(l->arena, "array.%d", l->array_count++)
@@ -2388,10 +2381,10 @@ static s32 add_global_array(Lowering *l, Type *array, Ast *value, bool writable)
 // The read-only global, const.N, of `node` (a data constant or a #run),
 // whose value of type t is `value`: has_layout and is_read_only, t's size
 // and alignment, the value's bytes and relocations (global_value, not
-// writable), no rig_type. Made the first time, the same after (by node_key
-// in constant_globals); its index.
+// writable), no rig_type. Made the first time, the same after (by
+// pointer_key in constant_globals); its index.
 static s32 read_only_global(Lowering *l, const void *node, Type *t, Ast *value) {
-    String key = node_key(&node);
+    String key = pointer_key(&node);
     s32 *found = table_get(&l->constant_globals, key);
     if (found) return *found;
     Ir_Global g = {};
@@ -2421,8 +2414,8 @@ static s32 constant_global(Lowering *l, Ast_Const *constant) {
 
 // An expression #run's baked aggregate, used at run time: one read-only
 // const.N per #run (read_only_global, of its type and the run itself, whose
-// value constant_bytes reads through constant_data), cached by node_key in
-// constant_globals, as a data constant's is; its index. A baked view's is
+// value constant_bytes reads through constant_data), cached by pointer_key
+// in constant_globals, as a data constant's is; its index. A baked view's is
 // the view, 16 bytes, its data a relocation to its elements' own read-only
 // const.N.
 static s32 run_global(Lowering *l, Ast_Run *run) { return read_only_global(l, run, run->type, run); }
@@ -2787,8 +2780,9 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
     return index;
 }
 
-// The body of procedure `source` (not a foreign one), declared as
-// module->procs[index], lowered into it.
+// The body of procedure `source` (not a foreign one), lowered into
+// module->procs[index]: the procedure declare_proc made for it, or the
+// run.N of a #run { } (ir_lower_run).
 static void lower_body(Lowering *l, Ast_Proc *source, s32 index) {
     l->proc = l->module->procs[index];
     l->block = ir_new_block(l->arena, l->proc);
