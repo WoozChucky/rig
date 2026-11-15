@@ -37,7 +37,7 @@ bin/rig version
 ## Using rig
 
 ```text
-rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]
+rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks]
 rig check FILE.rig [--stdin | --stdin-for FILE.rig]
 rig version [--verbose]
 ```
@@ -45,6 +45,26 @@ rig version [--verbose]
 Section 10.1 of [the specification](docs/rig-spec.md#101-the-rig-command) is the whole command line. In short:
 
 - `bin/rig build hello.rig` (`bin\rig build hello.rig` in Windows' command prompt) writes `hello.exe` on Windows and `hello` on Linux, in the current directory. `-o OUTPUT` names it otherwise; on Windows a name with no extension gets `.exe`. `--no-bounds-checks` leaves out the checks of array, view and string indexes (`#no_abc` after a procedure's results does so for that procedure). The object file goes into a `.build` directory, made in the current directory.
+- `bin/rig build` with no file builds `build.rig` in the current directory, and says so when there is none (`rig: error: no file given and no build.rig in the current directory`).
+- A **build program** (section 7.9 of [the specification](docs/rig-spec.md#79-build-programs-and-the-compiler-module)) is a program that imports the Compiler module and has no `main`, usually `build.rig`. `rig build` runs its top-level `#run`s, which make workspaces through the module's `#compiler` procedures, each a program to build with its own build options, and then builds each workspace, in the order they were made, as a compilation of its own: its files, its `.build` and its executable are relative to the build program's directory. It refuses `-o` and `--no-bounds-checks` for a build program, whose build options do their work (status 2). `rig check build.rig` checks it, runs none of its top-level `#run`s, and builds nothing. For example:
+
+  ```rig
+  #import "Compiler";
+
+  build :: () {
+      w := create_workspace("game");
+      o := get_build_options(w);
+      o.output_name = "game";
+      o.optimize    = true;
+      set_build_options(w, o);
+      add_build_file(w, "src/main.rig");
+  }
+
+  #run build();
+  ```
+
+  `bin/rig build` in its directory builds `src/main.rig`, and the files it `#load`s, into `game` (`game.exe` on Windows), optimised with LLVM's O2 pipeline. `tests/build` holds more build programs, with the programs they build.
+- `#import "Basic";` imports a module that ships with rig (section 2.14), found in the `modules` directory beside `rig`, as in a release, or in the one above it, the repository's `modules` for `bin/rig`.
 - `bin/rig check hello.rig` stops at the errors: it reads and checks the program as `build` does and prints the same diagnostics, but writes nothing. With `--stdin` it checks the text on its standard input under that file name, which is how an editor checks what you are typing before it is saved; the text's `#load`s are found from that file's directory. With `--stdin-for LOADED.rig` it checks `hello.rig`'s program from disk, but for `LOADED.rig`, a file the program loads, whose text it takes from its standard input: that's how an editor checks a loaded file as part of its program, which has the `main` and the names the file uses (a program that never loads it is `rig: error: 'hello.rig' doesn't load 'LOADED.rig'`).
 - Both commands take only a source file whose name ends in `.rig`.
 
