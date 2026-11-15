@@ -111,33 +111,31 @@ TEST(run_procedure_values_of_another_type) {
     arena_free(&a);
 }
 
-#ifndef _WIN32
 TEST(run_bakes_the_foreign_procedure_it_gave) {
-    // Two foreign procedures may name one C function: glibc's index is
-    // strchr. A value of that function is baked as the procedure of the
-    // run's type, so a constant names it as it may name the written one,
-    // though the interpreter found the other first.
+    // Two foreign procedures may name one C function (spec 7.6's C name):
+    // c_strchr is strchr. A value of that function is baked as the
+    // procedure of the run's type, so a constant names it as it may name the
+    // written one, though the interpreter found the other first.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "strchr :: (s: *u8, c: s32) -> *u8 #foreign libc;\n"
-                          "index :: (s: *u8, c: s32) -> *void #foreign libc;\n"
+                          "c_strchr :: (s: *u8, c: s32) -> *void #foreign libc \"strchr\";\n"
                           "use :: () -> int { p := strchr(\"ab\", 98); return 1; }\n"
                           "X :: #run use();\n"
-                          "pick :: () -> (s: *u8, c: s32) -> *void #c_call { return index; }\n"
+                          "pick :: () -> (s: *u8, c: s32) -> *void #c_call { return c_strchr; }\n"
                           "P :: #run pick();\n"
-                          "both :: () -> bool { return cast(*void) strchr == cast(*void) index; }\n"
+                          "both :: () -> bool { return cast(*void) strchr == cast(*void) c_strchr; }\n"
                           "SAME :: #run both();\n"
                           "main :: () { }\n");
     CHECK_STR(sorted_messages(&a, &c), "");
     CHECK(((Ast_Const *)global_named(&c, "P"))->proc == c.file->procs[1]);
-    // The case this test is for: should the C library stop making index
-    // strchr, it fails here rather than passing without testing anything.
+    // The case this test is for: both values are one C function's address,
+    // so the run's value must be baked as the procedure its type names.
     Ast *same = global_named(&c, "SAME");
     CHECK(same->is_constant && same->constant == 1);
     token_list_free(c.list);
     arena_free(&a);
 }
-#endif
 
 TEST(run_refuses_procedure_values_of_no_procedure) {
     // A procedure value made from an integer is no procedure's: it is
