@@ -6,7 +6,7 @@ title: Install
 
 [![The latest release](https://img.shields.io/github/v/release/WoozChucky/rig)](https://github.com/WoozChucky/rig/releases/latest)
 
-Each release of Rig has the compiler built for 64-bit Windows and Linux, each with LLVM's linker beside it, and the VS Code extension. The [release notes](https://github.com/WoozChucky/rig/releases/latest) say what is new; [every release](https://github.com/WoozChucky/rig/releases) is on GitHub.
+Each release of Rig has the compiler built for 64-bit Windows and Linux, each with LLVM's linker and the modules that ship with Rig beside it, and the VS Code extension. The [release notes](https://github.com/WoozChucky/rig/releases/latest) say what is new; [every release](https://github.com/WoozChucky/rig/releases) is on GitHub.
 
 Rig is early: the language will change from one release to the next.
 
@@ -27,7 +27,7 @@ irm https://woozchucky.github.io/rig/install.ps1 | iex
 Either one installs the latest release for your user alone, with no administrator rights and no questions asked. It does what the [steps by hand](#install-by-hand) below do:
 
 1. It downloads the archive and `SHA256SUMS`, and checks the archive's SHA-256. If it doesn't match, the script stops, with nothing installed.
-2. It unpacks the archive into `%LOCALAPPDATA%\Programs\rig` on Windows, or into `~/.local/share/rig` on Linux, linked as `~/.local/bin/rig`, overwriting the files already there.
+2. It unpacks the archive into `%LOCALAPPDATA%\Programs\rig` on Windows, or into `~/.local/share/rig` on Linux, linked as `~/.local/bin/rig`, overwriting the files already there. The `modules` folder there is replaced whole, so a file a module no longer has doesn't stay behind.
 3. It puts Rig on your `PATH`, unless it is there already. On Windows, it adds the folder to your user `PATH` as [step 4 for Windows](#windows) does. On Linux, when `~/.local/bin` isn't on the `PATH`, it adds this line to the end of `~/.profile` and `~/.bashrc`, and of `~/.zshrc` if you have one, once:
 
    ```sh
@@ -73,12 +73,12 @@ The steps the scripts take, one at a time, for those who would rather see each o
 
 | For | File |
 |---|---|
-| Windows x64 | [rig-windows-x64.zip](https://github.com/WoozChucky/rig/releases/latest/download/rig-windows-x64.zip): `rig.exe`, with LLVM's `lld-link.exe` |
-| Linux x86-64 | [rig-linux-x64.tar.gz](https://github.com/WoozChucky/rig/releases/latest/download/rig-linux-x64.tar.gz): `rig`, with LLVM's `ld.lld` |
+| Windows x64 | [rig-windows-x64.zip](https://github.com/WoozChucky/rig/releases/latest/download/rig-windows-x64.zip): `rig.exe`, with LLVM's `lld-link.exe` and the `modules` folder |
+| Linux x86-64 | [rig-linux-x64.tar.gz](https://github.com/WoozChucky/rig/releases/latest/download/rig-linux-x64.tar.gz): `rig`, with LLVM's `ld.lld` and the `modules` folder |
 | VS Code 1.75 or later | [rig-vscode.vsix](https://github.com/WoozChucky/rig/releases/latest/download/rig-vscode.vsix): the extension |
 | | [SHA256SUMS](https://github.com/WoozChucky/rig/releases/latest/download/SHA256SUMS): the SHA-256 of each of the three |
 
-The links always get the latest release. The commands below download it, check it, and install it for your user alone, with no administrator rights. Each archive's files are at its top level: the linker must stay in the same folder as `rig`, which runs it from there.
+The links always get the latest release. The commands below download it, check it, and install it for your user alone, with no administrator rights. Each archive's files are at its top level: the linker and the `modules` folder must stay in the same folder as `rig`, which runs the linker from there and finds there the modules a program imports (`#import "Basic";`).
 
 ### Windows
 
@@ -99,9 +99,10 @@ In PowerShell (Windows PowerShell, which comes with Windows, or PowerShell 7):
    if ((Get-FileHash -Algorithm SHA256 rig-windows-x64.zip).Hash -eq $sum) { 'rig-windows-x64.zip: OK' } else { throw 'rig-windows-x64.zip: FAILED, its checksum is not the one in SHA256SUMS' }
    ```
 
-3. Unpack it into `%LOCALAPPDATA%\Programs\rig`, overwriting the files already there, then delete the download:
+3. Unpack it into `%LOCALAPPDATA%\Programs\rig`, overwriting the files already there, then delete the download. The first line removes the `modules` folder an older release put there, so that a file a module no longer has doesn't stay behind:
 
    ```powershell
+   Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\rig\modules" -ErrorAction SilentlyContinue
    Expand-Archive -Force rig-windows-x64.zip "$env:LOCALAPPDATA\Programs\rig"
    cd ~; Remove-Item -Recurse "$env:TEMP\rig-download"
    ```
@@ -157,14 +158,14 @@ In a terminal:
    sha256sum -c --ignore-missing SHA256SUMS
    ```
 
-3. Unpack it into `~/.local/share/rig`, overwriting the files already there, then delete the download:
+3. Unpack it into `~/.local/share/rig`, overwriting the files already there, then delete the download. The `modules` folder an older release put there is removed first, so that a file a module no longer has doesn't stay behind:
 
    ```sh
-   mkdir -p ~/.local/share/rig && tar xzf rig-linux-x64.tar.gz -C ~/.local/share/rig
+   mkdir -p ~/.local/share/rig && rm -rf ~/.local/share/rig/modules && tar xzf rig-linux-x64.tar.gz -C ~/.local/share/rig
    cd ~ && rm -rf "$download"
    ```
 
-4. Link `rig` into `~/.local/bin`, the folder for your own programs on the `PATH` (`rig` finds `ld.lld` beside the file the link points to):
+4. Link `rig` into `~/.local/bin`, the folder for your own programs on the `PATH` (`rig` finds `ld.lld` and `modules` beside the file the link points to):
 
    ```sh
    mkdir -p ~/.local/bin && ln -sf ~/.local/share/rig/rig ~/.local/bin/rig
