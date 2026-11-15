@@ -126,13 +126,16 @@ static void token_list_free(Token_List *list) {
 }
 
 // The messages reported so far, one per line, with their positions:
-// "2:5: unknown identifier 'x'\n". Easier to compare than renderings.
+// "2:5: unknown identifier 'x'\n", each followed by its more lines, if it
+// has any (a failed #run's frames, Diagnostic.lines). Easier to compare
+// than renderings.
 static String messages(Arena *a, Diagnostics *d) {
     String all = string_printf(a, "");
     for (s64 i = 0; i < d->messages.count; i++) {
         Diagnostic *m = &d->messages[i];
         all = string_printf(a, STR_FMT "%d:%d: " STR_FMT "\n", STR_ARG(all), m->pos.line, m->pos.col,
                             STR_ARG(m->message));
+        if (m->lines.count) all = string_printf(a, STR_FMT STR_FMT, STR_ARG(all), STR_ARG(m->lines));
     }
     return all;
 }
@@ -178,6 +181,49 @@ static Ir_Module *lower_tokens(Arena *a, const char *description) {
     Ir_Module *m = ir_lower(file, &list->diag, a, true);
     token_list_free(list);
     return m;
+}
+
+// `text` parsed and checked, which must be clean, and an on-demand lowering
+// of it into a module of its own, as the compile-time world makes (#115):
+// the module starts with lowering's two helpers, and each ir_lower_run adds
+// a run's procedure and what it reaches. The tokens are kept, since their
+// Diagnostics hold the paths a runtime error names.
+struct Lowered_Runs {
+    Token_List *list;
+    Ast_File *file;
+    Ir_Module *module;
+    Lowering *lowering;
+};
+
+static Lowered_Runs lower_runs_of(Arena *a, const char *text) {
+    Lowered_Runs r = {};
+    r.list = src(text);
+    r.file = parse(r.list->tokens, a, &r.list->diag);
+    bool ok = check(r.file, a, &r.list->diag);
+    if (!ok) fprintf(stderr, "lower_runs_of: doesn't check:\n%.*s", STR_ARG(messages(a, &r.list->diag)));
+    RIG_ASSERT(ok);
+    r.module = arena_new<Ir_Module>(a);
+    r.lowering = ir_lowering_new(r.module, &r.list->diag, a);
+    return r;
+}
+
+// The lowering and the tokens; the module is in the arena.
+static void lowered_runs_free(Lowered_Runs *r) {
+    ir_lowering_free(r->lowering);
+    token_list_free(r->list);
+}
+
+// The #run that top-level constant `name` of f holds as its value, which
+// must be there.
+static Ast_Run *constant_run(Ast_File *f, const char *name) {
+    for (s64 i = 0; i < f->globals.count; i++) {
+        Ast *g = f->globals[i];
+        if (g->kind != AST_CONST || !string_eq(((Ast_Const *)g)->name, str(name))) continue;
+        RIG_ASSERT(((Ast_Const *)g)->value->kind == AST_RUN);
+        return (Ast_Run *)((Ast_Const *)g)->value;
+    }
+    RIG_ASSERT(!"no such constant");
+    return nullptr;
 }
 
 // Where `needle` first occurs in `haystack`, or -1.

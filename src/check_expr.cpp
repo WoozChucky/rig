@@ -227,7 +227,8 @@ void report_no_conversion(Checker *c, Ast *value, Type *to) {
 
 // Casts are walked through; a field or an element of constant data goes on
 // from the node holding its value (constant_data), a procedure's name in a
-// literal, or a cast of one.
+// literal, or a cast of one, and so does a #run's baked value, a name bound
+// to the procedure, alone or in a baked struct or array.
 Ast_Proc *procedure_address(Ast *e) {
     for (;;) {
         Type *t = e->type;
@@ -251,12 +252,19 @@ Ast_Proc *procedure_address(Ast *e) {
 // the string or view it's taken of (a .count is no pointer, and an array
 // is no literal); constant data goes on from the node holding its value
 // (constant_data): a string constant's literal, or the value a *u8 field
-// of a constant holds, which may be a cast of a literal.
+// of a constant holds, which may be a cast of a literal; and a #run's baked
+// string, a literal (Ast_String.is_baked), alone or in a baked struct or
+// array, or its baked []u8 cast to a string, whose value is its bytes'
+// literal (Ast_Literal.text), where the []u8 itself is an array's.
 Ast_String *literal_address(Ast *e) {
     for (;;) {
         Type *t = e->type;
         if (!t || (!type_is_view_or_string(t) && !type_is_pointer(t))) return nullptr;
         if (e->kind == AST_STRING) return (Ast_String *)e;
+        Ast *text;
+        if (e->kind == AST_CAST && t == &type_string && constant_data(e, &text)) {
+            return text ? (Ast_String *)text : nullptr;
+        }
         if (e->kind == AST_CAST) {
             e = ((Ast_Cast *)e)->value;
             continue;
@@ -374,10 +382,30 @@ bool constant_data(Ast *e, Ast **value) {
     case AST_CAST: {
         // To its own type (cast(Vec2) .{1, 2}), or between string and []u8,
         // the same bytes: the value is the same. Any other cast makes
-        // another value, a pointer or a view of it.
+        // another value, a pointer or a view of it. A string's data is a
+        // string literal, though: a #run's baked []u8 is the array literal
+        // of its elements, which holds them as one too (Ast_Literal.text),
+        // the value of its cast to a string. Any other array literal in a
+        // []u8's slot (a struct literal's field, written) has none.
         Ast *from = ((Ast_Cast *)e)->value;
         bool same = from->type == t || is_bytes_retyped(from->type, t);
-        return same && constant_data(from, value);
+        if (!same || !constant_data(from, value)) return false;
+        if (t == &type_string && *value && (*value)->kind != AST_STRING) {
+            *value = (*value)->kind == AST_LITERAL ? ((Ast_Literal *)*value)->text : nullptr;
+            return *value != nullptr;
+        }
+        return true;
+    }
+    case AST_RUN: {
+        // A #run's baked value (run.cpp) that isn't a number: the node
+        // holding it, a name bound to a procedure, a string literal, or a
+        // struct or array literal of constant data; a view's is the array
+        // literal of its elements. A number is a constant (Ast.constant),
+        // and a #run with no value has none to give.
+        Ast_Run *run = (Ast_Run *)e;
+        if (!run->value || run->is_constant) return false;
+        *value = run->value;
+        return true;
     }
     default: return false;
     }
@@ -2044,6 +2072,7 @@ Type *check_expression(Checker *c, Ast *e) {
     case AST_MEMBER: t = check_member(c, (Ast_Member *)e); break;
     case AST_LITERAL: t = check_literal(c, (Ast_Literal *)e); break;
     case AST_INDEX: t = check_index(c, (Ast_Index *)e); break;
+    case AST_RUN: t = check_run(c, (Ast_Run *)e); break;
     default: RIG_ASSERT(!"not an expression");
     }
     e->type = t;

@@ -1,0 +1,13 @@
+// A #run whose code calls a C function the compiler can't find is an error
+// at the #run (spec 7.8), with the calls that led there: while compiling,
+// only the C library's functions are there to call.
+rig_no_such_function :: () #foreign libc;
+
+call_missing :: () -> int {
+    rig_no_such_function();
+    return 1;
+}
+
+C :: #run call_missing();
+
+main :: () { }

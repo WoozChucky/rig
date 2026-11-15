@@ -1,0 +1,6 @@
+// A top-level #run that fails is an error at its #run, with the calls
+// that led there (spec 7.8); the runs after it still run.
+fill :: (n: int) { a : [2]int; a[n] = 1; }
+#run fill(5);
+#run { b : [1]int; i := 1; b[i] = 0; }
+main :: () { }

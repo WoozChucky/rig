@@ -1,0 +1,55 @@
+// A #run in a global's value (issue #115, spec 4.3, 7.8) gives the global
+// its own copy of what the run gave: a view's elements in an array of the
+// global's own, and a string's bytes too, both writable, so the program
+// may change them. The program's own store starts at its written zeros,
+// whatever the run did to it while compiling. A #run's string is a
+// literal's bytes, which C reads up to their zero, and a #run may call C.
+// A global made from a constant holding a #run's value gets its own copy
+// too, of a string's bytes and of a struct's string and view: writing it
+// leaves the constant as it was.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+strlen :: (s: *u8) -> u64 #foreign libc;
+
+store : [3]int;
+
+make :: () -> []int {
+    store[0] = 1;
+    store[1] = 2;
+    store[2] = 3;
+    return store;
+}
+
+name :: () -> string { return "rig"; }
+add :: (a: int, b: int) -> int { return a + b; }
+pick :: () -> (int, int) -> int { return add; }
+
+Pair :: struct {
+    label: string;
+    items: []int;
+}
+
+pair :: () -> Pair { return .{name(), make()}; }
+
+numbers : []int = #run make();
+text := #run name();
+op := #run pick();
+LEN :: #run strlen("compile time");
+NAME :: #run name();
+PAIR :: #run pair();
+copy := NAME;
+held := PAIR;
+
+main :: () {
+    numbers[0] = 10;
+    text[0] = 82;
+    printf("%lld %lld %lld\n", numbers[0], numbers[1], store[0]);
+    printf("%.*s\n", cast(s32) text.count, text.data);
+    printf("%s\n", #run name());
+    printf("%lld %llu\n", op(2, 3), LEN);
+    copy[0] = 82;
+    held.label[1] = 73;
+    held.items[2] = 30;
+    printf("%.*s %s\n", cast(s32) copy.count, copy.data, NAME);
+    printf("%.*s %s %lld %lld\n", cast(s32) held.label.count, held.label.data, PAIR.label, held.items[2],
+           PAIR.items[2]);
+}

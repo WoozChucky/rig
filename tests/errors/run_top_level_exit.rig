@@ -1,0 +1,8 @@
+// exit() in a top-level #run ends the compiler there (spec 7.8), after
+// printing the errors found so far: the failure of the run before it. The
+// run after it isn't run, so its failure isn't reported.
+exit :: (status: s32) #foreign libc;
+#run { a : [1]int; i := 2; a[i] = 0; }
+#run exit(1);
+#run { b : [1]int; i := 3; b[i] = 0; }
+main :: () { }

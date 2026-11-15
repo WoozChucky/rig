@@ -7,8 +7,10 @@
 // expressions; expressions made of calls, names, strings, integers,
 // floats, bools, null, operators, casts, addresses and dereferences,
 // size_of, fields (e.x), struct literals (Vec2.{1, 2}), elements (a[i])
-// and array literals (int.[1, 2]). And structs, declared at the top level,
-// and the files a program loads (#load "PATH";), named there too.
+// and array literals (int.[1, 2]), and code run while compiling (#run e).
+// And structs, declared at the top level, the files a program loads
+// (#load "PATH";), named there too, and the code it runs while compiling
+// for its effect (#run e; and #run { ... }), there too.
 // Each node kind is a struct that starts with Ast, so a pointer to any node
 // is also an Ast *, and `kind` says which it is.
 //
@@ -66,6 +68,7 @@ enum Ast_Kind : u8 {
     AST_LITERAL,       // Ast_Literal: Vec2.{1, 2}  Vec2.{y = 2}  .{1, 2}  int.[1, 2]  .[1, 2]
     AST_INDEX,         // Ast_Index: a[i]
     AST_LOAD,          // Ast_Load: #load "PATH";
+    AST_RUN,           // Ast_Run: #run e (an expression), or a top-level #run e; or #run { ... }
 };
 
 struct Ast {
@@ -109,9 +112,13 @@ struct Ast_Param : Ast {
     Ast_Type *type_expr;
 };
 
+struct Ast_Proc;
+
 struct Ast_Block : Ast {
     Array<Ast *> statements;
-    Position end;  // its '}': where a procedure that runs off its end is reported
+    Position end;    // its '}': where a procedure that runs off its end is reported
+    Ast_Proc *proc;  // a procedure's body (a top-level #run { }'s too): its procedure, set by the parser;
+                     // null for any other block
 };
 
 // How far the checker has got with a global variable, a top-level
@@ -158,6 +165,15 @@ struct Ast_Proc : Ast {
     Position c_name_pos;        // where that string is written
     Ast_Resolve resolve;        // its signature's: checked in source order, or earlier by a call
                                 // in a global's value (checker.cpp's resolve_signature)
+    Ast_Resolve body_resolve;   // its body's: checked in check()'s pass over the bodies, or earlier,
+                                // by a #run that reaches it (checker.cpp's check_body); `resolve` is
+                                // the signature's
+    bool had_errors;            // its signature's check or its body's reported an error: a #run reaching
+                                // it doesn't run
+    s32 body_levels;            // the deepest levels of its body, its blocks and the expressions and
+                                // types in them together (MAX_DEPTH, counted as that at most): checked
+                                // where a #run reaches it, what it needs starts a level below
+                                // (checker.cpp's check_reached_body)
 };
 
 // A variable: `x : T = e;`, `x := e;` (its type is e's), `x : T;` (zeroed)
@@ -173,6 +189,8 @@ struct Ast_Var : Ast {
     Ast_Resolve resolve;    // a global's: how far the checker has got with it
     s32 levels;             // the deepest levels of its type and value (MAX_DEPTH): a global
                             // or a constant they need starts a level below
+    bool had_errors;        // a global's check (checker.cpp's resolve_global) reported an error: a
+                            // #run reaching it doesn't run
 };
 
 // A constant: `N :: e;`. Its type is e's (untyped when e is). The checker
@@ -185,13 +203,16 @@ struct Ast_Const : Ast {
                           // type (checker.cpp's check_const_value): that procedure. It's
                           // no number, so is_constant isn't set: a use of it is the procedure's
                           // address, as its name's is (check_expr.cpp's procedure_address)
-    bool is_data;         // a constant holding data (a string, a struct, an array, or a pointer to a
-                          // string literal's bytes): never is_constant, its value is `data`
+    bool is_data;         // a constant holding data (a string, a struct, an array, a pointer to a
+                          // string literal's bytes, or a view a #run gave): never is_constant, its
+                          // value is `data`
     Ast *data;            // is_data: the node holding its value (constant_data): a string literal, or
-                          // a struct or array literal; a pointer's string literal; null when that's
-                          // a field or element a literal leaves out, so the value is zero
+                          // a struct or array literal (a baked view's, its elements' array); a
+                          // pointer's string literal; null when that's a field or element a literal
+                          // leaves out, so the value is zero
     Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it
     s32 levels;           // the deepest levels of its value (MAX_DEPTH), as Ast_Var's
+    bool had_errors;      // a top-level one's check (resolve_global) reported an error, as Ast_Var's
 };
 
 // A field of a struct: `x: float;`, at its name. Its type is in Ast.type
@@ -268,6 +289,8 @@ struct Ast_Member : Ast {
 // Or of an array: `T.[a, b]` is a [2]T, T being the element type; `.[a, b]`
 // takes its element type and count from where it's used, as .{a, b} takes
 // its struct. pos is the '.'; start is T's name when there is one.
+struct Ast_String;
+
 struct Ast_Literal : Ast {
     Ast_Type *type_expr;            // the T before the '.' (an array's element type), or null: the type
                                     // comes from where it's used
@@ -278,6 +301,14 @@ struct Ast_Literal : Ast {
     bool is_array;                  // T.[a, b] or .[a, b]: an array's elements, in order
     s8 is_data;                     // filled in by the checker once asked (constant_data): 1 when it's
                                     // constant data, -1 when it isn't, 0 not asked yet
+    bool is_baked;                  // made from a #run's result (run.cpp), a struct's, an array's or a
+                                    // view's elements: a view-typed value whose data is one is a baked
+                                    // view, which a constant may hold, where a written view can't be
+                                    // held; and of elements of no size it gives none, whatever the
+                                    // count
+    Ast_String *text;               // a baked []u8's elements (run.cpp): the same bytes as a string
+                                    // literal, is_baked, what the view cast to a string holds
+                                    // (constant_data); null for any other literal
 };
 
 // a[i]: element i of the array, view or string a, or what the pointer a
@@ -318,7 +349,9 @@ struct Ast_Name : Ast {
 };
 
 struct Ast_String : Ast {
-    String value;  // the bytes it means, escapes decoded
+    String value;   // the bytes it means, escapes decoded
+    bool is_baked;  // made from a #run's result (run.cpp): a global holding it gets bytes of its own,
+                    // writable (spec 4.3, 7.8), where a written literal's stay read-only
 };
 
 struct Ast_Int : Ast {
@@ -408,14 +441,34 @@ struct Ast_Load : Ast {
     Position path_pos;  // the string literal, where messages about the file point
 };
 
+// #run: code run while compiling (spec 7.8). pos is the '#run'.
+// - As an expression, #run e is a prefix operator, binding as - and ! do
+//   (5.2): #run f() + 1 is (#run f()) + 1.
+// - At the top level, #run e; (any expression, its value thrown away) or
+//   #run { ... } is a declaration of its own, run for its effect once the
+//   program has checked. It declares no name.
+struct Ast_Run : Ast {
+    Ast *operand;       // e; null for #run { ... }
+    Ast_Proc *proc;     // #run { ... }: the procedure it runs as: named "#run", at the '#run', with no
+                        // parameters or results, its body the block; null otherwise
+    bool is_top_level;  // in Ast_File.runs: run for its effect
+    bool checked;       // the checker has been through it (check_run, check_top_level_run): once
+    Ast *value;         // an expression #run's result once it ran: the node holding it, as constant
+                        // data's literal tree (run.cpp's bake_value; a view's, the array literal of
+                        // its elements, typed [count]T), or the operand itself when
+                        // that is a constant and nothing ran; null when it has none: it hasn't run,
+                        // its operand or what it reaches had errors, or it failed (said already)
+};
+
 // A parsed file, or the files of a program parsed into one (parse_into):
 // their declarations, in source order, broken ones included; a file's
 // declarations come after those of the files loaded before it
 // (Position.file's order). Procedures (and broken entries, which are
 // Ast_Procs) are in procs; the globals, top-level variables (Ast_Var,
 // is_global set), constants (Ast_Const) and structs (Ast_Struct), in
-// globals; the loads (Ast_Load), in loads. Each list is in source order on
-// its own; ast_declarations merges procs and globals back by position.
+// globals; the loads (Ast_Load), in loads; the top-level runs (Ast_Run,
+// is_top_level set), in runs. Each list is in source order on its own;
+// ast_declarations merges procs and globals back by position.
 //
 // lost_a_file is set when a #load failed (load.h's errors), had no string
 // to name a file by, wasn't at the top level, or was passed over by the
@@ -427,6 +480,7 @@ struct Ast_File {
     Array<Ast_Proc *> procs;
     Array<Ast *> globals;
     Array<Ast_Load *> loads;
+    Array<Ast_Run *> runs;  // the top-level #runs, in source order, file by file in load order
     bool lost_a_file;
 };
 
@@ -434,7 +488,8 @@ struct Ast_File {
 // entries included) and globals together, in source order, file by file in
 // load order: what the checker goes through. Loads aren't among them: the
 // checker has nothing to do with them, the loader having read the files
-// they name. The caller frees the Array.
+// they name. Nor are the top-level runs, which declare no name. The caller
+// frees the Array.
 Array<Ast *> ast_declarations(Ast_File *file);
 
 // A new, zeroed node of struct T and kind `kind`, in the arena.
@@ -492,8 +547,11 @@ Token_Kind compound_operator(Token_Kind op);
 // An array's count prints as written: (array (name N) int) for [N]int.
 // A struct prints as (struct Vec2 (x float32) (y float32)), each field's
 // type as written ((x float) for x: float).
+// #run e prints as (run (call f)) for #run f(), in an expression, a
+// statement or at the top level alike; a top-level #run { ... } as
+// (run (block ...)).
 // Globals print as locals do, (var counter int) and (const LIMIT (int 100)),
-// and a load as (load "world/map.rig"), among the procedures in source
-// order.
+// a load as (load "world/map.rig"), and a top-level run as above, each on
+// a line of its own among the procedures, in source order.
 String ast_dump(Arena *a, Ast_File *file);
 String ast_dump_node(Arena *a, Ast *node);

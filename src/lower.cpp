@@ -44,6 +44,19 @@
 //   no copy (lower_view_of). A pointer constant (GREETING :: cast(*u8)
 //   "hi";) holds no bytes of its own, and a string constant met as a *u8
 //   (puts(NAME)) needs none: each is its literal's str.N address.
+// - A #run's result (#115, spec 7.8) was baked while checking into the
+//   tree a written value would make (run.cpp), so it's lowered as one: a
+//   number is a constant, a procedure value its procedure's address, and a
+//   constant holding data from one is a data constant as above. An
+//   expression #run's aggregate used at run time is a const.N of its own,
+//   one per #run (run_global). A view a constant or a #run holds (a baked
+//   one: no written constant may) is 16 bytes whose data is a relocation to
+//   its elements, a read-only const.N too; a global variable's view sees a
+//   writable array.N instead. A global variable holding a baked string,
+//   given by a #run or by a constant made from one, gets bytes of its own,
+//   writable, string.N (string_copy_global), where a written literal's
+//   are its one read-only str.N: the global is the program's to change,
+//   and the run's string is a value it was given, not a literal it wrote.
 // - Several results: a return gives one value per result, a call numbers
 //   one value per result (its first is the call's value where one is
 //   wanted), and names or targets receiving them are stored from those
@@ -153,6 +166,35 @@
 // A jump or branch to a block that doesn't exist yet (the block after an
 // if, a loop's exit, where a break goes) is emitted with the target unset
 // and filled in once the block is made (terminator_of).
+//
+// Lowering on demand (#115, spec 7.8). The program's module is lowered
+// whole, by ir_lower. The code #run runs while compiling is lowered by the
+// same pieces (lower_global, declare_proc, lower_body), a piece at a time,
+// by a Lowering that lives as long as the compilation (ir_lowering_new),
+// into a compile-time module of its own, which the interpreter runs:
+// - The queue. A procedure is declared the first time something lowered
+//   names it (proc_index_of: a call, a procedure value, a global's
+//   relocation), and its body joins `waiting`; a global is made the first
+//   time a body uses it (address_of). ir_lower_run lowers the run's own
+//   procedure, then the waiting bodies, first in, first out, each of which
+//   may queue more: a run's procedure comes with everything it can call,
+//   and a procedure two runs reach is lowered once, its globals shared.
+// - The helpers come first, whole: __rig_bounds_failed (index 0) and
+//   __rig_string_equal (index 1), made by ir_lowering_new, so neither
+//   waits on checks lowered later. The bounds buffer is sized for the
+//   longest prefix any of the program's files can give (all of them are
+//   loaded before the checker, and so any #run, starts): the longest path,
+//   39 bytes for two 10-digit numbers, two ':' and ": runtime error: ",
+//   and the usual 73. Bounds checks are always on: --no-bounds-checks is
+//   the program's build option, but #no_abc, part of what a procedure
+//   means, still holds.
+// - The run's procedure, run.N: an expression #run's returns its operand's
+//   value, as a procedure with that result would; a top-level #run e;
+//   evaluates e; a top-level #run { } is its block, lowered as a body. Its
+//   source_name is #run, so a failure's outer frame reads "in #run".
+// - Compile-time code never reaches the program: it is lowered into its
+//   own module, and the program's ir_lower never sees a run. What a #run
+//   gives the program is its value, baked into the tree.
 
 #include "checker.h"
 #include "ir.h"
@@ -187,7 +229,8 @@ struct Lowering {
     // however many uses and constants reach it (literal_global).
     Table<s32> literal_globals;
     // Each data constant's const.N, by node_key, once a use needs it
-    // (constant_global).
+    // (constant_global), and each expression #run's baked aggregate's
+    // (run_global).
     Table<s32> constant_globals;
     s32 constant_count;       // the const.N globals made so far
     Ir_Proc *proc;            // the procedure whose body is being lowered
@@ -195,13 +238,17 @@ struct Lowering {
     Array<Local> locals;      // the current procedure's variables and parameters so far
     Array<Loop> loops;        // the loops around the statement being lowered, innermost last
     bool bounds_checks;       // whether a[i] is checked against a's count: rig build's
-                              // --no-bounds-checks clears it
+                              // --no-bounds-checks clears it; always set on demand
     bool checking_bounds;     // whether this procedure's are: bounds_checks, unless it says #no_abc
     s32 bounds_failed;        // __rig_bounds_failed's index in module->procs, once a check needs it; -1
-    s64 longest_where;        // the longest "PATH:L:C: runtime error: " a bounds check passes it
+                              // (on demand, 0 from the start)
+    s64 longest_where;        // the longest "PATH:L:C: runtime error: " a bounds check passes it (on
+                              // demand, the longest any can: ir_lowering_new)
     s32 array_count;          // the array.N globals made so far: the arrays global views see
+    s32 string_copy_count;    // the string.N globals made so far: the bytes of its own a global holding
+                              // a baked string gets (string_copy_global)
     s32 string_equal;         // __rig_string_equal's index in module->procs, once == on strings
-                              // needs it; -1
+                              // needs it; -1 (on demand, 1 from the start)
     // Where the instructions being emitted come from (ir.h's "Debug
     // information"): every one emitted gets them. lower_statement sets pos
     // to each statement's; a loop, an if and a failing check set it to the
@@ -213,6 +260,16 @@ struct Lowering {
     s32 scope;                // an index in proc->scopes; -1 in the procedures the compiler makes
     bool is_entry;            // the procedure being lowered is Rig's main, C's main: its returns
                               // give C's int, 0
+    // Lowering on demand (ir_lowering_new): the compile-time module, which
+    // gains a procedure or a global the first time something lowered needs
+    // it, rather than the whole program up front.
+    bool on_demand;
+    Array<Ast_Proc *> sources;  // by index in module->procs: the procedure of the source each lowers;
+                                // null, or past its end, for the compiler's own and the runs'
+                                // (set_source, ir_lowering_source)
+    Array<s32> waiting;         // on demand: procedures declared whose bodies wait to be lowered,
+                                // first in, first out (ir_lower_run)
+    s32 run_count;              // the run.N procedures made so far
 };
 
 // The `pos` and `scope` the next instructions get.
@@ -309,7 +366,9 @@ static void add_local_var(Lowering *l, Ast_Var *decl, s32 slot, s32 scope) {
 // Whether a local named `name`, declared here, hides a variable visible
 // here: a global, a parameter, or a local of the current scope or of one
 // around it (one of a block that has ended is visible no more). Such a
-// declaration starts a scope of its own (lower_statement says why).
+// declaration starts a scope of its own (lower_statement says why). On
+// demand, a global no body has used yet isn't seen; that changes only the
+// scopes, which a compile-time module, never compiled, gives no debugger.
 static bool hides_a_variable(Lowering *l, String name) {
     if (table_get(&l->global_index, name)) return true;
     for (s64 i = 0; i < l->proc->vars.count; i++) {
@@ -474,27 +533,40 @@ static Local *local_of(Lowering *l, Ast *decl) {
     return nullptr;
 }
 
+static s32 declare_proc(Lowering *l, Ast_Proc *source);
+static s32 lower_global(Lowering *l, Ast_Var *var);
+
 // The address of variable `decl` (an Ast_Var), where it's loaded from and
 // stored to: a local's slot, or a global's address, emitted here. A
 // global's name is its own: the checker allowed no other top-level
-// declaration of it.
+// declaration of it. ir_lower made every global before any body; on
+// demand, one no body used before is made now (lower_global).
 static s32 address_of(Lowering *l, Ast *decl) {
     RIG_ASSERT(decl->kind == AST_VAR);
     if (!((Ast_Var *)decl)->is_global) return local_of(l, decl)->value;
     s32 *index = table_get(&l->global_index, ((Ast_Var *)decl)->name);
-    RIG_ASSERT(index);
+    s32 global;
+    if (index) {
+        global = *index;
+    } else {
+        RIG_ASSERT(l->on_demand);
+        global = lower_global(l, (Ast_Var *)decl);
+    }
     Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
-    addr->target = *index;
+    addr->target = global;
     return addr->result;
 }
 
 // The index in module->procs of procedure `proc`, a Rig or foreign one of
 // the program, from any of its files: its name's (the checker allowed no
-// other top-level declaration of it, in any file).
+// other top-level declaration of it, in any file). ir_lower numbered every
+// procedure first; on demand, one nothing named before is declared now,
+// its body lowered later (declare_proc).
 static s32 proc_index_of(Lowering *l, Ast_Proc *proc) {
     s32 *index = table_get(&l->proc_index, proc->name);
-    RIG_ASSERT(index);
-    return *index;
+    if (index) return *index;
+    RIG_ASSERT(l->on_demand);
+    return declare_proc(l, proc);
 }
 
 // The value of procedure `proc` (its name, or a constant naming it, used as
@@ -579,6 +651,7 @@ static s32 aggregate_results(Ast_Proc *proc) {
 static s32 lower_expr(Lowering *l, Ast *e);
 static s32 lower_address(Lowering *l, Ast *e);
 static s32 constant_global(Lowering *l, Ast_Const *constant);
+static s32 run_global(Lowering *l, Ast_Run *run);
 
 // A view's count and data, loaded from the view at %view (its fields, as
 // types.h lays them out).
@@ -1160,6 +1233,9 @@ static s32 bounds_failed_proc(Lowering *l);
 // runtime check's panic is (emit_runtime_check).
 static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s32 count, bool is_signed) {
     String where = runtime_error_prefix(l, at);
+    // On demand, __rig_bounds_failed was made first, its buffer sized for
+    // any prefix (ir_lowering_new).
+    RIG_ASSERT(!l->on_demand || where.count <= l->longest_where);
     if (where.count > l->longest_where) l->longest_where = where.count;
     s32 fail = new_block(l);
     s32 ok = new_block(l);
@@ -1325,9 +1401,10 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         // statement reading it.
         // A procedure, or a constant naming one, is its address. A constant
         // holding data (a number's never gets here: it's a constant) is the
-        // address of its value: a string's, a struct's or an array's
-        // read-only global, as any aggregate's value is its bytes' address,
-        // or, a pointer, the string literal's bytes it points at.
+        // address of its value: a string's, a struct's, an array's or a
+        // baked view's read-only global, as any aggregate's value is its
+        // bytes' address, or, a pointer, the string literal's bytes it
+        // points at.
         Ast *decl = ((Ast_Name *)e)->decl;
         if (decl->kind == AST_PARAM) {
             s32 value = local_of(l, decl)->value;
@@ -1402,6 +1479,23 @@ static s32 lower_expr(Lowering *l, Ast *e) {
             }
         }
         return lower_operation(l, b->op, e->type, lower_value(l, b->left, e->type), b->right, b->pos);
+    }
+    case AST_RUN: {
+        // A #run's value, baked while checking (run.cpp): a number, a bool
+        // or null is a constant, lowered as one (lower_value). A procedure
+        // value is the procedure's address. Anything else is an aggregate,
+        // whose value is the address of its run's read-only global
+        // (run_global), as a data constant's is; a baked view's elements
+        // are a read-only global of their own.
+        if (e->type->kind == TYPE_PROC) {
+            Ast_Proc *proc = procedure_address(e);
+            RIG_ASSERT(proc);
+            return emit_proc_address(l, proc);
+        }
+        RIG_ASSERT(type_is_aggregate(e->type));
+        Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
+        addr->target = run_global(l, (Ast_Run *)e);
+        return addr->result;
     }
     default: RIG_ASSERT(!"not a value"); return -1;
     }
@@ -1506,9 +1600,7 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
     }
     s32 next;
     if (proc) {
-        s32 *index = table_get(&l->proc_index, proc->name);
-        RIG_ASSERT(index);
-        next = emit_call(l, *index, args)->result;
+        next = emit_call(l, proc_index_of(l, proc), args)->result;
     } else {
         // Right before the call, once the arguments are worked out: a null
         // procedure value is a runtime error at the call's '('.
@@ -2087,19 +2179,40 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
     for (s64 k = 0; k < size; k++) at[k] = (u8)(bits >> (8 * k));
 }
 
-static s32 add_global_array(Lowering *l, Type *array, Ast *value);
+static s32 add_global_array(Lowering *l, Type *array, Ast *value, bool writable);
 
 // The struct or array literal holding the value of `value`, an aggregate's
 // that constant_bytes writes: value itself, or, for constant data written
 // some other way (a constant's name, a field or an element of one, a cast
-// of it), the literal holding it (constant_data); null for a part a literal
-// leaves out, all zeros.
+// of it, a #run's baked value), the literal holding it (constant_data);
+// null for a part a literal leaves out, all zeros.
 static Ast_Literal *literal_of(Ast *value) {
     if (value->kind == AST_LITERAL) return (Ast_Literal *)value;
     Ast *data;
     bool known = constant_data(value, &data);
     RIG_ASSERT(known && (!data || data->kind == AST_LITERAL));
     return (Ast_Literal *)data;
+}
+
+// The bytes of a baked string, `literal`, for a global variable that holds
+// it: string.N, a global of bytes of its own, writable (has_layout, not
+// read-only), its count and a zero, aligned to 1; a new one each time. A
+// written literal's bytes are read-only, as in C, and every use of it
+// shares them (literal_global); a #run's string is the global's own data
+// (spec 4.3, 7.8), as a view's array is (add_global_array). Its name can't
+// be a Rig global's, which has no '.'.
+static s32 string_copy_global(Lowering *l, Ast_String *literal) {
+    Ir_Global g = {};
+    g.name = string_printf(l->arena, "string.%d", l->string_copy_count++);
+    g.type = IR_VOID;
+    g.has_layout = true;
+    g.size = literal->value.count + 1;
+    g.align = 1;
+    u8 *copy = (u8 *)arena_alloc(l->arena, (u64)literal->value.count + 1, 1);
+    memcpy(copy, literal->value.data, (size_t)literal->value.count);  // zeroed: the last byte is 0
+    g.bytes = {copy, literal->value.count + 1};
+    array_add(&l->module->globals, g);
+    return (s32)(l->module->globals.count - 1);
 }
 
 // The bytes of a constant value of type t, written `offset` bytes into a
@@ -2124,11 +2237,22 @@ static Ast_Literal *literal_of(Ast *value) {
 // out, not the order a literal with names gives them. A procedure's address
 // (procedure_address) is a relocation too, to the procedure. The checker
 // made sure every value is a constant, a string literal, a procedure,
-// constant data, or a literal of them (check_global_value).
-static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *relocs, Type *t, Ast *value) {
+// constant data, a literal of them (check_global_value), or a #run's baked
+// value (run.cpp), which is made of the same: a view's is the array literal
+// of its elements, read here as a view's array value is.
+//
+// `writable` says whose bytes they are: a global variable's (lower_global),
+// which the program may change, or a constant's or a #run's read-only
+// const.N (constant_global, run_global). A view's array is then a writable
+// array.N of its own, or a read-only const.N; and a baked string
+// (Ast_String.is_baked), which a global holds as its own data, gets bytes
+// of its own, string.N (string_copy_global), where a written literal's stay
+// its shared, read-only str.N.
+static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *relocs, Type *t, Ast *value,
+                           bool writable) {
     Ast_String *literal = literal_address(value);
     if (literal) {
-        s32 global = literal_global(l, literal);
+        s32 global = literal->is_baked && writable ? string_copy_global(l, literal) : literal_global(l, literal);
         if (!type_is_view_or_string(t)) {
             array_add(relocs, Ir_Reloc{offset, global, false});  // a pointer, *u8 or what a cast made it
             return;
@@ -2148,9 +2272,9 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
         // data's; add_global_array writes it, a part left out as zeros, all
         // N of its elements still seen. A value typed as the view is itself
         // a part of constant data (a struct literal's view field, or a
-        // constant's that its literal leaves out): its array is the node
-        // holding it (constant_data), and a view left out is the empty
-        // view, zeros.
+        // constant's that its literal leaves out), or a #run's baked view:
+        // its array is the node holding it (constant_data), and a view left
+        // out is the empty view, zeros.
         if (value->type->kind != TYPE_ARRAY) {
             Ast *data;
             bool known = constant_data(value, &data);
@@ -2160,7 +2284,7 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
             RIG_ASSERT(value->type->kind == TYPE_ARRAY);
         }
         Type *array = value->type;
-        s32 global = add_global_array(l, array, value);
+        s32 global = add_global_array(l, array, value, writable);
         write_bits(bytes + offset + VIEW_COUNT_OFFSET, (u64)array->count, 8);
         array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, global, false});
         return;
@@ -2170,7 +2294,8 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
         if (!literal) return;  // a part left out: zeros
         if (t->kind == TYPE_ARRAY) {
             for (s64 i = 0; i < literal->values.count; i++) {
-                constant_bytes(l, bytes, offset + i * t->element->size, relocs, t->element, literal->values[i]);
+                constant_bytes(l, bytes, offset + i * t->element->size, relocs, t->element, literal->values[i],
+                               writable);
             }
             return;
         }
@@ -2179,7 +2304,7 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
             Ast *field_value = literal_field_value(literal, t, (s32)f);
             if (!field_value) continue;
             Type_Field *field = &t->fields[f];
-            constant_bytes(l, bytes, offset + field->offset, relocs, field->type, field_value);
+            constant_bytes(l, bytes, offset + field->offset, relocs, field->type, field_value, writable);
         }
         return;
     }
@@ -2200,7 +2325,9 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
 // or a string. The bytes after it are zeros, which the global's size covers
 // and the compiler never holds: `big : [1 << 30]u8;` has no bytes at all,
 // and `S.{x = 1}` only up to x's. Constant data's is its literal's
-// (literal_of), and a part a literal leaves out needs none.
+// (literal_of), a #run's baked value's included, and a part a literal
+// leaves out needs none. A baked view's is a view's whole size, as any
+// view's: its elements are in a global of their own.
 static s64 constant_extent(Type *t, Ast *value) {
     if (!type_is_aggregate(t) || t->kind == TYPE_VIEW || literal_address(value)) return t->size;
     // A string here is one a literal leaves out: any other is a string
@@ -2227,41 +2354,43 @@ static s64 constant_extent(Type *t, Ast *value) {
 
 // A global of bytes of type t whose first value is `value`: the bytes up
 // to constant_extent, written by constant_bytes, and the relocations.
-static void global_value(Lowering *l, Ir_Global *g, Type *t, Ast *value) {
+// `writable`: a global variable's, not a constant's (constant_bytes).
+static void global_value(Lowering *l, Ir_Global *g, Type *t, Ast *value, bool writable) {
     s64 extent = constant_extent(t, value);
     u8 *bytes = (u8 *)arena_alloc(l->arena, extent ? (u64)extent : 1, 1);  // zeroed
-    constant_bytes(l, bytes, 0, &g->relocs, t, value);
+    constant_bytes(l, bytes, 0, &g->relocs, t, value, writable);
     g->bytes = {bytes, extent};
 }
 
-// A global of bytes for a global view's array value, `array.N`: a variable
-// (the view may write its elements), the value's bytes, an array literal's
-// or constant data's (the literal holding it, literal_of; zeros for a part a
-// literal leaves out); its index. Its name can't be a Rig global's, which
-// has no '.'.
-static s32 add_global_array(Lowering *l, Type *array, Ast *value) {
+// A global of bytes for a view's array value: the value's bytes, an array
+// literal's or constant data's (the literal holding it, literal_of; zeros
+// for a part a literal leaves out); its index. A global variable's view
+// (`writable`) sees `array.N`, a variable: the view may write its elements.
+// A view a constant holds (a #run's baked view, the only one a constant
+// may hold) sees `const.N`, read-only, counted with the constants' own: a
+// write through it is a memory error (spec 8.6), as one through a
+// constant's own bytes is. Either name can't be a Rig global's, which has
+// no '.'.
+static s32 add_global_array(Lowering *l, Type *array, Ast *value, bool writable) {
     Ir_Global g = {};
-    g.name = string_printf(l->arena, "array.%d", l->array_count++);
+    g.name = writable ? string_printf(l->arena, "array.%d", l->array_count++)
+                      : string_printf(l->arena, "const.%d", l->constant_count++);
     g.type = IR_VOID;
     g.has_layout = true;
+    g.is_read_only = !writable;
     g.size = array->size;
     g.align = (u32)array->align;
-    global_value(l, &g, array, value);
+    global_value(l, &g, array, value, writable);
     array_add(&l->module->globals, g);
     return (s32)(l->module->globals.count - 1);
 }
 
-// Data constant `constant`'s read-only global, const.N: has_layout and
-// is_read_only, its type's size and alignment, its value's bytes and
-// relocations (global_value), no rig_type. Made the first time a use needs
-// it, the same after; its index. So a constant used only folded (PRIMES[2],
-// NAME.count), or only as its literal's address (a pointer constant,
-// puts(NAME)), has none, and one whose bytes a use reads at run time has
-// one, wherever it's used. The bytes are the value node's, not `data`'s,
-// which is null for a part a literal leaves out: constant_bytes finds the
-// literal itself.
-static s32 constant_global(Lowering *l, Ast_Const *constant) {
-    const void *node = constant;
+// The read-only global, const.N, of `node` (a data constant or a #run),
+// whose value of type t is `value`: has_layout and is_read_only, t's size
+// and alignment, the value's bytes and relocations (global_value, not
+// writable), no rig_type. Made the first time, the same after (by node_key
+// in constant_globals); its index.
+static s32 read_only_global(Lowering *l, const void *node, Type *t, Ast *value) {
     String key = node_key(&node);
     s32 *found = table_get(&l->constant_globals, key);
     if (found) return *found;
@@ -2270,20 +2399,40 @@ static s32 constant_global(Lowering *l, Ast_Const *constant) {
     g.type = IR_VOID;
     g.has_layout = true;
     g.is_read_only = true;
-    g.size = constant->type->size;
-    g.align = (u32)constant->type->align;
-    global_value(l, &g, constant->type, constant->value);  // may add str.N globals first
+    g.size = t->size;
+    g.align = (u32)t->align;
+    global_value(l, &g, t, value, false);  // may add str.N and const.N globals first
     array_add(&l->module->globals, g);
     s32 global = (s32)(l->module->globals.count - 1);
     table_put(&l->constant_globals, string_copy(l->arena, key), global);
     return global;
 }
 
+// Data constant `constant`'s read-only global, const.N (read_only_global),
+// made the first time a use needs it, the same after; its index. So a
+// constant used only folded (PRIMES[2], NAME.count), or only as its
+// literal's address (a pointer constant, puts(NAME)), has none, and one
+// whose bytes a use reads at run time has one, wherever it's used. The
+// bytes are the value node's, not `data`'s, which is null for a part a
+// literal leaves out: constant_bytes finds the literal itself.
+static s32 constant_global(Lowering *l, Ast_Const *constant) {
+    return read_only_global(l, constant, constant->type, constant->value);
+}
+
+// An expression #run's baked aggregate, used at run time: one read-only
+// const.N per #run (read_only_global, of its type and the run itself, whose
+// value constant_bytes reads through constant_data), cached by node_key in
+// constant_globals, as a data constant's is; its index. A baked view's is
+// the view, 16 bytes, its data a relocation to its elements' own read-only
+// const.N.
+static s32 run_global(Lowering *l, Ast_Run *run) { return read_only_global(l, run, run->type, run); }
+
 // __rig_bounds_failed(ptr where, i64 where_length, i64 index, i64 count,
 // i1 index_is_signed): what a failing bounds check calls (emit_bounds_check).
 // Made the first time a check needs it, with no body yet: its body is made
 // once every procedure's is (lower_bounds_failed), when the longest `where`
-// is known. Its index in the module's procedures, after the program's.
+// is known. Its index in the module's procedures, after the program's. On
+// demand, it is made first, body and all (ir_lowering_new).
 static s32 bounds_failed_proc(Lowering *l) {
     if (l->bounds_failed < 0) {
         Ir_Proc *p = ir_new_proc(l->module, l->arena, str("__rig_bounds_failed"));
@@ -2419,7 +2568,9 @@ static void append_number(Lowering *l, s32 buffer, s32 length, s32 value, s32 is
 // view's may have been set below 0). The buffer is a local of the longest
 // WHERE any check passes plus 73 bytes: the fixed text is 33 ("index ", 6,
 // " is out of bounds (count ", 25, ")\n", 2), and each number at most 20.
-// WHERE is the message's prefix, so the panic's c is where_length (ir.h).
+// (On demand, made before any check, the longest WHERE any file can give:
+// ir_lowering_new.) WHERE is the message's prefix, so the panic's c is
+// where_length (ir.h).
 static void lower_bounds_failed(Lowering *l) {
     l->proc = l->module->procs[l->bounds_failed];
     l->block = ir_new_block(l->arena, l->proc);
@@ -2447,7 +2598,8 @@ static void lower_bounds_failed(Lowering *l) {
 // i1: what == on strings calls (lower_string_comparison). Made the first
 // time a comparison needs it, with no body yet (lower_string_equal makes
 // it, once every procedure's is); its index in the module's procedures,
-// after the program's.
+// after the program's. On demand, it is made second, body and all
+// (ir_lowering_new).
 static s32 string_equal_proc(Lowering *l) {
     if (l->string_equal < 0) {
         Ir_Proc *p = ir_new_proc(l->module, l->arena, str("__rig_string_equal"));
@@ -2526,6 +2678,180 @@ static void lower_string_equal(Lowering *l) {
     array_add(&emit(l, IR_RET, IR_VOID)->args, no);
 }
 
+// Records that module->procs[index] lowers `source`, null for one the
+// compiler makes; sources grows to it, with nulls.
+static void set_source(Lowering *l, s32 index, Ast_Proc *source) {
+    while (l->sources.count <= index) array_add(&l->sources, nullptr);
+    l->sources[index] = source;
+}
+
+// Global variable `var`, an Ir_Global of its type appended to the module
+// and entered in global_index; its index. Its first value is the constant
+// the checker made sure it has (an integer's bits cut to the type's width,
+// a float's whole, as an IR_CONST keeps them), or zero: without a value, or
+// with ---, since a global isn't on the stack and nothing else was ever
+// there. A struct is a global of bytes, its literal's (constant_bytes, only
+// as far as its last value: global_value) or zeros, of which the IR holds
+// none; so is an array, and a view, whose literal's array is a global of
+// its own, and a string. A pointer holding a string literal's address is a
+// global of bytes too, 8 of them: an address the linker writes is a
+// relocation, which only a global of bytes has; and so is one holding a
+// procedure's address, a procedure value or a *void. A value that is
+// constant data, or holds some, is copied into the global's bytes:
+// `origin := ORIGIN;` is a variable of its own, and so is a #run's baked
+// value, its view's elements and its strings' bytes too (constant_bytes,
+// writable). The globals its value needs (str.N, array.N, string.N) come
+// before it.
+static s32 lower_global(Lowering *l, Ast_Var *var) {
+    Ir_Global g = {};
+    g.name = var->name;
+    g.rig_type = var->type;
+    g.pos = var->pos;
+    bool address = var->value && (literal_address(var->value) || procedure_address(var->value));
+    if (type_is_aggregate(var->type) || address) {
+        g.type = IR_VOID;
+        g.has_layout = true;
+        g.size = var->type->size;
+        g.align = (u32)var->type->align;
+        if (var->value) global_value(l, &g, var->type, var->value, true);
+    } else {
+        g.type = ir_type_of(var->type);
+    }
+    if (var->value && g.type != IR_VOID) {
+        RIG_ASSERT(var->value->is_constant);
+        g.initial = var->value->constant;
+        if (g.type != IR_PTR && !ir_is_float(g.type) && ir_bits(g.type) < 64) {
+            g.initial &= ((u64)1 << ir_bits(g.type)) - 1;
+        }
+    }
+    s32 index = (s32)l->module->globals.count;
+    table_put(&l->global_index, var->name, index);
+    array_add(&l->module->globals, g);
+    return index;
+}
+
+// Procedure `source` declared: an Ir_Proc with its parameters and results,
+// appended to the module and entered in proc_index by its name; its index.
+// Its body is lowered after (lower_body): on demand, it joins `waiting`,
+// which ir_lower_run empties.
+static s32 declare_proc(Lowering *l, Ast_Proc *source) {
+    // A broken entry comes with an error (the parser's, or the lexer's for
+    // a TOKEN_ERROR the parser stopped at): rig build stops before lowering
+    // a program with errors, and a #run reaching one doesn't run.
+    RIG_ASSERT(!source->is_broken);
+    Ir_Proc *p = ir_new_proc(l->module, l->arena, source->name);
+    p->is_foreign = source->is_foreign;
+    // #foreign libc "free": the symbol, the Rig name staying p's. The module
+    // keeps its own copy of the string's bytes, as it does a literal's
+    // (add_bytes), so it doesn't depend on the arena the lexer decoded them
+    // into: rig build's is the compilation's, which the module lives in too
+    // (load.cpp), but a caller may lex into one it frees once the module is
+    // made, as the unit tests' token lists do.
+    if (source->has_c_name) p->c_name = string_copy(l->arena, source->c_name);
+    p->is_variadic = source->is_variadic;  // a foreign one: the checker made sure
+    // An aggregate result is a hidden ptr parameter, before the visible
+    // ones; an aggregate parameter a ptr to the caller's copy. The IR's
+    // results are the scalar results only. (A foreign procedure has
+    // neither: the checker allows no aggregate, a struct, an array, a view
+    // or a string, across C's boundary yet.)
+    for (s64 k = 0; k < source->results.count; k++) {
+        if (type_is_aggregate(source->results[k]->type)) ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    }
+    for (s64 k = 0; k < source->params.count; k++) {
+        Type *t = source->params[k]->type;
+        ir_add_param(p, ir_type_of(t), ir_ext_of(t));
+    }
+    for (s64 k = 0; k < source->results.count; k++) {
+        Type *t = source->results[k]->type;
+        if (!type_is_aggregate(t)) array_add(&p->results, {ir_type_of(t), ir_ext_of(t)});
+    }
+    // Rig's main is C's main, the program's entry point: exported, and
+    // returning C's int, 0 for success, which the C runtime that calls it
+    // hands to exit. (The checker made sure it takes and returns nothing in
+    // Rig; a Rig call of main ignores the int.) So a debugger's `break
+    // main` stops in the program's own main.
+    if (!source->is_foreign && string_eq(source->name, str("main"))) {
+        p->is_export = true;
+        array_add(&p->results, {IR_I32, IR_EXT_NONE});
+    }
+    if (!source->is_foreign) {
+        p->source_name = source->name;
+        p->pos = source->pos;
+        p->body = source->body->pos;
+        for (s64 k = 0; k < source->results.count; k++) array_add(&p->source_results, source->results[k]->type);
+    }
+    s32 index = (s32)(l->module->procs.count - 1);
+    table_put(&l->proc_index, source->name, index);
+    set_source(l, index, source);
+    if (l->on_demand && !source->is_foreign) array_add(&l->waiting, index);
+    return index;
+}
+
+// The body of procedure `source` (not a foreign one), declared as
+// module->procs[index], lowered into it.
+static void lower_body(Lowering *l, Ast_Proc *source, s32 index) {
+    l->proc = l->module->procs[index];
+    l->block = ir_new_block(l->arena, l->proc);
+    l->locals.count = 0;
+    l->checking_bounds = l->bounds_checks && !source->no_bounds_checks;
+    l->is_entry = string_eq(source->name, str("main"));
+    // The body is scope 0, at its '{'. Its parameters are its first
+    // variables. A scalar one is stored on entry into a slot of its own,
+    // and every use reads it from there, as clang does at -O0 (the header's
+    // "Parameters" says why). An aggregate one is the pointer to the
+    // caller's copy. The hidden result pointers before them are no variable
+    // here, and don't count in `arg` (the backend describes each to a
+    // debugger as the artificial parameter result$, from source_results:
+    // llvm_backend.cpp's declare_variables).
+    l->scope = -1;
+    s32 body_scope = new_scope(l, source->body->pos);
+    s32 hidden = aggregate_results(source);
+    for (s64 k = 0; k < source->params.count; k++) {
+        Ast_Param *param = source->params[k];
+        s32 value = hidden + (s32)k, arg = (s32)k + 1;  // the k-th visible parameter is the value hidden + k
+        if (type_is_aggregate(param->type)) {
+            array_add(&l->locals, {(Ast *)param, value});
+            array_add(&l->proc->vars, Ir_Var{param->name, param->type, param->pos, 0, IR_VAR_ADDRESS, value, arg});
+            continue;
+        }
+        // No position: this is the prologue's work, before any line of the
+        // body (a debugger's breakpoint on the procedure stops after it, at
+        // the first instruction with a line).
+        place(l, {}, -1);
+        Ir_Type type = ir_type_of(param->type);
+        s32 slot = emit(l, IR_LOCAL, type)->result;
+        emit_store(l, type, value, slot);
+        array_add(&l->locals, {(Ast *)param, slot});
+        array_add(&l->proc->vars, Ir_Var{param->name, param->type, param->pos, 0, IR_VAR_SLOT, slot, arg});
+    }
+    place(l, source->body->pos, body_scope);
+    lower_block(l, source->body, source);
+    if (!ir_block_has_ended(l->proc, l->block)) {
+        // Control reaches the '}', where its return is. The checker made
+        // sure that only happens in a procedure that returns nothing;
+        // anywhere else, the end can't be reached.
+        place(l, source->body->end, l->scope);  // the body's, or one a hiding declaration began
+        if (l->is_entry) {
+            emit_entry_return(l);
+        } else {
+            emit(l, source->results.count ? IR_UNREACHABLE : IR_RET, IR_VOID);
+        }
+    }
+    l->is_entry = false;
+}
+
+// The tables and arrays a lowering keeps, freed.
+static void release_lowering(Lowering *l) {
+    table_free(&l->proc_index);
+    table_free(&l->global_index);
+    table_free(&l->literal_globals);
+    table_free(&l->constant_globals);
+    array_free(&l->locals);
+    array_free(&l->loops);
+    array_free(&l->sources);
+    array_free(&l->waiting);
+}
+
 Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     Ir_Module *m = arena_new<Ir_Module>(a);
     Lowering l = {};
@@ -2550,159 +2876,29 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     }
     if (d->files.count > 0) m->directory = string_copy(a, d->files[0].directory);
 
-    // The global variables, in source order, each an Ir_Global of its
-    // type. Its first value is the constant the checker made sure it has
-    // (an integer's bits cut to the type's width, a float's whole, as an
-    // IR_CONST keeps them), or zero: without a value, or with ---, since a
-    // global isn't on the stack and nothing else was ever there. A struct
-    // is a global of bytes, its literal's (constant_bytes, only as far as
-    // its last value: global_value) or zeros, of which the IR holds none;
-    // so is an array, and a view, whose literal's array is a global of its
-    // own, and a string. A pointer holding a string literal's address is a
-    // global of bytes too, 8 of them: an address the linker writes is a
-    // relocation, which only a global of bytes has; and so is one holding a
-    // procedure's address, a procedure value or a *void. A value that is
-    // constant data, or holds some, is copied into the global's bytes:
-    // `origin := ORIGIN;` is a variable of its own. Constants and structs'
-    // declarations are skipped: a constant's uses are constants (or, naming
-    // a procedure, its address), its literal's str.N address (a pointer
-    // constant, or a string met as a *u8), or its data's read-only global,
-    // made where a use first needs it (constant_global); and a struct is
-    // only a type. The procedures are numbered first (proc_index), so a
-    // relocation can name one.
+    // The global variables, in source order (lower_global). Constants and
+    // structs' declarations are skipped: a constant's uses are constants
+    // (or, naming a procedure, its address), its literal's str.N address (a
+    // pointer constant, or a string met as a *u8), or its data's read-only
+    // global, made where a use first needs it (constant_global); and a
+    // struct is only a type. The procedures are numbered first
+    // (proc_index), so a relocation can name one.
     for (s64 i = 0; i < f->procs.count; i++) table_put(&l.proc_index, f->procs[i]->name, (s32)i);
     for (s64 i = 0; i < f->globals.count; i++) {
-        if (f->globals[i]->kind != AST_VAR) continue;
-        Ast_Var *var = (Ast_Var *)f->globals[i];
-        Ir_Global g = {};
-        g.name = var->name;
-        g.rig_type = var->type;
-        g.pos = var->pos;
-        bool address = var->value && (literal_address(var->value) || procedure_address(var->value));
-        if (type_is_aggregate(var->type) || address) {
-            g.type = IR_VOID;
-            g.has_layout = true;
-            g.size = var->type->size;
-            g.align = (u32)var->type->align;
-            if (var->value) global_value(&l, &g, var->type, var->value);
-        } else {
-            g.type = ir_type_of(var->type);
-        }
-        if (var->value && g.type != IR_VOID) {
-            RIG_ASSERT(var->value->is_constant);
-            g.initial = var->value->constant;
-            if (g.type != IR_PTR && !ir_is_float(g.type) && ir_bits(g.type) < 64) {
-                g.initial &= ((u64)1 << ir_bits(g.type)) - 1;
-            }
-        }
-        table_put(&l.global_index, var->name, (s32)m->globals.count);
-        array_add(&m->globals, g);
+        if (f->globals[i]->kind == AST_VAR) lower_global(&l, (Ast_Var *)f->globals[i]);
     }
 
-    // Every procedure first, so a call can name one declared later.
+    // Every procedure first, so a call can name one declared later, each
+    // at the index it was numbered with.
     for (s64 i = 0; i < f->procs.count; i++) {
-        Ast_Proc *source = f->procs[i];
-        // A broken entry comes with an error (the parser's, or the lexer's
-        // for a TOKEN_ERROR the parser stopped at), and rig build stops
-        // before lowering a program with errors.
-        RIG_ASSERT(!source->is_broken);
-        Ir_Proc *p = ir_new_proc(m, a, source->name);
-        p->is_foreign = source->is_foreign;
-        // #foreign libc "free": the symbol, the Rig name staying p's. The
-        // module keeps its own copy of the string's bytes, as it does a
-        // literal's (add_bytes), so it doesn't depend on the arena the
-        // lexer decoded them into: rig build's is the compilation's, which
-        // the module lives in too (load.cpp), but a caller may lex into one
-        // it frees once the module is made, as the unit tests' token lists
-        // do.
-        if (source->has_c_name) p->c_name = string_copy(a, source->c_name);
-        p->is_variadic = source->is_variadic;  // a foreign one: the checker made sure
-        // An aggregate result is a hidden ptr parameter, before the visible
-        // ones; an aggregate parameter a ptr to the caller's copy. The IR's
-        // results are the scalar results only. (A foreign procedure has
-        // neither: the checker allows no aggregate, a struct, an array, a
-        // view or a string, across C's boundary yet.)
-        for (s64 k = 0; k < source->results.count; k++) {
-            if (type_is_aggregate(source->results[k]->type)) ir_add_param(p, IR_PTR, IR_EXT_NONE);
-        }
-        for (s64 k = 0; k < source->params.count; k++) {
-            Type *t = source->params[k]->type;
-            ir_add_param(p, ir_type_of(t), ir_ext_of(t));
-        }
-        for (s64 k = 0; k < source->results.count; k++) {
-            Type *t = source->results[k]->type;
-            if (!type_is_aggregate(t)) array_add(&p->results, {ir_type_of(t), ir_ext_of(t)});
-        }
-        // Rig's main is C's main, the program's entry point: exported, and
-        // returning C's int, 0 for success, which the C runtime that calls
-        // it hands to exit. (The checker made sure it takes and returns
-        // nothing in Rig; a Rig call of main ignores the int.) So a
-        // debugger's `break main` stops in the program's own main.
-        if (!source->is_foreign && string_eq(source->name, str("main"))) {
-            p->is_export = true;
-            array_add(&p->results, {IR_I32, IR_EXT_NONE});
-        }
-        if (!source->is_foreign) {
-            p->source_name = source->name;
-            p->pos = source->pos;
-            p->body = source->body->pos;
-            for (s64 k = 0; k < source->results.count; k++) array_add(&p->source_results, source->results[k]->type);
-        }
+        s32 index = declare_proc(&l, f->procs[i]);
+        RIG_ASSERT(index == i);
     }
 
     // Then the bodies.
     for (s64 i = 0; i < f->procs.count; i++) {
-        Ast_Proc *source = f->procs[i];
-        if (source->is_foreign) continue;
-        l.proc = m->procs[i];
-        l.block = ir_new_block(a, l.proc);
-        l.locals.count = 0;
-        l.checking_bounds = l.bounds_checks && !source->no_bounds_checks;
-        l.is_entry = string_eq(source->name, str("main"));
-        // The body is scope 0, at its '{'. Its parameters are its first
-        // variables. A scalar one is stored on entry into a slot of its own,
-        // and every use reads it from there, as clang does at -O0 (the
-        // header's "Parameters" says why). An aggregate one is the pointer
-        // to the caller's copy. The hidden result pointers before them are
-        // no variable here, and don't count in `arg` (the backend describes
-        // each to a debugger as the artificial parameter result$, from
-        // source_results: llvm_backend.cpp's declare_variables).
-        l.scope = -1;
-        s32 body_scope = new_scope(&l, source->body->pos);
-        s32 hidden = aggregate_results(source);
-        for (s64 k = 0; k < source->params.count; k++) {
-            Ast_Param *param = source->params[k];
-            s32 value = hidden + (s32)k, arg = (s32)k + 1;  // the k-th visible parameter is the value hidden + k
-            if (type_is_aggregate(param->type)) {
-                array_add(&l.locals, {(Ast *)param, value});
-                array_add(&l.proc->vars, Ir_Var{param->name, param->type, param->pos, 0, IR_VAR_ADDRESS, value, arg});
-                continue;
-            }
-            // No position: this is the prologue's work, before any line of
-            // the body (a debugger's breakpoint on the procedure stops after
-            // it, at the first instruction with a line).
-            place(&l, {}, -1);
-            Ir_Type type = ir_type_of(param->type);
-            s32 slot = emit(&l, IR_LOCAL, type)->result;
-            emit_store(&l, type, value, slot);
-            array_add(&l.locals, {(Ast *)param, slot});
-            array_add(&l.proc->vars, Ir_Var{param->name, param->type, param->pos, 0, IR_VAR_SLOT, slot, arg});
-        }
-        place(&l, source->body->pos, body_scope);
-        lower_block(&l, source->body, source);
-        if (!ir_block_has_ended(l.proc, l.block)) {
-            // Control reaches the '}', where its return is. The checker made
-            // sure that only happens in a procedure that returns nothing;
-            // anywhere else, the end can't be reached.
-            place(&l, source->body->end, l.scope);  // the body's, or one a hiding declaration began
-            if (l.is_entry) {
-                emit_entry_return(&l);
-            } else {
-                emit(&l, source->results.count ? IR_UNREACHABLE : IR_RET, IR_VOID);
-            }
-        }
+        if (!f->procs[i]->is_foreign) lower_body(&l, f->procs[i], (s32)i);
     }
-    l.is_entry = false;
 
     // __rig_bounds_failed, if a check calls it: after every body, so the
     // longest message start is known. __rig_string_equal, if == on strings
@@ -2712,11 +2908,104 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     if (l.bounds_failed >= 0) lower_bounds_failed(&l);
     if (l.string_equal >= 0) lower_string_equal(&l);
 
-    table_free(&l.proc_index);
-    table_free(&l.global_index);
-    table_free(&l.literal_globals);
-    table_free(&l.constant_globals);
-    array_free(&l.locals);
-    array_free(&l.loops);
+    release_lowering(&l);
     return m;
+}
+
+Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a) {
+    RIG_ASSERT(m->procs.count == 0);
+    Lowering *l = (Lowering *)heap_realloc(nullptr, sizeof(Lowering));
+    *l = {};
+    l->arena = a;
+    l->diag = d;
+    l->module = m;
+    l->on_demand = true;
+    l->bounds_checks = true;  // rig build's --no-bounds-checks is the program's, not the compiler's
+    l->bounds_failed = -1;
+    l->string_equal = -1;
+    l->block = -1;
+    // The longest prefix a bounds check can pass __rig_bounds_failed, from
+    // any of the program's files, all loaded before the checker (and so any
+    // #run) starts: "PATH:L:C: runtime error: ", PATH the longest path, L
+    // and C at most 10 digits each (an s32), two ':' and ": runtime error:
+    // " (17), 39 bytes besides PATH.
+    s64 longest_path = 0;
+    for (s64 i = 0; i < d->files.count; i++) {
+        if (d->files[i].path.count > longest_path) longest_path = d->files[i].path.count;
+    }
+    l->longest_where = longest_path + 39;
+    bounds_failed_proc(l);
+    string_equal_proc(l);
+    RIG_ASSERT(l->bounds_failed == 0 && l->string_equal == 1);
+    place(l, {}, -1);
+    lower_bounds_failed(l);
+    lower_string_equal(l);
+    return l;
+}
+
+s32 ir_lower_run(Lowering *l, Ast_Run *run) {
+    RIG_ASSERT(l->on_demand && run->checked);
+    Ir_Module *m = l->module;
+    Ir_Proc *p = ir_new_proc(m, l->arena, string_printf(l->arena, "run.%d", l->run_count++));
+    s32 index = (s32)(m->procs.count - 1);
+    p->source_name = str("#run");
+    p->pos = run->pos;
+    if (run->proc) {
+        // #run { ... }: its block, a body of a procedure with no parameters
+        // or results, each statement at its own place, its return ending
+        // the run.
+        p->body = run->proc->body->pos;
+        lower_body(l, run->proc, index);
+    } else {
+        // #run e: e's value, the run's type, is its one result, as a
+        // procedure returning it gives it (declare_proc); a top-level
+        // one's is thrown away. Its instructions are at the #run, so a
+        // failure in what it calls has the run's place in its outer frame;
+        // a failing check is at the check, as everywhere (emit_bounds_check,
+        // emit_runtime_check).
+        Type *t = run->is_top_level ? nullptr : run->type;
+        bool aggregate = t && type_is_aggregate(t);
+        if (aggregate) ir_add_param(p, IR_PTR, IR_EXT_NONE);
+        if (t && !aggregate) array_add(&p->results, {ir_type_of(t), ir_ext_of(t)});
+        if (t) array_add(&p->source_results, t);
+        p->body = run->pos;
+        l->proc = p;
+        l->block = ir_new_block(l->arena, p);
+        l->locals.count = 0;
+        l->checking_bounds = true;
+        l->is_entry = false;
+        l->scope = -1;
+        s32 scope = new_scope(l, run->pos);
+        place(l, run->pos, scope);
+        if (!t) {
+            if (!run->operand->is_constant) lower_expr(l, run->operand);
+            emit(l, IR_RET, IR_VOID);
+        } else {
+            s32 value = lower_value(l, run->operand, t);
+            if (aggregate) {
+                emit_put(l, t, value, 0);  // into the hidden pointer, %0
+                emit(l, IR_RET, IR_VOID);
+            } else {
+                array_add(&emit(l, IR_RET, IR_VOID)->args, value);
+            }
+        }
+    }
+    // Then the bodies of what it named, and of what those name, in the
+    // order they were declared.
+    for (s64 i = 0; i < l->waiting.count; i++) {
+        s32 k = l->waiting[i];
+        lower_body(l, l->sources[k], k);
+    }
+    l->waiting.count = 0;
+    return index;
+}
+
+Ast_Proc *ir_lowering_source(Lowering *l, s32 proc) {
+    RIG_ASSERT(proc >= 0 && proc < l->module->procs.count);
+    return proc < l->sources.count ? l->sources[proc] : nullptr;
+}
+
+void ir_lowering_free(Lowering *l) {
+    release_lowering(l);
+    free(l);
 }

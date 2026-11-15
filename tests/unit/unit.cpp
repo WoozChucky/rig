@@ -318,3 +318,4 @@ int main(int argc, char **argv) {
 #include "test_grammar.cpp"
 #include "test_version.cpp"
 #include "test_interp.cpp"
+#include "test_run.cpp"

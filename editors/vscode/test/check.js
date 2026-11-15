@@ -110,10 +110,16 @@ check('no problem matcher shares its owner with the live check\'s collection', (
 // the column, both indented by four spaces. FILE is NAME.rig, or a file it
 // #loads, in tests/errors/load/. The matcher must take each first line,
 // with the file, line and column the source and caret lines confirm, and no
-// indented line.
+// indented line. A NAME.check.err, what `rig check` prints instead for a
+// program whose errors only `rig build` finds, may be empty, and is left
+// out (buildErrFiles).
+function buildErrFiles(dir) {
+    return fs.readdirSync(dir).filter((f) => f.endsWith('.err') && !f.endsWith('.check.err'));
+}
+
 check('the problem matcher reads every diagnostic of tests/errors', () => {
     const dir = path.join(root, 'tests', 'errors');
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.err'));
+    const files = buildErrFiles(dir);
     assert.ok(files.length > 0, 'tests/errors has no .err files');
     for (const name of files) {
         const lines = fs.readFileSync(path.join(dir, name), 'utf8').replace(/\r\n/g, '\n').split('\n');
@@ -242,14 +248,15 @@ check('diagnostics.js reads with the same regular expression as $rig', () => {
     assert.strictEqual(runtimeMatcher().pattern.regexp, matcher().pattern.regexp.replace('(?:runtime )?', 'runtime '));
 });
 
-// What `rig check tests/errors/NAME.rig` prints is NAME.err: each file's
+// What `rig check tests/errors/NAME.rig` prints is NAME.err, but for a
+// program with a NAME.check.err (left out here: buildErrFiles): each file's
 // diagnostics, and only those, come out for that file (NAME.rig, or a file
 // it #loads, in tests/errors/load/), at the line and column each names,
 // with its severity and message, and none of the source and caret lines.
 check('diagnostics.js reads every diagnostic of tests/errors', () => {
     const { parseDiagnostics } = diagnostics();
     const dir = path.join(root, 'tests', 'errors');
-    for (const name of fs.readdirSync(dir).filter((f) => f.endsWith('.err'))) {
+    for (const name of buildErrFiles(dir)) {
         const text = fs.readFileSync(path.join(dir, name), 'utf8');
         // Each file's diagnostics, under its name as the .err gives it.
         // NAME.rig is there even with none of its own: a name declared again
@@ -1169,6 +1176,20 @@ check('the setting rig.main is declared and read', () => {
     assert.ok(read('extension.js').includes("'main'"), "extension.js never reads 'main'");
 });
 
+// A #run runs code while checking (spec 7.8), which may never finish, so the
+// live check stops a check that runs too long: a resource setting, as a
+// folder whose programs run long work while compiling may want more.
+check('the setting rig.checkTimeout is declared: seconds, 10 by default, 0 for none, per resource', () => {
+    const setting = readJson('package.json').contributes.configuration.properties['rig.checkTimeout'];
+    assert.ok(setting, 'package.json declares no setting rig.checkTimeout');
+    assert.strictEqual(setting.type, 'number');
+    assert.strictEqual(setting.default, 10);
+    assert.strictEqual(setting.minimum, 0);
+    assert.strictEqual(setting.scope, 'resource');
+    assert.ok(setting.markdownDescription, 'rig.checkTimeout has no description');
+    assert.ok(read('extension.js').includes("'checkTimeout'"), "extension.js never reads 'checkTimeout'");
+});
+
 // --- Debugging: package.json ------------------------------------------------
 
 // VS Code lets the editor's gutter set breakpoints only in the languages
@@ -1459,6 +1480,8 @@ function reset() {
         folders: [],             // workspace folders
         compilerPath: '',        // the setting rig.compilerPath
         check: 'onType',         // the setting rig.check
+        checkTimeout: 10,        // the setting rig.checkTimeout, where checkTimeouts has none
+        checkTimeouts: {},       // the setting rig.checkTimeout, by the path of its workspace folder
         mains: {},               // the setting rig.main, by the path of its workspace folder
         trusted: true,           // vscode.workspace.isTrusted
         document: undefined,     // the active editor's document
@@ -1475,6 +1498,7 @@ function reset() {
         debugged: [],            // startDebugging's calls: { folder, config }
         launched: [],            // what each resolved to, as VS Code would launch it
         searches: [],            // findFiles' calls: the arguments of each
+        rigs: [],                // the stand-in compilers started (withStandIn): { cwd, args, ended }
     });
 }
 reset();
@@ -1590,12 +1614,17 @@ const vscodeStub = {
             return open;
         },
         getWorkspaceFolder: (uri) => stub.folders.find((f) => uri.fsPath.startsWith(f.uri.fsPath + path.sep)),
-        // rig.main is the scope's folder's (scopeFolder); the other settings
-        // are the same everywhere.
+        // rig.main and rig.checkTimeout are the scope's folder's
+        // (scopeFolder); the other settings are the same everywhere.
         getConfiguration: (section, scope) => ({
             get: (key, fallback) => {
                 if (key === 'compilerPath') return stub.compilerPath;
                 if (key === 'check') return stub.check;
+                if (key === 'checkTimeout') {
+                    const folder = scopeFolder(scope);
+                    const own = folder && stub.checkTimeouts[folder.uri.fsPath];
+                    return own !== undefined ? own : stub.checkTimeout;
+                }
                 if (key === 'main') {
                     const folder = scopeFolder(scope);
                     return (folder && stub.mains[folder.uri.fsPath]) || '';
@@ -1920,7 +1949,10 @@ check('the tasks use $rig-runtime while rig.check is on, $rig when it is off', (
 //
 // Except for that doesn't-load answer, which is its line alone as rig's is,
 // it adds a warning about another file. Either way it answers slowly if
-// stdin's text says `slow`. When there's a file named old-rig where it runs,
+// stdin's text says `slow`, or with --stdin-for if MAIN's does, and as it
+// answers it writes its arguments to answers.log as to calls.log, so a
+// check can tell that a rig it ended never answered (answers). When
+// there's a file named old-rig where it runs,
 // it's a rig from before --stdin-for instead: given that option, it answers
 // at once, without reading stdin, with that rig's usage and exit code 2, as
 // it takes the option for a second file. The documents are stand-ins too,
@@ -1962,7 +1994,10 @@ if (args[1] === '--stdin-for' && fs.existsSync('old-rig')) {
 }
 
 function answer() {
+    let slow = text.includes('slow');
+    if (args[1] === '--stdin-for' && fs.readFileSync(args[0], 'utf8').includes('slow')) slow = true;
     setTimeout(() => {
+        fs.appendFileSync('answers.log', JSON.stringify(args) + '\\n');
         let errors = 0;
         if (args[1] === '--stdin-for') {
             const main = args[0];
@@ -1986,20 +2021,26 @@ function answer() {
         }
         process.stderr.write('other.rig:1:1: warning: not this file\\n');
         process.exitCode = errors ? 1 : 0;
-    }, text.includes('slow') ? 1500 : 0);
+    }, slow ? 1500 : 0);
 }
 `;
 
 // The command lines the stand-in compiler was started with in `dir`, in
 // order, each the list of words after `check`.
-function calls(dir) {
-    const log = path.join(dir, 'calls.log');
+function calls(dir, log = 'calls.log') {
+    log = path.join(dir, log);
     if (!fs.existsSync(log)) return [];
     return fs
         .readFileSync(log, 'utf8')
         .split('\n')
         .filter((line) => line)
         .map((line) => JSON.parse(line));
+}
+
+// The command lines of the stand-ins that answered in `dir`, in the order
+// they answered: one ended before it answered isn't there.
+function answers(dir) {
+    return calls(dir, 'answers.log');
 }
 
 function fakeDocument(file, text) {
@@ -2048,16 +2089,29 @@ async function until(what, condition) {
 }
 
 // withScratch for an async fn, with the stand-in compiler set up: the
-// folder is a workspace folder, and rig.compilerPath is Node.
+// folder is a workspace folder, and rig.compilerPath is Node. Each process
+// the extension starts meanwhile is recorded in stub.rigs as it starts, its
+// directory, the words after `check`, and whether it has ended yet: a rig
+// ended at once may not have got as far as writing to calls.log.
 async function withStandIn(fn) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rig-vscode-check-'));
+    const child_process = require('child_process');
+    const spawn = child_process.spawn;
     try {
         fs.writeFileSync(path.join(dir, 'check.js'), STAND_IN);
         reset();
         stub.folders = [fakeFolder(dir)];
         stub.compilerPath = process.execPath;
+        child_process.spawn = (program, args, options, ...rest) => {
+            const child = spawn.call(child_process, program, args, options, ...rest);
+            const rig = { cwd: options && options.cwd, args: args.slice(1), ended: false };
+            stub.rigs.push(rig);
+            child.on('close', () => (rig.ended = true));
+            return child;
+        };
         await fn(dir);
     } finally {
+        child_process.spawn = spawn;
         // Ends any check still running (and its timer) before the folder goes.
         for (const document of vscodeStub.workspace.textDocuments) fire('close', document);
         fs.rmSync(dir, { recursive: true, force: true });
@@ -2191,6 +2245,176 @@ check('a newer check ends the older one, whose output is ignored', async () => {
         // The slow one would have answered by now, had it not been ended.
         await sleep(1800);
         assert.deepStrictEqual(live.get(key), []);
+    });
+});
+
+// settings.json may give rig.checkTimeout anything: what isn't a number of
+// at least 0 is the default, and a limit no timer can wait for is none.
+check('rig.checkTimeout reads as its default when it isn\'t a number of at least 0', () => {
+    const { checkTimeout } = loadExtension().forTests;
+    reset();
+    const uri = fileUri(path.join(os.tmpdir(), 'a.rig'));
+    const limit = (value) => {
+        stub.checkTimeout = value;
+        return checkTimeout(uri);
+    };
+    assert.deepStrictEqual([10, 0, 2.5, 1].map(limit), [10, 0, 2.5, 1]);
+    assert.deepStrictEqual([undefined, null, '5', -1, NaN].map(limit), [10, 10, 10, 10, 10]);
+    assert.deepStrictEqual([1e9, Infinity].map(limit), [0, 0]);
+    reset();
+});
+
+// What the live check says of a check stopped by rig.checkTimeout set to 1.
+const TIMED_OUT = 'Rig: a check took more than 1 second and was stopped; a #run may never finish.';
+
+// A configuration event for the setting rig.checkTimeout. The extension is
+// loaded once, for all the checks (loadExtension), and says a check was
+// stopped once until the setting changes, so each check that expects it to
+// be said fires this first, before any document is open.
+const TIMEOUT_CHANGED = { affectsConfiguration: (section) => section === 'rig.checkTimeout' || section === 'rig' };
+
+// The rigs started in `dir` (stub.rigs), in order.
+function started(dir) {
+    return stub.rigs.filter((rig) => rig.cwd === dir);
+}
+
+// Waits until the `count`th rig started in `dir` has ended: from then on,
+// it has answered (answers) if it ever will.
+async function pastAnswer(dir, count) {
+    await until(`rig number ${count} to end`, () => started(dir).length >= count && started(dir)[count - 1].ended);
+}
+
+// A #run runs code while checking, which may never finish, so a check that
+// runs past rig.checkTimeout is ended. That's said once, with the button to
+// the setting, and the document's problems stay as they were: the stopped
+// check found nothing. With no limit, the same check finishes.
+check('a check that runs past rig.checkTimeout is stopped and said once', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        fire('configuration', TIMEOUT_CHANGED);
+        stub.checkTimeout = 1;
+        stub.answers = ['Open Settings'];
+        const doc = fakeDocument(path.join(dir, 'e.rig'), 'slow putz');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        fire('save', doc);
+        await until('the message', () => stub.errors.length > 0);
+        assert.ok(!live.has(key), 'a stopped check set problems');
+        assert.deepStrictEqual(stub.errors, [TIMED_OUT]);
+        await until('the button\'s command', () => stub.commands.length > 0);
+        assert.deepStrictEqual(stub.commands, [['workbench.action.openSettings', 'rig.checkTimeout']]);
+        // Its rig was ended: it never answers.
+        await pastAnswer(dir, 1);
+        assert.deepStrictEqual(answers(dir), [], 'a stopped check\'s rig answered');
+        assert.ok(!live.has(key), 'a stopped check set problems');
+
+        // Stopped again, but said once.
+        fire('save', doc);
+        await pastAnswer(dir, 2);
+        assert.deepStrictEqual(answers(dir), [], 'a stopped check\'s rig answered');
+        assert.ok(!live.has(key), 'a stopped check set problems');
+        assert.deepStrictEqual(stub.errors, [TIMED_OUT]);
+
+        // No limit: the slow check finishes, and its problem shows.
+        stub.checkTimeout = 0;
+        fire('save', doc);
+        await until('the check under no limit', () => live.has(key));
+        assert.deepStrictEqual(live.get(key).map((d) => d.message), ["unknown identifier 'putz'"]);
+
+        // A stopped check leaves that problem shown, though the text has none
+        // now, and says nothing more.
+        stub.checkTimeout = 1;
+        doc.text = 'slow';
+        fire('save', doc);
+        await pastAnswer(dir, 4);
+        assert.strictEqual(answers(dir).length, 1, 'a stopped check\'s rig answered');
+        assert.deepStrictEqual(live.get(key).map((d) => d.message), ["unknown identifier 'putz'"]);
+        assert.deepStrictEqual(stub.errors, [TIMED_OUT]);
+    });
+});
+
+// A new rig.checkTimeout may stop checks again, which is said again, and
+// checks every open document again: one the old limit stopped may finish.
+// A limit other than 1 is said in seconds, even when it's less than 1.
+check('changing rig.checkTimeout checks again, and may say so again', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        fire('configuration', TIMEOUT_CHANGED);
+        stub.checkTimeout = 1;
+        const doc = fakeDocument(path.join(dir, 'f.rig'), 'slow putz');
+        const key = doc.uri.toString();
+        stub.document = doc;
+        fire('open', doc);
+        await until('the message', () => stub.errors.length > 0);
+        stub.checkTimeout = 0;
+        fire('configuration', TIMEOUT_CHANGED);
+        await until('the check under no limit', () => live.has(key));
+        assert.deepStrictEqual(live.get(key).map((d) => d.message), ["unknown identifier 'putz'"]);
+        stub.checkTimeout = 0.5;
+        fire('configuration', TIMEOUT_CHANGED);
+        await until('the message again', () => stub.errors.length > 1);
+        // Only the check under no limit answered.
+        await pastAnswer(dir, 3);
+        assert.strictEqual(answers(dir).length, 1, 'a stopped check\'s rig answered');
+        assert.deepStrictEqual(stub.errors, [
+            TIMED_OUT,
+            'Rig: a check took more than 0.5 seconds and was stopped; a #run may never finish.',
+        ]);
+        assert.deepStrictEqual(live.get(key).map((d) => d.message), ["unknown identifier 'putz'"]);
+    });
+});
+
+// rig.checkTimeout may be set for each workspace folder: a document's
+// check is under the limit of the folder it's in. Here one folder's limit
+// stops its slow check, and the other's, none, lets the same check finish.
+check('a document\'s check is under its own workspace folder\'s rig.checkTimeout', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        await withOtherDir(async (other) => {
+            fire('configuration', TIMEOUT_CHANGED);
+            stub.folders.push(fakeFolder(other));
+            stub.checkTimeouts = { [dir]: 1, [other]: 0 };
+            const stopped = fakeDocument(path.join(dir, 'g.rig'), 'slow putz');
+            const finished = fakeDocument(path.join(other, 'g.rig'), 'slow putz');
+            stub.documents = [stopped, finished];
+            fire('save', stopped);
+            fire('save', finished);
+            await until('the check under no limit', () => live.has(finished.uri.toString()));
+            assert.deepStrictEqual(live.get(finished.uri.toString()).map((d) => d.message), ["unknown identifier 'putz'"]);
+            await pastAnswer(dir, 1);
+            assert.deepStrictEqual(answers(dir), [], 'a stopped check\'s rig answered');
+            assert.ok(!live.has(stopped.uri.toString()), 'a stopped check set problems');
+            assert.deepStrictEqual(stub.errors, [TIMED_OUT]);
+        });
+    });
+});
+
+// rig.compilerPath may name a script that starts rig without exec, so that
+// rig isn't the process the extension started. A check that runs past
+// rig.checkTimeout ends that rig too, not only the script. Windows can't
+// start such a script (a .cmd needs a shell), so this is elsewhere only.
+check('a check that runs past rig.checkTimeout ends the rig a script started', async () => {
+    if (process.platform === 'win32') return;
+    loadExtension();
+    await withStandIn(async (dir) => {
+        fire('configuration', TIMEOUT_CHANGED);
+        // The exit after Node keeps sh from running Node in its own place.
+        const script = path.join(dir, 'rig');
+        fs.writeFileSync(script, `#!/bin/sh\n'${process.execPath}' "$@"\nexit $?\n`, { mode: 0o755 });
+        stub.compilerPath = script;
+        stub.checkTimeout = 1;
+        const doc = fakeDocument(path.join(dir, 'h.rig'), 'slow putz');
+        stub.document = doc;
+        fire('save', doc);
+        await until('the message', () => stub.errors.length > 0);
+        // The script's pipes close once both it and the stand-in it started,
+        // which holds them too, have ended.
+        await pastAnswer(dir, 1);
+        assert.deepStrictEqual(answers(dir), [], 'the rig of a stopped check\'s script answered');
+        assert.deepStrictEqual(stub.errors, [TIMED_OUT]);
     });
 });
 
@@ -2593,6 +2817,46 @@ check('a compiler Node can\'t start ends the search at the first main file', asy
             assert.ok(stub.errors[0].includes(`couldn't run ${program}`), stub.errors[0]);
             assert.ok(!live.has(doc.uri.toString()), 'the document got diagnostics');
         });
+    });
+});
+
+// A check through a main file that runs past rig.checkTimeout is the
+// search's answer too: it ends there, trying neither the next main file
+// nor the document alone, and sets no problems. That main file isn't
+// remembered as the document's program: with no limit, the next check
+// searches again from the start.
+check('a check through a main file that runs past rig.checkTimeout ends the search', async () => {
+    loadExtension();
+    const live = activated.collections.rig;
+    await withStandIn(async (dir) => {
+        fire('configuration', TIMEOUT_CHANGED);
+        writeMains(dir);
+        // b.rig's rig answers slowly; a.rig's, that its program doesn't load
+        // the document, at once.
+        fs.writeFileSync(path.join(dir, 'b.rig'), '#load "helper.rig"; // slow\nmain :: () { putz(); }\n');
+        stub.checkTimeout = 1;
+        const file = path.join(dir, 'helper.rig');
+        const a = [path.join(dir, 'a.rig'), '--stdin-for', file];
+        const b = [path.join(dir, 'b.rig'), '--stdin-for', file];
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        fire('open', doc);
+        await until('the message', () => stub.errors.length > 0);
+        await pastAnswer(dir, 2);
+        assert.deepStrictEqual(started(dir).map((rig) => rig.args), [a, b]);
+        assert.deepStrictEqual(answers(dir), [a], 'a stopped check\'s rig answered');
+        assert.deepStrictEqual(stub.errors, [TIMED_OUT]);
+        assert.ok(!live.has(doc.uri.toString()), 'a stopped check set problems');
+
+        // A change, which forgets no program as a save does.
+        stub.checkTimeout = 0;
+        const result = await checked(dir, doc, 'change', { document: doc, contentChanges: [{}] });
+        assert.deepStrictEqual(result.calls, [a, b]);
+        assert.deepStrictEqual(result.diagnostics, [
+            [0, 0, "unknown identifier 'putz'"],
+            [0, 0, "an error in another file of the program: b.rig:2:14: unknown identifier 'putz'"],
+        ]);
+        assert.deepStrictEqual(stub.errors, [TIMED_OUT]);
     });
 });
 

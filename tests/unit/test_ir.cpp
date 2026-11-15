@@ -4051,3 +4051,173 @@ TEST(constant_naming_other_data_has_its_bytes) {
     CHECK(contains(main, "addr @const.1"));
     arena_free(&a);
 }
+
+// Issue #115: lowering on demand, into a compile-time module (spec 7.8).
+
+// The program the on-demand tests share: three runs reaching twice, which
+// calls add and writes counter; unused and other reached by none of them.
+static const char *LOWERING_ON_DEMAND_PROGRAM =
+    "add :: (a: int, b: int) -> int { return a + b; }\n"
+    "unused :: () -> int { return 7; }\n"
+    "counter := 5;\n"
+    "other := 9;\n"
+    "twice :: (n: int) -> int { counter += 1; return add(n, n); }\n"
+    "N :: #run twice(3);\n"
+    "#run twice(20);\n"
+    "#run { x := twice(1); }\n"
+    "main :: () { }\n";
+
+TEST(lowering_on_demand_takes_what_a_run_reaches) {
+    // The module starts with the two helpers, whole. Each run's procedure
+    // comes next, then what it reaches, first named first lowered: run.0
+    // brings twice, which brings add; run.1 reaches twice again, which is
+    // there already, lowered once. N's run, an expression, returns its
+    // value. counter is made where twice's body first uses it; unused,
+    // other and main, which no run reaches, never are.
+    Arena a = arena_make();
+    Lowered_Runs r = lower_runs_of(&a, LOWERING_ON_DEMAND_PROGRAM);
+    CHECK_EQ(r.file->runs.count, 2);
+    CHECK_EQ(ir_lower_run(r.lowering, r.file->runs[0]), 2);
+    CHECK_EQ(ir_lower_run(r.lowering, r.file->runs[1]), 5);
+    CHECK_EQ(ir_lower_run(r.lowering, constant_run(r.file, "N")), 6);
+    String ir = ir_print(&a, r.module);
+    const char *order[] = {"proc @__rig_bounds_failed(", "proc @__rig_string_equal(", "proc @run.0()",
+                           "proc @twice(", "proc @add(", "proc @run.1()", "proc @run.2() -> i64"};
+    s64 last = -1;
+    for (const char *header : order) {
+        s64 at = index_of(ir, header);
+        if (at <= last) fprintf(stderr, "  '%s' isn't where it should be\n", header);
+        CHECK(at > last);
+        last = at;
+    }
+    CHECK_EQ(count_of(ir, "proc @twice("), 1);
+    CHECK(!contains(ir, "@unused"));
+    CHECK(!contains(ir, "@main"));
+    CHECK(!contains(ir, "@other"));
+    CHECK(contains(ir, "global @counter: i64 = 5\n"));
+    // The bounds buffer fits the longest prefix any file can give:
+    // test.rig's 8, 39 more, and the usual 73. __rig_string_equal has its
+    // body, though no run compares strings.
+    CHECK(contains(proc_ir(ir, "__rig_bounds_failed"), "local 120 align 1"));
+    CHECK(contains(proc_ir(ir, "__rig_string_equal"), "b0:\n"));
+    Ast_Proc *twice = nullptr, *add = nullptr;
+    for (s64 i = 0; i < r.file->procs.count; i++) {
+        if (string_eq(r.file->procs[i]->name, str("twice"))) twice = r.file->procs[i];
+        if (string_eq(r.file->procs[i]->name, str("add"))) add = r.file->procs[i];
+    }
+    CHECK(twice != nullptr);
+    CHECK(add != nullptr);
+    CHECK(ir_lowering_source(r.lowering, 3) == twice);
+    CHECK(ir_lowering_source(r.lowering, 4) == add);
+    CHECK(ir_lowering_source(r.lowering, 0) == nullptr);
+    CHECK(ir_lowering_source(r.lowering, 2) == nullptr);
+    // run.2, made after the last procedure of the source.
+    CHECK(ir_lowering_source(r.lowering, 6) == nullptr);
+
+    // The program's own lowering of the same file is whole, and has no runs.
+    String program = ir_print(&a, ir_lower(r.file, &r.list->diag, &a, true));
+    CHECK(contains(program, "proc @unused("));
+    CHECK(!contains(program, "@run."));
+    lowered_runs_free(&r);
+    arena_free(&a);
+}
+
+TEST(lowering_on_demand_keeps_no_abc) {
+    // Bounds checks are always on at compile time, but #no_abc, part of
+    // what a procedure means, still holds: peek's a[i] is unchecked, its
+    // unmarked twin look's checked.
+    Arena a = arena_make();
+    Lowered_Runs r = lower_runs_of(&a,
+                                   "peek :: (i: int) -> int #no_abc { a : [3]int; return a[i]; }\n"
+                                   "look :: (i: int) -> int { a : [3]int; return a[i]; }\n"
+                                   "#run { x := peek(1) + look(1); }\n"
+                                   "main :: () { }\n");
+    ir_lower_run(r.lowering, r.file->runs[0]);
+    String ir = ir_print(&a, r.module);
+    String peek = proc_ir(ir, "peek"), look = proc_ir(ir, "look");
+    CHECK(contains(peek, "b0:\n"));
+    CHECK(!contains(peek, "__rig_bounds_failed"));
+    CHECK(contains(look, "call @__rig_bounds_failed("));
+    lowered_runs_free(&r);
+    arena_free(&a);
+}
+
+TEST(lowering_on_demand_sizes_the_bounds_buffer_for_the_longest_path) {
+    // Any file's check may fail at compile time, a #load-ed one's too: the
+    // buffer fits the longest path, here the second file's 26, with 39
+    // more and the usual 73.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    diag_add_file(&d, str("main.rig"), str(""));
+    diag_add_file(&d, str("some/deeper/dir/loaded.rig"), str(""));
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Lowering *l = ir_lowering_new(m, &d, &a);
+    CHECK(contains(proc_ir(ir_print(&a, m), "__rig_bounds_failed"), "local 138 align 1"));
+    ir_lowering_free(l);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(baked_views_and_strings_in_constants_and_globals) {
+    // A #run's baked view in a global sees a writable array.N of its own,
+    // and a baked string there writable bytes of its own, string.N, so the
+    // program may change them. A constant's view sees read-only elements, a
+    // const.N as the constant's own bytes are, and so does an expression
+    // #run's view used in a body.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "store : [3]int;\n"
+                                          "make :: () -> []int { store[0] = 7; store[1] = 8; store[2] = 9; return store; }\n"
+                                          "name :: () -> string { return \"rig\"; }\n"
+                                          "VIEW :: #run make();\n"
+                                          "g : []int = #run make();\n"
+                                          "s := #run name();\n"
+                                          "main :: () { i := 1; x := VIEW[i]; g[0] = 1; s[0] = 82; }\n"
+                                          "Named :: struct { name: string; items: []int; }\n"
+                                          "named :: () -> Named { return .{name(), make()}; }\n"
+                                          "NAME :: #run name();\n"
+                                          "NAMED :: #run named();\n"
+                                          "t := NAME;\n"
+                                          "n := NAMED;\n"
+                                          "use :: () { i := 1; v := #run make(); y := v[i]; m := NAMED; }\n"));
+    const char *elements = "\\07\\00\\00\\00\\00\\00\\00\\00"
+                           "\\08\\00\\00\\00\\00\\00\\00\\00"
+                           "\\09\\00\\00\\00\\00\\00\\00\\00\"\n";
+    const char *count = "\\03\\00\\00\\00\\00\\00\\00\\00"
+                        "\\00\\00\\00\\00\\00\\00\\00\\00";
+    const char *three = "\\03\\00\\00\\00\\00\\00\\00\\00"
+                        "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @";
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "global @array.0: 24 align 8 = \"%s", elements))));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "global @g: 16 align 8 = \"%sarray.0\n", three))));
+    CHECK(contains(ir, "global @string.0: 4 align 1 = \"rig\\00\"\n"));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "global @s: 16 align 8 = \"%sstring.0\n", three))));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.1: 24 align 8 = \"%s", elements))));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.0: 16 align 8 = \"%sconst.1\n", three))));
+    CHECK(contains(proc_ir(ir, "main"), "addr @const.0"));
+
+    // A global made from a constant holding a baked string gets its own
+    // bytes too, and so does one holding a baked struct, its string's and
+    // its view's.
+    CHECK(contains(ir, "global @string.1: 4 align 1 = \"rig\\00\"\n"));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "global @t: 16 align 8 = \"%sstring.1\n", three))));
+    CHECK(contains(ir, "global @string.2: 4 align 1 = \"rig\\00\"\n"));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "global @array.1: 24 align 8 = \"%s", elements))));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a,
+                                                     "global @n: 32 align 8 = \"%s%s\" reloc 8 @string.2 "
+                                                     "reloc 24 @array.1\n",
+                                                     count, count))));
+
+    // An expression #run's aggregate used in a body is a read-only const.N
+    // of its own, its view's elements another. A constant's baked string
+    // stays a read-only str.N, as a written literal's does.
+    String use = proc_ir(ir, "use");
+    CHECK(contains(use, "addr @const.2"));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.3: 24 align 8 = \"%s", elements))));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.2: 16 align 8 = \"%sconst.3\n", three))));
+    CHECK(contains(use, "addr @const.4"));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.5: 24 align 8 = \"%s", elements))));
+    CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.4: 32 align 8 = \"%s%s\" reloc 8 @str.",
+                                                     count, count))));
+    CHECK(contains(ir, " reloc 24 @const.5\n"));
+    arena_free(&a);
+}

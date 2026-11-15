@@ -1,0 +1,6 @@
+tests/errors/run_result_holds_a_pointer.rig:8:6: error: #run's result holds a pointer, which can't be baked, for now
+    P :: #run point();
+         ^
+tests/errors/run_result_holds_a_pointer.rig:9:6: error: #run's result holds a pointer, which can't be baked, for now
+    H :: #run hold();
+         ^
