@@ -931,6 +931,7 @@ static String build_program_elsewhere_test(Arena *a, String rig);
   - 10.2:
     - stage 3 (the loader) imports;
     - stage 6: unoptimised by default, `optimize` running `default<O2>` at the optimising codegen level, debug information still made;
+    - with `optimize`, every stack slot is zeroed before the procedure's body runs, so a `---` local read before it's assigned is still an unspecified value (8.6), zero, not a read the optimiser takes as undefined;
     - a build program isn't lowered.
   - 10.6: `modules/` beside rig in an archive, as the linker is.
   - 10.7: the guarantees about variables and stack slots (every local, parameter and iterator shown with its value; a parameter in its own slot, as clang's -O0 code has it, so a value a debugger writes is the one the program goes on with) hold for unoptimised code: `rig build` of a file, or a workspace without `optimize`. With `optimize`, the debug information is still written, and marked optimised, but a debugger may show a variable as optimised out, and writing to one may have no effect.
