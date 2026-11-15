@@ -133,12 +133,13 @@ enum Ast_Resolve : u8 {
     RESOLVE_DONE,
 };
 
-// A declaration. When the parser gave up on one (a syntax error), it is
-// still kept, as a broken entry: is_broken is set and only name and pos
-// mean anything, so the checker knows the name is declared. Its name is the
-// one the declaration started with, where the tokens look like a declaration
-// of it (`greet :`, `greet () {`, `greet :=`, `#greet ::`: parser.cpp's
-// broken_entry), and empty otherwise.
+// A procedure: a declaration, or the procedure a top-level #run { ... } runs
+// as (Ast_Run.proc). When the parser gave up on a declaration (a syntax
+// error), it is still kept, as a broken entry: is_broken is set and only
+// name and pos mean anything, so the checker knows the name is declared. Its
+// name is the one the declaration started with, where the tokens look like a
+// declaration of it (`greet :`, `greet () {`, `greet :=`, `#greet ::`:
+// parser.cpp's broken_entry), and empty otherwise.
 //
 // Ast.type is the procedure's type, a TYPE_PROC, once its signature is
 // checked: null for a variadic one, which no procedure type can say, and
@@ -455,9 +456,9 @@ struct Ast_Run : Ast {
     bool checked;       // the checker has been through it (check_run, check_top_level_run): once
     Ast *value;         // an expression #run's result once it ran: the node holding it, as constant
                         // data's literal tree (run.cpp's bake_value; a view's, the array literal of
-                        // its elements, typed [count]T), or the operand itself when
-                        // that is a constant and nothing ran; null when it has none: it hasn't run,
-                        // its operand or what it reaches had errors, or it failed (said already)
+                        // its elements, typed [count]T), or the operand itself when that is a
+                        // constant and nothing ran; null when it has none: it hasn't run, its
+                        // operand or what it reaches had errors, or it failed (said already)
 };
 
 // A parsed file, or the files of a program parsed into one (parse_into):

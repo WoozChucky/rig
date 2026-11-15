@@ -197,6 +197,10 @@ u64 hash_string(String s) {
     return hash;
 }
 
+String pointer_key(const void *const *pointer) {
+    return {(const u8 *)pointer, (s64)sizeof *pointer};
+}
+
 // ---------------------------------------------------------------------------
 // Paths
 

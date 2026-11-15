@@ -1952,11 +1952,11 @@ check('the tasks use $rig-runtime while rig.check is on, $rig when it is off', (
 // stdin's text says `slow`, or with --stdin-for if MAIN's does, and as it
 // answers it writes its arguments to answers.log as to calls.log, so a
 // check can tell that a rig it ended never answered (answers). When
-// there's a file named old-rig where it runs,
-// it's a rig from before --stdin-for instead: given that option, it answers
-// at once, without reading stdin, with that rig's usage and exit code 2, as
-// it takes the option for a second file. The documents are stand-ins too,
-// never saved: what's checked is their text.
+// there's a file named old-rig where it runs, it's a rig from before
+// --stdin-for instead: given that option, it answers at once, without
+// reading stdin, with that rig's usage and exit code 2, as it takes the
+// option for a second file. The documents are stand-ins too, never saved:
+// what's checked is their text.
 
 const STAND_IN = `
 const fs = require('fs');
@@ -2026,7 +2026,9 @@ function answer() {
 `;
 
 // The command lines the stand-in compiler was started with in `dir`, in
-// order, each the list of words after `check`.
+// order, each the list of words after `check`, as the log file `log` there
+// has them: calls.log by default, or answers.log for those that answered
+// (answers).
 function calls(dir, log = 'calls.log') {
     log = path.join(dir, log);
     if (!fs.existsSync(log)) return [];

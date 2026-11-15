@@ -480,15 +480,16 @@
 //   whether its own check had errors (Ast_Proc.had_errors,
 //   Ast_Var.had_errors, Ast_Const.had_errors).
 // - It runs in the compilation's one compile-time world (run.h), and its
-//   result is baked into the tree, a typed constant (run.cpp): a number as
-//   one, anything else as constant data (constant_data), a copy of what
-//   the run gave. A run that fails is "#run failed: runtime error:
-//   MESSAGE", at the #run, followed by the calls that led there; it has no
-//   value then, and what needs it says nothing more, as after an error it
-//   reaches. So is a result that can't be baked: one holding a pointer
-//   that isn't null, "#run's result holds a pointer, which can't be baked,
-//   for now", or a view or a string whose count is below zero, "#run
-//   failed: its result holds a view with a negative count" ("a string").
+//   result is baked into the tree, a typed constant (run.cpp): a number, a
+//   bool or null as one, a procedure value as the procedure's name, and
+//   anything else as constant data (constant_data), a copy of what the run
+//   gave. A run that fails is "#run failed: runtime error: MESSAGE", at
+//   the #run, followed by the calls that led there; it has no value then,
+//   and what needs it says nothing more, as after an error it reaches. So
+//   is a result that can't be baked: one holding a pointer that isn't null,
+//   "#run's result holds a pointer, which can't be baked, for now", or a
+//   view or a string whose count is below zero, "#run failed: its result
+//   holds a view with a negative count" ("a string").
 // - A baked string is a string literal's bytes: it converts to a *u8 and
 //   passes C's '...' as a literal does (is_literal_string). A constant may
 //   hold a baked view, its elements read-only data, as the #run's value or
@@ -506,14 +507,14 @@
 //   (spec 4.8): the bodies in it have errors, and the globals in it no
 //   type. So is a struct a #run in one of its counts reaches, by value or
 //   through a pointer it moves or indexes, while its layout is under way:
-//   "'S' is defined in terms of itself", at
-//   the struct. Bodies checked inside one another nest as declarations do (at
-//   most MAX_DEPTH levels deep, open_declaration), a body's own levels its
-//   blocks and the expressions in them together: the one too many is "'f'
-//   is nested too deeply in the declarations that need it (more than 1000
-//   levels)", at its name, and is checked in its own turn. A body checked
-//   in its own turn, and a top-level #run's expression, aren't counted so:
-//   a body their #runs need starts at level 0.
+//   "'S' is defined in terms of itself", at the struct. Bodies checked
+//   inside one another nest as declarations do (at most MAX_DEPTH levels
+//   deep, open_declaration), a body's own levels its blocks and the
+//   expressions in them together: the one too many is "'f' is nested too
+//   deeply in the declarations that need it (more than 1000 levels)", at
+//   its name, and is checked in its own turn. A body checked in its own
+//   turn, and a top-level #run's expression, aren't counted so: a body
+//   their #runs need starts at level 0.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
@@ -620,20 +621,21 @@ bool is_literal_string(Ast *e);
 // - a cast of constant data to its own type, or between string and []u8:
 //   a #run's baked []u8 cast to a string is its bytes' string literal
 //   (Ast_Literal.text), not the array literal of its elements;
-// - a #run whose baked value isn't a number (Ast_Run.value): a procedure
-//   value's name, which procedure_address walks on from, a string literal,
-//   or a struct or array literal of constant data (is_data already); a
-//   view's is the array literal of its elements, typed [count]T where the
-//   #run is a []T.
+// - a #run whose baked value (Ast_Run.value) isn't a number, a bool or
+//   null, which are constants: a procedure value's name, which
+//   procedure_address walks on from, a string literal, or a struct or
+//   array literal of constant data (is_data already); a view's is the
+//   array literal of its elements, typed [count]T where the #run is a []T.
 // A field's or element's value node that is itself constant data is
 // followed in turn. So *value is a string or struct or array literal, or a
 // scalar field's or element's value node as the literal wrote it (a
 // constant, a procedure's name, a string literal, or a cast of one, which
 // literal_address and procedure_address walk on from); or a #run's baked
 // value, one of the same; or null when a literal leaves the field out
-// (zero), and so for any field or element of such a null part. A string's element is a byte that no node holds: not
-// constant data; nor is a field or an element of a value a literal gives
-// with the wrong type, reported (Line.{a = 5}.a.x).
+// (zero), and so for any field or element of such a null part. A string's
+// element is a byte that no node holds: not constant data; nor is a field
+// or an element of a value a literal gives with the wrong type, reported
+// (Line.{a = 5}.a.x).
 bool constant_data(Ast *e, Ast **value);
 
 // The value struct literal `literal`, of struct type t, gives field `field`,
@@ -650,8 +652,8 @@ Type *call_result_type(Ast_Call *call, s64 i);
 // constant that names one (OP :: add;), a field or an element of constant
 // data that holds one (OPS[0].run, constant_data), a #run that gave one,
 // or a cast of any of them that keeps the address, to *void or to a
-// procedure type (cast(*void) add); null for anything else, a field a literal leaves out too. A global
-// and a constant may hold one, its address written there by the linker, as
-// a string literal's is: the checker asks this to allow it, and lowering
-// to write it (constant_bytes).
+// procedure type (cast(*void) add); null for anything else, a field a
+// literal leaves out too. A global and a constant may hold one, its address
+// written there by the linker, as a string literal's is: the checker asks
+// this to allow it, and lowering to write it (constant_bytes).
 Ast_Proc *procedure_address(Ast *e);
