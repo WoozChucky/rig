@@ -2187,6 +2187,7 @@ TEST(llvm_optimises_with_the_o2_pipeline) {
         CHECK(contains(plain, "alloca"));
         CHECK(contains(plain, "DICompileUnit"));
         CHECK(contains(plain, "isOptimized: false"));
+        CHECK(!contains(plain, "DISPFlagOptimized"));
         bool ok = llvm_ir_text(&a, m, (Target)t, &optimised, &error, true);
         CHECK(ok);
         if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
@@ -2194,6 +2195,73 @@ TEST(llvm_optimises_with_the_o2_pipeline) {
         CHECK(contains(optimised, "DICompileUnit"));
         CHECK(contains(optimised, "isOptimized: true"));
         CHECK(contains(optimised, "DISPFlagOptimized"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_optimiser_takes_no_procedure_for_c_libraries) {
+    // LLVM knows C's library functions by name and type alone, whether the
+    // module defines them or not. The program's own strlen and sqrt keep
+    // their bodies (42 + 7), not C's results folded in (3 + 2), and its own
+    // puts doesn't receive the call LLVM would make of printf("x\n").
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                "strlen :: (s: *u8) -> int {\n"
+                                "    return 42;\n"
+                                "}\n"
+                                "puts :: (s: *u8) -> s32 {\n"
+                                "    return 7;\n"
+                                "}\n"
+                                "sqrt :: (x: float64) -> float64 {\n"
+                                "    return 7.0;\n"
+                                "}\n"
+                                "main :: () {\n"
+                                "    printf(\"x\\n\");\n"
+                                "    printf(\"%lld\\n\", strlen(\"abc\") + cast(int) sqrt(4.0));\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = {}, error = {};
+        bool ok = llvm_ir_text(&a, m, (Target)t, &text, &error, true);
+        CHECK(ok);
+        if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+        CHECK(contains(text, "i64 49)"));
+        CHECK(!contains(text, "@puts"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_optimised_module_takes_the_memory_functions_names) {
+    // LLVM's optimiser may make memset and memcpy intrinsics of its own,
+    // which become calls of C's memset and memcpy, by name, in a module
+    // that neither copies nor zeroes memory. So an optimised module always
+    // takes their names, and a program's own memset is the one renamed,
+    // which LLVM never calls. The loop that zeroes bytes stays a loop: LLVM
+    // would make it a memset if it knew C's functions (mark_definition).
+    // Unoptimised, the module makes no such call, and the program's memset
+    // keeps its name.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "keep :: (f: (*u8, s32, int) -> *u8 #c_call) #foreign libc;\n"
+                                "buffer :: () -> *u8 #foreign libc;\n"
+                                "memset :: (p: *u8, v: s32, n: int) -> *u8 #c_call {\n"
+                                "    return p;\n"
+                                "}\n"
+                                "main :: () {\n"
+                                "    keep(memset);\n"
+                                "    p := buffer();\n"
+                                "    for 0..99 { (p + it).* = 0; }\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String plain = {}, optimised = {}, error = {};
+        CHECK(llvm_ir_text(&a, m, (Target)t, &plain, &error, false));
+        CHECK(contains(plain, "define internal ptr @memset("));
+        bool ok = llvm_ir_text(&a, m, (Target)t, &optimised, &error, true);
+        CHECK(ok);
+        if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+        CHECK(contains(optimised, "define internal ptr @memset.1("));
+        CHECK(!contains(optimised, "call ptr @memset.1("));
+        CHECK(!contains(optimised, "@llvm.memset"));
     }
     arena_free(&a);
 }

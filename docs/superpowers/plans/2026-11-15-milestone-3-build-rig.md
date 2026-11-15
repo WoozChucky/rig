@@ -933,6 +933,7 @@ static String build_program_elsewhere_test(Arena *a, String rig);
     - stage 6: unoptimised by default, `optimize` running `default<O2>` at the optimising codegen level, debug information still made;
     - a build program isn't lowered.
   - 10.6: `modules/` beside rig in an archive, as the linker is.
+  - 10.7: the guarantees about variables and stack slots (every local, parameter and iterator shown with its value; a parameter in its own slot, as clang's -O0 code has it, so a value a debugger writes is the one the program goes on with) hold for unoptimised code: `rig build` of a file, or a workspace without `optimize`. With `optimize`, the debug information is still written, and marked optimised, but a debugger may show a variable as optimised out, and writing to one may have no effect.
   - 10.8: `#compiler` calls are C++ in the compiler, not through the thunks, their arguments in the interpreter's memory, and their failures runtime errors with frames.
   - Appendix A: A.2's `TopLevel` gains `ImportDecl`; `ImportDecl = "#import" string_lit ";" .`; `ProcDecl` as 7.1; the top-level-only rule and the recovery rule name `#import`.
   - Appendix B: `| #import | a module that ships with rig | 2.14 |` and `| #compiler | a procedure the compiler does | 7.9 |`.
