@@ -138,7 +138,7 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Modul
         // lexer reported the whole file before the parser began, and the
         // parser before the loader's errors about its #loads; the checker
         // came after every file, and reports every signature before any
-        // body; a failed top-level run's error comes after all of them.
+        // body. (The top-level runs run only when none of these had errors.)
         diag_sort(&d);
         diag_print(&d);
     }
@@ -268,10 +268,10 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
 // isn't lowered, LLVM and the linker aren't involved, and rig check itself
 // writes no file or .build directory. The expression #runs do run, in the
 // compile-time world (spec 7.8), though the top-level ones never do (they
-// are checked, and what they reach, but not run): their code may print,
-// take any time, or do whatever C lets it, which is why the editor limits
-// a check's time. Else it is quick to run on every keystroke, which is
-// what an editor does with it:
+// are checked, and what they reach, but not run): an expression #run's code
+// may print, take any time, or do whatever C lets it, which is why the
+// editor limits a check's time. Else it is quick to run on every
+// keystroke, which is what an editor does with it:
 // - --stdin reads the source from standard input, so the editor can send
 //   what's on screen, saved or not, and FILE.rig is then the name the
 //   diagnostics give it and the file whose directory its #loads are found
