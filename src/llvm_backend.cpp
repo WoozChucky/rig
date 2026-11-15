@@ -285,9 +285,27 @@ static void add_string_attribute(LLVMContextRef c, LLVMValueRef function, const 
 // which touches every page the same way. It calls it by name, so the
 // name is taken before the program's procedures are made, as C's memset
 // is (declare_stack_probe).
+//
+// When optimising, also knowing no C library function: "no-builtins", what
+// clang's -fno-builtin sets. LLVM's optimiser knows C's library functions
+// by name and type alone, whether the module only declares the function or
+// defines it, and internal or not. Rig names don't clash with C names
+// (spec 7.6), so without the attribute a program's own procedure called
+// like one would be taken for C's, both ways. A call of the program's
+// sqrt(4.0) would be folded into 2.0, its body never run. And a call LLVM
+// makes of a C function in place of another, puts for a printf of a plain
+// line, would go to the program's own puts, which has that name in the
+// module. With the attribute LLVM treats every call in the function as an
+// ordinary call: it rewrites none, not even a call of a foreign C
+// function, and makes no call of a C function of its own (a loop that
+// zeroes bytes stays a loop, not a memset). Its intrinsics are another
+// matter: llvm.memset still becomes a call of C's memset, by name
+// (declare_memory_functions). Unoptimised, no pass runs that could take a
+// procedure for C's, so the attribute is left out.
 static void mark_definition(Backend *b, LLVMValueRef function) {
     add_string_attribute(b->context, function, "frame-pointer", "all");
     if (b->target == TARGET_LINUX_X64) add_string_attribute(b->context, function, "probe-stack", "inline-asm");
+    if (b->optimize) add_string_attribute(b->context, function, "no-builtins", "");
 }
 
 // Whether any procedure of the module has an instruction of operation op.
@@ -305,7 +323,8 @@ static bool module_has(Ir_Module *m, Ir_Op op) {
 }
 
 // The C library's memmove, memset and memcpy, declared before the program's
-// own functions, in a module that copies or zeroes memory:
+// own functions, in a module that copies or zeroes memory, and in every
+// optimised module:
 //
 //   declare ptr @memmove(ptr, ptr, i64)
 //   declare ptr @memset(ptr, i32, i64)
@@ -318,7 +337,11 @@ static bool module_has(Ir_Module *m, Ir_Op op) {
 // declarations; they're here to take the names, as build_runtime takes
 // write and exit: a program's own procedure called memset is then the one
 // LLVM renames (memset.1), so LLVM's call goes to C's memset and not to the
-// program's. (size_t is 64 bits on both targets, and C's int 32.)
+// program's. The optimiser may make these intrinsics of its own too, in a
+// module that has neither IR_COPY nor IR_ZERO, so an optimised module
+// takes the names whatever it holds. (It makes no other call of a C
+// function, and takes none of the program's procedures for C's:
+// mark_definition.) (size_t is 64 bits on both targets, and C's int 32.)
 static void declare_memory_functions(Backend *b) {
     LLVMContextRef c = b->context;
     LLVMTypeRef ptr = LLVMPointerTypeInContext(c, 0), i32 = LLVMInt32TypeInContext(c),
@@ -1671,7 +1694,9 @@ static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Glob
 // so a C name is always C's: a procedure or a global of the program with
 // the same name, free or malloc, is the one LLVM renames (free.1), and as
 // an internal symbol it works the same under any name. Rig names don't
-// clash with C names, so the program may well have both (spec 7.6). Not
+// clash with C names, so the program may well have both (spec 7.6), and
+// the optimiser, which knows C's functions by name, mustn't take the
+// program's for C's (mark_definition). Not
 // every symbol of the program is internal, though: main is exported, the
 // entry point the C runtime calls by that name, and renamed main.1 the
 // program wouldn't link. So the checker refuses main as a C name, and the
@@ -1738,7 +1763,9 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, bool optimize, Are
 
     // The runtime first, so its C names are taken before the program's.
     if (module_has(m, IR_PANIC)) build_runtime(b);
-    if (module_has(m, IR_COPY) || module_has(m, IR_ZERO)) declare_memory_functions(b);
+    // C's memory functions where LLVM may call them: for a copy or a zero,
+    // or anywhere once the optimiser runs.
+    if (optimize || module_has(m, IR_COPY) || module_has(m, IR_ZERO)) declare_memory_functions(b);
     declare_stack_probe(b);
     LLVMValueRef *functions = arena_new_array<LLVMValueRef>(a, m->procs.count ? m->procs.count : 1);
     declare_foreign_functions(b, m, a, functions);
@@ -1879,9 +1906,16 @@ static void backend_free(Backend *b) {
     if (b->context) LLVMContextDispose(b->context);
 }
 
+// The module both public functions start from: built and verified, then
+// optimised when `optimize` is set. False with `error` set when either
+// fails; either way the caller calls backend_free.
+static bool backend_prepare(Backend *b, Ir_Module *m, Target t, bool optimize, Arena *a, String *error) {
+    return backend_build(b, m, t, optimize, a, error) && (!optimize || run_passes(b, a, error));
+}
+
 bool llvm_ir_text(Arena *a, Ir_Module *m, Target t, String *text, String *error, bool optimize) {
     Backend b = {};
-    bool ok = backend_build(&b, m, t, optimize, a, error) && (!optimize || run_passes(&b, a, error));
+    bool ok = backend_prepare(&b, m, t, optimize, a, error);
     if (ok) *text = take_message(a, LLVMPrintModuleToString(b.module));
     backend_free(&b);
     return ok;
@@ -1889,7 +1923,7 @@ bool llvm_ir_text(Arena *a, Ir_Module *m, Target t, String *text, String *error,
 
 bool llvm_emit_object(Ir_Module *m, Target t, String path, bool optimize, Arena *a, String *error) {
     Backend b = {};
-    bool ok = backend_build(&b, m, t, optimize, a, error) && (!optimize || run_passes(&b, a, error));
+    bool ok = backend_prepare(&b, m, t, optimize, a, error);
     if (ok) {
         char *message = nullptr;
         // LLVM takes a char *, though it doesn't change the name.
