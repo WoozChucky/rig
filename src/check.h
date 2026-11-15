@@ -178,6 +178,11 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing);
 // expr_is_place (checker.h), and if not, why not.
 bool is_place(Checker *c, Ast *e, bool for_writing);
 
+// What a for loop's variable var (is_iterator set) is, as the messages
+// about it say: "the loop's index" for it_index, "the loop's iterator" for
+// it or a named iterator.
+const char *loop_variable_kind(Ast_Var *var);
+
 // p += n or p -= n (`op_name`, at `at`), p's type the pointer type
 // `pointer`, or the offset of p + n, n + p or p - n: n must be an integer
 // ("'+=' moves a pointer by an integer, not 'float32'"), and an untyped one
