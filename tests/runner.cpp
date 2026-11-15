@@ -55,8 +55,9 @@
 //
 // Then a few fixed cases: rig build without -o from another directory, a
 // runtime error's order after the program's output when stdout and stderr
-// are one pipe, bin/unit-tests --interpret of a program that calls a
-// #compiler procedure (refused as rig build refuses it, with nothing run),
+// are one pipe, bin/unit-tests --interpret of two programs that call a
+// #compiler procedure, at run time and in a constant's #run (each refused
+// as rig build refuses it, with nothing run),
 // the command line's mistakes, a .build/ or an object file
 // rig can't write, and rig version's output, by its shape (version_test:
 // it names the commit rig was built from).
@@ -627,12 +628,14 @@ static String error_test(Arena *a, String rig, String name) {
     return {};
 }
 
-// bin/unit-tests --interpret of a program that checks clean but calls a
-// #compiler procedure (spec 7.9), which only lowering finds: it must print
-// the program's .err, as rig build does, exit 1, and run nothing, so print
-// nothing on stdout. {} when it does, otherwise why not.
-static String interpreted_compiler_call_test(Arena *a, String unit_tests) {
-    String name = str("compiler_called_at_run_time");
+// bin/unit-tests --interpret of tests/errors/NAME.rig, a program that calls
+// a #compiler procedure (spec 7.9): one that checks clean but calls it at
+// run time, which only lowering finds, or one whose constant's #run calls
+// it while checking, which the Compiler module refuses as rig build's does.
+// It must print the program's .err, as rig build does, exit 1, and run
+// nothing, so print nothing on stdout. {} when it does, otherwise why not.
+static String interpreted_compiler_call_test(Arena *a, String unit_tests, const char *program) {
+    String name = str(program);
     String expected = {};
     if (!read_expected_errors(a, name, &expected)) return str("no .err file");
     Array<String> argv = {};
@@ -2322,7 +2325,10 @@ int main(int argc, char **argv) {
            &failed);
     run_directory(&a, rig, "", "tests/errors", error_test, &passed, &failed);
     report("interpreted: a #compiler call refused when lowering, nothing run",
-           interpreted_compiler_call_test(&a, unit_tests), &passed, &failed);
+           interpreted_compiler_call_test(&a, unit_tests, "compiler_called_at_run_time"), &passed, &failed);
+    report("interpreted: a constant's #run calling the Compiler module, refused as rig build refuses it",
+           interpreted_compiler_call_test(&a, unit_tests, "main_creates_workspace_in_a_constant"), &passed,
+           &failed);
     report("a failed top-level #run's error after the runs' output, both in one pipe",
            run_output_order_test(&a, rig, false), &passed, &failed);
     report("a top-level #run's exit() after a failed one, the errors after the runs' output, in one pipe",

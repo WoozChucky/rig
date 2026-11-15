@@ -1,0 +1,4 @@
+tests/errors/main_creates_workspace_in_a_constant.rig:7:6: error: #run failed: runtime error: a program with 'main' can't create workspaces
+    W :: #run create_workspace("tools");
+         ^
+    in #run (tests/errors/main_creates_workspace_in_a_constant.rig:7:11)
