@@ -396,7 +396,7 @@ static Process_Result run_module(Arena *a, Ir_Module *m, const char *name) {
     array_add(&argv, program);
     Process_Result result = {};
     result.exit_code = -1;
-    bool emitted = llvm_emit_object(m, target_host(), object, a, &error);
+    bool emitted = llvm_emit_object(m, target_host(), object, false, a, &error);
     bool linked = emitted && link_executable(a, target_host(), objects, program, &error);
     if (!linked) fprintf(stderr, "  run_module: " STR_FMT "\n", STR_ARG(error));
     bool ran = linked && os_run_for(a, argv, {}, 60, &result);

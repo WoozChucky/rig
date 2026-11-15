@@ -70,11 +70,12 @@ rem developer prompt already set it, point clang at the newest installation
 rem that has them, through VCToolsInstallDir.
 if not defined VCToolsInstallDir call :find_msvc || exit /b 1
 
-rem The LLVM components Rig uses: the IR (core), and the x86 target that
+rem The LLVM components Rig uses: the IR (core), the optimiser's pipelines
+rem (passes), run when a build asks to be optimised, and the x86 target that
 rem turns it into object files. llvm-config names them (LLVMCore.lib, ...);
 rem each becomes -lLLVMCore, found through -L, so a path with spaces works.
 set LLVM_LIBS=
-for /f "delims=" %%i in ('"%LLVM%\bin\llvm-config.exe" --link-static --libnames core target x86codegen x86asmparser x86desc x86info') do set LIBNAMES=%%i
+for /f "delims=" %%i in ('"%LLVM%\bin\llvm-config.exe" --link-static --libnames core passes target x86codegen x86asmparser x86desc x86info') do set LIBNAMES=%%i
 for %%l in (%LIBNAMES%) do call set LLVM_LIBS=%%LLVM_LIBS%% -l%%~nl
 
 rem The Windows libraries LLVM uses, and COM's strings (finding Visual

@@ -166,8 +166,9 @@ static int build(Arena *a, String path, String output, bool bounds_checks) {
     String object = string_printf(a, ".build/" STR_FMT "%s", STR_ARG(name), target == TARGET_WINDOWS_X64 ? ".obj" : ".o");
     output = executable_path(a, output, name, target);
 
+    // Not optimised: rig build of a file never is (spec 10.2).
     String error = {};
-    if (!llvm_emit_object(module, target, object, a, &error)) {
+    if (!llvm_emit_object(module, target, object, false, a, &error)) {
         // LLVM's message is the system's alone ("permission denied"); the
         // path says which file.
         fprintf(stderr, "rig: error: cannot write '" STR_FMT "': " STR_FMT "\n", STR_ARG(object), STR_ARG(error));
