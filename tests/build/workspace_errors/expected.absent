@@ -2,3 +2,5 @@ broken
 .build/broken
 failing
 .build/failing
+nested
+.build/nested

@@ -1568,7 +1568,7 @@ A call of a variadic foreign procedure follows the platform's convention for C's
 
 ### 7.7 Turning off bounds checks
 
-`#no_abc` between a procedure's signature and its body turns off the bounds checks of indexing (section 8.5) in that procedure. `rig build --no-bounds-checks` turns them off in the whole program (section 10.1). Nothing else is turned off: null checks stay, and so does the compile-time check of a constant index into an array. With bounds checks off, an index outside its sequence is a memory error that no check catches.
+`#no_abc` between a procedure's signature and its body turns off the bounds checks of indexing (section 8.5) in that procedure. `rig build --no-bounds-checks` turns them off in the whole program (section 10.1), and a build program's `bounds_checks = false` in a workspace's whole program (section 7.9). Nothing else is turned off: null checks stay, and so does the compile-time check of a constant index into an array. With bounds checks off, an index outside its sequence is a memory error that no check catches.
 
 ```rig
 sum :: (values: []int) -> int #no_abc {
@@ -1929,7 +1929,7 @@ main :: () {
 example.rig:4:11: runtime error: index 3 is out of bounds (count 3)
 ```
 
-Bounds checks are turned off for a procedure by `#no_abc` and for a whole program by `rig build --no-bounds-checks` (section 7.7). Indexing a pointer is never bounds-checked.
+Bounds checks are turned off for a procedure by `#no_abc`, and for a whole program by `rig build --no-bounds-checks` or by a build program's `bounds_checks = false` for a workspace's program (section 7.7). Indexing a pointer is never bounds-checked.
 
 ### 8.6 What is not checked
 
@@ -2134,7 +2134,7 @@ After lowering, beside the LLVM and linker stages, a stage can run the IR rather
 - **Views and strings** are 16 bytes: the count, a 64-bit signed integer, at offset 0, and the data pointer at offset 8.
 - **String literals and constants' data** are private, read-only constant data in the object file. A string literal is its bytes followed by one zero byte, once for each literal written in the source that the program uses at run time, however many uses reach it, and not at all when it is only folded (`"abc".count`, `NAME[1]`, section 5.9). A constant holding data (section 4.2) is there once when the program uses it at run time, and not at all when it is only folded: its value, laid out as its type is, with relocations for the addresses inside it (a string literal's, a procedure's), which the linker resolves. A string constant is a 16-byte string there, whose data points at its literal's bytes; where it becomes a `*u8`, it is the literal's address itself. A `#run`'s value that holds data (section 7.8), a string, a struct, an array or a view, is constant data too, there once for each such `#run` the program uses at run time, its views' elements in constant data of their own, which the view points at (a string `#run` used only where it becomes a `*u8` is its literal's address itself, as a string constant is); one that is a number, a `bool`, `null` or a procedure occupies no storage, as such a constant doesn't (section 4.2).
 - **Global variables** are data local to the program, initialised with their values' bytes. A global holding a string literal's or an array's address gets it through a relocation, which the linker resolves. The bytes of the strings a `#run` gave a global, and the elements of its views, are data local to the program too, writable, of that global's own (section 4.3).
-- **Local variables** live in their procedure's stack frame. Every stack slot is allocated once, at the procedure's start, however often the block that declares it runs.
+- **Local variables** live in their procedure's stack frame. Every stack slot is allocated once, at the procedure's start, however often the block that declares it runs. That is unoptimised code; with a workspace's `optimize` (section 7.9), LLVM may keep a local in registers instead (section 10.7).
 
 ### 10.4 Calling convention
 

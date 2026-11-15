@@ -1,0 +1,6 @@
+// The nested workspace's program (build.rig): a build program, which a
+// workspace can't be, so the workspace isn't checked, and its error is
+// printed before the fine workspace is compiled.
+#import "Compiler";
+
+#run { }
