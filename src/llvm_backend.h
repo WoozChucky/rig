@@ -22,7 +22,10 @@
 // optimize (spec 10.2), LLVM's default<O2> pipeline runs on the module once
 // it verifies, and the target machine compiles at its default (optimising)
 // level. Debug information is kept either way, and says whether the code is
-// optimised.
+// optimised. Optimised, every stack slot is zeroed before the procedure's
+// body runs, so a `---` local read before it's assigned is a value (zero,
+// one unspecified value: spec 8.6), not the undefined read of memory nothing
+// stored that the optimiser would take it for.
 
 #pragma once
 
@@ -40,7 +43,8 @@ Target target_host();
 const char *target_triple(Target t);
 
 // The LLVM module as text (LLVMPrintModuleToString), optimised when
-// `optimize` is set. False with `error` set when it doesn't verify.
+// `optimize` is set. False with `error` set when it doesn't verify or, with
+// optimize, when LLVM refuses the optimisation pipeline.
 bool llvm_ir_text(Arena *a, Ir_Module *m, Target t, String *text, String *error, bool optimize = false);
 
 // The names of one of a module's source files (its Ir_Source's path, and
@@ -55,5 +59,6 @@ void llvm_debug_file_names(Arena *a, String source_path, String directory, Targe
 
 // Writes an object file (COFF on Windows, ELF on Linux) for the CPU x86-64,
 // optimised when `optimize` is set. False with `error` set when the module
-// doesn't verify or LLVM can't write the file.
+// doesn't verify, when LLVM refuses the optimisation pipeline (with
+// optimize), or when LLVM can't write the file.
 bool llvm_emit_object(Ir_Module *m, Target t, String path, bool optimize, Arena *a, String *error);

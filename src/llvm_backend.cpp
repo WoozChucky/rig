@@ -1565,6 +1565,31 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
     }
     declare_variables(b, a, p, &body);
 
+    // Optimised, every stack slot holds zeros before the body runs. A `---`
+    // local's slot is never stored to by its declaration, and reading it
+    // first gives an unspecified value (spec 8.6); unoptimised that's the
+    // bytes the slot held, but to the optimiser a read of memory nothing
+    // stored is undefined, and a branch on it unreachable: it would drop the
+    // code after it. Zero is one unspecified value, and the optimiser removes
+    // the stores the body overwrites. A slot of bytes is zeroed with a
+    // memset, as an IR_ZERO is. (A `---` local in a loop still holds its
+    // previous iteration's value, as unoptimised.) These run before the
+    // body, with no location, as declare_variables' stores do.
+    for (s64 k = 0; b->optimize && k < p->blocks.count; k++) {
+        Ir_Block *block = p->blocks[k];
+        for (s64 n = 0; n < block->instrs.count; n++) {
+            Ir_Instr *instr = &block->instrs[n];
+            if (instr->op != IR_LOCAL) continue;
+            LLVMValueRef slot = body.values[instr->result];
+            if (instr->type == IR_VOID) {
+                LLVMBuildMemSet(body.builder, slot, LLVMConstNull(LLVMInt8TypeInContext(c)),
+                                LLVMConstInt(LLVMInt64TypeInContext(c), instr->constant, 0), instr->align);
+            } else {
+                LLVMBuildStore(body.builder, LLVMConstNull(memory_type(c, instr->type)), slot);
+            }
+        }
+    }
+
     for (s64 k = 0; k < p->blocks.count; k++) {
         LLVMPositionBuilderAtEnd(body.builder, body.blocks[k]);
         Ir_Block *block = p->blocks[k];
@@ -1907,8 +1932,9 @@ static void backend_free(Backend *b) {
 }
 
 // The module both public functions start from: built and verified, then
-// optimised when `optimize` is set. False with `error` set when either
-// fails; either way the caller calls backend_free.
+// optimised when `optimize` is set. False with `error` set when LLVM doesn't
+// know the target, the module doesn't verify or LLVM refuses the pipeline;
+// either way the caller calls backend_free.
 static bool backend_prepare(Backend *b, Ir_Module *m, Target t, bool optimize, Arena *a, String *error) {
     return backend_build(b, m, t, optimize, a, error) && (!optimize || run_passes(b, a, error));
 }

@@ -95,6 +95,9 @@ TEST(objects_for_both_targets) {
     const char *paths[] = {".build/ir-test-windows.obj", ".build/ir-test-linux.o"};
     for (int optimize = 0; optimize < 2; optimize++) {
         for (int t = 0; t < 2; t++) {
+            // The file gone first, so a build that writes nothing can't
+            // pass on the one the build before it wrote.
+            remove(paths[t]);
             String error = {};
             bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), optimize, &a, &error);
             CHECK(ok);
@@ -2195,6 +2198,36 @@ TEST(llvm_optimises_with_the_o2_pipeline) {
         CHECK(contains(optimised, "DICompileUnit"));
         CHECK(contains(optimised, "isOptimized: true"));
         CHECK(contains(optimised, "DISPFlagOptimized"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_optimised_uninitialised_local_is_still_a_value) {
+    // A `---` local's slot is never stored to before it's read here, and a
+    // read of memory nothing stored is undefined to LLVM's optimiser: it
+    // would take a branch on it as unreachable, and main as nothing but
+    // `unreachable`. The language gives the read an unspecified value
+    // instead (spec 8.6), so an optimised main still makes one of each
+    // if's two calls, for the scalar's slot and for the struct's bytes
+    // alike (the optimiser may fold either if to the arm the value picks:
+    // the declaration and two calls of printf).
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                "Vec2 :: struct { x: int; y: int; }\n"
+                                "main :: () {\n"
+                                "    x : int = ---;\n"
+                                "    if x == 1 { printf(\"one\\n\"); } else { printf(\"notone\\n\"); }\n"
+                                "    v : Vec2 = ---;\n"
+                                "    if v.y == 1 { printf(\"vone\\n\"); } else { printf(\"vnotone\\n\"); }\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = {}, error = {};
+        bool ok = llvm_ir_text(&a, m, (Target)t, &text, &error, true);
+        CHECK(ok);
+        if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+        CHECK(!contains(text, "unreachable"));
+        CHECK_EQ(count_of(text, "@printf("), 3);
     }
     arena_free(&a);
 }
