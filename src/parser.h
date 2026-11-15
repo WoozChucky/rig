@@ -15,7 +15,7 @@
 //               | run                                               code run while compiling
 //   run         = '#run' block | '#run' expression ';'
 //   procedure   = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
-//                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';')
+//                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
 //                                                                  (the STRING: the C function's name)
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
 //   param       = IDENT ':' type
@@ -130,6 +130,14 @@
 // written twice"); a foreign procedure is C's already, so `#c_call
 // #foreign` is "a foreign procedure is C's already: it takes no
 // '#c_call'".
+//
+// A procedure the compiler does itself, while compiling (spec 7.9), is
+// declared with #compiler after its signature, Jai's directive, and a ';'
+// in place of a body: `create_workspace :: (name: string) -> Workspace
+// #compiler;` (Ast_Proc.is_compiler). It's no C function either: `#c_call
+// #compiler` is "a #compiler procedure is the compiler's: it takes no
+// '#c_call'", and `#no_abc #compiler` "expected '{'", as before #foreign.
+// Which files may declare one is the checker's business.
 //
 // A procedure's type (spec 3) is written as its signature: `(int, int) ->
 // int`, `(a: *void, b: *void) -> s32 #c_call`, `()`. The parameters' names

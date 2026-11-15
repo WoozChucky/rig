@@ -75,8 +75,9 @@ String executable_path(Arena *a, String output, String name, Target t) {
 // read or had errors, which it has then reported. With `lowered`, as rig
 // build asks, a program that checks without errors has its top-level #runs
 // run, and one still without errors after them is lowered into *lowered, its
-// indexes bounds-checked when bounds_checks is set; rig check passes
-// nullptr and stops at the checker.
+// indexes bounds-checked when bounds_checks is set; lowering's own errors
+// (a #compiler call) are reported too, and leave *lowered null. rig check
+// passes nullptr and stops at the checker.
 //
 // stdin_for, when not empty, is the file whose text is read from standard
 // input once the main file has been read (rig check --stdin-for): one the
@@ -151,8 +152,19 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Modul
     compile_time_free(world);
     // Lowered while d still holds the files' paths, which a runtime error's
     // message names, and their absolute paths and directories, which the
-    // debug information does; the module keeps its own copies.
-    if (ok && lowered) *lowered = ir_lower(tree, &d, a, bounds_checks);
+    // debug information does; the module keeps its own copies. Lowering
+    // finds the errors only it can, the calls of #compiler procedures the
+    // program would make (spec 7.9): they're printed in source order, and
+    // nothing is built.
+    if (ok && lowered) {
+        *lowered = ir_lower(tree, &d, a, bounds_checks);
+        if (d.error_count) {
+            diag_sort(&d);
+            diag_print(&d);
+            *lowered = nullptr;
+            ok = false;
+        }
+    }
     diag_free(&d);
     return ok ? tree : nullptr;
 }

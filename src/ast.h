@@ -151,12 +151,14 @@ struct Ast_Proc : Ast {
                                 // params, as a C function declared with '...' does (spec 7.6)
     Position variadic_pos;      // where that '..' is written
     Array<Ast_Type *> results;  // what it returns: none, one or several (-> int, int)
-    Ast_Block *body;            // null for a foreign procedure
+    Ast_Block *body;            // null for a foreign procedure and a #compiler one
     bool is_foreign;
     bool no_bounds_checks;      // #no_abc: its indexing isn't checked against counts (spec 6.5)
     bool is_c_call;             // #c_call: called the way C calls, so C can call it (spec 7.6); a
                                 // foreign procedure is C's, and isn't marked
     Position c_call_pos;        // where that #c_call is written
+    bool is_compiler;           // #compiler: no body; the compiler does it, while compiling (spec 7.9)
+    Position compiler_pos;      // where that #compiler is written
     bool is_broken;             // the parser gave up on it
     String foreign_library;     // #foreign's library name
     Position library_pos;       // where that name is written
@@ -545,6 +547,8 @@ Token_Kind compound_operator(Token_Kind op);
 //                                            c_free :: (p: *void) #foreign libc "free";
 //   (proc cmp (params (a (ptr void))) (returns s32) (c_call) (block ...))
 //                                            cmp :: (a: *void) -> s32 #c_call { ... }
+//   (proc make (params (name string)) (returns Workspace) (compiler))
+//                                            make :: (name: string) -> Workspace #compiler;
 //   (proc-type (params int int) (returns int))   (int, int) -> int
 //   (proc-type (params (ptr void)) (returns s32) (c_call))   (p: *void) -> s32 #c_call
 //   (proc-type (params))   ()

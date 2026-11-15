@@ -82,6 +82,24 @@ String module_lookup(Arena *a, const Module_Places *places, String name) {
     return {};
 }
 
+// Whether the file at `absolute_path` (path_absolute's: absolute, with the
+// host's separators) is inside one of the places, at any depth: a file of a
+// module that ships with rig (Source_File.in_module), whichever #import or
+// #load reached it. The text alone answers, as for the places themselves,
+// its case folded on Windows (os_fold_case), where a name's case doesn't
+// matter: C:\RIG\modules\Compiler\module.rig is inside C:\rig\modules.
+static bool in_a_place(Arena *a, const Module_Places *places, String absolute_path) {
+    String path = os_fold_case(a, absolute_path);
+    for (s64 i = 0; i < 2; i++) {
+        String place = os_fold_case(a, places->places[i]);
+        if (path.count > place.count && memcmp(path.data, place.data, (size_t)place.count) == 0 &&
+            path.data[place.count] == MODULE_SEPARATOR) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Whether `name` is a module's name: ASCII letters, digits and '_', a
 // letter first. Such a name is a single directory's, never a path (no
 // separator, no "..", nothing absolute), and holds no zero byte.
@@ -142,9 +160,14 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const
     Arena loading = arena_make();
     String directory = os_current_directory(&loading);
     Seen_Files seen = {};
-    // rig's own places are found only when the program first imports.
+    // The places #import looks in, which also say which files are a
+    // module's (in_a_place): the main file's too.
     Module_Places own_places = {};
     const Module_Places *places = options->modules;
+    if (!places) {
+        own_places = module_places(&loading);
+        places = &own_places;
+    }
 
     // The file given with its text (rig check --stdin-for), known by its
     // key as any file is, so it's found however the program names it. It's
@@ -166,6 +189,7 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const
     }
     s32 main_file = diag_add_file(d, path, text);
     diag_locate_file(d, main_file, directory, HOST_IS_WINDOWS);
+    d->files[main_file].in_module = in_a_place(&loading, places, d->files[main_file].absolute_path);
 
     // d->files is the queue: each file is lexed and parsed in turn, and the
     // files its #loads name that weren't loaded yet are added at its end.
@@ -194,10 +218,6 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const
                                STR_ARG(shown_name(&loading, load->path)));
                     tree->lost_a_file = true;
                     continue;
-                }
-                if (!places) {
-                    own_places = module_places(&loading);
-                    places = &own_places;
                 }
                 loaded = module_lookup(&loading, places, load->path);
                 if (!loaded.count) {
@@ -246,6 +266,7 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const
             }
             s32 added = diag_add_file(d, loaded, loaded_text);
             diag_locate_file(d, added, directory, HOST_IS_WINDOWS);
+            d->files[added].in_module = in_a_place(&loading, places, d->files[added].absolute_path);
         }
     }
     table_free(&seen.ids);

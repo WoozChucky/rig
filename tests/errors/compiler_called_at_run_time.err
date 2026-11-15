@@ -1,0 +1,3 @@
+tests/errors/compiler_called_at_run_time.rig:6:19: error: 'create_workspace' can only be called while compiling
+    main :: () { w := create_workspace("game"); }
+                      ^

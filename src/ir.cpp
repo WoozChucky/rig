@@ -457,7 +457,10 @@ static String print_module(Arena *a, Ir_Module *m, bool debug) {
     }
     for (s64 i = 0; i < m->procs.count; i++) {
         Ir_Proc *proc = m->procs[i];
-        const char *kind = proc->is_foreign ? "foreign proc" : proc->is_export ? "export proc" : "proc";
+        const char *kind = proc->is_foreign    ? "foreign proc"
+                           : proc->is_compiler ? "compiler proc"
+                           : proc->is_export   ? "export proc"
+                                               : "proc";
         out(&p, "%s @" STR_FMT "(", kind, STR_ARG(proc->name));
         for (s64 k = 0; k < proc->params.count; k++) {
             if (k) out(&p, ", ");
@@ -471,7 +474,7 @@ static String print_module(Arena *a, Ir_Module *m, bool debug) {
             out(&p, k ? ", " : " -> ");
             out_param(&p, proc->results[k]);
         }
-        if (proc->is_foreign) {
+        if (proc->is_foreign || proc->is_compiler) {
             if (proc->c_name.count) {
                 out(&p, " \"");
                 out_bytes(&p, proc->c_name);

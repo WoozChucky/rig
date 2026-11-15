@@ -108,7 +108,17 @@ static void interpret_mode(void *data) {
         mode->status = 1;
         return;
     }
+    // Lowering's own errors, a #compiler call the program would make (spec
+    // 7.9), are printed as read_and_check prints them, and nothing runs.
     Ir_Module *m = ir_lower(tree, &d, &a, bounds_checks);
+    if (d.error_count) {
+        diag_sort(&d);
+        diag_print(&d);
+        diag_free(&d);
+        arena_free(&a);
+        mode->status = 1;
+        return;
+    }
     Array<String> paths = {};
     for (s64 i = 0; i < d.files.count; i++) array_add(&paths, string_copy(&a, d.files[i].path));
     diag_free(&d);

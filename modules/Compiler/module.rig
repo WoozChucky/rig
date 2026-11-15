@@ -1,0 +1,64 @@
+// Compiler: what a build program uses to build other programs (spec 7.9).
+// A build program is an ordinary Rig program that imports this module and
+// declares no procedure called main, written in place of a build script:
+// rig build runs its top-level #runs, which make workspaces, and then
+// builds each workspace, in the order they were made, as a program of its
+// own, with its own globals and its own #runs. A build program is never an
+// executable itself. By default it is build.rig, which rig build with no
+// file runs:
+//
+//     #import "Compiler";
+//
+//     build :: () {
+//         w := create_workspace("game");
+//         o := get_build_options(w);
+//         o.output_name = "game";
+//         o.optimize    = true;
+//         set_build_options(w, o);
+//         add_build_file(w, "src/main.rig");
+//     }
+//
+//     #run build();
+//
+// Compiler ships with rig, so a program imports it by the module's name
+// (spec 2.14), and its names join the program's one top level, as Basic's
+// do. Its procedures are #compiler procedures: they have no body, since the
+// compiler does them itself, while compiling. So a build program calls them
+// from code its #runs reach. A call that a program's executable would make
+// is an error ("'create_workspace' can only be called while compiling"),
+// and none of them can be a value. A program with main that creates a
+// workspace fails there, as a runtime error does: a program builds others,
+// or is built, never both.
+//
+// The paths a build program gives, its files and its output's name, are
+// relative to the build program's own directory, as the .build directory
+// it builds in is, not to the directory rig runs in.
+
+// A workspace: one program to build. Its id is the compiler's; a zeroed
+// Workspace names none.
+Workspace :: struct { id: s64; }
+
+// How a workspace's program is built: create_workspace's defaults until the
+// build program sets others (get_build_options, set_build_options).
+Build_Options :: struct {
+    output_name: string;   // the executable's name; "" means the first file's name without .rig, as rig build does
+    optimize: bool;        // false: unoptimised, as today; true: LLVM's -O2 pipeline
+    bounds_checks: bool;   // true by default
+}
+
+// A new workspace named `name`, with no files and the default options. Two
+// workspaces can't share a name.
+create_workspace  :: (name: string) -> Workspace #compiler;
+
+// The options workspace w's program will be built with.
+get_build_options :: (w: Workspace) -> Build_Options #compiler;
+
+// Builds workspace w's program with `options`. The output's name can't end
+// in .rig, since that names a source file.
+set_build_options :: (w: Workspace, options: Build_Options) #compiler;
+
+// Adds the .rig file at `path` to workspace w's program, which must exist
+// when it's added. The first file added is the program's main file, and the
+// others are loaded right after it, in the order they were added, before
+// the files it #loads.
+add_build_file    :: (w: Workspace, path: string) #compiler;
