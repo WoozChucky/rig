@@ -1478,7 +1478,8 @@ TEST(the_compiler_module_makes_a_build_program) {
     // The places hold a Compiler module, a comment alone, and a Basic one.
     // The Compiler module's file is found by its identity, however it's
     // reached: imported, imported by a file the main file loads (at that
-    // #import, in file 1), or loaded by its path. A main, even a broken
+    // #import, in file 1), or loaded by its path; named again, it's still
+    // at the #import or #load that named it first. A main, even a broken
     // one, makes the program an ordinary one; a global called main is no
     // procedure, and doesn't. A program that never reaches the module is
     // never a build program.
@@ -1495,6 +1496,8 @@ TEST(the_compiler_module_makes_a_build_program) {
         {"#import \"Compiler\";\nmain :: () {\n", true, {0, 1, 1}, false},
         {"#load \"helper.rig\";\n", true, {1, 1, 1}, true},
         {"#load \"first/Compiler/module.rig\";\n", true, {0, 1, 1}, true},
+        {"#import \"Compiler\";\n#load \"first/Compiler/module.rig\";\n#import \"Compiler\";\n", true, {0, 1, 1},
+         true},
         {"#import \"Basic\";\n", false, {}, false},
     };
     for (const Build_Program_Case &c : cases) {

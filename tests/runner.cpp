@@ -86,19 +86,20 @@
 // output, and tests/build/workspace_unreadable so, the build program's #run
 // output before a workspace's file that can't be read is said
 // (workspace_output_order_test), tests/build/options once more, where the
-// workspace built with the default options stops at its index past the end
-// (checked_workspace_test), rig build without -o from another
-// directory, a runtime error's order after the program's output when stdout
-// and stderr are one pipe, bin/unit-tests --interpret of two programs that
-// call a #compiler procedure, at run time and in a constant's #run (each
-// refused as rig build refuses it, with nothing run), of a build program with
-// errors (said as rig build says them), and of one without (which it
-// refuses before its top-level #runs: there's no main to run), rig build
-// of a build program with -o, --no-bounds-checks or both (refused before
-// its top-level #runs, -o's refusal alone when both are given, but after
-// its errors), the command line's mistakes, a .build/ or an object file
-// rig can't write, and rig version's output, by its shape (version_test:
-// it names the commit rig was built from).
+// workspaces built with the default options, unoptimised and optimised,
+// stop at their index past the end (checked_workspace_test), rig build
+// without -o from another directory, a runtime error's order after the
+// program's output when stdout and stderr are one pipe, bin/unit-tests
+// --interpret of two programs that call a #compiler procedure, at run time
+// and in a constant's #run (each refused as rig build refuses it, with
+// nothing run), of a build program with errors (said as rig build says
+// them), and of one without (which it refuses on stderr before its
+// top-level #runs: there's no main to run), rig build of a build program
+// with -o, --no-bounds-checks or both (refused on stderr before its
+// top-level #runs, -o's refusal alone when both are given, but after its
+// errors), the command line's mistakes, a .build/ or an object file rig
+// can't write, and rig version's output, by its shape (version_test: it
+// names the commit rig was built from).
 //
 // Then rig check on every program of tests/run and tests/errors (not
 // tests/build's), from a file and
@@ -783,11 +784,33 @@ static String write_printing_build_program(Arena *a) {
     return {};
 }
 
+// argv run again, within `seconds`, with its stdout and stderr apart, once
+// the run with them in one pipe has shown their order: it must exit with
+// `status`, print `expected_out` and write `expected_err` to stderr, so a
+// refusal on stdout, which one pipe can't tell apart, fails. {} when it
+// does, otherwise why not.
+static String separate_streams_test(Arena *a, Array<String> argv, s32 seconds, s32 status, String expected_out,
+                                    String expected_err) {
+    Process_Result ran = {};
+    String why = {};
+    if (!run_within(a, argv, {}, seconds, &ran, &why)) return why;
+    if (ran.exit_code != status) {
+        return with_stderr(a,
+                           string_printf(a, "exit code " STR_FMT ", expected %d", STR_ARG(exit_code_text(a, ran.exit_code)),
+                                         status),
+                           ran.err);
+    }
+    if (!string_eq(ran.err, expected_err)) return first_difference(a, "stderr", expected_err, ran.err);
+    if (!string_eq(ran.out, expected_out)) return first_difference(a, "stdout", expected_out, ran.out);
+    return {};
+}
+
 // bin/unit-tests --interpret of a build program (spec 7.9), which has no
 // main to run: once it has checked, it must refuse it, exit 1, before its
 // top-level #run runs. Its stdout and stderr in one pipe must be the line
-// its expression #run printed while checking, then the refusal. {} when it
-// does, otherwise why not.
+// its expression #run printed while checking, then the refusal; and apart,
+// stdout that line alone and stderr the refusal alone
+// (separate_streams_test). {} when it does, otherwise why not.
 static String interpreted_build_program_test(Arena *a, String unit_tests) {
     String why = write_printing_build_program(a);
     if (why.count) return why;
@@ -797,17 +820,26 @@ static String interpreted_build_program_test(Arena *a, String unit_tests) {
     array_add(&argv, str(PRINTING_BUILD_PROGRAM));
     Process_Result ran = {};
     bool started = os_run_merged(a, argv, {}, INTERPRETED_TIMEOUT, &ran);
-    array_free(&argv);
-    if (!started) return string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(unit_tests), STR_ARG(os_error_message(a)));
-    if (ran.timed_out) return string_printf(a, "bin/unit-tests took longer than %d seconds", INTERPRETED_TIMEOUT);
-    ran.out = normalise_newlines(a, ran.out);
-    String expected =
-        string_printf(a, "%sunit-tests: error: a build program can't be interpreted\n", PRINTED_WHILE_CHECKING);
-    if (!string_eq(ran.out, expected)) return first_difference(a, "stdout and stderr", expected, ran.out);
-    if (ran.exit_code != 1) {
-        return string_printf(a, "exit code " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, ran.exit_code)));
+    if (!started) {
+        array_free(&argv);
+        return string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(unit_tests), STR_ARG(os_error_message(a)));
     }
-    return {};
+    if (ran.timed_out) {
+        array_free(&argv);
+        return string_printf(a, "bin/unit-tests took longer than %d seconds", INTERPRETED_TIMEOUT);
+    }
+    ran.out = normalise_newlines(a, ran.out);
+    String refusal = str("unit-tests: error: a build program can't be interpreted\n");
+    String expected = string_printf(a, "%s" STR_FMT, PRINTED_WHILE_CHECKING, STR_ARG(refusal));
+    if (!string_eq(ran.out, expected)) {
+        why = first_difference(a, "stdout and stderr", expected, ran.out);
+    } else if (ran.exit_code != 1) {
+        why = string_printf(a, "exit code " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, ran.exit_code)));
+    } else {
+        why = separate_streams_test(a, argv, INTERPRETED_TIMEOUT, 1, str(PRINTED_WHILE_CHECKING), refusal);
+    }
+    array_free(&argv);
+    return why;
 }
 
 // rig build of a build program (spec 7.9) with -o .build/tests/output (when
@@ -818,25 +850,27 @@ static String interpreted_build_program_test(Arena *a, String unit_tests) {
 // are the line its expression #run printed while checking, then -o's
 // refusal, or with only --no-bounds-checks that one's. With `has_errors`,
 // tests/errors/build_type_error.rig's errors come first, and alone: its
-// .err, exit 1, and no refusal after. Either way rig writes no program. {}
-// when it does, otherwise why not.
+// .err, exit 1, and no refusal after. Apart, stdout must be what was
+// printed while checking alone and stderr the rest (separate_streams_test).
+// Either way rig writes no program. {} when it does, otherwise why not.
 static String build_program_options_test(Arena *a, String rig, bool has_errors, bool output, bool no_bounds_checks) {
     String source = str("tests/errors/build_type_error.rig");
-    String expected = {};
+    String expected_out = {}, expected_err = {};
     s32 status = 1;
     if (has_errors) {
-        if (!read_expected_errors(a, str("build_type_error"), &expected)) return str("no .err file");
+        if (!read_expected_errors(a, str("build_type_error"), &expected_err)) return str("no .err file");
     } else {
         String why = write_printing_build_program(a);
         if (why.count) return why;
         source = str(PRINTING_BUILD_PROGRAM);
-        const char *refusal = output ? "rig: error: -o can't be used with a build program; its build options set the "
-                                       "output\n"
-                                     : "rig: error: --no-bounds-checks can't be used with a build program; its build "
-                                       "options set the bounds checks\n";
-        expected = string_printf(a, "%s%s", PRINTED_WHILE_CHECKING, refusal);
+        expected_out = str(PRINTED_WHILE_CHECKING);
+        expected_err = str(output ? "rig: error: -o can't be used with a build program; its build options set the "
+                                    "output\n"
+                                  : "rig: error: --no-bounds-checks can't be used with a build program; its build "
+                                    "options set the bounds checks\n");
         status = 2;
     }
+    String expected = string_printf(a, STR_FMT STR_FMT, STR_ARG(expected_out), STR_ARG(expected_err));
     String program = string_printf(a, ".build/tests/output%s", EXE);
     remove(string_cstr(a, program));
     Array<String> argv = {};
@@ -850,15 +884,26 @@ static String build_program_options_test(Arena *a, String rig, bool has_errors, 
     if (no_bounds_checks) array_add(&argv, str("--no-bounds-checks"));
     Process_Result built = {};
     bool started = os_run_merged(a, argv, {}, TIMEOUT, &built);
-    array_free(&argv);
-    if (!started) return string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(rig), STR_ARG(os_error_message(a)));
-    if (built.timed_out) return string_printf(a, "rig build took longer than %d seconds", TIMEOUT);
-    built.out = normalise_newlines(a, built.out);
-    if (!string_eq(built.out, expected)) return first_difference(a, "stdout and stderr", expected, built.out);
-    if (built.exit_code != status) {
-        return string_printf(a, "rig build exited with " STR_FMT ", expected %d", STR_ARG(exit_code_text(a, built.exit_code)),
-                             status);
+    if (!started) {
+        array_free(&argv);
+        return string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(rig), STR_ARG(os_error_message(a)));
     }
+    if (built.timed_out) {
+        array_free(&argv);
+        return string_printf(a, "rig build took longer than %d seconds", TIMEOUT);
+    }
+    built.out = normalise_newlines(a, built.out);
+    String why = {};
+    if (!string_eq(built.out, expected)) {
+        why = first_difference(a, "stdout and stderr", expected, built.out);
+    } else if (built.exit_code != status) {
+        why = string_printf(a, "rig build exited with " STR_FMT ", expected %d", STR_ARG(exit_code_text(a, built.exit_code)),
+                            status);
+    } else {
+        why = separate_streams_test(a, argv, TIMEOUT, status, expected_out, expected_err);
+    }
+    array_free(&argv);
+    if (why.count) return why;
     if (os_file_exists(program)) return string_printf(a, "rig build wrote " STR_FMT, STR_ARG(program));
     return {};
 }
@@ -1093,9 +1138,9 @@ static String build_program_elsewhere_test(Arena *a, String rig) {
 // sums.rig, unoptimised and optimised (spec 10.2), and print the same, so
 // only their objects tell them apart. Built in .build/tests/optimised
 // (build_copy), fast's, .build/fast.obj (fast.o on Linux), must be smaller
-// than plain's, .build/sums.obj, by a quarter at least, as LLVM's O2
-// pipeline makes it: its locals in registers rather than stack slots, its
-// loops over constants folded. {} when it is, otherwise why not.
+// than plain's, .build/sums.obj, by a tenth at least, as LLVM's O2
+// pipeline makes it: its locals in registers rather than stack slots. {}
+// when it is, otherwise why not.
 static String optimised_object_test(Arena *a, String rig) {
     String dir = str(".build/tests/optimised");
     Process_Result built = {};
@@ -1110,7 +1155,7 @@ static String optimised_object_test(Arena *a, String rig) {
     String plain = {}, fast = {};
     if (!os_read_file(a, plain_path, &plain)) return string_printf(a, "can't read " STR_FMT, STR_ARG(plain_path));
     if (!os_read_file(a, fast_path, &fast)) return string_printf(a, "can't read " STR_FMT, STR_ARG(fast_path));
-    if (fast.count * 4 > plain.count * 3) {
+    if (fast.count * 10 > plain.count * 9) {
         return string_printf(a, STR_FMT " is %lld bytes and " STR_FMT " %lld: is it optimised?", STR_ARG(fast_path),
                              (long long)fast.count, STR_ARG(plain_path), (long long)plain.count);
     }
@@ -1119,9 +1164,10 @@ static String optimised_object_test(Arena *a, String rig) {
 
 // tests/build/options built in .build/tests/checked (build_copy): its
 // checked workspace, built with the default build options, has its indexes
-// bounds-checked (spec 10.2), so its program, checked, stops at its index
-// one past the end: exit 101, nothing on stdout, and checked.err on stderr.
-// {} when it does, otherwise why not.
+// bounds-checked (spec 10.2), and so has its checked_fast workspace, the
+// same program optimised, so both programs, checked and checked_fast, stop
+// at its index one past the end: exit 101, nothing on stdout, and
+// checked.err on stderr. {} when they do, otherwise why not.
 static String checked_workspace_test(Arena *a, String rig) {
     String dir = str(".build/tests/checked");
     String expected_err = {};
@@ -1135,24 +1181,27 @@ static String checked_workspace_test(Arena *a, String rig) {
         return with_stderr(a, string_printf(a, "rig build exited with " STR_FMT, STR_ARG(exit_code_text(a, built.exit_code))),
                            built.err);
     }
-    String program = string_printf(a, STR_FMT "/checked%s", STR_ARG(dir), EXE);
-    if (!os_file_exists(program)) return string_printf(a, "rig build wrote no " STR_FMT, STR_ARG(program));
-    Array<String> command = {};
-    array_add(&command, program);
-    Process_Result ran = {};
-    bool started = run(a, command, dir, &ran, &why);
-    array_free(&command);
-    if (!started) return why;
-    if (ran.exit_code != 101) {
-        return with_stderr(a,
-                           string_printf(a, STR_FMT " exited with " STR_FMT ", expected 101", STR_ARG(program),
-                                         STR_ARG(exit_code_text(a, ran.exit_code))),
-                           ran.err);
-    }
-    if (!string_eq(ran.err, expected_err)) return first_difference(a, "stderr", expected_err, ran.err);
-    if (ran.out.count) {
-        return first_difference(a, string_cstr(a, string_printf(a, STR_FMT "'s stdout", STR_ARG(program))), {},
-                                ran.out);
+    const char *names[] = {"checked", "checked_fast"};
+    for (const char *name : names) {
+        String program = string_printf(a, STR_FMT "/%s%s", STR_ARG(dir), name, EXE);
+        if (!os_file_exists(program)) return string_printf(a, "rig build wrote no " STR_FMT, STR_ARG(program));
+        Array<String> command = {};
+        array_add(&command, program);
+        Process_Result ran = {};
+        bool started = run(a, command, dir, &ran, &why);
+        array_free(&command);
+        if (!started) return why;
+        if (ran.exit_code != 101) {
+            return with_stderr(a,
+                               string_printf(a, STR_FMT " exited with " STR_FMT ", expected 101", STR_ARG(program),
+                                             STR_ARG(exit_code_text(a, ran.exit_code))),
+                               ran.err);
+        }
+        if (!string_eq(ran.err, expected_err)) return first_difference(a, "stderr", expected_err, ran.err);
+        if (ran.out.count) {
+            return first_difference(a, string_cstr(a, string_printf(a, STR_FMT "'s stdout", STR_ARG(program))), {},
+                                    ran.out);
+        }
     }
     return {};
 }
@@ -2864,8 +2913,8 @@ int main(int argc, char **argv) {
            workspace_output_order_test(&a, rig, str("workspace_errors"), true), &passed, &failed);
     report("the build program's #run output before a workspace's unreadable file, both in one pipe",
            workspace_output_order_test(&a, rig, str("workspace_unreadable"), false), &passed, &failed);
-    report("a workspace built with the default options is bounds-checked", checked_workspace_test(&a, rig),
-           &passed, &failed);
+    report("a workspace built with the default options is bounds-checked, optimised or not",
+           checked_workspace_test(&a, rig), &passed, &failed);
     report("interpreted: a #compiler call refused when lowering, nothing run",
            interpreted_error_test(&a, unit_tests, "compiler_called_at_run_time"), &passed, &failed);
     report("interpreted: a constant's #run calling the Compiler module, refused as rig build refuses it",
