@@ -122,7 +122,7 @@ It prints `Hello, World!`.
 
 ### Building with build.rig
 
-A program can also be built by a build program, `build.rig`: Rig code that `rig build` runs while compiling, in place of a build script. Save this as `build.rig` beside `hello.rig`:
+With a compiler built from this repository (below), or a release from 0.3.0 on, a program can also be built by a build program, `build.rig`: Rig code that `rig build` runs while compiling, in place of a build script. Save this as `build.rig` beside `hello.rig`:
 
 ```rig
 #import "Compiler";

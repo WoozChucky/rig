@@ -1774,7 +1774,7 @@ The strings these procedures are given are copied as they are given, so the prog
 
 **What `rig build` does** with a build program, in order:
 
-1. It checks it as any program: one with errors has them reported, exits with status 1, and runs nothing.
+1. It checks it as any program: one with errors has them reported, exits with status 1, and runs none of its top-level `#run`s (its expression `#run`s ran while it was checked, section 7.8).
 2. It refuses `-o` and `--no-bounds-checks`, whose work the build options do (section 10.1): status 2, before any top-level `#run` runs.
 3. It runs its top-level `#run`s, which make the workspaces. What they print is `rig build`'s output. One that fails stops the build there: its error is reported once they have all run, no workspace is built, and rig exits with status 1.
 4. A build program whose `#run`s made no workspace has nothing to build: `the build program created no workspace`, at its `#import "Compiler"`, or at the `#load` that reached the module, or at the start of the file that is the module's `module.rig` itself. rig exits with status 1.
@@ -2029,6 +2029,9 @@ The sections defining each construct give its messages. Some of those met most o
 | `#run failed: runtime error: an output name can't contain a zero byte` | 7.9 |
 | `#run failed: runtime error: 'src/x.txt' isn't a .rig file` | 7.9 |
 | `#run failed: runtime error: there's no file 'src/x.rig'` | 7.9 |
+| `#run failed: runtime error: 'create_workspace' was given a string with a negative count` | 7.9 |
+| `#run failed: runtime error: the compiler has no procedure 'NAME'` | 10.8 |
+| `#run failed: runtime error: 'NAME' isn't declared as the compiler implements it` | 10.8 |
 | `the build program created no workspace` | 7.9 |
 | `workspace 'game' has no files` | 7.9 |
 | `workspace 'game' is a build program; a workspace builds an ordinary program` | 7.9 |
@@ -2117,7 +2120,7 @@ The compiler is a single program written in C++, with LLVM linked into it. It co
 
 A build program (section 7.9) goes through stages 1 to 4, and its top-level `#run`s run, but it isn't lowered into a program of its own: each of its workspaces goes through every stage instead, as a program of its own.
 
-No integer instruction carries LLVM's `nsw`, `nuw` or `exact` flags, and no float instruction carries fast-math flags: Rig's integers wrap and its floats are IEEE 754's. No pointer arithmetic is marked `inbounds`, copies are `memmove`s (the two sides may overlap), and no pointer is assumed non-null. So an optimised program does what an unoptimised one does: the optimiser takes none of these for undefined. Optimised, every procedure is also marked as knowing none of the C library's functions, as clang's `-fno-builtin` marks a function: a program's own procedure may have a C function's name (section 7.6), and LLVM would otherwise take it for C's, and C's for it. And optimised, every stack slot is zeroed before the procedure's body runs, so a `---` local read before it is assigned is still an unspecified value (section 8.6), zero, and not a read of memory nothing stored, which the optimiser would take as undefined and could remove the code after.
+No integer instruction carries LLVM's `nsw`, `nuw` or `exact` flags, and no float instruction carries fast-math flags: Rig's integers wrap and its floats are IEEE 754's. No pointer arithmetic is marked `inbounds`, copies are `memmove`s (the two sides may overlap), and no pointer is assumed non-null. So an optimised program does what an unoptimised one does: the optimiser takes none of these for undefined. Optimised, every procedure is also marked as knowing none of the C library's functions, as clang's `-fno-builtin` marks a function: a program's own procedure may have a C function's name (section 7.6), and LLVM would otherwise take it for C's, and C's for it. And optimised, every stack slot is zeroed before the procedure's body runs, so a `---` local read before it is assigned is still an unspecified value (section 8.6): zero the first time, and in a loop the value the slot held in the iteration before, as unoptimised, and never a read of memory nothing stored, which the optimiser would take as undefined and could remove the code after.
 
 After lowering, beside the LLVM and linker stages, a stage can run the IR rather than compile it: the **interpreter** (`src/interp.cpp`, calling C through `src/thunk.cpp`) runs lowered procedures inside the compiler, for code run while compiling (section 10.8). It runs the compile-time module, not the program's: the checker's `#run`s while it checks, and in `rig build` the top-level `#run`s once it has checked, before the program itself is lowered (section 7.8). The interpreter optimises nothing away: every instruction of the IR runs, even one whose result is never used.
 
