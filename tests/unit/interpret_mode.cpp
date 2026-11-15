@@ -78,8 +78,9 @@ static void interpret_mode(void *data) {
     // A copy of rig build's read_and_check (driver.cpp), which must follow
     // its changes: the loader reads, lexes and parses FILE and every file
     // it #loads into the one tree (load_program); the checker runs the
-    // expression #runs in a compile-time world of their own, and once the
-    // program checks with no errors, its top-level #runs run there too,
+    // expression #runs in a compile-time world of their own, whose
+    // #compiler calls a Build_State answers (compiler_module_call), and once
+    // the program checks with no errors, its top-level #runs run there too,
     // printing what rig build prints (the runner holds it to
     // NAME.build.out, before NAME.out); the diagnostics are printed after
     // them, or as a run's exit() ends the process (diag_print_at_exit). The
@@ -94,6 +95,9 @@ static void interpret_mode(void *data) {
     Ast_File *tree = load_program(&a, &d, path, text);
     diag_print_at_exit(&d);
     Compile_Time *world = compile_time_new(&d);
+    Build_State build = {};
+    build.program_path = path;
+    compile_time_set_compiler(world, compiler_module_call, &build);
     check(tree, &a, &d, world);
     if (d.error_count == 0) compile_time_run_top_level(world, tree);
     if (d.error_count) {
@@ -102,6 +106,7 @@ static void interpret_mode(void *data) {
     }
     diag_print_at_exit(nullptr);
     compile_time_free(world);
+    build_state_free(&build);
     if (d.error_count) {
         diag_free(&d);
         arena_free(&a);

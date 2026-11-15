@@ -2,10 +2,12 @@
 // expression #run runs when the checker first needs its value, in the one
 // compile-time world of the compilation, and its result is baked into the
 // tree as a constant (#113's constant data); the top-level #runs run later,
-// in the same world, once the program has checked. Uses test_checker.cpp's
-// helpers (check_src, global_named, local_named, value_of, sorted_messages,
-// joined) and helpers.cpp's (src, messages, check_source, lower_source,
-// contains, index_of, token_list_free).
+// in the same world, once the program has checked; and, last, a #compiler
+// procedure's call in a world with no compiler to do it (issue #116). Uses
+// test_checker.cpp's helpers (check_src, global_named, local_named,
+// value_of, sorted_messages, joined, check_module_source) and helpers.cpp's
+// (src, messages, check_source, lower_source, contains, index_of,
+// token_list_free).
 
 #include "test.h"
 
@@ -828,5 +830,21 @@ TEST(top_level_runs_share_the_world_and_fail_alone) {
               "4:1: #run failed: runtime error: index 5 is out of bounds (count 1)\n"
               "    in #run (test.rig:4:26)\n");
     CHECK_STR(check_source(&a, program), "");
+    arena_free(&a);
+}
+
+TEST(compiler_procedures_without_a_compiler_fail) {
+    // A #compiler procedure (spec 7.9) is done by the compiler's C++, which
+    // a world reaches through the hook its compilation installs
+    // (compile_time_set_compiler). The world check() makes of its own has
+    // none, so it can't call one: the #run fails, as a runtime error, at the
+    // call's name. The file is taken for a module's (test_checker.cpp's
+    // check_module_source), which may declare one.
+    Arena a = arena_make();
+    CHECK_STR(check_module_source(&a, "twice :: (n: int) -> int #compiler;\n"
+                                      "N :: #run twice(1);\n"
+                                      "main :: () {}\n"),
+              "2:6: #run failed: runtime error: 'twice' can only be called while compiling\n"
+              "    in #run (test.rig:2:11)\n");
     arena_free(&a);
 }
