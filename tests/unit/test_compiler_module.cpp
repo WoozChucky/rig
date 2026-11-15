@@ -76,11 +76,11 @@ static void write_build_file(Arena *a, String dir, const char *subdirectory, con
 }
 
 TEST(compiler_procedures_make_workspaces) {
-    // Two workspaces, in the order made: the first with its options set and
-    // two files, each the path as given resolved against the build
+    // Three workspaces, in the order made: the first with its options set
+    // and two files, each the path as given resolved against the build
     // program's directory, in the order added; the second as
-    // create_workspace leaves it. Each keeps where the call that made it
-    // is: the callee's name.
+    // create_workspace leaves it; the third named "", a name as any other.
+    // Each keeps where the call that made it is: the callee's name.
     Arena a = arena_make();
     String dir = compiler_test_directory(&a, "compiler_procedures_make_workspaces");
     write_build_file(&a, dir, "src", "src/main.rig", "main :: () {}\n");
@@ -99,12 +99,13 @@ TEST(compiler_procedures_make_workspaces) {
                                 "    add_build_file(w, \"src/main.rig\");\n"
                                 "    add_build_file(w, \"src/more.rig\");\n"
                                 "    create_workspace(\"tools\");\n"
+                                "    create_workspace(\"\");\n"
                                 "}\n"
                                 "main :: () {}\n",
                                 &state),
               "");
-    CHECK_EQ(state.workspaces.count, 2);
-    if (state.workspaces.count == 2) {
+    CHECK_EQ(state.workspaces.count, 3);
+    if (state.workspaces.count == 3) {
         Build_Workspace *game = &state.workspaces[0];
         CHECK_STR(game->name, "game");
         CHECK_EQ(game->made_at.line, 3);
@@ -125,6 +126,10 @@ TEST(compiler_procedures_make_workspaces) {
         CHECK_STR(tools->output_name, "");
         CHECK(!tools->optimize);
         CHECK(tools->bounds_checks);
+        Build_Workspace *unnamed = &state.workspaces[2];
+        CHECK_STR(unnamed->name, "");
+        CHECK_EQ(unnamed->made_at.line, 12);
+        CHECK_EQ(unnamed->made_at.col, 5);
     }
     build_state_free(&state);
     arena_free(&a);
@@ -232,6 +237,19 @@ TEST(compiler_procedures_fail_like_runtime_errors) {
                                 "main :: () {}\n"),
               "2:1: #run failed: runtime error: there's no workspace with id 0\n"
               "    in #run (PATH:2:70)\n");
+    // Once a workspace is made, the id one past it and a negative id are
+    // still no workspace's.
+    CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
+                                "#run { w := create_workspace(\"game\"); v := w; v.id = 2; "
+                                "add_build_file(v, \"x.rig\"); }\n"
+                                "main :: () {}\n"),
+              "2:1: #run failed: runtime error: there's no workspace with id 2\n"
+              "    in #run (PATH:2:57)\n");
+    CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
+                                "#run { w := create_workspace(\"game\"); v := w; v.id = -1; get_build_options(v); }\n"
+                                "main :: () {}\n"),
+              "2:1: #run failed: runtime error: there's no workspace with id -1\n"
+              "    in #run (PATH:2:58)\n");
     // Two workspaces of one name.
     CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
                                 "#run {\n"
@@ -240,6 +258,15 @@ TEST(compiler_procedures_fail_like_runtime_errors) {
                                 "}\n"
                                 "main :: () {}\n"),
               "2:1: #run failed: runtime error: there's already a workspace 'game'\n"
+              "    in #run (PATH:4:5)\n");
+    // A name holding a zero byte is said whole, the zero written \0.
+    CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
+                                "#run {\n"
+                                "    create_workspace(\"a\\0b\");\n"
+                                "    create_workspace(\"a\\0b\");\n"
+                                "}\n"
+                                "main :: () {}\n"),
+              "2:1: #run failed: runtime error: there's already a workspace 'a\\0b'\n"
               "    in #run (PATH:4:5)\n");
     // A file that isn't there, named as given.
     CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
@@ -258,6 +285,15 @@ TEST(compiler_procedures_fail_like_runtime_errors) {
                                 "}\n"
                                 "main :: () {}\n"),
               "2:1: #run failed: runtime error: 'notes.txt' isn't a .rig file\n"
+              "    in #run (PATH:4:5)\n");
+    // Such a path holding a zero byte is said whole too.
+    CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
+                                "#run {\n"
+                                "    w := create_workspace(\"game\");\n"
+                                "    add_build_file(w, \"a\\0.txt\");\n"
+                                "}\n"
+                                "main :: () {}\n"),
+              "2:1: #run failed: runtime error: 'a\\0.txt' isn't a .rig file\n"
               "    in #run (PATH:4:5)\n");
     // An output named as a source file is.
     CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"

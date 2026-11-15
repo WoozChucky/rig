@@ -1,11 +1,13 @@
 // A workspace (spec 7.9) is a program to build, so it needs a file: each
 // one the build program made and gave none is an error at the
 // create_workspace call that made it, the callee's name, and the errors
-// are said together. rig check never runs a top-level #run, so it has
-// nothing to say.
+// are said together. A name holding a zero byte is said whole, the zero
+// written \0. rig check never runs a top-level #run, so it has nothing to
+// say.
 #import "Compiler";
 
 #run {
     create_workspace("game");
     create_workspace("tools");
+    create_workspace("a\0b");
 }

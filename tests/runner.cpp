@@ -763,14 +763,19 @@ static String interpreted_error_test(Arena *a, String unit_tests, const char *pr
 }
 
 // A build program (spec 7.9) whose top-level #run prints a line, which a
-// refusal must come before, so a run that ran shows on stdout. It's
-// written here, in .build/tests, as a tests/errors program mustn't print.
+// refusal must come before, so a run that ran shows on stdout. Its
+// expression #run prints a line too, PRINTED_WHILE_CHECKING, as the checker
+// runs it, before any refusal, so that line must come before the refusal's
+// message. It's written here, in .build/tests, as a tests/errors program
+// mustn't print.
 static const char *PRINTING_BUILD_PROGRAM = ".build/tests/printing_build_program.rig";
+static const char *PRINTED_WHILE_CHECKING = "checked\n";
 
 // Writes PRINTING_BUILD_PROGRAM: {} when it's written, otherwise why not.
 static String write_printing_build_program(Arena *a) {
     String text = str("#import \"Compiler\";\n"
                       "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                      "N :: #run puts(\"checked\");\n"
                       "#run { puts(\"a top-level #run ran\"); }\n");
     if (!os_write_file(str(PRINTING_BUILD_PROGRAM), text)) {
         return string_printf(a, "couldn't write %s", PRINTING_BUILD_PROGRAM);
@@ -780,8 +785,9 @@ static String write_printing_build_program(Arena *a) {
 
 // bin/unit-tests --interpret of a build program (spec 7.9), which has no
 // main to run: once it has checked, it must refuse it, exit 1, before its
-// top-level #run runs, so print nothing on stdout. {} when it does,
-// otherwise why not.
+// top-level #run runs. Its stdout and stderr in one pipe must be the line
+// its expression #run printed while checking, then the refusal. {} when it
+// does, otherwise why not.
 static String interpreted_build_program_test(Arena *a, String unit_tests) {
     String why = write_printing_build_program(a);
     if (why.count) return why;
@@ -790,16 +796,17 @@ static String interpreted_build_program_test(Arena *a, String unit_tests) {
     array_add(&argv, str("--interpret"));
     array_add(&argv, str(PRINTING_BUILD_PROGRAM));
     Process_Result ran = {};
-    bool started = run_within(a, argv, {}, INTERPRETED_TIMEOUT, &ran, &why);
+    bool started = os_run_merged(a, argv, {}, INTERPRETED_TIMEOUT, &ran);
     array_free(&argv);
-    if (!started) return why;
+    if (!started) return string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(unit_tests), STR_ARG(os_error_message(a)));
+    if (ran.timed_out) return string_printf(a, "bin/unit-tests took longer than %d seconds", INTERPRETED_TIMEOUT);
+    ran.out = normalise_newlines(a, ran.out);
+    String expected =
+        string_printf(a, "%sunit-tests: error: a build program can't be interpreted\n", PRINTED_WHILE_CHECKING);
+    if (!string_eq(ran.out, expected)) return first_difference(a, "stdout and stderr", expected, ran.out);
     if (ran.exit_code != 1) {
-        return with_stderr(a, string_printf(a, "exit code " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, ran.exit_code))),
-                           ran.err);
+        return string_printf(a, "exit code " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, ran.exit_code)));
     }
-    String expected = str("unit-tests: error: a build program can't be interpreted\n");
-    if (!string_eq(ran.err, expected)) return first_difference(a, "stderr", expected, ran.err);
-    if (ran.out.count) return first_difference(a, "stdout", {}, ran.out);
     return {};
 }
 
@@ -807,11 +814,12 @@ static String interpreted_build_program_test(Arena *a, String unit_tests) {
 // `output`), then --no-bounds-checks (when `no_bounds_checks`): its build
 // options decide what these would, so rig refuses them, once the program
 // has checked. PRINTING_BUILD_PROGRAM, which checks clean, must be refused
-// before its top-level #run runs, exit 2: -o's refusal, or with only
-// --no-bounds-checks that one's, alone on stderr, and nothing on stdout.
-// With `has_errors`, tests/errors/build_type_error.rig's errors come first,
-// and alone: its .err, exit 1, and no refusal after. Either way rig writes
-// no program. {} when it does, otherwise why not.
+// before its top-level #run runs, exit 2: its stdout and stderr in one pipe
+// are the line its expression #run printed while checking, then -o's
+// refusal, or with only --no-bounds-checks that one's. With `has_errors`,
+// tests/errors/build_type_error.rig's errors come first, and alone: its
+// .err, exit 1, and no refusal after. Either way rig writes no program. {}
+// when it does, otherwise why not.
 static String build_program_options_test(Arena *a, String rig, bool has_errors, bool output, bool no_bounds_checks) {
     String source = str("tests/errors/build_type_error.rig");
     String expected = {};
@@ -822,9 +830,11 @@ static String build_program_options_test(Arena *a, String rig, bool has_errors, 
         String why = write_printing_build_program(a);
         if (why.count) return why;
         source = str(PRINTING_BUILD_PROGRAM);
-        expected = output ? str("rig: error: -o can't be used with a build program; its build options set the output\n")
-                          : str("rig: error: --no-bounds-checks can't be used with a build program; its build "
-                                "options set the bounds checks\n");
+        const char *refusal = output ? "rig: error: -o can't be used with a build program; its build options set the "
+                                       "output\n"
+                                     : "rig: error: --no-bounds-checks can't be used with a build program; its build "
+                                       "options set the bounds checks\n";
+        expected = string_printf(a, "%s%s", PRINTED_WHILE_CHECKING, refusal);
         status = 2;
     }
     String program = string_printf(a, ".build/tests/output%s", EXE);
@@ -839,18 +849,16 @@ static String build_program_options_test(Arena *a, String rig, bool has_errors, 
     }
     if (no_bounds_checks) array_add(&argv, str("--no-bounds-checks"));
     Process_Result built = {};
-    String why = {};
-    bool started = run(a, argv, {}, &built, &why);
+    bool started = os_run_merged(a, argv, {}, TIMEOUT, &built);
     array_free(&argv);
-    if (!started) return why;
+    if (!started) return string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(rig), STR_ARG(os_error_message(a)));
+    if (built.timed_out) return string_printf(a, "rig build took longer than %d seconds", TIMEOUT);
+    built.out = normalise_newlines(a, built.out);
+    if (!string_eq(built.out, expected)) return first_difference(a, "stdout and stderr", expected, built.out);
     if (built.exit_code != status) {
-        return with_stderr(a,
-                           string_printf(a, "rig build exited with " STR_FMT ", expected %d",
-                                         STR_ARG(exit_code_text(a, built.exit_code)), status),
-                           built.err);
+        return string_printf(a, "rig build exited with " STR_FMT ", expected %d", STR_ARG(exit_code_text(a, built.exit_code)),
+                             status);
     }
-    if (!string_eq(built.err, expected)) return first_difference(a, "stderr", expected, built.err);
-    if (built.out.count) return first_difference(a, "rig build's stdout", {}, built.out);
     if (os_file_exists(program)) return string_printf(a, "rig build wrote " STR_FMT, STR_ARG(program));
     return {};
 }
