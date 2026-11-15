@@ -1,0 +1,11 @@
+// A workspace whose program is a build program (spec 7.9) because a file it
+// #loads, where its main would be, can't be read: the loader's error about
+// that file, which says why there's no main, comes first, then the error at
+// the create_workspace call that made the workspace. rig check never runs a
+// top-level #run, so it has nothing to say.
+#import "Compiler";
+
+#run {
+    w := create_workspace("lost");
+    add_build_file(w, "load/build_nested_lost_inner.rig");
+}

@@ -35,6 +35,7 @@
 //   a program with 'main' can't create workspaces     (create_workspace outside a build program)
 //   there's already a workspace 'game'
 //   the output 'game.rig' ends in .rig; is it the source file?   (set_build_options)
+//   an output name can't contain a zero byte          (set_build_options: the system's names end at one)
 //   'src/x.txt' isn't a .rig file                     (add_build_file, before looking for it)
 //   there's no file 'src/x.rig'                       (add_build_file: the path as given)
 //   'create_workspace' was given a string with a negative count

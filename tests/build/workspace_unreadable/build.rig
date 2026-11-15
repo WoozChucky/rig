@@ -1,0 +1,24 @@
+// A workspace's file that can't be read when the workspace is built (spec
+// 7.9): add_build_file found it, but the build program removed it after.
+// rig says so, as for a main file it can't read, and the workspace fails,
+// whether the file is its first or a further one, leaving neither an
+// object nor a program; the workspace after them is still built, and rig
+// exits 1.
+#import "Compiler";
+
+remove :: (path: *u8) -> s32 #foreign libc;
+
+#run {
+    further := create_workspace("further");
+    add_build_file(further, "main.rig");
+    add_build_file(further, "gone.rig");
+
+    first := create_workspace("first");
+    add_build_file(first, "gone_main.rig");
+
+    remove("gone.rig");
+    remove("gone_main.rig");
+
+    fine := create_workspace("fine");
+    add_build_file(fine, "fine.rig");
+}

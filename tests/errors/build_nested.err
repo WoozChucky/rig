@@ -1,3 +1,6 @@
-tests/errors/build_nested.rig:9:10: error: workspace 'inner' is a build program; a workspace builds an ordinary program
+tests/errors/build_nested.rig:11:5: error: workspace 'empty' has no files
+        create_workspace("empty");
+        ^
+tests/errors/build_nested.rig:12:10: error: workspace 'inner' is a build program; a workspace builds an ordinary program
         w := create_workspace("inner");
              ^

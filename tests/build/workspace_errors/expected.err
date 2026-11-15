@@ -1,3 +1,6 @@
+build.rig:14:5: error: workspace 'empty' has no files
+        create_workspace("empty");
+        ^
 src/broken.rig:4:14: error: unknown identifier 'putz'
     main :: () { putz("hi"); }
                  ^

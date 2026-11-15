@@ -1584,3 +1584,85 @@ TEST(more_files_load_after_the_main_file) {
     diag_free(&d);
     arena_free(&a);
 }
+
+TEST(more_files_are_each_loaded_once) {
+    // A further file is known by its identity as any file is, so each is
+    // added once: the main file given again, a.rig given twice under two
+    // spellings, and c.rig, which main.rig #loads, given too. c.rig comes
+    // after b.rig then, in the order given, and main.rig's #load of it, and
+    // its own #load of a.rig, load nothing. A declaration read twice would
+    // be declared twice.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "more_files_are_each_loaded_once");
+    write_source(&a, dir, "main.rig", "#load \"c.rig\";\nmain :: () {}\n");
+    write_source(&a, dir, "a.rig", "a :: () {}\n");
+    write_source(&a, dir, "b.rig", "b :: () {}\n");
+    write_source(&a, dir, "c.rig", "#load \"a.rig\";\nc :: () {}\n");
+    String path = str(in_directory(&a, dir, "main.rig"));
+    String text = {};
+    CHECK(os_read_file(&a, path, &text));
+    Load_Options options = {};
+    const char *more[] = {"main.rig", "a.rig", "./a.rig", "b.rig", "c.rig", "a.rig"};
+    for (const char *name : more) {
+        String file = str(in_directory(&a, dir, name));
+        String file_text = {};
+        CHECK(os_read_file(&a, file, &file_text));
+        array_add(&options.more_files, file);
+        array_add(&options.more_texts, file_text);
+    }
+    Ast_File *tree = load_program(&a, &d, path, text, &options);
+    CHECK_STR(messages(&a, &d), "");
+    const char *names[] = {"main", "a", "b", "c"};
+    String expected = string_printf(&a, "");
+    for (s64 i = 0; i < 4; i++) {
+        expected = string_printf(&a, STR_FMT STR_FMT "/%s.rig\n", STR_ARG(expected), STR_ARG(dir), names[i]);
+    }
+    CHECK_STR(file_paths(&a, &d), string_cstr(&a, expected));
+    CHECK_EQ(tree->procs.count, 4);
+    for (s64 i = 0; i < 4 && i < tree->procs.count; i++) CHECK_STR(tree->procs[i]->name, names[i]);
+    CHECK(!tree->reaches_compiler);
+    array_free(&options.more_files);
+    array_free(&options.more_texts);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(a_further_file_can_be_the_compiler_module) {
+    // A further file that is the Compiler module's module.rig reaches it,
+    // at its own 1:1, as the main file does when it's that file: with no
+    // main, the program is a build program. It's a module's file, and the
+    // main file isn't.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "a_further_file_can_be_the_compiler_module");
+    Module_Places places = test_places(&a, dir);
+    write_module(&a, places.places[0], "Compiler", "// The Compiler module, for the tests.\n");
+    write_source(&a, dir, "main.rig", "x := 1;\n");
+    String path = str(in_directory(&a, dir, "main.rig"));
+    String text = {};
+    CHECK(os_read_file(&a, path, &text));
+    Load_Options options = {};
+    options.modules = &places;
+    String module = str(module_file(&a, places.places[0], "Compiler", "module.rig"));
+    String module_text = {};
+    CHECK(os_read_file(&a, module, &module_text));
+    array_add(&options.more_files, module);
+    array_add(&options.more_texts, module_text);
+    Ast_File *tree = load_program(&a, &d, path, text, &options);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 2);
+    if (d.files.count == 2) {
+        CHECK(!d.files[0].in_module);
+        CHECK(d.files[1].in_module);
+    }
+    CHECK(tree->reaches_compiler);
+    CHECK_EQ(tree->compiler_pos.file, 1);
+    CHECK_EQ(tree->compiler_pos.line, 1);
+    CHECK_EQ(tree->compiler_pos.col, 1);
+    CHECK(ast_is_build_program(tree));
+    array_free(&options.more_files);
+    array_free(&options.more_texts);
+    diag_free(&d);
+    arena_free(&a);
+}

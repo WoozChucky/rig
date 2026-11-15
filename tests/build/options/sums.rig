@@ -1,5 +1,6 @@
-// The plain and fast workspaces' program (build.rig): the same file built
-// unoptimised and optimised, which must print the same. Each part is
+// The plain and fast workspaces' program (build.rig), plain's main file and
+// #loaded by fast's, fast.rig: the same code built unoptimised and
+// optimised, which must print the same. Each part is
 // something the optimiser rewrites: a loop over an array, a struct passed
 // and returned, a recursive procedure, a float sum, and integer arithmetic
 // that wraps (spec 5.3), which LLVM mustn't take for undefined.

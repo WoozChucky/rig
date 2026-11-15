@@ -270,6 +270,19 @@ TEST(compiler_procedures_fail_like_runtime_errors) {
                                 "main :: () {}\n"),
               "2:1: #run failed: runtime error: the output 'game.rig' ends in .rig; is it the source file?\n"
               "    in #run (PATH:6:5)\n");
+    // An output name holding a zero byte, which the system would take as
+    // its end: "main.rig\0" doesn't end in .rig, but would name main.rig,
+    // the source, which the linker would overwrite.
+    CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
+                                "#run {\n"
+                                "    w := create_workspace(\"game\");\n"
+                                "    o := get_build_options(w);\n"
+                                "    o.output_name = \"main.rig\\0\";\n"
+                                "    set_build_options(w, o);\n"
+                                "}\n"
+                                "main :: () {}\n"),
+              "2:1: #run failed: runtime error: an output name can't contain a zero byte\n"
+              "    in #run (PATH:6:5)\n");
     // A string with no bytes to copy, given to each procedure taking one.
     CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
                                 "#run {\n"

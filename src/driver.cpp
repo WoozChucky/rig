@@ -49,7 +49,7 @@
 // build program's directory, not the current one. One that fails doesn't
 // stop the others, but rig exits 1; a workspace whose program is itself a
 // build program is an error in the build program, at the call that made
-// it.
+// it, after its files' own errors, a #load that failed, say.
 //
 // The checker runs even when the parser found errors, so a syntax error in
 // one procedure and a type error in another are reported in one build. A
@@ -339,6 +339,9 @@ static bool workspace_steps(Compilation *build, Build_Workspace *w, Compilation 
     Array<String> more_files = {w->files.data + 1, w->files.count - 1, w->files.count - 1};
     if (!compilation_load(c, w->files[0], false, {}, more_files)) return false;
     if (ast_is_build_program(c->tree)) {
+        // Its files' own errors first, the loader's and the parser's: a
+        // #load that failed may be why it has no main.
+        compilation_print(c);
         // load.cpp's shown_name: a zero byte would end the message.
         diag_error(&build->d, w->made_at, "workspace '" STR_FMT "' is a build program; a workspace builds an "
                                           "ordinary program",
@@ -383,7 +386,8 @@ static bool workspace_steps(Compilation *build, Build_Workspace *w, Compilation 
 // empty. Its own diagnostics are printed when its compilation ends. A
 // program that is itself a build program is an error in `build`'s
 // diagnostics instead, at the create_workspace call that made it, printed
-// right then, and isn't checked. True when it built.
+// right then, after the errors loading its files found, and isn't checked.
+// True when it built.
 static bool build_workspace(Compilation *build, Build_Workspace *w) {
     Arena arena = arena_make();
     Compilation c = {};

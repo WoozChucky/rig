@@ -492,8 +492,10 @@ struct Ast_File {
     Array<Ast_Load *> loads;
     Array<Ast_Run *> runs;  // the top-level #runs, in source order, file by file in load order
     bool lost_a_file;
-    bool reaches_compiler;  // the loader added the Compiler module's module.rig (by #import or #load)
-    Position compiler_pos;  // the #import or #load that first named it; the main file's 1:1 when it is that file
+    bool reaches_compiler;  // the loader added the Compiler module's module.rig (by #import or #load, or as the
+                            // main file or a workspace's further file)
+    Position compiler_pos;  // the #import or #load that first named it; its own 1:1 when it is the main file or a
+                            // further file (load.h)
 };
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler

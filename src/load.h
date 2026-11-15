@@ -71,12 +71,15 @@
 //
 // A program that reaches the Compiler module's module.rig (the one
 // module_lookup finds for "Compiler" in the places), by an #import or by a
-// #load of any spelling of its path, the main file being that file
-// included, is recorded as reaching it (Ast_File.reaches_compiler), at the
-// #import or #load that first named it (compiler_pos; the main file's 1:1
-// when it's the main file). Without a procedure called main, such a
-// program is a build program (ast_is_build_program, spec 7.9): it builds
-// others, and isn't an executable itself.
+// #load of any spelling of its path, the main file or a workspace's further
+// file being that file included, is recorded as reaching it
+// (Ast_File.reaches_compiler), at the #import or #load that first named it
+// (compiler_pos), or at the file's own 1:1 when it's the main file or a
+// further file. The further files are added before any #load is followed,
+// so when one of them is the module, a main file's #import of it doesn't
+// count as first. Without a procedure called main, such a program is a
+// build program (ast_is_build_program, spec 7.9): it builds others, and
+// isn't an executable itself.
 
 #pragma once
 
