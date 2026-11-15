@@ -4,7 +4,7 @@
 
 static void print_usage() {
     fprintf(stderr,
-            "usage: rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]\n"
+            "usage: rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks]\n"
             "       rig check FILE.rig [--stdin | --stdin-for FILE.rig]\n"
             "       rig version [--verbose]\n");
 }

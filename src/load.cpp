@@ -191,6 +191,19 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const
     diag_locate_file(d, main_file, directory, HOST_IS_WINDOWS);
     d->files[main_file].in_module = in_a_place(&loading, places, d->files[main_file].absolute_path);
 
+    // The Compiler module's module.rig, known by its key as any file is, so
+    // that reaching it by #import, or by a #load of any spelling of its
+    // path, makes the program a build program unless it declares main
+    // (ast_is_build_program, spec 7.9). The main file may be that file
+    // itself: rig check modules/Compiler/module.rig.
+    String compiler = module_lookup(&loading, places, str("Compiler"));
+    bool has_compiler = compiler.count > 0;
+    File_Key compiler_key = has_compiler ? file_key(&loading, directory, compiler) : File_Key{};
+    if (has_compiler && same_key(main_key, compiler_key)) {
+        tree->reaches_compiler = true;
+        tree->compiler_pos = {main_file, 1, 1};
+    }
+
     // d->files is the queue: each file is lexed and parsed in turn, and the
     // files its #loads name that weren't loaded yet are added at its end.
     // The loads a file adds to the tree are those after the ones before it.
@@ -267,6 +280,11 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const
             s32 added = diag_add_file(d, loaded, loaded_text);
             diag_locate_file(d, added, directory, HOST_IS_WINDOWS);
             d->files[added].in_module = in_a_place(&loading, places, d->files[added].absolute_path);
+            // Added once, at the #import or #load that first named it.
+            if (has_compiler && same_key(key, compiler_key)) {
+                tree->reaches_compiler = true;
+                tree->compiler_pos = load->pos;
+            }
         }
     }
     table_free(&seen.ids);

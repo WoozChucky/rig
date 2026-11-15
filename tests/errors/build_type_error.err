@@ -1,0 +1,3 @@
+tests/errors/build_type_error.rig:6:11: error: a value of type 'string' doesn't convert to 'int' implicitly
+    x : int = "text";
+              ^

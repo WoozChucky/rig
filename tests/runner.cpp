@@ -34,7 +34,10 @@
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, its stdout is empty (none prints from a top-level #run), and it
-// writes neither an object file nor a program. In a .err, @NO_SUCH_FILE@
+// writes neither an object file nor a program. A build program (spec 7.9)
+// there is named build_*.rig, and built without -o, which rig refuses for
+// one; it must not make tests/errors/.build either, where its workspaces'
+// objects would go. In a .err, @NO_SUCH_FILE@
 // stands for the system's reason a file that isn't there, in a directory
 // that is, can't be read, which differs between systems and languages
 // (no_such_file_message asks the system).
@@ -57,7 +60,8 @@
 // runtime error's order after the program's output when stdout and stderr
 // are one pipe, bin/unit-tests --interpret of two programs that call a
 // #compiler procedure, at run time and in a constant's #run (each refused
-// as rig build refuses it, with nothing run),
+// as rig build refuses it, with nothing run), and of a build program (which
+// it refuses: there's no main to run),
 // the command line's mistakes, a .build/ or an object file
 // rig can't write, and rig version's output, by its shape (version_test:
 // it names the commit rig was built from).
@@ -598,8 +602,36 @@ static bool read_expected_errors(Arena *a, String name, String *expected) {
     return true;
 }
 
+// Empties and removes DIR/.build, whatever an earlier run left there. (The
+// other system's files too, when Windows and WSL share the tree.)
+static bool remove_nested_build(Arena *a, String dir) {
+    String nested_build = string_printf(a, STR_FMT "/.build", STR_ARG(dir));
+    Array<String> leftovers = {};
+    os_list_directory(a, nested_build, &leftovers);
+    for (s64 i = 0; i < leftovers.count; i++) {
+        String path = string_printf(a, STR_FMT "/" STR_FMT, STR_ARG(nested_build), STR_ARG(leftovers[i]));
+        remove(string_cstr(a, path));
+#ifdef _WIN32
+        _rmdir(string_cstr(a, path));
+#else
+        rmdir(string_cstr(a, path));
+#endif
+    }
+    array_free(&leftovers);
+    remove(string_cstr(a, nested_build));  // a file
+#ifdef _WIN32
+    _rmdir(string_cstr(a, nested_build));
+#else
+    rmdir(string_cstr(a, nested_build));
+#endif
+    return !os_file_exists(nested_build);
+}
+
 // A program that must fail to build, with its .err on stderr and nothing on
-// stdout, and leave nothing behind.
+// stdout, and leave nothing behind. A build program, named build_*.rig,
+// is built without -o, which rig refuses for one (spec 7.9); it would build
+// its workspaces' objects in tests/errors/.build, beside it, which mustn't
+// appear.
 static String error_test(Arena *a, String rig, String name) {
     String why = {};
     String expected = {};
@@ -608,7 +640,12 @@ static String error_test(Arena *a, String rig, String name) {
     String object = string_printf(a, ".build/" STR_FMT "%s", STR_ARG(name), OBJ);
     remove(string_cstr(a, program));
     remove(string_cstr(a, object));
+    bool build_program = starts_with(name, "build_");
+    if (build_program && !remove_nested_build(a, str("tests/errors"))) {
+        return str("couldn't remove the last run's tests/errors/.build");
+    }
     Array<String> argv = build_command(a, rig, "tests/errors", name, program);
+    if (build_program) argv.count -= 2;  // without -o PROGRAM
     Process_Result built = {};
     bool started = run(a, argv, {}, &built, &why);
     array_free(&argv);
@@ -625,6 +662,9 @@ static String error_test(Arena *a, String rig, String name) {
     if (built.out.count) return first_difference(a, "rig build's stdout", {}, built.out);
     if (os_file_exists(object)) return string_printf(a, "rig build failed but wrote " STR_FMT, STR_ARG(object));
     if (os_file_exists(program)) return string_printf(a, "rig build failed but wrote " STR_FMT, STR_ARG(program));
+    if (build_program && os_file_exists(str("tests/errors/.build"))) {
+        return str("rig build failed but made tests/errors/.build");
+    }
     return {};
 }
 
@@ -657,29 +697,27 @@ static String interpreted_compiler_call_test(Arena *a, String unit_tests, const 
     return {};
 }
 
-// Empties and removes DIR/.build, whatever an earlier run left there. (The
-// other system's files too, when Windows and WSL share the tree.)
-static bool remove_nested_build(Arena *a, String dir) {
-    String nested_build = string_printf(a, STR_FMT "/.build", STR_ARG(dir));
-    Array<String> leftovers = {};
-    os_list_directory(a, nested_build, &leftovers);
-    for (s64 i = 0; i < leftovers.count; i++) {
-        String path = string_printf(a, STR_FMT "/" STR_FMT, STR_ARG(nested_build), STR_ARG(leftovers[i]));
-        remove(string_cstr(a, path));
-#ifdef _WIN32
-        _rmdir(string_cstr(a, path));
-#else
-        rmdir(string_cstr(a, path));
-#endif
+// bin/unit-tests --interpret of a build program (spec 7.9), which has no
+// main to run: it must refuse it, exit 1, and run nothing, so print nothing
+// on stdout. {} when it does, otherwise why not.
+static String interpreted_build_program_test(Arena *a, String unit_tests) {
+    Array<String> argv = {};
+    array_add(&argv, unit_tests);
+    array_add(&argv, str("--interpret"));
+    array_add(&argv, str("tests/errors/build_no_workspace.rig"));
+    Process_Result ran = {};
+    String why = {};
+    bool started = run_within(a, argv, {}, INTERPRETED_TIMEOUT, &ran, &why);
+    array_free(&argv);
+    if (!started) return why;
+    if (ran.exit_code != 1) {
+        return with_stderr(a, string_printf(a, "exit code " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, ran.exit_code))),
+                           ran.err);
     }
-    array_free(&leftovers);
-    remove(string_cstr(a, nested_build));  // a file
-#ifdef _WIN32
-    _rmdir(string_cstr(a, nested_build));
-#else
-    rmdir(string_cstr(a, nested_build));
-#endif
-    return !os_file_exists(nested_build);
+    String expected = str("unit-tests: error: a build program can't be interpreted\n");
+    if (!string_eq(ran.err, expected)) return first_difference(a, "stderr", expected, ran.err);
+    if (ran.out.count) return first_difference(a, "stdout", {}, ran.out);
+    return {};
 }
 
 // rig build ../../../tests/run/hello.rig, run in .build/tests/DIR_NAME.
@@ -852,12 +890,31 @@ struct Command_Case {
 };
 
 static const Command_Case COMMAND_CASES[] = {
-    {"no command", {nullptr}, 2, "usage: rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]\n"},
-    {"an unknown command", {"frob"}, 2, "usage: rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]\n"},
-    {"rig build with no file", {"build"}, 2, "usage: rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]\n"},
+    {"no command", {nullptr}, 2, "usage: rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks]\n"},
+    {"an unknown command", {"frob"}, 2, "usage: rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks]\n"},
+    // Run in the repository's root, which has no build.rig.
+    {"rig build with no file", {"build"}, 1, "rig: error: no file given and no build.rig in the current directory\n"},
     {"--no-bounds-checks twice", {"build", "tests/run/hello.rig", "--no-bounds-checks", "--no-bounds-checks"}, 2,
      "usage: "},
-    {"--no-bounds-checks with no file", {"build", "--no-bounds-checks"}, 2, "usage: "},
+    {"--no-bounds-checks with no file",
+     {"build", "--no-bounds-checks"},
+     1,
+     "rig: error: no file given and no build.rig in the current directory\n"},
+    // A build program's build options decide what these would (spec 7.9),
+    // so rig refuses them, once the program has checked: its errors come
+    // first.
+    {"-o with a build program",
+     {"build", "tests/errors/build_no_workspace.rig", "-o", ".build/tests/output"},
+     2,
+     "rig: error: -o can't be used with a build program; its build options set the output\n"},
+    {"--no-bounds-checks with a build program",
+     {"build", "tests/errors/build_no_workspace.rig", "--no-bounds-checks"},
+     2,
+     "rig: error: --no-bounds-checks can't be used with a build program; its build options set the bounds checks\n"},
+    {"-o with a build program that has errors",
+     {"build", "tests/errors/build_type_error.rig", "-o", ".build/tests/output"},
+     1,
+     "tests/errors/build_type_error.rig:"},
     {"rig check with --no-bounds-checks", {"check", "--no-bounds-checks", "tests/run/hello.rig"}, 2, "usage: "},
     {"rig build with two files", {"build", "tests/run/hello.rig", "tests/run/hello.rig"}, 2, "usage: "},
     {"-o with no name", {"build", "tests/run/hello.rig", "-o"}, 2, "usage: "},
@@ -1580,7 +1637,7 @@ static const Command_Case CHECK_CASES[] = {
     {"rig check with no file",
      {"check"},
      2,
-     "usage: rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]\n"
+     "usage: rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks]\n"
      "       rig check FILE.rig [--stdin | --stdin-for FILE.rig]\n"},
     {"rig check with two files", {"check", "tests/run/hello.rig", "tests/run/hello.rig"}, 2, "usage: "},
     {"rig check with -o", {"check", "tests/run/hello.rig", "-o", ".build/tests/output.RIG"}, 2, "usage: "},
@@ -2329,6 +2386,7 @@ int main(int argc, char **argv) {
     report("interpreted: a constant's #run calling the Compiler module, refused as rig build refuses it",
            interpreted_compiler_call_test(&a, unit_tests, "main_creates_workspace_in_a_constant"), &passed,
            &failed);
+    report("interpret mode refuses a build program", interpreted_build_program_test(&a, unit_tests), &passed, &failed);
     report("a failed top-level #run's error after the runs' output, both in one pipe",
            run_output_order_test(&a, rig, false), &passed, &failed);
     report("a top-level #run's exit() after a failed one, the errors after the runs' output, in one pipe",

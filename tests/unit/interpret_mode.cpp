@@ -12,10 +12,12 @@
 // --no-bounds-checks, running its #runs as rig build does, the top-level
 // ones too; a program with errors (a failed top-level run's among them)
 // gets its diagnostics on stderr, as rig build prints them, and exit status
-// 1, and isn't run. Otherwise it interprets main, and exits with main's
-// status, 0, unless the program calls C's exit, which ends the process with
-// its own. A run that fails exits with 101, as a compiled program's runtime
-// error does, after:
+// 1, and isn't run. A build program (spec 7.9), which has no main, is
+// refused once it has checked, before its top-level #runs: "unit-tests:
+// error: a build program can't be interpreted", exit status 1. Otherwise it
+// interprets main, and exits with main's status, 0, unless the program
+// calls C's exit, which ends the process with its own. A run that fails
+// exits with 101, as a compiled program's runtime error does, after:
 // 1. fflush(NULL), so what the program printf'd comes out first, as the
 //    runtime flushes its streams before writing the message;
 // 2. the message on stderr: a panic's own text, exactly as the compiled
@@ -75,58 +77,54 @@ static void interpret_mode(void *data) {
         return;
     }
 
-    // A copy of rig build's read_and_check (driver.cpp), which must follow
-    // its changes: the loader reads, lexes and parses FILE and every file
-    // it #loads into the one tree (load_program); the checker runs the
+    // rig build's steps (driver.cpp's Compilation, in the same unity
+    // build), from the text read above: the loader reads, lexes and parses
+    // FILE and every file it #loads into the one tree; the checker runs the
     // expression #runs in a compile-time world of their own, whose
-    // #compiler calls a Build_State answers (compiler_module_call), and once
-    // the program checks with no errors, its top-level #runs run there too,
-    // printing what rig build prints (the runner holds it to
-    // NAME.build.out, before NAME.out); the diagnostics are printed after
-    // them, or as a run's exit() ends the process (diag_print_at_exit). The
-    // world is freed before the program is lowered, and main's interpreter
-    // is one of its own, running the program's module, lowered afresh, so
-    // the globals start from their written values whatever the runs did. It
-    // can't call read_and_check, which frees the diagnostics, and with them
-    // the paths of the program's files, which a failure's frames name by
-    // index (a loaded file's as its #load made it); so it has one more step:
-    // the paths are copied before the diagnostics go.
-    Diagnostics d = {};
-    Ast_File *tree = load_program(&a, &d, path, text);
-    diag_print_at_exit(&d);
-    Compile_Time *world = compile_time_new(&d);
-    Build_State build = {};
-    build.program_path = path;
-    compile_time_set_compiler(world, compiler_module_call, &build);
-    check(tree, &a, &d, world);
-    if (d.error_count == 0) compile_time_run_top_level(world, tree);
-    if (d.error_count) {
-        diag_sort(&d);
-        diag_print(&d);
-    }
-    diag_print_at_exit(nullptr);
-    compile_time_free(world);
-    build_state_free(&build);
-    if (d.error_count) {
-        diag_free(&d);
+    // #compiler calls the compilation's Build_State answers
+    // (compiler_module_call), and once the program checks with no errors,
+    // its top-level #runs run there too, printing what rig build prints
+    // (the runner holds it to NAME.build.out, before NAME.out); the
+    // diagnostics are printed after them, or as a run's exit() ends the
+    // process (diag_print_at_exit). The world is freed before the program
+    // is lowered, and main's interpreter is one of its own, running the
+    // program's module, lowered afresh, so the globals start from their
+    // written values whatever the runs did. Lowering's own errors, a
+    // #compiler call the program would make (spec 7.9), are printed as rig
+    // build prints them, and nothing runs. The paths of the program's
+    // files, which a failure's frames name by index (a loaded file's as its
+    // #load made it), are copied before the diagnostics go.
+    //
+    // A build program (spec 7.9) has no main to run: once it has checked
+    // with no errors, it's refused, as rig build refuses -o for one, before
+    // any of its top-level #runs runs.
+    Compilation c = {};
+    c.arena = &a;
+    compilation_load_text(&c, path, text, nullptr);
+    bool ok = compilation_check(&c);
+    if (ok && c.build.is_build_program) {
+        compilation_free(&c);
+        fprintf(stderr, "unit-tests: error: a build program can't be interpreted\n");
         arena_free(&a);
         mode->status = 1;
         return;
     }
-    // Lowering's own errors, a #compiler call the program would make (spec
-    // 7.9), are printed as read_and_check prints them, and nothing runs.
-    Ir_Module *m = ir_lower(tree, &d, &a, bounds_checks);
-    if (d.error_count) {
-        diag_sort(&d);
-        diag_print(&d);
-        diag_free(&d);
+    if (ok) ok = compilation_run(&c);
+    Ir_Module *m = nullptr;
+    if (ok) {
+        compilation_end_runs(&c);
+        m = compilation_lower(&c, bounds_checks);
+    }
+    if (!m) {
+        compilation_print(&c);
+        compilation_free(&c);
         arena_free(&a);
         mode->status = 1;
         return;
     }
     Array<String> paths = {};
-    for (s64 i = 0; i < d.files.count; i++) array_add(&paths, string_copy(&a, d.files[i].path));
-    diag_free(&d);
+    for (s64 i = 0; i < c.d.files.count; i++) array_add(&paths, string_copy(&a, c.d.files[i].path));
+    compilation_free(&c);
 
     // main, which the checker made sure is there: no arguments, and one
     // result, the i32 C's main returns (always 0).

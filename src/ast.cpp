@@ -485,6 +485,14 @@ Array<Ast *> ast_declarations(Ast_File *file) {
     return all;
 }
 
+bool ast_is_build_program(Ast_File *file) {
+    if (!file->reaches_compiler) return false;
+    for (s64 i = 0; i < file->procs.count; i++) {
+        if (string_eq(file->procs[i]->name, str("main"))) return false;
+    }
+    return true;
+}
+
 // A top-level node, on a line of its own.
 static void dump_line(Array<u8> *buffer, Ast *node) {
     dump(buffer, node);

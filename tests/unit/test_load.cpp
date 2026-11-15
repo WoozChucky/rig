@@ -1457,3 +1457,85 @@ TEST(import_finds_basic_with_rigs_own_places) {
     diag_free(&d);
     arena_free(&a);
 }
+
+// Issue #116: build programs (spec 7.9). A program that reaches the Compiler
+// module's module.rig, by #import or by #load, and declares no procedure
+// called main is a build program (ast_is_build_program): the loader records
+// that it reached the module, and where (Ast_File.reaches_compiler,
+// compiler_pos).
+
+// One program of the_compiler_module_makes_a_build_program: its main file's
+// text, and what the loader must record of it.
+struct Build_Program_Case {
+    const char *text;
+    bool reaches_compiler;
+    Position compiler_pos;  // where the module was first named, when it's reached
+    bool is_build_program;
+};
+
+TEST(the_compiler_module_makes_a_build_program) {
+    // The places hold a Compiler module, a comment alone, and a Basic one.
+    // The Compiler module's file is found by its identity, however it's
+    // reached: imported, imported by a file the main file loads (at that
+    // #import, in file 1), or loaded by its path. A main, even a broken
+    // one, makes the program an ordinary one; a global called main is no
+    // procedure, and doesn't. A program that never reaches the module is
+    // never a build program.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "the_compiler_module_makes_a_build_program");
+    Module_Places places = test_places(&a, dir);
+    write_module(&a, places.places[0], "Compiler", "// The Compiler module, for the tests.\n");
+    write_module(&a, places.places[0], "Basic", "basic :: () {}\n");
+    write_source(&a, dir, "helper.rig", "#import \"Compiler\";\n");
+    const Build_Program_Case cases[] = {
+        {"#import \"Compiler\";\n", true, {0, 1, 1}, true},
+        {"#import \"Compiler\";\nmain :: () {}\n", true, {0, 1, 1}, false},
+        {"#import \"Compiler\";\nmain := 1;\n", true, {0, 1, 1}, true},
+        {"#import \"Compiler\";\nmain :: () {\n", true, {0, 1, 1}, false},
+        {"#load \"helper.rig\";\n", true, {1, 1, 1}, true},
+        {"#load \"first/Compiler/module.rig\";\n", true, {0, 1, 1}, true},
+        {"#import \"Basic\";\n", false, {}, false},
+    };
+    for (const Build_Program_Case &c : cases) {
+        Diagnostics d = {};
+        Ast_File *tree = load_main_importing(&a, &d, dir, c.text, &places);
+        CHECK_EQ(tree->reaches_compiler, c.reaches_compiler);
+        if (c.reaches_compiler) {
+            CHECK_EQ(tree->compiler_pos.file, c.compiler_pos.file);
+            CHECK_EQ(tree->compiler_pos.line, c.compiler_pos.line);
+            CHECK_EQ(tree->compiler_pos.col, c.compiler_pos.col);
+        }
+        CHECK_EQ(ast_is_build_program(tree), c.is_build_program);
+        diag_free(&d);
+    }
+
+    // The module's own file as the main file, as rig check
+    // modules/Compiler/module.rig checks it: it reaches itself, at its 1:1.
+    Diagnostics d = {};
+    Load_Options options = {};
+    options.modules = &places;
+    String text = str("// The Compiler module, for the tests.\n");
+    String module = str(module_file(&a, places.places[0], "Compiler", "module.rig"));
+    Ast_File *tree = load_program(&a, &d, module, text, &options);
+    CHECK(tree->reaches_compiler);
+    CHECK_EQ(tree->compiler_pos.file, 0);
+    CHECK_EQ(tree->compiler_pos.line, 1);
+    CHECK_EQ(tree->compiler_pos.col, 1);
+    CHECK(ast_is_build_program(tree));
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(build_programs_need_no_main) {
+    // The checker wants main in an ordinary program only: a build program
+    // is never an executable. Without the import, the same program is an
+    // ordinary one, and needs main.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "build_programs_need_no_main");
+    Module_Places places = test_places(&a, dir);
+    write_module(&a, places.places[0], "Compiler", "// The Compiler module, for the tests.\n");
+    bool lost = false;
+    CHECK_STR(import_messages(&a, dir, "#import \"Compiler\";\n", &places, &lost), "");
+    CHECK_STR(import_messages(&a, dir, "x := 1;\n", &places, &lost), "1:1: a procedure called 'main' is needed\n");
+    arena_free(&a);
+}

@@ -1,0 +1,4 @@
+tests/errors/build_no_such_file.rig:8:1: error: #run failed: runtime error: there's no file 'src/missing.rig'
+    #run {
+    ^
+    in #run (tests/errors/build_no_such_file.rig:10:5)

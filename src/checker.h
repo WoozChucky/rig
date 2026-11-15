@@ -547,7 +547,9 @@
 //   __rig_ are the compiler's own", at the string, or at the name.
 // - main must exist as a procedure, have a body, take nothing and return
 //   nothing. It can be called, but isn't a value: "'main' can't be a
-//   value: it's where the program starts" (it returns C's int to C).
+//   value: it's where the program starts" (it returns C's int to C). A
+//   build program, one that reaches the Compiler module and declares no
+//   procedure called main (ast_is_build_program, spec 7.9), needs none.
 //
 // After an error, an expression whose type is unknown (null) reports
 // nothing more, so one mistake gives one message.
