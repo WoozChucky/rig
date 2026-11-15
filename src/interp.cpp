@@ -85,6 +85,10 @@ struct Interp {
     Array<Ir_Ext> c_exts;
     Array<u64> c_values;
     Array<u64> c_stack;
+    // What does the #compiler procedures' calls (interp_set_compiler), and
+    // what it's given with each; null: nothing, and each call fails.
+    Interp_Compiler_Call *compiler;
+    void *compiler_context;
 };
 
 // ---------------------------------------------------------------------------
@@ -488,6 +492,40 @@ static void interp_fail_not_in_c(Interp *in, Interp_Record *frame, s32 block, s3
 }
 
 // ---------------------------------------------------------------------------
+// Calling the compiler
+
+// The IR_CALL at instruction `index` of block `block` in `frame`, of a
+// #compiler procedure: the hook (interp_set_compiler) is given the
+// arguments' values as they are, and the call's place, its instruction's
+// position, which lowering makes the callee's name. The results it gives
+// are the call's. False when the run stopped there, as interp_fail stops
+// it: there is no hook, or the hook failed, its message already in `a`.
+static bool interp_call_compiler(Interp *in, Interp_Record *frame, s32 block, s32 index, Arena *a,
+                                 Interp_Result *result) {
+    Ir_Proc *p = in->module->procs.data[frame->proc];
+    Ir_Instr *instr = &p->blocks.data[block]->instrs.data[index];
+    Ir_Proc *callee = in->module->procs.data[instr->target];
+    if (!in->compiler) {
+        interp_fail(in, frame, block, index, a, result, {});
+        result->message = string_printf(a, "'" STR_FMT "' can only be called while compiling",
+                                        STR_ARG(callee->name));
+        return false;
+    }
+    Array<u64> args = {};
+    for (s64 k = 0; k < instr->args.count; k++) array_add(&args, frame->values[instr->args.data[k]]);
+    Array<u64> results = {};
+    for (s64 k = 0; k < callee->results.count; k++) array_add(&results, (u64)0);
+    String message = in->compiler(in->compiler_context, callee, args, results.data, instr->pos, a);
+    for (s64 k = 0; k < results.count && !message.count; k++) frame->values[instr->result + k] = results[k];
+    array_free(&args);
+    array_free(&results);
+    if (!message.count) return true;
+    interp_fail(in, frame, block, index, a, result, {});
+    result->message = message;
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // The loop
 
 // Runs from `frame`'s first instruction until the first frame returns or
@@ -544,9 +582,15 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
             // outside the Rig procedures' range, is C: called through the
             // thunk, in this frame. A null address fails as the compiled
             // program's check does (lowering checks before every indirect
-            // call, so only IR made some other way gets here).
+            // call, so only IR made some other way gets here). A #compiler
+            // procedure, only ever called directly (it has no value), is
+            // the compiler's to do, in this frame (interp_call_compiler).
             s32 callee = instr->target;
             void *c_function = nullptr;
+            if (instr->op == IR_CALL && m->procs.data[callee]->is_compiler) {
+                if (!interp_call_compiler(in, frame, block, index, a, result)) return;
+                break;
+            }
             if (instr->op == IR_CALL_INDIRECT) {
                 u64 address = v[instr->a];
                 if (address == 0) {
@@ -921,6 +965,11 @@ void interp_run(Interp *in, s32 proc, Array<u64> args, Arena *a, Interp_Result *
     }
     for (s64 k = 0; k < args.count; k++) frame->values[k] = interp_truncate(args[k], p->params[k].type);
     interp_loop(in, frame, a, result);
+}
+
+void interp_set_compiler(Interp *in, Interp_Compiler_Call *call, void *context) {
+    in->compiler = call;
+    in->compiler_context = context;
 }
 
 u64 interp_proc_address(Interp *in, s32 proc) {

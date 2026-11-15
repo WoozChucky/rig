@@ -40,6 +40,7 @@
 // (a/hello.rig, b/hello.rig) share .build/hello.o: one at a time, they're
 // fine; at the same time, one could link the other's object.
 
+#include "compiler_module.h"
 #include "link.h"
 #include "load.h"
 
@@ -137,8 +138,16 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Modul
     // the program checked with no errors, is freed before the program is
     // lowered: the program's module is its own, its globals untouched by
     // the runs.
+    //
+    // A #run's code may call the Compiler module's procedures (spec 7.9),
+    // which the world hands to compiler_module_call with this compilation's
+    // Build_State. Its program is the one rig builds, never a build program
+    // that builds others, so create_workspace fails in it.
     diag_print_at_exit(&d);
     Compile_Time *world = compile_time_new(&d);
+    Build_State build = {};
+    build.program_path = path;
+    compile_time_set_compiler(world, compiler_module_call, &build);
     check(tree, a, &d, world);
     if (d.error_count == 0 && lowered) compile_time_run_top_level(world, tree);
     bool ok = d.error_count == 0;
@@ -153,6 +162,7 @@ static Ast_File *read_and_check(Arena *a, String path, bool from_stdin, Ir_Modul
     }
     diag_print_at_exit(nullptr);
     compile_time_free(world);
+    build_state_free(&build);
     // Lowered while d still holds the files' paths, which a runtime error's
     // message names, and their absolute paths and directories, which the
     // debug information does; the module keeps its own copies. Lowering

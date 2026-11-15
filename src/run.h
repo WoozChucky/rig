@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ast.h"
+#include "interp.h"  // Interp_Compiler_Call
 
 struct Checker;  // check.h: the checker, whose arena a baked value lives in
 
@@ -19,6 +20,11 @@ struct Compile_Time;
 // are sized for. d must outlive it.
 Compile_Time *compile_time_new(Diagnostics *d);
 void compile_time_free(Compile_Time *ct);
+
+// The hook the world's interpreter gets (interp_set_compiler), which does
+// the #compiler procedures' calls (spec 7.9), and its context; set before
+// the first run. A world without one fails each such call.
+void compile_time_set_compiler(Compile_Time *ct, Interp_Compiler_Call *call, void *context);
 
 // Runs the expression #run `run`, which checked and whose walk was clean,
 // and bakes its result into run->value (and is_constant and constant for a
