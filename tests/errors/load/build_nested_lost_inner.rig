@@ -1,0 +1,5 @@
+// The lost workspace's program of tests/errors/build_nested_lost.rig: its
+// main was to come from nope.rig, which isn't there, so with the Compiler
+// module it is a build program.
+#import "Compiler";
+#load "nope.rig";

@@ -1,0 +1,3 @@
+// The further workspace's main file (build.rig), which is never built: its
+// second file, gone.rig, is gone by then.
+main :: () { gone(); }

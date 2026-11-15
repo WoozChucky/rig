@@ -37,10 +37,10 @@
 // writes neither an object file nor a program. A build program (spec 7.9)
 // there is named build_*.rig, and built without -o, which rig refuses for
 // one; it must not make tests/errors/.build either, where its workspaces'
-// objects would go. In a .err, @NO_SUCH_FILE@
-// stands for the system's reason a file that isn't there, in a directory
-// that is, can't be read, which differs between systems and languages
-// (no_such_file_message asks the system).
+// objects would go. In a .err, and in tests/build's expected.err (below),
+// @NO_SUCH_FILE@ stands for the system's reason a file that isn't there, in
+// a directory that is, can't be read, which differs between systems and
+// languages (no_such_file_message asks the system).
 //
 // rig names a module's file (spec 2.14) by its absolute path, so in a .err,
 // .interp.err, .check.err or tests/build's expected.err (below), @MODULES@
@@ -71,12 +71,19 @@
 // line, without the host's suffix (.exe on Windows): each is run in the
 // copy, and must exit 0, write nothing to stderr, and print
 // NAME/PROGRAM.out. Without expected.programs rig must build nothing, so
-// make no .build in the copy. rig is never given -o there, and none of it
-// is interpreted: bin/unit-tests --interpret refuses a build program.
+// make no .build in the copy. NAME/expected.absent names files, one a line,
+// relative to the copy, that rig must not make, as named, with the host's
+// executable suffix, or with its object file's (.obj or .o): a failed
+// workspace's program and object. rig is never given -o there, and none of
+// it is interpreted: bin/unit-tests --interpret refuses a build program.
 //
 // Then a few fixed cases: rig build sub/build.rig from its parent (a build
 // program's files, objects and programs are relative to its own directory,
-// build_program_elsewhere_test), rig build without -o from another
+// build_program_elsewhere_test), tests/build/options again, where the
+// optimised workspace's object must be smaller than the unoptimised one's
+// (optimised_object_test), tests/build/workspace_errors with stdout and
+// stderr in one pipe, a workspace's errors before the next one's #run's
+// output (workspace_output_order_test), rig build without -o from another
 // directory, a runtime error's order after the program's output when stdout
 // and stderr are one pipe, bin/unit-tests --interpret of two programs that
 // call a #compiler procedure, at run time and in a constant's #run (each
@@ -89,7 +96,8 @@
 // rig can't write, and rig version's output, by its shape (version_test:
 // it names the commit rig was built from).
 //
-// Then rig check on every program of both directories, from a file and
+// Then rig check on every program of tests/run and tests/errors (not
+// tests/build's), from a file and
 // from stdin under the file's name, a loaded file's text from stdin within
 // its program (--stdin-for), and its own command line (check_tests). A
 // program of tests/run must check with nothing to say, exit 0; one of
@@ -871,39 +879,87 @@ static String built_program_test(Arena *a, String program, String directory, Str
     return {};
 }
 
+// `RIG build`, with no file, in `dir`, a copy of tests/build/NAME made
+// there (emptied first), its stdout and stderr in one pipe when `merged`.
+// False, with why not, when it couldn't be copied, or rig couldn't be run
+// or took too long.
+static bool build_copy(Arena *a, String rig, String name, String dir, bool merged, Process_Result *built,
+                       String *why) {
+    String source = string_printf(a, "tests/build/" STR_FMT, STR_ARG(name));
+    remove_tree(a, dir);
+    if (os_file_exists(dir)) {
+        *why = string_printf(a, "couldn't remove the last run's " STR_FMT, STR_ARG(dir));
+        return false;
+    }
+    if (!copy_tree(a, source, dir)) {
+        *why = string_printf(a, "couldn't copy " STR_FMT " to " STR_FMT ": " STR_FMT, STR_ARG(source), STR_ARG(dir),
+                             STR_ARG(os_error_message(a)));
+        return false;
+    }
+    Array<String> argv = {};
+    array_add(&argv, rig);
+    array_add(&argv, str("build"));
+    if (!merged) {
+        bool started = run(a, argv, dir, built, why);
+        array_free(&argv);
+        return started;
+    }
+    bool started = os_run_merged(a, argv, dir, TIMEOUT, built);
+    array_free(&argv);
+    if (!started) {
+        *why = string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(rig), STR_ARG(os_error_message(a)));
+        return false;
+    }
+    if (built->timed_out) {
+        *why = string_printf(a, "rig build took longer than %d seconds", TIMEOUT);
+        return false;
+    }
+    return true;
+}
+
+// The names in `list`, one a line, a \r\n's \r dropped, empty lines
+// skipped: a tests/build case's expected.programs or expected.absent. The
+// array is the caller's to free.
+static Array<String> names_in(String list) {
+    Array<String> names = {};
+    for (s64 start = 0, i = 0; i <= list.count; i++) {
+        if (i < list.count && list.data[i] != '\n') continue;
+        String name = string_slice(list, start, i - start);
+        start = i + 1;
+        if (name.count && name.data[name.count - 1] == '\r') name.count--;
+        if (name.count) array_add(&names, name);
+    }
+    return names;
+}
+
 // A case of tests/build: the directory tests/build/NAME, holding build.rig,
 // copied to .build/tests/build/NAME (emptied first), where `RIG build` runs
 // with no file. Its exit code, stdout and stderr must be NAME's
 // expected.exit, expected.build.out and expected.err (0 and nothing without
-// them), and each program expected.programs names, one a line, with the
-// host's suffix added, must be there, and run as built_program_test runs it,
-// printing NAME/PROGRAM.out. Without expected.programs, rig must make no
-// .build in the copy: it built nothing. {} when it all holds, otherwise why
-// not.
+// them; expected.err's @NO_SUCH_FILE@ replaced, no_such_file_message), and
+// no file expected.absent names, one a line, may be in the copy, as named,
+// with the host's executable suffix, or with its object file's: what a
+// workspace that failed must not have written. Each program
+// expected.programs names, one a line, with the host's suffix added, must be
+// there, and run as built_program_test runs it, printing NAME/PROGRAM.out.
+// Without expected.programs, rig must make no .build in the copy: it built
+// nothing. {} when it all holds, otherwise why not.
 static String build_directory_test(Arena *a, String rig, String name) {
     String source = string_printf(a, "tests/build/" STR_FMT, STR_ARG(name));
     String dir = string_printf(a, ".build/tests/build/" STR_FMT, STR_ARG(name));
-    remove_tree(a, dir);
-    if (os_file_exists(dir)) return string_printf(a, "couldn't remove the last run's " STR_FMT, STR_ARG(dir));
-    if (!copy_tree(a, source, dir)) {
-        return string_printf(a, "couldn't copy " STR_FMT " to " STR_FMT ": " STR_FMT, STR_ARG(source), STR_ARG(dir),
-                             STR_ARG(os_error_message(a)));
-    }
     s32 expected_exit = 0;
     String why = read_exit_file(a, string_printf(a, STR_FMT "/expected.exit", STR_ARG(source)), &expected_exit);
     if (why.count) return why;
-    String expected_out = {}, expected_err = {}, programs = {};
+    String expected_out = {}, expected_err = {}, programs = {}, absent = {};
     os_read_file(a, string_printf(a, STR_FMT "/expected.build.out", STR_ARG(source)), &expected_out);
-    os_read_file(a, string_printf(a, STR_FMT "/expected.err", STR_ARG(source)), &expected_err);
+    if (os_read_file(a, string_printf(a, STR_FMT "/expected.err", STR_ARG(source)), &expected_err)) {
+        expected_err = replace_all(a, expected_err, "@NO_SUCH_FILE@", no_such_file_message(a));
+    }
     bool has_programs = os_read_file(a, string_printf(a, STR_FMT "/expected.programs", STR_ARG(source)), &programs);
+    os_read_file(a, string_printf(a, STR_FMT "/expected.absent", STR_ARG(source)), &absent);
 
-    Array<String> argv = {};
-    array_add(&argv, rig);
-    array_add(&argv, str("build"));
     Process_Result built = {};
-    bool started = run(a, argv, dir, &built, &why);
-    array_free(&argv);
-    if (!started) return why;
+    if (!build_copy(a, rig, name, dir, false, &built, &why)) return why;
     built.err = with_module_placeholders(a, built.err, MODULES, BIN_MODULES);
     if (built.exit_code != expected_exit) {
         return with_stderr(a,
@@ -913,6 +969,20 @@ static String build_directory_test(Arena *a, String rig, String name) {
     }
     if (!string_eq(built.err, expected_err)) return first_difference(a, "stderr", expected_err, built.err);
     if (!string_eq(built.out, expected_out)) return first_difference(a, "rig build's stdout", expected_out, built.out);
+    why = {};
+    Array<String> absent_names = names_in(absent);
+    for (s64 i = 0; i < absent_names.count && !why.count; i++) {
+        const char *suffixes[] = {"", EXE, OBJ};
+        for (const char *suffix : suffixes) {
+            String path = string_printf(a, STR_FMT "/" STR_FMT "%s", STR_ARG(dir), STR_ARG(absent_names[i]), suffix);
+            if (os_file_exists(path)) {
+                why = string_printf(a, "rig build made " STR_FMT ", which expected.absent names", STR_ARG(path));
+                break;
+            }
+        }
+    }
+    array_free(&absent_names);
+    if (why.count) return why;
     if (!has_programs) {
         String nested_build = string_printf(a, STR_FMT "/.build", STR_ARG(dir));
         if (os_file_exists(nested_build)) {
@@ -921,18 +991,14 @@ static String build_directory_test(Arena *a, String rig, String name) {
         }
         return {};
     }
-    // One name a line, a \r\n's \r dropped, empty lines skipped.
-    for (s64 start = 0, i = 0; i <= programs.count; i++) {
-        if (i < programs.count && programs.data[i] != '\n') continue;
-        String program = string_slice(programs, start, i - start);
-        start = i + 1;
-        if (program.count && program.data[program.count - 1] == '\r') program.count--;
-        if (!program.count) continue;
+    Array<String> program_names = names_in(programs);
+    for (s64 i = 0; i < program_names.count && !why.count; i++) {
+        String program = program_names[i];
         why = built_program_test(a, string_printf(a, STR_FMT "/" STR_FMT "%s", STR_ARG(dir), STR_ARG(program), EXE),
                                  dir, string_printf(a, STR_FMT "/" STR_FMT ".out", STR_ARG(source), STR_ARG(program)));
-        if (why.count) return why;
     }
-    return {};
+    array_free(&program_names);
+    return why;
 }
 
 // A build program outside the directory rig runs in (spec 7.9):
@@ -978,6 +1044,63 @@ static String build_program_elsewhere_test(Arena *a, String rig) {
                        string_printf(a, STR_FMT "/.build", STR_ARG(dir))};
     for (String stray : strays) {
         if (os_file_exists(stray)) return string_printf(a, "rig build wrote " STR_FMT, STR_ARG(stray));
+    }
+    return {};
+}
+
+// tests/build/options's plain and fast workspaces build the same code,
+// sums.rig, unoptimised and optimised (spec 10.2), and print the same, so
+// only their objects tell them apart. Built in .build/tests/optimised
+// (build_copy), fast's, .build/fast.obj (fast.o on Linux), must be smaller
+// than plain's, .build/sums.obj, by a quarter at least, as LLVM's O2
+// pipeline makes it: its locals in registers rather than stack slots, its
+// loops over constants folded. {} when it is, otherwise why not.
+static String optimised_object_test(Arena *a, String rig) {
+    String dir = str(".build/tests/optimised");
+    Process_Result built = {};
+    String why = {};
+    if (!build_copy(a, rig, str("options"), dir, false, &built, &why)) return why;
+    if (built.exit_code != 0) {
+        return with_stderr(a, string_printf(a, "rig build exited with " STR_FMT, STR_ARG(exit_code_text(a, built.exit_code))),
+                           built.err);
+    }
+    String plain_path = string_printf(a, STR_FMT "/.build/sums%s", STR_ARG(dir), OBJ);
+    String fast_path = string_printf(a, STR_FMT "/.build/fast%s", STR_ARG(dir), OBJ);
+    String plain = {}, fast = {};
+    if (!os_read_file(a, plain_path, &plain)) return string_printf(a, "can't read " STR_FMT, STR_ARG(plain_path));
+    if (!os_read_file(a, fast_path, &fast)) return string_printf(a, "can't read " STR_FMT, STR_ARG(fast_path));
+    if (fast.count * 4 > plain.count * 3) {
+        return string_printf(a, STR_FMT " is %lld bytes and " STR_FMT " %lld: is it optimised?", STR_ARG(fast_path),
+                             (long long)fast.count, STR_ARG(plain_path), (long long)plain.count);
+    }
+    return {};
+}
+
+// tests/build/workspace_errors built in .build/tests/workspace-order
+// (build_copy), rig's stdout and stderr in one pipe: each compilation's
+// diagnostics are printed when it ends, before the next workspace is
+// compiled, so its expected.err, the build program's error and then the
+// broken workspace's, comes out before what the fine workspace's top-level
+// #run prints, its expected.build.out. stdout is a pipe, so C buffers it,
+// and rig flushes it before writing diagnostics. Exit 1. {} when it all
+// holds, otherwise why not.
+static String workspace_output_order_test(Arena *a, String rig) {
+    String source = str("tests/build/workspace_errors");
+    String err = {}, out = {};
+    if (!os_read_file(a, string_printf(a, STR_FMT "/expected.err", STR_ARG(source)), &err) ||
+        !os_read_file(a, string_printf(a, STR_FMT "/expected.build.out", STR_ARG(source)), &out)) {
+        return string_printf(a, "can't read " STR_FMT "'s expected.err or expected.build.out", STR_ARG(source));
+    }
+    String expected = string_printf(a, STR_FMT STR_FMT, STR_ARG(err), STR_ARG(out));
+    Process_Result built = {};
+    String why = {};
+    if (!build_copy(a, rig, str("workspace_errors"), str(".build/tests/workspace-order"), true, &built, &why)) {
+        return why;
+    }
+    built.out = normalise_newlines(a, built.out);
+    if (!string_eq(built.out, expected)) return first_difference(a, "stdout and stderr", expected, built.out);
+    if (built.exit_code != 1) {
+        return string_printf(a, "rig build exited with " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, built.exit_code)));
     }
     return {};
 }
@@ -2648,6 +2771,10 @@ int main(int argc, char **argv) {
     run_directory(&a, rig, "", "tests/errors", error_test, &passed, &failed);
     build_directory_tests(&a, rig, &passed, &failed);
     report("rig build sub/build.rig from its parent", build_program_elsewhere_test(&a, rig), &passed, &failed);
+    report("a workspace's optimize option reaches LLVM: its object is smaller", optimised_object_test(&a, rig),
+           &passed, &failed);
+    report("a workspace's errors before the next workspace's #run output, both in one pipe",
+           workspace_output_order_test(&a, rig), &passed, &failed);
     report("interpreted: a #compiler call refused when lowering, nothing run",
            interpreted_error_test(&a, unit_tests, "compiler_called_at_run_time"), &passed, &failed);
     report("interpreted: a constant's #run calling the Compiler module, refused as rig build refuses it",

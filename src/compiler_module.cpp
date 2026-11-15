@@ -108,7 +108,10 @@ static String build_get_build_options(Build_State *s, Array<u64> args, Position,
 // set_build_options :: (w: Workspace, options: Build_Options): args are w's
 // address, then the options'. An output name ending in .rig is refused, as
 // rig build's -o refuses one: it's a mistake for the source's name, which
-// the linker would overwrite. A bool is any byte but 0 (ir.h's "Memory").
+// the linker would overwrite. So is one holding a zero byte, which -o can't
+// be given: the system would take the name as ending there, and
+// "main.rig\0" would be main.rig. A bool is any byte but 0 (ir.h's
+// "Memory").
 static String build_set_build_options(Build_State *s, Array<u64> args, Position, Arena *a) {
     String message = {};
     Build_Workspace *w = build_workspace_at(s, args[0], a, &message);
@@ -116,6 +119,9 @@ static String build_set_build_options(Build_State *s, Array<u64> args, Position,
     String output = {};
     if (!build_string_at(args[1] + OPTIONS_OUTPUT_NAME_OFFSET, &output)) {
         return build_negative_count(a, str("set_build_options"));
+    }
+    if (output.count && memchr(output.data, 0, (size_t)output.count)) {
+        return string_printf(a, "an output name can't contain a zero byte");
     }
     if (is_rig_file(output)) {
         return string_printf(a, "the output '" STR_FMT "' ends in .rig; is it the source file?",
