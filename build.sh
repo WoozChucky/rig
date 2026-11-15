@@ -91,9 +91,10 @@ STAMP="-DRIG_VERSION=\"$VERSION_NUMBER\" -DRIG_COMMIT=\"$COMMIT\" -DRIG_COMMIT_D
 STAMP="$STAMP -DRIG_COMMIT_DATE=\"$COMMIT_DATE\" -DRIG_BUILD=\"$BUILD\""
 
 FLAGS="-std=c++23 -fno-exceptions -fno-rtti -g $OPT -Wall -Wextra -I$LLVM/include $STAMP"
-# The LLVM components Rig uses: the IR (core), and the x86 target that turns
-# it into object files.
-LLVM_LIBS="$("$LLVM/bin/llvm-config" --link-static --libfiles core target x86codegen x86asmparser x86desc x86info)"
+# The LLVM components Rig uses: the IR (core), the optimiser's pipelines
+# (passes), run when a build asks to be optimised, and the x86 target that
+# turns it into object files.
+LLVM_LIBS="$("$LLVM/bin/llvm-config" --link-static --libfiles core passes target x86codegen x86asmparser x86desc x86info)"
 # The system libraries LLVM uses. llvm-config --system-libs also names
 # zlib, zstd and libxml2, which would make their development packages a
 # requirement: the parts of LLVM Rig links don't need libxml2, and

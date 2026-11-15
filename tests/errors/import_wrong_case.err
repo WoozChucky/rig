@@ -1,0 +1,3 @@
+tests/errors/import_wrong_case.rig:3:9: error: there's no module 'basic' (looked in @BIN_MODULES@ and @MODULES@)
+    #import "basic";
+            ^

@@ -1,0 +1,10 @@
+// The checked workspace's program (build.rig), built with the default build
+// options: its index one past the end is checked, as rig build of a file
+// checks one, so it stops with a runtime error, checked.err, rather than
+// write past the array (checked_workspace_test). The checked_fast
+// workspace's program too, built optimised (checked_fast.rig).
+main :: () {
+    a : [4]int;
+    i := 4;
+    a[i] = 1;
+}

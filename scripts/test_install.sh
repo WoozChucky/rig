@@ -19,6 +19,9 @@
 #   - The hello world check: a build that fails gets the requirements
 #     message, and a program that builds but doesn't run gets another
 #     (a stand-in release, whose rig is a script, says which).
+#   - An upgrade replaces the archive's modules/ whole: a file the old
+#     modules/ had and the new one hasn't doesn't stay behind (the stand-in
+#     release again).
 #   - Installing the latest release: rig on the PATH's link, hello world
 #     built and run, the PATH line added to ~/.profile and ~/.bashrc, the
 #     extension installed.
@@ -304,9 +307,11 @@ done
 # through install.sh) says. By default it writes a hello that prints
 # "Hello, World!"; with build-fails, the build fails as a missing C
 # library makes it; with run-fails, it writes a hello that can't run, as a
-# temporary folder mounted noexec makes it.
+# temporary folder mounted noexec makes it. Beside rig, as in a release's
+# archive, is modules/, with Basic's module.rig.
 fake="$work/fake/download/v9.0.0"
-mkdir -p "$fake" "$work/fakerig"
+mkdir -p "$fake" "$work/fakerig/modules/Basic"
+echo "// Basic, as a stand-in release ships it." > "$work/fakerig/modules/Basic/module.rig"
 cat > "$work/fakerig/rig" <<'EOF'
 #!/bin/sh
 case $1 in
@@ -326,7 +331,7 @@ case $1 in
 esac
 EOF
 chmod +x "$work/fakerig/rig"
-tar -czf "$fake/rig-linux-x64.tar.gz" -C "$work/fakerig" rig
+tar -czf "$fake/rig-linux-x64.tar.gz" -C "$work/fakerig" rig modules
 (cd "$fake" && sha256sum rig-linux-x64.tar.gz > SHA256SUMS)
 fake_installer() {
     RIG_INSTALL_BASE_URL="file://$work/fake" installer --version 9.0.0 --no-vscode "$@"
@@ -345,6 +350,19 @@ says "built hello world, but running it failed (exit status 126)" || fail "a hel
 says "./hello: Permission denied" || fail "a hello world that doesn't run: the program's output"
 ! says "glibc's development files" || fail "a hello world that built but didn't run got the requirements message"
 pass "a hello world that builds but doesn't run is said to, without the requirements message"
+
+# The archive's modules/ is installed beside rig, and installing again
+# replaces it whole: stale.rig, added by hand, stands for a file an older
+# release's module had and the new one hasn't, which mustn't stay behind.
+fresh_home
+fake_installer --no-modify-path || fail "installing the stand-in release failed"
+modules="$HOME/.local/share/rig/modules"
+[ -f "$modules/Basic/module.rig" ] || fail "the stand-in release's modules/Basic/module.rig isn't installed"
+touch "$modules/Basic/stale.rig"
+fake_installer --no-modify-path || fail "installing the stand-in release again, over its modules/, failed"
+[ -f "$modules/Basic/module.rig" ] || fail "installing again lost modules/Basic/module.rig"
+[ ! -e "$modules/Basic/stale.rig" ] || fail "installing again left modules/Basic/stale.rig, which the release hasn't got"
+pass "installing again replaces modules/ whole: a file the release hasn't got doesn't stay behind"
 
 # --uninstall when the folder and the link are already gone (deleted by
 # hand) still removes the PATH lines, and says Rig is uninstalled.

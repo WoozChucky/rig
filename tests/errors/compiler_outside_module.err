@@ -1,0 +1,3 @@
+tests/errors/compiler_outside_module.rig:4:12: error: #compiler is only for the modules that ship with rig
+    make :: () #compiler;
+               ^

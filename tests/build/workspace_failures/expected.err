@@ -1,0 +1,7 @@
+broken.rig:4:14: error: unknown identifier 'putz'
+    main :: () { putz("hi"); }
+                 ^
+maker.rig:5:1: error: #run failed: runtime error: a program with 'main' can't create workspaces
+    #run create_workspace("more");
+    ^
+    in #run (maker.rig:5:6)

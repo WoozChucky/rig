@@ -29,6 +29,7 @@
 #include "interp_c_functions.cpp"
 #include "interp.cpp"
 #include "run.cpp"
+#include "compiler_module.cpp"
 #include "llvm_backend.cpp"
 #include "llvm_compression_stubs.cpp"
 #include "link.cpp"

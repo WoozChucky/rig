@@ -1,0 +1,8 @@
+// A build program (spec 7.9) is checked as any program is: its errors are
+// reported, by rig check too, and none of its #runs runs, so no workspace
+// is made.
+#import "Compiler";
+
+x : int = "text";
+
+#run { create_workspace("game"); }

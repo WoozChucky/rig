@@ -1,0 +1,5 @@
+// The b workspace's program (build.rig), which is never built: a's exit(3)
+// ends rig first.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () { puts("b"); }

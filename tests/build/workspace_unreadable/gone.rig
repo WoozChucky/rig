@@ -1,0 +1,3 @@
+// The further workspace's second file (build.rig), which the build program
+// removes after adding it.
+gone :: () {}

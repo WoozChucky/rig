@@ -1,0 +1,3 @@
+// The first workspace's only file (build.rig), which the build program
+// removes after adding it.
+main :: () {}

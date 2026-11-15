@@ -1,6 +1,6 @@
 // Basic's char (issue #134): ASCII classes and case on a u8, passed to
 // show as procedure values.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 show :: (name: string, test: (c: u8) -> bool, sample: string) {
     print_string(name);

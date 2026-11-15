@@ -90,15 +90,17 @@ What works today, as [the specification](docs/rig-spec.md) describes it:
 - **Procedures** that return several results (`q, r := divmod(7, 2);`), and procedure values: types such as `(int, int) -> int`, procedures kept in variables, fields and arrays and called through them, and `#c_call` procedures that C can call back; variables, constants and globals, with top-level declarations in any order; `if`, `while`, and `for` over a range or a sequence with `it` and `it_index`, `break` and `continue`.
 - **Programs of several files:** `#load "world/map.rig";` makes another file part of the program, its declarations joining the program's one top level. Each file is loaded once, so files may load each other.
 - **Code run while compiling:** `#run` runs the program's own code on the compiler's interpreter while it compiles. `PRIMES :: #run primes();` bakes what `primes` returns into the program as a constant, an array's count may be a `#run`, and a top-level `#run { ... }` runs for its effect.
+- **Modules:** `#import "Basic";` makes a module that ships with rig part of the program. Basic is Rig's first library, written in Rig: text and numbers, allocators, a string builder, a growable array, hash tables and printing. Compiler is what build programs use.
+- **Build programs:** a `build.rig`, written in Rig in place of a build script, that imports the Compiler module and has no `main`. Its `#run`s make workspaces, each a program to build with its own options (its output's name, optimised with LLVM's O2 pipeline or not, bounds checks on or off), and `rig build` with no file runs it and builds them ([below](#building-with-buildrig)).
 - **Runtime checks, on by default:** an index out of bounds, a null pointer dereference, an integer division by zero or a checked cast that would change a number stops the program with `PATH:LINE:COL: runtime error: MESSAGE` and exit status 101. `#no_abc` or `--no-bounds-checks` turns the bounds checks off.
 - **C interop:** a C function declared once with `#foreign libc` is called like any procedure, with the platform's C calling convention.
 - **Diagnostics** that name the file, line and column and show the line.
-- **Debug information** in every build: a PDB on Windows, DWARF on Linux. gdb, cdb, WinDbg, Visual Studio and VS Code stop at a line of any of the program's `.rig` files or at a procedure by its Rig name, show the call stack, step a line at a time, and show the variables with their values.
+- **Debug information** in every build: a PDB on Windows, DWARF on Linux. gdb, cdb, WinDbg, Visual Studio and VS Code stop at a line of any of the program's `.rig` files or at a procedure by its Rig name, show the call stack, step a line at a time, and show the variables with their values, in an unoptimised build.
 - **Windows x64 and Linux x86-64**, linked with each platform's own tools and C runtime.
 
 ## Status
 
-Rig is early. Milestones 1 (hello world) and 2 (the core language) of 8 are done, released as [Rig 0.2.0](https://github.com/WoozChucky/rig/releases/tag/v0.2.0), the first release; milestone 3, compile-time execution, is under way, with programs of several files (`#load`) and code run while compiling (`#run`, section 7.8 of [the specification](docs/rig-spec.md)) done. The [roadmap](https://github.com/WoozChucky/rig/issues/85) has the milestones and where each stands.
+Rig is early. Milestones 1 (hello world) and 2 (the core language) of 8 are done, released as [Rig 0.2.0](https://github.com/WoozChucky/rig/releases/tag/v0.2.0), the first release; milestone 3, compile-time execution, is under way, with programs of several files (`#load`), code run while compiling (`#run`, section 7.8 of [the specification](docs/rig-spec.md)), modules that ship with rig (`#import`) and build programs (`build.rig`, section 7.9) done. The [roadmap](https://github.com/WoozChucky/rig/issues/85) has the milestones and where each stands.
 
 ## Quick start
 
@@ -118,7 +120,30 @@ rig build hello.rig
 
 It prints `Hello, World!`.
 
-To build the compiler yourself instead, from this repository: **Windows** needs Visual Studio or its Build Tools with the "Desktop development with C++" workload:
+### Building with build.rig
+
+With a compiler built from this repository (below), or a release from 0.3.0 on, a program can also be built by a build program, `build.rig`: Rig code that `rig build` runs while compiling, in place of a build script. Save this as `build.rig` beside `hello.rig`:
+
+```rig
+#import "Compiler";
+
+build :: () {
+    w := create_workspace("hello");
+    o := get_build_options(w);
+    o.output_name = "greeter";
+    o.optimize    = true;
+    set_build_options(w, o);
+    add_build_file(w, "hello.rig");
+}
+
+#run build();
+```
+
+Then run `rig build` with no file, in that folder. It runs `build.rig`'s `#run`, which makes a workspace, a program to build, with `hello.rig` as its file, and then builds it, optimised, as `greeter` (`greeter.exe` on Windows). Since `build.rig` is ordinary Rig, it can build several programs, call C to copy files, or fail the build with `exit(1)`. Section 7.9 of [the specification](docs/rig-spec.md) has the rest.
+
+### Building the compiler
+
+To build the compiler yourself, from this repository, instead of installing it: **Windows** needs Visual Studio or its Build Tools with the "Desktop development with C++" workload:
 
 ```
 scripts\get_llvm.bat

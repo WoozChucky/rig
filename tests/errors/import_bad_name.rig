@@ -1,0 +1,7 @@
+// An #import names a module, not a path (spec 2.14): a module's name is
+// letters, digits and '_', a letter first, so a path to a module's
+// directory is no name, and isn't looked for. A module is reached by a
+// path with #load.
+#import "../modules/Basic";
+
+main :: () {}

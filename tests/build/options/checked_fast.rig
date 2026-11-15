@@ -1,0 +1,8 @@
+// The checked_fast workspace's main file (build.rig): checked.rig, #loaded
+// and built optimised, so its object is .build/checked_fast.obj
+// (checked_fast.o on Linux), named after this file, beside the checked
+// workspace's, for the runner to compare the two (optimised_object_test).
+// Its index past the end is still checked, and still stops it with
+// checked.err: the optimiser mustn't take the failed check's path for one
+// never taken (checked_workspace_test).
+#load "checked.rig";

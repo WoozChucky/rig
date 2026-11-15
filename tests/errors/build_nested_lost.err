@@ -1,0 +1,6 @@
+tests/errors/load/build_nested_lost_inner.rig:5:7: error: cannot read 'tests/errors/load/nope.rig': @NO_SUCH_FILE@
+    #load "nope.rig";
+          ^
+tests/errors/build_nested_lost.rig:9:10: error: workspace 'lost' is a build program; a workspace builds an ordinary program
+        w := create_workspace("lost");
+             ^

@@ -11,10 +11,11 @@
 //               | IDENT ':=' expression ';'                         a global variable
 //               | IDENT '::' expression ';'                         a constant
 //               | '#load' STRING ';'                                another file of the program
+//               | '#import' STRING ';'                              a module that ships with rig
 //               | run                                               code run while compiling
 //   run         = '#run' block | '#run' expression ';'
 //   procedure   = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
-//                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';')
+//                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
 //                                                                  (the STRING: the C function's name)
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
 //   param       = IDENT ':' type
@@ -130,6 +131,14 @@
 // #foreign` is "a foreign procedure is C's already: it takes no
 // '#c_call'".
 //
+// A procedure the compiler does itself, while compiling (spec 7.9), is
+// declared with #compiler after its signature, Jai's directive, and a ';'
+// in place of a body: `create_workspace :: (name: string) -> Workspace
+// #compiler;` (Ast_Proc.is_compiler). It's no C function either: `#c_call
+// #compiler` is "a #compiler procedure is the compiler's: it takes no
+// '#c_call'", and `#no_abc #compiler` "expected '{'", as before #foreign.
+// Which files may declare one is the checker's business.
+//
 // A procedure's type (spec 3) is written as its signature: `(int, int) ->
 // int`, `(a: *void, b: *void) -> s32 #c_call`, `()`. The parameters' names
 // are optional, and not part of the type. A type ends at a ',', so several
@@ -189,6 +198,13 @@
 // records that the program lacks it, as for a #load with no string. So it
 // does for a #load the recovery passes over, unreported, with a
 // declaration given up after another error.
+//
+// `#import "Basic";` (spec 2.14) names a module that ships with rig, which
+// the loader finds and reads (load.h). The parser records it as it records
+// a #load, an Ast_Load with is_import set, its path the module's name, and
+// every rule above holds for it too, its messages naming #import: "expected
+// a string after #import, as in #import "Basic";" and "#import can only be
+// at the top level".
 //
 // Code runs while compiling with #run (spec 7.8). #run e is a prefix
 // operator, binding as - and ! do (spec 5.2): #run f() + 1 is

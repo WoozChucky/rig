@@ -3,7 +3,7 @@
 // the language's own message, index I is out of bounds (count C), at
 // check_index in array.rig, whose line and column
 // basic_table_entry_bounds.err names. Edit one, edit the other.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 main :: () {
     t : Table;

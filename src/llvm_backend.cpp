@@ -8,9 +8,11 @@
 #include <llvm-c/Analysis.h>
 #include <llvm-c/Core.h>
 #include <llvm-c/DebugInfo.h>
+#include <llvm-c/Error.h>
 #include <llvm-c/Support.h>
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
+#include <llvm-c/Transforms/PassBuilder.h>
 
 Target target_host() {
 #ifdef _WIN32
@@ -79,6 +81,7 @@ struct Debug_Type {
 // What one translation needs, freed together by backend_free.
 struct Backend {
     Target target;
+    bool optimize;            // the module is optimised: its debug information says so
     LLVMContextRef context;
     LLVMModuleRef module;
     LLVMTargetMachineRef machine;
@@ -282,9 +285,27 @@ static void add_string_attribute(LLVMContextRef c, LLVMValueRef function, const 
 // which touches every page the same way. It calls it by name, so the
 // name is taken before the program's procedures are made, as C's memset
 // is (declare_stack_probe).
+//
+// When optimising, also knowing no C library function: "no-builtins", what
+// clang's -fno-builtin sets. LLVM's optimiser knows C's library functions
+// by name and type alone, whether the module only declares the function or
+// defines it, and internal or not. Rig names don't clash with C names
+// (spec 7.6), so without the attribute a program's own procedure called
+// like one would be taken for C's, both ways. A call of the program's
+// sqrt(4.0) would be folded into 2.0, its body never run. And a call LLVM
+// makes of a C function in place of another, puts for a printf of a plain
+// line, would go to the program's own puts, which has that name in the
+// module. With the attribute LLVM treats every call in the function as an
+// ordinary call: it rewrites none, not even a call of a foreign C
+// function, and makes no call of a C function of its own (a loop that
+// zeroes bytes stays a loop, not a memset). Its intrinsics are another
+// matter: llvm.memset still becomes a call of C's memset, by name
+// (declare_memory_functions). Unoptimised, no pass runs that could take a
+// procedure for C's, so the attribute is left out.
 static void mark_definition(Backend *b, LLVMValueRef function) {
     add_string_attribute(b->context, function, "frame-pointer", "all");
     if (b->target == TARGET_LINUX_X64) add_string_attribute(b->context, function, "probe-stack", "inline-asm");
+    if (b->optimize) add_string_attribute(b->context, function, "no-builtins", "");
 }
 
 // Whether any procedure of the module has an instruction of operation op.
@@ -302,7 +323,8 @@ static bool module_has(Ir_Module *m, Ir_Op op) {
 }
 
 // The C library's memmove, memset and memcpy, declared before the program's
-// own functions, in a module that copies or zeroes memory:
+// own functions, in a module that copies or zeroes memory, and in every
+// optimised module:
 //
 //   declare ptr @memmove(ptr, ptr, i64)
 //   declare ptr @memset(ptr, i32, i64)
@@ -315,7 +337,11 @@ static bool module_has(Ir_Module *m, Ir_Op op) {
 // declarations; they're here to take the names, as build_runtime takes
 // write and exit: a program's own procedure called memset is then the one
 // LLVM renames (memset.1), so LLVM's call goes to C's memset and not to the
-// program's. (size_t is 64 bits on both targets, and C's int 32.)
+// program's. The optimiser may make these intrinsics of its own too, in a
+// module that has neither IR_COPY nor IR_ZERO, so an optimised module
+// takes the names whatever it holds. (It makes no other call of a C
+// function, and takes none of the program's procedures for C's:
+// mark_definition.) (size_t is 64 bits on both targets, and C's int 32.)
 static void declare_memory_functions(Backend *b) {
     LLVMContextRef c = b->context;
     LLVMTypeRef ptr = LLVMPointerTypeInContext(c, 0), i32 = LLVMInt32TypeInContext(c),
@@ -674,14 +700,15 @@ static void begin_debug_info(Backend *b, Ir_Module *m, Arena *a) {
     // clang, "clang LLVM (rustc version ...)", for gdb's sake: gdb trusts
     // the line table to find a prologue's end only for a producer that
     // starts with "clang ". Rig's needn't: gdb also reads DWARF 5's
-    // prologue_end, which LLVM writes.) Not optimised; full emission (types
-    // and variables too, not only lines). Its file is the main one, the
-    // file rig build was given, as a C unit's is the .c file compiled, not
-    // its headers.
+    // prologue_end, which LLVM writes.) Optimised when the module is (as
+    // clang's -O2 -g says, so a debugger expects variables it can't show);
+    // full emission (types and variables too, not only lines). Its file is
+    // the main one, the file rig build was given, as a C unit's is the .c
+    // file compiled, not its headers.
     String producer = version_producer(a, build_stamp(), llvm_version(a));
     b->unit = LLVMDIBuilderCreateCompileUnit(b->debug, LLVMDWARFSourceLanguageC99, b->files[0],
-                                             (const char *)producer.data, (size_t)producer.count, 0, "", 0, 0, "",
-                                             0, LLVMDWARFEmissionFull, 0, 0, 0, "", 0, "", 0);
+                                             (const char *)producer.data, (size_t)producer.count, b->optimize, "", 0,
+                                             0, "", 0, LLVMDWARFEmissionFull, 0, 0, 0, "", 0, "", 0);
 
     // The flags: which version of LLVM's debug metadata this is (a module
     // whose version LLVM doesn't know has its debug information dropped),
@@ -1106,15 +1133,16 @@ static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMVal
     // names the procedure by it, so a Rig `write` that LLVM renamed write.1
     // (C's write was taken first) would be write.1 to `break` and `bt`.
     // Local to the unit unless exported, as its symbol is; a definition;
-    // prototyped, as a C function with a parameter list is. In the file
-    // it's declared in, which is where its scopes, its variables and so
-    // every line of its body are (ir.h's "Positions"): a location names no
-    // file of its own, and takes its scope's, so a breakpoint on a line of
-    // a loaded file, and a stop or a backtrace there, finds that file.
+    // prototyped, as a C function with a parameter list is; optimised when
+    // the module is, as the compile unit says. In the file it's declared
+    // in, which is where its scopes, its variables and so every line of its
+    // body are (ir.h's "Positions"): a location names no file of its own,
+    // and takes its scope's, so a breakpoint on a line of a loaded file,
+    // and a stop or a backtrace there, finds that file.
     LLVMMetadataRef file = debug_file(b, p->pos);
     LLVMMetadataRef subprogram = LLVMDIBuilderCreateFunction(
         b->debug, file, (const char *)p->source_name.data, (size_t)p->source_name.count, nullptr, 0, file,
-        (unsigned)p->pos.line, type, !p->is_export, 1, (unsigned)p->body.line, LLVMDIFlagPrototyped, 0);
+        (unsigned)p->pos.line, type, !p->is_export, 1, (unsigned)p->body.line, LLVMDIFlagPrototyped, b->optimize);
     LLVMSetSubprogram(function, subprogram);
 
     // Scope 0 is the body, the subprogram itself; each other scope is a
@@ -1537,6 +1565,31 @@ static void build_body(Backend *b, Arena *a, Ir_Module *m, Ir_Proc *p, LLVMValue
     }
     declare_variables(b, a, p, &body);
 
+    // Optimised, every stack slot holds zeros before the body runs. A `---`
+    // local's slot is never stored to by its declaration, and reading it
+    // first gives an unspecified value (spec 8.6); unoptimised that's the
+    // bytes the slot held, but to the optimiser a read of memory nothing
+    // stored is undefined, and a branch on it unreachable: it would drop the
+    // code after it. Zero is one unspecified value, and the optimiser removes
+    // the stores the body overwrites. A slot of bytes is zeroed with a
+    // memset, as an IR_ZERO is. (A `---` local in a loop still holds its
+    // previous iteration's value, as unoptimised.) These run before the
+    // body, with no location, as declare_variables' stores do.
+    for (s64 k = 0; b->optimize && k < p->blocks.count; k++) {
+        Ir_Block *block = p->blocks[k];
+        for (s64 n = 0; n < block->instrs.count; n++) {
+            Ir_Instr *instr = &block->instrs[n];
+            if (instr->op != IR_LOCAL) continue;
+            LLVMValueRef slot = body.values[instr->result];
+            if (instr->type == IR_VOID) {
+                LLVMBuildMemSet(body.builder, slot, LLVMConstNull(LLVMInt8TypeInContext(c)),
+                                LLVMConstInt(LLVMInt64TypeInContext(c), instr->constant, 0), instr->align);
+            } else {
+                LLVMBuildStore(body.builder, LLVMConstNull(memory_type(c, instr->type)), slot);
+            }
+        }
+    }
+
     for (s64 k = 0; k < p->blocks.count; k++) {
         LLVMPositionBuilderAtEnd(body.builder, body.blocks[k]);
         Ir_Block *block = p->blocks[k];
@@ -1666,7 +1719,9 @@ static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Glob
 // so a C name is always C's: a procedure or a global of the program with
 // the same name, free or malloc, is the one LLVM renames (free.1), and as
 // an internal symbol it works the same under any name. Rig names don't
-// clash with C names, so the program may well have both (spec 7.6). Not
+// clash with C names, so the program may well have both (spec 7.6), and
+// the optimiser, which knows C's functions by name, mustn't take the
+// program's for C's (mark_definition). Not
 // every symbol of the program is internal, though: main is exported, the
 // entry point the C runtime calls by that name, and renamed main.1 the
 // program wouldn't link. So the checker refuses main as a C name, and the
@@ -1700,13 +1755,16 @@ static void declare_foreign_functions(Backend *b, Ir_Module *m, Arena *a, LLVMVa
     }
 }
 
-// Builds and verifies the LLVM module for `m`. False with `error` set when
-// LLVM doesn't know the target or the module doesn't verify; either way the
-// caller calls backend_free.
-static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *error) {
+// Builds and verifies the LLVM module for `m`, with a target machine that
+// compiles at LLVM's default level, which optimises, when `optimize` is set,
+// and at its lowest otherwise (run_passes optimises the module itself).
+// False with `error` set when LLVM doesn't know the target or the module
+// doesn't verify; either way the caller calls backend_free.
+static bool backend_build(Backend *b, Ir_Module *m, Target t, bool optimize, Arena *a, String *error) {
     initialise_llvm();
     const char *triple = target_triple(t);
     b->target = t;
+    b->optimize = optimize;
     b->arena = a;
     b->context = LLVMContextCreate();
     b->module = LLVMModuleCreateWithNameInContext("rig", b->context);
@@ -1721,8 +1779,8 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     // Position-independent code on Linux, so the object links into a PIE as
     // well as a fixed-address executable; Windows' default is right for it.
     LLVMRelocMode reloc = t == TARGET_LINUX_X64 ? LLVMRelocPIC : LLVMRelocDefault;
-    b->machine = LLVMCreateTargetMachine(target, triple, "x86-64", "", LLVMCodeGenLevelNone, reloc,
-                                         LLVMCodeModelDefault);
+    LLVMCodeGenOptLevel level = optimize ? LLVMCodeGenLevelDefault : LLVMCodeGenLevelNone;
+    b->machine = LLVMCreateTargetMachine(target, triple, "x86-64", "", level, reloc, LLVMCodeModelDefault);
     LLVMTargetDataRef layout = LLVMCreateTargetDataLayout(b->machine);
     LLVMSetModuleDataLayout(b->module, layout);
     LLVMDisposeTargetData(layout);
@@ -1730,7 +1788,9 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
 
     // The runtime first, so its C names are taken before the program's.
     if (module_has(m, IR_PANIC)) build_runtime(b);
-    if (module_has(m, IR_COPY) || module_has(m, IR_ZERO)) declare_memory_functions(b);
+    // C's memory functions where LLVM may call them: for a copy or a zero,
+    // or anywhere once the optimiser runs.
+    if (optimize || module_has(m, IR_COPY) || module_has(m, IR_ZERO)) declare_memory_functions(b);
     declare_stack_probe(b);
     LLVMValueRef *functions = arena_new_array<LLVMValueRef>(a, m->procs.count ? m->procs.count : 1);
     declare_foreign_functions(b, m, a, functions);
@@ -1799,10 +1859,12 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     }
 
     // Every function of the program first, so a body can call one defined
-    // after it. (The foreign ones are declared already.)
+    // after it. (The foreign ones are declared already.) A #compiler
+    // procedure is none: the compiler does it while compiling, and lowering
+    // refused every call the program would make, so nothing names it.
     for (s64 i = 0; i < m->procs.count; i++) {
         Ir_Proc *p = m->procs[i];
-        if (p->is_foreign) continue;
+        if (p->is_foreign || p->is_compiler) continue;
         functions[i] = LLVMAddFunction(b->module, string_cstr(a, p->name), function_type(c, p, a));
         if (!p->is_export) LLVMSetLinkage(functions[i], LLVMInternalLinkage);
         mark_definition(b, functions[i]);
@@ -1829,7 +1891,8 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
         LLVMSetInitializer(globals[i], init);
     }
     for (s64 i = 0; i < m->procs.count; i++) {
-        if (!m->procs[i]->is_foreign) build_body(b, a, m, m->procs[i], functions[i], functions, globals);
+        Ir_Proc *p = m->procs[i];
+        if (!p->is_foreign && !p->is_compiler) build_body(b, a, m, p, functions[i], functions, globals);
     }
 
     // The debug information is complete: the builder resolves what it left
@@ -1844,6 +1907,25 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, Arena *a, String *
     return true;
 }
 
+// LLVM's default<O2> pipeline, the one clang runs for -O2, on b->module:
+// SROA, inlining, constant propagation, loop and vector work, and the rest.
+// The passes are given b->machine, so they weigh instructions by what they
+// cost on x86-64. The module has verified already (backend_build), and the
+// pipeline keeps it valid, debug information included. False with `error`
+// set when LLVM refuses the pipeline: only an LLVM that no longer knew
+// default<O2> would.
+static bool run_passes(Backend *b, Arena *a, String *error) {
+    LLVMPassBuilderOptionsRef options = LLVMCreatePassBuilderOptions();
+    LLVMErrorRef failure = LLVMRunPasses(b->module, "default<O2>", b->machine, options);
+    LLVMDisposePassBuilderOptions(options);
+    if (!failure) return true;
+    // Taking the message consumes the error; the message is LLVM's to free.
+    char *message = LLVMGetErrorMessage(failure);
+    *error = string_copy(a, str(message));
+    LLVMDisposeErrorMessage(message);
+    return false;
+}
+
 static void backend_free(Backend *b) {
     table_free(&b->debug_types);
     if (b->debug) LLVMDisposeDIBuilder(b->debug);
@@ -1852,17 +1934,25 @@ static void backend_free(Backend *b) {
     if (b->context) LLVMContextDispose(b->context);
 }
 
-bool llvm_ir_text(Arena *a, Ir_Module *m, Target t, String *text, String *error) {
+// The module both public functions start from: built and verified, then
+// optimised when `optimize` is set. False with `error` set when LLVM doesn't
+// know the target, the module doesn't verify or LLVM refuses the pipeline;
+// either way the caller calls backend_free.
+static bool backend_prepare(Backend *b, Ir_Module *m, Target t, bool optimize, Arena *a, String *error) {
+    return backend_build(b, m, t, optimize, a, error) && (!optimize || run_passes(b, a, error));
+}
+
+bool llvm_ir_text(Arena *a, Ir_Module *m, Target t, String *text, String *error, bool optimize) {
     Backend b = {};
-    bool ok = backend_build(&b, m, t, a, error);
+    bool ok = backend_prepare(&b, m, t, optimize, a, error);
     if (ok) *text = take_message(a, LLVMPrintModuleToString(b.module));
     backend_free(&b);
     return ok;
 }
 
-bool llvm_emit_object(Ir_Module *m, Target t, String path, Arena *a, String *error) {
+bool llvm_emit_object(Ir_Module *m, Target t, String path, bool optimize, Arena *a, String *error) {
     Backend b = {};
-    bool ok = backend_build(&b, m, t, a, error);
+    bool ok = backend_prepare(&b, m, t, optimize, a, error);
     if (ok) {
         char *message = nullptr;
         // LLVM takes a char *, though it doesn't change the name.

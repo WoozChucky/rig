@@ -1,0 +1,15 @@
+// A workspace builds an ordinary program (spec 7.9): one whose program is
+// itself a build program, load/build_nested_inner.rig, is an error at the
+// create_workspace call that made it, the callee's name, and isn't built.
+// The file is relative to this one's directory. Its name holds a zero byte,
+// which the error says whole, the zero written \0. The empty workspace's
+// error, made before it, is printed before any workspace is built, and
+// once: not again with the nested one's. rig check never runs a top-level
+// #run, so it has nothing to say.
+#import "Compiler";
+
+#run {
+    create_workspace("empty");
+    w := create_workspace("in\0ner");
+    add_build_file(w, "load/build_nested_inner.rig");
+}

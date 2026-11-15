@@ -5944,3 +5944,64 @@ TEST(run_bodies_count_their_own_levels) {
               expected);
     arena_free(&a);
 }
+
+// Issue #116: #compiler procedures (spec 7.9). Only a module that ships
+// with rig may declare one; it takes and returns Rig's structs and strings,
+// which no C function could, and it can't be a value.
+
+// check_source, with the file taken for a module's (Source_File.in_module),
+// as the loader marks a file inside one of the modules' places.
+static String check_module_source(Arena *a, const char *text) {
+    Token_List *list = src(text);
+    list->diag.files[0].in_module = true;
+    Ast_File *file = parse(list->tokens, a, &list->diag);
+    check(file, a, &list->diag);
+    diag_sort(&list->diag);
+    String result = messages(a, &list->diag);
+    token_list_free(list);
+    return result;
+}
+
+// The Compiler module's kind of declarations, small: a struct and a string
+// in, a struct out, and two of them in with nothing out.
+static const char *const COMPILER_DECLARATIONS = "Workspace :: struct { id: s64; }\n"
+                                                 "Options :: struct { name: string; on: bool; }\n"
+                                                 "make :: (name: string) -> Workspace #compiler;\n"
+                                                 "get :: (w: Workspace) -> Options #compiler;\n"
+                                                 "set :: (w: Workspace, o: Options) #compiler;\n";
+
+TEST(compiler_procedures_only_in_modules) {
+    // At the directive, in a file outside the modules' places.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "f :: () #compiler;\nmain :: () {}\n"),
+              "1:9: #compiler is only for the modules that ship with rig\n");
+    CHECK_STR(check_module_source(&a, "f :: () #compiler;\nmain :: () {}\n"), "");
+    arena_free(&a);
+}
+
+TEST(compiler_procedures_take_structs_and_strings) {
+    // The C rules a foreign procedure's signature follows aren't the
+    // compiler's: its procedures take and return Rig's own types.
+    Arena a = arena_make();
+    CHECK_STR(check_module_source(&a, joined(&a, COMPILER_DECLARATIONS, "main :: () {}\n")), "");
+    arena_free(&a);
+}
+
+TEST(compiler_procedures_arent_values) {
+    // Nothing in the program implements one, so there's no address to take:
+    // a constant naming it and a variable holding it are each one error, at
+    // the name.
+    Arena a = arena_make();
+    CHECK_STR(check_module_source(&a, joined(&a, COMPILER_DECLARATIONS, "M :: make;\nmain :: () { f := make; }\n")),
+              "6:6: 'make' can't be a value: the compiler does it\n"
+              "7:19: 'make' can't be a value: the compiler does it\n");
+    arena_free(&a);
+}
+
+TEST(compiler_main_needs_a_body) {
+    // main is where the program starts, so the compiler can't be doing it.
+    Arena a = arena_make();
+    CHECK_STR(check_module_source(&a, "main :: () #compiler;\n"),
+              "1:1: 'main' must have a body: it's where the program starts\n");
+    arena_free(&a);
+}

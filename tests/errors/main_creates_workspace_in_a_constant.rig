@@ -1,0 +1,9 @@
+// A constant's #run runs while checking (spec 7.8), so rig check runs it
+// too, with the compiler there to do its #compiler calls: a program with
+// main can't make workspaces (spec 7.9), so create_workspace fails, a
+// runtime error at the call's name, and rig check says so as rig build does.
+#import "Compiler";
+
+W :: #run create_workspace("tools");
+
+main :: () {}

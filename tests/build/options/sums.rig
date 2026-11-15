@@ -1,0 +1,62 @@
+// The plain and fast workspaces' program (build.rig), plain's main file and
+// #loaded by fast's, fast.rig: the same code built unoptimised and
+// optimised, which must print the same. Each part is
+// something the optimiser rewrites: a loop over an array, a struct passed
+// and returned, an index that is checked, a recursive procedure, a float
+// sum, and integer arithmetic that wraps (spec 5.3), which LLVM mustn't take
+// for undefined. Their data starts from what a call to C returns, which the
+// optimiser can't know, so it can't work them out while compiling: they run
+// in the optimised program.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Pair :: struct { low: int; high: int; }
+
+// The smallest and the largest of the array's values.
+bounds :: (values: [8]int) -> Pair {
+    p := Pair.{values[0], values[0]};
+    for values {
+        if it < p.low { p.low = it; }
+        if it > p.high { p.high = it; }
+    }
+    return p;
+}
+
+// p with its fields swapped and each doubled.
+flipped :: (p: Pair) -> Pair {
+    return Pair.{p.high * 2, p.low * 2};
+}
+
+fibonacci :: (n: int) -> int {
+    if n < 2 { return n; }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+main :: () {
+    // The count of what printf wrote, 5: a write can fail, so the optimiser
+    // can't take it for a constant.
+    start := cast(int) printf("sums\n");
+    values : [8]int;
+    for 0..7 { values[it] = (it * 37 + start * 2 + 1) % 23 - 9; }
+    total := 0;
+    for values { total += it * it; }
+    printf("sum of squares %lld\n", total);
+
+    p := bounds(values);
+    printf("bounds %lld %lld\n", p.low, p.high);
+    q := flipped(p);
+    printf("flipped %lld %lld\n", q.low, q.high);
+    // An index the optimiser can't know either, so its bounds check stays.
+    printf("values[%lld] %lld\n", start, values[start]);
+
+    printf("fibonacci(20) %lld\n", fibonacci(20));
+
+    sum : float64 = 0.0;
+    for 1..100 { sum += 1.0 / cast(float64) it; }
+    printf("harmonic(100) %.3f\n", sum);
+
+    big := 9223372036854775807;
+    big += start - 4;
+    small : u8 = 250;
+    small += cast(u8) (start * 2);
+    printf("wrapped %lld %d\n", big, small);
+}

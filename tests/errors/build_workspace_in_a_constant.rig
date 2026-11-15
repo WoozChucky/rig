@@ -1,0 +1,8 @@
+// A build program's (spec 7.9) expression #runs may make workspaces too:
+// a constant's #run runs while checking (spec 7.8), so rig check runs it,
+// and accepts it. The workspace it made counts as one a top-level #run
+// makes, so rig build finds it has no files, at the create_workspace call's
+// name. rig check never builds, so it has nothing to say.
+#import "Compiler";
+
+W :: #run create_workspace("game");

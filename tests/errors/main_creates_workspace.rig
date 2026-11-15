@@ -1,0 +1,9 @@
+// A program with main is built, so it can't make workspaces (spec 7.9),
+// even while compiling: create_workspace fails, a runtime error at the
+// call's name, and the #run that called it fails there. rig check never
+// runs a top-level #run, so it has nothing to say.
+#import "Compiler";
+
+#run { create_workspace("tools"); }
+
+main :: () {}

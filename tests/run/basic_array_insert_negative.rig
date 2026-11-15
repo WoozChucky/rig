@@ -3,7 +3,7 @@
 // the program with the language's own message, as if the count were one
 // more, at check_index in array.rig, whose line and column
 // basic_array_insert_negative.err names. Edit one, edit the other.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 main :: () {
     a : Array;

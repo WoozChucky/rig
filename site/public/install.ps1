@@ -266,7 +266,14 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
         # 3. Unpack into the temporary folder first: an archive that can't
         # be read stops here, with nothing installed. Then copy its files
         # over the old ones. rig.exe finds lld-link.exe beside it, so they
-        # stay together. The archive is unpacked with .NET's ZipFile rather
+        # stay together, and the modules that ship with it in modules\
+        # beside it. The programs and the other files go first: a program
+        # that is running can't be overwritten, and when one is, the copy
+        # stops there and the old installation is still whole. Only then is
+        # the old modules\ removed and the new one copied in, so it replaces
+        # it whole: a file a module no longer has mustn't stay behind, and
+        # Copy-Item copies a folder into the one there, keeping its other
+        # files. The archive is unpacked with .NET's ZipFile rather
         # than Expand-Archive: in Windows PowerShell 5.1 that is a function
         # of a script module, which doesn't see the block's preferences, so
         # it would draw its progress bar, slowly, file by file. (5.1 needs
@@ -280,8 +287,12 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
         }
         if (-not (Test-Path -LiteralPath (Join-Path $unpacked 'rig.exe'))) { throw "$archive has no rig.exe in it" }
         New-Item -ItemType Directory -Force -Path $dir > $null
+        $modules = Join-Path $dir 'modules'
         try {
-            Copy-Item -Path (Join-Path $unpacked '*') -Destination $dir -Force
+            Get-ChildItem -LiteralPath $unpacked | Where-Object { $_.Name -ne 'modules' } | Copy-Item -Destination $dir -Recurse -Force
+            if (Test-Path -LiteralPath $modules) { Remove-Item -LiteralPath $modules -Recurse -Force }
+            $newModules = Join-Path $unpacked 'modules'
+            if (Test-Path -LiteralPath $newModules) { Copy-Item -LiteralPath $newModules -Destination $dir -Recurse -Force }
         } catch {
             throw "couldn't replace the files in $dir ($($_.Exception.Message)). Windows can't overwrite a program that is running: if rig.exe is (a build, or VS Code's extension checking a file), wait for it or close VS Code, then run this again"
         }

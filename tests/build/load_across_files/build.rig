@@ -1,0 +1,14 @@
+// A workspace of two files (spec 7.9): the first is the program's main
+// file, and the second is loaded right after it, before the file the main
+// file #loads. Each file's #loads are relative to that file, and the files
+// a build program adds are relative to the build program's directory.
+#import "Compiler";
+
+#run {
+    w := create_workspace("game");
+    o := get_build_options(w);
+    o.output_name = "game";
+    set_build_options(w, o);
+    add_build_file(w, "src/main.rig");
+    add_build_file(w, "src/extra.rig");
+}

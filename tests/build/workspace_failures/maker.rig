@@ -1,0 +1,7 @@
+// The maker workspace's program (build.rig): it has main, so it is an
+// ordinary program, and its top-level #run's create_workspace fails.
+#import "Compiler";
+
+#run create_workspace("more");
+
+main :: () { }
