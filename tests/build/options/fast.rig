@@ -1,0 +1,4 @@
+// The fast workspace's main file (build.rig): sums.rig, #loaded, so its
+// object is .build/fast.obj (fast.o on Linux), named after this file, and
+// the plain workspace's, .build/sums.obj, stays beside it.
+#load "sums.rig";

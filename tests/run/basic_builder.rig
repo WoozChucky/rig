@@ -3,7 +3,7 @@
 // with nothing in it, which allocates nothing, the builder's own text
 // appended to itself, and memory that comes from the builder's allocator
 // and goes back to it.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 // int's most negative value.
 INT_SMALLEST :: -9223372036854775808;

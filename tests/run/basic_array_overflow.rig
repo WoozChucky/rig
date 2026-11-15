@@ -4,7 +4,7 @@
 // that, and given null the array stops the program where it next reaches
 // an element, with the language's null pointer dereference, at the line of
 // array.rig this .err names.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 Point :: struct { x: int; y: int; }
 

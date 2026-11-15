@@ -5,7 +5,7 @@
 // bytes and of none, elements of the array itself added to it while it
 // moves, and memory that comes from the array's allocator and goes back to
 // it.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 Point :: struct { x: int; y: int; }
 

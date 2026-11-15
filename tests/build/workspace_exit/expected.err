@@ -1,0 +1,4 @@
+a.rig:6:1: error: #run failed: runtime error: index 2 is out of bounds (count 1)
+    #run { a : [1]int; i := 2; a[i] = 0; }
+    ^
+    in #run (a.rig:6:29)

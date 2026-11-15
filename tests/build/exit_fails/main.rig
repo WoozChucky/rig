@@ -1,0 +1,5 @@
+// The never workspace's program (build.rig), which is never built: the
+// build program's exit(1) ends rig first.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () { puts("Hello, World!"); }

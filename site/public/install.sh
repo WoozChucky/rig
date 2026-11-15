@@ -352,11 +352,16 @@ install_rig() {
     # read stops here, with nothing installed. Then each file is moved
     # over the old one, which replaces it even while it runs (a new file,
     # where writing into a running program's file fails with "Text file
-    # busy"). rig finds ld.lld beside its own file, so they stay together.
+    # busy"). rig finds ld.lld beside its own file, so they stay together,
+    # and the modules that ship with it in modules/ beside it. The old
+    # modules/ is removed first, so the new one replaces it whole: a file a
+    # module no longer has mustn't stay behind, and mv can't move a folder
+    # over one that isn't empty.
     mkdir "$work/unpacked" || die "couldn't make $work/unpacked"
     tar -xzf "$work/$archive" -C "$work/unpacked" || die "couldn't unpack $archive"
     [ -x "$work/unpacked/rig" ] || die "$archive has no rig in it"
     mkdir -p "$share_dir" || die "couldn't make $share_dir"
+    rm -rf "$share_dir/modules" || die "couldn't remove the old $share_dir/modules"
     for file in "$work/unpacked"/*; do
         mv -f "$file" "$share_dir/" || die "couldn't install $file into $share_dir"
     done

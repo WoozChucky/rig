@@ -1,0 +1,2 @@
+rig: error: cannot read 'gone.rig': @NO_SUCH_FILE@
+rig: error: cannot read 'gone_main.rig': @NO_SUCH_FILE@

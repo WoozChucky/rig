@@ -1,0 +1,16 @@
+// The counter workspace's program (build.rig), in a directory of its own.
+// Its label and its top-level #run are its own, though the greeter's program
+// declares the same names.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+label := "the counter";
+
+#run printf("compiling %.*s\n", cast(s32) label.count, label.data);
+
+main :: () {
+    for 1..3 {
+        if it > 1 { printf(" "); }
+        printf("%lld", it);
+    }
+    printf("\n");
+}

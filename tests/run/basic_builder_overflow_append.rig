@@ -6,7 +6,7 @@
 // No allocator has that many bytes, and given null the builder stops the
 // program at its copy with the language's null pointer dereference, at the
 // line of builder.rig this .err names.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 LARGEST :: 9223372036854775807; // int's largest value
 

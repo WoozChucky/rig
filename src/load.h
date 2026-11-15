@@ -31,6 +31,11 @@
 //   for any other. It needn't exist, and it keeps the name it would have
 //   on disk: for the main file the path the caller gives, for any other the
 //   one its first #load gives it.
+// - A workspace of a build program (spec 7.9) may have further files after
+//   its main file, which its program's loading is given with their texts,
+//   read by the driver. They come right after the main file, in the order
+//   given, as if it #loaded each of them first, keeping the names they're
+//   given, and each is known by the same identity as any file.
 // - The order is the main file's, then each loaded file's in the order its
 //   first #load was met, the files walked in that same order: a queue, not
 //   a recursion, so a chain of loads of any length takes no more stack
@@ -44,33 +49,105 @@
 //   a #load path can't contain a zero byte  (the system's paths end at one)
 //   'src/x.txt' isn't a .rig file           (the file isn't read)
 //   cannot read 'src/x.rig': MESSAGE        (MESSAGE the system's, os_error_message)
+//
+// `#import "Basic";` (spec 2.14) loads a module that ships with rig: the
+// module NAME is the file NAME/module.rig in the first of the places beside
+// rig that has it (Module_Places, module_lookup). A module's name is
+// letters, digits and '_', a letter first, so it's never a path, and it's
+// matched as written, on Windows too. The file found is named by its
+// absolute path, and from there it's a #load of that path: the same
+// identity, so a module imported twice, or imported and #loaded by a path,
+// is read once, under the name of whichever reached it first; its own
+// #loads relative to it; the same error when it can't be read. Its errors,
+// at the #import's string, each also losing the file:
+//   '../x' isn't a module's name
+//   there's no module 'Nope' (looked in DIR1 and DIR2)   (the places, as Module_Places has them)
+//
+// A file whose absolute path is inside one of the places, at any depth, is
+// a module's, whether an #import reached it or a #load did, the main file
+// included (Source_File.in_module): only such a file may declare #compiler
+// procedures (spec 7.9), which the checker says. On Windows the case of
+// the path doesn't count there, as it doesn't in a file's name.
+//
+// A program that reaches the Compiler module's module.rig (the one
+// module_lookup finds for "Compiler" in the places), by an #import or by a
+// #load of any spelling of its path, the main file or a workspace's further
+// file being that file included, is recorded as reaching it
+// (Ast_File.reaches_compiler), at the #import or #load that first named it
+// (compiler_pos), or at the file's own 1:1 when it's the main file or a
+// further file. The further files are added before any #load is followed,
+// so when one of them is the module, a main file's #import of it doesn't
+// count as first. Without a procedure called main, such a program is a
+// build program (ast_is_build_program, spec 7.9): it builds others, and
+// isn't an executable itself.
 
 #pragma once
 
 #include "parser.h"
 
+// Where #import looks for a module (spec 2.14), in order:
+// <rig's directory>/modules, a release archive's, beside rig; then
+// <rig's directory>/../modules, the repository's, bin/ beside modules/.
+// Each absolute, with the host's separators (path_absolute).
+struct Module_Places {
+    String places[2];
+};
+
+// The places of the rig running (os_executable_directory), in the arena.
+Module_Places module_places(Arena *a);
+
+// The module NAME's module.rig: the first place with an entry named exactly
+// NAME (os_list_directory: case counts on Windows too) whose module.rig
+// exists; {} when there is none. NAME must be a module's name (letters,
+// digits and '_', a letter first), which the caller checked. The path is
+// the place, then NAME, then module.rig, each after the host's separator,
+// in the arena.
+String module_lookup(Arena *a, const Module_Places *places, String name);
+
+// What load_program may be given besides the main file, each optional.
+struct Load_Options {
+    // A file whose text is stdin_text instead of what's on disk (rig check
+    // --stdin-for), when not empty: load_program says how it's found.
+    String stdin_for;
+    String stdin_text;
+    bool *stdin_for_reached;       // when given, set to whether the program reached stdin_for
+    const Module_Places *modules;  // where #import looks, and where a module's files are (in_module); null:
+                                   // module_places(), rig's own
+    // A workspace's further files (spec 7.9), loaded right after the main
+    // file, before its #loads, in this order, as if it #loaded each first;
+    // named by their paths as given. more_texts holds their texts, read by
+    // the caller, one for each.
+    Array<String> more_files;
+    Array<String> more_texts;
+};
+
 // Lexes and parses `text`, the main file, named `path` (which need not
 // exist: rig check --stdin reads the text from standard input, and its
 // path only names it and says where its #loads are), then every file it
-// #loads, transitively, each once, in load order, into one tree: every
-// file's declarations, broken ones included. Every file is registered with
-// `d` (diag_add_file) and located from the directory rig runs in
-// (diag_locate_file, os_current_directory), the main file first. Errors go
-// to `d`; the tree is returned even with errors, never null, so the checker
-// still runs and reports what it finds in the rest. The tree and the texts
-// read are in the arena; the files' paths are copied into `d`
-// (diag_add_file), so they last as long as it does; each file's tokens are
-// freed once it's parsed.
+// #loads or #imports, transitively, each once, in load order, into one
+// tree: every file's declarations, broken ones included. Every file is
+// registered with `d` (diag_add_file), located from the directory rig
+// runs in (diag_locate_file, os_current_directory), and marked when it's
+// a module's (Source_File.in_module), the main file first.
+// Errors go to `d`; the tree is returned even with errors, never null, so
+// the checker still runs and reports what it finds in the rest. The tree
+// and the texts read are in the arena; the files' paths are copied into
+// `d` (diag_add_file), so they last as long as it does; each file's tokens
+// are freed once it's parsed.
 //
-// With stdin_for (when not empty), a file whose text is stdin_text instead
-// of what's on disk, wherever the program loads it, the main file included
-// (then `text` is unused). It needn't exist. It keeps the name its #load
-// gives it (load_path), or `path` for the main file. stdin_text, as `text`,
-// isn't copied: the tree's names and `d` point into it, so the caller keeps
-// it alive as long as both.
-// *stdin_for_reached, when given, says whether the program reached it.
-Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, String stdin_for = {},
-                       String stdin_text = {}, bool *stdin_for_reached = nullptr);
+// The options (Load_Options), when given: with stdin_for (when not empty),
+// a file whose text is stdin_text instead of what's on disk, wherever the
+// program loads it, the main file included (then `text` is unused). It
+// needn't exist. It keeps the name its #load gives it (load_path), or
+// `path` for the main file. stdin_text, as `text`, isn't copied: the tree's
+// names and `d` point into it, so the caller keeps it alive as long as
+// both. *stdin_for_reached, when given, says whether the program reached
+// it. modules, when given, are the places #import looks in, and that say
+// which files are a module's, in place of rig's own (module_places): the
+// tests' own modules. more_files, with their texts in more_texts, are
+// added right after the main file, as if it #loaded each first (a
+// workspace's further files); the texts, as `text`, aren't copied.
+Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const Load_Options *options = nullptr);
 
 // Whether paths a and b, each from the directory rig runs in, name one file
 // by the loader's rules: the same id (os_file_id) when both have one, else,

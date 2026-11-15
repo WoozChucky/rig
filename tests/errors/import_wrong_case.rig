@@ -1,0 +1,5 @@
+// A module's name is matched as written (spec 2.14): basic isn't Basic, on
+// Windows too, though its file system would open modules\basic there.
+#import "basic";
+
+main :: () {}

@@ -4,7 +4,7 @@
 //
 // The program also declares C's malloc itself, under C's own name, which
 // Basic leaves free to declare: Basic's own is c_malloc (issue #135).
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 malloc :: (size: u64) -> *void #foreign libc;
 

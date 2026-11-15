@@ -1,0 +1,6 @@
+// The failing workspace's program (build.rig): its top-level #run fails,
+// and no exit() ends rig after it, so the failure is printed when its
+// compilation ends, and the program is neither lowered nor linked.
+#run { a : [1]int; i := 2; a[i] = 0; }
+
+main :: () { }

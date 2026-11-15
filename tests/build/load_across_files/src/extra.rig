@@ -1,0 +1,3 @@
+// The game workspace's second file (build.rig), which the build program
+// adds and no file #loads.
+extra_say :: () { puts("the extra file speaks"); }

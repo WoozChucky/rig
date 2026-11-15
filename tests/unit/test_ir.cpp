@@ -3437,7 +3437,9 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
     // one of its scopes; so is each variable, and each scope is in its file.
     // The prologue's work is the exception: each scalar parameter's slot and
     // the store into it, first in the entry block, have no position. A
-    // procedure the compiler makes has no positions at all.
+    // procedure the compiler makes has no positions at all; a #compiler one
+    // (compiler_types_in_a_program imports Compiler), as a foreign one, has
+    // no blocks, nor a source name, which only a body brings.
     Arena a = arena_make();
     Array<String> names = {};
     CHECK(os_list_directory(&a, str("tests/run"), &names));
@@ -3457,7 +3459,7 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
             bool from_source = p->source_name.count > 0;
             bool compiler_made = string_eq(p->name, str("__rig_bounds_failed")) ||
                                  string_eq(p->name, str("__rig_string_equal"));
-            if (!p->is_foreign) CHECK(from_source != compiler_made);
+            if (!p->is_foreign && !p->is_compiler) CHECK(from_source != compiler_made);
             // A procedure of the program's is m->procs[k] for
             // tree->procs[k], whichever file it's in: its lines run from its
             // name's to its body's '}', in that file. Its position is the
@@ -4219,5 +4221,52 @@ TEST(baked_views_and_strings_in_constants_and_globals) {
     CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.4: 32 align 8 = \"%s%s\" reloc 8 @str.",
                                                      count, count))));
     CHECK(contains(ir, " reloc 24 @const.5\n"));
+    arena_free(&a);
+}
+
+// Issue #116: #compiler procedures (spec 7.9). The compiler does them while
+// compiling, so the program's own lowering declares them and refuses every
+// call of one, each a diagnostic at the callee's name.
+
+// The messages for `text`, a module's file (Source_File.in_module), which
+// must check cleanly, from lowering it as rig build does, in source order;
+// the module, which lives in the arena, in *module.
+static String lower_messages(Arena *a, const char *text, Ir_Module **module) {
+    Token_List *list = src(text);
+    list->diag.files[0].in_module = true;
+    Ast_File *file = parse(list->tokens, a, &list->diag);
+    bool ok = check(file, a, &list->diag);
+    if (!ok) fprintf(stderr, "lower_messages: doesn't check:\n%.*s", STR_ARG(messages(a, &list->diag)));
+    RIG_ASSERT(ok);
+    *module = ir_lower(file, &list->diag, a, true);
+    diag_sort(&list->diag);
+    String result = messages(a, &list->diag);
+    token_list_free(list);
+    return result;
+}
+
+TEST(lowering_refuses_compiler_calls) {
+    // Every call is refused, one in a procedure nothing calls too: the
+    // program as a whole can't be built.
+    Arena a = arena_make();
+    const char *declarations = "Workspace :: struct { id: s64; }\n"
+                               "create_workspace :: (name: string) -> Workspace #compiler;\n";
+    Ir_Module *m = nullptr;
+    CHECK_STR(lower_messages(&a,
+                             string_cstr(&a, string_printf(&a,
+                                                           "%s"
+                                                           "helper :: () { w := create_workspace(\"never called\"); }\n"
+                                                           "main :: () { w := create_workspace(\"game\"); }\n",
+                                                           declarations)),
+                             &m),
+              "3:21: 'create_workspace' can only be called while compiling\n"
+              "4:19: 'create_workspace' can only be called while compiling\n");
+
+    // Declared all the same, called or not, as every procedure is: its
+    // result's hidden pointer, then the string's. It has no body.
+    CHECK_STR(lower_messages(&a, string_cstr(&a, string_printf(&a, "%smain :: () {}\n", declarations)), &m), "");
+    String ir = ir_print(&a, m);
+    CHECK(contains(ir, "compiler proc @create_workspace(ptr, ptr)\n"));
+    CHECK(!contains(ir, "@create_workspace(ptr, ptr) {"));
     arena_free(&a);
 }

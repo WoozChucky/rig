@@ -1,0 +1,5 @@
+// A #compiler procedure is one the compiler implements itself (spec 7.9),
+// so only the modules that ship with rig may declare one: in any other file
+// the error is at the directive.
+make :: () #compiler;
+main :: () { }

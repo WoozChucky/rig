@@ -67,7 +67,7 @@ enum Ast_Kind : u8 {
     AST_MEMBER,        // Ast_Member: e.x
     AST_LITERAL,       // Ast_Literal: Vec2.{1, 2}  Vec2.{y = 2}  .{1, 2}  int.[1, 2]  .[1, 2]
     AST_INDEX,         // Ast_Index: a[i]
-    AST_LOAD,          // Ast_Load: #load "PATH";
+    AST_LOAD,          // Ast_Load: #load "PATH"; or #import "NAME";
     AST_RUN,           // Ast_Run: #run e (an expression), or a top-level #run e; or #run { ... }
 };
 
@@ -151,12 +151,14 @@ struct Ast_Proc : Ast {
                                 // params, as a C function declared with '...' does (spec 7.6)
     Position variadic_pos;      // where that '..' is written
     Array<Ast_Type *> results;  // what it returns: none, one or several (-> int, int)
-    Ast_Block *body;            // null for a foreign procedure
+    Ast_Block *body;            // null for a foreign procedure and a #compiler one
     bool is_foreign;
     bool no_bounds_checks;      // #no_abc: its indexing isn't checked against counts (spec 6.5)
     bool is_c_call;             // #c_call: called the way C calls, so C can call it (spec 7.6); a
                                 // foreign procedure is C's, and isn't marked
     Position c_call_pos;        // where that #c_call is written
+    bool is_compiler;           // #compiler: no body; the compiler does it, while compiling (spec 7.9)
+    Position compiler_pos;      // where that #compiler is written
     bool is_broken;             // the parser gave up on it
     String foreign_library;     // #foreign's library name
     Position library_pos;       // where that name is written
@@ -432,14 +434,17 @@ struct Ast_Multi_Var : Ast {
     Ast *value;  // the call
 };
 
-// `#load "PATH";`, a top-level declaration: the file at PATH is part of the
-// program too, its top-level declarations in the program's one top-level
-// scope. The parser only records it; the loader reads the file. pos is the
-// '#load'.
+// `#load "PATH";` or `#import "NAME";`, a top-level declaration: the file at
+// PATH, or the module NAME's module.rig, is part of the program too, its
+// top-level declarations in the program's one top-level scope. The parser
+// only records it; the loader finds and reads the file (load.h). pos is the
+// '#load' or the '#import'.
 struct Ast_Load : Ast {
     String path;        // the string literal's bytes, escapes decoded: the path before it's resolved
-                        // against the loading file's directory
+                        // against the loading file's directory, or the module's name
     Position path_pos;  // the string literal, where messages about the file point
+    bool is_import;     // #import "NAME": path holds NAME, a module that ships with rig (spec 2.14),
+                        // which the loader finds; #load "PATH" otherwise
 };
 
 // #run: code run while compiling (spec 7.8). pos is the '#run'.
@@ -467,23 +472,37 @@ struct Ast_Run : Ast {
 // (Position.file's order). Procedures (and broken entries, which are
 // Ast_Procs) are in procs; the globals, top-level variables (Ast_Var,
 // is_global set), constants (Ast_Const) and structs (Ast_Struct), in
-// globals; the loads (Ast_Load), in loads; the top-level runs (Ast_Run,
-// is_top_level set), in runs. Each list is in source order on its own;
-// ast_declarations merges procs and globals back by position.
+// globals; the loads and imports (Ast_Load), in loads; the top-level runs
+// (Ast_Run, is_top_level set), in runs. Each list is in source order on its
+// own; ast_declarations merges procs and globals back by position.
 //
-// lost_a_file is set when a #load failed (load.h's errors), had no string
-// to name a file by, wasn't at the top level, or was passed over by the
-// recovery after another error (parser.h): the program lacks that file, so
-// what it declares is unknown, as it is for a broken entry whose name was
-// lost, and the checker doesn't report a name as unknown, or main as
-// missing, because of it (checker.h).
+// lost_a_file is set when a #load or an #import failed (load.h's errors),
+// had no string to name a file by, wasn't at the top level, or was passed
+// over by the recovery after another error (parser.h): the program lacks
+// that file, so what it declares is unknown, as it is for a broken entry
+// whose name was lost, and the checker doesn't report a name as unknown,
+// or main as missing, because of it (checker.h).
+//
+// reaches_compiler and compiler_pos are the loader's (load.h): whether the
+// program reached the Compiler module, which with no main makes it a build
+// program (ast_is_build_program, spec 7.9).
 struct Ast_File {
     Array<Ast_Proc *> procs;
     Array<Ast *> globals;
     Array<Ast_Load *> loads;
     Array<Ast_Run *> runs;  // the top-level #runs, in source order, file by file in load order
     bool lost_a_file;
+    bool reaches_compiler;  // the loader added the Compiler module's module.rig (by #import or #load, or as the
+                            // main file or a workspace's further file)
+    Position compiler_pos;  // the #import or #load that first named it; its own 1:1 when it is the main file or a
+                            // further file (load.h)
 };
+
+// Whether the program is a build program (spec 7.9): it reaches the Compiler
+// module and has no procedure called main, a broken one included (a broken
+// main is the main of an ordinary program the parser gave up on). A global
+// called main is no procedure, and doesn't count.
+bool ast_is_build_program(Ast_File *file);
 
 // The program's declarations (every file's: parse_into), procedures (broken
 // entries included) and globals together, in source order, file by file in
@@ -542,6 +561,8 @@ Token_Kind compound_operator(Token_Kind op);
 //                                            c_free :: (p: *void) #foreign libc "free";
 //   (proc cmp (params (a (ptr void))) (returns s32) (c_call) (block ...))
 //                                            cmp :: (a: *void) -> s32 #c_call { ... }
+//   (proc make (params (name string)) (returns Workspace) (compiler))
+//                                            make :: (name: string) -> Workspace #compiler;
 //   (proc-type (params int int) (returns int))   (int, int) -> int
 //   (proc-type (params (ptr void)) (returns s32) (c_call))   (p: *void) -> s32 #c_call
 //   (proc-type (params))   ()

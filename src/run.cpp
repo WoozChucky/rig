@@ -10,7 +10,9 @@
 // program's own module is lowered afresh, after checking, so its globals
 // start from their written values whatever the runs did. The parts are made
 // by the first run, not with the world: every check() has a world, and few
-// programs have a #run.
+// programs have a #run. The interpreter calls the #compiler procedures
+// (spec 7.9) through the hook the compilation gives the world
+// (compile_time_set_compiler): the Compiler module's, compiler_module.h.
 //
 // When a run happens. The checker runs an expression #run where it first
 // needs its value (check_run.cpp's check_run), once everything the run
@@ -23,10 +25,11 @@
 // top-level runs before it, left in the globals.
 //
 // A failure. Anything the interpreter fails at (a runtime check's panic, the
-// stack running out, a call it can't make, a C function found nowhere) is an
-// error at the #run: "#run failed: runtime error: MESSAGE", then, after its
-// source line and caret, the calls that led there, innermost first, one a
-// line, "    in NAME (PATH:L:C)" (Diagnostic.lines), the outermost
+// stack running out, a call it can't make, a C function found nowhere, a
+// #compiler procedure's call the compiler refuses, spec 7.9) is an error at
+// the #run: "#run failed: runtime error: MESSAGE", then, after its source
+// line and caret, the calls that led there, innermost first, one a line,
+// "    in NAME (PATH:L:C)" (Diagnostic.lines), the outermost
 // "    in #run (PATH:L:C)", the run's own procedure; of a deep recursion's
 // thousands, the innermost and outermost few (report_failure). The #run
 // then has no value, and what needs it says nothing more (has_failed_run).
@@ -62,6 +65,8 @@
 
 struct Compile_Time {
     Diagnostics *diag;   // the program's files, whose paths a failure's frames name
+    Interp_Compiler_Call *compiler;  // compile_time_set_compiler's, handed to the interpreter when it's made
+    void *compiler_context;
     // Made by the first run (make_parts); null until then.
     Ir_Module *module;   // the code the runs reach, lowered on demand
     Lowering *lowering;  // lowering into it, as long as the world
@@ -85,13 +90,20 @@ void compile_time_free(Compile_Time *ct) {
     free(ct);
 }
 
+void compile_time_set_compiler(Compile_Time *ct, Interp_Compiler_Call *call, void *context) {
+    RIG_ASSERT(!ct->module);  // before the first run, which makes the interpreter
+    ct->compiler = call;
+    ct->compiler_context = context;
+}
+
 // The module, its lowering and the interpreter, made the first time a run
-// needs them.
+// needs them; the interpreter gets the world's hook for #compiler calls.
 static void make_parts(Compile_Time *ct) {
     ct->arena = arena_make();
     ct->module = arena_new<Ir_Module>(&ct->arena);
     ct->lowering = ir_lowering_new(ct->module, ct->diag, &ct->arena);
     ct->interp = interp_new(ct->module);
+    interp_set_compiler(ct->interp, ct->compiler, ct->compiler_context);
 }
 
 // One result being baked: the run it's of, and why it can't be, once a

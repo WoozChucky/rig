@@ -1,0 +1,14 @@
+// exit(n) in a workspace's top-level #run (spec 7.9) ends rig there, with n
+// as its status, as in the build program's: the diagnostics the workspace's
+// compilation found so far, its first #run's failure, are printed as it
+// ends, and the workspace made after it is never built, so no .build and no
+// executable appear.
+#import "Compiler";
+
+#run {
+    a := create_workspace("a");
+    add_build_file(a, "a.rig");
+
+    b := create_workspace("b");
+    add_build_file(b, "b.rig");
+}

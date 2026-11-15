@@ -130,6 +130,7 @@ static void dump(Array<u8> *buffer, Ast *node) {
         dump_results(buffer, proc->results);
         if (proc->is_c_call) out(buffer, " (c_call)");
         if (proc->no_bounds_checks) out(buffer, " (no_abc)");
+        if (proc->is_compiler) out(buffer, " (compiler)");
         if (proc->is_foreign) {
             out(buffer, " (foreign ");
             out(buffer, proc->foreign_library);
@@ -431,11 +432,14 @@ static void dump(Array<u8> *buffer, Ast *node) {
     }
     case AST_BREAK: out(buffer, "(break)"); break;
     case AST_CONTINUE: out(buffer, "(continue)"); break;
-    case AST_LOAD:
-        out(buffer, "(load ");
-        out_quoted(buffer, ((Ast_Load *)node)->path);
+    case AST_LOAD: {
+        // (load "a.rig") for #load "a.rig";, (import "Basic") for #import "Basic";.
+        Ast_Load *load = (Ast_Load *)node;
+        out(buffer, load->is_import ? "(import " : "(load ");
+        out_quoted(buffer, load->path);
         out(buffer, ")");
         break;
+    }
     case AST_RUN: {
         // (run E) for #run e; (run (block ...)) for a top-level #run { ... },
         // its procedure's body.
@@ -479,6 +483,14 @@ Array<Ast *> ast_declarations(Ast_File *file) {
         array_add(&all, proc_first ? (Ast *)file->procs[p++] : file->globals[g++]);
     }
     return all;
+}
+
+bool ast_is_build_program(Ast_File *file) {
+    if (!file->reaches_compiler) return false;
+    for (s64 i = 0; i < file->procs.count; i++) {
+        if (string_eq(file->procs[i]->name, str("main"))) return false;
+    }
+    return true;
 }
 
 // A top-level node, on a line of its own.

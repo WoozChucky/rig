@@ -7,19 +7,29 @@ rem The archive holds, at its top level (no folder around them):
 rem   rig.exe        the compiler, an optimised build (build.bat release)
 rem   lld-link.exe   LLVM's linker, which rig uses when Visual Studio has no
 rem                  link.exe (spec 10.6)
+rem   modules\       the modules that ship with rig (Basic, Compiler), which
+rem                  #import finds in modules\ beside rig.exe (spec 2.14)
 rem   LICENSE, README.md
 rem   LICENSE-LLVM.txt, LICENSE-LLD.txt
 rem                  the licences of LLVM, which rig.exe links statically,
 rem                  and of lld-link.exe (third_party\README.md)
 rem
 rem Then it checks the archive as someone downloading it would use it: it
-rem unpacks it into a temporary folder, builds tests\run\hello.rig with the
-rem rig.exe it holds, runs the program and compares what it prints with
-rem tests\run\hello.out, as package_linux.sh does. The zip is written and
-rem read with the tar.exe that ships with Windows 10 and later, by its full
-rem path (Git's GNU tar, which may come first on the PATH, can't write zip
-rem files). Programs are run by their paths (.\rig.exe): cmd may be set not
-rem to look for them in the current folder
+rem unpacks it into a temporary folder and, with the rig.exe it holds, as
+rem package_linux.sh does,
+rem   - builds tests\run\hello.rig, runs the program and compares what it
+rem     prints with tests\run\hello.out;
+rem   - builds a copy of tests\build\load_across_files, a build program,
+rem     which imports the Compiler module, as rig build try\build.rig, runs
+rem     the game it makes and compares what it prints with game.out;
+rem   - builds tests\run\basic_string.rig, which imports Basic, runs it and
+rem     compares what it prints with basic_string.out.
+rem Both imports find the archive's modules\, beside its rig.exe.
+rem
+rem The zip is written and read with the tar.exe that ships with Windows 10
+rem and later, by its full path (Git's GNU tar, which may come first on the
+rem PATH, can't write zip files). Programs are run by their paths
+rem (.\rig.exe): cmd may be set not to look for them in the current folder
 rem (NoDefaultCurrentDirectoryInExePath).
 
 setlocal
@@ -39,12 +49,13 @@ bin\rig.exe version || exit /b 1
 
 mkdir "%STAGE%\pack" "%STAGE%\check" || exit /b 1
 for %%f in (bin\rig.exe bin\lld-link.exe LICENSE README.md) do copy /y "%%f" "%STAGE%\pack\" >nul || goto failed
+xcopy /e /i /q /y modules "%STAGE%\pack\modules" >nul || goto failed
 copy /y third_party\llvm\LICENSE.TXT "%STAGE%\pack\LICENSE-LLVM.txt" >nul || goto failed
 copy /y third_party\lld\LICENSE.TXT "%STAGE%\pack\LICENSE-LLD.txt" >nul || goto failed
 
 if not exist dist mkdir dist
 if exist "%ARCHIVE%" del "%ARCHIVE%"
-"%TAR%" --format zip -cf "%ARCHIVE%" -C "%STAGE%\pack" rig.exe lld-link.exe LICENSE README.md LICENSE-LLVM.txt LICENSE-LLD.txt || goto failed
+"%TAR%" --format zip -cf "%ARCHIVE%" -C "%STAGE%\pack" rig.exe lld-link.exe modules LICENSE README.md LICENSE-LLVM.txt LICENSE-LLD.txt || goto failed
 
 "%TAR%" -xf "%ARCHIVE%" -C "%STAGE%\check" || goto failed
 pushd "%STAGE%\check"
@@ -56,6 +67,35 @@ rem fc /l compares the two line by line, whatever their line endings: the
 rem program's C runtime writes \r\n, and hello.out is checked out with \n.
 "%SystemRoot%\System32\fc.exe" /l "%ROOT%\tests\run\hello.out" "%STAGE%\check\hello.txt" >nul || (
     echo package_windows.bat: the packed rig.exe's hello doesn't print tests\run\hello.out 1>&2
+    goto failed
+)
+
+rem The build program, built from the folder above it, as the runner's fixed
+rem case does: its files and its game are relative to try\.
+xcopy /e /i /q /y "%ROOT%\tests\build\load_across_files" "%STAGE%\check\try" >nul || goto failed
+pushd "%STAGE%\check"
+.\rig.exe build try\build.rig && .\try\game.exe > game.txt
+set STATUS=%ERRORLEVEL%
+popd
+if not "%STATUS%"=="0" (
+    echo package_windows.bat: the packed rig.exe couldn't build and run tests\build\load_across_files 1>&2
+    goto failed
+)
+"%SystemRoot%\System32\fc.exe" /l "%ROOT%\tests\build\load_across_files\game.out" "%STAGE%\check\game.txt" >nul || (
+    echo package_windows.bat: the packed rig.exe's build program makes a game that doesn't print tests\build\load_across_files\game.out 1>&2
+    goto failed
+)
+
+pushd "%STAGE%\check"
+.\rig.exe build "%ROOT%\tests\run\basic_string.rig" -o basic.exe && .\basic.exe > basic.txt
+set STATUS=%ERRORLEVEL%
+popd
+if not "%STATUS%"=="0" (
+    echo package_windows.bat: the packed rig.exe couldn't build and run tests\run\basic_string.rig 1>&2
+    goto failed
+)
+"%SystemRoot%\System32\fc.exe" /l "%ROOT%\tests\run\basic_string.out" "%STAGE%\check\basic.txt" >nul || (
+    echo package_windows.bat: the packed rig.exe's basic_string doesn't print tests\run\basic_string.out 1>&2
     goto failed
 )
 

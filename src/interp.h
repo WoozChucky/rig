@@ -51,6 +51,16 @@
 // when C calls it. A C function that ends the process (exit) ends the
 // compiler.
 //
+// A #compiler procedure (spec 7.9) has no body and no C function: the
+// compiler does it, in C++ (compiler_module.h does the Compiler module's).
+// Its call goes neither to a frame nor through a thunk, but to a hook the
+// interpreter is given (interp_set_compiler), with the call's IR arguments
+// as they are: a struct or a string, parameter or result, is the address of
+// its bytes in the interpreter's memory, which is native, so the hook reads
+// and writes them in place. Without a hook, the call fails. A failure the
+// hook gives fails the run as any other, with the frames of the calls that
+// led there.
+//
 // The loop is iterative, with an explicit stack of frames: it never
 // recurses in C++, so deep recursion in Rig can't overflow the compiler's
 // own stack. There is no step limit: an endless loop runs until Ctrl-C.
@@ -68,7 +78,8 @@
 // failing instruction or the call it was waiting on.
 struct Interp_Frame {
     String proc;   // its source_name
-    Position pos;  // an instruction's position: its statement's first token, or a check's place
+    Position pos;  // an instruction's position: its statement's first token, a check's place, or a #compiler
+                   // call's callee name
 };
 
 struct Interp_Result {
@@ -104,6 +115,19 @@ void interp_free(Interp *in);
 // type's bits zero-extended from its width, an i1 0 or 1, an f32's bits in
 // the low 32, an f64's all 64, a ptr the address.
 void interp_run(Interp *in, s32 proc, Array<u64> args, Arena *a, Interp_Result *result);
+
+// A #compiler procedure's call (spec 7.9, 10.8): the compiler does it in
+// C++, in place of a body. args are the call's IR arguments, canonical: an
+// aggregate's is its address in native memory, the hidden result pointers
+// first. Scalar results go to results[0..]. `at` is the call's place (its
+// name). Returns {} when it worked; otherwise the failure's message, in
+// `a`, which fails the run with the caller's frames, as a runtime error.
+typedef String Interp_Compiler_Call(void *context, Ir_Proc *proc, Array<u64> args, u64 *results, Position at,
+                                    Arena *a);
+
+// The hook for in's #compiler calls; without one, each fails: "'NAME' can
+// only be called while compiling".
+void interp_set_compiler(Interp *in, Interp_Compiler_Call *call, void *context);
 
 // A Rig procedure's compile-time value: the address standing for it.
 u64 interp_proc_address(Interp *in, s32 proc);

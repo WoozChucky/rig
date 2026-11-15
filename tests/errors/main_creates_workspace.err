@@ -1,0 +1,4 @@
+tests/errors/main_creates_workspace.rig:7:1: error: #run failed: runtime error: a program with 'main' can't create workspaces
+    #run { create_workspace("tools"); }
+    ^
+    in #run (tests/errors/main_creates_workspace.rig:7:8)

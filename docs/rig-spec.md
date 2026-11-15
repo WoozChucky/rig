@@ -100,7 +100,7 @@ Some terms used throughout:
 
 ### 2.1 Source files
 
-A program is one source file or several: its main file, the one the compiler is given (section 10.1), and the files it loads with `#load` (section 2.13). Every source file's name must end in `.rig`, in any combination of upper and lower case; the compiler refuses any other name.
+A program is one source file or several: its main file, the one the compiler is given (section 10.1), the files it loads with `#load` (section 2.13), and the modules it imports with `#import` (section 2.14). Every source file's name must end in `.rig`, in any combination of upper and lower case; the compiler refuses any other name.
 
 Each file is a sequence of bytes, lexed on its own: no token or comment runs from one file into the next. Outside string literals and comments it must be ASCII: a byte from 0x80 up anywhere else is an error. Inside string literals and comments any bytes may appear, UTF-8 included. A UTF-8 byte-order mark (the bytes EF BB BF) at the very start of a file is ignored.
 
@@ -151,15 +151,17 @@ if        null      return    struct    true      union     using     while
 
 ### 2.7 Directives
 
-A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has five:
+A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has seven:
 
 - `#foreign`, which declares a procedure implemented in C, followed by the library's name and, when the C function's name is not the procedure's own, by that name in a string: `#foreign libc` or `#foreign libc "free"` (section 7.6);
 - `#no_abc`, which turns off bounds checks in one procedure (section 7.7);
 - `#c_call`, which makes a procedure one that C can call, and marks a procedure type as such a procedure's (sections 3.15, 7.6);
+- `#compiler`, which declares a procedure the compiler does itself, while compiling, in a module that ships with rig (section 7.9);
 - `#load`, which makes another file part of the program (section 2.13);
+- `#import`, which makes a module that ships with rig part of the program (section 2.14);
 - `#run`, which runs code while compiling (section 7.8).
 
-The first three appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` is a top-level declaration of its own, and anywhere else it is `#load can only be at the top level`, right after a signature on the same line too (on the next line it is the next declaration, section 2.13). `#run` is an expression, `#run e`, anywhere a value goes, or a top-level declaration of its own, `#run e;` or `#run { ... }` (section 7.8). In a body it is an expression only: a statement `#run f();` there is `#run in a body must be a value, as in x := #run f();`. Where neither a value nor a declaration goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive` (one starting the next line is the next declaration, section 9.2). Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
+The first four appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` and `#import` are top-level declarations of their own, and anywhere else each is `#load can only be at the top level` (`#import can only be at the top level`), right after a signature on the same line too (on the next line it is the next declaration, section 2.13). `#run` is an expression, `#run e`, anywhere a value goes, or a top-level declaration of its own, `#run e;` or `#run { ... }` (section 7.8). In a body it is an expression only: a statement `#run f();` there is `#run in a body must be a value, as in x := #run f();`. Where neither a value nor a declaration goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive` (one starting the next line is the next declaration, section 9.2). Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
 
 ### 2.8 Integer literals
 
@@ -229,14 +231,15 @@ Appendix B lists each one with the section that defines it.
 
 ### 2.13 Program structure
 
-A source file is a sequence of top-level declarations: procedures, structs, constants and global variables (section 4), `#load`s, and `#run`s, code run while compiling (section 7.8). They may come in any order. Statements appear only inside procedure bodies and a top-level `#run`'s block.
+A source file is a sequence of top-level declarations: procedures, structs, constants and global variables (section 4), `#load`s, `#import`s of modules (section 2.14), and `#run`s, code run while compiling (section 7.8). They may come in any order. Statements appear only inside procedure bodies and a top-level `#run`'s block.
 
 ```ebnf
-LoadDecl = "#load" string_lit ";" .
-RunDecl  = "#run" ( Block | Expression ";" ) .
+LoadDecl   = "#load" string_lit ";" .
+ImportDecl = "#import" string_lit ";" .
+RunDecl    = "#run" ( Block | Expression ";" ) .
 ```
 
-A program is the file given to `rig build` or `rig check` (section 10.1), its **main file**, and every file it loads. `#load "PATH";` makes the file at `PATH` part of the program: its top-level declarations join the program's one top level, as if they were written in the file that loads it (section 4.6). So each file may use what the others declare, in both directions and in any order, as declarations in one file do. A loaded file's own `#load`s are followed in turn, so the program is every file reached from the main file.
+A program is the file given to `rig build` or `rig check` (section 10.1), its **main file**, and every file it loads or imports. `#load "PATH";` makes the file at `PATH` part of the program: its top-level declarations join the program's one top level, as if they were written in the file that loads it (section 4.6). So each file may use what the others declare, in both directions and in any order, as declarations in one file do. A loaded file's own `#load`s are followed in turn, so the program is every file reached from the main file.
 
 ```rig file=shapes.rig
 #load "print.rig";
@@ -283,12 +286,45 @@ The main file, `example.rig`, uses `Square` and `show` from `shapes.rig`, and `p
 - `PATH` is a string literal (section 2.10), its escapes decoded. Unless it is absolute (on Linux, starting with `/`; on Windows, starting with a drive, `C:`, or a separator), it is relative to the directory of the file holding the `#load`: `src/main.rig`'s `#load "world/map.rig";` loads `src/world/map.rig`. `/` separates directories on both systems, and so does `\` on Windows; on Linux `\` is a character of a name like any other. On Windows that holds from a file named with the `\\?\` prefix too, a path Windows opens as written, without resolving its `/`, `.` and `..`: the compiler resolves the paths of the files it loads itself (section 9.1).
 - The file must be named as a source file is, ending in `.rig` (section 2.1): otherwise `'PATH' isn't a .rig file`, and it isn't read. A file that can't be read is `cannot read 'PATH': MESSAGE`, with the system's reason, at its first `#load` in load order alone, its later `#load`s adding nothing. One that is there but can't be read (a directory, say, or a file rig isn't allowed to read) is known by its identity, as a file loaded is (below), however its path is written. One that isn't there has no identity but its path: its later `#load`s are those whose paths name the same place once made absolute, written differently by `.`, `..`, doubled separators or being relative or absolute, and on Windows by `/` for `\` or by case. One reached through a link, under another name, is reported again. An empty path is `a #load path can't be empty`, and a path holding a zero byte (`\0`) is `a #load path can't contain a zero byte`, since the system's paths end at one. Each of these is reported at the `#load`'s string, and `PATH` in it names the file as diagnostics do (section 9.1). A `#load` followed by anything but a string is `expected a string after #load, as in #load "other.rig";`.
 - Each file is loaded once, however its path is written: `b.rig`, `./b.rig` and `sub/../b.rig` are the same file, and so are a link to it and, on Windows, `B.RIG`. A `#load` of a file already loaded, the main file included, loads nothing more, so files may load each other, in a cycle or not, without error.
-- The program's files are in **load order**: the main file first, then each file in the order its first `#load` is met, the files being read in that same order. When `main.rig` loads `b.rig` and then `c.rig`, and `b.rig` loads `d.rig`, the order is `main.rig`, `b.rig`, `c.rig`, `d.rig`. Diagnostics are sorted file by file in it (section 9.1).
+- The program's files are in **load order**: the main file first, then each file in the order its first `#load` is met, the files being read in that same order. When `main.rig` loads `b.rig` and then `c.rig`, and `b.rig` loads `d.rig`, the order is `main.rig`, `b.rig`, `c.rig`, `d.rig`. An `#import` takes its place in the same order as a `#load` of the module's file would (section 2.14): the `#load`s and `#import`s of every file are met in one sequence, in source order, so `#import "Basic";` and then `#load "b.rig";` in the main file read Basic's `module.rig` before `b.rig`. Diagnostics are sorted file by file in it (section 9.1).
 - `#load` is a top-level declaration: anywhere else, in a body, a struct or an expression, it is `#load can only be at the top level`, at its `#`, and it loads no file. A `#load` that starts a line right after a top-level declaration left unfinished is the next top-level declaration instead: the unfinished one is given up there (section 9.2), reported for what it lacks, and the file is loaded. Such a declaration is, for example, a signature with no body (`expected '{'`), a value with no `;` (`expected ';'`), `N ::` with no value (`expected an expression`) or a `#load` with no `;`. A body or a struct whose `}` is missing is found unclosed at the end of the file or at the next procedure's or struct's declaration in column 1, and there only the `#load`s in column 1 right before that point count, with nothing between them but, in a body, other declarations in column 1 (globals and constants, read again at the top level too): the block is reported (`expected '}'`) at the first of them. Any other `#load` in it is misplaced: an indented one, one followed by a statement or a field, and one after a statement or a field left unfinished.
 
 A `#load` fails when it has one of the errors above, has no string, or isn't at the top level, and it then leaves the program without the file it names. One in a declaration given up after an earlier error (section 9.2) is passed over with it, unreported, but has failed all the same. The names that file might have declared are then not reported as unknown: while a `#load` has failed, no name anywhere in the program is `unknown identifier` or `unknown type`, nor is `main` reported as missing, so one mistake gives one message (section 9.2).
 
-The program must declare a procedure called `main`, where it starts (section 7.4), in exactly one of its files.
+The program must declare a procedure called `main`, where it starts (section 7.4), in exactly one of its files, unless it is a build program (section 7.9), which builds other programs and has no `main`.
+
+### 2.14 Modules and #import
+
+```ebnf
+ImportDecl = "#import" string_lit ";" .
+```
+
+A **module** is a library that ships with rig: a directory of source files, named after the module, whose `module.rig` is the file a program imports, and which loads the module's other files. `#import "NAME";` makes module NAME part of the program, as a `#load` of its `module.rig` would (section 2.13): its declarations join the program's, and the files it loads are the program's too.
+
+```rig
+#import "Basic";
+
+main :: () {
+    print_line("Hello from Basic");
+}
+```
+
+The program prints:
+
+```text
+Hello from Basic
+```
+
+`print_line` is Basic's: it writes a string and a line break to standard output.
+
+- **The declaration.** `#import` is a top-level declaration, as `#load` is: anywhere else it is `#import can only be at the top level`, at its `#`, and it imports nothing. Every rule of section 2.13 about where a `#load` may be, and about a `#load` that starts a line after a declaration left unfinished, holds for an `#import` too, its message naming `#import`. An `#import` followed by anything but a string is `expected a string after #import, as in #import "Basic";`.
+- **Where modules are.** rig looks for a module in two places beside its own executable, in this order: `<rig's directory>/modules`, where a release archive and an installation keep the modules, beside `rig` (section 10.6); then `<rig's directory>/../modules`, the repository's, where a compiler built from it is `bin/rig`, beside the root's `modules`. Module NAME is found in the first place holding a directory named NAME with a file `module.rig` in it. Neither place depends on the directory rig runs in or on where the program is.
+- **Names.** A module's name is ASCII letters, digits and `_`, a letter first: `Basic`, `Compiler`. Anything else is `'../modules/Basic' isn't a module's name`, at the string, and nothing is looked for, so an `#import` never reaches a file by its path, as a `#load` does. The name is matched as written, case counting, on Windows too, whose file system would open `modules\basic` for `modules\Basic`: `#import "basic";` doesn't find `Basic`. A module in neither place is `there's no module 'Nope' (looked in DIR1 and DIR2)`, at the string, DIR1 and DIR2 being the two places, each absolute, with the system's separators.
+- **The module's files.** The `module.rig` found is named by its absolute path, in diagnostics (section 9.1), in runtime errors and in the debug information, so an editor and a debugger find it wherever the program is; the files it loads are named from it, absolute too. From there the `#import` is a `#load` of that path. The file is known by the same identity as a loaded one (section 2.13), so a module imported twice, or imported by one file and loaded by the path of its `module.rig` by another, is read once, under the name of whichever reached it first. It takes its place in load order where its `#import` is met. A module's file that can't be read is `cannot read 'PATH': MESSAGE`, as for a `#load`.
+- **An `#import` that fails**, with one of the errors above, leaves the program without the module, as a `#load` that fails leaves it without its file: while one has failed, no name anywhere in the program is reported as unknown, nor `main` as missing (section 2.13).
+- **One top level.** For now a module's declarations join the program's one top level, as a loaded file's do (section 4.6): a program that imports Basic can't declare a procedure, struct or constant of a name Basic declares. Modules with scopes of their own come later, with `#import` of a program's own modules and of modules fetched from elsewhere.
+- **The modules that ship with rig** are `Basic`, Rig's first library, written in Rig over a thin layer of C (its `README.md`, in the module's directory, lists what it declares), and `Compiler`, what a build program uses to build other programs (section 7.9).
+- **A module's file.** A file whose absolute path is inside one of the two places, at any depth, is a module's, whether an `#import` reached it or a `#load` did, the main file included; on Windows the case of the path doesn't count there, as it doesn't in a file's name. Only a module's file may declare a `#compiler` procedure (section 7.9).
 
 ## 3. Types
 
@@ -747,7 +783,7 @@ A struct's name is a type, not a value: used as a value it is `'Vec2' is a type,
 
 ### 4.6 The top level
 
-Procedures, structs, global variables and global constants make up the top level, with the `#load`s and the `#run`s, which declare no name (sections 2.13, 7.8). There is one top level for the whole program: the declarations of every one of its files (section 2.13) are in it, as if they were written in one file. They share one set of names: a global cannot take a procedure's name, nor a struct a constant's, whether they are in one file or in two (`'x' is already declared at PATH:L:C`, naming where the first one is). The declarations are taken file by file in load order, so of two in different files the one in the file loaded later is reported, naming the one in the other file.
+Procedures, structs, global variables and global constants make up the top level, with the `#load`s, the `#import`s and the `#run`s, which declare no name (sections 2.13, 2.14, 7.8). There is one top level for the whole program: the declarations of every one of its files (section 2.13) are in it, as if they were written in one file. They share one set of names: a global cannot take a procedure's name, nor a struct a constant's, whether they are in one file or in two (`'x' is already declared at PATH:L:C`, naming where the first one is). The declarations are taken file by file in load order, so of two in different files the one in the file loaded later is reported, naming the one in the other file.
 
 Every top-level declaration is visible everywhere in the program, in every one of its files, before its declaration as well as after it: a procedure may call one declared after it or in another file, a struct may hold one declared after it, and a constant may be defined from one declared after it.
 
@@ -1303,14 +1339,15 @@ main :: () {}
 ### 7.1 Declaration
 
 ```ebnf
-ProcDecl  = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#foreign" identifier [ string_lit ] ";" ) .
+ProcDecl  = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#foreign" identifier [ string_lit ] ";"
+                                       | "#compiler" ";" ) .
 Signature = "(" [ Params ] ")" [ "->" Results ] .
 Results   = Type { "," Type } | "(" Type { "," Type } ")" .
 Params    = Param { "," Param } [ "," ".." ] .
 Param     = identifier ":" Type .
 ```
 
-A procedure is declared at the top level with its name, its signature and its body. The signature lists the parameters in parentheses, each a name and a type, and after `->` the types of its results, separated by commas, with or without parentheses around them: `-> int, int` and `-> (int, int)` are the same. A procedure with no `->` returns nothing. A result that is a procedure type (section 3.15) is written as in any other place: `-> (int) -> int` returns a `(int) -> int`, since parentheses followed by `->` are a procedure type's. Before the body, `#c_call` makes the procedure one that C can call (section 7.6) and `#no_abc` turns off its bounds checks (section 7.7): each at most once (`'#c_call' is written twice`), in either order. A foreign procedure's list may end with `..`, after at least one parameter: it takes more arguments, as a C function declared with `...` does (section 7.6). In place of the body, a foreign procedure has `#foreign`, its library and, when the C function's name is not the procedure's own, that name in a string (section 7.6).
+A procedure is declared at the top level with its name, its signature and its body. The signature lists the parameters in parentheses, each a name and a type, and after `->` the types of its results, separated by commas, with or without parentheses around them: `-> int, int` and `-> (int, int)` are the same. A procedure with no `->` returns nothing. A result that is a procedure type (section 3.15) is written as in any other place: `-> (int) -> int` returns a `(int) -> int`, since parentheses followed by `->` are a procedure type's. Before the body, `#c_call` makes the procedure one that C can call (section 7.6) and `#no_abc` turns off its bounds checks (section 7.7): each at most once (`'#c_call' is written twice`), in either order. A foreign procedure's list may end with `..`, after at least one parameter: it takes more arguments, as a C function declared with `...` does (section 7.6). In place of the body, a foreign procedure has `#foreign`, its library and, when the C function's name is not the procedure's own, that name in a string (section 7.6), and a procedure the compiler does itself has `#compiler` and a `;`, which only a module that ships with rig may declare (section 7.9).
 
 ```rig
 divmod :: (a: int, b: int) -> int, int {
@@ -1354,7 +1391,7 @@ A procedure returns zero, one or several results, given by `return` (section 6.1
 
 ### 7.4 main and the program's exit
 
-The program must have a procedure called `main` (`a procedure called 'main' is needed`), with a body (`'main' must have a body: it's where the program starts`), taking no parameters and returning nothing (`'main' must take no arguments and return nothing`). `main` can be called, but it is not a procedure value (section 3.15): `me := main;` is `'main' can't be a value: it's where the program starts`, since C calls it as a function returning an `int` (section 10.4), which its type does not say.
+The program must have a procedure called `main` (`a procedure called 'main' is needed`), with a body (`'main' must have a body: it's where the program starts`), taking no parameters and returning nothing (`'main' must take no arguments and return nothing`). A build program is the exception: it builds other programs and is no executable itself, and it is a build program because it declares no procedure called `main` (section 7.9), so it is never told that one is needed. `main` can be called, but it is not a procedure value (section 3.15): `me := main;` is `'main' can't be a value: it's where the program starts`, since C calls it as a function returning an `int` (section 10.4), which its type does not say.
 
 The program starts by calling `main`, once the C runtime has started. When `main` returns, the program exits with status 0, and the C runtime flushes its output streams. A program ends with another status by calling the C library's `exit`:
 
@@ -1531,7 +1568,7 @@ A call of a variadic foreign procedure follows the platform's convention for C's
 
 ### 7.7 Turning off bounds checks
 
-`#no_abc` between a procedure's signature and its body turns off the bounds checks of indexing (section 8.5) in that procedure. `rig build --no-bounds-checks` turns them off in the whole program (section 10.1). Nothing else is turned off: null checks stay, and so does the compile-time check of a constant index into an array. With bounds checks off, an index outside its sequence is a memory error that no check catches.
+`#no_abc` between a procedure's signature and its body turns off the bounds checks of indexing (section 8.5) in that procedure. `rig build --no-bounds-checks` turns them off in the whole program (section 10.1), and a build program's `bounds_checks = false` in a workspace's whole program (section 7.9). Nothing else is turned off: null checks stay, and so does the compile-time check of a constant index into an array. With bounds checks off, an index outside its sequence is a memory error that no check catches.
 
 ```rig
 sum :: (values: []int) -> int #no_abc {
@@ -1611,7 +1648,7 @@ main :: () {
 - Before it runs, everything it reaches is checked: the procedures its operand calls or takes as values, the procedures those reach in turn, the constants and globals they name, and the structs of the values they use, whether or not the code would get to them when it runs. When any of that has errors, they are reported where they are, and the `#run` doesn't run. It says nothing more, and neither does what needs its value (an array's count, a constant made from it, an operator on it), so one mistake gives one message.
 - A `#run` whose value is needed while it is being worked out is a cycle (section 4.8): `M :: #run k();`, where `k` returns `M`, is `'M' is defined in terms of itself`, at `M`. So is a body a `#run` needs while that body is being checked, as `x := #run f();` in `f`'s own body: `'f' is defined in terms of itself`, at the `#run`.
 - `main`, where the program starts (section 7.4), is never run while compiling: a call of `main` anywhere in what a `#run` reaches is `main is where the program starts; #run can't call it`, at the `#run`. A `#run` in `main`'s body is fine.
-- The top-level `#run`s run in `rig build` only, once the whole program has checked with no errors, so after every expression's `#run`. They run file by file in load order (section 2.13), and in source order within a file: a loaded file's `#run`s run after every one of the file whose `#load` of it is met first, not at that `#load`. `rig check` checks them as `rig build` does, what they reach and `main` included, but never runs them (section 10.1). A top-level `#run` that fails doesn't stop the ones after it, and every diagnostic is printed after the last of them.
+- The top-level `#run`s run in `rig build` only, once the whole program has checked with no errors, so after every expression's `#run`. They run file by file in load order (section 2.13), and in source order within a file: a loaded file's `#run`s run after every one of the file whose `#load` of it is met first, not at that `#load`. `rig check` checks them as `rig build` does, what they reach and `main` included, but never runs them (section 10.1). A top-level `#run` that fails doesn't stop the ones after it, and every diagnostic is printed after the last of them. A build program's top-level `#run`s make the workspaces it builds, and come before them: the workspaces are built once the last `#run` has run, and none is when one of them failed (section 7.9).
 
 **One world.** Every `#run` of a compilation runs in one compile-time world: one interpreter, holding one copy of the program's globals, which start from their written values (section 4.3) and which every `#run` shares. So one `#run` can set up what a later one reads. The program's own globals are untouched: the program starts with their written values, whatever the `#run`s did to theirs.
 
@@ -1678,6 +1715,117 @@ gcd :: (a: int, b: int) -> int {
 ```
 
 **No step limit.** The interpreter counts no steps (section 10.8): a `#run` that never ends keeps the compiler running until it is stopped, as the program would run. An editor may stop a check that runs too long: the VS Code extension stops one after the seconds its setting `rig.checkTimeout` gives, 10 unless set.
+
+### 7.9 Build programs and the Compiler module
+
+A **build program** builds other programs, in place of a build script. It is an ordinary Rig program that imports the Compiler module (`#import "Compiler";`, section 2.14) and declares no procedure called `main`. `rig build` runs its top-level `#run`s (section 7.8), whose code makes **workspaces**, each one program to build, through the Compiler module's procedures, and then builds each workspace as a program of its own. A build program is never an executable itself. By default it is `build.rig`, which `rig build` with no file builds (section 10.1):
+
+```rig fragment
+#import "Compiler";
+
+build :: () {
+    w := create_workspace("game");
+    o := get_build_options(w);
+    o.output_name   = "game";
+    o.optimize      = true;
+    o.bounds_checks = false;
+    set_build_options(w, o);
+    add_build_file(w, "src/main.rig");
+}
+
+#run build();
+```
+
+`rig build`, in the directory of this `build.rig` and of its `src/main.rig`, runs `build`, which makes the workspace `game` and gives it its options and its file. Then rig builds `src/main.rig`, with the files it loads, into the executable `game` (`game.exe` on Windows), optimised and without bounds checks. Since a build program is ordinary Rig, its `#run`s may do more with no feature for it: build several programs, call C to copy files or start other programs, or end the build with `exit(1)`. (As a `rig fragment` (section 1.4), the example is checked with an empty `main` added, which makes it an ordinary program, whose top-level `#run` `rig check` never runs.)
+
+**What a build program is** is known once the program is loaded, before anything is checked or run, so `rig check`, the rule that `main` is needed (section 7.4) and the command line's checks (section 10.1) all know it. A build program reaches the Compiler module's `module.rig`, the file `#import "Compiler";` finds, through an `#import` or through a `#load` of its path, and none of its files declares a procedure called `main`. A global variable or a constant called `main` is no procedure, and doesn't count; a procedure `main` whose declaration has a syntax error (section 9.2) does. A program that imports the Compiler module and declares `main` is an ordinary program, which may use the module's types but can't make workspaces (below).
+
+**The Compiler module** declares:
+
+```text
+Workspace :: struct { id: s64; }
+
+Build_Options :: struct {
+    output_name: string;
+    optimize: bool;
+    bounds_checks: bool;
+}
+
+create_workspace  :: (name: string) -> Workspace #compiler;
+get_build_options :: (w: Workspace) -> Build_Options #compiler;
+set_build_options :: (w: Workspace, options: Build_Options) #compiler;
+add_build_file    :: (w: Workspace, path: string) #compiler;
+```
+
+- `Workspace` names a workspace by its `id`: the workspaces are numbered from 1, in the order they are made, so a zeroed `Workspace` names none.
+- `Build_Options` says how a workspace's program is built. `output_name` is the executable's name, by default `""`, which means the first file's name without its directory and its `.rig`, as `rig build` names a program after its main file. `optimize` is `false` by default, unoptimised as `rig build` of a file is, and `true` optimises it with LLVM's O2 pipeline (section 10.2). `bounds_checks` is `true` by default, and `false` leaves out the program's bounds checks, as `--no-bounds-checks` does (section 8.5); the code of its `#run`s keeps them while compiling (section 7.8).
+- `create_workspace(name)` makes a workspace, with no files and the default options, and gives it. Its name, which may be `""`, names it in messages, and two workspaces can't share one.
+- `get_build_options(w)` gives the options workspace `w`'s program will be built with, and `set_build_options(w, options)` sets them.
+- `add_build_file(w, path)` adds the `.rig` file at `path` to workspace `w`'s program. The file must be there when it is added.
+
+The strings these procedures are given are copied as they are given, so the program may change or free its own afterwards, and the `output_name` that `get_build_options` gives is a copy of the workspace's: what the program writes there changes nothing until it is set.
+
+**`#compiler` procedures.** The Compiler module's procedures have `#compiler` after the signature and a `;` in place of a body (section 7.1): the compiler does each of them itself, while compiling, rather than the program's code (section 10.8).
+
+- Only a module's file may declare one (section 2.14): in any other file `#compiler` is `#compiler is only for the modules that ship with rig`, at the directive. `#c_call` before it is `a #compiler procedure is the compiler's: it takes no '#c_call'`, and `#no_abc` before it `expected '{', found directive`, as before `#foreign`.
+- A `#compiler` procedure is no C function: it takes and returns Rig's structs and strings, which the rules of section 7.6 for a foreign procedure's types don't limit.
+- It has no code in the program, so it has no address, and it can't be a value: `'create_workspace' can't be a value: the compiler does it`, at the name. It can only be called by name.
+- It is called while compiling, by the code a `#run` runs. A call of it in the program's own code, which the executable would make, is `'create_workspace' can only be called while compiling`, at the procedure's name in the call. That error is found when `rig build` lowers the program into an executable (section 10.2), so `rig check`, which never lowers a program, doesn't say it; it is said of every such call, one in a procedure that is never called included, and no file is written.
+
+**What `rig build` does** with a build program, in order:
+
+1. It checks it as any program: one with errors has them reported, exits with status 1, and runs none of its top-level `#run`s (its expression `#run`s ran while it was checked, section 7.8).
+2. It refuses `-o` and `--no-bounds-checks`, whose work the build options do (section 10.1): status 2, before any top-level `#run` runs.
+3. It runs its top-level `#run`s, which make the workspaces. What they print is `rig build`'s output. One that fails stops the build there: its error is reported once they have all run, no workspace is built, and rig exits with status 1.
+4. A build program whose `#run`s made no workspace has nothing to build: `the build program created no workspace`, at its `#import "Compiler"`, or at the `#load` that reached the module, or at the start of the file that is the module's `module.rig` itself. rig exits with status 1.
+5. Each workspace with no files is `workspace 'game' has no files`, at the name of the `create_workspace` call that made it. These are reported together, before any workspace is built.
+6. Each workspace with files is built, in the order they were made, as a separate compilation: its program has its own globals and its own `#run`s, which run while it compiles and print then, and none of the build program's or another workspace's. It is built as `rig build` builds a program (section 10.1), its files loaded, checked, its top-level `#run`s run, lowered, compiled and linked, with its build options. Its diagnostics are printed when its compilation ends, before the next workspace is built. A workspace that fails doesn't stop the ones after it.
+7. A workspace whose program is itself a build program isn't built: it is an error of the build program, `workspace 'game' is a build program; a workspace builds an ordinary program`, at the `create_workspace` call that made it, reported after what loading the workspace's files found (a `#load` that failed, which may be why it has no `main`).
+8. rig exits with status 1 when anything failed, and 0 when every workspace was built.
+
+**A workspace's files.** The first file added is the program's main file. The others are loaded right after it, in the order they were added, before the files it loads, as if the main file `#load`ed each of them first (section 2.13); each is known by its identity, so a file added twice is loaded once. A file's own `#load`s are relative to it, as always: `src/main.rig`'s `#load "player.rig";` loads `src/player.rig`. A file that can't be read when its workspace is built (it was there when it was added) is `rig: error: cannot read 'PATH': MESSAGE`, as for a main file, and that workspace fails.
+
+**Paths** a build program gives are relative to its own directory, the directory of its main file as rig was given it, not to the directory rig runs in; for `rig build` with no file the two are the same. An absolute path stays as it is.
+
+- The files `add_build_file` adds are found there, and named from there in messages, as a `#load` in the build program names a file (section 9.1): with `rig build tools/build.rig`, `add_build_file(w, "src/main.rig");` adds `tools/src/main.rig`.
+- The executable is written there: named `output_name`, made into an executable's name as `-o`'s is (section 10.1: on Windows a name with no extension gets `.exe`), or, when `output_name` is `""`, named after the first file, as `rig build` names a program, in that directory and not the file's: the workspace of `src/counter.rig` makes `counter` beside the build program. On Windows its PDB is beside it.
+- The object file is written to the directory `.build` there, named after the first file, as `rig build` names one.
+
+**Failures.** The Compiler module's procedures fail as a failing runtime check in a `#run`'s code does (section 7.8): `#run failed: runtime error: MESSAGE`, at the `#run`, followed by the calls that led there, the innermost at the name of the call that failed (the `#compiler` procedure has no frame of its own). Each procedure checks its workspace first. The messages:
+
+- `there's no workspace with id 3`: the `Workspace` names none;
+- `a program with 'main' can't create workspaces`: `create_workspace` in a program that isn't a build program, which builds others or is built, never both;
+- `there's already a workspace 'game'`: `create_workspace` of a name another workspace has;
+- `the output 'game.rig' ends in .rig; is it the source file?` and `an output name can't contain a zero byte`, from `set_build_options`: a name ending in `.rig` (in any case) names a source file, as with `-o`, and the system's names end at a zero byte;
+- `'src/x.txt' isn't a .rig file` and `there's no file 'src/x.rig'`, from `add_build_file`, the first checked before the second, each naming the path as it was given (a path holding a zero byte names no file);
+- `'create_workspace' was given a string with a negative count`, naming the procedure.
+
+```rig error
+#import "Compiler";
+
+game :: () {
+    w := create_workspace("game");
+    add_build_file(w, "src/main.rig");
+}
+
+#run game();
+```
+
+With no `src/main.rig` beside it:
+
+```text
+example.rig:8:1: error: #run failed: runtime error: there's no file 'src/main.rig'
+    #run game();
+    ^
+    in game (example.rig:5:5)
+    in #run (example.rig:8:1)
+```
+
+The other errors, said of the build program as diagnostics (section 9.1) once its `#run`s have run, are those of steps 4, 5 and 7 above; a workspace's own errors are its program's. The command line's are in section 10.1.
+
+**Ending the build.** C's `exit`, called by the code of a build program's `#run` or of a `#run` in a workspace's program, ends rig there with the status it gives, after printing the diagnostics found so far (section 7.8): nothing after it is built, the workspaces not yet built included.
+
+**`rig check`** of a build program checks it as `rig build` does: it needs no `main`, and its expression `#run`s run, as in any program (section 7.8), and may make workspaces, but it never runs the top-level `#run`s and builds nothing. So it says none of the errors of steps 4, 5 and 7, which come after the top-level `#run`s: a build program that makes no workspace checks with none.
 
 ## 8. Runtime checks
 
@@ -1781,7 +1929,7 @@ main :: () {
 example.rig:4:11: runtime error: index 3 is out of bounds (count 3)
 ```
 
-Bounds checks are turned off for a procedure by `#no_abc` and for a whole program by `rig build --no-bounds-checks` (section 7.7). Indexing a pointer is never bounds-checked.
+Bounds checks are turned off for a procedure by `#no_abc`, and for a whole program by `rig build --no-bounds-checks` or by a build program's `bounds_checks = false` for a workspace's program (section 7.7). Indexing a pointer is never bounds-checked.
 
 ### 8.6 What is not checked
 
@@ -1809,7 +1957,7 @@ PATH:LINE:COL: error: MESSAGE
     ^
 ```
 
-`PATH` names the source file the message is about, and `LINE:COL` the position in it (section 2.2). The main file is named by its path as given on the command line. A loaded file (section 2.13) is named by the path of the file whose `#load` loaded it, up to and including its last separator, followed by the path the `#load`'s string gives, its escapes decoded: `src/main.rig`'s `#load "world/map.rig";` names `src/world/map.rig`, and `main.rig`'s names `world/map.rig`. On Windows a file named with a drive and no separator, `C:main.rig`, has that drive, `C:`, as its directory, so its `#load "a.rig";` names `C:a.rig`. On Windows a file named with the `\\?\` prefix has the paths of the files it loads resolved, each `/` made `\`, and each `.` and `..` taken away: `\\?\C:\x\main.rig`'s `#load "../sub/a.rig";` names `\\?\C:\sub\a.rig`. A `#load` with an absolute path names the file by that path. The source line follows, indented by four spaces, and under it a caret at the column. Each byte before the column becomes a space under it, except a tab, which stays a tab, so the caret lines up however tabs are shown.
+`PATH` names the source file the message is about, and `LINE:COL` the position in it (section 2.2). The main file is named by its path as given on the command line. A loaded file (section 2.13) is named by the path of the file whose `#load` loaded it, up to and including its last separator, followed by the path the `#load`'s string gives, its escapes decoded: `src/main.rig`'s `#load "world/map.rig";` names `src/world/map.rig`, and `main.rig`'s names `world/map.rig`. On Windows a file named with a drive and no separator, `C:main.rig`, has that drive, `C:`, as its directory, so its `#load "a.rig";` names `C:a.rig`. On Windows a file named with the `\\?\` prefix has the paths of the files it loads resolved, each `/` made `\`, and each `.` and `..` taken away: `\\?\C:\x\main.rig`'s `#load "../sub/a.rig";` names `\\?\C:\sub\a.rig`. A `#load` with an absolute path names the file by that path. A module's `module.rig`, which an `#import` reaches, is named by its absolute path, so the files it loads are too (section 2.14). The source line follows, indented by four spaces, and under it a caret at the column. Each byte before the column becomes a space under it, except a tab, which stays a tab, so the caret lines up however tabs are shown.
 
 The compiler reports every error it finds in the program, in all its files, not only the first, sorted by position: file by file in load order (section 2.13), then by line, then column. Diagnostics go to the standard error stream, and the compiler then exits with status 1 without writing any file.
 
@@ -1841,7 +1989,7 @@ example.rig:4:1: error: expected ';', found '}'
     ^
 ```
 
-An identifier found is named: `counter int = 0;` is `expected '::', found identifier 'int'`. After a syntax error the compiler gives up on the declaration it was in and goes on at the next one, so the errors in the rest of the file, and in the program's other files, are reported too, type errors included. The declaration given up on keeps its name when the text still looks like a declaration of it, and nothing more is reported about it or its uses, so one mistake gives one message. A missing `main` is not reported when a declaration with a syntax error might have been it. A `#load` or a `#run` that starts a line is the next top-level declaration too, as section 2.13 says of a `#load`: the declaration left unfinished before it is given up there, and the run is kept, unless a value is still expected there (`N ::` on the line before), where the `#run` is that value. A body or a struct whose `}` is missing ends before the `#run`s in column 1 as it ends before the `#load`s, a `#run {` in column 1 ends a body as a procedure's declaration does, and any `#run` in column 1 ends a struct's fields, which can't hold one. A `#load` that failed (section 2.13) is the same for the whole program: the file it names might have declared any name, so while one has failed no name anywhere is reported as unknown (`unknown identifier`, `unknown type`), nor `main` as missing.
+An identifier found is named: `counter int = 0;` is `expected '::', found identifier 'int'`. After a syntax error the compiler gives up on the declaration it was in and goes on at the next one, so the errors in the rest of the file, and in the program's other files, are reported too, type errors included. The declaration given up on keeps its name when the text still looks like a declaration of it, and nothing more is reported about it or its uses, so one mistake gives one message. A missing `main` is not reported when a declaration with a syntax error might have been it. A `#load`, an `#import` or a `#run` that starts a line is the next top-level declaration too, as section 2.13 says of a `#load`: the declaration left unfinished before it is given up there, and the load, the import or the run is kept, unless a value is still expected there (`N ::` on the line before), where the `#run` is that value. A body or a struct whose `}` is missing ends before the `#import`s and the `#run`s in column 1 as it ends before the `#load`s, a `#run {` in column 1 ends a body as a procedure's declaration does, and any `#run` in column 1 ends a struct's fields, which can't hold one. A `#load` or an `#import` that failed (sections 2.13, 2.14) is the same for the whole program: the file it names might have declared any name, so while one has failed no name anywhere is reported as unknown (`unknown identifier`, `unknown type`), nor `main` as missing.
 
 ### 9.3 Representative messages
 
@@ -1866,6 +2014,27 @@ The sections defining each construct give its messages. Some of those met most o
 | `'notes.txt' isn't a .rig file` | 2.13 |
 | `a #load path can't be empty` | 2.13 |
 | `a #load path can't contain a zero byte` | 2.13 |
+| `#import can only be at the top level` | 2.7, 2.14 |
+| `expected a string after #import, as in #import "Basic";` | 2.14 |
+| `'../x' isn't a module's name` | 2.14 |
+| `there's no module 'Nope' (looked in DIR1 and DIR2)` | 2.14 |
+| `#compiler is only for the modules that ship with rig` | 7.9 |
+| `a #compiler procedure is the compiler's: it takes no '#c_call'` | 7.9 |
+| `'create_workspace' can't be a value: the compiler does it` | 7.9 |
+| `'create_workspace' can only be called while compiling` | 7.9 |
+| `#run failed: runtime error: a program with 'main' can't create workspaces` | 7.9 |
+| `#run failed: runtime error: there's no workspace with id 3` | 7.9 |
+| `#run failed: runtime error: there's already a workspace 'game'` | 7.9 |
+| `#run failed: runtime error: the output 'game.rig' ends in .rig; is it the source file?` | 7.9 |
+| `#run failed: runtime error: an output name can't contain a zero byte` | 7.9 |
+| `#run failed: runtime error: 'src/x.txt' isn't a .rig file` | 7.9 |
+| `#run failed: runtime error: there's no file 'src/x.rig'` | 7.9 |
+| `#run failed: runtime error: 'create_workspace' was given a string with a negative count` | 7.9 |
+| `#run failed: runtime error: the compiler has no procedure 'NAME'` | 10.8 |
+| `#run failed: runtime error: 'NAME' isn't declared as the compiler implements it` | 10.8 |
+| `the build program created no workspace` | 7.9 |
+| `workspace 'game' has no files` | 7.9 |
+| `workspace 'game' is a build program; a workspace builds an ordinary program` | 7.9 |
 | `#run in a body must be a value, as in x := #run f();` | 2.7, 7.8 |
 | `#run can't use 'x': it's a local, which doesn't exist while compiling` | 7.8 |
 | `main is where the program starts; #run can't call it` | 7.8 |
@@ -1894,12 +2063,14 @@ This section describes the compiler in this repository: how it compiles a Rig pr
 ### 10.1 The rig command
 
 ```text
-rig build FILE.rig [-o OUTPUT] [--no-bounds-checks]
+rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks]
 rig check FILE.rig [--stdin | --stdin-for FILE.rig]
 rig version [--verbose]
 ```
 
-**`rig build`** compiles the program whose main file is `FILE.rig` into an executable: that file and every file it loads (section 2.13), each read from its path, which is relative to the current directory when it is not absolute. Once the program has checked with no errors, its top-level `#run`s run (section 7.8): what they print is `rig build`'s own output, and one that fails is an error, which stops the build once they have all run. The options may come in any order.
+**`rig build`** compiles the program whose main file is `FILE.rig` into an executable: that file and every file it loads or imports (sections 2.13, 2.14), each read from its path, which is relative to the current directory when it is not absolute. Once the program has checked with no errors, its top-level `#run`s run (section 7.8): what they print is `rig build`'s own output, and one that fails is an error, which stops the build once they have all run. The options may come in any order. With no file, `rig build` builds `build.rig` in the current directory, the usual name of a build program; when there is none, it is `rig: error: no file given and no build.rig in the current directory`, status 1.
+
+A **build program** (section 7.9) isn't made into an executable: once its top-level `#run`s have run, rig builds the workspaces they made, each a program of its own, with the options the build program gave it, its files, its object file and its executable relative to the build program's directory. The options below are an ordinary program's. A build program's build options do their work, so once it has checked with no errors, and before its top-level `#run`s run, `-o` is refused, `rig: error: -o can't be used with a build program; its build options set the output`, and `--no-bounds-checks` likewise, `rig: error: --no-bounds-checks can't be used with a build program; its build options set the bounds checks` (only `-o`'s is said when both are given), each with status 2. A program with errors has them reported, status 1, before either is.
 
 - The executable is written to the current directory, named after the main file without its directory and its `.rig`: `hello.exe` on Windows, `hello` on Linux, for `src/hello.rig`.
 - `-o OUTPUT` names the executable otherwise. On Windows a name whose file name has no extension gets `.exe`. An output ending in `.rig` is refused: `rig: error: the output 'hello.rig' ends in .rig; is it the source file?`.
@@ -1907,7 +2078,7 @@ rig version [--verbose]
 - The object file, one for the whole program, is written to a directory `.build` in the current directory, made if needed, named after the main file: `.build/hello.obj` on Windows, `.build/hello.o` on Linux.
 - On Windows the program's debug information is written beside it: the executable's name with `.pdb` for its `.exe` (in any case), `hello.pdb` for `hello.exe`, or with `.pdb` added to a name with another extension, `out.bin.pdb` for `out.bin` (section 10.7).
 
-**`rig check`** reads and checks the program as `rig build` does, the files it loads included, prints the same diagnostics, and stops: it writes no file. Checking runs the program's expression `#run`s, since types can depend on them (`[LIMIT]int`), and what they print goes where it would from any program, to `rig check`'s standard output or its standard error; it never runs the top-level `#run`s, which it checks all the same (section 7.8), so a program whose only error is a top-level `#run` that fails checks with none. With `--stdin` it reads the main file from standard input, which lets an editor check text that is not saved. `FILE.rig` is then the name its diagnostics give it, and its `#load`s are found from `FILE.rig`'s directory, as if the text were in that file; the file need not exist. The files it loads are read from disk. With `--stdin-for LOADED.rig` (the usage's second `FILE.rig`) the program is `FILE.rig`'s, read from disk, but for `LOADED.rig`, whose text is read from standard input wherever the program loads it, which lets an editor check a file a program loads as part of that program: checked alone, it would have no `main`, and the names the program's other files declare would be unknown. `LOADED.rig`, like `FILE.rig`, is a path from the current directory, not from `FILE.rig`'s; it is then known as `#load` knows a file (section 2.13), so the `#load` may write its path otherwise (`./b.rig` or `sub/../b.rig` for `b.rig`, and on Windows `B.RIG`), and it need not exist. Its diagnostics name it as its `#load` does. When `LOADED.rig` is `FILE.rig` itself, the option is `--stdin`.
+**`rig check`** reads and checks the program as `rig build` does, the files it loads or imports included, prints the same diagnostics, and stops: it writes no file. A build program is checked as any program is, and builds nothing (section 7.9). Checking runs the program's expression `#run`s, since types can depend on them (`[LIMIT]int`), and what they print goes where it would from any program, to `rig check`'s standard output or its standard error; it never runs the top-level `#run`s, which it checks all the same (section 7.8), so a program whose only error is a top-level `#run` that fails checks with none. With `--stdin` it reads the main file from standard input, which lets an editor check text that is not saved. `FILE.rig` is then the name its diagnostics give it, and its `#load`s are found from `FILE.rig`'s directory, as if the text were in that file; the file need not exist. The files it loads are read from disk. With `--stdin-for LOADED.rig` (the usage's second `FILE.rig`) the program is `FILE.rig`'s, read from disk, but for `LOADED.rig`, whose text is read from standard input wherever the program loads it, which lets an editor check a file a program loads as part of that program: checked alone, it would have no `main`, and the names the program's other files declare would be unknown. `LOADED.rig`, like `FILE.rig`, is a path from the current directory, not from `FILE.rig`'s; it is then known as `#load` knows a file (section 2.13), so the `#load` may write its path otherwise (`./b.rig` or `sub/../b.rig` for `b.rig`, and on Windows `B.RIG`), and it need not exist. Its diagnostics name it as its `#load` does. When `LOADED.rig` is `FILE.rig` itself, the option is `--stdin`.
 
 **`rig version`** says which compiler this is, on one line: its version, the commit of Rig's repository it was built from with that commit's date, and the version of the LLVM linked into it:
 
@@ -1933,7 +2104,7 @@ build: release
 
 Both `build` and `check` take only a source file whose name ends in `.rig`, in any case: `rig: error: 'hello.txt' isn't a .rig file`. So does `--stdin-for`, its file's name judged after the main file's, and both before anything is read. A main file that cannot be read is `rig: error: cannot read 'hello.rig': MESSAGE`, with the system's reason (`rig: error: cannot read standard input: MESSAGE` with `--stdin`). With `--stdin-for` the main file is read from disk first, and standard input only once it has been, so a main file that cannot be read is said without waiting for standard input; standard input that cannot be read is then `rig: error: cannot read standard input: MESSAGE`. A loaded file that cannot be read, or isn't a `.rig` file, is a diagnostic at its `#load`'s string instead (section 2.13). A program that never loads the `--stdin-for` file is `rig: error: 'main.rig' doesn't load 'helper.rig'`, the two files named as the command line names them, alone: nothing is checked, and what loading the program found isn't printed, since that file isn't part of it.
 
-The exit status is 0 on success; 1 when the program has errors (a `#run` that fails among them), cannot be read, doesn't load the `--stdin-for` file, or cannot be built or linked; and 2 when the command line is malformed (no command or an unknown one, no file, two files, an option given twice, `-o` or `--stdin-for` without a name or with an empty one, `--stdin` with `--stdin-for`, `-o` or `--no-bounds-checks` given to `rig check`, `--stdin-for` given to `rig build`, even as `-o`'s name, or anything but `--verbose` after `rig version`), in which case the usage is printed. A word that is not an option is taken as the file's name: an unknown option alone is a file that isn't a `.rig` file, and beside the file it is a second file. The word after `-o` or `--stdin-for` is its name, whatever it is: `--stdin-for --stdin` names a file `--stdin`, which isn't a `.rig` file. A `#run` whose code calls C's `exit` ends `rig` there, `rig build` or `rig check`, with the status it gives, after the diagnostics found so far (section 7.8).
+The exit status is 0 on success; 1 when the program has errors (a `#run` that fails among them), cannot be read, doesn't load the `--stdin-for` file, or cannot be built or linked, when `rig build` is given no file and there is no `build.rig`, and when one of a build program's workspaces fails or the build program has an error of its own (section 7.9); and 2 when the command line is malformed (no command or an unknown one, no file for `rig check`, two files, an option given twice, `-o` or `--stdin-for` without a name or with an empty one, `--stdin` with `--stdin-for`, `-o` or `--no-bounds-checks` given to `rig check`, `--stdin-for` given to `rig build`, even as `-o`'s name, or anything but `--verbose` after `rig version`), in which case the usage is printed, and when `-o` or `--no-bounds-checks` is given with a build program (above), in which case it isn't. A word that is not an option is taken as the file's name: an unknown option alone is a file that isn't a `.rig` file, and beside the file it is a second file. The word after `-o` or `--stdin-for` is its name, whatever it is: `--stdin-for --stdin` names a file `--stdin`, which isn't a `.rig` file. A `#run` whose code calls C's `exit` ends `rig` there, `rig build` or `rig check`, with the status it gives, after the diagnostics found so far (section 7.8).
 
 ### 10.2 The compiler's stages
 
@@ -1941,13 +2112,15 @@ The compiler is a single program written in C++, with LLVM linked into it. It co
 
 1. **Lexer** (`src/lexer.cpp`): the source's bytes into tokens (section 2).
 2. **Parser** (`src/parser.cpp`): the tokens into a syntax tree, by recursive descent, with expressions read by precedence climbing (Appendix A).
-3. **Loader** (`src/load.cpp`): the main file and every file it `#load`s, each once, in load order (section 2.13), each through the lexer and the parser into the same tree, so the checker sees one program.
+3. **Loader** (`src/load.cpp`): the main file and every file it `#load`s, and every module it `#import`s, found in the places beside rig (section 2.14), each once, in load order (section 2.13), each through the lexer and the parser into the same tree, so the checker sees one program. The loader also finds whether the program is a build program (section 7.9).
 4. **Checker** (`src/checker.cpp`, `src/check_expr.cpp`, `src/check_run.cpp`): resolves every name, works out every type and every struct's layout, folds the constant expressions, and checks the rules of sections 3 to 7. The checker runs even after syntax errors, so both kinds are reported together. It runs each expression's `#run` where it first needs its value (section 7.8), in the compile-time world (`src/run.cpp`): what the `#run` reaches is lowered (stage 5) into a compile-time module of the world's own, which grows as later `#run`s reach more, and run there on the interpreter (section 10.8), and the result is baked into the tree as if it had been written there.
 5. **Lowering** (`src/lower.cpp`): the checked tree into Rig's intermediate representation (`src/ir.h`), a list of procedures made of basic blocks of instructions on numbered values. Lowering adds the runtime checks of section 8 and the source positions and scopes that the debug information is made from.
-6. **LLVM** (`src/llvm_backend.cpp`): the IR into an LLVM module through LLVM's C API, which LLVM verifies and compiles into an object file for x86-64: COFF on Windows (target `x86_64-pc-windows-msvc`), ELF on Linux (`x86_64-pc-linux-gnu`), position-independent on Linux. The code is not optimised, and targets the baseline x86-64 processor.
+6. **LLVM** (`src/llvm_backend.cpp`): the IR into an LLVM module through LLVM's C API, which LLVM verifies and compiles into an object file for x86-64: COFF on Windows (target `x86_64-pc-windows-msvc`), ELF on Linux (`x86_64-pc-linux-gnu`), position-independent on Linux. The code targets the baseline x86-64 processor. It is not optimised, unless a build program's workspace asks for it with `optimize` (section 7.9): `rig build` of a file never optimises. Optimised, the module is run through LLVM's `default<O2>` pipeline, the one clang's `-O2` runs, and compiled at LLVM's optimising code generation level, and its debug information is still made (section 10.7).
 7. **Linker** (`src/link.cpp`): the object file into an executable with the platform's linker (section 10.6).
 
-No integer instruction carries LLVM's `nsw`, `nuw` or `exact` flags, and no float instruction carries fast-math flags: Rig's integers wrap and its floats are IEEE 754's. No pointer arithmetic is marked `inbounds`, copies are `memmove`s (the two sides may overlap), and no pointer is assumed non-null.
+A build program (section 7.9) goes through stages 1 to 4, and its top-level `#run`s run, but it isn't lowered into a program of its own: each of its workspaces goes through every stage instead, as a program of its own.
+
+No integer instruction carries LLVM's `nsw`, `nuw` or `exact` flags, and no float instruction carries fast-math flags: Rig's integers wrap and its floats are IEEE 754's. No pointer arithmetic is marked `inbounds`, copies are `memmove`s (the two sides may overlap), and no pointer is assumed non-null. So an optimised program does what an unoptimised one does: the optimiser takes none of these for undefined. Optimised, every procedure is also marked as knowing none of the C library's functions, as clang's `-fno-builtin` marks a function: a program's own procedure may have a C function's name (section 7.6), and LLVM would otherwise take it for C's, and C's for it. And optimised, every stack slot is zeroed before the procedure's body runs, so a `---` local read before it is assigned is still an unspecified value (section 8.6): zero the first time, and in a loop the value the slot held in the iteration before, as unoptimised, and never a read of memory nothing stored, which the optimiser would take as undefined and could remove the code after.
 
 After lowering, beside the LLVM and linker stages, a stage can run the IR rather than compile it: the **interpreter** (`src/interp.cpp`, calling C through `src/thunk.cpp`) runs lowered procedures inside the compiler, for code run while compiling (section 10.8). It runs the compile-time module, not the program's: the checker's `#run`s while it checks, and in `rig build` the top-level `#run`s once it has checked, before the program itself is lowered (section 7.8). The interpreter optimises nothing away: every instruction of the IR runs, even one whose result is never used.
 
@@ -1961,7 +2134,7 @@ After lowering, beside the LLVM and linker stages, a stage can run the IR rather
 - **Views and strings** are 16 bytes: the count, a 64-bit signed integer, at offset 0, and the data pointer at offset 8.
 - **String literals and constants' data** are private, read-only constant data in the object file. A string literal is its bytes followed by one zero byte, once for each literal written in the source that the program uses at run time, however many uses reach it, and not at all when it is only folded (`"abc".count`, `NAME[1]`, section 5.9). A constant holding data (section 4.2) is there once when the program uses it at run time, and not at all when it is only folded: its value, laid out as its type is, with relocations for the addresses inside it (a string literal's, a procedure's), which the linker resolves. A string constant is a 16-byte string there, whose data points at its literal's bytes; where it becomes a `*u8`, it is the literal's address itself. A `#run`'s value that holds data (section 7.8), a string, a struct, an array or a view, is constant data too, there once for each such `#run` the program uses at run time, its views' elements in constant data of their own, which the view points at (a string `#run` used only where it becomes a `*u8` is its literal's address itself, as a string constant is); one that is a number, a `bool`, `null` or a procedure occupies no storage, as such a constant doesn't (section 4.2).
 - **Global variables** are data local to the program, initialised with their values' bytes. A global holding a string literal's or an array's address gets it through a relocation, which the linker resolves. The bytes of the strings a `#run` gave a global, and the elements of its views, are data local to the program too, writable, of that global's own (section 4.3).
-- **Local variables** live in their procedure's stack frame. Every stack slot is allocated once, at the procedure's start, however often the block that declares it runs.
+- **Local variables** live in their procedure's stack frame. Every stack slot is allocated once, at the procedure's start, however often the block that declares it runs. That is unoptimised code; with a workspace's `optimize` (section 7.9), LLVM may keep a local in registers instead (section 10.7).
 
 ### 10.4 Calling convention
 
@@ -2013,6 +2186,8 @@ The library named by `#foreign` is checked to be `libc`, and a foreign procedure
 
 When a tool is missing, or the linker fails, the compiler prints the reason or the linker's own output, then `rig: error: linking failed`, and exits with status 1.
 
+A release archive, and an installation made from one, keeps beside `rig` the linker the compiler uses from its own directory (`lld-link.exe` on Windows, `ld.lld` on Linux), and beside both the directory `modules`, with the modules that ship with rig, where `#import` finds them (section 2.14).
+
 ### 10.7 Debug information
 
 `rig build` always writes debug information. The LLVM backend writes it from the IR's positions and scopes: **CodeView** on Windows, which the linker gathers into a **PDB** beside the executable (`hello.pdb` for `hello.exe`), and **DWARF 5** on Linux, kept inside the executable (with no name index, `.debug_names`: gdb doesn't use one it didn't make, and warns that it ignores it). Visual Studio, WinDbg and cdb read the PDB; gdb reads the DWARF.
@@ -2031,6 +2206,8 @@ The debug information holds:
 A debug type is made at most 1000 levels deep (the limit of section 9.4), counting each type along its longest chain of fields, pointees and elements. A program can chain types more deeply (structs held by value, each declared after the one it holds, or each holding a pointer to the next); past the limit a pointer is described as `void *` and any other type as a declared struct of its name with no fields, so the compiler's work stays bounded.
 
 Frame pointers are kept (section 10.4), so the stack can be walked without unwind tables.
+
+What this section says of the variables and their stack slots holds for unoptimised code, what `rig build` of a file makes, and a build program's workspace without `optimize` (section 7.9): every local, parameter and iterator is shown with its value, and a parameter is in its own slot, as clang's `-O0` code has it, so a value a debugger writes is the one the program goes on with. With `optimize`, the debug information is still written, and marked as describing optimised code, but the optimiser may keep a variable in a register, or nowhere, for some of its life: a debugger may show it as optimised out, a line may be stepped through out of order or not at all, and writing a variable may have no effect.
 
 ### 10.8 The interpreter
 
@@ -2055,6 +2232,8 @@ A name found nowhere is the runtime error `'NAME' isn't in the C library at comp
 
 What C writes at compile time goes to the compiler's own standard output and error. `exit` really exits the compiler, with its status, after the C runtime flushes its streams: a `#run`'s code that calls it ends the compilation there, the diagnostics found so far printed first (section 7.8).
 
+**Calling the compiler.** A call of a `#compiler` procedure (section 7.9) isn't a call of C, and doesn't go through the thunks: the interpreter hands it to the compiler's own C++ code (`src/compiler_module.cpp`), in the frame of its caller, with the compilation's own record of the workspaces it has made. The arguments and the results are where the IR has them, in the interpreter's memory: each aggregate argument is the address of the caller's copy, and an aggregate result is written through the hidden pointer the caller passes (section 10.4), so the compiler reads and writes Rig's structs and strings there, laid out as section 10.3 says. A failure is a runtime error, as a failing check's is, with the frames of the calls that led there (below), the innermost at the call's name. The compiler takes the procedure by its name and its number of parameters: a `#compiler` procedure it doesn't do, which a module of the places beside rig could declare, is `the compiler has no procedure 'NAME'`, and one declared otherwise than it does it `'NAME' isn't declared as the compiler implements it`.
+
 **Failures.** When interpreted code fails a runtime check (section 8.1), runs out of its stack, calls an address of the range that is no procedure's, calls a C function found nowhere or takes its value, hands C a Rig procedure, and when a program can't run at all (it has too many procedures, or a global holds a C function found nowhere), the run stops, but the compiler doesn't. The interpreter gives the failure to its caller: the message, without the `PATH:LINE:COL: runtime error: ` that a compiled program writes before it (`index 10 is out of bounds (count 10)`), and the chain of calls that led there, innermost first. Each frame is a procedure of the source and a position:
 
 - When a runtime check fails, the innermost frame's position is the failing check's, the one section 8.1's message names.
@@ -2070,7 +2249,7 @@ The procedures the compiler adds (section 10.5) are left out. A run that fails b
     in main (tables.rig:52:5)
 ```
 
-A failing `#run` writes them after its message (section 7.8), the outermost frame being the `#run`'s own procedure, `in #run (PATH:LINE:COL)`. The test mode that runs a program interpreted, `bin/unit-tests --interpret` (`CONTRIBUTING.md`), writes only the innermost frame's position before the message (the file alone when there is no frame), as a compiled program does: `tables.rig:40:17: runtime error: index 10 is out of bounds (count 10)`.
+A failing `#run` writes them after its message (section 7.8), the outermost frame being the `#run`'s own procedure, `in #run (PATH:LINE:COL)`. The test mode that runs a program interpreted, `bin/unit-tests --interpret` (`CONTRIBUTING.md`), writes only the innermost frame's position before the message (the file alone when there is no frame), as a compiled program does: `tables.rig:40:17: runtime error: index 10 is out of bounds (count 10)`. It refuses a build program (section 7.9), which has no `main` to run, once it has checked with no errors and before its top-level `#run`s: `unit-tests: error: a build program can't be interpreted`, status 1.
 
 **No step limit.** The interpreter counts no steps: an endless loop runs until the compiler is stopped (Ctrl-C), as the compiled program would. An editor checking as one types may stop it (section 7.8).
 
@@ -2121,11 +2300,13 @@ A number literal may not be followed directly by a letter or a digit (section 2.
 
 ```ebnf
 File          = { TopLevel } .
-TopLevel      = ProcDecl | StructDecl | ConstDecl | VarDecl | LoadDecl | RunDecl .
+TopLevel      = ProcDecl | StructDecl | ConstDecl | VarDecl | LoadDecl | ImportDecl | RunDecl .
 LoadDecl      = "#load" string_lit ";" .
+ImportDecl    = "#import" string_lit ";" .
 RunDecl       = "#run" ( Block | Expression ";" ) .
 
-ProcDecl      = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#foreign" identifier [ string_lit ] ";" ) .
+ProcDecl      = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#foreign" identifier [ string_lit ] ";"
+                                           | "#compiler" ";" ) .
 Signature     = "(" [ Params ] ")" [ "->" Results ] .
 Results       = Type { "," Type } | "(" Type { "," Type } ")" .
 Params        = Param { "," Param } [ "," ".." ] .
@@ -2149,9 +2330,9 @@ ProcParam     = [ identifier ":" ] Type .
 ProcResults   = Type | "(" Type { "," Type } ")" .
 ```
 
-After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. `ProcDecl`, `StructDecl`, `LoadDecl` and `RunDecl` appear only at the top level. A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'`.
+After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. `ProcDecl`, `StructDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level. A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
 
-In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{`, a directive other than `#c_call`, `#load` or `#run`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file. A `#load` or a `#run` reached first begins the next declaration, so the `VarDecl` is missing its `;`. Otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
+In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{`, a directive other than `#c_call`, `#load`, `#import` or `#run`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file. A `#load`, an `#import` or a `#run` reached first begins the next declaration, so the `VarDecl` is missing its `;`. Otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
 
 ### A.3 Statements
 
@@ -2228,7 +2409,9 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `#foreign` | C procedure | 7.6 |
 | `#c_call` | procedure that C can call; its procedure type | 7.6, 3.15 |
 | `#no_abc` | no bounds checks in a procedure | 7.7 |
+| `#compiler` | a procedure the compiler does | 7.9 |
 | `#load` | another file of the program | 2.13 |
+| `#import` | a module that ships with rig | 2.14 |
 | `#run` | code run while compiling | 7.8 |
 | `size_of` | a type's size | 5.16 |
 | `it`, `it_index` | a loop's iterator and index | 6.7, 6.8 |

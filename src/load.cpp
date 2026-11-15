@@ -50,6 +50,83 @@ bool load_same_file(String a, String b) {
     return same;
 }
 
+// The host's separator, which module_lookup puts between a place and the
+// names after it.
+static const char MODULE_SEPARATOR = HOST_IS_WINDOWS ? '\\' : '/';
+
+Module_Places module_places(Arena *a) {
+    String rig_directory = os_executable_directory(a);
+    Module_Places places = {};
+    places.places[0] = path_absolute(a, rig_directory, str("modules"), HOST_IS_WINDOWS);
+    places.places[1] = path_absolute(a, rig_directory, str("../modules"), HOST_IS_WINDOWS);
+    return places;
+}
+
+String module_lookup(Arena *a, const Module_Places *places, String name) {
+    for (s64 i = 0; i < 2; i++) {
+        String place = places->places[i];
+        // The place's own entries, compared byte for byte: asking the system
+        // whether place/NAME exists would find basic as Basic on Windows,
+        // whose names are case-blind, and the program would then depend on
+        // the host. A place that isn't there (or can't be listed) has none.
+        Array<String> names = {};
+        bool listed = os_list_directory(a, place, &names);
+        bool found = false;
+        for (s64 k = 0; listed && k < names.count && !found; k++) found = string_eq(names[k], name);
+        array_free(&names);
+        if (!found) continue;
+        String module = string_printf(a, STR_FMT "%c" STR_FMT "%cmodule.rig", STR_ARG(place), MODULE_SEPARATOR,
+                                      STR_ARG(name), MODULE_SEPARATOR);
+        if (os_file_exists(module)) return module;
+    }
+    return {};
+}
+
+// Whether the file at `absolute_path` (path_absolute's: absolute, with the
+// host's separators) is inside one of the places, at any depth: a file of a
+// module that ships with rig (Source_File.in_module), whichever #import or
+// #load reached it. The text alone answers, as for the places themselves,
+// its case folded on Windows (os_fold_case), where a name's case doesn't
+// matter: C:\RIG\modules\Compiler\module.rig is inside C:\rig\modules.
+static bool in_a_place(Arena *a, const Module_Places *places, String absolute_path) {
+    String path = os_fold_case(a, absolute_path);
+    for (s64 i = 0; i < 2; i++) {
+        String place = os_fold_case(a, places->places[i]);
+        if (path.count > place.count && memcmp(path.data, place.data, (size_t)place.count) == 0 &&
+            path.data[place.count] == MODULE_SEPARATOR) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Whether `name` is a module's name: ASCII letters, digits and '_', a
+// letter first. Such a name is a single directory's, never a path (no
+// separator, no "..", nothing absolute), and holds no zero byte.
+static bool is_module_name(String name) {
+    if (name.count == 0) return false;
+    for (s64 i = 0; i < name.count; i++) {
+        u8 c = name.data[i];
+        bool letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+        bool digit = c >= '0' && c <= '9';
+        if (!letter && (i == 0 || (!digit && c != '_'))) return false;
+    }
+    return true;
+}
+
+// `name` as a message shows it, in the arena: each zero byte written \0, as
+// the string had it, since the message's text would end at one.
+static String shown_name(Arena *a, String name) {
+    String shown = string_printf(a, "");
+    for (s64 start = 0, i = 0; i <= name.count; i++) {
+        if (i < name.count && name.data[i] != 0) continue;
+        shown = string_printf(a, STR_FMT STR_FMT "%s", STR_ARG(shown), STR_ARG(string_slice(name, start, i - start)),
+                              i < name.count ? "\\0" : "");
+        start = i + 1;
+    }
+    return shown;
+}
+
 // The files named so far, the main file and every #load's, read or not: a
 // file that can't be read is recorded too, so it's reported at its first
 // #load alone (load.h). The keys (File_Key) of those known by their ids
@@ -68,17 +145,29 @@ static bool first_time_seen(Seen_Files *seen, File_Key key) {
     return true;
 }
 
-Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, String stdin_for, String stdin_text,
-                       bool *stdin_for_reached) {
+Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const Load_Options *options) {
+    Load_Options none = {};
+    if (!options) options = &none;
+    String stdin_for = options->stdin_for;
+    String stdin_text = options->stdin_text;
     Ast_File *tree = arena_new<Ast_File>(a);
     // What the loading alone needs is in an arena of its own, freed at its
     // end: the directory rig runs in, each #load's path and key (the tables
-    // keep the keys of the files first seen), and the system's reasons for
-    // failing. d keeps copies of what it needs of them (diag_add_file,
+    // keep the keys of the files first seen), the places #import looks in
+    // and what it finds there, and the system's reasons for failing. d
+    // keeps copies of what it needs of them (diag_add_file,
     // diag_locate_file, diag_error).
     Arena loading = arena_make();
     String directory = os_current_directory(&loading);
     Seen_Files seen = {};
+    // The places #import looks in, which also say which files are a
+    // module's (in_a_place): the main file's too.
+    Module_Places own_places = {};
+    const Module_Places *places = options->modules;
+    if (!places) {
+        own_places = module_places(&loading);
+        places = &own_places;
+    }
 
     // The file given with its text (rig check --stdin-for), known by its
     // key as any file is, so it's found however the program names it. It's
@@ -100,6 +189,40 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, Strin
     }
     s32 main_file = diag_add_file(d, path, text);
     diag_locate_file(d, main_file, directory, HOST_IS_WINDOWS);
+    d->files[main_file].in_module = in_a_place(&loading, places, d->files[main_file].absolute_path);
+
+    // The Compiler module's module.rig, known by its key as any file is, so
+    // that reaching it by #import, or by a #load of any spelling of its
+    // path, makes the program a build program unless it declares main
+    // (ast_is_build_program, spec 7.9). The main file may be that file
+    // itself: rig check modules/Compiler/module.rig.
+    String compiler = module_lookup(&loading, places, str("Compiler"));
+    bool has_compiler = compiler.count > 0;
+    File_Key compiler_key = has_compiler ? file_key(&loading, directory, compiler) : File_Key{};
+    if (has_compiler && same_key(main_key, compiler_key)) {
+        tree->reaches_compiler = true;
+        tree->compiler_pos = {main_file, 1, 1};
+    }
+
+    // A workspace's further files (spec 7.9), with the texts the caller
+    // read, added right after the main file, so they're walked before the
+    // files its #loads add, as if it #loaded each first. Each is known by
+    // its key as any file is: one named twice, or the main file again, is
+    // added once, and a file one of them #loads that was added already
+    // loads nothing. The Compiler module's file among them is reached at
+    // its own 1:1, as the main file is.
+    Array<String> more_files = options->more_files, more_texts = options->more_texts;
+    for (s64 k = 0; k < more_files.count; k++) {
+        File_Key key = file_key(&loading, directory, more_files[k]);
+        if (!first_time_seen(&seen, key)) continue;
+        s32 added = diag_add_file(d, more_files[k], more_texts[k]);
+        diag_locate_file(d, added, directory, HOST_IS_WINDOWS);
+        d->files[added].in_module = in_a_place(&loading, places, d->files[added].absolute_path);
+        if (has_compiler && same_key(key, compiler_key)) {
+            tree->reaches_compiler = true;
+            tree->compiler_pos = {added, 1, 1};
+        }
+    }
 
     // d->files is the queue: each file is lexed and parsed in turn, and the
     // files its #loads name that weren't loaded yet are added at its end.
@@ -117,24 +240,46 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, Strin
         // names, which the tree records (Ast_File.lost_a_file).
         for (s64 k = first_load; k < tree->loads.count; k++) {
             Ast_Load *load = tree->loads[k];
-            // A string can hold a zero byte (\0), but the system takes a
-            // path as ending at one, so "b.rig\0x.rig" would read b.rig:
-            // such a path, as an empty one, names no file.
-            if (load->path.count == 0) {
-                diag_error(d, load->path_pos, "a #load path can't be empty");
-                tree->lost_a_file = true;
-                continue;
-            }
-            if (memchr(load->path.data, 0, (size_t)load->path.count)) {
-                diag_error(d, load->path_pos, "a #load path can't contain a zero byte");
-                tree->lost_a_file = true;
-                continue;
-            }
-            String loaded = load_path(&loading, d->files[file].path, load->path, HOST_IS_WINDOWS);
-            if (!is_rig_file(loaded)) {
-                diag_error(d, load->path_pos, "'" STR_FMT "' isn't a .rig file", STR_ARG(loaded));
-                tree->lost_a_file = true;
-                continue;
+            String loaded = {};
+            if (load->is_import) {
+                // The module's module.rig, by its absolute path: from here
+                // on, the #load of that path. A name that isn't a module's
+                // is looked for nowhere, so "../x" can't reach outside the
+                // places.
+                if (!is_module_name(load->path)) {
+                    diag_error(d, load->path_pos, "'" STR_FMT "' isn't a module's name",
+                               STR_ARG(shown_name(&loading, load->path)));
+                    tree->lost_a_file = true;
+                    continue;
+                }
+                loaded = module_lookup(&loading, places, load->path);
+                if (!loaded.count) {
+                    diag_error(d, load->path_pos,
+                               "there's no module '" STR_FMT "' (looked in " STR_FMT " and " STR_FMT ")",
+                               STR_ARG(load->path), STR_ARG(places->places[0]), STR_ARG(places->places[1]));
+                    tree->lost_a_file = true;
+                    continue;
+                }
+            } else {
+                // A string can hold a zero byte (\0), but the system takes a
+                // path as ending at one, so "b.rig\0x.rig" would read b.rig:
+                // such a path, as an empty one, names no file.
+                if (load->path.count == 0) {
+                    diag_error(d, load->path_pos, "a #load path can't be empty");
+                    tree->lost_a_file = true;
+                    continue;
+                }
+                if (memchr(load->path.data, 0, (size_t)load->path.count)) {
+                    diag_error(d, load->path_pos, "a #load path can't contain a zero byte");
+                    tree->lost_a_file = true;
+                    continue;
+                }
+                loaded = load_path(&loading, d->files[file].path, load->path, HOST_IS_WINDOWS);
+                if (!is_rig_file(loaded)) {
+                    diag_error(d, load->path_pos, "'" STR_FMT "' isn't a .rig file", STR_ARG(loaded));
+                    tree->lost_a_file = true;
+                    continue;
+                }
             }
             // A file that can't be read is reported at its first #load
             // alone, as a file that can is read at its first alone. The
@@ -154,11 +299,17 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, Strin
             }
             s32 added = diag_add_file(d, loaded, loaded_text);
             diag_locate_file(d, added, directory, HOST_IS_WINDOWS);
+            d->files[added].in_module = in_a_place(&loading, places, d->files[added].absolute_path);
+            // Added once, at the #import or #load that first named it.
+            if (has_compiler && same_key(key, compiler_key)) {
+                tree->reaches_compiler = true;
+                tree->compiler_pos = load->pos;
+            }
         }
     }
     table_free(&seen.ids);
     table_free(&seen.paths);
     arena_free(&loading);
-    if (stdin_for_reached) *stdin_for_reached = reached;
+    if (options->stdin_for_reached) *options->stdin_for_reached = reached;
     return tree;
 }

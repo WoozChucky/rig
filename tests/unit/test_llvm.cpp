@@ -2,12 +2,12 @@
 // tokens (issue #10), then IR built by hand for issues #32 to #37 (integer
 // widths, blocks and branches, the runtime's panic, several results,
 // globals and floats), #52 (the panic flushing first) and #56 (memory);
-// last, milestone 2c's line tables (#71), on modules lowered from source,
+// then milestone 2c's line tables (#71), on modules lowered from source,
 // with the debug information of a program of several files (#112) among
-// them. Uses test_ir.cpp's HELLO, max_module and lower_program,
-// test_checker.cpp's chain_of and joined, test_load.cpp's
-// load_test_directory, write_source and in_directory, and test_base.cpp's
-// md5_hex.
+// them; last, the optimiser (#116). Uses test_ir.cpp's HELLO, max_module
+// and lower_program, test_checker.cpp's chain_of and joined,
+// test_load.cpp's load_test_directory, write_source and in_directory, and
+// test_base.cpp's md5_hex.
 
 #include "test.h"
 
@@ -87,27 +87,34 @@ TEST(objects_for_both_targets) {
     // locate_file), so it has debug information, which must verify too, and
     // the object carries it: CodeView in COFF's .debug$S section, DWARF in
     // ELF's .debug_info and .debug_line (both names are in the file's bytes).
+    // Optimised (issue #116) or not: the optimiser keeps the debug
+    // information.
     Arena a = arena_make();
     Ir_Module *m = lower_tokens(&a, HELLO);
     os_make_directory(str(".build"));
     const char *paths[] = {".build/ir-test-windows.obj", ".build/ir-test-linux.o"};
-    for (int t = 0; t < 2; t++) {
-        String error = {};
-        bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), &a, &error);
-        CHECK(ok);
-        if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
-        String bytes = {};
-        CHECK(os_read_file(&a, str(paths[t]), &bytes));
-        CHECK(bytes.count > 64);
-        if (bytes.count < 4) continue;
-        if ((Target)t == TARGET_WINDOWS_X64) {
-            CHECK_EQ(bytes.data[0], 0x64);  // COFF: machine AMD64, 0x8664, little-endian
-            CHECK_EQ(bytes.data[1], 0x86);
-            CHECK(contains(bytes, ".debug$S"));
-        } else {
-            CHECK(memcmp(bytes.data, "\x7f" "ELF", 4) == 0);
-            CHECK(contains(bytes, ".debug_info"));
-            CHECK(contains(bytes, ".debug_line"));
+    for (int optimize = 0; optimize < 2; optimize++) {
+        for (int t = 0; t < 2; t++) {
+            // The file gone first, so a build that writes nothing can't
+            // pass on the one the build before it wrote.
+            remove(paths[t]);
+            String error = {};
+            bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), optimize, &a, &error);
+            CHECK(ok);
+            if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+            String bytes = {};
+            CHECK(os_read_file(&a, str(paths[t]), &bytes));
+            CHECK(bytes.count > 64);
+            if (bytes.count < 4) continue;
+            if ((Target)t == TARGET_WINDOWS_X64) {
+                CHECK_EQ(bytes.data[0], 0x64);  // COFF: machine AMD64, 0x8664, little-endian
+                CHECK_EQ(bytes.data[1], 0x86);
+                CHECK(contains(bytes, ".debug$S"));
+            } else {
+                CHECK(memcmp(bytes.data, "\x7f" "ELF", 4) == 0);
+                CHECK(contains(bytes, ".debug_info"));
+                CHECK(contains(bytes, ".debug_line"));
+            }
         }
     }
     arena_free(&a);
@@ -125,7 +132,7 @@ TEST(llvm_reports_a_module_that_doesnt_verify) {
     CHECK(!llvm_ir_text(&a, m, target_host(), &text, &error));
     CHECK(contains(error, "return"));
     error = {};
-    CHECK(!llvm_emit_object(m, target_host(), str(".build/never.o"), &a, &error));
+    CHECK(!llvm_emit_object(m, target_host(), str(".build/never.o"), false, &a, &error));
     CHECK(contains(error, "return"));
     arena_free(&a);
 }
@@ -858,7 +865,7 @@ TEST(llvm_big_global_holds_no_zeros) {
         CHECK(contains(text, "@short_tail = internal global [16 x i8] "
                              "c\"\\01\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\", align 8"));
         String error = {};
-        bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), &a, &error);
+        bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), false, &a, &error);
         CHECK(ok);
         if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
     }
@@ -1439,7 +1446,7 @@ TEST(llvm_debug_types_stop_at_a_depth) {
                 CHECK(struct_line(&a, text, beyond).count == 0);
             }
             String error = {};
-            bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), &a, &error);
+            bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), false, &a, &error);
             CHECK(ok);
             if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
         }
@@ -1488,7 +1495,7 @@ TEST(llvm_debug_types_through_cycles_are_not_cut) {
         CHECK(count_of(text, "DIFlagFwdDecl") == 0);
         CHECK(count_of(text, "baseType: null") == 0);
         String error = {};
-        bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), &a, &error);
+        bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), false, &a, &error);
         CHECK(ok);
         if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
     }
@@ -2155,6 +2162,197 @@ TEST(llvm_procedure_values_are_function_pointers) {
         CHECK(string_eq(attached(&a, line_with(text, "!DILocalVariable(name: \"g\""), "type:"), f));
         CHECK(string_eq(attached(&a, line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"op\""), "baseType:"),
                         f));
+    }
+    arena_free(&a);
+}
+
+// Issue #116: optimize (spec 10.2).
+
+TEST(llvm_optimises_with_the_o2_pipeline) {
+    // Unoptimised, each local and each parameter lives in a stack slot, an
+    // alloca. With optimize, LLVM's default<O2> pipeline runs: SROA puts
+    // scalars in registers, so no alloca is left (the program has scalars
+    // only: an aggregate passed by address could keep its slot). The debug
+    // information stays, and says the code is optimised, as clang's -O2
+    // -g does.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "twice :: (n: int) -> int {\n"
+                                "    return n * 2;\n"
+                                "}\n"
+                                "main :: () {\n"
+                                "    x := twice(3);\n"
+                                "    x += 1;\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String plain = {}, optimised = {}, error = {};
+        CHECK(llvm_ir_text(&a, m, (Target)t, &plain, &error, false));
+        CHECK(contains(plain, "alloca"));
+        CHECK(contains(plain, "DICompileUnit"));
+        CHECK(contains(plain, "isOptimized: false"));
+        CHECK(!contains(plain, "DISPFlagOptimized"));
+        bool ok = llvm_ir_text(&a, m, (Target)t, &optimised, &error, true);
+        CHECK(ok);
+        if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+        CHECK(!contains(optimised, "alloca"));
+        CHECK(contains(optimised, "DICompileUnit"));
+        CHECK(contains(optimised, "isOptimized: true"));
+        CHECK(contains(optimised, "DISPFlagOptimized"));
+    }
+    arena_free(&a);
+}
+
+// The object file for m on target t, emitted into memory from the module
+// backend_prepare leaves for `optimize`: by the target machine
+// backend_build made, or, with `lowest`, by one made here at LLVM's lowest
+// codegen level instead, as backend_build makes it unoptimised. Empty, and
+// a failed check, when it can't be made.
+static String object_from(Arena *a, Ir_Module *m, Target t, bool optimize, bool lowest) {
+    Backend b = {};
+    String error = {}, object = {};
+    bool ok = backend_prepare(&b, m, t, optimize, a, &error);
+    CHECK(ok);
+    if (ok && lowest) {
+        LLVMTargetRef target = LLVMGetTargetMachineTarget(b.machine);
+        LLVMRelocMode reloc = t == TARGET_LINUX_X64 ? LLVMRelocPIC : LLVMRelocDefault;
+        LLVMDisposeTargetMachine(b.machine);
+        b.machine = LLVMCreateTargetMachine(target, target_triple(t), "x86-64", "", LLVMCodeGenLevelNone, reloc,
+                                            LLVMCodeModelDefault);
+    }
+    LLVMMemoryBufferRef buffer = nullptr;
+    char *message = nullptr;
+    if (ok && LLVMTargetMachineEmitToMemoryBuffer(b.machine, b.module, LLVMObjectFile, &message, &buffer)) {
+        CHECK(false);
+        LLVMDisposeMessage(message);
+    } else if (ok) {
+        object = string_copy(a, {(const u8 *)LLVMGetBufferStart(buffer), (s64)LLVMGetBufferSize(buffer)});
+        LLVMDisposeMemoryBuffer(buffer);
+    }
+    backend_free(&b);
+    return object;
+}
+
+TEST(llvm_optimises_the_target_machines_code_too) {
+    // With optimize, the target machine compiles at LLVM's default level,
+    // not its lowest, as clang's -O2 has it: instruction selection and
+    // register allocation do their own work, so the object differs from
+    // the lowest level's, made from the same optimised module. Unoptimised,
+    // the target machine is at the lowest level, so its object is the one
+    // the lowest level makes.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "rand :: () -> s32 #foreign libc;\n"
+                                "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                "main :: () {\n"
+                                "    n := rand();\n"
+                                "    sum := 0;\n"
+                                "    for i: 0..n { sum += i * i + n; }\n"
+                                "    printf(\"%lld\\n\", sum);\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String optimised = object_from(&a, m, (Target)t, true, false);
+        CHECK(optimised.count > 0);
+        CHECK(!string_eq(optimised, object_from(&a, m, (Target)t, true, true)));
+        String plain = object_from(&a, m, (Target)t, false, false);
+        CHECK(plain.count > 0);
+        CHECK(string_eq(plain, object_from(&a, m, (Target)t, false, true)));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_optimised_uninitialised_local_is_still_a_value) {
+    // A `---` local's slot is never stored to before it's read here, and a
+    // read of memory nothing stored is undefined to LLVM's optimiser: it
+    // would take a branch on it as unreachable, and main as nothing but
+    // `unreachable`. The language gives the read an unspecified value
+    // instead (spec 8.6), so an optimised main still makes one of each
+    // if's two calls, for the scalar's slot and for the struct's bytes
+    // alike (the optimiser may fold either if to the arm the value picks:
+    // the declaration and two calls of printf).
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                "Vec2 :: struct { x: int; y: int; }\n"
+                                "main :: () {\n"
+                                "    x : int = ---;\n"
+                                "    if x == 1 { printf(\"one\\n\"); } else { printf(\"notone\\n\"); }\n"
+                                "    v : Vec2 = ---;\n"
+                                "    if v.y == 1 { printf(\"vone\\n\"); } else { printf(\"vnotone\\n\"); }\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = {}, error = {};
+        bool ok = llvm_ir_text(&a, m, (Target)t, &text, &error, true);
+        CHECK(ok);
+        if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+        CHECK(!contains(text, "unreachable"));
+        CHECK_EQ(count_of(text, "@printf("), 3);
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_optimiser_takes_no_procedure_for_c_libraries) {
+    // LLVM knows C's library functions by name and type alone, whether the
+    // module defines them or not. The program's own strlen and sqrt keep
+    // their bodies (42 + 7), not C's results folded in (3 + 2), and its own
+    // puts doesn't receive the call LLVM would make of printf("x\n").
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                "strlen :: (s: *u8) -> int {\n"
+                                "    return 42;\n"
+                                "}\n"
+                                "puts :: (s: *u8) -> s32 {\n"
+                                "    return 7;\n"
+                                "}\n"
+                                "sqrt :: (x: float64) -> float64 {\n"
+                                "    return 7.0;\n"
+                                "}\n"
+                                "main :: () {\n"
+                                "    printf(\"x\\n\");\n"
+                                "    printf(\"%lld\\n\", strlen(\"abc\") + cast(int) sqrt(4.0));\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = {}, error = {};
+        bool ok = llvm_ir_text(&a, m, (Target)t, &text, &error, true);
+        CHECK(ok);
+        if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+        CHECK(contains(text, "i64 49)"));
+        CHECK(!contains(text, "@puts"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_optimised_module_takes_the_memory_functions_names) {
+    // LLVM's optimiser may make memset and memcpy intrinsics of its own,
+    // which become calls of C's memset and memcpy, by name, in a module
+    // that neither copies nor zeroes memory. So an optimised module always
+    // takes their names, and a program's own memset is the one renamed,
+    // which LLVM never calls. The loop that zeroes bytes stays a loop: LLVM
+    // would make it a memset if it knew C's functions (mark_definition).
+    // Unoptimised, the module makes no such call, and the program's memset
+    // keeps its name.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "keep :: (f: (*u8, s32, int) -> *u8 #c_call) #foreign libc;\n"
+                                "buffer :: () -> *u8 #foreign libc;\n"
+                                "memset :: (p: *u8, v: s32, n: int) -> *u8 #c_call {\n"
+                                "    return p;\n"
+                                "}\n"
+                                "main :: () {\n"
+                                "    keep(memset);\n"
+                                "    p := buffer();\n"
+                                "    for 0..99 { (p + it).* = 0; }\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String plain = {}, optimised = {}, error = {};
+        CHECK(llvm_ir_text(&a, m, (Target)t, &plain, &error, false));
+        CHECK(contains(plain, "define internal ptr @memset("));
+        bool ok = llvm_ir_text(&a, m, (Target)t, &optimised, &error, true);
+        CHECK(ok);
+        if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+        CHECK(contains(optimised, "define internal ptr @memset.1("));
+        CHECK(!contains(optimised, "call ptr @memset.1("));
+        CHECK(!contains(optimised, "@llvm.memset"));
     }
     arena_free(&a);
 }

@@ -1,0 +1,6 @@
+tests/errors/build_nested.rig:12:5: error: workspace 'empty' has no files
+        create_workspace("empty");
+        ^
+tests/errors/build_nested.rig:13:10: error: workspace 'in\0ner' is a build program; a workspace builds an ordinary program
+        w := create_workspace("in\0ner");
+             ^

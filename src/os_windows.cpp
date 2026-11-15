@@ -243,12 +243,18 @@ bool os_list_directory(Arena *a, String dir, Array<String> *names) {
 }
 
 String os_executable_directory(Arena *a) {
-    wchar_t path[32768];
-    DWORD n = GetModuleFileNameW(nullptr, path, 32768);
-    RIG_ASSERT(n > 0 && n < 32768);
+    // Room for the longest path Windows has, 32767 characters, on the heap:
+    // its 64 KB would take a whole small stack, and the loader asks for this
+    // on whatever stack it runs on (the modules' places, load.cpp).
+    const DWORD capacity = 32768;
+    wchar_t *path = (wchar_t *)heap_realloc(nullptr, capacity * sizeof(wchar_t));
+    DWORD n = GetModuleFileNameW(nullptr, path, capacity);
+    RIG_ASSERT(n > 0 && n < capacity);
     while (n > 0 && path[n - 1] != L'\\' && path[n - 1] != L'/') n--;
     if (n > 0) n--;  // drop the separator
-    return from_wide(a, path, (int)n);
+    String directory = from_wide(a, path, (int)n);
+    free(path);
+    return directory;
 }
 
 // Appends one argument to a command line so that the C runtime's parser

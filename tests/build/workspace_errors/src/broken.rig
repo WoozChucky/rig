@@ -1,0 +1,4 @@
+// The broken workspace's program (build.rig): a misspelt name.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () { putz("hi"); }
