@@ -1475,30 +1475,30 @@ static Ast *parse_struct(Parser *p, Token *name) {
     Ast_Struct *s = ast_new<Ast_Struct>(p->arena, AST_STRUCT, name->pos);
     s->name = name->text;
     if (!expect(p, TOKEN_LBRACE)) return nullptr;
-    s64 run = -1;                // where the column-1 loads up to here start, or -1
+    s64 first_load = -1;         // where the column-1 loads up to here start, or -1
     Array<Position> loads = {};  // those loads, not reported yet
     while (peek(p)->kind != TOKEN_RBRACE) {
         bool top_level_run = is_directive(peek(p), "run") && peek(p)->pos.col == 1;  // a #run in column 1
         if (peek(p)->kind == TOKEN_EOF || starts_declaration(p) || top_level_run) {
-            // The run's loads are the top level's, read again there.
+            // Those loads are the top level's, read again there.
             array_free(&loads);
-            if (run >= 0) p->next = run;
+            if (first_load >= 0) p->next = first_load;
             error_expected(p, token_kind_name(TOKEN_RBRACE));
             p->resume = p->next;
             return nullptr;
         }
         if (is_directive(peek(p), "load")) {
             bool in_column_1 = peek(p)->pos.col == 1;
-            if (in_column_1 && run < 0) run = p->next;
+            if (in_column_1 && first_load < 0) first_load = p->next;
             array_add(&loads, skip_misplaced_load(p));
             if (!in_column_1) {
                 report_misplaced_loads(p, &loads);
-                run = -1;
+                first_load = -1;
             }
             continue;
         }
         report_misplaced_loads(p, &loads);
-        run = -1;
+        first_load = -1;
         Token *field_name = peek(p);
         if (field_name->kind != TOKEN_IDENT) {
             error_expected(p, "a field's name");

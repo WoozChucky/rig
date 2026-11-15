@@ -140,9 +140,9 @@ static Ast *refuse_pointer(Baking *b) {
 //   address stands for: a Rig procedure's in the interpreter's range
 //   (interp_proc_at), or a foreign procedure's C function
 //   (interp_c_function_at), the one of the run's type should two name the
-//   function. Any other address, one made from an integer,
-//   or the address of a run's own procedure or of one the compiler makes
-//   (no procedure of the source), is refused as a pointer is. 0 is null.
+//   function. Any other address, one made from an integer, or the address
+//   of a run's own procedure or of one the compiler makes (no procedure of
+//   the source), is refused as a pointer is. 0 is null.
 static Ast *bake_scalar(Baking *b, Type *t, u64 bits) {
     Compile_Time *ct = b->ct;
     switch (t->kind) {
