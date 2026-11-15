@@ -1,0 +1,19 @@
+// Workspaces that fail (spec 7.9), and nothing else: one whose program has
+// errors, and one whose top-level #run fails, so rig exits 1 for them
+// alone. The failing one's program has main and imports the Compiler
+// module, and its #run calls create_workspace: its compilation is its own,
+// an ordinary program's, so the call fails rather than add a workspace to
+// this build program's. The workspace after them is still built, and the
+// failed ones leave neither an object nor a program.
+#import "Compiler";
+
+#run {
+    broken := create_workspace("broken");
+    add_build_file(broken, "broken.rig");
+
+    maker := create_workspace("maker");
+    add_build_file(maker, "maker.rig");
+
+    fine := create_workspace("fine");
+    add_build_file(fine, "fine.rig");
+}
