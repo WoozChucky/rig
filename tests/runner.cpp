@@ -60,9 +60,12 @@
 // runtime error's order after the program's output when stdout and stderr
 // are one pipe, bin/unit-tests --interpret of two programs that call a
 // #compiler procedure, at run time and in a constant's #run (each refused
-// as rig build refuses it, with nothing run), and of a build program (which
-// it refuses: there's no main to run),
-// the command line's mistakes, a .build/ or an object file
+// as rig build refuses it, with nothing run), of a build program with
+// errors (said as rig build says them), and of one without (which it
+// refuses before its top-level #runs: there's no main to run), rig build
+// of a build program with -o, --no-bounds-checks or both (refused before
+// its top-level #runs, -o's refusal alone when both are given, but after
+// its errors), the command line's mistakes, a .build/ or an object file
 // rig can't write, and rig version's output, by its shape (version_test:
 // it names the commit rig was built from).
 //
@@ -668,13 +671,16 @@ static String error_test(Arena *a, String rig, String name) {
     return {};
 }
 
-// bin/unit-tests --interpret of tests/errors/NAME.rig, a program that calls
-// a #compiler procedure (spec 7.9): one that checks clean but calls it at
-// run time, which only lowering finds, or one whose constant's #run calls
-// it while checking, which the Compiler module refuses as rig build's does.
-// It must print the program's .err, as rig build does, exit 1, and run
-// nothing, so print nothing on stdout. {} when it does, otherwise why not.
-static String interpreted_compiler_call_test(Arena *a, String unit_tests, const char *program) {
+// bin/unit-tests --interpret of tests/errors/NAME.rig, a program with errors
+// interpret mode must find as rig build does: one that calls a #compiler
+// procedure (spec 7.9) and checks clean but calls it at run time, which
+// only lowering finds; one whose constant's #run calls it while checking,
+// which the Compiler module refuses as rig build's does; or a build program
+// with errors, which are said as any program's are, not its refusal as a
+// build program. It must print the program's .err, as rig build does, exit
+// 1, and run nothing, so print nothing on stdout. {} when it does,
+// otherwise why not.
+static String interpreted_error_test(Arena *a, String unit_tests, const char *program) {
     String name = str(program);
     String expected = {};
     if (!read_expected_errors(a, name, &expected)) return str("no .err file");
@@ -697,16 +703,34 @@ static String interpreted_compiler_call_test(Arena *a, String unit_tests, const 
     return {};
 }
 
+// A build program (spec 7.9) whose top-level #run prints a line, which a
+// refusal must come before, so a run that ran shows on stdout. It's
+// written here, in .build/tests, as a tests/errors program mustn't print.
+static const char *PRINTING_BUILD_PROGRAM = ".build/tests/printing_build_program.rig";
+
+// Writes PRINTING_BUILD_PROGRAM: {} when it's written, otherwise why not.
+static String write_printing_build_program(Arena *a) {
+    String text = str("#import \"Compiler\";\n"
+                      "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                      "#run { puts(\"a top-level #run ran\"); }\n");
+    if (!os_write_file(str(PRINTING_BUILD_PROGRAM), text)) {
+        return string_printf(a, "couldn't write %s", PRINTING_BUILD_PROGRAM);
+    }
+    return {};
+}
+
 // bin/unit-tests --interpret of a build program (spec 7.9), which has no
-// main to run: it must refuse it, exit 1, and run nothing, so print nothing
-// on stdout. {} when it does, otherwise why not.
+// main to run: once it has checked, it must refuse it, exit 1, before its
+// top-level #run runs, so print nothing on stdout. {} when it does,
+// otherwise why not.
 static String interpreted_build_program_test(Arena *a, String unit_tests) {
+    String why = write_printing_build_program(a);
+    if (why.count) return why;
     Array<String> argv = {};
     array_add(&argv, unit_tests);
     array_add(&argv, str("--interpret"));
-    array_add(&argv, str("tests/errors/build_no_workspace.rig"));
+    array_add(&argv, str(PRINTING_BUILD_PROGRAM));
     Process_Result ran = {};
-    String why = {};
     bool started = run_within(a, argv, {}, INTERPRETED_TIMEOUT, &ran, &why);
     array_free(&argv);
     if (!started) return why;
@@ -717,6 +741,58 @@ static String interpreted_build_program_test(Arena *a, String unit_tests) {
     String expected = str("unit-tests: error: a build program can't be interpreted\n");
     if (!string_eq(ran.err, expected)) return first_difference(a, "stderr", expected, ran.err);
     if (ran.out.count) return first_difference(a, "stdout", {}, ran.out);
+    return {};
+}
+
+// rig build of a build program (spec 7.9) with -o .build/tests/output (when
+// `output`), then --no-bounds-checks (when `no_bounds_checks`): its build
+// options decide what these would, so rig refuses them, once the program
+// has checked. PRINTING_BUILD_PROGRAM, which checks clean, must be refused
+// before its top-level #run runs, exit 2: -o's refusal, or with only
+// --no-bounds-checks that one's, alone on stderr, and nothing on stdout.
+// With `has_errors`, tests/errors/build_type_error.rig's errors come first,
+// and alone: its .err, exit 1, and no refusal after. Either way rig writes
+// no program. {} when it does, otherwise why not.
+static String build_program_options_test(Arena *a, String rig, bool has_errors, bool output, bool no_bounds_checks) {
+    String source = str("tests/errors/build_type_error.rig");
+    String expected = {};
+    s32 status = 1;
+    if (has_errors) {
+        if (!read_expected_errors(a, str("build_type_error"), &expected)) return str("no .err file");
+    } else {
+        String why = write_printing_build_program(a);
+        if (why.count) return why;
+        source = str(PRINTING_BUILD_PROGRAM);
+        expected = output ? str("rig: error: -o can't be used with a build program; its build options set the output\n")
+                          : str("rig: error: --no-bounds-checks can't be used with a build program; its build "
+                                "options set the bounds checks\n");
+        status = 2;
+    }
+    String program = string_printf(a, ".build/tests/output%s", EXE);
+    remove(string_cstr(a, program));
+    Array<String> argv = {};
+    array_add(&argv, rig);
+    array_add(&argv, str("build"));
+    array_add(&argv, source);
+    if (output) {
+        array_add(&argv, str("-o"));
+        array_add(&argv, str(".build/tests/output"));
+    }
+    if (no_bounds_checks) array_add(&argv, str("--no-bounds-checks"));
+    Process_Result built = {};
+    String why = {};
+    bool started = run(a, argv, {}, &built, &why);
+    array_free(&argv);
+    if (!started) return why;
+    if (built.exit_code != status) {
+        return with_stderr(a,
+                           string_printf(a, "rig build exited with " STR_FMT ", expected %d",
+                                         STR_ARG(exit_code_text(a, built.exit_code)), status),
+                           built.err);
+    }
+    if (!string_eq(built.err, expected)) return first_difference(a, "stderr", expected, built.err);
+    if (built.out.count) return first_difference(a, "rig build's stdout", {}, built.out);
+    if (os_file_exists(program)) return string_printf(a, "rig build wrote " STR_FMT, STR_ARG(program));
     return {};
 }
 
@@ -900,21 +976,6 @@ static const Command_Case COMMAND_CASES[] = {
      {"build", "--no-bounds-checks"},
      1,
      "rig: error: no file given and no build.rig in the current directory\n"},
-    // A build program's build options decide what these would (spec 7.9),
-    // so rig refuses them, once the program has checked: its errors come
-    // first.
-    {"-o with a build program",
-     {"build", "tests/errors/build_no_workspace.rig", "-o", ".build/tests/output"},
-     2,
-     "rig: error: -o can't be used with a build program; its build options set the output\n"},
-    {"--no-bounds-checks with a build program",
-     {"build", "tests/errors/build_no_workspace.rig", "--no-bounds-checks"},
-     2,
-     "rig: error: --no-bounds-checks can't be used with a build program; its build options set the bounds checks\n"},
-    {"-o with a build program that has errors",
-     {"build", "tests/errors/build_type_error.rig", "-o", ".build/tests/output"},
-     1,
-     "tests/errors/build_type_error.rig:"},
     {"rig check with --no-bounds-checks", {"check", "--no-bounds-checks", "tests/run/hello.rig"}, 2, "usage: "},
     {"rig build with two files", {"build", "tests/run/hello.rig", "tests/run/hello.rig"}, 2, "usage: "},
     {"-o with no name", {"build", "tests/run/hello.rig", "-o"}, 2, "usage: "},
@@ -2382,11 +2443,20 @@ int main(int argc, char **argv) {
            &failed);
     run_directory(&a, rig, "", "tests/errors", error_test, &passed, &failed);
     report("interpreted: a #compiler call refused when lowering, nothing run",
-           interpreted_compiler_call_test(&a, unit_tests, "compiler_called_at_run_time"), &passed, &failed);
+           interpreted_error_test(&a, unit_tests, "compiler_called_at_run_time"), &passed, &failed);
     report("interpreted: a constant's #run calling the Compiler module, refused as rig build refuses it",
-           interpreted_compiler_call_test(&a, unit_tests, "main_creates_workspace_in_a_constant"), &passed,
-           &failed);
+           interpreted_error_test(&a, unit_tests, "main_creates_workspace_in_a_constant"), &passed, &failed);
+    report("interpreted: a build program with errors, said, not refused",
+           interpreted_error_test(&a, unit_tests, "build_type_error"), &passed, &failed);
     report("interpret mode refuses a build program", interpreted_build_program_test(&a, unit_tests), &passed, &failed);
+    report("rig build refuses -o with a build program", build_program_options_test(&a, rig, false, true, false),
+           &passed, &failed);
+    report("rig build refuses --no-bounds-checks with a build program",
+           build_program_options_test(&a, rig, false, false, true), &passed, &failed);
+    report("rig build refuses -o and --no-bounds-checks with a build program, saying -o's alone",
+           build_program_options_test(&a, rig, false, true, true), &passed, &failed);
+    report("rig build of a build program with errors, given -o: the errors, not the refusal",
+           build_program_options_test(&a, rig, true, true, false), &passed, &failed);
     report("a failed top-level #run's error after the runs' output, both in one pipe",
            run_output_order_test(&a, rig, false), &passed, &failed);
     report("a top-level #run's exit() after a failed one, the errors after the runs' output, in one pipe",
