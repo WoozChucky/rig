@@ -31,6 +31,11 @@
 //   for any other. It needn't exist, and it keeps the name it would have
 //   on disk: for the main file the path the caller gives, for any other the
 //   one its first #load gives it.
+// - A workspace of a build program (spec 7.9) may have further files after
+//   its main file, which its program's loading is given with their texts,
+//   read by the driver. They come right after the main file, in the order
+//   given, as if it #loaded each of them first, keeping the names they're
+//   given, and each is known by the same identity as any file.
 // - The order is the main file's, then each loaded file's in the order its
 //   first #load was met, the files walked in that same order: a queue, not
 //   a recursion, so a chain of loads of any length takes no more stack
@@ -105,6 +110,12 @@ struct Load_Options {
     bool *stdin_for_reached;       // when given, set to whether the program reached stdin_for
     const Module_Places *modules;  // where #import looks, and where a module's files are (in_module); null:
                                    // module_places(), rig's own
+    // A workspace's further files (spec 7.9), loaded right after the main
+    // file, before its #loads, in this order, as if it #loaded each first;
+    // named by their paths as given. more_texts holds their texts, read by
+    // the caller, one for each.
+    Array<String> more_files;
+    Array<String> more_texts;
 };
 
 // Lexes and parses `text`, the main file, named `path` (which need not
@@ -130,7 +141,9 @@ struct Load_Options {
 // both. *stdin_for_reached, when given, says whether the program reached
 // it. modules, when given, are the places #import looks in, and that say
 // which files are a module's, in place of rig's own (module_places): the
-// tests' own modules.
+// tests' own modules. more_files, with their texts in more_texts, are
+// added right after the main file, as if it #loaded each first (a
+// workspace's further files); the texts, as `text`, aren't copied.
 Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const Load_Options *options = nullptr);
 
 // Whether paths a and b, each from the directory rig runs in, name one file

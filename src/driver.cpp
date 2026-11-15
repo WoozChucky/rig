@@ -41,8 +41,15 @@
 // workspaces through the Compiler module's procedures (compiler_module.h).
 // A build program that made none is an error, at its #import "Compiler"
 // (or the #load that reached the module), and so is each workspace with no
-// files, at the call that made it (exit 1). The workspaces with files, each
-// a program of its own, aren't built yet.
+// files, at the call that made it (exit 1). Then each workspace with files
+// is built, in the order they were made, as a compilation of its own, from
+// its files to its executable, with the build options it was given
+// (build_workspace): its own globals, #runs and diagnostics, printed when
+// it ends. Its files, its .build and its executable are relative to the
+// build program's directory, not the current one. One that fails doesn't
+// stop the others, but rig exits 1; a workspace whose program is itself a
+// build program is an error in the build program, at the call that made
+// it.
 //
 // The checker runs even when the parser found errors, so a syntax error in
 // one procedure and a type error in another are reported in one build. A
@@ -148,7 +155,13 @@ static void compilation_load_text(Compilation *c, String path, String text, cons
 // rig says so alone, exit 1, since the loader's errors, if any, are about a
 // program the file isn't part of, and an editor checking that file must not
 // take a clean exit as its program's verdict.
-static bool compilation_load(Compilation *c, String path, bool from_stdin, String stdin_for) {
+//
+// more_files, when given, are a workspace's further files (spec 7.9),
+// named as add_build_file resolved them: each is read as the main file is,
+// after it, and one that can't be read is said in the same words. The
+// loader puts them right after the main file (load.h).
+static bool compilation_load(Compilation *c, String path, bool from_stdin, String stdin_for,
+                             Array<String> more_files = {}) {
     Arena *a = c->arena;
     String text = {};
     bool read = from_stdin ? os_read_stdin(a, &text) : os_read_file(a, path, &text);
@@ -168,12 +181,26 @@ static bool compilation_load(Compilation *c, String path, bool from_stdin, Strin
         fprintf(stderr, "rig: error: cannot read standard input: " STR_FMT "\n", STR_ARG(os_error_message(a)));
         return false;
     }
+    Array<String> more_texts = {};
+    for (s64 i = 0; i < more_files.count; i++) {
+        String more_text = {};
+        if (!os_read_file(a, more_files[i], &more_text)) {
+            fprintf(stderr, "rig: error: cannot read '" STR_FMT "': " STR_FMT "\n", STR_ARG(more_files[i]),
+                    STR_ARG(os_error_message(a)));
+            array_free(&more_texts);
+            return false;
+        }
+        array_add(&more_texts, more_text);
+    }
     bool reached = false;
     Load_Options options = {};
     options.stdin_for = stdin_for;
     options.stdin_text = stdin_text;
     options.stdin_for_reached = &reached;
+    options.more_files = more_files;
+    options.more_texts = more_texts;
     compilation_load_text(c, path, text, &options);
+    array_free(&more_texts);
     if (stdin_for.count && !reached) {
         fprintf(stderr, "rig: error: '" STR_FMT "' doesn't load '" STR_FMT "'\n", STR_ARG(path), STR_ARG(stdin_for));
         return false;
@@ -243,10 +270,20 @@ static void compilation_free(Compilation *c) {
     diag_free(&c->d);
 }
 
-// An ordinary program, checked and run, lowered (compilation_lower),
-// emitted and linked; returns the exit code. `output` may be {}: the
-// default.
-static int build_executable(Compilation *c, String path, String output, bool bounds_checks) {
+// The object file's extension on target t, as rig build names the object
+// after the main file: .obj on Windows, .o on Linux.
+static const char *object_extension(Target t) {
+    return t == TARGET_WINDOWS_X64 ? ".obj" : ".o";
+}
+
+// c's checked and run program, lowered (compilation_lower) with
+// bounds_checks, written by LLVM, optimised with `optimize` (spec 10.2), to
+// the object file `object` in the directory `objects`, made if it isn't
+// there, and linked into the executable `executable`; returns the exit
+// code. Lowering's errors are printed as diagnostics, and nothing is
+// written; the rest are said as "rig: error: ...".
+static int emit_and_link(Compilation *c, bool bounds_checks, bool optimize, String objects, String object,
+                         String executable) {
     Arena *a = c->arena;
     Ir_Module *module = compilation_lower(c, bounds_checks);
     if (!module) {
@@ -255,26 +292,22 @@ static int build_executable(Compilation *c, String path, String output, bool bou
     }
 
     Target target = target_host();
-    String name = program_name(path);
-    if (!os_make_directory(str(".build"))) {
-        fprintf(stderr, "rig: error: cannot create '.build': " STR_FMT "\n", STR_ARG(os_error_message(a)));
+    if (!os_make_directory(objects)) {
+        fprintf(stderr, "rig: error: cannot create '" STR_FMT "': " STR_FMT "\n", STR_ARG(objects),
+                STR_ARG(os_error_message(a)));
         return 1;
     }
-    String object = string_printf(a, ".build/" STR_FMT "%s", STR_ARG(name), target == TARGET_WINDOWS_X64 ? ".obj" : ".o");
-    output = executable_path(a, output, name, target);
-
-    // Not optimised: rig build of a file never is (spec 10.2).
     String error = {};
-    if (!llvm_emit_object(module, target, object, false, a, &error)) {
+    if (!llvm_emit_object(module, target, object, optimize, a, &error)) {
         // LLVM's message is the system's alone ("permission denied"); the
         // path says which file.
         fprintf(stderr, "rig: error: cannot write '" STR_FMT "': " STR_FMT "\n", STR_ARG(object), STR_ARG(error));
         return 1;
     }
-    Array<String> objects = {};
-    array_add(&objects, object);
-    bool linked = link_executable(a, target, objects, output, &error);
-    array_free(&objects);
+    Array<String> object_files = {};
+    array_add(&object_files, object);
+    bool linked = link_executable(a, target, object_files, executable, &error);
+    array_free(&object_files);
     if (!linked) {
         // The linker's own output, or what's missing, then rig's verdict.
         fwrite(error.data, 1, (size_t)error.count, stderr);
@@ -285,12 +318,90 @@ static int build_executable(Compilation *c, String path, String output, bool bou
     return 0;
 }
 
+// An ordinary program, checked and run, emitted and linked (emit_and_link)
+// in the current directory: its object .build/NAME.obj or .build/NAME.o,
+// and its executable `output`, by default NAME.exe or NAME (executable_path);
+// returns the exit code. `output` may be {}: the default.
+static int build_executable(Compilation *c, String path, String output, bool bounds_checks) {
+    Arena *a = c->arena;
+    Target target = target_host();
+    String name = program_name(path);
+    String object = string_printf(a, ".build/" STR_FMT "%s", STR_ARG(name), object_extension(target));
+    // Not optimised: rig build of a file never is (spec 10.2).
+    return emit_and_link(c, bounds_checks, false, str(".build"), object, executable_path(a, output, name, target));
+}
+
+// Workspace w's steps on c, its own compilation, in order (build_workspace);
+// true when it built, c left for the caller to free.
+static bool workspace_steps(Compilation *build, Build_Workspace *w, Compilation *c) {
+    // The files after the first, a view of w's list that the loader only
+    // reads.
+    Array<String> more_files = {w->files.data + 1, w->files.count - 1, w->files.count - 1};
+    if (!compilation_load(c, w->files[0], false, {}, more_files)) return false;
+    if (ast_is_build_program(c->tree)) {
+        // load.cpp's shown_name: a zero byte would end the message.
+        diag_error(&build->d, w->made_at, "workspace '" STR_FMT "' is a build program; a workspace builds an "
+                                          "ordinary program",
+                   STR_ARG(shown_name(c->arena, w->name)));
+        compilation_print(build);
+        return false;
+    }
+    if (!compilation_check(c) || !compilation_run(c)) {
+        compilation_print(c);
+        return false;
+    }
+    compilation_end_runs(c);
+
+    // Its paths are relative to the build program's directory, which
+    // load_path takes from the build program's main file's path, as a #load
+    // in that file would be.
+    Arena *a = c->arena;
+    Target target = target_host();
+    bool windows = target == TARGET_WINDOWS_X64;
+    String program = build->build.program_path;
+    String name = program_name(w->files[0]);
+    String objects = load_path(a, program, str(".build"), windows);
+    String object_name = string_printf(a, ".build/" STR_FMT "%s", STR_ARG(name), object_extension(target));
+    String object = load_path(a, program, object_name, windows);
+    // An output name is taken as -o takes one, and the first file's name as
+    // rig build takes the main file's: on Windows each gets .exe as there.
+    String executable = w->output_name.count
+                            ? executable_path(a, load_path(a, program, w->output_name, windows), {}, target)
+                            : executable_path(a, {}, load_path(a, program, name, windows), target);
+    return emit_and_link(c, w->bounds_checks, w->optimize, objects, object, executable) == 0;
+}
+
+// Workspace w of the build program in `build`, compiled and linked as a
+// compilation of its own (spec 7.9), in an arena of its own: its files,
+// diagnostics, compile-time world, globals and #runs are its own, shared
+// with neither the build program nor another workspace. Its first file is
+// its main file, and the others are loaded right after it (load.h). Its
+// paths are relative to the build program's directory: its files, as
+// add_build_file resolved them; its object, in that directory's .build,
+// named after its first file as rig build names one; and its executable,
+// in that directory, named output_name, or after its first file when that's
+// empty. Its own diagnostics are printed when its compilation ends. A
+// program that is itself a build program is an error in `build`'s
+// diagnostics instead, at the create_workspace call that made it, printed
+// right then, and isn't checked. True when it built.
+static bool build_workspace(Compilation *build, Build_Workspace *w) {
+    Arena arena = arena_make();
+    Compilation c = {};
+    c.arena = &arena;
+    bool built = workspace_steps(build, w, &c);
+    compilation_free(&c);
+    arena_free(&arena);
+    return built;
+}
+
 // A build program's workspaces, once its top-level #runs are done (spec
 // 7.9); returns the exit code. A build program that made none has nothing
 // to build: the error is at the #import or #load that reached the Compiler
 // module. Each workspace with no files gets its error, at the
-// create_workspace call that made it, and these are printed together.
-// The workspaces with files aren't built yet.
+// create_workspace call that made it, and these are printed together. Then
+// each workspace with files is built (build_workspace), in the order they
+// were made, whether one before it failed or not; the exit code is 1 when
+// anything failed.
 static int build_workspaces(Compilation *c) {
     Build_State *s = &c->build;
     if (!s->workspaces.count) {
@@ -307,7 +418,12 @@ static int build_workspaces(Compilation *c) {
         }
     }
     compilation_print(c);
-    return c->d.error_count ? 1 : 0;
+    bool failed = c->d.error_count > 0;
+    for (s64 i = 0; i < s->workspaces.count; i++) {
+        Build_Workspace *w = &s->workspaces[i];
+        if (w->files.count && !build_workspace(c, w)) failed = true;
+    }
+    return failed ? 1 : 0;
 }
 
 // rig build's steps on c, in order; returns the exit code, c left for the

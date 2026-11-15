@@ -1,0 +1,2 @@
+// #loaded by src/main.rig, relative to it.
+player_say :: () { puts("the player speaks"); }

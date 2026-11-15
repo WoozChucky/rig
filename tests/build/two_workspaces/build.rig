@@ -1,0 +1,18 @@
+// Two workspaces (spec 7.9), each built as a program of its own, in the
+// order they were made. Both programs declare main and label, and each
+// prints its own label from its own top-level #run while compiling: two
+// compilations in one rig share nothing, neither names nor globals nor
+// #runs. The greeter's executable is named hello by its build options; the
+// counter's takes its file's name, as rig build of that file would give it.
+#import "Compiler";
+
+#run {
+    greeter := create_workspace("greeter");
+    o := get_build_options(greeter);
+    o.output_name = "hello";
+    set_build_options(greeter, o);
+    add_build_file(greeter, "greeter.rig");
+
+    counter := create_workspace("counter");
+    add_build_file(counter, "src/counter.rig");
+}

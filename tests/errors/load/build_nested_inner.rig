@@ -1,0 +1,5 @@
+// The inner workspace's program of tests/errors/build_nested.rig: a build
+// program, which a workspace can't be.
+#import "Compiler";
+
+#run { }

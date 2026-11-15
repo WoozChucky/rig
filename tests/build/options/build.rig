@@ -1,0 +1,27 @@
+// Build options (spec 7.9): one file built as two programs, plain
+// (unoptimised, as rig build of a file is) and fast (optimize: LLVM's O2
+// pipeline, spec 10.2), which must print the same; and a program built with
+// bounds_checks false, whose index past the end isn't checked. The
+// unchecked workspace's executable takes its file's name, past_the_end.
+#import "Compiler";
+
+#run {
+    plain := create_workspace("plain");
+    o := get_build_options(plain);
+    o.output_name = "plain";
+    set_build_options(plain, o);
+    add_build_file(plain, "sums.rig");
+
+    fast := create_workspace("fast");
+    o = get_build_options(fast);
+    o.output_name = "fast";
+    o.optimize = true;
+    set_build_options(fast, o);
+    add_build_file(fast, "sums.rig");
+
+    unchecked := create_workspace("unchecked");
+    o = get_build_options(unchecked);
+    o.bounds_checks = false;
+    set_build_options(unchecked, o);
+    add_build_file(unchecked, "past_the_end.rig");
+}
