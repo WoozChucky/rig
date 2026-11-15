@@ -4,7 +4,7 @@
 // that is less than int's largest. No allocator has that many bytes, and
 // given null the builder stops the program at its copy with the language's
 // null pointer dereference, at the line of builder.rig this .err names.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 // Prints the size of each allocation asked for, and gives none.
 refusing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {

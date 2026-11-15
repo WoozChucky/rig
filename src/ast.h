@@ -432,14 +432,17 @@ struct Ast_Multi_Var : Ast {
     Ast *value;  // the call
 };
 
-// `#load "PATH";`, a top-level declaration: the file at PATH is part of the
-// program too, its top-level declarations in the program's one top-level
-// scope. The parser only records it; the loader reads the file. pos is the
-// '#load'.
+// `#load "PATH";` or `#import "NAME";`, a top-level declaration: the file at
+// PATH, or the module NAME's module.rig, is part of the program too, its
+// top-level declarations in the program's one top-level scope. The parser
+// only records it; the loader finds and reads the file (load.h). pos is the
+// '#load' or the '#import'.
 struct Ast_Load : Ast {
     String path;        // the string literal's bytes, escapes decoded: the path before it's resolved
-                        // against the loading file's directory
+                        // against the loading file's directory, or the module's name
     Position path_pos;  // the string literal, where messages about the file point
+    bool is_import;     // #import "NAME": path holds NAME, a module that ships with rig (spec 2.14),
+                        // which the loader finds; #load "PATH" otherwise
 };
 
 // #run: code run while compiling (spec 7.8). pos is the '#run'.
@@ -467,16 +470,16 @@ struct Ast_Run : Ast {
 // (Position.file's order). Procedures (and broken entries, which are
 // Ast_Procs) are in procs; the globals, top-level variables (Ast_Var,
 // is_global set), constants (Ast_Const) and structs (Ast_Struct), in
-// globals; the loads (Ast_Load), in loads; the top-level runs (Ast_Run,
-// is_top_level set), in runs. Each list is in source order on its own;
-// ast_declarations merges procs and globals back by position.
+// globals; the loads and imports (Ast_Load), in loads; the top-level runs
+// (Ast_Run, is_top_level set), in runs. Each list is in source order on its
+// own; ast_declarations merges procs and globals back by position.
 //
-// lost_a_file is set when a #load failed (load.h's errors), had no string
-// to name a file by, wasn't at the top level, or was passed over by the
-// recovery after another error (parser.h): the program lacks that file, so
-// what it declares is unknown, as it is for a broken entry whose name was
-// lost, and the checker doesn't report a name as unknown, or main as
-// missing, because of it (checker.h).
+// lost_a_file is set when a #load or an #import failed (load.h's errors),
+// had no string to name a file by, wasn't at the top level, or was passed
+// over by the recovery after another error (parser.h): the program lacks
+// that file, so what it declares is unknown, as it is for a broken entry
+// whose name was lost, and the checker doesn't report a name as unknown,
+// or main as missing, because of it (checker.h).
 struct Ast_File {
     Array<Ast_Proc *> procs;
     Array<Ast *> globals;

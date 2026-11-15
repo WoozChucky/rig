@@ -431,11 +431,14 @@ static void dump(Array<u8> *buffer, Ast *node) {
     }
     case AST_BREAK: out(buffer, "(break)"); break;
     case AST_CONTINUE: out(buffer, "(continue)"); break;
-    case AST_LOAD:
-        out(buffer, "(load ");
-        out_quoted(buffer, ((Ast_Load *)node)->path);
+    case AST_LOAD: {
+        // (load "a.rig") for #load "a.rig";, (import "Basic") for #import "Basic";.
+        Ast_Load *load = (Ast_Load *)node;
+        out(buffer, load->is_import ? "(import " : "(load ");
+        out_quoted(buffer, load->path);
         out(buffer, ")");
         break;
+    }
     case AST_RUN: {
         // (run E) for #run e; (run (block ...)) for a top-level #run { ... },
         // its procedure's body.

@@ -1,0 +1,3 @@
+tests/errors/import_bad_name.rig:5:9: error: '../modules/Basic' isn't a module's name
+    #import "../modules/Basic";
+            ^

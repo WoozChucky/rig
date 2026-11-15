@@ -1,7 +1,7 @@
 // Basic's math (issue #134): min, max, abs and clamp for each type, with
 // int's and u64's extremes, positive and negative arguments to abs, -0.0,
 // the infinities and NaN.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 MIN :: -9223372036854775808;
 MAX :: 9223372036854775807;

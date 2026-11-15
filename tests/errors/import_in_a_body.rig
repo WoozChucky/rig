@@ -1,0 +1,7 @@
+// An #import, as a #load, can only be at the top level (spec 2.14): inside
+// a body it's reported at its '#', and skipped. The program lacks the
+// module, so print_line, which Basic would declare, isn't reported unknown.
+main :: () {
+    #import "Basic";
+    print_line("hello");
+}

@@ -1,6 +1,6 @@
 // Basic's memory (issue #134): setting bytes, copies that overlap both ways
 // and copies of no bytes, and compares that read bytes as unsigned.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 // int's most negative value. As a count, count - 1 wraps to int's largest,
 // so a loop over 0..count - 1 would run on through all of memory: only the

@@ -4,13 +4,15 @@ Basic is Rig's first library, written in Rig over a thin layer of C. It holds wh
 
 ## Loading it
 
-Rig has no `#import` yet, so a program loads Basic with `#load`, by the path from the program's own directory to `module.rig`. From `tests/run`:
+Basic ships with rig, so a program imports it by its name (spec 2.14):
 
 ```rig
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 ```
 
-`module.rig` loads every part. A loaded file's declarations join the program's one top level (spec 2.13), so every name listed below is the program's too: a program that loads Basic can't declare a procedure, struct or constant of the same name.
+rig finds `Basic/module.rig` in the `modules` directory beside it, or in the one above it, the repository's. A `#load` of `module.rig` by its path from the program's own directory still works (from `tests/run`, `#load "../../modules/Basic/module.rig";`), and a program that does both reads the files once.
+
+`module.rig` loads every part. An imported file's declarations join the program's one top level (spec 2.13), so every name listed below is the program's too: a program that imports Basic can't declare a procedure, struct or constant of the same name.
 
 ## Its C layer
 
@@ -181,4 +183,3 @@ What Basic would do differently once Rig has it:
 - No enums, so an allocator's modes and a table entry's states are constants.
 - No portable way to reach standard error and no conditional compilation, so Basic writes only through `c_putchar`, and an index out of bounds is reported by the language's own bounds check.
 - No `defer`, so what is allocated is freed by hand on every path.
-- No `#import`, so a program loads Basic with a `#load` of its relative path.

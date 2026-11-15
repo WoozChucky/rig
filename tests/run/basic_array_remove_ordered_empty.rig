@@ -3,7 +3,7 @@
 // the language's own message for it, at check_index in array.rig, whose
 // line and column basic_array_remove_ordered_empty.err names. Edit one,
 // edit the other.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 main :: () {
     a : Array;

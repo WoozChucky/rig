@@ -2839,3 +2839,75 @@ TEST(parse_run_after_a_body_never_closed) {
     CHECK_STR(errors, "2:10: expected an expression, found ';'\n4:10: expected an expression, found ';'\n");
     arena_free(&a);
 }
+
+// Issue #116: #import (spec 2.14). #import "NAME"; names a module that
+// ships with rig, which the loader finds (load.h); the parser records it as
+// it records a #load, an Ast_Load with is_import set, and every rule a
+// #load has where it's misplaced, #import has too.
+
+TEST(parse_import) {
+    // The name is kept as the load's path, where the string is written, and
+    // the dump shows it as an import; a #load stays a load.
+    Arena a = arena_make();
+    Token_List *list = src("#import \"Basic\";\nmain :: () {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK_EQ(file->loads.count, 1);
+    if (file->loads.count == 1) {
+        CHECK(file->loads[0]->is_import);
+        CHECK_STR(file->loads[0]->path, "Basic");
+        CHECK_EQ(file->loads[0]->path_pos.line, 1);
+        CHECK_EQ(file->loads[0]->path_pos.col, 9);
+    }
+    CHECK_STR(ast_dump(&a, file), "(import \"Basic\")\n(proc main (params) (block))\n");
+    token_list_free(list);
+
+    list = src("#load \"a.rig\";\nmain :: () {}\n");
+    file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK_EQ(file->loads.count, 1);
+    if (file->loads.count == 1) CHECK(!file->loads[0]->is_import);
+    CHECK_STR(ast_dump(&a, file), "(load \"a.rig\")\n(proc main (params) (block))\n");
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(parse_import_errors) {
+    // Each of #load's mistakes, made with #import: the message names the
+    // directive written, and the program lacks the module when the parser
+    // can't keep it.
+    Arena a = arena_make();
+    // No string: the example is a module's name, not a file's.
+    Token_List *list = src("#import Basic;\nmain :: () {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "1:9: expected a string after #import, as in #import \"Basic\";\n");
+    CHECK(file->lost_a_file);
+    token_list_free(list);
+
+    // Inside a body.
+    list = src("main :: () { #import \"Basic\"; }\n");
+    file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "1:14: #import can only be at the top level\n");
+    CHECK_EQ(file->loads.count, 0);
+    CHECK(file->lost_a_file);
+    token_list_free(list);
+
+    // Starting the line after a declaration that stopped short: the
+    // recovery resumes at it, and keeps it.
+    list = src("f :: ()\n#import \"Basic\";\nmain :: () {}\n");
+    file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "2:1: expected '{', found directive\n");
+    CHECK_STR(ast_dump(&a, file), "(broken f)\n(import \"Basic\")\n(proc main (params) (block))\n");
+    CHECK(!file->lost_a_file);
+    token_list_free(list);
+
+    // In column 1 after a struct never closed, it's read again at the top
+    // level, and kept, as #load's twin test has it.
+    list = src("S :: struct {\n    x: int;\n#import \"Basic\";\nmain :: () {}\n");
+    file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "3:1: expected '}', found directive\n");
+    CHECK_STR(ast_dump(&a, file), "(broken S)\n(import \"Basic\")\n(proc main (params) (block))\n");
+    CHECK(!file->lost_a_file);
+    token_list_free(list);
+    arena_free(&a);
+}

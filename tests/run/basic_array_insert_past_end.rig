@@ -7,7 +7,7 @@
 // The array is full when the bad insert comes, and its allocator prints
 // each allocation and resize it is asked for: the insert stops before it
 // asks for more memory, so the .out has no line for it.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 // Prints the size of each allocation or resize asked for, and passes it on
 // to the heap.

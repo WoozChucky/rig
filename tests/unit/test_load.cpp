@@ -798,7 +798,11 @@ static Ast_File *load_main_with_stdin_for(Arena *a, Diagnostics *d, String dir, 
     String path = str(in_directory(a, dir, "main.rig"));
     String main_text = {};
     CHECK(os_read_file(a, path, &main_text));
-    return load_program(a, d, path, main_text, file, str(text), reached);
+    Load_Options options = {};
+    options.stdin_for = file;
+    options.stdin_text = str(text);
+    options.stdin_for_reached = reached;
+    return load_program(a, d, path, main_text, &options);
 }
 
 // What the --stdin-for tests below give for h.rig, and what's on disk when
@@ -1095,6 +1099,216 @@ TEST(load_long_chain) {
     CHECK_EQ(d.files.count, COUNT);
     CHECK(load.tree != nullptr);
     if (load.tree) CHECK_EQ(load.tree->procs.count, COUNT);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+// Issue #116: #import (spec 2.14). #import "NAME" loads the module NAME's
+// module.rig from the first of two places that has it (load.h). Each test
+// makes its own two places, first/ and second/ under its directory, and
+// passes them to the loader in place of rig's own (Load_Options.modules).
+
+// Makes dir/first and dir/second, and returns them as the places #import
+// looks in, in that order, each absolute, as module_places makes rig's.
+static Module_Places test_places(Arena *a, String dir) {
+    String directory = os_current_directory(a);
+    Module_Places places = {};
+    const char *names[2] = {"first", "second"};
+    for (s64 i = 0; i < 2; i++) {
+        String place = str(in_directory(a, dir, names[i]));
+        CHECK(os_make_directory(place));
+        places.places[i] = path_absolute(a, directory, place, HOST_IS_WINDOWS);
+    }
+    return places;
+}
+
+// Writes `text` into the module NAME's module.rig in `place`, making the
+// module's directory.
+static void write_module(Arena *a, String place, const char *name, const char *text) {
+    String module = string_printf(a, STR_FMT "%c%s", STR_ARG(place), SEPARATOR, name);
+    CHECK(os_make_directory(module));
+    CHECK(os_write_file(string_printf(a, STR_FMT "%cmodule.rig", STR_ARG(module), SEPARATOR), str(text)));
+}
+
+// The path of the file NAME of the module MODULE in `place`, as the loader
+// names it: the place, then each name after the host's separator.
+static const char *module_file(Arena *a, String place, const char *module, const char *name) {
+    return string_cstr(a, string_printf(a, STR_FMT "%c%s%c%s", STR_ARG(place), SEPARATOR, module, SEPARATOR, name));
+}
+
+// load_program on dir/main.rig, holding `text`, with `places` as the
+// places #import looks in.
+static Ast_File *load_main_importing(Arena *a, Diagnostics *d, String dir, const char *text,
+                                     const Module_Places *places) {
+    write_source(a, dir, "main.rig", text);
+    Load_Options options = {};
+    options.modules = places;
+    return load_program(a, d, str(in_directory(a, dir, "main.rig")), str(text), &options);
+}
+
+TEST(import_finds_a_module_in_the_first_place_that_has_it) {
+    // Alpha is in both places, and the first one's is read; Beta only in
+    // the second. Each is named by its absolute path.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "import_finds_a_module_in_the_first_place_that_has_it");
+    Module_Places places = test_places(&a, dir);
+    write_module(&a, places.places[0], "Alpha", "alpha :: () {}\n");
+    write_module(&a, places.places[1], "Alpha", "not_this_alpha :: () {}\n");
+    write_module(&a, places.places[1], "Beta", "beta :: () {}\n");
+    Ast_File *tree =
+        load_main_importing(&a, &d, dir, "#import \"Alpha\";\n#import \"Beta\";\nmain :: () {}\n", &places);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 3);
+    if (d.files.count == 3) {
+        CHECK_STR(d.files[1].path, module_file(&a, places.places[0], "Alpha", "module.rig"));
+        CHECK_STR(d.files[2].path, module_file(&a, places.places[1], "Beta", "module.rig"));
+    }
+    CHECK_EQ(tree->procs.count, 3);
+    if (tree->procs.count == 3) {
+        CHECK_STR(tree->procs[1]->name, "alpha");
+        CHECK_STR(tree->procs[2]->name, "beta");
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(import_loads_a_module_once) {
+    // A module imported twice, and loaded by its path too, is one file,
+    // read once, named as whichever reached it first named it: by its
+    // absolute path when the #import came first, by the #load's path when
+    // the #load did.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "import_loads_a_module_once");
+    Module_Places places = test_places(&a, dir);
+    write_module(&a, places.places[0], "Alpha", "alpha :: () {}\n");
+
+    Diagnostics d = {};
+    load_main_importing(&a, &d, dir, "#import \"Alpha\";\n#import \"Alpha\";\n#load \"first/Alpha/module.rig\";\n",
+                        &places);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 2);
+    if (d.files.count == 2) CHECK_STR(d.files[1].path, module_file(&a, places.places[0], "Alpha", "module.rig"));
+    diag_free(&d);
+
+    d = {};
+    load_main_importing(&a, &d, dir, "#load \"first/Alpha/module.rig\";\n#import \"Alpha\";\n", &places);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 2);
+    if (d.files.count == 2) CHECK_STR(d.files[1].path, in_directory(&a, dir, "first/Alpha/module.rig"));
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(import_module_loads_relative_to_itself) {
+    // A module's own #loads are relative to its module.rig, as any file's
+    // are, so its parts are named by absolute paths too.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "import_module_loads_relative_to_itself");
+    Module_Places places = test_places(&a, dir);
+    write_module(&a, places.places[0], "Alpha", "#load \"part.rig\";\nalpha :: () {}\n");
+    CHECK(os_write_file(str(module_file(&a, places.places[0], "Alpha", "part.rig")), str("part :: () {}\n")));
+    load_main_importing(&a, &d, dir, "#import \"Alpha\";\nmain :: () { alpha(); part(); }\n", &places);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 3);
+    if (d.files.count == 3) CHECK_STR(d.files[2].path, module_file(&a, places.places[0], "Alpha", "part.rig"));
+    diag_free(&d);
+    arena_free(&a);
+}
+
+// The messages for dir/main.rig holding `text`, loaded with `places` and
+// then checked, as rig build checks it; and whether the tree records that
+// the program lacks a file.
+static String import_messages(Arena *a, String dir, const char *text, const Module_Places *places, bool *lost) {
+    Diagnostics d = {};
+    Ast_File *tree = load_main_importing(a, &d, dir, text, places);
+    *lost = tree->lost_a_file;
+    Compile_Time *world = compile_time_new(&d);
+    check(tree, a, &d, world);
+    compile_time_free(world);
+    diag_sort(&d);
+    String result = messages(a, &d);
+    diag_free(&d);
+    return result;
+}
+
+TEST(import_reports_names_and_missing_modules) {
+    // A module that's in neither place names both places; a name that
+    // isn't a module's (letters, digits and '_', a letter first) is looked
+    // for nowhere. Either way the program lacks a file, so the checker
+    // says nothing of main, which the module may have declared.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "import_reports_names_and_missing_modules");
+    Module_Places places = test_places(&a, dir);
+    bool lost = false;
+    String expected = string_printf(&a, "1:9: there's no module 'Nope' (looked in " STR_FMT " and " STR_FMT ")\n",
+                                    STR_ARG(places.places[0]), STR_ARG(places.places[1]));
+    CHECK_STR(import_messages(&a, dir, "#import \"Nope\";\n", &places, &lost), string_cstr(&a, expected));
+    CHECK(lost);
+    const char *names[] = {"../x", "", "a/b", "9lives"};
+    for (const char *name : names) {
+        String text = string_printf(&a, "#import \"%s\";\n", name);
+        expected = string_printf(&a, "1:9: '%s' isn't a module's name\n", name);
+        lost = false;
+        CHECK_STR(import_messages(&a, dir, string_cstr(&a, text), &places, &lost), string_cstr(&a, expected));
+        CHECK(lost);
+    }
+    // A zero byte is no letter, digit or '_' either. The message shows it
+    // as the string wrote it, since the message would end at the byte.
+    lost = false;
+    CHECK_STR(import_messages(&a, dir, "#import \"Alpha\\0\";\n", &places, &lost),
+              "1:9: 'Alpha\\0' isn't a module's name\n");
+    CHECK(lost);
+    arena_free(&a);
+}
+
+TEST(import_is_case_sensitive) {
+    // The name is compared with the place's entries as they're written, so
+    // alpha doesn't find Alpha, on Windows too, where the file system
+    // would open it.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "import_is_case_sensitive");
+    Module_Places places = test_places(&a, dir);
+    write_module(&a, places.places[0], "Alpha", "alpha :: () {}\n");
+    load_main_importing(&a, &d, dir, "#import \"alpha\";\nmain :: () {}\n", &places);
+    String expected = string_printf(&a, "1:9: there's no module 'alpha' (looked in " STR_FMT " and " STR_FMT ")\n",
+                                    STR_ARG(places.places[0]), STR_ARG(places.places[1]));
+    CHECK_STR(messages(&a, &d), string_cstr(&a, expected));
+    CHECK_EQ(d.files.count, 1);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(module_places_are_beside_rig_and_above_it) {
+    // modules beside the executable, a release archive's, then modules in
+    // the directory above it, the repository's: bin/unit-tests is in bin/,
+    // beside the repository's modules/, which holds Basic.
+    Arena a = arena_make();
+    Module_Places places = module_places(&a);
+    String exe_dir = os_executable_directory(&a);
+    CHECK_STR(places.places[0], string_cstr(&a, path_absolute(&a, exe_dir, str("modules"), HOST_IS_WINDOWS)));
+    CHECK_STR(places.places[1], string_cstr(&a, path_absolute(&a, exe_dir, str("../modules"), HOST_IS_WINDOWS)));
+    String second = places.places[1];
+    CHECK(second.count > 7 && string_eq(string_slice(second, second.count - 7, 7), str("modules")));
+    CHECK(os_file_exists(str(module_file(&a, second, "Basic", "module.rig"))));
+    arena_free(&a);
+}
+
+TEST(import_finds_basic_with_rigs_own_places) {
+    // With no places given, the loader looks in rig's own: the running
+    // program's, bin/unit-tests's, which find the repository's Basic.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    const char *text = "#import \"Basic\";\nmain :: () {}\n";
+    load_program(&a, &d, str("main.rig"), str(text));
+    CHECK_STR(messages(&a, &d), "");
+    Module_Places places = module_places(&a);
+    String basic = module_lookup(&a, &places, str("Basic"));
+    CHECK(basic.count > 0);
+    CHECK(d.files.count > 1);
+    if (d.files.count > 1) CHECK_STR(d.files[1].path, string_cstr(&a, basic));
     diag_free(&d);
     arena_free(&a);
 }

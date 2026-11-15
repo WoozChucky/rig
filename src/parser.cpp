@@ -114,10 +114,21 @@ static bool is_directive(Token *t, const char *name) {
     return t->kind == TOKEN_DIRECTIVE && string_eq(t->text, str(name));
 }
 
-// A #load anywhere but where a top-level declaration starts, at its '#'.
-// The file it names isn't loaded, so the program lacks it.
-static void error_misplaced_load(Parser *p, Position at) {
-    diag_error(p->diag, at, "#load can only be at the top level");
+// Whether token t is #load or #import (spec 2.14), a top-level declaration
+// that names another file of the program (parse_load). An #import follows
+// every rule a #load does where it's misplaced, or passed over by the
+// recovery, so what the comments below say of a #load they say of an
+// #import too.
+static bool is_load_or_import(Token *t) {
+    return is_directive(t, "load") || is_directive(t, "import");
+}
+
+// A #load (or an #import, `directive`) anywhere but where a top-level
+// declaration starts, at its '#': "#load can only be at the top level",
+// naming the directive written. The file it names isn't loaded, so the
+// program lacks it.
+static void error_misplaced_load(Parser *p, Token *directive) {
+    diag_error(p->diag, directive->pos, "#" STR_FMT " can only be at the top level", STR_ARG(directive->text));
     p->lost_a_file = true;
 }
 
@@ -131,8 +142,8 @@ static bool load_resumes_here(Parser *p);
 // was expected before it is then what's missing.
 static void error_expected_or_load(Parser *p, const char *expected) {
     Token *t = peek(p);
-    if (is_directive(t, "load") && !load_resumes_here(p)) {
-        error_misplaced_load(p, t->pos);
+    if (is_load_or_import(t) && !load_resumes_here(p)) {
+        error_misplaced_load(p, t);
     } else {
         error_expected(p, expected);
     }
@@ -915,7 +926,7 @@ static Ast *parse_for(Parser *p) {
     }
     if (after->kind != TOKEN_DOT_DOT) {
         if (after->kind == TOKEN_ERROR) return nullptr;  // the lexer said what's wrong
-        if (!named_iterator && loop->first->kind == AST_NAME && !is_directive(after, "load")) {
+        if (!named_iterator && loop->first->kind == AST_NAME && !is_load_or_import(after)) {
             diag_error(p->diag, after->pos, "expected ':' after the iterator's name, as in for i: 0..9");
         } else {
             error_expected_or_load(p, "'..' or the loop's '{'");
@@ -1013,12 +1024,12 @@ static bool declares_in_column_1(Parser *p) {
     Token *t = peek(p);
     Token_Kind after = peek(p, 1)->kind;
     return starts_global(p) || (t->kind == TOKEN_IDENT && t->pos.col == 1 && after == TOKEN_COLON_COLON) ||
-           ((is_directive(t, "load") || is_directive(t, "run")) && t->pos.col == 1);
+           ((is_load_or_import(t) || is_directive(t, "run")) && t->pos.col == 1);
 }
 
 // A #load where a statement or a struct's field starts: "#load can only be
-// at the top level", at its '#', which is returned for the caller to report
-// (parse_block_rest and parse_struct say when). Other mistakes in a body
+// at the top level", at its '#', whose token is returned for the caller to
+// report (parse_block_rest and parse_struct say when). Other mistakes in a body
 // give the declaration up (parser.h says why), but a load declares nothing
 // the body could use, so the body loses nothing by leaving it out: the
 // parser skips it up to its ';' and goes on with the body or the fields,
@@ -1028,18 +1039,19 @@ static bool declares_in_column_1(Parser *p) {
 // next line is kept (a variable it declares still known), the block around
 // it still closes at its '}', and a body never closed is still found
 // (parse_block_rest).
-static Position skip_misplaced_load(Parser *p) {
-    Position at = advance(p)->pos;
+static Token *skip_misplaced_load(Parser *p) {
+    Token *directive = advance(p);
     // A token came before the next one, the '#load' at least.
     for (Token *t = peek(p); t->kind != TOKEN_EOF && t->kind != TOKEN_LBRACE && t->kind != TOKEN_RBRACE; t = peek(p)) {
         if (p->tokens[p->next - 1].pos.line != t->pos.line) break;
         if (advance(p)->kind == TOKEN_SEMICOLON) break;
     }
-    return at;
+    return directive;
 }
 
-// Reports the misplaced loads at `loads`, and empties the list.
-static void report_misplaced_loads(Parser *p, Array<Position> *loads) {
+// Reports the misplaced loads whose directives are in `loads`, and empties
+// the list.
+static void report_misplaced_loads(Parser *p, Array<Token *> *loads) {
     for (s64 i = 0; i < loads->count; i++) error_misplaced_load(p, (*loads)[i]);
     array_free(loads);
 }
@@ -1077,8 +1089,8 @@ static void report_misplaced_loads(Parser *p, Array<Position> *loads) {
 // has nothing to report about it.
 static Ast_Block *parse_block_rest(Parser *p, Token *open) {
     Ast_Block *block = ast_new<Ast_Block>(p->arena, AST_BLOCK, open->pos);
-    s64 run = -1;                // where the run of column-1 declarations up to here starts, or -1
-    Array<Position> loads = {};  // the run's loads, not reported yet
+    s64 run = -1;               // where the run of column-1 declarations up to here starts, or -1
+    Array<Token *> loads = {};  // the run's loads, not reported yet
     while (peek(p)->kind != TOKEN_RBRACE) {
         if (peek(p)->kind == TOKEN_EOF || starts_declaration(p)) {
             // The run's loads are the top level's, read again there.
@@ -1094,7 +1106,7 @@ static Ast_Block *parse_block_rest(Parser *p, Token *open) {
         } else if (run < 0) {
             run = p->next;
         }
-        if (is_directive(peek(p), "load")) {
+        if (is_load_or_import(peek(p))) {
             array_add(&loads, skip_misplaced_load(p));
             if (run < 0) report_misplaced_loads(p, &loads);
             continue;
@@ -1411,7 +1423,7 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
         }
         // Where the '{' should be: parse_block reports it. A #run starting
         // the next line is where the recovery resumes, as a #load is.
-        if (is_directive(t, "load") || is_directive(t, "run")) break;
+        if (is_load_or_import(t) || is_directive(t, "run")) break;
         if (!string_eq(t->text, str("foreign"))) {
             diag_error(p->diag, t->pos, "unknown directive '#" STR_FMT "'", STR_ARG(t->text));
             return nullptr;
@@ -1475,8 +1487,8 @@ static Ast *parse_struct(Parser *p, Token *name) {
     Ast_Struct *s = ast_new<Ast_Struct>(p->arena, AST_STRUCT, name->pos);
     s->name = name->text;
     if (!expect(p, TOKEN_LBRACE)) return nullptr;
-    s64 first_load = -1;         // where the column-1 loads up to here start, or -1
-    Array<Position> loads = {};  // those loads, not reported yet
+    s64 first_load = -1;        // where the column-1 loads up to here start, or -1
+    Array<Token *> loads = {};  // those loads, not reported yet
     while (peek(p)->kind != TOKEN_RBRACE) {
         bool top_level_run = is_directive(peek(p), "run") && peek(p)->pos.col == 1;  // a #run in column 1
         if (peek(p)->kind == TOKEN_EOF || starts_declaration(p) || top_level_run) {
@@ -1487,7 +1499,7 @@ static Ast *parse_struct(Parser *p, Token *name) {
             p->resume = p->next;
             return nullptr;
         }
-        if (is_directive(peek(p), "load")) {
+        if (is_load_or_import(peek(p))) {
             bool in_column_1 = peek(p)->pos.col == 1;
             if (in_column_1 && first_load < 0) first_load = p->next;
             array_add(&loads, skip_misplaced_load(p));
@@ -1517,11 +1529,17 @@ static Ast *parse_struct(Parser *p, Token *name) {
     return s;
 }
 
-// load = '#load' STRING ';'
+// load = '#load' STRING ';' | '#import' STRING ';'
 //
-// Another file of the program, which the loader reads (parser.h). The
-// caller saw the '#load'. The string is decoded as any string literal is,
-// by the lexer: "dir\\x.rig" names dir\x.rig.
+// Another file of the program, which the loader reads (parser.h): by its
+// path, or, after #import, the module of that name that ships with rig
+// (spec 2.14), which the loader finds (Ast_Load.is_import). The caller saw
+// the '#load' or the '#import'. The string is decoded as any string
+// literal is, by the lexer: "dir\\x.rig" names dir\x.rig. Whether it's a
+// path or a module's name is the loader's to say.
+//
+// What follows says #load; an #import is read the same way, its message
+// for a missing string giving a module's name as the example.
 //
 // A load missing only its ';' is reported, but kept: it's whole without
 // it, and losing it would make every use of what the file declares unknown
@@ -1537,13 +1555,16 @@ static void resume_after_stray_tokens(Parser *p, s64 from, s64 resume);
 static Ast *parse_load(Parser *p) {
     s64 start = p->next;
     Token *directive = advance(p);
+    bool is_import = is_directive(directive, "import");
     Token *path = peek(p);
     if (path->kind != TOKEN_STRING) {
         p->lost_a_file = true;
         // A TOKEN_ERROR (a string never closed, say) was reported by the
         // lexer already, as error_expected says.
         if (path->kind != TOKEN_ERROR) {
-            diag_error(p->diag, path->pos, "expected a string after #load, as in #load \"other.rig\";");
+            diag_error(p->diag, path->pos,
+                       is_import ? "expected a string after #import, as in #import \"Basic\";"
+                                 : "expected a string after #load, as in #load \"other.rig\";");
         }
         return nullptr;
     }
@@ -1551,6 +1572,7 @@ static Ast *parse_load(Parser *p) {
     Ast_Load *load = ast_new<Ast_Load>(p->arena, AST_LOAD, directive->pos);
     load->path = path->string_value;
     load->path_pos = path->pos;
+    load->is_import = is_import;
     if (!expect(p, TOKEN_SEMICOLON)) {
         s64 resume = declaration_after_stray_tokens(p, start);
         if (resume >= 0) {
@@ -1598,7 +1620,7 @@ static Ast *parse_run(Parser *p) {
 //           | IDENT '::' expression ';'                       a constant
 //           | IDENT ':' type ['=' (expression | '---')] ';'   a global variable
 //           | IDENT ':=' expression ';'                       a global variable
-//           | load
+//           | load                                            #load or #import
 //           | run
 //
 // After '::', a procedure's parameters start with '(' ')', '(' IDENT ':' or
@@ -1618,7 +1640,7 @@ static bool variable_follows(Parser *p, s64 open);
 
 static Ast *parse_declaration(Parser *p) {
     if (is_directive(peek(p), "run")) return parse_run(p);
-    if (is_directive(peek(p), "load")) return parse_load(p);
+    if (is_load_or_import(peek(p))) return parse_load(p);
     Token *name = expect(p, TOKEN_IDENT);
     if (!name) return nullptr;
     Token_Kind after = peek(p)->kind;
@@ -1689,7 +1711,7 @@ static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
 static bool starts_load(Parser *p) {
     RIG_ASSERT(p->next > 0);
     Token *t = peek(p);
-    return is_directive(t, "load") && p->tokens[p->next - 1].pos.line != t->pos.line;
+    return is_load_or_import(t) && p->tokens[p->next - 1].pos.line != t->pos.line;
 }
 
 // Whether the next token is a #run that starts a line, as starts_load asks
@@ -1774,7 +1796,7 @@ static void skip_to_next_declaration(Parser *p, s64 start) {
         }
         if (!first && starts_line && depth <= 0 && parens <= 0 && starts_global(p)) return;
         if (!first && depth <= 0 && (starts_load(p) || starts_run(p))) return;
-        if (is_directive(t, "load")) p->lost_a_file = true;
+        if (is_load_or_import(t)) p->lost_a_file = true;
         count_open(p, p->next, &depth, &parens);
         advance(p);
     }
@@ -1807,7 +1829,7 @@ static s64 declaration_after_stray_tokens(Parser *p, s64 start) {
 // (p->lost_a_file), whether the next declaration shares the line or not.
 static void resume_after_stray_tokens(Parser *p, s64 from, s64 resume) {
     for (s64 i = from; i < resume; i++) {
-        if (is_directive(&p->tokens[i], "load")) p->lost_a_file = true;
+        if (is_load_or_import(&p->tokens[i])) p->lost_a_file = true;
     }
     p->next = resume;
 }
@@ -1846,7 +1868,7 @@ static bool parameters_follow(Parser *p, s64 open) {
         if (t->kind == TOKEN_RPAREN && --depth == 0) {
             Token *next = &p->tokens[i + 1];  // a token follows: the last is TOKEN_EOF
             return next->kind == TOKEN_LBRACE || next->kind == TOKEN_ARROW ||
-                   (next->kind == TOKEN_DIRECTIVE && !is_directive(next, "load") && !is_directive(next, "run"));
+                   (next->kind == TOKEN_DIRECTIVE && !is_load_or_import(next) && !is_directive(next, "run"));
         }
     }
     return false;
@@ -1880,7 +1902,7 @@ static bool variable_follows(Parser *p, s64 open) {
             if (depth <= 0) return false;
             break;
         case TOKEN_DIRECTIVE:
-            if (depth <= 0 && (is_directive(t, "load") || is_directive(t, "run"))) return true;
+            if (depth <= 0 && (is_load_or_import(t) || is_directive(t, "run"))) return true;
             if (depth <= 0 && !is_directive(t, "c_call")) return false;
             break;
         case TOKEN_EQUAL:

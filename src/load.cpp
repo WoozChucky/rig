@@ -50,6 +50,65 @@ bool load_same_file(String a, String b) {
     return same;
 }
 
+// The host's separator, which module_lookup puts between a place and the
+// names after it.
+static const char MODULE_SEPARATOR = HOST_IS_WINDOWS ? '\\' : '/';
+
+Module_Places module_places(Arena *a) {
+    String rig_directory = os_executable_directory(a);
+    Module_Places places = {};
+    places.places[0] = path_absolute(a, rig_directory, str("modules"), HOST_IS_WINDOWS);
+    places.places[1] = path_absolute(a, rig_directory, str("../modules"), HOST_IS_WINDOWS);
+    return places;
+}
+
+String module_lookup(Arena *a, const Module_Places *places, String name) {
+    for (s64 i = 0; i < 2; i++) {
+        String place = places->places[i];
+        // The place's own entries, compared byte for byte: asking the system
+        // whether place/NAME exists would find basic as Basic on Windows,
+        // whose names are case-blind, and the program would then depend on
+        // the host. A place that isn't there (or can't be listed) has none.
+        Array<String> names = {};
+        bool listed = os_list_directory(a, place, &names);
+        bool found = false;
+        for (s64 k = 0; listed && k < names.count && !found; k++) found = string_eq(names[k], name);
+        array_free(&names);
+        if (!found) continue;
+        String module = string_printf(a, STR_FMT "%c" STR_FMT "%cmodule.rig", STR_ARG(place), MODULE_SEPARATOR,
+                                      STR_ARG(name), MODULE_SEPARATOR);
+        if (os_file_exists(module)) return module;
+    }
+    return {};
+}
+
+// Whether `name` is a module's name: ASCII letters, digits and '_', a
+// letter first. Such a name is a single directory's, never a path (no
+// separator, no "..", nothing absolute), and holds no zero byte.
+static bool is_module_name(String name) {
+    if (name.count == 0) return false;
+    for (s64 i = 0; i < name.count; i++) {
+        u8 c = name.data[i];
+        bool letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+        bool digit = c >= '0' && c <= '9';
+        if (!letter && (i == 0 || (!digit && c != '_'))) return false;
+    }
+    return true;
+}
+
+// `name` as a message shows it, in the arena: each zero byte written \0, as
+// the string had it, since the message's text would end at one.
+static String shown_name(Arena *a, String name) {
+    String shown = string_printf(a, "");
+    for (s64 start = 0, i = 0; i <= name.count; i++) {
+        if (i < name.count && name.data[i] != 0) continue;
+        shown = string_printf(a, STR_FMT STR_FMT "%s", STR_ARG(shown), STR_ARG(string_slice(name, start, i - start)),
+                              i < name.count ? "\\0" : "");
+        start = i + 1;
+    }
+    return shown;
+}
+
 // The files named so far, the main file and every #load's, read or not: a
 // file that can't be read is recorded too, so it's reported at its first
 // #load alone (load.h). The keys (File_Key) of those known by their ids
@@ -68,17 +127,24 @@ static bool first_time_seen(Seen_Files *seen, File_Key key) {
     return true;
 }
 
-Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, String stdin_for, String stdin_text,
-                       bool *stdin_for_reached) {
+Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const Load_Options *options) {
+    Load_Options none = {};
+    if (!options) options = &none;
+    String stdin_for = options->stdin_for;
+    String stdin_text = options->stdin_text;
     Ast_File *tree = arena_new<Ast_File>(a);
     // What the loading alone needs is in an arena of its own, freed at its
     // end: the directory rig runs in, each #load's path and key (the tables
-    // keep the keys of the files first seen), and the system's reasons for
-    // failing. d keeps copies of what it needs of them (diag_add_file,
+    // keep the keys of the files first seen), the places #import looks in
+    // and what it finds there, and the system's reasons for failing. d
+    // keeps copies of what it needs of them (diag_add_file,
     // diag_locate_file, diag_error).
     Arena loading = arena_make();
     String directory = os_current_directory(&loading);
     Seen_Files seen = {};
+    // rig's own places are found only when the program first imports.
+    Module_Places own_places = {};
+    const Module_Places *places = options->modules;
 
     // The file given with its text (rig check --stdin-for), known by its
     // key as any file is, so it's found however the program names it. It's
@@ -117,24 +183,50 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, Strin
         // names, which the tree records (Ast_File.lost_a_file).
         for (s64 k = first_load; k < tree->loads.count; k++) {
             Ast_Load *load = tree->loads[k];
-            // A string can hold a zero byte (\0), but the system takes a
-            // path as ending at one, so "b.rig\0x.rig" would read b.rig:
-            // such a path, as an empty one, names no file.
-            if (load->path.count == 0) {
-                diag_error(d, load->path_pos, "a #load path can't be empty");
-                tree->lost_a_file = true;
-                continue;
-            }
-            if (memchr(load->path.data, 0, (size_t)load->path.count)) {
-                diag_error(d, load->path_pos, "a #load path can't contain a zero byte");
-                tree->lost_a_file = true;
-                continue;
-            }
-            String loaded = load_path(&loading, d->files[file].path, load->path, HOST_IS_WINDOWS);
-            if (!is_rig_file(loaded)) {
-                diag_error(d, load->path_pos, "'" STR_FMT "' isn't a .rig file", STR_ARG(loaded));
-                tree->lost_a_file = true;
-                continue;
+            String loaded = {};
+            if (load->is_import) {
+                // The module's module.rig, by its absolute path: from here
+                // on, the #load of that path. A name that isn't a module's
+                // is looked for nowhere, so "../x" can't reach outside the
+                // places.
+                if (!is_module_name(load->path)) {
+                    diag_error(d, load->path_pos, "'" STR_FMT "' isn't a module's name",
+                               STR_ARG(shown_name(&loading, load->path)));
+                    tree->lost_a_file = true;
+                    continue;
+                }
+                if (!places) {
+                    own_places = module_places(&loading);
+                    places = &own_places;
+                }
+                loaded = module_lookup(&loading, places, load->path);
+                if (!loaded.count) {
+                    diag_error(d, load->path_pos,
+                               "there's no module '" STR_FMT "' (looked in " STR_FMT " and " STR_FMT ")",
+                               STR_ARG(load->path), STR_ARG(places->places[0]), STR_ARG(places->places[1]));
+                    tree->lost_a_file = true;
+                    continue;
+                }
+            } else {
+                // A string can hold a zero byte (\0), but the system takes a
+                // path as ending at one, so "b.rig\0x.rig" would read b.rig:
+                // such a path, as an empty one, names no file.
+                if (load->path.count == 0) {
+                    diag_error(d, load->path_pos, "a #load path can't be empty");
+                    tree->lost_a_file = true;
+                    continue;
+                }
+                if (memchr(load->path.data, 0, (size_t)load->path.count)) {
+                    diag_error(d, load->path_pos, "a #load path can't contain a zero byte");
+                    tree->lost_a_file = true;
+                    continue;
+                }
+                loaded = load_path(&loading, d->files[file].path, load->path, HOST_IS_WINDOWS);
+                if (!is_rig_file(loaded)) {
+                    diag_error(d, load->path_pos, "'" STR_FMT "' isn't a .rig file", STR_ARG(loaded));
+                    tree->lost_a_file = true;
+                    continue;
+                }
             }
             // A file that can't be read is reported at its first #load
             // alone, as a file that can is read at its first alone. The
@@ -159,6 +251,6 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, Strin
     table_free(&seen.ids);
     table_free(&seen.paths);
     arena_free(&loading);
-    if (stdin_for_reached) *stdin_for_reached = reached;
+    if (options->stdin_for_reached) *options->stdin_for_reached = reached;
     return tree;
 }

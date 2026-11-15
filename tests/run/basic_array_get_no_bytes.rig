@@ -3,7 +3,7 @@
 // checked all the same, and the program stops with the language's own
 // message, at check_index in array.rig, whose line and column
 // basic_array_get_no_bytes.err names. Edit one, edit the other.
-#load "../../modules/Basic/module.rig";
+#import "Basic";
 
 // No bytes at all.
 Empty :: struct {}

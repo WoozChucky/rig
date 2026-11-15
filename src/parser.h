@@ -11,6 +11,7 @@
 //               | IDENT ':=' expression ';'                         a global variable
 //               | IDENT '::' expression ';'                         a constant
 //               | '#load' STRING ';'                                another file of the program
+//               | '#import' STRING ';'                              a module that ships with rig
 //               | run                                               code run while compiling
 //   run         = '#run' block | '#run' expression ';'
 //   procedure   = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
@@ -189,6 +190,13 @@
 // records that the program lacks it, as for a #load with no string. So it
 // does for a #load the recovery passes over, unreported, with a
 // declaration given up after another error.
+//
+// `#import "Basic";` (spec 2.14) names a module that ships with rig, which
+// the loader finds and reads (load.h). The parser records it as it records
+// a #load, an Ast_Load with is_import set, its path the module's name, and
+// every rule above holds for it too, its messages naming #import: "expected
+// a string after #import, as in #import "Basic";" and "#import can only be
+// at the top level".
 //
 // Code runs while compiling with #run (spec 7.8). #run e is a prefix
 // operator, binding as - and ! do (spec 5.2): #run f() + 1 is
