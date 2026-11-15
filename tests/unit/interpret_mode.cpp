@@ -104,6 +104,9 @@ static void interpret_mode(void *data) {
     bool ok = compilation_check(&c);
     if (ok && c.build.is_build_program) {
         compilation_free(&c);
+        // What the expression #runs printed while checking comes out
+        // first, as rig build has it.
+        fflush(stdout);
         fprintf(stderr, "unit-tests: error: a build program can't be interpreted\n");
         arena_free(&a);
         mode->status = 1;

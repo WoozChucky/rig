@@ -1,6 +1,9 @@
-tests/errors/build_empty_workspace.rig:9:5: error: workspace 'game' has no files
+tests/errors/build_empty_workspace.rig:10:5: error: workspace 'game' has no files
         create_workspace("game");
         ^
-tests/errors/build_empty_workspace.rig:10:5: error: workspace 'tools' has no files
+tests/errors/build_empty_workspace.rig:11:5: error: workspace 'tools' has no files
         create_workspace("tools");
+        ^
+tests/errors/build_empty_workspace.rig:12:5: error: workspace 'a\0b' has no files
+        create_workspace("a\0b");
         ^

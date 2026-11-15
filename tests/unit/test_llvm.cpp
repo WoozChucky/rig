@@ -2202,6 +2202,64 @@ TEST(llvm_optimises_with_the_o2_pipeline) {
     arena_free(&a);
 }
 
+// The object file for m on target t, emitted into memory from the module
+// backend_prepare leaves for `optimize`: by the target machine
+// backend_build made, or, with `lowest`, by one made here at LLVM's lowest
+// codegen level instead, as backend_build makes it unoptimised. Empty, and
+// a failed check, when it can't be made.
+static String object_from(Arena *a, Ir_Module *m, Target t, bool optimize, bool lowest) {
+    Backend b = {};
+    String error = {}, object = {};
+    bool ok = backend_prepare(&b, m, t, optimize, a, &error);
+    CHECK(ok);
+    if (ok && lowest) {
+        LLVMTargetRef target = LLVMGetTargetMachineTarget(b.machine);
+        LLVMRelocMode reloc = t == TARGET_LINUX_X64 ? LLVMRelocPIC : LLVMRelocDefault;
+        LLVMDisposeTargetMachine(b.machine);
+        b.machine = LLVMCreateTargetMachine(target, target_triple(t), "x86-64", "", LLVMCodeGenLevelNone, reloc,
+                                            LLVMCodeModelDefault);
+    }
+    LLVMMemoryBufferRef buffer = nullptr;
+    char *message = nullptr;
+    if (ok && LLVMTargetMachineEmitToMemoryBuffer(b.machine, b.module, LLVMObjectFile, &message, &buffer)) {
+        CHECK(false);
+        LLVMDisposeMessage(message);
+    } else if (ok) {
+        object = string_copy(a, {(const u8 *)LLVMGetBufferStart(buffer), (s64)LLVMGetBufferSize(buffer)});
+        LLVMDisposeMemoryBuffer(buffer);
+    }
+    backend_free(&b);
+    return object;
+}
+
+TEST(llvm_optimises_the_target_machines_code_too) {
+    // With optimize, the target machine compiles at LLVM's default level,
+    // not its lowest, as clang's -O2 has it: instruction selection and
+    // register allocation do their own work, so the object differs from
+    // the lowest level's, made from the same optimised module. Unoptimised,
+    // the target machine is at the lowest level, so its object is the one
+    // the lowest level makes.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "rand :: () -> s32 #foreign libc;\n"
+                                "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                "main :: () {\n"
+                                "    n := rand();\n"
+                                "    sum := 0;\n"
+                                "    for i: 0..n { sum += i * i + n; }\n"
+                                "    printf(\"%lld\\n\", sum);\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String optimised = object_from(&a, m, (Target)t, true, false);
+        CHECK(optimised.count > 0);
+        CHECK(!string_eq(optimised, object_from(&a, m, (Target)t, true, true)));
+        String plain = object_from(&a, m, (Target)t, false, false);
+        CHECK(plain.count > 0);
+        CHECK(string_eq(plain, object_from(&a, m, (Target)t, false, true)));
+    }
+    arena_free(&a);
+}
+
 TEST(llvm_optimised_uninitialised_local_is_still_a_value) {
     // A `---` local's slot is never stored to before it's read here, and a
     // read of memory nothing stored is undefined to LLVM's optimiser: it

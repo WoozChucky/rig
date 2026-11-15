@@ -454,6 +454,10 @@ static int build_steps(Compilation *c, String path, String output, bool bounds_c
     bool build_program = c->build.is_build_program;
     if (build_program && (output.count || !bounds_checks)) {
         compilation_end_runs(c);
+        // stdout is buffered when it's a pipe: what the expression #runs
+        // printed while checking comes out before the refusal, as
+        // diag_print has it.
+        fflush(stdout);
         if (output.count) {
             fprintf(stderr, "rig: error: -o can't be used with a build program; its build options set the output\n");
         } else {
