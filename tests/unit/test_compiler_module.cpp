@@ -210,17 +210,28 @@ TEST(compiler_procedures_fail_like_runtime_errors) {
     // calls that led there.
     Arena a = arena_make();
     // A workspace no create_workspace made; every procedure checks its own
-    // first.
+    // first, before the file's existence, its .rig, or the output's name.
     CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
                                 "#run { w : Workspace; w.id = 7; add_build_file(w, \"x.rig\"); }\n"
                                 "main :: () {}\n"),
               "2:1: #run failed: runtime error: there's no workspace with id 7\n"
               "    in #run (PATH:2:33)\n");
     CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
+                                "#run { w : Workspace; w.id = 3; add_build_file(w, \"notes.txt\"); }\n"
+                                "main :: () {}\n"),
+              "2:1: #run failed: runtime error: there's no workspace with id 3\n"
+              "    in #run (PATH:2:33)\n");
+    CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
                                 "#run { w : Workspace; get_build_options(w); }\n"
                                 "main :: () {}\n"),
               "2:1: #run failed: runtime error: there's no workspace with id 0\n"
               "    in #run (PATH:2:23)\n");
+    CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
+                                "#run { w : Workspace; o : Build_Options; o.output_name = \"game.rig\"; "
+                                "set_build_options(w, o); }\n"
+                                "main :: () {}\n"),
+              "2:1: #run failed: runtime error: there's no workspace with id 0\n"
+              "    in #run (PATH:2:70)\n");
     // Two workspaces of one name.
     CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
                                 "#run {\n"
@@ -259,7 +270,7 @@ TEST(compiler_procedures_fail_like_runtime_errors) {
                                 "main :: () {}\n"),
               "2:1: #run failed: runtime error: the output 'game.rig' ends in .rig; is it the source file?\n"
               "    in #run (PATH:6:5)\n");
-    // A string with no bytes to copy.
+    // A string with no bytes to copy, given to each procedure taking one.
     CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
                                 "#run {\n"
                                 "    name := \"game\";\n"
@@ -269,6 +280,39 @@ TEST(compiler_procedures_fail_like_runtime_errors) {
                                 "main :: () {}\n"),
               "2:1: #run failed: runtime error: 'create_workspace' was given a string with a negative count\n"
               "    in #run (PATH:5:5)\n");
+    CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
+                                "#run {\n"
+                                "    w := create_workspace(\"game\");\n"
+                                "    o := get_build_options(w);\n"
+                                "    o.output_name = \"game\";\n"
+                                "    o.output_name.count = -1;\n"
+                                "    set_build_options(w, o);\n"
+                                "}\n"
+                                "main :: () {}\n"),
+              "2:1: #run failed: runtime error: 'set_build_options' was given a string with a negative count\n"
+              "    in #run (PATH:7:5)\n");
+    CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
+                                "#run {\n"
+                                "    w := create_workspace(\"game\");\n"
+                                "    path := \"src/main.rig\";\n"
+                                "    path.count = -1;\n"
+                                "    add_build_file(w, path);\n"
+                                "}\n"
+                                "main :: () {}\n"),
+              "2:1: #run failed: runtime error: 'add_build_file' was given a string with a negative count\n"
+              "    in #run (PATH:6:5)\n");
+    // A path holding a zero byte names no file, though the system, given
+    // the bytes before it, would find src/main.rig there.
+    write_build_file(&a, compiler_test_directory(&a, "compiler_procedures_fail_like_runtime_errors"), "src",
+                     "src/main.rig", "main :: () {}\n");
+    CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
+                                "#run {\n"
+                                "    w := create_workspace(\"game\");\n"
+                                "    add_build_file(w, \"src/main.rig\\0.rig\");\n"
+                                "}\n"
+                                "main :: () {}\n"),
+              "2:1: #run failed: runtime error: there's no file 'src/main.rig\\0.rig'\n"
+              "    in #run (PATH:4:5)\n");
     // In a procedure the #run calls: its frame first, at the #compiler
     // call's name, then the #run's, at the ordinary call of make, which is
     // at its statement.
@@ -301,28 +345,37 @@ TEST(create_workspace_needs_a_build_program) {
 
 TEST(compiler_procedures_unknown_to_the_compiler_fail) {
     // A module of the test's own places declares #compiler procedures the
-    // compiler doesn't do as declared: one it has no procedure for, and one
-    // whose name it knows, with other parameters. Each call fails. Those
-    // places hold no Compiler module, so the program is never a build
-    // program, and has a main.
+    // compiler doesn't do as declared: one it has no procedure for, and
+    // three whose names it knows: one with another count of parameters, one
+    // with as many but not addresses, and one with a scalar result. Each
+    // call fails, before anything is read. The program has a main, as every
+    // one here does (run_build_program).
     Arena a = arena_make();
     String dir = compiler_test_directory(&a, "compiler_procedures_unknown_to_the_compiler_fail");
     Module_Places places = test_places(&a, dir);
     write_module(&a, places.places[0], "Fake",
                  "nothing :: () #compiler;\n"
-                 "create_workspace :: () #compiler;\n");
+                 "create_workspace :: () #compiler;\n"
+                 "get_build_options :: (a: int, b: int) #compiler;\n"
+                 "add_build_file :: (w: string, p: string) -> int #compiler;\n");
     Build_State state = {};
     state.is_build_program = true;
     CHECK_STR(run_build_program(&a, "compiler_procedures_unknown_to_the_compiler_fail",
                                 "#import \"Fake\";\n"
                                 "#run nothing();\n"
                                 "#run create_workspace();\n"
+                                "#run get_build_options(1, 2);\n"
+                                "#run add_build_file(\"a\", \"b.rig\");\n"
                                 "main :: () {}\n",
                                 &state, &places),
               "2:1: #run failed: runtime error: the compiler has no procedure 'nothing'\n"
               "    in #run (PATH:2:6)\n"
               "3:1: #run failed: runtime error: 'create_workspace' isn't declared as the compiler implements it\n"
-              "    in #run (PATH:3:6)\n");
+              "    in #run (PATH:3:6)\n"
+              "4:1: #run failed: runtime error: 'get_build_options' isn't declared as the compiler implements it\n"
+              "    in #run (PATH:4:6)\n"
+              "5:1: #run failed: runtime error: 'add_build_file' isn't declared as the compiler implements it\n"
+              "    in #run (PATH:5:6)\n");
     CHECK_EQ(state.workspaces.count, 0);
     build_state_free(&state);
     arena_free(&a);

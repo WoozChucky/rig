@@ -3,7 +3,8 @@
 // compile-time world of the compilation, and its result is baked into the
 // tree as a constant (#113's constant data); the top-level #runs run later,
 // in the same world, once the program has checked; and, last, a #compiler
-// procedure's call in a world with no compiler to do it (issue #116). Uses
+// procedure's call in a world with no compiler to do it, and in one with a
+// hook of the test's own (issue #116). Uses
 // test_checker.cpp's helpers (check_src, global_named, local_named,
 // value_of, sorted_messages, joined, check_module_source) and helpers.cpp's
 // (src, messages, check_source, lower_source, contains, index_of,
@@ -846,5 +847,45 @@ TEST(compiler_procedures_without_a_compiler_fail) {
                                       "main :: () {}\n"),
               "2:6: #run failed: runtime error: 'twice' can only be called while compiling\n"
               "    in #run (test.rig:2:11)\n");
+    arena_free(&a);
+}
+
+// A hook of the test's own (interp.h's Interp_Compiler_Call) doing
+// twice :: (n: int) -> int: n * 2, written into its one scalar result; an n
+// of 0 fails instead.
+static String twice_hook(void *context, Ir_Proc *proc, Array<u64> args, u64 *results, Position at, Arena *a) {
+    (void)context;
+    (void)proc;
+    (void)at;
+    if (args[0] == 0) return string_printf(a, "twice was given 0");
+    results[0] = args[0] * 2;
+    return {};
+}
+
+TEST(compiler_procedures_give_the_hooks_results) {
+    // In a world whose compilation installs a hook, a #compiler call is the
+    // hook's: the scalar result it writes is the call's, so N bakes 42, and
+    // a message it gives fails the #run, as a runtime error at the call's
+    // name. The file is taken for a module's, as check_module_source takes
+    // it.
+    Arena a = arena_make();
+    Token_List *list = src("twice :: (n: int) -> int #compiler;\n"
+                           "N :: #run twice(21);\n"
+                           "Z :: #run twice(0);\n"
+                           "main :: () {}\n");
+    list->diag.files[0].in_module = true;
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    Compile_Time *world = compile_time_new(&list->diag);
+    compile_time_set_compiler(world, twice_hook, nullptr);
+    check(file, &a, &list->diag, world);
+    compile_time_free(world);
+    diag_sort(&list->diag);
+    CHECK_STR(messages(&a, &list->diag), "3:6: #run failed: runtime error: twice was given 0\n"
+                                         "    in #run (test.rig:3:11)\n");
+    Checked c = {list, file, false};
+    Ast *n = global_named(&c, "N");
+    CHECK(n->is_constant);
+    CHECK_EQ(n->constant, 42);
+    token_list_free(list);
     arena_free(&a);
 }

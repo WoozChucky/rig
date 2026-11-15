@@ -78,7 +78,8 @@
 // failing instruction or the call it was waiting on.
 struct Interp_Frame {
     String proc;   // its source_name
-    Position pos;  // an instruction's position: its statement's first token, or a check's place
+    Position pos;  // an instruction's position: its statement's first token, a check's place, or a #compiler
+                   // call's callee name
 };
 
 struct Interp_Result {
