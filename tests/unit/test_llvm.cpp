@@ -2,12 +2,12 @@
 // tokens (issue #10), then IR built by hand for issues #32 to #37 (integer
 // widths, blocks and branches, the runtime's panic, several results,
 // globals and floats), #52 (the panic flushing first) and #56 (memory);
-// last, milestone 2c's line tables (#71), on modules lowered from source,
+// then milestone 2c's line tables (#71), on modules lowered from source,
 // with the debug information of a program of several files (#112) among
-// them. Uses test_ir.cpp's HELLO, max_module and lower_program,
-// test_checker.cpp's chain_of and joined, test_load.cpp's
-// load_test_directory, write_source and in_directory, and test_base.cpp's
-// md5_hex.
+// them; last, the optimiser (#116). Uses test_ir.cpp's HELLO, max_module
+// and lower_program, test_checker.cpp's chain_of and joined,
+// test_load.cpp's load_test_directory, write_source and in_directory, and
+// test_base.cpp's md5_hex.
 
 #include "test.h"
 
@@ -87,27 +87,31 @@ TEST(objects_for_both_targets) {
     // locate_file), so it has debug information, which must verify too, and
     // the object carries it: CodeView in COFF's .debug$S section, DWARF in
     // ELF's .debug_info and .debug_line (both names are in the file's bytes).
+    // Optimised (issue #116) or not: the optimiser keeps the debug
+    // information.
     Arena a = arena_make();
     Ir_Module *m = lower_tokens(&a, HELLO);
     os_make_directory(str(".build"));
     const char *paths[] = {".build/ir-test-windows.obj", ".build/ir-test-linux.o"};
-    for (int t = 0; t < 2; t++) {
-        String error = {};
-        bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), &a, &error);
-        CHECK(ok);
-        if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
-        String bytes = {};
-        CHECK(os_read_file(&a, str(paths[t]), &bytes));
-        CHECK(bytes.count > 64);
-        if (bytes.count < 4) continue;
-        if ((Target)t == TARGET_WINDOWS_X64) {
-            CHECK_EQ(bytes.data[0], 0x64);  // COFF: machine AMD64, 0x8664, little-endian
-            CHECK_EQ(bytes.data[1], 0x86);
-            CHECK(contains(bytes, ".debug$S"));
-        } else {
-            CHECK(memcmp(bytes.data, "\x7f" "ELF", 4) == 0);
-            CHECK(contains(bytes, ".debug_info"));
-            CHECK(contains(bytes, ".debug_line"));
+    for (int optimize = 0; optimize < 2; optimize++) {
+        for (int t = 0; t < 2; t++) {
+            String error = {};
+            bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), optimize, &a, &error);
+            CHECK(ok);
+            if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+            String bytes = {};
+            CHECK(os_read_file(&a, str(paths[t]), &bytes));
+            CHECK(bytes.count > 64);
+            if (bytes.count < 4) continue;
+            if ((Target)t == TARGET_WINDOWS_X64) {
+                CHECK_EQ(bytes.data[0], 0x64);  // COFF: machine AMD64, 0x8664, little-endian
+                CHECK_EQ(bytes.data[1], 0x86);
+                CHECK(contains(bytes, ".debug$S"));
+            } else {
+                CHECK(memcmp(bytes.data, "\x7f" "ELF", 4) == 0);
+                CHECK(contains(bytes, ".debug_info"));
+                CHECK(contains(bytes, ".debug_line"));
+            }
         }
     }
     arena_free(&a);
@@ -125,7 +129,7 @@ TEST(llvm_reports_a_module_that_doesnt_verify) {
     CHECK(!llvm_ir_text(&a, m, target_host(), &text, &error));
     CHECK(contains(error, "return"));
     error = {};
-    CHECK(!llvm_emit_object(m, target_host(), str(".build/never.o"), &a, &error));
+    CHECK(!llvm_emit_object(m, target_host(), str(".build/never.o"), false, &a, &error));
     CHECK(contains(error, "return"));
     arena_free(&a);
 }
@@ -858,7 +862,7 @@ TEST(llvm_big_global_holds_no_zeros) {
         CHECK(contains(text, "@short_tail = internal global [16 x i8] "
                              "c\"\\01\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\\00\", align 8"));
         String error = {};
-        bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), &a, &error);
+        bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), false, &a, &error);
         CHECK(ok);
         if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
     }
@@ -1439,7 +1443,7 @@ TEST(llvm_debug_types_stop_at_a_depth) {
                 CHECK(struct_line(&a, text, beyond).count == 0);
             }
             String error = {};
-            bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), &a, &error);
+            bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), false, &a, &error);
             CHECK(ok);
             if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
         }
@@ -1488,7 +1492,7 @@ TEST(llvm_debug_types_through_cycles_are_not_cut) {
         CHECK(count_of(text, "DIFlagFwdDecl") == 0);
         CHECK(count_of(text, "baseType: null") == 0);
         String error = {};
-        bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), &a, &error);
+        bool ok = llvm_emit_object(m, (Target)t, str(paths[t]), false, &a, &error);
         CHECK(ok);
         if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
     }
@@ -2155,6 +2159,41 @@ TEST(llvm_procedure_values_are_function_pointers) {
         CHECK(string_eq(attached(&a, line_with(text, "!DILocalVariable(name: \"g\""), "type:"), f));
         CHECK(string_eq(attached(&a, line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"op\""), "baseType:"),
                         f));
+    }
+    arena_free(&a);
+}
+
+// Issue #116: optimize (spec 10.2).
+
+TEST(llvm_optimises_with_the_o2_pipeline) {
+    // Unoptimised, each local and each parameter lives in a stack slot, an
+    // alloca. With optimize, LLVM's default<O2> pipeline runs: SROA puts
+    // scalars in registers, so no alloca is left (the program has scalars
+    // only: an aggregate passed by address could keep its slot). The debug
+    // information stays, and says the code is optimised, as clang's -O2
+    // -g does.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "twice :: (n: int) -> int {\n"
+                                "    return n * 2;\n"
+                                "}\n"
+                                "main :: () {\n"
+                                "    x := twice(3);\n"
+                                "    x += 1;\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String plain = {}, optimised = {}, error = {};
+        CHECK(llvm_ir_text(&a, m, (Target)t, &plain, &error, false));
+        CHECK(contains(plain, "alloca"));
+        CHECK(contains(plain, "DICompileUnit"));
+        CHECK(contains(plain, "isOptimized: false"));
+        bool ok = llvm_ir_text(&a, m, (Target)t, &optimised, &error, true);
+        CHECK(ok);
+        if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+        CHECK(!contains(optimised, "alloca"));
+        CHECK(contains(optimised, "DICompileUnit"));
+        CHECK(contains(optimised, "isOptimized: true"));
+        CHECK(contains(optimised, "DISPFlagOptimized"));
     }
     arena_free(&a);
 }

@@ -15,7 +15,14 @@
 //
 // A module with a panic also gets the runtime's __rig_panic, which writes
 // the message to stderr with C's write (_write on Windows) and exits with
-// status 101 through C's exit. Milestone 2a doesn't optimise.
+// status 101 through C's exit.
+//
+// By default nothing is optimised: the module is compiled as built, at
+// LLVM's lowest code generation level, as a debugger wants it. With
+// optimize (spec 10.2), LLVM's default<O2> pipeline runs on the module once
+// it verifies, and the target machine compiles at its default (optimising)
+// level. Debug information is kept either way, and says whether the code is
+// optimised.
 
 #pragma once
 
@@ -32,9 +39,9 @@ Target target_host();
 // "x86_64-pc-windows-msvc", "x86_64-pc-linux-gnu".
 const char *target_triple(Target t);
 
-// The LLVM module as text (LLVMPrintModuleToString). False with `error` set
-// when it doesn't verify.
-bool llvm_ir_text(Arena *a, Ir_Module *m, Target t, String *text, String *error);
+// The LLVM module as text (LLVMPrintModuleToString), optimised when
+// `optimize` is set. False with `error` set when it doesn't verify.
+bool llvm_ir_text(Arena *a, Ir_Module *m, Target t, String *text, String *error, bool optimize = false);
 
 // The names of one of a module's source files (its Ir_Source's path, and
 // Ir_Module's directory) as the debug information hands them to LLVM
@@ -46,7 +53,7 @@ bool llvm_ir_text(Arena *a, Ir_Module *m, Target t, String *text, String *error)
 void llvm_debug_file_names(Arena *a, String source_path, String directory, Target t, String *file,
                            String *file_directory);
 
-// Writes an object file (COFF on Windows, ELF on Linux) for the CPU x86-64.
-// False with `error` set when the module doesn't verify or LLVM can't write
-// the file.
-bool llvm_emit_object(Ir_Module *m, Target t, String path, Arena *a, String *error);
+// Writes an object file (COFF on Windows, ELF on Linux) for the CPU x86-64,
+// optimised when `optimize` is set. False with `error` set when the module
+// doesn't verify or LLVM can't write the file.
+bool llvm_emit_object(Ir_Module *m, Target t, String path, bool optimize, Arena *a, String *error);
