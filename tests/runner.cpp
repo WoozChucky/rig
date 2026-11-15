@@ -1134,12 +1134,17 @@ static String build_program_elsewhere_test(Arena *a, String rig) {
     return {};
 }
 
-// tests/build/options's plain and fast workspaces build the same code,
-// sums.rig, unoptimised and optimised (spec 10.2), and print the same, so
-// only their objects tell them apart. Built in .build/tests/optimised
-// (build_copy), fast's, .build/fast.obj (fast.o on Linux), must be smaller
-// than plain's, .build/sums.obj, by a tenth at least, as LLVM's O2
-// pipeline makes it: its locals in registers rather than stack slots. {}
+// tests/build/options's checked and checked_fast workspaces build the same
+// code, checked.rig, unoptimised and optimised (spec 10.2), and stop the
+// same way, so only their objects tell them apart. Built in
+// .build/tests/optimised (build_copy), checked_fast's,
+// .build/checked_fast.obj (checked_fast.o on Linux), must be smaller than
+// checked's, .build/checked.obj, by a tenth at least, as LLVM's O2
+// pipeline makes it: its index is known while compiling, so its main is
+// the failed check's call alone, with no array in a stack slot. (sums.rig's
+// optimised object is no measure: its data is known only at run time, and
+// what the optimiser adds to run its loops fast, and to tell a debugger
+// where its locals are, nearly makes up for what it takes away.) {}
 // when it is, otherwise why not.
 static String optimised_object_test(Arena *a, String rig) {
     String dir = str(".build/tests/optimised");
@@ -1150,8 +1155,8 @@ static String optimised_object_test(Arena *a, String rig) {
         return with_stderr(a, string_printf(a, "rig build exited with " STR_FMT, STR_ARG(exit_code_text(a, built.exit_code))),
                            built.err);
     }
-    String plain_path = string_printf(a, STR_FMT "/.build/sums%s", STR_ARG(dir), OBJ);
-    String fast_path = string_printf(a, STR_FMT "/.build/fast%s", STR_ARG(dir), OBJ);
+    String plain_path = string_printf(a, STR_FMT "/.build/checked%s", STR_ARG(dir), OBJ);
+    String fast_path = string_printf(a, STR_FMT "/.build/checked_fast%s", STR_ARG(dir), OBJ);
     String plain = {}, fast = {};
     if (!os_read_file(a, plain_path, &plain)) return string_printf(a, "can't read " STR_FMT, STR_ARG(plain_path));
     if (!os_read_file(a, fast_path, &fast)) return string_printf(a, "can't read " STR_FMT, STR_ARG(fast_path));
