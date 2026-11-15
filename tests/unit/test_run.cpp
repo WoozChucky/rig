@@ -1,9 +1,11 @@
-// test_run.cpp: code run while compiling (issue #115, spec 7.8): a #run
-// runs when the checker first needs its value, in the one compile-time
-// world of the compilation, and its result is baked into the tree as a
-// constant (#113's constant data). Uses test_checker.cpp's helpers
-// (check_src, global_named, value_of, sorted_messages, joined) and
-// helpers.cpp's (check_source, lower_source).
+// test_run.cpp: code run while compiling (issue #115, spec 7.8): an
+// expression #run runs when the checker first needs its value, in the one
+// compile-time world of the compilation, and its result is baked into the
+// tree as a constant (#113's constant data); the top-level #runs run later,
+// in the same world, once the program has checked. Uses test_checker.cpp's
+// helpers (check_src, global_named, local_named, value_of, sorted_messages,
+// joined) and helpers.cpp's (src, messages, check_source, lower_source,
+// contains, index_of, token_list_free).
 
 #include "test.h"
 
