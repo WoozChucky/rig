@@ -1,7 +1,8 @@
 // #import and #load of one module read it once, under the first name (spec
-// 2.14): the #import finds Basic's module.rig beside rig, and the #load
-// names the same file by its path from here, so it loads nothing more, and
-// no name Basic declares is declared twice.
+// 2.14): the #import finds Basic's module.rig in the modules directory
+// above rig, the repository's, and the #load names the same file by its
+// path from here, so it loads nothing more, and no name Basic declares is
+// declared twice.
 #import "Basic";
 #load "../../modules/Basic/module.rig";
 
