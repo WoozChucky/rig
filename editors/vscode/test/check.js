@@ -983,11 +983,12 @@ check('the grammar\'s other rules still colour as they did', () => {
     assertScopes('defer free(p);', { defer: 'keyword.control.rig', free: 'entity.name.function.call.rig' });
 });
 
-// Every program of tests/run, through the grammar: no line breaks it, the
+// Every program of tests/run and tests/build (the build programs and the
+// programs they build), through the grammar: no line breaks it, the
 // parameters, fields and results written `name: Type` of every procedure and
 // struct get their type coloured, and nothing is coloured as a type but the
 // names its structs are declared with.
-check('the grammar colours the types in every program of tests/run', () => {
+check('the grammar colours the types in every program of tests/run and tests/build', () => {
     const files = [];
     const walk = (dir) => {
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -997,6 +998,7 @@ check('the grammar colours the types in every program of tests/run', () => {
         }
     };
     walk(path.join(root, 'tests', 'run'));
+    walk(path.join(root, 'tests', 'build'));
     assert.ok(files.length > 50, `only ${files.length} programs`);
 
     const sources = new Map(files.map((f) => [f, fs.readFileSync(f, 'utf8')]));
@@ -1021,7 +1023,7 @@ check('the grammar colours the types in every program of tests/run', () => {
     const typeScopes = new Set([TYPE, PRIMITIVE]);
     const checked = {};   // file -> procedure -> the parameters and results checked
     for (const [file, source] of sources) {
-        const name = path.relative(path.join(root, 'tests', 'run'), file).replace(/\\/g, '/');
+        const name = path.relative(root, file).replace(/\\/g, '/');
         let lines;
         assert.doesNotThrow(() => (lines = tokenize(source)), name);
         lines.forEach((tokenized, n) => {
@@ -1079,10 +1081,11 @@ check('the grammar colours the types in every program of tests/run', () => {
 
     // Some known procedures, every parameter and result of them checked.
     const known = {
-        'struct_copies.rig': { show: 1, bump: 2, swap: 4, f: 2 },
-        'acceptance_2b.rig': { push: 3, malloc: 2 },
-        'constant_data.rig': { length: 2, sum: 2 },
-        'procedure_values.rig': { add: 3 },
+        'tests/run/struct_copies.rig': { show: 1, bump: 2, swap: 4, f: 2 },
+        'tests/run/acceptance_2b.rig': { push: 3, malloc: 2 },
+        'tests/run/constant_data.rig': { length: 2, sum: 2 },
+        'tests/run/procedure_values.rig': { add: 3 },
+        'tests/build/options/sums.rig': { bounds: 2, flipped: 2, fibonacci: 2 },
     };
     for (const [file, procedures] of Object.entries(known)) {
         for (const [procedure, n] of Object.entries(procedures)) {

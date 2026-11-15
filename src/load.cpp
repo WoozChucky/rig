@@ -204,6 +204,26 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const
         tree->compiler_pos = {main_file, 1, 1};
     }
 
+    // A workspace's further files (spec 7.9), with the texts the caller
+    // read, added right after the main file, so they're walked before the
+    // files its #loads add, as if it #loaded each first. Each is known by
+    // its key as any file is: one named twice, or the main file again, is
+    // added once, and a file one of them #loads that was added already
+    // loads nothing. The Compiler module's file among them is reached at
+    // its own 1:1, as the main file is.
+    Array<String> more_files = options->more_files, more_texts = options->more_texts;
+    for (s64 k = 0; k < more_files.count; k++) {
+        File_Key key = file_key(&loading, directory, more_files[k]);
+        if (!first_time_seen(&seen, key)) continue;
+        s32 added = diag_add_file(d, more_files[k], more_texts[k]);
+        diag_locate_file(d, added, directory, HOST_IS_WINDOWS);
+        d->files[added].in_module = in_a_place(&loading, places, d->files[added].absolute_path);
+        if (has_compiler && same_key(key, compiler_key)) {
+            tree->reaches_compiler = true;
+            tree->compiler_pos = {added, 1, 1};
+        }
+    }
+
     // d->files is the queue: each file is lexed and parsed in turn, and the
     // files its #loads name that weren't loaded yet are added at its end.
     // The loads a file adds to the tree are those after the ones before it.

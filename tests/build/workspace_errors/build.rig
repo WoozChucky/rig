@@ -1,0 +1,13 @@
+// A workspace whose program has errors (spec 7.9) fails alone: its errors
+// are printed when its compilation ends, naming its files as the build
+// program added them, and the workspaces after it are still built. rig
+// exits 1, since something failed.
+#import "Compiler";
+
+#run {
+    broken := create_workspace("broken");
+    add_build_file(broken, "src/broken.rig");
+
+    fine := create_workspace("fine");
+    add_build_file(fine, "fine.rig");
+}

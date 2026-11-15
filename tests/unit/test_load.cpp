@@ -1,7 +1,8 @@
 // test_load.cpp: the loader (issue #112): which files a program's #loads
 // read, in what order, each once, what's reported when one can't be, and a
 // file given with its text in place of what's on disk (rig check
-// --stdin-for).
+// --stdin-for); then #import's modules, build programs, and a workspace's
+// further files (issue #116).
 // Each test writes its files under .build/tests/load/NAME/, NAME the
 // test's (or the test's with a suffix, when it needs a second directory),
 // and loads them from there. Uses test_os.cpp's SEPARATOR and reason.
@@ -1537,5 +1538,49 @@ TEST(build_programs_need_no_main) {
     bool lost = false;
     CHECK_STR(import_messages(&a, dir, "#import \"Compiler\";\n", &places, &lost), "");
     CHECK_STR(import_messages(&a, dir, "x := 1;\n", &places, &lost), "1:1: a procedure called 'main' is needed\n");
+    arena_free(&a);
+}
+
+// Issue #116: a workspace's further files (spec 7.9), given to the loader
+// with their texts (Load_Options.more_files).
+
+TEST(more_files_load_after_the_main_file) {
+    // The further files come right after the main file, before the file it
+    // #loads, in the order given, as if it #loaded each first: main.rig's
+    // c.rig comes after a.rig and b.rig, and so do their declarations. They
+    // are known by their identity as any file is, so b.rig's #load of
+    // main.rig loads nothing, and main.rig is read once.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "more_files_load_after_the_main_file");
+    write_source(&a, dir, "main.rig", "#load \"c.rig\";\nmain :: () {}\n");
+    write_source(&a, dir, "a.rig", "a :: () {}\n");
+    write_source(&a, dir, "b.rig", "#load \"main.rig\";\nb :: () {}\n");
+    write_source(&a, dir, "c.rig", "c :: () {}\n");
+    String path = str(in_directory(&a, dir, "main.rig"));
+    String text = {};
+    CHECK(os_read_file(&a, path, &text));
+    Load_Options options = {};
+    const char *more[] = {"a.rig", "b.rig"};
+    for (const char *name : more) {
+        String file = str(in_directory(&a, dir, name));
+        String file_text = {};
+        CHECK(os_read_file(&a, file, &file_text));
+        array_add(&options.more_files, file);
+        array_add(&options.more_texts, file_text);
+    }
+    Ast_File *tree = load_program(&a, &d, path, text, &options);
+    CHECK_STR(messages(&a, &d), "");
+    const char *names[] = {"main", "a", "b", "c"};
+    String expected = string_printf(&a, "");
+    for (s64 i = 0; i < 4; i++) {
+        expected = string_printf(&a, STR_FMT STR_FMT "/%s.rig\n", STR_ARG(expected), STR_ARG(dir), names[i]);
+    }
+    CHECK_STR(file_paths(&a, &d), string_cstr(&a, expected));
+    CHECK_EQ(tree->procs.count, 4);
+    for (s64 i = 0; i < 4 && i < tree->procs.count; i++) CHECK_STR(tree->procs[i]->name, names[i]);
+    array_free(&options.more_files);
+    array_free(&options.more_texts);
+    diag_free(&d);
     arena_free(&a);
 }

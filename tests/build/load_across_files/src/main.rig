@@ -1,0 +1,11 @@
+// The game workspace's main file (build.rig). player.rig is beside it, in
+// src/, and extra_say comes from the workspace's second file, src/extra.rig,
+// which no file #loads.
+#load "player.rig";
+
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    player_say();
+    extra_say();
+}
