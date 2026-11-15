@@ -1,0 +1,3 @@
+0 game 4
+optimized
+no bounds checks in a zeroed Build_Options

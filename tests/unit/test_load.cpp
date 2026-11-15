@@ -1343,29 +1343,103 @@ TEST(module_places_are_beside_rig_and_above_it) {
 }
 
 TEST(files_inside_the_places_are_modules) {
-    // A file inside one of the places is a module's (Source_File.in_module),
+    // A file inside either place is a module's (Source_File.in_module),
     // which may declare #compiler procedures (spec 7.9), whether an #import
     // reached it or a #load by a relative path; the main file, outside
-    // them, isn't.
+    // them, isn't, nor is a file in firstly/, beside first/, whose path
+    // starts with the place's text but isn't inside it.
     Arena a = arena_make();
     Diagnostics d = {};
     String dir = load_test_directory(&a, "files_inside_the_places_are_modules");
     Module_Places places = test_places(&a, dir);
     write_module(&a, places.places[0], "Alpha", "alpha :: () {}\n");
+    write_module(&a, places.places[1], "Beta", "beta :: () {}\n");
     CHECK(os_write_file(str(module_file(&a, places.places[0], "Alpha", "other.rig")), str("other :: () {}\n")));
-    load_main_importing(&a, &d, dir, "#import \"Alpha\";\n#load \"first/Alpha/other.rig\";\nmain :: () {}\n",
+    CHECK(os_make_directory(str(in_directory(&a, dir, "firstly"))));
+    write_source(&a, dir, "firstly/x.rig", "x :: () {}\n");
+    load_main_importing(&a, &d, dir,
+                        "#import \"Alpha\";\n#import \"Beta\";\n#load \"first/Alpha/other.rig\";\n"
+                        "#load \"firstly/x.rig\";\nmain :: () {}\n",
                         &places);
     CHECK_STR(messages(&a, &d), "");
-    CHECK_EQ(d.files.count, 3);
-    if (d.files.count == 3) {
+    CHECK_EQ(d.files.count, 5);
+    if (d.files.count == 5) {
         CHECK(!d.files[0].in_module);
         CHECK(d.files[1].in_module);
-        CHECK_STR(d.files[2].path, in_directory(&a, dir, "first/Alpha/other.rig"));
+        CHECK_STR(d.files[2].path, module_file(&a, places.places[1], "Beta", "module.rig"));
         CHECK(d.files[2].in_module);
+        CHECK_STR(d.files[3].path, in_directory(&a, dir, "first/Alpha/other.rig"));
+        CHECK(d.files[3].in_module);
+        CHECK_STR(d.files[4].path, in_directory(&a, dir, "firstly/x.rig"));
+        CHECK(!d.files[4].in_module);
     }
     diag_free(&d);
     arena_free(&a);
 }
+
+TEST(a_main_file_inside_a_place_is_a_modules) {
+    // The main file is a module's when it's inside a place, as rig check
+    // modules/Compiler/module.rig checks the module's own file.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "a_main_file_inside_a_place_is_a_modules");
+    Module_Places places = test_places(&a, dir);
+    const char *text = "alpha :: () {}\n";
+    write_module(&a, places.places[0], "Alpha", text);
+    Load_Options options = {};
+    options.modules = &places;
+    load_program(&a, &d, str(in_directory(&a, dir, "first/Alpha/module.rig")), str(text), &options);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 1);
+    if (d.files.count == 1) CHECK(d.files[0].in_module);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+#ifdef _WIN32
+// `s` with its ASCII letters upper-cased, in the arena.
+static String upper_cased(Arena *a, String s) {
+    u8 *data = arena_new_array<u8>(a, s.count);
+    for (s64 i = 0; i < s.count; i++) {
+        u8 c = s.data[i];
+        data[i] = c >= 'a' && c <= 'z' ? (u8)(c - 'a' + 'A') : c;
+    }
+    return {data, s.count};
+}
+
+TEST(places_in_another_case_hold_the_same_files_on_windows) {
+    // On Windows, where a name's case doesn't matter, a file is inside a
+    // place whatever the case either is written in: the directory rig runs
+    // in, which a file's absolute path starts with, may be written in
+    // another case than rig's own directory, which the places start with.
+    // Here the places are upper-cased, and the files named from the
+    // directory as it is: the main file inside first/, and the file it
+    // loads, are modules'; firstly/x.rig still isn't.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "places_in_another_case_hold_the_same_files_on_windows");
+    Module_Places places = test_places(&a, dir);
+    const char *text = "#load \"other.rig\";\n#load \"../../firstly/x.rig\";\nalpha :: () {}\n";
+    write_module(&a, places.places[0], "Alpha", text);
+    CHECK(os_write_file(str(module_file(&a, places.places[0], "Alpha", "other.rig")), str("other :: () {}\n")));
+    CHECK(os_make_directory(str(in_directory(&a, dir, "firstly"))));
+    write_source(&a, dir, "firstly/x.rig", "x :: () {}\n");
+    Module_Places upper = {};
+    for (s64 i = 0; i < 2; i++) upper.places[i] = upper_cased(&a, places.places[i]);
+    Load_Options options = {};
+    options.modules = &upper;
+    load_program(&a, &d, str(in_directory(&a, dir, "first/Alpha/module.rig")), str(text), &options);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 3);
+    if (d.files.count == 3) {
+        CHECK(d.files[0].in_module);
+        CHECK(d.files[1].in_module);
+        CHECK(!d.files[2].in_module);
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
+#endif
 
 TEST(import_finds_basic_with_rigs_own_places) {
     // With no places given, the loader looks in rig's own: the running

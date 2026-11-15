@@ -55,7 +55,9 @@
 //
 // Then a few fixed cases: rig build without -o from another directory, a
 // runtime error's order after the program's output when stdout and stderr
-// are one pipe, the command line's mistakes, a .build/ or an object file
+// are one pipe, bin/unit-tests --interpret of a program that calls a
+// #compiler procedure (refused as rig build refuses it, with nothing run),
+// the command line's mistakes, a .build/ or an object file
 // rig can't write, and rig version's output, by its shape (version_test:
 // it names the commit rig was built from).
 //
@@ -622,6 +624,33 @@ static String error_test(Arena *a, String rig, String name) {
     if (built.out.count) return first_difference(a, "rig build's stdout", {}, built.out);
     if (os_file_exists(object)) return string_printf(a, "rig build failed but wrote " STR_FMT, STR_ARG(object));
     if (os_file_exists(program)) return string_printf(a, "rig build failed but wrote " STR_FMT, STR_ARG(program));
+    return {};
+}
+
+// bin/unit-tests --interpret of a program that checks clean but calls a
+// #compiler procedure (spec 7.9), which only lowering finds: it must print
+// the program's .err, as rig build does, exit 1, and run nothing, so print
+// nothing on stdout. {} when it does, otherwise why not.
+static String interpreted_compiler_call_test(Arena *a, String unit_tests) {
+    String name = str("compiler_called_at_run_time");
+    String expected = {};
+    if (!read_expected_errors(a, name, &expected)) return str("no .err file");
+    Array<String> argv = {};
+    array_add(&argv, unit_tests);
+    array_add(&argv, str("--interpret"));
+    array_add(&argv, string_printf(a, "tests/errors/" STR_FMT ".rig", STR_ARG(name)));
+    Process_Result ran = {};
+    String why = {};
+    bool started = run_within(a, argv, {}, INTERPRETED_TIMEOUT, &ran, &why);
+    array_free(&argv);
+    if (!started) return why;
+    ran.err = with_module_placeholders(a, ran.err, UNIT_TESTS_MODULES, UNIT_TESTS_BIN_MODULES);
+    if (ran.exit_code != 1) {
+        return with_stderr(a, string_printf(a, "exit code " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, ran.exit_code))),
+                           ran.err);
+    }
+    if (!string_eq(ran.err, expected)) return first_difference(a, "stderr", expected, ran.err);
+    if (ran.out.count) return first_difference(a, "stdout", {}, ran.out);
     return {};
 }
 
@@ -2292,6 +2321,8 @@ int main(int argc, char **argv) {
     report("a runtime error after the program's output, both in one pipe", merged_output_test(&a, rig), &passed,
            &failed);
     run_directory(&a, rig, "", "tests/errors", error_test, &passed, &failed);
+    report("interpreted: a #compiler call refused when lowering, nothing run",
+           interpreted_compiler_call_test(&a, unit_tests), &passed, &failed);
     report("a failed top-level #run's error after the runs' output, both in one pipe",
            run_output_order_test(&a, rig, false), &passed, &failed);
     report("a top-level #run's exit() after a failed one, the errors after the runs' output, in one pipe",
