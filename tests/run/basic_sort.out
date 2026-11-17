@@ -11,13 +11,20 @@ none and one: [42] allocations 0
 four: 1 2 3 4, allocations 0
 five: 1 2 3 4 5, allocations 1, scratch bytes 16
 too large for scratch: allocations 0
+largest scratch: allocations 1, size 9223372036854775807, comparisons 13
 merging no size: comparisons 0
+insertion no size: comparisons 0
 1000 scrambled: true, comparisons at most 10000: true
 1000 in order: true, comparisons 999
 1000 reversed: true, comparisons at most 10000: true
 without memory: 1 2 3 4 5
 stable without memory: 1/1 1/3 1/6 2/2 2/5 3/0 3/4
+always less: sentinels true, each once true; sentinels true, each once true
+alternating less: sentinels true, each once true; sentinels true, each once true
 search: 0/false 0/true 1/true 4/false 5/true 6/false
 search empty: 0/false
 search no size: 0/false 0/false
 search strings: 4/true 6/false 0/true
+search inside: outside false, calls for none 0
+compare_int: -1 0 1 -1 1
+search extremes: 0/true 1/false 1/true
