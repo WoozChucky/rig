@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, paths, files, and printing to standard output (issues #134 and #145).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, paths, files, the clock and the calendar, and printing to standard output (issues #134 and #145).
 
 ## Importing it
 
@@ -18,7 +18,7 @@ rig finds `Basic/module.rig` in the `modules` directory beside it, or in the one
 
 `libc.rig` declares the only C functions Basic calls, each under a name of its own that starts with `c_` (`#foreign libc "NAME"`, spec 7.6). So a program that loads Basic keeps C's own names: it may declare C's `putchar`, `malloc`, `realloc`, `fopen`, `getenv` and the rest itself. `free` is the exception, since Basic's allocators take that name for their own helper and `c_free` is taken too, so such a program declares C's `free` under another name, as in `libc_free :: (p: *void) #foreign libc "free";`.
 
-Each links and runs on Windows (the UCRT) and Linux (glibc), compiled and interpreted, with one declaration that serves both: where C's types differ (`fseek`'s `long` offset, `fpos_t`), the declaration and its comment say how Basic stays within what both agree on. `libc.rig`'s header says which C functions Basic leaves out, and why: `ftell` (C's `long`, 32 bits on Windows), `_ftelli64` and `ftello` (one system each), `time` (whole seconds) and `clock` (a different clock on each system).
+Each links and runs on Windows (the UCRT) and Linux (glibc), compiled and interpreted, with one declaration that serves both: where C's types differ (`fseek`'s `long` offset, `fpos_t`, `struct timespec`), the declaration and its comment say how Basic stays within what both agree on. `libc.rig`'s header says which C functions Basic leaves out, and why: `ftell` (C's `long`, 32 bits on Windows), `_ftelli64` and `ftello` (one system each), `time` (whole seconds) and `clock` (a different clock on each system).
 
 - `c_putchar(c: s32) -> s32`: C's `putchar`, the one call that writes a byte to standard output.
 - `c_malloc(size: u64) -> *void`, `c_realloc(memory: *void, size: u64) -> *void`, `c_free(memory: *void)`: C's `malloc`, `realloc` and `free`, the heap allocator's memory. Basic never calls them with a size of 0.
@@ -33,6 +33,9 @@ Each links and runs on Windows (the UCRT) and Linux (glibc), compiled and interp
 - `c_remove(path: *u8) -> s32`: C's `remove`, 0 when the file is deleted. On Linux it deletes an empty directory too.
 - `c_getenv(name: *u8) -> *u8`: C's `getenv`, a variable's value, or null.
 - `c_system(command: *u8) -> s32`: C's `system`, which runs a command through the system's shell and gives its status; null asks whether there is a shell.
+- `C_Timespec`: C's `struct timespec`, `seconds: s64`, `nanoseconds: s32` and `padding: s32`, 16 bytes, which holds the UCRT's (a 4-byte `long` of nanoseconds and padding) and glibc's (an 8-byte `long`, whose low 4 bytes hold them).
+- `C_TIME_UTC`: `timespec_get`'s base for UTC, 1.
+- `c_timespec_get(time: *C_Timespec, base: s32) -> s32`: C's `timespec_get`, the wall clock's seconds and nanoseconds since 1970; the base, or 0 when it can't. On Windows the compiler links it to the UCRT's `_timespec64_get`, as a C program's `<time.h>` does (issue #161, spec 10.6).
 
 ## Characters (`char.rig`)
 
@@ -217,6 +220,22 @@ Files through C's stdio, always in binary mode (`"rb"`, `"wb"`, `"ab"`), so the 
 - `file_exists(path: string) -> bool`: whether there is a file at `path` that opens for reading; a directory isn't one.
 - `delete_file(path: string) -> bool`: deletes a file that `file_exists` finds; `false` for a missing file, a directory, a path with a zero byte, or when C can't.
 
+## Time (`time.rig`)
+
+A time is a `Time`, an `int` of nanoseconds since 1970-01-01T00:00:00Z, negative before it, so every time is from 1677-09-21T00:12:43.145224192Z to 2262-04-11T23:47:16.854775807Z, and a difference of two is an `int` of nanoseconds too. The clock is C17's `timespec_get` with `TIME_UTC`, the wall clock, in nanoseconds on both systems. C17 has no monotonic clock, so a timer measures by the wall clock too: when the system's clock is set back while a timer runs, it gives less than the time that passed, even a negative time, and nothing clamps it. The calendar is UTC's, the proleptic Gregorian calendar of ISO 8601, with no time zones and no leap seconds (every day has 86400 seconds, as POSIX counts them), and weeks start on Sunday, 0, as C's `tm_wday` has them. Nothing sleeps: C17 has no call for it, and each system's own waits on conditional compilation.
+
+- `NANOSECONDS_PER_SECOND`: 1000000000.
+- `TIME_TEXT_MAX`: 20, the bytes `format_time` writes for every time `to_calendar` gives, `YYYY-MM-DDTHH:MM:SSZ`.
+- `Time`: `nanoseconds: int`, since 1970-01-01T00:00:00Z; a zeroed `Time` is that instant.
+- `Timer`: `start: Time`, when it was started.
+- `Calendar`: `year: int`, `month: int` (1 to 12), `day: int` (1 to 31), `hour: int` (0 to 23), `minute: int`, `second: int` (0 to 59), `nanosecond: int` (0 to 999999999) and `weekday: int` (0 for Sunday to 6), in UTC.
+- `time_now() -> Time`: the time now, by the wall clock; a zeroed `Time` when C can't give it.
+- `timer_start() -> Timer`: a timer started now.
+- `timer_elapsed_ns(timer: Timer) -> int`: the nanoseconds since the timer was started, by the wall clock.
+- `timer_elapsed_seconds(timer: Timer) -> float64`: the same in seconds, the nanoseconds over 10^9.
+- `to_calendar(time: Time) -> Calendar`: the time's fields in UTC, every field in its range for every `Time`, `int`'s extremes included (the years 1677 and 2262).
+- `format_time(calendar: Calendar, buffer: []u8) -> string`: writes the calendar as ISO 8601, `YYYY-MM-DDTHH:MM:SSZ`, at the buffer's start and gives the text written, without the nanosecond or the weekday. Each field is written as `format_int` writes it, with zeros on its left to 4 digits for the year and 2 for the rest; one that needs more digits, or is negative, is written whole, `-` first and no zeros, so the text is longer than `TIME_TEXT_MAX`, and a buffer of that many bytes stops at the language's bounds check (unless built with `--no-bounds-checks`).
+
 ## Print (`print.rig`)
 
 Everything goes to standard output through C's `putchar`, so it comes out in order with what a program writes with C's `printf`, compiled and interpreted. Bytes are written as they are, so UTF-8 text prints as UTF-8.
@@ -232,9 +251,9 @@ Everything goes to standard output through C's `putchar`, so it comes out in ord
 
 What Basic would do differently once Rig has it:
 
-- No type aliases, so the allocator's procedure type, and the key comparison the tables' probe takes, are written out wherever they're used.
+- No type aliases, so the allocator's procedure type, and the key comparison the tables' probe takes, are written out wherever they're used, and a time is a struct of one field, `Time`, rather than an `int` of a type of its own.
 - No overloading or generics, so procedures are named by type (`min_int`, `min_float64`), the collections are untyped, handing out `*void`, and there is one kind of table per kind of key, `Table` and `Int_Table`, with the same fields.
 - No way for a struct to take in another's fields, as Jai's `using` does, so both kinds of table entry repeat the fields of `Table_Entry_Header`, and the code they share reads an entry's start through it.
 - No enums, so an allocator's modes and a table entry's states are constants.
-- No portable way to reach standard error and no conditional compilation, so Basic writes only through `c_putchar`, and an index out of bounds is reported by the language's own bounds check.
+- No portable way to reach standard error and no conditional compilation, so Basic writes only through `c_putchar`, and an index out of bounds is reported by the language's own bounds check. For the same reason Basic can't sleep, which takes each system's own call (`Sleep`, `nanosleep`), nor read a monotonic clock, so a timer measures by the wall clock.
 - No `defer`, so what is allocated is freed by hand on every path.
