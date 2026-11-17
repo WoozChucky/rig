@@ -78,10 +78,15 @@ static u64 interp_test_value(Arena *a, Ir_Module *m, const char *name) {
 
 // The C function the interpreter finds by `name`, looked up as it does: the
 // compiler's own table first (the standard C library on Windows; what
-// libc_nonshared.a links in on Linux), then the system's.
+// libc_nonshared.a links in on Linux), then the system's, on Windows by
+// the name the backend declares.
 static void *interp_test_c_function(const char *name) {
     void *f = interp_c_library_function(str(name));
+#ifdef _WIN32
+    return f ? f : os_find_c_function(ir_windows_c_name(str(name)));
+#else
     return f ? f : os_find_c_function(str(name));
+#endif
 }
 
 // Runs m's procedure `name`, which takes no arguments, and checks that it
@@ -2979,6 +2984,38 @@ TEST(interp_calls_a_windows_function) {
                                 "pid :: () -> u32 { return GetCurrentProcessId(); }\n"
                                 "main :: () { }\n");
     CHECK_EQ(interp_test_value(&a, m, "pid"), (u64)_getpid());
+    arena_free(&a);
+}
+
+TEST(interp_windows_finds_the_64_bit_time_functions) {
+    // The compiler's table has C17's time functions, the 64-bit ones, but
+    // not Microsoft's, which ucrtbase.dll exports only under their 64-bit
+    // names (_mkgmtime64, _gmtime64_s): the interpreter looks those up, as
+    // the backend declares them (ir_windows_c_name), whether the C name is
+    // the procedure's own or given. 2100-07-01T00:00:00Z is past the 32-bit
+    // time_t's end in 2038.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Tm :: struct { second: s32; minute: s32; hour: s32; day: s32; month: s32;\n"
+                                "               year: s32; weekday: s32; year_day: s32; is_dst: s32; }\n"
+                                "_mkgmtime :: (tm: *Tm) -> s64 #foreign libc;\n"
+                                "c_gmtime_s :: (tm: *Tm, t: *s64) -> s32 #foreign libc \"gmtime_s\";\n"
+                                "later :: () -> s64 {\n"
+                                "    tm : Tm;\n"
+                                "    tm.day = 1;\n"
+                                "    tm.month = 6;\n"
+                                "    tm.year = 200;\n"
+                                "    return _mkgmtime(*tm);\n"
+                                "}\n"
+                                "later_year :: () -> s32 {\n"
+                                "    t : s64 = 4118083200;\n"
+                                "    tm : Tm;\n"
+                                "    if c_gmtime_s(*tm, *t) != 0 { return -1; }\n"
+                                "    return tm.year + 1900;\n"
+                                "}\n"
+                                "main :: () { }\n");
+    CHECK_EQ(interp_test_value(&a, m, "later"), 4118083200);
+    CHECK_EQ(interp_test_value(&a, m, "later_year"), 2100);
     arena_free(&a);
 }
 #endif

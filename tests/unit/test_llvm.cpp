@@ -536,6 +536,7 @@ TEST(llvm_windows_time_functions_are_the_64_bit_ones) {
                                 "timespec_get :: (ts: *Timespec, base: s32) -> s32 #foreign libc;\n"
                                 "time :: (t: *s64) -> s64 #foreign libc;\n"
                                 "time64 :: (t: *s64) -> s64 #foreign libc \"_time64\";\n"
+                                "c_time :: (t: *s64) -> s64 #foreign libc \"time\";\n"
                                 "gmtime :: (t: *s64) -> *Tm #foreign libc;\n"
                                 "localtime :: (t: *s64) -> *Tm #foreign libc;\n"
                                 "mktime :: (tm: *Tm) -> s64 #foreign libc;\n"
@@ -559,6 +560,7 @@ TEST(llvm_windows_time_functions_are_the_64_bit_ones) {
                                 "    r := timespec_get(*ts, 1);\n"
                                 "    t := time(null);\n"
                                 "    u := time64(null);\n"
+                                "    v := c_time(null);\n"
                                 "    g := gmtime(*t);\n"
                                 "    l := mktime(localtime(*t));\n"
                                 "    d := difftime(t, u);\n"
@@ -620,11 +622,13 @@ TEST(llvm_windows_time_functions_are_the_64_bit_ones) {
             if (!windows && string_eq(str(f.c_name), str("time"))) continue;
             CHECK(!contains(text, string_cstr(&a, string_printf(&a, "@%s(", other))));
         }
-        // time and time64 are one declaration on Windows, never renamed
-        // (_time64.1), and both calls go to it.
+        // time, time64 and c_time are one declaration on Windows, never
+        // renamed (_time64.1), and the three calls go to it: c_time's C
+        // name, "time", is renamed as time's own is. On Linux c_time is
+        // time's declaration.
         CHECK(!contains(text, "@_time64."));
-        CHECK_EQ(count_of(text, "call i64 @_time64(ptr null)"), windows ? 2 : 1);
-        CHECK_EQ(count_of(text, "call i64 @time(ptr null)"), windows ? 0 : 1);
+        CHECK_EQ(count_of(text, "call i64 @_time64(ptr null)"), windows ? 3 : 1);
+        CHECK_EQ(count_of(text, "call i64 @time(ptr null)"), windows ? 0 : 2);
     }
     arena_free(&a);
 }
