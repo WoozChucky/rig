@@ -133,13 +133,14 @@ C_TIME_UTC :: 1;
 c_timespec_get :: (time: *C_Timespec, base: s32) -> s32 #foreign libc "timespec_get";
 
 // C's <math.h> of a double, each called by math.rig's procedure of the
-// same name for float64 (c_sqrt by sqrt_float64, c_fmod by mod_float64).
-// The results are the C library's: glibc's libm on Linux and the UCRT's on
-// Windows, which may differ in the last bit, and on Windows a compiled
-// program's (ucrtbase.dll's) may differ in it from an interpreted one's
-// (the compiler's own copy, spec 10.8). A domain error, such as the square
-// root of -1, gives NaN; C's errno, which would tell it apart, isn't
-// reachable.
+// same name for float64 (c_sqrt by sqrt_float64). fmod's f only says it
+// is for floating point, which _float64 says already, so c_fmod's is
+// mod_float64. The results are the C library's: glibc's libm on Linux and
+// the UCRT's on Windows, which may differ in the last bit, and on Windows a
+// compiled program's (ucrtbase.dll's) may differ in it from an interpreted
+// one's (the compiler's own copy, spec 10.8). A domain error, such as the
+// square root of -1, gives NaN; C's errno, which would tell it apart,
+// isn't reachable.
 c_sqrt :: (x: float64) -> float64 #foreign libc "sqrt";
 c_cbrt :: (x: float64) -> float64 #foreign libc "cbrt";
 c_sin :: (x: float64) -> float64 #foreign libc "sin";

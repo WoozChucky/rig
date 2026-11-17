@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, π and C's math functions (roots, trigonometry, exponentials and logarithms, powers, rounding), copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and printing to standard output (issues #134 and #145).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, π and C's math functions (roots, trigonometry, exponentials and logarithms, powers, rounding), copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and printing to standard output (issues #134, #145 and #148).
 
 ## Importing it
 
@@ -37,7 +37,7 @@ Each links and runs on Windows (the UCRT) and Linux (glibc's `libc`, and its `li
 - `C_TIME_UTC`: `timespec_get`'s base for UTC, 1.
 - `c_timespec_get(time: *C_Timespec, base: s32) -> s32`: C's `timespec_get`, the wall clock's seconds and nanoseconds since 1970; the base, or 0 when it can't. On Windows the compiler links it to the UCRT's `_timespec64_get`, as a C program's `<time.h>` does (issue #161, spec 10.6).
 - `c_sqrt`, `c_cbrt`, `c_sin`, `c_cos`, `c_tan`, `c_asin`, `c_acos`, `c_atan`, `c_exp`, `c_exp2`, `c_log`, `c_log2`, `c_log10`, `c_floor`, `c_ceil`, `c_round`, `c_trunc` `(x: float64) -> float64`, `c_atan2(y: float64, x: float64) -> float64`, `c_pow(x: float64, y: float64) -> float64`, `c_hypot(x: float64, y: float64) -> float64`, `c_fmod(x: float64, y: float64) -> float64`: C's `<math.h>` functions of a `double`, libm's on Linux.
-- `c_sqrtf`, `c_cbrtf`, `c_sinf`, `c_cosf`, `c_tanf`, `c_asinf`, `c_acosf`, `c_atanf`, `c_expf`, `c_exp2f`, `c_logf`, `c_log2f`, `c_log10f`, `c_floorf`, `c_ceilf`, `c_roundf`, `c_truncf` `(x: float32) -> float32`, `c_atan2f(y: float32, x: float32) -> float32`, `c_powf(x: float32, y: float32) -> float32`, `c_hypotf(x: float32, y: float32) -> float32`, `c_fmodf(x: float32, y: float32) -> float32`: C's `<math.h>` functions of a `float`. On Windows the compiler links `c_hypotf` to the UCRT's `_hypotf`, as a C program's `<math.h>` does (spec 10.6).
+- `c_sqrtf`, `c_cbrtf`, `c_sinf`, `c_cosf`, `c_tanf`, `c_asinf`, `c_acosf`, `c_atanf`, `c_expf`, `c_exp2f`, `c_logf`, `c_log2f`, `c_log10f`, `c_floorf`, `c_ceilf`, `c_roundf`, `c_truncf` `(x: float32) -> float32`, `c_atan2f(y: float32, x: float32) -> float32`, `c_powf(x: float32, y: float32) -> float32`, `c_hypotf(x: float32, y: float32) -> float32`, `c_fmodf(x: float32, y: float32) -> float32`: C's `<math.h>` functions of a `float`, libm's on Linux. On Windows the compiler links `c_hypotf` to the UCRT's `_hypotf`, as a C program's `<math.h>` does (spec 10.6).
 
 ## Characters (`char.rig`)
 
@@ -56,7 +56,7 @@ A char is a `u8`, one byte of a string, and the classes are ASCII's, as C's `<ct
 
 One procedure per type, named by it: `int` and `u64` (every other integer type widens to one of them), `float32` and `float64`. `min` and `max` return their first operand unless the second is strictly smaller or larger, so a NaN first operand comes back from both and a NaN second one never does.
 
-The rest are C's `<math.h>`, through `libc.rig`, each procedure only the call, so `-0.0`, the infinities and NaN go to C and come back as C gives them. The results are the C library's, so the last bit can differ between systems, and on Windows between the compiled and the interpreted program. A domain error gives NaN (`sqrt_float64(-1)`), a pole an infinity (`log_float64(0)` is `-inf`), and C's `errno` isn't exposed. A NaN's sign is the C library's too, and `print_float` writes any NaN as `nan`.
+`PI` and `TAU` are Rig's own constants, and the procedures after them are C's `<math.h>`, through `libc.rig`, each procedure only the call, so `-0.0`, the infinities and NaN go to C and come back as C gives them. The results are the C library's, so the last bit can differ between systems, and on Windows between the compiled and the interpreted program. A domain error gives NaN (`sqrt_float64(-1)`), a pole an infinity (`log_float64(0)` is `-inf`), and C's `errno` isn't exposed. A NaN's sign is the C library's too, and `print_float` writes any NaN as `nan`.
 
 - `min_int`, `min_u64`, `min_float32`, `min_float64` `(a: T, b: T) -> T`: the smaller of `a` and `b`; `a` when they're equal.
 - `max_int`, `max_u64`, `max_float32`, `max_float64` `(a: T, b: T) -> T`: the larger of `a` and `b`; `a` when they're equal.

@@ -514,8 +514,8 @@ void os_release_inaccessible(void *p, u64 size) {
 // again, which is harmless after libc's own search. A handle that couldn't
 // be taken is skipped rather than ending the search. RTLD_DEFAULT would
 // search every library the compiler loaded, libstdc++ among them, and find
-// functions no program can link (10.6). Neither finds what -lc links in
-// statically, from libc_nonshared.a (atexit, at_quick_exit,
+// functions no program can link (10.6). Neither handle finds what -lc
+// links in statically, from libc_nonshared.a (atexit, at_quick_exit,
 // pthread_atfork), which interp_c_functions.cpp gives instead. dlsym finds
 // data too (stdout, environ): the interpreter calls what a #foreign
 // declaration names, as the linker would link it.
