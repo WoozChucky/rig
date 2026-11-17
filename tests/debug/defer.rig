@@ -1,0 +1,15 @@
+// A debugger's view of defer (bin/run-tests runs it under gdb with
+// defer.gdb and under cdb with defer.cdb): leaving a block runs its
+// deferred statements, the last registered first, each at its own line,
+// so stepping out of the block stops at each in the order they run, and
+// then goes on after the block.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+main :: () {
+    {
+        defer putchar(97);
+        defer putchar(98);
+        x := 1;
+    }
+    putchar(10);
+}
