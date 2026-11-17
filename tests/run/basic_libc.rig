@@ -10,6 +10,21 @@ strlen :: (s: *u8) -> u64 #foreign libc;
 // which the runner makes before any test.
 FILE_NAME :: ".build/tests/basic_libc.bin";
 
+// How many bytes a counting allocator was last asked for.
+Counter :: struct { last_size: int; }
+
+// Passes every call on to the heap, keeping the size of each allocation.
+counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE { counter.last_size = size; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+// Gives no memory, as an allocator that has run out would.
+failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return null;
+}
+
 main :: () {
     // A copy ends with a zero after the string's bytes, so C counts them.
     hi := to_c_string("hi", HEAP_ALLOCATOR);
@@ -19,6 +34,27 @@ main :: () {
     print_int(cast(int) strlen(hi));
     print_line("");
     free(hi, HEAP_ALLOCATOR);
+
+    // A view of part of a string has more of the string after it, not a
+    // zero as a literal has, so the copy must write its own zero.
+    part := to_c_string(slice("hix", 0, 2), HEAP_ALLOCATOR);
+    print_string("view: ");
+    print_int(cast(int) strlen(part));
+    print_string(" ");
+    print_bool(part[2] == 0);
+    print_line("");
+    free(part, HEAP_ALLOCATOR);
+
+    // The copy asks for the string's bytes and one more, for the zero, and
+    // is null when the allocator gives nothing.
+    counter : Counter;
+    counted := to_c_string("hi", Allocator.{counting_allocator_proc, *counter});
+    print_string("asks for: ");
+    print_int(counter.last_size);
+    print_string(", no memory: ");
+    print_bool(to_c_string("hi", Allocator.{failing_allocator_proc, null}) == null);
+    print_line("");
+    free(counted, HEAP_ALLOCATOR);
 
     // A zeroed string, with null data, gives a lone zero: no byte is read
     // through its data.
@@ -49,12 +85,15 @@ main :: () {
     print_line("");
 
     // A run that stopped halfway may have left the file, so it goes first.
-    // The bytes hold a zero, a line feed, a carriage return and 255, which
-    // a text mode would change or stop at, and the file is opened in binary
-    // mode, so none of them is.
+    // The file is written and read in binary mode, which keeps every byte.
+    // Windows' text mode would not: a text write turns the line feed (10)
+    // into a carriage return and a line feed, so the size would be 7, and a
+    // text read turns the carriage return and line feed (13 10) into a line
+    // feed and stops at Ctrl-Z (26), so it would read 3 bytes. The zero and
+    // 255 are read back as they were written, 255 unsigned.
     c_remove(FILE_NAME);
     f := c_fopen(FILE_NAME, "wb");
-    bytes := u8.[1, 0, 10, 13, 255, 10];
+    bytes := u8.[1, 0, 13, 10, 26, 255];
     print_string("write: ");
     print_int(cast(int) c_fwrite(bytes.data, 1, 6, f));
     print_string(" ");
@@ -64,7 +103,8 @@ main :: () {
     print_line("");
 
     // The size is the position at the end, from fgetpos, and fsetpos goes
-    // back to the start, where the whole file is read again.
+    // back to the start, where the whole file is read again. Then a seek
+    // from the start, by 0, goes back there from the end.
     g := c_fopen(FILE_NAME, "rb");
     start : C_Fpos;
     c_fgetpos(g, *start);
@@ -78,12 +118,16 @@ main :: () {
     print_int(end.position);
     print_string(", read ");
     print_int(cast(int) n);
-    print_string(": ");
-    print_int(back[1]);
-    print_string(" ");
-    print_int(back[3]);
-    print_string(" ");
-    print_int(back[4]);
+    print_string(":");
+    for i: 1..5 {
+        print_string(" ");
+        print_int(back[i]);
+    }
+    c_fseek(g, 0, C_SEEK_SET);
+    here : C_Fpos;
+    c_fgetpos(g, *here);
+    print_string(", after a seek to the start ");
+    print_int(here.position);
     print_line("");
     c_fclose(g);
 

@@ -182,9 +182,11 @@ split_from_left :: (s: string, separator: u8) -> bool, string, string {
 
 // A copy of s that C can read: s.count + 1 bytes from allocator, the bytes
 // of s and then a zero, which is where C finds a string's end. A Rig string
-// has no zero after its bytes (a view of part of a string has the rest of
-// the string there), so one bound for C is copied first. The caller gives
-// the copy back with free(p, allocator) once C is done with it.
+// need not have a zero after its bytes: a literal does (spec 3.8), but a
+// view of part of a string has the rest of the string there, and other
+// strings have whatever follows them, so one bound for C is copied first.
+// The caller gives the copy back with free(p, allocator) once C is done
+// with it.
 //
 // It is null when the allocator has no memory to give. A zeroed string
 // gives a lone zero, C's empty string, and no byte is read through its
