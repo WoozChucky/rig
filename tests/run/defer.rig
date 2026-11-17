@@ -79,6 +79,32 @@ nested :: () {
     }
     puts("nested: the body");
 }
+// A deferred defer: each copy is a block of its own, so the inner defer
+// runs as soon as the outer copy ends, before the body's older defer.
+deferred_defer :: () {
+    defer puts("defer defer: the body's first defer, last");
+    defer defer puts("defer defer: the inner defer, when the outer copy ends");
+    puts("defer defer: the body");
+}
+// A deferred #if is copied at each way out, and each copy declares its own m.
+deferred_if :: (early: bool) {
+    n := 1;
+    defer #if true { m := n; printf("deferred #if: m is %lld\n", m); }
+    if early { return; }
+    n = 2;
+}
+// Each arm of an if is a block: falling off its '}' runs its defers, before
+// the code after the if.
+if_arms :: (c: bool) {
+    if c {
+        defer puts("if arms: the if arm's defer");
+        puts("if arms: the if arm");
+    } else {
+        defer puts("if arms: the else arm's defer");
+        puts("if arms: the else arm");
+    }
+    puts("if arms: after the if");
+}
 // A loop inside deferred code breaks and continues as any loop.
 looping :: () {
     defer {
@@ -111,6 +137,11 @@ main :: () {
     p, n := pair();
     printf("pair: %lld %lld %lld\n", p.a, p.b, n);
     nested();
+    deferred_defer();
+    deferred_if(true);
+    deferred_if(false);
+    if_arms(true);
+    if_arms(false);
     looping();
     in_if_directive();
 }

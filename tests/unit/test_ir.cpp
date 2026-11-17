@@ -4375,6 +4375,108 @@ TEST(defer_runs_at_each_way_out_in_reverse_order) {
     arena_free(&a);
 }
 
+TEST(defer_runs_where_an_if_arm_or_a_loop_body_ends) {
+    // Each arm of an if is a block of its own for defer: falling off its '}'
+    // runs its defer, in a scope inside the arm's, then jumps, at the '}', to
+    // the code after the if. A loop body's defer runs at the continue, whose
+    // jump to the step stays at its keyword, and at the body's end, whose
+    // jump stays at the loop's keyword.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "putchar :: (c: s32) -> s32 #foreign libc;\n"
+                                                "f :: (c: bool) {\n"
+                                                "    if c {\n"
+                                                "        defer putchar(97);\n"
+                                                "        putchar(98);\n"
+                                                "    } else {\n"
+                                                "        defer putchar(99);\n"
+                                                "    }\n"
+                                                "    putchar(100);\n"
+                                                "}\n"
+                                                "g :: () {\n"
+                                                "    for 1..2 {\n"
+                                                "        defer putchar(101);\n"
+                                                "        if it == 1 { continue; }\n"
+                                                "    }\n"
+                                                "}\n"
+                                                "main :: () {}\n"));
+    CHECK_STR(proc_ir(ir, "f"), "proc @f(i1) {\n"
+                                "  ; source f at 2:1, body 2:16\n"
+                                "  ; scope 1 in 0 at 3:10\n"
+                                "  ; scope 2 in 1 at 4:15\n"
+                                "  ; scope 3 in 0 at 6:12\n"
+                                "  ; scope 4 in 3 at 7:15\n"
+                                "  ; var c bool slot %1 arg 1 in 0 at 2:7\n"
+                                "b0:\n"
+                                "  %1 = local i1\n"
+                                "  store i1 %0, %1\n"
+                                "  %2 = load i1 %1  ; 3:5 s0\n"
+                                "  branch %2, b1, b2  ; 3:5 s0\n"
+                                "b1:\n"
+                                "  %3 = const i32 98  ; 5:9 s1\n"
+                                "  %4 = call @putchar(%3)  ; 5:9 s1\n"
+                                "  %5 = const i32 97  ; 4:15 s2\n"
+                                "  %6 = call @putchar(%5)  ; 4:15 s2\n"
+                                "  jump b3  ; 6:5 s0\n"
+                                "b2:\n"
+                                "  %7 = const i32 99  ; 7:15 s4\n"
+                                "  %8 = call @putchar(%7)  ; 7:15 s4\n"
+                                "  jump b3  ; 8:5 s0\n"
+                                "b3:\n"
+                                "  %9 = const i32 100  ; 9:5 s0\n"
+                                "  %10 = call @putchar(%9)  ; 9:5 s0\n"
+                                "  ret  ; 10:1 s0\n"
+                                "}\n");
+    CHECK_STR(proc_ir(ir, "g"), "proc @g() {\n"
+                                "  ; source g at 11:1, body 11:9\n"
+                                "  ; scope 1 in 0 at 12:5\n"
+                                "  ; scope 2 in 1 at 14:20\n"
+                                "  ; scope 3 in 1 at 13:15\n"
+                                "  ; scope 4 in 1 at 13:15\n"
+                                "  ; var it int slot %2 in 1 at 12:5\n"
+                                "  ; var it_index int slot %3 in 1 at 12:5\n"
+                                "b0:\n"
+                                "  %0 = const i64 1  ; 12:5 s0\n"
+                                "  %1 = const i64 2  ; 12:5 s0\n"
+                                "  %2 = local i64  ; 12:5 s0\n"
+                                "  store i64 %0, %2  ; 12:5 s0\n"
+                                "  %3 = local i64  ; 12:5 s0\n"
+                                "  %4 = const i64 0  ; 12:5 s0\n"
+                                "  store i64 %4, %3  ; 12:5 s0\n"
+                                "  %5 = cmp sgt i64 %0, %1  ; 12:5 s1\n"
+                                "  branch %5, b6, b1  ; 12:5 s1\n"
+                                "b1:\n"
+                                "  %6 = load i64 %2  ; 14:9 s1\n"
+                                "  %7 = const i64 1  ; 14:9 s1\n"
+                                "  %8 = cmp eq i64 %6, %7  ; 14:9 s1\n"
+                                "  branch %8, b2, b3  ; 14:9 s1\n"
+                                "b2:\n"
+                                "  %9 = const i32 101  ; 13:15 s3\n"
+                                "  %10 = call @putchar(%9)  ; 13:15 s3\n"
+                                "  jump b4  ; 14:22 s2\n"
+                                "b3:\n"
+                                "  %11 = const i32 101  ; 13:15 s4\n"
+                                "  %12 = call @putchar(%11)  ; 13:15 s4\n"
+                                "  jump b4  ; 12:5 s1\n"
+                                "b4:\n"
+                                "  %13 = load i64 %2  ; 12:5 s1\n"
+                                "  %14 = cmp eq i64 %13, %1  ; 12:5 s1\n"
+                                "  branch %14, b6, b5  ; 12:5 s1\n"
+                                "b5:\n"
+                                "  %15 = const i64 1  ; 12:5 s1\n"
+                                "  %16 = add i64 %13, %15  ; 12:5 s1\n"
+                                "  store i64 %16, %2  ; 12:5 s1\n"
+                                "  %17 = load i64 %3  ; 12:5 s1\n"
+                                "  %18 = const i64 1  ; 12:5 s1\n"
+                                "  %19 = add i64 %17, %18  ; 12:5 s1\n"
+                                "  store i64 %19, %3  ; 12:5 s1\n"
+                                "  jump b1  ; 12:5 s1\n"
+                                "b6:\n"
+                                "  ret  ; 16:1 s0\n"
+                                "}\n");
+    arena_free(&a);
+}
+
 TEST(defer_runs_after_the_return_values) {
     // return x; works x out first, then runs the defers: the result is 1,
     // though the deferred store makes x 2 before the ret.
@@ -4585,6 +4687,40 @@ TEST(deferred_code_is_at_its_own_lines) {
     CHECK_EQ(count_of(f, "; 5:9 s"), 4);
     CHECK_EQ(count_of(f, "; 5:9 s2\n"), 2);
     CHECK_EQ(count_of(f, "; 5:9 s3\n"), 2);
+    arena_free(&a);
+}
+
+TEST(a_deferred_statement_that_is_not_a_block_is_a_block_for_defer) {
+    // defer defer g();: the copy of the outer defer, at the body's one way
+    // out, registers the inner one under its own mark, and runs it as it
+    // ends, once, before the body's older defer h().
+    Arena a = arena_make();
+    String f = proc_ir(ir_print(&a, lower_source(&a,
+                                                 "f :: () {\n"
+                                                 "    defer h();\n"
+                                                 "    defer defer g();\n"
+                                                 "}\n"
+                                                 "g :: () {}\n"
+                                                 "h :: () {}\n"
+                                                 "main :: () {}\n")),
+                       "f");
+    CHECK_EQ(count_of(f, "call @g()"), 1);
+    CHECK_EQ(count_of(f, "call @h()"), 1);
+    CHECK(index_of(f, "call @g()") < index_of(f, "call @h()"));
+    // A deferred #if whose branch declares m, copied at the return and at
+    // the '}': each copy's m is a variable of its own, in that copy's scope.
+    String k = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                       "k :: (early: bool) {\n"
+                                                       "    defer #if true { m := 1; }\n"
+                                                       "    if early { return; }\n"
+                                                       "}\n"
+                                                       "main :: () {}\n")),
+                       "k");
+    CHECK(contains(k, "  ; scope 2 in 0 at 2:11\n"
+                      "  ; scope 3 in 0 at 2:11\n"));
+    CHECK_EQ(count_of(k, "; var m int "), 2);
+    CHECK_EQ(count_of(k, " in 2 at 2:22\n"), 1);
+    CHECK_EQ(count_of(k, " in 3 at 2:22\n"), 1);
     arena_free(&a);
 }
 
