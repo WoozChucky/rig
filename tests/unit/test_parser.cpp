@@ -3283,6 +3283,14 @@ TEST(parse_if_directive_in_column_1_resumes) {
     CHECK_STR(parse_src(&a, "f :: () {\n#if A {} else {\n    S :: struct { x: int; }\n}\nmain :: () {}\n", &errors),
               "(broken f)\n(#if (name A) (block) (block (struct S (x int))))\n(proc main (params) (block))\n");
     CHECK_STR(errors, "2:1: expected '}', found directive\n");
+    // So is one whose branch holds a #run { }, which no body can either,
+    // indented or not.
+    CHECK_STR(parse_src(&a, "f :: () {\n    x := 1;\n#if A {\n    #run { g(); }\n}\nmain :: () {}\n", &errors),
+              "(broken f)\n(#if (name A) (block (run (block (call g)))))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "3:1: expected '}', found directive\n");
+    CHECK_STR(parse_src(&a, "f :: () {\n    x := 1;\n#if A {\n#run { g(); }\n}\nmain :: () {}\n", &errors),
+              "(broken f)\n(#if (name A) (block (run (block (call g)))))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "3:1: expected '}', found directive\n");
 
     // A #load in the branch of a column-1 #if read again at the top level is
     // the top level's: it isn't misplaced, and its file is loaded. When the
@@ -3343,6 +3351,15 @@ TEST(parse_if_directive_errors) {
     CHECK_STR(errors, "2:11: expected '{', found '}'\n");
     body_dump(&a, "x := #if A {};", &errors);
     CHECK_STR(errors, "2:10: expected an expression, found directive\n");
+    // After a branch, the #if's own recovery counts the braces from the
+    // '#if', not from the branch's last declaration: the #load is inside
+    // the '.{' the else's condition left open, so it's misplaced, and its
+    // file isn't loaded.
+    Token_List *list = src("#if A {\n    N :: 1;\n} else #if .{1,\n#load \"x.rig\";\nmain :: () {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "4:1: #load can only be at the top level\n");
+    CHECK(file->lost_a_file);
+    token_list_free(list);
     arena_free(&a);
 }
 
@@ -3367,6 +3384,20 @@ TEST(parse_if_directives_nested_too_deeply) {
     CHECK_STR(parse_src(&a, nested_source(&a, "main :: () {\n", "#if A {", MAX_DEPTH, "", "}", "\n}\n"), &errors),
               "(broken main)\n");
     CHECK_STR(errors, "2:7000: blocks are nested too deeply (more than 1000 levels)\n");
+    // A body in top-level branches counts after them: 998 branches, the
+    // body and a block in it are 1000; one more branch, and the block is
+    // the one too many, the branches around it still closing.
+    dump = parse_src(&a, nested_source(&a, "", "#if A {", MAX_DEPTH - 2, "\nf :: () { { } }\n", "}", "\nmain :: () {}\n"),
+                     &errors);
+    CHECK_STR(errors, "");
+    CHECK_EQ(count_of(dump, "(#if "), MAX_DEPTH - 2);
+    CHECK_EQ(count_of(dump, "(proc f (params) (block (block)))"), 1);
+    dump = parse_src(&a, nested_source(&a, "", "#if A {", MAX_DEPTH - 1, "\nf :: () { { } }\n", "}", "\nmain :: () {}\n"),
+                     &errors);
+    CHECK_STR(errors, "2:11: blocks are nested too deeply (more than 1000 levels)\n");
+    CHECK_EQ(count_of(dump, "(#if "), MAX_DEPTH - 1);
+    CHECK_EQ(count_of(dump, "(block (broken f))"), 1);
+    CHECK_EQ(count_of(dump, ")\n(proc main (params) (block))\n"), 1);
     arena_free(&a);
 }
 
@@ -3383,8 +3414,12 @@ TEST(parse_if_directive_branches_arent_body_levels) {
                              "        #run { { y := (3); } }\n    }\n}\n");
     Ast_File *nested_file = parse(nested->tokens, &a, &nested->diag);
     CHECK_STR(messages(&a, &nested->diag), "");
-    if (plain_file->procs.count == 1 && plain_file->runs.count == 1 && nested_file->ifs.count == 1) {
-        Ast_Block *inner = ((Ast_If_Directive *)nested_file->ifs[0]->then_block->statements[0])->then_block;
+    Ast_Block *outer = nested_file->ifs.count == 1 ? nested_file->ifs[0]->then_block : nullptr;
+    Ast_Block *inner = outer && outer->statements.count == 1 && outer->statements[0]->kind == AST_IF_DIRECTIVE
+                           ? ((Ast_If_Directive *)outer->statements[0])->then_block
+                           : nullptr;
+    if (plain_file->procs.count == 1 && plain_file->runs.count == 1 && inner && inner->statements.count == 2 &&
+        inner->statements[0]->kind == AST_PROC && inner->statements[1]->kind == AST_RUN) {
         Ast_Proc *f = (Ast_Proc *)inner->statements[0];
         Ast_Run *run = (Ast_Run *)inner->statements[1];
         CHECK_EQ(plain_file->procs[0]->body_levels, 3);
