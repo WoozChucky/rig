@@ -1,9 +1,10 @@
 // Basic: Rig's first library, written in Rig over a thin layer of C
 // (libc.rig). It gathers what most programs need first: for now, the class
 // and case of a byte, min, max, clamp and abs, copying, setting and
-// comparing bytes in memory, numbers to text and back, views of strings,
-// allocators (the heap, an arena and a pool), a string builder, a growable
-// array, hash tables, paths, files, and printing to standard output.
+// comparing bytes in memory, numbers to text and back, views and copies of
+// strings, allocators (the heap, an arena and a pool), a string builder, a
+// growable array, hash tables, paths, files, and printing to standard
+// output.
 //
 // Basic ships with rig, so a program imports all of it through this file
 // by the module's name (spec 2.14):

@@ -1,0 +1,26 @@
+true true false true false
+2 2 0 0 2
+[a, b, c]
+[]
+[-]
+[x]
+[a+b+c]
+[bbbbbb]
+[baba]
+[aa]
+[hello]
+[hello] copied: true
+[]
+[ababab]
+[]
+[]
+[]
+[HELLO, WöRLD! 09]
+[Àbc def]
+[]
+empty results allocate: 0
+one allocation: 1
+views: 1 false [a+b]
+no memory: 7 true 4 true 6 true 5 true
+int's largest: true 9223372036854775807 true 9223372036854775806
+past it: true true true
