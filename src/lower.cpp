@@ -189,8 +189,11 @@
 //   is where it is without them (a return's, break's or continue's at its
 //   keyword, an if's block's at its '}', a loop body's at the loop's
 //   keyword, the body's ret at its '}'), so a debugger steps through the
-//   deferred lines in the order they run, then to that place; a block
-//   statement has no jump of its own, and goes on to the next statement.
+//   deferred lines in the order they run, then to that place, when it has
+//   an instruction there (a jump to the block laid out right after it has
+//   none, so a break at the end of a while body goes straight on after
+//   the loop); a block statement has no jump of its own, and goes on to
+//   the next statement.
 //
 // Blocks are numbered in the order they're made, and made in the order
 // their code comes in the source, so the printed IR reads like the program.
