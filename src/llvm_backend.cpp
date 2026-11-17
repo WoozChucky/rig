@@ -1764,10 +1764,11 @@ static void declare_foreign_functions(Backend *b, Ir_Module *m, Arena *a, LLVMVa
 // Builds and verifies the LLVM module for `m`, and the target machine that
 // compiles it. When `optimize` is set, the module is built to be optimised
 // (Backend.optimize says how) and the machine compiles at LLVM's default
-// level, which optimises; otherwise the machine compiles at its lowest. The
-// module itself is optimised afterwards, by run_passes. False with `error`
-// set when LLVM doesn't know the target or the module doesn't verify;
-// either way the caller calls backend_free.
+// level, which optimises; otherwise the machine compiles at its lowest.
+// When `optimize` is set, the module itself is optimised afterwards, by
+// run_passes (backend_prepare). False with `error` set when LLVM doesn't
+// know the target or the module doesn't verify; either way the caller calls
+// backend_free.
 static bool backend_build(Backend *b, Ir_Module *m, Target t, bool optimize, Arena *a, String *error) {
     initialise_llvm();
     const char *triple = target_triple(t);
