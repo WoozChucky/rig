@@ -15,8 +15,10 @@
 // advance, so it copies nothing, lives as long as the path's bytes, and
 // can't reach outside the path: a zeroed path gives four zeroed parts, and
 // a view of part of a string is read only as far as the view goes. A part
-// that isn't there, as the extension of "file", is an empty view at the
-// path's end, so it still points into the path. path_join is the one that
+// that isn't there still points into the path: a missing extension, as in
+// "file", and the name of a path that ends with a separator, as in "a/b/",
+// are empty views at the path's end, and the missing directory of a name
+// alone, as in "file", is one at its start. path_join is the one that
 // copies, into memory from the allocator it is given.
 #load "string.rig";
 #load "allocators.rig";
