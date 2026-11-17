@@ -99,13 +99,19 @@
 //   `for` or `while`, an if's test at its `if` and the jump out of each of
 //   its blocks at that block's '}', a runtime check's failure at the check
 //   (the place its message names), the implicit return at the end of a
-//   body at its '}'. Line 0 is no position. The procedures the compiler
-//   makes itself (__rig_bounds_failed, __rig_string_equal) have none, and
-//   no source, so a debugger steps over them. In a procedure of the
-//   source, only the prologue's work has none: each scalar parameter's slot
-//   and the store into it, before the body's first line (a debugger's
-//   breakpoint on the procedure stops at the first instruction with a
-//   line, once they're done).
+//   body at its '}'. A deferred statement (spec 6.12) is lowered again at
+//   each way out of its block, each copy's instructions at their own
+//   statements' positions; the defer itself has no code, and the ret or
+//   jump that leaves after the copies stays where it is with none (at its
+//   return, break or continue, an if's block's '}', its loop's keyword, the
+//   body's '}'), so stepping out of a block goes through the deferred lines
+//   in the order they run, then to that place. Line 0 is no position. The
+//   procedures the compiler makes itself (__rig_bounds_failed,
+//   __rig_string_equal) have none, and no source, so a debugger steps over
+//   them. In a procedure of the source, only the prologue's work has none:
+//   each scalar parameter's slot and the store into it, before the body's
+//   first line (a debugger's breakpoint on the procedure stops at the first
+//   instruction with a line, once they're done).
 //   Every position in a procedure, its scopes' and its variables' too, is
 //   in the procedure's own file (Ir_Proc.pos's): a backend names that file
 //   once, in the procedure's debug scope, and each line in it.
@@ -118,15 +124,18 @@
 //   the keyword and holds the iterator and it_index. An #if's taken branch
 //   is none (spec 4.9): its statements are the enclosing block's, and the
 //   #if adds no code of its own, its taken statements being at their own
-//   positions (none at the '#if'). And a declaration of a
-//   local that hides a variable (a global, a parameter, an outer local)
-//   starts a scope of its own, inside its block's, from the declaration to
-//   the block's end, and the local is declared in it: a name is hidden only
-//   from the end of its declaration (spec 4.7), but a debugger shows a
-//   scope's variables over the whole scope. Its initializer is in the scope
-//   around, its store in the new one. So where an inner block declares x
-//   again, a debugger shows the outer x until the declaration, the inner one
-//   from there to the block's end, and the outer one after.
+//   positions (none at the '#if'). Each copy of a deferred statement is a
+//   scope of its own, at the statement, inside the scope the defer was
+//   reached in, so what each copy declares is a variable of its own. And a
+//   declaration of a local that hides a variable (a global, a parameter, an
+//   outer local) starts a scope of its own, inside its block's, from the
+//   declaration to the block's end, and the local is declared in it: a name
+//   is hidden only from the end of its declaration (spec 4.7), but a
+//   debugger shows a scope's variables over the whole scope. Its initializer
+//   is in the scope around, its store in the new one. So where an inner
+//   block declares x again, a debugger shows the outer x until the
+//   declaration, the inner one from there to the block's end, and the outer
+//   one after.
 // - Variables (Ir_Var): every parameter, local, iterator and it_index, by
 //   name, with its Rig type, its scope, and where it lives: a local or a
 //   scalar parameter in its stack slot (an IR_LOCAL; a parameter's is

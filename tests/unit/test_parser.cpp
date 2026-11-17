@@ -3542,15 +3542,20 @@ TEST(parse_defers_nested_too_deeply) {
     // Each defer is a block level (MAX_DEPTH), its statement a block of its
     // own: the body and 999 defers are 1000 levels; the 1000th defer is the
     // one too many, at its keyword. defer { ... } is two levels, the second
-    // its '{'.
+    // its '{'. The deepest that parse build too: every stage walks a defer
+    // inside deferred code by recursion, lowering a copy inside a copy.
     Arena a = arena_make();
     String errors;
-    parse_src(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "defer ", 999, "y = 2;", "", "\n}\n"), &errors);
+    const char *deepest = nested_source(&a, "main :: () {\n    y := 1;\n", "defer ", 999, "y = 2;", "", "\n}\n");
+    parse_src(&a, deepest, &errors);
     CHECK_STR(errors, "");
+    CHECK(builds(&a, deepest));
     parse_src(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "defer ", 1000, "y = 2;", "", "\n}\n"), &errors);
     CHECK_STR(errors, "3:5995: blocks are nested too deeply (more than 1000 levels)\n");
-    parse_src(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "defer { ", 499, "y = 2;", " }", "\n}\n"), &errors);
+    deepest = nested_source(&a, "main :: () {\n    y := 1;\n", "defer { ", 499, "y = 2;", " }", "\n}\n");
+    parse_src(&a, deepest, &errors);
     CHECK_STR(errors, "");
+    CHECK(builds(&a, deepest));
     parse_src(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "defer { ", 500, "y = 2;", " }", "\n}\n"), &errors);
     CHECK_STR(errors, "3:3999: blocks are nested too deeply (more than 1000 levels)\n");
     // A body's levels (Ast_Proc.body_levels) count each defer as a block:
