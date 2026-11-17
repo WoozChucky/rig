@@ -37,6 +37,7 @@ Each links and runs on Windows (the UCRT) and Linux (glibc's `libc`, and its `li
 - `C_TIME_UTC`: `timespec_get`'s base for UTC, 1.
 - `c_timespec_get(time: *C_Timespec, base: s32) -> s32`: C's `timespec_get`, the wall clock's seconds and nanoseconds since 1970; the base, or 0 when it can't. On Windows the compiler links it to the UCRT's `_timespec64_get`, as a C program's `<time.h>` does (issue #161, spec 10.6).
 - `c_sqrt`, `c_cbrt`, `c_sin`, `c_cos`, `c_tan`, `c_asin`, `c_acos`, `c_atan`, `c_exp`, `c_exp2`, `c_log`, `c_log2`, `c_log10`, `c_floor`, `c_ceil`, `c_round`, `c_trunc` `(x: float64) -> float64`, `c_atan2(y: float64, x: float64) -> float64`, `c_pow(x: float64, y: float64) -> float64`, `c_hypot(x: float64, y: float64) -> float64`, `c_fmod(x: float64, y: float64) -> float64`: C's `<math.h>` functions of a `double`, libm's on Linux.
+- `c_sqrtf`, `c_cbrtf`, `c_sinf`, `c_cosf`, `c_tanf`, `c_asinf`, `c_acosf`, `c_atanf`, `c_expf`, `c_exp2f`, `c_logf`, `c_log2f`, `c_log10f`, `c_floorf`, `c_ceilf`, `c_roundf`, `c_truncf` `(x: float32) -> float32`, `c_atan2f(y: float32, x: float32) -> float32`, `c_powf(x: float32, y: float32) -> float32`, `c_hypotf(x: float32, y: float32) -> float32`, `c_fmodf(x: float32, y: float32) -> float32`: C's `<math.h>` functions of a `float`. On Windows the compiler links `c_hypotf` to the UCRT's `_hypotf`, as a C program's `<math.h>` does (spec 10.6).
 
 ## Characters (`char.rig`)
 
@@ -63,22 +64,22 @@ The rest are C's `<math.h>`, through `libc.rig`, each procedure only the call, s
 - `abs_int(value: int) -> int`: the magnitude; the most negative `int` is itself, since its negation wraps.
 - `abs_float32(value: float32) -> float32`, `abs_float64(value: float64) -> float64`: the value with its sign bit cleared, so `-0.0` gives `0.0` and NaN stays NaN.
 - `PI`, `TAU`: π, 3.141592653589793, and 2π, 6.283185307179586; untyped float constants (spec 3.12), so each takes either float type, and `x := PI;` makes a `float32`.
-- `sqrt_float64` `(x: T) -> T`: the square root; `-0.0` for `-0.0`, NaN below 0.
-- `cbrt_float64` `(x: T) -> T`: the cube root, negative for a negative `x`.
-- `sin_float64` `(x: T) -> T`: the sine of an angle in radians; NaN for an infinity.
-- `cos_float64` `(x: T) -> T`: the cosine of an angle in radians; NaN for an infinity.
-- `tan_float64` `(x: T) -> T`: the tangent of an angle in radians; NaN for an infinity.
-- `asin_float64`, `acos_float64` `(x: T) -> T`: the angle whose sine or cosine is `x`, in radians, `-π/2` to `π/2` and 0 to π; NaN outside -1 to 1.
-- `atan_float64` `(x: T) -> T`: the angle whose tangent is `x`, in radians, `-π/2` to `π/2`.
-- `atan2_float64` `(y: T, x: T) -> T`: the angle of the point (`x`, `y`) from the positive x axis, `-π` to `π`, in the point's quadrant, `y` first as in C; on the axes the zeros' signs choose: `(0, -0.0)` is π and `(-0.0, -0.0)` is `-π`.
-- `exp_float64`, `exp2_float64` `(x: T) -> T`: e and 2 to the power `x`; 0 for `-inf`.
-- `log_float64`, `log2_float64`, `log10_float64` `(x: T) -> T`: the logarithm to base e, 2 and 10; `-inf` for 0, NaN below 0.
-- `pow_float64` `(base: T, exponent: T) -> T`: `base` to the power `exponent`; NaN for a negative base and an exponent that isn't whole; 1 for an exponent of 0 or a base of 1, even with a NaN; `inf` or `-inf` for 0 or `-0.0` to a negative odd power.
-- `hypot_float64` `(x: T, y: T) -> T`: the square root of `x² + y²`, without overflow or underflow on the way; `inf` when either is infinite, even with a NaN.
-- `floor_float64`, `ceil_float64` `(x: T) -> T`: the nearest whole number below and above; the sign of `-0.0` kept, and `ceil` of a value between -1 and 0 is `-0.0`.
-- `round_float64` `(x: T) -> T`: the nearest whole number, halves away from zero, as C's `round` (2.5 is 3, -2.5 is -3, -0.4 is `-0.0`).
-- `trunc_float64` `(x: T) -> T`: toward zero.
-- `mod_float64` `(a: T, b: T) -> T`: C's `fmod`, the remainder of `a / b` with `a`'s sign (`mod_float64(-5.5, 2)` is -1.5); NaN for a `b` of 0 or an infinite `a`, and `a` for an infinite `b`.
+- `sqrt_float64`, `sqrt_float32` `(x: T) -> T`: the square root; `-0.0` for `-0.0`, NaN below 0.
+- `cbrt_float64`, `cbrt_float32` `(x: T) -> T`: the cube root, negative for a negative `x`.
+- `sin_float64`, `sin_float32` `(x: T) -> T`: the sine of an angle in radians; NaN for an infinity.
+- `cos_float64`, `cos_float32` `(x: T) -> T`: the cosine of an angle in radians; NaN for an infinity.
+- `tan_float64`, `tan_float32` `(x: T) -> T`: the tangent of an angle in radians; NaN for an infinity.
+- `asin_float64`, `asin_float32`, `acos_float64`, `acos_float32` `(x: T) -> T`: the angle whose sine or cosine is `x`, in radians, `-π/2` to `π/2` and 0 to π; NaN outside -1 to 1.
+- `atan_float64`, `atan_float32` `(x: T) -> T`: the angle whose tangent is `x`, in radians, `-π/2` to `π/2`.
+- `atan2_float64`, `atan2_float32` `(y: T, x: T) -> T`: the angle of the point (`x`, `y`) from the positive x axis, `-π` to `π`, in the point's quadrant, `y` first as in C; on the axes the zeros' signs choose: `(0, -0.0)` is π and `(-0.0, -0.0)` is `-π`.
+- `exp_float64`, `exp_float32`, `exp2_float64`, `exp2_float32` `(x: T) -> T`: e and 2 to the power `x`; 0 for `-inf`.
+- `log_float64`, `log_float32`, `log2_float64`, `log2_float32`, `log10_float64`, `log10_float32` `(x: T) -> T`: the logarithm to base e, 2 and 10; `-inf` for 0, NaN below 0.
+- `pow_float64`, `pow_float32` `(base: T, exponent: T) -> T`: `base` to the power `exponent`; NaN for a negative base and an exponent that isn't whole; 1 for an exponent of 0 or a base of 1, even with a NaN; `inf` or `-inf` for 0 or `-0.0` to a negative odd power.
+- `hypot_float64`, `hypot_float32` `(x: T, y: T) -> T`: the square root of `x² + y²`, without overflow or underflow on the way; `inf` when either is infinite, even with a NaN.
+- `floor_float64`, `floor_float32`, `ceil_float64`, `ceil_float32` `(x: T) -> T`: the nearest whole number below and above; the sign of `-0.0` kept, and `ceil` of a value between -1 and 0 is `-0.0`.
+- `round_float64`, `round_float32` `(x: T) -> T`: the nearest whole number, halves away from zero, as C's `round` (2.5 is 3, -2.5 is -3, -0.4 is `-0.0`).
+- `trunc_float64`, `trunc_float32` `(x: T) -> T`: toward zero.
+- `mod_float64`, `mod_float32` `(a: T, b: T) -> T`: C's `fmod`, the remainder of `a / b` with `a`'s sign (`mod_float64(-5.5, 2)` is -1.5); NaN for a `b` of 0 or an infinite `a`, and `a` for an infinite `b`.
 
 ## Memory (`memory.rig`)
 
