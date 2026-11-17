@@ -116,7 +116,7 @@ The procedures that cut strings up and search them, from `strings_equal` to `spl
 
 ## Allocators (`allocators.rig`)
 
-An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` holds a procedure and the data it works on, and the procedure is called with a mode, `ALLOCATE`, `RESIZE`, `FREE` or `FREE_ALL`. A program calls the four helpers rather than the procedure. They settle the edges, so an allocator is only ever asked for more than 0 bytes and only ever given memory that isn't null to resize or free. An allocator that can't give memory returns null. The heap's memory is aligned as C's `malloc` aligns it, and an arena's or a pool's to 8 bytes when its parent's is, as the heap's is.
+An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` holds a procedure and the data it works on, and the procedure is called with a mode, `ALLOCATE`, `RESIZE`, `FREE` or `FREE_ALL`. Basic's three, `heap_allocator_proc`, `arena_allocator_proc` and `pool_allocator_proc`, are each of that procedure's type, `(mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void`. A program calls the four helpers rather than the procedure. They settle the edges, so an allocator is only ever asked for more than 0 bytes and only ever given memory that isn't null to resize or free. An allocator that can't give memory returns null. The heap's memory is aligned as C's `malloc` aligns it, and an arena's or a pool's to 8 bytes when its parent's is, as the heap's is.
 
 - `ALLOCATE`, `RESIZE`, `FREE`, `FREE_ALL`: the modes, 0 to 3.
 - `Allocator`: `proc: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void` and `data: *void`.
@@ -288,6 +288,14 @@ What Basic would do differently once Rig has it:
 - No type aliases, so the allocator's procedure type, the key comparison the tables' probe takes, and the comparisons of the sorts and `binary_search`, are written out wherever they're used, and a time is a struct of one field, `Time`, rather than an `int` of a type of its own.
 - No overloading or generics, so procedures are named by type (`min_int`, `min_float64`), the collections are untyped, handing out `*void`, sorting and searching take an element's size and compare through pointers, and there is one kind of table per kind of key, `Table` and `Int_Table`, with the same fields.
 - No way for a struct to take in another's fields, as Jai's `using` does, so both kinds of table entry repeat the fields of `Table_Entry_Header`, and the code they share reads an entry's start through it.
-- No enums, so an allocator's modes and a table entry's states are constants.
-- No portable way to reach standard error and no conditional compilation, so Basic writes only through `c_putchar`, and an index out of bounds is reported by the language's own bounds check. For the same reason Basic can't sleep, which takes each system's own call (`Sleep`, `nanosleep`) since C17's `thrd_sleep` is only inline in the UCRT's headers, nor read a monotonic clock, so a timer measures by the wall clock.
-- No `defer`, so what is allocated is freed by hand on every path.
+- No enums, so an allocator's modes, a table entry's states and a file's modes are constants.
+- No conditional compilation (`#if`, #147), so Basic calls only C functions that both systems' C libraries have by the same name, each with one declaration that fits both, and does without what each system does its own way (#157):
+  - no standard error, which each C library reaches differently, and so no `assert`, which would write to it: Basic writes only through `c_putchar`, and an index out of bounds is reported by the language's own bounds check;
+  - no sleeping, which takes each system's own call (`Sleep`, `nanosleep`), since C17's `thrd_sleep` is only inline in the UCRT's headers, and no monotonic clock, so a timer measures by the wall clock;
+  - no listing, making or deleting a directory, for which C17 has no call, so the file tests use `tests/run`, which is always there and never empty;
+  - no running a process and reading its output (`_popen`, `popen`), so `run_command` gives only the status;
+  - none of the C functions that differ by name (`_ftelli64` on Windows, `ftello` on Linux) or by type (`ftell`'s `long`, 32 bits on Windows and 64 on Linux), so a file's size is measured with `fgetpos`, and `fseek` is only given an offset of 0.
+- No command-line arguments: a program's start doesn't keep them for Rig code to read (#152).
+- No `Any` or variadic procedures (#153, #150), so there is no formatted `print` (#154): a line is printed a piece at a time, with `print_string`, `print_int` and the rest.
+- No context (#156), so a procedure that allocates takes its allocator as an argument, and the file procedures, whose signatures take none, copy a path for C into memory from the heap.
+- No `defer` (#149), so what is allocated is freed by hand on every path.
