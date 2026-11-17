@@ -1,8 +1,10 @@
-// Basic's environment (issue #145): a variable bin/run-tests sets for every
-// program it runs, RIG_BASIC_TEST, so this test passes only under the
-// runner; PATH, which every system sets, read without printing it; names
-// Basic refuses; an allocator with no memory; and commands, whose output
-// comes in order with the program's, and their status.
+// Basic's environment (issue #145): two variables bin/run-tests sets for
+// every program it runs, RIG_BASIC_TEST and RIG_BASIC_TEST_EMPTY, which is
+// set to "", so this test passes only under the runner; PATH, which every
+// system sets, read without printing it; names Basic refuses; allocators
+// that count what they give and get back, one with no memory and one with
+// memory for only the name's C copy; and commands, whose output comes in
+// order with the program's, and their status.
 #import "Basic";
 
 // Prints s between brackets, so an empty string shows as [].
@@ -24,18 +26,72 @@ show_int :: (value: int) {
     print_int(value);
 }
 
+// How many allocations an allocator was asked for, and how many frees.
+Counter :: struct {
+    allocations: int;
+    frees: int;
+}
+
+// Prints a space and counter's allocations, then a space and its frees,
+// and sets both back to 0 for the next call.
+show_counts :: (counter: *Counter) {
+    show_int(counter.allocations);
+    show_int(counter.frees);
+    counter.allocations = 0;
+    counter.frees = 0;
+}
+
+// Passes every call on to the heap, counting the allocations and the
+// frees.
+counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE { counter.allocations += 1; }
+    if mode == FREE { counter.frees += 1; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+// Counts as counting_allocator_proc does, but gives memory for the first
+// allocation only, as an allocator that runs out after it would.
+first_only_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE {
+        counter.allocations += 1;
+        if counter.allocations > 1 { return null; }
+    }
+    if mode == FREE { counter.frees += 1; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
 // Gives no memory, as an allocator that has run out would.
 failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     return null;
 }
 
 main :: () {
-    value, found := get_environment("RIG_BASIC_TEST", HEAP_ALLOCATOR);
+    counter : Counter;
+    counting := Allocator.{counting_allocator_proc, *counter};
+
+    // The name's C copy is given back once getenv returns, so of the two
+    // allocations, the name's and the value's, one is freed, and the
+    // caller frees the value.
+    value, found := get_environment("RIG_BASIC_TEST", counting);
     print_string("RIG_BASIC_TEST: ");
     show_text(value);
     show_bool(found);
+    show_counts(*counter);
     print_line("");
-    free(value.data, HEAP_ALLOCATOR);
+    free(value.data, counting);
+    counter.frees = 0; // The caller's free isn't the next call's.
+
+    // A variable set to "" is found, and is the zeroed string, with only
+    // the name's C copy allocated, and freed.
+    value, found = get_environment("RIG_BASIC_TEST_EMPTY", counting);
+    print_string("empty: ");
+    show_text(value);
+    show_bool(found);
+    show_bool(value.data == null);
+    show_counts(*counter);
+    print_line("");
 
     // A variable that isn't set is the zeroed string, with nothing
     // allocated.
@@ -56,15 +112,17 @@ main :: () {
     free(value.data, HEAP_ALLOCATOR);
 
     // An empty name, one with '=', which ends a name in the environment,
-    // and one with a zero byte, which C would read as "PA", are refused
-    // without asking C.
+    // and one with a zero byte, which C would read as RIG_BASIC_TEST,
+    // which is set, are refused without asking C: no C copy of the name is
+    // made, so the allocator is asked for nothing.
     print_string("refused names:");
-    value, found = get_environment("", HEAP_ALLOCATOR);
+    value, found = get_environment("", counting);
     show_bool(found);
-    value, found = get_environment("A=B", HEAP_ALLOCATOR);
+    value, found = get_environment("A=B", counting);
     show_bool(found);
-    value, found = get_environment("PA\0TH", HEAP_ALLOCATOR);
+    value, found = get_environment("RIG_BASIC_TEST\0X", counting);
     show_bool(found);
+    show_counts(*counter);
     print_line("");
 
     // With no memory for the copies, the variable is the zeroed string
@@ -76,12 +134,26 @@ main :: () {
     show_int(run_command("echo from a command with no memory", Allocator.{failing_allocator_proc, null}));
     print_line("");
 
+    // With memory for the name's C copy but not for the value, the
+    // variable is the zeroed string and false, and the name's copy is
+    // given back: two allocations asked for, one freed.
+    first_only : Counter;
+    value, found = get_environment("RIG_BASIC_TEST", Allocator.{first_only_allocator_proc, *first_only});
+    print_string("no memory for the value: ");
+    show_text(value);
+    show_bool(found);
+    show_bool(value.data == null);
+    show_counts(*first_only);
+    print_line("");
+
     // What the program printed is flushed before the command runs, so the
-    // command's line comes after it, and before what follows.
+    // command's line comes after it, and before what follows. The
+    // command's C copy is given back once it has run.
     print_line("before the command");
-    status := run_command("echo from the command", HEAP_ALLOCATOR);
+    status := run_command("echo from the command", counting);
     print_string("status:");
     show_int(status);
+    show_counts(*counter);
     print_line("");
 
     // cmd.exe gives exit 3's code, 3; sh's wait status holds it times 256.
