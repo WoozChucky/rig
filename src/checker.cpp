@@ -1997,7 +1997,8 @@ static String declared_name(Ast *decl) {
 // Then the whole declarations of `declarations`, in order: a name declared
 // twice is reported at the later one. Each struct gets its Type here, if it
 // has none yet (a decider made it, and what it worked out uses it), still
-// without its layout, so a pointer can name it from anywhere. Then the
+// without its layout, so a pointer can name it from anywhere; one a decider
+// found in a circle, or too big, is done, and keeps having none. Then the
 // broken entries' names. With report, check()'s, the mistakes are said
 // (a built-in type's name, a predeclared name, a name already declared);
 // without, a decider's, the first of a name wins, silently: check() says
@@ -2010,7 +2011,7 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
         if (decl->kind == AST_PROC && ((Ast_Proc *)decl)->is_broken) continue;
         if (decl->kind == AST_STRUCT) {
             Ast_Struct *s = (Ast_Struct *)decl;
-            if (!s->declared) {
+            if (!s->declared && s->resolve == RESOLVE_NOT_YET) {
                 Type *t = arena_new<Type>(c->arena);
                 t->kind = TYPE_STRUCT;
                 t->name = s->name;

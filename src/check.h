@@ -109,12 +109,15 @@ bool check_proc_signature(Checker *c, Ast_Proc *proc);
 bool check_reached_body(Checker *c, Ast_Proc *proc, Position at);
 
 // In deciding mode, for a name found nowhere: whether it's declared in a
-// top-level #if, in any branch of one, taken or not, decided or not, at any
-// depth, or among the declarations that joined the top level through a
-// taken branch since the base (spec 4.9). If so, "'NAME' is declared in a
-// top-level #if, so it can't decide another top-level #if" at `at`, missing
-// file or not (the name is known to be declared), and true. The callers,
-// which report a name declared nowhere, ask this first.
+// top-level #if read so far, in any branch of one, taken or not, decided or
+// not, at any depth, or among the declarations that joined the top level
+// through a taken branch since the base: the files a taken branch has
+// loaded so far (spec 4.9). If so, "'NAME' is declared in a top-level #if,
+// so it can't decide another top-level #if" at `at`, missing file or not
+// (the name is known to be declared), and true. A name in a file not read
+// yet is neither, and stays unknown. The callers, which report a name
+// declared nowhere, ask this first (but for a built-in type's name, which
+// means the built-in type).
 bool check_in_a_branch(Checker *c, String name, Position at);
 
 // [count]element (type_array_of), or null after "'[N]T' is too big", at

@@ -567,12 +567,14 @@
 //   every #if is read: a checker that knows those files' declarations, the
 //   base, and the predeclared constants, nothing else. It decides each chain
 //   as decide_if does a body's, with the same two messages about the
-//   condition, and has two limits of its own. A name declared in a top-level
-//   #if's branch (any branch, taken or not, decided or not, at any depth),
-//   or in a file only a taken branch loads, reached from a condition
-//   directly or through constants and types, is "'LEVEL' is declared in a
-//   top-level #if, so it can't decide another top-level #if", at the use: it
-//   can't be known before the #ifs that declare it are decided. A #run
+//   condition, and has two limits of its own. A name declared in a branch of
+//   a top-level #if read so far (any branch, taken or not, decided or not, at
+//   any depth), or in a file only a taken branch loads, once it's read,
+//   reached from a condition directly or through constants and types, is
+//   "'LEVEL' is declared in a top-level #if, so it can't decide another
+//   top-level #if", at the use: it can't be known before the #ifs that
+//   declare it are decided. A name in a file not read yet is unknown, as one
+//   declared nowhere is (unless a load or a condition has failed). A #run
 //   reached from a condition, one whose operand is a constant too, is "a
 //   top-level #if's condition can't run code while compiling, for now", at
 //   the #run, which then has no value (has_failed_run). A condition in a body
