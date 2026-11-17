@@ -1,0 +1,6 @@
+// Loaded by tests/run/if_load.rig on Linux only, from its #if's branch for
+// Linux. puts is the main file's: the program has one top level, where a
+// second puts would be already declared.
+SYSTEM_NAME :: "linux";
+
+greet :: () { puts("hello from the loaded file"); }

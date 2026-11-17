@@ -24,6 +24,14 @@
 //   is "'foo' is not a type"; a name declared nowhere, "unknown type
 //   'foo'". A built-in type's name always means the built-in type, so a
 //   struct can't take one: "'u8' is a built-in type", at its name.
+// - Three constants are predeclared (spec 2.5), untyped integers visible
+//   everywhere: OS_WINDOWS (1), OS_LINUX (2), and OS, the system the
+//   program is built for (Ast_File.system, else the host's), so
+//   OS == OS_WINDOWS is a constant bool. A top-level declaration can't take
+//   one of their names: "'OS' is predeclared: it's the system the program
+//   is built for", at its name, and it isn't declared. A broken entry
+//   (below) of one of their names isn't declared either, and says nothing.
+//   A local may hide one, as it may any of the top level's names.
 // - A name declared in a block (a variable or a constant) is visible from
 //   after its declaration to the end of the block. An inner block may
 //   declare the same name again, hiding the outer one; the same block may
@@ -192,9 +200,10 @@
 //   this one reaches its end", or "'divmod' must return its values on every
 //   path, ..." when it has several). A block reaches its end unless its
 //   last statement is a return, a block that doesn't reach its own end, an
-//   if with an else whose branches both don't, or a `while` whose condition
-//   is the constant true and that has no break of its own. An if or while
-//   whose condition was an error doesn't reach its end either, so the
+//   if with an else whose branches both don't, an #if whose taken branch
+//   doesn't (Conditional compilation, below), or a `while` whose condition
+//   is the constant true and that has no break of its own. An if, #if or
+//   while whose condition was an error doesn't reach its end either, so the
 //   condition's is the one message.
 // - An expression statement must be a call, whose value may be ignored
 //   (spec 6.7).
@@ -529,6 +538,55 @@
 //   compiling: the program's lowering refuses one its executable would
 //   make (lower.cpp), so rig check, which never lowers, says nothing of it.
 //
+// Conditional compilation (issue #147, spec 4.9).
+// - #if in a body is a statement, decided where it is, when the body is
+//   checked (decide_if): each arm's condition in order until one is true,
+//   whose branch is taken; none true, the last else, if any. A condition is
+//   a bool known while compiling: "the condition of '#if' must be a bool,
+//   not 'int'", "the condition of '#if' must be known while compiling", at
+//   it. It may use local constants and #run. One with an error takes
+//   neither branch, and the decision is on the chain's first arm
+//   (Ast_If_Directive.decided, failed, taken). The locals a branch declares
+//   are then declared nowhere, so after it a name declared nowhere in that
+//   body isn't reported as unknown: the condition's message is the one.
+// - Only the taken branch is checked, and it makes no scope: its
+//   statements are the enclosing block's, so a local it declares is visible
+//   after the #if, and the block can't declare it again. The conditions after
+//   the true one, and the branches not taken, are never checked: they were
+//   parsed, nothing more (their syntax errors are the parser's).
+// - It reaches its end when its taken branch does, or when it took none; one
+//   whose condition was an error is taken not to, as an if's, so the
+//   condition's message is the one. break and continue in the taken branch
+//   act on a loop around the #if, as anywhere.
+// - Only the taken branch is code: a #run's walk, lowering and the debug
+//   information see that branch alone. The #if adds no code of its own: the
+//   taken statements are at their own positions, so an #if whose branch is
+//   on lines of its own has nothing at its line.
+// - A top-level #if is decided before anything else is checked, by a
+//   decider (check_decider_new) the loader makes once every file outside
+//   every #if is read: a checker that knows those files' declarations, the
+//   base, and the predeclared constants, nothing else. It decides each chain
+//   as decide_if does a body's, with the same two messages about the
+//   condition, and has two limits of its own. A name declared in a branch of
+//   a top-level #if read so far (any branch, taken or not, decided or not, at
+//   any depth), or in a file only a taken branch loads, once it's read,
+//   reached from a condition directly or through constants and types, is
+//   "'LEVEL' is declared in a top-level #if, so it can't decide another
+//   top-level #if", at the use: it can't be known before the #ifs that
+//   declare it are decided. A name in a file not read yet is unknown, as one
+//   declared nowhere is (unless a load or a condition has failed). A #run
+//   reached from a condition, one whose operand is a constant too, is "a
+//   top-level #if's condition can't run code while compiling, for now", at
+//   the #run, which then has no value (has_failed_run). A condition in a body
+//   has neither limit.
+// - What the decider works out on the way (a constant's value, a struct's
+//   layout and Type, a signature) stays on the nodes, its messages said: the
+//   check after it finds them done. A condition with an error takes neither
+//   branch; the loader then counts the program as lacking a file
+//   (Ast_File.lost_a_file), so no name anywhere is unknown, nor main
+//   missing. check() itself decides no top-level #if: one the loader didn't
+//   decide (a tree from parse()) is as if no branch were taken.
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - A string after the library is the C function's name (issue #135),
@@ -556,7 +614,8 @@
 //
 // The checker also runs after syntax errors, so they and the type errors in
 // the rest of the program are reported together. A declaration the parser
-// gave up on is a broken entry (parser.h): its name is declared, with an
+// gave up on is a broken entry (parser.h): its name is declared (unless
+// it's a predeclared constant's, which keeps meaning the constant), with an
 // unknown type, and nothing is reported about it or about its uses (a call
 // to it may pass anything). Its body isn't checked: there is none. The
 // checker runs after a #load failed too (load.h), or one that named no
@@ -581,6 +640,21 @@ struct Compile_Time;  // run.h: the compile-time world
 // (spec 7.8): in `world`, which the caller keeps for the top-level runs;
 // without one, check() makes one of its own and frees it before returning.
 bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world = nullptr);
+
+struct Checker;
+
+// A checker for deciding the top-level #ifs of `file` (spec 4.9), which the
+// loader makes once every file outside every #if is read: it knows those
+// files' declarations (the base: the procs and globals file has now) and the
+// predeclared constants, and nothing else. It says nothing about them as it
+// declares them (check() does, later).
+Checker *check_decider_new(Ast_File *file, Arena *a, Diagnostics *d);
+
+// Decides the chain `first` begins (a top-level #if): decide_if, in deciding
+// mode, with file->lost_a_file as it is now.
+void check_decide(Checker *c, Ast_If_Directive *first);
+
+void check_decider_free(Checker *c);
 
 // Whether e, checked with no errors, is a place in memory: a variable, but
 // not a loop's iterator or index; p.*; a field of a place, or of a struct

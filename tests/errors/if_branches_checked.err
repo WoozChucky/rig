@@ -1,0 +1,6 @@
+tests/errors/if_branches_checked.rig:5:19: error: a value of type 'string' doesn't convert to 'int' implicitly
+        taken : int = "reported";
+                      ^
+tests/errors/if_branches_checked.rig:8:25: error: expected an expression, found ';'
+        broken :: () { x := ; }
+                            ^

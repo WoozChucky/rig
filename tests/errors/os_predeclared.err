@@ -1,0 +1,9 @@
+tests/errors/os_predeclared.rig:4:1: error: 'OS' is predeclared: it's the system the program is built for
+    OS :: 3;
+    ^
+tests/errors/os_predeclared.rig:5:1: error: 'OS_WINDOWS' is predeclared: it's Windows, one of the systems OS may be
+    OS_WINDOWS : int;
+    ^
+tests/errors/os_predeclared.rig:6:1: error: 'OS_LINUX' is predeclared: it's Linux, one of the systems OS may be
+    OS_LINUX :: () {}
+    ^

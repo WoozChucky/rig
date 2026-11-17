@@ -1,0 +1,6 @@
+tests/errors/if_condition_runs_code.rig:5:6: error: a top-level #if's condition can't run code while compiling, for now
+    N :: #run three();
+         ^
+tests/errors/if_condition_runs_code.rig:7:5: error: a top-level #if's condition can't run code while compiling, for now
+    #if #run ready() { }
+        ^

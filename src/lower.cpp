@@ -2063,7 +2063,8 @@ static void lower_multi_assign(Lowering *l, Ast_Assign *assign) {
 // Where a statement is, for a debugger: its first token. A declaration's is
 // its (first) name, which is its pos; an assignment's is its first target's
 // start (its pos is the operator), an expression statement's (a call) its
-// start (its pos is the '('); every other statement's pos is its keyword.
+// start (its pos is the '('); every other statement's pos is its keyword
+// (an #if's, its '#if', though nothing is ever at it: lower_statement).
 static Position statement_position(Ast *s) {
     switch (s->kind) {
     case AST_ASSIGN: return ((Ast_Assign *)s)->targets[0]->start;
@@ -2073,6 +2074,7 @@ static Position statement_position(Ast *s) {
     case AST_RETURN:
     case AST_BLOCK:
     case AST_IF:
+    case AST_IF_DIRECTIVE:
     case AST_WHILE:
     case AST_FOR:
     case AST_BREAK:
@@ -2176,6 +2178,19 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     }
     case AST_BLOCK: lower_scoped_block(l, (Ast_Block *)s, source); break;
     case AST_IF: lower_if(l, (Ast_If *)s, source); break;
+    case AST_IF_DIRECTIVE: {
+        // Decided while compiling (spec 4.9): only the taken branch is code,
+        // its statements the enclosing block's, at their own lines, in the
+        // current scope (no lower_scoped_block: an #if makes no scope, ir.h's
+        // "Debug information"). Nothing is at the '#if' itself: a debugger
+        // stops at the taken statements alone, so at the #if's line only when
+        // the branch shares it (#if C { return 1; }). A hiding declaration in the branch
+        // starts a scope that lasts to the end of the enclosing block, as its
+        // name does.
+        Ast_Block *taken = ((Ast_If_Directive *)s)->taken;
+        if (taken) lower_block(l, taken, source);
+        break;
+    }
     case AST_WHILE: lower_while(l, (Ast_While *)s, source); break;
     case AST_FOR: lower_for(l, (Ast_For *)s, source); break;
     case AST_BREAK:

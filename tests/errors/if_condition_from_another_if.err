@@ -1,0 +1,6 @@
+tests/errors/if_condition_from_another_if.rig:6:10: error: 'DEPTH' is declared in a top-level #if, so it can't decide another top-level #if
+    DEBUG :: DEPTH > 1;
+             ^
+tests/errors/if_condition_from_another_if.rig:7:5: error: 'LEVEL' is declared in a top-level #if, so it can't decide another top-level #if
+    #if LEVEL > 1 { }
+        ^

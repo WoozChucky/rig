@@ -1,0 +1,4 @@
+// Loaded by tests/run/if_constant_elsewhere.rig, whose top-level #if is
+// decided by DEBUG, a constant of this file, outside every #if.
+LEVEL :: 2;
+DEBUG :: LEVEL > 1;

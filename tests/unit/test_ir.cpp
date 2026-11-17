@@ -4270,3 +4270,61 @@ TEST(lowering_refuses_compiler_calls) {
     CHECK(!contains(ir, "@create_workspace(ptr, ptr) {"));
     arena_free(&a);
 }
+
+// Issue #147: #if in a body (spec 4.9, 10.7).
+
+TEST(an_if_directive_makes_no_scope) {
+    // Its taken branch's statements are the enclosing block's, in its scope
+    // and at their own lines; the #if itself is no code, so nothing is at
+    // its line (a debugger never stops there).
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "main :: () {\n"
+                                                "    x := 1;\n"
+                                                "    #if true {\n"
+                                                "        y := 2;\n"
+                                                "    }\n"
+                                                "    z := y;\n"
+                                                "}\n"));
+    String entry = proc_ir(ir, "main");
+    CHECK(!contains(entry, "; scope"));
+    CHECK(contains(entry, "  ; var y int slot %2 in 0 at 4:9\n"));
+    CHECK(contains(entry, "  %2 = local i64  ; 4:9 s0\n"));
+    CHECK(!contains(entry, "; 3:"));
+    CHECK(!contains(entry, "; 5:"));
+
+    // A branch not taken is no code either, and neither is any line that
+    // holds only a branch's '}' or an 'else' and its '{'.
+    ir = ir_print_debug(&a, lower_source(&a,
+                                         "main :: () {\n"
+                                         "    #if true {\n"
+                                         "        y := 2;\n"
+                                         "    } else {\n"
+                                         "        w := 3;\n"
+                                         "    }\n"
+                                         "}\n"));
+    entry = proc_ir(ir, "main");
+    CHECK(contains(entry, "; 3:9"));
+    CHECK(!contains(entry, "; 2:"));
+    CHECK(!contains(entry, "; 4:"));
+    CHECK(!contains(entry, "; 5:"));
+    CHECK(!contains(entry, "; 6:"));
+
+    // A declaration in the taken branch that hides a global starts a scope
+    // that lasts to the end of the enclosing block, not to the branch's '}':
+    // z, and the code after the #if, are in it, and see the local G.
+    ir = ir_print_debug(&a, lower_source(&a,
+                                         "G := 1;\n"
+                                         "main :: () {\n"
+                                         "    #if true {\n"
+                                         "        G := 2;\n"
+                                         "    }\n"
+                                         "    z := G;\n"
+                                         "}\n"));
+    entry = proc_ir(ir, "main");
+    CHECK(contains(entry, "  ; scope 1 in 0 at 4:9\n"));
+    CHECK(contains(entry, "  ; var G int slot %0 in 1 at 4:9\n"));
+    CHECK(contains(entry, "  ; var z int slot %2 in 1 at 6:5\n"));
+    CHECK(contains(entry, "  %2 = local i64  ; 6:5 s1\n"));
+    arena_free(&a);
+}

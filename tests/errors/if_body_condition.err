@@ -1,0 +1,9 @@
+tests/errors/if_body_condition.rig:6:9: error: the condition of '#if' must be a bool, not 'int'
+        #if 1 { return 1; }          // the condition's error alone: no must-return
+            ^
+tests/errors/if_body_condition.rig:10:9: error: the condition of '#if' must be known while compiling
+        #if flag { }
+            ^
+tests/errors/if_body_condition.rig:13:26: error: a value of type 'string' doesn't convert to 'int' implicitly
+        #if true { x : int = "taken"; } else { y : int = "not checked"; }
+                             ^

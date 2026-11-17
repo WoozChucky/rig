@@ -1,0 +1,9 @@
+// A top-level #if's condition (issue #147, spec 4.9) can't run code while
+// compiling, for now: a #run it reaches, through a constant or written in
+// it, is refused at the #run.
+three :: () -> int { return 3; }
+N :: #run three();
+#if N == 3 { }
+#if #run ready() { }
+ready :: () -> bool { return true; }
+main :: () {}

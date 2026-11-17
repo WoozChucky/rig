@@ -119,8 +119,9 @@
 //
 // Then rig check on every program of tests/run and tests/errors (not
 // tests/build's), from a file and from stdin under the file's name, a
-// loaded file's text from stdin within its program (--stdin-for), and its
-// own command line (check_tests). A program of tests/run must check with
+// loaded file's text from stdin within its program (--stdin-for: one the
+// program doesn't load, or loads only in an #if branch not taken, is said
+// to be so), and its own command line (check_tests). A program of tests/run must check with
 // nothing to say, exit 0; one of tests/errors exit 1 and print its
 // NAME.err, unless it has a NAME.check.err: what rig check prints instead,
 // for a program whose errors only rig build finds (a top-level #run that
@@ -1800,7 +1801,8 @@ static void build_directory_tests(Arena *a, String rig, s64 *passed, s64 *failed
 // stdin as the text of FILE.rig, a file it #loads (an editor's text of a
 // loaded file, checked as part of its program): it must say what rig build
 // would say if FILE.rig held that text, or that MAIN.rig doesn't load
-// FILE.rig.
+// FILE.rig, or that it loads it only in an #if branch not taken on this
+// system (spec 4.9).
 
 // The directory where rig check is shown to write nothing, not even a
 // .build (check_writes_nothing_test).
@@ -2197,6 +2199,41 @@ static String check_stdin_for_a_file_not_loaded_test(Arena *a, String rig) {
                         str("rig: error: 'tests/errors/load_missing.rig' doesn't load 'tests/run/load/divide.rig'\n"));
 }
 
+// --stdin-for a file the program loads only in an #if branch not taken on
+// this system (spec 4.9): tests/run/if_load.rig loads load/if_windows.rig
+// on Windows and load/if_linux.rig on Linux. The other system's file, with
+// its own text, isn't part of the program here: rig says so, and that
+// alone, exit 1, as for a file the program doesn't load, and the editor
+// shows nothing for it. This system's file is checked as any loaded file.
+// CHECK_CASES has the file loaded on neither system, the same on both.
+static String check_stdin_for_a_branch_not_taken_test(Arena *a, String rig) {
+    String main = str("tests/run/if_load.rig");
+#ifdef _WIN32
+    String other = str("tests/run/load/if_linux.rig"), own = str("tests/run/load/if_windows.rig");
+#else
+    String other = str("tests/run/load/if_windows.rig"), own = str("tests/run/load/if_linux.rig");
+#endif
+    // rig build put an object here earlier; rig check mustn't make one.
+    remove(string_cstr(a, string_printf(a, ".build/if_load%s", OBJ)));
+    String source = {};
+    if (!os_read_file(a, other, &source)) return string_printf(a, "can't read " STR_FMT, STR_ARG(other));
+    Process_Result r = {};
+    String why = {};
+    if (!run_check_for(a, rig, main, other, source, {}, &r, &why)) return why;
+    String err = string_printf(a, "rig: error: '" STR_FMT "' loads '" STR_FMT "' only in an #if branch not taken\n",
+                               STR_ARG(main), STR_ARG(other));
+    why = check_result(a, "rig check --stdin-for the other system's file", &r, 1, err);
+    if (why.count) return why;
+
+    if (!os_read_file(a, own, &source)) return string_printf(a, "can't read " STR_FMT, STR_ARG(own));
+    if (!run_check_for(a, rig, main, own, source, {}, &r, &why)) return why;
+    why = check_result(a, "rig check --stdin-for this system's file", &r, 0, {});
+    if (why.count) return why;
+    String wrote = check_wrote(a, str("if_load"));
+    if (wrote.count) return string_printf(a, "rig check --stdin-for wrote " STR_FMT, STR_ARG(wrote));
+    return {};
+}
+
 // --stdin-for with a main file that isn't there, and a standard input that
 // stays open with nothing written to it, as an editor's whose write stalls:
 // rig reads the main file first, so it says it cannot read it without
@@ -2299,6 +2336,24 @@ static const Command_Case CHECK_CASES[] = {
      {"check", "tests/run/hello.rig", "--stdin-for", "tests/run/load/divide.rig"},
      1,
      "rig: error: 'tests/run/hello.rig' doesn't load 'tests/run/load/divide.rig'\n"},
+    {"--stdin-for of a file loaded only in a branch taken on neither system",
+     {"check", "tests/run/if_load.rig", "--stdin-for", "tests/run/load/no_such_file.rig"},
+     1,
+     "rig: error: 'tests/run/if_load.rig' loads 'tests/run/load/no_such_file.rig' only in an #if branch not taken\n"},
+    // A branch of a chain whose condition failed isn't "not taken": the
+    // program is checked as any program with errors, and the condition's
+    // error, in another file than the --stdin-for one, is said (spec 4.9).
+    // load/if_failed.rig needn't exist, as no --stdin-for file need.
+    {"--stdin-for of a file loaded only in a failed #if's branch: the program is checked",
+     {"check", "tests/errors/if_failed_condition.rig", "--stdin-for", "tests/errors/load/if_failed.rig"},
+     1,
+     "tests/errors/if_failed_condition.rig:1:5: error: the condition of '#if' must be a bool, not 'int'\n"},
+    // And it isn't "not taken" when a branch not taken names the file too:
+    // the failed #if may still make it the program's, so its error wins.
+    {"--stdin-for of a file loaded in a failed #if's branch and one not taken: the program is checked",
+     {"check", "tests/errors/if_failed_and_not_taken.rig", "--stdin-for", "tests/errors/load/if_failed.rig"},
+     1,
+     "tests/errors/if_failed_and_not_taken.rig:4:5: error: the condition of '#if' must be a bool, not 'int'\n"},
     {"--stdin-for before the main file",
      {"check", "--stdin-for", "tests/run/load/divide.rig", "tests/run/hello.rig"},
      1,
@@ -2358,7 +2413,9 @@ static void check_tests(Arena *a, String rig, s64 *passed, s64 *failed) {
     report("rig check --stdin-for the main file", check_stdin_for_the_main_file_test(a, rig), passed, failed);
     report("rig check --stdin-for a file the program doesn't load", check_stdin_for_a_file_not_loaded_test(a, rig),
            passed, failed);
-    report("rig check --stdin-for reads the main file first", check_stdin_for_reads_the_main_file_first_test(a, rig),
+    report("rig check --stdin-for a file only a branch not taken loads",
+           check_stdin_for_a_branch_not_taken_test(a, rig), passed, failed);
+    report("rig check --stdin-for reads the main file first",check_stdin_for_reads_the_main_file_first_test(a, rig),
            passed, failed);
     report("rig check writes nothing, not even .build", check_writes_nothing_test(a, rig), passed, failed);
     for (const Command_Case &c : CHECK_CASES) {

@@ -1,0 +1,10 @@
+// A top-level #if's taken branch is checked (issue #147, spec 4.9); the
+// branch not taken is only parsed: its syntax error is reported, its type
+// error isn't. The condition is true on both systems.
+#if OS == OS_WINDOWS || OS == OS_LINUX {
+    taken : int = "reported";
+} else {
+    not_taken : int = "not checked";
+    broken :: () { x := ; }
+}
+main :: () {}
