@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, and printing to standard output (issue #134).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, files, and printing to standard output (issues #134 and #145).
 
 ## Importing it
 
@@ -177,6 +177,23 @@ The entries are one run of memory, a power of two of them, each a header (the ke
 - `table_remove(table: *Table, key: string) -> bool`, `int_table_remove(table: *Int_Table, key: int) -> bool`: removes `key`, giving a string key's copy back, and says whether it was there.
 - `table_entry(table: Table, index: int) -> bool, string, *void`, `int_table_entry(table: Int_Table, index: int) -> bool, int, *void`: entry `index`, from 0 to the capacity less one: whether it holds a key, the key and the value's address; false, the zeroed string or 0, and null for one that holds none. Any other index stops the program with the language's own bounds check, through `check_index` (unless built with `--no-bounds-checks`).
 - `table_free(table: *Table)`, `int_table_free(table: *Int_Table)`: gives every key's copy and the entries back; the table is empty, with no entries, and keeps its value size and allocator.
+
+## Files (`file.rig`)
+
+Files through C's stdio, always in binary mode (`"rb"`, `"wb"`, `"ab"`), so the bytes read are the bytes written on every system: Windows' text mode would turn a line feed into a carriage return and a line feed, and stop reading at Ctrl-Z. A directory is not a file, on either system: opening one to read, which Linux's C library allows, reads a byte first, and a directory's read fails, so it isn't found, read or deleted (Linux's `remove` would delete an empty one). A file's size is the position at its end from `fgetpos`, 64 bits on both systems, so a file past 2 GiB is measured right. A path goes to C as a copy ended by a zero, from the heap since these procedures take no allocator, given back once C is done with it; a path with a zero byte would reach C as a shorter name, another file's, so it is refused without calling C.
+
+- `File`: `handle: *void`, C's `FILE *`, null when the file isn't open; a zeroed `File` isn't open.
+- `FILE_READ`, `FILE_WRITE`, `FILE_APPEND`: `file_open`'s modes, 0 to 2: reading from the start, writing from empty, and writing at the end, the last two making the file when it isn't there.
+- `file_open(path: string, mode: int) -> File, bool`: the open file and `true`; a `File` that isn't open and `false` for another mode, a path with a zero byte, a file C can't open, and when reading, a directory.
+- `file_close(file: File)`: closes the file; one that isn't open is left alone.
+- `file_read(file: File, buffer: []u8) -> int`: reads up to `buffer.count` bytes from where the file is, and gives how many; 0 at the end, on an error, or for a `File` that isn't open.
+- `file_write(file: File, data: string) -> bool`: whether every byte of `data` was written; `""` writes nothing and is `true`, and a `File` that isn't open is `false`.
+- `file_size(file: File) -> int`: the file's size in bytes, its position left where it was; -1 when C can't tell, or for a `File` that isn't open.
+- `read_entire_file(path: string, allocator: Allocator) -> string, bool`: the whole file in memory from `allocator`, which the caller frees with `free(s.data, allocator)`, and `true`. An empty file is the zeroed string and `true`, allocating nothing; a missing file, a directory, a short read or no memory is the zeroed string and `false`, with nothing left allocated.
+- `write_entire_file(path: string, data: string) -> bool`: makes or empties the file and writes `data`; `true` when every byte was written and the file closed without an error.
+- `append_to_file(path: string, data: string) -> bool`: writes `data` at the end of the file, making it when it isn't there; `true` as for `write_entire_file`.
+- `file_exists(path: string) -> bool`: whether there is a file at `path` that opens for reading; a directory isn't one.
+- `delete_file(path: string) -> bool`: deletes a file that `file_exists` finds; `false` for a missing file, a directory, a path with a zero byte, or when C can't.
 
 ## Print (`print.rig`)
 
