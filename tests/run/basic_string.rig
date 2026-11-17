@@ -33,6 +33,17 @@ show_parts :: (count: int, parts: []string) {
     print_byte(10);
 }
 
+// Prints what split_from_left gives: whether the separator was found, then
+// the bytes before it and after it between brackets, and a line feed.
+show_split :: (found: bool, before: string, after: string) {
+    print_bool(found);
+    print_string(" [");
+    print_string(before);
+    print_string("] [");
+    print_string(after);
+    print_line("]");
+}
+
 main :: () {
     empty : string;
     parts : [8]string;
@@ -173,37 +184,15 @@ main :: () {
     show_parts(split("a,b", ","[0], none), none);
 
     found, before, after := split_from_left("key=value=x", "="[0]);
-    print_bool(found);
-    print_string(" [");
-    print_string(before);
-    print_string("] [");
-    print_string(after);
-    print_line("]");
-
+    show_split(found, before, after);
     found, before, after = split_from_left("novalue", "="[0]);
-    print_bool(found);
-    print_string(" [");
-    print_string(before);
-    print_string("] [");
-    print_string(after);
-    print_line("]");
+    show_split(found, before, after);
 
     // A separator at either end leaves an empty piece on that side.
     found, before, after = split_from_left("=x", "="[0]);
-    print_bool(found);
-    print_string(" [");
-    print_string(before);
-    print_string("] [");
-    print_string(after);
-    print_line("]");
-
+    show_split(found, before, after);
     found, before, after = split_from_left("k=", "="[0]);
-    print_bool(found);
-    print_string(" [");
-    print_string(before);
-    print_string("] [");
-    print_string(after);
-    print_line("]");
+    show_split(found, before, after);
 
     // A slice views its string's own bytes: nothing is copied. A start past
     // the end gives an empty view at the string's end, and so does
@@ -257,12 +246,7 @@ main :: () {
     show(advance(empty, 1));
     show_parts(split(empty, ","[0], parts), parts);
     found, before, after = split_from_left(empty, "="[0]);
-    print_bool(found);
-    print_string(" [");
-    print_string(before);
-    print_string("] [");
-    print_string(after);
-    print_line("]");
+    show_split(found, before, after);
 
     // int's extremes are clamped like any other number, and nothing in the
     // clamps overflows.
