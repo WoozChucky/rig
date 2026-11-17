@@ -2,20 +2,23 @@
 // checking, the taken branch's declarations joining the one top level, as
 // if written in place of the #if, visible before and after it. Each system
 // takes its own arm of the else #if chain, which declares a constant, a
-// global and a procedure; the last else is taken on neither, and nothing in
-// it is read, checked or run. main itself is in a branch. What's printed is
-// the same on both systems.
+// global, a struct (its fields in another order on each) and a procedure;
+// the last else is taken on neither, and nothing in it is read, checked or
+// run. main itself is in a branch. What's printed is the same on both
+// systems.
 puts :: (s: *u8) -> s32 #foreign libc;
 
 #if OS == OS_WINDOWS {
     NAME :: "windows";
     counter := 1;
     on_this_system :: () -> bool { return OS == OS_WINDOWS; }
+    Label :: struct { text: *u8; system: int; }
     GUARD :: 1 / (OS - OS_LINUX);     // division by zero, were it checked on Linux
 } else #if OS == OS_LINUX {
     NAME :: "linux";
     counter := 2;
     on_this_system :: () -> bool { return OS == OS_LINUX; }
+    Label :: struct { system: int; text: *u8; }
     GUARD :: 1 / (OS - OS_WINDOWS);
 } else {
     // Taken on neither system: nothing here is read, checked or run.
@@ -28,5 +31,9 @@ puts :: (s: *u8) -> s32 #foreign libc;
     main :: () {
         if on_this_system() && counter == OS && GUARD * GUARD == 1 { puts("the branch for this system"); }
         if (NAME[0] == 119) == (OS == OS_WINDOWS) { puts("NAME agrees with OS"); }
+        label : Label;
+        label.text = "a struct from the branch";
+        label.system = OS;
+        if label.system == OS { puts(label.text); }
     }
 }
