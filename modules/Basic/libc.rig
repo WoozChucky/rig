@@ -8,7 +8,9 @@
 // Everything else in Basic is written in Rig over these.
 //
 // Each of them links and runs on Windows (the UCRT) and Linux (glibc),
-// compiled and interpreted, with the same C types on both. On Windows the
+// compiled and interpreted, with one declaration that serves both: where
+// C's types differ (fseek's long offset, fpos_t), the declaration and its
+// comment say how Basic stays within what both agree on. On Windows the
 // interpreter takes them from the compiler's own copy of the C library, so
 // a FILE * that c_fopen gives is one the other calls accept. Some C
 // functions that would seem to fit are left out on purpose:
@@ -20,8 +22,7 @@
 // - _ftelli64 and ftello: each is on one system only, and on Windows the
 //   interpreter takes _ftelli64 from a second C runtime, whose calls refuse
 //   the compiler's own FILE *.
-// - time: whole seconds, where timespec_get gives nanoseconds; and in a
-//   compiled program on Windows, C's time is the 32-bit _time32.
+// - time: whole seconds, where timespec_get gives nanoseconds.
 // - clock: a different clock on each system, the wall time since the
 //   program started on Windows and the processor time on Linux.
 
