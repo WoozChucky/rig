@@ -1718,8 +1718,9 @@ static void lower_deferred(Lowering *l, Deferred d, Ast_Proc *source) {
 // run in reverse order and the innermost block's first. The registrations
 // stay: the blocks' other ways out copy them again. Each copy is at its own
 // lines; after them l->pos and l->scope are as they were, so the
-// instruction that leaves (a ret, a jump) is where it is with no defer, at
-// its return, break or continue, or at its block's '}'.
+// instruction that leaves (a ret, a jump) is where it is with no defer: at
+// its return, break or continue, an if's block's '}', the loop's keyword,
+// the body's '}' ("What a debugger needs").
 static void lower_defers(Lowering *l, s64 down_to, Ast_Proc *source) {
     Position pos = l->pos;
     s32 scope = l->scope;
