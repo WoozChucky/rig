@@ -146,7 +146,7 @@ TEST(declarations_sort_across_files_and_within_one) {
     array_add(&file.order, 0);
     Position procs_added[5] = {{0, 4, 1}, {1, 5, 9}, {0, 1, 1}, {1, 5, 3}, {1, 2, 1}};
     Position procs_sorted[5] = {{1, 2, 1}, {1, 5, 3}, {1, 5, 9}, {0, 1, 1}, {0, 4, 1}};
-    Position runs_added[4] = {{0, 6, 1}, {0, 2, 5}, {1, 3, 1}, {0, 1, 1}};
+    Position runs_added[4] = {{0, 6, 1}, {0, 2, 5}, {0, 1, 1}, {1, 3, 1}};
     Position runs_sorted[4] = {{1, 3, 1}, {0, 1, 1}, {0, 2, 5}, {0, 6, 1}};
     Position globals_added[3] = {{0, 2, 1}, {1, 7, 1}, {1, 1, 1}};
     Position globals_sorted[3] = {{1, 1, 1}, {1, 7, 1}, {0, 2, 1}};
