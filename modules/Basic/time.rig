@@ -18,10 +18,10 @@
 // 8601 has it: no time zones, no leap seconds (each day has 86400 seconds,
 // as POSIX and timespec_get count them), and Gregorian years before 1582
 // too. Nothing here sleeps: C17's own call, thrd_sleep (<threads.h>,
-// optional), is on both systems, but the UCRT's headers define it only
-// inline, over _thrd_sleep64, which the compiler doesn't link it to and
-// the interpreter doesn't find; and a system's own (Sleep, nanosleep)
-// waits on conditional compilation.
+// optional), is on both systems, but MSVC's <threads.h> defines it only
+// inline, over the Visual C++ runtime's _thrd_sleep64, which the compiler
+// doesn't link it to and the interpreter doesn't find; and a system's
+// own (Sleep, nanosleep) waits on conditional compilation.
 #load "libc.rig";
 #load "numbers.rig";
 
