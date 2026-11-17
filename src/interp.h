@@ -37,7 +37,7 @@
 // - anything else is the system's (os_find_c_function): kernel32.dll's or
 //   ucrtbase.dll's on Windows (a time function of a time_t by its 64-bit
 //   name, which the backend declares: ir_windows_c_name), libc's (and the
-//   dynamic loader's it depends on) on Linux;
+//   dynamic loader's it depends on), then libm's, on Linux;
 // - a name found nowhere fails, "'NAME' isn't in the C library at compile
 //   time".
 // A call of one, or of any non-null address outside the Rig procedures'

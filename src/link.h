@@ -8,7 +8,7 @@
 // family, which the DLLs don't export.
 //
 // Linux: LLVM's ld.lld, copied beside rig by build.sh, with glibc's C runtime
-// files (crt1.o, crti.o, crtn.o) and libc, dynamically linked.
+// files (crt1.o, crti.o, crtn.o), libc and libm, dynamically linked.
 //
 // The command lines and the file checks (link.cpp) are compiled on both
 // hosts, so both are tested everywhere; finding Visual Studio
@@ -52,7 +52,7 @@ Array<String> link_command_windows(Arena *a, Windows_Toolchain *tc, Array<String
 // ld.lld's arguments, argv[0] included:
 //   LD_LLD -o OUTPUT --eh-frame-hdr -m elf_x86_64
 //          -dynamic-linker /lib64/ld-linux-x86-64.so.2
-//          CRT/crt1.o CRT/crti.o OBJECTS... -LCRT -lc CRT/crtn.o
+//          CRT/crt1.o CRT/crti.o OBJECTS... -LCRT -lc -lm CRT/crtn.o
 // The objects' DWARF (.debug_* sections) is kept in the executable as it
 // is: ld.lld drops it only when told to (-S, --strip-debug).
 Array<String> link_command_linux(Arena *a, String ld_lld, String crt_dir, Array<String> objects, String output);

@@ -633,6 +633,35 @@ TEST(llvm_windows_time_functions_are_the_64_bit_ones) {
     arena_free(&a);
 }
 
+TEST(llvm_windows_hypotf_is_the_ucrts_hypotf) {
+    // The Universal C Runtime exports hypotf only as _hypotf (its <math.h>
+    // defines hypotf as an inline function over it), so on Windows a
+    // foreign procedure whose C name is hypotf is declared as _hypotf: one
+    // declaration with a program's own _hypotf, never renamed (_hypotf.1),
+    // and the three calls go to it. On Linux each stays under its own name,
+    // since glibc's libm has hypotf.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "hypotf :: (x: float32, y: float32) -> float32 #foreign libc;\n"
+                                "c_hypotf :: (x: float32, y: float32) -> float32 #foreign libc \"hypotf\";\n"
+                                "_hypotf :: (x: float32, y: float32) -> float32 #foreign libc;\n"
+                                "main :: () {\n"
+                                "    h := hypotf(3, 4);\n"
+                                "    c := c_hypotf(3, 4);\n"
+                                "    u := _hypotf(3, 4);\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        bool windows = (Target)t == TARGET_WINDOWS_X64;
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK_EQ(count_of(text, "declare float @_hypotf(float, float)"), 1);
+        CHECK_EQ(count_of(text, "declare float @hypotf(float, float)"), windows ? 0 : 1);
+        CHECK(!contains(text, "@_hypotf."));
+        CHECK_EQ(count_of(text, "call float @_hypotf("), windows ? 3 : 1);
+        CHECK_EQ(count_of(text, "call float @hypotf("), windows ? 0 : 2);
+    }
+    arena_free(&a);
+}
+
 TEST(llvm_bool_is_zeroext_on_both_targets) {
     // clang marks C's _Bool zeroext on Linux and on Windows alike (see
     // mark_extensions), so an i1 parameter or result is marked on both.

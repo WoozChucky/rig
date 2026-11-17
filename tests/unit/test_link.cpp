@@ -82,6 +82,7 @@ TEST(linux_link_command) {
         ".build/hello.o",
         "-L/usr/lib/x86_64-linux-gnu",
         "-lc",
+        "-lm",
         "/usr/lib/x86_64-linux-gnu/crtn.o",
     });
     CHECK_STR(joined(&a, argv), string_cstr(&a, joined(&a, expected)));
@@ -371,6 +372,26 @@ TEST(windows_time_functions_link_and_run_as_the_64_bit_ones) {
                                           "_utime: -1\n"
                                           "utime: -1\n"
                                           "_futime and _wutime: true\n");
+    CHECK_STR(without_cr(&a, result.err), "");
+    CHECK_EQ(result.exit_code, 0);
+    arena_free(&a);
+}
+
+TEST(windows_hypotf_links_and_runs_as_the_ucrts_hypotf) {
+    // Issue #148: hypotf declared under its C name links to the Universal C
+    // Runtime's _hypotf (ir_windows_c_name), which a C program's inline
+    // hypotf calls, as _hypotf declared under its own name does.
+    // tests/run/foreign_math calls it compiled and interpreted.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "hypotf :: (x: float32, y: float32) -> float32 #foreign libc;\n"
+                                "_hypotf :: (x: float32, y: float32) -> float32 #foreign libc;\n"
+                                "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                "main :: () {\n"
+                                "    printf(\"hypotf: %.4f %.4f %.4f\\n\", hypotf(3, 4), hypotf(1, 1), _hypotf(-5, 12));\n"
+                                "}\n");
+    Process_Result result = run_module(&a, m, "hypotf-test");
+    CHECK_STR(without_cr(&a, result.out), "hypotf: 5.0000 1.4142 13.0000\n");
     CHECK_STR(without_cr(&a, result.err), "");
     CHECK_EQ(result.exit_code, 0);
     arena_free(&a);
