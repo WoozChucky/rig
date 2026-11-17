@@ -26,7 +26,9 @@
 // <math.h> come one procedure per type too, each only a call of libc.rig's
 // c_ declaration and nothing else, so every edge value, -0.0, the
 // infinities and NaN, goes to C and comes back as C gives it, and the
-// results are the C library's (libc.rig says whose).
+// results are the C library's (libc.rig says whose). The float64 ones call
+// C's double functions (sqrt), and the float32 ones its float functions
+// (sqrtf), each computing in float32 rather than by way of a float64.
 #load "libc.rig";
 
 // The smaller of a and b; a when they're equal.
@@ -268,4 +270,125 @@ trunc_float64 :: (x: float64) -> float64 {
 // itself for an infinite b.
 mod_float64 :: (a: float64, b: float64) -> float64 {
     return c_fmod(a, b);
+}
+
+// The square root of x, in float32 (C's sqrtf), as sqrt_float64.
+sqrt_float32 :: (x: float32) -> float32 {
+    return c_sqrtf(x);
+}
+
+// The cube root of x, in float32 (C's cbrtf), as cbrt_float64.
+cbrt_float32 :: (x: float32) -> float32 {
+    return c_cbrtf(x);
+}
+
+// The sine of an angle x in radians, in float32 (C's sinf), as sin_float64.
+sin_float32 :: (x: float32) -> float32 {
+    return c_sinf(x);
+}
+
+// The cosine of an angle x in radians, in float32 (C's cosf), as
+// cos_float64.
+cos_float32 :: (x: float32) -> float32 {
+    return c_cosf(x);
+}
+
+// The tangent of an angle x in radians, in float32 (C's tanf), as
+// tan_float64.
+tan_float32 :: (x: float32) -> float32 {
+    return c_tanf(x);
+}
+
+// The angle in radians whose sine is x, in float32 (C's asinf), as
+// asin_float64.
+asin_float32 :: (x: float32) -> float32 {
+    return c_asinf(x);
+}
+
+// The angle in radians whose cosine is x, in float32 (C's acosf), as
+// acos_float64.
+acos_float32 :: (x: float32) -> float32 {
+    return c_acosf(x);
+}
+
+// The angle in radians whose tangent is x, in float32 (C's atanf), as
+// atan_float64.
+atan_float32 :: (x: float32) -> float32 {
+    return c_atanf(x);
+}
+
+// The angle of the point (x, y) from the positive x axis, y first, in
+// float32 (C's atan2f), as atan2_float64.
+atan2_float32 :: (y: float32, x: float32) -> float32 {
+    return c_atan2f(y, x);
+}
+
+// e to the power x, in float32 (C's expf), as exp_float64: inf past
+// float32's largest.
+exp_float32 :: (x: float32) -> float32 {
+    return c_expf(x);
+}
+
+// 2 to the power x, in float32 (C's exp2f), as exp2_float64: inf past
+// float32's largest.
+exp2_float32 :: (x: float32) -> float32 {
+    return c_exp2f(x);
+}
+
+// The natural logarithm of x, in float32 (C's logf), as log_float64.
+log_float32 :: (x: float32) -> float32 {
+    return c_logf(x);
+}
+
+// The logarithm of x to base 2, in float32 (C's log2f), as log2_float64.
+log2_float32 :: (x: float32) -> float32 {
+    return c_log2f(x);
+}
+
+// The logarithm of x to base 10, in float32 (C's log10f), as
+// log10_float64.
+log10_float32 :: (x: float32) -> float32 {
+    return c_log10f(x);
+}
+
+// base to the power exponent, in float32 (C's powf), as pow_float64.
+pow_float32 :: (base: float32, exponent: float32) -> float32 {
+    return c_powf(base, exponent);
+}
+
+// The square root of x² + y², in float32 (C's hypotf, the UCRT's _hypotf
+// on Windows), as hypot_float64: only a hypotenuse past float32's largest
+// is inf.
+hypot_float32 :: (x: float32, y: float32) -> float32 {
+    return c_hypotf(x, y);
+}
+
+// The nearest whole number at or below x, in float32 (C's floorf), as
+// floor_float64.
+floor_float32 :: (x: float32) -> float32 {
+    return c_floorf(x);
+}
+
+// The nearest whole number at or above x, in float32 (C's ceilf), as
+// ceil_float64.
+ceil_float32 :: (x: float32) -> float32 {
+    return c_ceilf(x);
+}
+
+// The nearest whole number to x, halves away from zero, in float32 (C's
+// roundf), as round_float64: the float32 just below 0.5 gives 0.
+round_float32 :: (x: float32) -> float32 {
+    return c_roundf(x);
+}
+
+// x without its fraction, toward zero, in float32 (C's truncf), as
+// trunc_float64.
+trunc_float32 :: (x: float32) -> float32 {
+    return c_truncf(x);
+}
+
+// The remainder of a / b with a's sign, in float32 (C's fmodf), as
+// mod_float64.
+mod_float32 :: (a: float32, b: float32) -> float32 {
+    return c_fmodf(a, b);
 }

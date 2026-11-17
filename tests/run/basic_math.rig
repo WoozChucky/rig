@@ -353,4 +353,180 @@ main :: () {
     show64(mod_float64(1, 0));
     show64(mod_float64(1, inf));
     print_byte(10);
+
+    // The same for float32, each computed in float32 by C's float function
+    // (sqrtf for sqrt_float32). 0.49999997 is the float32 just below 0.5;
+    // 3e30 and 4e30 have squares past float32's largest, and 3e38 twice a
+    // hypotenuse past it.
+    inf32 := 1 / zero32;
+    start_line("sqrt_float32");
+    show32(sqrt_float32(2));
+    show32(sqrt_float32(0));
+    show32(sqrt_float32(minus_zero32));
+    show32(sqrt_float32(inf32));
+    show32(sqrt_float32(-1));
+    print_byte(10);
+
+    start_line("cbrt_float32");
+    show32(cbrt_float32(27));
+    show32(cbrt_float32(-8));
+    show32(cbrt_float32(2));
+    show32(cbrt_float32(minus_zero32));
+    show32(cbrt_float32(-inf32));
+    print_byte(10);
+
+    start_line("sin_float32");
+    show32(sin_float32(PI / 6));
+    show32(sin_float32(minus_zero32));
+    show32(sin_float32(PI / 2));
+    show32(sin_float32(inf32));
+    print_byte(10);
+
+    start_line("cos_float32");
+    show32(cos_float32(0));
+    show32(cos_float32(PI / 3));
+    show32(cos_float32(PI));
+    show32(cos_float32(inf32));
+    print_byte(10);
+
+    start_line("tan_float32");
+    show32(tan_float32(PI / 4));
+    show32(tan_float32(minus_zero32));
+    show32(tan_float32(1));
+    print_byte(10);
+
+    start_line("asin_float32");
+    show32(asin_float32(1));
+    show32(asin_float32(-0.5));
+    show32(asin_float32(minus_zero32));
+    show32(asin_float32(2));
+    print_byte(10);
+
+    start_line("acos_float32");
+    show32(acos_float32(1));
+    show32(acos_float32(0));
+    show32(acos_float32(-1));
+    show32(acos_float32(2));
+    print_byte(10);
+
+    start_line("atan_float32");
+    show32(atan_float32(1));
+    show32(atan_float32(minus_zero32));
+    show32(atan_float32(inf32));
+    show32(atan_float32(-inf32));
+    print_byte(10);
+
+    start_line("atan2_float32");
+    show32(atan2_float32(1, 1));
+    show32(atan2_float32(1, -1));
+    show32(atan2_float32(-1, -1));
+    show32(atan2_float32(-1, 1));
+    print_byte(10);
+
+    start_line("atan2_float32 on the axes");
+    show32(atan2_float32(0, 0));
+    show32(atan2_float32(minus_zero32, 0));
+    show32(atan2_float32(0, minus_zero32));
+    show32(atan2_float32(minus_zero32, minus_zero32));
+    show32(atan2_float32(1, 0));
+    show32(atan2_float32(-1, 0));
+    show32(atan2_float32(nan32, 1));
+    print_byte(10);
+
+    start_line("exp_float32");
+    show32(exp_float32(0));
+    show32(exp_float32(1));
+    show32(exp_float32(-inf32));
+    show32(exp_float32(inf32));
+    show32(exp_float32(-1000));
+    print_byte(10);
+
+    start_line("exp2_float32");
+    show32(exp2_float32(10));
+    show32(exp2_float32(-1));
+    show32(exp2_float32(0.5));
+    show32(exp2_float32(-inf32));
+    print_byte(10);
+
+    start_line("log_float32");
+    show32(log_float32(1));
+    show32(log_float32(10));
+    show32(log_float32(0));
+    show32(log_float32(-1));
+    show32(log_float32(inf32));
+    print_byte(10);
+
+    start_line("log2_float32");
+    show32(log2_float32(1024));
+    show32(log2_float32(0.5));
+    show32(log2_float32(0));
+    show32(log2_float32(-1));
+    print_byte(10);
+
+    start_line("log10_float32");
+    show32(log10_float32(1000));
+    show32(log10_float32(0.001));
+    show32(log10_float32(0));
+    show32(log10_float32(-1));
+    print_byte(10);
+
+    start_line("pow_float32");
+    show32(pow_float32(2, 10));
+    show32(pow_float32(2, 0.5));
+    show32(pow_float32(2, -1));
+    show32(pow_float32(-2, 3));
+    show32(pow_float32(-8, 1.0 / 3));
+    show32(pow_float32(0, -1));
+    show32(pow_float32(minus_zero32, -1));
+    show32(pow_float32(minus_zero32, 3));
+    show32(pow_float32(nan32, 0));
+    show32(pow_float32(1, nan32));
+    print_byte(10);
+
+    start_line("hypot_float32");
+    show32(hypot_float32(3, 4));
+    show32(hypot_float32(-5, 12));
+    show32(hypot_float32(inf32, nan32));
+    show32(hypot_float32(3e30, 4e30) / 1e30);
+    show32(hypot_float32(3e38, 3e38));
+    print_byte(10);
+
+    start_line("floor_float32");
+    show32(floor_float32(2.5));
+    show32(floor_float32(-2.5));
+    show32(floor_float32(-0.5));
+    show32(floor_float32(minus_zero32));
+    print_byte(10);
+
+    start_line("ceil_float32");
+    show32(ceil_float32(2.5));
+    show32(ceil_float32(-2.5));
+    show32(ceil_float32(-0.5));
+    print_byte(10);
+
+    start_line("round_float32");
+    show32(round_float32(0.5));
+    show32(round_float32(1.5));
+    show32(round_float32(2.5));
+    show32(round_float32(-0.5));
+    show32(round_float32(-2.5));
+    show32(round_float32(-0.4));
+    show32(round_float32(0.49999997));
+    print_byte(10);
+
+    start_line("trunc_float32");
+    show32(trunc_float32(2.7));
+    show32(trunc_float32(-2.7));
+    show32(trunc_float32(-0.5));
+    print_byte(10);
+
+    start_line("mod_float32");
+    show32(mod_float32(5.5, 2));
+    show32(mod_float32(-5.5, 2));
+    show32(mod_float32(5.5, -2));
+    show32(mod_float32(-5.5, -2));
+    show32(mod_float32(-4, 2));
+    show32(mod_float32(1, 0));
+    show32(mod_float32(1, inf32));
+    print_byte(10);
 }
