@@ -1074,8 +1074,49 @@ static Ast *parse_jump(Parser *p) {
     return jump;
 }
 
+static Ast *parse_statement(Parser *p);
+
+// defer = 'defer' statement
+//
+// The statement runs when the block the defer is in is left (spec 6.12):
+// `defer free(p);`, or a block of them, `defer { ... }`, a block being a
+// statement. It's a block of its own, for every stage: the checker checks
+// it in a scope of its own, and lowering lowers a copy of it as a block at
+// each way out. So it's a level of the blocks' limit (MAX_DEPTH), as a
+// block is, counted at the 'defer': the one too many is "blocks are nested
+// too deeply", there, and `defer { ... }` is two levels.
+//
+// The statement can be any but a declaration: what it declared would end
+// with its block, as soon as it ran, so nothing could use it. That's "a
+// deferred statement can't declare anything: its block ends when it runs",
+// at the declaration's first name, after it's read; the procedure is then
+// given up, as after any syntax error. A declaration inside a deferred
+// block, if or #if is that block's, and fine. return, break and continue
+// parse, and the checker refuses them where they'd leave the deferred
+// statement. A procedure or a struct is refused before, as anywhere in a
+// body (parse_local_declaration).
+static Ast *parse_defer(Parser *p) {
+    Token *keyword = advance(p);
+    if (p->blocks == MAX_DEPTH) {
+        diag_error(p->diag, keyword->pos, "blocks are nested too deeply (more than %d levels)", MAX_DEPTH);
+        return nullptr;
+    }
+    p->blocks++;
+    reach_in_body(p, body_blocks(p));
+    Ast *statement = parse_statement(p);
+    p->blocks--;
+    if (!statement) return nullptr;
+    if (statement->kind == AST_VAR || statement->kind == AST_CONST || statement->kind == AST_MULTI_VAR) {
+        diag_error(p->diag, statement->pos, "a deferred statement can't declare anything: its block ends when it runs");
+        return nullptr;
+    }
+    Ast_Defer *d = ast_new<Ast_Defer>(p->arena, AST_DEFER, keyword->pos);
+    d->statement = statement;
+    return d;
+}
+
 // statement = declaration | multi_var | assignment | return | block
-//           | if | if_directive | while | for | 'break' ';' | 'continue' ';' | expression ';'
+//           | if | if_directive | while | for | 'break' ';' | 'continue' ';' | defer | expression ';'
 //
 // A keyword starts most of them, and #if an if_directive
 // (parse_if_directive), whose branches are blocks of statements here. A
@@ -1096,6 +1137,7 @@ static Ast *parse_statement(Parser *p) {
     case TOKEN_FOR: return parse_for(p);
     case TOKEN_BREAK:
     case TOKEN_CONTINUE: return parse_jump(p);
+    case TOKEN_DEFER: return parse_defer(p);
     default: break;
     }
     if (is_directive(t, "if")) return parse_if_directive(p, false);
@@ -1278,7 +1320,9 @@ static Ast_Block *parse_block_rest(Parser *p, Token *open) {
 // Blocks nest at most MAX_DEPTH deep, a procedure's body the first, unless
 // it's in top-level #if branches, which count first (parse_top_level_block):
 // "blocks are nested too deeply (more than 1000 levels)" at the '{' of the
-// one too many. The parser, the checker and lowering recurse into each.
+// one too many. The parser, the checker and lowering recurse into each. A
+// defer's statement is a block of its own, counted the same at the 'defer'
+// (parse_defer).
 static Ast_Block *parse_block(Parser *p) {
     Token *open = expect(p, TOKEN_LBRACE);
     if (!open) return nullptr;
@@ -1816,12 +1860,23 @@ static Ast *parse_run(Parser *p) {
 // any body or directive (variable_follows); otherwise it's a signature.
 // Anything else after the name is "expected '::'": procedures are what's
 // most often declared.
+//
+// A defer is a statement, and only a body has a block to leave: at the top
+// level, a top-level #if's branch included, it's "defer can only be in a
+// body", at the keyword, rather than "expected identifier". The recovery
+// then gives it a broken entry with no name, as any failed declaration,
+// unless a declaration comes later on the same line (`defer f :: () {}`):
+// defer is then a stray token, and f is read.
 static bool variable_follows(Parser *p, s64 open);
 
 static Ast *parse_declaration(Parser *p) {
     if (is_directive(peek(p), "run")) return parse_run(p);
     if (is_directive(peek(p), "if")) return parse_if_directive(p, true);
     if (is_load_or_import(peek(p))) return parse_load(p);
+    if (peek(p)->kind == TOKEN_DEFER) {
+        diag_error(p->diag, peek(p)->pos, "defer can only be in a body");
+        return nullptr;
+    }
     Token *name = expect(p, TOKEN_IDENT);
     if (!name) return nullptr;
     Token_Kind after = peek(p)->kind;

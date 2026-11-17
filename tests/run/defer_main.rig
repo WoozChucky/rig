@@ -1,0 +1,13 @@
+// main's defers (issue #149, spec 7.4): they run when main returns, before
+// the C runtime flushes the output streams and the program exits with 0.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+main :: () {
+    defer printf("main's defer runs last\n");
+    printf("main returns early, ");
+    if true {
+        defer printf("the if's defer first, ");
+        return;
+    }
+    printf("never\n");
+}

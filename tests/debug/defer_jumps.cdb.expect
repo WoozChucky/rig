@@ -1,0 +1,12 @@
+11:     k := n;
+12:     if k == 1 {
+13:         return k;
+10:     defer putchar(97);
+13:         return k;
+27:     f(2);
+18:             putchar(99);
+16:         defer putchar(98);
+19:             break;
+10:     defer putchar(97);
+22:     return 0;
+28:     putchar(10);

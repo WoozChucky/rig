@@ -1,0 +1,16 @@
+f (n=1) at
+defer_jumps.rig:11
+k := n;
+if k == 1 {
+return k;
+defer putchar(97);
+return k;
+f(2);
+f (n=2) at
+defer_jumps.rig:18
+putchar(99);
+defer putchar(98);
+break;
+defer putchar(97);
+return 0;
+putchar(10);

@@ -1,0 +1,1 @@
+main returns early, the if's defer first, main's defer runs last

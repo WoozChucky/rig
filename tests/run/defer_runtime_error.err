@@ -1,0 +1,1 @@
+tests/run/defer_runtime_error.rig:9:25: runtime error: division by zero

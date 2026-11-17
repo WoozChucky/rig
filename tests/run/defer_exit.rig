@@ -1,0 +1,10 @@
+// C's exit runs no defers (issue #149, spec 6.12, 7.4): the program ends
+// there, with the status exit gives, as a C program would.
+puts :: (s: *u8) -> s32 #foreign libc;
+exit :: (status: s32) #foreign libc;
+
+main :: () {
+    defer puts("never: exit runs no defers");
+    puts("calling exit");
+    exit(3);
+}

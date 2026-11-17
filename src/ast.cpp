@@ -469,6 +469,12 @@ static void dump(Array<u8> *buffer, Ast *node) {
         for (s64 i = 0; i < arms; i++) out(buffer, ")");
         break;
     }
+    case AST_DEFER:
+        // (defer S); defer { ... } is (defer (block ...)).
+        out(buffer, "(defer ");
+        dump(buffer, ((Ast_Defer *)node)->statement);
+        out(buffer, ")");
+        break;
     }
 }
 

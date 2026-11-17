@@ -27,7 +27,7 @@
 //                   ['->' (type | '(' type {',' type} ')')] ['#c_call']
 //   block       = '{' statement* '}'
 //   statement   = declaration | multi_var | assignment | return | block
-//               | if | if_directive | while | for | 'break' ';' | 'continue' ';' | expression ';'
+//               | if | if_directive | while | for | 'break' ';' | 'continue' ';' | defer | expression ';'
 //   declaration = IDENT ':' type ['=' (expression | '---')] ';'
 //               | IDENT ':=' expression ';'
 //               | IDENT '::' expression ';'
@@ -39,6 +39,7 @@
 //   if          = 'if' expression block ['else' (block | if)]
 //   while       = 'while' expression block
 //   for         = 'for' ['*'] [IDENT ':'] expression ['..' expression] block
+//   defer       = 'defer' statement                                (any statement but a declaration)
 //   expression  = unary { BINARY_OPERATOR unary }, binary operators left-associative, tightest last:
 //                   1: ||   2: &&   3: == != < <= > >=   4: + - | ^   5: * / % << >> &
 //   unary       = ('-' | '~' | '!' | '*' | '#run') unary | cast | postfix
@@ -110,10 +111,11 @@
 // cast, call, dereference, field, element, literal and binary operator is a
 // level above what it holds, so a chain of 1001 '+' is too deep too, and a
 // procedure's body is the first block, unless it's in top-level #if
-// branches, which count first (below). Deeper is "this expression is nested
-// too deeply (more than 1000 levels)", at the start of the outermost
-// expression, or "blocks are nested too deeply (more than 1000 levels)", at
-// the '{' one too many; the declaration is then given up, as after any
+// branches, which count first (below), and each defer is a block level too
+// (below). Deeper is "this expression is nested too deeply (more than 1000
+// levels)", at the start of the outermost expression, or "blocks are nested
+// too deeply (more than 1000 levels)", at the '{' or 'defer' one too many;
+// the declaration is then given up, as after any
 // other error below, not only the statement: the parser has no recovery
 // inside a body (but for a misplaced #load, which declares nothing and is
 // skipped, see below), and skipping just the statement would leave a
@@ -173,6 +175,21 @@
 // the iterator's name, as in for i: 0..9", at what came instead of the ':';
 // anything else is "expected '..' or the loop's '{'", or a #load misplaced
 // (below).
+//
+// `defer S` (spec 6.12) runs S when the block the defer is written in is
+// left, by any way out; `defer { ... }` runs a block, a block being a
+// statement (Ast_Defer). S is any statement but a declaration: its block
+// ends when it runs, so what it declared would end with it, unused. `defer
+// x := 1;` is "a deferred statement can't declare anything: its block ends
+// when it runs", at the declaration's first name, and the procedure is
+// given up, as after any error below; a declaration inside a deferred
+// block, if or #if is that block's, and fine. return, break and continue
+// parse after a defer: the checker refuses those that would leave the
+// deferred statement. S is a block of its own, for the nesting limit
+// above too: each defer is a level, at its keyword, so `defer { ... }` is
+// two. Only a body has blocks to leave: at the top level, a top-level #if's
+// branch included, a defer is "defer can only be in a body", at the
+// keyword.
 //
 // A program can be several files (spec 2.13): `#load "world/map.rig";` at
 // the top level names another, whose declarations join the program's. The

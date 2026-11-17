@@ -1,0 +1,147 @@
+// defer (issue #149, spec 6.12): a deferred statement runs when the block
+// it's written in is left, by any way out: a block's in reverse order of
+// registration, the innermost block's first. It's registered when it's
+// reached, evaluated when it runs, and runs after a return's values are
+// worked out.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+puts :: (s: *u8) -> s32 #foreign libc;
+
+reverse :: () {
+    defer puts("reverse: registered first, runs last");
+    defer puts("reverse: registered second, runs second");
+    defer { puts("reverse: registered last, runs first"); }
+}
+// A return three blocks deep runs every enclosing block's defers, the innermost first.
+deep :: () -> int {
+    defer puts("deep: the body's, last");
+    {
+        defer puts("deep: the outer block's, third");
+        if true {
+            defer puts("deep: the if's, second");
+            {
+                defer puts("deep: the innermost block's, first");
+                return 3;
+            }
+        }
+    }
+    return 0;
+}
+// Once per iteration, before the next step, continue and break included.
+per_iteration :: () {
+    for 1..5 {
+        defer printf("loop: end of iteration %lld\n", it);
+        if it == 2 { continue; }
+        if it == 4 { break; }
+        printf("loop: iteration %lld\n", it);
+    }
+}
+// A break out of nested blocks: the inner block's, then the loop body's.
+nested_break :: () {
+    while true {
+        defer puts("break: the loop body's, second");
+        {
+            defer puts("break: the inner block's, first");
+            break;
+        }
+    }
+    puts("break: after the loop");
+}
+// A defer not reached isn't registered.
+early :: (bad: bool) {
+    if bad { return; }
+    defer puts("early: reached, so it runs");
+}
+// Evaluated when it runs.
+late :: () {
+    n := 1;
+    defer printf("late: n is %lld when the block ends\n", n);
+    n = 2;
+}
+// Return values first.
+returned :: () -> int {
+    x := 1;
+    defer x = 2;
+    return x;
+}
+// An aggregate result is in the caller's temporary before the defers run.
+Pair :: struct { a: int; b: int; }
+pair :: () -> Pair, int {
+    p := Pair.{1, 2};
+    n := 3;
+    defer { p.a = 10; n = 30; }
+    return p, n;
+}
+// A defer inside deferred code runs when the deferred block ends.
+nested :: () {
+    defer {
+        defer puts("nested: the deferred block's own defer");
+        puts("nested: the deferred block");
+    }
+    puts("nested: the body");
+}
+// A deferred defer: each copy is a block of its own, so the inner defer
+// runs as soon as the outer copy ends, before the body's older defer.
+deferred_defer :: () {
+    defer puts("defer defer: the body's first defer, last");
+    defer defer puts("defer defer: the inner defer, when the outer copy ends");
+    puts("defer defer: the body");
+}
+// A deferred #if is copied at each way out, and each copy declares its own m.
+deferred_if :: (early: bool) {
+    n := 1;
+    defer #if true { m := n; printf("deferred #if: m is %lld\n", m); }
+    if early { return; }
+    n = 2;
+}
+// Each arm of an if is a block: falling off its '}' runs its defers, before
+// the code after the if.
+if_arms :: (c: bool) {
+    if c {
+        defer puts("if arms: the if arm's defer");
+        puts("if arms: the if arm");
+    } else {
+        defer puts("if arms: the else arm's defer");
+        puts("if arms: the else arm");
+    }
+    puts("if arms: after the if");
+}
+// A loop inside deferred code breaks and continues as any loop.
+looping :: () {
+    defer {
+        total := 0;
+        for 1..10 {
+            if it == 2 { continue; }
+            if it > 4 { break; }
+            total += it;
+        }
+        printf("looping: a deferred loop sums %lld\n", total);
+    }
+}
+// A body #if makes no scope: its defer is the enclosing block's.
+in_if_directive :: () {
+    {
+        #if true { defer puts("#if: runs when the enclosing block ends"); }
+        puts("#if: after the #if");
+    }
+    puts("#if: after the block");
+}
+main :: () {
+    reverse();
+    printf("deep: returned %lld\n", deep());
+    per_iteration();
+    nested_break();
+    early(true);
+    early(false);
+    late();
+    printf("returned: %lld\n", returned());
+    p, n := pair();
+    printf("pair: %lld %lld %lld\n", p.a, p.b, n);
+    nested();
+    deferred_defer();
+    deferred_if(true);
+    deferred_if(false);
+    if_arms(true);
+    if_arms(false);
+    looping();
+    in_if_directive();
+}

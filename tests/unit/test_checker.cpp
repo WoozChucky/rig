@@ -348,6 +348,7 @@ static Ast *find_in_statement(Ast *s, const char *name) {
         if (string_eq(loop->index->name, str(name))) return loop->index;
         return find_local(loop->body, name);
     }
+    case AST_DEFER: return find_in_statement(((Ast_Defer *)s)->statement, name);
     default: return nullptr;
     }
 }
@@ -6694,5 +6695,273 @@ TEST(top_level_if_directives_nest_up_to_a_thousand_levels) {
                                              "\nmain :: () { x : [A]u8; }\n"),
                            SYSTEM_NONE),
               "");
+    arena_free(&a);
+}
+
+// Issue #149: defer (spec 6.12).
+
+TEST(defer_checks_its_statement_in_a_scope_of_its_own) {
+    // The deferred statement is checked where the defer is, so it names
+    // what's in scope there, and in a scope of its own: what its #if's
+    // branch declares ends with it, so the body may declare that name again.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    n := 1;\n"
+                           "    defer #if true { m := n; }\n"
+                           "    m := 2;\n"
+                           "}\n"),
+              "");
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    defer { y := 1; }\n"
+                           "    z := y;\n"
+                           "}\n"),
+              "3:10: unknown identifier 'y'\n");
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    defer n = 1;\n"
+                           "    n := 0;\n"
+                           "}\n"),
+              "2:11: unknown identifier 'n'\n");
+    // Statements as anywhere else (6.3, 7.8).
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    defer 1 + 2;\n"
+                           "    defer #run f();\n"
+                           "}\n"
+                           "f :: () {}\n"),
+              "2:11: only a call can be a statement, for now\n"
+              "3:11: #run in a body must be a value, as in x := #run f();\n");
+    // The deferred m is the first in source order (find_in_statement looks
+    // into a defer), with n's type; the body's own m is another, an int.
+    Checked c = check_src(&a,
+                          "main :: () {\n"
+                          "    n : u8 = 1;\n"
+                          "    defer #if true { m := n; }\n"
+                          "    m := 2;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "m"), "u8");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(defer_refuses_return) {
+    // Deferred code runs as its block is left, so it can't leave itself
+    // but by its end: a return anywhere in it is refused, at the keyword.
+    // Its values are still checked, as expressions.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: () -> int {\n"
+                           "    defer return 1;\n"
+                           "    defer { if true { return 2; } }\n"
+                           "    return 0;\n"
+                           "}\n"
+                           "main :: () {}\n"),
+              "2:11: can't return from a deferred statement\n"
+              "3:23: can't return from a deferred statement\n");
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    defer return nope;\n"
+                           "}\n"),
+              "2:11: can't return from a deferred statement\n"
+              "2:18: unknown identifier 'nope'\n");
+    // A defer inside deferred code gives the outer one back when it's done:
+    // the return after it is still in the outer deferred statement.
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    defer { defer g(); return; }\n"
+                           "}\n"
+                           "g :: () {}\n"),
+              "2:24: can't return from a deferred statement\n");
+    // A top-level #run's block is a body like any other: its own return is
+    // fine, a deferred one isn't.
+    CHECK_STR(check_source(&a,
+                           "#run {\n"
+                           "    defer return;\n"
+                           "}\n"
+                           "main :: () {}\n"),
+              "2:11: can't return from a deferred statement\n");
+    CHECK_STR(check_source(&a,
+                           "#run {\n"
+                           "    defer {}\n"
+                           "    return;\n"
+                           "}\n"
+                           "main :: () {}\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(defer_refuses_break_and_continue_leaving_it) {
+    // A break or continue whose loop is outside the deferred statement
+    // would leave it; one inside a loop of its own is that loop's. With no
+    // loop around at all, the message is the usual one.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    for 1..3 {\n"
+                           "        defer break;\n"
+                           "        defer { continue; }\n"
+                           "        defer if it == 2 { for 1..2 { break; } break; }\n"
+                           "    }\n"
+                           "    defer break;\n"
+                           "}\n"),
+              "3:15: 'break' can't leave a deferred statement\n"
+              "4:17: 'continue' can't leave a deferred statement\n"
+              "5:48: 'break' can't leave a deferred statement\n"
+              "7:11: 'break' is only allowed inside a loop\n");
+    // A defer inside deferred code is the innermost one: a loop between the
+    // two is outside it, so its jumps are refused. And the outer one is back
+    // after it: the continue after the inner defer still leaves the outer.
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    defer { for 1..3 { defer break; defer { continue; } } }\n"
+                           "    for 1..2 { defer { defer g(); continue; } }\n"
+                           "}\n"
+                           "g :: () {}\n"),
+              "2:30: 'break' can't leave a deferred statement\n"
+              "2:45: 'continue' can't leave a deferred statement\n"
+              "3:35: 'continue' can't leave a deferred statement\n");
+    arena_free(&a);
+}
+
+TEST(defer_allows_loops_and_defers_inside) {
+    // Loops inside deferred code may break and continue, a defer may be
+    // inside deferred code, and a defer in a body #if's branch is the
+    // enclosing block's. After a defer inside deferred code, a loop of the
+    // outer deferred statement is that statement's again: its break is fine.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    defer { for 1..3 { if it == 2 { continue; } defer { while true { break; } } } }\n"
+                           "    defer defer { x := 1; }\n"
+                           "    for 1..2 { #if true { defer g(); } }\n"
+                           "    defer { for 1..2 { defer g(); break; } }\n"
+                           "    for 1..3 { defer { while true { defer g(); break; } } }\n"
+                           "}\n"
+                           "g :: () {}\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(defer_changes_nothing_about_reaching_the_end) {
+    // A defer is no way out (6.11): a body that reaches its end with one
+    // still must return, and one that can't reach it needn't.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: () -> int {\n"
+                           "    defer g();\n"
+                           "}\n"
+                           "g :: () {}\n"
+                           "main :: () {}\n"),
+              "3:1: 'f' must return a value on every path, and this one reaches its end\n");
+    CHECK_STR(check_source(&a,
+                           "f :: () -> int {\n"
+                           "    defer g();\n"
+                           "    return 1;\n"
+                           "}\n"
+                           "g :: () {}\n"
+                           "main :: () {}\n"),
+              "");
+    CHECK_STR(check_source(&a,
+                           "f :: () -> int {\n"
+                           "    while true { defer g(); }\n"
+                           "}\n"
+                           "g :: () {}\n"
+                           "main :: () {}\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(a_run_in_deferred_code_checks_its_body_as_its_own) {
+    // Review Focus 3: g comes after main, so its body is first checked on
+    // demand, from inside main's deferred statement (check_body). It's
+    // checked as its own: neither its return nor its loop's break is
+    // refused, only its own error is said, and so the #run doesn't run.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    n := 0;\n"
+                           "    for 1..2 { defer n = #run g(); }\n"
+                           "}\n"
+                           "g :: () -> int {\n"
+                           "    x : int = \"s\";\n"
+                           "    for 1..2 { break; }\n"
+                           "    return 1;\n"
+                           "}\n"),
+              "6:15: a value of type 'string' doesn't convert to 'int' implicitly\n");
+    // And main's deferred statement is back after it: the jump and the
+    // return after the #run still leave it.
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    n := 0;\n"
+                           "    for 1..2 { defer { n = #run g(); break; } }\n"
+                           "}\n"
+                           "g :: () -> int { return 1; }\n"),
+              "3:38: 'break' can't leave a deferred statement\n");
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    n := 0;\n"
+                           "    defer { n = #run g(); return; }\n"
+                           "}\n"
+                           "g :: () -> int { return 1; }\n"),
+              "3:27: can't return from a deferred statement\n");
+    arena_free(&a);
+}
+
+TEST(defer_in_code_a_run_runs) {
+    // Review Focus 3: a #run runs the IR compiled code runs, defers
+    // included. f's return works n out, 1, before its defer makes n 2.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "N :: #run f();\n"
+                          "f :: () -> int {\n"
+                          "    n := 1;\n"
+                          "    defer n = 2;\n"
+                          "    return n;\n"
+                          "}\n"
+                          "main :: () {}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(global_named(&c, "N")->is_constant);
+    CHECK_EQ(global_named(&c, "N")->constant, 1u);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(a_run_reaches_what_only_deferred_code_calls) {
+    // A #run's walk goes into deferred code: g, declared after f and called
+    // only from its defer, is checked on demand before the #run lowers and
+    // runs it. The inner block's defer makes n 2 before the return.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "N :: #run f();\n"
+                          "f :: () -> int {\n"
+                          "    n := 1;\n"
+                          "    {\n"
+                          "        defer g(*n);\n"
+                          "    }\n"
+                          "    return n;\n"
+                          "}\n"
+                          "g :: (p: *int) {\n"
+                          "    p.* = 2;\n"
+                          "}\n"
+                          "main :: () {}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(global_named(&c, "N")->is_constant);
+    CHECK_EQ(global_named(&c, "N")->constant, 2u);
+    token_list_free(c.list);
+    // So g's error is said, and the #run, which would run it, doesn't.
+    CHECK_STR(check_source(&a,
+                           "N :: #run f();\n"
+                           "f :: () -> int {\n"
+                           "    defer g();\n"
+                           "    return 1;\n"
+                           "}\n"
+                           "g :: () {\n"
+                           "    x : int = \"s\";\n"
+                           "}\n"
+                           "main :: () {}\n"),
+              "7:15: a value of type 'string' doesn't convert to 'int' implicitly\n");
     arena_free(&a);
 }
