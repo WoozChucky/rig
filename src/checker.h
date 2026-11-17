@@ -29,8 +29,9 @@
 //   program is built for (Ast_File.system, else the host's), so
 //   OS == OS_WINDOWS is a constant bool. A top-level declaration can't take
 //   one of their names: "'OS' is predeclared: it's the system the program
-//   is built for", at its name, and it isn't declared. A local may hide
-//   one, as it may any of the top level's names.
+//   is built for", at its name, and it isn't declared. A broken entry
+//   (below) of one of their names isn't declared either, and says nothing.
+//   A local may hide one, as it may any of the top level's names.
 // - A name declared in a block (a variable or a constant) is visible from
 //   after its declaration to the end of the block. An inner block may
 //   declare the same name again, hiding the outer one; the same block may
@@ -563,7 +564,8 @@
 //
 // The checker also runs after syntax errors, so they and the type errors in
 // the rest of the program are reported together. A declaration the parser
-// gave up on is a broken entry (parser.h): its name is declared, with an
+// gave up on is a broken entry (parser.h): its name is declared (unless
+// it's a predeclared constant's, which keeps meaning the constant), with an
 // unknown type, and nothing is reported about it or about its uses (a call
 // to it may pass anything). Its body isn't checked: there is none. The
 // checker runs after a #load failed too (load.h), or one that named no

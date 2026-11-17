@@ -6047,6 +6047,23 @@ TEST(os_is_the_programs_system) {
     CHECK_EQ(os_value_for(SYSTEM_LINUX), 2);
     CHECK_EQ(os_value_for(SYSTEM_WINDOWS), 1);
     CHECK_EQ(os_value_for(SYSTEM_NONE), (u64)host_system());
+    // And the host's is the one rig runs on, as the loader knows it.
+#ifdef _WIN32
+    CHECK_EQ(host_system(), SYSTEM_WINDOWS);
+#else
+    CHECK_EQ(host_system(), SYSTEM_LINUX);
+#endif
+    CHECK_EQ(host_system() == SYSTEM_WINDOWS, HOST_IS_WINDOWS);
+}
+
+// Whether `value`, checked, is a use of the predeclared OS: a name whose
+// declaration is the constant written nowhere (position 0:0), the host's
+// system.
+static bool names_predeclared_os(Ast *value) {
+    if (value->kind != AST_NAME) return false;
+    Ast *decl = ((Ast_Name *)value)->decl;
+    return decl && decl->kind == AST_CONST && decl->pos.line == 0 && decl->pos.col == 0 &&
+           value->is_constant && value->constant == (u64)host_system();
 }
 
 TEST(a_top_level_declaration_of_os_is_refused) {
@@ -6058,6 +6075,26 @@ TEST(a_top_level_declaration_of_os_is_refused) {
               "3:1: 'OS_LINUX' is predeclared: it's Linux, one of the systems OS may be\n");
     CHECK_STR(check_source(&a, "OS :: struct { x: int; }\nmain :: () {}\n"),
               "1:1: 'OS' is predeclared: it's the system the program is built for\n");
+    // The refused declaration isn't declared: a use still means the constant.
+    Checked c = check_src(&a, "OS :: 3;\nmain :: () { x := OS; }\n");
+    CHECK(names_predeclared_os(((Ast_Var *)local_named(&c, "x"))->value));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(a_broken_entry_named_os_isnt_declared) {
+    // Silently: its syntax error is the one message, and a use still means
+    // the constant (not the broken entry's unknown type, which would say
+    // nothing).
+    Arena a = arena_make();
+    const char *program = "OS :: 5 6;\nmain :: () { x : u8 = OS; }\n";
+    CHECK_STR(check_source(&a, program), "1:9: expected ';', found integer literal\n");
+    Token_List *list = src(program);
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    check(file, &a, &list->diag);
+    Checked c = {list, file, false};
+    CHECK(names_predeclared_os(((Ast_Var *)local_named(&c, "x"))->value));
+    token_list_free(list);
     arena_free(&a);
 }
 
