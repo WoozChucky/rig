@@ -693,8 +693,9 @@ static bool procedure_follows(Parser *p, s64 ahead) {
 // statement; nor can #run { ... }, which only the top level has (a #run in
 // a body takes an expression, and a block isn't one). An #if in column 1
 // isn't one either: in a body it's a statement, unindented, as a constant
-// may be (spec 4.9); unless a branch of it declares a procedure or a struct
-// (branch_declares_procedure), which only a top-level #if's branch can.
+// may be (spec 4.9); unless a branch of it declares a procedure or a struct,
+// or holds a #run { } (branch_declares_procedure), which only a top-level
+// #if's branch can.
 static bool branch_declares_procedure(Parser *p);
 
 static bool starts_declaration(Parser *p) {
@@ -706,13 +707,15 @@ static bool starts_declaration(Parser *p) {
 }
 
 // Whether a branch of the #if chain at the next token declares a procedure
-// or a struct right inside its braces, IDENT '::' '(' ... or IDENT '::'
-// 'struct', indented or not: then it can only be a top-level #if, its
-// branches holding declarations, as the writer's indentation says (an #if
-// written after a body whose '}' was forgotten). The chain ends at a '}'
-// that closes a branch with no else after it, or at the end of the file.
-// A brace in a condition (`#if X == .{1} {`) can end the look early, and
-// the #if is then a statement, as without such a declaration.
+// or a struct, or holds a #run { }, right inside its braces, IDENT '::' '('
+// ... or IDENT '::' 'struct' or #run '{', indented or not: no body can
+// hold any of them (a #run in a body takes an expression), so it can only
+// be a top-level #if, its branches holding declarations, as the writer's
+// indentation says (an #if written after a body whose '}' was forgotten).
+// The chain ends at a '}' that closes a branch with no else after it, or
+// at the end of the file. A brace in a condition (`#if X == .{1} {`) can
+// end the look early, and the #if is then a statement, as without such a
+// declaration.
 static bool branch_declares_procedure(Parser *p) {
     s64 depth = 0;  // the braces open since the '#if'
     for (s64 ahead = 1; peek(p, ahead)->kind != TOKEN_EOF; ahead++) {
@@ -723,6 +726,8 @@ static bool branch_declares_procedure(Parser *p) {
             if (--depth <= 0 && peek(p, ahead + 1)->kind != TOKEN_ELSE) return false;
         } else if (depth == 1 && t->kind == TOKEN_IDENT && peek(p, ahead + 1)->kind == TOKEN_COLON_COLON &&
                    (procedure_follows(p, ahead + 2) || peek(p, ahead + 2)->kind == TOKEN_STRUCT)) {
+            return true;
+        } else if (depth == 1 && is_directive(t, "run") && peek(p, ahead + 1)->kind == TOKEN_LBRACE) {
             return true;
         }
     }
@@ -1175,7 +1180,8 @@ static void report_misplaced_loads(Parser *p, Array<Token *> *loads) {
 //
 // The end of the file, or a procedure's declaration at the start of a line
 // (`name :: (` in column 1, `#run {`, or an #if whose branch declares a
-// procedure or a struct: starts_declaration), before the '}' means the
+// procedure or a struct, or holds a #run { }: starts_declaration), before
+// the '}' means the
 // block was never closed: an if's '}' forgotten, say.
 // Everything up to there has been read as the block's statements, globals
 // in column 1 included, which belong after the body; read as its locals,
@@ -1208,8 +1214,8 @@ static void report_misplaced_loads(Parser *p, Array<Token *> *loads) {
 // has nothing to report about it. So does an #if in column 1, read in the
 // block as the statement it can be there (spec 4.9), and again at the top
 // level, where its branches hold declarations, at the end of such a run;
-// one whose branch declares a procedure or a struct is the end itself
-// (starts_declaration).
+// one whose branch declares a procedure or a struct, or holds a #run { },
+// is the end itself (starts_declaration).
 static Ast_Block *parse_block_rest(Parser *p, Token *open) {
     Ast_Block *block = ast_new<Ast_Block>(p->arena, AST_BLOCK, open->pos);
     s64 run = -1;               // where the run of column-1 declarations up to here starts, or -1

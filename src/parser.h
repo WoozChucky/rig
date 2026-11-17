@@ -262,10 +262,10 @@
 // '{' should be; one in column 1 is among the column-1 declarations a body
 // never closed is taken to end before (it doesn't end a body by itself:
 // unindented, it's a statement there; unless a branch of it declares a
-// procedure or a struct, which only a top-level #if's branch can, and it
-// then ends the body as a procedure's declaration does), the skipping
-// resumes at it inside braces too, as at a procedure's declaration in
-// column 1, and it ends a struct's fields.
+// procedure or a struct, or holds a #run { }, which only a top-level #if's
+// branch can, and it then ends the body as a procedure's declaration does),
+// the skipping resumes at it inside braces too, as at a procedure's
+// declaration in column 1, and it ends a struct's fields.
 //
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;
@@ -285,10 +285,11 @@
 // A body never closed ends at the end of the file or at a procedure's or a
 // struct's declaration in column 1 (`name :: (` or `Name :: struct`), a
 // #run { in column 1, or an #if in column 1 whose branch declares a
-// procedure or a struct: a body can't hold any of them, and each can only
-// start a top-level declaration. A constant in column 1 (`N :: 5;`) is a
-// local constant, as an indented one is. A struct's braces never closed
-// end there too, and at any #run or #if in column 1. The body is then taken
+// procedure or a struct, or holds a #run { }: a body can't hold any of
+// them, and each can only start a top-level declaration. A constant in
+// column 1 (`N :: 5;`) is a local constant, as an indented one is. A
+// struct's braces never closed end there too, and at any #run or #if in
+// column 1. The body is then taken
 // to end before the column-1 declarations (IDENT ':', ':=' or '::', a
 // #load, a #run or an #if) right before that point, at its own level:
 // "expected '}'" is reported at the first of them, and the top level
@@ -315,7 +316,10 @@
 // program into one tree this way, a file's declarations after those of the
 // files loaded before it. Nodes are allocated in the arena; errors go to d.
 // A declaration with errors is appended to `file` as a broken entry, in its
-// place in source order.
+// place in source order. A top-level #if is appended to file->ifs, and the
+// declarations in its branches, broken entries included, stay in the
+// branches' blocks: they join the file's lists only once the loader takes
+// a branch (ast_add_declaration).
 void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d);
 
 // parse_into on a new Ast_File: a file on its own.
