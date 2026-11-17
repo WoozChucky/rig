@@ -200,9 +200,10 @@
 //   this one reaches its end", or "'divmod' must return its values on every
 //   path, ..." when it has several). A block reaches its end unless its
 //   last statement is a return, a block that doesn't reach its own end, an
-//   if with an else whose branches both don't, or a `while` whose condition
-//   is the constant true and that has no break of its own. An if or while
-//   whose condition was an error doesn't reach its end either, so the
+//   if with an else whose branches both don't, an #if whose taken branch
+//   doesn't (Conditional compilation, below), or a `while` whose condition
+//   is the constant true and that has no break of its own. An if, #if or
+//   while whose condition was an error doesn't reach its end either, so the
 //   condition's is the one message.
 // - An expression statement must be a call, whose value may be ignored
 //   (spec 6.7).
@@ -545,7 +546,9 @@
 //   not 'int'", "the condition of '#if' must be known while compiling", at
 //   it. It may use local constants and #run. One with an error takes
 //   neither branch, and the decision is on the chain's first arm
-//   (Ast_If_Directive.decided, failed, taken).
+//   (Ast_If_Directive.decided, failed, taken). The locals a branch declares
+//   are then declared nowhere, so after it a name declared nowhere in that
+//   body isn't reported as unknown: the condition's message is the one.
 // - Only the taken branch is checked, and it makes no scope: its
 //   statements are the enclosing block's, so a local it declares is visible
 //   after the #if, and the block can't declare it again. The conditions after
@@ -556,7 +559,9 @@
 //   condition's message is the one. break and continue in the taken branch
 //   act on a loop around the #if, as anywhere.
 // - Only the taken branch is code: a #run's walk, lowering and the debug
-//   information see that branch alone, and nothing is at the #if's line.
+//   information see that branch alone. The #if adds no code of its own: the
+//   taken statements are at their own positions, so an #if whose branch is
+//   on lines of its own has nothing at its line.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
