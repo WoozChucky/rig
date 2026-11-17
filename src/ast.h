@@ -636,6 +636,9 @@ Token_Kind compound_operator(Token_Kind op);
 //                 #if c { ... } else #if d { ... } else { ... }
 // Globals print as locals do, (var counter int) and (const LIMIT (int 100)),
 // a load as (load "world/map.rig"), and a top-level run and #if as above,
-// each on a line of its own among the procedures, in source order.
+// each on a line of its own among the procedures, in source order. On a
+// loaded tree the declarations of the branches the loader took are in the
+// lists too (ast_add_declaration), so they print twice: in their #if's
+// block and each on a line of its own.
 String ast_dump(Arena *a, Ast_File *file);
 String ast_dump_node(Arena *a, Ast *node);
