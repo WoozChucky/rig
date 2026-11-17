@@ -132,6 +132,51 @@ TEST(declarations_sort_in_load_order) {
     arena_free(&a);
 }
 
+TEST(declarations_sort_across_files_and_within_one) {
+    // ast_add_declaration puts a taken branch's declarations after the same
+    // file's later ones, so a list can be out of order inside one file as
+    // well as across files. The lists here hold five procedures (an odd
+    // count, three merge passes, so the sorted list is copied back), four
+    // runs (two passes, nothing to copy back) and three globals (an odd
+    // count, two passes). Each list's first entry in load order is added
+    // last. File 1 comes first.
+    Arena a = arena_make();
+    Ast_File file = {};
+    array_add(&file.order, 1);
+    array_add(&file.order, 0);
+    Position procs_added[5] = {{0, 4, 1}, {1, 5, 9}, {0, 1, 1}, {1, 5, 3}, {1, 2, 1}};
+    Position procs_sorted[5] = {{1, 2, 1}, {1, 5, 3}, {1, 5, 9}, {0, 1, 1}, {0, 4, 1}};
+    Position runs_added[4] = {{0, 6, 1}, {0, 2, 5}, {1, 3, 1}, {0, 1, 1}};
+    Position runs_sorted[4] = {{1, 3, 1}, {0, 1, 1}, {0, 2, 5}, {0, 6, 1}};
+    Position globals_added[3] = {{0, 2, 1}, {1, 7, 1}, {1, 1, 1}};
+    Position globals_sorted[3] = {{1, 1, 1}, {1, 7, 1}, {0, 2, 1}};
+    for (s32 i = 0; i < 5; i++) ast_add_declaration(&file, ast_new<Ast_Proc>(&a, AST_PROC, procs_added[i]));
+    for (s32 i = 0; i < 4; i++) ast_add_declaration(&file, ast_new<Ast_Run>(&a, AST_RUN, runs_added[i]));
+    for (s32 i = 0; i < 3; i++) ast_add_declaration(&file, ast_new<Ast_Const>(&a, AST_CONST, globals_added[i]));
+    ast_sort_declarations(&file);
+    CHECK_EQ(file.procs.count, 5);
+    CHECK_EQ(file.runs.count, 4);
+    CHECK_EQ(file.globals.count, 3);
+    for (s32 i = 0; i < 5 && i < file.procs.count; i++) {
+        Position at = file.procs[i]->pos;
+        CHECK(at.file == procs_sorted[i].file && at.line == procs_sorted[i].line && at.col == procs_sorted[i].col);
+    }
+    for (s32 i = 0; i < 4 && i < file.runs.count; i++) {
+        Position at = file.runs[i]->pos;
+        CHECK(at.file == runs_sorted[i].file && at.line == runs_sorted[i].line && at.col == runs_sorted[i].col);
+    }
+    for (s32 i = 0; i < 3 && i < file.globals.count; i++) {
+        Position at = file.globals[i]->pos;
+        CHECK(at.file == globals_sorted[i].file && at.line == globals_sorted[i].line &&
+              at.col == globals_sorted[i].col);
+    }
+    array_free(&file.procs);
+    array_free(&file.runs);
+    array_free(&file.globals);
+    array_free(&file.order);
+    arena_free(&a);
+}
+
 TEST(nodes_start_zeroed) {
     Arena a = arena_make();
     Ast_Proc *p = ast_new<Ast_Proc>(&a, AST_PROC, {0, 3, 7});
