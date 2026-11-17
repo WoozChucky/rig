@@ -1,0 +1,36 @@
+[a/b] [c.txt] [.txt] [a/b/c]
+[a\b] [c.txt] [.txt] [a\b\c]
+[a/b] [c.tar.gz] [.gz] [a/b\c.tar]
+[] [file] [] [file]
+[dir.d] [file] [] [dir.d/file]
+[a/b] [] [] [a/b/]
+[a] [b] [] [a//b]
+[/] [b.c] [.c] [/b]
+[/] [] [] [/]
+[\] [b] [] [\\b]
+[] [] [] []
+[] [] [] []
+[] [.bashrc] [] [.bashrc]
+[a] [.config.json] [.json] [a/.config]
+[a] [b.] [.] [a/b]
+[a] [..] [] [a/..]
+[C:\x] [y.rig] [.rig] [C:\x\y]
+[] [x.tar] [.tar] [x]
+views: true true true true true true
+separators: true true false false
+[a/b]
+[a/b]
+[a\b]
+[a/b]
+[a\b]
+[b]
+[a]
+[a//b]
+[a//b]
+[/b]
+[.build/tests/x.bin]
+join of nothing: 0 true
+copied: true
+empty join allocates: 0
+one allocation: 1 3
+no memory: 0 true

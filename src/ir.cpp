@@ -89,6 +89,66 @@ Ir_Instr *ir_emit_call_indirect(Ir_Proc *p, s32 block, s32 callee, Ir_Proc *sign
     return call;
 }
 
+// The C runtime's time functions on Windows, each beside the Universal C
+// Runtime's 64-bit export that a C program's call of it reaches (time_t is
+// 64 bits unless a program asks for 32). The UCRT exports none of these
+// names: its headers define each as an inline function, or a macro (_ftime
+// and _ftime_s), over the 64-bit function. msvcrt.lib, on the link line for
+// the C runtime's start-up code (spec 10.6), defines some of the names
+// itself, though, as the 32-bit versions: C's time, gmtime, localtime,
+// mktime, difftime and ctime, and Microsoft's _mkgmtime, _wctime, _ftime,
+// _futime, _utime and _wutime (_time32 and the rest). Declared under these
+// names, then, the others don't link and those take and give 32-bit times:
+// time writes 4 bytes of an s64. An alternate name on the link line
+// (/ALTERNATENAME:timespec_get=_timespec64_get) would serve the others, but
+// it only applies to a symbol nothing defines, so it can't reach the ones
+// msvcrt.lib does: the backend declares them all by the 64-bit names
+// instead. msvcrt.lib's other 32-bit names (_stat, _findfirst and their
+// kin) aren't time functions, and stay.
+//
+// The interpreter calls the compiler's own copies of C17's seven,
+// timespec_get to ctime, which are the headers' inline functions, so the
+// 64-bit ones (interp_c_functions.cpp). The rest it looks up in ucrtbase.dll
+// by their 64-bit names, which ucrtbase.dll exports as ucrt.lib does: a
+// program's #run gets the 64-bit functions the compiled program does.
+struct Windows_C_Name {
+    const char *c_name;
+    const char *windows_name;
+};
+
+static const Windows_C_Name WINDOWS_C_NAMES[] = {
+    // C17's <time.h>
+    {"timespec_get", "_timespec64_get"},
+    {"time", "_time64"},
+    {"gmtime", "_gmtime64"},
+    {"localtime", "_localtime64"},
+    {"mktime", "_mktime64"},
+    {"difftime", "_difftime64"},
+    {"ctime", "_ctime64"},
+    // C11's bounds-checked forms (gmtime_s and localtime_s as Microsoft
+    // defines them, giving an errno_t), and Microsoft's own functions
+    {"ctime_s", "_ctime64_s"},
+    {"gmtime_s", "_gmtime64_s"},
+    {"localtime_s", "_localtime64_s"},
+    {"_mkgmtime", "_mkgmtime64"},
+    {"_wctime", "_wctime64"},
+    {"_wctime_s", "_wctime64_s"},
+    {"_ftime", "_ftime64"},
+    {"_ftime_s", "_ftime64_s"},
+    {"ftime", "_ftime64"},
+    {"_futime", "_futime64"},
+    {"_utime", "_utime64"},
+    {"utime", "_utime64"},
+    {"_wutime", "_wutime64"},
+};
+
+String ir_windows_c_name(String c_name) {
+    for (const Windows_C_Name &n : WINDOWS_C_NAMES) {
+        if (string_eq(c_name, str(n.c_name))) return str(n.windows_name);
+    }
+    return c_name;
+}
+
 // Printing.
 
 static const char *ir_type_name(Ir_Type t) {

@@ -411,8 +411,18 @@ inline bool ir_is_float(Ir_Type t) { return t == IR_F32 || t == IR_F64; }
 
 // The name of the C function foreign procedure p is: its C name when it has
 // one, otherwise its own. What links it (the backend's symbol) and what the
-// interpreter looks up; p->name stays its Rig name everywhere else.
+// interpreter looks up, but on Windows a few of the C runtime's time
+// functions are declared, and looked up in ucrtbase.dll, under their 64-bit
+// names instead (ir_windows_c_name); p->name stays its Rig name everywhere
+// else.
 inline String ir_c_name(Ir_Proc *p) { return p->c_name.count ? p->c_name : p->name; }
+
+// The name a C function of C name `c_name` has on Windows: the Universal C
+// Runtime's 64-bit export for one of the C runtime's time functions of a
+// time_t (time is _time64), and otherwise the C name itself. The backend
+// declares a foreign procedure under it on Windows, and the interpreter
+// looks it up in ucrtbase.dll by it.
+String ir_windows_c_name(String c_name);
 
 // Building a module. Structs live in the arena, Arrays on the heap, as long
 // as the compilation (like the tree's).

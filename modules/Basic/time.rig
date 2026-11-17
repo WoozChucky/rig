@@ -1,0 +1,204 @@
+// Basic's time: the wall clock, a timer that measures by it, and a time
+// turned into the calendar's fields and written as ISO 8601.
+//
+// A time is an int of nanoseconds since 1970-01-01T00:00:00Z, the Unix
+// epoch, wrapped in a struct of its own, Time, so a procedure's signature
+// says it takes a time and not any int (Rig has no type aliases yet). An
+// int of nanoseconds reaches from 1677-09-21T00:12:43.145224192Z to
+// 2262-04-11T23:47:16.854775807Z, so that is every Time's range. A
+// difference of two times is an int of nanoseconds too.
+//
+// The clock is C17's timespec_get with TIME_UTC (libc.rig), the one clock
+// C17 gives in nanoseconds on both systems. It is the wall clock, and C17
+// has no monotonic one, so a timer measures by it too: when the system's
+// clock is set back while a timer runs, the timer gives less than the time
+// that passed, even a negative time, and nothing here hides that.
+//
+// The calendar is always UTC, the proleptic Gregorian calendar's, as ISO
+// 8601 has it: no time zones, no leap seconds (each day has 86400 seconds,
+// as POSIX and timespec_get count them), and Gregorian years before 1582
+// too. Nothing here sleeps: C17's own call, thrd_sleep (<threads.h>,
+// optional), is on both systems, but MSVC's <threads.h> defines it only
+// inline, over the Visual C++ runtime's _thrd_sleep64, which the compiler
+// doesn't link it to and the interpreter doesn't find; and a system's
+// own (Sleep, nanosleep) waits on conditional compilation.
+#load "libc.rig";
+#load "numbers.rig";
+
+// The nanoseconds in a second.
+NANOSECONDS_PER_SECOND :: 1000000000;
+
+// The bytes format_time writes for every time to_calendar gives:
+// YYYY-MM-DDTHH:MM:SSZ.
+TIME_TEXT_MAX :: 20;
+
+// A point in time: the nanoseconds since 1970-01-01T00:00:00Z, negative
+// before it. A zeroed Time is that instant.
+Time :: struct {
+    nanoseconds: int;
+}
+
+// A timer: the time it was started at.
+Timer :: struct {
+    start: Time;
+}
+
+// A time's fields in the calendar, in UTC: the year, the month from 1 to
+// 12, the day of the month from 1 to 31, the hour from 0 to 23, the minute
+// and second from 0 to 59, the nanoseconds into the second from 0 to
+// 999999999, and the day of the week from 0 for Sunday to 6 for Saturday,
+// as C's tm_wday has it.
+Calendar :: struct {
+    year: int;
+    month: int;
+    day: int;
+    hour: int;
+    minute: int;
+    second: int;
+    nanosecond: int;
+    weekday: int;
+}
+
+// The time now, by the system's wall clock; a zeroed Time, 1970's first
+// instant, when C can't give it.
+//
+// C gives whole seconds and the nanoseconds after them, which are put
+// together here. A clock past 2262 would wrap the int, but no system's
+// clock is there.
+time_now :: () -> Time {
+    ts : C_Timespec;
+    if c_timespec_get(*ts, C_TIME_UTC) == 0 { return Time.{0}; }
+    return Time.{ts.seconds * NANOSECONDS_PER_SECOND + ts.nanoseconds};
+}
+
+// A timer started now.
+timer_start :: () -> Timer {
+    return Timer.{time_now()};
+}
+
+// The nanoseconds since timer was started, by the wall clock: less, even
+// negative, when the system's clock was set back meanwhile.
+timer_elapsed_ns :: (timer: Timer) -> int {
+    return time_now().nanoseconds - timer.start.nanoseconds;
+}
+
+// The seconds since timer was started, as timer_elapsed_ns's nanoseconds
+// over 10^9, with a fraction. A float64 holds a whole number of
+// nanoseconds exactly up to 2^53, about 104 days.
+timer_elapsed_seconds :: (timer: Timer) -> float64 {
+    elapsed := cast(float64) timer_elapsed_ns(timer);
+    return elapsed / NANOSECONDS_PER_SECOND;
+}
+
+// time's fields in the calendar, in UTC. Every Time gives a year from 1677
+// to 2262, and every field within its range, int's most negative and
+// largest values included.
+to_calendar :: (time: Time) -> Calendar {
+    NANOSECONDS_PER_DAY :: 86400 * NANOSECONDS_PER_SECOND;
+    calendar : Calendar;
+
+    // The days since 1970-01-01 and the nanoseconds into the day, by floor
+    // division: / truncates toward zero, so a time before 1970 that isn't a
+    // day's first instant would count from the wrong midnight, the one
+    // after it, with a negative rest. Moving it to the day before puts the
+    // rest in [0, NANOSECONDS_PER_DAY). This takes the rest from %, and
+    // doesn't multiply the days back to find it, which for int's most
+    // negative value would overflow.
+    days := time.nanoseconds / NANOSECONDS_PER_DAY;
+    rest := time.nanoseconds % NANOSECONDS_PER_DAY;
+    if rest < 0 {
+        days -= 1;
+        rest += NANOSECONDS_PER_DAY;
+    }
+
+    seconds := rest / NANOSECONDS_PER_SECOND;
+    calendar.nanosecond = rest % NANOSECONDS_PER_SECOND;
+    calendar.hour = seconds / 3600;
+    calendar.minute = seconds / 60 % 60;
+    calendar.second = seconds % 60;
+
+    // 1970-01-01 was a Thursday, 4. days % 7 is from -6 to 6, since %
+    // keeps the sign of days, so 11, which is 4 and a whole week, keeps the
+    // sum above 0 before the last % 7.
+    calendar.weekday = (days % 7 + 11) % 7;
+
+    // The date, by Howard Hinnant's civil_from_days
+    // (https://howardhinnant.github.io/date_algorithms.html). It counts
+    // years that start on March 1st, so a leap day is a year's last day,
+    // and the months' lengths from March on repeat a pattern that one
+    // formula gives. And it counts in eras of 400 years, 146097 days each,
+    // after which the Gregorian calendar repeats.
+    //
+    // z is the days since 0000-03-01, the start of an era. The era is z
+    // divided by 146097, rounded down, which / does for a negative z only
+    // after taking 146096 from it.
+    z := days + 719468;
+    era := z;
+    if z < 0 { era = z - 146096; }
+    era /= 146097;
+    // The day of the era, from 0 to 146096.
+    day_of_era := z - era * 146097;
+    // The year of the era, from 0 to 399: its days over 365, after taking
+    // out one day for each leap year before it (every 4th year's, but every
+    // 100th's, but every 400th's).
+    year_of_era := (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365;
+    // The day of the year that starts on March 1st, from 0 to 365.
+    day_of_year := day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    // The month counted from March, from 0 to 11. The five months from
+    // March have 31, 30, 31, 30 and 31 days, 153 in all, and so do the five
+    // from August, and January has 31 again (February, last, is cut short
+    // by the year's end), so (153 * m + 2) / 5 is the day of the year that
+    // month m starts on, and this is that formula turned around.
+    month_from_march := (5 * day_of_year + 2) / 153;
+    calendar.day = day_of_year - (153 * month_from_march + 2) / 5 + 1;
+    if month_from_march < 10 {
+        calendar.month = month_from_march + 3;
+    } else {
+        calendar.month = month_from_march - 9;
+    }
+    // January and February belong to the year that started the March
+    // before, so their calendar year is one later.
+    calendar.year = year_of_era + era * 400;
+    if calendar.month <= 2 { calendar.year += 1; }
+    return calendar;
+}
+
+// Writes calendar as ISO 8601, YYYY-MM-DDTHH:MM:SSZ, at buffer's start, and
+// returns the text written. Its nanosecond and weekday aren't written.
+//
+// Each field is written as format_int writes it, with zeros on its left to
+// 4 digits for the year and 2 for the rest. A field that needs more digits,
+// or is negative, is written whole, its - first and no zeros. When that is
+// wider than the field's width, the text is longer than TIME_TEXT_MAX, and
+// a buffer of TIME_TEXT_MAX bytes stops the program at the language's
+// bounds check, before any byte is written past its end (unless built with
+// --no-bounds-checks). A calendar from to_calendar always fits: its year is
+// 1677 to 2262.
+format_time :: (calendar: Calendar, buffer: []u8) -> string {
+    // What follows each field.
+    AFTER :: "--T::Z";
+    fields := int.[calendar.year, calendar.month, calendar.day, calendar.hour, calendar.minute, calendar.second];
+    count := 0;
+    for field: fields {
+        width := 2;
+        if it_index == 0 { width = 4; }
+        digits : [INT_TEXT_MAX]u8;
+        text := format_int(digits, field, 10);
+        if field >= 0 {
+            for 1..width - text.count {
+                buffer[count] = "0"[0];
+                count += 1;
+            }
+        }
+        for byte: text {
+            buffer[count] = byte;
+            count += 1;
+        }
+        buffer[count] = AFTER[it_index];
+        count += 1;
+    }
+
+    written := cast(string) buffer;
+    written.count = count;
+    return written;
+}
