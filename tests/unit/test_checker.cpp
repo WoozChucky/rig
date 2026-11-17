@@ -6767,6 +6767,14 @@ TEST(defer_refuses_return) {
                            "}\n"),
               "2:11: can't return from a deferred statement\n"
               "2:18: unknown identifier 'nope'\n");
+    // A defer inside deferred code gives the outer one back when it's done:
+    // the return after it is still in the outer deferred statement.
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    defer { defer g(); return; }\n"
+                           "}\n"
+                           "g :: () {}\n"),
+              "2:24: can't return from a deferred statement\n");
     // A top-level #run's block is a body like any other: its own return is
     // fine, a deferred one isn't.
     CHECK_STR(check_source(&a,
@@ -6803,19 +6811,34 @@ TEST(defer_refuses_break_and_continue_leaving_it) {
               "4:17: 'continue' can't leave a deferred statement\n"
               "5:48: 'break' can't leave a deferred statement\n"
               "7:11: 'break' is only allowed inside a loop\n");
+    // A defer inside deferred code is the innermost one: a loop between the
+    // two is outside it, so its jumps are refused. And the outer one is back
+    // after it: the continue after the inner defer still leaves the outer.
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    defer { for 1..3 { defer break; defer { continue; } } }\n"
+                           "    for 1..2 { defer { defer g(); continue; } }\n"
+                           "}\n"
+                           "g :: () {}\n"),
+              "2:30: 'break' can't leave a deferred statement\n"
+              "2:45: 'continue' can't leave a deferred statement\n"
+              "3:35: 'continue' can't leave a deferred statement\n");
     arena_free(&a);
 }
 
 TEST(defer_allows_loops_and_defers_inside) {
     // Loops inside deferred code may break and continue, a defer may be
     // inside deferred code, and a defer in a body #if's branch is the
-    // enclosing block's.
+    // enclosing block's. After a defer inside deferred code, a loop of the
+    // outer deferred statement is that statement's again: its break is fine.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "main :: () {\n"
                            "    defer { for 1..3 { if it == 2 { continue; } defer { while true { break; } } } }\n"
                            "    defer defer { x := 1; }\n"
                            "    for 1..2 { #if true { defer g(); } }\n"
+                           "    defer { for 1..2 { defer g(); break; } }\n"
+                           "    for 1..3 { defer { while true { defer g(); break; } } }\n"
                            "}\n"
                            "g :: () {}\n"),
               "");
@@ -6868,5 +6891,21 @@ TEST(a_run_in_deferred_code_checks_its_body_as_its_own) {
                            "    return 1;\n"
                            "}\n"),
               "6:15: a value of type 'string' doesn't convert to 'int' implicitly\n");
+    // And main's deferred statement is back after it: the jump and the
+    // return after the #run still leave it.
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    n := 0;\n"
+                           "    for 1..2 { defer { n = #run g(); break; } }\n"
+                           "}\n"
+                           "g :: () -> int { return 1; }\n"),
+              "3:38: 'break' can't leave a deferred statement\n");
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    n := 0;\n"
+                           "    defer { n = #run g(); return; }\n"
+                           "}\n"
+                           "g :: () -> int { return 1; }\n"),
+              "3:27: can't return from a deferred statement\n");
     arena_free(&a);
 }
