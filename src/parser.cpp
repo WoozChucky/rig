@@ -23,8 +23,9 @@ struct Parser {
     s32 type_levels;            // the type levels (*, [], [N] and a procedure type's '(') open around
                                 // the next token
     s32 deepest;                // the most levels reached since take_deepest last restarted it
-    s32 body_deepest;           // the most levels reached in the body being read, the blocks open
-                                // around each counted too (reach_in_body)
+    s32 body_deepest;           // the most levels reached in the body being read, the body's own
+                                // blocks open around each counted too, not the top-level #if
+                                // branches around the body (body_blocks, reach_in_body)
     // After a body or a struct's braces found never closed: the token where
     // the top level resumes (parse_block_rest, parse_struct), or -1.
     s64 resume;
@@ -35,6 +36,11 @@ struct Parser {
     // the recovery passed over (skip_to_next_declaration,
     // resume_after_stray_tokens).
     bool lost_a_file;
+    // While a statement in a body's run of column-1 declarations is read
+    // (parse_block_rest): that run's loads not reported yet, to which the
+    // misplaced loads in the statement's blocks are added rather than
+    // reported (report_misplaced_loads); otherwise null.
+    Array<Token *> *held_loads;
 };
 
 // A limit of the compiler (spec 6.1): an expression nests at most MAX_DEPTH
@@ -203,15 +209,25 @@ static void reach_in_body(Parser *p, s32 levels) {
     if (levels > p->body_deepest) p->body_deepest = levels;
 }
 
+// The blocks open around the next token that a body's levels count: its
+// own, not the top-level #if branches around the body, which p->blocks
+// counts too (for the limit, parse_top_level_block). A #run that reaches
+// the body works it out from its own block, the branches not on the stack:
+// a taken branch's declarations join the one top level.
+static s32 body_blocks(Parser *p) {
+    return p->blocks - p->branches;
+}
+
 // The text read reaches `levels` levels: kept in p->deepest if it's the
-// most so far, and in p->body_deepest with the blocks open around it. A
+// most so far, and in p->body_deepest with the body's blocks open around
+// it (body_blocks). A
 // name read a level down by size_of or a cast (parse_type_below) is at that
 // level, which the limit doesn't check, so it's counted as MAX_DEPTH at
 // most: a struct it names is then too deep to work out there, and that's
 // the checker's to say.
 static void reach(Parser *p, s32 levels) {
     if (levels > p->deepest) p->deepest = levels;
-    reach_in_body(p, p->blocks + levels);
+    reach_in_body(p, body_blocks(p) + levels);
 }
 
 // The most levels reached since the last call (0 at the start): a
@@ -677,12 +693,40 @@ static bool procedure_follows(Parser *p, s64 ahead) {
 // statement; nor can #run { ... }, which only the top level has (a #run in
 // a body takes an expression, and a block isn't one). An #if in column 1
 // isn't one either: in a body it's a statement, unindented, as a constant
-// may be (spec 4.9).
+// may be (spec 4.9); unless a branch of it declares a procedure or a struct
+// (branch_declares_procedure), which only a top-level #if's branch can.
+static bool branch_declares_procedure(Parser *p);
+
 static bool starts_declaration(Parser *p) {
     Token *t = peek(p);
     if (is_directive(t, "run")) return t->pos.col == 1 && peek(p, 1)->kind == TOKEN_LBRACE;
+    if (is_directive(t, "if")) return t->pos.col == 1 && branch_declares_procedure(p);
     return t->kind == TOKEN_IDENT && t->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON &&
            (procedure_follows(p, 2) || peek(p, 2)->kind == TOKEN_STRUCT);
+}
+
+// Whether a branch of the #if chain at the next token declares a procedure
+// or a struct right inside its braces, IDENT '::' '(' ... or IDENT '::'
+// 'struct', indented or not: then it can only be a top-level #if, its
+// branches holding declarations, as the writer's indentation says (an #if
+// written after a body whose '}' was forgotten). The chain ends at a '}'
+// that closes a branch with no else after it, or at the end of the file.
+// A brace in a condition (`#if X == .{1} {`) can end the look early, and
+// the #if is then a statement, as without such a declaration.
+static bool branch_declares_procedure(Parser *p) {
+    s64 depth = 0;  // the braces open since the '#if'
+    for (s64 ahead = 1; peek(p, ahead)->kind != TOKEN_EOF; ahead++) {
+        Token *t = peek(p, ahead);
+        if (t->kind == TOKEN_LBRACE) {
+            depth++;
+        } else if (t->kind == TOKEN_RBRACE) {
+            if (--depth <= 0 && peek(p, ahead + 1)->kind != TOKEN_ELSE) return false;
+        } else if (depth == 1 && t->kind == TOKEN_IDENT && peek(p, ahead + 1)->kind == TOKEN_COLON_COLON &&
+                   (procedure_follows(p, ahead + 2) || peek(p, ahead + 2)->kind == TOKEN_STRUCT)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // The value of the constant `name` after its '::': expression ';'. The
@@ -1112,17 +1156,27 @@ static Token *skip_misplaced_load(Parser *p) {
 }
 
 // Reports the misplaced loads whose directives are in `loads`, and empties
-// the list.
+// the list. Inside a statement of a body's run of column-1 declarations,
+// they're added to the run's loads instead (p->held_loads): the statement
+// may be read again at the top level, an #if's branch holding the loads,
+// where they aren't misplaced (parse_block_rest).
 static void report_misplaced_loads(Parser *p, Array<Token *> *loads) {
-    for (s64 i = 0; i < loads->count; i++) error_misplaced_load(p, (*loads)[i]);
+    for (s64 i = 0; i < loads->count; i++) {
+        if (p->held_loads) {
+            array_add(p->held_loads, (*loads)[i]);
+        } else {
+            error_misplaced_load(p, (*loads)[i]);
+        }
+    }
     array_free(loads);
 }
 
 // The statements of the block that `open` began, and its '}'.
 //
 // The end of the file, or a procedure's declaration at the start of a line
-// (`name :: (` in column 1, or `#run {`: starts_declaration), before the
-// '}' means the block was never closed: an if's '}' forgotten, say.
+// (`name :: (` in column 1, `#run {`, or an #if whose branch declares a
+// procedure or a struct: starts_declaration), before the '}' means the
+// block was never closed: an if's '}' forgotten, say.
 // Everything up to there has been read as the block's statements, globals
 // in column 1 included, which belong after the body; read as its locals,
 // they'd be lost with it, and every use of them unknown. So the block is
@@ -1142,7 +1196,10 @@ static void report_misplaced_loads(Parser *p, Array<Token *> *loads) {
 // block closes, or a statement fails and the body is given up. Diagnostics
 // are sorted by position before they're shown, so reporting it later
 // changes nothing.
-// One not in column 1 never starts a run, and is reported at once.
+// One not in column 1 never starts a run, and is reported at once; unless
+// it's in a block of a statement in the run (an #if's branch), which is
+// read again at the top level with the run: it's held with the run's loads
+// then (p->held_loads), reported with them or read again as the top level's.
 //
 // A #run in column 1 (`#run g();`) is one of those declarations too: at
 // the end of such a run, it's read again at the top level as the
@@ -1150,7 +1207,9 @@ static void report_misplaced_loads(Parser *p, Array<Token *> *loads) {
 // stays a statement of the block, as an unindented local does: the parser
 // has nothing to report about it. So does an #if in column 1, read in the
 // block as the statement it can be there (spec 4.9), and again at the top
-// level, where its branches hold declarations, at the end of such a run.
+// level, where its branches hold declarations, at the end of such a run;
+// one whose branch declares a procedure or a struct is the end itself
+// (starts_declaration).
 static Ast_Block *parse_block_rest(Parser *p, Token *open) {
     Ast_Block *block = ast_new<Ast_Block>(p->arena, AST_BLOCK, open->pos);
     s64 run = -1;               // where the run of column-1 declarations up to here starts, or -1
@@ -1175,7 +1234,12 @@ static Ast_Block *parse_block_rest(Parser *p, Token *open) {
             if (run < 0) report_misplaced_loads(p, &loads);
             continue;
         }
+        // A statement in the run (an #if) holds its misplaced loads with the
+        // run's, read again with it at the top level or reported with them.
+        Array<Token *> *held_loads = p->held_loads;
+        if (run >= 0) p->held_loads = &loads;
         Ast *statement = parse_statement(p);
+        p->held_loads = held_loads;
         if (!statement) {
             report_misplaced_loads(p, &loads);
             return nullptr;
@@ -1189,7 +1253,8 @@ static Ast_Block *parse_block_rest(Parser *p, Token *open) {
 
 // block = '{' statement* '}'
 //
-// Blocks nest at most MAX_DEPTH deep, a procedure's body the first:
+// Blocks nest at most MAX_DEPTH deep, a procedure's body the first, unless
+// it's in top-level #if branches, which count first (parse_top_level_block):
 // "blocks are nested too deeply (more than 1000 levels)" at the '{' of the
 // one too many. The parser, the checker and lowering recurse into each.
 static Ast_Block *parse_block(Parser *p) {
@@ -1200,7 +1265,7 @@ static Ast_Block *parse_block(Parser *p) {
         return nullptr;
     }
     p->blocks++;
-    reach_in_body(p, p->blocks);
+    reach_in_body(p, body_blocks(p));
     Ast_Block *block = parse_block_rest(p, open);
     p->blocks--;
     return block;
@@ -2182,7 +2247,7 @@ static bool reported_at(Parser *p, Position pos) {
 //
 // A branch is a block for MAX_DEPTH, counted in p->blocks with a body's:
 // the stages that walk the branches recurse into each, and into the bodies
-// in them.
+// in them. It isn't one of a body's levels, though (body_blocks).
 static Ast_Block *parse_top_level_block(Parser *p) {
     Token *open = expect(p, TOKEN_LBRACE);
     if (!open) return nullptr;
@@ -2212,7 +2277,7 @@ static Ast_Block *parse_top_level_block(Parser *p) {
 
 void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
-    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, 0, 0, 0, -1, 0, false};
+    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, 0, 0, 0, -1, 0, false, nullptr};
     Array<Ast *> declarations = {};
     while (peek(&p)->kind != TOKEN_EOF) parse_top_level_declaration(&p, &declarations);
     for (s64 i = 0; i < declarations.count; i++) ast_add_declaration(file, declarations[i]);

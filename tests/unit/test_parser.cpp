@@ -3234,9 +3234,25 @@ TEST(parse_if_directive_in_column_1_resumes) {
                                                       broken[i])));
     }
 
+    // Indented too, at the top level and in a branch, where the nested #if
+    // stays in the branch: where the declaration stopped, and skipping.
+    String errors;
+    CHECK_STR(parse_src(&a, "#if A {\n    N ::\n    #if B { M :: 1; }\n}\nmain :: () {}\n", &errors),
+              "(#if (name A) (block (broken N) (#if (name B) (block (const M (int 1))))))\n"
+              "(proc main (params) (block))\n");
+    CHECK_STR(errors, "3:5: expected an expression, found directive\n");
+    CHECK_STR(parse_src(&a, "N :: 1 2\n    #if A { M :: 1; }\nmain :: () {}\n", &errors),
+              "(broken N)\n(#if (name A) (block (const M (int 1))))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:8: expected ';', found integer literal\n");
+    CHECK_STR(parse_src(&a, "#if A {\n    N :: 1 2\n    #if B {}\n}\nmain :: () {}\n", &errors),
+              "(#if (name A) (block (broken N) (#if (name B) (block))))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "2:12: expected ';', found integer literal\n");
+    CHECK_STR(parse_src(&a, "foo(1)\n    #if B { M :: 1; }\nmain :: () {}\n", &errors),
+              "(broken)\n(#if (name B) (block (const M (int 1))))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:4: expected '::', found '('\n");
+
     // A body never closed ends before the column-1 globals and #ifs right
     // before the end: both are the top level's.
-    String errors;
     CHECK_STR(parse_src(&a, "f :: () {\n    x := 1;\nG := 2;\n#if A {}\nmain :: () {}\n", &errors),
               "(broken f)\n(var G _ (int 2))\n(#if (name A) (block))\n(proc main (params) (block))\n");
     CHECK_STR(errors, "3:1: expected '}', found identifier 'G'\n");
@@ -3253,6 +3269,40 @@ TEST(parse_if_directive_in_column_1_resumes) {
     CHECK_STR(parse_src(&a, "f :: () {\n    x := ;\n    #if A {}\n}\nmain :: () {}\n", &errors),
               "(broken f)\n(proc main (params) (block))\n");
     CHECK_STR(errors, "2:10: expected an expression, found ';'\n");
+    // The body's statement failing right at a column-1 #if keeps it.
+    CHECK_STR(parse_src(&a, "f :: () {\n    x := 1 +\n#if A {}\nmain :: () {}\n", &errors),
+              "(broken f)\n(#if (name A) (block))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "3:1: expected an expression, found directive\n");
+
+    // A column-1 #if whose branch declares a procedure or a struct, which no
+    // body's #if can, is the top level's, as a #run { is: it ends a body
+    // never closed by itself, and its branches are read as the top level's.
+    CHECK_STR(parse_src(&a, "f :: () {\n    x := 1;\n#if true {\n    helper :: () {}\n}\nmain :: () {}\n", &errors),
+              "(broken f)\n(#if (bool true) (block (proc helper (params) (block))))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "3:1: expected '}', found directive\n");
+    CHECK_STR(parse_src(&a, "f :: () {\n#if A {} else {\n    S :: struct { x: int; }\n}\nmain :: () {}\n", &errors),
+              "(broken f)\n(#if (name A) (block) (block (struct S (x int))))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "2:1: expected '}', found directive\n");
+
+    // A #load in the branch of a column-1 #if read again at the top level is
+    // the top level's: it isn't misplaced, and its file is loaded. When the
+    // #if stays in the body, it's misplaced there.
+    Token_List *list = src("f :: () {\n    x := 1;\n#if A {\n    #load \"a.rig\";\n}\nmain :: () {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "3:1: expected '}', found directive\n");
+    CHECK_STR(ast_dump(&a, file), "(broken f)\n(#if (name A) (block (load \"a.rig\")))\n(proc main (params) (block))\n");
+    CHECK(!file->lost_a_file);
+    token_list_free(list);
+    list = src("f :: () {\n    x := 1;\n#if A {\n    #load \"a.rig\";\n}\n    y := 2;\n}\n");
+    file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "4:5: #load can only be at the top level\n");
+    CHECK(file->lost_a_file);
+    token_list_free(list);
+    list = src("f :: () {\n#if A {\n    #load \"a.rig\";\n}\n}\n");
+    file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "3:5: #load can only be at the top level\n");
+    CHECK(file->lost_a_file);
+    token_list_free(list);
     arena_free(&a);
 }
 
@@ -3317,5 +3367,34 @@ TEST(parse_if_directives_nested_too_deeply) {
     CHECK_STR(parse_src(&a, nested_source(&a, "main :: () {\n", "#if A {", MAX_DEPTH, "", "}", "\n}\n"), &errors),
               "(broken main)\n");
     CHECK_STR(errors, "2:7000: blocks are nested too deeply (more than 1000 levels)\n");
+    arena_free(&a);
+}
+
+TEST(parse_if_directive_branches_arent_body_levels) {
+    // A body's levels (Ast_Proc.body_levels) are its own: a #run that
+    // reaches it works it out from its own block, the branches around it
+    // not on the stack. So a procedure and a #run { } in two nested
+    // branches have the levels they have outside them.
+    Arena a = arena_make();
+    Token_List *plain = src("f :: () { x := (1 + 2); }\n#run { { y := (3); } }\n");
+    Ast_File *plain_file = parse(plain->tokens, &a, &plain->diag);
+    CHECK_STR(messages(&a, &plain->diag), "");
+    Token_List *nested = src("#if A {\n    #if B {\n        f :: () { x := (1 + 2); }\n"
+                             "        #run { { y := (3); } }\n    }\n}\n");
+    Ast_File *nested_file = parse(nested->tokens, &a, &nested->diag);
+    CHECK_STR(messages(&a, &nested->diag), "");
+    if (plain_file->procs.count == 1 && plain_file->runs.count == 1 && nested_file->ifs.count == 1) {
+        Ast_Block *inner = ((Ast_If_Directive *)nested_file->ifs[0]->then_block->statements[0])->then_block;
+        Ast_Proc *f = (Ast_Proc *)inner->statements[0];
+        Ast_Run *run = (Ast_Run *)inner->statements[1];
+        CHECK_EQ(plain_file->procs[0]->body_levels, 3);
+        CHECK_EQ(f->body_levels, plain_file->procs[0]->body_levels);
+        CHECK_EQ(plain_file->runs[0]->proc->body_levels, 3);
+        CHECK_EQ(run->proc->body_levels, plain_file->runs[0]->proc->body_levels);
+    } else {
+        CHECK(!"each file has f and the #run");
+    }
+    token_list_free(nested);
+    token_list_free(plain);
     arena_free(&a);
 }
