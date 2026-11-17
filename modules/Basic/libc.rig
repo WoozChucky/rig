@@ -9,11 +9,11 @@
 //
 // Each of them links and runs on Windows (the UCRT) and Linux (glibc),
 // compiled and interpreted, with one declaration that serves both: where
-// C's types differ (fseek's long offset, fpos_t), the declaration and its
-// comment say how Basic stays within what both agree on. On Windows the
-// interpreter takes them from the compiler's own copy of the C library, so
-// a FILE * that c_fopen gives is one the other calls accept. Some C
-// functions that would seem to fit are left out on purpose:
+// C's types differ (fseek's long offset, fpos_t, struct timespec), the
+// declaration and its comment say how Basic stays within what both agree
+// on. On Windows the interpreter takes them from the compiler's own copy of
+// the C library, so a FILE * that c_fopen gives is one the other calls
+// accept. Some C functions that would seem to fit are left out on purpose:
 //
 // - ftell and a nonzero fseek offset: they take or give C's long, 32 bits
 //   on Windows and 64 on Linux, so no one declaration fits both, and on
@@ -105,3 +105,28 @@ c_getenv :: (name: *u8) -> *u8 #foreign libc "getenv";
 // wait status on Linux. Given null it runs nothing and gives whether there
 // is a shell, not 0 when there is.
 c_system :: (command: *u8) -> s32 #foreign libc "system";
+
+// C's struct timespec, a time as whole seconds and the nanoseconds after
+// them, which timespec_get fills. Its tv_sec is a 64-bit time_t on both
+// systems, but its tv_nsec is C's long: 4 bytes and then 4 of padding in
+// the UCRT, 8 bytes in glibc. The nanoseconds are below 10^9, so on
+// glibc's little-endian long they are the low 4 bytes, and the high 4 are
+// 0. So this struct, 16 bytes, holds either, and its nanoseconds field
+// reads them on both. Basic leaves padding as C wrote it.
+C_Timespec :: struct {
+    seconds: s64;
+    nanoseconds: s32;
+    padding: s32;
+}
+
+// timespec_get's base for the wall clock, UTC: the same number in both C
+// libraries.
+C_TIME_UTC :: 1;
+
+// The time now in base, C_TIME_UTC, written to time as the seconds and
+// nanoseconds since 1970-01-01T00:00:00Z; it gives base, or 0 when it
+// couldn't. On Windows the UCRT has no timespec_get to link to (its
+// <time.h> defines one inline over _timespec64_get), so the compiler links
+// this declaration to _timespec64_get there, as a C program's call is
+// (issue #161, spec 10.6).
+c_timespec_get :: (time: *C_Timespec, base: s32) -> s32 #foreign libc "timespec_get";
