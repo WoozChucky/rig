@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, paths, files, and printing to standard output (issues #134 and #145).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, paths, files, and printing to standard output (issues #134 and #145).
 
 ## Importing it
 
@@ -81,7 +81,7 @@ Numbers are written into a buffer the caller gives, and the text comes back as a
 
 ## Strings (`string.rig`)
 
-The procedures that cut strings up and search them, from `strings_equal` to `split_from_left`, and `contains` and `count_of`, never allocate: every string they return is a view into the string given. The ones that copy, `to_c_string`, `join`, `replace`, `repeat`, `to_upper_copy` and `to_lower_copy`, take their memory from the allocator they are given, and the caller gives it back there. The last five always copy, even when nothing changed, so the caller can always free `result.data` with `free(result.data, allocator)`; each works out its size first and allocates once, and an empty result is the zeroed string and allocates nothing, as `builder_to_string`'s does. An allocator with no memory, or a size past `int`'s largest, gives the zeroed string too. Indexes and counts are in bytes, and bytes are compared unsigned, with no knowledge of UTF-8. A zeroed string (count 0, data null) is the empty string everywhere, and no byte is read through its null data.
+The procedures that cut strings up and search them, from `strings_equal` to `split_from_left`, and `contains` and `count_of`, never allocate: every string they return is a view into the string given. The ones that copy, `to_c_string`, `join`, `replace`, `repeat`, `to_upper_copy` and `to_lower_copy`, take their memory from the allocator they are given, and the caller gives it back there. The last five always copy, even when nothing changed, so the caller can always free `result.data` with `free(result.data, allocator)`; each works out its size first and allocates once, and an empty result is the zeroed string and allocates nothing, as `builder_to_string`'s does. An allocator with no memory, or a size past `int`'s largest, gives the zeroed string too. Indexes and counts are in bytes, and bytes are compared unsigned. Only the three `utf8_` procedures know UTF-8, reading and writing its sequences as the Unicode Standard has them (Table 3-7: no overlong forms, no surrogates, nothing past U+10FFFF); every other string procedure works on bytes. A zeroed string (count 0, data null) is the empty string everywhere, and no byte is read through its null data.
 
 - `strings_equal(a: string, b: string) -> bool`: `a == b`, as a procedure a procedure value can name.
 - `compare_strings(a: string, b: string) -> int`: -1, 0 or 1 by the first byte that differs, compared unsigned; a prefix sorts first.
@@ -105,6 +105,11 @@ The procedures that cut strings up and search them, from `strings_equal` to `spl
 - `replace(s: string, old: string, new: string, allocator: Allocator) -> string`: a copy of `s` with each `old` replaced by `new`, from the left without overlap, what replaces one never searched again; an empty `old` matches nothing, so the result is a copy of `s`. The caller frees `result.data`.
 - `repeat(s: string, n: int, allocator: Allocator) -> string`: `s` `n` times over; `""` for an `n` of 0 or less. The caller frees `result.data`.
 - `to_upper_copy(s: string, allocator: Allocator) -> string`, `to_lower_copy(s: string, allocator: Allocator) -> string`: a copy of `s` with its ASCII letters changed as `to_upper` and `to_lower` change them, every other byte as it is. The caller frees `result.data`.
+- `UTF8_REPLACEMENT`: U+FFFD, 65533, the replacement character.
+- `UTF8_MAX_BYTES`: 4, the most bytes a code point takes, so a buffer of that many is always enough for `utf8_encode`.
+- `utf8_decode(s: string, index: int) -> int, int, bool`: the code point whose sequence starts at byte `index`, its byte count, and whether it is well-formed; `UTF8_REPLACEMENT`, 1 and `false` for a byte that doesn't start a well-formed sequence, one cut short by the string's end included, so a loop moving on by the count goes on at the next byte; 0, 0 and `false`, reading nothing, for an index outside `s`.
+- `utf8_count(s: string) -> int, bool`: how many code points `s` holds, each byte of an ill-formed sequence counted as one, and whether all of `s` is well-formed; `""` is 0 and `true`.
+- `utf8_encode(code_point: int, buffer: []u8) -> int`: writes the code point's sequence at the start of `buffer` and gives its byte count, 1 to 4; a negative value, a surrogate (U+D800 to U+DFFF) or one past U+10FFFF writes `UTF8_REPLACEMENT`'s 3 bytes. A buffer shorter than the sequence stops at the language's bounds check (unless built with `--no-bounds-checks`).
 
 ## Allocators (`allocators.rig`)
 

@@ -1,0 +1,7 @@
+decode: 97/1/true 233/2/true 8364/3/true 128512/4/true
+valid: 127/1/true 128/2/true 2047/2/true 2048/3/true 55295/3/true 57344/3/true 65535/3/true 65536/4/true 1114111/4/true
+invalid: 65533/1/false 65533/1/false 65533/1/false 65533/1/false 65533/1/false 65533/1/false 65533/1/false 65533/1/false 65533/1/false 65533/1/false 65533/1/false 65533/1/false 65533/1/false
+edges: 0/0/false 0/0/false 0/0/false 65533/1/false
+count: 4/true 0/true 3/false 3/false
+encode: 1:41 2:c3a9 3:e282ac 4:f09f9880 4:f48fbfbf 1:00 3:efbfbd 3:efbfbd 3:efbfbd 3:efbfbd
+round trip: true
