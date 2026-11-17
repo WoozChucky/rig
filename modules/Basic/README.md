@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, paths, files, and printing to standard output (issues #134 and #145).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, paths, files, and printing to standard output (issues #134 and #145).
 
 ## Importing it
 
@@ -81,7 +81,7 @@ Numbers are written into a buffer the caller gives, and the text comes back as a
 
 ## Strings (`string.rig`)
 
-Every string returned is a view into the string given: nothing is copied or allocated. The one copy, `to_c_string`, takes its memory from the allocator it is given. Indexes and counts are in bytes, and bytes are compared unsigned, with no knowledge of UTF-8. A zeroed string (count 0, data null) is the empty string everywhere, and no byte is read through its null data.
+The procedures that cut strings up and search them, from `strings_equal` to `split_from_left`, and `contains` and `count_of`, never allocate: every string they return is a view into the string given. The ones that copy, `to_c_string`, `join`, `replace`, `repeat`, `to_upper_copy` and `to_lower_copy`, take their memory from the allocator they are given, and the caller gives it back there. The last five always copy, even when nothing changed, so the caller can always free `result.data` with `free(result.data, allocator)`; each works out its size first and allocates once, and an empty result is the zeroed string and allocates nothing, as `builder_to_string`'s does. An allocator with no memory, or a size past `int`'s largest, gives the zeroed string too. Indexes and counts are in bytes, and bytes are compared unsigned, with no knowledge of UTF-8. A zeroed string (count 0, data null) is the empty string everywhere, and no byte is read through its null data.
 
 - `strings_equal(a: string, b: string) -> bool`: `a == b`, as a procedure a procedure value can name.
 - `compare_strings(a: string, b: string) -> int`: -1, 0 or 1 by the first byte that differs, compared unsigned; a prefix sorts first.
@@ -99,6 +99,12 @@ Every string returned is a view into the string given: nothing is copied or allo
 - `split(s: string, separator: u8, parts: []string) -> int`: writes the pieces of `s` between separators into `parts` and returns how many; empty pieces count, `""` is one empty piece, the last part holds the unsplit rest when `parts` runs out, and an empty `parts` gets 0.
 - `split_from_left(s: string, separator: u8) -> bool, string, string`: whether `separator` is in `s`, and the bytes before and after its first occurrence; without one, `false`, `s` and an empty view at the end of `s`.
 - `to_c_string(s: string, allocator: Allocator) -> *u8`: a C string, `s.count + 1` bytes from `allocator` holding the bytes of `s` and a zero, which the caller frees with `free(p, allocator)`; null when the allocator has none. A zeroed string gives a lone zero. A zero inside `s` is copied as it is, so C sees the string end there.
+- `contains(s: string, sub: string) -> bool`: whether `sub` occurs in `s`; every string contains `""`.
+- `count_of(s: string, sub: string) -> int`: how many times `sub` occurs in `s`, counted from the left without overlap (`"aa"` in `"aaaa"` is 2); `""` matches nothing, so 0.
+- `join(parts: []string, separator: string, allocator: Allocator) -> string`: the parts with `separator` between each two, in memory from `allocator`, which the caller frees with `free(result.data, allocator)`; empty parts keep their separators, and no parts give `""`.
+- `replace(s: string, old: string, new: string, allocator: Allocator) -> string`: a copy of `s` with each `old` replaced by `new`, from the left without overlap, what replaces one never searched again; an empty `old` matches nothing, so the result is a copy of `s`. The caller frees `result.data`.
+- `repeat(s: string, n: int, allocator: Allocator) -> string`: `s` `n` times over; `""` for an `n` of 0 or less. The caller frees `result.data`.
+- `to_upper_copy(s: string, allocator: Allocator) -> string`, `to_lower_copy(s: string, allocator: Allocator) -> string`: a copy of `s` with its ASCII letters changed as `to_upper` and `to_lower` change them, every other byte as it is. The caller frees `result.data`.
 
 ## Allocators (`allocators.rig`)
 

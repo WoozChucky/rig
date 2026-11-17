@@ -1,23 +1,34 @@
-// Basic's strings: comparing, finding, trimming, slicing and splitting, and
-// the copy C reads, ended by a zero.
+// Basic's strings: comparing, finding, trimming, slicing and splitting, the
+// copy C reads, ended by a zero, and the copies made by joining, replacing,
+// repeating and changing case.
 //
-// A string is a view, a count and a pointer to bytes (spec 3.8), so every
-// string these procedures return is a view into the string they were given:
-// the views copy nothing and allocate nothing, and each lives as long as
-// the bytes it views. The one procedure that copies, to_c_string, takes its
-// memory from the allocator it is given, and the caller gives it back
-// there. Indexes and counts are in bytes, and the bytes are compared as
-// they are, unsigned, with no knowledge of UTF-8, so a search for an ASCII
-// byte never lands inside a UTF-8 character, whose bytes are all from 128
-// up.
+// A string is a view, a count and a pointer to bytes (spec 3.8), so the
+// procedures that cut strings up return views into the string they were
+// given: they copy nothing and allocate nothing, and each view lives as
+// long as the bytes it views. The procedures that copy, to_c_string, join,
+// replace, repeat, to_upper_copy and to_lower_copy, take their memory from
+// the allocator they are given, and the caller gives it back there. Indexes
+// and counts are in bytes, and the bytes are compared as they are,
+// unsigned, with no knowledge of UTF-8, so a search for an ASCII byte never
+// lands inside a UTF-8 character, whose bytes are all from 128 up.
 //
 // A zeroed string, with count 0 and data null, is the empty string
 // everywhere here: its count of 0 stops every loop before a byte is read,
 // and a view of it starts at offset 0, so its null data is never moved.
 //
-// Every string returned is the string given or a view cut out of it by
+// Every view returned is the string given or a view cut out of it by
 // slice, which clamps what it is asked for to the string it is given, so no
 // procedure here can return a view that reaches outside its string.
+//
+// The strings that join, replace, repeat and the case copies give are
+// always copies, even when nothing in them changed, so the caller can
+// always free them. Each one's size is worked out first, so the allocator
+// is asked once, and an empty result is the zeroed string, which asks it
+// nothing, as builder_to_string's empty text does: freeing it gives the
+// allocator nothing it didn't give. A size past int's largest, which would
+// wrap, asks for nothing either, since no memory holds that many bytes, and
+// neither it nor an allocator with no memory to give is told apart from an
+// empty result: each gives the zeroed string.
 #load "char.rig";
 #load "memory.rig";
 #load "allocators.rig";
@@ -200,4 +211,186 @@ to_c_string :: (s: string, allocator: Allocator) -> *u8 {
     copy_memory(c, s.data, s.count);
     c[s.count] = 0;
     return c;
+}
+
+// Whether sub occurs in s. Every string contains "", the empty and the
+// zeroed string too, as find_string finds it at 0.
+contains :: (s: string, sub: string) -> bool {
+    return find_string(s, sub) >= 0;
+}
+
+// How many times sub occurs in s, counted from the left without overlap,
+// as replace replaces them: each search starts after the last match, so
+// count_of("aaaa", "aa") is 2, not 3. The empty sub would match at every
+// place, and between each byte, so it is taken to match nothing, and gives
+// 0.
+count_of :: (s: string, sub: string) -> int {
+    if sub.count == 0 { return 0; }
+    count := 0;
+    rest := s;
+    at := find_string(rest, sub);
+    while at >= 0 {
+        count += 1;
+        rest = advance(rest, at + sub.count);
+        at = find_string(rest, sub);
+    }
+    return count;
+}
+
+// The parts one after another, with separator between each two, in memory
+// from allocator, which the caller gives back with free(s.data, allocator).
+// An empty part still has its separators, so "" and "" joined by "-" give
+// "-", and a part alone has none.
+//
+// The result is always a copy, even of one part alone, so the caller can
+// always free it. An empty result, of no parts or of empty parts and an
+// empty separator, is the zeroed string, count 0 and data null, which
+// allocates nothing, as builder_to_string's empty text does, and freeing
+// it gives the allocator nothing. When the allocator has no memory to give,
+// the result is the zeroed string too.
+//
+// The size is worked out first, so the memory is asked for once. Counts
+// added up past int's largest would wrap to a smaller size than the bytes
+// copied into it, and no memory holds that many bytes anyway, so then
+// nothing is asked for, and the result is the zeroed string.
+join :: (parts: []string, separator: string, allocator: Allocator) -> string {
+    LARGEST :: 9223372036854775807; // int's largest value
+    joined : string;
+    if parts.count <= 0 { return joined; }
+
+    count := 0;
+    for parts {
+        if it.count > LARGEST - count { return joined; }
+        count += it.count;
+    }
+    // parts.count - 1 separators, checked by division so the product can't
+    // wrap.
+    gaps := parts.count - 1;
+    if gaps > 0 && separator.count > (LARGEST - count) / gaps { return joined; }
+    count += separator.count * gaps;
+    if count == 0 { return joined; }
+    data := cast(*u8) alloc(count, allocator);
+    if data == null { return joined; }
+
+    at := 0;
+    for parts {
+        if it_index > 0 {
+            copy_memory(data + at, separator.data, separator.count);
+            at += separator.count;
+        }
+        copy_memory(data + at, it.data, it.count);
+        at += it.count;
+    }
+    joined.data = data;
+    joined.count = count;
+    return joined;
+}
+
+// A copy of s with every occurrence of old replaced by new, in memory from
+// allocator, which the caller gives back with free(s.data, allocator). The
+// occurrences are taken from the left without overlap, as count_of counts
+// them, and what replaces one is never searched again, so "aaaa" with "aa"
+// replaced by "a" gives "aa", and "aaa" with "a" replaced by "bb" gives
+// "bbbbbb". An empty old matches nothing, as in count_of, so the result is
+// a copy of s.
+//
+// The result is always a copy, even when nothing was replaced, so the
+// caller can always free it. An empty result is the zeroed string, which
+// allocates nothing, and so is the result when the allocator has no memory
+// to give, or when its size would pass int's largest.
+//
+// The matches are counted first, so the size is known and the memory asked
+// for once; then they are found again as the copy is filled.
+replace :: (s: string, old: string, new: string, allocator: Allocator) -> string {
+    LARGEST :: 9223372036854775807; // int's largest value
+    replaced : string;
+    matches := count_of(s, old);
+
+    // Each match changes the count by new.count - old.count. Shrinking
+    // can't take it below 0, since the matches are within s; growing is
+    // checked by division so the product can't wrap.
+    count := s.count;
+    if new.count > old.count {
+        growth := new.count - old.count;
+        if matches > 0 && growth > (LARGEST - count) / matches { return replaced; }
+        count += growth * matches;
+    } else {
+        count -= (old.count - new.count) * matches;
+    }
+    if count == 0 { return replaced; }
+    data := cast(*u8) alloc(count, allocator);
+    if data == null { return replaced; }
+
+    // As many matches as were counted are found again, each in the rest of
+    // s after the last; the bytes before each are copied, then new. With
+    // none, as for an empty old, the loop doesn't run, and all of s is the
+    // rest.
+    at := 0;
+    rest := s;
+    done := 0;
+    while done < matches {
+        found := find_string(rest, old);
+        copy_memory(data + at, rest.data, found);
+        at += found;
+        copy_memory(data + at, new.data, new.count);
+        at += new.count;
+        rest = advance(rest, found + old.count);
+        done += 1;
+    }
+    copy_memory(data + at, rest.data, rest.count);
+    replaced.data = data;
+    replaced.count = count;
+    return replaced;
+}
+
+// s n times over, in memory from allocator, which the caller gives back with
+// free(s.data, allocator). An n of 0 or less, or an empty s, gives the
+// zeroed string, which allocates nothing, and so does an allocator with no
+// memory to give, or a size that would pass int's largest. Otherwise the
+// result is a copy, even for an n of 1.
+repeat :: (s: string, n: int, allocator: Allocator) -> string {
+    LARGEST :: 9223372036854775807; // int's largest value
+    repeated : string;
+    if n <= 0 || s.count == 0 { return repeated; }
+    // Checked by division, so the product can't wrap.
+    if s.count > LARGEST / n { return repeated; }
+    count := s.count * n;
+    data := cast(*u8) alloc(count, allocator);
+    if data == null { return repeated; }
+
+    for i: 0..n - 1 { copy_memory(data + i * s.count, s.data, s.count); }
+    repeated.data = data;
+    repeated.count = count;
+    return repeated;
+}
+
+// A copy of s with every ASCII letter in uppercase, as to_upper changes
+// them, and every other byte as it is, so UTF-8's bytes, all from 128 up,
+// pass through unharmed. The memory is from allocator, and the caller gives
+// it back with free(s.data, allocator). An empty s gives the zeroed string,
+// which allocates nothing, and so does an allocator with no memory to give.
+to_upper_copy :: (s: string, allocator: Allocator) -> string {
+    upper : string;
+    if s.count == 0 { return upper; }
+    data := cast(*u8) alloc(s.count, allocator);
+    if data == null { return upper; }
+
+    for s { data[it_index] = to_upper(it); }
+    upper.data = data;
+    upper.count = s.count;
+    return upper;
+}
+
+// A copy of s with every ASCII letter in lowercase, as to_lower changes
+// them, and every other byte as it is, as to_upper_copy does.
+to_lower_copy :: (s: string, allocator: Allocator) -> string {
+    lower : string;
+    if s.count == 0 { return lower; }
+    data := cast(*u8) alloc(s.count, allocator);
+    if data == null { return lower; }
+
+    for s { data[it_index] = to_lower(it); }
+    lower.data = data;
+    lower.count = s.count;
+    return lower;
 }
