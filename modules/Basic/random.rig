@@ -1,0 +1,190 @@
+// Basic's random numbers: PCG32, Melissa O'Neill's permuted congruential
+// generator (https://www.pcg-random.org, and her paper "PCG: A Family of
+// Simple Fast Space-Efficient Statistically Good Algorithms for Random
+// Number Generation", 2014), written after her pcg-c-basic, the minimal C
+// version: pcg32_srandom_r, pcg32_random_r and pcg32_boundedrand_r. They
+// are for simulations, games, tests and shuffles; not for keys, tokens or
+// anything an adversary mustn't guess, since anyone who sees a few outputs
+// can work out the state and every number after it.
+//
+// The generator is two steps. A linear congruential generator moves a
+// 64-bit state on, state * multiplier + increment modulo 2^64: fast, and
+// with an odd increment it passes through all 2^64 states before it
+// repeats, but its low bits are weak (bit k repeats every 2^(k+1) steps).
+// So the output isn't the state itself: a permutation turns the state into
+// 32 bits, a xorshift that folds the high bits down onto the low ones, then
+// a rotation by an amount the state's top 5 bits choose, the best bits it
+// has. Every output bit then depends on the strong high bits, which is what
+// lets random_bool take only the lowest.
+//
+// The increment picks one of 2^63 streams, each its own order of the 2^64
+// states, so two generators seeded alike but given different streams give
+// different numbers. Each procedure here follows the C code step for step,
+// so the numbers are the reference's: tests/run/basic_random.rig prints the
+// first round pcg32-demo prints and checks it against pcg-random.org's.
+//
+// Arithmetic on u64 and u32 wraps (spec 5.3), which is the modulo 2^64 the
+// generator wants; cast,trunc takes bits from one integer type to another
+// unchecked, where cast would stop the program for a value out of range.
+#load "time.rig";
+
+// The 64-bit multiplier of PCG's linear congruential step, the one
+// pcg-c-basic uses, from Knuth's MMIX.
+PCG_MULTIPLIER :: 6364136223846793005;
+
+// A generator: its state, and the increment of its linear congruential
+// step, which is always odd once seeded (the stream shifted left, with 1).
+// A zeroed Random is safe to draw from, but it isn't random: with an
+// increment of 0 the step is a plain multiplication, which keeps a state
+// of 0 at 0, so it gives 0 every time. Seed it first, with random_seed, or
+// make it with random_from_time.
+Random :: struct {
+    state: u64;
+    increment: u64;
+}
+
+// Seeds r: the same seed and stream give the same numbers on every system,
+// compiled and interpreted. The stream's top bit is lost to the shift, so
+// streams that differ only there are one stream.
+//
+// This is pcg32_srandom_r: the increment is set first, then two steps
+// around adding the seed, so that a seed of 0 doesn't start at state 0 and
+// the first output already depends on every bit of the seed.
+random_seed :: (r: *Random, seed: u64, stream: u64) {
+    r.state = 0;
+    r.increment = (stream << 1) | 1;
+    random_u32(r);
+    r.state += seed;
+    random_u32(r);
+}
+
+// The next 32-bit number from r, every value of u32 equally likely.
+//
+// This is pcg32_random_r. It moves the state on, and permutes the old
+// state, so the step and the permutation don't wait on each other. The
+// xorshift by 18 folds the high bits onto the low ones, and the shift by 27
+// and the cut to 32 bits keep the result's bits 27 to 58, just below the
+// top 5; then those 32 bits rotate right by the old state's top 5 bits, 0
+// to 31. A rotation left by 32 - rotation
+// is the bits that fell off the right end; (0 - rotation) & 31 is that
+// amount, and 0 when the rotation is 0, rather than a shift by 32.
+random_u32 :: (r: *Random) -> u32 {
+    old := r.state;
+    r.state = old * PCG_MULTIPLIER + r.increment;
+    shifted := cast,trunc(u32) (((old >> 18) ^ old) >> 27);
+    rotation := cast,trunc(u32) (old >> 59);
+    return (shifted >> rotation) | (shifted << ((0 - rotation) & 31));
+}
+
+// The next 64-bit number from r: two 32-bit numbers, the first drawn the
+// high half.
+random_u64 :: (r: *Random) -> u64 {
+    high : u64 = random_u32(r);
+    low : u64 = random_u32(r);
+    return (high << 32) | low;
+}
+
+// A number from low to high, both included, every one equally likely. The
+// bounds may come either way round: high below low is the same range. It
+// draws at least once, even when low equals high, so a generator moves on
+// alike whatever the range.
+//
+// The range has span + 1 values, span being high less low, worked out in
+// u64 so that int's whole range, whose span is 2^64 - 1, doesn't overflow.
+// Each draw is added to low in u64 too, and the sum read back as an int:
+// two's complement makes that the right number for every low, negative
+// ones included.
+//
+// A draw modulo the range would favour the smallest values whenever the
+// range doesn't divide 2^32 (or 2^64) evenly: the draws past the last whole
+// multiple of the range wrap onto the bottom of it. So the draws below
+// threshold, 2^32 (or 2^64) modulo the range, are thrown away and drawn
+// again; what is left is a whole number of copies of the range. That is
+// pcg32_boundedrand_r, and its threshold is (0 - bound) % bound since 0 -
+// bound in u32 is 2^32 - bound, which has the same remainder. Fewer than
+// half the draws are ever thrown away, so the loop ends quickly.
+random_int :: (r: *Random, low: int, high: int) -> int {
+    base := cast,trunc(u64) low;
+    span := cast,trunc(u64) high - base;
+    if high < low {
+        base = cast,trunc(u64) high;
+        span = cast,trunc(u64) low - base;
+    }
+
+    // Every int: a 64-bit number is one already.
+    if span == 0xFFFFFFFFFFFFFFFF { return cast,trunc(int) random_u64(r); }
+    // Exactly 2^32 values: a 32-bit number is one of them, with nothing to
+    // throw away.
+    if span == 0xFFFFFFFF { return cast,trunc(int) (base + random_u32(r)); }
+
+    // Fewer than 2^32 values: 32-bit draws, as pcg32_boundedrand_r takes
+    // them, so the demo's rolls and shuffles come out as its own.
+    if span < 0xFFFFFFFF {
+        bound := cast,trunc(u32) (span + 1);
+        threshold := (0 - bound) % bound;
+        x := random_u32(r);
+        while x < threshold { x = random_u32(r); }
+        return cast,trunc(int) (base + x % bound);
+    }
+
+    // More than 2^32 values: the same in 64 bits.
+    range := span + 1;
+    threshold := (0 - range) % range;
+    x := random_u64(r);
+    while x < threshold { x = random_u64(r); }
+    return cast,trunc(int) (base + x % range);
+}
+
+// A number from 0 up to but not including 1, in steps of 2^-53: the top 53
+// bits of a 64-bit number, as many as a float64's significand holds, over
+// 2^53. Every one of those 2^53 values is equally likely and exact, so 1
+// itself never comes, which dividing a whole 64-bit number by 2^64 could
+// give by rounding up.
+random_float64 :: (r: *Random) -> float64 {
+    return cast(float64) (random_u64(r) >> 11) * (1.0 / 9007199254740992.0);
+}
+
+// true or false, each equally likely: the lowest bit of a 32-bit number,
+// which is pcg32_boundedrand_r of 2, whose threshold is 0. The lowest bit
+// of the state alone alternates, but the output's is a permutation of the
+// state's high bits, as good as any other bit.
+random_bool :: (r: *Random) -> bool {
+    return random_u32(r) & 1 == 1;
+}
+
+// Puts the count elements of element_size bytes each that start at data in
+// a random order, every order equally likely. No memory is needed: two
+// elements are swapped a byte at a time. Nothing is drawn or touched for a
+// count of 1 or less, or an element_size of 0 or less, so data may be null
+// then.
+//
+// This is the Fisher-Yates shuffle, as pcg32-demo shuffles its cards: from
+// the last element down to the second, each is swapped with one at or
+// before it, chosen at random, so each place is filled from what is left.
+random_shuffle :: (r: *Random, data: *void, count: int, element_size: int) {
+    if count <= 1 || element_size <= 0 { return; }
+    bytes := cast(*u8) data;
+    i := count - 1;
+    while i > 0 {
+        j := random_int(r, 0, i);
+        a := bytes + i * element_size;
+        b := bytes + j * element_size;
+        for k: 0..element_size - 1 {
+            byte := a[k];
+            a[k] = b[k];
+            b[k] = byte;
+        }
+        i -= 1;
+    }
+}
+
+// A generator seeded from the clock: the seed is time_now()'s nanoseconds,
+// and the stream the address of a local, as pcg32-demo seeds with the time
+// and an address when it's run with -r. Two generators made within the
+// same nanosecond, or by the same call on a system whose clock is coarser,
+// may give the same numbers.
+random_from_time :: () -> Random {
+    r : Random;
+    random_seed(*r, cast,trunc(u64) time_now().nanoseconds, cast(u64) *r);
+    return r;
+}
