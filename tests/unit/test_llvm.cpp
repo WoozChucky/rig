@@ -516,19 +516,23 @@ TEST(llvm_foreign_c_name_calls_through_each_declaration) {
     arena_free(&a);
 }
 
-// Issue #161: C's time functions on Windows, by their 64-bit names.
+// Issue #161: C runtime time functions on Windows, by their 64-bit names.
 
 TEST(llvm_windows_time_functions_are_the_64_bit_ones) {
-    // On Windows C's seven time functions are declared under the Universal
-    // C Runtime's 64-bit exports, which a C program's <time.h> calls: no
-    // timespec_get exists to link, and msvcrt.lib's time and the rest are
-    // the 32-bit versions. _time64 declared under its own name too is the
-    // same declaration as time's. On Linux glibc's are 64 bits under C's
-    // names, which stay.
+    // On Windows the C runtime's time functions are declared under the
+    // Universal C Runtime's 64-bit exports, which a C program's headers
+    // call: the UCRT exports none of their names, and msvcrt.lib's time,
+    // _mkgmtime and the rest are the 32-bit versions. _ftime and ftime, and
+    // _utime and utime, are one function each, as _time64 declared under
+    // its own name too is time's. On Linux each stays under its own name
+    // (glibc's are 64 bits; it has no Microsoft names, which the linker
+    // would say).
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "Timespec :: struct { seconds: s64; nanoseconds: s32; padding: s32; }\n"
                                 "Tm :: struct { second: s32; minute: s32; hour: s32; }\n"
+                                "Timeb :: struct { time: s64; milliseconds: u16; timezone: s16; dstflag: s16; }\n"
+                                "Utimbuf :: struct { access: s64; modification: s64; }\n"
                                 "timespec_get :: (ts: *Timespec, base: s32) -> s32 #foreign libc;\n"
                                 "time :: (t: *s64) -> s64 #foreign libc;\n"
                                 "time64 :: (t: *s64) -> s64 #foreign libc \"_time64\";\n"
@@ -537,6 +541,19 @@ TEST(llvm_windows_time_functions_are_the_64_bit_ones) {
                                 "mktime :: (tm: *Tm) -> s64 #foreign libc;\n"
                                 "difftime :: (end: s64, start: s64) -> float64 #foreign libc;\n"
                                 "ctime :: (t: *s64) -> *u8 #foreign libc;\n"
+                                "_mkgmtime :: (tm: *Tm) -> s64 #foreign libc;\n"
+                                "_wctime :: (t: *s64) -> *u16 #foreign libc;\n"
+                                "_ftime :: (tb: *Timeb) #foreign libc;\n"
+                                "ftime :: (tb: *Timeb) #foreign libc;\n"
+                                "_ftime_s :: (tb: *Timeb) -> s32 #foreign libc;\n"
+                                "_futime :: (fd: s32, times: *Utimbuf) -> s32 #foreign libc;\n"
+                                "_utime :: (path: *u8, times: *Utimbuf) -> s32 #foreign libc;\n"
+                                "utime :: (path: *u8, times: *Utimbuf) -> s32 #foreign libc;\n"
+                                "_wutime :: (path: *u16, times: *Utimbuf) -> s32 #foreign libc;\n"
+                                "ctime_s :: (buffer: *u8, size: u64, t: *s64) -> s32 #foreign libc;\n"
+                                "_wctime_s :: (buffer: *u16, size: u64, t: *s64) -> s32 #foreign libc;\n"
+                                "gmtime_s :: (tm: *Tm, t: *s64) -> s32 #foreign libc;\n"
+                                "localtime_s :: (tm: *Tm, t: *s64) -> s32 #foreign libc;\n"
                                 "main :: () {\n"
                                 "    ts : Timespec;\n"
                                 "    r := timespec_get(*ts, 1);\n"
@@ -546,26 +563,61 @@ TEST(llvm_windows_time_functions_are_the_64_bit_ones) {
                                 "    l := mktime(localtime(*t));\n"
                                 "    d := difftime(t, u);\n"
                                 "    c := ctime(*t);\n"
+                                "    k := _mkgmtime(g);\n"
+                                "    w := _wctime(*t);\n"
+                                "    tb : Timeb;\n"
+                                "    _ftime(*tb);\n"
+                                "    ftime(*tb);\n"
+                                "    fs := _ftime_s(*tb);\n"
+                                "    times : Utimbuf;\n"
+                                "    f := _futime(0, *times);\n"
+                                "    p := _utime(null, *times);\n"
+                                "    q := utime(null, *times);\n"
+                                "    wp := _wutime(null, *times);\n"
+                                "    cs := ctime_s(null, 0, *t);\n"
+                                "    ws := _wctime_s(null, 0, *t);\n"
+                                "    tm : Tm;\n"
+                                "    gs := gmtime_s(*tm, *t);\n"
+                                "    ls := localtime_s(*tm, *t);\n"
                                 "}\n");
-    // Each function's declaration, with %s for its name; C's name, and its
-    // Windows name.
-    const char *declarations[] = {"declare i32 @%s(ptr, i32)", "declare i64 @%s(ptr)",
-                                  "declare ptr @%s(ptr)",      "declare ptr @%s(ptr)",
-                                  "declare i64 @%s(ptr)",      "declare double @%s(i64, i64)",
-                                  "declare ptr @%s(ptr)"};
-    const char *c_names[] = {"timespec_get", "time", "gmtime", "localtime", "mktime", "difftime", "ctime"};
-    const char *windows_names[] = {"_timespec64_get", "_time64", "_gmtime64", "_localtime64",
-                                   "_mktime64", "_difftime64", "_ctime64"};
+    // Each function: its declaration, with %s for its name; C's name; and
+    // its Windows name.
+    struct Time_Function {
+        const char *declaration;
+        const char *c_name;
+        const char *windows_name;
+    };
+    const Time_Function functions[] = {
+        {"declare i32 @%s(ptr, i32)", "timespec_get", "_timespec64_get"},
+        {"declare i64 @%s(ptr)", "time", "_time64"},
+        {"declare ptr @%s(ptr)", "gmtime", "_gmtime64"},
+        {"declare ptr @%s(ptr)", "localtime", "_localtime64"},
+        {"declare i64 @%s(ptr)", "mktime", "_mktime64"},
+        {"declare double @%s(i64, i64)", "difftime", "_difftime64"},
+        {"declare ptr @%s(ptr)", "ctime", "_ctime64"},
+        {"declare i64 @%s(ptr)", "_mkgmtime", "_mkgmtime64"},
+        {"declare ptr @%s(ptr)", "_wctime", "_wctime64"},
+        {"declare void @%s(ptr)", "_ftime", "_ftime64"},
+        {"declare void @%s(ptr)", "ftime", "_ftime64"},
+        {"declare i32 @%s(ptr)", "_ftime_s", "_ftime64_s"},
+        {"declare i32 @%s(i32, ptr)", "_futime", "_futime64"},
+        {"declare i32 @%s(ptr, ptr)", "_utime", "_utime64"},
+        {"declare i32 @%s(ptr, ptr)", "utime", "_utime64"},
+        {"declare i32 @%s(ptr, ptr)", "_wutime", "_wutime64"},
+        {"declare i32 @%s(ptr, i64, ptr)", "ctime_s", "_ctime64_s"},
+        {"declare i32 @%s(ptr, i64, ptr)", "_wctime_s", "_wctime64_s"},
+        {"declare i32 @%s(ptr, ptr)", "gmtime_s", "_gmtime64_s"},
+        {"declare i32 @%s(ptr, ptr)", "localtime_s", "_localtime64_s"},
+    };
     for (int t = 0; t < 2; t++) {
         bool windows = (Target)t == TARGET_WINDOWS_X64;
         String text = llvm_text(&a, m, (Target)t);
-        for (int i = 0; i < 7; i++) {
-            const char *declared = windows ? windows_names[i] : c_names[i];
-            const char *other = windows ? c_names[i] : windows_names[i];
-            CHECK_EQ(count_of(text, string_cstr(&a, string_printf(&a, declarations[i], declared))), 1);
-            // On Linux _time64 is declared too, under the name it's given
-            // (which glibc doesn't have; the linker would say so).
-            if (!windows && i == 1) continue;
+        for (const Time_Function &f : functions) {
+            const char *declared = windows ? f.windows_name : f.c_name;
+            const char *other = windows ? f.c_name : f.windows_name;
+            CHECK_EQ(count_of(text, string_cstr(&a, string_printf(&a, f.declaration, declared))), 1);
+            // On Linux _time64 is declared too, under the name it's given.
+            if (!windows && string_eq(str(f.c_name), str("time"))) continue;
             CHECK(!contains(text, string_cstr(&a, string_printf(&a, "@%s(", other))));
         }
         // time and time64 are one declaration on Windows, never renamed

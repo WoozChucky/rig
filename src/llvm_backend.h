@@ -6,7 +6,9 @@
 // basic block, and every stack slot's alloca is in the entry block,
 // whichever block asked for it. Rig's procedures are internal, the entry
 // point and foreign procedures external, each foreign one declared under
-// its C name (#foreign libc "free"), one declaration per C function; a
+// its C name (#foreign libc "free"), or on Windows, for a few of the C
+// runtime's time functions, under the Universal C Runtime's 64-bit name
+// (declare_foreign_functions), one declaration per C function; a
 // procedure with several results returns them as one LLVM struct. A
 // #compiler procedure (spec 7.9) is no function of the module: the
 // compiler does it, while compiling, and a module that reaches the backend
