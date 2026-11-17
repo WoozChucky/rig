@@ -2952,6 +2952,9 @@ TEST(interp_finds_c_functions_by_name) {
     CHECK(os_find_c_function(str("sqrt")) == dlsym(libm, "sqrt"));
     CHECK(os_find_c_function(str("copysign")) == dlsym(libc, "copysign"));
     CHECK(dlsym(libc, "copysign") != dlsym(libm, "copysign"));
+    // std::terminate is in the process, through libstdc++, so a null
+    // result shows the lookup left libstdc++'s functions out.
+    CHECK(dlsym(RTLD_DEFAULT, "_ZSt9terminatev") != nullptr);
     CHECK(os_find_c_function(str("_ZSt9terminatev")) == nullptr);
 #endif
     CHECK(interp_test_c_function("nope_not_a_function") == nullptr);
