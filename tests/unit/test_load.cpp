@@ -1830,6 +1830,40 @@ TEST(if_branch_load_of_a_file_loaded_elsewhere) {
     arena_free(&a);
 }
 
+TEST(if_branch_load_of_a_file_two_taken_branches_reach) {
+    // The spec's case: main loads a in one taken branch and ./d in a later
+    // one, and a loads d. Deciding the first #if reads a and, at once, d
+    // through a's #load, before the second #if is decided: d is named as a
+    // spells it, though main's #load comes first in load order.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "if_branch_load_of_a_file_two_taken_branches_reach");
+    write_source(&a, dir, "a.rig", "#load \"d.rig\";\nA :: 1;\n");
+    write_source(&a, dir, "d.rig", "D :: 2;\n");
+    Diagnostics d = {};
+    Ast_File *tree =
+        load_text(&a, &d, dir, "#if true { #load \"a.rig\"; }\n#if true { #load \"./d.rig\"; }\n", SYSTEM_NONE);
+    CHECK_STR(messages(&a, &d), "");
+    const char *paths[3] = {"main.rig", "a.rig", "d.rig"};
+    CHECK_EQ(d.files.count, 3);
+    if (d.files.count == 3) {
+        for (s32 i = 0; i < 3; i++) CHECK_STR(d.files[i].path, in_directory(&a, dir, paths[i]));
+    }
+    CHECK_EQ(tree->globals.count, 2);
+    diag_free(&d);
+
+    // And when it can't be read, it's reported at a's #load, read first.
+    write_source(&a, dir, "b.rig", "#load \"nope.rig\";\n");
+    d = {};
+    tree = load_text(&a, &d, dir, "#if true { #load \"b.rig\"; }\n#if true { #load \"./nope.rig\"; }\n", SYSTEM_NONE);
+    CHECK_EQ(d.messages.count, 1);
+    if (d.messages.count == 1) {
+        check_cannot_read(&a, &d.messages[0], 1, 1, 7, str(in_directory(&a, dir, "nope.rig")));
+    }
+    CHECK(tree->lost_a_file);
+    diag_free(&d);
+    arena_free(&a);
+}
+
 TEST(if_branch_load_is_relative_to_its_file) {
     // A taken branch's #load, as any, names its file from the directory of
     // the file holding the #if: sub/a.rig's "b.rig" is sub/b.rig, and b's
@@ -2003,6 +2037,29 @@ TEST(if_condition_cant_see_constants_of_a_file_a_branch_loads) {
     // LEVEL alone: neither A nor B.
     CHECK_EQ(tree->globals.count, 1);
     if (tree->globals.count == 1) CHECK_STR(((Ast_Const *)tree->globals[0])->name, "LEVEL");
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(if_condition_cant_see_a_file_not_read_yet) {
+    // A file a later taken branch loads isn't read when an earlier #if is
+    // decided, so a name only it declares is unknown there, and that #if
+    // takes neither branch. The later #if is taken all the same.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "if_condition_cant_see_a_file_not_read_yet");
+    write_source(&a, dir, "a.rig", "X :: 1;\n");
+    Diagnostics d = {};
+    Ast_File *tree = load_text(&a, &d, dir, "#if X == 1 { A :: 1; }\n#if true { #load \"a.rig\"; }\n", SYSTEM_NONE);
+    CHECK_STR(messages(&a, &d), "1:5: unknown identifier 'X'\n");
+    CHECK(tree->lost_a_file);
+    CHECK_EQ(tree->ifs.count, 2);
+    if (tree->ifs.count == 2) {
+        CHECK(tree->ifs[0]->failed && !tree->ifs[0]->taken);
+        CHECK(tree->ifs[1]->taken && !tree->ifs[1]->failed);
+    }
+    // X alone: not A.
+    CHECK_EQ(tree->globals.count, 1);
+    if (tree->globals.count == 1) CHECK_STR(((Ast_Const *)tree->globals[0])->name, "X");
     diag_free(&d);
     arena_free(&a);
 }
