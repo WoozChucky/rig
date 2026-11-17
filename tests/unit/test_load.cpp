@@ -2152,6 +2152,38 @@ TEST(stdin_for_in_branches_nested_a_thousand_levels) {
     arena_free(&a);
 }
 
+TEST(stdin_for_in_a_chain_of_10000_arms) {
+    // Review Focus 5: every arm of a long else #if chain but the taken one,
+    // the last, is walked along a loop (note_branches), not recursing per
+    // arm, down to the one before the last, which loads the --stdin-for
+    // file.
+    const s64 ARMS = 10000;
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "stdin_for_in_a_chain_of_10000_arms");
+    char *text = (char *)arena_alloc(&a, (u64)(ARMS * 64 + 4096), 1);
+    char *at = text;
+    at += sprintf(at, "N :: %lld;\n", (long long)(ARMS - 1));
+    for (s64 i = 0; i < ARMS; i++) {
+        at += sprintf(at, "%s#if N == %lld { %s }\n", i ? "else " : "", (long long)i,
+                      i == ARMS - 2 ? "#load \"l.rig\";" : "");
+    }
+    Diagnostics d = {};
+    bool reached = true, not_taken = false, undecided = true;
+    Load_Options options = {};
+    options.stdin_for = str(in_directory(&a, dir, "l.rig"));
+    options.stdin_text = str("L :: 2;\n");
+    options.stdin_for_reached = &reached;
+    options.stdin_for_not_taken = &not_taken;
+    options.stdin_for_undecided = &undecided;
+    load_program(&a, &d, str(in_directory(&a, dir, "main.rig")), str(text), &options);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK(!reached);
+    CHECK(not_taken);
+    CHECK(!undecided);
+    diag_free(&d);
+    arena_free(&a);
+}
+
 TEST(stdin_for_imported_only_in_a_branch_not_taken) {
     // An #import in a branch not taken is resolved as one outside it would
     // be (module_lookup), unread: --stdin-for its module.rig is the file

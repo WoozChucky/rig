@@ -6207,6 +6207,11 @@ TEST(if_directive_condition_errors) {
               "1:16: unknown identifier 'u'\n"
               "1:23: the condition of '#if' must be a bool, not 'int'\n"
               "2:19: unknown identifier 'r'\n");
+    // A branch in a body declares no type, so an unknown type still is
+    // reported there (spec 4.9).
+    CHECK_STR(check_source(&a, "main :: () {\n    #if 1 { }\n    t : Nope;\n    y := w;\n}\n"),
+              "2:9: the condition of '#if' must be a bool, not 'int'\n"
+              "3:9: unknown type 'Nope'\n");
     // A body a #run checks on demand there is another body: its unknown
     // names are reported, and the rest of the first still says nothing.
     CHECK_STR(check_source(&a, "main :: () { #if 1 {} x := #run g(); y := z; }\ng :: () -> int { return q; }\n"),
@@ -6666,8 +6671,14 @@ TEST(top_level_if_directive_chains_of_10000_arms) {
     for (s64 i = 0; i < ARMS; i++) {
         at += sprintf(at, "%s#if N == %lld { A :: %lld; }\n", i ? "else " : "", (long long)i, (long long)i);
     }
-    sprintf(at, "main :: () { x : [A - %lld]u8; }\n", (long long)(ARMS - 1));
+    at += sprintf(at, "main :: () { x : [A - %lld]u8; }\n", (long long)(ARMS - 1));
     CHECK_STR(check_loaded(&a, text, SYSTEM_NONE), "");
+    // A later condition naming what the base lacks has every arm's branch
+    // looked into for it (check_in_a_branch), along a loop too: declared in
+    // none, it's unknown.
+    sprintf(at, "#if NOPE == 1 {}\n");
+    CHECK_STR(check_loaded(&a, text, SYSTEM_NONE),
+              string_cstr(&a, string_printf(&a, "%lld:5: unknown identifier 'NOPE'\n", (long long)(ARMS + 3))));
     arena_free(&a);
 }
 

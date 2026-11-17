@@ -520,7 +520,9 @@ System host_system();
 // over by the recovery after another error (parser.h): the program lacks
 // that file, so what it declares is unknown, as it is for a broken entry
 // whose name was lost, and the checker doesn't report a name as unknown,
-// or main as missing, because of it (checker.h).
+// or main as missing, because of it (checker.h). The loader sets it too
+// when a top-level #if's condition had an error (load.h, spec 4.9): the
+// program lacks what its branches might have declared.
 //
 // reaches_compiler and compiler_pos are the loader's (load.h): whether the
 // program reached the Compiler module, which with no main makes it a build

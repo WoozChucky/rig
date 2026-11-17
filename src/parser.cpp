@@ -712,22 +712,38 @@ static bool starts_declaration(Parser *p) {
 // hold any of them (a #run in a body takes an expression), so it can only
 // be a top-level #if, its branches holding declarations, as the writer's
 // indentation says (an #if written after a body whose '}' was forgotten).
+// A branch of an #if right inside a branch counts too (`#if OS == .. {
+// #if DEBUG { f :: () {} } }`), at any depth: its braces are a branch's
+// as well. A block in a branch isn't one, nor is anything in it.
 // The chain ends at a '}' that closes a branch with no else after it, or
 // at the end of the file. A brace in a condition (`#if X == .{1} {`) can
 // end the look early, and the #if is then a statement, as without such a
 // declaration.
 static bool branch_declares_procedure(Parser *p) {
-    s64 depth = 0;  // the braces open since the '#if'
+    s64 depth = 0;             // the braces open since the '#if'
+    s64 branches = 0;          // how many of those are branches' (always the outermost ones)
+    bool opens_branch = true;  // the next '{' opens a branch: after an #if or an else at a branch's level
     for (s64 ahead = 1; peek(p, ahead)->kind != TOKEN_EOF; ahead++) {
         Token *t = peek(p, ahead);
+        bool at_branch_level = depth > 0 && depth == branches;
         if (t->kind == TOKEN_LBRACE) {
             depth++;
+            if (opens_branch && depth == branches + 1) branches = depth;
+            opens_branch = false;
         } else if (t->kind == TOKEN_RBRACE) {
-            if (--depth <= 0 && peek(p, ahead + 1)->kind != TOKEN_ELSE) return false;
-        } else if (depth == 1 && t->kind == TOKEN_IDENT && peek(p, ahead + 1)->kind == TOKEN_COLON_COLON &&
+            bool closes_branch = depth == branches;
+            bool else_follows = peek(p, ahead + 1)->kind == TOKEN_ELSE;
+            if (--depth <= 0 && !else_follows) return false;
+            if (closes_branch) {
+                branches = depth;
+                opens_branch = else_follows;
+            }
+        } else if (at_branch_level && is_directive(t, "if")) {
+            opens_branch = true;
+        } else if (at_branch_level && t->kind == TOKEN_IDENT && peek(p, ahead + 1)->kind == TOKEN_COLON_COLON &&
                    (procedure_follows(p, ahead + 2) || peek(p, ahead + 2)->kind == TOKEN_STRUCT)) {
             return true;
-        } else if (depth == 1 && is_directive(t, "run") && peek(p, ahead + 1)->kind == TOKEN_LBRACE) {
+        } else if (at_branch_level && is_directive(t, "run") && peek(p, ahead + 1)->kind == TOKEN_LBRACE) {
             return true;
         }
     }
