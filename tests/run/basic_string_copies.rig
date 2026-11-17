@@ -19,6 +19,17 @@ show :: (s: string) {
     free(s.data, HEAP_ALLOCATOR);
 }
 
+// Prints result between brackets and whether it is a copy, at another
+// address than original's, then gives its memory back to the heap.
+show_copied :: (result: string, original: string) {
+    print_string("[");
+    print_string(result);
+    print_string("] copied:");
+    show_bool(result.data != original.data);
+    print_line("");
+    free(result.data, HEAP_ALLOCATOR);
+}
+
 // Prints a space, then value.
 show_bool :: (value: bool) {
     print_string(" ");
@@ -95,7 +106,8 @@ main :: () {
     show(join(string.["a", "b", "c"], ", ", HEAP_ALLOCATOR));
     show(join(none, ", ", HEAP_ALLOCATOR));
     show(join(string.["", ""], "-", HEAP_ALLOCATOR));
-    show(join(string.["x"], "--", HEAP_ALLOCATOR));
+    x := "x";
+    show_copied(join(string.[x], "--", HEAP_ALLOCATOR), x);
 
     // Matches are replaced left to right without overlap, and what replaces
     // one is never searched again.
@@ -107,13 +119,7 @@ main :: () {
 
     // An empty old matches nothing, and the result is still a copy.
     h := "hello";
-    r := replace(h, "", "x", HEAP_ALLOCATOR);
-    print_string("[");
-    print_string(r);
-    print_string("] copied:");
-    show_bool(r.data != h.data);
-    print_line("");
-    free(r.data, HEAP_ALLOCATOR);
+    show_copied(replace(h, "", "x", HEAP_ALLOCATOR), h);
 
     show(replace("abc", "abc", "", HEAP_ALLOCATOR));
 
@@ -122,11 +128,18 @@ main :: () {
     show(repeat("ab", 0, HEAP_ALLOCATOR));
     show(repeat("ab", -1, HEAP_ALLOCATOR));
     show(repeat("", 5, HEAP_ALLOCATOR));
+    // Once is still a copy.
+    show_copied(repeat(h, 1, HEAP_ALLOCATOR), h);
 
     // ASCII letters change case; every other byte, UTF-8's included, stays.
     show(to_upper_copy("Hello, Wörld! 09", HEAP_ALLOCATOR));
     show(to_lower_copy("ÀBC Def", HEAP_ALLOCATOR));
     show(to_upper_copy(empty, HEAP_ALLOCATOR));
+    // A copy that changes no byte is still a copy.
+    capitals := "ABC";
+    show_copied(to_upper_copy(capitals, HEAP_ALLOCATOR), capitals);
+    digits := "09";
+    show_copied(to_lower_copy(digits, HEAP_ALLOCATOR), digits);
 
     // An empty result is the zeroed string, which asks the allocator for
     // nothing.
@@ -170,11 +183,13 @@ main :: () {
     upper := to_upper_copy("hello", refusing);
     show_int(refused.last_size);
     show_zeroed(upper);
+    lower := to_lower_copy("ABC", refusing);
+    show_int(refused.last_size);
+    show_zeroed(lower);
     print_line("");
 
-    // Sizes up to int's largest are asked for; past it, where the size
-    // would wrap, nothing is asked, and the result is the zeroed string. The
-    // halves claim more bytes than they have, which is safe only because
+    // Sizes up to int's largest are asked for. The halves here, and wide
+    // below, claim more bytes than they have, which is safe only because
     // the allocator gives nothing, so no byte is copied.
     half : string;
     half.data = "x".data;
@@ -186,10 +201,24 @@ main :: () {
     show_int(refused.last_size);
     print_line("");
 
+    // Past it, each size below, worked out unchecked, would wrap round to a
+    // small size above 0, which an allocator could give, and the copy would
+    // write far past it. So each call must give the zeroed string and leave
+    // the allocator unasked: five halves joined, five parts joined by a
+    // separator of 2^62 bytes (4 gaps make 2^64, which wraps to 0), five
+    // bytes each replaced by a half, and 4 bytes repeated 2^62 + 1 times.
+    wide : string;
+    wide.data = "x".data;
+    wide.count = LARGEST / 2 + 1;
     asked := refused.allocations;
     print_string("past it:");
-    show_zeroed(join(string.[half, half], "--", refusing));
-    show_zeroed(repeat("ab", LARGEST / 2 + 1, refusing));
+    show_zeroed(join(string.[half, half, half, half, half], "", refusing));
+    show_bool(refused.allocations == asked);
+    show_zeroed(join(string.["a", "b", "c", "d", "e"], wide, refusing));
+    show_bool(refused.allocations == asked);
+    show_zeroed(replace("aaaaa", "a", half, refusing));
+    show_bool(refused.allocations == asked);
+    show_zeroed(repeat("abcd", LARGEST / 2 + 2, refusing));
     show_bool(refused.allocations == asked);
     print_line("");
 }

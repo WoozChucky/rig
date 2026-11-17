@@ -238,9 +238,9 @@ count_of :: (s: string, sub: string) -> int {
 }
 
 // The parts one after another, with separator between each two, in memory
-// from allocator, which the caller gives back with free(s.data, allocator).
-// An empty part still has its separators, so "" and "" joined by "-" give
-// "-", and a part alone has none.
+// from allocator, which the caller gives back with
+// free(result.data, allocator). An empty part still has its separators, so
+// "" and "" joined by "-" give "-", and a part alone has none.
 //
 // The result is always a copy, even of one part alone, so the caller can
 // always free it. An empty result, of no parts or of empty parts and an
@@ -287,12 +287,12 @@ join :: (parts: []string, separator: string, allocator: Allocator) -> string {
 }
 
 // A copy of s with every occurrence of old replaced by new, in memory from
-// allocator, which the caller gives back with free(s.data, allocator). The
-// occurrences are taken from the left without overlap, as count_of counts
-// them, and what replaces one is never searched again, so "aaaa" with "aa"
-// replaced by "a" gives "aa", and "aaa" with "a" replaced by "bb" gives
-// "bbbbbb". An empty old matches nothing, as in count_of, so the result is
-// a copy of s.
+// allocator, which the caller gives back with free(result.data, allocator).
+// The occurrences are taken from the left without overlap, as count_of
+// counts them, and what replaces one is never searched again, so "aaaa"
+// with "aa" replaced by "a" gives "aa", and "aaa" with "a" replaced by "bb"
+// gives "bbbbbb". An empty old matches nothing, as in count_of, so the
+// result is a copy of s.
 //
 // The result is always a copy, even when nothing was replaced, so the
 // caller can always free it. An empty result is the zeroed string, which
@@ -344,7 +344,7 @@ replace :: (s: string, old: string, new: string, allocator: Allocator) -> string
 }
 
 // s n times over, in memory from allocator, which the caller gives back with
-// free(s.data, allocator). An n of 0 or less, or an empty s, gives the
+// free(result.data, allocator). An n of 0 or less, or an empty s, gives the
 // zeroed string, which allocates nothing, and so does an allocator with no
 // memory to give, or a size that would pass int's largest. Otherwise the
 // result is a copy, even for an n of 1.
@@ -367,8 +367,9 @@ repeat :: (s: string, n: int, allocator: Allocator) -> string {
 // A copy of s with every ASCII letter in uppercase, as to_upper changes
 // them, and every other byte as it is, so UTF-8's bytes, all from 128 up,
 // pass through unharmed. The memory is from allocator, and the caller gives
-// it back with free(s.data, allocator). An empty s gives the zeroed string,
-// which allocates nothing, and so does an allocator with no memory to give.
+// it back with free(result.data, allocator). An empty s gives the zeroed
+// string, which allocates nothing, and so does an allocator with no memory
+// to give.
 to_upper_copy :: (s: string, allocator: Allocator) -> string {
     upper : string;
     if s.count == 0 { return upper; }
