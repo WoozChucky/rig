@@ -6623,7 +6623,8 @@ TEST(if_branch_names_and_the_rest) {
 TEST(top_level_if_directive_chains_of_10000_arms) {
     // Review Focus 5: a top-level else #if chain, as a generated table
     // writes one, is decided and its taken branch spliced with no recursion
-    // per arm, in the loader as in the checker. N picks the last arm.
+    // per arm, in the loader as in the checker. N picks the last arm, and
+    // only its A makes main's count no less than zero.
     const s64 ARMS = 10000;
     Arena a = arena_make();
     char *text = (char *)arena_alloc(&a, (u64)(ARMS * 64 + 4096), 1);
@@ -6632,7 +6633,7 @@ TEST(top_level_if_directive_chains_of_10000_arms) {
     for (s64 i = 0; i < ARMS; i++) {
         at += sprintf(at, "%s#if N == %lld { A :: %lld; }\n", i ? "else " : "", (long long)i, (long long)i);
     }
-    sprintf(at, "main :: () { x : [A + 1]u8; }\n");
+    sprintf(at, "main :: () { x : [A - %lld]u8; }\n", (long long)(ARMS - 1));
     CHECK_STR(check_loaded(&a, text, SYSTEM_NONE), "");
     arena_free(&a);
 }
