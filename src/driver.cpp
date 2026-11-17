@@ -10,17 +10,18 @@
 // (tests/unit/interpret_mode.cpp).
 //
 // rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks] reads the file (by
-// default build.rig in the current directory) and the files it #loads,
-// lexes, parses and checks them, and stops there with the diagnostics on
-// stderr if anything was wrong (exit 1). Otherwise it lowers the program
-// (without the bounds checks of a[i] with --no-bounds-checks, spec 8.5).
-// Lowering finds errors of its own, a call of a #compiler procedure the
-// program would make (spec 7.9), printed as the others are, and then rig
-// stops there too, writing no object (exit 1). Otherwise it has LLVM write
-// the object file .build/NAME.obj (Windows) or .build/NAME.o (Linux) in the
-// current directory, and links it into OUTPUT, by default NAME.exe or NAME
-// in the current directory, NAME being FILE.rig's name (the main file's)
-// without its directory and .rig (exit 0).
+// default build.rig in the current directory), the files it #loads and the
+// modules it #imports, lexes, parses and checks them, and stops there with
+// the diagnostics on stderr if anything was wrong (exit 1). Otherwise it
+// lowers the program (without the bounds checks of a[i] with
+// --no-bounds-checks, spec 8.5). Lowering finds errors of its own, a call
+// of a #compiler procedure the program would make (spec 7.9), printed as
+// the others are, and then rig stops there too, writing no object (exit
+// 1). Otherwise it has LLVM write the object file .build/NAME.obj
+// (Windows) or .build/NAME.o (Linux) in the current directory, and links
+// it into OUTPUT, by default NAME.exe or NAME in the current directory,
+// NAME being FILE.rig's name (the main file's) without its directory and
+// .rig (exit 0).
 //
 // The checker runs the program's expression #runs while it checks, where it
 // first needs their values (spec 7.8), in rig check too: what they print
@@ -104,8 +105,8 @@ String executable_path(Arena *a, String output, String name, Target t) {
 // any, are in d, which compilation_check counts; compilation_check and
 // compilation_run are false when there are errors so far, and
 // compilation_lower is null, those errors to be printed by
-// compilation_print. Zeroed, with `arena` set, it's ready for the first; compilation_free
-// ends it, after any step.
+// compilation_print. Zeroed, with `arena` set, it's ready for the first;
+// compilation_free ends it, after any step.
 //
 // The tree, the texts and the module live in the arena; the rest is the
 // compilation's own, freed by compilation_free. The loader lexes and parses
@@ -113,8 +114,7 @@ String executable_path(Arena *a, String output, String name, Target t) {
 // and registers each with d: messages name a file by its path as given (a
 // loaded one's from the file that loads it, an imported one's absolute,
 // load.h), the debug information by its absolute path, from the directory
-// rig runs in (ir_lower). #import looks in rig's own places
-// (module_places).
+// rig runs in (ir_lower). #import looks in rig's own places (module_places).
 //
 // From compilation_check until compilation_end_runs, a #run's code may end
 // the process (C's exit), and the diagnostics found by then are printed as
@@ -346,10 +346,10 @@ static bool workspace_steps(Compilation *build, Build_Workspace *w, Compilation 
         // Its files' own errors first, the loader's and the parser's: a
         // #load that failed may be why it has no main.
         compilation_print(c);
-        // load.cpp's shown_name: a zero byte would end the message.
+        // load_shown_name: a zero byte would end the message.
         diag_error(&build->d, w->made_at, "workspace '" STR_FMT "' is a build program; a workspace builds an "
                                           "ordinary program",
-                   STR_ARG(shown_name(c->arena, w->name)));
+                   STR_ARG(load_shown_name(c->arena, w->name)));
         compilation_print(build);
         return false;
     }
@@ -361,20 +361,20 @@ static bool workspace_steps(Compilation *build, Build_Workspace *w, Compilation 
 
     // Its paths are relative to the build program's directory, which
     // load_path takes from the build program's main file's path, as a #load
-    // in that file would be.
+    // in that file would be. load.cpp's HOST_IS_WINDOWS: the files are the
+    // host's.
     Arena *a = c->arena;
     Target target = target_host();
-    bool windows = target == TARGET_WINDOWS_X64;
     String program = build->build.program_path;
     String name = program_name(w->files[0]);
-    String objects = load_path(a, program, str(".build"), windows);
+    String objects = load_path(a, program, str(".build"), HOST_IS_WINDOWS);
     String object_name = string_printf(a, ".build/" STR_FMT "%s", STR_ARG(name), object_extension(target));
-    String object = load_path(a, program, object_name, windows);
+    String object = load_path(a, program, object_name, HOST_IS_WINDOWS);
     // An output name is taken as -o takes one, and the first file's name as
     // rig build takes the main file's: on Windows each gets .exe as there.
     String executable = w->output_name.count
-                            ? executable_path(a, load_path(a, program, w->output_name, windows), {}, target)
-                            : executable_path(a, {}, load_path(a, program, name, windows), target);
+                            ? executable_path(a, load_path(a, program, w->output_name, HOST_IS_WINDOWS), {}, target)
+                            : executable_path(a, {}, load_path(a, program, name, HOST_IS_WINDOWS), target);
     return emit_and_link(c, w->bounds_checks, w->optimize, objects, object, executable) == 0;
 }
 
@@ -423,10 +423,10 @@ static int build_workspaces(Compilation *c) {
     }
     for (s64 i = 0; i < s->workspaces.count; i++) {
         Build_Workspace *w = &s->workspaces[i];
-        // load.cpp's shown_name: a zero byte would end the message.
+        // load_shown_name: a zero byte would end the message.
         if (!w->files.count) {
             diag_error(&c->d, w->made_at, "workspace '" STR_FMT "' has no files",
-                       STR_ARG(shown_name(c->arena, w->name)));
+                       STR_ARG(load_shown_name(c->arena, w->name)));
         }
     }
     compilation_print(c);

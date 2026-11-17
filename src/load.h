@@ -156,3 +156,9 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const
 // without. rig check --stdin-for asks it before reading anything, to know
 // whether the file it's given is the main file, which needn't exist then.
 bool load_same_file(String a, String b);
+
+// `name` as a message shows it, in the arena: each zero byte written \0, as
+// the string had it, since the message's text would end at one. The
+// loader's messages show an #import's name so, and the Compiler module's
+// and rig build's the names and paths a build program gives.
+String load_shown_name(Arena *a, String name);

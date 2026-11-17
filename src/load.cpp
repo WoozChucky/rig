@@ -114,9 +114,7 @@ static bool is_module_name(String name) {
     return true;
 }
 
-// `name` as a message shows it, in the arena: each zero byte written \0, as
-// the string had it, since the message's text would end at one.
-static String shown_name(Arena *a, String name) {
+String load_shown_name(Arena *a, String name) {
     String shown = string_printf(a, "");
     for (s64 start = 0, i = 0; i <= name.count; i++) {
         if (i < name.count && name.data[i] != 0) continue;
@@ -248,7 +246,7 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const
                 // places.
                 if (!is_module_name(load->path)) {
                     diag_error(d, load->path_pos, "'" STR_FMT "' isn't a module's name",
-                               STR_ARG(shown_name(&loading, load->path)));
+                               STR_ARG(load_shown_name(&loading, load->path)));
                     tree->lost_a_file = true;
                     continue;
                 }
