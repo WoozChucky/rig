@@ -231,4 +231,10 @@ main :: () {
     print_byte(32);
     print_bool(ok_billion);
     print_byte(10);
+
+    // FLOAT64_LARGEST is a float64 of its own: a variable takes it whole.
+    largest := FLOAT64_LARGEST;
+    print_string("largest: ");
+    print_bool(largest > 1e308);
+    print_byte(10);
 }
