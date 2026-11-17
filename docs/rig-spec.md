@@ -149,7 +149,7 @@ break     cast      continue  defer     else      enum      false     for
 if        null      return    struct    true      union     using     while
 ```
 
-`defer`, `enum`, `union` and `using` are reserved: no construct uses them yet, and writing one is a syntax error wherever it appears.
+`enum`, `union` and `using` are reserved: no construct uses them yet, and writing one is a syntax error wherever it appears. `defer` is a keyword in use: it runs a statement when its block is left (section 6.12).
 
 ### 2.7 Directives
 
@@ -1253,7 +1253,7 @@ main :: () {
 ```ebnf
 Statement = VarDecl | ConstDecl | MultiVarDecl | Assignment | MultiAssignment
           | ReturnStmt | Block | IfStmt | IfDirective | WhileStmt | ForStmt
-          | "break" ";" | "continue" ";" | Expression ";" .
+          | "break" ";" | "continue" ";" | DeferStmt | Expression ";" .
 ```
 
 Statements appear only in procedure bodies, and run in order. Every statement that does not end with a block ends with `;`. An `IfDirective`, `#if`, is decided while compiling, and its taken branch's statements are the enclosing block's (section 4.9).
@@ -1264,7 +1264,7 @@ Statements appear only in procedure bodies, and run in order. Every statement th
 Block = "{" { Statement } "}" .
 ```
 
-A block is a sequence of statements in braces, and a scope (section 4.7). An `#if`'s branch is written as a block but makes no scope: its statements are the enclosing block's (section 4.9). A block may stand on its own as a statement, giving its declarations a scope of their own.
+A block is a sequence of statements in braces, and a scope (section 4.7). An `#if`'s branch is written as a block but makes no scope: its statements are the enclosing block's (section 4.9). A block may stand on its own as a statement, giving its declarations a scope of their own. When a block is left, by any way out, its deferred statements run (section 6.12).
 
 ### 6.2 Declaration statements
 
@@ -1392,7 +1392,7 @@ four vowels
 
 ### 6.9 break and continue
 
-`break;` leaves the innermost loop around it, a `while` or a `for`, and execution goes on after the loop. `continue;` ends the current iteration of the innermost loop: a `while` tests its condition again, and a `for` goes on to its next value or element. Outside a loop, each is an error: `'break' is only allowed inside a loop`.
+`break;` leaves the innermost loop around it, a `while` or a `for`, and execution goes on after the loop. `continue;` ends the current iteration of the innermost loop: a `while` tests its condition again, and a `for` goes on to its next value or element. Outside a loop, each is an error: `'break' is only allowed inside a loop`. Each leaves the blocks between it and the loop, the loop's body among them, and runs their deferred statements before it goes on (section 6.12).
 
 ### 6.10 return
 
@@ -1408,6 +1408,8 @@ ReturnStmt = "return" [ Expression { "," Expression } ] ";" .
 
 A call in a `return` is one value, its first result, even when it returns as many results as the procedure: `return divmod(a, b);` in a procedure with two results gives one value.
 
+A `return` works out its values in order and copies each aggregate one into the caller's temporary (section 10.4); then it runs the deferred statements of every block of the procedure around it (section 6.12), and then the procedure returns. So the values are the ones worked out before the deferred statements ran.
+
 ### 6.11 Reaching the end of a procedure
 
 A procedure with no results returns when it reaches the `}` of its body. A procedure with results must return them on every path, so it must not reach that `}`: `'f' must return a value on every path, and this one reaches its end` (`... must return its values on every path ...` with several results), at the `}`.
@@ -1420,7 +1422,7 @@ A block reaches its end unless its last statement is one of:
 - an `#if` whose taken branch does not reach its end (section 4.9): one that took no branch reaches it;
 - a `while` whose condition is the constant `true` and that has no `break` of its own.
 
-An `if`, an `#if` or a `while` whose condition has an error is taken not to reach its end, so the condition's message is the only one.
+An `if`, an `#if` or a `while` whose condition has an error is taken not to reach its end, so the condition's message is the only one. A `defer` changes nothing here: deferred code can't return (section 6.12), so a block that ends with a `defer` reaches its end, and one that ends with a `return` after a `defer` doesn't.
 
 ```rig
 first_even :: (values: []int) -> int {
@@ -1431,6 +1433,80 @@ first_even :: (values: []int) -> int {
 }
 
 main :: () {}
+```
+
+### 6.12 defer
+
+```ebnf
+DeferStmt = "defer" Statement .
+```
+
+`defer S` runs the statement `S` when the block the `defer` is written in is left, however it is left: what a procedure takes, it gives back where it took it, once, rather than on every path. `S` is any statement but a declaration, which would end as soon as it ran: `defer x := f();` is `a deferred statement can't declare anything: its block ends when it runs`, at the declaration's first name. It may be a block, so a `defer` has two forms, `defer Statement` and `defer Block`: `defer free(p);`, `defer count -= 1;`, `defer if open { close(); }` and `defer { a(); b(); }`. An expression that isn't a call is refused as any such statement is (section 6.3): `defer count + 1;` is `only a call can be a statement, for now`, and `defer #run f();` is `#run in a body must be a value, as in x := #run f();`. `S` is a block of its own, a scope (section 4.7), even when it isn't written in braces: what a block, an `if` or an `#if` branch inside it declares ends with it, and a `defer` inside it belongs to it.
+
+**When it runs.** A `defer` is registered when execution reaches it, and its statement runs when the block it is written in is left, by any way out: falling off the block's end, a `return`, or a `break` or `continue` leaving it. A `defer` not reached isn't registered: after `if bad { return; } defer f();`, the early `return` doesn't run `f`. A block's deferred statements run in reverse order of registration, the last reached first. Leaving several blocks at once runs the innermost block's first, then each enclosing one's, up to the block the jump lands in: a `return` runs those of every block of the procedure around it, and a `break` or a `continue` those of the blocks inside its loop, the loop's body included (sections 6.9, 6.10).
+
+- A loop's body is a block, left at the end of every iteration: a `defer` in it runs once per iteration, before the next test or step, and a `continue` or `break` runs it too.
+- An `#if` in a body makes no scope (section 4.9): a `defer` in its taken branch belongs to the enclosing block.
+
+**What it sees.** The deferred statement is worked out when it runs, not when the `defer` is reached: `defer print_int(n);` prints `n` as it is when the block ends. It names what is in scope at the `defer` (section 4.7), all of which is still there when it runs, since the `defer` is in the block being left.
+
+**Return values first.** `return e1, e2;` works out its values in order and copies each aggregate one into the caller's temporary (section 10.4); then the deferred statements run, then the procedure returns (section 6.10). So a deferred statement that changes a local the `return` named doesn't change what is returned: in `x := 1; defer x = 2; return x;` the result is 1. Returning a view of memory a deferred statement frees is a dangling view, a memory error no check catches (section 8.6).
+
+**What deferred code may not do.** It leaves itself only by its end. A `return` anywhere in it is `can't return from a deferred statement`, and a `break` or `continue` whose loop is outside it is `'break' can't leave a deferred statement` (`'continue' can't leave a deferred statement`), each at its keyword. A loop inside deferred code may `break` and `continue` as any loop, and a `break` or `continue` with no loop around it at all is `'break' is only allowed inside a loop`, as anywhere (section 6.9). A procedure that deferred code calls, or that a `#run` in it reaches, is a body of its own, whose `return`s are its own. A `defer` inside deferred code is allowed, and runs when the deferred statement's block ends: `defer { defer b(); a(); }` runs `a`, then `b`.
+
+**`main`.** Its deferred statements run before it returns to the C runtime, which then flushes the output streams (section 7.4).
+
+**What runs none.** A runtime error stops the program without running any deferred statement (section 8.1). So does C's `exit`, called by the program or by a `#run`'s code, which ends the compiler (sections 7.4, 7.8).
+
+**The top level.** Only a body has blocks to leave: at the top level, a top-level `#if`'s branch included, `defer` is `defer can only be in a body`, at the keyword. In a top-level `#run { ... }`, whose block is a procedure's body (section 7.8), `defer` works as in any body, `return;` included. Code that a `#run` runs runs its deferred statements as the compiled program does, since the interpreter runs the same code (section 10.8).
+
+**Reaching the end** of a procedure (section 6.11) is unchanged: deferred code can't return, so it changes nothing about which paths reach a `}`.
+
+Each `defer` is a level for the limit on how deeply blocks nest, its statement a block of its own (section 9.4). The compiler compiles the deferred statement again at each way out of its block, a copy for each, each at the deferred statement's own lines, so a debugger stepping out of a block stops at the deferred lines in the order they run (section 10.7).
+
+```rig
+puts :: (s: *u8) -> s32 #foreign libc;
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+find :: (values: []int, wanted: int) -> int {
+    puts("searching");
+    defer puts("done searching");      // runs on every return below
+    for values {
+        defer printf("looked at %lld\n", it);
+        if it == wanted { return it_index; }
+    }
+    return -1;
+}
+
+main :: () {
+    numbers := int.[4, 8, 15];
+    printf("found at %lld\n", find(numbers, 8));
+}
+```
+
+```text
+searching
+looked at 4
+looked at 8
+done searching
+found at 1
+```
+
+The loop's body is left at the end of the first iteration, which runs its `defer`, and by the `return` in the second, which runs the loop body's `defer` and then the one of the procedure's body. The value returned was worked out before either ran, and `main` prints it last.
+
+```rig error
+first :: () -> int {
+    defer return 1;
+    return 0;
+}
+
+main :: () {}
+```
+
+```text
+example.rig:2:11: error: can't return from a deferred statement
+        defer return 1;
+              ^
 ```
 
 ## 7. Procedures
@@ -1492,7 +1568,7 @@ A procedure returns zero, one or several results, given by `return` (section 6.1
 
 The program must have a procedure called `main` (`a procedure called 'main' is needed`), with a body (`'main' must have a body: it's where the program starts`), taking no parameters and returning nothing (`'main' must take no arguments and return nothing`). A build program is the exception: it builds other programs and is no executable itself, and it is a build program because it reaches the Compiler module and declares no procedure called `main` (section 7.9), so it is never told that one is needed. `main` can be called, but it is not a procedure value (section 3.15): `me := main;` is `'main' can't be a value: it's where the program starts`, since C calls it as a function returning an `int` (section 10.4), which its type does not say.
 
-The program starts by calling `main`, once the C runtime has started. When `main` returns, the program exits with status 0, and the C runtime flushes its output streams. A program ends with another status by calling the C library's `exit`:
+The program starts by calling `main`, once the C runtime has started. When `main` returns, its deferred statements run (section 6.12), then the C runtime flushes its output streams and the program exits with status 0. A program ends with another status by calling the C library's `exit`, which runs no deferred statement:
 
 ```rig exit=3
 exit :: (status: s32) #foreign libc;
@@ -1690,7 +1766,7 @@ Unary   = ( "-" | "~" | "!" | "*" | "#run" ) Unary | Cast | Postfix .
 
 **As an expression,** `#run e` is a prefix operator, binding as `-` and `!` do (section 5.2): `#run f() + 1` is `(#run f()) + 1`, which runs `f()` and adds 1 to what it gives, and `#run (f() + 1)` runs both. It may be written wherever a value may: a constant's value, a global's, a local's, an argument, an operand, an array's count (`[#run f()]int`). Its operand is any expression, and a call is its first result, as anywhere (section 5.10): a call that returns nothing is no value, so `x := #run setup();`, for a `setup` with no results, is `'setup' returns nothing, so it has no value`. The `#run`'s value is its operand's, worked out while compiling, and its type is the operand's, an untyped constant taking its default type (section 3.12): `#run 5` is an `int`, and `LIMIT :: #run triangle(4);`, for a `triangle` that returns an `int`, is a typed `int` constant (section 4.2), not an untyped one. An operand that is a constant already runs nothing: the `#run` is that constant. The block form is the top level's alone: `x := #run { ... };` is `expected an expression, found '{'`.
 
-**At the top level,** `#run e;` and `#run { ... }` are declarations of their own, which declare no name (section 4.6). They run for their effect, and what they give is thrown away. `#run e;` runs the whole expression up to its `;`, so `#run f() + 1;` runs the sum, and the expression may be a call that returns nothing. `#run { ... }` runs its block as the body of a procedure named `#run` with no parameters and no results: its statements run in order, and `return;` ends it.
+**At the top level,** `#run e;` and `#run { ... }` are declarations of their own, which declare no name (section 4.6). They run for their effect, and what they give is thrown away. `#run e;` runs the whole expression up to its `;`, so `#run f() + 1;` runs the sum, and the expression may be a call that returns nothing. `#run { ... }` runs its block as the body of a procedure named `#run` with no parameters and no results: its statements run in order, and `return;` ends it. A `defer` in it works as in any body, `return;` running the deferred statements as any `return` does (section 6.12). The code any `#run` runs, of either form, runs its deferred statements as the compiled program would.
 
 **In a body,** `#run` is an expression only. A statement `#run f();` is `#run in a body must be a value, as in x := #run f();`, at the `#run`: code run for its effect alone is a top-level `#run`. A `#run` in a body runs before any call of the procedure it is in, so its operand can't use what exists only while that procedure runs: a local variable, a parameter, a loop's iterator or its index. Each is `#run can't use 'x': it's a local, which doesn't exist while compiling`, at the name (`it's a parameter`, `it's the loop's iterator` or `it's the loop's index` for the others). A local constant is known while compiling, and may be used.
 
@@ -1795,7 +1871,7 @@ example.rig:9:12: error: #run failed: runtime error: index 4 is out of bounds (c
 
 Bounds checks are always made while compiling: `rig build --no-bounds-checks` (section 10.1) leaves them out of the program only. `#no_abc` is part of a procedure's meaning, and turns them off in it while compiling too (section 7.7).
 
-**Ending the compiler.** C's `exit`, called by a `#run`'s code, ends the compiler there, with the status it gives, after printing the diagnostics found so far, sorted as always (section 9.1): nothing more is checked, run or built.
+**Ending the compiler.** C's `exit`, called by a `#run`'s code, ends the compiler there, with the status it gives, after printing the diagnostics found so far, sorted as always (section 9.1): nothing more is checked, run or built, and no deferred statement of the code it ends runs (section 6.12).
 
 **Output.** What a `#run`'s code prints goes to the compiler's own standard output and error (section 10.8), in order with what the compiler prints. Types can depend on an expression's `#run` (`[LIMIT]int`), so `rig check` runs those too, and what they print is `rig check`'s output (section 10.1). An editor runs `rig check` on every change, and code that should run only when the program is built, because it prints, writes files or starts programs, belongs in a top-level `#run`, which `rig check` never runs.
 
@@ -1938,7 +2014,7 @@ A runtime error writes one line to the standard error stream,
 PATH:LINE:COL: runtime error: MESSAGE
 ```
 
-and the program exits with status 101. `PATH` names the source file holding the operation that failed as a diagnostic names it (section 9.1): the main file's path as it was given to `rig build`, or a loaded file's path made from it. `LINE:COL` is the position of the operation in that file. Before writing the message, the program flushes the C library's output streams, so what it printed before the error comes out before the message, even where standard output and standard error go to the same place. The error is written with one call of the C library's unbuffered `write` (`_write` on Windows), and the program then exits through C's `exit`.
+and the program exits with status 101. `PATH` names the source file holding the operation that failed as a diagnostic names it (section 9.1): the main file's path as it was given to `rig build`, or a loaded file's path made from it. `LINE:COL` is the position of the operation in that file: in deferred code, its own position in the deferred statement, wherever the block was left (section 6.12). A runtime error runs no deferred statement. Before writing the message, the program flushes the C library's output streams, so what it printed before the error comes out before the message, even where standard output and standard error go to the same place. The error is written with one call of the C library's unbuffered `write` (`_write` on Windows), and the program then exits through C's `exit`.
 
 The messages and their positions:
 
@@ -2158,13 +2234,17 @@ The sections defining each construct give its messages. Some of those met most o
 | `a top-level #if's condition can't run code while compiling, for now` | 4.9 |
 | `#if can't be among a struct's fields, for now` | 4.9, 9.2 |
 | `rig: error: 'main.rig' loads 'linux.rig' only in an #if branch not taken` | 4.9, 10.1 |
+| `defer can only be in a body` | 6.12 |
+| `a deferred statement can't declare anything: its block ends when it runs` | 6.12 |
+| `can't return from a deferred statement` | 6.12 |
+| `'break' can't leave a deferred statement`, `'continue' can't leave a deferred statement` | 6.12 |
 
 ### 9.4 Limits
 
 The compiler limits how deeply a program's constructs nest:
 
 - An expression nests at most 1000 levels: each parenthesis, prefix operator, cast, call, dereference, field, element, compound literal and binary operator is a level above what it holds, so a chain of 1001 `+` is too deep. Deeper is `this expression is nested too deeply (more than 1000 levels)`, at the start of the outermost expression.
-- Blocks nest at most 1000 levels, a procedure's body the first: `blocks are nested too deeply (more than 1000 levels)`, at the `{` one too many. A top-level `#if`'s branch is a block for this limit, so top-level `#if`s nest at most 1000 levels, and a procedure declared in branches has its body that many levels down already. In a body an `#if`'s branch is a block too.
+- Blocks nest at most 1000 levels, a procedure's body the first: `blocks are nested too deeply (more than 1000 levels)`, at the `{` one too many. A top-level `#if`'s branch is a block for this limit, so top-level `#if`s nest at most 1000 levels, and a procedure declared in branches has its body that many levels down already. In a body an `#if`'s branch is a block too, and so is each `defer`, whose statement is a block of its own (section 6.12): `defer { ... }` is two levels, and the one too many is reported at its `defer`.
 - A written type nests at most 1000 levels, each `*`, `[]`, `[N]` and procedure type's `(` one: `types are nested too deeply (more than 1000 levels)`. Types and expressions inside each other count together: an array's count is inside its `[N]` level, and the type of `size_of` and of a cast is a level below the expression.
 - Top-level declarations worked out inside one another (a constant whose value names a constant declared after it, and so on) nest at most 1000 levels: `'A1001' is nested too deeply in the declarations that need it (more than 1000 levels)`. Declared in the order they are needed, a chain of any length compiles. A body a `#run` needs (section 7.8) is worked out inside the declaration or the body holding the `#run`, its blocks, expressions and types counted together from where that one is: a chain of bodies each running the next goes no deeper than 1000 levels either, and the body one too many is reported at its procedure's name, in the same words.
 
@@ -2228,7 +2308,7 @@ The compiler is a single program written in C++, with LLVM linked into it. It co
 2. **Parser** (`src/parser.cpp`): the tokens into a syntax tree, by recursive descent, with expressions read by precedence climbing (Appendix A).
 3. **Loader** (`src/load.cpp`): the main file and every file it `#load`s, and every module it `#import`s, found in the places beside rig (section 2.14), each once, in load order (section 2.13), each through the lexer and the parser into the same tree, so the checker sees one program. Once the files outside every `#if` are read, the loader decides the top-level `#if`s (section 4.9), with a checker (stage 4) that knows only those files' declarations, adds the taken branches' declarations to the tree, reads the files their `#load`s and `#import`s reach, and puts the files in load order. The loader also finds whether the program is a build program (section 7.9), once the `#if`s are decided.
 4. **Checker** (`src/checker.cpp`, `src/check_expr.cpp`, `src/check_run.cpp`): resolves every name, works out every type and every struct's layout, folds the constant expressions, and checks the rules of sections 3 to 7. The checker runs even after syntax errors, so both kinds are reported together. It runs each expression's `#run` where it first needs its value (section 7.8), in the compile-time world (`src/run.cpp`): what the `#run` reaches is lowered (stage 5) into a compile-time module of the world's own, which grows as later `#run`s reach more, and run there on the interpreter (section 10.8), and the result is baked into the tree as if it had been written there.
-5. **Lowering** (`src/lower.cpp`): the checked tree into Rig's intermediate representation (`src/ir.h`), a list of procedures made of basic blocks of instructions on numbered values. Lowering adds the runtime checks of section 8 and the source positions and scopes that the debug information is made from.
+5. **Lowering** (`src/lower.cpp`): the checked tree into Rig's intermediate representation (`src/ir.h`), a list of procedures made of basic blocks of instructions on numbered values. Lowering adds the runtime checks of section 8 and the source positions and scopes that the debug information is made from, and lowers each deferred statement again at each way out of its block (section 6.12).
 6. **LLVM** (`src/llvm_backend.cpp`): the IR into an LLVM module through LLVM's C API, which LLVM verifies and compiles into an object file for x86-64: COFF on Windows (target `x86_64-pc-windows-msvc`), ELF on Linux (`x86_64-pc-linux-gnu`), position-independent on Linux. The code targets the baseline x86-64 processor. It is not optimised, unless a build program's workspace asks for it with `optimize` (section 7.9): `rig build` of a file never optimises. Optimised, the module is run through LLVM's `default<O2>` pipeline, the one clang's `-O2` runs, and compiled at LLVM's optimising code generation level, and its debug information is still made (section 10.7).
 7. **Linker** (`src/link.cpp`): the object file into an executable with the platform's linker (section 10.6).
 
@@ -2311,11 +2391,13 @@ The debug information holds:
 - **A file entry for each source file** of the program, the main file and every file it loads or imports (sections 2.13, 2.14), named by its absolute path (made from the path diagnostics name it by, section 9.1, and the directory the compiler ran in, which on Linux is named as the shell names it, `$PWD`, when that is the directory: reached through a symlink, it keeps the symlink's name, as the editor that sets a breakpoint knows it), with that directory and the MD5 checksum of the file's bytes, so a debugger finds each file and can tell when it has changed. On Windows a file on a network share (a UNC path, `\\server\share\dir\x.rig`) is named `/\server\share\dir\x.rig`: LLVM's CodeView writer keeps a name that starts with `/` as it is, where it would put the share after the directory's drive, and Windows reads `/\` as the `\\` that starts a UNC path, so a debugger finds the file on the share and takes a breakpoint on it by the share's name, the file's name alone or a drive path to it. Each procedure, struct and global variable below is in the file that declares it, so a breakpoint on a line of a loaded file is found there, and a backtrace names each frame's own file.
 - **A compile unit** for the program, whose file is the main file's entry, as a C compiler's unit is the `.c` file it was given, not the headers that file includes. The unit's language is C (C99), whose expression syntax a debugger then uses (`a.count`, `a[i]`; Rig's `p.*` is C's `*p`), and its producer is `rig 0.1.0 (3f9c2a1b7d4e) (LLVM X.Y.Z)`: the compiler's version and commit as `rig version` gives them (section 10.1), without the date, `-dirty` after the hash when it was dirty and `unknown` without one, and X.Y.Z the version of the LLVM the compiler is built with.
 - **A subprogram for each procedure with a body**, by its Rig name, with its line and the line its body starts on, so `break main` or `break sort` stops at the procedure and a backtrace names each frame. The internal procedures of section 10.5 have none, and a debugger steps over them.
-- **Lexical blocks** following the program's scopes (section 4.7): each `if`, `else` and standalone block, and each loop's body, which starts at its `for` or `while`; and one inside its block for each declaration of a local that hides a variable (a global, a parameter or an outer local), from the declaration to the end of the block (rustc starts one at every `let`). An `#if` makes none, since it makes no scope (section 4.9): the taken branch's locals are in the block around it.
-- **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}` (an `else if` chain is left from the block that ran straight to the code after the chain, so a debugger doesn't stop at the `}` of an arm that didn't run), a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. An `#if` adds no code of its own: the taken branch's statements are at their own lines, so a line holding only an `#if` and its `{`, or only a branch's `}`, has none, and neither does the branch not taken (section 4.9). On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
+- **Lexical blocks** following the program's scopes (section 4.7): each `if`, `else` and standalone block, and each loop's body, which starts at its `for` or `while`; and one inside its block for each declaration of a local that hides a variable (a global, a parameter or an outer local), from the declaration to the end of the block (rustc starts one at every `let`). An `#if` makes none, since it makes no scope (section 4.9): the taken branch's locals are in the block around it. Each copy of a deferred statement (section 6.12, and the line table below) is a block of its own, at the deferred statement, inside the block where the `defer` was reached, so what each copy declares is a variable of its own.
+- **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}` (an `else if` chain is left from the block that ran straight to the code after the chain, so a debugger doesn't stop at the `}` of an arm that didn't run), a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. An `#if` adds no code of its own: the taken branch's statements are at their own lines, so a line holding only an `#if` and its `{`, or only a branch's `}`, has none, and neither does the branch not taken (section 4.9). A deferred statement is compiled again at each way out of its block, a copy for each (section 6.12), each copy's instructions at their own statements' positions, and the `defer` adds no code of its own, so its line has code only where the copies are. After the copies, the instruction that leaves is where it would be with no `defer`: a `return`'s, `break`'s or `continue`'s at its keyword, the jump out of an `if`'s block at that block's `}`, a loop body's jump to its test or step at the loop's keyword, and the return at the end of a body at its `}`. So stepping out of a block stops at the deferred lines, in the order they run, then at the place that leaves (a `return`'s, `break`'s or `continue`'s line again, an `if` block's `}`, the loop's keyword, the body's `}`), and goes on; a standalone block has no jump at its `}`, so after its deferred lines a debugger goes on to the statement after it. On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
 
 - **Variables:** every local variable, parameter, loop iterator (`it`, `it_index` or a named one) and global variable, by its Rig name and with its type. A local is in the lexical block that declares it, or, when it hides a variable, in the one its declaration starts, since a debugger shows a block's variables over the whole block, but a declaration hides a name only from its end: so before `g := 10;` a debugger shows the variable `g` it hides, from the declaration on the new one (its initializer is still in the block around it, and reads the outer one), and on leaving its block the outer one again. Parameters are stored in their own stack slots before the body's first line, so a breakpoint at a procedure already shows them. A scalar parameter's slot is where the program itself reads it from, as clang's code does at `-O0`: a value a debugger writes there (gdb's `set var n = 2`, cdb's `?? n = 2`) is the one the program goes on with. A parameter passed by address (a struct, array, view or string) is described as what is passed, the same in DWARF and CodeView: a pointer to the value, held in its slot. So a debugger shows the address and names the fields through it (gdb's `p->a`, `*p`, and `p.a`, which gdb reads through a pointer too; cdb's `a->count`; Visual Studio's `a.count`), and calls the procedure with an address (see **Types**). Each hidden result pointer is a parameter too, before the visible ones, named `result$` (`result$1`, `result$2`, ... when there are several), a name no Rig variable can have but both debuggers take in an expression (gdb's `print result$`, cdb's `?? result$`). It points at the caller's temporary, which holds the value only once `return` has copied it there. Constants are not variables: a debugger doesn't see them, though the program keeps some constants' data as read-only data (section 10.3).
 - **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; `[N]T` as arrays of N elements; `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`; and a procedure type as a pointer to the subroutine type of its signature, as C's function pointers are described, `#c_call` or not, one node for each procedure type. A procedure's type says how it is called (section 10.4), the same in DWARF and CodeView, not how C would pass the same types: an aggregate parameter is a pointer to its type, and each aggregate result a pointer parameter, `result$`, before the visible ones, the procedure returning its one scalar result, or nothing when it has none or several (gdb's `ptype make` is `void (struct Pair *, int)`, `ptype sum` `int (struct Pair *)`; cdb's `dt make` `void (Pair*, int64)`). A debugger that calls a procedure from an expression passes what that type says, so a call passes addresses where the procedure takes them: given `q`, a `Pair`, gdb's `print sum(&q)` and cdb's `.call sum(&q)` return `q.a + q.b`, and gdb's `print make(&q, 7)` and cdb's `.call make(&q, 7)` make `q` `{a = 7, b = 8}`; cdb refuses `.call make(7)` (`Too few arguments`). gdb's `finish` out of a procedure that returns an aggregate shows no value, rather than whatever the registers held. After it the procedure's frame is gone, and `result$` with it: to see the value, print `result$` before leaving (gdb names the address `$1`, say) and `*$1` after `finish`, or print the variable the caller assigns once its call's line is done. A procedure whose parameters and results are all scalars is called as C's (gdb's `print twice(4)`, cdb's `.call twice(4)`). A procedure value's subroutine type is the one a procedure of its type has, so a debugger shows the value as an address and the procedure there, and calls through it as it calls the procedure: gdb's `print f` is `(int (*)(int, int)) 0x401136 <add>` and `ptype` of a value holding `make` `void (*)(struct Pair *, int)`; cdb's `dx f` is `procedure_values!add+0x0 [Type: __int64 (__cdecl*)(__int64,__int64)]`, after the address. A null value shows as `0x0`. gdb calls through a value as C does, `print f(10, 20)`; cdb's `.call` takes only a procedure's name, but calls through a value with C++'s expression evaluator, `.call @@c++(f)(10, 20)`. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
+
+A line of deferred code that runs at more than one way out of its block has its code in several places, one per copy, and the debuggers treat a breakpoint on it by their own rules and LLVM's, not Rig's. cdb takes a breakpoint on a line only when the line's code is in one piece, as it refuses one on a `for` line, so it refuses one on such a line (`Ambiguous symbol error`). gdb keeps one place of a line per lexical block, and LLVM writes a lexical block only for a scope that declares a variable itself (a scope that holds only other scopes is folded into the one around it too): so the copies of a deferred line are one place, the first copy in the code, where a breakpoint stops only when that copy runs, unless the line is in a block of the deferred code that declares a variable itself. Both lines of `defer { t := f(); g(t); }` have a place per copy, but the `if` line of `defer if c { t := f(); g(t); }` one, since `t` is in a block inside it. Stepping goes through every copy that runs, in both debuggers.
 
 A debug type is made at most 1000 levels deep (the limit of section 9.4), counting each type along its longest chain of fields, pointees and elements. A program can chain types more deeply (structs held by value, each declared after the one it holds, or each holding a pointer to the next); past the limit a pointer is described as `void *` and any other type as a declared struct of its name with no fields, so the compiler's work stays bounded.
 
@@ -2456,7 +2538,7 @@ Block           = "{" { Statement } "}" .
 Statement       = VarDecl | ConstDecl | MultiVarDecl
                 | Assignment | MultiAssignment
                 | ReturnStmt | Block | IfStmt | IfDirective | WhileStmt | ForStmt
-                | "break" ";" | "continue" ";"
+                | "break" ";" | "continue" ";" | DeferStmt
                 | Expression ";" .
 
 Assignment      = Expression AssignOp Expression ";" .
@@ -2467,9 +2549,10 @@ ReturnStmt      = "return" [ Expression { "," Expression } ] ";" .
 IfStmt          = "if" Expression Block [ "else" ( Block | IfStmt ) ] .
 WhileStmt       = "while" Expression Block .
 ForStmt         = "for" [ "*" ] [ identifier ":" ] Expression [ ".." Expression ] Block .
+DeferStmt       = "defer" Statement .
 ```
 
-A statement that starts with an identifier followed by `:`, `:=` or `::` is a declaration; one that starts with identifiers separated by commas and then `:=` is a `MultiVarDecl`. Otherwise a statement that starts with an expression is an `Assignment` when an assignment operator follows the expression, a `MultiAssignment` when a `,` does, and an expression statement when `;` does. In `IfStmt`, `IfDirective`, `WhileStmt` and `ForStmt`, the `{` of the block ends the expression before it. `IfDirective` is the rule of A.2, its blocks holding statements here. In `ForStmt`, an identifier followed by `:` right after `for` (or `for *`) names the iterator.
+A statement that starts with an identifier followed by `:`, `:=` or `::` is a declaration; one that starts with identifiers separated by commas and then `:=` is a `MultiVarDecl`. Otherwise a statement that starts with an expression is an `Assignment` when an assignment operator follows the expression, a `MultiAssignment` when a `,` does, and an expression statement when `;` does. In `IfStmt`, `IfDirective`, `WhileStmt` and `ForStmt`, the `{` of the block ends the expression before it. `IfDirective` is the rule of A.2, its blocks holding statements here. In `ForStmt`, an identifier followed by `:` right after `for` (or `for *`) names the iterator. A `DeferStmt`'s `Statement` is not a declaration (`VarDecl`, `ConstDecl` or `MultiVarDecl`), and a `DeferStmt` appears only in a body, never at the top level (section 6.12).
 
 ### A.4 Expressions
 
@@ -2512,7 +2595,8 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `break` | leave a loop | 6.9 |
 | `cast` | cast, checked or `cast,trunc` | 3.14 |
 | `continue` | next iteration | 6.9 |
-| `defer`, `enum`, `union`, `using` | reserved | 2.6 |
+| `defer` | run a statement when its block is left | 6.12 |
+| `enum`, `union`, `using` | reserved | 2.6 |
 | `else` | alternative of `if` and of `#if` | 6.5, 4.9 |
 | `false`, `true` | bool values | 2.11, 3.4 |
 | `for` | loop over a range or a sequence | 6.7, 6.8 |

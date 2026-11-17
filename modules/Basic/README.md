@@ -299,4 +299,3 @@ What Basic would do differently once Rig has it:
 - No command-line arguments: a program's start doesn't keep them for Rig code to read (#152).
 - No `Any` or variadic Rig procedures (#153, #150), so there is no formatted `print` (#154): a line is printed a piece at a time, with `print_string`, `print_int` and the rest.
 - No context (#156), so a procedure that allocates takes its allocator as an argument, and the file procedures copy a path for C into memory from the heap, since most of their signatures take no allocator (`read_entire_file`'s is for the file's contents).
-- No `defer` (#149), so what is allocated is freed by hand on every path.
