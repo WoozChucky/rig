@@ -3554,12 +3554,13 @@ TEST(parse_defers_nested_too_deeply) {
     parse_src(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "defer { ", 500, "y = 2;", " }", "\n}\n"), &errors);
     CHECK_STR(errors, "3:3999: blocks are nested too deeply (more than 1000 levels)\n");
     // A body's levels (Ast_Proc.body_levels) count each defer as a block:
-    // defer g(); reaches as far as { g(); } does.
-    Token_List *list = src("f :: () { defer g(); }\nh :: () { { g(); } }\n");
+    // defer return; reaches as far as { return; } does, though no
+    // expression in it reaches that level.
+    Token_List *list = src("f :: () { defer return; }\nh :: () { { return; } }\n");
     Ast_File *file = parse(list->tokens, &a, &list->diag);
     CHECK_STR(messages(&a, &list->diag), "");
     if (file->procs.count == 2) {
-        CHECK_EQ(file->procs[0]->body_levels, 3);
+        CHECK_EQ(file->procs[0]->body_levels, 2);
         CHECK_EQ(file->procs[0]->body_levels, file->procs[1]->body_levels);
     } else {
         CHECK(!"the file has f and h");
