@@ -7,11 +7,11 @@
 //
 // The sort is a merge sort because it is stable: elements that compare
 // equal keep the order they had, so a list sorted by name and then by town
-// is by town, and by name within each town. It also takes the same time,
-// n log n comparisons at most, whatever the order the elements come in,
-// where a quicksort can take n^2 on an unlucky one. What it costs is
-// scratch memory, half the elements' bytes, from the allocator it is
-// given; when that allocator has none, it sorts by insertion in place
+// is by town, and by name within each town. It also takes n log n
+// comparisons at most whatever the order the elements come in (n when they
+// come sorted), where a quicksort can take n^2 on an unlucky one. What it
+// costs is scratch memory, half the elements' bytes, from the allocator it
+// is given; when that allocator has none, it sorts by insertion in place
 // instead, slower but stable all the same, so sorting never fails.
 //
 // Elements are moved and swapped a byte at a time, since only their size
@@ -27,7 +27,7 @@
 // takes fewer steps than splitting, copying out and merging, and asks for
 // no memory. So the merge sort sorts runs this short by insertion, and
 // sort asks for no scratch memory to sort this few.
-INSERTION_SORT_MAX :: 4;
+SORT_INSERTION_MAX :: 4;
 
 // Sorts the count elements of element_size bytes each that start at data,
 // in place, by insertion: each element in turn is swapped down, a byte at
@@ -37,7 +37,7 @@ INSERTION_SORT_MAX :: 4;
 // elements, but it needs no memory. Nothing is compared or touched for a
 // count of 1 or less, or an element_size of 0 or less, so data may be null
 // then.
-insertion_sort :: (data: *void, count: int, element_size: int, less: (a: *void, b: *void) -> bool) {
+sort_by_insertion :: (data: *void, count: int, element_size: int, less: (a: *void, b: *void) -> bool) {
     if count <= 1 || element_size <= 0 { return; }
     bytes := cast(*u8) data;
     for i: 1..count - 1 {
@@ -58,8 +58,10 @@ insertion_sort :: (data: *void, count: int, element_size: int, less: (a: *void, 
 
 // Sorts the count elements of element_size bytes each that start at data,
 // in place, by merging, using scratch, which holds count / 2 elements at
-// least: sort's procedure, which checks the arguments first. Runs of up to
-// INSERTION_SORT_MAX elements are sorted by insertion.
+// least: what sort does once it has the scratch. Runs of up to
+// SORT_INSERTION_MAX elements are sorted by insertion. Nothing is compared
+// or touched for a count of 1 or less, or an element_size of 0 or less, so
+// data and scratch may be null then.
 //
 // The two halves are sorted first, each with the same scratch, which is
 // free again once a half is sorted. When the first element of the right
@@ -77,17 +79,18 @@ insertion_sort :: (data: *void, count: int, element_size: int, less: (a: *void, 
 // An element is taken from the right only when it is less than the left's,
 // so of two equal elements the left one, the earlier, comes first: that is
 // what keeps the sort stable.
-merge_sort :: (data: *void, scratch: *void, count: int, element_size: int, less: (a: *void, b: *void) -> bool) {
-    if count <= INSERTION_SORT_MAX {
-        insertion_sort(data, count, element_size, less);
+sort_by_merging :: (data: *void, scratch: *void, count: int, element_size: int, less: (a: *void, b: *void) -> bool) {
+    if count <= 1 || element_size <= 0 { return; }
+    if count <= SORT_INSERTION_MAX {
+        sort_by_insertion(data, count, element_size, less);
         return;
     }
     bytes := cast(*u8) data;
     spare := cast(*u8) scratch;
     half := count / 2;
     right := bytes + half * element_size;
-    merge_sort(bytes, scratch, half, element_size, less);
-    merge_sort(right, scratch, count - half, element_size, less);
+    sort_by_merging(bytes, scratch, half, element_size, less);
+    sort_by_merging(right, scratch, count - half, element_size, less);
     if !less(right, right - element_size) { return; }
 
     copy_memory(spare, bytes, half * element_size);
@@ -115,31 +118,33 @@ merge_sort :: (data: *void, scratch: *void, count: int, element_size: int, less:
 // they had: the sort is stable. less must be a strict weak order, as C++'s
 // sorts ask: nothing is less than itself, a less than b and b less than c
 // means a is less than c, and two elements equal to a third are equal to
-// each other. One that isn't leaves the elements in some order, but not a
-// sorted one.
+// each other. One that isn't leaves the elements in some order, each still
+// there once, but not necessarily a sorted one, and equal elements may lose
+// their order. Either way nothing outside the elements is read or written,
+// since no loop's bounds depend on what less says.
 //
 // The scratch memory, half the elements' bytes, comes from allocator and
 // goes back to it before sort returns. When the allocator has none, or the
 // bytes would be more than an int can count, the elements are sorted by
-// insertion in place instead, still stable. Up to INSERTION_SORT_MAX
+// insertion in place instead, still stable. Up to SORT_INSERTION_MAX
 // elements are sorted by insertion without asking for memory. Nothing is
 // asked for, compared or touched for a count of 1 or less, or an
 // element_size of 0 or less, so data may be null then.
 sort :: (data: *void, count: int, element_size: int, less: (a: *void, b: *void) -> bool, allocator: Allocator) {
     LARGEST :: 9223372036854775807; // int's largest value
     if count <= 1 || element_size <= 0 { return; }
-    if count <= INSERTION_SORT_MAX {
-        insertion_sort(data, count, element_size, less);
+    if count <= SORT_INSERTION_MAX {
+        sort_by_insertion(data, count, element_size, less);
         return;
     }
     half := count / 2;
     scratch : *void = null;
     if half <= LARGEST / element_size { scratch = alloc(half * element_size, allocator); }
     if scratch == null {
-        insertion_sort(data, count, element_size, less);
+        sort_by_insertion(data, count, element_size, less);
         return;
     }
-    merge_sort(data, scratch, count, element_size, less);
+    sort_by_merging(data, scratch, count, element_size, less);
     free(scratch, allocator);
 }
 
