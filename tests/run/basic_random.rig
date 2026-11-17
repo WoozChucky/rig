@@ -170,7 +170,7 @@ main :: () {
     random_shuffle(*r, *one, 1, 8);
     random_shuffle(*r, *one, 5, 0);
     random_shuffle(*r, *one, 5, -1);
-    print_string("shuffle of 0 and 1:");
+    print_string("shuffle of 0, 1 or size 0:");
     show_bool(random_u32(*r) == first && one == 1);
     print_line("");
 

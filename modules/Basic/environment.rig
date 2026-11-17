@@ -24,6 +24,7 @@
 #load "libc.rig";
 #load "string.rig";
 #load "allocators.rig";
+#load "memory.rig";
 
 // A copy of the value of the environment's variable name, in memory from
 // allocator, which the caller gives back with free(value.data, allocator),
@@ -62,10 +63,14 @@ get_environment :: (name: string, allocator: Allocator) -> string, bool {
 
 // Runs command through the system's shell, cmd.exe on Windows and sh on
 // Linux, waits for it to end, and gives its status as C's system gives
-// it. On Windows that is the command's exit code: "exit 3" gives 3. On
-// Linux it is a wait status: the exit code times 256 when the command
-// ended by itself ("exit 3" gives 768), and 32512 (127 times 256) when sh
-// can't find the command. Either way 0 means it succeeded.
+// it. On Windows that is the command's exit code: "exit 3" gives 3, and a
+// command cmd.exe can't find gives 1. On Linux it is a wait status: the
+// exit code times 256 when the command ended by itself ("exit 3" gives
+// 768), and 32512 (127 times 256) when sh can't find the command. Either
+// way 0 means it succeeded. An empty command, "" or the zeroed string,
+// runs the shell with nothing to do, which gives 0: it reaches C as a lone
+// zero (to_c_string), never as the null that asks whether there is a
+// shell.
 //
 // It is -1, and nothing runs, for a command with a zero byte, which C
 // would read as a shorter command, and when the allocator has no memory

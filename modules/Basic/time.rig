@@ -15,13 +15,13 @@
 // that passed, even a negative time, and nothing here hides that.
 //
 // The calendar is always UTC, the proleptic Gregorian calendar's, as ISO
-// 8601 has it: no time zones, no leap seconds (each day has 86400 seconds,
-// as POSIX and timespec_get count them), and Gregorian years before 1582
-// too. Nothing here sleeps: C17's own call, thrd_sleep (<threads.h>,
-// optional), is on both systems, but MSVC's <threads.h> defines it only
-// inline, over the Visual C++ runtime's _thrd_sleep64, which the compiler
-// doesn't link it to and the interpreter doesn't find; and a system's
-// own (Sleep, nanosleep) waits on conditional compilation.
+// 8601 has it: no time zones and no leap seconds (each day has 86400
+// seconds, as POSIX and timespec_get count them). Nothing here sleeps:
+// C17's own call, thrd_sleep (<threads.h>, optional), is on both systems,
+// but MSVC's <threads.h> defines it only inline, over the Visual C++
+// runtime's _thrd_sleep64, which the compiler doesn't link it to and the
+// interpreter doesn't find; and a system's own (Sleep, nanosleep) waits on
+// conditional compilation.
 #load "libc.rig";
 #load "numbers.rig";
 
@@ -129,9 +129,11 @@ to_calendar :: (time: Time) -> Calendar {
     // formula gives. And it counts in eras of 400 years, 146097 days each,
     // after which the Gregorian calendar repeats.
     //
-    // z is the days since 0000-03-01, the start of an era. The era is z
-    // divided by 146097, rounded down, which / does for a negative z only
-    // after taking 146096 from it.
+    // z is the days since 0000-03-01, the start of an era: from 612716 to
+    // 826219 for every Time, so never negative. The era is z divided by
+    // 146097, rounded down, which / does for z as it is; Hinnant's code
+    // takes 146096 from a negative z first, kept here though no Time gives
+    // one.
     z := days + 719468;
     era := z;
     if z < 0 { era = z - 146096; }
