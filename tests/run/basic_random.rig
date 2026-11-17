@@ -2,11 +2,12 @@
 // round pcg-random.org's pcg32-demo prints for its fixed seed (seed 42,
 // stream 54), reproduced through Basic's own procedures: six 32-bit
 // numbers, 65 coins, 33 rolls of a die and a shuffled deck of 52 cards.
-// Then 64-bit numbers and floats from the same seed, random_int at int's
-// extremes, across 2^32 values and one more, with its bounds swapped and
-// equal, shuffles of bytes and of nothing, every value of a small range
-// seen and none outside it, and a generator seeded from the clock, of
-// which it prints only what can't vary from run to run.
+// Then 64-bit numbers and floats, random_int at int's extremes, across 2^32
+// values and one more, with its bounds swapped and equal, over ranges that
+// throw away about half their draws, and from a zeroed Random; shuffles of
+// bytes and of nothing, every value of a small range seen and none outside
+// it, and a generator seeded from the clock, of which it prints only what
+// can't vary from run to run.
 #import "Basic";
 
 MIN :: -9223372036854775808;
@@ -52,16 +53,24 @@ main :: () {
     for 1..33 { show_int(random_int(*r, 1, 6)); }
     print_line("");
 
-    // Card c is the rank c / 4 and the suit c % 4.
+    // Card c is the rank c / 4 and the suit c % 4. Each is kept in every
+    // byte of its int, so that a shuffle which moved only part of each
+    // element would leave cards whose bytes differ.
     cards : [52]int;
-    for 0..51 { cards[it] = it; }
+    for 0..51 { cards[it] = it * 0x0101010101010101; }
     random_shuffle(*r, cards.data, 52, size_of(int));
     print_string("Cards:");
+    whole := true;
     for cards {
+        card := it & 0xFF;
+        if it != card * 0x0101010101010101 { whole = false; }
         print_string(" ");
-        print_byte("A23456789TJQK"[it / 4]);
-        print_byte("hcds"[it % 4]);
+        print_byte("A23456789TJQK"[card / 4]);
+        print_byte("hcds"[card % 4]);
     }
+    print_line("");
+    print_string("Cards whole:");
+    show_bool(whole);
     print_line("");
 
     // A 64-bit number is two 32-bit ones, the first the high half: the
@@ -72,19 +81,24 @@ main :: () {
     print_line("");
 
     // A float is the top 53 bits of a 64-bit number over 2^53, so scaling
-    // it back gives those bits exactly: 0xa15c02b77b47f409 >> 11.
+    // it back gives those bits exactly: 0xa15c02b77b47f409 >> 11. Those
+    // bits end in 0, which 52 bits scaled by 2^52 would give as well, so
+    // seed 1 checks bits that end in 1.
     random_seed(*r, 42, 54);
     f := random_float64(*r);
     print_string("float64:");
     show_bool(cast(u64) (f * 9007199254740992.0) == 0x142b8056ef68fe);
     show_bool(f >= 0.0 && f < 1.0);
+    random_seed(*r, 1, 54);
+    show_bool(cast(u64) (random_float64(*r) * 9007199254740992.0) == 0x136d7bb521863f);
     print_line("");
 
     // Ranges from one generator, without reseeding: a small one, the same
     // with its bounds the wrong way round, all of int, exactly 2^32 values
     // (a 32-bit number added to the low bound), 2^32 + 1 values (the 64-bit
-    // path), two values at int's most negative end, and one value, which
-    // still draws.
+    // path), both of those again from a low bound far below 0, two values
+    // at int's most negative end, and one value, which still draws: the
+    // three draws after it are the ones that follow a draw.
     random_seed(*r, 1, 1);
     print_string("-3..3:");
     for 1..20 { show_int(random_int(*r, -3, 3)); }
@@ -101,11 +115,39 @@ main :: () {
     print_string("2^32 + 1 values:");
     for 1..2 { show_int(random_int(*r, 0, 4294967296)); }
     print_line("");
+    print_string("MIN..MIN + 2^32 - 1:");
+    for 1..2 { show_int(random_int(*r, MIN, MIN + 4294967295)); }
+    print_line("");
+    print_string("-2^32..0:");
+    for 1..2 { show_int(random_int(*r, -4294967296, 0)); }
+    print_line("");
     print_string("MIN..MIN + 1:");
     for 1..2 { show_int(random_int(*r, MIN, MIN + 1)); }
     print_line("");
-    print_string("7..7:");
+    print_string("7..7, then -3..3:");
     show_int(random_int(*r, 7, 7));
+    for 1..3 { show_int(random_int(*r, -3, 3)); }
+    print_line("");
+
+    // Ranges whose threshold is just under half of what a draw can be, so
+    // that about half the draws are thrown away: 2^31 + 1 values in 32 bits
+    // and 2^63 + 1 in 64. Seed 2 throws away 9 draws over the first four
+    // numbers and 6 over the second four, so these numbers are not the
+    // ones a draw modulo the range would give.
+    random_seed(*r, 2, 0);
+    print_string("0..2^31:");
+    for 1..4 { show_int(random_int(*r, 0, 2147483648)); }
+    print_line("");
+    random_seed(*r, 2, 0);
+    print_string("MIN..0:");
+    for 1..4 { show_int(random_int(*r, MIN, 0)); }
+    print_line("");
+
+    // A zeroed Random is stream 0 from state 0: its first number is 0, but
+    // the ones after it aren't, so a range that throws draws away ends.
+    zeroed : Random;
+    print_string("zeroed 1..6:");
+    for 1..6 { show_int(random_int(*zeroed, 1, 6)); }
     print_line("");
 
     // A shuffle of one-byte elements.
@@ -126,6 +168,7 @@ main :: () {
     random_shuffle(*r, null, 0, 8);
     random_shuffle(*r, *one, 1, 8);
     random_shuffle(*r, *one, 5, 0);
+    random_shuffle(*r, *one, 5, -1);
     print_string("shuffle of 0 and 1:");
     show_bool(random_u32(*r) == first && one == 1);
     print_line("");
@@ -161,10 +204,13 @@ main :: () {
     print_line("");
 
     // A generator seeded from the clock: what it gives varies, but not the
-    // range it gives it in.
+    // range it gives it in, and it is seeded, which leaves its increment
+    // odd and, but for one seed in 2^64, its state not 0.
     t := random_from_time();
-    v := random_int(*t, 10, 20);
     print_string("from time:");
+    show_bool(t.increment & 1 == 1);
+    show_bool(t.state != 0);
+    v := random_int(*t, 10, 20);
     show_bool(v >= 10 && v <= 20);
     print_line("");
 }
