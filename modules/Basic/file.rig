@@ -20,6 +20,14 @@
 // without calling C. The copy comes from the heap, since these procedures
 // take no allocator, and is given back as soon as the C call that takes it
 // returns.
+//
+// The path's bytes go to C as they are. Linux's C library takes a file
+// name as plain bytes, so a UTF-8 path names the file it says, but
+// Windows' reads it in the system's ANSI code page rather than as UTF-8,
+// so a path with a character outside ASCII names another file there (with
+// code page 1252, "café.txt" makes cafÃ©.txt). Windows' wide-character
+// calls, _wfopen and _wremove, would take it right, but only Windows has
+// them, which waits on conditional compilation.
 #load "libc.rig";
 #load "string.rig";
 #load "allocators.rig";
