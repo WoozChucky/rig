@@ -153,7 +153,9 @@ main :: () {
     print_byte(10);
 
     // PI and TAU are untyped: each takes float32 or float64 where it meets
-    // one, so p32's declaration and show32(PI) round it to a float32.
+    // one, so p32's declaration and show32(PI) round it to a float32. And
+    // each is the float64 nearest its value: C's atan2(0, -1) is π exactly,
+    // and doubling a float64 is exact.
     minus_zero : float64 = -0.0;
     p32 : float32 = PI;
     start_line("constants");
@@ -162,6 +164,10 @@ main :: () {
     show32(p32);
     show32(PI);
     show64(TAU - 2 * PI);
+    print_byte(32);
+    print_bool(PI == atan2_float64(0, -1));
+    print_byte(32);
+    print_bool(TAU == 2 * PI);
     print_byte(10);
 
     start_line("sqrt_float64");
@@ -278,8 +284,9 @@ main :: () {
     print_byte(10);
 
     // A negative base to a power that isn't whole is NaN; 0 and -0.0 to a
-    // negative odd power are infinities of their signs; and an exponent of
-    // 0, or a base of 1, gives 1 even with a NaN.
+    // negative odd power are infinities of their signs, and -0.0 to a
+    // positive odd power is -0.0; and an exponent of 0, or a base of 1,
+    // gives 1 even with a NaN.
     start_line("pow_float64");
     show64(pow_float64(2, 10));
     show64(pow_float64(2, 0.5));
@@ -288,16 +295,19 @@ main :: () {
     show64(pow_float64(-8, 1.0 / 3));
     show64(pow_float64(0, -1));
     show64(pow_float64(minus_zero, -1));
+    show64(pow_float64(minus_zero, 3));
     show64(pow_float64(nan, 0));
     show64(pow_float64(1, nan));
     print_byte(10);
 
-    // An infinity wins over a NaN, and 1.5e308 twice has a hypotenuse past
-    // float64's largest.
+    // An infinity wins over a NaN; 3e200 and 4e200 have squares past
+    // float64's largest but a hypotenuse of 5e200, divided back to 5; and
+    // 1.5e308 twice has a hypotenuse past float64's largest.
     start_line("hypot_float64");
     show64(hypot_float64(3, 4));
     show64(hypot_float64(-5, 12));
     show64(hypot_float64(inf, nan));
+    show64(hypot_float64(3e200, 4e200) / 1e200);
     show64(hypot_float64(1.5e308, 1.5e308));
     print_byte(10);
 
