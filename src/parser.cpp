@@ -1864,7 +1864,9 @@ static Ast *parse_run(Parser *p) {
 // A defer is a statement, and only a body has a block to leave: at the top
 // level, a top-level #if's branch included, it's "defer can only be in a
 // body", at the keyword, rather than "expected identifier". The recovery
-// then gives it a broken entry with no name, as any failed declaration.
+// then gives it a broken entry with no name, as any failed declaration,
+// unless a declaration comes later on the same line (`defer f :: () {}`):
+// defer is then a stray token, and f is read.
 static bool variable_follows(Parser *p, s64 open);
 
 static Ast *parse_declaration(Parser *p) {
