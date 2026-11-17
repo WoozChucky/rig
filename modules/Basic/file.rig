@@ -1,0 +1,227 @@
+// Basic's files: reading and writing them whole, appending to them, asking
+// whether one is there and deleting it, and an open file read or written a
+// piece at a time, all through C's stdio (libc.rig).
+//
+// Every file is opened in binary mode, "rb", "wb" or "ab", so the bytes
+// read are the bytes written on every system. Windows' text mode would
+// change them: it writes a line feed as a carriage return and a line feed,
+// and reads stop at Ctrl-Z (26).
+//
+// A directory is not a file here, on either system. Windows' fopen won't
+// open one, but Linux's opens it for reading, and its remove deletes an
+// empty one. So file_open, opening to read, reads one byte first: a
+// directory's read fails, where a file's gives the byte or the end. Every
+// procedure that reads, or asks whether a file is there, or deletes one,
+// opens it that way first.
+//
+// A path goes to C as a copy ended by a zero (to_c_string), which C reads
+// up to its first zero. So a path with a zero byte in it would reach C as
+// a shorter one, another file's name, and every procedure here refuses it
+// without calling C. The copy comes from the heap, since these procedures
+// take no allocator, and is given back as soon as C has the file open, or
+// has failed to.
+#load "libc.rig";
+#load "string.rig";
+#load "allocators.rig";
+
+// An open file: C's FILE *, or null when the file isn't open. A zeroed
+// File is one that isn't open.
+File :: struct {
+    handle: *void;
+}
+
+// The modes file_open opens a file in: to read it from the start, to write
+// it from empty, made when it isn't there, and to write at its end, made
+// when it isn't there.
+FILE_READ :: 0;
+FILE_WRITE :: 1;
+FILE_APPEND :: 2;
+
+// Opens the file at path in mode, FILE_READ, FILE_WRITE or FILE_APPEND,
+// and gives it and true; the caller closes it with file_close. It gives a
+// File that isn't open, and false, for any other mode, for a path with a
+// zero byte, for a file C can't open (missing, when reading, or not
+// allowed), and when reading, for a directory.
+//
+// To tell a directory from a file when reading, one byte is read and then
+// the position set back to the start, where it was before: on Linux a
+// directory opens, but its read fails, where a file's read gives a byte or
+// the end of the file. A position that can't be read or set back fails the
+// open too, since the byte read would be lost.
+file_open :: (path: string, mode: int) -> File, bool {
+    if mode != FILE_READ && mode != FILE_WRITE && mode != FILE_APPEND { return File.{null}, false; }
+    if find_byte(path, 0) >= 0 { return File.{null}, false; }
+    c_path := to_c_string(path, HEAP_ALLOCATOR);
+    if c_path == null { return File.{null}, false; }
+
+    handle : *void = null;
+    if mode == FILE_READ {
+        handle = c_fopen(c_path, "rb");
+    } else if mode == FILE_WRITE {
+        handle = c_fopen(c_path, "wb");
+    } else {
+        handle = c_fopen(c_path, "ab");
+    }
+    free(c_path, HEAP_ALLOCATOR);
+    if handle == null { return File.{null}, false; }
+
+    if mode == FILE_READ {
+        start : C_Fpos;
+        if c_fgetpos(handle, *start) != 0 {
+            c_fclose(handle);
+            return File.{null}, false;
+        }
+        probe : u8;
+        c_fread(*probe, 1, 1, handle);
+        if c_ferror(handle) != 0 || c_fsetpos(handle, *start) != 0 {
+            c_fclose(handle);
+            return File.{null}, false;
+        }
+    }
+    return File.{handle}, true;
+}
+
+// Closes file, writing out what C still holds of it. A File that isn't
+// open is left alone.
+file_close :: (file: File) {
+    if file.handle == null { return; }
+    c_fclose(file.handle);
+}
+
+// Reads up to buffer.count bytes into buffer from where file is, and gives
+// how many it read: fewer at the end of the file, and 0 there, on an error,
+// for an empty buffer or for a File that isn't open.
+file_read :: (file: File, buffer: []u8) -> int {
+    if file.handle == null || buffer.count <= 0 { return 0; }
+    return cast(int) c_fread(buffer.data, 1, cast(u64) buffer.count, file.handle);
+}
+
+// Writes the bytes of data to file, and gives whether every one of them
+// was written. An empty or zeroed string writes nothing, and is true. A
+// File that isn't open is false.
+//
+// What is written may stay in C's buffer until the file is closed, which
+// is when an error writing it out shows: c_fclose gives it, which
+// write_entire_file and append_to_file read, and file_close doesn't.
+file_write :: (file: File, data: string) -> bool {
+    if file.handle == null { return false; }
+    if data.count <= 0 { return true; }
+    return c_fwrite(data.data, 1, cast(u64) data.count, file.handle) == cast(u64) data.count;
+}
+
+// The size of file in bytes, its position left where it was; -1 when C
+// can't tell, or for a File that isn't open.
+//
+// It is the position at the end: the position now is kept, the file goes
+// to its end and the position there is read, and then it goes back. The
+// positions are fgetpos's, 64 bits on both systems, so a file past 2 GiB
+// has its size right. Going back with fsetpos clears the end-of-file mark
+// the move to the end may have left, so the next read reads.
+file_size :: (file: File) -> int {
+    if file.handle == null { return -1; }
+    here : C_Fpos;
+    if c_fgetpos(file.handle, *here) != 0 { return -1; }
+    if c_fseek(file.handle, 0, C_SEEK_END) != 0 {
+        c_fsetpos(file.handle, *here);
+        return -1;
+    }
+    end : C_Fpos;
+    found := c_fgetpos(file.handle, *end) == 0;
+    if c_fsetpos(file.handle, *here) != 0 || !found { return -1; }
+    return end.position;
+}
+
+// The whole file at path, in memory from allocator, which the caller gives
+// back with free(s.data, allocator), and true. An empty file is the zeroed
+// string (count 0, data null), allocating nothing, and true.
+//
+// A missing file, a directory, a path with a zero byte, a file whose size
+// C can't tell, no memory, or fewer bytes read than the size are the
+// zeroed string and false, with nothing left allocated.
+//
+// The memory is the file's size, asked for once, and C reads into it until
+// it is full or a read gives nothing.
+read_entire_file :: (path: string, allocator: Allocator) -> string, bool {
+    empty : string;
+    file, opened := file_open(path, FILE_READ);
+    if !opened { return empty, false; }
+    size := file_size(file);
+    if size < 0 {
+        file_close(file);
+        return empty, false;
+    }
+    if size == 0 {
+        file_close(file);
+        return empty, true;
+    }
+    data := cast(*u8) alloc(size, allocator);
+    if data == null {
+        file_close(file);
+        return empty, false;
+    }
+
+    got := 0;
+    while got < size {
+        rest : []u8;
+        rest.data = data + got;
+        rest.count = size - got;
+        n := file_read(file, rest);
+        if n <= 0 { break; }
+        got += n;
+    }
+    file_close(file);
+    if got < size {
+        free(data, allocator);
+        return empty, false;
+    }
+
+    s : string;
+    s.data = data;
+    s.count = size;
+    return s, true;
+}
+
+// Makes the file at path, or empties it when it is there, and writes data
+// to it. True when it opened, every byte was written and it closed without
+// an error: c_fclose gives an error when it couldn't write out what C
+// still held, as on a full disk. False for a path with a zero byte.
+write_entire_file :: (path: string, data: string) -> bool {
+    file, opened := file_open(path, FILE_WRITE);
+    if !opened { return false; }
+    written := file_write(file, data);
+    closed := c_fclose(file.handle) == 0;
+    return written && closed;
+}
+
+// Writes data at the end of the file at path, making the file when it
+// isn't there. True as for write_entire_file.
+append_to_file :: (path: string, data: string) -> bool {
+    file, opened := file_open(path, FILE_APPEND);
+    if !opened { return false; }
+    written := file_write(file, data);
+    closed := c_fclose(file.handle) == 0;
+    return written && closed;
+}
+
+// Whether there is a file at path that opens for reading: false for a
+// directory, a missing file, one that can't be read, and a path with a
+// zero byte.
+file_exists :: (path: string) -> bool {
+    file, opened := file_open(path, FILE_READ);
+    file_close(file);
+    return opened;
+}
+
+// Deletes the file at path, and gives whether it did: false for a missing
+// file, a directory, a path with a zero byte, or when C can't. Only a file
+// that file_exists finds is deleted, so Linux's remove, which deletes an
+// empty directory too, is never given one, and a file that can't be opened
+// for reading isn't deleted either.
+delete_file :: (path: string) -> bool {
+    if !file_exists(path) { return false; }
+    c_path := to_c_string(path, HEAP_ALLOCATOR);
+    if c_path == null { return false; }
+    removed := c_remove(c_path) == 0;
+    free(c_path, HEAP_ALLOCATOR);
+    return removed;
+}

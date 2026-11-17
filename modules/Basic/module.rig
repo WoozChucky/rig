@@ -3,7 +3,7 @@
 // and case of a byte, min, max, clamp and abs, copying, setting and
 // comparing bytes in memory, numbers to text and back, views of strings,
 // allocators (the heap, an arena and a pool), a string builder, a growable
-// array, hash tables, and printing to standard output.
+// array, hash tables, files, and printing to standard output.
 //
 // Basic ships with rig, so a program imports all of it through this file
 // by the module's name (spec 2.14):
@@ -31,4 +31,5 @@
 #load "builder.rig";
 #load "array.rig";
 #load "table.rig";
+#load "file.rig";
 #load "print.rig";
