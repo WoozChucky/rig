@@ -195,9 +195,11 @@ table_probe :: (entries: *u8, capacity: int, entry_size: int, hash: u64, key: *v
 //
 // Rehashing copies every used entry, header, key and value, to where its
 // stored hash puts it among the new entries, past any used one: the keys
-// are all different, so none is compared, hashed or copied again. The old
-// entries aren't given back here: a set's value may be one of their
-// values, so the set gives them back once its value is copied.
+// are all different, so none is compared or hashed again. A string key in
+// an entry is a view of the table's own copy, so the view is copied and
+// the copy's bytes stay where they are. The old entries aren't given back
+// here: a set's value may be one of their values, so the set gives them
+// back once its value is copied.
 table_make_room :: (entries: *u8, capacity: int, count: int, removed: int, entry_size: int, allocator: Allocator) -> *u8, int, int {
     LARGEST :: 9223372036854775807; // int's largest value
     if (count + removed + 1) * 4 <= capacity * 3 { return entries, capacity, removed; }
@@ -259,10 +261,10 @@ table_init :: (table: *Table, value_size: int, allocator: Allocator) {
 // bytes when value is null, and returns the value's address in the table,
 // valid until the table's next set or free: a set may rehash the table,
 // which moves every value even when the capacity stays the same, and a
-// remove moves none. A key that isn't there yet is added:
-// the table keeps a copy of it, in memory from its allocator, so the bytes
-// key views may change or go once the set is done. A new key takes the
-// first removed entry its probe passed, if any, and an empty one if not.
+// remove moves none. A key that isn't there yet is added: the table keeps a
+// copy of it, in memory from its allocator, so the bytes key views may
+// change or go once the set is done. A new key takes the first removed
+// entry its probe passed, if any, and an empty one if not.
 //
 // value may be one of the table's own values, to set another key to what
 // one holds already: growing moves them, so the old entries are given back
@@ -306,7 +308,9 @@ table_set :: (table: *Table, key: string, value: *void) -> *void {
 // before its first set or after table_free, has no keys.
 table_find :: (table: Table, key: string) -> *void {
     wanted := key;
-    found, slot := table_probe(table.entries, table.capacity, table.entry_size, hash_string(key), *wanted, table_same_key);
+    // A call used as a value is its first result (spec 5.10), so only the
+    // key's entry is taken, without a name for where it would go.
+    found := table_probe(table.entries, table.capacity, table.entry_size, hash_string(key), *wanted, table_same_key);
     if found < 0 { return null; }
     return table.entries + found * table.entry_size + TABLE_VALUE_OFFSET;
 }
@@ -317,7 +321,7 @@ table_find :: (table: Table, key: string) -> *void {
 // be lost behind an empty entry.
 table_remove :: (table: *Table, key: string) -> bool {
     wanted := key;
-    found, slot := table_probe(table.entries, table.capacity, table.entry_size, hash_string(key), *wanted, table_same_key);
+    found := table_probe(table.entries, table.capacity, table.entry_size, hash_string(key), *wanted, table_same_key);
     if found < 0 { return false; }
     entry := cast(*Table_Entry) (table.entries + found * table.entry_size);
     free(entry.key.data, table.allocator);
@@ -412,7 +416,7 @@ int_table_set :: (table: *Int_Table, key: int, value: *void) -> *void {
 // The address of key's value, or null, as table_find gives for strings.
 int_table_find :: (table: Int_Table, key: int) -> *void {
     wanted := key;
-    found, slot := table_probe(table.entries, table.capacity, table.entry_size, hash_int(key), *wanted, int_table_same_key);
+    found := table_probe(table.entries, table.capacity, table.entry_size, hash_int(key), *wanted, int_table_same_key);
     if found < 0 { return null; }
     return table.entries + found * table.entry_size + INT_TABLE_VALUE_OFFSET;
 }
@@ -421,7 +425,7 @@ int_table_find :: (table: Int_Table, key: int) -> *void {
 // strings.
 int_table_remove :: (table: *Int_Table, key: int) -> bool {
     wanted := key;
-    found, slot := table_probe(table.entries, table.capacity, table.entry_size, hash_int(key), *wanted, int_table_same_key);
+    found := table_probe(table.entries, table.capacity, table.entry_size, hash_int(key), *wanted, int_table_same_key);
     if found < 0 { return false; }
     entry := cast(*Int_Table_Entry) (table.entries + found * table.entry_size);
     entry.state = TABLE_REMOVED;
