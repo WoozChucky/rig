@@ -1,0 +1,27 @@
+// defer's refusals (issue #149, spec 6.12): deferred code can't leave
+// itself but by its end, a deferred statement can't declare anything, and
+// defer is a statement, only in a body.
+returns :: () -> int {
+    defer return 1;
+    defer if true { return 2; }
+    return 0;
+}
+loops :: () {
+    for 1..3 {
+        defer break;
+        defer continue;
+        defer if it == 2 { break; }
+        defer if it == 3 { continue; }
+        defer { while true { break; } }
+    }
+}
+defer puts("not in a body");
+statement :: () {
+    n := 1;
+    defer n + 1;
+}
+// Last: the parser gives this body up and skips to the next declaration.
+declares :: () {
+    defer x := 1;
+}
+main :: () {}
