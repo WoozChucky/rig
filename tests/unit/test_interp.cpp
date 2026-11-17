@@ -22,7 +22,7 @@
 #include <errno.h>    // ERANGE, for interp_windows_shares_the_compilers_streams_and_errno
 #include <process.h>  // _getpid, for interp_calls_a_windows_function
 #else
-#include <dlfcn.h>     // dlopen, dlsym and RTLD_DEFAULT, for interp_finds_c_functions_by_name
+#include <dlfcn.h>     // dlopen, dlsym, RTLD_LAZY, RTLD_NOLOAD and RTLD_DEFAULT, for interp_finds_c_functions_by_name
 #include <errno.h>     // errno, ENOMEM, for interp_procedure_values
 #include <execinfo.h>  // backtrace, for thunk_unwinds_through_the_thunk
 #include <pthread.h>   // pthread_atfork, for interp_finds_c_functions_by_name
