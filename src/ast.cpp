@@ -484,25 +484,67 @@ String ast_dump_node(Arena *a, Ast *node) {
     return finish(a, &buffer);
 }
 
-// Whether position a comes before position b in the source.
-static bool before(Position a, Position b) {
-    if (a.file != b.file) return a.file < b.file;
+// File f's place in load order: Ast_File.order's, or, with no order set,
+// its index.
+static s32 place(Ast_File *file, s32 f) {
+    return file->order.count ? file->order[f] : f;
+}
+
+// Whether position a comes before position b in the program: file by file
+// in load order, then line and column.
+static bool before(Ast_File *file, Position a, Position b) {
+    if (a.file != b.file) return place(file, a.file) < place(file, b.file);
     if (a.line != b.line) return a.line < b.line;
     return a.col < b.col;
 }
 
 // The procedures and the globals are two lists, each in source order:
 // merged by position, they're the declarations in source order, file by
-// file in load order (Position.file).
+// file in load order.
 Array<Ast *> ast_declarations(Ast_File *file) {
     Array<Ast *> all = {};
     s64 p = 0, g = 0;
     while (p < file->procs.count || g < file->globals.count) {
         bool proc_first = g == file->globals.count ||
-                          (p < file->procs.count && before(file->procs[p]->pos, file->globals[g]->pos));
+                          (p < file->procs.count && before(file, file->procs[p]->pos, file->globals[g]->pos));
         array_add(&all, proc_first ? (Ast *)file->procs[p++] : file->globals[g++]);
     }
     return all;
+}
+
+// Sorts one of file's lists by before(), stably: a merge sort, bottom up,
+// as diag_sort's, so a list of many declarations takes n log n steps
+// however out of order the loader left it. T is the list's node type.
+template<typename T>
+static void sort_by_position(Ast_File *file, Array<T *> *list) {
+    s64 n = list->count;
+    Array<T *> other = {};
+    array_reserve(&other, n);
+    T **from = list->data;
+    T **to = other.data;
+    for (s64 width = 1; width < n; width *= 2) {
+        for (s64 left = 0; left < n; left += 2 * width) {
+            s64 middle = left + width < n ? left + width : n;
+            s64 end = middle + width < n ? middle + width : n;
+            s64 i = left, k = middle, out = left;
+            while (i < middle && k < end) to[out++] = before(file, from[k]->pos, from[i]->pos) ? from[k++] : from[i++];
+            while (i < middle) to[out++] = from[i++];
+            while (k < end) to[out++] = from[k++];
+        }
+        T **sorted = to;
+        to = from;
+        from = sorted;
+    }
+    if (from != list->data) memcpy(list->data, from, (size_t)n * sizeof(T *));
+    array_free(&other);
+}
+
+void ast_sort_declarations(Ast_File *file) {
+    sort_by_position(file, &file->procs);
+    sort_by_position(file, &file->globals);
+    sort_by_position(file, &file->loads);
+    sort_by_position(file, &file->runs);
+    sort_by_position(file, &file->ifs);
 }
 
 // The compiler building rig answers, as for load.cpp's HOST_IS_WINDOWS:
@@ -540,11 +582,11 @@ static void dump_line(Array<u8> *buffer, Ast *node) {
 }
 
 // Of the nodes `count` lists have next (null for a list used up), the one
-// that comes first in the source, or null; its list's index through *which.
-static Ast *earliest_next(Ast **next, s64 count, s64 *which) {
+// that comes first in the program, or null; its list's index through *which.
+static Ast *earliest_next(Ast_File *file, Ast **next, s64 count, s64 *which) {
     Ast *first = nullptr;
     for (s64 i = 0; i < count; i++) {
-        if (next[i] && (!first || before(next[i]->pos, first->pos))) {
+        if (next[i] && (!first || before(file, next[i]->pos, first->pos))) {
             first = next[i];
             *which = i;
         }
@@ -568,8 +610,8 @@ String ast_dump(Arena *a, Ast_File *file) {
                 f < file->ifs.count ? file->ifs[f] : nullptr,
             };
             s64 which = 0;
-            Ast *first = earliest_next(next, 3, &which);
-            if (!first || (i < declarations.count && !before(first->pos, declarations[i]->pos))) break;
+            Ast *first = earliest_next(file, next, 3, &which);
+            if (!first || (i < declarations.count && !before(file, first->pos, declarations[i]->pos))) break;
             dump_line(&buffer, first);
             if (which == 0) l++;
             else if (which == 1) r++;
