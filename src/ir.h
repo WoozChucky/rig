@@ -341,8 +341,9 @@ struct Ir_Param {
 // inside its parent.
 struct Ir_Scope {
     s32 parent;    // the scope it's inside; -1 for scope 0
-    Position pos;  // where it starts: its '{', a loop's `for` or `while`, or the
-                   // declaration that hides a variable
+    Position pos;  // where it starts: its '{', a loop's `for` or `while`, the
+                   // declaration that hides a variable, or, for a copy of
+                   // deferred code, the deferred statement (its first token)
 };
 
 // Where a variable lives, which says what Ir_Var.value is.
