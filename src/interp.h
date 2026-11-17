@@ -66,9 +66,10 @@
 // own stack. There is no step limit: an endless loop runs until Ctrl-C.
 //
 // A failure (a runtime check's panic, the stack running out, a call the
-// interpreter can't make, a C function that is nowhere) stops the run,
-// with its message and the chain of calls that led there, innermost first,
-// for the caller to report as a compile-time error.
+// interpreter can't make, a C function that is nowhere, a failure the
+// #compiler hook gives) stops the run, with its message and the chain of
+// calls that led there, innermost first, for the caller to report as a
+// compile-time error.
 
 #pragma once
 

@@ -202,9 +202,9 @@
 // `#import "Basic";` (spec 2.14) names a module that ships with rig, which
 // the loader finds and reads (load.h). The parser records it as it records
 // a #load, an Ast_Load with is_import set, its path the module's name, and
-// every rule above holds for it too, its messages naming #import: "expected
-// a string after #import, as in #import "Basic";" and "#import can only be
-// at the top level".
+// every rule for a #load holds for it too, those above and the recovery's
+// below, its messages naming #import: "expected a string after #import, as
+// in #import "Basic";" and "#import can only be at the top level".
 //
 // Code runs while compiling with #run (spec 7.8). #run e is a prefix
 // operator, binding as - and ! do (spec 5.2): #run f() + 1 is

@@ -1366,16 +1366,16 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // no '#c_call'", #no_abc "expected '{'". A #load there is "#load can only be
 // at the top level", unless the recovery resumes at it: the '{' is then
 // what's missing (error_expected_or_load). A #run there is "expected '{'"
-// (on the next line, it's the top-level run the recovery resumes at). Any
-// other directive but these is "unknown directive '#foo'". A string after
-// #foreign's library is the C function's name, when it isn't the
-// procedure's own (c_free :: (p: *void) #foreign libc "free";): the
+// (on the next line, it's the top-level run the recovery resumes at). A
+// string after #foreign's library is the C function's name, when it isn't
+// the procedure's own (c_free :: (p: *void) #foreign libc "free";): the
 // procedure keeps its name in Rig. #compiler, Jai's directive, declares a
 // procedure the compiler does itself, while compiling (spec 7.9), with no
 // body: `create_workspace :: (name: string) -> Workspace #compiler;`. It's
 // no C function, so it takes no #c_call either ("a #compiler procedure is
 // the compiler's: it takes no '#c_call'"), #no_abc before it is "expected
-// '{'", as before #foreign, and the ';' must follow it.
+// '{'", as before #foreign, and the ';' must follow it. Any other
+// directive but these is "unknown directive '#foo'".
 //
 // Each element of the parameter list is a parameter or, last, the '..' of
 // a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign libc;).
