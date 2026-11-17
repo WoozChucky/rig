@@ -1,0 +1,117 @@
+// Basic's paths: a path's directory, its file's name, the name's extension
+// and the path without it, and two paths joined into one. A path is a plain
+// string here, and the work is string work: nothing asks the system
+// whether a file or directory is there.
+//
+// Both / and \ separate a path's parts when it is read, on every system,
+// so a path written for Windows reads the same on Linux and the other way
+// round: Windows takes either, and a \ in a Linux file's name is rare. A
+// join writes /, which both systems accept. Nothing else is special: a
+// drive letter is part of the first name ("C:\x"'s directory is "C:"),
+// and Windows' \\server\share is read as a path from the root whose first
+// separator is doubled, as //server/share would be.
+//
+// Every part is a view into the path given, cut out of it by slice and
+// advance, so it copies nothing, lives as long as the path's bytes, and
+// can't reach outside the path: a zeroed path gives four zeroed parts, and
+// a view of part of a string is read only as far as the view goes. A part
+// that isn't there, as the extension of "file", is an empty view at the
+// path's end, so it still points into the path. path_join is the one that
+// copies, into memory from the allocator it is given.
+#load "string.rig";
+#load "allocators.rig";
+#load "memory.rig";
+
+// Whether c separates a path's parts: / or \, on every system.
+is_path_separator :: (c: u8) -> bool {
+    return c == "/"[0] || c == "\\"[0];
+}
+
+// The directory part of path: what is before its last separator, without
+// the separators that end it, so "a/b/c.txt" and "a//c.txt" give "a/b" and
+// "a". A path with a separator at its end names a directory, so "a/b/"
+// gives "a/b", and the file's name is empty.
+//
+// When nothing is left before the separators and the path starts with one,
+// the path is in the root, and the directory is that first separator, so
+// "/b.c", "/" and "\\b" give "/", "/" and "\". A path with no separator is
+// a name alone, in no directory given, and gives "".
+path_directory :: (path: string) -> string {
+    last := path.count - 1;
+    while last >= 0 && !is_path_separator(path[last]) { last -= 1; }
+    if last < 0 { return slice(path, 0, 0); }
+
+    // last is a separator, so the count before it stops at the first byte
+    // of the run of separators that ends there.
+    count := last;
+    while count > 0 && is_path_separator(path[count - 1]) { count -= 1; }
+    if count == 0 { return slice(path, 0, 1); }
+    return slice(path, 0, count);
+}
+
+// The file's name: what is after the last separator of path, and all of
+// path when it has none. A path that ends with a separator gives an empty
+// view at its end.
+path_file_name :: (path: string) -> string {
+    start := path.count;
+    while start > 0 && !is_path_separator(path[start - 1]) { start -= 1; }
+    return advance(path, start);
+}
+
+// The extension of the file's name, with its dot: from the name's last
+// dot to the path's end, so "c.tar.gz" gives ".gz" and "b." gives ".". The
+// dots a name starts with are the name's, not an extension's: ".bashrc"
+// is a hidden file's name on Linux, and "." and ".." are the directory and
+// its parent, so none of them has one, though ".config.json" has ".json".
+// A dot in a directory's name is not the file's, so "dir.d/file" has none.
+//
+// A name with no extension gives an empty view at the path's end.
+path_extension :: (path: string) -> string {
+    name := path_file_name(path);
+    first := 0;
+    while first < name.count && name[first] == "."[0] { first += 1; }
+    at := find_byte_from_end(advance(name, first), "."[0]);
+    if at < 0 { return advance(path, path.count); }
+    return advance(name, first + at);
+}
+
+// path without the extension of its file's name, so "a/b/c.txt" gives
+// "a/b/c", and a path with no extension gives all of path. The extension
+// is always at the path's end, so this is the bytes before it.
+path_without_extension :: (path: string) -> string {
+    return slice(path, 0, path.count - path_extension(path).count);
+}
+
+// a and b joined into one path, in memory from allocator, which the caller
+// gives back with free(s.data, allocator). It is a, then a / between the
+// two, then b. The / is left out when either is empty, so a join with ""
+// is the other path, and when a ends with a separator or b starts with
+// one, so there is one at the seam already: "a/" and "b" give "a/b", but
+// "a/" and "/b" give "a//b", since neither separator is taken away. An
+// absolute b is joined all the same: "a" and "/b" give "a/b".
+//
+// The result is always a copy, even when it is a or b, so the caller can
+// always free it. Two empty paths give the zeroed string, count 0 and data
+// null, which allocates nothing, as builder_to_string's empty text does,
+// and freeing it gives the allocator nothing. When the allocator has no
+// memory to give, the result is the zeroed string too. The size is worked
+// out first, so the memory is asked for once.
+path_join :: (a: string, b: string, allocator: Allocator) -> string {
+    joined : string;
+    separator := 1;
+    if a.count == 0 || b.count == 0 { separator = 0; }
+    if a.count > 0 && is_path_separator(a[a.count - 1]) { separator = 0; }
+    if b.count > 0 && is_path_separator(b[0]) { separator = 0; }
+
+    count := a.count + separator + b.count;
+    if count == 0 { return joined; }
+    data := cast(*u8) alloc(count, allocator);
+    if data == null { return joined; }
+
+    copy_memory(data, a.data, a.count);
+    if separator == 1 { data[a.count] = "/"[0]; }
+    copy_memory(data + a.count + separator, b.data, b.count);
+    joined.data = data;
+    joined.count = count;
+    return joined;
+}
