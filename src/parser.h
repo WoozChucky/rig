@@ -109,7 +109,8 @@
 // the compiler; parser.cpp's MAX_DEPTH): each parenthesis, prefix operator,
 // cast, call, dereference, field, element, literal and binary operator is a
 // level above what it holds, so a chain of 1001 '+' is too deep too, and a
-// procedure's body is the first block. Deeper is "this expression is nested
+// procedure's body is the first block, unless it's in top-level #if
+// branches, which count first (below). Deeper is "this expression is nested
 // too deeply (more than 1000 levels)", at the start of the outermost
 // expression, or "blocks are nested too deeply (more than 1000 levels)", at
 // the '{' one too many; the declaration is then given up, as after any
@@ -156,13 +157,13 @@
 // At the top level, after '::', a procedure's parameter list starts with
 // '(' ')', '(' IDENT ':' or '(' '..'; any other '(' begins a constant's
 // value, so `N :: (1 + 2);` is a constant. A name followed by ':' or ':='
-// and then a signature with a body or a directive other than #load and
-// #run after it (`greet : () {`) is a procedure with its '::' mistyped:
+// and then a signature with a body or a directive other than #load, #run
+// and #if after it (`greet : () {`) is a procedure with its '::' mistyped:
 // "expected '::', found ':'"; a name, ':' and a procedure type followed by
-// '=' or ';', or by a #load or a #run (which begins the next declaration,
-// so the variable is then missing its ';'), is a variable of that type:
-// `op : (int) -> int = add;`. Anything else after a top-level name is
-// "expected '::', found ...".
+// '=' or ';', or by a #load, a #run or an #if (which begins the next
+// declaration, so the variable is then missing its ';'), is a variable of
+// that type: `op : (int) -> int = add;`. Anything else after a top-level
+// name is "expected '::', found ...".
 //
 // The bodies of if, else, while and for are always blocks in braces (spec
 // 6.1), and a condition needs no parentheses: the body's '{' ends it. A for
@@ -248,7 +249,7 @@
 // conditional, for now: an #if among them is "#if can't be among a
 // struct's fields, for now", at the '#if', and the struct is given up. #if
 // is no expression (`x := #if A {};` is "expected an expression"). A
-// top-level branch is a block for the nesting limit below, as a body's
+// top-level branch is a block for the nesting limit above, as a body's
 // blocks are. Its declarations may be written unindented, as C's #ifdef
 // has them: no column-1 rule ends a branch, only its '}'. Inside a branch,
 // the recovery below skips as at the top level, but stops at the '}' that
@@ -260,9 +261,11 @@
 // a line outside any braces, and after a signature it's where the body's
 // '{' should be; one in column 1 is among the column-1 declarations a body
 // never closed is taken to end before (it doesn't end a body by itself:
-// unindented, it's a statement there), the skipping resumes at it inside
-// braces too, as at a procedure's declaration in column 1, and it ends a
-// struct's fields.
+// unindented, it's a statement there; unless a branch of it declares a
+// procedure or a struct, which only a top-level #if's branch can, and it
+// then ends the body as a procedure's declaration does), the skipping
+// resumes at it inside braces too, as at a procedure's declaration in
+// column 1, and it ends a struct's fields.
 //
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;
@@ -280,17 +283,19 @@
 // name.
 //
 // A body never closed ends at the end of the file or at a procedure's or a
-// struct's declaration in column 1 (`name :: (` or `Name :: struct`), or a
-// #run { in column 1, which a body can't hold and which can only start a
-// top-level declaration: a constant in column 1 (`N :: 5;`) is a local
-// constant, as an indented one is. A struct's braces never closed end
-// there too, and at any #run or #if in column 1. The body is then taken to end
-// before the column-1 declarations (IDENT ':', ':=' or '::', a #load, a
-// #run or an #if) right before that point, at its own level: "expected
-// '}'" is reported at the first of them, and the top level resumes there,
-// so they're read as the globals, constants, loads, runs and #ifs they were
-// meant to be (an if's '}' forgotten, then globals). A #load among them isn't
-// misplaced after all, so it isn't reported. A struct is taken to end
+// struct's declaration in column 1 (`name :: (` or `Name :: struct`), a
+// #run { in column 1, or an #if in column 1 whose branch declares a
+// procedure or a struct: a body can't hold any of them, and each can only
+// start a top-level declaration. A constant in column 1 (`N :: 5;`) is a
+// local constant, as an indented one is. A struct's braces never closed
+// end there too, and at any #run or #if in column 1. The body is then taken
+// to end before the column-1 declarations (IDENT ':', ':=' or '::', a
+// #load, a #run or an #if) right before that point, at its own level:
+// "expected '}'" is reported at the first of them, and the top level
+// resumes there, so they're read as the globals, constants, loads, runs and
+// #ifs they were meant to be (an if's '}' forgotten, then globals). A #load
+// among them, or in the branch of an #if among them, isn't misplaced after
+// all, so it isn't reported. A struct is taken to end
 // before the #loads in column 1 right before that point, the same way, but
 // not before fields in column 1: a field is written as a global is, so
 // they stay its fields. Without them, "expected '}'" is reported where the
