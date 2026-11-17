@@ -1,0 +1,60 @@
+// C's other time functions with a 64-bit time_t, compiled as interpreted
+// (issue #161). On Windows msvcrt.lib defines time, gmtime, localtime,
+// mktime, difftime and ctime as their 32-bit versions, while the Universal
+// C Runtime's <time.h> makes those names call the 64-bit ones, _time64 and
+// the rest, which the compiler declares them as. A 32-bit time would write
+// only time's low 4 bytes and read only LATER's, a date in 1964. The
+// program prints only what doesn't vary by host, time zone or run.
+
+// C's struct tm's nine ints. glibc's has two more fields after them, so the
+// program only reads through the pointers C returns, and never passes C a
+// Tm of its own.
+Tm :: struct {
+    second: s32;
+    minute: s32;
+    hour: s32;
+    day: s32;
+    month: s32;
+    year: s32;
+    weekday: s32;
+    year_day: s32;
+    is_dst: s32;
+}
+
+time :: (t: *s64) -> s64 #foreign libc;
+gmtime :: (t: *s64) -> *Tm #foreign libc;
+localtime :: (t: *s64) -> *Tm #foreign libc;
+mktime :: (tm: *Tm) -> s64 #foreign libc;
+difftime :: (end: s64, start: s64) -> float64 #foreign libc;
+ctime :: (t: *s64) -> *u8 #foreign libc;
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+// 2100-07-01T00:00:00Z, past the 32-bit time_t's end in 2038.
+LATER :: 4118083200;
+
+// "true" or "false", for printf's %s.
+text_of :: (b: bool) -> *u8 {
+    if b { return "true"; }
+    return "false";
+}
+
+main :: () {
+    // All 8 bytes written: -1's high half would leave it negative.
+    t : s64 = -1;
+    r := time(*t);
+    printf("time: %s %s\n", text_of(t > 1700000000), text_of(r == t));
+
+    later : s64 = LATER;
+    g := gmtime(*later);
+    printf("gmtime: %d %d %d\n", g.year + 1900, g.month + 1, g.day);
+
+    // A round trip through local time, whatever the zone.
+    back := mktime(localtime(*later));
+    printf("localtime and mktime: %s\n", text_of(back == later));
+
+    printf("difftime: %.0f\n", difftime(later, 0));
+
+    // Www Mmm dd hh:mm:ss yyyy: on July 1st the year is 2100 in every zone.
+    text := ctime(*later);
+    printf("ctime: %.4s\n", text + 20);
+}

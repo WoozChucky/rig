@@ -329,15 +329,22 @@ static bool interp_in_proc_range(Interp *in, u64 address) {
 // time it's needed and kept: the compiler's own copy of a standard C
 // function (interp_c_library_function: any of them on Windows, what
 // libc_nonshared.a links in on Linux), or else the system's
-// (os_find_c_function). Null when neither has it, which isn't kept, so a
-// later run looks again.
+// (os_find_c_function). On Windows the system's is looked up by the name
+// the backend declares (ir_windows_c_name): ucrtbase.dll exports a time
+// function of a time_t only as its 64-bit one, _mkgmtime as _mkgmtime64.
+// Null when neither has it, which isn't kept, so a later run looks again.
 static void *interp_c_function(Interp *in, s32 k) {
     void *f = in->c_functions[k];
     if (f) return f;
     Ir_Proc *p = in->module->procs[k];
     RIG_ASSERT(p->is_foreign);
-    f = interp_c_library_function(ir_c_name(p));
-    if (!f) f = os_find_c_function(ir_c_name(p));
+    String c_name = ir_c_name(p);
+    f = interp_c_library_function(c_name);
+#ifdef _WIN32
+    if (!f) f = os_find_c_function(ir_windows_c_name(c_name));
+#else
+    if (!f) f = os_find_c_function(c_name);
+#endif
     in->c_functions[k] = f;
     return f;
 }

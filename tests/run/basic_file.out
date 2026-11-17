@@ -1,0 +1,19 @@
+missing: false false 0 true
+write: true true
+read: true 6 true
+append: true 12 true
+append makes a file: true 3
+no memory: false 0 true
+empty: true true true 0 true
+binary: true 256 true
+large: true 5242880 true
+reads: true 5 [hello] 12 5 2 0
+write mode: true true [abc]
+append mode: true [abcdef]
+wrong mode: false 0
+bad opens: false true false
+directory: false false false
+empty directory: false false true true
+zero byte: false false false
+delete: true true true true true, again: false, exists: false
+null handle: 0 false -1

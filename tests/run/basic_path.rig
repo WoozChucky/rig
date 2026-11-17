@@ -1,0 +1,187 @@
+// Basic's paths (issue #145): the parts of a path as views into it, with
+// both separators, / and \, trailing and doubled separators, dots in a
+// directory's name and at the start of a file's, the root, an empty and a
+// zeroed path, and a view of part of a string; then joins, which copy,
+// with and without a separator at the seam, and what they allocate.
+#import "Basic";
+
+// Prints a space, then value.
+show_bool :: (value: bool) {
+    print_string(" ");
+    print_bool(value);
+}
+
+// Prints a space, then value.
+show_int :: (value: int) {
+    print_string(" ");
+    print_int(value);
+}
+
+// Prints s between brackets, so an empty part shows as [].
+show_part :: (s: string) {
+    print_string("[");
+    print_string(s);
+    print_string("]");
+}
+
+// Prints the four parts of path, its directory, its file's name, its
+// extension and the path without it, each between brackets.
+show :: (path: string) {
+    show_part(path_directory(path));
+    print_string(" ");
+    show_part(path_file_name(path));
+    print_string(" ");
+    show_part(path_extension(path));
+    print_string(" ");
+    show_part(path_without_extension(path));
+    print_line("");
+}
+
+// Prints the join of a and b between brackets, and gives its memory back.
+// It is named show_join since Basic's string copies take join.
+show_join :: (a: string, b: string) {
+    joined := path_join(a, b, HEAP_ALLOCATOR);
+    show_part(joined);
+    print_line("");
+    free(joined.data, HEAP_ALLOCATOR);
+}
+
+// How many allocations a counting allocator was asked for, and the size of
+// the last.
+Counter :: struct {
+    allocations: int;
+    last_size: int;
+}
+
+// Passes every call on to the heap, counting the allocations and keeping
+// the size of the last.
+counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE {
+        counter.allocations += 1;
+        counter.last_size = size;
+    }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+// Gives no memory, as an allocator that has run out would.
+failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return null;
+}
+
+main :: () {
+    // Either separator, or both in one path, splits it.
+    show("a/b/c.txt");
+    show("a\\b\\c.txt");
+    show("a/b\\c.tar.gz");
+
+    // No separator: all of it is the file's name. A dot in a directory's
+    // name is no extension of the file's.
+    show("file");
+    show("dir.d/file");
+
+    // A trailing separator leaves an empty name, and the directory loses
+    // every separator that ends it, doubled ones too.
+    show("a/b/");
+    show("a//b");
+
+    // The root is the directory of what is in it, and of itself.
+    show("/b.c");
+    show("/");
+    show("\\\\b");
+
+    // An empty path and a zeroed one have four empty parts, and no byte is
+    // read through the zeroed one's null data.
+    show("");
+    empty : string;
+    show(empty);
+
+    // The dots a name starts with are part of the name, not an extension.
+    show(".bashrc");
+    show("a/.config.json");
+    show("a/b.");
+    show("a/..");
+
+    // A drive letter is nothing special.
+    show("C:\\x\\y.rig");
+
+    // A view of part of a string ends where the view does: the rest of the
+    // string after it, ".gz", is not read.
+    show(slice("x.tar.gz", 0, 5));
+
+    // Every part is a view into the path. A missing extension, and the
+    // name of a path that ends with a separator, are empty views at the
+    // path's end; the missing directory of a name alone is one at its start.
+    p := "a/b/c.txt";
+    f := "file";
+    q := "a/b/";
+    print_string("views:");
+    show_bool(path_directory(p).data == p.data);
+    show_bool(path_file_name(p).data == p.data + 4);
+    show_bool(path_extension(p).data == p.data + 5);
+    show_bool(path_extension(f).data == f.data + 4);
+    show_bool(path_directory(f).data == f.data);
+    show_bool(path_file_name(q).data == q.data + 4);
+    print_line("");
+
+    print_string("separators:");
+    show_bool(is_path_separator("/"[0]));
+    show_bool(is_path_separator("\\"[0]));
+    show_bool(is_path_separator(":"[0]));
+    show_bool(is_path_separator("."[0]));
+    print_line("");
+
+    // A / goes between the two unless either is empty or there is a
+    // separator at the seam already; an absolute b is joined all the same.
+    show_join("a", "b");
+    show_join("a/", "b");
+    show_join("a\\", "b");
+    show_join("a", "/b");
+    show_join("a", "\\b");
+    show_join("", "b");
+    show_join("a", "");
+    show_join("a//", "b");
+    show_join("a/", "/b");
+    show_join("/", "b");
+    show_join(".build/tests", "x.bin");
+
+    // Two empty paths join to the zeroed string, which allocates nothing,
+    // so freeing it gives the allocator nothing it didn't give.
+    j := path_join("", "", HEAP_ALLOCATOR);
+    print_string("join of nothing:");
+    show_int(j.count);
+    show_bool(j.data == null);
+    print_line("");
+    free(j.data, HEAP_ALLOCATOR);
+
+    // A join is always a copy, even when one of the two is empty, so the
+    // caller always frees it.
+    a := "a";
+    k := path_join(a, "", HEAP_ALLOCATOR);
+    print_string("copied:");
+    show_bool(k.data != a.data);
+    print_line("");
+    free(k.data, HEAP_ALLOCATOR);
+
+    // The size is worked out first, and asked for once: 3 bytes for a/b.
+    // A join of nothing asks for none.
+    counter : Counter;
+    counting := Allocator.{counting_allocator_proc, *counter};
+    path_join("", "", counting);
+    print_string("empty join allocates:");
+    show_int(counter.allocations);
+    print_line("");
+    joined := path_join("a", "b", counting);
+    print_string("one allocation:");
+    show_int(counter.allocations);
+    show_int(counter.last_size);
+    print_line("");
+    free(joined.data, counting);
+
+    // An allocator with no memory gives the zeroed string.
+    none := path_join("a", "b", Allocator.{failing_allocator_proc, null});
+    print_string("no memory:");
+    show_int(none.count);
+    show_bool(none.data == null);
+    print_line("");
+}
