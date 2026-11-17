@@ -208,8 +208,14 @@
 // at a `for`, `while` or `if` line (their tests, steps and jumps are
 // pieces apart from each other), nor at a line holding a runtime check (an
 // index, a division, a checked cast, a field through a pointer), whose
-// failure block is a second piece. gdb, Visual Studio and VS Code take any
-// line. Every .cdb script starts with `l+t` (step by source line), `l+s`
+// failure block is a second piece, nor at a line of deferred code that runs
+// at more than one way out of its block (a copy per way out, pieces apart).
+// gdb, Visual Studio and VS Code take any line, but gdb stops at a deferred
+// line's first copy only, unless the line is in a block of the deferred
+// code that declares a variable itself (gdb keeps one place of a line per
+// lexical block, and LLVM writes one only for such a scope; CONTRIBUTING.md
+// has an example); a script reaches the other copies by stepping.
+// Every .cdb script starts with `l+t` (step by source line), `l+s`
 // and `l+l` (show the source line at each stop), and ends with `q`; it
 // never uses `.lines`, which with -lines turns the line information off.
 //
