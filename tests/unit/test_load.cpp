@@ -1903,6 +1903,39 @@ TEST(if_nested_in_a_taken_branch) {
     arena_free(&a);
 }
 
+TEST(if_nested_in_a_taken_branch_loads_its_files) {
+    // A nested #if's taken branch loads its files as its holder's does: from
+    // the directory of the file holding the outer #if (sub/b.rig, with no
+    // b.rig beside main.rig), and in source order among the outer branch's
+    // other statements, so b, whose #load comes first, is read and placed
+    // before c.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "if_nested_in_a_taken_branch_loads_its_files");
+    os_make_directory(str(in_directory(&a, dir, "sub")));
+    write_source(&a, dir, "sub/x.rig", "#if true { #if true { #load \"b.rig\"; } #load \"c.rig\"; }\n");
+    write_source(&a, dir, "sub/b.rig", "B :: 1;\n");
+    write_source(&a, dir, "sub/c.rig", "C :: 2;\n");
+    Diagnostics d = {};
+    Ast_File *tree = load_text(&a, &d, dir, "#load \"sub/x.rig\";\n", SYSTEM_NONE);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK(!tree->lost_a_file);
+    const char *paths[4] = {"main.rig", "sub/x.rig", "sub/b.rig", "sub/c.rig"};
+    CHECK_EQ(d.files.count, 4);
+    if (d.files.count == 4) {
+        for (s32 i = 0; i < 4; i++) {
+            CHECK_STR(d.files[i].path, in_directory(&a, dir, paths[i]));
+            CHECK_EQ(d.files[i].order, i);
+        }
+    }
+    const char *names[2] = {"B", "C"};
+    CHECK_EQ(tree->globals.count, 2);
+    if (tree->globals.count == 2) {
+        for (s64 i = 0; i < 2; i++) CHECK_STR(((Ast_Const *)tree->globals[i])->name, names[i]);
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
+
 TEST(if_failed_condition_loses_like_a_failed_load) {
     // A condition with an error takes neither branch: the program lacks
     // what they may have declared, as after a failed #load.
@@ -1913,6 +1946,12 @@ TEST(if_failed_condition_loses_like_a_failed_load) {
     CHECK_STR(messages(&a, &d), "1:5: the condition of '#if' must be a bool, not 'int'\n");
     CHECK(tree->lost_a_file);
     CHECK(tree->ifs[0]->failed);
+    diag_free(&d);
+    // A nested #if's failed condition loses its branches the same way.
+    d = {};
+    tree = load_text(&a, &d, dir, "#if true { #if 1 {} }\n", SYSTEM_NONE);
+    CHECK_STR(messages(&a, &d), "1:16: the condition of '#if' must be a bool, not 'int'\n");
+    CHECK(tree->lost_a_file);
     diag_free(&d);
     d = {};
     tree = load_text(&a, &d, dir, "#if true {}\n", SYSTEM_NONE);
