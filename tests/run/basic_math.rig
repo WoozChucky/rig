@@ -283,10 +283,10 @@ main :: () {
     show64(log10_float64(-1));
     print_byte(10);
 
-    // A negative base to a power that isn't whole is NaN; 0 and -0.0 to a
-    // negative odd power are infinities of their signs, and -0.0 to a
-    // positive odd power is -0.0; and an exponent of 0, or a base of 1,
-    // gives 1 even with a NaN.
+    // A finite negative base to a finite power that isn't whole is NaN; 0
+    // and -0.0 to a negative odd power are infinities of their signs, and
+    // -0.0 to a positive odd power is -0.0; and an exponent of 0, or a base
+    // of 1, gives 1 even with a NaN.
     start_line("pow_float64");
     show64(pow_float64(2, 10));
     show64(pow_float64(2, 0.5));

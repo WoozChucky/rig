@@ -224,9 +224,9 @@ log10_float64 :: (x: float64) -> float64 {
     return c_log10(x);
 }
 
-// base to the power exponent. A negative base has a real power only for a
-// whole exponent, so another gives NaN: pow(-8, 1.0 / 3) is NaN, not -2
-// (cbrt_float64 gives that). 0 and -0.0 to a negative odd power are inf
+// base to the power exponent. A finite negative base has a real power only
+// for a whole exponent, so another finite one gives NaN: pow(-8, 1.0 / 3)
+// is NaN, not -2 (cbrt_float64 gives that). 0 and -0.0 to a negative odd power are inf
 // and -inf. An exponent of 0, or a base of 1, gives 1, even when the other
 // is NaN.
 pow_float64 :: (base: float64, exponent: float64) -> float64 {

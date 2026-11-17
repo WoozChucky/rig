@@ -74,7 +74,7 @@ The rest are C's `<math.h>`, through `libc.rig`, each procedure only the call, s
 - `atan2_float64`, `atan2_float32` `(y: T, x: T) -> T`: the angle of the point (`x`, `y`) from the positive x axis, `-π` to `π`, in the point's quadrant, `y` first as in C; on the axes the zeros' signs choose: `(0, -0.0)` is π and `(-0.0, -0.0)` is `-π`.
 - `exp_float64`, `exp_float32`, `exp2_float64`, `exp2_float32` `(x: T) -> T`: e and 2 to the power `x`; 0 for `-inf`.
 - `log_float64`, `log_float32`, `log2_float64`, `log2_float32`, `log10_float64`, `log10_float32` `(x: T) -> T`: the logarithm to base e, 2 and 10; `-inf` for 0, NaN below 0.
-- `pow_float64`, `pow_float32` `(base: T, exponent: T) -> T`: `base` to the power `exponent`; NaN for a negative base and an exponent that isn't whole; 1 for an exponent of 0 or a base of 1, even with a NaN; `inf` or `-inf` for 0 or `-0.0` to a negative odd power.
+- `pow_float64`, `pow_float32` `(base: T, exponent: T) -> T`: `base` to the power `exponent`; NaN for a finite negative base and a finite exponent that isn't whole; 1 for an exponent of 0 or a base of 1, even with a NaN; `inf` or `-inf` for 0 or `-0.0` to a negative odd power.
 - `hypot_float64`, `hypot_float32` `(x: T, y: T) -> T`: the square root of `x² + y²`, without overflow or underflow on the way; `inf` when either is infinite, even with a NaN.
 - `floor_float64`, `floor_float32`, `ceil_float64`, `ceil_float32` `(x: T) -> T`: the nearest whole number below and above; the sign of `-0.0` kept, and `ceil` of a value between -1 and 0 is `-0.0`.
 - `round_float64`, `round_float32` `(x: T) -> T`: the nearest whole number, halves away from zero, as C's `round` (2.5 is 3, -2.5 is -3, -0.4 is `-0.0`).
