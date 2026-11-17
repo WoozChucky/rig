@@ -287,6 +287,96 @@ TEST(byte_globals_and_memory_run) {
     arena_free(&a);
 }
 
+#ifdef _WIN32
+TEST(windows_time_functions_link_and_run_as_the_64_bit_ones) {
+    // Issue #161: Microsoft's time functions, and C11's bounds-checked ones,
+    // declared under their C names, link to the Universal C Runtime's 64-bit
+    // exports (ir_windows_c_name) and give what only those give.
+    // tests/run/foreign_time_64 does C17's seven, compiled and interpreted.
+    // 2100-07-01T00:00:00Z is past the 32-bit time_t's end in 2038; on July
+    // 1st its year is 2100 in every zone. A 64-bit _ftime fills all 8 bytes
+    // of a time set to -1. _futime and _wutime are only taken as values, so
+    // the program links them: _futime of a bad descriptor ends the program
+    // through the C runtime's invalid parameter handler.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Tm :: struct { second: s32; minute: s32; hour: s32; day: s32; month: s32;\n"
+                                "               year: s32; weekday: s32; year_day: s32; is_dst: s32; }\n"
+                                "Timeb :: struct { time: s64; milliseconds: u16; timezone: s16; dstflag: s16; }\n"
+                                "Utimbuf :: struct { access: s64; modification: s64; }\n"
+                                "_mkgmtime :: (tm: *Tm) -> s64 #foreign libc;\n"
+                                "gmtime_s :: (tm: *Tm, t: *s64) -> s32 #foreign libc;\n"
+                                "localtime_s :: (tm: *Tm, t: *s64) -> s32 #foreign libc;\n"
+                                "ctime_s :: (buffer: *u8, size: u64, t: *s64) -> s32 #foreign libc;\n"
+                                "_wctime :: (t: *s64) -> *u16 #foreign libc;\n"
+                                "_wctime_s :: (buffer: *u16, size: u64, t: *s64) -> s32 #foreign libc;\n"
+                                "_ftime :: (tb: *Timeb) #foreign libc;\n"
+                                "ftime :: (tb: *Timeb) #foreign libc;\n"
+                                "_ftime_s :: (tb: *Timeb) -> s32 #foreign libc;\n"
+                                "_futime :: (fd: s32, times: *Utimbuf) -> s32 #foreign libc;\n"
+                                "_utime :: (path: *u8, times: *Utimbuf) -> s32 #foreign libc;\n"
+                                "utime :: (path: *u8, times: *Utimbuf) -> s32 #foreign libc;\n"
+                                "_wutime :: (path: *u16, times: *Utimbuf) -> s32 #foreign libc;\n"
+                                "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                "text_of :: (b: bool) -> *u8 {\n"
+                                "    if b { return \"true\"; }\n"
+                                "    return \"false\";\n"
+                                "}\n"
+                                "main :: () {\n"
+                                "    later : s64 = 4118083200;\n"
+                                "    tm : Tm;\n"
+                                "    tm.day = 1;\n"
+                                "    tm.month = 6;\n"
+                                "    tm.year = 200;\n"
+                                "    printf(\"_mkgmtime: %lld\\n\", _mkgmtime(*tm));\n"
+                                "    tm.year = 0;\n"
+                                "    r := gmtime_s(*tm, *later);\n"
+                                "    printf(\"gmtime_s: %d %d\\n\", r, tm.year + 1900);\n"
+                                "    tm.year = 0;\n"
+                                "    r = localtime_s(*tm, *later);\n"
+                                "    printf(\"localtime_s: %d %d\\n\", r, tm.year + 1900);\n"
+                                "    text : [26]u8;\n"
+                                "    r = ctime_s(text.data, 26, *later);\n"
+                                "    printf(\"ctime_s: %d %.4s\\n\", r, text.data + 20);\n"
+                                "    printf(\"_wctime: %.4ls\\n\", _wctime(*later) + 20);\n"
+                                "    wide : [26]u16;\n"
+                                "    r = _wctime_s(wide.data, 26, *later);\n"
+                                "    printf(\"_wctime_s: %d %.4ls\\n\", r, wide.data + 20);\n"
+                                "    tb : Timeb;\n"
+                                "    tb.time = -1;\n"
+                                "    _ftime(*tb);\n"
+                                "    printf(\"_ftime: %s\\n\", text_of(tb.time > 1700000000));\n"
+                                "    tb.time = -1;\n"
+                                "    ftime(*tb);\n"
+                                "    printf(\"ftime: %s\\n\", text_of(tb.time > 1700000000));\n"
+                                "    tb.time = -1;\n"
+                                "    r = _ftime_s(*tb);\n"
+                                "    printf(\"_ftime_s: %d %s\\n\", r, text_of(tb.time > 1700000000));\n"
+                                "    printf(\"_utime: %d\\n\", _utime(\".build/tests/no-such-file\", null));\n"
+                                "    printf(\"utime: %d\\n\", utime(\".build/tests/no-such-file\", null));\n"
+                                "    futime := cast(*void) _futime;\n"
+                                "    wutime := cast(*void) _wutime;\n"
+                                "    printf(\"_futime and _wutime: %s\\n\", text_of(futime != null && wutime != null));\n"
+                                "}\n");
+    Process_Result result = run_module(&a, m, "time-64-test");
+    CHECK_STR(without_cr(&a, result.out), "_mkgmtime: 4118083200\n"
+                                          "gmtime_s: 0 2100\n"
+                                          "localtime_s: 0 2100\n"
+                                          "ctime_s: 0 2100\n"
+                                          "_wctime: 2100\n"
+                                          "_wctime_s: 0 2100\n"
+                                          "_ftime: true\n"
+                                          "ftime: true\n"
+                                          "_ftime_s: 0 true\n"
+                                          "_utime: -1\n"
+                                          "utime: -1\n"
+                                          "_futime and _wutime: true\n");
+    CHECK_STR(without_cr(&a, result.err), "");
+    CHECK_EQ(result.exit_code, 0);
+    arena_free(&a);
+}
+#endif
+
 TEST(windows_linker_falls_back_to_lld_link) {
     // link.exe when Visual Studio has it; otherwise the lld-link.exe
     // build.bat copied beside rig; otherwise a sentence.
