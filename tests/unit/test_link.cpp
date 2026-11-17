@@ -81,6 +81,7 @@ TEST(linux_link_command) {
         "/usr/lib/x86_64-linux-gnu/crti.o",
         ".build/hello.o",
         "-L/usr/lib/x86_64-linux-gnu",
+        "-lm",
         "-lc",
         "/usr/lib/x86_64-linux-gnu/crtn.o",
     });

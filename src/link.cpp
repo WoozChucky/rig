@@ -123,6 +123,13 @@ Array<String> link_command_linux(Arena *a, String ld_lld, String crt_dir, Array<
     array_add(&argv, string_printf(a, STR_FMT "/crti.o", STR_ARG(crt_dir)));
     for (s64 i = 0; i < objects.count; i++) array_add(&argv, objects[i]);
     array_add(&argv, string_printf(a, "-L" STR_FMT, STR_ARG(crt_dir)));
+    // The C library: libm, where glibc keeps C's <math.h> (sqrt, sin, pow),
+    // which libc doesn't export, and libc itself. Both are glibc's own
+    // package, so every program depends on libm.so.6 whether it calls a math
+    // function or not, at no cost of anything to install (spec 10.6). -lm
+    // comes before -lc as C compilers order them: a library goes before the
+    // libraries it depends on.
+    array_add(&argv, str("-lm"));
     array_add(&argv, str("-lc"));
     array_add(&argv, string_printf(a, STR_FMT "/crtn.o", STR_ARG(crt_dir)));
     return argv;
