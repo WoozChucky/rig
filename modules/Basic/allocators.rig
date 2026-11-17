@@ -143,8 +143,7 @@ arena_init :: (arena: *Arena, block_size: int, parent: Allocator) {
 //   parent's memory is, as the heap's is. When the rest of the block can't
 //   hold size bytes, a new block is taken from the parent, block_size bytes
 //   or size when that is larger, plus the header, and what was left of the
-//   old block goes unused. A parent's null is
-//   passed on.
+//   old block goes unused. A parent's null is passed on.
 // - RESIZE allocates anew and copies the old bytes that fit: an arena
 //   can't grow memory in place, since more may have been handed out after
 //   it.

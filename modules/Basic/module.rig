@@ -18,7 +18,9 @@
 // lists them.
 //
 // Each part loads the parts it uses itself, and a file is read once however
-// often it is named, so the order here is only the reading order.
+// often it is named, so the order here is only the reading order. It is
+// README.md's, so the two can be read side by side: print.rig, which uses
+// only libc.rig and numbers.rig, comes last there, after the collections.
 #load "libc.rig";
 #load "char.rig";
 #load "math.rig";

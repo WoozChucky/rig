@@ -45,7 +45,8 @@ check_index :: (index: int, count: int) {
 
 // An array of count elements of element_size bytes each, at data, which
 // has room for capacity of them, from allocator. data is null, and count
-// and capacity 0, until the first element is added.
+// and capacity 0, until the first element is added. Elements of 0 bytes
+// take no memory, so for them data stays null after it too.
 Array :: struct {
     element_size: int;
     count: int;

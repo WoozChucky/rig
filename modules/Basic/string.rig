@@ -120,9 +120,10 @@ trim :: (s: string) -> string {
 // 0..s.count - start, what is left from start. So slice("hello", 3, 10) is
 // "lo", and a start past the end or a negative count gives an empty view.
 //
-// Clamping start before count means neither limit can overflow: start ends
-// within 0..s.count, so s.count - start can't wrap. A zeroed string's
-// start is clamped to 0, and its null data is moved by nothing.
+// The start is clamped before the count, so neither limit can overflow:
+// first, the start clamped, ends within 0..s.count, so s.count - first
+// can't wrap. A zeroed string's start is clamped to 0, and its null data is
+// moved by nothing.
 slice :: (s: string, start: int, count: int) -> string {
     first := start;
     if first < 0 { first = 0; }

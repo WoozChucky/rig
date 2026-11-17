@@ -12,7 +12,7 @@ LARGEST :: 9223372036854775807; // int's largest value
 
 // Prints the size of each allocation asked for, and gives the heap's for a
 // size the heap could have, and null for one past a gigabyte.
-refusing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+past_a_gigabyte_refusing_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     if mode == ALLOCATE || mode == RESIZE {
         print_string("asked for ");
         print_int(size);
@@ -24,7 +24,7 @@ refusing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *vo
 
 main :: () {
     b : String_Builder;
-    builder_init(*b, Allocator.{refusing_allocator_proc, null});
+    builder_init(*b, Allocator.{past_a_gigabyte_refusing_proc, null});
     append_string(*b, "abc");
 
     // No string this long exists, but its bytes are never read: the append

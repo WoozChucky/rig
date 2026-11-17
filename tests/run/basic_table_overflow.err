@@ -1,1 +1,1 @@
-@MODULES@/Basic/memory.rig:43:29: runtime error: null pointer dereference
+@MODULES@/Basic/memory.rig:46:29: runtime error: null pointer dereference
