@@ -187,7 +187,7 @@ Files through C's stdio, always in binary mode (`"rb"`, `"wb"`, `"ab"`), so the 
 - `file_open(path: string, mode: int) -> File, bool`: the open file and `true`; a `File` that isn't open and `false` for another mode, a path with a zero byte, a file C can't open, and when reading, a directory.
 - `file_close(file: File)`: closes the file; one that isn't open is left alone.
 - `file_read(file: File, buffer: []u8) -> int`: reads up to `buffer.count` bytes from where the file is, and gives how many; 0 at the end, on an error, or for a `File` that isn't open.
-- `file_write(file: File, data: string) -> bool`: whether every byte of `data` was written; `""` writes nothing and is `true`, and a `File` that isn't open is `false`.
+- `file_write(file: File, data: string) -> bool`: whether every byte of `data` was written; `""` writes nothing and is `true`, and a `File` that isn't open is `false`. The bytes may stay in C's buffer until the file is closed, and `file_close` doesn't say whether writing them out failed (a full disk, say); `write_entire_file` and `append_to_file` do.
 - `file_size(file: File) -> int`: the file's size in bytes, its position left where it was; -1 when C can't tell, or for a `File` that isn't open.
 - `read_entire_file(path: string, allocator: Allocator) -> string, bool`: the whole file in memory from `allocator`, which the caller frees with `free(s.data, allocator)`, and `true`. An empty file is the zeroed string and `true`, allocating nothing; a missing file, a directory, a short read or no memory is the zeroed string and `false`, with nothing left allocated.
 - `write_entire_file(path: string, data: string) -> bool`: makes or empties the file and writes `data`; `true` when every byte was written and the file closed without an error.

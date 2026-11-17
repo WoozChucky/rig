@@ -2,8 +2,9 @@
 // .build/tests/, which the runner makes before any test, and removed at the
 // end. A missing file, an empty one, one of every byte value and one of
 // several megabytes, appending, an allocator with no memory, the File
-// procedures, a directory given as a file, a path with a zero byte, and a
-// File that isn't open.
+// procedures, a file read or written in the wrong mode, a directory given
+// as a file, and an empty one, a path with a zero byte, and a File that
+// isn't open.
 #import "Basic";
 
 A :: ".build/tests/basic_file_a.txt";
@@ -12,6 +13,12 @@ C :: ".build/tests/basic_file_c.txt";
 BINARY :: ".build/tests/basic_file_binary.bin";
 LARGE :: ".build/tests/basic_file_large.bin";
 MISSING :: ".build/tests/basic_file_missing.txt";
+
+// An empty directory, which the runner makes before any test, since C17
+// can't make one, and a file this test makes in it, for a moment, to show
+// the directory is still there.
+EMPTY_DIRECTORY :: ".build/tests/basic_file_empty_dir";
+IN_EMPTY_DIRECTORY :: ".build/tests/basic_file_empty_dir/x.txt";
 
 // Prints s between brackets, so an empty string shows as [].
 show_text :: (s: string) {
@@ -45,6 +52,7 @@ main :: () {
     delete_file(BINARY);
     delete_file(LARGE);
     delete_file(MISSING);
+    delete_file(IN_EMPTY_DIRECTORY);
 
     // A missing file is the zeroed string, with nothing allocated.
     print_string("missing:");
@@ -184,6 +192,17 @@ main :: () {
     print_line("");
     free(data.data, HEAP_ALLOCATOR);
 
+    // A file opened to read can't be written, and one opened to write
+    // can't be read: C's fwrite and fread give 0 for them.
+    f, opened = file_open(A, FILE_READ);
+    print_string("wrong mode:");
+    show_bool(file_write(f, "x"));
+    file_close(f);
+    f, opened = file_open(B, FILE_WRITE);
+    show_int(file_read(f, buffer));
+    file_close(f);
+    print_line("");
+
     // A missing file and a mode that isn't one give a File that isn't open.
     f, opened = file_open(MISSING, FILE_READ);
     print_string("bad opens:");
@@ -193,16 +212,24 @@ main :: () {
     show_bool(opened);
     print_line("");
 
-    // tests/run is a directory, which is never empty, on both systems: not
-    // found, read, opened or deleted, though Linux's C library opens a
-    // directory for reading and removes an empty one.
+    // A directory, tests/run, is not found, read or opened on either
+    // system, though Linux's C library opens one for reading.
     print_string("directory:");
     show_bool(file_exists("tests/run"));
     d, read_ok := read_entire_file("tests/run", HEAP_ALLOCATOR);
     show_bool(read_ok);
     f, opened = file_open("tests/run", FILE_READ);
     show_bool(opened);
-    show_bool(delete_file("tests/run"));
+    print_line("");
+
+    // An empty directory isn't deleted either, though Linux's remove would
+    // delete it: delete_file asks file_exists first. A file can still be
+    // made in it afterwards, so it is still there.
+    print_string("empty directory:");
+    show_bool(file_exists(EMPTY_DIRECTORY));
+    show_bool(delete_file(EMPTY_DIRECTORY));
+    show_bool(write_entire_file(IN_EMPTY_DIRECTORY, "x"));
+    show_bool(delete_file(IN_EMPTY_DIRECTORY));
     print_line("");
 
     // C would see the path end at the zero, a different name, so the path

@@ -16,6 +16,10 @@
 // text-mode streams write \r\n for each \n: every \r\n in its stdout and
 // stderr becomes \n (normalise_newlines). The rest is compared byte for
 // byte. .out and .err aren't normalised; .gitattributes keeps them LF.
+// Before any test the runner makes .build/tests, and in it an empty
+// directory, .build/tests/basic_file_empty_dir, which tests/run/basic_file
+// gives Basic's file procedures as a path: Basic, on C17 alone, can't make
+// one.
 //
 // Then every program of tests/run again, interpreted: `bin/unit-tests
 // --interpret tests/run/NAME.rig`, with the words of NAME.flags after it,
@@ -2968,6 +2972,7 @@ int main(int argc, char **argv) {
     module_places_of(&a, unit_tests, &unit_tests_modules, &unit_tests_bin_modules);
     os_make_directory(str(".build"));
     os_make_directory(str(".build/tests"));
+    os_make_directory(str(".build/tests/basic_file_empty_dir"));
     s64 passed = 0, failed = 0;
     run_directory(&a, rig, "", "tests/run", run_test, &passed, &failed);
     run_directory(&a, unit_tests, "interpreted ", "tests/run", interpreted_test, &passed, &failed);
