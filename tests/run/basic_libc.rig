@@ -83,6 +83,10 @@ main :: () {
     print_string("C_Fpos: ");
     print_int(size_of(C_Fpos));
     print_line("");
+    // The UCRT's 16-byte timespec and glibc's, read through one struct.
+    print_string("C_Timespec: ");
+    print_int(size_of(C_Timespec));
+    print_line("");
 
     // A run that stopped halfway may have left the file, so it goes first.
     // The file is written and read in binary mode, which keeps every byte.

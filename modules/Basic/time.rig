@@ -17,8 +17,11 @@
 // The calendar is always UTC, the proleptic Gregorian calendar's, as ISO
 // 8601 has it: no time zones, no leap seconds (each day has 86400 seconds,
 // as POSIX and timespec_get count them), and Gregorian years before 1582
-// too. Nothing here sleeps: C17 has no call for it, and a system's own
-// (Sleep, nanosleep) waits on conditional compilation.
+// too. Nothing here sleeps: C17's own call, thrd_sleep (<threads.h>,
+// optional), is on both systems, but the UCRT's headers define it only
+// inline, over _thrd_sleep64, which the compiler doesn't link it to and
+// the interpreter doesn't find; and a system's own (Sleep, nanosleep)
+// waits on conditional compilation.
 #load "libc.rig";
 #load "numbers.rig";
 
@@ -165,11 +168,12 @@ to_calendar :: (time: Time) -> Calendar {
 //
 // Each field is written as format_int writes it, with zeros on its left to
 // 4 digits for the year and 2 for the rest. A field that needs more digits,
-// or is negative, is written whole, its - first and no zeros, so the text
-// is longer than TIME_TEXT_MAX, and a buffer of TIME_TEXT_MAX bytes stops
-// the program at the language's bounds check, before any byte is written
-// past its end (unless built with --no-bounds-checks). A calendar from
-// to_calendar always fits: its year is 1677 to 2262.
+// or is negative, is written whole, its - first and no zeros. When that is
+// wider than the field's width, the text is longer than TIME_TEXT_MAX, and
+// a buffer of TIME_TEXT_MAX bytes stops the program at the language's
+// bounds check, before any byte is written past its end (unless built with
+// --no-bounds-checks). A calendar from to_calendar always fits: its year is
+// 1677 to 2262.
 format_time :: (calendar: Calendar, buffer: []u8) -> string {
     // What follows each field.
     AFTER :: "--T::Z";
