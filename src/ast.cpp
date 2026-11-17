@@ -486,14 +486,14 @@ String ast_dump_node(Arena *a, Ast *node) {
 
 // File f's place in load order: Ast_File.order's, or, with no order set,
 // its index.
-static s32 place(Ast_File *file, s32 f) {
+static s32 load_place(Ast_File *file, s32 f) {
     return file->order.count ? file->order[f] : f;
 }
 
 // Whether position a comes before position b in the program: file by file
 // in load order, then line and column.
 static bool before(Ast_File *file, Position a, Position b) {
-    if (a.file != b.file) return place(file, a.file) < place(file, b.file);
+    if (a.file != b.file) return load_place(file, a.file) < load_place(file, b.file);
     if (a.line != b.line) return a.line < b.line;
     return a.col < b.col;
 }
