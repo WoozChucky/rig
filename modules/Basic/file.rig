@@ -18,8 +18,8 @@
 // up to its first zero. So a path with a zero byte in it would reach C as
 // a shorter one, another file's name, and every procedure here refuses it
 // without calling C. The copy comes from the heap, since these procedures
-// take no allocator, and is given back as soon as C has the file open, or
-// has failed to.
+// take no allocator, and is given back as soon as the C call that takes it
+// returns.
 #load "libc.rig";
 #load "string.rig";
 #load "allocators.rig";
@@ -115,8 +115,9 @@ file_write :: (file: File, data: string) -> bool {
 // It is the position at the end: the position now is kept, the file goes
 // to its end and the position there is read, and then it goes back. The
 // positions are fgetpos's, 64 bits on both systems, so a file past 2 GiB
-// has its size right. Going back with fsetpos clears the end-of-file mark
-// the move to the end may have left, so the next read reads.
+// has its size right. Both moves, fseek's and fsetpos's, clear the
+// end-of-file mark, so a read that had reached the end before reads again
+// from where it was.
 file_size :: (file: File) -> int {
     if file.handle == null { return -1; }
     here : C_Fpos;
