@@ -19,9 +19,11 @@
 //
 // The increment picks one of 2^63 streams, each its own order of the 2^64
 // states, so two generators seeded alike but given different streams give
-// different numbers. Each procedure here follows the C code step for step,
-// so the numbers are the reference's: tests/run/basic_random.rig prints the
-// first round pcg32-demo prints and checks it against pcg-random.org's.
+// different numbers. random_seed, random_u32 and random_int's 32-bit path
+// follow the C code step for step, and random_bool and random_shuffle draw
+// as pcg32-demo does, so the numbers are the reference's:
+// tests/run/basic_random.rig prints the first round pcg32-demo prints and
+// checks it against pcg-random.org's.
 //
 // Arithmetic on u64 and u32 wraps (spec 5.3), which is the modulo 2^64 the
 // generator wants; cast,trunc takes bits from one integer type to another
@@ -34,10 +36,10 @@ PCG_MULTIPLIER :: 6364136223846793005;
 
 // A generator: its state, and the increment of its linear congruential
 // step, which is always odd once seeded (the stream shifted left, with 1).
-// A zeroed Random is safe to draw from, but it isn't random: with an
-// increment of 0 the step is a plain multiplication, which keeps a state
-// of 0 at 0, so it gives 0 every time. Seed it first, with random_seed, or
-// make it with random_from_time.
+// A zeroed Random is safe to draw from, but it isn't seeded: random_u32
+// steps with the increment's lowest bit set, so a zeroed Random is stream 0
+// from state 0, the same numbers in every program, the first of them 0.
+// Seed it first, with random_seed, or make it with random_from_time.
 Random :: struct {
     state: u64;
     increment: u64;
@@ -68,9 +70,14 @@ random_seed :: (r: *Random, seed: u64, stream: u64) {
 // to 31. A rotation left by 32 - rotation
 // is the bits that fell off the right end; (0 - rotation) & 31 is that
 // amount, and 0 when the rotation is 0, rather than a shift by 32.
+//
+// The increment is taken with its lowest bit set. A seeded one is odd
+// already, so that changes nothing; a zeroed Random's 0 would make the step
+// a plain multiplication, which keeps a state of 0 at 0, and random_int
+// would then throw away every draw and never return.
 random_u32 :: (r: *Random) -> u32 {
     old := r.state;
-    r.state = old * PCG_MULTIPLIER + r.increment;
+    r.state = old * PCG_MULTIPLIER + (r.increment | 1);
     shifted := cast,trunc(u32) (((old >> 18) ^ old) >> 27);
     rotation := cast,trunc(u32) (old >> 59);
     return (shifted >> rotation) | (shifted << ((0 - rotation) & 31));
@@ -86,8 +93,8 @@ random_u64 :: (r: *Random) -> u64 {
 
 // A number from low to high, both included, every one equally likely. The
 // bounds may come either way round: high below low is the same range. It
-// draws at least once, even when low equals high, so a generator moves on
-// alike whatever the range.
+// draws at least once, even when low equals high, so a range of one value
+// moves the generator on as a small range would, rather than not at all.
 //
 // The range has span + 1 values, span being high less low, worked out in
 // u64 so that int's whole range, whose span is 2^64 - 1, doesn't overflow.
@@ -180,9 +187,13 @@ random_shuffle :: (r: *Random, data: *void, count: int, element_size: int) {
 
 // A generator seeded from the clock: the seed is time_now()'s nanoseconds,
 // and the stream the address of a local, as pcg32-demo seeds with the time
-// and an address when it's run with -r. Two generators made within the
-// same nanosecond, or by the same call on a system whose clock is coarser,
-// may give the same numbers.
+// and an address when it's run with -r. The seed differs from run to run,
+// not from call to call: two generators made within one tick of the clock
+// (a nanosecond on Linux, 100 on Windows) get the same seed, and from the
+// same caller the same stream, so they give the same numbers, as two made
+// one after the other often do on Windows. For several generators, seed
+// one from the clock and the others from its numbers, or give each its own
+// stream.
 random_from_time :: () -> Random {
     r : Random;
     random_seed(*r, cast,trunc(u64) time_now().nanoseconds, cast(u64) *r);
