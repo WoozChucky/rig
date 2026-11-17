@@ -410,7 +410,9 @@ struct Ir_Module {
 inline bool ir_is_float(Ir_Type t) { return t == IR_F32 || t == IR_F64; }
 
 // The name of the C function foreign procedure p is: its C name when it has
-// one, otherwise its own. What links it (the backend's symbol) and what the
+// one, otherwise its own. What links it (the backend's symbol, but on
+// Windows a few of the C runtime's time functions are declared under their
+// 64-bit names instead: llvm_backend.cpp's windows_c_name) and what the
 // interpreter looks up; p->name stays its Rig name everywhere else.
 inline String ir_c_name(Ir_Proc *p) { return p->c_name.count ? p->c_name : p->name; }
 
