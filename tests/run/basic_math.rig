@@ -11,7 +11,8 @@ MAX :: 9223372036854775807;
 
 // A line of C's math starts with its label, and each result follows it
 // after a space: a float64 with 6 decimals and a float32 with 4, few enough
-// that every C library, compiled or interpreted, prints the same digits.
+// that every C library's results, compiled or interpreted, print as the
+// same digits.
 start_line :: (label: string) {
     print_string(label);
     print_string(":");
@@ -154,8 +155,8 @@ main :: () {
 
     // PI and TAU are untyped: each takes float32 or float64 where it meets
     // one, so p32's declaration and show32(PI) round it to a float32. And
-    // each is the float64 nearest its value: C's atan2(0, -1) is π exactly,
-    // and doubling a float64 is exact.
+    // each is the float64 nearest its value: C's atan2(0, -1) is the float64
+    // nearest π, and doubling a float64 is exact.
     minus_zero : float64 = -0.0;
     p32 : float32 = PI;
     start_line("constants");
@@ -355,9 +356,9 @@ main :: () {
     print_byte(10);
 
     // The same for float32, each given by C's float function (sqrtf for
-    // sqrt_float32), not its double one narrowed. 0.49999997 is the float32 just below 0.5;
-    // 3e30 and 4e30 have squares past float32's largest, and 3e38 twice a
-    // hypotenuse past it.
+    // sqrt_float32), not its double one narrowed. 0.49999997 is the float32
+    // just below 0.5; 3e30 and 4e30 have squares past float32's largest, and
+    // 3e38 twice has a hypotenuse past it.
     inf32 := 1 / zero32;
     start_line("sqrt_float32");
     show32(sqrt_float32(2));
