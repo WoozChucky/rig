@@ -4291,5 +4291,22 @@ TEST(an_if_directive_makes_no_scope) {
     CHECK(contains(entry, "  ; var y int slot %2 in 0 at 4:9\n"));
     CHECK(contains(entry, "  %2 = local i64  ; 4:9 s0\n"));
     CHECK(!contains(entry, "; 3:"));
+
+    // A declaration in the taken branch that hides a global starts a scope
+    // that lasts to the end of the enclosing block, not to the branch's '}':
+    // z, and the code after the #if, are in it, and see the local G.
+    ir = ir_print_debug(&a, lower_source(&a,
+                                         "G := 1;\n"
+                                         "main :: () {\n"
+                                         "    #if true {\n"
+                                         "        G := 2;\n"
+                                         "    }\n"
+                                         "    z := G;\n"
+                                         "}\n"));
+    entry = proc_ir(ir, "main");
+    CHECK(contains(entry, "  ; scope 1 in 0 at 4:9\n"));
+    CHECK(contains(entry, "  ; var G int slot %0 in 1 at 4:9\n"));
+    CHECK(contains(entry, "  ; var z int slot %2 in 1 at 6:5\n"));
+    CHECK(contains(entry, "  %2 = local i64  ; 6:5 s1\n"));
     arena_free(&a);
 }

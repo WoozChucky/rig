@@ -18,6 +18,12 @@ guarded :: () -> int {
     return g;                     // -1 on Windows, 1 on Linux
 }
 PICKED :: #run system_number();   // a #run reaching a body #if
+// The #run's walk follows the taken branch only: helper, reached nowhere
+// else, is checked before the run, and nope, in the branch not taken, is
+// never looked at.
+PICKED_TOO :: #run pick();
+pick :: () -> int { #if true { return helper(); } else { return nope(); } }
+helper :: () -> int { return 7; }
 ready :: () -> bool { return true; }
 
 main :: () {
@@ -26,6 +32,7 @@ main :: () {
     if system_number() == OS { puts("the last statement returns"); }
     if guarded() * guarded() == 1 { puts("the other system's branch is never checked"); }
     if PICKED == OS { puts("#run takes the same branch"); }
+    if PICKED_TOO == 7 { puts("#run reaches what the taken branch calls"); }
     sum := 0;
     for 1..3 { #if true { if it == 2 { continue; } } sum += it; }
     if sum == 4 { puts("continue in a taken branch"); }

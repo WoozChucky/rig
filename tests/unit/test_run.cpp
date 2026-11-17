@@ -739,6 +739,28 @@ TEST(run_reaches_every_part_of_a_body) {
     arena_free(&a);
 }
 
+TEST(run_reaches_only_the_taken_branch_of_an_if_directive) {
+    // What the taken branch calls is checked as the walk meets it, before the
+    // run lowers it; the branch not taken, never checked, isn't walked, so
+    // its unknown procedure says nothing. helper is declared after the #run,
+    // and called nowhere else.
+    Arena a = arena_make();
+    const char *program = "N :: #run pick();\n"
+                          "pick :: () -> int { #if true { return helper(); } else { return nope(); } }\n"
+                          "helper :: () -> int { return %s; }\n"
+                          "main :: () { }\n";
+    Checked c = check_src(&a, string_cstr(&a, string_printf(&a, program, "7")));
+    CHECK_STR(sorted_messages(&a, &c), "");
+    CHECK(is_number(&a, global_named(&c, "N"), 7, "int"));
+    token_list_free(c.list);
+    // An error in helper stops the run, which says nothing more.
+    c = check_src(&a, string_cstr(&a, string_printf(&a, program, "oops")));
+    CHECK_STR(sorted_messages(&a, &c), "3:30: unknown identifier 'oops'\n");
+    CHECK(global_named(&c, "N")->type == nullptr);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
 TEST(run_reads_globals_and_constant_data) {
     // A #run's code may read globals whose values point elsewhere: a
     // procedure value, a string's bytes, a struct holding a string, a
