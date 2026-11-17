@@ -156,11 +156,12 @@
 //   code) remembers where its own began, a mark. A body #if takes none: its
 //   defers are the enclosing block's. At each way out, a copy of every
 //   deferred statement it leaves is lowered there, the last registered
-//   first, down to the mark of the block it lands in (lower_defers): at a
-//   block's end if control gets there (leave_block), at a return all of
-//   them, after its values are worked out and its aggregates copied into
-//   the caller's temporaries, and at a break or a continue those since its
-//   loop's body began. Then the block drops its registrations. So the code
+//   first, down to the mark of the outermost block it leaves (lower_defers):
+//   at a block's end its own, down to its mark, if control gets there
+//   (leave_block); at a return all of them, down to mark 0, after its values
+//   are worked out and its aggregates copied into the caller's temporaries;
+//   and at a break or a continue those since its loop's body began, down to
+//   the body's mark. Then the block drops its registrations. So the code
 //   grows by a copy per way out, with no flag tested at run time, and the
 //   interpreter, which runs the same IR, runs a #run's defers as compiled.
 // - Rig's main is C's main (ir.h): exported, its every return a ret of C's
@@ -1707,8 +1708,9 @@ static void lower_deferred(Lowering *l, Deferred d, Ast_Proc *source) {
         lower_statement(l, statement, source);
     }
     // The checker refused every way out of deferred code but its end (a
-    // return, a break or continue whose loop is outside it): control always
-    // gets there.
+    // return, a break or continue whose loop is outside it), so no copy ends
+    // its IR block: the block it ends in is open, even after a loop that
+    // never ends (its exit block).
     RIG_ASSERT(!has_ended(l, l->block));
     leave_block(l, mark, source);
 }

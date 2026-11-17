@@ -22,6 +22,17 @@ pair: 1 2 3
 nested: the body
 nested: the deferred block
 nested: the deferred block's own defer
+defer defer: the body
+defer defer: the inner defer, when the outer copy ends
+defer defer: the body's first defer, last
+deferred #if: m is 1
+deferred #if: m is 2
+if arms: the if arm
+if arms: the if arm's defer
+if arms: after the if
+if arms: the else arm
+if arms: the else arm's defer
+if arms: after the if
 looping: a deferred loop sums 8
 #if: after the #if
 #if: runs when the enclosing block ends
