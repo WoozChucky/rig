@@ -6184,18 +6184,41 @@ TEST(if_directive_condition_errors) {
     CHECK_STR(check_source(&a, "yes :: () -> bool { return true; }\n"
                                "main :: () { V :: false; #if V {} #if #run yes() {} }\n"),
               "");
+    // A condition with an error takes neither branch and checks neither,
+    // whichever arm it's on: x and y say nothing.
+    CHECK_STR(check_source(&a, "main :: () { #if 1 { x : int = \"s\"; } }"),
+              "1:18: the condition of '#if' must be a bool, not 'int'\n");
+    const char *late = "main :: () { #if false {} else #if 1 { y : int = \"s\"; } else { z : int = \"s\"; } }";
+    CHECK_STR(check_source(&a, late), "1:36: the condition of '#if' must be a bool, not 'int'\n");
+    // The first arm says so, wherever the failure was.
+    Checked c = check_src(&a, late);
+    Ast_If_Directive *first = first_if_directive(&c);
+    CHECK(first->decided && first->failed);
+    CHECK(first->taken == nullptr);
+    CHECK(!((Ast_If_Directive *)first->else_part)->failed);
+    token_list_free(c.list);
     arena_free(&a);
 }
 
 TEST(if_directive_reaches_the_end) {
-    // When its taken branch does; one whose condition failed is taken not
-    // to, as an if's, so the condition's message is the only one.
+    // When its taken branch does; one whose condition failed, at any arm, is
+    // taken not to, as an if's, so the condition's message is the only one.
     Arena a = arena_make();
     CHECK_STR(check_source(&a, "f :: () -> int { #if true { return 1; } else { return 2; } }\nmain :: () {}\n"), "");
     CHECK_STR(check_source(&a, "f :: () -> int { #if false { return 1; } }\nmain :: () {}\n"),
               "1:42: 'f' must return a value on every path, and this one reaches its end\n");
+    // Only the taken branch counts, not every branch as for an if: a branch
+    // not taken that returns, or one that doesn't, changes nothing.
+    CHECK_STR(check_source(&a, "f :: () -> int { #if true { return 1; } else { } }\nmain :: () {}\n"), "");
+    CHECK_STR(check_source(&a, "f :: () -> int { #if false { return 1; } else { } }\nmain :: () {}\n"),
+              "1:51: 'f' must return a value on every path, and this one reaches its end\n");
+    CHECK_STR(check_source(&a, "f :: () -> int { #if true { } else { return 1; } }\nmain :: () {}\n"),
+              "1:50: 'f' must return a value on every path, and this one reaches its end\n");
     CHECK_STR(check_source(&a, "f :: () -> int { #if 1 { return 1; } }\nmain :: () {}\n"),
               "1:22: the condition of '#if' must be a bool, not 'int'\n");
+    // A condition that fails at a later arm too.
+    CHECK_STR(check_source(&a, "f :: () -> int { #if false { return 1; } else #if 1 { return 2; } }\nmain :: () {}\n"),
+              "1:51: the condition of '#if' must be a bool, not 'int'\n");
     // A while true ends by a break in a taken branch (breaks_out_of), so f
     // reaches its end; a break in a branch not taken ends nothing.
     CHECK_STR(check_source(&a, "f :: () -> int { while true { #if true { break; } } }\nmain :: () {}\n"),
