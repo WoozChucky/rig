@@ -20,8 +20,10 @@
 // The increment picks one of 2^63 streams, each its own order of the 2^64
 // states, so two generators seeded alike but given different streams give
 // different numbers. random_seed, random_u32 and random_int's 32-bit path
-// follow the C code step for step, and random_bool and random_shuffle draw
-// as pcg32-demo does, so the numbers are the reference's:
+// follow the C code step for step (but random_u32 steps with the
+// increment's lowest bit set, which changes nothing once seeded), and
+// random_bool and random_shuffle draw as pcg32-demo does, so the numbers
+// are the reference's:
 // tests/run/basic_random.rig prints the first round pcg32-demo prints and
 // checks it against pcg-random.org's.
 //
@@ -67,14 +69,17 @@ random_seed :: (r: *Random, seed: u64, stream: u64) {
 // xorshift by 18 folds the high bits onto the low ones, and the shift by 27
 // and the cut to 32 bits keep the result's bits 27 to 58, just below the
 // top 5; then those 32 bits rotate right by the old state's top 5 bits, 0
-// to 31. A rotation left by 32 - rotation
-// is the bits that fell off the right end; (0 - rotation) & 31 is that
-// amount, and 0 when the rotation is 0, rather than a shift by 32.
+// to 31. A shift left by 32 - rotation puts back the bits that fell off
+// the right end. (0 - rotation) & 31 is that amount as pcg-c-basic writes
+// it, 0 when the rotation is 0, since a shift by 32 is undefined in C; a
+// shift in Rig takes its amount modulo the width already (spec 5.5), so
+// the & 31 changes nothing here.
 //
 // The increment is taken with its lowest bit set. A seeded one is odd
-// already, so that changes nothing; a zeroed Random's 0 would make the step
-// a plain multiplication, which keeps a state of 0 at 0, and random_int
-// would then throw away every draw and never return.
+// already, so that changes nothing. Without it, a zeroed Random's 0 would
+// make the step a plain multiplication, which keeps a state of 0 at 0, so
+// every draw would be 0, and random_int, which throws away the draws below
+// its threshold, would never return for most ranges.
 random_u32 :: (r: *Random) -> u32 {
     old := r.state;
     r.state = old * PCG_MULTIPLIER + (r.increment | 1);
@@ -96,11 +101,11 @@ random_u64 :: (r: *Random) -> u64 {
 // draws at least once, even when low equals high, so a range of one value
 // moves the generator on as a small range would, rather than not at all.
 //
-// The range has span + 1 values, span being high less low, worked out in
-// u64 so that int's whole range, whose span is 2^64 - 1, doesn't overflow.
-// Each draw is added to low in u64 too, and the sum read back as an int:
-// two's complement makes that the right number for every low, negative
-// ones included.
+// The range has span + 1 values, span being the larger bound less the
+// smaller, worked out in u64 so that int's whole range, whose span is
+// 2^64 - 1, doesn't overflow. Each draw is added to the smaller bound in
+// u64 too, and the sum read back as an int: two's complement makes that
+// the right number for every bound, negative ones included.
 //
 // A draw modulo the range would favour the smallest values whenever the
 // range doesn't divide 2^32 (or 2^64) evenly: the draws past the last whole

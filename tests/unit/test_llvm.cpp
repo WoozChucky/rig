@@ -2,9 +2,11 @@
 // tokens (issue #10), then IR built by hand for issues #32 to #37 (integer
 // widths, blocks and branches, the runtime's panic, several results,
 // globals and floats), #52 (the panic flushing first) and #56 (memory);
-// then milestone 2c's line tables (#71), on modules lowered from source,
-// with the debug information of a program of several files (#112) among
-// them; last, the optimiser (#116). Uses test_ir.cpp's HELLO, max_module
+// C functions declared on Windows under the Universal C Runtime's names,
+// the time functions' 64-bit ones (#161) and _hypotf (#148); then
+// milestone 2c's line tables (#71), on modules lowered from source, with
+// the debug information of a program of several files (#112) among them;
+// last, the optimiser (#116). Uses test_ir.cpp's HELLO, max_module
 // and lower_program, test_checker.cpp's chain_of and joined,
 // test_load.cpp's load_test_directory, write_source and in_directory, and
 // test_base.cpp's md5_hex.

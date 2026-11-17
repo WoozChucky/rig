@@ -10,9 +10,9 @@
 // A directory is not a file here, on either system. Windows' fopen won't
 // open one, but Linux's opens it for reading, and its remove deletes an
 // empty one. So file_open, opening to read, reads one byte first: a
-// directory's read fails, where a file's gives the byte or the end. Every
-// procedure that reads, or asks whether a file is there, or deletes one,
-// opens it that way first.
+// directory's read fails, where a file's gives the byte or the end.
+// read_entire_file, file_exists and delete_file open the file that way,
+// through file_open, before reading it, finding it or deleting it.
 //
 // A path goes to C as a copy ended by a zero (to_c_string), which C reads
 // up to its first zero. So a path with a zero byte in it would reach C as

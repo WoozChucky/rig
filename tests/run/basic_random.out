@@ -18,7 +18,7 @@ MIN..MIN + 1: -9223372036854775808 -9223372036854775808 -9223372036854775808 -92
 MIN..0: -325035735912841067 -916151018093667526 -4983065992247595518 -6487009322779924043
 zeroed 1..6: 5 5 2 1 1 5
 shuffle: bjicghfdea
-shuffle of 0 and 1: true
+shuffle of 0, 1 or size 0: true
 -5..5 all seen, none outside: true
 float64 in [0, 1): true
 from time: true true true

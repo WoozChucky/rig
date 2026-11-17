@@ -45,7 +45,8 @@ c_free :: (memory: *void) #foreign libc "free";
 // back to. The UCRT's is a long long, 8 bytes, and glibc's a 16-byte
 // struct whose first 8 bytes are the offset, so this struct holds either,
 // with the offset in position on both. Basic reads position for a file's
-// size and leaves reserved as C wrote it.
+// size and never touches reserved, which glibc's fgetpos writes and the
+// UCRT's leaves as it was.
 C_Fpos :: struct {
     position: s64;
     reserved: u64;

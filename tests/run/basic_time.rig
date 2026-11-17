@@ -49,12 +49,13 @@ main :: () {
     show(-2203891200000000000);
     show(1709210096789000000);
     show(4107542400000000000);
-    // A time before 1970 that isn't midnight, a Sunday, and a recent one.
+    // A time before 1970 that isn't midnight, a Sunday.
     show(-14182940000000000);
     // A Saturday before 1970, one nanosecond past its midnight: its days %
     // 7 is -5, so adding only 4 to it, and not 11, would make the weekday
     // negative.
     show(-431999999999999);
+    // A recent time.
     show(1794907800000000000);
     // int's largest and most negative values, the ends of what a Time holds.
     show(9223372036854775807);
@@ -75,8 +76,9 @@ main :: () {
     print_line(format_time(Calendar.{5, 1, 2, 3, 4, 5, 0, 0}, buffer));
     // A negative year shorter than 4 bytes gets no zeros: its - comes first.
     print_line(format_time(Calendar.{-5, 1, 2, 3, 4, 5, 0, 0}, buffer));
-    // A year too wide for 4 digits and a negative month are written whole,
-    // so the text is longer than TIME_TEXT_MAX and needs a buffer that is.
+    // A year too wide for 4 digits and a negative month are written whole.
+    // The year makes the text longer than TIME_TEXT_MAX, so it needs a
+    // buffer that is.
     wide : [64]u8;
     print_line(format_time(Calendar.{12345, -1, 2, 3, 4, 5, 0, 0}, wide));
 

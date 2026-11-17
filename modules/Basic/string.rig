@@ -230,8 +230,7 @@ contains :: (s: string, sub: string) -> bool {
 // How many times sub occurs in s, counted from the left without overlap,
 // as replace replaces them: each search starts after the last match, so
 // count_of("aaaa", "aa") is 2, not 3. The empty sub would match at every
-// place, and between each byte, so it is taken to match nothing, and gives
-// 0.
+// place, so it is taken to match nothing, and gives 0.
 count_of :: (s: string, sub: string) -> int {
     if sub.count == 0 { return 0; }
     count := 0;
@@ -298,8 +297,8 @@ join :: (parts: []string, separator: string, allocator: Allocator) -> string {
 // allocator, which the caller gives back with free(result.data, allocator).
 // The occurrences are taken from the left without overlap, as count_of
 // counts them, and what replaces one is never searched again, so "aaaa"
-// with "aa" replaced by "a" gives "aa", and "aaa" with "a" replaced by "bb"
-// gives "bbbbbb". An empty old matches nothing, as in count_of, so the
+// with "aa" replaced by "a" gives "aa", and "aaa" with "a" replaced by "ab"
+// gives "ababab". An empty old matches nothing, as in count_of, so the
 // result is a copy of s.
 //
 // The result is always a copy, even when nothing was replaced, so the
@@ -391,7 +390,10 @@ to_upper_copy :: (s: string, allocator: Allocator) -> string {
 }
 
 // A copy of s with every ASCII letter in lowercase, as to_lower changes
-// them, and every other byte as it is, as to_upper_copy does.
+// them, and every other byte as it is, as to_upper_copy does. The memory is
+// from allocator, and the caller gives it back with free(result.data,
+// allocator). An empty s gives the zeroed string, which allocates nothing,
+// and so does an allocator with no memory to give.
 to_lower_copy :: (s: string, allocator: Allocator) -> string {
     lower : string;
     if s.count == 0 { return lower; }
@@ -417,10 +419,9 @@ UTF8_MAX_BYTES :: 4;
 // bytes the sequence takes, and whether it is well-formed. An ill-formed
 // sequence gives U+FFFD, 1 and false: the first byte alone, so a loop that
 // moves on by the count goes on with the next byte, which may start a
-// well-formed sequence, and every byte starts one decode, none skipped and
-// none counted twice. An index outside s, before its start or at or past
-// its end, gives 0, 0 and false, and reads nothing, so a zeroed string's
-// null data is never read.
+// well-formed sequence, and no byte is skipped or counted twice. An index
+// outside s, before its start or at or past its end, gives 0, 0 and false,
+// and reads nothing, so a zeroed string's null data is never read.
 //
 // The sequences that are well-formed are the Unicode Standard's (Table 3-7):
 // one byte 00-7F; a lead byte C2-DF, E0-EF or F0-F4, saying that one, two or

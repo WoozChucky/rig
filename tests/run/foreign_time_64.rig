@@ -1,4 +1,4 @@
-// C's other time functions with a 64-bit time_t, compiled as interpreted
+// C's other time functions with a 64-bit time_t, compiled and interpreted
 // (issue #161). On Windows msvcrt.lib defines time, gmtime, localtime,
 // mktime, difftime and ctime as their 32-bit versions, while the Universal
 // C Runtime's <time.h> makes those names call the 64-bit ones, _time64 and
