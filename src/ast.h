@@ -3,8 +3,8 @@
 // Procedures (with a body, or #foreign), their parameters and types, and
 // global variables and constants; in a body, blocks of statements: local
 // variables and constants (several variables at once, from a call's
-// results), assignments, returns, if, while, for, break, continue and
-// expressions; expressions made of calls, names, strings, integers,
+// results), assignments, returns, if, while, for, break, continue, defer
+// and expressions; expressions made of calls, names, strings, integers,
 // floats, bools, null, operators, casts, addresses and dereferences,
 // size_of, fields (e.x), struct literals (Vec2.{1, 2}), elements (a[i])
 // and array literals (int.[1, 2]), and code run while compiling (#run e).
@@ -72,6 +72,7 @@ enum Ast_Kind : u8 {
     AST_LOAD,          // Ast_Load: #load "PATH"; or #import "NAME";
     AST_RUN,           // Ast_Run: #run e (an expression), or a top-level #run e; or #run { ... }
     AST_IF_DIRECTIVE,  // Ast_If_Directive: #if c { ... } else ...
+    AST_DEFER,         // Ast_Defer: defer statement;  defer { ... }
 };
 
 struct Ast {
@@ -487,6 +488,12 @@ struct Ast_If_Directive : Ast {
     Ast_Block *taken;   // first arm: the branch taken, an arm's then_block or the last else; null for none
 };
 
+// defer S, or defer { ... }: S runs when the block the defer is written in
+// is left, by any way out (spec 6.12). pos is the 'defer'.
+struct Ast_Defer : Ast {
+    Ast *statement;  // any statement but a declaration; an Ast_Block for defer { ... }
+};
+
 // The systems a program can be built for (spec 2.5, 4.9), numbered as the
 // predeclared OS_WINDOWS and OS_LINUX are; 0 names none.
 enum System : u8 { SYSTEM_NONE = 0, SYSTEM_WINDOWS = 1, SYSTEM_LINUX = 2 };
@@ -636,6 +643,8 @@ Token_Kind compound_operator(Token_Kind op);
 // the top level alike, a top-level branch's block holding its declarations:
 //   (#if (name c) (block ...) (#if (name d) (block ...) (block ...)))
 //                 #if c { ... } else #if d { ... } else { ... }
+// defer prints as (defer (call free (name p))) for defer free(p);, and as
+// (defer (block ...)) for defer { ... }.
 // Globals print as locals do, (var counter int) and (const LIMIT (int 100)),
 // a load as (load "world/map.rig"), and a top-level run and #if as above,
 // each on a line of its own among the procedures, in source order. On a
