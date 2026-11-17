@@ -40,7 +40,8 @@ struct Checker {
     bool lost_a_local;           // a body's #if whose condition failed, in the body being checked:
                                  // neither branch's locals are declared, so from there on a name
                                  // declared nowhere may be one of them, and isn't reported as
-                                 // unknown (checker.cpp's check_if_directive)
+                                 // unknown (checker.cpp's check_if_directive); set aside with the
+                                 // scopes (leave_scopes)
     Ast_File *file;              // the program being checked
     bool deciding;               // a decider (check_decider_new): it checks the top-level #ifs'
                                  // conditions only, knowing the base's names alone, and refuses any

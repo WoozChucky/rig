@@ -226,24 +226,34 @@ static void pop_scope(Checker *c) {
     c->scopes.count--;
 }
 
+// What leave_scopes sets aside, and return_to_scopes returns to.
+struct Outer_Scopes {
+    Array<Table<Ast *>> scopes;  // Checker.scopes
+    bool lost_a_local;           // Checker.lost_a_local
+};
+
 // A declaration worked out where it's first needed (a global, a constant, a
 // struct's layout, a late field's type, a signature) means the same
 // wherever that is: its names are the top level's, whatever body needed it.
 // A body checked on demand has its own scopes too (check_body). So the
 // scopes open where it's needed are set aside, returned here, and the
-// checker goes on with none.
-static Array<Table<Ast *>> leave_scopes(Checker *c) {
-    Array<Table<Ast *>> outer = c->scopes;
+// checker goes on with none. So is lost_a_local, which is about those
+// scopes: a failed #if in the body that needed it may hide a local's name,
+// never a top-level one, so the declaration's unknown names are reported.
+static Outer_Scopes leave_scopes(Checker *c) {
+    Outer_Scopes outer = {c->scopes, c->lost_a_local};
     c->scopes = {};
+    c->lost_a_local = false;
     return outer;
 }
 
 // Back to the scopes leave_scopes set aside, every scope opened since
-// closed.
-static void return_to_scopes(Checker *c, Array<Table<Ast *>> outer) {
+// closed, and to their lost_a_local.
+static void return_to_scopes(Checker *c, Outer_Scopes outer) {
     RIG_ASSERT(c->scopes.count == 0);
     array_free(&c->scopes);
-    c->scopes = outer;
+    c->scopes = outer.scopes;
+    c->lost_a_local = outer.lost_a_local;
 }
 
 static void resolve_global(Checker *c, Ast *decl);
@@ -718,7 +728,8 @@ static bool open_declaration(Checker *c, Ast *decl, String name, s32 levels, s32
 // where the #run is, in the declaration pass too, and its names would be
 // in scope while a global or a constant it needs is worked out. So the
 // scopes are set aside (leave_scopes), and a local's name can never leak
-// into a global's value.
+// into a global's value, nor a failed #if in that body keep an unknown name
+// in it unsaid.
 //
 // Whether its check reported an error is kept (Ast_Var.had_errors,
 // Ast_Const.had_errors): a #run that reaches it doesn't run.
@@ -741,7 +752,7 @@ static void resolve_global(Checker *c, Ast *decl) {
     if (!open_declaration(c, decl, name, is_var ? ((Ast_Var *)decl)->levels : ((Ast_Const *)decl)->levels, &outer)) {
         return;
     }
-    Array<Table<Ast *>> scopes = leave_scopes(c);
+    Outer_Scopes scopes = leave_scopes(c);
     *state = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, decl);
     s64 errors = c->diag->error_count;
@@ -969,7 +980,7 @@ static Type *resolve_struct(Checker *c, Ast_Struct *s) {
         if (layout_levels(s->fields[i]) > levels) levels = layout_levels(s->fields[i]);
     }
     if (!open_declaration(c, s, s->name, levels, &outer)) return nullptr;
-    Array<Table<Ast *>> scopes = leave_scopes(c);  // its counts' names are the top level's
+    Outer_Scopes scopes = leave_scopes(c);  // its counts' names are the top level's
     s->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)s);
     lay_out(c, s, outer);
@@ -1005,7 +1016,7 @@ static void make_late_field(Checker *c, Ast_Struct *s, s64 i) {
     }
     s32 outer;
     if (!open_declaration(c, field, field->name, field->type_expr->levels, &outer)) return;
-    Array<Table<Ast *>> scopes = leave_scopes(c);  // its counts' names are the top level's
+    Outer_Scopes scopes = leave_scopes(c);  // its counts' names are the top level's
     field->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)field);
     Type *type = resolve_type(c, field->type_expr);
@@ -1633,11 +1644,9 @@ static bool reaches_end(Ast_Block *block) {
 // #run that reaches it doesn't run.
 static void check_body(Checker *c, Ast_Proc *proc) {
     Ast_Proc *outer_proc = c->proc;
-    Array<Table<Ast *>> outer_scopes = leave_scopes(c);
+    Outer_Scopes outer_scopes = leave_scopes(c);  // and lost_a_local
     Array<Ast *> outer_loops = c->loops;
     c->loops = {};
-    bool outer_lost_a_local = c->lost_a_local;
-    c->lost_a_local = false;
     s32 outer_levels = c->levels;
     proc->body_resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)proc->body);
@@ -1663,7 +1672,6 @@ static void check_body(Checker *c, Ast_Proc *proc) {
     proc->body_resolve = RESOLVE_DONE;
     array_free(&c->loops);
     c->loops = outer_loops;
-    c->lost_a_local = outer_lost_a_local;
     return_to_scopes(c, outer_scopes);
     c->levels = outer_levels;
     c->proc = outer_proc;
@@ -1905,7 +1913,7 @@ static bool resolve_signature(Checker *c, Ast_Proc *proc) {
         if (proc->results[i]->levels > levels) levels = proc->results[i]->levels;
     }
     if (!open_declaration(c, proc, proc->name, levels, &outer)) return false;
-    Array<Table<Ast *>> scopes = leave_scopes(c);  // its types' names are the top level's
+    Outer_Scopes scopes = leave_scopes(c);  // its types' names are the top level's
     proc->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)proc);
     s64 errors = c->diag->error_count;

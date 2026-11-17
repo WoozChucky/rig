@@ -2061,8 +2061,9 @@ static String not_taken_result(Arena *a, const char *text, bool reached, bool no
 }
 
 TEST(stdin_for_loaded_only_in_a_branch_not_taken) {
-    // dir/l.rig is the --stdin-for file, never on disk; w.rig and sub/a.rig
-    // are, and sub/a.rig's #if names l.rig from sub. Each case's load of
+    // dir/l.rig is the --stdin-for file, never on disk; w.rig, x.rig and
+    // sub/a.rig are, x.rig loads l.rig, and sub/a.rig's #if names l.rig from
+    // sub. Each case's load of
     // l.rig is in a branch not taken (on that system), in a failed chain,
     // or outside every #if; a branch not taken may spell it another way,
     // since a file is known by its identity. The bad loads of a branch not
@@ -2071,6 +2072,7 @@ TEST(stdin_for_loaded_only_in_a_branch_not_taken) {
     String dir = load_test_directory(&a, "stdin_for_loaded_only_in_a_branch_not_taken");
     CHECK(os_make_directory(str(in_directory(&a, dir, "sub"))));
     write_source(&a, dir, "w.rig", "W :: 1;\n");
+    write_source(&a, dir, "x.rig", "#load \"l.rig\";\n");
     write_source(&a, dir, "sub/a.rig", "#if false { #load \"../l.rig\"; }\n");
     CHECK(!os_file_exists(str(in_directory(&a, dir, "l.rig"))));
     const char *by_os = "#if OS == OS_WINDOWS { #load \"w.rig\"; } else { #load \"l.rig\"; }\n";
@@ -2089,6 +2091,10 @@ TEST(stdin_for_loaded_only_in_a_branch_not_taken) {
         // Another file, and loads that name no file, said nowhere.
         {"#if false { #load \"x.rig\"; #load \"\"; #load \"l.txt\"; #import \"../l\"; #import \"Nope\"; }\n",
          SYSTEM_NONE, false, false, false, 0},
+        // A file a branch not taken loads isn't read, so l.rig, which x.rig
+        // loads, is two steps away: the program doesn't load it, and it's
+        // checked alone (Decision 13).
+        {"#if false { #load \"x.rig\"; }\n", SYSTEM_NONE, false, false, false, 0},
         // A failed chain's branches, every one of them, an arm whose own
         // condition was false before the failed one included, and the
         // branches of an #if nested in one, are undecided, not "not taken".
@@ -2118,6 +2124,31 @@ TEST(stdin_for_loaded_only_in_a_branch_not_taken) {
         CHECK_STR(got, string_cstr(&a, expected));
         diag_free(&d);
     }
+    arena_free(&a);
+}
+
+TEST(stdin_for_in_branches_nested_a_thousand_levels) {
+    // MAX_DEPTH top-level #ifs, each in the one before's branch, the
+    // outermost false: every branch inside is walked, never decided,
+    // recursing once per level (note_not_taken), down to the innermost
+    // one's #load of the --stdin-for file.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "stdin_for_in_branches_nested_a_thousand_levels");
+    const char *text = nested_source(&a, "#if false {", "#if true {", MAX_DEPTH - 1, "#load \"l.rig\";", "}", "}\n");
+    Diagnostics d = {};
+    bool reached = true, not_taken = false, undecided = true;
+    Load_Options options = {};
+    options.stdin_for = str(in_directory(&a, dir, "l.rig"));
+    options.stdin_text = str("L :: 2;\n");
+    options.stdin_for_reached = &reached;
+    options.stdin_for_not_taken = &not_taken;
+    options.stdin_for_undecided = &undecided;
+    load_program(&a, &d, str(in_directory(&a, dir, "main.rig")), str(text), &options);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK(!reached);
+    CHECK(not_taken);
+    CHECK(!undecided);
+    diag_free(&d);
     arena_free(&a);
 }
 

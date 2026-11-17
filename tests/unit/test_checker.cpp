@@ -6212,6 +6212,24 @@ TEST(if_directive_condition_errors) {
     CHECK_STR(check_source(&a, "main :: () { #if 1 {} x := #run g(); y := z; }\ng :: () -> int { return q; }\n"),
               "1:18: the condition of '#if' must be a bool, not 'int'\n"
               "2:25: unknown identifier 'q'\n");
+    // So is a top-level declaration that body needs first, worked out there
+    // (a global, a struct's layout, a signature): its names are the top
+    // level's, and an unknown one is reported.
+    CHECK_STR(check_source(&a, "A :: #run f();\n"
+                               "f :: () -> int {\n"
+                               "    #if 1 { }\n"
+                               "    s : S;\n"
+                               "    p := g;\n"
+                               "    return B;\n"
+                               "}\n"
+                               "B :: undefined_name;\n"
+                               "S :: struct { a: [nope]int; }\n"
+                               "g :: (a: [also_nope]int) {}\n"
+                               "main :: () { }\n"),
+              "3:9: the condition of '#if' must be a bool, not 'int'\n"
+              "8:6: unknown identifier 'undefined_name'\n"
+              "9:19: unknown identifier 'nope'\n"
+              "10:11: unknown identifier 'also_nope'\n");
     arena_free(&a);
 }
 
@@ -6620,6 +6638,21 @@ TEST(if_branch_names_and_the_rest) {
     arena_free(&a);
 }
 
+TEST(what_a_top_level_condition_worked_out_stays_for_check) {
+    // A call to a procedure of the base isn't constant, but the decider
+    // resolves its signature on the way, against the S it laid out; check()
+    // uses both as they are, so main's call to f converts its S.
+    Arena a = arena_make();
+    CHECK_STR(check_loaded(&a,
+                           "S :: struct { x: int; }\n"
+                           "f :: (s: S) -> bool { return s.x == 0; }\n"
+                           "#if f(S.{0}) {}\n"
+                           "main :: () { s : S; b := f(s); }\n",
+                           SYSTEM_NONE),
+              "3:5: the condition of '#if' must be known while compiling\n");
+    arena_free(&a);
+}
+
 TEST(top_level_if_directive_chains_of_10000_arms) {
     // Review Focus 5: a top-level else #if chain, as a generated table
     // writes one, is decided and its taken branch spliced with no recursion
@@ -6635,5 +6668,20 @@ TEST(top_level_if_directive_chains_of_10000_arms) {
     }
     sprintf(at, "main :: () { x : [A - %lld]u8; }\n", (long long)(ARMS - 1));
     CHECK_STR(check_loaded(&a, text, SYSTEM_NONE), "");
+    arena_free(&a);
+}
+
+TEST(top_level_if_directives_nest_up_to_a_thousand_levels) {
+    // MAX_DEPTH of them (parse_if_directives_nested_too_deeply), each in the
+    // one before's branch: the loader decides each, recursing once per
+    // level (decide_in_load_order), and the innermost branch's A joins the
+    // top level, so main's count is 1. For --stdin-for, the branches not
+    // taken are walked the same way
+    // (stdin_for_in_branches_nested_a_thousand_levels).
+    Arena a = arena_make();
+    CHECK_STR(check_loaded(&a, nested_source(&a, "", "#if true {", MAX_DEPTH, "A :: 1;", "}",
+                                             "\nmain :: () { x : [A]u8; }\n"),
+                           SYSTEM_NONE),
+              "");
     arena_free(&a);
 }
