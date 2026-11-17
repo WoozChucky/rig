@@ -81,8 +81,8 @@ TEST(linux_link_command) {
         "/usr/lib/x86_64-linux-gnu/crti.o",
         ".build/hello.o",
         "-L/usr/lib/x86_64-linux-gnu",
-        "-lm",
         "-lc",
+        "-lm",
         "/usr/lib/x86_64-linux-gnu/crtn.o",
     });
     CHECK_STR(joined(&a, argv), string_cstr(&a, joined(&a, expected)));

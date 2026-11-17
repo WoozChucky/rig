@@ -2293,7 +2293,7 @@ where `PDB` is the PDB's path (section 10.1), so a program uses the C runtime's 
 ```text
 ld.lld -o OUTPUT --eh-frame-hdr -m elf_x86_64
        -dynamic-linker /lib64/ld-linux-x86-64.so.2
-       CRT/crt1.o CRT/crti.o OBJECTS... -LCRT -lm -lc CRT/crtn.o
+       CRT/crt1.o CRT/crti.o OBJECTS... -LCRT -lc -lm CRT/crtn.o
 ```
 
 The library named by `#foreign` is checked to be `libc`, and a foreign procedure resolves against whatever the link line provides. On Linux that is glibc's `libc` and `libm`, which holds C's `<math.h>` functions (`sqrt`, `sin`, `pow`): every program depends on `libm.so.6`, whether it calls one or not, which is in glibc's own package beside `libc.so.6`. Functions of any other library are not available. On Windows it is the libraries above, so the C runtime's math functions and `kernel32`'s functions resolve too.
