@@ -432,10 +432,11 @@ bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run) {
 // Each run as an expression's is run (run_procedure), with no arguments: a
 // top-level run's procedure has no result to copy, its expression's value
 // or its block's end thrown away (ir_lower_run). Ast_File.runs is in the
-// order they run in already: the loader parses the files one at a time, in
-// load order, each into the end of the lists. A failure is said, and the
-// next run starts afresh on an empty stack, with the globals as the failed
-// one left them.
+// order they run in already: file by file in load order, source order
+// within a file, as the loader puts the tree's lists once the top-level
+// #ifs are decided (ast_sort_declarations, load.h). A failure is said, and
+// the next run starts afresh on an empty stack, with the globals as the
+// failed one left them.
 void compile_time_run_top_level(Compile_Time *ct, Ast_File *file) {
     for (s64 i = 0; i < file->runs.count; i++) {
         Arena scratch = arena_make();
