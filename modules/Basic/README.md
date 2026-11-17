@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, files, and printing to standard output (issues #134 and #145).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, paths, files, and printing to standard output (issues #134 and #145).
 
 ## Importing it
 
@@ -177,6 +177,17 @@ The entries are one run of memory, a power of two of them, each a header (the ke
 - `table_remove(table: *Table, key: string) -> bool`, `int_table_remove(table: *Int_Table, key: int) -> bool`: removes `key`, giving a string key's copy back, and says whether it was there.
 - `table_entry(table: Table, index: int) -> bool, string, *void`, `int_table_entry(table: Int_Table, index: int) -> bool, int, *void`: entry `index`, from 0 to the capacity less one: whether it holds a key, the key and the value's address; false, the zeroed string or 0, and null for one that holds none. Any other index stops the program with the language's own bounds check, through `check_index` (unless built with `--no-bounds-checks`).
 - `table_free(table: *Table)`, `int_table_free(table: *Int_Table)`: gives every key's copy and the entries back; the table is empty, with no entries, and keeps its value size and allocator.
+
+## Paths (`path.rig`)
+
+A path is a plain string, and its parts are views into it, cut out by `slice` and `advance`: nothing is copied, nothing asks the system whether a file is there, and no part reaches outside the path, so a zeroed path gives zeroed parts and a view of part of a string is read only as far as it goes. A part that isn't there is an empty view at the path's end. Both `/` and `\` separate a path's parts, on every system, and a join writes `/`, which both systems accept. Nothing else is special: a drive letter is part of the first name (`"C:\x"`'s directory is `"C:"`), and `\\server\share` is a path from the root whose first separator is doubled.
+
+- `is_path_separator(c: u8) -> bool`: `/` or `\`.
+- `path_directory(path: string) -> string`: what is before the last separator, without the separators that end it (`"a//b"` gives `"a"`, `"a/b/"` gives `"a/b"`); the first separator when only separators are left, the root (`"/b"` gives `"/"`); `""` with no separator.
+- `path_file_name(path: string) -> string`: what is after the last separator, all of `path` with none; `""` when `path` ends with one.
+- `path_extension(path: string) -> string`: the file name's extension with its dot, from its last dot that isn't one of the dots the name starts with: `".gz"` for `"c.tar.gz"`, `"."` for `"b."`, none for `".bashrc"` or `".."`; none is an empty view at the path's end.
+- `path_without_extension(path: string) -> string`: `path` without `path_extension(path)`.
+- `path_join(a: string, b: string, allocator: Allocator) -> string`: `a`, a `/`, then `b`, in memory from `allocator`, which the caller frees with `free(s.data, allocator)`. The `/` is left out when either is empty, `a` ends with a separator or `b` starts with one; an absolute `b` is joined all the same. Always a copy, allocated once; two empty paths give the zeroed string (count 0, data null) and allocate nothing, and an allocator with no memory gives the zeroed string too.
 
 ## Files (`file.rig`)
 
