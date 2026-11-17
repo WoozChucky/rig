@@ -1,0 +1,118 @@
+// Basic's C layer (issue #145): each C function Basic v1 calls, called
+// through its c_ name, compiled and interpreted, and to_c_string, the copy
+// of a string that C reads up to a zero. The program declares C's strlen
+// under C's own name, which Basic's c_ names leave free.
+#import "Basic";
+
+strlen :: (s: *u8) -> u64 #foreign libc;
+
+// The file the program writes, reads and removes, under .build/tests/,
+// which the runner makes before any test.
+FILE_NAME :: ".build/tests/basic_libc.bin";
+
+main :: () {
+    // A copy ends with a zero after the string's bytes, so C counts them.
+    hi := to_c_string("hi", HEAP_ALLOCATOR);
+    print_string("to_c_string: ");
+    print_bool(hi[0] == "h"[0] && hi[1] == "i"[0] && hi[2] == 0);
+    print_string(" ");
+    print_int(cast(int) strlen(hi));
+    print_line("");
+    free(hi, HEAP_ALLOCATOR);
+
+    // A zeroed string, with null data, gives a lone zero: no byte is read
+    // through its data.
+    empty : string;
+    z := to_c_string(empty, HEAP_ALLOCATOR);
+    print_string("empty: ");
+    print_bool(z[0] == 0);
+    print_string(" ");
+    print_int(cast(int) strlen(z));
+    print_line("");
+    free(z, HEAP_ALLOCATOR);
+
+    // A zero inside the string is copied as it is, and every byte after it
+    // too, so C sees the string end at the first zero.
+    inner := to_c_string("a\0b", HEAP_ALLOCATOR);
+    print_string("zero inside: ");
+    print_int(cast(int) strlen(inner));
+    print_string(" ");
+    print_bool(inner[2] == "b"[0]);
+    print_string(" ");
+    print_bool(inner[3] == 0);
+    print_line("");
+    free(inner, HEAP_ALLOCATOR);
+
+    // Big enough for glibc's 16-byte fpos_t as well as the UCRT's 8 bytes.
+    print_string("C_Fpos: ");
+    print_int(size_of(C_Fpos));
+    print_line("");
+
+    // A run that stopped halfway may have left the file, so it goes first.
+    // The bytes hold a zero, a line feed, a carriage return and 255, which
+    // a text mode would change or stop at, and the file is opened in binary
+    // mode, so none of them is.
+    c_remove(FILE_NAME);
+    f := c_fopen(FILE_NAME, "wb");
+    bytes := u8.[1, 0, 10, 13, 255, 10];
+    print_string("write: ");
+    print_int(cast(int) c_fwrite(bytes.data, 1, 6, f));
+    print_string(" ");
+    print_int(c_ferror(f));
+    print_string(" ");
+    print_int(c_fclose(f));
+    print_line("");
+
+    // The size is the position at the end, from fgetpos, and fsetpos goes
+    // back to the start, where the whole file is read again.
+    g := c_fopen(FILE_NAME, "rb");
+    start : C_Fpos;
+    c_fgetpos(g, *start);
+    c_fseek(g, 0, C_SEEK_END);
+    end : C_Fpos;
+    c_fgetpos(g, *end);
+    c_fsetpos(g, *start);
+    back : [16]u8;
+    n := c_fread(back.data, 1, 16, g);
+    print_string("size ");
+    print_int(end.position);
+    print_string(", read ");
+    print_int(cast(int) n);
+    print_string(": ");
+    print_int(back[1]);
+    print_string(" ");
+    print_int(back[3]);
+    print_string(" ");
+    print_int(back[4]);
+    print_line("");
+    c_fclose(g);
+
+    print_string("missing: ");
+    print_bool(c_fopen(".build/tests/basic_libc_missing.bin", "rb") == null);
+    print_line("");
+
+    // The second remove finds nothing to remove.
+    print_string("remove: ");
+    print_int(c_remove(FILE_NAME));
+    print_string(" ");
+    print_int(c_remove(FILE_NAME));
+    print_line("");
+
+    // PATH is defined on both systems; the second name on neither.
+    print_string("getenv: ");
+    print_bool(c_getenv("PATH") != null);
+    print_string(" ");
+    print_bool(c_getenv("RIG_NO_SUCH_VARIABLE_145") == null);
+    print_line("");
+
+    // null flushes every stream C has open.
+    print_string("fflush: ");
+    print_int(c_fflush(null));
+    print_line("");
+
+    // system(null) asks whether there is a shell to run commands, and runs
+    // none.
+    print_string("a shell: ");
+    print_bool(c_system(null) != 0);
+    print_line("");
+}

@@ -16,10 +16,23 @@ rig finds `Basic/module.rig` in the `modules` directory beside it, or in the one
 
 ## Its C layer
 
-`libc.rig` declares the only C functions Basic calls, each under a name of its own that starts with `c_` (`#foreign libc "NAME"`, spec 7.6). So a program that loads Basic keeps C's own names: it may declare C's `putchar`, `malloc` and `realloc` itself. `free` is the exception, since Basic's allocators take that name for their own helper and `c_free` is taken too, so such a program declares C's `free` under another name, as in `libc_free :: (p: *void) #foreign libc "free";`.
+`libc.rig` declares the only C functions Basic calls, each under a name of its own that starts with `c_` (`#foreign libc "NAME"`, spec 7.6). So a program that loads Basic keeps C's own names: it may declare C's `putchar`, `malloc`, `realloc`, `fopen`, `getenv` and the rest itself. `free` is the exception, since Basic's allocators take that name for their own helper and `c_free` is taken too, so such a program declares C's `free` under another name, as in `libc_free :: (p: *void) #foreign libc "free";`.
+
+Each links and runs on Windows (the UCRT) and Linux (glibc), compiled and interpreted, with the same C types on both. `libc.rig`'s header says which C functions Basic leaves out, and why: `ftell` (C's `long`, 32 bits on Windows), `_ftelli64` and `ftello` (one system each), `time` (whole seconds) and `clock` (a different clock on each system).
 
 - `c_putchar(c: s32) -> s32`: C's `putchar`, the one call that writes a byte to standard output.
 - `c_malloc(size: u64) -> *void`, `c_realloc(memory: *void, size: u64) -> *void`, `c_free(memory: *void)`: C's `malloc`, `realloc` and `free`, the heap allocator's memory. Basic never calls them with a size of 0.
+- `C_Fpos`: C's `fpos_t`, `position: s64` (the offset) and `reserved: u64`, 16 bytes, which holds the UCRT's 8 and glibc's 16.
+- `C_SEEK_SET`, `C_SEEK_END`: `fseek`'s origins, 0 and 2.
+- `c_fopen(path: *u8, mode: *u8) -> *void`, `c_fclose(file: *void) -> s32`: C's `fopen` and `fclose`; a `FILE *`, or null when the file can't be opened.
+- `c_fread(buffer: *void, size: u64, count: u64, file: *void) -> u64`, `c_fwrite(data: *void, size: u64, count: u64, file: *void) -> u64`: C's `fread` and `fwrite`, giving the items read or written.
+- `c_fseek(file: *void, offset: s64, origin: s32) -> s32`: C's `fseek`. The offset is C's `long`, 32 bits on Windows, so Basic passes only 0.
+- `c_fgetpos(file: *void, position: *C_Fpos) -> s32`, `c_fsetpos(file: *void, position: *C_Fpos) -> s32`: C's `fgetpos` and `fsetpos`, the position in a file in 64 bits on both systems.
+- `c_ferror(file: *void) -> s32`: C's `ferror`, not 0 when a read or write has failed.
+- `c_fflush(file: *void) -> s32`: C's `fflush`; null flushes every stream.
+- `c_remove(path: *u8) -> s32`: C's `remove`, 0 when the file is deleted. On Linux it deletes an empty directory too.
+- `c_getenv(name: *u8) -> *u8`: C's `getenv`, a variable's value, or null.
+- `c_system(command: *u8) -> s32`: C's `system`, which runs a command through the system's shell and gives its status; null asks whether there is a shell.
 
 ## Characters (`char.rig`)
 
@@ -68,7 +81,7 @@ Numbers are written into a buffer the caller gives, and the text comes back as a
 
 ## Strings (`string.rig`)
 
-Every string returned is a view into the string given: nothing is copied or allocated. Indexes and counts are in bytes, and bytes are compared unsigned, with no knowledge of UTF-8. A zeroed string (count 0, data null) is the empty string everywhere, and no byte is read through its null data.
+Every string returned is a view into the string given: nothing is copied or allocated. The one copy, `to_c_string`, takes its memory from the allocator it is given. Indexes and counts are in bytes, and bytes are compared unsigned, with no knowledge of UTF-8. A zeroed string (count 0, data null) is the empty string everywhere, and no byte is read through its null data.
 
 - `strings_equal(a: string, b: string) -> bool`: `a == b`, as a procedure a procedure value can name.
 - `compare_strings(a: string, b: string) -> int`: -1, 0 or 1 by the first byte that differs, compared unsigned; a prefix sorts first.
@@ -85,6 +98,7 @@ Every string returned is a view into the string given: nothing is copied or allo
 - `advance(s: string, amount: int) -> string`: `s` without its first `amount` bytes, clamped as `slice` is.
 - `split(s: string, separator: u8, parts: []string) -> int`: writes the pieces of `s` between separators into `parts` and returns how many; empty pieces count, `""` is one empty piece, the last part holds the unsplit rest when `parts` runs out, and an empty `parts` gets 0.
 - `split_from_left(s: string, separator: u8) -> bool, string, string`: whether `separator` is in `s`, and the bytes before and after its first occurrence; without one, `false`, `s` and an empty view at the end of `s`.
+- `to_c_string(s: string, allocator: Allocator) -> *u8`: a C string, `s.count + 1` bytes from `allocator` holding the bytes of `s` and a zero, which the caller frees with `free(p, allocator)`; null when the allocator has none. A zeroed string gives a lone zero. A zero inside `s` is copied as it is, so C sees the string end there.
 
 ## Allocators (`allocators.rig`)
 

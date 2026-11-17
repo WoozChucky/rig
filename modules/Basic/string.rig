@@ -1,22 +1,26 @@
-// Basic's strings: comparing, finding, trimming, slicing and splitting.
+// Basic's strings: comparing, finding, trimming, slicing and splitting, and
+// the copy C reads, ended by a zero.
 //
 // A string is a view, a count and a pointer to bytes (spec 3.8), so every
 // string these procedures return is a view into the string they were given:
-// nothing is copied and nothing is allocated, and the result lives as long
-// as the bytes it views. Indexes and counts are in bytes, and the bytes are
-// compared as they are, unsigned, with no knowledge of UTF-8, so a search
-// for an ASCII byte never lands inside a UTF-8 character, whose bytes are
-// all from 128 up.
+// the views copy nothing and allocate nothing, and each lives as long as
+// the bytes it views. The one procedure that copies, to_c_string, takes its
+// memory from the allocator it is given, and the caller gives it back
+// there. Indexes and counts are in bytes, and the bytes are compared as
+// they are, unsigned, with no knowledge of UTF-8, so a search for an ASCII
+// byte never lands inside a UTF-8 character, whose bytes are all from 128
+// up.
 //
 // A zeroed string, with count 0 and data null, is the empty string
 // everywhere here: its count of 0 stops every loop before a byte is read,
 // and a view of it starts at offset 0, so its null data is never moved.
 //
-// Every result is the string given or a view cut out of it by slice, which
-// clamps what it is asked for to the string it is given, so no procedure
-// here can return a view that reaches outside its string.
+// Every string returned is the string given or a view cut out of it by
+// slice, which clamps what it is asked for to the string it is given, so no
+// procedure here can return a view that reaches outside its string.
 #load "char.rig";
 #load "memory.rig";
+#load "allocators.rig";
 
 // Whether a and b hold the same bytes, as a == b: the same count, and the
 // same byte at every index. It is here as a named procedure, so that a
@@ -174,4 +178,24 @@ split_from_left :: (s: string, separator: u8) -> bool, string, string {
     at := find_byte(s, separator);
     if at < 0 { return false, s, advance(s, s.count); }
     return true, slice(s, 0, at), advance(s, at + 1);
+}
+
+// A copy of s that C can read: s.count + 1 bytes from allocator, the bytes
+// of s and then a zero, which is where C finds a string's end. A Rig string
+// has no zero after its bytes (a view of part of a string has the rest of
+// the string there), so one bound for C is copied first. The caller gives
+// the copy back with free(p, allocator) once C is done with it.
+//
+// It is null when the allocator has no memory to give. A zeroed string
+// gives a lone zero, C's empty string, and no byte is read through its
+// null data. A zero inside s is copied as it is, so C sees the string end
+// there. A caller handing C a name, such as a file's, refuses a string
+// with a zero in it first (find_byte(s, 0) >= 0), rather than have C use a
+// shorter name, another file's.
+to_c_string :: (s: string, allocator: Allocator) -> *u8 {
+    c := cast(*u8) alloc(s.count + 1, allocator);
+    if c == null { return null; }
+    copy_memory(c, s.data, s.count);
+    c[s.count] = 0;
+    return c;
 }
