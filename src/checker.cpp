@@ -2162,14 +2162,18 @@ Checker *check_decider_new(Ast_File *file, Arena *a, Diagnostics *d) {
 }
 
 void check_decide(Checker *c, Ast_If_Directive *first) {
-    // A file that failed to load since the last decision may declare the
-    // name a condition misses, so it isn't unknown (Checker.lost_a_file).
+    // A file that failed to load, or a condition that failed, since the last
+    // decision may declare the name a condition misses, so it isn't unknown
+    // (Checker.lost_a_file).
     c->lost_a_file = c->file->lost_a_file;
     decide_if(c, first);
 }
 
 // What a Checker holds of its own, freed alike by check() and
 // check_decider_free: a field that needs freeing is freed here, for both.
+// The compile-time world (Checker.world) isn't freed here: check() frees
+// the one it made itself (compile_time_free), never its caller's, and a
+// decider has none.
 static void free_checker_fields(Checker *c) {
     table_free(&c->top_level);
     array_free(&c->scopes);
@@ -2299,9 +2303,9 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // A broken main, a broken declaration whose name was lost, a file a
     // #load failed to load, or a top-level #if whose condition failed
     // (Ast_File.lost_a_file) has nothing to say about main: what it declares
-    // is unknown. A global called main is no
-    // procedure, so it's as if there were none. A build program (spec 7.9)
-    // needs none: it builds others, and is never an executable itself.
+    // is unknown. A global called main is no procedure, so it's as if there
+    // were none. A build program (spec 7.9) needs none: it builds others, and
+    // is never an executable itself.
     Ast **main_decl = table_get(&c.top_level, str("main"));
     if (!main_decl || (*main_decl)->kind != AST_PROC) {
         if (!lost_a_name && !c.lost_a_file && !ast_is_build_program(file)) {

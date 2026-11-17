@@ -1790,10 +1790,10 @@ TEST(if_branch_load_order) {
 }
 
 TEST(if_branch_load_of_a_file_loaded_elsewhere) {
-    // Review Focus 4: b is read once, as a's #load reaches it first in the
-    // reading order, but its place in load order is at the taken branch's
-    // #load, which comes before main's #load of a. Its name is still the
-    // one a's #load, read first, spells it with.
+    // b is read once, as a's #load reaches it first in the reading order,
+    // but its place in load order is at the taken branch's #load, which
+    // comes before main's #load of a. Its name is still the one a's #load,
+    // read first, spells it with.
     Arena a = arena_make();
     String dir = load_test_directory(&a, "if_branch_load_of_a_file_loaded_elsewhere");
     write_source(&a, dir, "a.rig", "#load \"./b.rig\";\nA :: 1;\n");
@@ -2211,10 +2211,9 @@ TEST(stdin_for_in_branches_nested_a_thousand_levels) {
 }
 
 TEST(stdin_for_in_a_chain_of_10000_arms) {
-    // Review Focus 5: every arm of a long else #if chain but the taken one,
-    // the last, is walked along a loop (note_branches), not recursing per
-    // arm, down to the one before the last, which loads the --stdin-for
-    // file.
+    // Every arm of a long else #if chain but the taken one, the last, is
+    // walked along a loop (note_branches), not recursing per arm, down to
+    // the one before the last, which loads the --stdin-for file.
     const s64 ARMS = 10000;
     Arena a = arena_make();
     String dir = load_test_directory(&a, "stdin_for_in_a_chain_of_10000_arms");
