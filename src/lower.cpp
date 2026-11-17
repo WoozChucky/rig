@@ -172,7 +172,8 @@
 //   reading and writing them where the interpreter keeps them. A call of
 //   one is at the callee's name. The program's own lowering (ir_lower)
 //   refuses each call, the one error lowering reports: "'create_workspace'
-//   can only be called while compiling" (lower_call_results).
+//   can only be called while compiling" (lower_call_results), once for a
+//   call in deferred code, however many copies of it there are.
 // - What a debugger needs (ir.h's "Debug information") is kept as the code
 //   is lowered: each instruction is stamped with the position and scope of
 //   the statement being lowered (Lowering.pos and scope, emit_in);
@@ -196,7 +197,9 @@
 //   the next statement.
 //
 // Blocks are numbered in the order they're made, and made in the order
-// their code comes in the source, so the printed IR reads like the program.
+// their code comes in the source (deferred code's where each copy is
+// lowered, at a way out of its block: spec 6.12), so the printed IR reads
+// like the program.
 // A jump or branch to a block that doesn't exist yet (the block after an
 // if, a loop's exit, where a break goes) is emitted with the target unset
 // and filled in once the block is made (terminator_of).
@@ -247,7 +250,8 @@ struct Local {
 // lowered again at each way out of the block (lower_defers).
 struct Deferred {
     Ast_Defer *defer;
-    s32 scope;  // l->scope where the defer was reached: each copy's scope is inside it
+    s32 scope;    // l->scope where the defer was reached: each copy's scope is inside it
+    bool copied;  // a copy has been lowered: the next ones are again (Lowering.repeating)
 };
 
 // A loop being lowered, and the jumps out of its body whose targets aren't
@@ -283,6 +287,8 @@ struct Lowering {
     Array<Loop> loops;        // the loops around the statement being lowered, innermost last
     Array<Deferred> defers;   // the defers reached in the blocks being lowered, in the order reached,
                               // the outermost block's first (lower_defers)
+    bool repeating;           // lowering deferred code again, a copy after its first (lower_deferred):
+                              // lowering's one error was reported at the first, so it isn't again
     bool bounds_checks;       // whether a[i] is checked against a's count: rig build's
                               // --no-bounds-checks clears it; always set on demand
     bool checking_bounds;     // whether this procedure's are: bounds_checks, unless it says #no_abc
@@ -1651,7 +1657,7 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
         // call is refused there, and still emitted, so the IR stays whole.
         Position outer = l->pos;
         l->pos = call->callee->pos;
-        if (!l->on_demand) {
+        if (!l->on_demand && !l->repeating) {
             diag_error(l->diag, l->pos, "'" STR_FMT "' can only be called while compiling", STR_ARG(proc->name));
         }
         next = emit_call(l, proc_index_of(l, proc), args)->result;
@@ -1698,12 +1704,20 @@ static void leave_block(Lowering *l, s64 mark, Ast_Proc *source);
 // debugger shows inside it, and its instructions are at their own lines. A
 // deferred block's statements go straight into that scope, which stands for
 // the block's own. The copy is a block of its own for defer, too: the
-// defers it reaches run at its end (leave_block).
+// defers it reaches run at its end (leave_block). Its scope isn't inside
+// the blocks a return, break or continue leaves, so a name one of them
+// hides is, in a debugger, the one the deferred code reads; but their code
+// is then in pieces around the copy, which CodeView can't describe, and
+// cdb shows their variables in the block around them (spec 10.7). A copy
+// after the first is `repeating`, and doesn't report lowering's error again,
+// nor do the copies of the defers it reaches.
 static void lower_deferred(Lowering *l, Deferred d, Ast_Proc *source) {
     Ast *statement = d.defer->statement;
     Position at = statement_position(statement);
     place(l, at, d.scope);
     l->scope = new_scope(l, at);
+    bool repeating = l->repeating;
+    l->repeating = repeating || d.copied;
     s64 mark = l->defers.count;
     if (statement->kind == AST_BLOCK) {
         lower_block(l, (Ast_Block *)statement, source);
@@ -1716,6 +1730,7 @@ static void lower_deferred(Lowering *l, Deferred d, Ast_Proc *source) {
     // never ends (its exit block).
     RIG_ASSERT(!has_ended(l, l->block));
     leave_block(l, mark, source);
+    l->repeating = repeating;
 }
 
 // What a way out of blocks runs (spec 6.12): a copy of each registered
@@ -1733,6 +1748,7 @@ static void lower_defers(Lowering *l, s64 down_to, Ast_Proc *source) {
         // Passed by value: a copy registers defers of its own, which may
         // move the list (they're gone again when the copy ends).
         lower_deferred(l, l->defers[i], source);
+        l->defers[i].copied = true;
     }
     place(l, pos, scope);
 }
@@ -2311,7 +2327,7 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     // Registered, and nothing emitted (spec 6.12): its statement is lowered
     // at each way out of its block instead (lower_defers), so its line has
     // code only where its copies are.
-    case AST_DEFER: array_add(&l->defers, Deferred{(Ast_Defer *)s, l->scope}); break;
+    case AST_DEFER: array_add(&l->defers, Deferred{(Ast_Defer *)s, l->scope, false}); break;
     default: lower_expr(l, s); break;  // a call, its value ignored
     }
 }
