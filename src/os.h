@@ -158,8 +158,8 @@ void os_release_inaccessible(void *p, u64 size);
 // the dynamic loader it depends on, and libm, as 10.6's -lc -lm provides
 // them); what -lc links in statically (atexit, at_quick_exit,
 // pthread_atfork) is looked up before this, in the compiler's own table.
-// Windows: GetProcAddress in kernel32.dll, then in
-// ucrtbase.dll (LoadLibraryW once); the standard C library's functions are
-// looked up before this, in the compiler's own table. Null isn't a
-// failure: a name nothing has leaves os_error_message as it was.
+// Windows: GetProcAddress in kernel32.dll, then in ucrtbase.dll
+// (LoadLibraryW once); the standard C library's functions are looked up
+// before this, in the compiler's own table. Null isn't a failure: a name
+// nothing has leaves os_error_message as it was.
 void *os_find_c_function(String name);

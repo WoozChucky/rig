@@ -15,13 +15,14 @@
 
 #include "test.h"
 
-#include <math.h>  // copysignf, ldexp, sqrt, sqrtf and sqrtl, for thunk_float_results and interp_finds_c_functions_by_name
+#include <math.h>  // copysignf, hypotf, ldexp, sqrt, sqrtf and sqrtl, for thunk_float_results and interp_finds_c_functions_by_name
 #include <time.h>  // time, for interp_recursion_to_the_limit; time, localtime and difftime, for interp_finds_c_functions_by_name
 #ifdef _WIN32
 #include <ctype.h>    // toupper, isalpha, for interp_finds_c_functions_by_name
 #include <errno.h>    // ERANGE, for interp_windows_shares_the_compilers_streams_and_errno
 #include <process.h>  // _getpid, for interp_calls_a_windows_function
 #else
+#include <dlfcn.h>     // dlopen, dlsym, RTLD_LAZY, RTLD_NOLOAD and RTLD_DEFAULT, for interp_finds_c_functions_by_name
 #include <errno.h>     // errno, ENOMEM, for interp_procedure_values
 #include <execinfo.h>  // backtrace, for thunk_unwinds_through_the_thunk
 #include <pthread.h>   // pthread_atfork, for interp_finds_c_functions_by_name

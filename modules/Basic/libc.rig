@@ -45,7 +45,9 @@ c_free :: (memory: *void) #foreign libc "free";
 // back to. The UCRT's is a long long, 8 bytes, and glibc's a 16-byte
 // struct whose first 8 bytes are the offset, so this struct holds either,
 // with the offset in position on both. Basic reads position for a file's
-// size and leaves reserved as C wrote it.
+// size and never touches reserved, which neither C library's fgetpos
+// writes for a byte stream: glibc's fills its state only for a wide stream
+// in a stateful encoding, and the UCRT's fpos_t is 8 bytes.
 C_Fpos :: struct {
     position: s64;
     reserved: u64;
@@ -133,13 +135,14 @@ C_TIME_UTC :: 1;
 c_timespec_get :: (time: *C_Timespec, base: s32) -> s32 #foreign libc "timespec_get";
 
 // C's <math.h> of a double, each called by math.rig's procedure of the
-// same name for float64 (c_sqrt by sqrt_float64, c_fmod by mod_float64).
-// The results are the C library's: glibc's libm on Linux and the UCRT's on
-// Windows, which may differ in the last bit, and on Windows a compiled
-// program's (ucrtbase.dll's) may differ in it from an interpreted one's
-// (the compiler's own copy, spec 10.8). A domain error, such as the square
-// root of -1, gives NaN; C's errno, which would tell it apart, isn't
-// reachable.
+// same name for float64 (c_sqrt by sqrt_float64). fmod's f only says it
+// is for floating point, which _float64 says already, so c_fmod's is
+// mod_float64. The results are the C library's: glibc's libm on Linux and
+// the UCRT's on Windows, which may differ in the last bit, and on Windows a
+// compiled program's (ucrtbase.dll's) may differ in it from an interpreted
+// one's (the compiler's own copy, spec 10.8). A domain error, such as the
+// square root of -1, gives NaN; C's errno, which would tell it apart,
+// isn't reachable.
 c_sqrt :: (x: float64) -> float64 #foreign libc "sqrt";
 c_cbrt :: (x: float64) -> float64 #foreign libc "cbrt";
 c_sin :: (x: float64) -> float64 #foreign libc "sin";
@@ -173,10 +176,10 @@ c_trunc :: (x: float64) -> float64 #foreign libc "trunc";
 c_fmod :: (x: float64, y: float64) -> float64 #foreign libc "fmod";
 
 // C's <math.h> of a float, each called by math.rig's procedure of the same
-// name for float32 (c_sqrtf by sqrt_float32, c_fmodf by mod_float32), and
-// each taking and giving a float, rather than the double one with its
-// result narrowed. Their results are the C library's, as the double ones'
-// above are.
+// name for float32 (c_sqrtf by sqrt_float32, c_fmodf by mod_float32, named
+// as mod_float64 is), and each taking and giving a float, rather than the
+// double one with its result narrowed. Their results are the C library's,
+// as the double ones' above are.
 c_sqrtf :: (x: float32) -> float32 #foreign libc "sqrtf";
 c_cbrtf :: (x: float32) -> float32 #foreign libc "cbrtf";
 c_sinf :: (x: float32) -> float32 #foreign libc "sinf";
