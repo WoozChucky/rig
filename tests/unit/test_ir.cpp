@@ -4332,10 +4332,10 @@ TEST(an_if_directive_makes_no_scope) {
 // Issue #149: defer (spec 6.12).
 
 TEST(defer_runs_at_each_way_out_in_reverse_order) {
-    // A defer emits nothing where it is: its statement is lowered again at
-    // each way out of its block, the last registered first. The return runs
-    // the if's defer, then the body's; the body's '}' only the body's. Each
-    // copy is at the deferred statement's own line, in a scope of its own
+    // A defer emits nothing where it is: its statement is lowered at each way
+    // out of its block, a copy for each, the last registered first. The return
+    // runs the if's defer, then the body's; the body's '}' only the body's.
+    // Each copy is at the deferred statement's own line, in a scope of its own
     // inside the one the defer was reached in, and the ret after the copies
     // stays at the return, or at the '}'.
     Arena a = arena_make();
@@ -4518,11 +4518,11 @@ TEST(defer_runs_after_the_return_values) {
 }
 
 TEST(defer_runs_when_break_and_continue_leave_nested_blocks) {
-    // Review Focus 1. The continue and the break leave the inner block and
-    // the loop's body: each runs the inner block's defer, then the body's,
-    // and nothing older, then jumps (to the step, to the exit). Falling off
-    // the inner block runs its own, and off the body the body's, before the
-    // jump to the step: a copy of each per way out, three of each.
+    // The continue and the break leave the inner block and the loop's body:
+    // each runs the inner block's defer, then the body's, and nothing
+    // older, then jumps (to the step, to the exit). Falling off the inner
+    // block runs its own, and off the body the body's, before the jump to
+    // the step: a copy of each per way out, three of each.
     Arena a = arena_make();
     String g = proc_ir(ir_print(&a, lower_source(&a,
                                                  "putchar :: (c: s32) -> s32 #foreign libc;\n"
@@ -4610,11 +4610,11 @@ TEST(defer_runs_when_break_and_continue_leave_nested_blocks) {
 }
 
 TEST(break_and_continue_run_only_their_own_loops_defers) {
-    // Review Focus 1: the inner loop's break and continue run the defers
-    // registered since its own body began, never the outer loop body's or
-    // the procedure body's. The inner defer is copied at the break, the
-    // continue and the inner body's end; the outer body's only at its end,
-    // and the procedure body's only at its '}'.
+    // The inner loop's break and continue run the defers registered since
+    // its own body began, never the outer loop body's or the procedure
+    // body's. The inner defer is copied at the break, the continue and the
+    // inner body's end; the outer body's only at its end, and the procedure
+    // body's only at its '}'.
     Arena a = arena_make();
     String g = proc_ir(ir_print(&a, lower_source(&a,
                                                  "putchar :: (c: s32) -> s32 #foreign libc;\n"
@@ -4661,11 +4661,10 @@ TEST(no_defer_runs_before_an_unreachable_end) {
 }
 
 TEST(deferred_code_is_at_its_own_lines) {
-    // Review Focus 2. The deferred block declares t, and is copied at the
-    // return and at the body's '}': each copy has its own slot, in its own
-    // scope, both inside the body's, at the deferred statement's '{'. Each
-    // copy's instructions are at their own lines: putchar(t), a load and a
-    // call, twice.
+    // The deferred block declares t, and is copied at the return and at the
+    // body's '}': each copy has its own slot, in its own scope, both inside
+    // the body's, at the deferred statement's '{'. Each copy's instructions
+    // are at their own lines: putchar(t), a load and a call, twice.
     Arena a = arena_make();
     String f = proc_ir(ir_print_debug(&a, lower_source(&a,
                                                        "putchar :: (c: s32) -> s32 #foreign libc;\n"
@@ -4775,9 +4774,9 @@ TEST(defer_in_main_runs_before_its_return) {
 }
 
 TEST(deferred_loops_at_a_break_build) {
-    // Review Focus 4: the break's copy of the deferred code pushes 20 loops
-    // onto the list of loops being lowered, which may move it; the break's
-    // own loop is found again after the copies.
+    // The break's copy of the deferred code pushes 20 loops onto the list
+    // of loops being lowered, which may move it; the break's own loop is
+    // found again after the copies.
     Arena a = arena_make();
     CHECK(builds(&a, nested_source(&a, "main :: () {\n    for 1..2 {\n        defer {", "for 1..2 {", 20, "", "}",
                                    "}\n        break;\n    }\n}\n")));
@@ -4785,8 +4784,8 @@ TEST(deferred_loops_at_a_break_build) {
 }
 
 TEST(defer_before_an_else_if_chain_of_10000_returns) {
-    // Review Focus 5: each of the 10001 returns copies the deferred
-    // statement, one add each, lowered in a loop down the chain.
+    // Each of the 10001 returns copies the deferred statement, one add
+    // each, lowered in a loop down the chain.
     const s64 ARMS = 10000;
     Arena a = arena_make();
     char *text = (char *)arena_alloc(&a, (u64)(ARMS * 64 + 4096), 1);

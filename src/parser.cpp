@@ -131,8 +131,8 @@ static bool is_load_or_import(Token *t) {
 }
 
 // Whether token t is a directive that begins a top-level declaration of its
-// own (parse_declaration): #load, #import, #run or #if (spec 2.14, 7.8,
-// 4.9). After a signature, or after a variable's procedure type, one means
+// own (parse_declaration): #load, #import, #run or #if (spec 2.13, 2.14,
+// 7.8, 4.9). After a signature, or a variable's procedure type, one means
 // the declaration being read stopped short there: it begins the next one.
 static bool is_top_level_directive(Token *t) {
     return is_load_or_import(t) || is_directive(t, "run") || is_directive(t, "if");
@@ -218,13 +218,12 @@ static s32 body_blocks(Parser *p) {
     return p->blocks - p->branches;
 }
 
-// The text read reaches `levels` levels: kept in p->deepest if it's the
-// most so far, and in p->body_deepest with the body's blocks open around
-// it (body_blocks). A
-// name read a level down by size_of or a cast (parse_type_below) is at that
-// level, which the limit doesn't check, so it's counted as MAX_DEPTH at
-// most: a struct it names is then too deep to work out there, and that's
-// the checker's to say.
+// The text read reaches `levels` levels: kept in p->deepest if it's the most
+// so far, and in p->body_deepest with the body's blocks open around it
+// (body_blocks). A name read a level down by size_of or a cast
+// (parse_type_below) is at that level, which the limit doesn't check, so
+// it's counted as MAX_DEPTH at most: a struct it names is then too deep to
+// work out there, and that's the checker's to say.
 static void reach(Parser *p, s32 levels) {
     if (levels > p->deepest) p->deepest = levels;
     reach_in_body(p, body_blocks(p) + levels);
@@ -694,14 +693,14 @@ static bool procedure_follows(Parser *p, s64 ahead) {
 // a body takes an expression, and a block isn't one). An #if in column 1
 // isn't one either: in a body it's a statement, unindented, as a constant
 // may be (spec 4.9); unless a branch of it declares a procedure or a struct,
-// or holds a #run { } (branch_declares_procedure), which only a top-level
+// or holds a #run { } (branch_declares_top_level), which only a top-level
 // #if's branch can.
-static bool branch_declares_procedure(Parser *p);
+static bool branch_declares_top_level(Parser *p);
 
 static bool starts_declaration(Parser *p) {
     Token *t = peek(p);
     if (is_directive(t, "run")) return t->pos.col == 1 && peek(p, 1)->kind == TOKEN_LBRACE;
-    if (is_directive(t, "if")) return t->pos.col == 1 && branch_declares_procedure(p);
+    if (is_directive(t, "if")) return t->pos.col == 1 && branch_declares_top_level(p);
     return t->kind == TOKEN_IDENT && t->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON &&
            (procedure_follows(p, 2) || peek(p, 2)->kind == TOKEN_STRUCT);
 }
@@ -719,7 +718,7 @@ static bool starts_declaration(Parser *p) {
 // at the end of the file. A brace in a condition (`#if X == .{1} {`) can
 // end the look early, and the #if is then a statement, as without such a
 // declaration.
-static bool branch_declares_procedure(Parser *p) {
+static bool branch_declares_top_level(Parser *p) {
     s64 depth = 0;             // the braces open since the '#if'
     s64 branches = 0;          // how many of those are branches' (always the outermost ones)
     bool opens_branch = true;  // the next '{' opens a branch: after an #if or an else at a branch's level
@@ -1239,19 +1238,17 @@ static void report_misplaced_loads(Parser *p, Array<Token *> *loads) {
 // The end of the file, or a procedure's declaration at the start of a line
 // (`name :: (` in column 1, `#run {`, or an #if whose branch declares a
 // procedure or a struct, or holds a #run { }: starts_declaration), before
-// the '}' means the
-// block was never closed: an if's '}' forgotten, say.
-// Everything up to there has been read as the block's statements, globals
-// in column 1 included, which belong after the body; read as its locals,
-// they'd be lost with it, and every use of them unknown. So the block is
-// taken to end before the run of statements in column 1 that declare
-// something (declares_in_column_1) right before the end, at this block's
-// own level: "expected '}'" is reported at the first of them, and the top
-// level resumes there (p->resume), reading them again as globals and
-// constants.
-// Without such a run, it's reported at the end itself, where the top level
-// resumes. A local that wasn't indented, followed by any other statement,
-// starts no run, so only the declarations next to the end are taken.
+// the '}' means the block was never closed: an if's '}' forgotten, say.
+// Everything up to there has been read as the block's statements, globals in
+// column 1 included, which belong after the body; read as its locals, they'd
+// be lost with it, and every use of them unknown. So the block is taken to
+// end before the run of statements in column 1 that declare something
+// (declares_in_column_1) right before the end, at this block's own level:
+// "expected '}'" is reported at the first of them, and the top level resumes
+// there (p->resume), reading them again as globals and constants. Without
+// such a run, it's reported at the end itself, where the top level resumes.
+// A local that wasn't indented, followed by any other statement, starts no
+// run, so only the declarations next to the end are taken.
 //
 // A #load in the run, in column 1, is read again at the top level too, as
 // the load it was meant to be: the file it names is loaded. So it's only
@@ -1708,7 +1705,7 @@ static Ast *parse_struct(Parser *p, Token *name) {
         // A #run or an #if in column 1: the top level's.
         Token *t = peek(p);
         bool top_level_directive = (is_directive(t, "run") || is_directive(t, "if")) && t->pos.col == 1;
-        if (t->kind == TOKEN_EOF || starts_declaration(p) || top_level_directive) {
+        if (t->kind == TOKEN_EOF || top_level_directive || starts_declaration(p)) {
             // Those loads are the top level's, read again there.
             array_free(&loads);
             if (first_load >= 0) p->next = first_load;
@@ -2052,7 +2049,7 @@ static void skip_to_next_declaration(Parser *p, s64 start) {
     bool in_column_1 = stop->kind == TOKEN_IDENT && stop->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON;
     bool outside = depth <= 0;
     if (p->next > start &&
-        (starts_declaration(p) || if_in_column_1(p) || closes_branch(p, depth) ||
+        (if_in_column_1(p) || starts_declaration(p) || closes_branch(p, depth) ||
          (outside && (in_column_1 || starts_load(p) || starts_run(p) || starts_if(p))) ||
          (outside && parens <= 0 && starts_global(p)))) {
         return;
@@ -2064,7 +2061,7 @@ static void skip_to_next_declaration(Parser *p, s64 start) {
         bool starts_line = p->next == 0 || p->tokens[p->next - 1].pos.line != t->pos.line;
         if (!first && starts_line &&
             ((depth <= 0 && t->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_COLON_COLON) ||
-             starts_declaration(p) || if_in_column_1(p))) {
+             if_in_column_1(p) || starts_declaration(p))) {
             return;
         }
         if (!first && starts_line && depth <= 0 && parens <= 0 && starts_global(p)) return;

@@ -306,11 +306,13 @@ TEST(a_stray_call_outside_a_body_declares_nothing) {
 // Milestone 2a (issue #33): scopes, untyped constants, integer operators,
 // conversions and returns (spec 6.4). These lex real source with src().
 
-// Parses and checks `text`, which must parse; the caller frees c.list.
-static Checked check_src(Arena *a, const char *text) {
+// Parses and checks `text`, which must parse, for `system` (Ast_File.system;
+// SYSTEM_NONE, the host's); the caller frees c.list.
+static Checked check_src(Arena *a, const char *text, System system = SYSTEM_NONE) {
     Token_List *list = src(text);
     Ast_File *file = parse(list->tokens, a, &list->diag);
     RIG_ASSERT(list->diag.error_count == 0);  // these tests are about the checker
+    file->system = system;
     bool ok = check(file, a, &list->diag);
     return {list, file, ok};
 }
@@ -6037,13 +6039,10 @@ TEST(os_constants_are_predeclared) {
 // `system`.
 static u64 os_value_for(System system) {
     Arena a = arena_make();
-    Token_List *list = src("N :: OS;\nmain :: () {}\n");
-    Ast_File *file = parse(list->tokens, &a, &list->diag);
-    file->system = system;
-    check(file, &a, &list->diag);
-    RIG_ASSERT(list->diag.error_count == 0);
-    u64 value = file->globals[0]->constant;
-    token_list_free(list);
+    Checked c = check_src(&a, "N :: OS;\nmain :: () {}\n", system);
+    RIG_ASSERT(c.ok);
+    u64 value = c.file->globals[0]->constant;
+    token_list_free(c.list);
     arena_free(&a);
     return value;
 }
@@ -6266,19 +6265,6 @@ TEST(if_directive_reaches_the_end) {
     arena_free(&a);
 }
 
-// The messages for `text`, parsed and checked for `system`
-// (Ast_File.system), in source order.
-static String messages_for_system(Arena *a, const char *text, System system) {
-    Token_List *list = src(text);
-    Ast_File *file = parse(list->tokens, a, &list->diag);
-    file->system = system;
-    check(file, a, &list->diag);
-    diag_sort(&list->diag);
-    String result = messages(a, &list->diag);
-    token_list_free(list);
-    return result;
-}
-
 TEST(if_directive_per_system) {
     // Each system takes its own branch, whatever the host: only the taken
     // branch's error is said.
@@ -6286,9 +6272,9 @@ TEST(if_directive_per_system) {
     const char *program = "main :: () {\n"
                           "    #if OS == OS_WINDOWS { a : int = \"w\"; } else { b : int = \"l\"; }\n"
                           "}\n";
-    CHECK_STR(messages_for_system(&a, program, SYSTEM_WINDOWS),
+    CHECK_STR(check_source(&a, program, SYSTEM_WINDOWS),
               "2:38: a value of type 'string' doesn't convert to 'int' implicitly\n");
-    CHECK_STR(messages_for_system(&a, program, SYSTEM_LINUX),
+    CHECK_STR(check_source(&a, program, SYSTEM_LINUX),
               "2:62: a value of type 'string' doesn't convert to 'int' implicitly\n");
     arena_free(&a);
 }
@@ -6303,11 +6289,11 @@ TEST(if_directive_jumps_need_a_loop) {
 }
 
 TEST(if_directive_chains_of_10000_arms) {
-    // Review Focus 5: an else #if chain nests one level per arm, as an else
-    // if chain does (else_if_chains_of_10000_arms), and no stage may recurse
-    // per arm. pick's X picks an arm in the middle; none's picks none, so
-    // deciding walks every condition to the last else. Only a taken branch
-    // is lowered: one return in each.
+    // An else #if chain nests one level per arm, as an else if chain does
+    // (else_if_chains_of_10000_arms), and no stage may recurse per arm.
+    // pick's X picks an arm in the middle; none's picks none, so deciding
+    // walks every condition to the last else. Only a taken branch is
+    // lowered: one return in each.
     const s64 ARMS = 10000;
     Arena a = arena_make();
     char *text = (char *)arena_alloc(&a, (u64)(2 * ARMS * 64 + 4096), 1);
@@ -6629,10 +6615,10 @@ static String check_loaded(Arena *a, const char *text, System system) {
 }
 
 TEST(if_branch_names_and_the_rest) {
-    // Review Focus 2: one name in both branches is the normal use, never
-    // already declared, on either system. A branch's name clashing with one
-    // outside every #if is, at the later of the two in load order, naming
-    // the earlier, whichever is in the branch.
+    // One name in both branches is the normal use, never already declared,
+    // on either system. A branch's name clashing with one outside every #if
+    // is, at the later of the two in load order, naming the earlier,
+    // whichever is in the branch.
     Arena a = arena_make();
     const char *both = "#if OS == OS_WINDOWS { NAME :: 1; } else { NAME :: 2; }\nmain :: () {}\n";
     CHECK_STR(check_loaded(&a, both, SYSTEM_WINDOWS), "");
@@ -6660,10 +6646,10 @@ TEST(what_a_top_level_condition_worked_out_stays_for_check) {
 }
 
 TEST(top_level_if_directive_chains_of_10000_arms) {
-    // Review Focus 5: a top-level else #if chain, as a generated table
-    // writes one, is decided and its taken branch spliced with no recursion
-    // per arm, in the loader as in the checker. N picks the last arm, and
-    // only its A makes main's count no less than zero.
+    // A top-level else #if chain, as a generated table writes one, is
+    // decided and its taken branch spliced with no recursion per arm, in
+    // the loader as in the checker. N picks the last arm, and only its A
+    // makes main's count no less than zero.
     const s64 ARMS = 10000;
     Arena a = arena_make();
     char *text = (char *)arena_alloc(&a, (u64)(ARMS * 64 + 4096), 1);
@@ -6875,10 +6861,10 @@ TEST(defer_changes_nothing_about_reaching_the_end) {
 }
 
 TEST(a_run_in_deferred_code_checks_its_body_as_its_own) {
-    // Review Focus 3: g comes after main, so its body is first checked on
-    // demand, from inside main's deferred statement (check_body). It's
-    // checked as its own: neither its return nor its loop's break is
-    // refused, only its own error is said, and so the #run doesn't run.
+    // g comes after main, so its body is first checked on demand, from
+    // inside main's deferred statement (check_body). It's checked as its
+    // own: neither its return nor its loop's break is refused, only its own
+    // error is said, and so the #run doesn't run.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "main :: () {\n"
@@ -6911,8 +6897,8 @@ TEST(a_run_in_deferred_code_checks_its_body_as_its_own) {
 }
 
 TEST(defer_in_code_a_run_runs) {
-    // Review Focus 3: a #run runs the IR compiled code runs, defers
-    // included. f's return works n out, 1, before its defer makes n 2.
+    // A #run runs the IR compiled code runs, defers included. f's return
+    // works n out, 1, before its defer makes n 2.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "N :: #run f();\n"

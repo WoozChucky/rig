@@ -149,10 +149,13 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // A written type. A name is a built-in type, or a struct's, whose layout is
 // worked out here if it isn't yet (resolve_struct). Any other name declared
 // where the type is written isn't a type ("'foo' is not a type"), and a name
-// declared nowhere is "unknown type 'foo'", unless a #load failed: the
-// missing file may declare it (Checker.lost_a_file). A broken entry's name
-// may have been anything, so nothing is said about it. A struct found to
-// contain itself has no type: its uses say nothing more.
+// declared nowhere is "unknown type 'foo'", unless a #load or a top-level
+// #if's condition failed: the missing file, or the branches never decided,
+// may declare it (Checker.lost_a_file). A decider says instead, of a name a
+// top-level #if's branch declares, "'foo' is declared in a top-level #if,
+// so it can't decide another top-level #if" (check_in_a_branch). A broken
+// entry's name may have been anything, so nothing is said about it. A
+// struct found to contain itself has no type: its uses say nothing more.
 //
 // behind_pointer: the type is what a pointer points at, or a view's
 // elements, which lie elsewhere: a struct named right there needs only its
@@ -1268,8 +1271,9 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
 // A return of a call with as many results (return divmod(a, b);) is one
 // value, the call's first result, so it doesn't count as several.
 // In deferred code (spec 6.12) a return is refused, at the 'return': that
-// code runs as its block is left, and leaves itself only by its end. Its
-// values are still checked, as expressions, against no result.
+// code runs as its block is left, and leaves itself only by its end. Each
+// of its values is still checked, so its own errors are said, but nothing
+// compares it with the procedure's results.
 static void check_return(Checker *c, Ast_Return *ret) {
     if (c->deferring) {
         diag_error(c->diag, ret->pos, "can't return from a deferred statement");
@@ -1342,10 +1346,12 @@ static void check_if(Checker *c, Ast_If *branch) {
 }
 
 // An #if's condition (spec 4.9): a bool known while compiling. False after
-// saying what's wrong at condition->start: not a bool ("the condition of
-// '#if' must be a bool, not 'int'"), or not known while compiling ("... must
-// be known while compiling", unless it needs a #run with no value, whose
-// failure was said: has_failed_run), or its own error.
+// saying what's wrong: at condition->start, not a bool ("the condition of
+// '#if' must be a bool, not 'int'"), or not known while compiling ("...
+// must be known while compiling", unless it needs a #run with no value,
+// whose failure was said: has_failed_run); or the condition's own error,
+// which check_operand reports where it is (an unknown identifier at its
+// name).
 static bool check_if_condition(Checker *c, Ast *condition) {
     Type *t = check_operand(c, condition);
     if (!t) return false;
@@ -1605,8 +1611,8 @@ static bool breaks_out_of(Ast *s, Ast *loop) {
 static bool reaches_end(Ast_Block *block);
 
 // Whether control can go on past statement s, to what follows it. Not past
-// a return; nor past a block, an if with an else, or a loop, that can't
-// reach its own end:
+// a return; nor past a block, an if with an else, an #if or a loop that
+// can't reach its own end:
 // - an if with an else, when neither branch reaches its end (else if: the
 //   if that's the else part can't be got past either). Without an else,
 //   the condition may be false, so it always may.
@@ -1619,12 +1625,12 @@ static bool reaches_end(Ast_Block *block);
 // loop; the rule is only asked about statements outside any loop body
 // (a procedure's body, and the blocks, ifs and #ifs that end it) or about
 // whole loops, so it never sees one.
-// An if, an #if or a while whose condition was an error (its type unknown,
-// or not bool: check_condition reported it; for an #if's chain, any of its
-// conditions, which check_if_condition also refuses when not known while
-// compiling: Ast_If_Directive.failed) is taken not to go past,
-// whatever its branches do. That's a policy, so the condition's message is
-// the only one: for `while 1` (likely meant as `while true`) a
+// An if or a while whose condition was an error (its type unknown, or not
+// bool), which check_condition reported, is taken not to go past, whatever
+// its branches do; so is an #if any of whose chain's conditions failed
+// (Ast_If_Directive.failed), which check_if_condition reported, a condition
+// not known while compiling included. That's a policy, so the condition's
+// message is the only one: for `while 1` (likely meant as `while true`) a
 // missing-return message would be wrong, and for an if a real missing
 // return shows up once the condition is fixed.
 static bool goes_past(Ast *s) {
@@ -1681,9 +1687,9 @@ static bool reaches_end(Ast_Block *block) {
 // global's value in the pass before. So it's checked with a state of its
 // own: the procedure, the scopes, the loops, the deferred statement
 // (Checker.deferring) and lost_a_local of whatever was being checked are
-// set aside, and back when it's done, as the levels are. While
-// it's under way, its block is on c->resolving, so a #run that needs it
-// then finds a circle.
+// set aside, and back when it's done, as the levels are. While it's under
+// way, its block is on c->resolving, so a #run that needs it then finds a
+// circle.
 // Whether its check reported an error is kept (Ast_Proc.had_errors): a
 // #run that reaches it doesn't run.
 static void check_body(Checker *c, Ast_Proc *proc) {
@@ -2162,12 +2168,18 @@ void check_decide(Checker *c, Ast_If_Directive *first) {
     decide_if(c, first);
 }
 
-void check_decider_free(Checker *c) {
+// What a Checker holds of its own, freed alike by check() and
+// check_decider_free: a field that needs freeing is freed here, for both.
+static void free_checker_fields(Checker *c) {
     table_free(&c->top_level);
     array_free(&c->scopes);
     array_free(&c->loops);
     array_free(&c->resolving);
     array_free(&c->too_deep);
+}
+
+void check_decider_free(Checker *c) {
+    free_checker_fields(c);
     free(c);
 }
 
@@ -2284,9 +2296,10 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // for their effect once the whole program checks (spec 7.8).
     for (s64 i = 0; i < file->runs.count; i++) check_top_level_run(&c, file->runs[i]);
 
-    // A broken main, a broken declaration whose name was lost, or a file a
-    // #load failed to load (Ast_File.lost_a_file) has nothing to say about
-    // main: what it declares is unknown. A global called main is no
+    // A broken main, a broken declaration whose name was lost, a file a
+    // #load failed to load, or a top-level #if whose condition failed
+    // (Ast_File.lost_a_file) has nothing to say about main: what it declares
+    // is unknown. A global called main is no
     // procedure, so it's as if there were none. A build program (spec 7.9)
     // needs none: it builds others, and is never an executable itself.
     Ast **main_decl = table_get(&c.top_level, str("main"));
@@ -2302,11 +2315,7 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
         if (!m->body) diag_error(d, m->pos, "'main' must have a body: it's where the program starts");
     }
 
-    table_free(&c.top_level);
-    array_free(&c.scopes);
-    array_free(&c.loops);
-    array_free(&c.resolving);
-    array_free(&c.too_deep);
+    free_checker_fields(&c);
     if (!world) compile_time_free(c.world);
     return d->error_count == errors_before;
 }

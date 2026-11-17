@@ -295,7 +295,7 @@
                     "match": "\\b(?:true|false|null)\\b"
                 },
                 {
-                    "comment": "The predeclared constants (spec 2.5), names to the lexer: src/checker.cpp's PREDECLARED_CONSTANTS.",
+                    "comment": "The predeclared constants (spec 2.5), which the lexer reads as identifiers: the list is src/checker.cpp's PREDECLARED_CONSTANTS.",
                     "name": "support.constant.rig",
                     "match": "\\b(?:OS|OS_WINDOWS|OS_LINUX)\\b"
                 }

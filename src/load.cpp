@@ -220,7 +220,8 @@ static String load_target(Loading *l, Ast_Load *load, s32 holder, String *why) {
         // #load of that path. A name that isn't a module's is looked for
         // nowhere, so "../x" can't reach outside the places.
         if (!is_module_name(load->path)) {
-            *why = string_printf(arena, "'" STR_FMT "' isn't a module's name", STR_ARG(load_shown_name(arena, load->path)));
+            *why = string_printf(arena, "'" STR_FMT "' isn't a module's name",
+                                 STR_ARG(load_shown_name(arena, load->path)));
             return {};
         }
         String module = module_lookup(arena, l->places, load->path);
@@ -249,12 +250,12 @@ static String load_target(Loading *l, Ast_Load *load, s32 holder, String *why) {
     return loaded;
 }
 
-// The load's file, as the queue resolved one before (an #import's module, a
-// #load's path, the errors, the stdin-for text, the Compiler module): its
-// index, read and added if new, or -1. Sets load->file. `holder` is the
-// file the load is in, whose directory a #load's path is relative to. Each
-// #load that fails leaves the program without the file it names, which the
-// tree records (Ast_File.lost_a_file).
+// The load's file (an #import's module, a #load's path, the errors, the
+// stdin-for text, the Compiler module): its index, read and added if new,
+// or -1. Sets load->file. `holder` is the file the load is in, whose
+// directory a #load's path is relative to. Each #load that fails leaves the
+// program without the file it names, which the tree records
+// (Ast_File.lost_a_file).
 static s32 follow_load(Loading *l, Ast_Load *load, s32 holder) {
     Diagnostics *d = l->d;
     Ast_File *tree = l->tree;

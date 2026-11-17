@@ -140,11 +140,13 @@ static String messages(Arena *a, Diagnostics *d) {
     return all;
 }
 
-// The messages for `text` (lexed with src()), parsed and checked, in source
-// order as rig build prints them; "" when it checks.
-static String check_source(Arena *a, const char *text) {
+// The messages for `text` (lexed with src()), parsed and checked for
+// `system` (Ast_File.system; SYSTEM_NONE, the host's), in source order as
+// rig build prints them; "" when it checks.
+static String check_source(Arena *a, const char *text, System system = SYSTEM_NONE) {
     Token_List *list = src(text);
     Ast_File *file = parse(list->tokens, a, &list->diag);
+    file->system = system;
     check(file, a, &list->diag);
     diag_sort(&list->diag);
     String result = messages(a, &list->diag);

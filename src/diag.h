@@ -41,8 +41,10 @@ struct Source_File {
     bool in_module;        // inside one of the modules' places (load.h, spec 2.14): a file
                            // of a module that ships with rig, which may declare #compiler
                            // procedures; set by the loader
-    s32 order;  // the file's place in load order (spec 2.13), which diagnostics sort by: its index, set by
-                // diag_add_file, unless a #load in a taken #if branch read it out of order (load.h)
+    s32 order;  // the file's place in load order (spec 2.13), which diagnostics sort by: its index,
+                // as diag_add_file sets it, until the loader sets every file's (load.h): it
+                // differs from the index only where a #load in a taken #if branch read a file
+                // out of order
 };
 
 struct Diagnostic {
