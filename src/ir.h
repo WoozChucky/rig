@@ -99,13 +99,15 @@
 //   `for` or `while`, an if's test at its `if` and the jump out of each of
 //   its blocks at that block's '}', a runtime check's failure at the check
 //   (the place its message names), the implicit return at the end of a
-//   body at its '}'. A deferred statement (spec 6.12) is lowered again at
-//   each way out of its block, each copy's instructions at their own
-//   statements' positions; the defer itself has no code, and the ret or
-//   jump that leaves after the copies stays where it is with none (at its
-//   return, break or continue, an if's block's '}', its loop's keyword, the
-//   body's '}'), so stepping out of a block goes through the deferred lines
-//   in the order they run, then to that place. Line 0 is no position. The
+//   body at its '}'. A deferred statement (spec 6.12) is lowered at each
+//   way out of its block, a copy for each, each copy's instructions at
+//   their own statements' positions; the defer itself has no code, and the
+//   ret or jump that leaves after the copies stays where it would be with
+//   no defer (at its return, break or continue, an if's block's '}', its
+//   loop's keyword, the body's '}'), so stepping out of a block goes
+//   through the deferred lines in the order they run, then to that place,
+//   when there is an instruction there (a jump to the block laid out right
+//   after it has none: lower.cpp's header). Line 0 is no position. The
 //   procedures the compiler makes itself (__rig_bounds_failed,
 //   __rig_string_equal) have none, and no source, so a debugger steps over
 //   them. In a procedure of the source, only the prologue's work has none:
@@ -122,9 +124,9 @@
 //   checker's scopes: an if's or else's block, or a block statement, is a
 //   scope; a for's or while's body is the loop's scope, which starts at
 //   the keyword and holds the iterator and it_index. An #if's taken branch
-//   is none (spec 4.9): its statements are the enclosing block's, and the
-//   #if adds no code of its own, its taken statements being at their own
-//   positions (none at the '#if'). Each copy of a deferred statement is a
+//   is no scope (spec 4.9): its statements are the enclosing block's, and
+//   the #if adds no code of its own, its taken statements being at their
+//   own positions (none at the '#if'). Each copy of a deferred statement is a
 //   scope of its own, at the statement, inside the scope the defer was
 //   reached in, so what each copy declares is a variable of its own. And a
 //   declaration of a local that hides a variable (a global, a parameter, an

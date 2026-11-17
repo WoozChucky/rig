@@ -1,5 +1,5 @@
 // A #compiler call in deferred code (spec 6.12, 7.9) is refused once, at
-// its name, though the statement is compiled again at each way out of its
+// its name, though the statement is compiled at each way out of its
 // block: here three, two returns and the body's end. So is one in a defer
 // that deferred code reaches, though each copy registers it anew. rig
 // check, which never lowers the program, has nothing to say.

@@ -2,7 +2,9 @@
 // read, in what order, each once, what's reported when one can't be, and a
 // file given with its text in place of what's on disk (rig check
 // --stdin-for); then #import's modules, build programs, and a workspace's
-// further files (issue #116).
+// further files (issue #116); then top-level #if (issue #147): what the
+// loader decides, the files a taken branch reads, load order, and
+// --stdin-for of a file only a branch not taken loads.
 // Each test writes its files under .build/tests/load/NAME/, NAME the
 // test's (or the test's with a suffix, when it needs a second directory),
 // and loads them from there. Uses test_os.cpp's SEPARATOR and reason.
@@ -2120,11 +2122,10 @@ static String not_taken_result(Arena *a, const char *text, bool reached, bool no
 TEST(stdin_for_loaded_only_in_a_branch_not_taken) {
     // dir/l.rig is the --stdin-for file, never on disk; w.rig, x.rig and
     // sub/a.rig are, x.rig loads l.rig, and sub/a.rig's #if names l.rig from
-    // sub. Each case's load of
-    // l.rig is in a branch not taken (on that system), in a failed chain,
-    // or outside every #if; a branch not taken may spell it another way,
-    // since a file is known by its identity. The bad loads of a branch not
-    // taken are resolved saying nothing.
+    // sub. Each case's load of l.rig is in a branch not taken (on that
+    // system), in a failed chain, or outside every #if; a branch not taken may
+    // spell it another way, since a file is known by its identity. The bad
+    // loads of a branch not taken are resolved saying nothing.
     Arena a = arena_make();
     String dir = load_test_directory(&a, "stdin_for_loaded_only_in_a_branch_not_taken");
     CHECK(os_make_directory(str(in_directory(&a, dir, "sub"))));

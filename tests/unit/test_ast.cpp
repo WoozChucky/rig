@@ -135,10 +135,10 @@ TEST(declarations_sort_in_load_order) {
 TEST(declarations_sort_across_files_and_within_one) {
     // ast_add_declaration puts a taken branch's declarations after the same
     // file's later ones, so a list can be out of order inside one file as
-    // well as across files. The lists here hold five procedures (an odd
-    // count, three merge passes, so the sorted list is copied back), four
-    // runs (two passes, nothing to copy back) and three globals (an odd
-    // count, two passes). Each list's first entry in load order is added
+    // well as across files. The lists here hold five procedures (three merge
+    // passes, an odd number, so the sorted list is copied back), four runs
+    // (two passes, an even number: nothing to copy back) and three globals
+    // (two passes too). Each list's first entry in load order is added
     // last. File 1 comes first.
     Arena a = arena_make();
     Ast_File file = {};

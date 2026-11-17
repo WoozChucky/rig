@@ -247,11 +247,13 @@ struct Local {
 };
 
 // A defer reached in a block being lowered (spec 6.12): its statement is
-// lowered again at each way out of the block (lower_defers).
+// lowered at each way out of the block, a copy for each (lower_defers),
+// and not where the defer is.
 struct Deferred {
     Ast_Defer *defer;
     s32 scope;    // l->scope where the defer was reached: each copy's scope is inside it
-    bool copied;  // a copy has been lowered: the next ones are again (Lowering.repeating)
+    bool copied;  // a copy has been lowered: the later ones are lowered as repeats, which don't report
+                  // lowering's errors again (Lowering.repeating)
 };
 
 // A loop being lowered, and the jumps out of its body whose targets aren't
@@ -2311,11 +2313,11 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
         // current scope (no lower_scoped_block: an #if makes no scope, ir.h's
         // "Debug information"). Nothing is at the '#if' itself: a debugger
         // stops at the taken statements alone, so at the #if's line only when
-        // the branch shares it (#if C { return 1; }). A hiding declaration in the branch
-        // starts a scope that lasts to the end of the enclosing block, as its
-        // name does; a defer in it is the enclosing block's too, run when
-        // that block is left (spec 6.12: the branch takes no mark of its
-        // own, leave_block).
+        // the branch shares it (#if C { return 1; }). A hiding declaration in
+        // the branch starts a scope that lasts to the end of the enclosing
+        // block, as its name does; a defer in it is the enclosing block's
+        // too, run when that block is left (spec 6.12: the branch takes no
+        // mark of its own, leave_block).
         Ast_Block *taken = ((Ast_If_Directive *)s)->taken;
         if (taken) lower_block(l, taken, source);
         break;
