@@ -6407,6 +6407,50 @@ TEST(a_top_level_condition_cant_use_a_name_from_another_if) {
     CHECK_STR(decide_source(&a, "#if false {} else #if true { #if true {} else { DEEP :: 1; } }\n#if DEEP == 1 {}",
                             SYSTEM_NONE, nullptr),
               "2:5: 'DEEP' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    // A procedure, called, and a variable, as the constants are.
+    CHECK_STR(decide_source(&a, "#if true { f :: () -> bool { return true; } v := 1; }\n#if f() {}\n#if v == 1 {}",
+                            SYSTEM_NONE, nullptr),
+              "2:5: 'f' is declared in a top-level #if, so it can't decide another top-level #if\n"
+              "3:5: 'v' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    // A built-in type's name always means the built-in type, even where a
+    // branch declares a struct of that name (refused there, if it's checked):
+    // its own messages.
+    CHECK_STR(decide_source(&a, "#if true { int :: struct { x: int; } }\n#if int == 1 {}", SYSTEM_NONE, nullptr),
+              "2:5: 'int' is a type, not a value\n");
+    CHECK_STR(decide_source(&a, "#if true { s64 :: struct { x: int; } }\n#if s64() == 1 {}", SYSTEM_NONE, nullptr),
+              "2:5: 's64' isn't a procedure, so it can't be called\n");
+    arena_free(&a);
+}
+
+TEST(a_top_level_condition_cant_use_a_name_that_joined_through_a_branch) {
+    // What joins the top level after the decider is made, as a file only a
+    // taken branch loads does (the loader adds its declarations,
+    // ast_add_declaration), isn't the base: a condition that uses it is
+    // refused, as one using a branch's name is. The second source stands in
+    // for that file. The base's own names are used as ever: it has more
+    // procedures than globals, so neither list is read from the other's
+    // count.
+    Arena a = arena_make();
+    Token_List *list = src("BASE :: 1;\ng :: () -> int { return 2; }\nh :: () -> int { return 3; }\n"
+                           "#if BASE == 1 {}\n#if X == 1 {}\n#if f() == 1 {}\n#if v == 1 {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    Token_List *loaded = src("X :: 1;\nf :: () -> int { return 1; }\nv := 1;\n");
+    Ast_File *more = parse(loaded->tokens, &a, &loaded->diag);
+    Checker *decider = check_decider_new(file, &a, &list->diag);
+    for (s64 i = 0; i < more->procs.count; i++) ast_add_declaration(file, more->procs[i]);
+    for (s64 i = 0; i < more->globals.count; i++) ast_add_declaration(file, more->globals[i]);
+    for (s64 i = 0; i < file->ifs.count; i++) check_decide(decider, file->ifs[i]);
+    check_decider_free(decider);
+    diag_sort(&list->diag);
+    CHECK_STR(messages(&a, &list->diag),
+              "5:5: 'X' is declared in a top-level #if, so it can't decide another top-level #if\n"
+              "6:5: 'f' is declared in a top-level #if, so it can't decide another top-level #if\n"
+              "7:5: 'v' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK(file->ifs[0]->decided && !file->ifs[0]->failed);
+    CHECK(file->ifs[0]->taken == file->ifs[0]->then_block);
+    CHECK(file->ifs[1]->failed && file->ifs[2]->failed && file->ifs[3]->failed);
+    token_list_free(loaded);
+    token_list_free(list);
     arena_free(&a);
 }
 
@@ -6443,27 +6487,31 @@ TEST(a_top_level_condition_must_be_a_constant_bool) {
 
 TEST(a_top_level_condition_with_an_unknown_name) {
     // Declared nowhere: unknown, unless a file is missing (lost_a_file),
-    // which may declare it. A name a branch declares is known to be
-    // declared, so it's refused all the same.
+    // which may declare it. A file may go missing between two decisions (a
+    // taken branch's #load), so each decision asks. A name a branch declares
+    // is known to be declared, so it's refused all the same.
     Arena a = arena_make();
     CHECK_STR(decide_source(&a, "#if nope {}", SYSTEM_NONE, nullptr), "1:5: unknown identifier 'nope'\n");
     CHECK_STR(decide_source(&a, "x : Nope;\n#if size_of(Nope) == 1 {}", SYSTEM_NONE, nullptr),
               "2:13: unknown type 'Nope'\n");
-    Token_List *list = src("#if nope {}\n#if true { X :: 1; }\n#if X == 1 {}\n");
+    Token_List *list = src("#if nope {}\n#if nope {}\n#if true { X :: 1; }\n#if X == 1 {}\n");
     Ast_File *file = parse(list->tokens, &a, &list->diag);
+    Checker *decider = check_decider_new(file, &a, &list->diag);
+    check_decide(decider, file->ifs[0]);
     file->lost_a_file = true;
-    decide_all(file, &a, &list->diag);
+    for (s64 i = 1; i < file->ifs.count; i++) check_decide(decider, file->ifs[i]);
+    check_decider_free(decider);
     CHECK_STR(messages(&a, &list->diag),
-              "3:5: 'X' is declared in a top-level #if, so it can't decide another top-level #if\n");
-    CHECK(file->ifs[0]->failed);
+              "1:5: unknown identifier 'nope'\n"
+              "4:5: 'X' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK(file->ifs[0]->failed && file->ifs[1]->failed);
     token_list_free(list);
     arena_free(&a);
 }
 
 TEST(deciding_leaves_the_rest_for_check) {
     // What the decider worked out stays on the nodes, found done by check():
-    // Vec2's one Type, ORIGIN's value. The program then checks clean, every
-    // message said once.
+    // Vec2's one Type, ORIGIN's value. The program then checks clean.
     Arena a = arena_make();
     Token_List *list = src("Vec2 :: struct { x: int; y: int; }\nORIGIN :: Vec2.{0, 0};\n#if ORIGIN.x == 0 {}\n"
                            "main :: () { v : Vec2 = ORIGIN; }\n");
@@ -6478,6 +6526,51 @@ TEST(deciding_leaves_the_rest_for_check) {
     CHECK(check(file, &a, &list->diag));
     CHECK_STR(messages(&a, &list->diag), "");
     CHECK(vec2->declared == decided);
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(deciding_and_checking_say_each_message_once) {
+    // The decider says nothing about the names (a name already declared, a
+    // predeclared one): check() does. What the decider said about a
+    // declaration it worked out (B's unknown name, N's #run, refused), check()
+    // finds said, and doesn't say again.
+    Arena a = arena_make();
+    Token_List *list = src("A :: 1;\nA :: 2;\nOS :: 3;\nB :: nope;\n#if B == 1 {}\nN :: #run f();\n#if N == 3 {}\n"
+                           "f :: () -> int { return 3; }\nmain :: () { x := B; y := N; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    decide_all(file, &a, &list->diag);
+    diag_sort(&list->diag);
+    CHECK_STR(messages(&a, &list->diag),
+              "4:6: unknown identifier 'nope'\n"
+              "6:6: a top-level #if's condition can't run code while compiling, for now\n");
+    CHECK(!check(file, &a, &list->diag));
+    diag_sort(&list->diag);
+    CHECK_STR(messages(&a, &list->diag),
+              "2:1: 'A' is already declared at test.rig:1:1\n"
+              "3:1: 'OS' is predeclared: it's the system the program is built for\n"
+              "4:6: unknown identifier 'nope'\n"
+              "6:6: a top-level #if's condition can't run code while compiling, for now\n");
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(deciding_leaves_a_struct_in_a_circle_without_a_type) {
+    // A struct the decider found in a circle, or too big, keeps having no
+    // type in check(), as when check() finds it so: its uses say nothing
+    // more.
+    Arena a = arena_make();
+    Token_List *list = src("Node :: struct { next: Node; v: int; }\nHuge :: struct { x: [1099511627776]u8; y: u8; }\n"
+                           "#if size_of(Node) > 0 {}\n#if size_of(Huge) > 0 {}\n"
+                           "main :: () { n : Node; x := n.v; h : Huge; y := h.y; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    decide_all(file, &a, &list->diag);
+    CHECK(file->ifs[0]->failed && file->ifs[1]->failed);
+    CHECK(check(file, &a, &list->diag));  // nothing of its own to say
+    diag_sort(&list->diag);
+    CHECK_STR(messages(&a, &list->diag),
+              "1:1: 'Node' contains itself; it can hold a pointer to itself, *Node\n"
+              "2:1: 'Huge' is too big\n");
     token_list_free(list);
     arena_free(&a);
 }
