@@ -21,9 +21,9 @@ true true false true false
 []
 [ABC] copied: true
 [09] copied: true
-empty results allocate: 0
-one allocation: 1
+empty results allocate: 0 true true true true true true
+one allocation: 1 2 3 4 5
 views: 1 false [a+b]
 no memory: 7 true 4 true 6 true 5 true 3 true
-int's largest: true 9223372036854775807 true 9223372036854775806
+int's largest: true 9223372036854775807 true 9223372036854775807 true 9223372036854775807 true 9223372036854775806
 past it: true true true true true true true true
