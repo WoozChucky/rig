@@ -1,0 +1,252 @@
+// Basic's sorting and searching (issue #145): a stable merge sort through
+// procedure values, of ints at int's extremes, of pairs with equal keys
+// (seven, and a thousand), of strings and of floats with NaNs and
+// infinities; the scratch memory it asks for and gives back; no elements,
+// one, elements of no size and four elements, which ask for nothing, and
+// five, which ask for scratch; a thousand ints scrambled, in order and the
+// other way round; and the same sort without memory, still stable. Then
+// binary search, a lower bound, before the first element, among equal ones,
+// between two and after the last, of nothing and of elements of no size,
+// and of strings.
+#import "Basic";
+
+// What a counting allocator was asked to do: how many allocations and
+// frees, and how many bytes the last allocation was for.
+Counter :: struct { allocations: int; frees: int; last_size: int; }
+
+// Passes every call on to the heap, counting allocations and frees.
+counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE {
+        counter.allocations += 1;
+        counter.last_size = size;
+    }
+    if mode == FREE { counter.frees += 1; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+// Gives no memory, as an allocator that has run out would.
+null_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return null;
+}
+
+// A key to sort by, and the order the pair had before the sort, which a
+// stable sort keeps among equal keys.
+Pair :: struct { key: int; order: int; }
+
+// Whether a's key is below b's, the order left out, so that pairs of one
+// key are equal to the sort.
+less_key :: (a: *void, b: *void) -> bool {
+    return (cast(*Pair) a).key < (cast(*Pair) b).key;
+}
+
+// Prints a space, then index/found.
+show_search :: (index: int, found: bool) {
+    print_string(" ");
+    print_int(index);
+    print_string("/");
+    print_bool(found);
+}
+
+// Prints a space, then value.
+show_int :: (value: int) {
+    print_string(" ");
+    print_int(value);
+}
+
+// Prints a space, then value.
+show_bool :: (value: bool) {
+    print_string(" ");
+    print_bool(value);
+}
+
+// Prints a space, then each pair as key/order.
+show_pairs :: (pairs: []Pair) {
+    for pairs {
+        print_string(" ");
+        print_int(it.key);
+        print_string("/");
+        print_int(it.order);
+    }
+}
+
+// Whether the count ints at data run from 0 up by one.
+counts_up :: (data: *int, count: int) -> bool {
+    for 0..count - 1 {
+        if data[it] != it { return false; }
+    }
+    return true;
+}
+
+// Whether the pairs are in order of key and, among equal keys, in the
+// order they had.
+in_stable_order :: (pairs: []Pair) -> bool {
+    for 1..pairs.count - 1 {
+        before := pairs[it - 1];
+        after := pairs[it];
+        if after.key < before.key { return false; }
+        if after.key == before.key && after.order < before.order { return false; }
+    }
+    return true;
+}
+
+main :: () {
+    // Ints, int's extremes and two equal ones among them, sorted with
+    // scratch memory from an allocator that counts: one allocation, given
+    // back, for the first half of the ints, 5 of 8 bytes each.
+    counter : Counter;
+    counting := Allocator.{counting_allocator_proc, *counter};
+    numbers := int.[5, -3, 9, 0, -3, 7, 2, 9223372036854775807, -9223372036854775808, 1];
+    sort(numbers.data, 10, size_of(int), less_int, counting);
+    print_string("ints:");
+    for numbers { show_int(it); }
+    print_line("");
+    print_string("allocations: ");
+    print_int(counter.allocations);
+    print_string(", frees: ");
+    print_int(counter.frees);
+    print_line("");
+    print_string("scratch bytes:");
+    show_int(counter.last_size);
+    print_line("");
+
+    // Pairs with equal keys keep the order they had.
+    pairs : [7]Pair;
+    keys := int.[3, 1, 2, 1, 3, 2, 1];
+    for 0..6 { pairs[it] = Pair.{keys[it], it}; }
+    sort(pairs.data, 7, size_of(Pair), less_key, HEAP_ALLOCATOR);
+    print_string("stable:");
+    show_pairs(pairs);
+    print_line("");
+
+    // A thousand pairs of ten keys, so that the equal keys meet in merges
+    // of long runs.
+    many : [1000]Pair;
+    for 0..999 { many[it] = Pair.{(it * 7919) % 10, it}; }
+    sort(many.data, 1000, size_of(Pair), less_key, HEAP_ALLOCATOR);
+    print_string("1000 stable:");
+    show_bool(in_stable_order(many));
+    print_line("");
+
+    // Strings, by their bytes: the empty one first, a capital before a
+    // small letter, and a prefix before the longer string.
+    words := string.["pear", "apple", "fig", "", "apple pie", "Apple"];
+    sort(words.data, 6, size_of(string), less_string, HEAP_ALLOCATOR);
+    print_string("strings:");
+    for words {
+        print_string(" [");
+        print_string(it);
+        print_string("]");
+    }
+    print_line("");
+
+    // Floats, NaNs and infinities among them, worked out at run time: the
+    // NaNs go last.
+    zero : float64 = 0;
+    nan := zero / zero;
+    floats := float64.[3.5, nan, -1, 1 / zero, -1 / zero, 0, nan, 2.25];
+    sort(floats.data, 8, size_of(float64), less_float64, HEAP_ALLOCATOR);
+    print_string("floats:");
+    for floats {
+        print_string(" ");
+        print_float(it, 2);
+    }
+    print_line("");
+
+    // No elements, one, and elements of no size or a negative one ask for
+    // no memory and change nothing.
+    fresh : Counter;
+    counting = Allocator.{counting_allocator_proc, *fresh};
+    sort(null, 0, 8, less_int, counting);
+    single := int.[42];
+    sort(single.data, 1, 8, less_int, counting);
+    sort(single.data, 5, 0, less_int, counting);
+    sort(single.data, 5, -8, less_int, counting);
+    print_string("none and one: [");
+    print_int(single[0]);
+    print_string("] allocations ");
+    print_int(fresh.allocations);
+    print_line("");
+
+    // Up to four elements are sorted by insertion, asking for no memory;
+    // five are merged, with scratch for two of them.
+    four := int.[4, 2, 3, 1];
+    sort(four.data, 4, size_of(int), less_int, counting);
+    print_string("four:");
+    for four { show_int(it); }
+    print_string(", allocations ");
+    print_int(fresh.allocations);
+    print_line("");
+    five := int.[4, 5, 2, 3, 1];
+    sort(five.data, 5, size_of(int), less_int, counting);
+    print_string("five:");
+    for five { show_int(it); }
+    print_string(", allocations ");
+    print_int(fresh.allocations);
+    print_string(", scratch bytes ");
+    print_int(fresh.last_size);
+    print_line("");
+
+    // A thousand ints, every one of 0 to 999 once, in a scrambled order (7919
+    // is prime, so it * 7919 % 1000 meets each once), then already in order,
+    // then the other way round.
+    big : [1000]int;
+    for 0..999 { big[it] = (it * 7919) % 1000; }
+    sort(big.data, 1000, size_of(int), less_int, HEAP_ALLOCATOR);
+    print_string("1000 sorted:");
+    show_bool(counts_up(big.data, 1000));
+    print_line("");
+    sort(big.data, 1000, size_of(int), less_int, HEAP_ALLOCATOR);
+    print_string("in order, reversed:");
+    show_bool(counts_up(big.data, 1000));
+    for 0..999 { big[it] = 999 - it; }
+    sort(big.data, 1000, size_of(int), less_int, HEAP_ALLOCATOR);
+    show_bool(counts_up(big.data, 1000));
+    print_line("");
+
+    // Without memory the sort is done in place, and is still stable.
+    none := Allocator.{null_allocator_proc, null};
+    few := int.[5, 3, 1, 4, 2];
+    sort(few.data, 5, size_of(int), less_int, none);
+    print_string("without memory:");
+    for few { show_int(it); }
+    print_line("");
+    for 0..6 { pairs[it] = Pair.{keys[it], it}; }
+    sort(pairs.data, 7, size_of(Pair), less_key, none);
+    print_string("stable without memory:");
+    show_pairs(pairs);
+    print_line("");
+
+    // The first index whose element isn't below the key, and whether the
+    // key is there: before the first element, at it, the first of three
+    // equal ones, between two, the last, and after it.
+    sorted := int.[1, 3, 3, 3, 5, 7];
+    print_string("search:");
+    for int.[0, 1, 3, 4, 7, 8] {
+        wanted := it;
+        index, found := binary_search(sorted.data, 6, size_of(int), *wanted, compare_int);
+        show_search(index, found);
+    }
+    print_line("");
+
+    // Nothing to search, and elements of no size, find nothing at 0.
+    key := 3;
+    index, found := binary_search(null, 0, 8, *key, compare_int);
+    print_string("search empty:");
+    show_search(index, found);
+    print_line("");
+    index, found = binary_search(sorted.data, 6, 0, *key, compare_int);
+    print_string("search no size:");
+    show_search(index, found);
+    print_line("");
+
+    // The sorted words, searched with compare_string, which takes pointers
+    // to two strings.
+    print_string("search strings:");
+    for string.["fig", "zz", ""] {
+        word := it;
+        index, found = binary_search(words.data, 6, size_of(string), *word, compare_string);
+        show_search(index, found);
+    }
+    print_line("");
+}
