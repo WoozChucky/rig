@@ -1,10 +1,12 @@
 // Basic's growable array (issue #134): an untyped array, which knows only
 // its element's size and hands out each element's address as a *void that
 // the caller casts to a pointer to its own type. It shows adding, getting,
-// inserting, removing and popping, how the memory grows, elements of 3
-// bytes and of none, elements of the array itself added to it while it
-// moves, and memory that comes from the array's allocator and goes back to
-// it.
+// inserting, removing and popping, null for a zeroed element and for no
+// copy out, how the memory grows, resetting and freeing and adding after a
+// free, elements of 1 byte, of 3 and of none, elements of the array itself
+// added and inserted while it moves, an item that straddles two elements,
+// a capacity doubled near int's largest value, a negative element size,
+// and memory that comes from the array's allocator and goes back to it.
 #import "Basic";
 
 Point :: struct { x: int; y: int; }

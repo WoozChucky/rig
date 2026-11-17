@@ -158,7 +158,7 @@ main :: () {
     print_byte(10);
 
     // A copy out comes from the allocator given, not the builder's.
-    u :=builder_to_string(*d, counting);
+    u := builder_to_string(*d, counting);
     print_string("copied out of another allocator: ");
     print_int(counter.allocations);
     print_byte(32);
