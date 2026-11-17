@@ -2,7 +2,7 @@
 
 Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, and printing to standard output (issue #134).
 
-## Loading it
+## Importing it
 
 Basic ships with rig, so a program imports it by its name (spec 2.14):
 
@@ -46,10 +46,10 @@ One procedure per type, named by it: `int` and `u64` (every other integer type w
 
 ## Memory (`memory.rig`)
 
-C's `memmove`, `memset` and `memcmp`, written as byte loops in Rig rather than called from C. Memory is passed as `*void`, so any pointer converts to it. A count of 0 or less does nothing and reads nothing.
+C's `memmove`, `memset` and `memcmp`, written as byte loops in Rig rather than called from C. Memory is passed as `*void`, so any pointer converts to it. A count of 0 or less does nothing and reads nothing, `int`'s most negative value included.
 
 - `copy_memory(destination: *void, source: *void, count: int)`: copies `count` bytes from `source` to `destination`; the two may overlap, and the bytes copied are the ones `source` held before the copy.
-- `set_memory(destination: *void, value: u8, count: int)`: sets `count` bytes from `destination` on to `value`.
+- `set_memory(destination: *void, value: u8, count: int)`: sets each of the `count` bytes that start at `destination` to `value`.
 - `compare_memory(a: *void, b: *void, count: int) -> int`: -1, 0 or 1 as the first of `count` bytes that differs is smaller or larger in `a` than in `b`, the bytes compared unsigned; 0 when none differs.
 
 ## Numbers (`numbers.rig`)
@@ -58,11 +58,13 @@ Numbers are written into a buffer the caller gives, and the text comes back as a
 
 - `INT_TEXT_MAX`: 65, the most bytes `format_int` writes (64 binary digits and a sign).
 - `FLOAT_TEXT_MAX`: 320, the most bytes `format_float` writes (a sign, 309 digits, a point and 9 decimals).
+- `FLOAT64_LARGEST`: `1.7976931348623157e308`, `float64`'s largest finite value.
 - `digit_value(c: u8) -> int`: 0-9 for `0`-`9`, 10-35 for `a`-`z` and `A`-`Z`, -1 for any other byte.
 - `format_int(buffer: []u8, value: int, base: int) -> string`: writes `value` in a base from 2 to 36, lowercase, with `-` before a negative value; another base writes nothing and gives `""`.
 - `parse_int(s: string, base: int) -> int, bool`: reads an optional `+` or `-` and one digit or more of the base, either case; `0, false` for anything else, a value outside `int` or a base outside 2 to 36.
 - `format_float(buffer: []u8, value: float64, decimals: int) -> string`: writes `value` with 0 to 9 decimals (others are clamped), the last rounded half away from zero on the `float64`'s own value, though a value within about a unit in the last place of a tie can round the other way (`1.805` with 2 decimals is `1.81`); `nan`, `inf`, `-inf`, and `-` before any negative value, `-0.0` included. From 1e18 up, 18 leading digits are written, of which only about the first 15 or 16 are the value's, and the rest are zeros.
-- `parse_float(s: string) -> float64, bool`: reads `[+-] digits [. digits] [(e|E) [+-] digits]`, with a digit before or after the point; `0, false` for anything else. A value too large is an infinity. Correctly rounded when the significant digits fit in 2^53 and the power of ten is within ±22, otherwise within a few units in the last place.
+- `format_float_word(buffer: []u8, count: int, word: string) -> string`: writes `word` after the `count` bytes already in `buffer` and gives the text written; `format_float`'s `nan` and `inf`.
+- `parse_float(s: string) -> float64, bool`: reads `[+-] digits [. digits] [(e|E) [+-] digits]`, with a digit before or after the point; `0, false` for anything else. A value too large is an infinity, and one too small is zero. Correctly rounded when the significant digits fit in 2^53 and the power of ten is within ±22, otherwise within a few units in the last place.
 
 ## Strings (`string.rig`)
 
@@ -127,7 +129,7 @@ Elements of one size, one after another in memory from the allocator the array i
 - `check_index(index: int, count: int)`: stops the program with the language's `index I is out of bounds (count C)` unless `index` is at least 0 and less than `count`.
 - `Array`: `element_size: int`, `count: int` (the elements held), `capacity: int` (the elements `data` has room for), `data: *u8` and `allocator: Allocator`.
 - `array_init(array: *Array, element_size: int, allocator: Allocator)`: an empty array of elements of `element_size` bytes, whose memory comes from `allocator`, taken at the first add. A negative `element_size` is taken as 0.
-- `array_add(array: *Array, item: *void) -> *void`: adds a copy of the bytes at `item` as the last element, or a zeroed element for null, and gives its address.
+- `array_add(array: *Array, item: *void) -> *void`: adds a copy of the bytes at `item` as the last element, or a zeroed element for null, and gives its address. `item` may be one of the array's own elements: it is copied from where any growing put it.
 - `array_get(array: Array, index: int) -> *void`: the address of element `index`.
 - `array_pop(array: *Array, item: *void)`: copies the last element into `item`, unless null, and removes it; an empty array stops the program.
 - `array_insert(array: *Array, index: int, item: *void) -> *void`: inserts a copy of the bytes at `item`, or a zeroed element for null, as element `index`, from 0 to the count, moving the later elements up, and gives its address. `item` may be one of the array's own elements: it is copied from where the move and any growing put it.
@@ -140,7 +142,7 @@ Elements of one size, one after another in memory from the allocator the array i
 
 Values found by their key, a string (`Table`) or an int (`Int_Table`). Like the array, a table is untyped: it knows only its value's size, copies values in by that many bytes, and hands out a value's address as a `*void` for the caller to cast, valid until the table's next set or free: a set may rehash the table, which moves every value even when the capacity stays the same. A string key is copied into memory from the table's allocator when it is set, and given back when it is removed.
 
-The entries are one run of memory, a power of two of them, each a header (the key's 64-bit FNV-1a hash, the entry's state and the key) and then the value, at a multiple of 8, so every value is aligned to 8. Keys are found by open addressing with linear probing; a removed key's entry is marked removed, so keys further along its chain are still found, and a new key takes the first removed entry its probe passed. Before a set, when one more key would leave more than three quarters of the entries used or removed, the table is rehashed: into 16 entries the first time, twice as many when the keys would fill more than half, and otherwise as many, which only clears the removed entries. A table with no entries, before its first set or after it is freed, is found in without touching any. An allocator that has no memory to give stops the program at the next write, with the language's `null pointer dereference`.
+The entries are one run of memory, a power of two of them, each a header (the key's 64-bit FNV-1a hash, the entry's state and the key) and then the value, at a multiple of 8, so every value is aligned to 8 when the allocator's memory is, as the heap's is. Keys are found by open addressing with linear probing; a removed key's entry is marked removed, so keys further along its chain are still found, and a new key takes the first removed entry its probe passed. Before a set, when one more key would leave more than three quarters of the entries used or removed, the table is rehashed: into 16 entries the first time, twice as many when the keys would fill more than half, and otherwise as many, which only clears the removed entries. A table with no entries, before its first set or after it is freed, is found in without touching any. An allocator that has no memory to give stops the program at the next write, with the language's `null pointer dereference`.
 
 - `hash_bytes(data: *u8, count: int) -> u64`: the 64-bit FNV-1a hash of `count` bytes; the offset basis, 14695981039346656037, for 0 or less.
 - `hash_string(s: string) -> u64`: the hash of the bytes of `s`.
