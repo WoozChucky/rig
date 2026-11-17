@@ -174,8 +174,9 @@ c_fmod :: (x: float64, y: float64) -> float64 #foreign libc "fmod";
 
 // C's <math.h> of a float, each called by math.rig's procedure of the same
 // name for float32 (c_sqrtf by sqrt_float32, c_fmodf by mod_float32), and
-// each computing in float, not by way of a double. Their results are the
-// C library's, as the double ones' above are.
+// each taking and giving a float, rather than the double one with its
+// result narrowed. Their results are the C library's, as the double ones'
+// above are.
 c_sqrtf :: (x: float32) -> float32 #foreign libc "sqrtf";
 c_cbrtf :: (x: float32) -> float32 #foreign libc "cbrtf";
 c_sinf :: (x: float32) -> float32 #foreign libc "sinf";
