@@ -89,11 +89,14 @@ Ir_Instr *ir_emit_call_indirect(Ir_Proc *p, s32 block, s32 callee, Ir_Proc *sign
     return call;
 }
 
-// The C runtime's time functions on Windows, each beside the Universal C
-// Runtime's 64-bit export that a C program's call of it reaches (time_t is
-// 64 bits unless a program asks for 32). The UCRT exports none of these
-// names: its headers define each as an inline function, or a macro (_ftime
-// and _ftime_s), over the 64-bit function. msvcrt.lib, on the link line for
+// The C runtime's functions that a C program's call reaches under another
+// name on Windows, each beside the Universal C Runtime's export it reaches:
+// the time functions, and <math.h>'s hypotf.
+//
+// The time functions reach their 64-bit exports (time_t is 64 bits unless
+// a program asks for 32). The UCRT exports none of their names: its
+// headers define each as an inline function, or a macro (_ftime and
+// _ftime_s), over the 64-bit function. msvcrt.lib, on the link line for
 // the C runtime's start-up code (spec 10.6), defines some of the names
 // itself, though, as the 32-bit versions: C's time, gmtime, localtime,
 // mktime, difftime and ctime, and Microsoft's _mkgmtime, _wctime, _ftime,
@@ -110,7 +113,9 @@ Ir_Instr *ir_emit_call_indirect(Ir_Proc *p, s32 block, s32 callee, Ir_Proc *sign
 // timespec_get to ctime, which are the headers' inline functions, so the
 // 64-bit ones (interp_c_functions.cpp). The rest it looks up in ucrtbase.dll
 // by their 64-bit names, which ucrtbase.dll exports as ucrt.lib does: a
-// program's #run gets the 64-bit functions the compiled program does.
+// program's #run gets the 64-bit functions the compiled program does. It
+// calls the compiler's own hypotf too, the header's inline function over
+// the static _hypotf, and looks a program's own _hypotf up in ucrtbase.dll.
 struct Windows_C_Name {
     const char *c_name;
     const char *windows_name;
@@ -140,6 +145,12 @@ static const Windows_C_Name WINDOWS_C_NAMES[] = {
     {"_utime", "_utime64"},
     {"utime", "_utime64"},
     {"_wutime", "_wutime64"},
+    // C99's <math.h>. The UCRT's header defines hypotf as an inline
+    // function over _hypotf, which it exports; its other float functions it
+    // exports by their C names, but frexpf, ldexpf and fabsf, which it has
+    // only inline, with no export under any name: there is nothing to map
+    // them to, so they don't link compiled (spec 10.6).
+    {"hypotf", "_hypotf"},
 };
 
 String ir_windows_c_name(String c_name) {

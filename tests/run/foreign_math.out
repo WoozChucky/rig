@@ -5,4 +5,6 @@ floor(-2.5) = -3.0
 fmod(-5.5, 2) = -1.5
 sqrtf(2) = 1.4142
 powf(2, 0.5) = 1.4142
+hypotf(3, 4) = 5.0000
+hypotf(1, 1) = 1.4142
 through its value: 4.0
