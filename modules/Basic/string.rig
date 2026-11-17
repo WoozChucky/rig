@@ -1,6 +1,7 @@
 // Basic's strings: comparing, finding, trimming, slicing and splitting, the
-// copy C reads, ended by a zero, and the copies made by joining, replacing,
-// repeating and changing case.
+// copy C reads, ended by a zero, the copies made by joining, replacing,
+// repeating and changing case, and UTF-8's code points, decoded, counted
+// and encoded.
 //
 // A string is a view, a count and a pointer to bytes (spec 3.8), so the
 // procedures that cut strings up return views into the string they were
@@ -29,6 +30,12 @@
 // wrap, asks for nothing either, since no memory holds that many bytes, and
 // neither it nor an allocator with no memory to give is told apart from an
 // empty result: each gives the zeroed string.
+//
+// Only utf8_decode, utf8_count and utf8_encode know UTF-8: they read and
+// write a code point's sequence of one to four bytes, and treat a byte that
+// isn't part of a well-formed one as U+FFFD, the replacement character, one
+// byte long, so a string of any bytes can be read through to its end.
+// Every other procedure here works on bytes.
 #load "char.rig";
 #load "memory.rig";
 #load "allocators.rig";
@@ -394,4 +401,132 @@ to_lower_copy :: (s: string, allocator: Allocator) -> string {
     lower.data = data;
     lower.count = s.count;
     return lower;
+}
+
+// U+FFFD, the replacement character, which utf8_decode gives for a byte
+// that isn't part of a well-formed sequence and utf8_encode writes for a
+// value that has no encoding.
+UTF8_REPLACEMENT :: 0xFFFD;
+
+// The most bytes a code point takes in UTF-8, so a buffer of this many is
+// always enough for utf8_encode.
+UTF8_MAX_BYTES :: 4;
+
+// The code point whose UTF-8 sequence starts at byte index of s, how many
+// bytes the sequence takes, and whether it is well-formed. An ill-formed
+// sequence gives U+FFFD, 1 and false: the first byte alone, so a loop that
+// moves on by the count goes on with the next byte, which may start a
+// well-formed sequence, and every byte is read once. An index outside s,
+// before its start or at or past its end, gives 0, 0 and false, and reads
+// nothing, so a zeroed string's null data is never read.
+//
+// The sequences that are well-formed are the Unicode Standard's (Table 3-7):
+// one byte 00-7F; a lead byte C2-DF, E0-EF or F0-F4, saying that one, two or
+// three bytes follow; and each byte that follows 80-BF. Four lead bytes
+// narrow the byte after them, since what they would otherwise start isn't
+// a code point, or has a shorter form: E0 then 80-9F would be an overlong
+// form of a code point below U+0800, ED then A0-BF a surrogate,
+// U+D800-U+DFFF, which UTF-16 uses in pairs and which no code point is, F0
+// then 80-8F an overlong form of one below U+10000, and F4 then 90-BF one
+// past U+10FFFF, the last code point. Nothing else starts a sequence:
+// 80-BF only continue one, C0 and C1 could only start an overlong form of
+// a code point below U+0080 (C0 AF would be "/", which a check for "/" by
+// byte would miss), and F5-FF one past U+10FFFF.
+//
+// The bytes of the sequence are counted before any is read, so one cut
+// short by the string's end is ill-formed and nothing past the end is read.
+utf8_decode :: (s: string, index: int) -> int, int, bool {
+    if index < 0 || index >= s.count { return 0, 0, false; }
+    first := s[index];
+    if first < 0x80 { return cast(int) first, 1, true; }
+
+    // The lead byte's high bits say how many bytes the sequence takes, and
+    // its low bits are the code point's highest; each byte after it adds 6
+    // bits. low and high are the range the second byte must be in.
+    count := 0;
+    code_point := 0;
+    low : u8 = 0x80;
+    high : u8 = 0xBF;
+    if first >= 0xC2 && first <= 0xDF {
+        count = 2;
+        code_point = cast(int) (first & 0x1F);
+    } else if first >= 0xE0 && first <= 0xEF {
+        count = 3;
+        code_point = cast(int) (first & 0x0F);
+        if first == 0xE0 { low = 0xA0; }
+        if first == 0xED { high = 0x9F; }
+    } else if first >= 0xF0 && first <= 0xF4 {
+        count = 4;
+        code_point = cast(int) (first & 0x07);
+        if first == 0xF0 { low = 0x90; }
+        if first == 0xF4 { high = 0x8F; }
+    } else {
+        return UTF8_REPLACEMENT, 1, false;
+    }
+
+    // index is within s, so s.count - index is at least 1 and can't wrap.
+    if count > s.count - index { return UTF8_REPLACEMENT, 1, false; }
+    for i: 1..count - 1 {
+        byte := s[index + i];
+        if byte < low || byte > high { return UTF8_REPLACEMENT, 1, false; }
+        code_point = (code_point << 6) | cast(int) (byte & 0x3F);
+        // Only the second byte has a narrower range; the rest are 80-BF.
+        low = 0x80;
+        high = 0xBF;
+    }
+    return code_point, count, true;
+}
+
+// How many code points s holds, and whether all of its bytes are
+// well-formed UTF-8. It reads s as utf8_decode does, sequence by sequence,
+// so each byte of an ill-formed sequence is counted as one code point,
+// U+FFFD's, as a program printing the decoded text would show it. "" is 0
+// and true.
+utf8_count :: (s: string) -> int, bool {
+    count := 0;
+    valid := true;
+    index := 0;
+    while index < s.count {
+        code_point, size, well_formed := utf8_decode(s, index);
+        if !well_formed { valid = false; }
+        index += size;
+        count += 1;
+    }
+    return count, valid;
+}
+
+// Writes code_point's UTF-8 sequence at the start of buffer, and gives how
+// many bytes it wrote, 1 to 4. A value that isn't a code point, negative or
+// past U+10FFFF, or that is a surrogate, U+D800-U+DFFF, has no encoding, so
+// U+FFFD's three bytes are written for it, as Go's utf8.EncodeRune does,
+// and the text stays well-formed. A buffer of UTF8_MAX_BYTES is always
+// enough; one shorter than the sequence stops the program at the
+// language's bounds check (unless built with --no-bounds-checks).
+//
+// The code point's bits are split from the highest: the lead byte's marker
+// (110, 1110 or 11110) holds the top 5, 4 or 3 bits, and each byte after it
+// is 10 and the next 6.
+utf8_encode :: (code_point: int, buffer: []u8) -> int {
+    c := code_point;
+    if c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF) { c = UTF8_REPLACEMENT; }
+    if c < 0x80 {
+        buffer[0] = cast(u8) c;
+        return 1;
+    }
+    if c < 0x800 {
+        buffer[0] = cast(u8) (0xC0 | (c >> 6));
+        buffer[1] = cast(u8) (0x80 | (c & 0x3F));
+        return 2;
+    }
+    if c < 0x10000 {
+        buffer[0] = cast(u8) (0xE0 | (c >> 12));
+        buffer[1] = cast(u8) (0x80 | ((c >> 6) & 0x3F));
+        buffer[2] = cast(u8) (0x80 | (c & 0x3F));
+        return 3;
+    }
+    buffer[0] = cast(u8) (0xF0 | (c >> 18));
+    buffer[1] = cast(u8) (0x80 | ((c >> 12) & 0x3F));
+    buffer[2] = cast(u8) (0x80 | ((c >> 6) & 0x3F));
+    buffer[3] = cast(u8) (0x80 | (c & 0x3F));
+    return 4;
 }

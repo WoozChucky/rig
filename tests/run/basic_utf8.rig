@@ -1,0 +1,161 @@
+// Basic's UTF-8 (issue #145): utf8_decode at the first and last code point
+// of each length, and at every kind of ill-formed sequence the Unicode
+// Standard rules out (overlong forms, surrogates, code points past U+10FFFF,
+// sequences cut short, stray continuation bytes and bytes that never start
+// one), each U+FFFD and one byte; an index outside the string, which reads
+// nothing; utf8_count, an ill-formed byte counted as one; and utf8_encode,
+// with U+FFFD for what has no encoding, and a round trip through both.
+#import "Basic";
+
+// Prints a space, then the code point at byte index of s, its byte count and
+// whether it is well-formed, as CP/COUNT/VALID.
+show_decode :: (s: string, index: int) {
+    code_point, count, valid := utf8_decode(s, index);
+    print_string(" ");
+    print_int(code_point);
+    print_string("/");
+    print_int(count);
+    print_string("/");
+    print_bool(valid);
+}
+
+// Decodes the sequence that starts bytes, as show_decode prints it. The
+// bytes are a []u8, which casts to a string, so a test can hold any bytes,
+// as a literal can't.
+decode_bytes :: (bytes: []u8) {
+    show_decode(cast(string) bytes, 0);
+}
+
+// Prints a space, then the code points in s and whether all were
+// well-formed, as N/VALID.
+show_count :: (s: string) {
+    count, valid := utf8_count(s);
+    print_string(" ");
+    print_int(count);
+    print_string("/");
+    print_bool(valid);
+}
+
+// Counts the code points in bytes, as show_count prints them.
+count_bytes :: (bytes: []u8) {
+    show_count(cast(string) bytes);
+}
+
+// Prints a space, then how many bytes utf8_encode writes for code_point, a
+// colon, and each byte as two lowercase hex digits.
+show_encode :: (code_point: int) {
+    HEX :: "0123456789abcdef";
+    buffer : [UTF8_MAX_BYTES]u8;
+    written := utf8_encode(code_point, buffer);
+    print_string(" ");
+    print_int(written);
+    print_string(":");
+    for i: 0..written - 1 {
+        print_byte(HEX[buffer[i] >> 4]);
+        print_byte(HEX[buffer[i] & 15]);
+    }
+}
+
+main :: () {
+    empty : string;
+
+    // One code point of each length, one, two, three and four bytes, each
+    // decoded at the byte it starts at.
+    s := "aé€😀";
+    print_string("decode:");
+    show_decode(s, 0);
+    show_decode(s, 1);
+    show_decode(s, 3);
+    show_decode(s, 6);
+    print_line("");
+
+    // The first and last code point of each length, and the two either side
+    // of the surrogates, U+D7FF and U+E000.
+    print_string("valid:");
+    decode_bytes(u8.[0x7F]);
+    decode_bytes(u8.[0xC2, 0x80]);
+    decode_bytes(u8.[0xDF, 0xBF]);
+    decode_bytes(u8.[0xE0, 0xA0, 0x80]);
+    decode_bytes(u8.[0xED, 0x9F, 0xBF]);
+    decode_bytes(u8.[0xEE, 0x80, 0x80]);
+    decode_bytes(u8.[0xEF, 0xBF, 0xBF]);
+    decode_bytes(u8.[0xF0, 0x90, 0x80, 0x80]);
+    decode_bytes(u8.[0xF4, 0x8F, 0xBF, 0xBF]);
+    print_line("");
+
+    // Each is U+FFFD and one byte: overlong forms of '/' in two, three and
+    // four bytes, and the two-byte one of U+007F; a surrogate, U+D800;
+    // U+110000, past the last code point; a lead byte that starts nothing,
+    // F5, and FF; a stray continuation byte; three and four bytes cut short,
+    // at the string's end; a lead byte whose next byte isn't a continuation;
+    // and a two-byte lead alone at the end.
+    print_string("invalid:");
+    decode_bytes(u8.[0xC0, 0xAF]);
+    decode_bytes(u8.[0xC1, 0xBF]);
+    decode_bytes(u8.[0xE0, 0x80, 0xAF]);
+    decode_bytes(u8.[0xF0, 0x80, 0x80, 0xAF]);
+    decode_bytes(u8.[0xED, 0xA0, 0x80]);
+    decode_bytes(u8.[0xF4, 0x90, 0x80, 0x80]);
+    decode_bytes(u8.[0xF5, 0x80, 0x80, 0x80]);
+    decode_bytes(u8.[0xFF]);
+    decode_bytes(u8.[0x80]);
+    decode_bytes(u8.[0xE2, 0x82]);
+    decode_bytes(u8.[0xF0, 0x9F, 0x98]);
+    decode_bytes(u8.[0xC3, 0x28]);
+    decode_bytes(u8.[0xC3]);
+    print_line("");
+
+    // An index before the start or past the end, of the zeroed string too,
+    // reads nothing; an index inside a sequence is a stray continuation
+    // byte.
+    print_string("edges:");
+    show_decode("abc", -1);
+    show_decode("abc", 3);
+    show_decode(empty, 0);
+    show_decode("é", 1);
+    print_line("");
+
+    // Each ill-formed byte counts as one code point, U+FFFD's: a stray
+    // continuation byte, and the two bytes of a cut-short sequence, each
+    // read on its own.
+    print_string("count:");
+    show_count("aé€😀");
+    show_count("");
+    count_bytes(u8.[0x61, 0x80, 0x62]);
+    count_bytes(u8.[0xE2, 0x82, 0x78]);
+    print_line("");
+
+    // The last code point of each length, U+0000, and U+FFFD for a negative
+    // value, the first surrogate, one past the last code point, and the last
+    // surrogate.
+    print_string("encode:");
+    show_encode(65);
+    show_encode(233);
+    show_encode(8364);
+    show_encode(128512);
+    show_encode(1114111);
+    show_encode(0);
+    show_encode(-1);
+    show_encode(55296);
+    show_encode(1114112);
+    show_encode(57343);
+    print_line("");
+
+    // Every 37th code point, the surrogates left out, encoded and decoded
+    // back: the same code point, from all the bytes written, well-formed.
+    all_back := true;
+    buffer : [UTF8_MAX_BYTES]u8;
+    cp := 0;
+    while cp <= 1114111 {
+        if cp < 55296 || cp > 57343 {
+            written := utf8_encode(cp, buffer);
+            view : []u8 = buffer;
+            decoded, count, valid := utf8_decode(slice(cast(string) view, 0, written), 0);
+            if decoded != cp || count != written || !valid { all_back = false; }
+        }
+        cp += 37;
+    }
+    print_string("round trip: ");
+    print_bool(all_back);
+    print_line("");
+}
