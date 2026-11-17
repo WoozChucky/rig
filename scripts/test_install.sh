@@ -13,9 +13,8 @@
 #   - --help, and each failure: an unknown option, a release that doesn't
 #     exist, a checksum that doesn't match, no network, a server's error
 #     (with curl, with wget, and with a wget that prints no status line),
-#     another system or architecture. Each
-#     stops with its message, before anything is installed: HOME stays
-#     empty.
+#     another system or architecture. Each stops with its message, before
+#     anything is installed: HOME stays empty.
 #   - The hello world check: a build that fails gets the requirements
 #     message, and a program that builds but doesn't run gets another
 #     (a stand-in release, whose rig is a script, says which).

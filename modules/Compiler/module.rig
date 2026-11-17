@@ -42,23 +42,23 @@ Workspace :: struct { id: s64; }
 // build program sets others (get_build_options, set_build_options).
 Build_Options :: struct {
     output_name: string;   // the executable's name; "" means the first file's name without .rig, as rig build does
-    optimize: bool;        // false: unoptimised, as today; true: LLVM's -O2 pipeline
+    optimize: bool;        // false by default: unoptimised; true: LLVM's -O2 pipeline
     bounds_checks: bool;   // true by default
 }
 
-// A new workspace named `name`, with no files and the default options. Two
+// A new workspace named name, with no files and the default options. Two
 // workspaces can't share a name.
 create_workspace  :: (name: string) -> Workspace #compiler;
 
 // The options workspace w's program will be built with.
 get_build_options :: (w: Workspace) -> Build_Options #compiler;
 
-// Builds workspace w's program with `options`. The output's name can't end
+// Builds workspace w's program with options. The output's name can't end
 // in .rig, since that names a source file, or hold a zero byte, since the
 // system would end the name there.
 set_build_options :: (w: Workspace, options: Build_Options) #compiler;
 
-// Adds the .rig file at `path` to workspace w's program, which must exist
+// Adds the .rig file at path to workspace w's program, which must exist
 // when it's added. The first file added is the program's main file, and the
 // others are loaded right after it, in the order they were added, before
 // the files it #loads.
