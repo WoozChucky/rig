@@ -2567,9 +2567,9 @@ TEST(interp_calls_c) {
     //   buffer, which strlen measures and the global `written` keeps;
     // - malloc's memory, which memset sets and free frees;
     // - float32 arguments and results, a float32 beside an s32, and a
-    //   float64 result. copysignf and scalbnf are <math.h>'s, but glibc's
-    //   libc exports them too (unlike sqrt, which only libm has), so they
-    //   work on Linux, interpreted and compiled alike.
+    //   float64 result. copysignf and scalbnf are <math.h>'s, which glibc's
+    //   libc exports itself (libm, which every program links too, has them
+    //   as well): called here as libc's.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "snprintf :: (buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;\n"
@@ -2910,9 +2910,12 @@ TEST(interp_finds_c_functions_by_name) {
     // Linux: everything from libc and the dynamic loader it depends on
     // (__tls_get_addr is the loader's), but what libc_nonshared.a links in
     // statically (atexit, at_quick_exit, pthread_atfork), which libc.so.6
-    // doesn't export, the compiler's own from its table; and libm-only
-    // functions (sqrt) not at all, as a program links libc alone (spec
-    // 10.6). Neither finds a name nothing has.
+    // doesn't export, the compiler's own from its table; then libm's
+    // (sqrt, sinf, hypotf), as the link line's -lc -lm provides them (spec
+    // 10.6), so a name both export (copysign) is libc's, as a program's
+    // call binds to it. libstdc++'s, which the compiler loads too, aren't
+    // found, as no program could link them. Neither finds a name nothing
+    // has.
 #ifdef _WIN32
     CHECK(interp_c_library_function(str("strlen")) == (void *)&strlen);
     CHECK(interp_c_library_function(str("sqrt")) == (void *)static_cast<double (*)(double)>(&sqrt));
@@ -2938,7 +2941,18 @@ TEST(interp_finds_c_functions_by_name) {
     CHECK(interp_test_c_function("atexit") == (void *)&atexit);
     CHECK(interp_test_c_function("at_quick_exit") == (void *)&at_quick_exit);
     CHECK(interp_test_c_function("pthread_atfork") == (void *)&pthread_atfork);
-    CHECK(os_find_c_function(str("sqrt")) == nullptr);
+    double (*root)(double) = (double (*)(double))os_find_c_function(str("sqrt"));
+    CHECK(root != nullptr);
+    if (root) CHECK(root(2.0) == 1.4142135623730951);
+    CHECK(os_find_c_function(str("sinf")) != nullptr);
+    CHECK(os_find_c_function(str("hypotf")) != nullptr);
+    void *libc = dlopen("libc.so.6", RTLD_LAZY | RTLD_NOLOAD);
+    void *libm = dlopen("libm.so.6", RTLD_LAZY | RTLD_NOLOAD);
+    CHECK(libc != nullptr && libm != nullptr);
+    CHECK(os_find_c_function(str("sqrt")) == dlsym(libm, "sqrt"));
+    CHECK(os_find_c_function(str("copysign")) == dlsym(libc, "copysign"));
+    CHECK(dlsym(libc, "copysign") != dlsym(libm, "copysign"));
+    CHECK(os_find_c_function(str("_ZSt9terminatev")) == nullptr);
 #endif
     CHECK(interp_test_c_function("nope_not_a_function") == nullptr);
 }
