@@ -28,7 +28,8 @@
 // infinities and NaN, goes to C and comes back as C gives it, and the
 // results are the C library's (libc.rig says whose). The float64 ones call
 // C's double functions (sqrt), and the float32 ones its float functions
-// (sqrtf), each computing in float32 rather than by way of a float64.
+// (sqrtf), each taking and giving a float32, rather than the float64 one
+// with its result narrowed.
 #load "libc.rig";
 
 // The smaller of a and b; a when they're equal.
