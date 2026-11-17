@@ -77,6 +77,14 @@ refusing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *vo
     return null;
 }
 
+// Prints a space, then the size of counter's last allocation, and sets it
+// back to 0, so a call that asks for nothing after it prints 0, not the
+// size asked for before.
+show_last_size :: (counter: *Counter) {
+    show_int(counter.last_size);
+    counter.last_size = 0;
+}
+
 main :: () {
     counter : Counter;
     counting := Allocator.{counting_allocator_proc, *counter};
@@ -141,22 +149,44 @@ main :: () {
     digits := "09";
     show_copied(to_lower_copy(digits, HEAP_ALLOCATOR), digits);
 
-    // An empty result is the zeroed string, which asks the allocator for
+    // An empty result is the zeroed string, count 0 and data null, so the
+    // caller can always free result.data, and it asks the allocator for
     // nothing.
-    join(string.["", ""], "", counting);
-    replace("abc", "abc", "", counting);
-    repeat("", 9, counting);
-    to_lower_copy("", counting);
+    empty_joined := join(string.["", ""], "", counting);
+    no_parts := join(none, ", ", counting);
+    empty_replaced := replace("abc", "abc", "", counting);
+    empty_repeated := repeat("", 9, counting);
+    no_times := repeat("ab", 0, counting);
+    empty_lower := to_lower_copy("", counting);
     print_string("empty results allocate:");
     show_int(counter.allocations);
+    show_zeroed(empty_joined);
+    show_zeroed(no_parts);
+    show_zeroed(empty_replaced);
+    show_zeroed(empty_repeated);
+    show_zeroed(no_times);
+    show_zeroed(empty_lower);
     print_line("");
 
-    // Any other result is one allocation.
-    j := join(string.["a", "b"], "+", counting);
+    // Any other result is one allocation, so the count goes up by one with
+    // each copy.
     print_string("one allocation:");
+    j := join(string.["a", "b"], "+", counting);
     show_int(counter.allocations);
-    print_line("");
     free(j.data, counting);
+    r := replace("a-b", "-", "--", counting);
+    show_int(counter.allocations);
+    free(r.data, counting);
+    t := repeat("abc", 2, counting);
+    show_int(counter.allocations);
+    free(t.data, counting);
+    u := to_upper_copy("hello", counting);
+    show_int(counter.allocations);
+    free(u.data, counting);
+    l := to_lower_copy("ABC", counting);
+    show_int(counter.allocations);
+    free(l.data, counting);
+    print_line("");
 
     // A view of part of a string is read only as far as the view goes: the
     // bytes after it would make another match.
@@ -188,35 +218,50 @@ main :: () {
     show_zeroed(lower);
     print_line("");
 
-    // Sizes up to int's largest are asked for. The halves here, and wide
-    // below, claim more bytes than they have, which is safe only because
-    // the allocator gives nothing, so no byte is copied.
+    // Sizes up to int's largest are asked for: two halves and a separator
+    // byte joined, a half and wide joined, seven bytes each replaced by a
+    // seventh of int's largest, and two bytes repeated half of it times.
+    // half, wide and seventh, and wider below, claim more bytes than they
+    // have, which is safe only because the allocator gives nothing, so no
+    // byte is copied.
     half : string;
     half.data = "x".data;
     half.count = LARGEST / 2;
+    wide : string;
+    wide.data = "x".data;
+    wide.count = LARGEST / 2 + 1;
+    seventh : string;
+    seventh.data = "x".data;
+    seventh.count = LARGEST / 7;
     print_string("int's largest:");
     show_zeroed(join(string.[half, half], "-", refusing));
-    show_int(refused.last_size);
+    show_last_size(*refused);
+    show_zeroed(join(string.[half, wide], "", refusing));
+    show_last_size(*refused);
+    show_zeroed(replace("aaaaaaa", "a", seventh, refusing));
+    show_last_size(*refused);
     show_zeroed(repeat("ab", LARGEST / 2, refusing));
-    show_int(refused.last_size);
+    show_last_size(*refused);
     print_line("");
 
     // Past it, each size below, worked out unchecked, would wrap round to a
     // small size above 0, which an allocator could give, and the copy would
     // write far past it. So each call must give the zeroed string and leave
-    // the allocator unasked: five halves joined, five parts joined by a
-    // separator of 2^62 bytes (4 gaps make 2^64, which wraps to 0), five
-    // bytes each replaced by a half, and 4 bytes repeated 2^62 + 1 times.
-    wide : string;
-    wide.data = "x".data;
-    wide.count = LARGEST / 2 + 1;
+    // the allocator unasked: four parts of 2^62 bytes and "abc" joined
+    // (2^64 + 3 wraps to 3), five parts joined by a separator of 2^62 bytes
+    // (4 gaps make 2^64, which wraps to 0, so 5), four bytes each replaced
+    // by 2^62 + 1 bytes (4 times 2^62 more wraps to 0, so 4), and 4 bytes
+    // repeated 2^62 + 1 times (2^64 + 4 wraps to 4).
+    wider : string;
+    wider.data = "x".data;
+    wider.count = LARGEST / 2 + 2;
     asked := refused.allocations;
     print_string("past it:");
-    show_zeroed(join(string.[half, half, half, half, half], "", refusing));
+    show_zeroed(join(string.[wide, wide, wide, wide, "abc"], "", refusing));
     show_bool(refused.allocations == asked);
     show_zeroed(join(string.["a", "b", "c", "d", "e"], wide, refusing));
     show_bool(refused.allocations == asked);
-    show_zeroed(replace("aaaaa", "a", half, refusing));
+    show_zeroed(replace("aaaa", "a", wider, refusing));
     show_bool(refused.allocations == asked);
     show_zeroed(repeat("abcd", LARGEST / 2 + 2, refusing));
     show_bool(refused.allocations == asked);
