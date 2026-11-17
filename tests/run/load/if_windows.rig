@@ -1,0 +1,6 @@
+// Loaded by tests/run/if_load.rig on Windows only, from its #if's branch for
+// Windows. puts is the main file's: the program has one top level, where a
+// second puts would be already declared.
+SYSTEM_NAME :: "windows";
+
+greet :: () { puts("hello from the loaded file"); }

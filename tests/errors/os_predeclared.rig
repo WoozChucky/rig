@@ -1,0 +1,8 @@
+// The predeclared constants (issue #147, spec 2.5) can't be declared again
+// at the top level, whatever the declaration is: each is refused at its
+// name, and says what the name is. A local may hide them.
+OS :: 3;
+OS_WINDOWS : int;
+OS_LINUX :: () {}
+
+main :: () {}

@@ -1,0 +1,20 @@
+// The predeclared constants (issue #147, spec 2.5): OS is the system the
+// program is built for, OS_WINDOWS (1) or OS_LINUX (2), each an untyped
+// integer constant, so a comparison of them is a constant bool. #run's code
+// sees the program's OS, and a local may hide it. What's printed is the
+// same on both systems.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+KNOWN :: OS == OS_WINDOWS || OS == OS_LINUX;   // a constant bool
+SEEN :: #run which();                          // #run's code sees the program's OS
+which :: () -> int { return OS; }
+
+main :: () {
+    if KNOWN { puts("OS is Windows or Linux"); }
+    if OS_WINDOWS == 1 && OS_LINUX == 2 { puts("OS_WINDOWS is 1, OS_LINUX is 2"); }
+    if SEEN == OS { puts("#run sees the same OS"); }
+    small : u8 = OS;
+    if small == OS { puts("OS is an untyped integer"); }
+    OS := 7;
+    if OS == 7 { puts("a local hides OS"); }
+}

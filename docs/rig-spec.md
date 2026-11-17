@@ -136,7 +136,9 @@ digit      = "0" … "9" .
 
 A name that contains a byte from 0x80 up, such as `função`, is one bad token, reported once at that byte: `non-ASCII characters can only be in strings and comments, for now`.
 
-Some identifiers are predeclared rather than reserved: the names of the built-in types (section 3), `size_of` (section 5.16), and the loop variables `it` and `it_index` (section 6.8). How each can be used is described with it.
+Some identifiers are predeclared rather than reserved: the names of the built-in types (section 3), `size_of` (section 5.16), the loop variables `it` and `it_index` (section 6.8), and the constants `OS`, `OS_WINDOWS` and `OS_LINUX`, untyped integer constants that name the system a program is built for (section 4.9). How each can be used is described with it.
+
+The three constants are the top level's, visible everywhere, and a top-level declaration can't take one of their names: it is `'OS' is predeclared: it's the system the program is built for`, `'OS_WINDOWS' is predeclared: it's Windows, one of the systems OS may be` or `'OS_LINUX' is predeclared: it's Linux, one of the systems OS may be`, at the declaration's name, and the name keeps meaning the constant. A local may hide them, as it may any top-level name (section 4.7).
 
 ### 2.6 Keywords
 
@@ -151,7 +153,7 @@ if        null      return    struct    true      union     using     while
 
 ### 2.7 Directives
 
-A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has seven:
+A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has eight:
 
 - `#foreign`, which declares a procedure implemented in C, followed by the library's name and, when the C function's name is not the procedure's own, by that name in a string: `#foreign libc` or `#foreign libc "free"` (section 7.6);
 - `#no_abc`, which turns off bounds checks in one procedure (section 7.7);
@@ -159,9 +161,10 @@ A directive is `#` followed immediately by a name, made of letters, digits and `
 - `#compiler`, which declares a procedure the compiler does itself, while compiling, in a module that ships with rig (section 7.9);
 - `#load`, which makes another file part of the program (section 2.13);
 - `#import`, which makes a module that ships with rig part of the program (section 2.14);
-- `#run`, which runs code while compiling (section 7.8).
+- `#run`, which runs code while compiling (section 7.8);
+- `#if`, which compiles code for one system and not the other, or on any other condition known while compiling (section 4.9).
 
-The first four appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` and `#import` are top-level declarations of their own, and anywhere else each is `#load can only be at the top level` (`#import can only be at the top level`), right after a signature on the same line too (on the next line it is the next declaration, section 2.13). `#run` is an expression, `#run e`, anywhere a value goes, or a top-level declaration of its own, `#run e;` or `#run { ... }` (section 7.8). In a body it is an expression only: a statement `#run f();` there is `#run in a body must be a value, as in x := #run f();`. Where neither a value nor a declaration goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive` (one starting the next line is the next declaration, section 9.2). Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
+The first four appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` and `#import` are top-level declarations of their own, and anywhere else each is `#load can only be at the top level` (`#import can only be at the top level`), right after a signature on the same line too (on the next line it is the next declaration, section 2.13). `#run` is an expression, `#run e`, anywhere a value goes, or a top-level declaration of its own, `#run e;` or `#run { ... }` (section 7.8). In a body it is an expression only: a statement `#run f();` there is `#run in a body must be a value, as in x := #run f();`. Where neither a value nor a declaration goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive` (one starting the next line is the next declaration, section 9.2). `#if` is a top-level declaration of its own or a statement in a body (section 4.9), and never a value: where one is expected it is `expected an expression, found directive`, and after a signature it is where the body should be, as a `#run` there is, `expected '{', found directive`, one starting the next line being the next declaration. Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
 
 ### 2.8 Integer literals
 
@@ -231,7 +234,7 @@ Appendix B lists each one with the section that defines it.
 
 ### 2.13 Program structure
 
-A source file is a sequence of top-level declarations: procedures, structs, constants and global variables (section 4), `#load`s, `#import`s of modules (section 2.14), and `#run`s, code run while compiling (section 7.8). They may come in any order. Statements appear only inside procedure bodies and a top-level `#run`'s block.
+A source file is a sequence of top-level declarations: procedures, structs, constants and global variables (section 4), `#load`s, `#import`s of modules (section 2.14), `#run`s, code run while compiling (section 7.8), and `#if`s, whose taken branch's declarations are the file's too (section 4.9). They may come in any order. Statements appear only inside procedure bodies and a top-level `#run`'s block.
 
 ```ebnf
 LoadDecl   = "#load" string_lit ";" .
@@ -284,9 +287,9 @@ The program prints:
 The main file, `example.rig`, uses `Square` and `show` from `shapes.rig`, and `putchar` from `print.rig`, which `shapes.rig` loads; `shapes.rig` uses `print_int` from `print.rig` and `newline` from the main file. The load order (below) is `example.rig`, `shapes.rig`, `print.rig`.
 
 - `PATH` is a string literal (section 2.10), its escapes decoded. Unless it is absolute (on Linux, starting with `/`; on Windows, starting with a drive, `C:`, or a separator), it is relative to the directory of the file holding the `#load`: `src/main.rig`'s `#load "world/map.rig";` loads `src/world/map.rig`. `/` separates directories on both systems, and so does `\` on Windows; on Linux `\` is a character of a name like any other. On Windows that holds from a file named with the `\\?\` prefix too, a path Windows opens as written, without resolving its `/`, `.` and `..`: the compiler resolves the paths of the files it loads itself (section 9.1).
-- The file must be named as a source file is, ending in `.rig` (section 2.1): otherwise `'PATH' isn't a .rig file`, and it isn't read. A file that can't be read is `cannot read 'PATH': MESSAGE`, with the system's reason, at its first `#load` in load order alone, its later `#load`s adding nothing. One that is there but can't be read (a directory, say, or a file rig isn't allowed to read) is known by its identity, as a file loaded is (below), however its path is written. One that isn't there has no identity but its path: its later `#load`s are those whose paths name the same place once made absolute, written differently by `.`, `..`, doubled separators or being relative or absolute, and on Windows by `/` for `\` or by case. One reached through a link, under another name, is reported again. An empty path is `a #load path can't be empty`, and a path holding a zero byte (`\0`) is `a #load path can't contain a zero byte`, since the system's paths end at one. Each of these is reported at the `#load`'s string, and `PATH` in it names the file as diagnostics do (section 9.1). A `#load` followed by anything but a string is `expected a string after #load, as in #load "other.rig";`.
+- The file must be named as a source file is, ending in `.rig` (section 2.1): otherwise `'PATH' isn't a .rig file`, and it isn't read. A file that can't be read is `cannot read 'PATH': MESSAGE`, with the system's reason, at its first `#load` in load order alone (with top-level `#if`s, its first in the order files are read, which can differ from load order, section 4.9), its later `#load`s adding nothing. One that is there but can't be read (a directory, say, or a file rig isn't allowed to read) is known by its identity, as a file loaded is (below), however its path is written. One that isn't there has no identity but its path: its later `#load`s are those whose paths name the same place once made absolute, written differently by `.`, `..`, doubled separators or being relative or absolute, and on Windows by `/` for `\` or by case. One reached through a link, under another name, is reported again. An empty path is `a #load path can't be empty`, and a path holding a zero byte (`\0`) is `a #load path can't contain a zero byte`, since the system's paths end at one. Each of these is reported at the `#load`'s string, and `PATH` in it names the file as diagnostics do (section 9.1). A `#load` followed by anything but a string is `expected a string after #load, as in #load "other.rig";`.
 - Each file is loaded once, however its path is written: `b.rig`, `./b.rig` and `sub/../b.rig` are the same file, and so are a link to it and, on Windows, `B.RIG`. A `#load` of a file already loaded, the main file included, loads nothing more, so files may load each other, in a cycle or not, without error.
-- The program's files are in **load order**: the main file first, then each file in the order its first `#load` is met, the files being read in that same order. When `main.rig` loads `b.rig` and then `c.rig`, and `b.rig` loads `d.rig`, the order is `main.rig`, `b.rig`, `c.rig`, `d.rig`. An `#import` takes its place in the same order as a `#load` of the module's file would (section 2.14): the `#load`s and `#import`s of every file are met in one sequence, in source order, so `#import "Basic";` and then `#load "b.rig";` in the main file read Basic's `module.rig` before `b.rig`. Diagnostics are sorted file by file in it (section 9.1).
+- The program's files are in **load order**: the main file first, then each file in the order its first `#load` is met, the files being read in that same order. When `main.rig` loads `b.rig` and then `c.rig`, and `b.rig` loads `d.rig`, the order is `main.rig`, `b.rig`, `c.rig`, `d.rig`. An `#import` takes its place in the same order as a `#load` of the module's file would (section 2.14): the `#load`s and `#import`s of every file are met in one sequence, in source order, so `#import "Basic";` and then `#load "b.rig";` in the main file read Basic's `module.rig` before `b.rig`. Diagnostics are sorted file by file in it (section 9.1). With top-level `#if`s, the load order is the one the program would have with only its taken branches written: a taken branch's `#load` takes its place where the `#if` is, though the files outside every `#if` are read first (section 4.9). A file that only a branch not taken loads isn't part of the program: it isn't read, and its not being there is no error.
 - `#load` is a top-level declaration: anywhere else, in a body, a struct or an expression, it is `#load can only be at the top level`, at its `#`, and it loads no file. A `#load` that starts a line right after a top-level declaration left unfinished is the next top-level declaration instead: the unfinished one is given up there (section 9.2), reported for what it lacks, and the file is loaded. Such a declaration is, for example, a signature with no body (`expected '{'`), a value with no `;` (`expected ';'`), `N ::` with no value (`expected an expression`) or a `#load` with no `;`. A body or a struct whose `}` is missing is found unclosed at the end of the file or at the next procedure's or struct's declaration in column 1, and there only the `#load`s in column 1 right before that point count, with nothing between them but, in a body, other declarations in column 1 (globals and constants, read again at the top level too): the block is reported (`expected '}'`) at the first of them. Any other `#load` in it is misplaced: an indented one, one followed by a statement or a field, and one after a statement or a field left unfinished.
 
 A `#load` fails when it has one of the errors above, has no string, or isn't at the top level, and it then leaves the program without the file it names. One in a declaration given up after an earlier error (section 9.2) is passed over with it, unreported, but has failed all the same. The names that file might have declared are then not reported as unknown: while a `#load` has failed, no name anywhere in the program is `unknown identifier` or `unknown type`, nor is `main` reported as missing, so one mistake gives one message (section 9.2).
@@ -348,7 +351,7 @@ Every value and every expression in Rig has a type, known while compiling. The t
 Type = "*" Type | "[" Expression "]" Type | "[" "]" Type | ProcType | identifier .
 ```
 
-A type name is a built-in type's name or a struct's. A name declared as something else, written where a type goes, is `'foo' is not a type`; a name declared nowhere is `unknown type 'foo'`, unless a `#load` has failed (section 2.13). The built-in type names always mean the built-in types: a struct cannot be called `u8` (`'u8' is a built-in type`). Other declarations may use those names, hiding nothing of the types: a variable may be called `int`, and `int` is still the type wherever a type is written.
+A type name is a built-in type's name or a struct's. A name declared as something else, written where a type goes, is `'foo' is not a type`; a name declared nowhere is `unknown type 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error (section 4.9). The built-in type names always mean the built-in types: a struct cannot be called `u8` (`'u8' is a built-in type`). Other declarations may use those names, hiding nothing of the types: a variable may be called `int`, and `int` is still the type wherever a type is written.
 
 **Type identity.** Two types are the same type when they are the same built-in type, the same struct declaration, or are made the same way from the same types: `*T` and `*U` when `T` and `U` are the same, `[N]T` and `[M]U` when `N` equals `M` and `T` and `U` are the same, `[]T` and `[]U` when `T` and `U` are the same, and two procedure types when their parameter types, their result types and their `#c_call` marks are (section 3.15). `float` is the same type as `float32`. `int` and `s64` are different types with the same size and representation; each converts implicitly to the other (section 3.13).
 
@@ -630,7 +633,7 @@ main :: () {
 
 ### 4.1 Declarations
 
-A declaration of a name binds it to a constant, a variable, a procedure or a struct, and uses `:`. The top level also holds `#load`s, declarations that name no value but another file of the program (section 2.13), and `#run`s, which name nothing and run code while compiling (section 7.8). The forms of a declaration of a name are:
+A declaration of a name binds it to a constant, a variable, a procedure or a struct, and uses `:`. The top level also holds `#load`s, declarations that name no value but another file of the program (section 2.13), `#run`s, which name nothing and run code while compiling (section 7.8), and `#if`s, which name nothing either, and whose taken branch's declarations are the top level's (section 4.9). The forms of a declaration of a name are:
 
 | Form | Declares |
 |---|---|
@@ -783,20 +786,20 @@ A struct's name is a type, not a value: used as a value it is `'Vec2' is a type,
 
 ### 4.6 The top level
 
-Procedures, structs, global variables and global constants make up the top level, with the `#load`s, the `#import`s and the `#run`s, which declare no name (sections 2.13, 2.14, 7.8). There is one top level for the whole program: the declarations of every one of its files (section 2.13) are in it, as if they were written in one file. They share one set of names: a global cannot take a procedure's name, nor a struct a constant's, whether they are in one file or in two (`'x' is already declared at PATH:L:C`, naming where the first one is). The declarations are taken file by file in load order, so of two in different files the one in the file loaded later is reported, naming the one in the other file.
+Procedures, structs, global variables and global constants make up the top level, with the `#load`s, the `#import`s, the `#run`s and the `#if`s, which declare no name (sections 2.13, 2.14, 7.8, 4.9). A top-level `#if`'s taken branch's declarations are the top level's, as if written in place of the `#if`, and a branch not taken's are nothing of the program's (section 4.9). There is one top level for the whole program: the declarations of every one of its files (section 2.13) are in it, as if they were written in one file. They share one set of names: a global cannot take a procedure's name, nor a struct a constant's, whether they are in one file or in two (`'x' is already declared at PATH:L:C`, naming where the first one is). The declarations are taken file by file in load order, so of two in different files the one in the file loaded later is reported, naming the one in the other file.
 
 Every top-level declaration is visible everywhere in the program, in every one of its files, before its declaration as well as after it: a procedure may call one declared after it or in another file, a struct may hold one declared after it, and a constant may be defined from one declared after it.
 
 ### 4.7 Scope
 
-A **block** is a sequence of statements in braces (section 6.1). A procedure's body is a block, and so is each body of an `if`, `else`, `while` and `for`.
+A **block** is a sequence of statements in braces (section 6.1). A procedure's body is a block, and so is each body of an `if`, `else`, `while` and `for`. An `#if`'s branch is written as a block but makes no scope: in a body, the taken branch's statements are the enclosing block's (section 4.9).
 
 - A name declared in a block, a local variable or a local constant, is visible from the end of its declaration to the end of the block, including in blocks nested inside it.
 - A procedure's parameters are declared in its body's block.
 - A `for` loop declares its iterator (`it` or the name given) and `it_index` in its body's block (section 6.8).
 - A name declared at the top level is visible everywhere, in every file of the program, unless hidden.
 
-A name is looked up from the innermost block outwards, and then at the top level. A block may declare a name that an enclosing block, or the top level, already declares; the new declaration **hides** the outer one until the end of the block. The same block may not declare a name twice: `'x' is already declared at PATH:L:C`. Since parameters are in the body's block, a local cannot take a parameter's name. A name that is declared nowhere is `unknown identifier 'foo'`, unless a `#load` has failed (section 2.13).
+A name is looked up from the innermost block outwards, and then at the top level. A block may declare a name that an enclosing block, or the top level, already declares; the new declaration **hides** the outer one until the end of the block. The same block may not declare a name twice: `'x' is already declared at PATH:L:C`. Since parameters are in the body's block, a local cannot take a parameter's name. A name that is declared nowhere is `unknown identifier 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error, or, for a name used after it in the same body, a body `#if`'s condition has (section 4.9).
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;
@@ -844,6 +847,99 @@ The same holds for a global variable's value, a struct's size (a struct cannot h
 A procedure's body is checked where a `#run` first reaches it, before the `#run` runs (section 7.8), so a body is worked out where it is needed too. A body needed while it is being checked, as `f`'s is by `x := #run f();` in its own body, or by a `#run` there that calls a procedure calling `f`, is a cycle of its own, reported at the `#run` that needed it: `'f' is defined in terms of itself`.
 
 The chains of declarations worked out inside one another, bodies included, are limited to 1000 levels (section 9.4).
+
+### 4.9 Conditional compilation: #if
+
+```ebnf
+IfDirective = "#if" Expression Block [ "else" ( Block | IfDirective ) ] .
+```
+
+`#if` compiles code for one system and not the other, or on any other condition known while compiling. `#if c { ... } else { ... }` is decided while compiling: the condition `c` is worked out, and the branch it picks, the **taken** branch, is part of the program, as if it had been written in place of the `#if`, while the other is not. It may be written at the top level, where its blocks hold top-level declarations (section 4.6), and as a statement in a body, where they hold statements (section 6).
+
+**The system.** Three constants are predeclared (section 2.5), untyped integer constants (section 3.12) visible everywhere: `OS_WINDOWS`, which is 1, `OS_LINUX`, which is 2, and `OS`, the system the program is built for, one of the two (0 names no system). rig builds a program for the system it runs on, so `OS` is `OS_WINDOWS` on Windows and `OS_LINUX` on Linux, in the program and in the code its `#run`s run while compiling (section 7.8), which sees the same `OS`. `OS == OS_WINDOWS` is a constant `bool` (section 5.9). A top-level declaration can't take one of the three names, and a local may hide them, as section 2.5 says.
+
+**The condition** is a `bool` known while compiling (section 5.9): otherwise it is `the condition of '#if' must be a bool, not 'int'`, or `the condition of '#if' must be known while compiling`, at the condition. As an `if`'s, it needs no parentheses: the `{` of the branch ends it (section 6.5). The branches are always blocks in braces, and after `else` comes a block or another `#if`, the next arm of a chain: `#if A { ... } else #if B { ... } else { ... }`. The conditions are worked out in order until one is `true`, whose branch is taken; when none is, the last `else`'s block is, if there is one. Everything after the taken branch is not taken, the later conditions included, which aren't checked. `else if` after an `#if` is `an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }`, at the `if`: in a body it would be an ordinary `if` in the `else`, compiled whatever the condition.
+
+A condition with an error takes neither branch, and neither is checked, so the condition's message is the only one about the `#if`.
+
+**A branch not taken** is parsed and nothing more. Its syntax errors are reported (section 9.2), but its names aren't declared, its types aren't resolved, its expressions aren't checked, its `#run`s don't run, its `#load`s and `#import`s aren't read (a file one of them names that isn't there is no error), and nothing of it is compiled into the program. So each branch may hold what would be an error on the other system: a C function only that system has, or a constant that can be worked out only there.
+
+**At the top level** a branch holds what the top level holds: procedures, structs, constants, global variables, `#load`s, `#import`s, `#run`s and other `#if`s, nested as deeply as blocks may be (section 9.4). The `#if` declares no name itself. The taken branch's declarations join the program's one top level (section 4.6), as if written in place of the `#if`: visible everywhere in the program, before the `#if` and after it, in every file. `main` may be declared in a branch. Two branches of one `#if` may declare the same name, since only one is taken; a name declared both in the taken branch and outside it is `'x' is already declared at PATH:L:C`, at the later of the two (section 4.6). A branch's declarations may be written unindented, as C's `#ifdef` has them: only the branch's `}` ends it (section 9.2).
+
+- **When.** The top-level `#if`s are decided once the files outside every `#if` are read, before anything else is checked: file by file in load order (section 2.13), each file's in source order, and an `#if` nested in a taken branch where it is met. A taken branch's `#load`s and `#import`s are read then, and the top-level `#if`s of the files they reach are decided in their turn.
+- **What a condition may use.** A top-level condition is worked out before the program is checked, from what is known by then: literals, the predeclared constants, and the constants declared outside every top-level `#if`, in any file, with what they need in turn (other constants, and the structs whose sizes they take). A name declared in a branch of a top-level `#if` read by then, taken or not, at any depth, or in a file that only a taken branch loads and that has been read by then, reached from another top-level condition, directly or through constants and types, is `'LEVEL' is declared in a top-level #if, so it can't decide another top-level #if`, at the name: what the branches declare isn't known until the `#if`s are decided. What has been read by then follows the order files are read in (under **Load order**, below), so a name that only a file not read yet declares is `unknown identifier`, or nothing while a `#load` or a condition has failed. Running code would need the whole program checked, so a `#run` reached from a top-level condition, one in a constant's value included, is `a top-level #if's condition can't run code while compiling, for now`, at the `#run`. A condition in a body has neither limit (below).
+- **A condition with an error** leaves the program without whatever its branches might have declared, as a `#load` that fails leaves it without its file (section 2.13): no name anywhere in the program is then `unknown identifier` or `unknown type`, nor is `main` reported missing.
+- **Load order** is the one the program would have with only its taken branches written: a taken branch's `#load` and `#import` take their places where the `#if` is (section 2.13). Diagnostics are sorted in it (section 9.1), and the top-level `#run`s run in it (section 7.8). The files are read in another order: the files outside every `#if` first, then, as each `#if` is decided in turn, a taken branch's `#load`s and `#import`s, every file they reach read at once, outside its own `#if`s. That order still decides two things about a file loaded more than once: it is named by the first of its `#load`s read, when they spell its path differently (section 9.1), and when it can't be read, it is reported there. A file loaded both in a taken branch and outside every `#if`, say, is named, and reported, at the first of its `#load`s outside; and when `main.rig` loads `a.rig` in one taken branch and `./d.rig` in a later one, and `a.rig` loads `d.rig`, the file is `d.rig`, and reported at `a.rig`'s `#load`, though `main.rig`'s comes first in load order.
+- **Build programs** are known once the top-level `#if`s are decided (section 7.9): a `main` or an `#import "Compiler";` in a branch not taken doesn't count.
+
+A C function that exists on one system only is declared in that system's branch, with a procedure that both branches declare, which the rest of the program calls on either:
+
+```rig fragment
+#if OS == OS_WINDOWS {
+    Sleep :: (milliseconds: u32) #foreign libc;           // kernel32's (section 10.6)
+    sleep_ms :: (ms: int) { Sleep(cast(u32) ms); }
+} else {
+    c_usleep :: (microseconds: u32) -> s32 #foreign libc "usleep";
+    sleep_ms :: (ms: int) { c_usleep(cast(u32) (ms * 1000)); }
+}
+```
+
+A top-level condition can't use what another top-level `#if` declares, whichever of its branches is taken:
+
+```rig error
+#if OS == OS_WINDOWS { LEVEL :: 2; } else { LEVEL :: 3; }
+
+#if LEVEL > 1 {
+    verbose :: () {}
+}
+
+main :: () {}
+```
+
+```text
+example.rig:3:5: error: 'LEVEL' is declared in a top-level #if, so it can't decide another top-level #if
+    #if LEVEL > 1 {
+        ^
+```
+
+**In a body** `#if` is a statement (section 6), and it makes no scope (section 4.7): the taken branch's statements are the enclosing block's, so a local declared there is visible after the `#if`, to the end of the block, and the block can't declare it again. Its condition is checked where it is, when the body is checked (section 7.8), with what is known there: a local constant may decide it, and so may a `#run`. When it has an error, the locals a branch would have declared are declared nowhere, so no identifier the body uses after the `#if` is `unknown identifier` (a branch in a body declares no type, so `unknown type` still is). An `#if` statement reaches its end when its taken branch does, or when it took no branch (section 6.11). A `break` or a `continue` in the taken branch acts on the loop around the `#if` (section 6.9), and with none it is `'break' is only allowed inside a loop`.
+
+```rig
+puts :: (s: *u8) -> s32 #foreign libc;
+
+// The last statement: it returns on every path, since its taken branch does.
+system_number :: () -> int {
+    #if OS == OS_WINDOWS { return 1; } else #if OS == OS_LINUX { return 2; } else { return 0; }
+}
+
+main :: () {
+    #if OS == OS_WINDOWS {
+        name := "windows";
+    } else {
+        name := "linux";
+    }
+    // name is the taken branch's local: #if makes no scope.
+    if (name[0] == 119) == (OS == OS_WINDOWS) { puts("the name agrees with OS"); }
+    if system_number() == OS { puts("so does the number"); }
+    VERBOSE :: false;
+    #if VERBOSE { puts("never compiled"); } else { puts("a local constant decides"); }
+    #if false { x : int = "never checked"; nope(); }
+}
+```
+
+```text
+the name agrees with OS
+so does the number
+a local constant decides
+```
+
+Each system takes its own branches, and the program prints the same on both: `119` is `w`, the first byte of `"windows"`. The last `#if`'s branch, never taken, would have two errors, but it is only parsed.
+
+**Neither in a struct nor an expression,** for now. An `#if` among a struct's fields is `#if can't be among a struct's fields, for now`, at the `#if`, and the struct is given up, unless it is in column 1, where it ends the fields as the next top-level declaration (section 9.2). `#if` is no value: `x := #if A { };` is `expected an expression, found directive`. An `#if` that starts a line outside any braces is the next top-level declaration, as a `#load` and a `#run` are, so the declaration left unfinished before it is given up there (section 9.2).
+
+**`rig check` and the editor** check the taken branches only, for the system rig runs on, as `rig build` builds the program: on Windows a branch for Linux shows its syntax errors and nothing else (section 10.1). A file the program loads only in a branch not taken isn't part of it on that system: `rig check main.rig --stdin-for linux.rig` says `rig: error: 'main.rig' loads 'linux.rig' only in an #if branch not taken`, and an editor shows nothing for that file (section 10.1).
+
+**Debug information** (section 10.7): an `#if` makes no lexical block, since it makes no scope. It adds no code of its own: the taken branch's statements are at their own lines, so a line holding only an `#if` and its `{` has none.
 
 ## 5. Expressions
 
@@ -965,7 +1061,7 @@ Nothing else is compared: `'==' needs numbers, bools, pointers, procedure values
 A constant expression is one whose value is known while compiling. The compiler works it out (folds it), with the same result the program would compute. These are constant:
 
 - integer and float literals, `true` and `false`, `null`;
-- the name of a constant holding a number, a `bool` or `null`;
+- the name of a constant holding a number, a `bool` or `null`, the predeclared `OS`, `OS_WINDOWS` and `OS_LINUX` included (section 4.9);
 - `size_of(T)` and an array's `.count`;
 - `-`, `~` or `!`, or an arithmetic, bitwise, shift, comparison or logical operator, applied to constant operands (an address, `*x`, is never a constant);
 - a cast of a constant to a number type or `bool`, and a cast of `null` to a pointer type;
@@ -981,7 +1077,7 @@ A constant expression is one whose value is known while compiling. The compiler 
 - a cast of constant data to its own type, or between `string` and `[]u8`;
 - `#run e` whose value is a string, a struct, an array or a view (section 7.8), baked as if it had been written as a literal: its strings hold literals, as written ones do. A view's count and elements do not fold: they are read at run time, as any view's are.
 
-A part of constant data that is a string, a struct or an array is constant data too (`LINE.a`, `LINES[1]`). One that is a string literal's address or a procedure value is known while compiling, as a constant's value or a global's (sections 4.2, 4.3), but does not fold. A variable, a call and anything made from them are not constants, unless a `#run` holds them: `Vec2.{i, 2}` is no constant data, and `PRIMES[i]`, for a variable `i`, is read at run time. Where a constant is required (a constant's value, an array's count) anything else is an error (sections 4.2, 3.6), with two exceptions, both a constant's value: it may name a procedure, as it is or through casts that end at its own type, since its address is known when the program is linked, and it may be constant data, or a string literal's address (section 4.2). A global variable's initial value accepts more than constants (section 4.3).
+A part of constant data that is a string, a struct or an array is constant data too (`LINE.a`, `LINES[1]`). One that is a string literal's address or a procedure value is known while compiling, as a constant's value or a global's (sections 4.2, 4.3), but does not fold. A variable, a call and anything made from them are not constants, unless a `#run` holds them: `Vec2.{i, 2}` is no constant data, and `PRIMES[i]`, for a variable `i`, is read at run time. Where a constant is required (a constant's value, an array's count, an `#if`'s condition) anything else is an error (sections 4.2, 3.6, 4.9), with two exceptions, both a constant's value: it may name a procedure, as it is or through casts that end at its own type, since its address is known when the program is linked, and it may be constant data, or a string literal's address (section 4.2). A global variable's initial value accepts more than constants (section 4.3).
 
 Untyped constant expressions are exact (section 3.12). Typed constant expressions wrap as at run time; a division by the constant 0 is an error while compiling.
 
@@ -1156,11 +1252,11 @@ main :: () {
 
 ```ebnf
 Statement = VarDecl | ConstDecl | MultiVarDecl | Assignment | MultiAssignment
-          | ReturnStmt | Block | IfStmt | WhileStmt | ForStmt
+          | ReturnStmt | Block | IfStmt | IfDirective | WhileStmt | ForStmt
           | "break" ";" | "continue" ";" | Expression ";" .
 ```
 
-Statements appear only in procedure bodies, and run in order. Every statement that does not end with a block ends with `;`.
+Statements appear only in procedure bodies, and run in order. Every statement that does not end with a block ends with `;`. An `IfDirective`, `#if`, is decided while compiling, and its taken branch's statements are the enclosing block's (section 4.9).
 
 ### 6.1 Blocks
 
@@ -1168,7 +1264,7 @@ Statements appear only in procedure bodies, and run in order. Every statement th
 Block = "{" { Statement } "}" .
 ```
 
-A block is a sequence of statements in braces, and a scope (section 4.7). A block may stand on its own as a statement, giving its declarations a scope of their own.
+A block is a sequence of statements in braces, and a scope (section 4.7). An `#if`'s branch is written as a block but makes no scope: its statements are the enclosing block's (section 4.9). A block may stand on its own as a statement, giving its declarations a scope of their own.
 
 ### 6.2 Declaration statements
 
@@ -1321,7 +1417,10 @@ A block reaches its end unless its last statement is one of:
 - a `return`;
 - a block that does not reach its own end;
 - an `if` with an `else`, neither of whose blocks reaches its end;
+- an `#if` whose taken branch does not reach its end (section 4.9): one that took no branch reaches it;
 - a `while` whose condition is the constant `true` and that has no `break` of its own.
+
+An `if`, an `#if` or a `while` whose condition has an error is taken not to reach its end, so the condition's message is the only one.
 
 ```rig
 first_even :: (values: []int) -> int {
@@ -1644,11 +1743,11 @@ main :: () {
 
 **When it runs.**
 
-- An expression's `#run` runs when the checker first needs its value: a constant's or a global's when that declaration is worked out (section 4.8), one in a body when the body is checked. Each `#run` runs once, however often the code around it would run: one in a loop's body, or in a procedure called many times, runs once while compiling, and the program has its value every time. Every body is checked, so a `#run` in a procedure the program never calls runs too.
+- An expression's `#run` runs when the checker first needs its value: a constant's or a global's when that declaration is worked out (section 4.8), one in a body when the body is checked. Each `#run` runs once, however often the code around it would run: one in a loop's body, or in a procedure called many times, runs once while compiling, and the program has its value every time. Every body is checked, so a `#run` in a procedure the program never calls runs too; one in an `#if`'s branch not taken never runs (section 4.9).
 - Before it runs, everything it reaches is checked: the procedures its operand calls or takes as values, the procedures those reach in turn, the constants and globals they name, and the structs of the values they use, whether or not the code would get to them when it runs. When any of that has errors, they are reported where they are, and the `#run` doesn't run. It says nothing more, and neither does what needs its value (an array's count, a constant made from it, an operator on it), so one mistake gives one message.
 - A `#run` whose value is needed while it is being worked out is a cycle (section 4.8): `M :: #run k();`, where `k` returns `M`, is `'M' is defined in terms of itself`, at `M`. So is a body a `#run` needs while that body is being checked, as `x := #run f();` in `f`'s own body: `'f' is defined in terms of itself`, at the `#run`.
 - `main`, where the program starts (section 7.4), is never run while compiling: a call of `main` anywhere in what a `#run` reaches is `main is where the program starts; #run can't call it`, at the `#run`. A `#run` in `main`'s body is fine.
-- The top-level `#run`s run in `rig build` only, once the whole program has checked with no errors, so after every expression's `#run`. They run file by file in load order (section 2.13), and in source order within a file: a loaded file's `#run`s run after every one of the file whose `#load` of it is met first, not at that `#load`. `rig check` checks them as `rig build` does, what they reach and `main` included, but never runs them (section 10.1). A top-level `#run` that fails doesn't stop the ones after it, and every diagnostic is printed after the last of them. A build program's top-level `#run`s make the workspaces it builds, and come before them: the workspaces are built once the last `#run` has run, and none is when one of them failed (section 7.9).
+- The top-level `#run`s run in `rig build` only, once the whole program has checked with no errors, so after every expression's `#run`. They run file by file in load order (section 2.13), and in source order within a file: a loaded file's `#run`s run after every one of the file whose `#load` of it is met first, not at that `#load`. That is the load order with only the taken branches of the top-level `#if`s written, a taken branch's `#run`s running in the `#if`'s place, and a branch not taken's never (section 4.9). `rig check` checks them as `rig build` does, what they reach and `main` included, but never runs them (section 10.1). A top-level `#run` that fails doesn't stop the ones after it, and every diagnostic is printed after the last of them. A build program's top-level `#run`s make the workspaces it builds, and come before them: the workspaces are built once the last `#run` has run, and none is when one of them failed (section 7.9).
 
 **One world.** Every `#run` of a compilation runs in one compile-time world: one interpreter, holding one copy of the program's globals, which start from their written values (section 4.3) and which every `#run` shares. So one `#run` can set up what a later one reads. The program's own globals are untouched: the program starts with their written values, whatever the `#run`s did to theirs.
 
@@ -1738,7 +1837,7 @@ build :: () {
 
 `rig build`, in the directory of this `build.rig` and of its `src/main.rig`, runs `build`, which makes the workspace `game` and gives it its options and its file. Then rig builds `src/main.rig`, with the files it loads, into the executable `game` (`game.exe` on Windows), optimised and without bounds checks. Since a build program is ordinary Rig, its `#run`s may do more with no feature for it: build several programs, call C to copy files or start other programs, or end the build with `exit(1)`. (As a `rig fragment` (section 1.4), the example is checked with an empty `main` added, which makes it an ordinary program, whose top-level `#run` `rig check` never runs.)
 
-**What a build program is** is known once the program is loaded, before anything is checked or run, so `rig check`, the rule that `main` is needed (section 7.4) and the command line's checks (section 10.1) all know it. A build program reaches the Compiler module's `module.rig`, the file `#import "Compiler";` finds, through an `#import` or through a `#load` of its path, and none of its files declares a procedure called `main`. A global variable or a constant called `main` is no procedure, and doesn't count; a procedure `main` whose declaration has a syntax error (section 9.2) does. A program that imports the Compiler module and declares `main` is an ordinary program, which may use the module's types but can't make workspaces (below).
+**What a build program is** is known once the program is loaded and its top-level `#if`s are decided (section 4.9), before anything is checked or run, so `rig check`, the rule that `main` is needed (section 7.4) and the command line's checks (section 10.1) all know it. A `main` or an `#import "Compiler";` in a branch not taken doesn't count. A build program reaches the Compiler module's `module.rig`, the file `#import "Compiler";` finds, through an `#import` or through a `#load` of its path, and none of its files declares a procedure called `main`. A global variable or a constant called `main` is no procedure, and doesn't count; a procedure `main` whose declaration has a syntax error (section 9.2) does. A program that imports the Compiler module and declares `main` is an ordinary program, which may use the module's types but can't make workspaces (below).
 
 **The Compiler module** declares:
 
@@ -1989,7 +2088,9 @@ example.rig:4:1: error: expected ';', found '}'
     ^
 ```
 
-An identifier found is named: `counter int = 0;` is `expected '::', found identifier 'int'`. After a syntax error the compiler gives up on the declaration it was in and goes on at the next one, so the errors in the rest of the file, and in the program's other files, are reported too, type errors included. The declaration given up on keeps its name when the text still looks like a declaration of it, and nothing more is reported about it or its uses, so one mistake gives one message. A missing `main` is not reported when a declaration with a syntax error might have been it. A `#load`, an `#import` or a `#run` that starts a line is the next top-level declaration too, as section 2.13 says of a `#load`: the declaration left unfinished before it is given up there, and the load, the import or the run is kept, unless a value is still expected there (`N ::` on the line before), where the `#run` is that value. A body or a struct whose `}` is missing ends before the `#import`s and the `#run`s in column 1 as it ends before the `#load`s, a `#run {` in column 1 ends a body as a procedure's declaration does, and any `#run` in column 1 ends a struct's fields, which can't hold one. A `#load` or an `#import` that failed (sections 2.13, 2.14) is the same for the whole program: the file it names might have declared any name, so while one has failed no name anywhere is reported as unknown (`unknown identifier`, `unknown type`), nor `main` as missing.
+An identifier found is named: `counter int = 0;` is `expected '::', found identifier 'int'`. After a syntax error the compiler gives up on the declaration it was in and goes on at the next one, so the errors in the rest of the file, and in the program's other files, are reported too, type errors included. The declaration given up on keeps its name when the text still looks like a declaration of it, and nothing more is reported about it or its uses, so one mistake gives one message. A missing `main` is not reported when a declaration with a syntax error might have been it. A `#load`, an `#import` or a `#run` that starts a line is the next top-level declaration too, as section 2.13 says of a `#load`: the declaration left unfinished before it is given up there, and the load, the import or the run is kept, unless a value is still expected there (`N ::` on the line before), where the `#run` is that value. A body or a struct whose `}` is missing ends before the `#import`s and the `#run`s in column 1 as it ends before the `#load`s, a `#run {` in column 1 ends a body as a procedure's declaration does, and any `#run` in column 1 ends a struct's fields, which can't hold one. A `#load` or an `#import` that failed (sections 2.13, 2.14) is the same for the whole program: the file it names might have declared any name, so while one has failed no name anywhere is reported as unknown (`unknown identifier`, `unknown type`), nor `main` as missing. So is a top-level `#if` whose condition has an error, whose branches might have declared any name (section 4.9).
+
+Recovery treats an `#if` (section 4.9) as it treats a `#run`: one that starts a line outside any braces is the next top-level declaration, and after a signature it is where the body's `{` should be. One in column 1 is among the column-1 declarations that a body whose `}` is missing ends before, and the skipping after an error resumes at it inside braces too, as at a procedure's declaration in column 1. It doesn't end a body by itself, since unindented it is a statement there, unless a branch of it (or of an `#if` right inside one of its branches, at any depth) declares a procedure or a struct, or holds a `#run { }`, which a body can't hold: it then ends the body as a procedure's declaration in column 1 does. Any `#if` in column 1 ends a struct's fields, and any other among them is `#if can't be among a struct's fields, for now`. Inside a top-level `#if`'s branch, a declaration with an error is given up as at the top level, but the skipping stops at the `}` that closes the branch, so the declarations after the `#if` are read as the top level's. No column-1 rule ends a branch, whose declarations may be unindented: only its `}` does. A branch whose `}` is missing at the end of the file is `expected '}'` there (unless a body never closed in it said so already), and the whole `#if` is given up. A branch not taken is parsed as any other, so its syntax errors are reported.
 
 ### 9.3 Representative messages
 
@@ -2047,17 +2148,27 @@ The sections defining each construct give its messages. Some of those met most o
 | `'fr ee' can't be a C function's name: it has white space` | 7.6 |
 | `'main' can't be a C function's name: it's where the program starts` | 7.6 |
 | `'__rig_panic' can't be a C function's name: names starting with __rig_ are the compiler's own` | 7.6 |
+| `'OS' is predeclared: it's the system the program is built for` | 2.5, 4.9 |
+| `'OS_WINDOWS' is predeclared: it's Windows, one of the systems OS may be` | 2.5, 4.9 |
+| `'OS_LINUX' is predeclared: it's Linux, one of the systems OS may be` | 2.5, 4.9 |
+| `the condition of '#if' must be a bool, not 'int'` | 4.9 |
+| `the condition of '#if' must be known while compiling` | 4.9 |
+| `an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }` | 4.9 |
+| `'LEVEL' is declared in a top-level #if, so it can't decide another top-level #if` | 4.9 |
+| `a top-level #if's condition can't run code while compiling, for now` | 4.9 |
+| `#if can't be among a struct's fields, for now` | 4.9, 9.2 |
+| `rig: error: 'main.rig' loads 'linux.rig' only in an #if branch not taken` | 4.9, 10.1 |
 
 ### 9.4 Limits
 
 The compiler limits how deeply a program's constructs nest:
 
 - An expression nests at most 1000 levels: each parenthesis, prefix operator, cast, call, dereference, field, element, compound literal and binary operator is a level above what it holds, so a chain of 1001 `+` is too deep. Deeper is `this expression is nested too deeply (more than 1000 levels)`, at the start of the outermost expression.
-- Blocks nest at most 1000 levels, a procedure's body the first: `blocks are nested too deeply (more than 1000 levels)`, at the `{` one too many.
+- Blocks nest at most 1000 levels, a procedure's body the first: `blocks are nested too deeply (more than 1000 levels)`, at the `{` one too many. A top-level `#if`'s branch is a block for this limit, so top-level `#if`s nest at most 1000 levels, and a procedure declared in branches has its body that many levels down already. In a body an `#if`'s branch is a block too.
 - A written type nests at most 1000 levels, each `*`, `[]`, `[N]` and procedure type's `(` one: `types are nested too deeply (more than 1000 levels)`. Types and expressions inside each other count together: an array's count is inside its `[N]` level, and the type of `size_of` and of a cast is a level below the expression.
 - Top-level declarations worked out inside one another (a constant whose value names a constant declared after it, and so on) nest at most 1000 levels: `'A1001' is nested too deeply in the declarations that need it (more than 1000 levels)`. Declared in the order they are needed, a chain of any length compiles. A body a `#run` needs (section 7.8) is worked out inside the declaration or the body holding the `#run`, its blocks, expressions and types counted together from where that one is: a chain of bodies each running the next goes no deeper than 1000 levels either, and the body one too many is reported at its procedure's name, in the same words.
 
-An `else if` chain may have any number of arms.
+An `else if` chain, and an `else #if` chain, may have any number of arms.
 
 ## 10. Implementation
 
@@ -2081,7 +2192,7 @@ A **build program** (section 7.9) isn't made into an executable: once its top-le
 - The object file, one for the whole program, is written to a directory `.build` in the current directory, made if needed, named after the main file: `.build/hello.obj` on Windows, `.build/hello.o` on Linux.
 - On Windows the program's debug information is written beside it: the executable's name with `.pdb` for its `.exe` (in any case), `hello.pdb` for `hello.exe`, or with `.pdb` added to a name with another extension, `out.bin.pdb` for `out.bin` (section 10.7).
 
-**`rig check`** reads and checks the program as `rig build` does, the files it loads or imports included, prints the same diagnostics, and stops: it writes no file. A build program is checked as any program is, and builds nothing (section 7.9). Checking runs the program's expression `#run`s, since types can depend on them (`[LIMIT]int`), and what they print goes where it would from any program, to `rig check`'s standard output or its standard error; it never runs the top-level `#run`s, which it checks all the same (section 7.8), so a program whose only error is a top-level `#run` that fails checks with none. With `--stdin` it reads the main file from standard input, which lets an editor check text that is not saved. `FILE.rig` is then the name its diagnostics give it, and its `#load`s are found from `FILE.rig`'s directory, as if the text were in that file; the file need not exist. The files it loads are read from disk. With `--stdin-for LOADED.rig` (the usage's second `FILE.rig`) the program is `FILE.rig`'s, read from disk, but for `LOADED.rig`, whose text is read from standard input wherever the program loads it, which lets an editor check a file a program loads as part of that program: checked alone, it would have no `main`, and the names the program's other files declare would be unknown. `LOADED.rig`, like `FILE.rig`, is a path from the current directory, not from `FILE.rig`'s; it is then known as `#load` knows a file (section 2.13), so the `#load` may write its path otherwise (`./b.rig` or `sub/../b.rig` for `b.rig`, and on Windows `B.RIG`), and it need not exist. Its diagnostics name it as its `#load` does. When `LOADED.rig` is `FILE.rig` itself, the option is `--stdin`.
+**`rig check`** reads and checks the program as `rig build` does, the files it loads or imports included, prints the same diagnostics, and stops: it writes no file. A build program is checked as any program is, and builds nothing (section 7.9). Checking runs the program's expression `#run`s, since types can depend on them (`[LIMIT]int`), and what they print goes where it would from any program, to `rig check`'s standard output or its standard error; it never runs the top-level `#run`s, which it checks all the same (section 7.8), so a program whose only error is a top-level `#run` that fails checks with none. It checks the program for the system rig runs on, as `rig build` builds it: only the taken branches of its `#if`s (section 4.9), so on Windows a branch for Linux shows its syntax errors and nothing else. With `--stdin` it reads the main file from standard input, which lets an editor check text that is not saved. `FILE.rig` is then the name its diagnostics give it, and its `#load`s are found from `FILE.rig`'s directory, as if the text were in that file; the file need not exist. The files it loads are read from disk. With `--stdin-for LOADED.rig` (the usage's second `FILE.rig`) the program is `FILE.rig`'s, read from disk, but for `LOADED.rig`, whose text is read from standard input wherever the program loads it, which lets an editor check a file a program loads as part of that program: checked alone, it would have no `main`, and the names the program's other files declare would be unknown. `LOADED.rig`, like `FILE.rig`, is a path from the current directory, not from `FILE.rig`'s; it is then known as `#load` knows a file (section 2.13), so the `#load` may write its path otherwise (`./b.rig` or `sub/../b.rig` for `b.rig`, and on Windows `B.RIG`), and it need not exist. Its diagnostics name it as its `#load` does. When `LOADED.rig` is `FILE.rig` itself, the option is `--stdin`.
 
 **`rig version`** says which compiler this is, on one line: its version, the commit of Rig's repository it was built from with that commit's date, and the version of the LLVM linked into it:
 
@@ -2105,9 +2216,9 @@ target: x86_64-pc-linux-gnu
 build: release
 ```
 
-Both `build` and `check` take only a source file whose name ends in `.rig`, in any case: `rig: error: 'hello.txt' isn't a .rig file`. So does `--stdin-for`, its file's name judged after the main file's, and both before anything is read. A main file that cannot be read is `rig: error: cannot read 'hello.rig': MESSAGE`, with the system's reason (`rig: error: cannot read standard input: MESSAGE` with `--stdin`). With `--stdin-for` the main file is read from disk first, and standard input only once it has been, so a main file that cannot be read is said without waiting for standard input; standard input that cannot be read is then `rig: error: cannot read standard input: MESSAGE`. A loaded file that cannot be read, or isn't a `.rig` file, is a diagnostic at its `#load`'s string instead (section 2.13). A program that never loads the `--stdin-for` file is `rig: error: 'main.rig' doesn't load 'helper.rig'`, the two files named as the command line names them, alone: nothing is checked, and what loading the program found isn't printed, since that file isn't part of it.
+Both `build` and `check` take only a source file whose name ends in `.rig`, in any case: `rig: error: 'hello.txt' isn't a .rig file`. So does `--stdin-for`, its file's name judged after the main file's, and both before anything is read. A main file that cannot be read is `rig: error: cannot read 'hello.rig': MESSAGE`, with the system's reason (`rig: error: cannot read standard input: MESSAGE` with `--stdin`). With `--stdin-for` the main file is read from disk first, and standard input only once it has been, so a main file that cannot be read is said without waiting for standard input; standard input that cannot be read is then `rig: error: cannot read standard input: MESSAGE`. A loaded file that cannot be read, or isn't a `.rig` file, is a diagnostic at its `#load`'s string instead (section 2.13). A program that never loads the `--stdin-for` file is `rig: error: 'main.rig' doesn't load 'helper.rig'`, the two files named as the command line names them, alone: nothing is checked, and what loading the program found isn't printed, since that file isn't part of it. A program that loads it only in a branch of an `#if` not taken on this system, at any depth in that branch, is `rig: error: 'main.rig' loads 'linux.rig' only in an #if branch not taken`, alone too: the file isn't part of the program here, though it is on the other system, and an editor then shows nothing for it (the VS Code extension says why, once, in its output channel, `Rig`). A file that only a file loaded in a branch not taken loads is `doesn't load`, since that file isn't read. When a `#load` or an `#import` in any branch of an `#if` chain one of whose conditions has an error (any arm, before or after it), at any depth in it, names the file, rig says neither, even when one in a branch not taken names it too: no branch was taken, so the file may well be part of the program, which is checked, its errors printed, the condition's among them.
 
-The exit status is 0 on success; 1 when the program has errors (a `#run` that fails among them), cannot be read, doesn't load the `--stdin-for` file, or cannot be built or linked, when `rig build` is given no file and there is no `build.rig`, and when one of a build program's workspaces fails or the build program has an error of its own (section 7.9); and 2 when the command line is malformed (no command or an unknown one, no file for `rig check`, two files, an option given twice, `-o` or `--stdin-for` without a name or with an empty one, `--stdin` with `--stdin-for`, `-o` or `--no-bounds-checks` given to `rig check`, `--stdin-for` given to `rig build`, even as `-o`'s name, or anything but `--verbose` after `rig version`), in which case the usage is printed, and when `-o` or `--no-bounds-checks` is given with a build program (above), in which case it isn't. A word that is not an option is taken as the file's name: an unknown option alone is a file that isn't a `.rig` file, and beside the file it is a second file. The word after `-o` or `--stdin-for` is its name, whatever it is: `--stdin-for --stdin` names a file `--stdin`, which isn't a `.rig` file. A `#run` whose code calls C's `exit` ends `rig` there, `rig build` or `rig check`, with the status it gives, after the diagnostics found so far (section 7.8).
+The exit status is 0 on success; 1 when the program has errors (a `#run` that fails among them), cannot be read, doesn't load the `--stdin-for` file or loads it only in an `#if` branch not taken, or cannot be built or linked, when `rig build` is given no file and there is no `build.rig`, and when one of a build program's workspaces fails or the build program has an error of its own (section 7.9); and 2 when the command line is malformed (no command or an unknown one, no file for `rig check`, two files, an option given twice, `-o` or `--stdin-for` without a name or with an empty one, `--stdin` with `--stdin-for`, `-o` or `--no-bounds-checks` given to `rig check`, `--stdin-for` given to `rig build`, even as `-o`'s name, or anything but `--verbose` after `rig version`), in which case the usage is printed, and when `-o` or `--no-bounds-checks` is given with a build program (above), in which case it isn't. A word that is not an option is taken as the file's name: an unknown option alone is a file that isn't a `.rig` file, and beside the file it is a second file. The word after `-o` or `--stdin-for` is its name, whatever it is: `--stdin-for --stdin` names a file `--stdin`, which isn't a `.rig` file. A `#run` whose code calls C's `exit` ends `rig` there, `rig build` or `rig check`, with the status it gives, after the diagnostics found so far (section 7.8).
 
 ### 10.2 The compiler's stages
 
@@ -2115,7 +2226,7 @@ The compiler is a single program written in C++, with LLVM linked into it. It co
 
 1. **Lexer** (`src/lexer.cpp`): the source's bytes into tokens (section 2).
 2. **Parser** (`src/parser.cpp`): the tokens into a syntax tree, by recursive descent, with expressions read by precedence climbing (Appendix A).
-3. **Loader** (`src/load.cpp`): the main file and every file it `#load`s, and every module it `#import`s, found in the places beside rig (section 2.14), each once, in load order (section 2.13), each through the lexer and the parser into the same tree, so the checker sees one program. The loader also finds whether the program is a build program (section 7.9).
+3. **Loader** (`src/load.cpp`): the main file and every file it `#load`s, and every module it `#import`s, found in the places beside rig (section 2.14), each once, in load order (section 2.13), each through the lexer and the parser into the same tree, so the checker sees one program. Once the files outside every `#if` are read, the loader decides the top-level `#if`s (section 4.9), with a checker (stage 4) that knows only those files' declarations, adds the taken branches' declarations to the tree, reads the files their `#load`s and `#import`s reach, and puts the files in load order. The loader also finds whether the program is a build program (section 7.9), once the `#if`s are decided.
 4. **Checker** (`src/checker.cpp`, `src/check_expr.cpp`, `src/check_run.cpp`): resolves every name, works out every type and every struct's layout, folds the constant expressions, and checks the rules of sections 3 to 7. The checker runs even after syntax errors, so both kinds are reported together. It runs each expression's `#run` where it first needs its value (section 7.8), in the compile-time world (`src/run.cpp`): what the `#run` reaches is lowered (stage 5) into a compile-time module of the world's own, which grows as later `#run`s reach more, and run there on the interpreter (section 10.8), and the result is baked into the tree as if it had been written there.
 5. **Lowering** (`src/lower.cpp`): the checked tree into Rig's intermediate representation (`src/ir.h`), a list of procedures made of basic blocks of instructions on numbered values. Lowering adds the runtime checks of section 8 and the source positions and scopes that the debug information is made from.
 6. **LLVM** (`src/llvm_backend.cpp`): the IR into an LLVM module through LLVM's C API, which LLVM verifies and compiles into an object file for x86-64: COFF on Windows (target `x86_64-pc-windows-msvc`), ELF on Linux (`x86_64-pc-linux-gnu`), position-independent on Linux. The code targets the baseline x86-64 processor. It is not optimised, unless a build program's workspace asks for it with `optimize` (section 7.9): `rig build` of a file never optimises. Optimised, the module is run through LLVM's `default<O2>` pipeline, the one clang's `-O2` runs, and compiled at LLVM's optimising code generation level, and its debug information is still made (section 10.7).
@@ -2200,8 +2311,8 @@ The debug information holds:
 - **A file entry for each source file** of the program, the main file and every file it loads or imports (sections 2.13, 2.14), named by its absolute path (made from the path diagnostics name it by, section 9.1, and the directory the compiler ran in, which on Linux is named as the shell names it, `$PWD`, when that is the directory: reached through a symlink, it keeps the symlink's name, as the editor that sets a breakpoint knows it), with that directory and the MD5 checksum of the file's bytes, so a debugger finds each file and can tell when it has changed. On Windows a file on a network share (a UNC path, `\\server\share\dir\x.rig`) is named `/\server\share\dir\x.rig`: LLVM's CodeView writer keeps a name that starts with `/` as it is, where it would put the share after the directory's drive, and Windows reads `/\` as the `\\` that starts a UNC path, so a debugger finds the file on the share and takes a breakpoint on it by the share's name, the file's name alone or a drive path to it. Each procedure, struct and global variable below is in the file that declares it, so a breakpoint on a line of a loaded file is found there, and a backtrace names each frame's own file.
 - **A compile unit** for the program, whose file is the main file's entry, as a C compiler's unit is the `.c` file it was given, not the headers that file includes. The unit's language is C (C99), whose expression syntax a debugger then uses (`a.count`, `a[i]`; Rig's `p.*` is C's `*p`), and its producer is `rig 0.1.0 (3f9c2a1b7d4e) (LLVM X.Y.Z)`: the compiler's version and commit as `rig version` gives them (section 10.1), without the date, `-dirty` after the hash when it was dirty and `unknown` without one, and X.Y.Z the version of the LLVM the compiler is built with.
 - **A subprogram for each procedure with a body**, by its Rig name, with its line and the line its body starts on, so `break main` or `break sort` stops at the procedure and a backtrace names each frame. The internal procedures of section 10.5 have none, and a debugger steps over them.
-- **Lexical blocks** following the program's scopes (section 4.7): each `if`, `else` and standalone block, and each loop's body, which starts at its `for` or `while`; and one inside its block for each declaration of a local that hides a variable (a global, a parameter or an outer local), from the declaration to the end of the block (rustc starts one at every `let`).
-- **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}` (an `else if` chain is left from the block that ran straight to the code after the chain, so a debugger doesn't stop at the `}` of an arm that didn't run), a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
+- **Lexical blocks** following the program's scopes (section 4.7): each `if`, `else` and standalone block, and each loop's body, which starts at its `for` or `while`; and one inside its block for each declaration of a local that hides a variable (a global, a parameter or an outer local), from the declaration to the end of the block (rustc starts one at every `let`). An `#if` makes none, since it makes no scope (section 4.9): the taken branch's locals are in the block around it.
+- **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}` (an `else if` chain is left from the block that ran straight to the code after the chain, so a debugger doesn't stop at the `}` of an arm that didn't run), a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. An `#if` adds no code of its own: the taken branch's statements are at their own lines, so a line holding only an `#if` and its `{`, or only a branch's `}`, has none, and neither does the branch not taken (section 4.9). On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
 
 - **Variables:** every local variable, parameter, loop iterator (`it`, `it_index` or a named one) and global variable, by its Rig name and with its type. A local is in the lexical block that declares it, or, when it hides a variable, in the one its declaration starts, since a debugger shows a block's variables over the whole block, but a declaration hides a name only from its end: so before `g := 10;` a debugger shows the variable `g` it hides, from the declaration on the new one (its initializer is still in the block around it, and reads the outer one), and on leaving its block the outer one again. Parameters are stored in their own stack slots before the body's first line, so a breakpoint at a procedure already shows them. A scalar parameter's slot is where the program itself reads it from, as clang's code does at `-O0`: a value a debugger writes there (gdb's `set var n = 2`, cdb's `?? n = 2`) is the one the program goes on with. A parameter passed by address (a struct, array, view or string) is described as what is passed, the same in DWARF and CodeView: a pointer to the value, held in its slot. So a debugger shows the address and names the fields through it (gdb's `p->a`, `*p`, and `p.a`, which gdb reads through a pointer too; cdb's `a->count`; Visual Studio's `a.count`), and calls the procedure with an address (see **Types**). Each hidden result pointer is a parameter too, before the visible ones, named `result$` (`result$1`, `result$2`, ... when there are several), a name no Rig variable can have but both debuggers take in an expression (gdb's `print result$`, cdb's `?? result$`). It points at the caller's temporary, which holds the value only once `return` has copied it there. Constants are not variables: a debugger doesn't see them, though the program keeps some constants' data as read-only data (section 10.3).
 - **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; `[N]T` as arrays of N elements; `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`; and a procedure type as a pointer to the subroutine type of its signature, as C's function pointers are described, `#c_call` or not, one node for each procedure type. A procedure's type says how it is called (section 10.4), the same in DWARF and CodeView, not how C would pass the same types: an aggregate parameter is a pointer to its type, and each aggregate result a pointer parameter, `result$`, before the visible ones, the procedure returning its one scalar result, or nothing when it has none or several (gdb's `ptype make` is `void (struct Pair *, int)`, `ptype sum` `int (struct Pair *)`; cdb's `dt make` `void (Pair*, int64)`). A debugger that calls a procedure from an expression passes what that type says, so a call passes addresses where the procedure takes them: given `q`, a `Pair`, gdb's `print sum(&q)` and cdb's `.call sum(&q)` return `q.a + q.b`, and gdb's `print make(&q, 7)` and cdb's `.call make(&q, 7)` make `q` `{a = 7, b = 8}`; cdb refuses `.call make(7)` (`Too few arguments`). gdb's `finish` out of a procedure that returns an aggregate shows no value, rather than whatever the registers held. After it the procedure's frame is gone, and `result$` with it: to see the value, print `result$` before leaving (gdb names the address `$1`, say) and `*$1` after `finish`, or print the variable the caller assigns once its call's line is done. A procedure whose parameters and results are all scalars is called as C's (gdb's `print twice(4)`, cdb's `.call twice(4)`). A procedure value's subroutine type is the one a procedure of its type has, so a debugger shows the value as an address and the procedure there, and calls through it as it calls the procedure: gdb's `print f` is `(int (*)(int, int)) 0x401136 <add>` and `ptype` of a value holding `make` `void (*)(struct Pair *, int)`; cdb's `dx f` is `procedure_values!add+0x0 [Type: __int64 (__cdecl*)(__int64,__int64)]`, after the address. A null value shows as `0x0`. gdb calls through a value as C does, `print f(10, 20)`; cdb's `.call` takes only a procedure's name, but calls through a value with C++'s expression evaluator, `.call @@c++(f)(10, 20)`. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
@@ -2303,10 +2414,11 @@ A number literal may not be followed directly by a letter or a digit (section 2.
 
 ```ebnf
 File          = { TopLevel } .
-TopLevel      = ProcDecl | StructDecl | ConstDecl | VarDecl | LoadDecl | ImportDecl | RunDecl .
+TopLevel      = ProcDecl | StructDecl | ConstDecl | VarDecl | LoadDecl | ImportDecl | RunDecl | IfDirective .
 LoadDecl      = "#load" string_lit ";" .
 ImportDecl    = "#import" string_lit ";" .
 RunDecl       = "#run" ( Block | Expression ";" ) .
+IfDirective   = "#if" Expression Block [ "else" ( Block | IfDirective ) ] .
 
 ProcDecl      = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#foreign" identifier [ string_lit ] ";"
                                            | "#compiler" ";" ) .
@@ -2333,9 +2445,9 @@ ProcParam     = [ identifier ":" ] Type .
 ProcResults   = Type | "(" Type { "," Type } ")" .
 ```
 
-After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. `ProcDecl`, `StructDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level. A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
+After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. `ProcDecl`, `StructDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level, where an `IfDirective`'s `Block`s hold `TopLevel`s in place of `Statement`s, so they appear in a top-level `IfDirective`'s branches too (section 4.9). After `else`, an `IfDirective` takes a `Block` or another `IfDirective`, never an `IfStmt` (`an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }`). A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
 
-In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{`, a directive other than `#c_call`, `#load`, `#import` or `#run`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file. A `#load`, an `#import` or a `#run` reached first begins the next declaration, so the `VarDecl` is missing its `;`. Otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
+In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{`, a directive other than `#c_call`, `#load`, `#import`, `#run` or `#if`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file. A `#load`, an `#import`, a `#run` or an `#if` reached first begins the next declaration, so the `VarDecl` is missing its `;`. Otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
 
 ### A.3 Statements
 
@@ -2343,7 +2455,7 @@ In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `Pr
 Block           = "{" { Statement } "}" .
 Statement       = VarDecl | ConstDecl | MultiVarDecl
                 | Assignment | MultiAssignment
-                | ReturnStmt | Block | IfStmt | WhileStmt | ForStmt
+                | ReturnStmt | Block | IfStmt | IfDirective | WhileStmt | ForStmt
                 | "break" ";" | "continue" ";"
                 | Expression ";" .
 
@@ -2357,7 +2469,7 @@ WhileStmt       = "while" Expression Block .
 ForStmt         = "for" [ "*" ] [ identifier ":" ] Expression [ ".." Expression ] Block .
 ```
 
-A statement that starts with an identifier followed by `:`, `:=` or `::` is a declaration; one that starts with identifiers separated by commas and then `:=` is a `MultiVarDecl`. Otherwise a statement that starts with an expression is an `Assignment` when an assignment operator follows the expression, a `MultiAssignment` when a `,` does, and an expression statement when `;` does. In `IfStmt`, `WhileStmt` and `ForStmt`, the `{` of the block ends the expression before it. In `ForStmt`, an identifier followed by `:` right after `for` (or `for *`) names the iterator.
+A statement that starts with an identifier followed by `:`, `:=` or `::` is a declaration; one that starts with identifiers separated by commas and then `:=` is a `MultiVarDecl`. Otherwise a statement that starts with an expression is an `Assignment` when an assignment operator follows the expression, a `MultiAssignment` when a `,` does, and an expression statement when `;` does. In `IfStmt`, `IfDirective`, `WhileStmt` and `ForStmt`, the `{` of the block ends the expression before it. `IfDirective` is the rule of A.2, its blocks holding statements here. In `ForStmt`, an identifier followed by `:` right after `for` (or `for *`) names the iterator.
 
 ### A.4 Expressions
 
@@ -2401,7 +2513,7 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `cast` | cast, checked or `cast,trunc` | 3.14 |
 | `continue` | next iteration | 6.9 |
 | `defer`, `enum`, `union`, `using` | reserved | 2.6 |
-| `else` | alternative of `if` | 6.5 |
+| `else` | alternative of `if` and of `#if` | 6.5, 4.9 |
 | `false`, `true` | bool values | 2.11, 3.4 |
 | `for` | loop over a range or a sequence | 6.7, 6.8 |
 | `if` | conditional | 6.5 |
@@ -2416,8 +2528,10 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `#load` | another file of the program | 2.13 |
 | `#import` | a module that ships with rig | 2.14 |
 | `#run` | code run while compiling | 7.8 |
+| `#if` | conditional compilation | 4.9 |
 | `size_of` | a type's size | 5.16 |
 | `it`, `it_index` | a loop's iterator and index | 6.7, 6.8 |
+| `OS`, `OS_WINDOWS`, `OS_LINUX` | the system a program is built for | 2.5, 4.9 |
 | `+` `-` `*` `/` | arithmetic | 5.3, 5.4 |
 | `%` | remainder | 5.4 |
 | `&` `\|` `^` | bitwise and, or, exclusive or | 5.5 |

@@ -41,6 +41,8 @@ struct Source_File {
     bool in_module;        // inside one of the modules' places (load.h, spec 2.14): a file
                            // of a module that ships with rig, which may declare #compiler
                            // procedures; set by the loader
+    s32 order;  // the file's place in load order (spec 2.13), which diagnostics sort by: its index, set by
+                // diag_add_file, unless a #load in a taken #if branch read it out of order (load.h)
 };
 
 struct Diagnostic {
@@ -77,9 +79,10 @@ void diag_error(Diagnostics *d, Position pos, const char *fmt, ...);
 // break, and they're printed after its caret (Diagnostic.lines).
 void diag_add_lines(Diagnostics *d, String lines);
 
-// Sorts the errors by file, then line, then column, keeping the order of
-// errors at the same place. Each stage reports in its own order (the lexer
-// the whole file before the parser starts); rig sorts before printing.
+// Sorts the errors by file, in load order (Source_File.order), then line,
+// then column, keeping the order of errors at the same place. Each stage
+// reports in its own order (the lexer the whole file before the parser
+// starts); rig sorts before printing.
 void diag_sort(Diagnostics *d);
 
 // Every error, in the list's order (the order reported, or diag_sort's once

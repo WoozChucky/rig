@@ -445,6 +445,22 @@ check('program.js: doesntLoad and tooOld read rig\'s answer', () => {
     assert.strictEqual(tooOld(2, 'rig: error: x\nusage: rig build FILE.rig ...\n'), false);
 });
 
+// rig check MAIN --stdin-for FILE's other answer: MAIN loads FILE only in an
+// #if branch not taken on this system (notTaken), which isn't doesntLoad's.
+check('program.js: notTaken reads rig\'s answer', () => {
+    const { notTaken, doesntLoad } = program();
+    const line = "rig: error: 'm.rig' loads 'h.rig' only in an #if branch not taken\n";
+    assert.strictEqual(notTaken(1, line), true);
+    assert.strictEqual(notTaken(1, line.replace('\n', '\r\n')), true);
+    assert.strictEqual(notTaken(0, line), false);
+    assert.strictEqual(notTaken(2, line), false);
+    assert.strictEqual(notTaken(null, line), false);   // a check that was killed
+    // A source line quoted under an error is indented: it isn't rig's answer.
+    assert.strictEqual(notTaken(1, `h.rig:1:6: error: x\n    ${line}`), false);
+    assert.strictEqual(notTaken(1, "rig: error: 'm.rig' doesn't load 'h.rig'\n"), false);
+    assert.strictEqual(doesntLoad(1, line), false);
+});
+
 // --- Snippets --------------------------------------------------------------
 
 // A snippet's body is a string or an array of lines; either way, its text.
@@ -981,6 +997,14 @@ check('the grammar\'s other rules still colour as they did', () => {
     assertScopes('x := a @ b;', { '@': 'invalid.illegal.character.rig' });
     assertScopes('#load "load/shapes.rig";', { '#load': 'keyword.other.directive.rig' });
     assertScopes('defer free(p);', { defer: 'keyword.control.rig', free: 'entity.name.function.call.rig' });
+    // The predeclared constants (issue #147), from the checker's table; a
+    // name that only ends in one is the program's own.
+    assertScopes('#if OS == OS_WINDOWS {', {
+        '#if': 'keyword.other.directive.rig',
+        OS: 'support.constant.rig',
+        OS_WINDOWS: 'support.constant.rig',
+    });
+    assertScopes('MY_OS := OS_LINUX;', { MY_OS: null, OS_LINUX: 'support.constant.rig' });
 });
 
 // Every program of tests/run and tests/build (the build programs and the
@@ -1502,6 +1526,7 @@ function reset() {
         launched: [],            // what each resolved to, as VS Code would launch it
         searches: [],            // findFiles' calls: the arguments of each
         rigs: [],                // the stand-in compilers started (withStandIn): { cwd, args, ended }
+        output: [],              // the lines written to the output channel Rig
     });
 }
 reset();
@@ -1510,8 +1535,17 @@ reset();
 // of VS Code's events, by the event's name, the task provider, the debug
 // configuration providers, by debug type, the diagnostic collections it
 // made, by name, each a Map from a document's uri (as a string) to its
-// diagnostics, the file system watchers it made, and its context.
-const activated = { listeners: {}, taskProvider: null, debugProviders: {}, collections: {}, watchers: [], context: null };
+// diagnostics, the file system watchers it made, the output channels it
+// made, by name (each writes its lines to stub.output), and its context.
+const activated = {
+    listeners: {},
+    taskProvider: null,
+    debugProviders: {},
+    collections: {},
+    watchers: [],
+    channels: {},
+    context: null,
+};
 
 function listen(event) {
     return (listener) => {
@@ -1674,6 +1708,15 @@ const vscodeStub = {
         showErrorMessage: (message) => {
             stub.errors.push(message);
             return Promise.resolve(stub.answers.shift());
+        },
+        createOutputChannel: (name) => {
+            const channel = {
+                name,
+                appendLine: (line) => stub.output.push(line),
+                dispose() {},
+            };
+            activated.channels[name] = channel;
+            return channel;
         },
     },
     commands: {
@@ -1915,6 +1958,10 @@ check('activate listens to the documents for the live check', () => {
     assert.ok(watcher, 'no file system watcher');
     assert.strictEqual(watcher.pattern, '**/*.rig');
     assert.ok(activated.context.subscriptions.includes(watcher), 'the file system watcher is never disposed of');
+    // The output channel Rig, made once, and disposed of with the extension.
+    const channel = activated.channels.Rig;
+    assert.ok(channel, "no output channel 'Rig'");
+    assert.ok(activated.context.subscriptions.includes(channel), 'the output channel is never disposed of');
 });
 
 // While the live check shows the compile errors, the tasks' matcher takes
@@ -1943,15 +1990,17 @@ check('the tasks use $rig-runtime while rig.check is on, $rig when it is off', (
 //
 // - with --stdin, it reports each `putz` in stdin's text as rig would,
 //   under FILE's name, and an error in broken.rig if the text #loads it;
-// - with --stdin-for, it reads MAIN from disk. Unless MAIN has the line
-//   `#load "REL";`, REL being FILE's path from MAIN's directory with '/',
+// - with --stdin-for, it reads MAIN from disk. When MAIN has
+//   `#if NOT_TAKEN { #load "REL"; }`, REL being FILE's path from MAIN's
+//   directory with '/', it answers as rig does when MAIN loads FILE only in
+//   an #if branch not taken. Else, unless MAIN has the line `#load "REL";`,
 //   it answers as rig does when MAIN's program never loads FILE. Otherwise
 //   it reports stdin's `putz`s under the name rig gives a loaded file
 //   (MAIN's directory as MAIN names it, then REL), and MAIN's own under
 //   MAIN.
 //
-// Except for that doesn't-load answer, which is its line alone as rig's is,
-// it adds a warning about another file. Either way it answers slowly if
+// Except for those two answers, each its line alone as rig's is, it adds a
+// warning about another file. Either way it answers slowly if
 // stdin's text says `slow`, or with --stdin-for if MAIN's does, and as it
 // answers it writes its arguments to answers.log as to calls.log, so a
 // check can tell that a rig it ended never answered (answers). When
@@ -2007,6 +2056,11 @@ function answer() {
             const file = args[2];
             const rel = path.relative(path.dirname(main), file).split(path.sep).join('/');
             const own = fs.readFileSync(main, 'utf8');
+            if (own.includes('#if NOT_TAKEN { #load "' + rel + '"; }')) {
+                process.stderr.write("rig: error: '" + main + "' loads '" + file + "' only in an #if branch not taken\\n");
+                process.exitCode = 1;
+                return;
+            }
             if (!own.includes('#load "' + rel + '";')) {
                 process.stderr.write("rig: error: '" + main + "' doesn't load '" + file + "'\\n");
                 process.exitCode = 1;
@@ -2679,6 +2733,44 @@ check('the document is never a candidate, even when its file on disk declares ma
         const result = await checked(dir, doc, 'open');
         assert.deepStrictEqual(result.calls, [[path.join(dir, 'b.rig'), '--stdin-for', file]]);
         assert.deepStrictEqual(result.diagnostics, [[0, 0, "unknown identifier 'putz'"]]);
+        assert.deepStrictEqual(stub.errors, []);
+    });
+});
+
+// A file that b.rig loads only in an #if branch not taken on this system
+// isn't part of its program here: rig says so, and the document shows no
+// problems, its program remembered as any other, and the output channel
+// says why, once while the document is open. a.rig, before b.rig in path
+// order, doesn't load it: the second check goes to b.rig straight away.
+check('a file only a branch not taken loads shows nothing, and says why once', async () => {
+    loadExtension();
+    await withStandIn(async (dir) => {
+        const a = path.join(dir, 'a.rig');
+        const b = path.join(dir, 'b.rig');
+        fs.writeFileSync(a, 'main :: () {}\n');
+        fs.writeFileSync(b, '#if NOT_TAKEN { #load "helper.rig"; }\nmain :: () {}\n');
+        const file = path.join(dir, 'helper.rig');
+        const doc = fakeDocument(file, 'putz();\n');
+        stub.document = doc;
+        const said = [`${file} isn't checked: ${b} loads it only in an #if branch not taken on this system.`];
+
+        const opened = await checked(dir, doc, 'open');
+        assert.deepStrictEqual(opened.calls, [
+            [a, '--stdin-for', file],
+            [b, '--stdin-for', file],
+        ]);
+        assert.deepStrictEqual(opened.diagnostics, []);
+        assert.deepStrictEqual(stub.output, said);
+
+        const changed = await checked(dir, doc, 'change', { document: doc, contentChanges: [{}] });
+        assert.deepStrictEqual(changed.calls, [[b, '--stdin-for', file]], 'remembered');
+        assert.deepStrictEqual(changed.diagnostics, []);
+        assert.deepStrictEqual(stub.output, said, 'said again before the document closed');
+
+        fire('close', doc);
+        const reopened = await checked(dir, doc, 'open');
+        assert.deepStrictEqual(reopened.diagnostics, []);
+        assert.deepStrictEqual(stub.output, [...said, ...said], 'not said again once the document reopened');
         assert.deepStrictEqual(stub.errors, []);
     });
 });

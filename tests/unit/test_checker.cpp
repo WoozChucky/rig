@@ -336,6 +336,11 @@ static Ast *find_in_statement(Ast *s, const char *name) {
         Ast *found = find_local(branch->then_block, name);
         return found || !branch->else_part ? found : find_in_statement(branch->else_part, name);
     }
+    case AST_IF_DIRECTIVE: {
+        // Only the taken branch declares anything (spec 4.9).
+        Ast_Block *taken = ((Ast_If_Directive *)s)->taken;
+        return taken ? find_local(taken, name) : nullptr;
+    }
     case AST_WHILE: return find_local(((Ast_While *)s)->body, name);
     case AST_FOR: {
         Ast_For *loop = (Ast_For *)s;
@@ -6003,5 +6008,691 @@ TEST(compiler_main_needs_a_body) {
     Arena a = arena_make();
     CHECK_STR(check_module_source(&a, "main :: () #compiler;\n"),
               "1:1: 'main' must have a body: it's where the program starts\n");
+    arena_free(&a);
+}
+
+// Issue #147: #if and the OS constants (spec 2.5, 4.9).
+
+TEST(os_constants_are_predeclared) {
+    // Untyped integer constants, visible everywhere as the program's own
+    // constants are: OS fits a u8, and a comparison of them folds.
+    Arena a = arena_make();
+    const char *program = "main :: () { a : u8 = OS; b := OS_WINDOWS; c := OS_LINUX; "
+                          "if OS == OS_WINDOWS || OS == OS_LINUX {} }";
+    CHECK_STR(check_source(&a, program), "");
+    Checked c = check_src(&a, program);
+    Ast_If *branch = (Ast_If *)c.file->procs[0]->body->statements[3];
+    CHECK_EQ(branch->kind, AST_IF);
+    CHECK(branch->condition->is_constant);
+    CHECK_EQ(branch->condition->constant, 1);
+    Ast_Name *os_linux = (Ast_Name *)((Ast_Var *)local_named(&c, "c"))->value;
+    CHECK_EQ(os_linux->constant, 2);
+    CHECK_EQ(os_linux->decl->kind, AST_CONST);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+// The value of N in `N :: OS;`, checked with the tree's system set to
+// `system`.
+static u64 os_value_for(System system) {
+    Arena a = arena_make();
+    Token_List *list = src("N :: OS;\nmain :: () {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    file->system = system;
+    check(file, &a, &list->diag);
+    RIG_ASSERT(list->diag.error_count == 0);
+    u64 value = file->globals[0]->constant;
+    token_list_free(list);
+    arena_free(&a);
+    return value;
+}
+
+TEST(os_is_the_programs_system) {
+    // Ast_File.system, which the loader sets; none set is the host's.
+    CHECK_EQ(os_value_for(SYSTEM_LINUX), 2);
+    CHECK_EQ(os_value_for(SYSTEM_WINDOWS), 1);
+    CHECK_EQ(os_value_for(SYSTEM_NONE), (u64)host_system());
+    // And the host's is the one rig runs on, as the loader knows it.
+#ifdef _WIN32
+    CHECK_EQ(host_system(), SYSTEM_WINDOWS);
+#else
+    CHECK_EQ(host_system(), SYSTEM_LINUX);
+#endif
+    CHECK_EQ(host_system() == SYSTEM_WINDOWS, HOST_IS_WINDOWS);
+}
+
+// Whether `value`, checked, is a use of the predeclared OS: a name whose
+// declaration is the constant written nowhere (position 0:0), the host's
+// system.
+static bool names_predeclared_os(Ast *value) {
+    if (value->kind != AST_NAME) return false;
+    Ast *decl = ((Ast_Name *)value)->decl;
+    return decl && decl->kind == AST_CONST && decl->pos.line == 0 && decl->pos.col == 0 &&
+           value->is_constant && value->constant == (u64)host_system();
+}
+
+TEST(a_top_level_declaration_of_os_is_refused) {
+    // At its name, whatever it declares; each says what the name is.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "OS :: 3;\nOS_WINDOWS : int;\nOS_LINUX :: () {}\nmain :: () {}\n"),
+              "1:1: 'OS' is predeclared: it's the system the program is built for\n"
+              "2:1: 'OS_WINDOWS' is predeclared: it's Windows, one of the systems OS may be\n"
+              "3:1: 'OS_LINUX' is predeclared: it's Linux, one of the systems OS may be\n");
+    CHECK_STR(check_source(&a, "OS :: struct { x: int; }\nmain :: () {}\n"),
+              "1:1: 'OS' is predeclared: it's the system the program is built for\n");
+    // The refused declaration isn't declared: a use still means the constant.
+    Checked c = check_src(&a, "OS :: 3;\nmain :: () { x := OS; }\n");
+    CHECK(names_predeclared_os(((Ast_Var *)local_named(&c, "x"))->value));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(a_broken_entry_named_os_isnt_declared) {
+    // Silently: its syntax error is the one message, and a use still means
+    // the constant (not the broken entry's unknown type, which would say
+    // nothing).
+    Arena a = arena_make();
+    const char *program = "OS :: 5 6;\nmain :: () { x : u8 = OS; }\n";
+    CHECK_STR(check_source(&a, program), "1:9: expected ';', found integer literal\n");
+    Token_List *list = src(program);
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    check(file, &a, &list->diag);
+    Checked c = {list, file, false};
+    CHECK(names_predeclared_os(((Ast_Var *)local_named(&c, "x"))->value));
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(a_local_may_hide_os) {
+    // As a local may hide any of the program's names. OS is then an int
+    // variable, no constant.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "main :: () { OS := 7; x := OS; if OS == 7 {} }");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Name *value = (Ast_Name *)((Ast_Var *)local_named(&c, "x"))->value;
+    CHECK(value->decl == local_named(&c, "OS"));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+// #if in a body (spec 4.9): the checker decides it where the statement is.
+
+// The first statement of the last procedure's body, an #if.
+static Ast_If_Directive *first_if_directive(Checked *c) {
+    Ast *statement = c->file->procs[c->file->procs.count - 1]->body->statements[0];
+    RIG_ASSERT(statement->kind == AST_IF_DIRECTIVE);
+    return (Ast_If_Directive *)statement;
+}
+
+TEST(if_directive_takes_the_first_true_branch) {
+    // Conditions in order until one is true; those after it aren't checked,
+    // so nope is no unknown identifier. The decision is on the first arm.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "main :: () { #if false { a := 1; } else #if true { b := 2; } "
+                              "else #if nope { c := 3; } else { d := 4; } }");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_If_Directive *first = first_if_directive(&c);
+    Ast_If_Directive *second = (Ast_If_Directive *)first->else_part;
+    CHECK(first->decided && !first->failed);
+    CHECK(first->taken == second->then_block);
+    CHECK(!second->decided);  // only the first arm says
+    CHECK(local_named(&c, "b")->type == &type_int);
+    token_list_free(c.list);
+
+    // No condition true and no else: nothing taken, but decided.
+    c = check_src(&a, "main :: () { #if false {} }");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    first = first_if_directive(&c);
+    CHECK(first->decided && !first->failed);
+    CHECK(first->taken == nullptr);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(if_directive_makes_no_scope) {
+    // The taken branch's statements are the enclosing block's: its x is
+    // visible after the #if, and the block can't declare x again.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "main :: () { #if true { x := 1; } else { x := \"s\"; } y : int = x; }"), "");
+    CHECK_STR(check_source(&a, "main :: () { #if true { x := 1; } x := 2; }"),
+              "1:35: 'x' is already declared at test.rig:1:25\n");
+    arena_free(&a);
+}
+
+TEST(if_directive_branch_not_taken_is_not_checked) {
+    // Parsed, nothing else: a type error, unknown names, an unknown type and
+    // a #run that would fail all say nothing.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "main :: () { #if false { x : int = \"s\"; nope(); y : Nope; z := #run nope(); } }"),
+              "");
+    arena_free(&a);
+}
+
+TEST(if_directive_condition_errors) {
+    // A bool known while compiling, at the condition; a condition with an
+    // error of its own says only that, and a #run that failed says nothing
+    // more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "main :: () { #if 1 {} }"), "1:18: the condition of '#if' must be a bool, not 'int'\n");
+    CHECK_STR(check_source(&a, "main :: () { b := true; #if b {} }"),
+              "1:29: the condition of '#if' must be known while compiling\n");
+    CHECK_STR(check_source(&a, "main :: () { #if nope {} }"), "1:18: unknown identifier 'nope'\n");
+    CHECK_STR(check_source(&a, "bad :: () -> bool { return 1; }\nmain :: () { #if #run bad() {} }\n"),
+              "1:28: a value of type 'int' doesn't convert to 'bool' implicitly\n");
+    // A local constant and a #run may decide it, as no top-level #if's
+    // condition may.
+    CHECK_STR(check_source(&a, "yes :: () -> bool { return true; }\n"
+                               "main :: () { V :: false; #if V {} #if #run yes() {} }\n"),
+              "");
+    // A condition with an error takes neither branch and checks neither,
+    // whichever arm it's on: x and y say nothing.
+    CHECK_STR(check_source(&a, "main :: () { #if 1 { x : int = \"s\"; } }"),
+              "1:18: the condition of '#if' must be a bool, not 'int'\n");
+    const char *late = "main :: () { #if false {} else #if 1 { y : int = \"s\"; } else { z : int = \"s\"; } }";
+    CHECK_STR(check_source(&a, late), "1:36: the condition of '#if' must be a bool, not 'int'\n");
+    // The first arm says so, wherever the failure was.
+    Checked c = check_src(&a, late);
+    Ast_If_Directive *first = first_if_directive(&c);
+    CHECK(first->decided && first->failed);
+    CHECK(first->taken == nullptr);
+    CHECK(!((Ast_If_Directive *)first->else_part)->failed);
+    token_list_free(c.list);
+    // Neither branch's locals are then declared, so a name used later in
+    // the body, which a branch may declare, isn't reported as unknown. Only
+    // in that body: one used before the #if is, and so is one in another
+    // body.
+    CHECK_STR(check_source(&a, "main :: () {\n    #if 1 { x := 1; } else { x := 2; }\n    y := x;\n    { z := w; }\n}\n"),
+              "2:9: the condition of '#if' must be a bool, not 'int'\n");
+    CHECK_STR(check_source(&a, "f :: () { v := u; #if 1 {} v = t; }\nmain :: () { s := r; }\n"),
+              "1:16: unknown identifier 'u'\n"
+              "1:23: the condition of '#if' must be a bool, not 'int'\n"
+              "2:19: unknown identifier 'r'\n");
+    // A branch in a body declares no type, so an unknown type still is
+    // reported there (spec 4.9).
+    CHECK_STR(check_source(&a, "main :: () {\n    #if 1 { }\n    t : Nope;\n    y := w;\n}\n"),
+              "2:9: the condition of '#if' must be a bool, not 'int'\n"
+              "3:9: unknown type 'Nope'\n");
+    // A body a #run checks on demand there is another body: its unknown
+    // names are reported, and the rest of the first still says nothing.
+    CHECK_STR(check_source(&a, "main :: () { #if 1 {} x := #run g(); y := z; }\ng :: () -> int { return q; }\n"),
+              "1:18: the condition of '#if' must be a bool, not 'int'\n"
+              "2:25: unknown identifier 'q'\n");
+    // So is a top-level declaration that body needs first, worked out there
+    // (a global, a struct's layout, a signature): its names are the top
+    // level's, and an unknown one is reported.
+    CHECK_STR(check_source(&a, "A :: #run f();\n"
+                               "f :: () -> int {\n"
+                               "    #if 1 { }\n"
+                               "    s : S;\n"
+                               "    p := g;\n"
+                               "    return B;\n"
+                               "}\n"
+                               "B :: undefined_name;\n"
+                               "S :: struct { a: [nope]int; }\n"
+                               "g :: (a: [also_nope]int) {}\n"
+                               "main :: () { }\n"),
+              "3:9: the condition of '#if' must be a bool, not 'int'\n"
+              "8:6: unknown identifier 'undefined_name'\n"
+              "9:19: unknown identifier 'nope'\n"
+              "10:11: unknown identifier 'also_nope'\n");
+    arena_free(&a);
+}
+
+TEST(if_directive_reaches_the_end) {
+    // When its taken branch does; one whose condition failed, at any arm, is
+    // taken not to, as an if's, so the condition's message is the only one.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "f :: () -> int { #if true { return 1; } else { return 2; } }\nmain :: () {}\n"), "");
+    CHECK_STR(check_source(&a, "f :: () -> int { #if false { return 1; } }\nmain :: () {}\n"),
+              "1:42: 'f' must return a value on every path, and this one reaches its end\n");
+    // Only the taken branch counts, not every branch as for an if: a branch
+    // not taken that returns, or one that doesn't, changes nothing.
+    CHECK_STR(check_source(&a, "f :: () -> int { #if true { return 1; } else { } }\nmain :: () {}\n"), "");
+    CHECK_STR(check_source(&a, "f :: () -> int { #if false { return 1; } else { } }\nmain :: () {}\n"),
+              "1:51: 'f' must return a value on every path, and this one reaches its end\n");
+    CHECK_STR(check_source(&a, "f :: () -> int { #if true { } else { return 1; } }\nmain :: () {}\n"),
+              "1:50: 'f' must return a value on every path, and this one reaches its end\n");
+    CHECK_STR(check_source(&a, "f :: () -> int { #if 1 { return 1; } }\nmain :: () {}\n"),
+              "1:22: the condition of '#if' must be a bool, not 'int'\n");
+    // A condition that fails at a later arm too.
+    CHECK_STR(check_source(&a, "f :: () -> int { #if false { return 1; } else #if 1 { return 2; } }\nmain :: () {}\n"),
+              "1:51: the condition of '#if' must be a bool, not 'int'\n");
+    // A while true ends by a break in a taken branch (breaks_out_of), so f
+    // reaches its end; a break in a branch not taken ends nothing.
+    CHECK_STR(check_source(&a, "f :: () -> int { while true { #if true { break; } } }\nmain :: () {}\n"),
+              "1:53: 'f' must return a value on every path, and this one reaches its end\n");
+    CHECK_STR(check_source(&a, "f :: () -> int { while true { #if false { break; } } }\nmain :: () {}\n"), "");
+    arena_free(&a);
+}
+
+// The messages for `text`, parsed and checked for `system`
+// (Ast_File.system), in source order.
+static String messages_for_system(Arena *a, const char *text, System system) {
+    Token_List *list = src(text);
+    Ast_File *file = parse(list->tokens, a, &list->diag);
+    file->system = system;
+    check(file, a, &list->diag);
+    diag_sort(&list->diag);
+    String result = messages(a, &list->diag);
+    token_list_free(list);
+    return result;
+}
+
+TEST(if_directive_per_system) {
+    // Each system takes its own branch, whatever the host: only the taken
+    // branch's error is said.
+    Arena a = arena_make();
+    const char *program = "main :: () {\n"
+                          "    #if OS == OS_WINDOWS { a : int = \"w\"; } else { b : int = \"l\"; }\n"
+                          "}\n";
+    CHECK_STR(messages_for_system(&a, program, SYSTEM_WINDOWS),
+              "2:38: a value of type 'string' doesn't convert to 'int' implicitly\n");
+    CHECK_STR(messages_for_system(&a, program, SYSTEM_LINUX),
+              "2:62: a value of type 'string' doesn't convert to 'int' implicitly\n");
+    arena_free(&a);
+}
+
+TEST(if_directive_jumps_need_a_loop) {
+    // break and continue in the taken branch act on a loop around the #if,
+    // which is none itself.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "main :: () { #if true { break; } }"), "1:25: 'break' is only allowed inside a loop\n");
+    CHECK_STR(check_source(&a, "main :: () { for 0..1 { #if true { break; } } }"), "");
+    arena_free(&a);
+}
+
+TEST(if_directive_chains_of_10000_arms) {
+    // Review Focus 5: an else #if chain nests one level per arm, as an else
+    // if chain does (else_if_chains_of_10000_arms), and no stage may recurse
+    // per arm. pick's X picks an arm in the middle; none's picks none, so
+    // deciding walks every condition to the last else. Only a taken branch
+    // is lowered: one return in each.
+    const s64 ARMS = 10000;
+    Arena a = arena_make();
+    char *text = (char *)arena_alloc(&a, (u64)(2 * ARMS * 64 + 4096), 1);
+    char *at = text;
+    at += sprintf(at, "putchar :: (c: s32) -> s32 #foreign libc;\n");
+    const char *names[] = {"pick", "none"};
+    const char *picks[] = {"5000", "10000"};
+    for (int p = 0; p < 2; p++) {
+        at += sprintf(at, "%s :: () -> int {\n    X :: %s;\n", names[p], picks[p]);
+        for (s64 i = 0; i < ARMS; i++) {
+            at += sprintf(at, "    %s#if X == %lld { return %lld; }\n", i ? "else " : "", (long long)i, (long long)i);
+        }
+        at += sprintf(at, "    else { return -1; }\n}\n");
+    }
+    sprintf(at, "main :: () {\n"
+                "    if pick() == 5000 && none() == -1 {\n"
+                "        putchar(111);\n"
+                "        putchar(107);\n"
+                "    }\n"
+                "}\n");
+    CHECK(builds(&a, text));
+    Ir_Module *m = lower_source(&a, text);
+    // pick's, none's and main's.
+    CHECK_EQ(count_of(ir_print(&a, m), "  ret "), 3);
+    Process_Result run = run_module(&a, m, "if-directive-test");
+    CHECK_EQ(run.exit_code, 0);
+    CHECK_STR(run.out, "ok");
+    arena_free(&a);
+}
+
+// A top-level #if (spec 4.9): the loader decides each with a checker that
+// knows only the declarations outside every #if (check_decider_new). These
+// tests decide them the same way, without the loader: a taken branch's
+// declarations don't join the tree here, so a name a branch declares stays
+// one declared in a top-level #if.
+
+// Decides each of file's top-level #ifs in order, with one decider, as the
+// loader does.
+static void decide_all(Ast_File *file, Arena *a, Diagnostics *d) {
+    Checker *decider = check_decider_new(file, a, d);
+    for (s64 i = 0; i < file->ifs.count; i++) check_decide(decider, file->ifs[i]);
+    check_decider_free(decider);
+}
+
+// `text` lexed and parsed, OS set to `system`, and its top-level #ifs
+// decided (decide_all): the messages, in source order. The tree through
+// *file, when it's asked for, for its decisions: its nodes are in the arena,
+// but the Diagnostics its positions name is freed with the tokens, so it
+// can't be checked further (deciding_leaves_the_rest_for_check keeps them).
+static String decide_source(Arena *a, const char *text, System system, Ast_File **file) {
+    Token_List *list = src(text);
+    Ast_File *f = parse(list->tokens, a, &list->diag);
+    RIG_ASSERT(list->diag.error_count == 0);  // these tests are about the decisions
+    f->system = system;
+    decide_all(f, a, &list->diag);
+    diag_sort(&list->diag);
+    String result = messages(a, &list->diag);
+    token_list_free(list);
+    if (file) *file = f;
+    return result;
+}
+
+TEST(decides_a_top_level_if_by_the_system) {
+    // Each system takes its own branch, whatever the host.
+    Arena a = arena_make();
+    const char *program = "#if OS == OS_WINDOWS { A :: 1; } else { B :: 2; }";
+    Ast_File *file = nullptr;
+    CHECK_STR(decide_source(&a, program, SYSTEM_WINDOWS, &file), "");
+    Ast_If_Directive *first = file->ifs[0];
+    CHECK(first->decided && !first->failed);
+    CHECK(first->taken == first->then_block);
+    CHECK_STR(decide_source(&a, program, SYSTEM_LINUX, &file), "");
+    first = file->ifs[0];
+    CHECK(first->decided && !first->failed);
+    CHECK(first->taken == (Ast_Block *)first->else_part);
+    arena_free(&a);
+}
+
+TEST(decides_a_top_level_chain_in_order) {
+    // As in a body: the conditions in order until one is true, those after
+    // it never checked, so nope is no unknown identifier.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(decide_source(&a, "#if false {} else #if true {} else #if nope {} else {}", SYSTEM_NONE, &file), "");
+    Ast_If_Directive *first = file->ifs[0];
+    CHECK(first->decided && !first->failed);
+    CHECK(first->taken == ((Ast_If_Directive *)first->else_part)->then_block);
+    arena_free(&a);
+}
+
+TEST(a_top_level_condition_uses_constants_outside_every_if) {
+    // In any order, with what they need in turn: DEBUG needs LEVEL, declared
+    // after it. A struct's size too: its layout is worked out there.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(decide_source(&a, "DEBUG :: LEVEL > 1;\nLEVEL :: 2;\n#if DEBUG {}", SYSTEM_NONE, &file), "");
+    CHECK(file->ifs[0]->taken == file->ifs[0]->then_block);
+    CHECK_STR(decide_source(&a, "S :: struct { x: int; }\n#if size_of(S) == 8 {}", SYSTEM_NONE, &file), "");
+    CHECK(file->ifs[0]->taken == file->ifs[0]->then_block);
+    arena_free(&a);
+}
+
+TEST(a_top_level_condition_cant_use_a_name_from_another_if) {
+    // A name declared in a top-level #if's branch, taken or not, decided or
+    // not, is refused where a condition uses it: directly, through a
+    // constant outside every #if (at the name in the constant's value), or
+    // as a type.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(decide_source(&a, "#if true { LEVEL :: 2; }\n#if LEVEL > 1 {}", SYSTEM_NONE, &file),
+              "2:5: 'LEVEL' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK(file->ifs[1]->decided && file->ifs[1]->failed);
+    CHECK(file->ifs[1]->taken == nullptr);
+    CHECK_STR(decide_source(&a, "DEBUG :: DEPTH > 1;\n#if DEBUG {}\n#if true { DEPTH :: 2; }", SYSTEM_NONE, &file),
+              "1:10: 'DEPTH' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK(file->ifs[0]->failed);
+    CHECK_STR(decide_source(&a, "#if true { T :: struct { x: int; } }\n#if size_of(T) == 8 {}", SYSTEM_NONE, &file),
+              "2:13: 'T' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK(file->ifs[1]->failed);
+    // In a branch of a nested #if, or of a later arm, too.
+    CHECK_STR(decide_source(&a, "#if false {} else #if true { #if true {} else { DEEP :: 1; } }\n#if DEEP == 1 {}",
+                            SYSTEM_NONE, nullptr),
+              "2:5: 'DEEP' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    // A procedure, called, and a variable, as the constants are.
+    CHECK_STR(decide_source(&a, "#if true { f :: () -> bool { return true; } v := 1; }\n#if f() {}\n#if v == 1 {}",
+                            SYSTEM_NONE, nullptr),
+              "2:5: 'f' is declared in a top-level #if, so it can't decide another top-level #if\n"
+              "3:5: 'v' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    // A built-in type's name always means the built-in type, even where a
+    // branch declares a struct of that name (refused there, if it's checked):
+    // its own messages.
+    CHECK_STR(decide_source(&a, "#if true { int :: struct { x: int; } }\n#if int == 1 {}", SYSTEM_NONE, nullptr),
+              "2:5: 'int' is a type, not a value\n");
+    CHECK_STR(decide_source(&a, "#if true { s64 :: struct { x: int; } }\n#if s64() == 1 {}", SYSTEM_NONE, nullptr),
+              "2:5: 's64' isn't a procedure, so it can't be called\n");
+    arena_free(&a);
+}
+
+TEST(a_top_level_condition_cant_use_a_name_that_joined_through_a_branch) {
+    // What joins the top level after the decider is made, as a file only a
+    // taken branch loads does (the loader adds its declarations,
+    // ast_add_declaration), isn't the base: a condition that uses it is
+    // refused, as one using a branch's name is. The second source stands in
+    // for that file. The base's own names are used as ever: it has more
+    // procedures than globals, so neither list is read from the other's
+    // count.
+    Arena a = arena_make();
+    Token_List *list = src("BASE :: 1;\ng :: () -> int { return 2; }\nh :: () -> int { return 3; }\n"
+                           "#if BASE == 1 {}\n#if X == 1 {}\n#if f() == 1 {}\n#if v == 1 {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    Token_List *loaded = src("X :: 1;\nf :: () -> int { return 1; }\nv := 1;\n");
+    Ast_File *more = parse(loaded->tokens, &a, &loaded->diag);
+    Checker *decider = check_decider_new(file, &a, &list->diag);
+    for (s64 i = 0; i < more->procs.count; i++) ast_add_declaration(file, more->procs[i]);
+    for (s64 i = 0; i < more->globals.count; i++) ast_add_declaration(file, more->globals[i]);
+    for (s64 i = 0; i < file->ifs.count; i++) check_decide(decider, file->ifs[i]);
+    check_decider_free(decider);
+    diag_sort(&list->diag);
+    CHECK_STR(messages(&a, &list->diag),
+              "5:5: 'X' is declared in a top-level #if, so it can't decide another top-level #if\n"
+              "6:5: 'f' is declared in a top-level #if, so it can't decide another top-level #if\n"
+              "7:5: 'v' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK(file->ifs[0]->decided && !file->ifs[0]->failed);
+    CHECK(file->ifs[0]->taken == file->ifs[0]->then_block);
+    CHECK(file->ifs[1]->failed && file->ifs[2]->failed && file->ifs[3]->failed);
+    token_list_free(loaded);
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(a_top_level_condition_cant_run_code) {
+    // Any #run it reaches, through a constant or written in it, one whose
+    // operand is a constant too, is refused at the #run, and says nothing
+    // more.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(decide_source(&a, "N :: #run three();\n#if N == 3 {}\nthree :: () -> int { return 3; }", SYSTEM_NONE,
+                            &file),
+              "1:6: a top-level #if's condition can't run code while compiling, for now\n");
+    CHECK(file->ifs[0]->failed);
+    CHECK_STR(decide_source(&a, "#if #run ready() {}\nready :: () -> bool { return true; }", SYSTEM_NONE, &file),
+              "1:5: a top-level #if's condition can't run code while compiling, for now\n");
+    CHECK(file->ifs[0]->failed);
+    CHECK_STR(decide_source(&a, "#if #run true {}", SYSTEM_NONE, &file),
+              "1:5: a top-level #if's condition can't run code while compiling, for now\n");
+    CHECK(file->ifs[0]->failed);
+    arena_free(&a);
+}
+
+TEST(a_top_level_condition_must_be_a_constant_bool) {
+    // The two messages a body's condition says, at the condition.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(decide_source(&a, "#if 1 {}", SYSTEM_NONE, &file), "1:5: the condition of '#if' must be a bool, not 'int'\n");
+    CHECK(file->ifs[0]->failed);
+    CHECK_STR(decide_source(&a, "flag := true;\n#if flag {}", SYSTEM_NONE, &file),
+              "2:5: the condition of '#if' must be known while compiling\n");
+    CHECK(file->ifs[0]->failed);
+    arena_free(&a);
+}
+
+TEST(a_top_level_condition_with_an_unknown_name) {
+    // Declared nowhere: unknown, unless a file is missing (lost_a_file),
+    // which may declare it. A file may go missing between two decisions (a
+    // taken branch's #load), so each decision asks. A name a branch declares
+    // is known to be declared, so it's refused all the same.
+    Arena a = arena_make();
+    CHECK_STR(decide_source(&a, "#if nope {}", SYSTEM_NONE, nullptr), "1:5: unknown identifier 'nope'\n");
+    CHECK_STR(decide_source(&a, "x : Nope;\n#if size_of(Nope) == 1 {}", SYSTEM_NONE, nullptr),
+              "2:13: unknown type 'Nope'\n");
+    Token_List *list = src("#if nope {}\n#if nope {}\n#if true { X :: 1; }\n#if X == 1 {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    Checker *decider = check_decider_new(file, &a, &list->diag);
+    check_decide(decider, file->ifs[0]);
+    file->lost_a_file = true;
+    for (s64 i = 1; i < file->ifs.count; i++) check_decide(decider, file->ifs[i]);
+    check_decider_free(decider);
+    CHECK_STR(messages(&a, &list->diag),
+              "1:5: unknown identifier 'nope'\n"
+              "4:5: 'X' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK(file->ifs[0]->failed && file->ifs[1]->failed);
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(deciding_leaves_the_rest_for_check) {
+    // What the decider worked out stays on the nodes, found done by check():
+    // Vec2's one Type, ORIGIN's value. The program then checks clean.
+    Arena a = arena_make();
+    Token_List *list = src("Vec2 :: struct { x: int; y: int; }\nORIGIN :: Vec2.{0, 0};\n#if ORIGIN.x == 0 {}\n"
+                           "main :: () { v : Vec2 = ORIGIN; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    decide_all(file, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK(file->ifs[0]->taken == file->ifs[0]->then_block);
+    Ast_Struct *vec2 = (Ast_Struct *)file->globals[0];
+    Type *decided = vec2->declared;
+    CHECK(decided != nullptr);
+    CHECK(file->globals[1]->type == decided);
+    CHECK(check(file, &a, &list->diag));
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK(vec2->declared == decided);
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(deciding_and_checking_say_each_message_once) {
+    // The decider says nothing about the names (a name already declared, a
+    // predeclared one, a built-in type's): check() does. What the decider
+    // said about a declaration it worked out (B's unknown name, N's #run,
+    // refused), check() finds said, and doesn't say again.
+    Arena a = arena_make();
+    Token_List *list = src("A :: 1;\nA :: 2;\nOS :: 3;\nB :: nope;\n#if B == 1 {}\nN :: #run f();\n#if N == 3 {}\n"
+                           "f :: () -> int { return 3; }\nmain :: () { x := B; y := N; }\nu8 :: struct { x: int; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    decide_all(file, &a, &list->diag);
+    diag_sort(&list->diag);
+    CHECK_STR(messages(&a, &list->diag),
+              "4:6: unknown identifier 'nope'\n"
+              "6:6: a top-level #if's condition can't run code while compiling, for now\n");
+    CHECK(!check(file, &a, &list->diag));
+    diag_sort(&list->diag);
+    CHECK_STR(messages(&a, &list->diag),
+              "2:1: 'A' is already declared at test.rig:1:1\n"
+              "3:1: 'OS' is predeclared: it's the system the program is built for\n"
+              "4:6: unknown identifier 'nope'\n"
+              "6:6: a top-level #if's condition can't run code while compiling, for now\n"
+              "10:1: 'u8' is a built-in type\n");
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(checking_a_branchs_name_outside_it_says_its_unknown) {
+    // Only the decider refuses a name a top-level #if's branch declares:
+    // check() finds such a name, used outside the branch, declared nowhere it
+    // can see, as any other.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "#if false { X :: 1; T :: struct { x: int; } }\nmain :: () { y := X; t : T; }\n"),
+              "2:19: unknown identifier 'X'\n"
+              "2:26: unknown type 'T'\n");
+    arena_free(&a);
+}
+
+TEST(deciding_leaves_a_struct_in_a_circle_without_a_type) {
+    // A struct the decider found in a circle, or too big, keeps having no
+    // type in check(), as when check() finds it so: its uses say nothing
+    // more.
+    Arena a = arena_make();
+    Token_List *list = src("Node :: struct { next: Node; v: int; }\nHuge :: struct { x: [1099511627776]u8; y: u8; }\n"
+                           "#if size_of(Node) > 0 {}\n#if size_of(Huge) > 0 {}\n"
+                           "main :: () { n : Node; x := n.v; h : Huge; y := h.y; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    decide_all(file, &a, &list->diag);
+    CHECK(file->ifs[0]->failed && file->ifs[1]->failed);
+    CHECK(check(file, &a, &list->diag));  // nothing of its own to say
+    diag_sort(&list->diag);
+    CHECK_STR(messages(&a, &list->diag),
+              "1:1: 'Node' contains itself; it can hold a pointer to itself, *Node\n"
+              "2:1: 'Huge' is too big\n");
+    token_list_free(list);
+    arena_free(&a);
+}
+
+// The top-level #ifs as rig decides them: by the loader, before check().
+
+// `text` loaded as test.rig (load_program, which takes the main file's text,
+// so no file is needed), with OS `system` (Load_Options.system), its
+// top-level #ifs decided there; then checked: the messages, in source order.
+static String check_loaded(Arena *a, const char *text, System system) {
+    Diagnostics d = {};
+    Load_Options options = {};
+    options.system = system;
+    Ast_File *file = load_program(a, &d, str("test.rig"), str(text), &options);
+    check(file, a, &d);
+    diag_sort(&d);
+    String result = messages(a, &d);
+    diag_free(&d);
+    return result;
+}
+
+TEST(if_branch_names_and_the_rest) {
+    // Review Focus 2: one name in both branches is the normal use, never
+    // already declared, on either system. A branch's name clashing with one
+    // outside every #if is, at the later of the two in load order, naming
+    // the earlier, whichever is in the branch.
+    Arena a = arena_make();
+    const char *both = "#if OS == OS_WINDOWS { NAME :: 1; } else { NAME :: 2; }\nmain :: () {}\n";
+    CHECK_STR(check_loaded(&a, both, SYSTEM_WINDOWS), "");
+    CHECK_STR(check_loaded(&a, both, SYSTEM_LINUX), "");
+    CHECK_STR(check_loaded(&a, "X :: 0;\n#if true { X :: 1; }\nmain :: () {}\n", SYSTEM_NONE),
+              "2:12: 'X' is already declared at test.rig:1:1\n");
+    CHECK_STR(check_loaded(&a, "#if true { X :: 1; }\nX :: 0;\nmain :: () {}\n", SYSTEM_NONE),
+              "2:1: 'X' is already declared at test.rig:1:12\n");
+    arena_free(&a);
+}
+
+TEST(what_a_top_level_condition_worked_out_stays_for_check) {
+    // A call to a procedure of the base isn't constant, but the decider
+    // resolves its signature on the way, against the S it laid out; check()
+    // uses both as they are, so main's call to f converts its S.
+    Arena a = arena_make();
+    CHECK_STR(check_loaded(&a,
+                           "S :: struct { x: int; }\n"
+                           "f :: (s: S) -> bool { return s.x == 0; }\n"
+                           "#if f(S.{0}) {}\n"
+                           "main :: () { s : S; b := f(s); }\n",
+                           SYSTEM_NONE),
+              "3:5: the condition of '#if' must be known while compiling\n");
+    arena_free(&a);
+}
+
+TEST(top_level_if_directive_chains_of_10000_arms) {
+    // Review Focus 5: a top-level else #if chain, as a generated table
+    // writes one, is decided and its taken branch spliced with no recursion
+    // per arm, in the loader as in the checker. N picks the last arm, and
+    // only its A makes main's count no less than zero.
+    const s64 ARMS = 10000;
+    Arena a = arena_make();
+    char *text = (char *)arena_alloc(&a, (u64)(ARMS * 64 + 4096), 1);
+    char *at = text;
+    at += sprintf(at, "N :: %lld;\n", (long long)(ARMS - 1));
+    for (s64 i = 0; i < ARMS; i++) {
+        at += sprintf(at, "%s#if N == %lld { A :: %lld; }\n", i ? "else " : "", (long long)i, (long long)i);
+    }
+    at += sprintf(at, "main :: () { x : [A - %lld]u8; }\n", (long long)(ARMS - 1));
+    CHECK_STR(check_loaded(&a, text, SYSTEM_NONE), "");
+    // A later condition naming what the base lacks has every arm's branch
+    // looked into for it (check_in_a_branch), along a loop too: declared in
+    // none, it's unknown.
+    sprintf(at, "#if NOPE == 1 {}\n");
+    CHECK_STR(check_loaded(&a, text, SYSTEM_NONE),
+              string_cstr(&a, string_printf(&a, "%lld:5: unknown identifier 'NOPE'\n", (long long)(ARMS + 3))));
+    arena_free(&a);
+}
+
+TEST(top_level_if_directives_nest_up_to_a_thousand_levels) {
+    // MAX_DEPTH of them (parse_if_directives_nested_too_deeply), each in the
+    // one before's branch: the loader decides each, recursing once per
+    // level (decide_in_load_order), and the innermost branch's A joins the
+    // top level, so main's count is 1. For --stdin-for, the branches not
+    // taken are walked the same way
+    // (stdin_for_in_branches_nested_a_thousand_levels).
+    Arena a = arena_make();
+    CHECK_STR(check_loaded(&a, nested_source(&a, "", "#if true {", MAX_DEPTH, "A :: 1;", "}",
+                                             "\nmain :: () { x : [A]u8; }\n"),
+                           SYSTEM_NONE),
+              "");
     arena_free(&a);
 }

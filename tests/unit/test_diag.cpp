@@ -127,6 +127,30 @@ TEST(sorting_a_program_of_many_files) {
     diag_free(&d);
 }
 
+TEST(diagnostics_sort_in_load_order) {
+    // A file a taken #if branch loads (spec 4.9) may be read after a file
+    // that comes later in load order: the errors sort by each file's place
+    // in load order (Source_File.order), not by its index.
+    Diagnostics d = {};
+    for (s32 f = 0; f < 3; f++) diag_add_file(&d, str("x.rig"), str("a\nb\nc\nd\ne\nf\ng\nh\ni\n"));
+    CHECK(d.files[0].order == 0 && d.files[1].order == 1 && d.files[2].order == 2);
+    d.files[1].order = 2;
+    d.files[2].order = 1;
+    diag_error(&d, {1, 1, 1}, "x");
+    diag_error(&d, {2, 5, 1}, "x");
+    diag_error(&d, {0, 9, 1}, "x");
+    diag_error(&d, {2, 1, 1}, "x");
+    diag_sort(&d);
+    CHECK_EQ(d.messages.count, 4);
+    if (d.messages.count == 4) {
+        CHECK(d.messages[0].pos.file == 0 && d.messages[0].pos.line == 9);
+        CHECK(d.messages[1].pos.file == 2 && d.messages[1].pos.line == 1);
+        CHECK(d.messages[2].pos.file == 2 && d.messages[2].pos.line == 5);
+        CHECK(d.messages[3].pos.file == 1 && d.messages[3].pos.line == 1);
+    }
+    diag_free(&d);
+}
+
 TEST(diag_render_prints_lines_after_the_caret) {
     // A failed #run's frames (issue #115) follow its message's source line
     // and caret, and stay with it when the messages are sorted.

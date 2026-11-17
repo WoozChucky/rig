@@ -115,7 +115,10 @@
 //   a procedure the compiler makes, is in none, -1). They follow the
 //   checker's scopes: an if's or else's block, or a block statement, is a
 //   scope; a for's or while's body is the loop's scope, which starts at
-//   the keyword and holds the iterator and it_index. And a declaration of a
+//   the keyword and holds the iterator and it_index. An #if's taken branch
+//   is none (spec 4.9): its statements are the enclosing block's, and the
+//   #if adds no code of its own, its taken statements being at their own
+//   positions (none at the '#if'). And a declaration of a
 //   local that hides a variable (a global, a parameter, an outer local)
 //   starts a scope of its own, inside its block's, from the declaration to
 //   the block's end, and the local is declared in it: a name is hidden only

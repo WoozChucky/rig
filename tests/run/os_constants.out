@@ -1,0 +1,5 @@
+OS is Windows or Linux
+OS_WINDOWS is 1, OS_LINUX is 2
+#run sees the same OS
+OS is an untyped integer
+a local hides OS

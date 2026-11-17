@@ -186,6 +186,9 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
     if (t) return t;
     Ast *decl = find_name(c, written->name);
     if (!decl) {
+        // A decider knows only the base: a struct a top-level #if's branch
+        // declares is no unknown type, but one no condition may use.
+        if (c->deciding && check_in_a_branch(c, written->name, written->pos)) return nullptr;
         if (!c->lost_a_file) diag_error(c->diag, written->pos, "unknown type '" STR_FMT "'", STR_ARG(written->name));
     } else if (decl->kind == AST_STRUCT) {
         Ast_Struct *s = (Ast_Struct *)decl;
@@ -223,24 +226,34 @@ static void pop_scope(Checker *c) {
     c->scopes.count--;
 }
 
+// What leave_scopes sets aside, and return_to_scopes returns to.
+struct Outer_Scopes {
+    Array<Table<Ast *>> scopes;  // Checker.scopes
+    bool lost_a_local;           // Checker.lost_a_local
+};
+
 // A declaration worked out where it's first needed (a global, a constant, a
 // struct's layout, a late field's type, a signature) means the same
 // wherever that is: its names are the top level's, whatever body needed it.
 // A body checked on demand has its own scopes too (check_body). So the
 // scopes open where it's needed are set aside, returned here, and the
-// checker goes on with none.
-static Array<Table<Ast *>> leave_scopes(Checker *c) {
-    Array<Table<Ast *>> outer = c->scopes;
+// checker goes on with none. So is lost_a_local, which is about those
+// scopes: a failed #if in the body that needed it may hide a local's name,
+// never a top-level one, so the declaration's unknown names are reported.
+static Outer_Scopes leave_scopes(Checker *c) {
+    Outer_Scopes outer = {c->scopes, c->lost_a_local};
     c->scopes = {};
+    c->lost_a_local = false;
     return outer;
 }
 
 // Back to the scopes leave_scopes set aside, every scope opened since
-// closed.
-static void return_to_scopes(Checker *c, Array<Table<Ast *>> outer) {
+// closed, and to their lost_a_local.
+static void return_to_scopes(Checker *c, Outer_Scopes outer) {
     RIG_ASSERT(c->scopes.count == 0);
     array_free(&c->scopes);
-    c->scopes = outer;
+    c->scopes = outer.scopes;
+    c->lost_a_local = outer.lost_a_local;
 }
 
 static void resolve_global(Checker *c, Ast *decl);
@@ -715,7 +728,8 @@ static bool open_declaration(Checker *c, Ast *decl, String name, s32 levels, s32
 // where the #run is, in the declaration pass too, and its names would be
 // in scope while a global or a constant it needs is worked out. So the
 // scopes are set aside (leave_scopes), and a local's name can never leak
-// into a global's value.
+// into a global's value, nor a failed #if in that body keep an unknown name
+// in it unsaid.
 //
 // Whether its check reported an error is kept (Ast_Var.had_errors,
 // Ast_Const.had_errors): a #run that reaches it doesn't run.
@@ -738,7 +752,7 @@ static void resolve_global(Checker *c, Ast *decl) {
     if (!open_declaration(c, decl, name, is_var ? ((Ast_Var *)decl)->levels : ((Ast_Const *)decl)->levels, &outer)) {
         return;
     }
-    Array<Table<Ast *>> scopes = leave_scopes(c);
+    Outer_Scopes scopes = leave_scopes(c);
     *state = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, decl);
     s64 errors = c->diag->error_count;
@@ -966,7 +980,7 @@ static Type *resolve_struct(Checker *c, Ast_Struct *s) {
         if (layout_levels(s->fields[i]) > levels) levels = layout_levels(s->fields[i]);
     }
     if (!open_declaration(c, s, s->name, levels, &outer)) return nullptr;
-    Array<Table<Ast *>> scopes = leave_scopes(c);  // its counts' names are the top level's
+    Outer_Scopes scopes = leave_scopes(c);  // its counts' names are the top level's
     s->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)s);
     lay_out(c, s, outer);
@@ -1002,7 +1016,7 @@ static void make_late_field(Checker *c, Ast_Struct *s, s64 i) {
     }
     s32 outer;
     if (!open_declaration(c, field, field->name, field->type_expr->levels, &outer)) return;
-    Array<Table<Ast *>> scopes = leave_scopes(c);  // its counts' names are the top level's
+    Outer_Scopes scopes = leave_scopes(c);  // its counts' names are the top level's
     field->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)field);
     Type *type = resolve_type(c, field->type_expr);
@@ -1319,6 +1333,65 @@ static void check_if(Checker *c, Ast_If *branch) {
     }
 }
 
+// An #if's condition (spec 4.9): a bool known while compiling. False after
+// saying what's wrong at condition->start: not a bool ("the condition of
+// '#if' must be a bool, not 'int'"), or not known while compiling ("... must
+// be known while compiling", unless it needs a #run with no value, whose
+// failure was said: has_failed_run), or its own error.
+static bool check_if_condition(Checker *c, Ast *condition) {
+    Type *t = check_operand(c, condition);
+    if (!t) return false;
+    if (t != &type_bool) {
+        diag_error(c->diag, condition->start, "the condition of '#if' must be a bool, not '" STR_FMT "'",
+                   STR_ARG(type_name(c->arena, t)));
+        return false;
+    }
+    if (!condition->is_constant) {
+        if (!has_failed_run(condition)) {
+            diag_error(c->diag, condition->start, "the condition of '#if' must be known while compiling");
+        }
+        return false;
+    }
+    return true;
+}
+
+// Decides the chain `first` begins: each arm's condition in order until one
+// is true, whose then_block is taken; none true, the last else (or none).
+// Conditions after the true one aren't checked: they belong to what isn't
+// taken. A condition that fails sets first->failed and takes none. Sets
+// first->decided and first->taken. Along the chain in a loop, as check_if
+// (parse_if says why).
+static void decide_if(Checker *c, Ast_If_Directive *first) {
+    first->decided = true;
+    Ast *part = first;
+    while (part && part->kind == AST_IF_DIRECTIVE) {
+        Ast_If_Directive *arm = (Ast_If_Directive *)part;
+        if (!check_if_condition(c, arm->condition)) {
+            first->failed = true;
+            return;
+        }
+        if (arm->condition->constant) {
+            first->taken = arm->then_block;
+            return;
+        }
+        part = arm->else_part;
+    }
+    first->taken = (Ast_Block *)part;
+}
+
+// A body's #if: decide_if, then the taken branch's statements checked in the
+// current scope (check_block, no push_scope): #if makes no scope, so what
+// the branch declares is the enclosing block's. The branches not taken are
+// never checked. A condition that failed checks no branch, so the locals a
+// branch declares are declared nowhere: the rest of the body says nothing
+// about them (Checker.lost_a_local), the condition's message being the only
+// one.
+static void check_if_directive(Checker *c, Ast_If_Directive *first) {
+    decide_if(c, first);
+    if (first->failed) c->lost_a_local = true;
+    if (first->taken) check_block(c, first->taken);
+}
+
 // A loop's body, with the loop the innermost one, for break and continue.
 static void check_loop_body(Checker *c, Ast *loop, Ast_Block *body) {
     array_add(&c->loops, loop);
@@ -1428,6 +1501,7 @@ static void check_statement(Checker *c, Ast *statement) {
     case AST_RETURN: check_return(c, (Ast_Return *)statement); break;
     case AST_BLOCK: check_scoped_block(c, (Ast_Block *)statement); break;
     case AST_IF: check_if(c, (Ast_If *)statement); break;
+    case AST_IF_DIRECTIVE: check_if_directive(c, (Ast_If_Directive *)statement); break;
     case AST_WHILE: check_while(c, (Ast_While *)statement); break;
     case AST_FOR: check_for(c, (Ast_For *)statement); break;
     case AST_BREAK:
@@ -1477,6 +1551,11 @@ static bool breaks_out_of(Ast *s, Ast *loop) {
         }
         return part && breaks_out_of(part, loop);
     }
+    case AST_IF_DIRECTIVE: {
+        // Only the taken branch is code: a break in another isn't there.
+        Ast_Block *taken = ((Ast_If_Directive *)s)->taken;
+        return taken && breaks_out_of(taken, loop);
+    }
     case AST_WHILE: return breaks_out_of(((Ast_While *)s)->body, loop);
     case AST_FOR: return breaks_out_of(((Ast_For *)s)->body, loop);
     default: return false;
@@ -1494,16 +1573,20 @@ static bool reaches_end(Ast_Block *block);
 // - a while whose condition is the constant true, which only ends by a
 //   break of its own (or never). Any other while, and every for, may run
 //   zero times.
+// - an #if (spec 4.9), when its taken branch can't: the #if is only that
+//   branch's code. One that took none goes past, as an empty block does.
 // A break or continue leaves the block too, but goes on elsewhere in its
 // loop; the rule is only asked about statements outside any loop body
-// (a procedure's body, and the blocks and ifs that end it) or about
+// (a procedure's body, and the blocks, ifs and #ifs that end it) or about
 // whole loops, so it never sees one.
-// An if or while whose condition was an error (its type unknown, or not
-// bool: check_condition reported it) is taken not to go past, whatever its
-// branches do. That's a policy, so the condition's message is the only one:
-// for `while 1` (likely meant as `while true`) a missing-return message
-// would be wrong, and for an if a real missing return shows up once the
-// condition is fixed.
+// An if, an #if or a while whose condition was an error (its type unknown,
+// or not bool: check_condition reported it; for an #if's chain, any of its
+// conditions, which check_if_condition also refuses when not known while
+// compiling: Ast_If_Directive.failed) is taken not to go past,
+// whatever its branches do. That's a policy, so the condition's message is
+// the only one: for `while 1` (likely meant as `while true`) a
+// missing-return message would be wrong, and for an if a real missing
+// return shows up once the condition is fixed.
 static bool goes_past(Ast *s) {
     switch (s->kind) {
     case AST_RETURN: return false;
@@ -1521,6 +1604,11 @@ static bool goes_past(Ast *s) {
             part = branch->else_part;
         }
         return reaches_end((Ast_Block *)part);
+    }
+    case AST_IF_DIRECTIVE: {
+        Ast_If_Directive *first = (Ast_If_Directive *)s;
+        if (first->failed) return false;
+        return !first->taken || reaches_end(first->taken);
     }
     case AST_WHILE: {
         Ast_While *loop = (Ast_While *)s;
@@ -1548,15 +1636,15 @@ static bool reaches_end(Ast_Block *block) {
 // Checked in check()'s pass over the bodies, or earlier, where a #run
 // reaches it (check_reached_body): inside another body, or inside a
 // global's value in the pass before. So it's checked with a state of its
-// own: the procedure, the scopes and the loops of whatever was being
-// checked are set aside, and back when it's done, as the levels are. While
+// own: the procedure, the scopes, the loops and lost_a_local of whatever
+// was being checked are set aside, and back when it's done, as the levels are. While
 // it's under way, its block is on c->resolving, so a #run that needs it
 // then finds a circle.
 // Whether its check reported an error is kept (Ast_Proc.had_errors): a
 // #run that reaches it doesn't run.
 static void check_body(Checker *c, Ast_Proc *proc) {
     Ast_Proc *outer_proc = c->proc;
-    Array<Table<Ast *>> outer_scopes = leave_scopes(c);
+    Outer_Scopes outer_scopes = leave_scopes(c);  // and lost_a_local
     Array<Ast *> outer_loops = c->loops;
     c->loops = {};
     s32 outer_levels = c->levels;
@@ -1825,7 +1913,7 @@ static bool resolve_signature(Checker *c, Ast_Proc *proc) {
         if (proc->results[i]->levels > levels) levels = proc->results[i]->levels;
     }
     if (!open_declaration(c, proc, proc->name, levels, &outer)) return false;
-    Array<Table<Ast *>> scopes = leave_scopes(c);  // its types' names are the top level's
+    Outer_Scopes scopes = leave_scopes(c);  // its types' names are the top level's
     proc->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)proc);
     s64 errors = c->diag->error_count;
@@ -1843,6 +1931,60 @@ bool check_proc_signature(Checker *c, Ast_Proc *proc) {
     return resolve_signature(c, proc);
 }
 
+// The predeclared constants (spec 2.5): the systems a program can be built
+// for, and the one it is. Each is an untyped integer constant, visible
+// everywhere as the program's own constants are, so OS == OS_WINDOWS is a
+// constant bool that folds. The VS Code grammar lists their names from this
+// table too (tests/unit/test_grammar.cpp).
+struct Predeclared_Constant {
+    const char *name;
+    System value;         // SYSTEM_NONE for OS, whose value is the program's (Ast_File.system)
+    const char *meaning;  // what the refusal of a top-level declaration says it is
+};
+
+static const Predeclared_Constant PREDECLARED_CONSTANTS[] = {
+    {"OS", SYSTEM_NONE, "the system the program is built for"},
+    {"OS_WINDOWS", SYSTEM_WINDOWS, "Windows, one of the systems OS may be"},
+    {"OS_LINUX", SYSTEM_LINUX, "Linux, one of the systems OS may be"},
+};
+
+// Whether `name` is a predeclared constant's; its entry through *entry.
+static bool is_predeclared(String name, const Predeclared_Constant **entry) {
+    for (const Predeclared_Constant &constant : PREDECLARED_CONSTANTS) {
+        if (string_eq(name, str(constant.name))) {
+            *entry = &constant;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Puts the predeclared constants in c->top_level, before the program's
+// names. Each is an Ast_Const as a checked `NAME :: 2;` would be: untyped,
+// folded, done, its value an integer literal of the same number (so
+// #run's walk, which reaches a constant's value, finds one). It's written
+// nowhere: its position is 0:0. OS's value is the program's system, the
+// host's when the tree names none.
+static void declare_predeclared(Checker *c, Ast_File *file) {
+    for (const Predeclared_Constant &entry : PREDECLARED_CONSTANTS) {
+        System value = entry.value;
+        if (value == SYSTEM_NONE) value = file->system ? file->system : host_system();
+        Ast_Int *number = ast_new<Ast_Int>(c->arena, AST_INT, {0, 0, 0});
+        number->value = value;
+        number->type = &type_untyped_int;
+        number->is_constant = true;
+        number->constant = value;
+        Ast_Const *constant = ast_new<Ast_Const>(c->arena, AST_CONST, {0, 0, 0});
+        constant->name = str(entry.name);
+        constant->value = number;
+        constant->type = &type_untyped_int;
+        constant->is_constant = true;
+        constant->constant = value;
+        constant->resolve = RESOLVE_DONE;
+        table_put(&c->top_level, constant->name, (Ast *)constant);
+    }
+}
+
 // The name a top-level declaration declares.
 static String declared_name(Ast *decl) {
     switch (decl->kind) {
@@ -1854,52 +1996,67 @@ static String declared_name(Ast *decl) {
     }
 }
 
-bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
-    s64 errors_before = d->error_count;
-    Checker c = {};
-    c.arena = a;
-    c.diag = d;
-    c.world = world ? world : compile_time_new(d);
-    c.lost_a_file = file->lost_a_file;
-
-    // First every name, so procedures, globals, constants and structs can
-    // be used before they're declared. They share one table: a global can't
-    // have a procedure's name. The whole declarations first, in source
-    // order: a name declared twice is reported at the later one. Each
-    // struct gets its Type here, still without its layout, so a pointer
-    // can name it from anywhere.
-    Array<Ast *> declarations = ast_declarations(file);
+// The top level's names, so procedures, globals, constants and structs can
+// be used before they're declared. They share one table: a global can't
+// have a procedure's name. The predeclared constants come first
+// (declare_predeclared): a top-level declaration of one of their names is
+// refused, at its name, and isn't declared, so every use means the
+// constant. (A local may hide one, as it may any of the top level's names.)
+// Then the whole declarations of `declarations`, in order: a name declared
+// twice is reported at the later one. Each struct gets its Type here, if it
+// has none yet (a decider made it, and what it worked out uses it), still
+// without its layout, so a pointer can name it from anywhere; one a decider
+// found in a circle, or too big, is done, and keeps having none. Then the
+// broken entries' names. With report, check()'s, the mistakes are said
+// (a built-in type's name, a predeclared name, a name already declared);
+// without, a decider's, the first of a name wins, silently: check() says
+// them once, later. Returns whether a broken entry lost its name (check()'s
+// main rule).
+static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report) {
+    declare_predeclared(c, c->file);
     for (s64 i = 0; i < declarations.count; i++) {
         Ast *decl = declarations[i];
         if (decl->kind == AST_PROC && ((Ast_Proc *)decl)->is_broken) continue;
         if (decl->kind == AST_STRUCT) {
             Ast_Struct *s = (Ast_Struct *)decl;
-            Type *t = arena_new<Type>(a);
-            t->kind = TYPE_STRUCT;
-            t->name = s->name;
-            t->align = 1;
-            t->decl = s;
-            t->arena = a;  // so its pointer types are freed with it (type_pointer_to)
-            s->declared = t;
+            if (!s->declared && s->resolve == RESOLVE_NOT_YET) {
+                Type *t = arena_new<Type>(c->arena);
+                t->kind = TYPE_STRUCT;
+                t->name = s->name;
+                t->align = 1;
+                t->decl = s;
+                t->arena = c->arena;  // so its pointer types are freed with it (type_pointer_to)
+                s->declared = t;
+            }
             // A built-in type's name always means the built-in type
             // (resolve_type_or_void looks there first), so a struct of that
             // name could never be named: "'u8' is a built-in type", and it
             // isn't declared. Its fields are still checked, for their own
             // mistakes.
             if (type_from_name(s->name)) {
-                diag_error(d, s->pos, "'" STR_FMT "' is a built-in type", STR_ARG(s->name));
+                if (report) diag_error(c->diag, s->pos, "'" STR_FMT "' is a built-in type", STR_ARG(s->name));
                 continue;
             }
         }
         String name = declared_name(decl);
-        Ast **earlier = table_get(&c.top_level, name);
-        if (earlier) {
-            Position at = (*earlier)->pos;
-            diag_error(d, decl->pos, "'" STR_FMT "' is already declared at " STR_FMT ":%d:%d", STR_ARG(name),
-                       STR_ARG(d->files[at.file].path), at.line, at.col);
+        const Predeclared_Constant *predeclared = nullptr;
+        if (is_predeclared(name, &predeclared)) {
+            if (report) {
+                diag_error(c->diag, decl->pos, "'" STR_FMT "' is predeclared: it's %s", STR_ARG(name),
+                           predeclared->meaning);
+            }
             continue;
         }
-        table_put(&c.top_level, name, decl);
+        Ast **earlier = table_get(&c->top_level, name);
+        if (earlier) {
+            if (report) {
+                Position at = (*earlier)->pos;
+                diag_error(c->diag, decl->pos, "'" STR_FMT "' is already declared at " STR_FMT ":%d:%d", STR_ARG(name),
+                           STR_ARG(c->diag->files[at.file].path), at.line, at.col);
+            }
+            continue;
+        }
+        table_put(&c->top_level, name, decl);
     }
     // Then the broken ones (parser.h), the names of declarations the parser
     // gave up on. Each is declared, with an unknown type, so its uses are
@@ -1907,17 +2064,124 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // about them either: a name that's also declared whole may only look
     // twice declared because of the syntax error, and calls are better
     // checked against the whole declaration, wherever it is. One with no
-    // name could have declared anything, main included.
+    // name could have declared anything, main included. One with a
+    // predeclared constant's name isn't declared either, silently: the
+    // name is the constant's.
     bool lost_a_name = false;
-    for (s64 i = 0; i < file->procs.count; i++) {
-        Ast_Proc *proc = file->procs[i];
+    for (s64 i = 0; i < declarations.count; i++) {
+        if (declarations[i]->kind != AST_PROC) continue;
+        Ast_Proc *proc = (Ast_Proc *)declarations[i];
         if (!proc->is_broken) continue;
         if (!proc->name.count) {
             lost_a_name = true;
-        } else if (!table_get(&c.top_level, proc->name)) {
-            table_put(&c.top_level, proc->name, proc);
+        } else if (!table_get(&c->top_level, proc->name)) {
+            table_put(&c->top_level, proc->name, proc);
         }
     }
+    return lost_a_name;
+}
+
+// The deciding mode (spec 4.9, checker.h's rules): a checker that decides
+// the top-level #ifs before anything else is checked, so it knows only what
+// can be known then: the base's declarations, outside every #if, in the
+// files read before the first decision. It has no compile-time world (its
+// #runs are refused, check_run) and no body of its own to check; what it
+// works out of the base on the way stays on the nodes for check().
+
+Checker *check_decider_new(Ast_File *file, Arena *a, Diagnostics *d) {
+    Checker *c = (Checker *)heap_realloc(nullptr, sizeof(Checker));
+    *c = {};
+    c->arena = a;
+    c->diag = d;
+    c->file = file;
+    c->deciding = true;
+    c->base_procs = file->procs.count;
+    c->base_globals = file->globals.count;
+    Array<Ast *> declarations = ast_declarations(file);
+    declare_top_level(c, declarations, false);
+    array_free(&declarations);
+    return c;
+}
+
+void check_decide(Checker *c, Ast_If_Directive *first) {
+    // A file that failed to load since the last decision may declare the
+    // name a condition misses, so it isn't unknown (Checker.lost_a_file).
+    c->lost_a_file = c->file->lost_a_file;
+    decide_if(c, first);
+}
+
+void check_decider_free(Checker *c) {
+    table_free(&c->top_level);
+    array_free(&c->scopes);
+    array_free(&c->loops);
+    array_free(&c->resolving);
+    array_free(&c->too_deep);
+    free(c);
+}
+
+// Whether `block`, a top-level #if's branch, declares `name` right inside
+// it; the #ifs nested in it are added to *nested, to look into in turn.
+static bool branch_declares(Ast_Block *block, String name, Array<Ast_If_Directive *> *nested) {
+    for (s64 i = 0; i < block->statements.count; i++) {
+        Ast *s = block->statements[i];
+        switch (s->kind) {
+        case AST_PROC:
+        case AST_VAR:
+        case AST_CONST:
+        case AST_STRUCT:
+            if (string_eq(declared_name(s), name)) return true;
+            break;
+        case AST_IF_DIRECTIVE: array_add(nested, (Ast_If_Directive *)s); break;
+        default: break;  // a #load, an #import or a #run declares nothing
+        }
+    }
+    return false;
+}
+
+// The declarations that joined the top level since the base first, then
+// every branch of every top-level #if read so far, the nested #ifs' through
+// a worklist rather than by recursion, and an else #if chain along a loop:
+// a chain of generated arms may be long (parse_if says why).
+bool check_in_a_branch(Checker *c, String name, Position at) {
+    Ast_File *file = c->file;
+    bool found = false;
+    for (s64 i = c->base_procs; i < file->procs.count && !found; i++) {
+        found = string_eq(file->procs[i]->name, name);
+    }
+    for (s64 i = c->base_globals; i < file->globals.count && !found; i++) {
+        found = string_eq(declared_name(file->globals[i]), name);
+    }
+    Array<Ast_If_Directive *> work = {};
+    for (s64 i = 0; i < file->ifs.count; i++) array_add(&work, file->ifs[i]);
+    while (work.count && !found) {
+        Ast *part = array_pop(&work);
+        while (part && part->kind == AST_IF_DIRECTIVE && !found) {
+            Ast_If_Directive *arm = (Ast_If_Directive *)part;
+            found = branch_declares(arm->then_block, name, &work);
+            part = arm->else_part;
+        }
+        if (part && part->kind == AST_BLOCK && !found) found = branch_declares((Ast_Block *)part, name, &work);
+    }
+    array_free(&work);
+    if (found) {
+        diag_error(c->diag, at, "'" STR_FMT "' is declared in a top-level #if, so it can't decide another top-level #if",
+                   STR_ARG(name));
+    }
+    return found;
+}
+
+bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
+    s64 errors_before = d->error_count;
+    Checker c = {};
+    c.arena = a;
+    c.diag = d;
+    c.world = world ? world : compile_time_new(d);
+    c.file = file;
+    c.lost_a_file = file->lost_a_file;
+
+    // First every name (declare_top_level), saying what's wrong with them.
+    Array<Ast *> declarations = ast_declarations(file);
+    bool lost_a_name = declare_top_level(&c, declarations, true);
     // Then every declaration in its turn, in source order: the structs'
     // layouts, the signatures, the globals and the constants, each one that
     // isn't done yet (one needed earlier was worked out there:

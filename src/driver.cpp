@@ -4,8 +4,10 @@
 // editor's text not yet saved (command_check, at the end).
 //
 // Each of them is a compilation (Compilation), taken through its steps in
-// order: load, check, run the top-level #runs (rig build only), lower (rig
-// build of an ordinary program only), each step's diagnostics printed when
+// order: load, which decides the top-level #ifs once the files outside
+// every #if are read, and reads the files their taken branches load (spec
+// 4.9, load.h); check; run the top-level #runs (rig build only); lower (rig
+// build of an ordinary program only); each step's diagnostics printed when
 // it fails. bin/unit-tests --interpret takes the same steps
 // (tests/unit/interpret_mode.cpp).
 //
@@ -145,8 +147,9 @@ static void compilation_load_text(Compilation *c, String path, String text, cons
 // Reads the main file (the file at `path`, or with from_stdin standard
 // input, named `path` all the same), and stdin_for's text, and loads
 // (compilation_load_text). False when nothing could be loaded: the main file
-// or standard input couldn't be read, or the program doesn't reach
-// stdin_for, said on stderr ("rig: error: ...").
+// or standard input couldn't be read, or the program doesn't reach stdin_for
+// (unless a failed #if's branch names it, below), said on stderr ("rig:
+// error: ...").
 //
 // stdin_for, when not empty, is the file whose text is read from standard
 // input once the main file has been read (rig check --stdin-for): one the
@@ -155,7 +158,14 @@ static void compilation_load_text(Compilation *c, String path, String text, cons
 // program loads it (load.h). A program that never loads it isn't checked:
 // rig says so alone, exit 1, since the loader's errors, if any, are about a
 // program the file isn't part of, and an editor checking that file must not
-// take a clean exit as its program's verdict.
+// take a clean exit as its program's verdict. It says which of two ways:
+// the program doesn't load the file at all, or loads it only in an #if
+// branch not taken on this system (spec 4.9), which the editor tells apart
+// (the file is part of the program on another system: no other main file
+// is to be tried). But when a branch of an #if whose condition had an error
+// names the file, the program is checked all the same: no branch was
+// decided, so the file may well be the program's, and the condition's
+// error is what's to be said (exit 1, as for any error).
 //
 // more_files, when given, are a workspace's further files (spec 7.9),
 // named as add_build_file resolved them: each is read as the main file is,
@@ -193,17 +203,25 @@ static bool compilation_load(Compilation *c, String path, bool from_stdin, Strin
         }
         array_add(&more_texts, more_text);
     }
-    bool reached = false;
+    bool reached = false, not_taken = false, undecided = false;
     Load_Options options = {};
     options.stdin_for = stdin_for;
     options.stdin_text = stdin_text;
     options.stdin_for_reached = &reached;
+    options.stdin_for_not_taken = &not_taken;
+    options.stdin_for_undecided = &undecided;
     options.more_files = more_files;
     options.more_texts = more_texts;
     compilation_load_text(c, path, text, &options);
     array_free(&more_texts);
-    if (stdin_for.count && !reached) {
-        fprintf(stderr, "rig: error: '" STR_FMT "' doesn't load '" STR_FMT "'\n", STR_ARG(path), STR_ARG(stdin_for));
+    if (stdin_for.count && !reached && !undecided) {
+        if (not_taken) {
+            fprintf(stderr, "rig: error: '" STR_FMT "' loads '" STR_FMT "' only in an #if branch not taken\n",
+                    STR_ARG(path), STR_ARG(stdin_for));
+        } else {
+            fprintf(stderr, "rig: error: '" STR_FMT "' doesn't load '" STR_FMT "'\n", STR_ARG(path),
+                    STR_ARG(stdin_for));
+        }
         return false;
     }
     return true;
@@ -556,9 +574,10 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
 // rig check's command line: the words after "check", FILE.rig [--stdin |
 // --stdin-for FILE.rig], in any order. Returns the exit code: 1 if the
 // program has errors (printed as rig build prints them), can't be read,
-// doesn't load the --stdin-for file, or a file isn't named .rig (as rig
-// build refuses it, source_named_rig: the main file's name first, then the
-// --stdin-for one's), else 0; 2 for a malformed line (no file, two files,
+// doesn't load the --stdin-for file or loads it only in an #if branch not
+// taken, or a file isn't named .rig (as rig build refuses it,
+// source_named_rig: the main file's name first, then the --stdin-for
+// one's), else 0; 2 for a malformed line (no file, two files,
 // --stdin twice, --stdin-for with no name or an empty one, twice, or with
 // --stdin, or -o: check writes nothing, so there is no output to name, nor
 // --no-bounds-checks: it is the program's, which is never lowered, not a
@@ -587,7 +606,11 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
 //   its #load names it (load.h). That's what the editor sends for a file
 //   the program loads: checked alone, it would be missing main and the
 //   names the other files declare. It needn't exist either, and the
-//   diagnostics name it as its #load does. When it is the main file
+//   diagnostics name it as its #load does. A file the program loads only
+//   in an #if branch not taken on this system isn't part of it here, and
+//   isn't checked: rig says so alone, in words of its own, as it does for
+//   a file the program doesn't load, and the editor then shows nothing
+//   for the file (spec 4.9; compilation_load). When it is the main file
 //   (load_same_file, asked before anything is read, since the main file
 //   needn't exist then either), this is --stdin.
 int command_check(Arena *a, Array<String> words, void (*print_usage)()) {

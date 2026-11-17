@@ -1,0 +1,3 @@
+tests/errors/if_failed_and_not_taken.rig:4:5: error: the condition of '#if' must be a bool, not 'int'
+    #if 1 {
+        ^

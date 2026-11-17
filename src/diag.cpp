@@ -3,8 +3,9 @@
 #include "diag.h"
 
 s32 diag_add_file(Diagnostics *d, String path, String text) {
-    array_add(&d->files, {string_copy(&d->arena, path), text, {}, {}, false});
-    return (s32)(d->files.count - 1);
+    s32 index = (s32)d->files.count;
+    array_add(&d->files, {string_copy(&d->arena, path), text, {}, {}, false, index});
+    return index;
 }
 
 void diag_locate_file(Diagnostics *d, s32 file, String directory, bool windows) {
@@ -48,8 +49,10 @@ static String source_line(String text, s32 line) {
     return string_slice(text, start, end - start);
 }
 
-static bool comes_before(Position x, Position y) {
-    if (x.file != y.file) return x.file < y.file;
+// Whether x comes before y: file by file in load order (Source_File.order),
+// then line and column.
+static bool comes_before(Diagnostics *d, Position x, Position y) {
+    if (x.file != y.file) return d->files[x.file].order < d->files[y.file].order;
     if (x.line != y.line) return x.line < y.line;
     return x.col < y.col;
 }
@@ -73,7 +76,9 @@ void diag_sort(Diagnostics *d) {
             s64 middle = left + width < n ? left + width : n;
             s64 end = middle + width < n ? middle + width : n;
             s64 i = left, k = middle, out = left;
-            while (i < middle && k < end) to[out++] = comes_before(from[k].pos, from[i].pos) ? from[k++] : from[i++];
+            while (i < middle && k < end) {
+                to[out++] = comes_before(d, from[k].pos, from[i].pos) ? from[k++] : from[i++];
+            }
             while (i < middle) to[out++] = from[i++];
             while (k < end) to[out++] = from[k++];
         }
