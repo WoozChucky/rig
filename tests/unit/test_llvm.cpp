@@ -516,6 +516,67 @@ TEST(llvm_foreign_c_name_calls_through_each_declaration) {
     arena_free(&a);
 }
 
+// Issue #161: C's time functions on Windows, by their 64-bit names.
+
+TEST(llvm_windows_time_functions_are_the_64_bit_ones) {
+    // On Windows C's seven time functions are declared under the Universal
+    // C Runtime's 64-bit exports, which a C program's <time.h> calls: no
+    // timespec_get exists to link, and msvcrt.lib's time and the rest are
+    // the 32-bit versions. _time64 declared under its own name too is the
+    // same declaration as time's. On Linux glibc's are 64 bits under C's
+    // names, which stay.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Timespec :: struct { seconds: s64; nanoseconds: s32; padding: s32; }\n"
+                                "Tm :: struct { second: s32; minute: s32; hour: s32; }\n"
+                                "timespec_get :: (ts: *Timespec, base: s32) -> s32 #foreign libc;\n"
+                                "time :: (t: *s64) -> s64 #foreign libc;\n"
+                                "time64 :: (t: *s64) -> s64 #foreign libc \"_time64\";\n"
+                                "gmtime :: (t: *s64) -> *Tm #foreign libc;\n"
+                                "localtime :: (t: *s64) -> *Tm #foreign libc;\n"
+                                "mktime :: (tm: *Tm) -> s64 #foreign libc;\n"
+                                "difftime :: (end: s64, start: s64) -> float64 #foreign libc;\n"
+                                "ctime :: (t: *s64) -> *u8 #foreign libc;\n"
+                                "main :: () {\n"
+                                "    ts : Timespec;\n"
+                                "    r := timespec_get(*ts, 1);\n"
+                                "    t := time(null);\n"
+                                "    u := time64(null);\n"
+                                "    g := gmtime(*t);\n"
+                                "    l := mktime(localtime(*t));\n"
+                                "    d := difftime(t, u);\n"
+                                "    c := ctime(*t);\n"
+                                "}\n");
+    // Each function's declaration, with %s for its name; C's name, and its
+    // Windows name.
+    const char *declarations[] = {"declare i32 @%s(ptr, i32)", "declare i64 @%s(ptr)",
+                                  "declare ptr @%s(ptr)",      "declare ptr @%s(ptr)",
+                                  "declare i64 @%s(ptr)",      "declare double @%s(i64, i64)",
+                                  "declare ptr @%s(ptr)"};
+    const char *c_names[] = {"timespec_get", "time", "gmtime", "localtime", "mktime", "difftime", "ctime"};
+    const char *windows_names[] = {"_timespec64_get", "_time64", "_gmtime64", "_localtime64",
+                                   "_mktime64", "_difftime64", "_ctime64"};
+    for (int t = 0; t < 2; t++) {
+        bool windows = (Target)t == TARGET_WINDOWS_X64;
+        String text = llvm_text(&a, m, (Target)t);
+        for (int i = 0; i < 7; i++) {
+            const char *declared = windows ? windows_names[i] : c_names[i];
+            const char *other = windows ? c_names[i] : windows_names[i];
+            CHECK_EQ(count_of(text, string_cstr(&a, string_printf(&a, declarations[i], declared))), 1);
+            // On Linux _time64 is declared too, under the name it's given
+            // (which glibc doesn't have; the linker would say so).
+            if (!windows && i == 1) continue;
+            CHECK(!contains(text, string_cstr(&a, string_printf(&a, "@%s(", other))));
+        }
+        // time and time64 are one declaration on Windows, never renamed
+        // (_time64.1), and both calls go to it.
+        CHECK(!contains(text, "@_time64."));
+        CHECK_EQ(count_of(text, "call i64 @_time64(ptr null)"), windows ? 2 : 1);
+        CHECK_EQ(count_of(text, "call i64 @time(ptr null)"), windows ? 0 : 1);
+    }
+    arena_free(&a);
+}
+
 TEST(llvm_bool_is_zeroext_on_both_targets) {
     // clang marks C's _Bool zeroext on Linux and on Windows alike (see
     // mark_extensions), so an i1 parameter or result is marked on both.
