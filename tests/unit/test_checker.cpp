@@ -6313,3 +6313,171 @@ TEST(if_directive_chains_of_10000_arms) {
     CHECK_STR(run.out, "ok");
     arena_free(&a);
 }
+
+// A top-level #if (spec 4.9): the loader decides each with a checker that
+// knows only the declarations outside every #if (check_decider_new). These
+// tests decide them the same way, without the loader: a taken branch's
+// declarations don't join the tree here, so a name a branch declares stays
+// one declared in a top-level #if.
+
+// Decides each of file's top-level #ifs in order, with one decider, as the
+// loader does.
+static void decide_all(Ast_File *file, Arena *a, Diagnostics *d) {
+    Checker *decider = check_decider_new(file, a, d);
+    for (s64 i = 0; i < file->ifs.count; i++) check_decide(decider, file->ifs[i]);
+    check_decider_free(decider);
+}
+
+// `text` lexed and parsed, OS set to `system`, and its top-level #ifs
+// decided (decide_all): the messages, in source order. The tree through
+// *file, when it's asked for, for its decisions: its nodes are in the arena,
+// but the Diagnostics its positions name is freed with the tokens, so it
+// can't be checked further (deciding_leaves_the_rest_for_check keeps them).
+static String decide_source(Arena *a, const char *text, System system, Ast_File **file) {
+    Token_List *list = src(text);
+    Ast_File *f = parse(list->tokens, a, &list->diag);
+    RIG_ASSERT(list->diag.error_count == 0);  // these tests are about the decisions
+    f->system = system;
+    decide_all(f, a, &list->diag);
+    diag_sort(&list->diag);
+    String result = messages(a, &list->diag);
+    token_list_free(list);
+    if (file) *file = f;
+    return result;
+}
+
+TEST(decides_a_top_level_if_by_the_system) {
+    // Each system takes its own branch, whatever the host.
+    Arena a = arena_make();
+    const char *program = "#if OS == OS_WINDOWS { A :: 1; } else { B :: 2; }";
+    Ast_File *file = nullptr;
+    CHECK_STR(decide_source(&a, program, SYSTEM_WINDOWS, &file), "");
+    Ast_If_Directive *first = file->ifs[0];
+    CHECK(first->decided && !first->failed);
+    CHECK(first->taken == first->then_block);
+    CHECK_STR(decide_source(&a, program, SYSTEM_LINUX, &file), "");
+    first = file->ifs[0];
+    CHECK(first->decided && !first->failed);
+    CHECK(first->taken == (Ast_Block *)first->else_part);
+    arena_free(&a);
+}
+
+TEST(decides_a_top_level_chain_in_order) {
+    // As in a body: the conditions in order until one is true, those after
+    // it never checked, so nope is no unknown identifier.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(decide_source(&a, "#if false {} else #if true {} else #if nope {} else {}", SYSTEM_NONE, &file), "");
+    Ast_If_Directive *first = file->ifs[0];
+    CHECK(first->decided && !first->failed);
+    CHECK(first->taken == ((Ast_If_Directive *)first->else_part)->then_block);
+    arena_free(&a);
+}
+
+TEST(a_top_level_condition_uses_constants_outside_every_if) {
+    // In any order, with what they need in turn: DEBUG needs LEVEL, declared
+    // after it. A struct's size too: its layout is worked out there.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(decide_source(&a, "DEBUG :: LEVEL > 1;\nLEVEL :: 2;\n#if DEBUG {}", SYSTEM_NONE, &file), "");
+    CHECK(file->ifs[0]->taken == file->ifs[0]->then_block);
+    CHECK_STR(decide_source(&a, "S :: struct { x: int; }\n#if size_of(S) == 8 {}", SYSTEM_NONE, &file), "");
+    CHECK(file->ifs[0]->taken == file->ifs[0]->then_block);
+    arena_free(&a);
+}
+
+TEST(a_top_level_condition_cant_use_a_name_from_another_if) {
+    // A name declared in a top-level #if's branch, taken or not, decided or
+    // not, is refused where a condition uses it: directly, through a
+    // constant outside every #if (at the name in the constant's value), or
+    // as a type.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(decide_source(&a, "#if true { LEVEL :: 2; }\n#if LEVEL > 1 {}", SYSTEM_NONE, &file),
+              "2:5: 'LEVEL' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK(file->ifs[1]->decided && file->ifs[1]->failed);
+    CHECK(file->ifs[1]->taken == nullptr);
+    CHECK_STR(decide_source(&a, "DEBUG :: DEPTH > 1;\n#if DEBUG {}\n#if true { DEPTH :: 2; }", SYSTEM_NONE, &file),
+              "1:10: 'DEPTH' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK(file->ifs[0]->failed);
+    CHECK_STR(decide_source(&a, "#if true { T :: struct { x: int; } }\n#if size_of(T) == 8 {}", SYSTEM_NONE, &file),
+              "2:13: 'T' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK(file->ifs[1]->failed);
+    // In a branch of a nested #if, or of a later arm, too.
+    CHECK_STR(decide_source(&a, "#if false {} else #if true { #if true {} else { DEEP :: 1; } }\n#if DEEP == 1 {}",
+                            SYSTEM_NONE, nullptr),
+              "2:5: 'DEEP' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    arena_free(&a);
+}
+
+TEST(a_top_level_condition_cant_run_code) {
+    // Any #run it reaches, through a constant or written in it, one whose
+    // operand is a constant too, is refused at the #run, and says nothing
+    // more.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(decide_source(&a, "N :: #run three();\n#if N == 3 {}\nthree :: () -> int { return 3; }", SYSTEM_NONE,
+                            &file),
+              "1:6: a top-level #if's condition can't run code while compiling, for now\n");
+    CHECK(file->ifs[0]->failed);
+    CHECK_STR(decide_source(&a, "#if #run ready() {}\nready :: () -> bool { return true; }", SYSTEM_NONE, &file),
+              "1:5: a top-level #if's condition can't run code while compiling, for now\n");
+    CHECK(file->ifs[0]->failed);
+    CHECK_STR(decide_source(&a, "#if #run true {}", SYSTEM_NONE, &file),
+              "1:5: a top-level #if's condition can't run code while compiling, for now\n");
+    CHECK(file->ifs[0]->failed);
+    arena_free(&a);
+}
+
+TEST(a_top_level_condition_must_be_a_constant_bool) {
+    // The two messages a body's condition says, at the condition.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(decide_source(&a, "#if 1 {}", SYSTEM_NONE, &file), "1:5: the condition of '#if' must be a bool, not 'int'\n");
+    CHECK(file->ifs[0]->failed);
+    CHECK_STR(decide_source(&a, "flag := true;\n#if flag {}", SYSTEM_NONE, &file),
+              "2:5: the condition of '#if' must be known while compiling\n");
+    CHECK(file->ifs[0]->failed);
+    arena_free(&a);
+}
+
+TEST(a_top_level_condition_with_an_unknown_name) {
+    // Declared nowhere: unknown, unless a file is missing (lost_a_file),
+    // which may declare it. A name a branch declares is known to be
+    // declared, so it's refused all the same.
+    Arena a = arena_make();
+    CHECK_STR(decide_source(&a, "#if nope {}", SYSTEM_NONE, nullptr), "1:5: unknown identifier 'nope'\n");
+    CHECK_STR(decide_source(&a, "x : Nope;\n#if size_of(Nope) == 1 {}", SYSTEM_NONE, nullptr),
+              "2:13: unknown type 'Nope'\n");
+    Token_List *list = src("#if nope {}\n#if true { X :: 1; }\n#if X == 1 {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    file->lost_a_file = true;
+    decide_all(file, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag),
+              "3:5: 'X' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK(file->ifs[0]->failed);
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(deciding_leaves_the_rest_for_check) {
+    // What the decider worked out stays on the nodes, found done by check():
+    // Vec2's one Type, ORIGIN's value. The program then checks clean, every
+    // message said once.
+    Arena a = arena_make();
+    Token_List *list = src("Vec2 :: struct { x: int; y: int; }\nORIGIN :: Vec2.{0, 0};\n#if ORIGIN.x == 0 {}\n"
+                           "main :: () { v : Vec2 = ORIGIN; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    decide_all(file, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK(file->ifs[0]->taken == file->ifs[0]->then_block);
+    Ast_Struct *vec2 = (Ast_Struct *)file->globals[0];
+    Type *decided = vec2->declared;
+    CHECK(decided != nullptr);
+    CHECK(file->globals[1]->type == decided);
+    CHECK(check(file, &a, &list->diag));
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK(vec2->declared == decided);
+    token_list_free(list);
+    arena_free(&a);
+}

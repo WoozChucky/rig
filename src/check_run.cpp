@@ -352,7 +352,9 @@ static bool reach_run(Checker *c, Ast_Run *run, Type *t) {
 
 // In order:
 // 1. Once: a #run is checked where it's met, and never again, so neither
-//    the walk of what it reaches nor its messages ever happen twice.
+//    the walk of what it reaches nor its messages ever happen twice. A
+//    decider's, reached from a top-level #if's condition (checker.h), is
+//    refused there, its operand left unchecked.
 // 2. Its operand is a value, a call's first result (check_value: a call
 //    that returns nothing has none), its type the #run's; an untyped one
 //    gets its default type (check_default_type), so `C :: #run 7;` is a
@@ -368,6 +370,14 @@ static bool reach_run(Checker *c, Ast_Run *run, Type *t) {
 Type *check_run(Checker *c, Ast_Run *run) {
     if (run->checked) return run->type;
     run->checked = true;
+    if (c->deciding) {
+        // A top-level #if's condition is decided before anything else is
+        // checked, so there's no compile-time world yet to run in (spec
+        // 4.9). Refused, a constant operand too, and with no value, what
+        // needs it says nothing more (has_failed_run).
+        diag_error(c->diag, run->pos, "a top-level #if's condition can't run code while compiling, for now");
+        return nullptr;
+    }
     Ast *operand = run->operand;
     s64 errors = c->diag->error_count;
     if (!check_value(c, operand)) return nullptr;
