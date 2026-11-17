@@ -2340,6 +2340,12 @@ static const Command_Case CHECK_CASES[] = {
      {"check", "tests/errors/if_failed_condition.rig", "--stdin-for", "tests/errors/load/if_failed.rig"},
      1,
      "tests/errors/if_failed_condition.rig:1:5: error: the condition of '#if' must be a bool, not 'int'\n"},
+    // And it isn't "not taken" when a branch not taken names the file too:
+    // the failed #if may still make it the program's, so its error wins.
+    {"--stdin-for of a file loaded in a failed #if's branch and one not taken: the program is checked",
+     {"check", "tests/errors/if_failed_and_not_taken.rig", "--stdin-for", "tests/errors/load/if_failed.rig"},
+     1,
+     "tests/errors/if_failed_and_not_taken.rig:4:5: error: the condition of '#if' must be a bool, not 'int'\n"},
     {"--stdin-for before the main file",
      {"check", "--stdin-for", "tests/run/load/divide.rig", "tests/run/hello.rig"},
      1,

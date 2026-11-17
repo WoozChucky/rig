@@ -1,0 +1,13 @@
+#if false {
+    #load "load/if_failed.rig";
+}
+#if 1 {
+    #load "load/if_failed.rig";
+}
+main :: () {}
+// One file named in two top-level #ifs' branches (issue #147, spec 4.9):
+// one not taken, one of an #if whose condition has an error. Neither is
+// read, and the condition's message is the only one. rig check's runner
+// case (--stdin-for of that file) finds it too: no branch of the second #if
+// was decided, so the file may be the program's, and its program is
+// checked, though a branch not taken names the file as well.
