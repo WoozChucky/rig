@@ -7,7 +7,10 @@
 // Each takes its memory as *void, so any pointer converts to it, and reads
 // and writes it as *u8, one byte at a time: a *void has no size to move or
 // index by (spec 3.5). A count of 0 or less does nothing and reads nothing,
-// so a null pointer with no bytes behind it is fine.
+// so a null pointer with no bytes behind it is fine. Each returns early for
+// one, though a loop from 0 to count - 1 runs no times for nearly all: for
+// int's most negative count, count - 1 wraps to int's largest value, and
+// the loop would run on.
 
 // Copies count bytes from source to destination. The two may overlap, as
 // with C's memmove: the bytes copied are the ones source held before the
@@ -34,7 +37,7 @@ copy_memory :: (destination: *void, source: *void, count: int) {
     }
 }
 
-// Sets count bytes from destination on to value.
+// Sets each of the count bytes that start at destination to value.
 set_memory :: (destination: *void, value: u8, count: int) {
     if count <= 0 { return; }
     to := cast(*u8) destination;
