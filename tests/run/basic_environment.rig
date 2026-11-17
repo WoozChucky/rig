@@ -93,13 +93,14 @@ main :: () {
     show_counts(*counter);
     print_line("");
 
-    // A variable that isn't set is the zeroed string, with nothing
-    // allocated.
-    value, found = get_environment("RIG_BASIC_TEST_UNSET", HEAP_ALLOCATOR);
+    // A variable that isn't set is the zeroed string, with nothing left
+    // allocated: the name's C copy is freed.
+    value, found = get_environment("RIG_BASIC_TEST_UNSET", counting);
     print_string("unset: ");
     show_text(value);
     show_bool(found);
     show_bool(value.data == null);
+    show_counts(*counter);
     print_line("");
 
     // PATH differs from system to system and run to run, so only that it
@@ -114,14 +115,18 @@ main :: () {
     // An empty name, one with '=', which ends a name in the environment,
     // and one with a zero byte, which C would read as RIG_BASIC_TEST,
     // which is set, are refused without asking C: no C copy of the name is
-    // made, so the allocator is asked for nothing.
+    // made, so the allocator is asked for nothing. Each is the zeroed
+    // string and false.
     print_string("refused names:");
     value, found = get_environment("", counting);
     show_bool(found);
+    show_bool(value.data == null && value.count == 0);
     value, found = get_environment("A=B", counting);
     show_bool(found);
+    show_bool(value.data == null && value.count == 0);
     value, found = get_environment("RIG_BASIC_TEST\0X", counting);
     show_bool(found);
+    show_bool(value.data == null && value.count == 0);
     show_counts(*counter);
     print_line("");
 
@@ -162,8 +167,10 @@ main :: () {
     show_bool(failed == 3 || failed == 768);
     print_line("");
 
-    // A command with a zero byte would run as "echo a", so it is refused.
+    // A command with a zero byte would run as "echo a", so it is refused
+    // before its C copy is made: the allocator is asked for nothing.
     print_string("zero byte:");
-    show_int(run_command("echo a\0b", HEAP_ALLOCATOR));
+    show_int(run_command("echo a\0b", counting));
+    show_counts(*counter);
     print_line("");
 }

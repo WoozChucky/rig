@@ -62,7 +62,9 @@ get_environment :: (name: string, allocator: Allocator) -> string, bool {
 //
 // It is -1, and nothing runs, for a command with a zero byte, which C
 // would read as a shorter command, and when the allocator has no memory
-// for the command's C copy.
+// for the command's C copy. -1 is also what C's system gives when it
+// can't start the shell, and on Windows what a command that exits with -1
+// gives ("exit -1"), so -1 alone doesn't say the command never ran.
 //
 // The program's output may still sit in C's buffer for stdout, where
 // Basic's print puts it, while the command writes to the same place
