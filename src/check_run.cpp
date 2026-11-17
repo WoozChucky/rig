@@ -129,7 +129,8 @@ static bool uses_no_locals(Checker *c, Ast *operand) {
 // parameters' and results' types reached. Each must have one: a type with
 // an error counted to another declaration (`a: [K]int`, K's value wrong)
 // leaves the procedure without errors of its own, but its parameter with
-// no type. A foreign one has no body: C's code is called as it is.
+// no type. A foreign one has no body, nor has a #compiler one: C's code is
+// called as it is, and the compiler does the other itself.
 static bool walk_proc(Reach *r, Ast_Proc *proc) {
     if (proc->is_broken || !check_proc_signature(r->c, proc) || proc->had_errors) return false;
     if (!check_reached_body(r->c, proc, r->run->pos)) return false;
