@@ -4507,6 +4507,57 @@ TEST(defer_runs_when_break_and_continue_leave_nested_blocks) {
     arena_free(&a);
 }
 
+TEST(break_and_continue_run_only_their_own_loops_defers) {
+    // Review Focus 1: the inner loop's break and continue run the defers
+    // registered since its own body began, never the outer loop body's or
+    // the procedure body's. The inner defer is copied at the break, the
+    // continue and the inner body's end; the outer body's only at its end,
+    // and the procedure body's only at its '}'.
+    Arena a = arena_make();
+    String g = proc_ir(ir_print(&a, lower_source(&a,
+                                                 "putchar :: (c: s32) -> s32 #foreign libc;\n"
+                                                 "g :: () {\n"
+                                                 "    defer putchar(97);\n"
+                                                 "    for 1..2 {\n"
+                                                 "        defer putchar(98);\n"
+                                                 "        for 1..3 {\n"
+                                                 "            defer putchar(99);\n"
+                                                 "            if it == 2 { break; }\n"
+                                                 "            if it == 3 { continue; }\n"
+                                                 "        }\n"
+                                                 "    }\n"
+                                                 "}\n"
+                                                 "main :: () {}\n")),
+                       "g");
+    CHECK_EQ(count_of(g, "const i32 99"), 3);
+    CHECK_EQ(count_of(g, "const i32 98"), 1);
+    CHECK_EQ(count_of(g, "const i32 97"), 1);
+    arena_free(&a);
+}
+
+TEST(no_defer_runs_before_an_unreachable_end) {
+    // f returns a value, so its '}' can't be reached, though the IR block
+    // after the loop is there: the unreachable that ends it has no copy of
+    // the body's defer before it. Only the return copies it.
+    Arena a = arena_make();
+    String f = proc_ir(ir_print(&a, lower_source(&a,
+                                                 "f :: () -> int {\n"
+                                                 "    defer g();\n"
+                                                 "    while true { return 1; }\n"
+                                                 "}\n"
+                                                 "g :: () {}\n"
+                                                 "main :: () {}\n")),
+                       "f");
+    CHECK_EQ(count_of(f, "call @g()"), 1);
+    s64 end = index_of(f, "  unreachable\n");
+    CHECK(end > 0);
+    String before = string_slice(f, 0, end);
+    s64 line = before.count - 1;
+    while (line > 0 && before.data[line - 1] != '\n') line--;
+    CHECK(!contains(string_slice(before, line, before.count - line), "call"));
+    arena_free(&a);
+}
+
 TEST(deferred_code_is_at_its_own_lines) {
     // Review Focus 2. The deferred block declares t, and is copied at the
     // return and at the body's '}': each copy has its own slot, in its own

@@ -6928,3 +6928,40 @@ TEST(defer_in_code_a_run_runs) {
     token_list_free(c.list);
     arena_free(&a);
 }
+
+TEST(a_run_reaches_what_only_deferred_code_calls) {
+    // A #run's walk goes into deferred code: g, declared after f and called
+    // only from its defer, is checked on demand before the #run lowers and
+    // runs it. The inner block's defer makes n 2 before the return.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "N :: #run f();\n"
+                          "f :: () -> int {\n"
+                          "    n := 1;\n"
+                          "    {\n"
+                          "        defer g(*n);\n"
+                          "    }\n"
+                          "    return n;\n"
+                          "}\n"
+                          "g :: (p: *int) {\n"
+                          "    p.* = 2;\n"
+                          "}\n"
+                          "main :: () {}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(global_named(&c, "N")->is_constant);
+    CHECK_EQ(global_named(&c, "N")->constant, 2u);
+    token_list_free(c.list);
+    // So g's error is said, and the #run, which would run it, doesn't.
+    CHECK_STR(check_source(&a,
+                           "N :: #run f();\n"
+                           "f :: () -> int {\n"
+                           "    defer g();\n"
+                           "    return 1;\n"
+                           "}\n"
+                           "g :: () {\n"
+                           "    x : int = \"s\";\n"
+                           "}\n"
+                           "main :: () {}\n"),
+              "7:15: a value of type 'string' doesn't convert to 'int' implicitly\n");
+    arena_free(&a);
+}
