@@ -595,8 +595,9 @@ static void report_type_as_value(Checker *c, Ast_Name *name) {
 // unknown either: it's said to be a type, as a struct's name is
 // (report_type_as_value), or, being called, "'s64' isn't a procedure, so
 // it can't be called". Any other name is nothing to report when a #load
-// failed: the missing file may declare it (Checker.lost_a_file); nor after
-// a failed #if in the body: a branch may declare it (Checker.lost_a_local).
+// or a top-level #if's condition failed: the missing file, or the branches
+// never decided, may declare it (Checker.lost_a_file); nor after a failed
+// #if in the body: a branch may declare it (Checker.lost_a_local).
 // A decider, which knows only the base, says first whether a top-level #if's
 // branch declares it (check_in_a_branch); not for a built-in type's name,
 // which means the built-in type, whatever a branch declares.

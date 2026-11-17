@@ -1,5 +1,7 @@
-// ast.cpp: dumping the syntax tree as S-expressions, and what the tree's
-// operators mean (see ast.h).
+// ast.cpp: dumping the syntax tree as S-expressions, what the tree's
+// operators mean, and the order of a file's declarations: by position, file
+// by file in load order (before), which ast_declarations merges them in and
+// ast_sort_declarations puts each list in (see ast.h).
 
 #include "ast.h"
 

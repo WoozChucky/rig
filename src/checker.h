@@ -632,7 +632,9 @@
 // another error, unreported (parser.h): the program then lacks a file,
 // whose declarations are unknown, so a name declared nowhere isn't reported
 // as unknown ("unknown identifier", "unknown type"), nor main as missing
-// (Ast_File.lost_a_file).
+// (Ast_File.lost_a_file). The same after a top-level #if's condition
+// failed (spec 4.9): the program lacks what its branches might have
+// declared.
 
 #pragma once
 

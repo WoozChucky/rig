@@ -16,7 +16,9 @@ struct Checker {
                                  // check()'s own
     Table<Ast *> top_level;      // every procedure, global variable, top-level constant and
                                  // struct, by name: visible everywhere (Ast_Proc, Ast_Var,
-                                 // Ast_Const, Ast_Struct)
+                                 // Ast_Const, Ast_Struct); and the predeclared constants, OS,
+                                 // OS_WINDOWS and OS_LINUX (spec 2.5), each an Ast_Const put
+                                 // first (checker.cpp's declare_predeclared)
     Array<Table<Ast *>> scopes;  // the blocks being checked, innermost last: the names
                                  // declared in each so far (Ast_Var, Ast_Const, Ast_Param); only the
                                  // innermost body's, a body checked on demand and a declaration

@@ -115,17 +115,17 @@
 // (below). Deeper is "this expression is nested too deeply (more than 1000
 // levels)", at the start of the outermost expression, or "blocks are nested
 // too deeply (more than 1000 levels)", at the '{' or 'defer' one too many;
-// the declaration is then given up, as after any
-// other error below, not only the statement: the parser has no recovery
-// inside a body (but for a misplaced #load, which declares nothing and is
-// skipped, see below), and skipping just the statement would leave a
-// variable it declares (`x := ((...));`) undeclared, so every later use of
-// it would be one more message. Types nest at most 1000 levels too, each
-// '*', '[]', '[N]' and procedure type's '(' one, and the levels of types
-// and expressions inside each other count together: an array's count is
-// read inside its '[N]' level, size_of's and a cast's type a level down.
-// The level one too many, when it's a '*' or '[', is "types are nested too
-// deeply (more than 1000 levels)", there.
+// the declaration is then given up, as after any other error below, not only
+// the statement: the parser has no recovery inside a body (but for a
+// misplaced #load, which declares nothing and is skipped, see below), and
+// skipping just the statement would leave a variable it declares
+// (`x := ((...));`) undeclared, so every later use of it would be one more
+// message. Types nest at most 1000 levels too, each '*', '[]', '[N]' and
+// procedure type's '(' one, and the levels of types and expressions inside
+// each other count together: an array's count is read inside its '[N]'
+// level, size_of's and a cast's type a level down. The level one too many,
+// when it's a '*' or '[', is "types are nested too deeply (more than 1000
+// levels)", there.
 //
 // Several results (spec 6.7) are a list of types after '->', with or
 // without parentheses: `divmod :: (a: int, b: int) -> int, int { ... }` or
@@ -280,10 +280,10 @@
 // never closed is taken to end before (it doesn't end a body by itself:
 // unindented, it's a statement there; unless a branch of it, or of an #if
 // right inside one of its branches, declares a procedure or a struct, or
-// holds a #run { }, which only a top-level #if's
-// branch can, and it then ends the body as a procedure's declaration does),
-// the skipping resumes at it inside braces too, as at a procedure's
-// declaration in column 1, and it ends a struct's fields.
+// holds a #run { }, which only a top-level #if's branch can, and it then
+// ends the body as a procedure's declaration does), the skipping resumes at
+// it inside braces too, as at a procedure's declaration in column 1, and it
+// ends a struct's fields.
 //
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;
@@ -304,22 +304,20 @@
 // struct's declaration in column 1 (`name :: (` or `Name :: struct`), a
 // #run { in column 1, or an #if in column 1 whose branch (or a nested
 // #if's, right inside one) declares a procedure or a struct, or holds a
-// #run { }: a body can't hold any of
-// them, and each can only start a top-level declaration. A constant in
-// column 1 (`N :: 5;`) is a local constant, as an indented one is. A
-// struct's braces never closed end there too, and at any #run or #if in
-// column 1. The body is then taken
-// to end before the column-1 declarations (IDENT ':', ':=' or '::', a
-// #load, a #run or an #if) right before that point, at its own level:
-// "expected '}'" is reported at the first of them, and the top level
-// resumes there, so they're read as the globals, constants, loads, runs and
-// #ifs they were meant to be (an if's '}' forgotten, then globals). A #load
-// among them, or in the branch of an #if among them, isn't misplaced after
-// all, so it isn't reported. A struct is taken to end
-// before the #loads in column 1 right before that point, the same way, but
-// not before fields in column 1: a field is written as a global is, so
-// they stay its fields. Without them, "expected '}'" is reported where the
-// end was found.
+// #run { }: a body can't hold any of them, and each can only start a
+// top-level declaration. A constant in column 1 (`N :: 5;`) is a local
+// constant, as an indented one is. A struct's braces never closed end there
+// too, and at any #run or #if in column 1. The body is then taken to end
+// before the column-1 declarations (IDENT ':', ':=' or '::', a #load, a
+// #run or an #if) right before that point, at its own level: "expected
+// '}'" is reported at the first of them, and the top level resumes there,
+// so they're read as the globals, constants, loads, runs and #ifs they were
+// meant to be (an if's '}' forgotten, then globals). A #load among them, or
+// in the branch of an #if among them, isn't misplaced after all, so it
+// isn't reported. A struct is taken to end before the #loads in column 1
+// right before that point, the same way, but not before fields in column 1:
+// a field is written as a global is, so they stay its fields. Without them,
+// "expected '}'" is reported where the end was found.
 //
 // So one mistake gives one error, and the checker can still check the rest
 // of the program (every file of it): the broken declaration's name is

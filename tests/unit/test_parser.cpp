@@ -3151,9 +3151,9 @@ TEST(parse_if_directive_in_a_struct) {
 }
 
 TEST(parse_if_directive_with_unindented_contents) {
-    // Review Focus 1: branches written the C way, unindented, as after
-    // #ifdef. No column-1 rule ends a branch: its declarations are its own
-    // up to its '}', and what follows is the top level's.
+    // Branches written the C way, unindented, as after #ifdef. No column-1
+    // rule ends a branch: its declarations are its own up to its '}', and
+    // what follows is the top level's.
     Arena a = arena_make();
     String errors;
     CHECK_STR(parse_src(&a, "#if A {\nf :: () {}\nN :: 1;\n}\nmain :: () {}\n", &errors),
@@ -3172,10 +3172,10 @@ TEST(parse_if_directive_with_unindented_contents) {
 }
 
 TEST(parse_if_directive_recovers_inside_a_branch) {
-    // Review Focus 1: a syntax error inside a branch is recovered from as at
-    // the top level, the broken declaration kept in the branch; the skipping
-    // stops at the '}' that closes the branch, so it still closes there, and
-    // what follows is the top level's.
+    // A syntax error inside a branch is recovered from as at the top level,
+    // the broken declaration kept in the branch; the skipping stops at the
+    // '}' that closes the branch, so it still closes there, and what follows
+    // is the top level's.
     Arena a = arena_make();
     String errors;
     CHECK_STR(parse_src(&a, "#if A {\n    f :: () { x := ; }\n    g :: () {}\n}\nmain :: () {}\n", &errors),

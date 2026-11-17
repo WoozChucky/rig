@@ -516,11 +516,11 @@ System host_system();
 //
 // order is each file's place in load order (spec 2.13), by Position.file,
 // as Source_File.order is. Empty, as parse() and parse_into leave it, each
-// file is at its index: the order the files were read in, which is load
-// order unless a #load in a taken #if branch (spec 4.9) read a file after
-// one that comes later. The loader then sets it, and puts every list in it
-// (ast_sort_declarations); before() follows it, in ast_declarations and
-// ast_dump too.
+// file is at its index: the order the files were read in. The loader sets
+// it for every program it loads (walk_in_load_order), and puts every list
+// in it (ast_sort_declarations): it differs from the reading order only
+// when a #load in a taken #if branch (spec 4.9) read a file after one that
+// comes later. before() follows it, in ast_declarations and ast_dump too.
 //
 // lost_a_file is set when a #load or an #import failed (load.h's errors),
 // had no string to name a file by, wasn't at the top level, or was passed
@@ -544,8 +544,8 @@ struct Ast_File {
     Array<Ast *> globals;
     Array<Ast_Load *> loads;
     Array<Ast_Run *> runs;  // the top-level #runs, in source order, file by file in load order
-    Array<Ast_If_Directive *> ifs;  // the #ifs written at a file's top level (not nested in a branch), in
-                                    // source order, file by file in load order
+    Array<Ast_If_Directive *> ifs;  // the #ifs written at a file's top level (not nested in a branch),
+                                    // in source order, file by file in load order
     bool lost_a_file;
     bool reaches_compiler;  // the loader added the Compiler module's module.rig (by #import or #load, or as the
                             // main file or a workspace's further file)

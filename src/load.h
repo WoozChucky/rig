@@ -37,12 +37,13 @@
 //   given, as if it #loaded each of them first, keeping the names they're
 //   given, and each is known by the same identity as any file.
 // - The files are read in this order: the main file, then each loaded
-//   file in the order its first #load was met, the files walked in that
-//   same order: a queue, not a recursion, so a chain of loads of any length
-//   takes no more stack than one file. It's the order of the files in
-//   Diagnostics.files, which Position.file numbers. Without top-level #ifs
-//   it's the load order too (spec 2.13), which errors sort file by file in
-//   (diag_sort); with them, the load order can differ (below).
+//   file in the order its first #load was met, each file's #loads followed
+//   in that same order: a queue, not a recursion, so a chain of loads of
+//   any length takes no more stack than one file. It's the order of the
+//   files in Diagnostics.files, which Position.file numbers. Without
+//   top-level #ifs it's the load order too (spec 2.13), which errors sort
+//   file by file in (diag_sort); with them, the load order can differ
+//   (below).
 // Errors, at the #load's string, in the file holding it; each stops only
 // that #load, and the loading goes on, the tree recording that a file is
 // missing (Ast_File.lost_a_file), so the checker doesn't report the names
@@ -110,10 +111,11 @@
 // It differs from the reading order when a taken branch's #load comes
 // before a #load outside every #if: main.rig's `#if true { #load "b.rig"; }`
 // before its `#load "a.rig";` places b before a, though a is read first.
-// A file keeps what the reading order gave it,
-// though: its index (Position.file), its name (a file loaded both in a
-// branch and outside every #if, by two spellings, is named by the #load
-// read first), and the place where "cannot read" is said.
+// A file keeps what the reading order gave it, though: its index
+// (Position.file), its name (a file loaded both in a branch and outside
+// every #if, by two spellings, is named by the #load read first), and the
+// place where "cannot read" is said; and the program keeps the #import or
+// #load read first that named the Compiler module (Ast_File.compiler_pos).
 //
 // Build programs are recognised once the #ifs are decided: an #import
 // "Compiler" in a branch not taken isn't read, so it doesn't reach the

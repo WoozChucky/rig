@@ -118,15 +118,15 @@
 // was built from).
 //
 // Then rig check on every program of tests/run and tests/errors (not
-// tests/build's), from a file and from stdin under the file's name, a
-// loaded file's text from stdin within its program (--stdin-for: one the
-// program doesn't load, or loads only in an #if branch not taken, is said
-// to be so), and its own command line (check_tests). A program of tests/run must check with
-// nothing to say, exit 0; one of tests/errors exit 1 and print its
+// tests/build's), from a file and from stdin under the file's name, a loaded
+// file's text from stdin within its program (--stdin-for: one the program
+// doesn't load, or loads only in an #if branch not taken, is said to be so),
+// and its own command line (check_tests). A program of tests/run must check
+// with nothing to say, exit 0; one of tests/errors exit 1 and print its
 // NAME.err, unless it has a NAME.check.err: what rig check prints instead,
 // for a program whose errors only rig build finds (a top-level #run that
-// fails, which checking never runs, or a #compiler call, which only
-// lowering finds). An empty one means exit 0 with nothing on stderr.
+// fails, which checking never runs, or a #compiler call, which only lowering
+// finds). An empty one means exit 0 with nothing on stderr.
 //
 // Then the specification's examples (spec_tests): every ```rig block of
 // docs/rig-spec.md but a file= one (below; its section 1.4 says so too),
@@ -2421,7 +2421,7 @@ static void check_tests(Arena *a, String rig, s64 *passed, s64 *failed) {
            passed, failed);
     report("rig check --stdin-for a file only a branch not taken loads",
            check_stdin_for_a_branch_not_taken_test(a, rig), passed, failed);
-    report("rig check --stdin-for reads the main file first",check_stdin_for_reads_the_main_file_first_test(a, rig),
+    report("rig check --stdin-for reads the main file first", check_stdin_for_reads_the_main_file_first_test(a, rig),
            passed, failed);
     report("rig check writes nothing, not even .build", check_writes_nothing_test(a, rig), passed, failed);
     for (const Command_Case &c : CHECK_CASES) {
