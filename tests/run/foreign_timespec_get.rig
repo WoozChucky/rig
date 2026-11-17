@@ -1,0 +1,23 @@
+// C17's timespec_get links and runs on both hosts (issue #161). On Windows
+// the Universal C Runtime's headers make it an inline function over
+// _timespec64_get, which the compiler declares it as. Its struct is C's
+// struct timespec, whose tv_nsec is a long: 4 bytes and 4 of padding on
+// Windows, 8 bytes on Linux, whose low 4 hold it, as the nanoseconds are
+// below 10^9. So one Rig struct fits both.
+Timespec :: struct { seconds: s64; nanoseconds: s32; padding: s32; }
+timespec_get :: (ts: *Timespec, base: s32) -> s32 #foreign libc;
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+// "true" or "false", for printf's %s.
+text_of :: (b: bool) -> *u8 {
+    if b { return "true"; }
+    return "false";
+}
+
+main :: () {
+    ts : Timespec;
+    // 1 is TIME_UTC on both hosts; timespec_get gives it back on success.
+    result := timespec_get(*ts, 1);
+    printf("timespec_get: %d %s %s\n", result, text_of(ts.seconds > 1700000000),
+           text_of(ts.nanoseconds >= 0 && ts.nanoseconds < 1000000000));
+}

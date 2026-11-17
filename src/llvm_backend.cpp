@@ -1718,6 +1718,43 @@ static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Glob
     return LLVMStructTypeInContext(c, p.types, (unsigned)p.count, 1);
 }
 
+// C's time functions on Windows, each beside the Universal C Runtime's
+// 64-bit export that a C program's call of it reaches. The UCRT exports no
+// timespec_get: its <time.h> defines it as an inline function over
+// _timespec64_get. It defines the other six inline too, over the 64-bit
+// functions (time_t is 64 bits unless a program asks for 32), but msvcrt.lib,
+// on the link line for the C runtime's start-up code (spec 10.6), defines
+// time, gmtime, localtime, mktime, difftime and ctime itself, as the 32-bit
+// _time32 and the rest. Declared under C's names, then, timespec_get doesn't
+// link and the six take and give 32-bit times: time writes 4 bytes of an
+// s64. The interpreter calls the compiler's own copies, which are the
+// headers' inline functions, so it gets the 64-bit ones (src/
+// interp_c_functions.cpp). An alternate name on the link line
+// (/ALTERNATENAME:timespec_get=_timespec64_get) would serve timespec_get,
+// but it only applies to a symbol nothing defines, so it can't reach the
+// six that msvcrt.lib does: the backend declares all seven by the 64-bit
+// names instead.
+struct Windows_C_Name {
+    const char *c_name;
+    const char *windows_name;
+};
+
+static const Windows_C_Name WINDOWS_C_NAMES[] = {
+    {"timespec_get", "_timespec64_get"}, {"time", "_time64"},           {"gmtime", "_gmtime64"},
+    {"localtime", "_localtime64"},       {"mktime", "_mktime64"},       {"difftime", "_difftime64"},
+    {"ctime", "_ctime64"},
+};
+
+// The name a foreign procedure of C name `c_name` is declared under on
+// Windows: its 64-bit export for one of C's time functions above, and
+// otherwise the C name itself.
+static String windows_c_name(String c_name) {
+    for (const Windows_C_Name &n : WINDOWS_C_NAMES) {
+        if (string_eq(c_name, str(n.c_name))) return str(n.windows_name);
+    }
+    return c_name;
+}
+
 // The program's foreign procedures, each a declaration of its C function
 // (ir_c_name: its C name, #foreign libc "free", or else its own), into
 // `functions` at its index. They're declared before the program's globals
@@ -1745,11 +1782,18 @@ static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Glob
 // program's business, as in C. The declaration is marked as the first one
 // says: another's widening attributes could contradict it (an s8's signext
 // beside a u8's zeroext), and the verifier refuses both on one parameter.
+//
+// On Windows a few C names are declared under another (windows_c_name), so
+// a foreign procedure links to the function a C program's call reaches.
+// The name declared is the one looked up, so time and _time64 declared both
+// are one declaration there too.
 static void declare_foreign_functions(Backend *b, Ir_Module *m, Arena *a, LLVMValueRef *functions) {
     for (s64 i = 0; i < m->procs.count; i++) {
         Ir_Proc *p = m->procs[i];
         if (!p->is_foreign) continue;
-        const char *name = string_cstr(a, ir_c_name(p));
+        String c_name = ir_c_name(p);
+        if (b->target == TARGET_WINDOWS_X64) c_name = windows_c_name(c_name);
+        const char *name = string_cstr(a, c_name);
         LLVMValueRef existing = LLVMGetNamedFunction(b->module, name);
         if (existing && LLVMIsDeclaration(existing)) {
             functions[i] = existing;
