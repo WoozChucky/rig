@@ -448,6 +448,8 @@ struct Ast_Load : Ast {
     Position path_pos;  // the string literal, where messages about the file point
     bool is_import;     // #import "NAME": path holds NAME, a module that ships with rig (spec 2.14),
                         // which the loader finds; #load "PATH" otherwise
+    s32 file;           // the loader's: the file it names (Position.file), read now or known already by its
+                        // identity; -1 when it failed or wasn't followed (a branch not taken)
 };
 
 // #run: code run while compiling (spec 7.8). pos is the '#run'.

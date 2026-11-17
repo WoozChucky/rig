@@ -1735,6 +1735,7 @@ static Ast *parse_load(Parser *p) {
     load->path = path->string_value;
     load->path_pos = path->pos;
     load->is_import = is_import;
+    load->file = -1;  // none until the loader follows it
     if (!expect(p, TOKEN_SEMICOLON)) {
         s64 resume = declaration_after_stray_tokens(p, start);
         if (resume >= 0) {

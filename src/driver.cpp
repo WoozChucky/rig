@@ -4,8 +4,10 @@
 // editor's text not yet saved (command_check, at the end).
 //
 // Each of them is a compilation (Compilation), taken through its steps in
-// order: load, check, run the top-level #runs (rig build only), lower (rig
-// build of an ordinary program only), each step's diagnostics printed when
+// order: load, which decides the top-level #ifs once the files outside
+// every #if are read, and reads the files their taken branches load (spec
+// 4.9, load.h); check; run the top-level #runs (rig build only); lower (rig
+// build of an ordinary program only); each step's diagnostics printed when
 // it fails. bin/unit-tests --interpret takes the same steps
 // (tests/unit/interpret_mode.cpp).
 //
