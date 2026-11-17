@@ -2983,7 +2983,7 @@ int main(int argc, char **argv) {
            workspace_output_order_test(&a, rig, str("workspace_errors"), true), &passed, &failed);
     report("the build program's #run output before a workspace's unreadable file, both in one pipe",
            workspace_output_order_test(&a, rig, str("workspace_unreadable"), false), &passed, &failed);
-    report("a workspace built with the default options is bounds-checked, optimised or not",
+    report("a workspace whose bounds checks are on by default is bounds-checked, optimised or not",
            checked_workspace_test(&a, rig), &passed, &failed);
     report("interpreted: a #compiler call refused when lowering, nothing run",
            interpreted_error_test(&a, unit_tests, "compiler_called_at_run_time"), &passed, &failed);

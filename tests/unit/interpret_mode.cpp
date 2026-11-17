@@ -10,9 +10,9 @@
 // It reads, lexes, parses, checks and lowers FILE, every file it #loads and
 // every module it #imports, as rig build does, without the bounds checks of
 // a[i] with --no-bounds-checks, running its #runs as rig build does, the
-// top-level ones too; a program with errors (a failed top-level run's among them)
-// gets its diagnostics on stderr, as rig build prints them, and exit status
-// 1, and isn't run. A build program (spec 7.9), which has no main, is
+// top-level ones too; a program with errors (a failed top-level run's
+// among them) gets its diagnostics on stderr, as rig build prints them, and
+// exit status 1, and isn't run. A build program (spec 7.9), which has no main, is
 // refused once it has checked, before its top-level #runs: "unit-tests:
 // error: a build program can't be interpreted", exit status 1. Otherwise it
 // interprets main, and exits with main's status, 0, unless the program
