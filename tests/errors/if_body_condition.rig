@@ -1,0 +1,15 @@
+// A body #if's condition (issue #147, spec 4.9) is a bool known while
+// compiling. One whose condition has an error takes neither branch, and is
+// taken not to reach its end, so its message is the only one. Only the
+// taken branch is checked.
+answer :: () -> int {
+    #if 1 { return 1; }          // the condition's error alone: no must-return
+}
+flagged :: () {
+    flag := true;
+    #if flag { }
+}
+branches :: () {
+    #if true { x : int = "taken"; } else { y : int = "not checked"; }
+}
+main :: () {}

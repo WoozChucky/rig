@@ -1319,6 +1319,61 @@ static void check_if(Checker *c, Ast_If *branch) {
     }
 }
 
+// An #if's condition (spec 4.9): a bool known while compiling. False after
+// saying what's wrong at condition->start: not a bool ("the condition of
+// '#if' must be a bool, not 'int'"), or not known while compiling ("... must
+// be known while compiling", unless it needs a #run with no value, whose
+// failure was said: has_failed_run), or its own error.
+static bool check_if_condition(Checker *c, Ast *condition) {
+    Type *t = check_operand(c, condition);
+    if (!t) return false;
+    if (t != &type_bool) {
+        diag_error(c->diag, condition->start, "the condition of '#if' must be a bool, not '" STR_FMT "'",
+                   STR_ARG(type_name(c->arena, t)));
+        return false;
+    }
+    if (!condition->is_constant) {
+        if (!has_failed_run(condition)) {
+            diag_error(c->diag, condition->start, "the condition of '#if' must be known while compiling");
+        }
+        return false;
+    }
+    return true;
+}
+
+// Decides the chain `first` begins: each arm's condition in order until one
+// is true, whose then_block is taken; none true, the last else (or none).
+// Conditions after the true one aren't checked: they belong to what isn't
+// taken. A condition that fails sets first->failed and takes none. Sets
+// first->decided and first->taken. Along the chain in a loop, as check_if
+// (parse_if says why).
+static void decide_if(Checker *c, Ast_If_Directive *first) {
+    first->decided = true;
+    Ast *part = first;
+    while (part && part->kind == AST_IF_DIRECTIVE) {
+        Ast_If_Directive *arm = (Ast_If_Directive *)part;
+        if (!check_if_condition(c, arm->condition)) {
+            first->failed = true;
+            return;
+        }
+        if (arm->condition->constant) {
+            first->taken = arm->then_block;
+            return;
+        }
+        part = arm->else_part;
+    }
+    first->taken = (Ast_Block *)part;
+}
+
+// A body's #if: decide_if, then the taken branch's statements checked in the
+// current scope (check_block, no push_scope): #if makes no scope, so what
+// the branch declares is the enclosing block's. The branches not taken are
+// never checked.
+static void check_if_directive(Checker *c, Ast_If_Directive *first) {
+    decide_if(c, first);
+    if (first->taken) check_block(c, first->taken);
+}
+
 // A loop's body, with the loop the innermost one, for break and continue.
 static void check_loop_body(Checker *c, Ast *loop, Ast_Block *body) {
     array_add(&c->loops, loop);
@@ -1428,6 +1483,7 @@ static void check_statement(Checker *c, Ast *statement) {
     case AST_RETURN: check_return(c, (Ast_Return *)statement); break;
     case AST_BLOCK: check_scoped_block(c, (Ast_Block *)statement); break;
     case AST_IF: check_if(c, (Ast_If *)statement); break;
+    case AST_IF_DIRECTIVE: check_if_directive(c, (Ast_If_Directive *)statement); break;
     case AST_WHILE: check_while(c, (Ast_While *)statement); break;
     case AST_FOR: check_for(c, (Ast_For *)statement); break;
     case AST_BREAK:
@@ -1477,6 +1533,11 @@ static bool breaks_out_of(Ast *s, Ast *loop) {
         }
         return part && breaks_out_of(part, loop);
     }
+    case AST_IF_DIRECTIVE: {
+        // Only the taken branch is code: a break in another isn't there.
+        Ast_Block *taken = ((Ast_If_Directive *)s)->taken;
+        return taken && breaks_out_of(taken, loop);
+    }
     case AST_WHILE: return breaks_out_of(((Ast_While *)s)->body, loop);
     case AST_FOR: return breaks_out_of(((Ast_For *)s)->body, loop);
     default: return false;
@@ -1494,16 +1555,20 @@ static bool reaches_end(Ast_Block *block);
 // - a while whose condition is the constant true, which only ends by a
 //   break of its own (or never). Any other while, and every for, may run
 //   zero times.
+// - an #if (spec 4.9), when its taken branch can't: the #if is only that
+//   branch's code. One that took none goes past, as an empty block does.
 // A break or continue leaves the block too, but goes on elsewhere in its
 // loop; the rule is only asked about statements outside any loop body
-// (a procedure's body, and the blocks and ifs that end it) or about
+// (a procedure's body, and the blocks, ifs and #ifs that end it) or about
 // whole loops, so it never sees one.
-// An if or while whose condition was an error (its type unknown, or not
-// bool: check_condition reported it) is taken not to go past, whatever its
-// branches do. That's a policy, so the condition's message is the only one:
-// for `while 1` (likely meant as `while true`) a missing-return message
-// would be wrong, and for an if a real missing return shows up once the
-// condition is fixed.
+// An if, an #if or a while whose condition was an error (its type unknown,
+// or not bool: check_condition reported it; for an #if's chain, any of its
+// conditions, which check_if_condition also refuses when not known while
+// compiling: Ast_If_Directive.failed) is taken not to go past,
+// whatever its branches do. That's a policy, so the condition's message is
+// the only one: for `while 1` (likely meant as `while true`) a
+// missing-return message would be wrong, and for an if a real missing
+// return shows up once the condition is fixed.
 static bool goes_past(Ast *s) {
     switch (s->kind) {
     case AST_RETURN: return false;
@@ -1521,6 +1586,11 @@ static bool goes_past(Ast *s) {
             part = branch->else_part;
         }
         return reaches_end((Ast_Block *)part);
+    }
+    case AST_IF_DIRECTIVE: {
+        Ast_If_Directive *first = (Ast_If_Directive *)s;
+        if (first->failed) return false;
+        return !first->taken || reaches_end(first->taken);
     }
     case AST_WHILE: {
         Ast_While *loop = (Ast_While *)s;

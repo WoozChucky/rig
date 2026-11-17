@@ -336,6 +336,11 @@ static Ast *find_in_statement(Ast *s, const char *name) {
         Ast *found = find_local(branch->then_block, name);
         return found || !branch->else_part ? found : find_in_statement(branch->else_part, name);
     }
+    case AST_IF_DIRECTIVE: {
+        // Only the taken branch declares anything (spec 4.9).
+        Ast_Block *taken = ((Ast_If_Directive *)s)->taken;
+        return taken ? find_local(taken, name) : nullptr;
+    }
     case AST_WHILE: return find_local(((Ast_While *)s)->body, name);
     case AST_FOR: {
         Ast_For *loop = (Ast_For *)s;
@@ -6107,5 +6112,166 @@ TEST(a_local_may_hide_os) {
     Ast_Name *value = (Ast_Name *)((Ast_Var *)local_named(&c, "x"))->value;
     CHECK(value->decl == local_named(&c, "OS"));
     token_list_free(c.list);
+    arena_free(&a);
+}
+
+// #if in a body (spec 4.9): the checker decides it where the statement is.
+
+// The first statement of the last procedure's body, an #if.
+static Ast_If_Directive *first_if_directive(Checked *c) {
+    Ast *statement = c->file->procs[c->file->procs.count - 1]->body->statements[0];
+    RIG_ASSERT(statement->kind == AST_IF_DIRECTIVE);
+    return (Ast_If_Directive *)statement;
+}
+
+TEST(if_directive_takes_the_first_true_branch) {
+    // Conditions in order until one is true; those after it aren't checked,
+    // so nope is no unknown identifier. The decision is on the first arm.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "main :: () { #if false { a := 1; } else #if true { b := 2; } "
+                              "else #if nope { c := 3; } else { d := 4; } }");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_If_Directive *first = first_if_directive(&c);
+    Ast_If_Directive *second = (Ast_If_Directive *)first->else_part;
+    CHECK(first->decided && !first->failed);
+    CHECK(first->taken == second->then_block);
+    CHECK(!second->decided);  // only the first arm says
+    CHECK(local_named(&c, "b")->type == &type_int);
+    token_list_free(c.list);
+
+    // No condition true and no else: nothing taken, but decided.
+    c = check_src(&a, "main :: () { #if false {} }");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    first = first_if_directive(&c);
+    CHECK(first->decided && !first->failed);
+    CHECK(first->taken == nullptr);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(if_directive_makes_no_scope) {
+    // The taken branch's statements are the enclosing block's: its x is
+    // visible after the #if, and the block can't declare x again.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "main :: () { #if true { x := 1; } else { x := \"s\"; } y : int = x; }"), "");
+    CHECK_STR(check_source(&a, "main :: () { #if true { x := 1; } x := 2; }"),
+              "1:35: 'x' is already declared at test.rig:1:25\n");
+    arena_free(&a);
+}
+
+TEST(if_directive_branch_not_taken_is_not_checked) {
+    // Parsed, nothing else: a type error, unknown names, an unknown type and
+    // a #run that would fail all say nothing.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "main :: () { #if false { x : int = \"s\"; nope(); y : Nope; z := #run nope(); } }"),
+              "");
+    arena_free(&a);
+}
+
+TEST(if_directive_condition_errors) {
+    // A bool known while compiling, at the condition; a condition with an
+    // error of its own says only that, and a #run that failed says nothing
+    // more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "main :: () { #if 1 {} }"), "1:18: the condition of '#if' must be a bool, not 'int'\n");
+    CHECK_STR(check_source(&a, "main :: () { b := true; #if b {} }"),
+              "1:29: the condition of '#if' must be known while compiling\n");
+    CHECK_STR(check_source(&a, "main :: () { #if nope {} }"), "1:18: unknown identifier 'nope'\n");
+    CHECK_STR(check_source(&a, "bad :: () -> bool { return 1; }\nmain :: () { #if #run bad() {} }\n"),
+              "1:28: a value of type 'int' doesn't convert to 'bool' implicitly\n");
+    // A local constant and a #run may decide it, as no top-level #if's
+    // condition may.
+    CHECK_STR(check_source(&a, "yes :: () -> bool { return true; }\n"
+                               "main :: () { V :: false; #if V {} #if #run yes() {} }\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(if_directive_reaches_the_end) {
+    // When its taken branch does; one whose condition failed is taken not
+    // to, as an if's, so the condition's message is the only one.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "f :: () -> int { #if true { return 1; } else { return 2; } }\nmain :: () {}\n"), "");
+    CHECK_STR(check_source(&a, "f :: () -> int { #if false { return 1; } }\nmain :: () {}\n"),
+              "1:42: 'f' must return a value on every path, and this one reaches its end\n");
+    CHECK_STR(check_source(&a, "f :: () -> int { #if 1 { return 1; } }\nmain :: () {}\n"),
+              "1:22: the condition of '#if' must be a bool, not 'int'\n");
+    // A while true ends by a break in a taken branch (breaks_out_of), so f
+    // reaches its end; a break in a branch not taken ends nothing.
+    CHECK_STR(check_source(&a, "f :: () -> int { while true { #if true { break; } } }\nmain :: () {}\n"),
+              "1:53: 'f' must return a value on every path, and this one reaches its end\n");
+    CHECK_STR(check_source(&a, "f :: () -> int { while true { #if false { break; } } }\nmain :: () {}\n"), "");
+    arena_free(&a);
+}
+
+// The messages for `text`, parsed and checked for `system`
+// (Ast_File.system), in source order.
+static String messages_for_system(Arena *a, const char *text, System system) {
+    Token_List *list = src(text);
+    Ast_File *file = parse(list->tokens, a, &list->diag);
+    file->system = system;
+    check(file, a, &list->diag);
+    diag_sort(&list->diag);
+    String result = messages(a, &list->diag);
+    token_list_free(list);
+    return result;
+}
+
+TEST(if_directive_per_system) {
+    // Each system takes its own branch, whatever the host: only the taken
+    // branch's error is said.
+    Arena a = arena_make();
+    const char *program = "main :: () {\n"
+                          "    #if OS == OS_WINDOWS { a : int = \"w\"; } else { b : int = \"l\"; }\n"
+                          "}\n";
+    CHECK_STR(messages_for_system(&a, program, SYSTEM_WINDOWS),
+              "2:38: a value of type 'string' doesn't convert to 'int' implicitly\n");
+    CHECK_STR(messages_for_system(&a, program, SYSTEM_LINUX),
+              "2:62: a value of type 'string' doesn't convert to 'int' implicitly\n");
+    arena_free(&a);
+}
+
+TEST(if_directive_jumps_need_a_loop) {
+    // break and continue in the taken branch act on a loop around the #if,
+    // which is none itself.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "main :: () { #if true { break; } }"), "1:25: 'break' is only allowed inside a loop\n");
+    CHECK_STR(check_source(&a, "main :: () { for 0..1 { #if true { break; } } }"), "");
+    arena_free(&a);
+}
+
+TEST(if_directive_chains_of_10000_arms) {
+    // Review Focus 5: an else #if chain nests one level per arm, as an else
+    // if chain does (else_if_chains_of_10000_arms), and no stage may recurse
+    // per arm. pick's X picks an arm in the middle; none's picks none, so
+    // deciding walks every condition to the last else. Only a taken branch
+    // is lowered: one return in each.
+    const s64 ARMS = 10000;
+    Arena a = arena_make();
+    char *text = (char *)arena_alloc(&a, (u64)(2 * ARMS * 64 + 4096), 1);
+    char *at = text;
+    at += sprintf(at, "putchar :: (c: s32) -> s32 #foreign libc;\n");
+    const char *names[] = {"pick", "none"};
+    const char *picks[] = {"5000", "10000"};
+    for (int p = 0; p < 2; p++) {
+        at += sprintf(at, "%s :: () -> int {\n    X :: %s;\n", names[p], picks[p]);
+        for (s64 i = 0; i < ARMS; i++) {
+            at += sprintf(at, "    %s#if X == %lld { return %lld; }\n", i ? "else " : "", (long long)i, (long long)i);
+        }
+        at += sprintf(at, "    else { return -1; }\n}\n");
+    }
+    sprintf(at, "main :: () {\n"
+                "    if pick() == 5000 && none() == -1 {\n"
+                "        putchar(111);\n"
+                "        putchar(107);\n"
+                "    }\n"
+                "}\n");
+    CHECK(builds(&a, text));
+    Ir_Module *m = lower_source(&a, text);
+    // pick's, none's and main's.
+    CHECK_EQ(count_of(ir_print(&a, m), "  ret "), 3);
+    Process_Result run = run_module(&a, m, "if-directive-test");
+    CHECK_EQ(run.exit_code, 0);
+    CHECK_STR(run.out, "ok");
     arena_free(&a);
 }

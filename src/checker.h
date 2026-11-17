@@ -537,6 +537,27 @@
 //   compiling: the program's lowering refuses one its executable would
 //   make (lower.cpp), so rig check, which never lowers, says nothing of it.
 //
+// Conditional compilation (issue #147, spec 4.9).
+// - #if in a body is a statement, decided where it is, when the body is
+//   checked (decide_if): each arm's condition in order until one is true,
+//   whose branch is taken; none true, the last else, if any. A condition is
+//   a bool known while compiling: "the condition of '#if' must be a bool,
+//   not 'int'", "the condition of '#if' must be known while compiling", at
+//   it. It may use local constants and #run. One with an error takes
+//   neither branch, and the decision is on the chain's first arm
+//   (Ast_If_Directive.decided, failed, taken).
+// - Only the taken branch is checked, and it makes no scope: its
+//   statements are the enclosing block's, so a local it declares is visible
+//   after the #if, and the block can't declare it again. The conditions after
+//   the true one, and the branches not taken, are never checked: they were
+//   parsed, nothing more (their syntax errors are the parser's).
+// - It reaches its end when its taken branch does, or when it took none; one
+//   whose condition was an error is taken not to, as an if's, so the
+//   condition's message is the one. break and continue in the taken branch
+//   act on a loop around the #if, as anywhere.
+// - Only the taken branch is code: a #run's walk, lowering and the debug
+//   information see that branch alone, and nothing is at the #if's line.
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - A string after the library is the C function's name (issue #135),

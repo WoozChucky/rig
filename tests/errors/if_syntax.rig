@@ -1,0 +1,16 @@
+// #if's syntax (issue #147, spec 4.9): not among a struct's fields, for
+// now; an #if's else is a block or another #if, never a run-time if, in a
+// body and at the top level; and a branch not taken is still parsed, so its
+// syntax errors are reported.
+Point :: struct {
+    x: int;
+    #if true { y: int; }
+}
+f :: () {
+    #if true { } else if false { }
+}
+#if true { } else if false { }
+g :: () {
+    #if false { z := ; }
+}
+main :: () {}

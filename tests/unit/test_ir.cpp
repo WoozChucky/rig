@@ -4270,3 +4270,26 @@ TEST(lowering_refuses_compiler_calls) {
     CHECK(!contains(ir, "@create_workspace(ptr, ptr) {"));
     arena_free(&a);
 }
+
+// Issue #147: #if in a body (spec 4.9, 10.7).
+
+TEST(an_if_directive_makes_no_scope) {
+    // Its taken branch's statements are the enclosing block's, in its scope
+    // and at their own lines; the #if itself is no code, so nothing is at
+    // its line (a debugger never stops there).
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "main :: () {\n"
+                                                "    x := 1;\n"
+                                                "    #if true {\n"
+                                                "        y := 2;\n"
+                                                "    }\n"
+                                                "    z := y;\n"
+                                                "}\n"));
+    String entry = proc_ir(ir, "main");
+    CHECK(!contains(entry, "; scope"));
+    CHECK(contains(entry, "  ; var y int slot %2 in 0 at 4:9\n"));
+    CHECK(contains(entry, "  %2 = local i64  ; 4:9 s0\n"));
+    CHECK(!contains(entry, "; 3:"));
+    arena_free(&a);
+}
