@@ -6005,3 +6005,70 @@ TEST(compiler_main_needs_a_body) {
               "1:1: 'main' must have a body: it's where the program starts\n");
     arena_free(&a);
 }
+
+// Issue #147: #if and the OS constants (spec 2.5, 4.9).
+
+TEST(os_constants_are_predeclared) {
+    // Untyped integer constants, visible everywhere as the program's own
+    // constants are: OS fits a u8, and a comparison of them folds.
+    Arena a = arena_make();
+    const char *program = "main :: () { a : u8 = OS; b := OS_WINDOWS; c := OS_LINUX; "
+                          "if OS == OS_WINDOWS || OS == OS_LINUX {} }";
+    CHECK_STR(check_source(&a, program), "");
+    Checked c = check_src(&a, program);
+    Ast_If *branch = (Ast_If *)c.file->procs[0]->body->statements[3];
+    CHECK_EQ(branch->kind, AST_IF);
+    CHECK(branch->condition->is_constant);
+    CHECK_EQ(branch->condition->constant, 1);
+    Ast_Name *os_linux = (Ast_Name *)((Ast_Var *)local_named(&c, "c"))->value;
+    CHECK_EQ(os_linux->constant, 2);
+    CHECK_EQ(os_linux->decl->kind, AST_CONST);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+// The value of N in `N :: OS;`, checked with the tree's system set to
+// `system`.
+static u64 os_value_for(System system) {
+    Arena a = arena_make();
+    Token_List *list = src("N :: OS;\nmain :: () {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    file->system = system;
+    check(file, &a, &list->diag);
+    RIG_ASSERT(list->diag.error_count == 0);
+    u64 value = file->globals[0]->constant;
+    token_list_free(list);
+    arena_free(&a);
+    return value;
+}
+
+TEST(os_is_the_programs_system) {
+    // Ast_File.system, which the loader sets; none set is the host's.
+    CHECK_EQ(os_value_for(SYSTEM_LINUX), 2);
+    CHECK_EQ(os_value_for(SYSTEM_WINDOWS), 1);
+    CHECK_EQ(os_value_for(SYSTEM_NONE), (u64)host_system());
+}
+
+TEST(a_top_level_declaration_of_os_is_refused) {
+    // At its name, whatever it declares; each says what the name is.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "OS :: 3;\nOS_WINDOWS : int;\nOS_LINUX :: () {}\nmain :: () {}\n"),
+              "1:1: 'OS' is predeclared: it's the system the program is built for\n"
+              "2:1: 'OS_WINDOWS' is predeclared: it's Windows, one of the systems OS may be\n"
+              "3:1: 'OS_LINUX' is predeclared: it's Linux, one of the systems OS may be\n");
+    CHECK_STR(check_source(&a, "OS :: struct { x: int; }\nmain :: () {}\n"),
+              "1:1: 'OS' is predeclared: it's the system the program is built for\n");
+    arena_free(&a);
+}
+
+TEST(a_local_may_hide_os) {
+    // As a local may hide any of the program's names. OS is then an int
+    // variable, no constant.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "main :: () { OS := 7; x := OS; if OS == 7 {} }");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Name *value = (Ast_Name *)((Ast_Var *)local_named(&c, "x"))->value;
+    CHECK(value->decl == local_named(&c, "OS"));
+    token_list_free(c.list);
+    arena_free(&a);
+}
