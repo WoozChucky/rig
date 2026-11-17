@@ -1,5 +1,5 @@
 main () at
-defer_return.rig:13
-putchar(10);
+defer_return.rig:12
+defer putchar(97);
 a = 1
 !y =

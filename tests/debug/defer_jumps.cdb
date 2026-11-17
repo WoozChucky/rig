@@ -1,0 +1,18 @@
+l+t
+l+s
+l+l
+bp /1 `defer_jumps.rig:11`
+bp `defer_jumps.rig:18`
+g
+p
+p
+p
+p
+p
+g
+p
+p
+p
+p
+p
+q

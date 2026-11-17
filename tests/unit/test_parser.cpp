@@ -3532,6 +3532,10 @@ TEST(parse_defer_at_the_top_level) {
     String errors;
     CHECK_STR(parse_src(&a, "defer f();\nmain :: () {}\n", &errors), "(broken)\n(proc main (params) (block))\n");
     CHECK_STR(errors, "1:1: defer can only be in a body\n");
+    // A declaration later on the same line is read: defer is a stray token.
+    CHECK_STR(parse_src(&a, "defer f :: () {}\nmain :: () {}\n", &errors),
+              "(proc f (params) (block))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:1: defer can only be in a body\n");
     CHECK_STR(parse_src(&a, "#if true { defer f(); }\nmain :: () {}\n", &errors),
               "(#if (bool true) (block (broken)))\n(proc main (params) (block))\n");
     CHECK_STR(errors, "1:12: defer can only be in a body\n");

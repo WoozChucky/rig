@@ -1,3 +1,6 @@
-tests/errors/compiler_called_in_defer.rig:7:11: error: 'create_workspace' can only be called while compiling
+tests/errors/compiler_called_in_defer.rig:8:11: error: 'create_workspace' can only be called while compiling
         defer create_workspace("game");
               ^
+tests/errors/compiler_called_in_defer.rig:9:19: error: 'create_workspace' can only be called while compiling
+        defer { defer create_workspace("game"); }
+                      ^
