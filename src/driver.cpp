@@ -147,8 +147,9 @@ static void compilation_load_text(Compilation *c, String path, String text, cons
 // Reads the main file (the file at `path`, or with from_stdin standard
 // input, named `path` all the same), and stdin_for's text, and loads
 // (compilation_load_text). False when nothing could be loaded: the main file
-// or standard input couldn't be read, or the program doesn't reach
-// stdin_for, said on stderr ("rig: error: ...").
+// or standard input couldn't be read, or the program doesn't reach stdin_for
+// (unless a failed #if's branch names it, below), said on stderr ("rig:
+// error: ...").
 //
 // stdin_for, when not empty, is the file whose text is read from standard
 // input once the main file has been read (rig check --stdin-for): one the
