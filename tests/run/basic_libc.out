@@ -4,6 +4,7 @@ asks for: 3, no memory: true
 empty: true 0
 zero inside: 1 true true
 C_Fpos: 16
+C_Timespec: 16
 write: 6 0 0
 size 6, read 6: 0 13 10 26 255, after a seek to the start 0
 missing: true
