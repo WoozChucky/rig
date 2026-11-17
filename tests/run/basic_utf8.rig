@@ -72,6 +72,7 @@ main :: () {
     // The first and last code point of each length, and the two either side
     // of the surrogates, U+D7FF and U+E000.
     print_string("valid:");
+    decode_bytes(u8.[0x00]);
     decode_bytes(u8.[0x7F]);
     decode_bytes(u8.[0xC2, 0x80]);
     decode_bytes(u8.[0xDF, 0xBF]);
@@ -84,16 +85,21 @@ main :: () {
     print_line("");
 
     // Each is U+FFFD and one byte: overlong forms of '/' in two, three and
-    // four bytes, and the two-byte one of U+007F; a surrogate, U+D800;
-    // U+110000, past the last code point; a lead byte that starts nothing,
-    // F5, and FF; a stray continuation byte; three and four bytes cut short,
-    // at the string's end; a lead byte whose next byte isn't a continuation;
-    // and a two-byte lead alone at the end.
+    // four bytes, and the two-byte one of U+007F; the longest overlong forms
+    // in three and four bytes, of U+07FF and U+FFFF, just below E0 and F0's
+    // second-byte ranges; a surrogate, U+D800; U+110000, past the last code
+    // point; a lead byte that starts nothing, F5, and FF; a stray
+    // continuation byte; three and four bytes cut short, at the string's
+    // end; a lead byte whose next byte isn't a continuation; a four-byte
+    // sequence whose last byte isn't one; and a two-byte lead alone at the
+    // end.
     print_string("invalid:");
     decode_bytes(u8.[0xC0, 0xAF]);
     decode_bytes(u8.[0xC1, 0xBF]);
     decode_bytes(u8.[0xE0, 0x80, 0xAF]);
     decode_bytes(u8.[0xF0, 0x80, 0x80, 0xAF]);
+    decode_bytes(u8.[0xE0, 0x9F, 0xBF]);
+    decode_bytes(u8.[0xF0, 0x8F, 0xBF, 0xBF]);
     decode_bytes(u8.[0xED, 0xA0, 0x80]);
     decode_bytes(u8.[0xF4, 0x90, 0x80, 0x80]);
     decode_bytes(u8.[0xF5, 0x80, 0x80, 0x80]);
@@ -102,6 +108,7 @@ main :: () {
     decode_bytes(u8.[0xE2, 0x82]);
     decode_bytes(u8.[0xF0, 0x9F, 0x98]);
     decode_bytes(u8.[0xC3, 0x28]);
+    decode_bytes(u8.[0xF0, 0x9F, 0x98, 0x41]);
     decode_bytes(u8.[0xC3]);
     print_line("");
 
@@ -116,25 +123,34 @@ main :: () {
     print_line("");
 
     // Each ill-formed byte counts as one code point, U+FFFD's: a stray
-    // continuation byte, and the two bytes of a cut-short sequence, each
-    // read on its own.
+    // continuation byte; the two bytes of a sequence cut short by a byte
+    // that isn't a continuation, each read on its own; and three and four
+    // bytes cut short by the string's end after an 'a', so the sequence
+    // starts past index 0.
     print_string("count:");
     show_count("aé€😀");
     show_count("");
     count_bytes(u8.[0x61, 0x80, 0x62]);
     count_bytes(u8.[0xE2, 0x82, 0x78]);
+    count_bytes(u8.[0x61, 0xE2, 0x82]);
+    count_bytes(u8.[0x61, 0xF0, 0x9F, 0x98]);
     print_line("");
 
-    // The last code point of each length, U+0000, and U+FFFD for a negative
-    // value, the first surrogate, one past the last code point, and the last
-    // surrogate.
+    // The first and last code point of each length, and the two either side
+    // of the surrogates, as the valid line has them, and U+FFFD for a
+    // negative value, the first surrogate, one past the last code point, and
+    // the last surrogate.
     print_string("encode:");
-    show_encode(65);
-    show_encode(233);
-    show_encode(8364);
-    show_encode(128512);
-    show_encode(1114111);
     show_encode(0);
+    show_encode(127);
+    show_encode(128);
+    show_encode(2047);
+    show_encode(2048);
+    show_encode(55295);
+    show_encode(57344);
+    show_encode(65535);
+    show_encode(65536);
+    show_encode(1114111);
     show_encode(-1);
     show_encode(55296);
     show_encode(1114112);

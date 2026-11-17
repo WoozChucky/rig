@@ -9,9 +9,10 @@
 // long as the bytes it views. The procedures that copy, to_c_string, join,
 // replace, repeat, to_upper_copy and to_lower_copy, take their memory from
 // the allocator they are given, and the caller gives it back there. Indexes
-// and counts are in bytes, and the bytes are compared as they are,
-// unsigned, with no knowledge of UTF-8, so a search for an ASCII byte never
-// lands inside a UTF-8 character, whose bytes are all from 128 up.
+// and counts are in bytes (but utf8_count's, which counts code points), and
+// the bytes are compared as they are, unsigned, with no knowledge of UTF-8,
+// so a search for an ASCII byte never lands inside a UTF-8 character, whose
+// bytes are all from 128 up.
 //
 // A zeroed string, with count 0 and data null, is the empty string
 // everywhere here: its count of 0 stops every loop before a byte is read,
@@ -416,19 +417,22 @@ UTF8_MAX_BYTES :: 4;
 // bytes the sequence takes, and whether it is well-formed. An ill-formed
 // sequence gives U+FFFD, 1 and false: the first byte alone, so a loop that
 // moves on by the count goes on with the next byte, which may start a
-// well-formed sequence, and every byte is read once. An index outside s,
-// before its start or at or past its end, gives 0, 0 and false, and reads
-// nothing, so a zeroed string's null data is never read.
+// well-formed sequence, and every byte starts one decode, none skipped and
+// none counted twice. An index outside s, before its start or at or past
+// its end, gives 0, 0 and false, and reads nothing, so a zeroed string's
+// null data is never read.
 //
 // The sequences that are well-formed are the Unicode Standard's (Table 3-7):
 // one byte 00-7F; a lead byte C2-DF, E0-EF or F0-F4, saying that one, two or
 // three bytes follow; and each byte that follows 80-BF. Four lead bytes
-// narrow the byte after them, since what they would otherwise start isn't
-// a code point, or has a shorter form: E0 then 80-9F would be an overlong
-// form of a code point below U+0800, ED then A0-BF a surrogate,
-// U+D800-U+DFFF, which UTF-16 uses in pairs and which no code point is, F0
-// then 80-8F an overlong form of one below U+10000, and F4 then 90-BF one
-// past U+10FFFF, the last code point. Nothing else starts a sequence:
+// narrow the byte after them, since what they would otherwise start is a
+// code point UTF-8 doesn't encode, or isn't one, or has a shorter form: E0
+// then 80-9F would be an overlong form of a code point below U+0800, ED
+// then A0-BF a surrogate, U+D800-U+DFFF, a code point UTF-16 uses in pairs
+// and UTF-8 doesn't encode (it encodes only the code points that aren't
+// surrogates, Unicode's scalar values), F0 then 80-8F an overlong form of
+// one below U+10000, and F4 then 90-BF one past U+10FFFF, the last code
+// point. Nothing else starts a sequence:
 // 80-BF only continue one, C0 and C1 could only start an overlong form of
 // a code point below U+0080 (C0 AF would be "/", which a check for "/" by
 // byte would miss), and F5-FF one past U+10FFFF.
