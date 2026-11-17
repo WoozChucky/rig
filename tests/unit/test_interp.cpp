@@ -2934,6 +2934,13 @@ TEST(interp_finds_c_functions_by_name) {
     CHECK(interp_c_library_function(str("GetCurrentProcessId")) == nullptr);
     CHECK(os_find_c_function(str("GetCurrentProcessId")) != nullptr);
     CHECK(os_find_c_function(str("_getpid")) != nullptr);
+    // hypotf is the table's, the header's inline function over the static
+    // _hypotf, found first; ucrtbase.dll exports only _hypotf, the name
+    // ir_windows_c_name gives it.
+    CHECK(interp_c_library_function(str("hypotf")) == (void *)&hypotf);
+    CHECK(string_eq(ir_windows_c_name(str("hypotf")), str("_hypotf")));
+    CHECK(os_find_c_function(str("_hypotf")) != nullptr);
+    CHECK(os_find_c_function(str("hypotf")) == nullptr);
 #else
     CHECK(interp_c_library_function(str("printf")) == nullptr);
     CHECK(os_find_c_function(str("printf")) != nullptr);
