@@ -358,7 +358,7 @@ main :: () {
     // The same for float32, each given by C's float function (sqrtf for
     // sqrt_float32), not its double one narrowed. 0.49999997 is the float32
     // just below 0.5; 3e30 and 4e30 have squares past float32's largest, and
-    // 3e38 twice has a hypotenuse past it.
+    // 3e38 and 3e38 have a hypotenuse past it.
     inf32 := 1 / zero32;
     start_line("sqrt_float32");
     show32(sqrt_float32(2));
