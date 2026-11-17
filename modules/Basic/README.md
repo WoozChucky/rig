@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, and printing to standard output (issues #134 and #145).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and printing to standard output (issues #134 and #145).
 
 ## Importing it
 
@@ -262,6 +262,13 @@ PCG32, Melissa O'Neill's permuted congruential generator (https://www.pcg-random
 - `random_bool(r: *Random) -> bool`: the lowest bit of `random_u32`.
 - `random_shuffle(r: *Random, data: *void, count: int, element_size: int)`: puts the `count` elements of `element_size` bytes at `data` in a random order (Fisher-Yates, swapping a byte at a time, so it needs no memory); nothing is drawn for a `count` of 1 or less or an `element_size` of 0 or less.
 - `random_from_time() -> Random`: a generator seeded from `time_now()`, its stream the address of a local. The seed differs from run to run, not from call to call: two made within one tick of the clock (100 ns on Windows) get the same seed, and from the same caller the same stream, so they give the same numbers, as two made one after the other often do on Windows. For several generators, seed one from the clock and the others from its numbers, or give each its own stream.
+
+## The environment (`environment.rig`)
+
+A variable of the environment the program was started with, through C's `getenv`, and a command run through the system's shell, through C's `system`. A name or a command goes to C as a copy ended by a zero, from the allocator it comes with, given back once C is done with it; one with a zero byte would reach C cut short, so it is refused without calling C. The systems differ, and Basic doesn't hide it: Windows' variable names are case-insensitive (`"Path"` finds `PATH`) and Linux's aren't; a command runs in cmd.exe on Windows and in sh on Linux, each with its own syntax; and its status means something else on each (`run_command`). What the program printed before a command comes out before what the command prints: every C stream is flushed before it runs.
+
+- `get_environment(name: string, allocator: Allocator) -> string, bool`: a copy of the variable's value in memory from `allocator`, which the caller frees with `free(value.data, allocator)`, and `true`; copied at once, since C may change its own. A variable set to `""` is the zeroed string (count 0, data null) and `true`, allocating nothing. A variable that isn't set, no memory, an empty name, and one with `=` or a zero byte are the zeroed string and `false`, with nothing left allocated.
+- `run_command(command: string, allocator: Allocator) -> int`: runs `command` through the shell, waits for it, and gives its status as C's `system` gives it: on Windows the command's exit code (`exit 3` gives 3); on Linux a wait status, the exit code times 256 when the command ended by itself (`exit 3` gives 768) and 32512 (127 times 256) when sh can't find the command. 0 is success on both. -1, with nothing run, for a command with a zero byte or no memory for its C copy.
 
 ## Print (`print.rig`)
 

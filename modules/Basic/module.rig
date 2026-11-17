@@ -4,8 +4,9 @@
 // comparing bytes in memory, numbers to text and back, views and copies of
 // strings and their UTF-8, allocators (the heap, an arena and a pool), a
 // string builder, a growable array, hash tables, sorting and searching,
-// paths, files, the clock and the calendar, random numbers, and printing
-// to standard output.
+// paths, files, the clock and the calendar, random numbers, the
+// environment's variables and commands run by the system's shell, and
+// printing to standard output.
 //
 // Basic ships with rig, so a program imports all of it through this file
 // by the module's name (spec 2.14):
@@ -38,4 +39,5 @@
 #load "file.rig";
 #load "time.rig";
 #load "random.rig";
+#load "environment.rig";
 #load "print.rig";

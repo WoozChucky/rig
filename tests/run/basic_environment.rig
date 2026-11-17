@@ -1,0 +1,97 @@
+// Basic's environment (issue #145): a variable bin/run-tests sets for every
+// program it runs, RIG_BASIC_TEST, so this test passes only under the
+// runner; PATH, which every system sets, read without printing it; names
+// Basic refuses; an allocator with no memory; and commands, whose output
+// comes in order with the program's, and their status.
+#import "Basic";
+
+// Prints s between brackets, so an empty string shows as [].
+show_text :: (s: string) {
+    print_string("[");
+    print_string(s);
+    print_string("]");
+}
+
+// Prints a space, then value.
+show_bool :: (value: bool) {
+    print_string(" ");
+    print_bool(value);
+}
+
+// Prints a space, then value.
+show_int :: (value: int) {
+    print_string(" ");
+    print_int(value);
+}
+
+// Gives no memory, as an allocator that has run out would.
+failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return null;
+}
+
+main :: () {
+    value, found := get_environment("RIG_BASIC_TEST", HEAP_ALLOCATOR);
+    print_string("RIG_BASIC_TEST: ");
+    show_text(value);
+    show_bool(found);
+    print_line("");
+    free(value.data, HEAP_ALLOCATOR);
+
+    // A variable that isn't set is the zeroed string, with nothing
+    // allocated.
+    value, found = get_environment("RIG_BASIC_TEST_UNSET", HEAP_ALLOCATOR);
+    print_string("unset: ");
+    show_text(value);
+    show_bool(found);
+    show_bool(value.data == null);
+    print_line("");
+
+    // PATH differs from system to system and run to run, so only that it
+    // is there, and not empty, is printed.
+    value, found = get_environment("PATH", HEAP_ALLOCATOR);
+    print_string("PATH:");
+    show_bool(found);
+    show_bool(value.count > 0);
+    print_line("");
+    free(value.data, HEAP_ALLOCATOR);
+
+    // An empty name, one with '=', which ends a name in the environment,
+    // and one with a zero byte, which C would read as "PA", are refused
+    // without asking C.
+    print_string("refused names:");
+    value, found = get_environment("", HEAP_ALLOCATOR);
+    show_bool(found);
+    value, found = get_environment("A=B", HEAP_ALLOCATOR);
+    show_bool(found);
+    value, found = get_environment("PA\0TH", HEAP_ALLOCATOR);
+    show_bool(found);
+    print_line("");
+
+    // With no memory for the copies, the variable is the zeroed string
+    // and false, and the command isn't run.
+    value, found = get_environment("RIG_BASIC_TEST", Allocator.{failing_allocator_proc, null});
+    print_string("no memory: ");
+    show_text(value);
+    show_bool(found);
+    show_int(run_command("echo from a command with no memory", Allocator.{failing_allocator_proc, null}));
+    print_line("");
+
+    // What the program printed is flushed before the command runs, so the
+    // command's line comes after it, and before what follows.
+    print_line("before the command");
+    status := run_command("echo from the command", HEAP_ALLOCATOR);
+    print_string("status:");
+    show_int(status);
+    print_line("");
+
+    // cmd.exe gives exit 3's code, 3; sh's wait status holds it times 256.
+    failed := run_command("exit 3", HEAP_ALLOCATOR);
+    print_string("exit 3:");
+    show_bool(failed == 3 || failed == 768);
+    print_line("");
+
+    // A command with a zero byte would run as "echo a", so it is refused.
+    print_string("zero byte:");
+    show_int(run_command("echo a\0b", HEAP_ALLOCATOR));
+    print_line("");
+}
