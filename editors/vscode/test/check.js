@@ -1003,7 +1003,7 @@ check('the grammar colours the types in every program of tests/run and tests/bui
 
     const sources = new Map(files.map((f) => [f, fs.readFileSync(f, 'utf8')]));
     // The structs a program may name: its own, and those of the modules a
-    // program #loads (modules/Basic's Allocator, say).
+    // program #imports or #loads (modules/Basic's Allocator, say).
     const modules = [];
     const walkModules = (dir) => {
         if (!fs.existsSync(dir)) return;

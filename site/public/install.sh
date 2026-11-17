@@ -11,8 +11,9 @@
 # ~/.local/bin on the PATH if it isn't there yet, installs the VS Code
 # extension when `code` is on the PATH, and builds hello world with the
 # installed rig to check that the system has what linking needs. Running it
-# again upgrades: the files are overwritten. `--help` lists the options. It
-# asks nothing, and needs no root or sudo.
+# again upgrades: the files are replaced, and the modules folder replaced
+# whole, so a file a module no longer has doesn't stay behind (step 3).
+# `--help` lists the options. It asks nothing, and needs no root or sudo.
 #
 # RIG_INSTALL_BASE_URL, if set, replaces the releases' URL (release_base
 # below), for tests: a release's files are then fetched from
@@ -54,7 +55,8 @@ settings() {
 
 usage() {
     cat <<'EOF'
-Installs Rig, the compiler and its linker, for your user, on Linux x86-64.
+Installs Rig for your user, on Linux x86-64: the compiler, its linker and the
+modules that ship with it.
 
   curl -fsSL https://woozchucky.github.io/rig/install.sh | sh
   curl -fsSL https://woozchucky.github.io/rig/install.sh | sh -s -- OPTIONS
@@ -352,7 +354,7 @@ install_rig() {
     # read stops here, with nothing installed. Then each file is moved
     # over the old one, which replaces it even while it runs (a new file,
     # where writing into a running program's file fails with "Text file
-    # busy"). rig finds ld.lld beside its own file, so they stay together,
+    # busy"), keeping them together: rig finds ld.lld beside its own file,
     # and the modules that ship with it in modules/ beside it. The old
     # modules/ is removed first, so the new one replaces it whole: a file a
     # module no longer has mustn't stay behind, and mv can't move a folder

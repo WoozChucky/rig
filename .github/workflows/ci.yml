@@ -73,7 +73,8 @@ jobs:
   # The one-line installers, site/public/install.sh and install.ps1,
   # against the releases on GitHub. scripts/test_install.sh runs install.sh
   # as its users do, piped into sh, in a throwaway HOME: the latest release
-  # installed, run again, --version 0.2.0, --uninstall, and the failures.
+  # installed, run again, --version 0.2.0, --uninstall, an upgrade that
+  # replaces modules/ whole, and the failures.
   # install.ps1 runs on Windows only, which has no runner here
   # (scripts/test_install.ps1 checks it locally); PowerShell 7, on the
   # image as shellcheck is, checks that it parses.
