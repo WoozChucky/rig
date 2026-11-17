@@ -97,8 +97,9 @@ main :: () {
     // with its bounds the wrong way round, all of int, exactly 2^32 values
     // (a 32-bit number added to the low bound), 2^32 + 1 values (the 64-bit
     // path), both of those again from a low bound far below 0, two values
-    // at int's most negative end, and one value, which still draws: the
-    // three draws after it are the ones that follow a draw.
+    // at int's most negative end, drawn four times so that both come out,
+    // and one value, which still draws: the three draws after it are the
+    // ones that follow a draw.
     random_seed(*r, 1, 1);
     print_string("-3..3:");
     for 1..20 { show_int(random_int(*r, -3, 3)); }
@@ -122,7 +123,7 @@ main :: () {
     for 1..2 { show_int(random_int(*r, -4294967296, 0)); }
     print_line("");
     print_string("MIN..MIN + 1:");
-    for 1..2 { show_int(random_int(*r, MIN, MIN + 1)); }
+    for 1..4 { show_int(random_int(*r, MIN, MIN + 1)); }
     print_line("");
     print_string("7..7, then -3..3:");
     show_int(random_int(*r, 7, 7));

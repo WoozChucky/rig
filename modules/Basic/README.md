@@ -241,7 +241,7 @@ A time is a `Time`, an `int` of nanoseconds since 1970-01-01T00:00:00Z, negative
 PCG32, Melissa O'Neill's permuted congruential generator (https://www.pcg-random.org), as her pcg-c-basic writes it: a 64-bit linear congruential step, and a permutation of the old state (a xorshift, then a rotation by its top bits) that gives 32 bits. The same seed and stream give the same numbers on every system, compiled and interpreted, and they are the reference's: `tests/run/basic_random.rig` reproduces the first round `pcg32-demo` prints. It is for simulations, games, tests and shuffles, not for keys, tokens or anything that must not be guessed: a few outputs give the state away. A zeroed `Random` is stream 0 from state 0, the same numbers in every program, so seed it first.
 
 - `PCG_MULTIPLIER`: 6364136223846793005, the multiplier of the linear congruential step.
-- `Random`: `state: u64` and `increment: u64`, the step's increment, odd once seeded; `random_u32` sets its lowest bit, so a zeroed one draws as stream 0.
+- `Random`: `state: u64` and `increment: u64`, the step's increment, odd once seeded; `random_u32` steps with its lowest bit set (it doesn't change the field), so a zeroed one draws as stream 0.
 - `random_seed(r: *Random, seed: u64, stream: u64)`: seeds `r` as `pcg32_srandom_r` does; generators of different streams give different numbers from the same seed. The stream's top bit is unused.
 - `random_u32(r: *Random) -> u32`: the next 32-bit number, as `pcg32_random_r` gives it.
 - `random_u64(r: *Random) -> u64`: two 32-bit numbers, the first the high half.
