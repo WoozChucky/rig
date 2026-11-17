@@ -81,7 +81,12 @@ struct Debug_Type {
 // What one translation needs, freed together by backend_free.
 struct Backend {
     Target target;
-    bool optimize;            // the module is optimised: its debug information says so
+    // The module is to be optimised (run_passes), so it's built for that:
+    // its debug information says it's optimised, each definition is marked
+    // "no-builtins" (mark_definition), every stack slot is zeroed before the
+    // body runs (build_body), and C's memory functions are declared whatever
+    // the module holds (declare_memory_functions).
+    bool optimize;
     LLVMContextRef context;
     LLVMModuleRef module;
     LLVMTargetMachineRef machine;
@@ -339,9 +344,10 @@ static bool module_has(Ir_Module *m, Ir_Op op) {
 // LLVM renames (memset.1), so LLVM's call goes to C's memset and not to the
 // program's. The optimiser may make these intrinsics of its own too, in a
 // module that has neither IR_COPY nor IR_ZERO, so an optimised module
-// takes the names whatever it holds. (It makes no other call of a C
-// function, and takes none of the program's procedures for C's:
-// mark_definition.) (size_t is 64 bits on both targets, and C's int 32.)
+// takes the names whatever it holds. It makes no other call of a C
+// function, and takes none of the program's procedures for C's
+// (mark_definition). In the declarations, size_t is 64 bits on both
+// targets, and C's int 32.
 static void declare_memory_functions(Backend *b) {
     LLVMContextRef c = b->context;
     LLVMTypeRef ptr = LLVMPointerTypeInContext(c, 0), i32 = LLVMInt32TypeInContext(c),
@@ -1721,13 +1727,13 @@ static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Glob
 // an internal symbol it works the same under any name. Rig names don't
 // clash with C names, so the program may well have both (spec 7.6), and
 // the optimiser, which knows C's functions by name, mustn't take the
-// program's for C's (mark_definition). Not
-// every symbol of the program is internal, though: main is exported, the
-// entry point the C runtime calls by that name, and renamed main.1 the
-// program wouldn't link. So the checker refuses main as a C name, and the
-// names starting with __rig_, of the runtime's procedures, which a
-// foreign declaration would take (__rig_panic is defined before this, and
-// the declaration would be the one renamed): check_c_name.
+// program's for C's (mark_definition). Not every symbol of the program is
+// internal, though: main is exported, the entry point the C runtime calls
+// by that name, and renamed main.1 the program wouldn't link. So the
+// checker refuses main as a C name, and the names starting with __rig_, of
+// the runtime's procedures, which a foreign declaration would take
+// (__rig_panic is defined before this, and the declaration would be the
+// one renamed): check_c_name.
 //
 // One C function is one declaration. A C name declared already, by the
 // runtime (exit, say) or by another foreign procedure (free :: (p: *void)
@@ -1755,11 +1761,14 @@ static void declare_foreign_functions(Backend *b, Ir_Module *m, Arena *a, LLVMVa
     }
 }
 
-// Builds and verifies the LLVM module for `m`, with a target machine that
-// compiles at LLVM's default level, which optimises, when `optimize` is set,
-// and at its lowest otherwise (run_passes optimises the module itself).
-// False with `error` set when LLVM doesn't know the target or the module
-// doesn't verify; either way the caller calls backend_free.
+// Builds and verifies the LLVM module for `m`, and the target machine that
+// compiles it. When `optimize` is set, the module is built to be optimised
+// (Backend.optimize says how) and the machine compiles at LLVM's default
+// level, which optimises; otherwise the machine compiles at its lowest.
+// When `optimize` is set, the module itself is optimised afterwards, by
+// run_passes (backend_prepare). False with `error` set when LLVM doesn't
+// know the target or the module doesn't verify; either way the caller calls
+// backend_free.
 static bool backend_build(Backend *b, Ir_Module *m, Target t, bool optimize, Arena *a, String *error) {
     initialise_llvm();
     const char *triple = target_triple(t);

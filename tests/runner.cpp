@@ -7,11 +7,11 @@
 // on any number of lines: add_flags), and run; its stdout must equal
 // NAME.out, its exit code the number in NAME.exit (0 when there's none),
 // and its stderr NAME.err (a runtime error's message, say), or be empty
-// when there's no NAME.err. What rig build itself prints to
-// stdout, what the program's top-level #runs print while compiling (spec
-// 7.8), must equal NAME.build.out, or be empty when there's none. A
-// program prints while compiling only from its top-level #runs: rig check
-// runs its expression #runs too, and must print nothing (check_tests).
+// when there's no NAME.err. What rig build itself prints to stdout, what
+// the program's top-level #runs print while compiling (spec 7.8), must
+// equal NAME.build.out, or be empty when there's none. A program prints
+// while compiling only from its top-level #runs: rig check runs its
+// expression #runs too, and must print nothing (check_tests).
 // On Windows the program's newlines are normalised first, since C's
 // text-mode streams write \r\n for each \n: every \r\n in its stdout and
 // stderr becomes \n (normalise_newlines). The rest is compared byte for
@@ -32,6 +32,10 @@
 // whole, and one at least (its NAME.exit is the compiled run's).
 // The interpreter is always bin/unit-tests's, whatever RIG is given.
 //
+// Then two fixed cases: rig build without -o from another directory
+// (default_output_test), and a runtime error's order after the program's
+// output when stdout and stderr are one pipe (merged_output_test).
+//
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, its stdout is empty (none prints from a top-level #run), and it
 // writes neither an object file nor a program. A build program (spec 7.9)
@@ -46,12 +50,12 @@
 // .interp.err, .check.err or tests/build's expected.err (below), @MODULES@
 // stands for <RIG's directory>/../modules, the repository's modules/, and
 // @BIN_MODULES@ for <RIG's directory>/modules, each absolute: the places
-// rig looks for a module in. Before comparing, the
-// runner puts the placeholders in place of the places in what was printed
-// (bin/unit-tests's places for an interpreted run), and on Windows makes each
-// '\' in the rest of such a path '/', so `@MODULES@/Basic/array.rig:43:23:`
-// serves both hosts (with_module_placeholders). The tests assume the
-// repository's layout, bin/ beside modules/.
+// rig looks for a module in. Before comparing, the runner puts the
+// placeholders in place of the places in what was printed (bin/unit-tests's
+// places for an interpreted run), and on Windows makes each '\' in the rest
+// of such a path '/', so `@MODULES@/Basic/array.rig:43:23:` serves both
+// hosts (with_module_placeholders). The tests assume the repository's
+// layout, bin/ beside modules/.
 //
 // Only the NAME.rig files directly in tests/run, tests/errors and
 // tests/debug (below) are programs: their subdirectories, load/, hold the
@@ -86,33 +90,34 @@
 // output, and tests/build/workspace_unreadable so, the build program's #run
 // output before a workspace's file that can't be read is said
 // (workspace_output_order_test), tests/build/options once more, where the
-// workspaces built with the default options, unoptimised and optimised,
-// stop at their index past the end (checked_workspace_test), rig build
-// without -o from another directory, a runtime error's order after the
-// program's output when stdout and stderr are one pipe, bin/unit-tests
-// --interpret of two programs that call a #compiler procedure, at run time
-// and in a constant's #run (each refused as rig build refuses it, with
-// nothing run), of a build program with errors (said as rig build says
-// them), and of one without (which it refuses on stderr before its
-// top-level #runs: there's no main to run), rig build of a build program
-// with -o, --no-bounds-checks or both (refused on stderr before its
-// top-level #runs, -o's refusal alone when both are given, but after its
-// errors), the command line's mistakes, a .build/ or an object file rig
-// can't write, a workspace's .build/ that it can't make, said after what
-// the workspace's #run printed when both are in one pipe
-// (workspace_unwritable_test), and rig version's output, by its shape (version_test: it
-// names the commit rig was built from).
+// workspaces whose bounds checks are left on by default, unoptimised and
+// optimised, stop at their index past the end (checked_workspace_test),
+// bin/unit-tests --interpret of two programs that call a #compiler
+// procedure, at run time and in a constant's #run (each refused as rig
+// build refuses it, with nothing run), of a build program with errors
+// (said as rig build says them), and of one without (which it refuses on
+// stderr before its top-level #runs: there's no main to run), rig build of
+// a build program with -o, --no-bounds-checks or both (refused on stderr
+// before its top-level #runs, -o's refusal alone when both are given, but
+// after its errors), a failed top-level #run's error after the runs'
+// output, and after a later run's exit(), when stdout and stderr are one
+// pipe (run_output_order_test), rig check's output of a constant's #run
+// before its diagnostics, in one pipe (check_run_output_test), a .build/
+// or an object file rig can't write, a workspace's .build/ that it can't
+// make, said after what the workspace's #run printed when both are in one
+// pipe (workspace_unwritable_test), the command line's mistakes, and rig
+// version's output, by its shape (version_test: it names the commit rig
+// was built from).
 //
 // Then rig check on every program of tests/run and tests/errors (not
-// tests/build's), from a file and
-// from stdin under the file's name, a loaded file's text from stdin within
-// its program (--stdin-for), and its own command line (check_tests). A
-// program of tests/run must check with nothing to say, exit 0; one of
-// tests/errors exit 1 and print its NAME.err, unless it has a
-// NAME.check.err: what rig check prints instead, for a program whose
-// errors only rig build finds (a top-level #run that fails, which checking
-// never runs, or a #compiler call, which only lowering finds). An empty
-// one means exit 0 with nothing on stderr.
+// tests/build's), from a file and from stdin under the file's name, a
+// loaded file's text from stdin within its program (--stdin-for), and its
+// own command line (check_tests). A program of tests/run must check with
+// nothing to say, exit 0; one of tests/errors exit 1 and print its
+// NAME.err, unless it has a NAME.check.err: what rig check prints instead,
+// for a program whose errors only rig build finds (a top-level #run that
+// fails, which checking never runs, or a #compiler call, which only
+// lowering finds). An empty one means exit 0 with nothing on stderr.
 //
 // Then the specification's examples (spec_tests): every ```rig block of
 // docs/rig-spec.md but a file= one (below; its section 1.4 says so too),
@@ -291,17 +296,18 @@ static String replace_all(Arena *a, String s, const char *from, String to) {
 }
 
 // The places rig looks for a module in (src/load.h's Module_Places): RIG's
-// MODULES (<RIG's directory>/../modules, the repository's) and BIN_MODULES
-// (<RIG's directory>/modules, a release archive's); and the same pair for
-// bin/unit-tests, whose loader the interpreted runs use. main sets them.
+// rig_modules (<RIG's directory>/../modules, the repository's) and
+// rig_bin_modules (<RIG's directory>/modules, a release archive's); and the
+// same pair for bin/unit-tests, whose loader the interpreted runs use. main
+// sets them.
 // A module's file is named by its absolute path, which differs from one
 // checkout to the next, so the runner puts @MODULES@ and @BIN_MODULES@ in
 // their place before comparing a stderr with an expectation file
 // (with_module_placeholders).
-static String MODULES;
-static String BIN_MODULES;
-static String UNIT_TESTS_MODULES;
-static String UNIT_TESTS_BIN_MODULES;
+static String rig_modules;
+static String rig_bin_modules;
+static String unit_tests_modules;
+static String unit_tests_bin_modules;
 
 #ifdef _WIN32
 static const bool HOST_IS_WINDOWS = true;
@@ -564,7 +570,7 @@ static String run_test(Arena *a, String rig, String name) {
     array_free(&command);
     if (!started) return why;
     // A runtime error in a module names its file as rig found it.
-    ran.err = with_module_placeholders(a, ran.err, MODULES, BIN_MODULES);
+    ran.err = with_module_placeholders(a, ran.err, rig_modules, rig_bin_modules);
     return held_to_expected(a, name, &ran);
 }
 
@@ -586,7 +592,7 @@ static String interpreted_test(Arena *a, String unit_tests, String name) {
     array_free(&argv);
     if (!started) return why;
     // A module's file named as bin/unit-tests's loader found it.
-    ran.err = with_module_placeholders(a, ran.err, UNIT_TESTS_MODULES, UNIT_TESTS_BIN_MODULES);
+    ran.err = with_module_placeholders(a, ran.err, unit_tests_modules, unit_tests_bin_modules);
 
     String build_out = read_build_out(a, name);
     String refusal = {};
@@ -715,7 +721,7 @@ static String error_test(Arena *a, String rig, String name) {
     bool started = run(a, argv, {}, &built, &why);
     array_free(&argv);
     if (!started) return why;
-    built.err = with_module_placeholders(a, built.err, MODULES, BIN_MODULES);
+    built.err = with_module_placeholders(a, built.err, rig_modules, rig_bin_modules);
     if (built.exit_code != 1) {
         return with_stderr(
             a, string_printf(a, "rig build exited with " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, built.exit_code))),
@@ -755,7 +761,7 @@ static String interpreted_error_test(Arena *a, String unit_tests, const char *pr
     bool started = run_within(a, argv, {}, INTERPRETED_TIMEOUT, &ran, &why);
     array_free(&argv);
     if (!started) return why;
-    ran.err = with_module_placeholders(a, ran.err, UNIT_TESTS_MODULES, UNIT_TESTS_BIN_MODULES);
+    ran.err = with_module_placeholders(a, ran.err, unit_tests_modules, unit_tests_bin_modules);
     if (ran.exit_code != 1) {
         return with_stderr(a, string_printf(a, "exit code " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, ran.exit_code))),
                            ran.err);
@@ -1019,7 +1025,7 @@ static String build_directory_test(Arena *a, String rig, String name) {
 
     Process_Result built = {};
     if (!build_copy(a, rig, name, dir, false, &built, &why)) return why;
-    built.err = with_module_placeholders(a, built.err, MODULES, BIN_MODULES);
+    built.err = with_module_placeholders(a, built.err, rig_modules, rig_bin_modules);
     if (built.exit_code != expected_exit) {
         return with_stderr(a,
                            string_printf(a, "rig build exited with " STR_FMT ", expected %d",
@@ -1929,14 +1935,14 @@ static String check_both_ways(Arena *a, String rig, const char *dir, String name
     Process_Result r = {};
     String why = {};
     if (!run_check(a, rig, file, false, {}, {}, &r, &why)) return why;
-    r.err = with_module_placeholders(a, r.err, MODULES, BIN_MODULES);
+    r.err = with_module_placeholders(a, r.err, rig_modules, rig_bin_modules);
     why = check_result(a, "rig check", &r, exit_code, err);
     if (why.count) return why;
     String wrote = check_wrote(a, name);
     if (wrote.count) return string_printf(a, "rig check wrote " STR_FMT, STR_ARG(wrote));
 
     if (!run_check(a, rig, file, true, source, {}, &r, &why)) return why;
-    r.err = with_module_placeholders(a, r.err, MODULES, BIN_MODULES);
+    r.err = with_module_placeholders(a, r.err, rig_modules, rig_bin_modules);
     why = check_result(a, "rig check --stdin", &r, exit_code, err);
     if (why.count) return why;
     wrote = check_wrote(a, name);
@@ -2958,8 +2964,8 @@ int main(int argc, char **argv) {
     String rig = args.count >= 2 ? args[1] : string_printf(&a, "bin/rig%s", EXE);
     array_free(&args);
     String unit_tests = string_printf(&a, "bin/unit-tests%s", EXE);
-    module_places_of(&a, rig, &MODULES, &BIN_MODULES);
-    module_places_of(&a, unit_tests, &UNIT_TESTS_MODULES, &UNIT_TESTS_BIN_MODULES);
+    module_places_of(&a, rig, &rig_modules, &rig_bin_modules);
+    module_places_of(&a, unit_tests, &unit_tests_modules, &unit_tests_bin_modules);
     os_make_directory(str(".build"));
     os_make_directory(str(".build/tests"));
     s64 passed = 0, failed = 0;
@@ -2977,7 +2983,7 @@ int main(int argc, char **argv) {
            workspace_output_order_test(&a, rig, str("workspace_errors"), true), &passed, &failed);
     report("the build program's #run output before a workspace's unreadable file, both in one pipe",
            workspace_output_order_test(&a, rig, str("workspace_unreadable"), false), &passed, &failed);
-    report("a workspace built with the default options is bounds-checked, optimised or not",
+    report("a workspace whose bounds checks are on by default is bounds-checked, optimised or not",
            checked_workspace_test(&a, rig), &passed, &failed);
     report("interpreted: a #compiler call refused when lowering, nothing run",
            interpreted_error_test(&a, unit_tests, "compiler_called_at_run_time"), &passed, &failed);

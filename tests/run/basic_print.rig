@@ -1,7 +1,9 @@
 // Basic's print (issue #134): bytes go to standard output through C's
 // putchar, so they come out in order with C's own printf, compiled and
 // interpreted. Basic declares putchar as c_putchar (issue #135), so this
-// program can declare C's putchar under its own name too.
+// program can declare C's putchar under its own name too. It #loads Basic
+// by its path on purpose, where the other basic_ tests #import it, so a
+// module loaded as a plain file stays tested.
 #load "../../modules/Basic/module.rig";
 
 printf :: (format: *u8, ..) -> s32 #foreign libc;

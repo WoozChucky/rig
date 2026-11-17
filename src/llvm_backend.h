@@ -1,19 +1,21 @@
 // llvm_backend.h: Rig's IR to LLVM, through LLVM's C API.
 //
-// Each call builds a fresh LLVM module from the IR, verifies it, and then
-// prints it or writes an object file. Each IR block is one LLVM basic block,
-// and every stack slot's alloca is in the entry block, whichever block asked
-// for it. Rig's procedures are internal, the entry point and foreign
-// procedures external, each foreign one declared under its C name
-// (#foreign libc "free"), one declaration per C function; a procedure with
-// several results returns them as one LLVM struct. A #compiler procedure
-// (spec 7.9) is no function of the module: the compiler does it, while
-// compiling, and a module that reaches the backend calls none (lowering
-// refuses such a call). Constant bytes are private constant arrays, Rig's
-// global variables internal globals. No instruction carries nsw, nuw or
-// exact: Rig's integers wrap (spec 6.4). On Linux, i8 and i16 parameters
-// and results are marked signext or zeroext, on every function and call,
-// as clang marks them; on Windows they aren't; an i1 is zeroext on both.
+// Each call builds a fresh LLVM module from the IR, verifies it, optimises
+// it when asked (below), and then prints it or writes an object file. The
+// rest of this paragraph is the module as built. Each IR block is one LLVM
+// basic block, and every stack slot's alloca is in the entry block,
+// whichever block asked for it. Rig's procedures are internal, the entry
+// point and foreign procedures external, each foreign one declared under
+// its C name (#foreign libc "free"), one declaration per C function; a
+// procedure with several results returns them as one LLVM struct. A
+// #compiler procedure (spec 7.9) is no function of the module: the
+// compiler does it, while compiling, and a module that reaches the backend
+// calls none (lowering refuses such a call). Constant bytes are private
+// constant arrays, Rig's global variables internal globals. No instruction
+// carries nsw, nuw or exact: Rig's integers wrap (spec 6.4). On Linux, i8
+// and i16 parameters and results are marked signext or zeroext, on every
+// function and call, as clang marks them; on Windows they aren't; an i1 is
+// zeroext on both.
 //
 // A module with a panic also gets the runtime's __rig_panic, which writes
 // the message to stderr with C's write (_write on Windows) and exits with
