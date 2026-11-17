@@ -21,7 +21,9 @@ INT_TEXT_MAX :: 65;
 FLOAT_TEXT_MAX :: 320;
 
 // float64's largest finite value. A magnitude above it is an infinity.
-FLOAT64_LARGEST :: 1.7976931348623157e308;
+// Typed, since an untyped float is a float32 where nothing else says
+// (spec 3.12), and this one doesn't fit in a float32.
+FLOAT64_LARGEST :: cast(float64) 1.7976931348623157e308;
 
 // The value of c as a digit: 0 to 9 for "0" to "9", and 10 to 35 for "a" to
 // "z" and for "A" to "Z", so a digit of any base up to 36 in either case.
