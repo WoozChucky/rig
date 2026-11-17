@@ -3010,3 +3010,312 @@ TEST(parse_compiler_procedures) {
     CHECK_STR(errors, "1:19: expected ';', found '{'\n");
     arena_free(&a);
 }
+
+// Issue #147: #if (spec 4.9).
+
+TEST(parse_if_directive_at_the_top_level) {
+    // A top-level #if's branches hold top-level declarations, in source
+    // order, and nothing of them is in the file's lists: the #if itself is
+    // in Ast_File.ifs, the loader's to decide.
+    Arena a = arena_make();
+    Token_List *list = src("#if OS == OS_WINDOWS {\n    f :: () {}\n    N :: 1;\n    #load \"w.rig\";\n} else {\n"
+                           "    g : int;\n}\nmain :: () {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK_STR(ast_dump(&a, file),
+              "(#if (binary == (name OS) (name OS_WINDOWS)) (block (proc f (params) (block)) (const N (int 1)) "
+              "(load \"w.rig\")) (block (var g int)))\n"
+              "(proc main (params) (block))\n");
+    CHECK_EQ(file->ifs.count, 1);
+    if (file->ifs.count == 1) {
+        Ast_If_Directive *chain = file->ifs[0];
+        CHECK_EQ(chain->kind, AST_IF_DIRECTIVE);
+        CHECK(chain->is_top_level);
+        CHECK(!chain->decided);
+        CHECK(chain->taken == nullptr);
+        CHECK_EQ(chain->pos.line, 1);
+        CHECK_EQ(chain->pos.col, 1);
+        CHECK(chain->else_part != nullptr && chain->else_part->kind == AST_BLOCK);
+    }
+    CHECK_EQ(file->procs.count, 1);
+    CHECK_EQ(file->globals.count, 0);
+    CHECK_EQ(file->loads.count, 0);
+    CHECK_EQ(file->runs.count, 0);
+    token_list_free(list);
+
+    // Among the other declarations, the dump has it in its place, as a load
+    // or a run: before a declaration, between a load and a run, and last.
+    String errors;
+    CHECK_STR(parse_src(&a, "#if A {}\n#load \"x.rig\";\n#if B {}\n#run f();\nmain :: () {}\n#if C {}\n", &errors),
+              "(#if (name A) (block))\n(load \"x.rig\")\n(#if (name B) (block))\n(run (call f))\n"
+              "(proc main (params) (block))\n(#if (name C) (block))\n");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(parse_if_directive_chains) {
+    // `else #if` is the chain's next arm, in the arm before's else part, as
+    // `else if` is an if's: the dump nests to the right. With no else, the
+    // arm has none.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "#if A {} else #if B {} else #if C {} else {}\n", &errors),
+              "(#if (name A) (block) (#if (name B) (block) (#if (name C) (block) (block))))\n");
+    CHECK_STR(errors, "");
+    CHECK_STR(parse_src(&a, "#if A {}\n", &errors), "(#if (name A) (block))\n");
+    CHECK_STR(errors, "");
+    CHECK_STR(parse_src(&a, "#if A {} else #if B {}\n", &errors), "(#if (name A) (block) (#if (name B) (block)))\n");
+    CHECK_STR(errors, "");
+    // In a body too.
+    CHECK_STR(body_dump(&a, "#if A {} else #if B {} else #if C {} else {}", &errors),
+              "(block (#if (name A) (block) (#if (name B) (block) (#if (name C) (block) (block)))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "#if A {}", &errors), "(block (#if (name A) (block)))");
+    CHECK_STR(errors, "");
+    // Every arm of a top-level chain is a top-level one; only the first is
+    // in Ast_File.ifs, and a nested #if is its branch's, not the file's.
+    Token_List *list = src("#if A {\n    #if B {}\n} else #if C {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK_EQ(file->ifs.count, 1);
+    if (file->ifs.count == 1) {
+        Ast_If_Directive *first = file->ifs[0];
+        CHECK(first->is_top_level);
+        Ast_If_Directive *second = (Ast_If_Directive *)first->else_part;
+        CHECK(second != nullptr && second->kind == AST_IF_DIRECTIVE && second->is_top_level);
+        CHECK_EQ(first->then_block->statements.count, 1);
+        if (first->then_block->statements.count == 1) {
+            Ast *nested = first->then_block->statements[0];
+            CHECK(nested->kind == AST_IF_DIRECTIVE && ((Ast_If_Directive *)nested)->is_top_level);
+        }
+    }
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(parse_if_directive_in_a_body) {
+    // In a body it's a statement among the block's, its branches blocks of
+    // statements; it isn't a top-level one.
+    Arena a = arena_make();
+    const char *text = "main :: () { #if true { x := 1; } else { x := 2; } y := x; }\n";
+    String errors;
+    CHECK_STR(parse_src(&a, text, &errors),
+              "(proc main (params) (block (#if (bool true) (block (var x _ (int 1))) (block (var x _ (int 2)))) "
+              "(var y _ (name x))))\n");
+    CHECK_STR(errors, "");
+    Token_List *list = src(text);
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(file->ifs.count, 0);
+    if (file->procs.count == 1 && file->procs[0]->body->statements.count == 2) {
+        Ast *statement = file->procs[0]->body->statements[0];
+        CHECK_EQ(statement->kind, AST_IF_DIRECTIVE);
+        CHECK(!((Ast_If_Directive *)statement)->is_top_level);
+    } else {
+        CHECK(!"main's body has the #if and y");
+    }
+    token_list_free(list);
+    // Its branches are a body's blocks: no procedure there.
+    CHECK_STR(parse_src(&a, "main :: () {\n    #if A {\n        helper :: () {}\n    }\n}\n", &errors),
+              "(broken main)\n");
+    CHECK_STR(errors, "3:9: procedures can only be declared at the top level, for now\n");
+    arena_free(&a);
+}
+
+TEST(parse_else_if_after_if_directive_is_refused) {
+    // `else if` after an #if is the if statement, which isn't compiled
+    // conditionally: refused at the `if`, the #if given up as a broken entry
+    // with no name.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "#if A {} else if B {}\nmain :: () {}\n", &errors),
+              "(broken)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:15: an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }\n");
+    body_dump(&a, "#if A {} else if B {}", &errors);
+    CHECK_STR(errors, "2:19: an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }\n");
+    arena_free(&a);
+}
+
+TEST(parse_if_directive_in_a_struct) {
+    // A struct's fields can't be conditional, for now: the struct is given
+    // up, its name kept. In column 1, the #if ends fields never closed, as
+    // a column-1 #run does, and is read as the top level's.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "S :: struct {\n    x: int;\n    #if A { y: int; }\n}\nmain :: () {}\n", &errors),
+              "(broken S)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "3:5: #if can't be among a struct's fields, for now\n");
+    CHECK_STR(parse_src(&a, "S :: struct {\n    x: int;\n#if A { y: int; }\nmain :: () {}\n", &errors),
+              "(broken S)\n(#if (name A) (block (var y int)))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "3:1: expected '}', found directive\n");
+    arena_free(&a);
+}
+
+TEST(parse_if_directive_with_unindented_contents) {
+    // Review Focus 1: branches written the C way, unindented, as after
+    // #ifdef. No column-1 rule ends a branch: its declarations are its own
+    // up to its '}', and what follows is the top level's.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "#if A {\nf :: () {}\nN :: 1;\n}\nmain :: () {}\n", &errors),
+              "(#if (name A) (block (proc f (params) (block)) (const N (int 1))))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "");
+    // Every kind of declaration, a nested #if too.
+    CHECK_STR(parse_src(&a,
+                        "#if A {\nG := 1;\nS :: struct { x: int; }\n#load \"a.rig\";\n#import \"Basic\";\n#run f();\n"
+                        "#run { g(); }\n#if B {\nh :: () {}\n}\n}\nmain :: () {}\n",
+                        &errors),
+              "(#if (name A) (block (var G _ (int 1)) (struct S (x int)) (load \"a.rig\") (import \"Basic\") "
+              "(run (call f)) (run (block (call g))) (#if (name B) (block (proc h (params) (block))))))\n"
+              "(proc main (params) (block))\n");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(parse_if_directive_recovers_inside_a_branch) {
+    // Review Focus 1: a syntax error inside a branch is recovered from as at
+    // the top level, the broken declaration kept in the branch; the skipping
+    // stops at the '}' that closes the branch, so it still closes there, and
+    // what follows is the top level's.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "#if A {\n    f :: () { x := ; }\n    g :: () {}\n}\nmain :: () {}\n", &errors),
+              "(#if (name A) (block (broken f) (proc g (params) (block))))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "2:20: expected an expression, found ';'\n");
+    // Stopped right at the '}'.
+    CHECK_STR(parse_src(&a, "#if A {\n    N :: 1\n}\nmain :: () {}\n", &errors),
+              "(#if (name A) (block (broken N)))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "3:1: expected ';', found '}'\n");
+    // Skipping to it, in the else branch, nested in another branch.
+    CHECK_STR(parse_src(&a, "#if A {} else {\n    #if B {\n        x := 1 2;\n    }\n    g :: () {}\n}\n", &errors),
+              "(#if (name A) (block) (block (#if (name B) (block (broken x))) (proc g (params) (block))))\n");
+    CHECK_STR(errors, "3:16: expected ';', found integer literal\n");
+    // Stray tokens before a declaration on the same line are skipped, but
+    // not past the branch's '}'.
+    CHECK_STR(parse_src(&a, "#if A { * N :: 1; }\nmain :: () {}\n", &errors),
+              "(#if (name A) (block (const N (int 1))))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:9: expected identifier, found '*'\n");
+    CHECK_STR(parse_src(&a, "#if A { * } N :: 1;\nmain :: () {}\n", &errors),
+              "(#if (name A) (block (broken)))\n(const N (int 1))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:9: expected identifier, found '*'\n");
+    arena_free(&a);
+}
+
+TEST(parse_if_directive_in_column_1_resumes) {
+    // An #if starting a line outside every brace is where the recovery
+    // resumes, as a #load or a #run is, and after a signature it's where the
+    // body's '{' should be; one in column 1 is among the declarations a
+    // body never closed is taken to end before, and the skipping resumes at
+    // it inside braces too.
+    Arena a = arena_make();
+    const char *sources[] = {
+        "N ::\n#if A { M :: 1; }\nmain :: () {}\n",
+        "f :: ()\n#if A { M :: 1; }\nmain :: () {}\n",
+        "g :\n#if A { M :: 1; }\nmain :: () {}\n",
+        "x := (1 + 2)\n#if A { M :: 1; }\nmain :: () {}\n",
+        "foo(1)\n#if A { M :: 1; }\nmain :: () {}\n",
+        "op : (int) -> int\n#if A { M :: 1; }\nmain :: () {}\n",
+    };
+    const char *expected[] = {
+        "2:1: expected an expression, found directive\n",
+        "2:1: expected '{', found directive\n",
+        "2:1: expected a type, found directive\n",
+        "2:1: expected ';', found directive\n",
+        "1:4: expected '::', found '('\n",
+        "2:1: expected ';', found directive\n",
+    };
+    const char *broken[] = {"(broken N)", "(broken f)", "(broken g)", "(broken x)", "(broken)", "(broken op)"};
+    for (s64 i = 0; i < 6; i++) {
+        String errors;
+        String dump = parse_src(&a, sources[i], &errors);
+        CHECK_STR(errors, expected[i]);
+        CHECK_STR(dump, string_cstr(&a, string_printf(&a,
+                                                      "%s\n(#if (name A) (block (const M (int 1))))\n"
+                                                      "(proc main (params) (block))\n",
+                                                      broken[i])));
+    }
+
+    // A body never closed ends before the column-1 globals and #ifs right
+    // before the end: both are the top level's.
+    String errors;
+    CHECK_STR(parse_src(&a, "f :: () {\n    x := 1;\nG := 2;\n#if A {}\nmain :: () {}\n", &errors),
+              "(broken f)\n(var G _ (int 2))\n(#if (name A) (block))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'G'\n");
+    // Followed by another statement, the #if stays in the body, a statement
+    // of it: in column 1 it doesn't end the body by itself.
+    CHECK_STR(parse_src(&a, "f :: () {\n    x := 1;\n#if A {}\n    y := 2;\n}\n", &errors),
+              "(proc f (params) (block (var x _ (int 1)) (#if (name A) (block)) (var y _ (int 2))))\n");
+    CHECK_STR(errors, "");
+    // After an error in a body, the skipping resumes at a column-1 #if, and
+    // passes over an indented one.
+    CHECK_STR(parse_src(&a, "f :: () {\n    x := ;\n#if A {}\nmain :: () {}\n", &errors),
+              "(broken f)\n(#if (name A) (block))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "2:10: expected an expression, found ';'\n");
+    CHECK_STR(parse_src(&a, "f :: () {\n    x := ;\n    #if A {}\n}\nmain :: () {}\n", &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "2:10: expected an expression, found ';'\n");
+    arena_free(&a);
+}
+
+TEST(parse_if_directive_never_closed) {
+    // A branch ends only at its '}': at the end of the file, "expected '}'"
+    // there, and the whole #if is a broken entry with no name; when a body
+    // never closed inside it said so at that very place already, that's the
+    // one message.
+    Arena a = arena_make();
+    Token_List *list = src("#if A {\n    f :: () {}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "3:1: expected '}', found end of file\n");
+    CHECK_STR(ast_dump(&a, file), "(broken)\n");
+    CHECK_EQ(file->ifs.count, 0);
+    token_list_free(list);
+    String errors;
+    CHECK_STR(parse_src(&a, "#if A {\n    f :: () {\n", &errors), "(broken)\n");
+    CHECK_STR(errors, "3:1: expected '}', found end of file\n");
+    CHECK_STR(parse_src(&a, "#if A {\n#if B {\n", &errors), "(broken)\n");
+    CHECK_STR(errors, "3:1: expected '}', found end of file\n");
+    CHECK_STR(parse_src(&a, "#if A {} else {\n    N :: 1;\n", &errors), "(broken)\n");
+    CHECK_STR(errors, "3:1: expected '}', found end of file\n");
+    arena_free(&a);
+}
+
+TEST(parse_if_directive_errors) {
+    // A condition, then a block; after else, a block or another #if. #if is
+    // no expression.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "#if {}\nmain :: () {}\n", &errors), "(broken)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:5: expected an expression, found '{'\n");
+    CHECK_STR(parse_src(&a, "#if A }\nmain :: () {}\n", &errors), "(broken)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:7: expected '{', found '}'\n");
+    CHECK_STR(parse_src(&a, "#if A {} else B\nmain :: () {}\n", &errors), "(broken)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:15: expected '{', found identifier 'B'\n");
+    body_dump(&a, "#if A }", &errors);
+    CHECK_STR(errors, "2:11: expected '{', found '}'\n");
+    body_dump(&a, "x := #if A {};", &errors);
+    CHECK_STR(errors, "2:10: expected an expression, found directive\n");
+    arena_free(&a);
+}
+
+TEST(parse_if_directives_nested_too_deeply) {
+    // A top-level #if's branches are blocks too (MAX_DEPTH): 1000 nested
+    // parse, 1001 is the message at the '{' one too many, and the branches
+    // around it still close. In a body, the body's own block is the first.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_src(&a, nested_source(&a, "", "#if A {", MAX_DEPTH, "", "}", "\nmain :: () {}\n"), &errors);
+    CHECK_STR(errors, "");
+    CHECK_EQ(count_of(dump, "(#if "), MAX_DEPTH);
+    // The 1001st is a broken entry in the 1000th's branch, and the branches
+    // around it close at their '}': main is still the top level's.
+    dump = parse_src(&a, nested_source(&a, "", "#if A {", MAX_DEPTH + 1, "", "}", "\nmain :: () {}\n"), &errors);
+    CHECK_STR(errors, "1:7007: blocks are nested too deeply (more than 1000 levels)\n");
+    CHECK_EQ(count_of(dump, "(#if "), MAX_DEPTH);
+    CHECK_EQ(count_of(dump, "(block (broken))"), 1);
+    CHECK_EQ(count_of(dump, ")\n(proc main (params) (block))\n"), 1);
+    parse_src(&a, nested_source(&a, "main :: () {\n", "#if A {", MAX_DEPTH - 1, "", "}", "\n}\n"), &errors);
+    CHECK_STR(errors, "");
+    CHECK_STR(parse_src(&a, nested_source(&a, "main :: () {\n", "#if A {", MAX_DEPTH, "", "}", "\n}\n"), &errors),
+              "(broken main)\n");
+    CHECK_STR(errors, "2:7000: blocks are nested too deeply (more than 1000 levels)\n");
+    arena_free(&a);
+}

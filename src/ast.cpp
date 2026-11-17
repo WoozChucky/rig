@@ -449,6 +449,26 @@ static void dump(Array<u8> *buffer, Ast *node) {
         out(buffer, ")");
         break;
     }
+    case AST_IF_DIRECTIVE: {
+        // (#if c1 T1 (#if c2 T2 E)), as an if's chain, followed in a loop
+        // too: an `else #if` chain has no limit to its length either.
+        Ast *part = node;
+        s64 arms = 0;
+        while (part && part->kind == AST_IF_DIRECTIVE) {
+            Ast_If_Directive *arm = (Ast_If_Directive *)part;
+            out(buffer, arms++ ? " (#if " : "(#if ");
+            dump(buffer, arm->condition);
+            out(buffer, " ");
+            dump(buffer, arm->then_block);
+            part = arm->else_part;
+        }
+        if (part) {  // the last else's block
+            out(buffer, " ");
+            dump(buffer, part);
+        }
+        for (s64 i = 0; i < arms; i++) out(buffer, ")");
+        break;
+    }
     }
 }
 
@@ -503,29 +523,57 @@ bool ast_is_build_program(Ast_File *file) {
     return true;
 }
 
+void ast_add_declaration(Ast_File *file, Ast *decl) {
+    switch (decl->kind) {
+    case AST_PROC: array_add(&file->procs, (Ast_Proc *)decl); break;
+    case AST_LOAD: array_add(&file->loads, (Ast_Load *)decl); break;
+    case AST_RUN: array_add(&file->runs, (Ast_Run *)decl); break;
+    case AST_IF_DIRECTIVE: array_add(&file->ifs, (Ast_If_Directive *)decl); break;
+    default: array_add(&file->globals, decl); break;
+    }
+}
+
 // A top-level node, on a line of its own.
 static void dump_line(Array<u8> *buffer, Ast *node) {
     dump(buffer, node);
     out(buffer, "\n");
 }
 
-// The loads and the top-level runs, two more lists in source order, are
-// merged in by position too: before each declaration, the loads and runs
-// that come before it, in order; after the last, those left.
+// Of the nodes `count` lists have next (null for a list used up), the one
+// that comes first in the source, or null; its list's index through *which.
+static Ast *earliest_next(Ast **next, s64 count, s64 *which) {
+    Ast *first = nullptr;
+    for (s64 i = 0; i < count; i++) {
+        if (next[i] && (!first || before(next[i]->pos, first->pos))) {
+            first = next[i];
+            *which = i;
+        }
+    }
+    return first;
+}
+
+// The loads, the top-level runs and the top-level #ifs, three more lists in
+// source order, are merged in by position too: before each declaration, the
+// ones that come before it, in order; after the last, those left.
 String ast_dump(Arena *a, Ast_File *file) {
     Array<u8> buffer = {};
     Array<Ast *> declarations = ast_declarations(file);
-    s64 l = 0, r = 0;
+    s64 l = 0, r = 0, f = 0;
     for (s64 i = 0; i <= declarations.count; i++) {
         // i == declarations.count: past the last, where everything left goes.
         for (;;) {
-            Ast *load = l < file->loads.count ? file->loads[l] : nullptr;
-            Ast *run = r < file->runs.count ? file->runs[r] : nullptr;
-            Ast *next = !load ? run : !run ? load : before(run->pos, load->pos) ? run : load;
-            if (!next || (i < declarations.count && !before(next->pos, declarations[i]->pos))) break;
-            dump_line(&buffer, next);
-            if (next == load) l++;
-            else r++;
+            Ast *next[] = {
+                l < file->loads.count ? file->loads[l] : nullptr,
+                r < file->runs.count ? file->runs[r] : nullptr,
+                f < file->ifs.count ? file->ifs[f] : nullptr,
+            };
+            s64 which = 0;
+            Ast *first = earliest_next(next, 3, &which);
+            if (!first || (i < declarations.count && !before(first->pos, declarations[i]->pos))) break;
+            dump_line(&buffer, first);
+            if (which == 0) l++;
+            else if (which == 1) r++;
+            else f++;
         }
         if (i < declarations.count) dump_line(&buffer, declarations[i]);
     }
