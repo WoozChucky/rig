@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and printing to standard output (issues #134 and #145).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, π and C's math functions (roots, trigonometry, exponentials and logarithms, powers, rounding), copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and printing to standard output (issues #134 and #145).
 
 ## Importing it
 
@@ -18,7 +18,7 @@ rig finds `Basic/module.rig` in the `modules` directory beside it, or in the one
 
 `libc.rig` declares the only C functions Basic calls, each under a name of its own that starts with `c_` (`#foreign libc "NAME"`, spec 7.6). So a program that loads Basic keeps C's own names: it may declare C's `putchar`, `malloc`, `realloc`, `fopen`, `getenv` and the rest itself. `free` is the exception, since Basic's allocators take that name for their own helper and `c_free` is taken too, so such a program declares C's `free` under another name, as in `libc_free :: (p: *void) #foreign libc "free";`.
 
-Each links and runs on Windows (the UCRT) and Linux (glibc), compiled and interpreted, with one declaration that serves both: where C's types differ (`fseek`'s `long` offset, `fpos_t`, `struct timespec`), the declaration and its comment say how Basic stays within what both agree on. `libc.rig`'s header says which C functions Basic leaves out, and why: `ftell` (C's `long`, 32 bits on Windows), `_ftelli64` and `ftello` (one system each), `time` (whole seconds) and `clock` (a different clock on each system).
+Each links and runs on Windows (the UCRT) and Linux (glibc's `libc`, and its `libm` for `<math.h>`, which every program links too, spec 10.6), compiled and interpreted, with one declaration that serves both: where C's types differ (`fseek`'s `long` offset, `fpos_t`, `struct timespec`), the declaration and its comment say how Basic stays within what both agree on. `libc.rig`'s header says which C functions Basic leaves out, and why: `ftell` (C's `long`, 32 bits on Windows), `_ftelli64` and `ftello` (one system each), `time` (whole seconds) and `clock` (a different clock on each system).
 
 - `c_putchar(c: s32) -> s32`: C's `putchar`, the one call that writes a byte to standard output.
 - `c_malloc(size: u64) -> *void`, `c_realloc(memory: *void, size: u64) -> *void`, `c_free(memory: *void)`: C's `malloc`, `realloc` and `free`, the heap allocator's memory. Basic never calls them with a size of 0.
@@ -36,6 +36,8 @@ Each links and runs on Windows (the UCRT) and Linux (glibc), compiled and interp
 - `C_Timespec`: C's `struct timespec`, `seconds: s64`, `nanoseconds: s32` and `padding: s32`, 16 bytes, which holds the UCRT's (a 4-byte `long` of nanoseconds and padding) and glibc's (an 8-byte `long`, whose low 4 bytes hold them).
 - `C_TIME_UTC`: `timespec_get`'s base for UTC, 1.
 - `c_timespec_get(time: *C_Timespec, base: s32) -> s32`: C's `timespec_get`, the wall clock's seconds and nanoseconds since 1970; the base, or 0 when it can't. On Windows the compiler links it to the UCRT's `_timespec64_get`, as a C program's `<time.h>` does (issue #161, spec 10.6).
+- `c_sqrt`, `c_cbrt`, `c_sin`, `c_cos`, `c_tan`, `c_asin`, `c_acos`, `c_atan`, `c_exp`, `c_exp2`, `c_log`, `c_log2`, `c_log10`, `c_floor`, `c_ceil`, `c_round`, `c_trunc` `(x: float64) -> float64`, `c_atan2(y: float64, x: float64) -> float64`, `c_pow(x: float64, y: float64) -> float64`, `c_hypot(x: float64, y: float64) -> float64`, `c_fmod(x: float64, y: float64) -> float64`: C's `<math.h>` functions of a `double`, libm's on Linux.
+- `c_sqrtf`, `c_cbrtf`, `c_sinf`, `c_cosf`, `c_tanf`, `c_asinf`, `c_acosf`, `c_atanf`, `c_expf`, `c_exp2f`, `c_logf`, `c_log2f`, `c_log10f`, `c_floorf`, `c_ceilf`, `c_roundf`, `c_truncf` `(x: float32) -> float32`, `c_atan2f(y: float32, x: float32) -> float32`, `c_powf(x: float32, y: float32) -> float32`, `c_hypotf(x: float32, y: float32) -> float32`, `c_fmodf(x: float32, y: float32) -> float32`: C's `<math.h>` functions of a `float`. On Windows the compiler links `c_hypotf` to the UCRT's `_hypotf`, as a C program's `<math.h>` does (spec 10.6).
 
 ## Characters (`char.rig`)
 
@@ -54,11 +56,30 @@ A char is a `u8`, one byte of a string, and the classes are ASCII's, as C's `<ct
 
 One procedure per type, named by it: `int` and `u64` (every other integer type widens to one of them), `float32` and `float64`. `min` and `max` return their first operand unless the second is strictly smaller or larger, so a NaN first operand comes back from both and a NaN second one never does.
 
+The rest are C's `<math.h>`, through `libc.rig`, each procedure only the call, so `-0.0`, the infinities and NaN go to C and come back as C gives them. The results are the C library's, so the last bit can differ between systems, and on Windows between the compiled and the interpreted program. A domain error gives NaN (`sqrt_float64(-1)`), a pole an infinity (`log_float64(0)` is `-inf`), and C's `errno` isn't exposed. A NaN's sign is the C library's too, and `print_float` writes any NaN as `nan`.
+
 - `min_int`, `min_u64`, `min_float32`, `min_float64` `(a: T, b: T) -> T`: the smaller of `a` and `b`; `a` when they're equal.
 - `max_int`, `max_u64`, `max_float32`, `max_float64` `(a: T, b: T) -> T`: the larger of `a` and `b`; `a` when they're equal.
 - `clamp_int`, `clamp_u64`, `clamp_float32`, `clamp_float64` `(value: T, low: T, high: T) -> T`: `low` for a value below it, `high` for one above it, otherwise `value`.
 - `abs_int(value: int) -> int`: the magnitude; the most negative `int` is itself, since its negation wraps.
 - `abs_float32(value: float32) -> float32`, `abs_float64(value: float64) -> float64`: the value with its sign bit cleared, so `-0.0` gives `0.0` and NaN stays NaN.
+- `PI`, `TAU`: π, 3.141592653589793, and 2π, 6.283185307179586; untyped float constants (spec 3.12), so each takes either float type, and `x := PI;` makes a `float32`.
+- `sqrt_float64`, `sqrt_float32` `(x: T) -> T`: the square root; `-0.0` for `-0.0`, NaN below 0.
+- `cbrt_float64`, `cbrt_float32` `(x: T) -> T`: the cube root, negative for a negative `x`.
+- `sin_float64`, `sin_float32` `(x: T) -> T`: the sine of an angle in radians; NaN for an infinity.
+- `cos_float64`, `cos_float32` `(x: T) -> T`: the cosine of an angle in radians; NaN for an infinity.
+- `tan_float64`, `tan_float32` `(x: T) -> T`: the tangent of an angle in radians; NaN for an infinity.
+- `asin_float64`, `asin_float32`, `acos_float64`, `acos_float32` `(x: T) -> T`: the angle whose sine or cosine is `x`, in radians, `-π/2` to `π/2` and 0 to π; NaN outside -1 to 1.
+- `atan_float64`, `atan_float32` `(x: T) -> T`: the angle whose tangent is `x`, in radians, `-π/2` to `π/2`.
+- `atan2_float64`, `atan2_float32` `(y: T, x: T) -> T`: the angle of the point (`x`, `y`) from the positive x axis, `-π` to `π`, in the point's quadrant, `y` first as in C; on the axes the zeros' signs choose: `(0, -0.0)` is π and `(-0.0, -0.0)` is `-π`.
+- `exp_float64`, `exp_float32`, `exp2_float64`, `exp2_float32` `(x: T) -> T`: e and 2 to the power `x`; 0 for `-inf`.
+- `log_float64`, `log_float32`, `log2_float64`, `log2_float32`, `log10_float64`, `log10_float32` `(x: T) -> T`: the logarithm to base e, 2 and 10; `-inf` for 0, NaN below 0.
+- `pow_float64`, `pow_float32` `(base: T, exponent: T) -> T`: `base` to the power `exponent`; NaN for a finite negative base and a finite exponent that isn't whole; 1 for an exponent of 0 or a base of 1, even with a NaN; `inf` or `-inf` for 0 or `-0.0` to a negative odd power.
+- `hypot_float64`, `hypot_float32` `(x: T, y: T) -> T`: the square root of `x² + y²`, without overflow or underflow on the way; `inf` when either is infinite, even with a NaN.
+- `floor_float64`, `floor_float32`, `ceil_float64`, `ceil_float32` `(x: T) -> T`: the nearest whole number below and above; the sign of `-0.0` kept, and `ceil` of a value between -1 and 0 is `-0.0`.
+- `round_float64`, `round_float32` `(x: T) -> T`: the nearest whole number, halves away from zero, as C's `round` (2.5 is 3, -2.5 is -3, -0.4 is `-0.0`).
+- `trunc_float64`, `trunc_float32` `(x: T) -> T`: toward zero.
+- `mod_float64`, `mod_float32` `(a: T, b: T) -> T`: C's `fmod`, the remainder of `a / b` with `a`'s sign (`mod_float64(-5.5, 2)` is -1.5); NaN for a `b` of 0 or an infinite `a`, and `a` for an infinite `b`.
 
 ## Memory (`memory.rig`)
 
@@ -289,13 +310,6 @@ What Basic would do differently once Rig has it:
 - No overloading or generics, so procedures are named by type (`min_int`, `min_float64`), the collections are untyped, handing out `*void`, sorting and searching take an element's size and compare through pointers, and there is one kind of table per kind of key, `Table` and `Int_Table`, with the same fields.
 - No way for a struct to take in another's fields, as Jai's `using` does, so both kinds of table entry repeat the fields of `Table_Entry_Header`, and the code they share reads an entry's start through it.
 - No enums, so an allocator's modes, a table entry's states and a file's modes are constants.
-- No conditional compilation (`#if`, #147), so Basic calls only C functions that both systems' C libraries have by the same name, each with one declaration that fits both, and does without what each system does its own way (#157):
-  - no standard error, which each C library reaches differently, and so no `assert`, which would write to it: Basic writes only through `c_putchar`, and an index out of bounds is reported by the language's own bounds check;
-  - no sleeping, which takes each system's own call (`Sleep`, `nanosleep`), since C17's `thrd_sleep` is only inline in MSVC's `<threads.h>`, over the Visual C++ runtime's `_thrd_sleep64`, and no monotonic clock, so a timer measures by the wall clock;
-  - no listing, making or deleting a directory, which C17 has no portable call for (its `remove` deletes an empty one on Linux only), so the file tests use `tests/run`, which is always there and never empty, and an empty directory that the test runner makes before any test, `.build/tests/basic_file_empty_dir`;
-  - no wide-character calls (`_wfopen`, `_wremove`, `_wgetenv`, `_wsystem`), which only Windows' C library has, so a path, a variable's name and value, and a command reach Windows' C library in the system's ANSI code page rather than as UTF-8;
-  - no running a process and reading its output (`_popen`, `popen`), so `run_command` gives only the status;
-  - none of the C functions that differ by name (`_ftelli64` on Windows, `ftello` on Linux) or by type (`ftell`'s `long`, 32 bits on Windows and 64 on Linux), so a file's size is measured with `fgetpos`, and `fseek` is only given an offset of 0.
 - No command-line arguments: a program's start doesn't keep them for Rig code to read (#152).
 - No `Any` or variadic Rig procedures (#153, #150), so there is no formatted `print` (#154): a line is printed a piece at a time, with `print_string`, `print_int` and the rest.
 - No context (#156), so a procedure that allocates takes its allocator as an argument, and the file procedures copy a path for C into memory from the heap, since most of their signatures take no allocator (`read_entire_file`'s is for the file's contents).

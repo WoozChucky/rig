@@ -503,22 +503,29 @@ void os_release_inaccessible(void *p, u64 size) {
     munmap(p, (size_t)size);
 }
 
-// The compiler is linked with libc dynamically, so libc is loaded already:
-// RTLD_NOLOAD takes a handle to it without loading anything, kept for the
-// process's life. dlsym on that handle searches libc and the dynamic
-// loader it depends on, as the link line's -lc provides them, where
-// RTLD_DEFAULT would search every library the compiler loaded, libm and
-// libstdc++ among them, and find functions a program can't call (10.6
-// links libc alone). It doesn't find what -lc links in statically, from
-// libc_nonshared.a (atexit, at_quick_exit, pthread_atfork), which
-// interp_c_functions.cpp gives instead. dlsym finds data too (stdout,
-// environ): the interpreter calls what a #foreign declaration names, as the
-// linker would link it.
+// The compiler is linked with libc and libm dynamically (build.sh's -lm,
+// which LLVM needs too), so both are loaded already: RTLD_NOLOAD takes a
+// handle to each without loading anything, kept for the process's life.
+// libc is searched first, as the link line's -lc -lm provides them, so a
+// name both export (copysign, frexp, ldexp, modf, scalbn) is libc's, as a
+// program's call binds to it at run time; then libm, for its own (sqrt,
+// sinf, hypotf). dlsym on libc's handle searches libc and the dynamic
+// loader it depends on; on libm's, libm and what it depends on, libc
+// again, which is harmless after libc's own search. A handle that couldn't
+// be taken is skipped rather than ending the search. RTLD_DEFAULT would
+// search every library the compiler loaded, libstdc++ among them, and find
+// functions no program can link (10.6). Neither finds what -lc links in
+// statically, from libc_nonshared.a (atexit, at_quick_exit,
+// pthread_atfork), which interp_c_functions.cpp gives instead. dlsym finds
+// data too (stdout, environ): the interpreter calls what a #foreign
+// declaration names, as the linker would link it.
 void *os_find_c_function(String name) {
     static void *libc = dlopen("libc.so.6", RTLD_LAZY | RTLD_NOLOAD);
-    if (!libc) return nullptr;
+    static void *libm = dlopen("libm.so.6", RTLD_LAZY | RTLD_NOLOAD);
     Arena scratch = arena_make(1024);
-    void *f = dlsym(libc, string_cstr(&scratch, name));
+    const char *c_name = string_cstr(&scratch, name);
+    void *f = libc ? dlsym(libc, c_name) : nullptr;
+    if (!f && libm) f = dlsym(libm, c_name);
     arena_free(&scratch);
     return f;
 }

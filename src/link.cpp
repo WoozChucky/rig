@@ -123,7 +123,15 @@ Array<String> link_command_linux(Arena *a, String ld_lld, String crt_dir, Array<
     array_add(&argv, string_printf(a, STR_FMT "/crti.o", STR_ARG(crt_dir)));
     for (s64 i = 0; i < objects.count; i++) array_add(&argv, objects[i]);
     array_add(&argv, string_printf(a, "-L" STR_FMT, STR_ARG(crt_dir)));
+    // The C library: libc itself, and libm, where glibc keeps most of C's
+    // <math.h> (sqrt, sin, pow), which libc doesn't export. Both are glibc's
+    // own package, so every program depends on libm.so.6 whether it calls a
+    // math function or not, at no cost of anything to install (spec 10.6).
+    // ld.lld takes shared libraries in any order, but the order is the one the
+    // dynamic loader searches them in at run time, so -lc goes first: a name
+    // both export (copysign, frexp, ldexp, modf, scalbn) is libc's.
     array_add(&argv, str("-lc"));
+    array_add(&argv, str("-lm"));
     array_add(&argv, string_printf(a, STR_FMT "/crtn.o", STR_ARG(crt_dir)));
     return argv;
 }

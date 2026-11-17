@@ -1,0 +1,31 @@
+// C's <math.h> through #foreign libc (issue #148): the program declares
+// C's math functions under their C names and calls them, sqrt through its
+// value too, compiled as interpreted. On Linux they are libm's, which every
+// program links beside libc; on Windows the Universal C Runtime's, where
+// the compiler links hypotf to the UCRT's _hypotf, which a C program's
+// inline hypotf calls (spec 10.6). Printed with printf, whose %f rounds the
+// same in both C libraries, and no NaN, which they print differently.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+sqrt :: (x: float64) -> float64 #foreign libc;
+sin :: (x: float64) -> float64 #foreign libc;
+pow :: (base: float64, exponent: float64) -> float64 #foreign libc;
+floor :: (x: float64) -> float64 #foreign libc;
+fmod :: (a: float64, b: float64) -> float64 #foreign libc;
+sqrtf :: (x: float32) -> float32 #foreign libc;
+powf :: (base: float32, exponent: float32) -> float32 #foreign libc;
+hypotf :: (x: float32, y: float32) -> float32 #foreign libc;
+
+main :: () {
+    printf("sqrt(2) = %.6f\n", sqrt(2));
+    printf("sin(PI / 6) = %.6f\n", sin(3.141592653589793 / 6));
+    printf("pow(2, 10) = %.6f\n", pow(2, 10));
+    printf("floor(-2.5) = %.1f\n", floor(-2.5));
+    printf("fmod(-5.5, 2) = %.1f\n", fmod(-5.5, 2));
+    printf("sqrtf(2) = %.4f\n", sqrtf(2));
+    printf("powf(2, 0.5) = %.4f\n", powf(2, 0.5));
+    printf("hypotf(3, 4) = %.4f\n", hypotf(3, 4));
+    printf("hypotf(1, 1) = %.4f\n", hypotf(1, 1));
+    // Through its value, which is C's sqrt itself.
+    root := sqrt;
+    printf("through its value: %.1f\n", root(16));
+}
