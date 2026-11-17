@@ -9,7 +9,7 @@
 - **The parser** reads `#if` into an `Ast_If_Directive`, one node per arm of an `else #if` chain. Each branch is an `Ast_Block`: statements in a body, top-level declarations at the top level. The top-level ones a file writes go into `Ast_File.ifs`, their branches unread by everything else.
 - **In a body**, the checker decides the chain where the statement is (`decide_if`), checks the taken branch's statements in the current scope (no scope of its own), and records the decision on the chain's first arm. Lowering, `#run`'s walk, `goes_past` and `breaks_out_of` follow the taken branch only.
 - **At the top level**, the loader decides: it loads the files outside every `#if` as today, then walks the files in load order, deciding each top-level `#if` with a checker that knows only those files' declarations (`check_decider_new`, `check_decide`). A taken branch's declarations join the tree's lists; its `#load`s and `#import`s are read then; its nested `#if`s are decided in source order. The walk also gives each file its place in load order, which can now differ from the order the files were read in: `Source_File.order` and `Ast_File.order`, which `diag_sort`, `ast_declarations` and a final sort of the tree's lists follow.
-- **`rig check --stdin-for`** of a file that only a branch not taken loads says so (`rig: error: 'main.rig' loads 'linux.rig' only in an #if branch not taken`), and the VS Code extension then shows nothing for that file and says why once.
+- **`rig check --stdin-for`** of a file that only a branch not taken loads says so (`rig: error: 'main.rig' loads 'linux.rig' only in an #if branch not taken`), and the VS Code extension then shows nothing for that file and says why once. A branch of a chain whose condition failed isn't "not taken": the program is checked as any program with errors, so the condition's error is reported.
 
 **Tech Stack:** C-style C++23 built with the pinned clang 23.1.5 (`build.bat`, `build.sh`), no STL; JavaScript (Node) for the VS Code extension and its checks.
 
@@ -71,25 +71,25 @@
    - Messages are "L:C: MESSAGE" in the tests' `messages()` (`tests/unit/helpers.cpp:132`); `parse_dump`/`parse_src` and the `src()` cases style are in `test_parser.cpp:9`, `301`; `else_if_chains_of_10000_arms` is `test_parser.cpp:1794`.
 3. **AST** (`ast.h`): `Ast_If` (`380-384`), `Ast_Block` (`117-122`), `Ast_Load` (`442-448`), `Ast_File` (`489-499`: `procs`, `globals`, `loads`, `runs`, `lost_a_file`, `reaches_compiler`, `compiler_pos`). `ast.cpp`: the `AST_IF` dump, a chain in a loop (`290-309`); `before` (`468-472`, `Position.file` first); `ast_declarations` (`477-486`) merges `procs` and `globals` by position; `ast_dump` (`505-524`) merges in `loads` and `runs`.
 4. **Loader** (`load.cpp`, rules in `load.h:1-82`):
-   - `Load_Options` (`load.h:107-122`): `stdin_for`, `stdin_text`, `stdin_for_reached`, `modules`, `more_files`, `more_texts`.
+   - `Load_Options` (`load.h:108-122`): `stdin_for`, `stdin_text`, `stdin_for_reached`, `modules`, `more_files`, `more_texts`.
    - `Seen_Files` (`load.cpp:132-144`) is two `Table<bool>`.
    - `load_program` (`146-313`): the main file and the further files (`178-223`), then the queue (`228-307`): each file lexed and parsed into the tree, then each of its new `tree->loads` resolved (`#import`: `module_lookup`; `#load`: `load_path`), keyed, read once, added (`diag_add_file`, `diag_locate_file`, `in_module`, the Compiler module's `reaches_compiler`).
-   - `load.cpp` comes before `checker.cpp` in `all.cpp`; it may call what `checker.h` declares.
-5. **Diagnostics:** `Source_File` (`diag.h:31-43`); `comes_before` (`diag.cpp:51-55`) compares `Position.file` first; `diag_sort` (`diag.cpp:65`).
+   - `load.cpp` comes before `checker.cpp` in `all.cpp`; it may call what `checker.h` declares, once it includes it (it includes only `load.h` and `os.h` now; `checker.h` brings `ast.h` and `types.h`, and only declares `struct Checker`, which `check.h` defines).
+5. **Diagnostics:** `Source_File` (`diag.h:31-44`), filled by `diag_add_file`'s aggregate (`diag.cpp:6`); `comes_before` (`diag.cpp:51-55`, static, positions only) compares `Position.file` first; `diag_sort` (`diag.cpp:65`).
 6. **Checker:**
-   - `Checker` (`check.h:12-41`).
+   - `Checker` (`check.h:12-40`).
    - `check()` (`checker.cpp:1857-1996`): the names (`1871-1903`; each struct's `Type` made at `1875-1883`; `'u8' is a built-in type` at `1889-1892`; `'x' is already declared at ...` at `1894-1901`), the broken entries (`1911-1920`), each declaration in its turn (`1934-1943`), the bodies (`1962-1965`), the top-level runs (`1969`), the `main` rule (`1976-1987`).
    - `check_lookup` (`260-269`), `find_name` (`251-258`), `resolve_written`'s name lookup (`185-197`, `unknown type`), `report_undeclared` (`check_expr.cpp:599-607`, `unknown identifier`), `check_name` (`check_expr.cpp:616-661`).
    - `check_condition` (`1298-1304`) says `the condition of '%s' must be a bool, not 'T'` at `condition->start`; `check_if` (`1308-1320`); `check_statement` (`1422-1449`); `check_block` (`1452-1454`, the caller pushes the scope); `breaks_out_of` (`1459-1484`); `goes_past` (`1507-1534`); `reaches_end` (`1540-1543`).
    - `check_array_count` (`35-55`) is the model for "must be known while compiling" with `has_failed_run`.
-   - `check_run` (`check_run.cpp:361-388`); the walk's `walk_node` (`check_run.cpp:206-300`): `AST_CONST` pushes `constant->value` (`217-223`, so a constant needs a value node), `AST_IF` (`261-267`).
+   - `check_run` (`check_run.cpp:361-388`); the walk's `walk_node` (`check_run.cpp:206-292`): `AST_CONST` pushes `constant->value` (`217-223`, so a constant needs a value node), `AST_IF` (`261-267`).
    - `type_from_name`/`NAMED_TYPES` (`types.cpp:62-75`); `type_untyped_int` exists.
 7. **Lowering** (`lower.cpp`): `lower_scoped_block` (`1660-1665`), `lower_if` (`1711`), `statement_position` (`2067-2082`), `lower_statement` (`2093-2185`, `AST_IF` at `2178`), `lower_block` (`2190-2195`). A node with `is_constant` lowers to its constant (`745`). `ir_print_debug` shows scopes and positions (`test_ir.cpp:2942`, `scopes_follow_blocks`).
 8. **Driver** (`driver.cpp`): `compilation_load` (`164-210`) prints `rig: error: 'MAIN' doesn't load 'FILE'` (`205-208`); `compilation_check` (`216-223`) takes `is_build_program` from the tree before checking. Interpret mode (`tests/unit/interpret_mode.cpp:104`) and the workspaces load through `load_program` too.
 9. **Grammar:** `rig.tmLanguage.template.json`'s `constants` (`291-299`) holds `@KEYWORDS_CONSTANT@`; its directive rule colours any `#name` as `keyword.other.directive.rig` (`129-150`). `test_grammar.cpp`: `Grammar_Tables` (`203-224`), placeholders filled at `486-561` (`TYPES` at `523`, its missing-placeholder problem at `561`).
 10. **Extension:** `program.js`'s `DOESNT_LOAD` and `doesntLoad` (`130-155`); `extension.js`'s `through` (`1192-1212`) and `show` (`1158-1183`); no output channel exists yet. `test/check.js`: the `doesntLoad` checks (`430-445`), the vscode stub's `window` (`1670-1679`), the stand-in compiler `STAND_IN` (`1964-2029`), `checked` (`2532`).
-11. **Runner** (`tests/runner.cpp`): `CHECK_CASES` (`2230-2310`), `check_tests` (`2321-2359`), `check_stdin_for_a_file_not_loaded_test` (`2180-2190`), `run_check_for` (`1832`), `check_result`. `tests/run/load/` and `tests/errors/load/` hold loaded files, never built alone.
-12. **Test helpers:** `check_source` (`helpers.cpp:145`), `lower_source` (`170`), `check_src` (`test_checker.cpp:310`), `load_main` and `test_places` (`test_load.cpp:37`, `1114`).
+11. **Runner** (`tests/runner.cpp`): `CHECK_CASES` (`2230-2310`), `check_tests` (`2321-2359`), `check_stdin_for_a_file_not_loaded_test` (`2180-2190`), `run_check_for` (`1834`), `check_result`. A `CHECK_CASES` entry's last field is what stderr must *start* with (`command_test`, `1521`), and its rig gets an empty standard input. `tests/run/load/` and `tests/errors/load/` hold loaded files, never built alone.
+12. **Test helpers:** `check_source` (`helpers.cpp:145`), `lower_source` (`170`), `check_src` (`test_checker.cpp:309`), `load_main` and `test_places` (`test_load.cpp:37`, `1114`).
 
 ## The maintainer's decisions (binding: the issue's, restated)
 
@@ -122,7 +122,7 @@
 6. **Which names count as "declared in a top-level #if"** for the condition rule: those in any branch, taken or not, decided or not, at any depth, of the top-level `#if`s read so far, and every declaration of a file that only a taken branch's `#load` brought in (it joins the top level through the branch). The base a condition may use is exactly the declarations of the files read before the first decision, outside every `#if`. A name in a file not read yet is `unknown identifier` (unless a load or a condition has failed).
 7. **The decider is a checker with `deciding` set**, made lazily at the first top-level `#if` (programs with none pay nothing), knowing the base names and the constants, saying no "already declared" or built-in-name errors (`check()` says them once, later). `check()` then runs as today on the whole tree, with a checker of its own; what the decider worked out (a constant's value, a struct's layout and `Type`) is kept on the nodes and found done. `check()` makes a struct's `Type` only if it has none yet.
 8. **In deciding mode** every `#run` reached is refused, one whose operand is a constant included (`#if #run true`). A call's callee signature may be resolved on the way (the call then isn't constant anyway).
-9. **Load order with branches** is computed by one walk after the files outside every `#if` are read: files in load order, each file's top-level `#load`s, `#import`s and `#if`s in source order, a taken branch's in its place, nested `#if`s decided as met. Each file's place in that walk is its `order`. A file's *name* (the path of the `#load` that first reached it) and the place of a `cannot read` error stay those of the reading order: a file reached both from a branch and from outside every `#if`, by two spellings, keeps the first spelling read. (The maintainer may want otherwise: see the report.)
+9. **Load order with branches** is computed by one walk after the files outside every `#if` are read: files in load order, each file's top-level `#load`s, `#import`s and `#if`s in source order, a taken branch's in its place, nested `#if`s decided as met. Each file's place in that walk is its `order`. A file's *name* (the path of the `#load` that first reached it) and the place of a `cannot read` error stay those of the reading order: a file reached both from a branch and from outside every `#if`, by two spellings, keeps the first spelling read. (The maintainer has confirmed this.)
 10. **Recovery details:**
     - Inside a top-level branch the recovery skips as at the top level, but stops at the `}` that closes the branch (a `}` at brace depth 0 counted from the failed declaration's start), so the branch closes there.
     - Branch contents may be unindented (a C habit from `#ifdef`): no column-1 rule ends a branch. A branch ends only at its `}`; at the end of the file it's `expected '}'` there, unless an error was reported at that very position already (a body never closed inside it), and the whole `#if` is given up as a broken entry with no name.
@@ -132,7 +132,8 @@
     - Top-level branches count as blocks for MAX_DEPTH (`blocks are nested too deeply (more than 1000 levels)`).
 11. **A failed top-level condition** sets `Ast_File.lost_a_file`, the existing flag for "the program lacks something": the same silence, no new flag. A misplaced `#load` inside a branch not taken still sets the file's `lost_a_file` (the parser's flag is per file); the program has that syntax error anyway.
 12. **`check()` and undecided top-level `#if`s:** a tree from `parse()` keeps its top-level `#if`s undecided, and `check()` leaves their branches out, as if not taken. Only `load_program` decides them; the unit tests of the top-level form go through it (`load_program` takes the main file's text, so no file need exist).
-13. **`--stdin-for` and branches not taken:** the loader resolves the `#load`s and `#import`s of every branch not taken (every branch of a failed chain, and at any depth inside such a branch) without reading them, and compares each with the `--stdin-for` file by identity. Only when the program doesn't reach the file but such a load names it is the not-taken message said. A file only a file in a branch not taken loads (two steps away) gets `doesn't load`, as the unread file's loads are unknown.
+13. **`--stdin-for` and branches not taken:** the loader resolves the `#load`s and `#import`s of every branch not taken (the branches of a decided chain other than the taken one, and at any depth inside such a branch) without reading them or saying anything, and compares each with the `--stdin-for` file by identity. Only when the program doesn't reach the file but such a load names it is the not-taken message said. A file only a file in a branch not taken loads (two steps away) gets `doesn't load`, as the unread file's loads are unknown.
+    - **A failed chain's branches are not "not taken"** (the maintainer's change to this decision): a load in any branch of a chain whose condition failed, at any depth inside it, is *undecided*. When the program doesn't reach the file but an undecided load names it, rig doesn't say `doesn't load` or the not-taken message: it goes on and checks the program as for any program with errors, so the condition's error is reported (in another file than the `--stdin-for` one, which the extension shows as its count of the other files' errors), exit 1, and the editor doesn't silently show nothing. Undecided wins over not taken when loads of both kinds name the file.
 14. **The extension:** a new output channel named `Rig`. On the not-taken answer, the document's diagnostics are set to none, `main` is remembered as its program, and the channel gets one line, once per document until it's closed: `FILE isn't checked: MAIN loads it only in an #if branch not taken on this system.` (paths as the extension has them).
 15. **Test names.** `tests/run/os_constants`, `if_body`, `if_top_level`, `if_load` (with `load/if_windows.rig`, `load/if_linux.rig`), `if_constant_elsewhere` (with `load/if_level.rig`), `if_sleep`; `tests/errors/os_predeclared`, `if_body_condition`, `if_syntax`, `if_top_level_condition`, `if_failed_condition`, `if_condition_from_another_if`, `if_condition_runs_code`, `if_branches_checked`.
 
@@ -273,7 +274,7 @@ static bool starts_if(Parser *p);  // an #if starting a line, as starts_run
   - `parse_if_directive_in_column_1_resumes`: `N ::\n#if A { M :: 1; }\nmain :: () {}\n` is `2:1: expected an expression, found directive`, the `#if` kept; `f :: ()\n#if A {}\n` is `expected '{', found directive` at 2:1, the `#if` kept; a body never closed before column-1 globals and an `#if` (`f :: () {\n    x := 1;\nG := 2;\n#if A {}\nmain :: () {}\n`) reports `expected '}'` at `G` (3:1), and both `G` and the `#if` are the top level's.
   - `parse_if_directive_never_closed`: `#if A {\n    f :: () {}\n` is one `expected '}'` at the end of the file, and the `#if` is a broken entry with no name; `#if A {\n    f :: () {\n` is one message too, the body's.
   - `parse_if_directive_errors`: `#if {}` (`expected an expression, found '{'`), `#if A }` (`expected '{', found '}'`), `#if A {} else B` (`expected '{', found identifier 'B'`), `x := #if A {};` in a body (`expected an expression, found directive`).
-  - `parse_if_directives_nested_too_deeply`: 1000 nested top-level `#if A {` build with no error (`nested_source`); 1001 is `blocks are nested too deeply (more than 1000 levels)` at the `{` too many. The same in a body, where the body's own block counts first.
+  - `parse_if_directives_nested_too_deeply`: 1000 nested top-level `#if A {` parse with no error (`parse_src` of `nested_source`; not `builds`, which checks: until Task 3 the checker has no case for a body `#if`, and `parse()` leaves top-level ones undecided); 1001 is `blocks are nested too deeply (more than 1000 levels)` at the `{` too many. The same in a body, where the body's own block counts first.
 - [ ] **Step 2: Run** the Windows build, then `.\bin\unit-tests.exe parse_`: the new tests fail.
 - [ ] **Step 3: Implement.**
   - `parse_declaration`: `#if` → `parse_if_directive(p, true)`. `parse_statement`: `#if` → `parse_if_directive(p, false)`.
@@ -322,7 +323,7 @@ static void check_if_directive(Checker *c, Ast_If_Directive *first);
     - `if_directive_reaches_the_end`: `f :: () -> int { #if true { return 1; } else { return 2; } }` clean; `f :: () -> int { #if false { return 1; } }` is the must-return message; `f :: () -> int { #if 1 { return 1; } }` only the condition's message. A `while true { #if true { break; } }` ends (no must-return after it).
     - `if_directive_per_system`: parse `main :: () {\n    #if OS == OS_WINDOWS { a : int = "w"; } else { b : int = "l"; }\n}\n` twice, `file->system` `SYSTEM_WINDOWS` then `SYSTEM_LINUX`: one error each, `a value of type 'string' doesn't convert to 'int' implicitly`, at `2:38` (`a`'s value) on Windows' system and `2:62` (`b`'s) on Linux's.
     - `if_directive_jumps_need_a_loop`: `main :: () { #if true { break; } }` is `'break' is only allowed inside a loop`; inside a `for`, clean.
-    - `if_directive_chains_of_10000_arms` (Review Focus 5), modelled on `else_if_chains_of_10000_arms` (`test_parser.cpp:1794`) with the body form: a procedure whose `X :: 5000;` decides a 10000-arm `#if X == i { return i; } else #if ...` chain, last `else { return -1; }`, builds (`builds`), runs (`run_module`) and returns 5000.
+    - `if_directive_chains_of_10000_arms` (Review Focus 5), modelled on `else_if_chains_of_10000_arms` (`test_parser.cpp:1794`) with the body form: a procedure whose `X :: 5000;` decides a 10000-arm `#if X == i { return i; } else #if ...` chain, last `else { return -1; }`, builds (`builds`) and runs (`run_module` of `lower_source`): `main` can't return a value, so, as in `else_if_chains_of_10000_arms`, it prints `ok` (`putchar`) when the procedure returns 5000.
     - `find_in_statement` (test helper) looks into the taken branch of an `AST_IF_DIRECTIVE`.
   - `test_ir.cpp`, `an_if_directive_makes_no_scope`: `main :: () {\n    x := 1;\n    #if true {\n        y := 2;\n    }\n    z := y;\n}\n` with `ir_print_debug`: no `; scope` line, `y`'s var line says `in 0 at 4:9`, and no instruction is at line 3 (no `; 3:` in the procedure's IR).
   - `tests/run/if_body.rig` (libc `puts`), its `.out` the six lines in order:
@@ -442,12 +443,14 @@ void check_decide(Checker *c, Ast_If_Directive *first);
 void check_decider_free(Checker *c);
 
 // checker.cpp
-// The top level's names: the predeclared constants, then `declarations` in
-// order, each struct's Type made if it has none. With report, the mistakes are
-// said (built-in name, predeclared name, already declared) and the broken
-// entries declared after, as check() did; without, the first of a name wins,
-// silently.
-static void declare_top_level(Checker *c, Array<Ast *> declarations, bool report);
+// The top level's names: the predeclared constants (declare_predeclared(c,
+// c->file)), then the whole declarations of `declarations` in order, each
+// struct's Type made if it has none, then the broken entries' names, as
+// check()'s two name passes did. With report, the mistakes are said (built-in
+// name, predeclared name, already declared); without, the first of a name
+// wins, silently. Returns whether a broken entry lost its name (check()'s
+// lost_a_name, for the main rule).
+static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report);
 // In deciding mode, for a name found nowhere: whether it's declared in a
 // top-level #if (Decision 6); if so, "'NAME' is declared in a top-level #if,
 // so it can't decide another top-level #if" at `at`, and true.
@@ -465,7 +468,7 @@ bool check_in_a_branch(Checker *c, String name, Position at);   // check.h
   - `deciding_leaves_the_rest_for_check`: `Vec2 :: struct { x: int; y: int; }\nORIGIN :: Vec2.{0, 0};\n#if ORIGIN.x == 0 {}\nmain :: () { v : Vec2 = ORIGIN; }\n`: decided (then-block), then `check()` on the same tree says nothing (one `Type` for `Vec2`, kept from the decider).
 - [ ] **Step 2: Run** them: they fail to compile.
 - [ ] **Step 3: Implement.**
-  - `check()` calls `declare_top_level(&c, declarations, true)`; the broken entries' pass and the rest unchanged.
+  - `check()` sets `c.file = file` and calls `bool lost_a_name = declare_top_level(&c, declarations, true)` in place of its two name passes (Task 1's `declare_predeclared` call moves into `declare_top_level`); the rest unchanged.
   - `check_decider_new` allocates a `Checker` (`deciding`, `file`, `base_procs = file->procs.count`, `base_globals = file->globals.count`, no world), `declare_top_level(c, ast_declarations(file), false)`.
   - `check_in_a_branch` reports whatever `lost_a_file` says (the name is known to be declared, in a branch), and looks through `file->procs[base_procs..]`, `file->globals[base_globals..]`, and every branch of `file->ifs` at any depth (a worklist, not recursion per arm), for a declaration of the name.
   - `report_undeclared` and `resolve_written`'s unknown-type branch call it first in deciding mode.
@@ -536,7 +539,7 @@ Source_File.order and Ast_File.order; ast_sort_declarations(tree); check_decider
     - `if_nested_in_a_taken_branch`: `#if true { #if false { X :: 1; } else { Y :: 2; } }`: `Y` only.
     - `if_failed_condition_loses_like_a_failed_load`: `#if 1 {}` sets `tree->lost_a_file`.
     - `if_condition_sees_constants_of_every_file`: main `#load "a.rig";\n#if LEVEL > 1 { A :: 1; }`, `a.rig` `LEVEL :: 2;`: `A` declared, no diagnostics.
-    - `if_decides_build_programs` (with `test_places` and a written `Compiler` module): `#if false { #import "Compiler"; }` doesn't reach it (`reaches_compiler` false); `#import "Compiler";\n#if false { main :: () {} }` is a build program (`ast_is_build_program`), `#if true { main :: () {} }` isn't.
+    - `if_decides_build_programs` (with `test_places` and a written `Compiler` module): `#if false { #import "Compiler"; }` doesn't reach it (`reaches_compiler` false); `#import "Compiler";\n#if false { main :: () {} }` is a build program (`ast_is_build_program`), `#import "Compiler";\n#if true { main :: () {} }` isn't.
   - `test_checker.cpp`, with a helper `check_loaded(Arena *a, const char *text, System system)`: `load_program` of `text` as `test.rig` (no file needed) with `Load_Options.system`, then `check()`, `diag_sort`, the messages:
     - `if_branch_names_and_the_rest` (Review Focus 2), through `load_program` and `check()`: `#if OS == OS_WINDOWS { NAME :: 1; } else { NAME :: 2; }\nmain :: () {}\n` checks clean on both systems; `X :: 0;\n#if true { X :: 1; }\nmain :: () {}\n` is `'X' is already declared at test.rig:1:1`, at 2:12; with the `#if` first and `X :: 0;` after, the message is at the outside one, naming the branch's.
     - `top_level_if_directive_chains_of_10000_arms` (Review Focus 5): a top-level `#if N == 0 { A :: 0; } else #if N == 1 { A :: 1; } ...` of 10000 arms with `N :: 9999;`, then `main :: () { x : [A + 1]u8; }`: loads and checks clean.
@@ -570,7 +573,7 @@ Source_File.order and Ast_File.order; ast_sort_declarations(tree); check_decider
   - `tests/run/if_constant_elsewhere.rig`, `.out` `debug build\n`: `#load "load/if_level.rig";` then `#if DEBUG { report :: () { puts("debug build"); } } else { report :: () { puts("release build"); } }` and `main :: () { report(); }`; `load/if_level.rig` is `LEVEL :: 2;\nDEBUG :: LEVEL > 1;\n`.
   - `tests/run/if_sleep.rig`, `.out` `slept, and greeted\n`: the issue's example with libc `puts` for Basic: `Sleep :: (milliseconds: u32) #foreign libc;` and `sleep_ms` on Windows, `c_usleep :: (microseconds: u32) -> s32 #foreign libc "usleep";` and `sleep_ms` otherwise; `main`'s body `#if` declares `greeting` in each branch, `sleep_ms(10)`, then `if greeting.count > 0 { puts("slept, and greeted"); }`. The interpreted pass runs it too (kernel32's `Sleep` and libc's `usleep` are found by `os_find_c_function`).
   - `tests/errors/if_top_level_condition.rig`: `#if 1 { }\nflag := true;\n#if flag { }\nmain :: () {}\n`: the two condition messages, at 1:5 and 3:5.
-  - `tests/errors/if_failed_condition.rig`: `#if 1 {\n    main :: () { helper(); }\n}\nuse :: () { helper(); missing(); }\n`: only the condition's message: no unknown name, no missing `main`.
+  - `tests/errors/if_failed_condition.rig`: `#if 1 {\n    #load "load/if_failed.rig";\n    main :: () { helper(); }\n}\nuse :: () { helper(); missing(); }\n`: only the condition's message (1:5): no unknown name, no missing `main`, and the `#load` (of a file that isn't there) not read. Task 7's runner case uses it.
   - `tests/errors/if_condition_from_another_if.rig`:
     ```rig
     #if OS == OS_WINDOWS { LEVEL :: 2; } else { LEVEL :: 3; }
@@ -601,7 +604,7 @@ Source_File.order and Ast_File.order; ast_sort_declarations(tree); check_decider
 ### Task 7: --stdin-for of a file only a branch not taken loads, and the extension
 
 **Files:**
-- Modify: `src/load.h`, `src/load.cpp` (`Load_Options.stdin_for_not_taken`, `note_not_taken`)
+- Modify: `src/load.h`, `src/load.cpp` (`Load_Options.stdin_for_not_taken`, `Load_Options.stdin_for_undecided`, `note_not_taken`)
 - Modify: `src/driver.cpp` (`compilation_load`, `command_check`'s comment)
 - Modify: `tests/runner.cpp` (`check_stdin_for_a_branch_not_taken_test`, a `CHECK_CASES` entry, the header comment)
 - Modify: `editors/vscode/program.js`, `editors/vscode/extension.js`, `editors/vscode/README.md`, `editors/vscode/test/check.js`
@@ -612,9 +615,12 @@ Source_File.order and Ast_File.order; ast_sort_declarations(tree); check_decider
 // load.h, Load_Options gains:
 bool *stdin_for_not_taken;  // when given, set to whether a #load or an #import in a branch not taken
                             // (Decision 13) names stdin_for
-// load.cpp: the loads of `branch`, a branch not taken, and of every branch of the #ifs in it, each
-// resolved as follow_load would (unread) and compared with the stdin-for file by identity.
-static void note_not_taken(Loading *l, Ast_Block *branch, s32 holder);
+bool *stdin_for_undecided;  // when given, set to whether one in a branch of a chain whose condition
+                            // failed, at any depth inside it, names stdin_for (Decision 13)
+// load.cpp: the loads of `branch`, a branch not taken (`undecided`: a branch of a failed chain), and of
+// every branch of the #ifs in it, each resolved as follow_load would (unread, saying nothing) and
+// compared with the stdin-for file by identity; a match sets the not-taken or the undecided flag.
+static void note_not_taken(Loading *l, Ast_Block *branch, s32 holder, bool undecided);
 ```
 ```js
 // program.js
@@ -624,9 +630,10 @@ function notTaken(code, output) { /* exit 1 and such a line, as doesntLoad */ }
 ```
 
 - [ ] **Step 1: Write the failing tests.**
-  - `test_load.cpp`, `stdin_for_loaded_only_in_a_branch_not_taken`: main `#if OS == OS_WINDOWS { #load "w.rig"; } else { #load "l.rig"; }`, `--stdin-for` `l.rig`'s path: with `SYSTEM_WINDOWS`, `reached` false and `not_taken` true; with `SYSTEM_LINUX`, `reached` true. A nested branch not taken inside a taken one counts; a failed condition's branches count; `l.rig` loaded both in a branch not taken and outside every `#if` is `reached`.
+  - `test_load.cpp`, `stdin_for_loaded_only_in_a_branch_not_taken`: main `#if OS == OS_WINDOWS { #load "w.rig"; } else { #load "l.rig"; }`, `--stdin-for` `l.rig`'s path: with `SYSTEM_WINDOWS`, `reached` false and `not_taken` true; with `SYSTEM_LINUX`, `reached` true. A nested branch not taken inside a taken one counts; a failed condition's branches don't (`#if 1 { #load "l.rig"; } else { #load "l.rig"; }`, and an `else #if 1` arm after a false one: `reached` and `not_taken` false, `undecided` true); every branch of an `#if` nested in a failed chain's branch (never decided) is undecided too; `l.rig` named both in a failed chain and in a branch not taken is `undecided`; `l.rig` loaded both in a branch not taken and outside every `#if` is `reached`.
   - `runner.cpp`:
     - `CHECK_CASES`: `{"--stdin-for of a file loaded only in a branch taken on neither system", {"check", "tests/run/if_load.rig", "--stdin-for", "tests/run/load/no_such_file.rig"}, 1, "rig: error: 'tests/run/if_load.rig' loads 'tests/run/load/no_such_file.rig' only in an #if branch not taken\n"}`.
+    - `CHECK_CASES` (the maintainer's change to Decision 13): `{"--stdin-for of a file loaded only in a failed #if's branch: the program is checked", {"check", "tests/errors/if_failed_condition.rig", "--stdin-for", "tests/errors/load/if_failed.rig"}, 1, "tests/errors/if_failed_condition.rig:1:5: error: the condition of '#if' must be a bool, not 'int'\n"}` (Task 6's file; `load/if_failed.rig` needn't exist, as no `--stdin-for` file need).
     - `check_stdin_for_a_branch_not_taken_test`, reported as `rig check --stdin-for a file only a branch not taken loads`: the other system's file (`tests/run/load/if_linux.rig` on Windows, `if_windows.rig` on Linux, `#ifdef _WIN32`) with its own text gives exit 1 and exactly the message line; this system's file with its own text gives exit 0 and nothing.
   - `check.js`:
     - `program.js: notTaken reads rig's answer`, as the `doesntLoad` checks: true for exit 1 and the line (CRLF too), false for exit 0, 2 or null, for an indented line, and for the doesn't-load line; `doesntLoad` false for the not-taken line.
@@ -634,8 +641,8 @@ function notTaken(code, output) { /* exit 1 and such a line, as doesntLoad */ }
     - `a file only a branch not taken loads shows nothing, and says why once`: a main file `b.rig` with that line, the document `helper.rig` holding `putz();`: the check calls `b.rig --stdin-for helper.rig`, the document's diagnostics are `[]`, `stub.output` (the stub's `window.createOutputChannel('Rig')` records `appendLine`s) has one line naming both files; a second check (a change) adds no line and calls `b.rig` straight away (remembered); after a close and a new open, the line is said again.
 - [ ] **Step 2: Run** `.\bin\unit-tests.exe stdin_for`, `.\bin\run-tests.exe`, `node editors/vscode/test/check.js`: the new ones fail.
 - [ ] **Step 3: Implement.**
-  - The loader: in the walk, for a decided chain, `note_not_taken` on each branch not taken (every branch when it `failed`, the arms after the taken one included).
-  - `compilation_load`: with `stdin_for` and not `reached`, the not-taken message when `not_taken`, else the doesn't-load one.
+  - The loader: in the walk, for a decided chain, `note_not_taken` on each branch not taken (the arms after the taken one included), `undecided` false; when it `failed`, on every branch, `undecided` true. Inside a branch, `undecided` carries down to every nested `#if`'s branches.
+  - `compilation_load`: with `stdin_for` and not `reached`: when `undecided`, it goes on (returns true: the program is checked and its errors printed, exit 1); else the not-taken message when `not_taken`; else the doesn't-load one.
   - The extension: `notTaken` exported; in `through`, a not-taken answer sets the document's diagnostics to none, remembers `main`, appends Decision 14's line to the `Rig` channel (made once, in `activate`, disposed with the context) unless said for this document since it opened (a `Set` of document keys, cleared on close), and resolves `'done'`. The README's live-check section gets a paragraph: a file loaded only in a branch not taken on this system isn't checked, and why.
   - `command_check`'s comment and the runner's header name the new answer.
 - [ ] **Step 4: Run all tests** on both hosts, `check.js` included.
@@ -668,7 +675,7 @@ function notTaken(code, output) { /* exit 1 and such a line, as doesntLoad */ }
   - 9.2: `#if` in the recovery (column 1, starting a line, a branch's `}`, a struct).
   - 9.3: a row for each new message, with its section.
   - 9.4: `An else if chain, and an else #if chain, may have any number of arms.`; top-level `#if`s nest as blocks do (1000).
-  - 10.1: `rig check` checks the taken branches for the host's `OS`; `--stdin-for`'s not-taken answer and its exit status in the status paragraph.
+  - 10.1: `rig check` checks the taken branches for the host's `OS`; `--stdin-for`'s not-taken answer and its exit status in the status paragraph; a file named only in a branch of a chain whose condition failed isn't "not taken": the program is checked, its errors (the condition's) printed.
   - 10.2: stage 3 decides the top-level `#if`s, with the checker, between reading the files outside every `#if` and checking.
   - 10.7: an `#if` makes no lexical block; its line has no code.
   - Appendix A: A.2's `TopLevel` and A.3's `Statement` gain `IfDirective`, and its rule; the sentence on what appears only at the top level. Appendix B: rows for `#if` (4.9) and `OS`, `OS_WINDOWS`, `OS_LINUX` (2.5, 4.9).
