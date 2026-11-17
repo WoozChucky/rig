@@ -1,0 +1,121 @@
+// Basic's time (issue #145): times turned into the calendar and written as
+// ISO 8601, at 1970's first instant, one nanosecond before it, on leap days
+// of a year divisible by 400 and of an ordinary one, at the first day after
+// February of century years that aren't leap years (1900, 2100), before
+// 1970, and at int's two extremes, whose floor division mustn't overflow;
+// the calendar's fields one by one; fields padded with zeros, and ones too
+// wide or negative for their width; then the clock and a timer, of which it
+// prints only what can't vary from run to run.
+#import "Basic";
+
+// Prints the time nanoseconds after 1970-01-01T00:00:00Z as ISO 8601, then
+// its weekday (0 for Sunday) and its nanosecond, each after a space.
+show :: (nanoseconds: int) {
+    c := to_calendar(Time.{nanoseconds});
+    buffer : [TIME_TEXT_MAX]u8;
+    print_string(format_time(c, buffer));
+    print_string(" ");
+    print_int(c.weekday);
+    print_string(" ");
+    print_int(c.nanosecond);
+    print_line("");
+}
+
+// Prints a space, then value.
+show_int :: (value: int) {
+    print_string(" ");
+    print_int(value);
+}
+
+// Prints a space, then value.
+show_bool :: (value: bool) {
+    print_string(" ");
+    print_bool(value);
+}
+
+main :: () {
+    // 1970's first instant, a Thursday, and the nanosecond before it, the
+    // last of a Wednesday in 1969.
+    show(0);
+    show(-1);
+    // 2000 is divisible by 400, so it has a February 29th: its first and
+    // last nanosecond.
+    show(951782400000000000);
+    show(951868799999999999);
+    // 1900 and 2100 are divisible by 100 and not by 400, so they have none:
+    // the day after February 28th is March 1st. Between them, 2024 is
+    // divisible by 4 and not by 100, so it has one, here at a time with
+    // every field set.
+    show(-2203891200000000000);
+    show(1709210096789000000);
+    show(4107542400000000000);
+    // A time before 1970 that isn't midnight, a Sunday, and a recent one.
+    show(-14182940000000000);
+    // A Saturday before 1970, one nanosecond past its midnight: its days %
+    // 7 is -5, so adding only 4 to it, and not 11, would make the weekday
+    // negative.
+    show(-431999999999999);
+    show(1794907800000000000);
+    // int's largest and most negative values, the ends of what a Time holds.
+    show(9223372036854775807);
+    show(-9223372036854775808);
+
+    // The fields of the calendar, from the year down to the second.
+    c := to_calendar(Time.{1709210096789000000});
+    print_int(c.year);
+    show_int(c.month);
+    show_int(c.day);
+    show_int(c.hour);
+    show_int(c.minute);
+    show_int(c.second);
+    print_line("");
+
+    // Short fields padded with zeros on the left, to 4 digits for the year.
+    buffer : [TIME_TEXT_MAX]u8;
+    print_line(format_time(Calendar.{5, 1, 2, 3, 4, 5, 0, 0}, buffer));
+    // A negative year shorter than 4 bytes gets no zeros: its - comes first.
+    print_line(format_time(Calendar.{-5, 1, 2, 3, 4, 5, 0, 0}, buffer));
+    // A year too wide for 4 digits and a negative month are written whole,
+    // so the text is longer than TIME_TEXT_MAX and needs a buffer that is.
+    wide : [64]u8;
+    print_line(format_time(Calendar.{12345, -1, 2, 3, 4, 5, 0, 0}, wide));
+
+    // The clock: this test was written in November 2026, so it is at least
+    // that late. And it gives the nanoseconds after the second, not only
+    // whole seconds: of three readings, one at least isn't on a second's
+    // first nanosecond, unless the clock only counts seconds.
+    now := time_now();
+    print_string("now:");
+    show_bool(to_calendar(now).year >= 2026);
+    show_bool(now.nanoseconds > 1794000000000000000);
+    between_seconds := false;
+    for 1..3 {
+        if time_now().nanoseconds % NANOSECONDS_PER_SECOND != 0 { between_seconds = true; }
+    }
+    show_bool(between_seconds);
+    print_line("");
+
+    // A timer that was started 5.5 seconds ago, by setting its start: it
+    // has run that long and a little more, which pins the seconds' fraction
+    // and their scale, and that the start is taken from now and not the
+    // other way.
+    past := Timer.{Time.{time_now().nanoseconds - 5500000000}};
+    print_string("past:");
+    show_bool(timer_elapsed_ns(past) >= 5500000000);
+    past_seconds := timer_elapsed_seconds(past);
+    show_bool(past_seconds >= 5.5 && past_seconds < 65.5);
+    print_line("");
+
+    // A timer around some work: how long it took varies, but it is no less
+    // than nothing (unless the clock is set back meanwhile) and far less
+    // than a minute.
+    timer := timer_start();
+    total := 0;
+    for 1..100000 { total += it; }
+    ns := timer_elapsed_ns(timer);
+    seconds := timer_elapsed_seconds(timer);
+    print_string("timer:");
+    show_bool(ns >= 0);
+    show_bool(seconds >= 0.0 && seconds < 60.0);
+    print_line("");
+}

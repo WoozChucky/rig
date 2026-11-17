@@ -1,0 +1,266 @@
+// Basic's files (issue #145): files through C's stdio in binary mode, under
+// .build/tests/, which the runner makes before any test, and removed at the
+// end. A missing file, an empty one, one of every byte value and one of
+// several megabytes, appending, an allocator with no memory, the File
+// procedures, a file read or written in the wrong mode, a directory given
+// as a file, and an empty one, a path with a zero byte, and a File that
+// isn't open.
+#import "Basic";
+
+A :: ".build/tests/basic_file_a.txt";
+B :: ".build/tests/basic_file_b.txt";
+C :: ".build/tests/basic_file_c.txt";
+BINARY :: ".build/tests/basic_file_binary.bin";
+LARGE :: ".build/tests/basic_file_large.bin";
+MISSING :: ".build/tests/basic_file_missing.txt";
+
+// An empty directory, which the runner makes before any test, since C17
+// can't make one, and a file this test makes in it, for a moment, to show
+// the directory is still there.
+EMPTY_DIRECTORY :: ".build/tests/basic_file_empty_dir";
+IN_EMPTY_DIRECTORY :: ".build/tests/basic_file_empty_dir/x.txt";
+
+// Prints s between brackets, so an empty string shows as [].
+show_text :: (s: string) {
+    print_string("[");
+    print_string(s);
+    print_string("]");
+}
+
+// Prints a space, then value.
+show_bool :: (value: bool) {
+    print_string(" ");
+    print_bool(value);
+}
+
+// Prints a space, then value.
+show_int :: (value: int) {
+    print_string(" ");
+    print_int(value);
+}
+
+// Gives no memory, as an allocator that has run out would.
+failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return null;
+}
+
+main :: () {
+    // A run that stopped halfway may have left any of them.
+    delete_file(A);
+    delete_file(B);
+    delete_file(C);
+    delete_file(BINARY);
+    delete_file(LARGE);
+    delete_file(MISSING);
+    delete_file(IN_EMPTY_DIRECTORY);
+
+    // A missing file is the zeroed string, with nothing allocated.
+    print_string("missing:");
+    show_bool(file_exists(A));
+    data, ok := read_entire_file(A, HEAP_ALLOCATOR);
+    show_bool(ok);
+    show_int(data.count);
+    show_bool(data.data == null);
+    print_line("");
+
+    print_string("write:");
+    show_bool(write_entire_file(A, "hello\n"));
+    show_bool(file_exists(A));
+    print_line("");
+
+    // Binary mode keeps the line feed one byte on Windows too.
+    data, ok = read_entire_file(A, HEAP_ALLOCATOR);
+    print_string("read:");
+    show_bool(ok);
+    show_int(data.count);
+    show_bool(data == "hello\n");
+    print_line("");
+    free(data.data, HEAP_ALLOCATOR);
+
+    print_string("append:");
+    show_bool(append_to_file(A, "world\n"));
+    data, ok = read_entire_file(A, HEAP_ALLOCATOR);
+    show_int(data.count);
+    show_bool(data == "hello\nworld\n");
+    print_line("");
+    free(data.data, HEAP_ALLOCATOR);
+
+    // Appending to a file that isn't there makes it.
+    print_string("append makes a file:");
+    show_bool(append_to_file(B, "new"));
+    data, ok = read_entire_file(B, HEAP_ALLOCATOR);
+    show_int(data.count);
+    print_line("");
+    free(data.data, HEAP_ALLOCATOR);
+
+    // An allocator with no memory for the file's bytes gives the zeroed
+    // string and false.
+    data, ok = read_entire_file(A, Allocator.{failing_allocator_proc, null});
+    print_string("no memory:");
+    show_bool(ok);
+    show_int(data.count);
+    show_bool(data.data == null);
+    print_line("");
+
+    // An empty file is found, and read as the zeroed string, with nothing
+    // allocated.
+    print_string("empty:");
+    show_bool(write_entire_file(C, ""));
+    show_bool(file_exists(C));
+    data, ok = read_entire_file(C, HEAP_ALLOCATOR);
+    show_bool(ok);
+    show_int(data.count);
+    show_bool(data.data == null);
+    print_line("");
+
+    // Every byte value, the zero, the carriage return and Ctrl-Z among
+    // them, comes back as it was written.
+    bytes : [256]u8;
+    for 0..255 { bytes[it] = cast(u8) it; }
+    view : []u8 = bytes;
+    write_entire_file(BINARY, cast(string) view);
+    data, ok = read_entire_file(BINARY, HEAP_ALLOCATOR);
+    print_string("binary:");
+    show_bool(ok);
+    show_int(data.count);
+    show_bool(compare_memory(data.data, bytes.data, 256) == 0);
+    print_line("");
+    free(data.data, HEAP_ALLOCATOR);
+
+    // Five megabytes, more than any buffer C reads through at once.
+    size := 5 * 1024 * 1024;
+    big := cast(*u8) alloc(size, HEAP_ALLOCATOR);
+    for 0..size - 1 { big[it] = cast,trunc(u8) (it * 31); }
+    big_text : string;
+    big_text.data = big;
+    big_text.count = size;
+    write_entire_file(LARGE, big_text);
+    data, ok = read_entire_file(LARGE, HEAP_ALLOCATOR);
+    print_string("large:");
+    show_bool(ok);
+    show_int(data.count);
+    show_bool(data.count == size && compare_memory(data.data, big, size) == 0);
+    print_line("");
+    free(data.data, HEAP_ALLOCATOR);
+    free(big, HEAP_ALLOCATOR);
+
+    // Reads go on from where the last stopped, and file_size leaves the
+    // position where it was: the read after it goes on from byte 5. The
+    // last read is at the end, and gives 0. The first read has a buffer of
+    // its own, so the later ones don't write over what it read.
+    f, opened := file_open(A, FILE_READ);
+    first : [5]u8;
+    buffer : [5]u8;
+    n1 := file_read(f, first);
+    size_now := file_size(f);
+    n2 := file_read(f, buffer);
+    n3 := file_read(f, buffer);
+    n4 := file_read(f, buffer);
+    first_view : []u8 = first;
+    print_string("reads:");
+    show_bool(opened);
+    show_int(n1);
+    print_string(" ");
+    show_text(slice(cast(string) first_view, 0, n1));
+    show_int(size_now);
+    show_int(n2);
+    show_int(n3);
+    show_int(n4);
+    print_line("");
+    file_close(f);
+
+    // Opening to write empties the file; writing "" writes nothing and is
+    // still a success.
+    f, opened = file_open(A, FILE_WRITE);
+    print_string("write mode:");
+    show_bool(file_write(f, "abc"));
+    show_bool(file_write(f, ""));
+    file_close(f);
+    data, ok = read_entire_file(A, HEAP_ALLOCATOR);
+    print_string(" ");
+    show_text(data);
+    print_line("");
+    free(data.data, HEAP_ALLOCATOR);
+
+    f, opened = file_open(A, FILE_APPEND);
+    print_string("append mode:");
+    show_bool(file_write(f, "def"));
+    file_close(f);
+    data, ok = read_entire_file(A, HEAP_ALLOCATOR);
+    print_string(" ");
+    show_text(data);
+    print_line("");
+    free(data.data, HEAP_ALLOCATOR);
+
+    // A file opened to read can't be written, and one opened to write
+    // can't be read: C's fwrite and fread give 0 for them.
+    f, opened = file_open(A, FILE_READ);
+    print_string("wrong mode:");
+    show_bool(file_write(f, "x"));
+    file_close(f);
+    f, opened = file_open(B, FILE_WRITE);
+    show_int(file_read(f, buffer));
+    file_close(f);
+    print_line("");
+
+    // A missing file and a mode that isn't one give a File that isn't open.
+    f, opened = file_open(MISSING, FILE_READ);
+    print_string("bad opens:");
+    show_bool(opened);
+    show_bool(f.handle == null);
+    f, opened = file_open(A, 7);
+    show_bool(opened);
+    print_line("");
+
+    // A directory, tests/run, is not found, read or opened on either
+    // system, though Linux's C library opens one for reading.
+    print_string("directory:");
+    show_bool(file_exists("tests/run"));
+    d, read_ok := read_entire_file("tests/run", HEAP_ALLOCATOR);
+    show_bool(read_ok);
+    f, opened = file_open("tests/run", FILE_READ);
+    show_bool(opened);
+    print_line("");
+
+    // An empty directory isn't deleted either, though Linux's remove would
+    // delete it: delete_file asks file_exists first. A file can still be
+    // made in it afterwards, so it is still there.
+    print_string("empty directory:");
+    show_bool(file_exists(EMPTY_DIRECTORY));
+    show_bool(delete_file(EMPTY_DIRECTORY));
+    show_bool(write_entire_file(IN_EMPTY_DIRECTORY, "x"));
+    show_bool(delete_file(IN_EMPTY_DIRECTORY));
+    print_line("");
+
+    // C would see the path end at the zero, a different name, so the path
+    // is refused and C isn't called: no file named basic_file is made in
+    // the repository's root, where the program runs.
+    zero := "basic_file\0x";
+    print_string("zero byte:");
+    show_bool(write_entire_file(zero, "x"));
+    show_bool(file_exists(zero));
+    show_bool(delete_file(zero));
+    print_line("");
+
+    print_string("delete:");
+    show_bool(delete_file(A));
+    show_bool(delete_file(B));
+    show_bool(delete_file(C));
+    show_bool(delete_file(BINARY));
+    show_bool(delete_file(LARGE));
+    print_string(", again: ");
+    print_bool(delete_file(A));
+    print_string(", exists: ");
+    print_bool(file_exists(A));
+    print_line("");
+
+    // A File that isn't open reads nothing, writes nothing and has no size,
+    // and closing it does nothing.
+    none : File;
+    file_close(none);
+    print_string("null handle:");
+    show_int(file_read(none, buffer));
+    show_bool(file_write(none, "x"));
+    show_int(file_size(none));
+    print_line("");
+}

@@ -1,0 +1,12 @@
+RIG_BASIC_TEST: [set by bin/run-tests] true 2 1
+empty: [] true true 1 1
+unset: [] false true 1 1
+PATH: true true
+refused names: false true false true false true 0 0
+no memory: [] false -1
+no memory for the value: [] false true 2 1
+before the command
+from the command
+status: 0 1 1
+exit 3: true
+zero byte: -1 0 0

@@ -1,0 +1,229 @@
+// Basic's sorting and searching: a merge sort and a binary search over
+// elements of any type. Rig has no generics yet, so both take the elements
+// as a pointer to the first, a count and each element's size in bytes, as
+// C's qsort and bsearch do, and a procedure value that compares two
+// elements through pointers to them: less_int and its neighbours here, or
+// one a program writes for its own type.
+//
+// The sort is a merge sort because it is stable: elements that compare
+// equal keep the order they had, so a list sorted by name and then by town
+// is by town, and by name within each town. It also takes n log n
+// comparisons at most whatever the order the elements come in (n when they
+// come sorted), where a quicksort can take n^2 on an unlucky one. What it
+// costs is scratch memory, half the elements' bytes, from the allocator it
+// is given; when that allocator has none, it sorts by insertion in place
+// instead, slower but stable all the same, so sorting never fails.
+//
+// Elements are moved and swapped a byte at a time, since only their size
+// is known. A comparison procedure may be given a pointer to an element's
+// copy in the scratch memory rather than to the element in place, so it
+// must compare what the pointers point at, never the addresses.
+#load "allocators.rig";
+#load "memory.rig";
+#load "string.rig";
+
+// The most elements sorted by insertion rather than by merging. For a
+// handful of elements, moving each down past the larger ones before it
+// takes fewer steps than splitting, copying out and merging, and asks for
+// no memory. So the merge sort sorts runs this short by insertion, and
+// sort asks for no scratch memory to sort this few.
+SORT_INSERTION_MAX :: 4;
+
+// Sorts the count elements of element_size bytes each that start at data,
+// in place, by insertion: each element in turn is swapped down, a byte at
+// a time, past the ones before it that it is less than, so it ends up
+// after every one it isn't less than, and equal elements keep their order.
+// It takes n^2 / 2 comparisons and swaps at most, so it suits only a few
+// elements, but it needs no memory. Nothing is compared or touched for a
+// count of 1 or less, or an element_size of 0 or less, so data may be null
+// then.
+sort_by_insertion :: (data: *void, count: int, element_size: int, less: (a: *void, b: *void) -> bool) {
+    if count <= 1 || element_size <= 0 { return; }
+    bytes := cast(*u8) data;
+    for i: 1..count - 1 {
+        j := i;
+        while j > 0 {
+            right := bytes + j * element_size;
+            left := right - element_size;
+            if !less(right, left) { break; }
+            for k: 0..element_size - 1 {
+                byte := left[k];
+                left[k] = right[k];
+                right[k] = byte;
+            }
+            j -= 1;
+        }
+    }
+}
+
+// Sorts the count elements of element_size bytes each that start at data,
+// in place, by merging, using scratch, which holds count / 2 elements at
+// least: what sort does once it has the scratch. Runs of up to
+// SORT_INSERTION_MAX elements are sorted by insertion. Nothing is compared
+// or touched for a count of 1 or less, or an element_size of 0 or less, so
+// data and scratch may be null then.
+//
+// The two halves are sorted first, each with the same scratch, which is
+// free again once a half is sorted. When the first element of the right
+// half isn't less than the last of the left one, the halves are in order
+// already, and there is nothing to merge: so elements that come sorted take
+// n comparisons rather than n log n. Otherwise the left half is copied out
+// to scratch, and the two are merged back into data from its start. The
+// writing never overtakes the reading of the right half: after k elements
+// are written, some i from the left half and k - i from the right, the
+// next to be read from the right is at half + k - i, above k, since i is
+// less than half while the left half lasts. When the right half runs
+// out first, what is left of the left half goes at the end; when the left
+// one does, what is left of the right is in its place already.
+//
+// An element is taken from the right only when it is less than the left's,
+// so of two equal elements the left one, the earlier, comes first: that is
+// what keeps the sort stable.
+sort_by_merging :: (data: *void, scratch: *void, count: int, element_size: int, less: (a: *void, b: *void) -> bool) {
+    if count <= 1 || element_size <= 0 { return; }
+    if count <= SORT_INSERTION_MAX {
+        sort_by_insertion(data, count, element_size, less);
+        return;
+    }
+    bytes := cast(*u8) data;
+    spare := cast(*u8) scratch;
+    half := count / 2;
+    right := bytes + half * element_size;
+    sort_by_merging(bytes, scratch, half, element_size, less);
+    sort_by_merging(right, scratch, count - half, element_size, less);
+    if !less(right, right - element_size) { return; }
+
+    copy_memory(spare, bytes, half * element_size);
+    i := 0;
+    j := half;
+    k := 0;
+    while i < half && j < count {
+        from := spare + i * element_size;
+        if less(bytes + j * element_size, from) {
+            from = bytes + j * element_size;
+            j += 1;
+        } else {
+            i += 1;
+        }
+        copy_memory(bytes + k * element_size, from, element_size);
+        k += 1;
+    }
+    copy_memory(bytes + k * element_size, spare + i * element_size, (half - i) * element_size);
+}
+
+// Sorts the count elements of element_size bytes each that start at data,
+// in place, so that no element is less than one before it, by less, which
+// is given pointers to two elements and says whether the first goes before
+// the second. Equal elements, neither less than the other, keep the order
+// they had: the sort is stable. less must be a strict weak order, as C++'s
+// sorts ask: nothing is less than itself, a less than b and b less than c
+// means a is less than c, and two elements equal to a third are equal to
+// each other. One that isn't leaves the elements in some order, each still
+// there once, but not necessarily a sorted one, and equal elements may lose
+// their order. Either way nothing outside the elements is read or written,
+// since no loop's bounds depend on what less says.
+//
+// The scratch memory, half the elements' bytes, comes from allocator and
+// goes back to it before sort returns. When the allocator has none, or the
+// bytes would be more than an int can count, the elements are sorted by
+// insertion in place instead, still stable. Up to SORT_INSERTION_MAX
+// elements are sorted by insertion without asking for memory. Nothing is
+// asked for, compared or touched for a count of 1 or less, or an
+// element_size of 0 or less, so data may be null then.
+sort :: (data: *void, count: int, element_size: int, less: (a: *void, b: *void) -> bool, allocator: Allocator) {
+    LARGEST :: 9223372036854775807; // int's largest value
+    if count <= 1 || element_size <= 0 { return; }
+    if count <= SORT_INSERTION_MAX {
+        sort_by_insertion(data, count, element_size, less);
+        return;
+    }
+    half := count / 2;
+    scratch : *void = null;
+    if half <= LARGEST / element_size { scratch = alloc(half * element_size, allocator); }
+    if scratch == null {
+        sort_by_insertion(data, count, element_size, less);
+        return;
+    }
+    sort_by_merging(data, scratch, count, element_size, less);
+    free(scratch, allocator);
+}
+
+// The first index of the count sorted elements of element_size bytes each
+// that start at data whose element isn't below key, and whether the element
+// there is equal to it: C++'s lower_bound. So for a key that is there, the
+// index is its first occurrence's; for one that isn't, it is where the key
+// would go to keep the elements sorted, and the result is that index and
+// false; past the last element, it is count and false.
+//
+// compare is given key first and an element second, and gives a negative
+// number when the key goes before the element, 0 when they're equal, and
+// a positive number when it goes after: compare_int and compare_string
+// give -1, 0 or 1. The key needn't be an element: a procedure can compare
+// an int with a struct's int field, to find a struct by it. The elements
+// must be sorted by the same order. Each step halves the elements still to
+// look at, so it takes about log2(count) + 1 comparisons.
+//
+// A count of 0 or less, or an element_size of 0 or less, has no element to
+// find: 0 and false, without calling compare, so data may be null then.
+binary_search :: (data: *void, count: int, element_size: int, key: *void, compare: (key: *void, element: *void) -> int) -> int, bool {
+    if count <= 0 || element_size <= 0 { return 0, false; }
+    bytes := cast(*u8) data;
+    // The answer is always from low to high, both included: every element
+    // before low is below the key, and high is either count or an element
+    // that isn't. The middle is worked out as low + (high - low) / 2 rather
+    // than (low + high) / 2, which could overflow for the largest counts.
+    low := 0;
+    high := count;
+    while low < high {
+        middle := low + (high - low) / 2;
+        if compare(key, bytes + middle * element_size) > 0 {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    if low < count && compare(key, bytes + low * element_size) == 0 { return low, true; }
+    return low, false;
+}
+
+// Whether the int at a is less than the int at b, for sort.
+less_int :: (a: *void, b: *void) -> bool {
+    return (cast(*int) a).* < (cast(*int) b).*;
+}
+
+// Whether the float64 at a is less than the float64 at b, for sort, with
+// NaN after every number. Every comparison with NaN is false, so x < y
+// alone would make a NaN equal to every number, and 1 equal to NaN equal
+// to 2 while 1 is less than 2: no strict weak order, and the sort could
+// leave the NaNs' neighbours unsorted. So when b is NaN, a goes first
+// unless it is NaN too (a NaN is the one value not equal to itself); two
+// NaNs are equal. -0.0 and 0.0 are equal, and keep their order.
+less_float64 :: (a: *void, b: *void) -> bool {
+    x := (cast(*float64) a).*;
+    y := (cast(*float64) b).*;
+    if y != y { return x == x; }
+    return x < y;
+}
+
+// Whether the string at a sorts before the string at b, for sort: by
+// compare_strings, byte by byte, unsigned, a prefix first.
+less_string :: (a: *void, b: *void) -> bool {
+    return compare_strings((cast(*string) a).*, (cast(*string) b).*) < 0;
+}
+
+// -1, 0 or 1 as the int at key is less than, equal to or greater than the
+// int at element, for binary_search.
+compare_int :: (key: *void, element: *void) -> int {
+    k := (cast(*int) key).*;
+    e := (cast(*int) element).*;
+    if k < e { return -1; }
+    if k > e { return 1; }
+    return 0;
+}
+
+// compare_strings of the string at key and the string at element, for
+// binary_search: it takes pointers to the two strings, where
+// compare_strings takes the strings.
+compare_string :: (key: *void, element: *void) -> int {
+    return compare_strings((cast(*string) key).*, (cast(*string) element).*);
+}

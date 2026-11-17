@@ -1,0 +1,166 @@
+// Basic's C layer (issue #145): each C function Basic v1 calls, called
+// through its c_ name, compiled and interpreted, and to_c_string, the copy
+// of a string that C reads up to a zero. The program declares C's strlen
+// under C's own name, which Basic's c_ names leave free.
+#import "Basic";
+
+strlen :: (s: *u8) -> u64 #foreign libc;
+
+// The file the program writes, reads and removes, under .build/tests/,
+// which the runner makes before any test.
+FILE_NAME :: ".build/tests/basic_libc.bin";
+
+// How many bytes a counting allocator was last asked for.
+Counter :: struct { last_size: int; }
+
+// Passes every call on to the heap, keeping the size of each allocation.
+counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE { counter.last_size = size; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+// Gives no memory, as an allocator that has run out would.
+failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return null;
+}
+
+main :: () {
+    // A copy ends with a zero after the string's bytes, so C counts them.
+    hi := to_c_string("hi", HEAP_ALLOCATOR);
+    print_string("to_c_string: ");
+    print_bool(hi[0] == "h"[0] && hi[1] == "i"[0] && hi[2] == 0);
+    print_string(" ");
+    print_int(cast(int) strlen(hi));
+    print_line("");
+    free(hi, HEAP_ALLOCATOR);
+
+    // A view of part of a string has more of the string after it, not a
+    // zero as a literal has, so the copy must write its own zero.
+    part := to_c_string(slice("hix", 0, 2), HEAP_ALLOCATOR);
+    print_string("view: ");
+    print_int(cast(int) strlen(part));
+    print_string(" ");
+    print_bool(part[2] == 0);
+    print_line("");
+    free(part, HEAP_ALLOCATOR);
+
+    // The copy asks for the string's bytes and one more, for the zero, and
+    // is null when the allocator gives nothing.
+    counter : Counter;
+    counted := to_c_string("hi", Allocator.{counting_allocator_proc, *counter});
+    print_string("asks for: ");
+    print_int(counter.last_size);
+    print_string(", no memory: ");
+    print_bool(to_c_string("hi", Allocator.{failing_allocator_proc, null}) == null);
+    print_line("");
+    free(counted, HEAP_ALLOCATOR);
+
+    // A zeroed string, with null data, gives a lone zero: no byte is read
+    // through its data.
+    empty : string;
+    z := to_c_string(empty, HEAP_ALLOCATOR);
+    print_string("empty: ");
+    print_bool(z[0] == 0);
+    print_string(" ");
+    print_int(cast(int) strlen(z));
+    print_line("");
+    free(z, HEAP_ALLOCATOR);
+
+    // A zero inside the string is copied as it is, and every byte after it
+    // too, so C sees the string end at the first zero.
+    inner := to_c_string("a\0b", HEAP_ALLOCATOR);
+    print_string("zero inside: ");
+    print_int(cast(int) strlen(inner));
+    print_string(" ");
+    print_bool(inner[2] == "b"[0]);
+    print_string(" ");
+    print_bool(inner[3] == 0);
+    print_line("");
+    free(inner, HEAP_ALLOCATOR);
+
+    // Big enough for glibc's 16-byte fpos_t as well as the UCRT's 8 bytes.
+    print_string("C_Fpos: ");
+    print_int(size_of(C_Fpos));
+    print_line("");
+    // The UCRT's 16-byte timespec and glibc's, read through one struct.
+    print_string("C_Timespec: ");
+    print_int(size_of(C_Timespec));
+    print_line("");
+
+    // A run that stopped halfway may have left the file, so it goes first.
+    // The file is written and read in binary mode, which keeps every byte.
+    // Windows' text mode would not: a text write turns the line feed (10)
+    // into a carriage return and a line feed, so the size would be 7, and a
+    // text read turns the carriage return and line feed (13 10) into a line
+    // feed and stops at Ctrl-Z (26), so it would read 3 bytes. The zero and
+    // 255 are read back as they were written, 255 unsigned.
+    c_remove(FILE_NAME);
+    f := c_fopen(FILE_NAME, "wb");
+    bytes := u8.[1, 0, 13, 10, 26, 255];
+    print_string("write: ");
+    print_int(cast(int) c_fwrite(bytes.data, 1, 6, f));
+    print_string(" ");
+    print_int(c_ferror(f));
+    print_string(" ");
+    print_int(c_fclose(f));
+    print_line("");
+
+    // The size is the position at the end, from fgetpos, and fsetpos goes
+    // back to the start, where the whole file is read again. Then a seek
+    // from the start, by 0, goes back there from the end.
+    g := c_fopen(FILE_NAME, "rb");
+    start : C_Fpos;
+    c_fgetpos(g, *start);
+    c_fseek(g, 0, C_SEEK_END);
+    end : C_Fpos;
+    c_fgetpos(g, *end);
+    c_fsetpos(g, *start);
+    back : [16]u8;
+    n := c_fread(back.data, 1, 16, g);
+    print_string("size ");
+    print_int(end.position);
+    print_string(", read ");
+    print_int(cast(int) n);
+    print_string(":");
+    for i: 1..5 {
+        print_string(" ");
+        print_int(back[i]);
+    }
+    c_fseek(g, 0, C_SEEK_SET);
+    here : C_Fpos;
+    c_fgetpos(g, *here);
+    print_string(", after a seek to the start ");
+    print_int(here.position);
+    print_line("");
+    c_fclose(g);
+
+    print_string("missing: ");
+    print_bool(c_fopen(".build/tests/basic_libc_missing.bin", "rb") == null);
+    print_line("");
+
+    // The second remove finds nothing to remove.
+    print_string("remove: ");
+    print_int(c_remove(FILE_NAME));
+    print_string(" ");
+    print_int(c_remove(FILE_NAME));
+    print_line("");
+
+    // PATH is defined on both systems; the second name on neither.
+    print_string("getenv: ");
+    print_bool(c_getenv("PATH") != null);
+    print_string(" ");
+    print_bool(c_getenv("RIG_NO_SUCH_VARIABLE_145") == null);
+    print_line("");
+
+    // null flushes every stream C has open.
+    print_string("fflush: ");
+    print_int(c_fflush(null));
+    print_line("");
+
+    // system(null) asks whether there is a shell to run commands, and runs
+    // none.
+    print_string("a shell: ");
+    print_bool(c_system(null) != 0);
+    print_line("");
+}

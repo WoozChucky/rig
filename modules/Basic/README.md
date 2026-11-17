@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views of strings, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, and printing to standard output (issue #134).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and printing to standard output (issues #134 and #145).
 
 ## Importing it
 
@@ -16,10 +16,26 @@ rig finds `Basic/module.rig` in the `modules` directory beside it, or in the one
 
 ## Its C layer
 
-`libc.rig` declares the only C functions Basic calls, each under a name of its own that starts with `c_` (`#foreign libc "NAME"`, spec 7.6). So a program that loads Basic keeps C's own names: it may declare C's `putchar`, `malloc` and `realloc` itself. `free` is the exception, since Basic's allocators take that name for their own helper and `c_free` is taken too, so such a program declares C's `free` under another name, as in `libc_free :: (p: *void) #foreign libc "free";`.
+`libc.rig` declares the only C functions Basic calls, each under a name of its own that starts with `c_` (`#foreign libc "NAME"`, spec 7.6). So a program that loads Basic keeps C's own names: it may declare C's `putchar`, `malloc`, `realloc`, `fopen`, `getenv` and the rest itself. `free` is the exception, since Basic's allocators take that name for their own helper and `c_free` is taken too, so such a program declares C's `free` under another name, as in `libc_free :: (p: *void) #foreign libc "free";`.
+
+Each links and runs on Windows (the UCRT) and Linux (glibc), compiled and interpreted, with one declaration that serves both: where C's types differ (`fseek`'s `long` offset, `fpos_t`, `struct timespec`), the declaration and its comment say how Basic stays within what both agree on. `libc.rig`'s header says which C functions Basic leaves out, and why: `ftell` (C's `long`, 32 bits on Windows), `_ftelli64` and `ftello` (one system each), `time` (whole seconds) and `clock` (a different clock on each system).
 
 - `c_putchar(c: s32) -> s32`: C's `putchar`, the one call that writes a byte to standard output.
 - `c_malloc(size: u64) -> *void`, `c_realloc(memory: *void, size: u64) -> *void`, `c_free(memory: *void)`: C's `malloc`, `realloc` and `free`, the heap allocator's memory. Basic never calls them with a size of 0.
+- `C_Fpos`: C's `fpos_t`, `position: s64` (the offset) and `reserved: u64`, 16 bytes, which holds the UCRT's 8 and glibc's 16.
+- `C_SEEK_SET`, `C_SEEK_END`: `fseek`'s origins, 0 and 2.
+- `c_fopen(path: *u8, mode: *u8) -> *void`, `c_fclose(file: *void) -> s32`: C's `fopen` and `fclose`; a `FILE *`, or null when the file can't be opened.
+- `c_fread(buffer: *void, size: u64, count: u64, file: *void) -> u64`, `c_fwrite(data: *void, size: u64, count: u64, file: *void) -> u64`: C's `fread` and `fwrite`, giving the items read or written.
+- `c_fseek(file: *void, offset: s64, origin: s32) -> s32`: C's `fseek`. The offset is C's `long`, 32 bits on Windows, so Basic passes only 0.
+- `c_fgetpos(file: *void, position: *C_Fpos) -> s32`, `c_fsetpos(file: *void, position: *C_Fpos) -> s32`: C's `fgetpos` and `fsetpos`, the position in a file in 64 bits on both systems.
+- `c_ferror(file: *void) -> s32`: C's `ferror`, not 0 when a read or write has failed.
+- `c_fflush(file: *void) -> s32`: C's `fflush`; null flushes every stream.
+- `c_remove(path: *u8) -> s32`: C's `remove`, 0 when the file is deleted. On Linux it deletes an empty directory too.
+- `c_getenv(name: *u8) -> *u8`: C's `getenv`, a variable's value, or null.
+- `c_system(command: *u8) -> s32`: C's `system`, which runs a command through the system's shell and gives its status; null asks whether there is a shell.
+- `C_Timespec`: C's `struct timespec`, `seconds: s64`, `nanoseconds: s32` and `padding: s32`, 16 bytes, which holds the UCRT's (a 4-byte `long` of nanoseconds and padding) and glibc's (an 8-byte `long`, whose low 4 bytes hold them).
+- `C_TIME_UTC`: `timespec_get`'s base for UTC, 1.
+- `c_timespec_get(time: *C_Timespec, base: s32) -> s32`: C's `timespec_get`, the wall clock's seconds and nanoseconds since 1970; the base, or 0 when it can't. On Windows the compiler links it to the UCRT's `_timespec64_get`, as a C program's `<time.h>` does (issue #161, spec 10.6).
 
 ## Characters (`char.rig`)
 
@@ -68,10 +84,10 @@ Numbers are written into a buffer the caller gives, and the text comes back as a
 
 ## Strings (`string.rig`)
 
-Every string returned is a view into the string given: nothing is copied or allocated. Indexes and counts are in bytes, and bytes are compared unsigned, with no knowledge of UTF-8. A zeroed string (count 0, data null) is the empty string everywhere, and no byte is read through its null data.
+The procedures that cut strings up and search them, from `strings_equal` to `split_from_left`, and `contains` and `count_of`, never allocate: every string they return is a view into the string given. The ones that copy, `to_c_string`, `join`, `replace`, `repeat`, `to_upper_copy` and `to_lower_copy`, take their memory from the allocator they are given, and the caller gives it back there. The last five always copy, even when nothing changed, so the caller can always free `result.data` with `free(result.data, allocator)`; each works out its size first and allocates once, and an empty result is the zeroed string and allocates nothing, as `builder_to_string`'s does. An allocator with no memory, or a size past `int`'s largest, gives the zeroed string too. Indexes and counts are in bytes (but `utf8_count`'s, which counts code points), and bytes are compared unsigned. Only the three `utf8_` procedures know UTF-8, reading and writing its sequences as the Unicode Standard has them (Table 3-7: no overlong forms, no surrogates, nothing past U+10FFFF); every other string procedure works on bytes. A zeroed string (count 0, data null) is the empty string everywhere, and no byte is read through its null data.
 
 - `strings_equal(a: string, b: string) -> bool`: `a == b`, as a procedure a procedure value can name.
-- `compare_strings(a: string, b: string) -> int`: -1, 0 or 1 by the first byte that differs, compared unsigned; a prefix sorts first.
+- `compare_strings(a: string, b: string) -> int`: -1, 0 or 1 by the first byte that differs, compared unsigned; a prefix sorts first. It takes the strings; `compare_string`, for `binary_search`, takes pointers to them.
 - `find_byte(s: string, byte: u8) -> int`: the index of the first `byte` in `s`, or -1.
 - `find_byte_from_end(s: string, byte: u8) -> int`: the index of the last `byte` in `s`, or -1.
 - `find_string(s: string, needle: string) -> int`: the index of the first `needle` in `s`, or -1; the empty needle is found at 0.
@@ -85,10 +101,22 @@ Every string returned is a view into the string given: nothing is copied or allo
 - `advance(s: string, amount: int) -> string`: `s` without its first `amount` bytes, clamped as `slice` is.
 - `split(s: string, separator: u8, parts: []string) -> int`: writes the pieces of `s` between separators into `parts` and returns how many; empty pieces count, `""` is one empty piece, the last part holds the unsplit rest when `parts` runs out, and an empty `parts` gets 0.
 - `split_from_left(s: string, separator: u8) -> bool, string, string`: whether `separator` is in `s`, and the bytes before and after its first occurrence; without one, `false`, `s` and an empty view at the end of `s`.
+- `to_c_string(s: string, allocator: Allocator) -> *u8`: a C string, `s.count + 1` bytes from `allocator` holding the bytes of `s` and a zero, which the caller frees with `free(p, allocator)`; null when the allocator has none. A zeroed string gives a lone zero. A zero inside `s` is copied as it is, so C sees the string end there.
+- `contains(s: string, sub: string) -> bool`: whether `sub` occurs in `s`; every string contains `""`.
+- `count_of(s: string, sub: string) -> int`: how many times `sub` occurs in `s`, counted from the left without overlap (`"aa"` in `"aaaa"` is 2); `""` matches nothing, so 0.
+- `join(parts: []string, separator: string, allocator: Allocator) -> string`: the parts with `separator` between each two, in memory from `allocator`, which the caller frees with `free(result.data, allocator)`; empty parts keep their separators, and no parts give `""`.
+- `replace(s: string, old: string, new: string, allocator: Allocator) -> string`: a copy of `s` with each `old` replaced by `new`, from the left without overlap, what replaces one never searched again; an empty `old` matches nothing, so the result is a copy of `s`. The caller frees `result.data`.
+- `repeat(s: string, n: int, allocator: Allocator) -> string`: `s` `n` times over; `""` for an `n` of 0 or less. The caller frees `result.data`.
+- `to_upper_copy(s: string, allocator: Allocator) -> string`, `to_lower_copy(s: string, allocator: Allocator) -> string`: a copy of `s` with its ASCII letters changed as `to_upper` and `to_lower` change them, every other byte as it is. The caller frees `result.data`.
+- `UTF8_REPLACEMENT`: U+FFFD, 65533, the replacement character.
+- `UTF8_MAX_BYTES`: 4, the most bytes a code point takes, so a buffer of that many is always enough for `utf8_encode`.
+- `utf8_decode(s: string, index: int) -> int, int, bool`: the code point whose sequence starts at byte `index`, its byte count, and whether it is well-formed; `UTF8_REPLACEMENT`, 1 and `false` for a byte that doesn't start a well-formed sequence, one cut short by the string's end included, so a loop moving on by the count goes on at the next byte; 0, 0 and `false`, reading nothing, for an index outside `s`.
+- `utf8_count(s: string) -> int, bool`: how many code points `s` holds, each byte of an ill-formed sequence counted as one, and whether all of `s` is well-formed; `""` is 0 and `true`.
+- `utf8_encode(code_point: int, buffer: []u8) -> int`: writes the code point's sequence at the start of `buffer` and gives its byte count, 1 to 4; a negative value, a surrogate (U+D800 to U+DFFF) or one past U+10FFFF writes `UTF8_REPLACEMENT`'s 3 bytes. A buffer shorter than the sequence stops at the language's bounds check (unless built with `--no-bounds-checks`).
 
 ## Allocators (`allocators.rig`)
 
-An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` holds a procedure and the data it works on, and the procedure is called with a mode, `ALLOCATE`, `RESIZE`, `FREE` or `FREE_ALL`. A program calls the four helpers rather than the procedure. They settle the edges, so an allocator is only ever asked for more than 0 bytes and only ever given memory that isn't null to resize or free. An allocator that can't give memory returns null. The heap's memory is aligned as C's `malloc` aligns it, and an arena's or a pool's to 8 bytes when its parent's is, as the heap's is.
+An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` holds a procedure and the data it works on, and the procedure is called with a mode, `ALLOCATE`, `RESIZE`, `FREE` or `FREE_ALL`. Basic's three, `heap_allocator_proc`, `arena_allocator_proc` and `pool_allocator_proc`, are each of that procedure's type, `(mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void`. A program calls the four helpers rather than the procedure. They settle the edges, so an allocator is only ever asked for more than 0 bytes and only ever given memory that isn't null to resize or free. An allocator that can't give memory returns null. The heap's memory is aligned as C's `malloc` aligns it, and an arena's or a pool's to 8 bytes when its parent's is, as the heap's is.
 
 - `ALLOCATE`, `RESIZE`, `FREE`, `FREE_ALL`: the modes, 0 to 3.
 - `Allocator`: `proc: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void` and `data: *void`.
@@ -164,6 +192,84 @@ The entries are one run of memory, a power of two of them, each a header (the ke
 - `table_entry(table: Table, index: int) -> bool, string, *void`, `int_table_entry(table: Int_Table, index: int) -> bool, int, *void`: entry `index`, from 0 to the capacity less one: whether it holds a key, the key and the value's address; false, the zeroed string or 0, and null for one that holds none. Any other index stops the program with the language's own bounds check, through `check_index` (unless built with `--no-bounds-checks`).
 - `table_free(table: *Table)`, `int_table_free(table: *Int_Table)`: gives every key's copy and the entries back; the table is empty, with no entries, and keeps its value size and allocator.
 
+## Sorting and searching (`sort.rig`)
+
+Elements of any type, given as a pointer to the first, a count and each element's size in bytes, as C's `qsort` and `bsearch` take them, and compared by a procedure value given pointers to two of them: `less_int` and its neighbours, or one of the program's own. The sort is a merge sort, and stable: elements that compare equal keep the order they had, so sorting by one key and then by another sorts by the second and, within it, by the first. It takes at most about n log2 n comparisons whatever the order the elements come in, and n for elements already sorted. Its scratch memory, half the elements' bytes, comes from the allocator it is given and goes back before it returns; up to `SORT_INSERTION_MAX` elements are sorted by insertion without asking. When the allocator has no memory, the elements are sorted by insertion in place instead, about n^2 / 2 comparisons and swaps, stable all the same: sorting never fails. Elements are moved a byte at a time, and a comparison may be given a pointer to an element's copy in the scratch memory, so it must compare what the pointers point at, not the addresses.
+
+- `SORT_INSERTION_MAX`: 4, the most elements sorted by insertion, without merging or memory.
+- `sort_by_insertion(data: *void, count: int, element_size: int, less: (a: *void, b: *void) -> bool)`: sorts in place, stable, with no memory, swapping neighbours a byte at a time; for a few elements, and `sort`'s fallback.
+- `sort_by_merging(data: *void, scratch: *void, count: int, element_size: int, less: (a: *void, b: *void) -> bool)`: sorts in place, stable, with `scratch` holding at least `count / 2` elements; what `sort` does once it has the scratch. Nothing is compared or touched for a `count` of 1 or less or an `element_size` of 0 or less.
+- `sort(data: *void, count: int, element_size: int, less: (a: *void, b: *void) -> bool, allocator: Allocator)`: sorts the elements in place so that none is less than one before it, stable. `less` says whether the element at its first pointer goes before the one at its second, and must be a strict weak order. Nothing is asked for, compared or touched for a `count` of 1 or less or an `element_size` of 0 or less.
+- `binary_search(data: *void, count: int, element_size: int, key: *void, compare: (key: *void, element: *void) -> int) -> int, bool`: in sorted elements, the first index whose element isn't below the key, as C++'s `lower_bound` gives it, and whether that element equals the key: the key's first occurrence and `true`, or where it would go and `false`, `count` and `false` past the last. `compare` is given the key first and gives a negative number, 0 or a positive one as the key goes before the element, equals it or goes after; the key may be of another type than the elements. No elements, or an `element_size` of 0 or less, give 0 and `false` without calling `compare`.
+- `less_int(a: *void, b: *void) -> bool`, `less_float64(a: *void, b: *void) -> bool`, `less_string(a: *void, b: *void) -> bool`: whether the `int`, `float64` or `string` at `a` goes before the one at `b`, for `sort`. NaN goes after every number and equals another NaN, so floats with NaNs still sort; strings go by `compare_strings`.
+- `compare_int(key: *void, element: *void) -> int`, `compare_string(key: *void, element: *void) -> int`: -1, 0 or 1 as the `int` or `string` at `key` goes before, equals or goes after the one at `element`, for `binary_search`. `compare_string` takes pointers to two strings, where `compare_strings` takes the strings themselves.
+
+## Paths (`path.rig`)
+
+A path is a plain string, and its parts are views into it, cut out by `slice` and `advance`: nothing is copied, nothing asks the system whether a file is there, and no part reaches outside the path, so a zeroed path gives zeroed parts and a view of part of a string is read only as far as it goes. A missing extension or file name is an empty view at the path's end, and a missing directory is one at its start. Both `/` and `\` separate a path's parts, on every system, and a join writes `/`, which both systems accept. Nothing else is special: a drive letter is part of the first name (`"C:\x"`'s directory is `"C:"`), and `\\server\share` is a path from the root whose first separator is doubled.
+
+- `is_path_separator(c: u8) -> bool`: `/` or `\`.
+- `path_directory(path: string) -> string`: what is before the last separator, without the separators that end it (`"a//b"` gives `"a"`, `"a/b/"` gives `"a/b"`); the first separator when only separators are left, the root (`"/b"` gives `"/"`); `""` with no separator.
+- `path_file_name(path: string) -> string`: what is after the last separator, all of `path` with none; `""` when `path` ends with one.
+- `path_extension(path: string) -> string`: the file name's extension with its dot, from its last dot that isn't one of the dots the name starts with: `".gz"` for `"c.tar.gz"`, `"."` for `"b."`, none for `".bashrc"` or `".."`; none is an empty view at the path's end.
+- `path_without_extension(path: string) -> string`: `path` without `path_extension(path)`.
+- `path_join(a: string, b: string, allocator: Allocator) -> string`: `a`, a `/`, then `b`, in memory from `allocator`, which the caller frees with `free(s.data, allocator)`. The `/` is left out when either is empty, `a` ends with a separator or `b` starts with one; an absolute `b` is joined all the same. Always a copy, allocated once; two empty paths give the zeroed string (count 0, data null) and allocate nothing, and an allocator with no memory gives the zeroed string too.
+
+## Files (`file.rig`)
+
+Files through C's stdio, always in binary mode (`"rb"`, `"wb"`, `"ab"`), so the bytes read are the bytes written on every system: Windows' text mode would turn a line feed into a carriage return and a line feed, and stop reading at Ctrl-Z. A directory is not a file, on either system: opening one to read, which Linux's C library allows, reads a byte first, and a directory's read fails, so it isn't found, read or deleted (Linux's `remove` would delete an empty one). A file's size is the position at its end from `fgetpos`, 64 bits on both systems, so a file past 2 GiB is measured right. A path goes to C as a copy ended by a zero, from the heap since most of these procedures take no allocator (`read_entire_file`'s is for the file's contents), given back once C is done with it; a path with a zero byte would reach C as a shorter name, another file's, so it is refused without calling C. The path's bytes go to C as they are: Linux's C library takes a file name as plain bytes, but Windows' reads it in the system's ANSI code page rather than as UTF-8, so a path with a character outside ASCII names another file there (with code page 1252, `"café.txt"` makes `cafÃ©.txt`).
+
+- `File`: `handle: *void`, C's `FILE *`, null when the file isn't open; a zeroed `File` isn't open.
+- `FILE_READ`, `FILE_WRITE`, `FILE_APPEND`: `file_open`'s modes, 0 to 2: reading from the start, writing from empty, and writing at the end, the last two making the file when it isn't there.
+- `file_open(path: string, mode: int) -> File, bool`: the open file and `true`; a `File` that isn't open and `false` for another mode, a path with a zero byte, a file C can't open, and when reading, a directory.
+- `file_close(file: File)`: closes the file; one that isn't open is left alone.
+- `file_read(file: File, buffer: []u8) -> int`: reads up to `buffer.count` bytes from where the file is, and gives how many; 0 at the end, on an error, or for a `File` that isn't open.
+- `file_write(file: File, data: string) -> bool`: whether every byte of `data` was written; `""` writes nothing and is `true`, and a `File` that isn't open is `false`. The bytes may stay in C's buffer until the file is closed, and `file_close` doesn't say whether writing them out failed (a full disk, say); `write_entire_file` and `append_to_file` do.
+- `file_size(file: File) -> int`: the file's size in bytes, its position left where it was; -1 when C can't tell, or for a `File` that isn't open.
+- `read_entire_file(path: string, allocator: Allocator) -> string, bool`: the whole file in memory from `allocator`, which the caller frees with `free(s.data, allocator)`, and `true`. An empty file is the zeroed string and `true`, allocating nothing; a missing file, a directory, a short read or no memory is the zeroed string and `false`, with nothing left allocated.
+- `write_entire_file(path: string, data: string) -> bool`: makes or empties the file and writes `data`; `true` when every byte was written and the file closed without an error.
+- `append_to_file(path: string, data: string) -> bool`: writes `data` at the end of the file, making it when it isn't there; `true` as for `write_entire_file`.
+- `file_exists(path: string) -> bool`: whether there is a file at `path` that opens for reading; a directory isn't one.
+- `delete_file(path: string) -> bool`: deletes a file that `file_exists` finds; `false` for a missing file, a directory, a path with a zero byte, or when C can't.
+
+## Time (`time.rig`)
+
+A time is a `Time`, an `int` of nanoseconds since 1970-01-01T00:00:00Z, negative before it, so every time is from 1677-09-21T00:12:43.145224192Z to 2262-04-11T23:47:16.854775807Z, and a difference of two is an `int` of nanoseconds too. The clock is C17's `timespec_get` with `TIME_UTC`, the wall clock, in nanoseconds on both systems. C17 has no monotonic clock, so a timer measures by the wall clock too: when the system's clock is set back while a timer runs, it gives less than the time that passed, even a negative time, and nothing clamps it. The calendar is UTC's, the proleptic Gregorian calendar of ISO 8601, with no time zones and no leap seconds (every day has 86400 seconds, as POSIX counts them), and weeks start on Sunday, 0, as C's `tm_wday` has them. Nothing sleeps: C17's own call, `thrd_sleep` (`<threads.h>`, optional), is on both systems, but MSVC's `<threads.h>` defines it only inline, over the Visual C++ runtime's `_thrd_sleep64`, which the compiler doesn't link it to and the interpreter doesn't find; and each system's own waits on conditional compilation.
+
+- `NANOSECONDS_PER_SECOND`: 1000000000.
+- `TIME_TEXT_MAX`: 20, the bytes `format_time` writes for every time `to_calendar` gives, `YYYY-MM-DDTHH:MM:SSZ`.
+- `Time`: `nanoseconds: int`, since 1970-01-01T00:00:00Z; a zeroed `Time` is that instant.
+- `Timer`: `start: Time`, when it was started.
+- `Calendar`: `year: int`, `month: int` (1 to 12), `day: int` (1 to 31), `hour: int` (0 to 23), `minute: int`, `second: int` (0 to 59), `nanosecond: int` (0 to 999999999) and `weekday: int` (0 for Sunday to 6), in UTC.
+- `time_now() -> Time`: the time now, by the wall clock; a zeroed `Time` when C can't give it.
+- `timer_start() -> Timer`: a timer started now.
+- `timer_elapsed_ns(timer: Timer) -> int`: the nanoseconds since the timer was started, by the wall clock.
+- `timer_elapsed_seconds(timer: Timer) -> float64`: the same in seconds, the nanoseconds over 10^9.
+- `to_calendar(time: Time) -> Calendar`: the time's fields in UTC, every field in its range for every `Time`, `int`'s extremes included (the years 1677 and 2262).
+- `format_time(calendar: Calendar, buffer: []u8) -> string`: writes the calendar as ISO 8601, `YYYY-MM-DDTHH:MM:SSZ`, at the buffer's start and gives the text written, without the nanosecond or the weekday. Each field is written as `format_int` writes it, with zeros on its left to 4 digits for the year and 2 for the rest; one that needs more digits, or is negative, is written whole, `-` first and no zeros; when that is wider than the field's width, the text is longer than `TIME_TEXT_MAX`, and a buffer of that many bytes stops at the language's bounds check (unless built with `--no-bounds-checks`).
+
+## Random numbers (`random.rig`)
+
+PCG32, Melissa O'Neill's permuted congruential generator (https://www.pcg-random.org), as her pcg-c-basic writes it: a 64-bit linear congruential step, and a permutation of the old state (a xorshift, then a rotation by its top bits) that gives 32 bits. The same seed and stream give the same numbers on every system, compiled and interpreted, and they are the reference's: `tests/run/basic_random.rig` reproduces the first round `pcg32-demo` prints. It is for simulations, games, tests and shuffles, not for keys, tokens or anything that must not be guessed: a few outputs give the state away. A zeroed `Random` is stream 0 from state 0, the same numbers in every program, so seed it first.
+
+- `PCG_MULTIPLIER`: 6364136223846793005, the multiplier of the linear congruential step.
+- `Random`: `state: u64` and `increment: u64`, the step's increment, odd once seeded; `random_u32` steps with its lowest bit set (it doesn't change the field), so a zeroed one draws as stream 0.
+- `random_seed(r: *Random, seed: u64, stream: u64)`: seeds `r` as `pcg32_srandom_r` does; generators of different streams give different numbers from the same seed. The stream's top bit is unused.
+- `random_u32(r: *Random) -> u32`: the next 32-bit number, as `pcg32_random_r` gives it.
+- `random_u64(r: *Random) -> u64`: two 32-bit numbers, the first the high half.
+- `random_int(r: *Random, low: int, high: int) -> int`: a number from `low` to `high`, both included, every one equally likely, with the bounds either way round. Draws that would favour some numbers are drawn again (`pcg32_boundedrand_r`'s rejection) rather than taken modulo the range, and it draws at least once, even for one value. Any range works, `int`'s whole range included.
+- `random_float64(r: *Random) -> float64`: a number from 0 up to but not including 1, the top 53 bits of `random_u64` over 2^53.
+- `random_bool(r: *Random) -> bool`: the lowest bit of `random_u32`.
+- `random_shuffle(r: *Random, data: *void, count: int, element_size: int)`: puts the `count` elements of `element_size` bytes at `data` in a random order (Fisher-Yates, swapping a byte at a time, so it needs no memory); nothing is drawn for a `count` of 1 or less or an `element_size` of 0 or less.
+- `random_from_time() -> Random`: a generator seeded from `time_now()`, its stream the address of a local. The seed differs from run to run, not from call to call: two made within one tick of the clock (100 ns on Windows) get the same seed, and from the same caller the same stream, so they give the same numbers, as two made one after the other often do on Windows. For several generators, seed one from the clock and the others from its numbers, or give each its own stream.
+
+## The environment (`environment.rig`)
+
+A variable of the environment the program was started with, through C's `getenv`, and a command run through the system's shell, through C's `system`. A name or a command goes to C as a copy ended by a zero, from the allocator it comes with, given back once C is done with it; one with a zero byte would reach C cut short, so it is refused without calling C. A name, a value and a command are bytes to C: Linux's C library takes them as they are, but Windows' reads and gives them in the system's ANSI code page rather than as UTF-8, so one with a character outside ASCII means something else there. The systems differ, and Basic doesn't hide it: Windows' variable names are case-insensitive (`"Path"` finds `PATH`) and Linux's aren't; a command runs in cmd.exe on Windows and in sh on Linux, each with its own syntax; and its status means something else on each (`run_command`). What the program printed before a command comes out before what the command prints: every C stream is flushed before it runs.
+
+- `get_environment(name: string, allocator: Allocator) -> string, bool`: a copy of the variable's value in memory from `allocator`, which the caller frees with `free(value.data, allocator)`, and `true`; copied at once, since C may change its own. A variable set to `""` is the zeroed string (count 0, data null) and `true`, allocating nothing. A variable that isn't set, no memory, an empty name, and one with `=` or a zero byte are the zeroed string and `false`, with nothing left allocated.
+- `run_command(command: string, allocator: Allocator) -> int`: runs `command` through the shell, waits for it, and gives its status as C's `system` gives it: on Windows the command's exit code (`exit 3` gives 3); on Linux a wait status, the exit code times 256 when the command ended by itself (`exit 3` gives 768) and 32512 (127 times 256) when sh can't find the command. 0 is success on both. -1, with nothing run, for a command with a zero byte or no memory for its C copy. -1 is also what C's `system` gives when it can't start the shell, and on Windows what a command that exits with -1 gives, so -1 alone doesn't say the command never ran.
+
 ## Print (`print.rig`)
 
 Everything goes to standard output through C's `putchar`, so it comes out in order with what a program writes with C's `printf`, compiled and interpreted. Bytes are written as they are, so UTF-8 text prints as UTF-8.
@@ -179,9 +285,18 @@ Everything goes to standard output through C's `putchar`, so it comes out in ord
 
 What Basic would do differently once Rig has it:
 
-- No type aliases, so the allocator's procedure type, and the key comparison the tables' probe takes, are written out wherever they're used.
-- No overloading or generics, so procedures are named by type (`min_int`, `min_float64`), the collections are untyped, handing out `*void`, and there is one kind of table per kind of key, `Table` and `Int_Table`, with the same fields.
+- No type aliases, so the allocator's procedure type, the key comparison the tables' probe takes, and the comparisons of the sorts and `binary_search`, are written out wherever they're used, and a time is a struct of one field, `Time`, rather than an `int` of a type of its own.
+- No overloading or generics, so procedures are named by type (`min_int`, `min_float64`), the collections are untyped, handing out `*void`, sorting and searching take an element's size and compare through pointers, and there is one kind of table per kind of key, `Table` and `Int_Table`, with the same fields.
 - No way for a struct to take in another's fields, as Jai's `using` does, so both kinds of table entry repeat the fields of `Table_Entry_Header`, and the code they share reads an entry's start through it.
-- No enums, so an allocator's modes and a table entry's states are constants.
-- No portable way to reach standard error and no conditional compilation, so Basic writes only through `c_putchar`, and an index out of bounds is reported by the language's own bounds check.
-- No `defer`, so what is allocated is freed by hand on every path.
+- No enums, so an allocator's modes, a table entry's states and a file's modes are constants.
+- No conditional compilation (`#if`, #147), so Basic calls only C functions that both systems' C libraries have by the same name, each with one declaration that fits both, and does without what each system does its own way (#157):
+  - no standard error, which each C library reaches differently, and so no `assert`, which would write to it: Basic writes only through `c_putchar`, and an index out of bounds is reported by the language's own bounds check;
+  - no sleeping, which takes each system's own call (`Sleep`, `nanosleep`), since C17's `thrd_sleep` is only inline in MSVC's `<threads.h>`, over the Visual C++ runtime's `_thrd_sleep64`, and no monotonic clock, so a timer measures by the wall clock;
+  - no listing, making or deleting a directory, which C17 has no portable call for (its `remove` deletes an empty one on Linux only), so the file tests use `tests/run`, which is always there and never empty, and an empty directory that the test runner makes before any test, `.build/tests/basic_file_empty_dir`;
+  - no wide-character calls (`_wfopen`, `_wremove`, `_wgetenv`, `_wsystem`), which only Windows' C library has, so a path, a variable's name and value, and a command reach Windows' C library in the system's ANSI code page rather than as UTF-8;
+  - no running a process and reading its output (`_popen`, `popen`), so `run_command` gives only the status;
+  - none of the C functions that differ by name (`_ftelli64` on Windows, `ftello` on Linux) or by type (`ftell`'s `long`, 32 bits on Windows and 64 on Linux), so a file's size is measured with `fgetpos`, and `fseek` is only given an offset of 0.
+- No command-line arguments: a program's start doesn't keep them for Rig code to read (#152).
+- No `Any` or variadic Rig procedures (#153, #150), so there is no formatted `print` (#154): a line is printed a piece at a time, with `print_string`, `print_int` and the rest.
+- No context (#156), so a procedure that allocates takes its allocator as an argument, and the file procedures copy a path for C into memory from the heap, since most of their signatures take no allocator (`read_entire_file`'s is for the file's contents).
+- No `defer` (#149), so what is allocated is freed by hand on every path.

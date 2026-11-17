@@ -1745,11 +1745,18 @@ static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Glob
 // program's business, as in C. The declaration is marked as the first one
 // says: another's widening attributes could contradict it (an s8's signext
 // beside a u8's zeroext), and the verifier refuses both on one parameter.
+//
+// On Windows a few C names are declared under another (ir_windows_c_name),
+// so a foreign procedure links to the function a C program's call reaches.
+// The name declared is the one looked up, so time and _time64 declared both
+// are one declaration there too.
 static void declare_foreign_functions(Backend *b, Ir_Module *m, Arena *a, LLVMValueRef *functions) {
     for (s64 i = 0; i < m->procs.count; i++) {
         Ir_Proc *p = m->procs[i];
         if (!p->is_foreign) continue;
-        const char *name = string_cstr(a, ir_c_name(p));
+        String c_name = ir_c_name(p);
+        if (b->target == TARGET_WINDOWS_X64) c_name = ir_windows_c_name(c_name);
+        const char *name = string_cstr(a, c_name);
         LLVMValueRef existing = LLVMGetNamedFunction(b->module, name);
         if (existing && LLVMIsDeclaration(existing)) {
             functions[i] = existing;
