@@ -6,6 +6,24 @@
 // a program's putchar and Basic's c_putchar are the same C function.
 //
 // Everything else in Basic is written in Rig over these.
+//
+// Each of them links and runs on Windows (the UCRT) and Linux (glibc),
+// compiled and interpreted, with the same C types on both. On Windows the
+// interpreter takes them from the compiler's own copy of the C library, so
+// a FILE * that c_fopen gives is one the other calls accept. Some C
+// functions that would seem to fit are left out on purpose:
+//
+// - ftell and a nonzero fseek offset: they take or give C's long, 32 bits
+//   on Windows and 64 on Linux, so no one declaration fits both, and on
+//   Windows a file past 2 GiB is out of reach. A file's size comes from
+//   fgetpos at its end instead, 64 bits on both.
+// - _ftelli64 and ftello: each is on one system only, and on Windows the
+//   interpreter takes _ftelli64 from a second C runtime, whose calls refuse
+//   the compiler's own FILE *.
+// - time: whole seconds, where timespec_get gives nanoseconds; and in a
+//   compiled program on Windows, C's time is the 32-bit _time32.
+// - clock: a different clock on each system, the wall time since the
+//   program started on Windows and the processor time on Linux.
 
 // Writes one byte to standard output, through C's own stdout buffer. It is
 // the one call Basic writes with: unlike POSIX's write or Windows' _write,
@@ -20,3 +38,69 @@ c_putchar :: (c: s32) -> s32 #foreign libc "putchar";
 c_malloc :: (size: u64) -> *void #foreign libc "malloc";
 c_realloc :: (memory: *void, size: u64) -> *void #foreign libc "realloc";
 c_free :: (memory: *void) #foreign libc "free";
+
+// C's fpos_t, a position in a file, which fgetpos fills and fsetpos goes
+// back to. The UCRT's is a long long, 8 bytes, and glibc's a 16-byte
+// struct whose first 8 bytes are the offset, so this struct holds either,
+// with the offset in position on both. Basic reads position for a file's
+// size and leaves reserved as C wrote it.
+C_Fpos :: struct {
+    position: s64;
+    reserved: u64;
+}
+
+// fseek's origins, the same numbers in both C libraries: from the start of
+// the file, and from its end.
+C_SEEK_SET :: 0;
+C_SEEK_END :: 2;
+
+// Basic's files: opening one with a mode such as "rb" or "wb", which gives
+// a C FILE *, or null when it can't be opened, and closing it, which gives
+// 0, or EOF (-1) when what was still buffered couldn't be written.
+c_fopen :: (path: *u8, mode: *u8) -> *void #foreign libc "fopen";
+c_fclose :: (file: *void) -> s32 #foreign libc "fclose";
+
+// Reading and writing count items of size bytes each, which give how many
+// whole items were read or written. Basic passes a size of 1, so the count
+// is in bytes.
+c_fread :: (buffer: *void, size: u64, count: u64, file: *void) -> u64 #foreign libc "fread";
+c_fwrite :: (data: *void, size: u64, count: u64, file: *void) -> u64 #foreign libc "fwrite";
+
+// Moves to offset bytes from origin, C_SEEK_SET or C_SEEK_END; 0 when it
+// could. The offset is C's long, 32 bits on Windows and 64 on Linux, so
+// only an offset of 0 means the same on both, and 0 is all Basic passes:
+// it goes to the end of a file to learn its size, and positions within a
+// file are moved to with c_fsetpos.
+c_fseek :: (file: *void, offset: s64, origin: s32) -> s32 #foreign libc "fseek";
+
+// The position in a file, written to position, and a move back to one
+// that c_fgetpos wrote; each gives 0 when it could. Unlike ftell's long,
+// fpos_t holds 64 bits on both systems, so a file's size past 2 GiB is
+// read right.
+c_fgetpos :: (file: *void, position: *C_Fpos) -> s32 #foreign libc "fgetpos";
+c_fsetpos :: (file: *void, position: *C_Fpos) -> s32 #foreign libc "fsetpos";
+
+// Whether a read or write on the file has failed: not 0 when one has. A
+// read of a directory opened as a file on Linux fails, and Basic tells a
+// directory from a file by it.
+c_ferror :: (file: *void) -> s32 #foreign libc "ferror";
+
+// Writes out what C holds in a stream's buffer: 0 when it could. Given
+// null it flushes every stream, which Basic does before running a command,
+// so what the program printed comes out before what the command prints.
+c_fflush :: (file: *void) -> s32 #foreign libc "fflush";
+
+// Deletes the file at path: 0 when it did, and not 0 when it didn't. On
+// Linux it deletes an empty directory too, so Basic checks first that the
+// path is a file.
+c_remove :: (path: *u8) -> s32 #foreign libc "remove";
+
+// The environment: the value of the variable name, or null when there's
+// none. The value is C's, to be read and not written or freed.
+c_getenv :: (name: *u8) -> *u8 #foreign libc "getenv";
+
+// Runs command through the system's shell (cmd.exe on Windows, sh on
+// Linux) and gives its status: the command's exit code on Windows, and a
+// wait status on Linux. Given null it runs nothing and gives whether there
+// is a shell, not 0 when there is.
+c_system :: (command: *u8) -> s32 #foreign libc "system";
