@@ -10,8 +10,9 @@
 # isn't there yet. Then it installs the VS Code extension when `code` is on the
 # PATH, and builds hello world with the installed rig.exe to check that the
 # computer has what linking needs. Running it again upgrades: the files are
-# overwritten. -Help lists the options. It asks nothing, and needs no
-# administrator.
+# replaced, and the modules folder replaced whole, so a file a module no
+# longer has doesn't stay behind (step 3). -Help lists the options. It asks
+# nothing, and needs no administrator.
 #
 # RIG_INSTALL_BASE_URL, if set, replaces the releases' URL ($releaseBase
 # below), for tests: a release's files are then fetched from
@@ -87,7 +88,8 @@ if ($true) { & {
 
     function Show-Usage {
         Write-Host @'
-Installs Rig, the compiler and its linker, for your user, on Windows x64.
+Installs Rig for your user, on Windows x64: the compiler, its linker and the
+modules that ship with it.
 
   irm https://woozchucky.github.io/rig/install.ps1 | iex
   & ([scriptblock]::Create((irm https://woozchucky.github.io/rig/install.ps1))) OPTIONS
@@ -265,15 +267,15 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
 
         # 3. Unpack into the temporary folder first: an archive that can't
         # be read stops here, with nothing installed. Then copy its files
-        # over the old ones. rig.exe finds lld-link.exe beside it, so they
-        # stay together, and the modules that ship with it in modules\
-        # beside it. The programs and the other files go first: a program
-        # that is running can't be overwritten, and when one is, the copy
-        # stops there and the old installation is still whole. Only then is
-        # the old modules\ removed and the new one copied in, so it replaces
-        # it whole: a file a module no longer has mustn't stay behind, and
-        # Copy-Item copies a folder into the one there, keeping its other
-        # files. The archive is unpacked with .NET's ZipFile rather
+        # over the old ones, keeping them together: rig.exe finds
+        # lld-link.exe beside it, and the modules that ship with it in
+        # modules\ beside it. The programs and the other files go first: a
+        # program that is running can't be overwritten, and when one is, the
+        # copy stops there and the old installation is still whole. Only
+        # then is the old modules\ removed and the new one copied in, so it
+        # replaces it whole: a file a module no longer has mustn't stay
+        # behind, and Copy-Item copies a folder into the one there, keeping
+        # its other files. The archive is unpacked with .NET's ZipFile rather
         # than Expand-Archive: in Windows PowerShell 5.1 that is a function
         # of a script module, which doesn't see the block's preferences, so
         # it would draw its progress bar, slowly, file by file. (5.1 needs
