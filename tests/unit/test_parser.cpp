@@ -3381,6 +3381,10 @@ TEST(parse_if_directives_nested_too_deeply) {
     CHECK_EQ(count_of(dump, ")\n(proc main (params) (block))\n"), 1);
     parse_src(&a, nested_source(&a, "main :: () {\n", "#if A {", MAX_DEPTH - 1, "", "}", "\n}\n"), &errors);
     CHECK_STR(errors, "");
+    // Taken at every level, they go through every stage, as nested ifs do
+    // (blocks_nest_up_to_a_thousand_levels): the checker and lowering
+    // recurse through each taken branch.
+    CHECK(builds(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "#if true {", MAX_DEPTH - 1, "y = 2;", "}", "\n}\n")));
     CHECK_STR(parse_src(&a, nested_source(&a, "main :: () {\n", "#if A {", MAX_DEPTH, "", "}", "\n}\n"), &errors),
               "(broken main)\n");
     CHECK_STR(errors, "2:7000: blocks are nested too deeply (more than 1000 levels)\n");

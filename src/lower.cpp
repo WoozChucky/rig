@@ -2182,8 +2182,9 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
         // Decided while compiling (spec 4.9): only the taken branch is code,
         // its statements the enclosing block's, at their own lines, in the
         // current scope (no lower_scoped_block: an #if makes no scope, ir.h's
-        // "Debug information"). Nothing is at the #if's own line, so a
-        // debugger never stops there. A hiding declaration in the branch
+        // "Debug information"). Nothing is at the '#if' itself: a debugger
+        // stops at the taken statements alone, so at the #if's line only when
+        // the branch shares it (#if C { return 1; }). A hiding declaration in the branch
         // starts a scope that lasts to the end of the enclosing block, as its
         // name does.
         Ast_Block *taken = ((Ast_If_Directive *)s)->taken;

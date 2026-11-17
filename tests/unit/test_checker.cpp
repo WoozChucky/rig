@@ -6197,6 +6197,21 @@ TEST(if_directive_condition_errors) {
     CHECK(first->taken == nullptr);
     CHECK(!((Ast_If_Directive *)first->else_part)->failed);
     token_list_free(c.list);
+    // Neither branch's locals are then declared, so a name used later in
+    // the body, which a branch may declare, isn't reported as unknown. Only
+    // in that body: one used before the #if is, and so is one in another
+    // body.
+    CHECK_STR(check_source(&a, "main :: () {\n    #if 1 { x := 1; } else { x := 2; }\n    y := x;\n    { z := w; }\n}\n"),
+              "2:9: the condition of '#if' must be a bool, not 'int'\n");
+    CHECK_STR(check_source(&a, "f :: () { v := u; #if 1 {} v = t; }\nmain :: () { s := r; }\n"),
+              "1:16: unknown identifier 'u'\n"
+              "1:23: the condition of '#if' must be a bool, not 'int'\n"
+              "2:19: unknown identifier 'r'\n");
+    // A body a #run checks on demand there is another body: its unknown
+    // names are reported, and the rest of the first still says nothing.
+    CHECK_STR(check_source(&a, "main :: () { #if 1 {} x := #run g(); y := z; }\ng :: () -> int { return q; }\n"),
+              "1:18: the condition of '#if' must be a bool, not 'int'\n"
+              "2:25: unknown identifier 'q'\n");
     arena_free(&a);
 }
 

@@ -37,6 +37,10 @@ struct Checker {
     bool lost_a_file;            // a #load failed (Ast_File.lost_a_file): a name declared nowhere
                                  // may be the missing file's, so it isn't reported as unknown,
                                  // nor main as missing
+    bool lost_a_local;           // a body's #if whose condition failed, in the body being checked:
+                                 // neither branch's locals are declared, so from there on a name
+                                 // declared nowhere may be one of them, and isn't reported as
+                                 // unknown (checker.cpp's check_if_directive)
 };
 
 // checker.cpp

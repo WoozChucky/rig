@@ -1368,9 +1368,13 @@ static void decide_if(Checker *c, Ast_If_Directive *first) {
 // A body's #if: decide_if, then the taken branch's statements checked in the
 // current scope (check_block, no push_scope): #if makes no scope, so what
 // the branch declares is the enclosing block's. The branches not taken are
-// never checked.
+// never checked. A condition that failed checks no branch, so the locals a
+// branch declares are declared nowhere: the rest of the body says nothing
+// about them (Checker.lost_a_local), the condition's message being the only
+// one.
 static void check_if_directive(Checker *c, Ast_If_Directive *first) {
     decide_if(c, first);
+    if (first->failed) c->lost_a_local = true;
     if (first->taken) check_block(c, first->taken);
 }
 
@@ -1618,8 +1622,8 @@ static bool reaches_end(Ast_Block *block) {
 // Checked in check()'s pass over the bodies, or earlier, where a #run
 // reaches it (check_reached_body): inside another body, or inside a
 // global's value in the pass before. So it's checked with a state of its
-// own: the procedure, the scopes and the loops of whatever was being
-// checked are set aside, and back when it's done, as the levels are. While
+// own: the procedure, the scopes, the loops and lost_a_local of whatever
+// was being checked are set aside, and back when it's done, as the levels are. While
 // it's under way, its block is on c->resolving, so a #run that needs it
 // then finds a circle.
 // Whether its check reported an error is kept (Ast_Proc.had_errors): a
@@ -1629,6 +1633,8 @@ static void check_body(Checker *c, Ast_Proc *proc) {
     Array<Table<Ast *>> outer_scopes = leave_scopes(c);
     Array<Ast *> outer_loops = c->loops;
     c->loops = {};
+    bool outer_lost_a_local = c->lost_a_local;
+    c->lost_a_local = false;
     s32 outer_levels = c->levels;
     proc->body_resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)proc->body);
@@ -1654,6 +1660,7 @@ static void check_body(Checker *c, Ast_Proc *proc) {
     proc->body_resolve = RESOLVE_DONE;
     array_free(&c->loops);
     c->loops = outer_loops;
+    c->lost_a_local = outer_lost_a_local;
     return_to_scopes(c, outer_scopes);
     c->levels = outer_levels;
     c->proc = outer_proc;
