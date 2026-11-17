@@ -25,6 +25,11 @@ struct Checker {
     Ast_Proc *proc;              // the procedure whose body is being checked
     Array<Ast *> loops;          // the loops around the statement being checked, innermost
                                  // last (Ast_While, Ast_For): what break and continue act on
+    Ast_Defer *deferring;        // the innermost defer whose statement is being checked (spec 6.12);
+                                 // null outside deferred code. A body checked on demand sets it
+                                 // aside (check_body)
+    s64 defer_loops;             // c->loops.count at `deferring`: a break or continue whose loop is
+                                 // among the first defer_loops would leave the deferred statement
     Array<Ast *> resolving;      // the globals, constants, structs' layouts, late fields' types,
                                  // signatures and bodies under way, each needed by the one before it
                                  // (resolve_global, resolve_struct, make_late_field,
