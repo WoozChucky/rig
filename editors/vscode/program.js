@@ -142,6 +142,20 @@ function doesntLoad(code, output) {
     return code === 1 && output.split(/\r?\n/).some((line) => DOESNT_LOAD.test(line));
 }
 
+// rig's answer when MAIN loads FILE only in an #if branch not taken
+// (src/driver.cpp): a line of its own, with both named as it was given them.
+const NOT_TAKEN = /^rig: error: '.*' loads '.*' only in an #if branch not taken$/;
+
+// Whether rig's exit code and stderr say MAIN loads FILE only in an #if
+// branch not taken on this system: exit 1 and a line `rig: error: '...'
+// loads '...' only in an #if branch not taken`, as doesntLoad reads its own.
+//
+// That answer ends the search: FILE is part of MAIN's program, but not on
+// this system, so it isn't checked, and has no problems to show.
+function notTaken(code, output) {
+    return code === 1 && output.split(/\r?\n/).some((line) => NOT_TAKEN.test(line));
+}
+
 // Whether rig's answer is an old rig's to --stdin-for: exit 2, stderr
 // starting `usage:`.
 //
@@ -152,4 +166,4 @@ function tooOld(code, output) {
     return code === 2 && output.startsWith('usage:');
 }
 
-module.exports = { declaresMain, pathOrder, searchable, doesntLoad, tooOld };
+module.exports = { declaresMain, pathOrder, searchable, doesntLoad, notTaken, tooOld };

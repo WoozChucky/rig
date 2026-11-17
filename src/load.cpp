@@ -171,11 +171,15 @@ struct Loading {
     const Module_Places *places;
     // The file given with its text (rig check --stdin-for), when there's
     // one (substitute), known by its key as any file is, so it's found
-    // however the program names it; and whether the program reached it.
+    // however the program names it; whether the program reached it; and
+    // whether a load in a branch not taken names it, or one in a branch of
+    // a chain whose condition failed (note_not_taken).
     bool substitute;
     File_Key stdin_key;
     String stdin_text;
     bool reached;
+    bool not_taken;
+    bool undecided;
     // The Compiler module's module.rig, when the places have one (load.h).
     bool has_compiler;
     File_Key compiler_key;
@@ -203,6 +207,48 @@ static s32 add_file(Loading *l, String path, String text, File_Key key, const Po
     return added;
 }
 
+// The path of the file `load` names: an #import's module's module.rig, a
+// #load's path from the directory of `holder`, the file the load is in;
+// {} when it names none, with *why the message saying so, in the loading
+// arena. Nothing is read, and nothing said: follow_load says *why, and
+// note_not_taken asks it of the loads of a branch not taken, which say
+// nothing.
+static String load_target(Loading *l, Ast_Load *load, s32 holder, String *why) {
+    Arena *arena = &l->arena;
+    if (load->is_import) {
+        // The module's module.rig, by its absolute path: from here on, the
+        // #load of that path. A name that isn't a module's is looked for
+        // nowhere, so "../x" can't reach outside the places.
+        if (!is_module_name(load->path)) {
+            *why = string_printf(arena, "'" STR_FMT "' isn't a module's name", STR_ARG(load_shown_name(arena, load->path)));
+            return {};
+        }
+        String module = module_lookup(arena, l->places, load->path);
+        if (!module.count) {
+            *why = string_printf(arena, "there's no module '" STR_FMT "' (looked in " STR_FMT " and " STR_FMT ")",
+                                 STR_ARG(load->path), STR_ARG(l->places->places[0]), STR_ARG(l->places->places[1]));
+        }
+        return module;
+    }
+    // A string can hold a zero byte (\0), but the system takes a path as
+    // ending at one, so "b.rig\0x.rig" would read b.rig: such a path, as an
+    // empty one, names no file.
+    if (load->path.count == 0) {
+        *why = string_printf(arena, "a #load path can't be empty");
+        return {};
+    }
+    if (memchr(load->path.data, 0, (size_t)load->path.count)) {
+        *why = string_printf(arena, "a #load path can't contain a zero byte");
+        return {};
+    }
+    String loaded = load_path(arena, l->d->files[holder].path, load->path, HOST_IS_WINDOWS);
+    if (!is_rig_file(loaded)) {
+        *why = string_printf(arena, "'" STR_FMT "' isn't a .rig file", STR_ARG(loaded));
+        return {};
+    }
+    return loaded;
+}
+
 // The load's file, as the queue resolved one before (an #import's module, a
 // #load's path, the errors, the stdin-for text, the Compiler module): its
 // index, read and added if new, or -1. Sets load->file. `holder` is the
@@ -213,44 +259,12 @@ static s32 follow_load(Loading *l, Ast_Load *load, s32 holder) {
     Diagnostics *d = l->d;
     Ast_File *tree = l->tree;
     load->file = -1;
-    String loaded = {};
-    if (load->is_import) {
-        // The module's module.rig, by its absolute path: from here on, the
-        // #load of that path. A name that isn't a module's is looked for
-        // nowhere, so "../x" can't reach outside the places.
-        if (!is_module_name(load->path)) {
-            diag_error(d, load->path_pos, "'" STR_FMT "' isn't a module's name",
-                       STR_ARG(load_shown_name(&l->arena, load->path)));
-            tree->lost_a_file = true;
-            return -1;
-        }
-        loaded = module_lookup(&l->arena, l->places, load->path);
-        if (!loaded.count) {
-            diag_error(d, load->path_pos, "there's no module '" STR_FMT "' (looked in " STR_FMT " and " STR_FMT ")",
-                       STR_ARG(load->path), STR_ARG(l->places->places[0]), STR_ARG(l->places->places[1]));
-            tree->lost_a_file = true;
-            return -1;
-        }
-    } else {
-        // A string can hold a zero byte (\0), but the system takes a path
-        // as ending at one, so "b.rig\0x.rig" would read b.rig: such a
-        // path, as an empty one, names no file.
-        if (load->path.count == 0) {
-            diag_error(d, load->path_pos, "a #load path can't be empty");
-            tree->lost_a_file = true;
-            return -1;
-        }
-        if (memchr(load->path.data, 0, (size_t)load->path.count)) {
-            diag_error(d, load->path_pos, "a #load path can't contain a zero byte");
-            tree->lost_a_file = true;
-            return -1;
-        }
-        loaded = load_path(&l->arena, d->files[holder].path, load->path, HOST_IS_WINDOWS);
-        if (!is_rig_file(loaded)) {
-            diag_error(d, load->path_pos, "'" STR_FMT "' isn't a .rig file", STR_ARG(loaded));
-            tree->lost_a_file = true;
-            return -1;
-        }
+    String why = {};
+    String loaded = load_target(l, load, holder, &why);
+    if (!loaded.count) {
+        diag_error(d, load->path_pos, STR_FMT, STR_ARG(why));
+        tree->lost_a_file = true;
+        return -1;
     }
     // A file named before is the one it was then (-1 when it couldn't be
     // read): a file that can't be read is reported at its first #load
@@ -320,6 +334,51 @@ static void place_in_load_order(Walk *walk, s32 file) {
     array_add(&walk->files, file);
 }
 
+static void note_not_taken(Loading *l, Ast_Block *branch, s32 holder, bool undecided);
+
+// note_not_taken on each branch of the chain `first` begins but `taken`
+// (null: every branch): the arms' blocks in order, then the last else's.
+// A loop over the arms, so a chain of any length takes no more stack than
+// one arm.
+static void note_branches(Loading *l, Ast_If_Directive *first, Ast_Block *taken, s32 holder, bool undecided) {
+    for (Ast_If_Directive *arm = first; arm;) {
+        if (arm->then_block != taken) note_not_taken(l, arm->then_block, holder, undecided);
+        Ast *rest = arm->else_part;
+        arm = nullptr;
+        if (rest && rest->kind == AST_IF_DIRECTIVE) {
+            arm = (Ast_If_Directive *)rest;
+        } else if (rest && rest != taken) {
+            note_not_taken(l, (Ast_Block *)rest, holder, undecided);
+        }
+    }
+}
+
+// The loads of `branch`, a branch not taken (`undecided`: a branch of a
+// chain whose condition failed), and of every branch of the #ifs in it,
+// never decided, each resolved as follow_load would (load_target: unread,
+// saying nothing) and compared with the stdin-for file by identity; a
+// match sets the not-taken or the undecided flag (load.h). `holder` is the
+// file the branch is in.
+static void note_not_taken(Loading *l, Ast_Block *branch, s32 holder, bool undecided) {
+    if (!branch) return;
+    for (s64 i = 0; i < branch->statements.count; i++) {
+        Ast *s = branch->statements[i];
+        if (s->kind == AST_IF_DIRECTIVE) {
+            note_branches(l, (Ast_If_Directive *)s, nullptr, holder, undecided);
+            continue;
+        }
+        if (s->kind != AST_LOAD) continue;
+        String why = {};
+        String target = load_target(l, (Ast_Load *)s, holder, &why);
+        if (!target.count || !same_key(file_key(&l->arena, l->directory, target), l->stdin_key)) continue;
+        if (undecided) {
+            l->undecided = true;
+        } else {
+            l->not_taken = true;
+        }
+    }
+}
+
 // Decides the chain `first` begins, an #if of file `holder`'s top level or
 // of a taken branch in it, with the decider, made at the first #if: by
 // then every file outside every #if is read, and their declarations are
@@ -333,6 +392,10 @@ static void decide_in_load_order(Loading *l, Walk *walk, Ast_If_Directive *first
     if (!l->decider) l->decider = check_decider_new(tree, l->a, l->d);
     check_decide(l->decider, first);
     if (first->failed) tree->lost_a_file = true;
+    // With rig check --stdin-for, whether the branches left as they are
+    // name its file: every branch of a failed chain, else every one but
+    // the taken one.
+    if (l->substitute) note_branches(l, first, first->taken, holder, first->failed);
     if (!first->taken) return;
     Array<Ast *> statements = first->taken->statements;
     for (s64 i = 0; i < statements.count; i++) {
@@ -471,5 +534,7 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const
     array_free(&l.items);
     arena_free(&l.arena);
     if (options->stdin_for_reached) *options->stdin_for_reached = l.reached;
+    if (options->stdin_for_not_taken) *options->stdin_for_not_taken = l.not_taken;
+    if (options->stdin_for_undecided) *options->stdin_for_undecided = l.undecided;
     return l.tree;
 }

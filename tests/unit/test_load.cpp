@@ -2038,3 +2038,111 @@ TEST(if_decides_build_programs) {
     }
     arena_free(&a);
 }
+
+// Issue #147: rig check --stdin-for of a file that only a branch not taken
+// loads (load.h). The loader resolves each #load and #import of a branch
+// not taken, without reading it or saying anything, and tells whether one
+// names the --stdin-for file (Load_Options.stdin_for_not_taken); one in a
+// branch of a chain whose condition had an error, at any depth, is
+// undecided instead (stdin_for_undecided): the driver then checks the
+// program, so the condition's error is said.
+struct Not_Taken_Case {
+    const char *text;  // main.rig's
+    System system;
+    bool reached, not_taken, undecided;
+    s64 errors;  // the messages the loader and the decider say: a failed condition's
+};
+
+// A Not_Taken_Case's outcome as text, the case's own text first, so that a
+// failure names the case.
+static String not_taken_result(Arena *a, const char *text, bool reached, bool not_taken, bool undecided, s64 errors) {
+    return string_printf(a, "%sreached %d, not taken %d, undecided %d, %d errors", text, reached, not_taken, undecided,
+                         (int)errors);
+}
+
+TEST(stdin_for_loaded_only_in_a_branch_not_taken) {
+    // dir/l.rig is the --stdin-for file, never on disk; w.rig and sub/a.rig
+    // are, and sub/a.rig's #if names l.rig from sub. Each case's load of
+    // l.rig is in a branch not taken (on that system), in a failed chain,
+    // or outside every #if; a branch not taken may spell it another way,
+    // since a file is known by its identity. The bad loads of a branch not
+    // taken are resolved saying nothing.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "stdin_for_loaded_only_in_a_branch_not_taken");
+    CHECK(os_make_directory(str(in_directory(&a, dir, "sub"))));
+    write_source(&a, dir, "w.rig", "W :: 1;\n");
+    write_source(&a, dir, "sub/a.rig", "#if false { #load \"../l.rig\"; }\n");
+    CHECK(!os_file_exists(str(in_directory(&a, dir, "l.rig"))));
+    const char *by_os = "#if OS == OS_WINDOWS { #load \"w.rig\"; } else { #load \"l.rig\"; }\n";
+    const Not_Taken_Case cases[] = {
+        {by_os, SYSTEM_WINDOWS, false, true, false, 0},
+        {by_os, SYSTEM_LINUX, true, false, false, 0},
+        // A nested branch not taken inside a taken one; every branch of an
+        // #if inside a branch not taken, never decided; the arms after the
+        // taken one.
+        {"#if true { #if false { #load \"l.rig\"; } }\n", SYSTEM_NONE, false, true, false, 0},
+        {"#if false { #if true { #load \"l.rig\"; } }\n", SYSTEM_NONE, false, true, false, 0},
+        {"#if true { } else #if true { #load \"l.rig\"; }\n", SYSTEM_NONE, false, true, false, 0},
+        // Another spelling, and a file whose #if names l.rig from sub.
+        {"#if false { #load \"./sub/../l.rig\"; }\n", SYSTEM_NONE, false, true, false, 0},
+        {"#load \"sub/a.rig\";\n", SYSTEM_NONE, false, true, false, 0},
+        // Another file, and loads that name no file, said nowhere.
+        {"#if false { #load \"x.rig\"; #load \"\"; #load \"l.txt\"; #import \"../l\"; #import \"Nope\"; }\n",
+         SYSTEM_NONE, false, false, false, 0},
+        // A failed chain's branches, every one of them, an arm whose own
+        // condition was false before the failed one included, and the
+        // branches of an #if nested in one, are undecided, not "not taken".
+        {"#if 1 { #load \"l.rig\"; } else { #load \"l.rig\"; }\n", SYSTEM_NONE, false, false, true, 1},
+        {"#if false { } else #if 1 { #load \"l.rig\"; }\n", SYSTEM_NONE, false, false, true, 1},
+        {"#if false { #load \"l.rig\"; } else #if 1 { }\n", SYSTEM_NONE, false, false, true, 1},
+        {"#if 1 { #if true { } else { #load \"l.rig\"; } }\n", SYSTEM_NONE, false, false, true, 1},
+        // Named both in a failed chain and in a branch not taken: both, and
+        // the driver takes undecided first. Loaded outside every #if too:
+        // reached.
+        {"#if false { #load \"l.rig\"; }\n#if 1 { #load \"l.rig\"; }\n", SYSTEM_NONE, false, true, true, 1},
+        {"#if false { #load \"l.rig\"; }\n#load \"l.rig\";\n", SYSTEM_NONE, true, true, false, 0},
+    };
+    for (const Not_Taken_Case &c : cases) {
+        Diagnostics d = {};
+        bool reached = !c.reached, not_taken = !c.not_taken, undecided = !c.undecided;
+        Load_Options options = {};
+        options.system = c.system;
+        options.stdin_for = str(in_directory(&a, dir, "l.rig"));
+        options.stdin_text = str("L :: 2;\n");
+        options.stdin_for_reached = &reached;
+        options.stdin_for_not_taken = &not_taken;
+        options.stdin_for_undecided = &undecided;
+        load_program(&a, &d, str(in_directory(&a, dir, "main.rig")), str(c.text), &options);
+        String got = not_taken_result(&a, c.text, reached, not_taken, undecided, d.messages.count);
+        String expected = not_taken_result(&a, c.text, c.reached, c.not_taken, c.undecided, c.errors);
+        CHECK_STR(got, string_cstr(&a, expected));
+        diag_free(&d);
+    }
+    arena_free(&a);
+}
+
+TEST(stdin_for_imported_only_in_a_branch_not_taken) {
+    // An #import in a branch not taken is resolved as one outside it would
+    // be (module_lookup), unread: --stdin-for its module.rig is the file
+    // only a branch not taken loads.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "stdin_for_imported_only_in_a_branch_not_taken");
+    Module_Places places = test_places(&a, dir);
+    write_module(&a, places.places[0], "Mod", "M :: 1;\n");
+    Diagnostics d = {};
+    bool reached = true, not_taken = false, undecided = true;
+    Load_Options options = {};
+    options.modules = &places;
+    options.stdin_for = str(module_file(&a, places.places[0], "Mod", "module.rig"));
+    options.stdin_text = str("M :: 2;\n");
+    options.stdin_for_reached = &reached;
+    options.stdin_for_not_taken = &not_taken;
+    options.stdin_for_undecided = &undecided;
+    load_program(&a, &d, str(in_directory(&a, dir, "main.rig")), str("#if false { #import \"Mod\"; }\n"), &options);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK(!reached);
+    CHECK(not_taken);
+    CHECK(!undecided);
+    diag_free(&d);
+    arena_free(&a);
+}
