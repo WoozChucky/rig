@@ -4,13 +4,17 @@
 // infinities, of zeros of either sign; the comparisons, none of which
 // takes equal values for less; the scratch memory it asks for and gives
 // back; no elements, one, elements of no size and four elements, which ask
-// for nothing, five, which ask for scratch, and elements too large for it;
-// sort_by_merging checking its own arguments; a thousand ints scrambled, in
-// order and the other way round, and the comparisons each takes; and the
-// same sort without memory, still stable. Then binary search, a lower
-// bound, before the first element, among equal ones, between two and after
-// the last, of nothing and of elements of no size or a negative one, and
-// of strings.
+// for nothing, five, which ask for scratch, elements too large for it and
+// ones whose scratch is exactly int's largest number of bytes;
+// sort_by_merging and sort_by_insertion checking their own arguments; a
+// thousand ints scrambled, in order and the other way round, and the
+// comparisons each takes; the same sort without memory, still stable; and
+// a less that is no order, which loses no element and touches nothing
+// around them. Then binary search, a lower bound, before the first
+// element, among equal ones, between two and after the last, of nothing
+// and of elements of no size or a negative one, and of strings; the
+// elements it hands compare, and when it calls it not at all; and
+// compare_int at int's extremes.
 #import "Basic";
 
 // What a counting allocator was asked to do: how many allocations and
@@ -33,6 +37,18 @@ null_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, 
     return null;
 }
 
+// Counts allocations and frees as counting_allocator_proc does, but gives
+// no memory, so a request of any size can be made of it.
+counting_null_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE {
+        counter.allocations += 1;
+        counter.last_size = size;
+    }
+    if mode == FREE { counter.frees += 1; }
+    return null;
+}
+
 // A key to sort by, and the order the pair had before the sort, which a
 // stable sort keeps among equal keys.
 Pair :: struct { key: int; order: int; }
@@ -43,7 +59,8 @@ less_key :: (a: *void, b: *void) -> bool {
     return (cast(*Pair) a).key < (cast(*Pair) b).key;
 }
 
-// How many comparisons less_counted and never_less have made.
+// How many comparisons less_counted, never_less, always_less and
+// alternating_less have made.
 comparisons : int;
 
 // less_int, counting each call.
@@ -57,6 +74,41 @@ less_counted :: (a: *void, b: *void) -> bool {
 never_less :: (a: *void, b: *void) -> bool {
     comparisons += 1;
     return false;
+}
+
+// Says of every element that it goes before any other, itself included,
+// counting each call: no strict weak order, since nothing may be less than
+// itself.
+always_less :: (a: *void, b: *void) -> bool {
+    comparisons += 1;
+    return true;
+}
+
+// Says no and yes in turn, whatever the elements, counting each call: no
+// order at all.
+alternating_less :: (a: *void, b: *void) -> bool {
+    comparisons += 1;
+    return comparisons % 2 == 0;
+}
+
+// The bytes binary_search is searching, from search_start up to
+// search_end, whether compare_checked has been given an element outside
+// them, and how many times it has been called.
+search_start : *u8;
+search_end : *u8;
+outside : bool;
+compare_calls : int;
+
+// compare_int, counting each call and noting an element outside
+// search_start..search_end, which it then doesn't read.
+compare_checked :: (key: *void, element: *void) -> int {
+    compare_calls += 1;
+    at := cast(*u8) element;
+    if at < search_start || at >= search_end {
+        outside = true;
+        return 0;
+    }
+    return compare_int(key, element);
 }
 
 // Prints a space, then index/found.
@@ -95,6 +147,24 @@ counts_up :: (data: *int, count: int) -> bool {
         if data[it] != it { return false; }
     }
     return true;
+}
+
+// Fills the thousand ints between guarded's first and last, two sentinels
+// of -1, with 0 to 999 in a scrambled order, sorts them by less with
+// allocator, and prints whether the sentinels are still -1 and whether
+// each of 0 to 999 is still there once, which sorting the thousand again
+// by less_int shows.
+show_unordered_sort :: (guarded: *int, less: (a: *void, b: *void) -> bool, allocator: Allocator) {
+    guarded[0] = -1;
+    guarded[1001] = -1;
+    for 0..999 { guarded[it + 1] = (it * 7919) % 1000; }
+    comparisons = 0;
+    sort(*guarded[1], 1000, size_of(int), less, allocator);
+    print_string(" sentinels");
+    show_bool(guarded[0] == -1 && guarded[1001] == -1);
+    sort(*guarded[1], 1000, size_of(int), less_int, HEAP_ALLOCATOR);
+    print_string(", each once");
+    show_bool(counts_up(*guarded[1], 1000));
 }
 
 // Whether the pairs are in order of key and, among equal keys, in the
@@ -242,14 +312,38 @@ main :: () {
     print_int(huge.allocations);
     print_line("");
 
-    // sort_by_merging checks its own arguments: elements of no size, or a
-    // negative one, are not compared.
+    // Fourteen elements of 1317624576693539401 bytes, int's largest over 7:
+    // the scratch for seven of them is exactly int's largest number of
+    // bytes, which an int can count, so sort asks for it. The allocator has
+    // none, and the elements are sorted by insertion, 13 comparisons for
+    // never_less, which looks at no element.
+    largest : Counter;
+    counting = Allocator.{counting_null_allocator_proc, *largest};
+    comparisons = 0;
+    sort(*lone, 14, 1317624576693539401, never_less, counting);
+    print_string("largest scratch: allocations ");
+    print_int(largest.allocations);
+    print_string(", size ");
+    print_int(largest.last_size);
+    print_string(", comparisons ");
+    print_int(comparisons);
+    print_line("");
+
+    // sort_by_merging and sort_by_insertion check their own arguments:
+    // elements of no size, or a negative one, and a single element, are not
+    // compared.
     comparisons = 0;
     six := int.[6, 5, 4, 3, 2, 1];
     spare := int.[0, 0, 0];
     sort_by_merging(six.data, spare.data, 6, 0, never_less);
     sort_by_merging(six.data, spare.data, 6, -8, never_less);
     print_string("merging no size: comparisons ");
+    print_int(comparisons);
+    print_line("");
+    sort_by_insertion(six.data, 6, 0, never_less);
+    sort_by_insertion(six.data, 6, -8, never_less);
+    sort_by_insertion(null, 1, 8, never_less);
+    print_string("insertion no size: comparisons ");
     print_int(comparisons);
     print_line("");
 
@@ -297,6 +391,22 @@ main :: () {
     show_pairs(pairs);
     print_line("");
 
+    // A less that is no strict weak order, one that says every element
+    // goes first and one that says no and yes in turn, with scratch memory
+    // and without: the thousand ints between two sentinels come out in some
+    // order, each still there once, and the sentinels are untouched.
+    guarded : [1002]int;
+    print_string("always less:");
+    show_unordered_sort(guarded.data, always_less, HEAP_ALLOCATOR);
+    print_string(";");
+    show_unordered_sort(guarded.data, always_less, none);
+    print_line("");
+    print_string("alternating less:");
+    show_unordered_sort(guarded.data, alternating_less, HEAP_ALLOCATOR);
+    print_string(";");
+    show_unordered_sort(guarded.data, alternating_less, none);
+    print_line("");
+
     // The first index whose element isn't below the key, and whether the
     // key is there: before the first element, at it, the first of three
     // equal ones, between two, the last, and after it.
@@ -329,6 +439,49 @@ main :: () {
     for string.["fig", "zz", ""] {
         word := it;
         index, found = binary_search(words.data, 6, size_of(string), *word, compare_string);
+        show_search(index, found);
+    }
+    print_line("");
+
+    // binary_search hands compare only elements among the ones it is
+    // given: for keys before them, among them and after the last, where it
+    // doesn't look past the end. Nothing to search, and elements of no size
+    // or a negative one, call compare not at all.
+    search_start = cast(*u8) sorted.data;
+    search_end = search_start + 6 * size_of(int);
+    for int.[0, 1, 3, 4, 7, 8] {
+        wanted := it;
+        index, found = binary_search(sorted.data, 6, size_of(int), *wanted, compare_checked);
+    }
+    print_string("search inside: outside");
+    show_bool(outside);
+    compare_calls = 0;
+    index, found = binary_search(null, 0, 8, *key, compare_checked);
+    index, found = binary_search(sorted.data, 6, 0, *key, compare_checked);
+    index, found = binary_search(sorted.data, 6, -8, *key, compare_checked);
+    print_string(", calls for none");
+    show_int(compare_calls);
+    print_line("");
+
+    // compare_int gives -1, 0 or 1, at int's extremes too, where the
+    // difference of the two would overflow; and a search among the
+    // extremes finds them, and 1 between them.
+    one := 1;
+    three := 3;
+    smallest : int = -9223372036854775808;
+    largest_int : int = 9223372036854775807;
+    print_string("compare_int:");
+    show_int(compare_int(*one, *three));
+    show_int(compare_int(*three, *three));
+    show_int(compare_int(*three, *one));
+    show_int(compare_int(*smallest, *largest_int));
+    show_int(compare_int(*largest_int, *smallest));
+    print_line("");
+    extremes := int.[-9223372036854775808, 9223372036854775807];
+    print_string("search extremes:");
+    for int.[-9223372036854775808, 1, 9223372036854775807] {
+        wanted := it;
+        index, found = binary_search(extremes.data, 2, size_of(int), *wanted, compare_int);
         show_search(index, found);
     }
     print_line("");

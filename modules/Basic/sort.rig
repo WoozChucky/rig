@@ -194,7 +194,7 @@ less_int :: (a: *void, b: *void) -> bool {
 // Whether the float64 at a is less than the float64 at b, for sort, with
 // NaN after every number. Every comparison with NaN is false, so x < y
 // alone would make a NaN equal to every number, and 1 equal to NaN equal
-// to 2 while 1 is less than 2: no strict weak order, and the sort would
+// to 2 while 1 is less than 2: no strict weak order, and the sort could
 // leave the NaNs' neighbours unsorted. So when b is NaN, a goes first
 // unless it is NaN too (a NaN is the one value not equal to itself); two
 // NaNs are equal. -0.0 and 0.0 are equal, and keep their order.
