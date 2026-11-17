@@ -1,0 +1,20 @@
+// A #load in a top-level #if's branch (issue #147, spec 4.9): only the taken
+// branch's file is read, once the #if is decided, and its declarations join
+// the one top level. Each system loads its own file, which declares the same
+// names; the last else, taken on neither, loads a file that isn't there,
+// which is no error, since it isn't read. What's printed is the same on both
+// systems.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+#if OS == OS_WINDOWS {
+    #load "load/if_windows.rig";
+} else #if OS == OS_LINUX {
+    #load "load/if_linux.rig";
+} else {
+    #load "load/no_such_file.rig";
+}
+
+main :: () {
+    if (SYSTEM_NAME[0] == 119) == (OS == OS_WINDOWS) { puts("the file for this system"); }
+    greet();
+}

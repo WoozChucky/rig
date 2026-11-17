@@ -6586,3 +6586,53 @@ TEST(deciding_leaves_a_struct_in_a_circle_without_a_type) {
     token_list_free(list);
     arena_free(&a);
 }
+
+// The top-level #ifs as rig decides them: by the loader, before check().
+
+// `text` loaded as test.rig (load_program, which takes the main file's text,
+// so no file is needed), with OS `system` (Load_Options.system), its
+// top-level #ifs decided there; then checked: the messages, in source order.
+static String check_loaded(Arena *a, const char *text, System system) {
+    Diagnostics d = {};
+    Load_Options options = {};
+    options.system = system;
+    Ast_File *file = load_program(a, &d, str("test.rig"), str(text), &options);
+    check(file, a, &d);
+    diag_sort(&d);
+    String result = messages(a, &d);
+    diag_free(&d);
+    return result;
+}
+
+TEST(if_branch_names_and_the_rest) {
+    // Review Focus 2: one name in both branches is the normal use, never
+    // already declared, on either system. A branch's name clashing with one
+    // outside every #if is, at the later of the two in load order, naming
+    // the earlier, whichever is in the branch.
+    Arena a = arena_make();
+    const char *both = "#if OS == OS_WINDOWS { NAME :: 1; } else { NAME :: 2; }\nmain :: () {}\n";
+    CHECK_STR(check_loaded(&a, both, SYSTEM_WINDOWS), "");
+    CHECK_STR(check_loaded(&a, both, SYSTEM_LINUX), "");
+    CHECK_STR(check_loaded(&a, "X :: 0;\n#if true { X :: 1; }\nmain :: () {}\n", SYSTEM_NONE),
+              "2:12: 'X' is already declared at test.rig:1:1\n");
+    CHECK_STR(check_loaded(&a, "#if true { X :: 1; }\nX :: 0;\nmain :: () {}\n", SYSTEM_NONE),
+              "2:1: 'X' is already declared at test.rig:1:12\n");
+    arena_free(&a);
+}
+
+TEST(top_level_if_directive_chains_of_10000_arms) {
+    // Review Focus 5: a top-level else #if chain, as a generated table
+    // writes one, is decided and its taken branch spliced with no recursion
+    // per arm, in the loader as in the checker. N picks the last arm.
+    const s64 ARMS = 10000;
+    Arena a = arena_make();
+    char *text = (char *)arena_alloc(&a, (u64)(ARMS * 64 + 4096), 1);
+    char *at = text;
+    at += sprintf(at, "N :: %lld;\n", (long long)(ARMS - 1));
+    for (s64 i = 0; i < ARMS; i++) {
+        at += sprintf(at, "%s#if N == %lld { A :: %lld; }\n", i ? "else " : "", (long long)i, (long long)i);
+    }
+    sprintf(at, "main :: () { x : [A + 1]u8; }\n");
+    CHECK_STR(check_loaded(&a, text, SYSTEM_NONE), "");
+    arena_free(&a);
+}

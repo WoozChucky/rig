@@ -1,0 +1,24 @@
+// The issue's example (issue #147, spec 4.9), with libc's puts for Basic's
+// print_line: a C function that exists on one system only, declared in that
+// system's branch, and a branch-local visible after a body #if, which makes
+// no scope. Sleep is kernel32's on Windows; usleep libc's on Linux. What's
+// printed is the same on both systems.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+#if OS == OS_WINDOWS {
+    Sleep :: (milliseconds: u32) #foreign libc;
+    sleep_ms :: (ms: int) { Sleep(cast(u32) ms); }
+} else {
+    c_usleep :: (microseconds: u32) -> s32 #foreign libc "usleep";
+    sleep_ms :: (ms: int) { c_usleep(cast(u32) (ms * 1000)); }
+}
+
+main :: () {
+    #if OS == OS_WINDOWS {
+        greeting := "hello from Windows";
+    } else {
+        greeting := "hello from Linux";
+    }
+    sleep_ms(10);
+    if greeting.count > 0 { puts("slept, and greeted"); }
+}

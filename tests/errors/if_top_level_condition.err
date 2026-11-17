@@ -1,0 +1,6 @@
+tests/errors/if_top_level_condition.rig:3:5: error: the condition of '#if' must be a bool, not 'int'
+    #if 1 { }
+        ^
+tests/errors/if_top_level_condition.rig:5:5: error: the condition of '#if' must be known while compiling
+    #if flag { }
+        ^

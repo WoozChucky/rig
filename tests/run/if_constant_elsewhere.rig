@@ -1,0 +1,10 @@
+// A top-level #if's condition (issue #147, spec 4.9) may use constants
+// declared outside every top-level #if, in any file, with what they need in
+// turn: DEBUG is load/if_level.rig's, and needs LEVEL there.
+#load "load/if_level.rig";
+
+puts :: (s: *u8) -> s32 #foreign libc;
+
+#if DEBUG { report :: () { puts("debug build"); } } else { report :: () { puts("release build"); } }
+
+main :: () { report(); }

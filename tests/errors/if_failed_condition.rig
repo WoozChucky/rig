@@ -1,0 +1,11 @@
+#if 1 {
+    #load "load/if_failed.rig";
+    main :: () { helper(); }
+}
+use :: () { helper(); missing(); }
+// A top-level #if whose condition has an error (issue #147, spec 4.9) takes
+// neither branch: its #load isn't read (the file isn't there), and the
+// program lacks what either branch might have declared, as after a failed
+// #load, so the condition's message is the only one: no name is unknown,
+// and main isn't missing. The #if is on line 1, where rig check's runner
+// case (--stdin-for of the file the branch loads) finds its message too.

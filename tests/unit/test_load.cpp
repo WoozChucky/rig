@@ -1669,3 +1669,256 @@ TEST(a_further_file_can_be_the_compiler_module) {
     diag_free(&d);
     arena_free(&a);
 }
+
+// Issue #147: top-level #if (spec 4.9). The loader decides each top-level
+// #if once the files outside every #if are read, in load order: a taken
+// branch's declarations join the tree, its #loads and #imports are read
+// then, and each file gets its place in load order (Ast_File.order,
+// Source_File.order), which can differ from the order the files were read
+// in. Each test names the system it decides for (Load_Options.system), or
+// none, the host's, when the conditions don't ask.
+
+// load_program on dir/main.rig, its text `text`, never written (the loader
+// takes the main file's text), with OS `system` (Load_Options.system). The
+// files it loads are dir's.
+static Ast_File *load_text(Arena *a, Diagnostics *d, String dir, const char *text, System system) {
+    Load_Options options = {};
+    options.system = system;
+    return load_program(a, d, str(in_directory(a, dir, "main.rig")), str(text), &options);
+}
+
+TEST(if_decides_between_loading_and_checking) {
+    // Each system takes its own branch, whatever the host: only the taken
+    // branch's procedure joins the tree, and the #if is decided.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "if_decides_between_loading_and_checking");
+    const char *text = "#if OS == OS_WINDOWS { w :: () {} } else { l :: () {} }\n";
+    const System systems[2] = {SYSTEM_WINDOWS, SYSTEM_LINUX};
+    const char *names[2] = {"w", "l"};
+    for (s64 i = 0; i < 2; i++) {
+        Diagnostics d = {};
+        Ast_File *tree = load_text(&a, &d, dir, text, systems[i]);
+        CHECK_STR(messages(&a, &d), "");
+        CHECK_EQ(tree->system, systems[i]);
+        CHECK_EQ(tree->procs.count, 1);
+        if (tree->procs.count == 1) CHECK_STR(tree->procs[0]->name, names[i]);
+        CHECK_EQ(tree->ifs.count, 1);
+        if (tree->ifs.count == 1) CHECK(tree->ifs[0]->decided && !tree->ifs[0]->failed);
+        diag_free(&d);
+    }
+    arena_free(&a);
+}
+
+TEST(if_branch_loads_its_files) {
+    // The taken branch's #load reads its file; the one in the branch not
+    // taken reads nothing, so a file that isn't there is no error. In the
+    // taken branch it's "cannot read" at its string, as anywhere, and the
+    // program lacks it.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "if_branch_loads_its_files");
+    write_source(&a, dir, "a.rig", "A :: 1;\n");
+    Diagnostics d = {};
+    Ast_File *tree = load_text(&a, &d, dir, "#if true { #load \"a.rig\"; } else { #load \"nope.rig\"; }\n", SYSTEM_NONE);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK(!tree->lost_a_file);
+    String expected = string_printf(&a, STR_FMT "\n" STR_FMT "\n", STR_ARG(str(in_directory(&a, dir, "main.rig"))),
+                                    STR_ARG(str(in_directory(&a, dir, "a.rig"))));
+    CHECK_STR(file_paths(&a, &d), string_cstr(&a, expected));
+    CHECK_EQ(tree->globals.count, 1);
+    diag_free(&d);
+
+    d = {};
+    tree = load_text(&a, &d, dir, "#if true { #load \"nope.rig\"; }\n", SYSTEM_NONE);
+    CHECK_EQ(d.messages.count, 1);
+    if (d.messages.count == 1) {
+        check_cannot_read(&a, &d.messages[0], 0, 1, 18, str(in_directory(&a, dir, "nope.rig")));
+    }
+    CHECK(tree->lost_a_file);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(if_branch_load_order) {
+    // main's top-level #loads are read first (a, c), then a's (d), and only
+    // then the #if is decided, which reads b: the reading order is main, a,
+    // c, d, b. The load order is the one the program would have with the
+    // taken branch's #load written where the #if is: main, a, b, c, d. The
+    // top-level runs and the errors follow it.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "if_branch_load_order");
+    write_source(&a, dir, "a.rig", "#load \"d.rig\";\n#run {}\nxa : int = \"s\";\n");
+    write_source(&a, dir, "b.rig", "#run {}\nxb : int = \"s\";\n");
+    write_source(&a, dir, "c.rig", "#run {}\nxc : int = \"s\";\n");
+    write_source(&a, dir, "d.rig", "#run {}\nxd : int = \"s\";\n");
+    Diagnostics d = {};
+    Ast_File *tree =
+        load_text(&a, &d, dir,
+                  "#load \"a.rig\";\n#if true { #load \"b.rig\"; }\n#load \"c.rig\";\n#run {}\nxm : int = \"s\";\n"
+                  "main :: () {}\n",
+                  SYSTEM_NONE);
+    CHECK_STR(messages(&a, &d), "");
+    const char *read[5] = {"main.rig", "a.rig", "c.rig", "d.rig", "b.rig"};
+    const s32 order[5] = {0, 1, 3, 4, 2};
+    CHECK_EQ(d.files.count, 5);
+    CHECK_EQ(tree->order.count, 5);
+    if (d.files.count == 5 && tree->order.count == 5) {
+        for (s64 i = 0; i < 5; i++) {
+            CHECK_STR(d.files[i].path, in_directory(&a, dir, read[i]));
+            CHECK_EQ(d.files[i].order, order[i]);
+            CHECK_EQ(tree->order[i], order[i]);
+        }
+    }
+    // By index, main, a, b, c, d are 0, 1, 4, 2, 3.
+    const s32 in_load_order[5] = {0, 1, 4, 2, 3};
+    CHECK_EQ(tree->runs.count, 5);
+    if (tree->runs.count == 5) {
+        for (s64 i = 0; i < 5; i++) CHECK_EQ(tree->runs[i]->pos.file, in_load_order[i]);
+    }
+    CHECK(!check(tree, &a, &d));
+    diag_sort(&d);
+    CHECK_EQ(d.messages.count, 5);
+    if (d.messages.count == 5) {
+        for (s64 i = 0; i < 5; i++) CHECK_EQ(d.messages[i].pos.file, in_load_order[i]);
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(if_branch_load_of_a_file_loaded_elsewhere) {
+    // Review Focus 4: b is read once, as a's #load reaches it first in the
+    // reading order, but its place in load order is at the taken branch's
+    // #load, which comes before main's #load of a.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "if_branch_load_of_a_file_loaded_elsewhere");
+    write_source(&a, dir, "a.rig", "#load \"b.rig\";\nA :: 1;\n");
+    write_source(&a, dir, "b.rig", "B :: 2;\n");
+    Diagnostics d = {};
+    Ast_File *tree = load_text(&a, &d, dir, "#if true { #load \"b.rig\"; }\n#load \"a.rig\";\n", SYSTEM_NONE);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 3);
+    CHECK_EQ(tree->order.count, 3);
+    if (d.files.count == 3 && tree->order.count == 3) {
+        CHECK_STR(d.files[1].path, in_directory(&a, dir, "a.rig"));
+        CHECK_STR(d.files[2].path, in_directory(&a, dir, "b.rig"));
+        CHECK_EQ(d.files[1].order, 2);
+        CHECK_EQ(d.files[2].order, 1);
+        CHECK_EQ(tree->order[1], 2);
+        CHECK_EQ(tree->order[2], 1);
+    }
+    // B, b's, before A, a's.
+    CHECK_EQ(tree->globals.count, 2);
+    if (tree->globals.count == 2) {
+        CHECK_STR(((Ast_Const *)tree->globals[0])->name, "B");
+        CHECK_STR(((Ast_Const *)tree->globals[1])->name, "A");
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(if_in_a_branch_loaded_file_is_decided) {
+    // A file a taken branch loads has top-level #ifs of its own, decided in
+    // their turn.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "if_in_a_branch_loaded_file_is_decided");
+    write_source(&a, dir, "a.rig", "#if true { A :: 1; } else { B :: 2; }\n");
+    Diagnostics d = {};
+    Ast_File *tree = load_text(&a, &d, dir, "#if true { #load \"a.rig\"; }\n", SYSTEM_NONE);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(tree->globals.count, 1);
+    if (tree->globals.count == 1) CHECK_STR(((Ast_Const *)tree->globals[0])->name, "A");
+    CHECK_EQ(tree->ifs.count, 2);
+    for (s64 i = 0; i < tree->ifs.count; i++) CHECK(tree->ifs[i]->decided);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(if_nested_in_a_taken_branch) {
+    // An #if in a taken branch is decided there; in a branch not taken it
+    // never is.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "if_nested_in_a_taken_branch");
+    Diagnostics d = {};
+    Ast_File *tree = load_text(&a, &d, dir,
+                               "#if true { #if false { X :: 1; } else { Y :: 2; } }\n"
+                               "#if false { #if true { Z :: 3; } }\n",
+                               SYSTEM_NONE);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(tree->globals.count, 1);
+    if (tree->globals.count == 1) CHECK_STR(((Ast_Const *)tree->globals[0])->name, "Y");
+    CHECK_EQ(tree->ifs.count, 2);
+    if (tree->ifs.count == 2) {
+        Ast_If_Directive *nested = (Ast_If_Directive *)tree->ifs[0]->then_block->statements[0];
+        CHECK(nested->decided);
+        CHECK(nested->taken == nested->else_part);
+        Ast_If_Directive *never = (Ast_If_Directive *)tree->ifs[1]->then_block->statements[0];
+        CHECK(!never->decided);
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(if_failed_condition_loses_like_a_failed_load) {
+    // A condition with an error takes neither branch: the program lacks
+    // what they may have declared, as after a failed #load.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "if_failed_condition_loses_like_a_failed_load");
+    Diagnostics d = {};
+    Ast_File *tree = load_text(&a, &d, dir, "#if 1 {}\n", SYSTEM_NONE);
+    CHECK_STR(messages(&a, &d), "1:5: the condition of '#if' must be a bool, not 'int'\n");
+    CHECK(tree->lost_a_file);
+    CHECK(tree->ifs[0]->failed);
+    diag_free(&d);
+    d = {};
+    tree = load_text(&a, &d, dir, "#if true {}\n", SYSTEM_NONE);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK(!tree->lost_a_file);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(if_condition_sees_constants_of_every_file) {
+    // The base a condition may use is every file read outside every #if,
+    // the files main loads included.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "if_condition_sees_constants_of_every_file");
+    write_source(&a, dir, "a.rig", "LEVEL :: 2;\n");
+    Diagnostics d = {};
+    Ast_File *tree = load_text(&a, &d, dir, "#load \"a.rig\";\n#if LEVEL > 1 { A :: 1; }\n", SYSTEM_NONE);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(tree->globals.count, 2);
+    if (tree->globals.count == 2) CHECK_STR(((Ast_Const *)tree->globals[0])->name, "A");
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(if_decides_build_programs) {
+    // A program is a build program, or not, by its taken branches only: an
+    // #import "Compiler" in a branch not taken isn't read, and a main there
+    // isn't declared.
+    Arena a = arena_make();
+    String dir = load_test_directory(&a, "if_decides_build_programs");
+    Module_Places places = test_places(&a, dir);
+    write_module(&a, places.places[0], "Compiler", "// The Compiler module, for the tests.\n");
+    const Build_Program_Case cases[] = {
+        {"#if false { #import \"Compiler\"; }\n", false, {}, false},
+        {"#if true { #import \"Compiler\"; }\n", true, {0, 1, 12}, true},
+        {"#import \"Compiler\";\n#if false { main :: () {} }\n", true, {0, 1, 1}, true},
+        {"#import \"Compiler\";\n#if true { main :: () {} }\n", true, {0, 1, 1}, false},
+    };
+    for (const Build_Program_Case &c : cases) {
+        Diagnostics d = {};
+        Load_Options options = {};
+        options.modules = &places;
+        Ast_File *tree = load_program(&a, &d, str(in_directory(&a, dir, "main.rig")), str(c.text), &options);
+        CHECK_STR(messages(&a, &d), "");
+        CHECK_EQ(tree->reaches_compiler, c.reaches_compiler);
+        if (c.reaches_compiler) {
+            CHECK_EQ(tree->compiler_pos.file, c.compiler_pos.file);
+            CHECK_EQ(tree->compiler_pos.line, c.compiler_pos.line);
+            CHECK_EQ(tree->compiler_pos.col, c.compiler_pos.col);
+        }
+        CHECK_EQ(ast_is_build_program(tree), c.is_build_program);
+        diag_free(&d);
+    }
+    arena_free(&a);
+}

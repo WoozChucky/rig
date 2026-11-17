@@ -1,0 +1,3 @@
+tests/errors/if_failed_condition.rig:1:5: error: the condition of '#if' must be a bool, not 'int'
+    #if 1 {
+        ^

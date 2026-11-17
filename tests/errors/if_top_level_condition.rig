@@ -1,0 +1,6 @@
+// A top-level #if's condition (issue #147, spec 4.9) is a bool known while
+// compiling, as a body #if's is; a global isn't known.
+#if 1 { }
+flag := true;
+#if flag { }
+main :: () {}
