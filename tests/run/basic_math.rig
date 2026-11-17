@@ -1,10 +1,31 @@
 // Basic's math (issue #134): min, max, abs and clamp for each type, with
 // int's and u64's extremes, positive and negative arguments to abs, -0.0,
-// the infinities and NaN.
+// the infinities and NaN. And (issue #148) PI, TAU and C's math functions
+// over <math.h>, each with its edges: zeros of both signs, the infinities,
+// NaN, domain errors, atan2 in each quadrant and on the axes, round at
+// halves, and mod with negative operands.
 #import "Basic";
 
 MIN :: -9223372036854775808;
 MAX :: 9223372036854775807;
+
+// A line of C's math starts with its label, and each result follows it
+// after a space: a float64 with 6 decimals and a float32 with 4, few enough
+// that every C library, compiled or interpreted, prints the same digits.
+start_line :: (label: string) {
+    print_string(label);
+    print_string(":");
+}
+
+show64 :: (value: float64) {
+    print_byte(32);
+    print_float(value, 6);
+}
+
+show32 :: (value: float32) {
+    print_byte(32);
+    print_float(value, 4);
+}
 
 main :: () {
     print_int(min_int(3, -7));
@@ -129,5 +150,197 @@ main :: () {
     print_float(min_float32(nan32, 1), 2);
     print_byte(32);
     print_float(max_float32(1, nan32), 2);
+    print_byte(10);
+
+    // PI and TAU are untyped: each takes float32 or float64 where it meets
+    // one, so p32's declaration and show32(PI) round it to a float32.
+    minus_zero : float64 = -0.0;
+    p32 : float32 = PI;
+    start_line("constants");
+    show64(PI);
+    show64(TAU);
+    show32(p32);
+    show32(PI);
+    show64(TAU - 2 * PI);
+    print_byte(10);
+
+    start_line("sqrt_float64");
+    show64(sqrt_float64(2));
+    show64(sqrt_float64(0));
+    show64(sqrt_float64(minus_zero));
+    show64(sqrt_float64(inf));
+    show64(sqrt_float64(-1));
+    print_byte(10);
+
+    start_line("cbrt_float64");
+    show64(cbrt_float64(27));
+    show64(cbrt_float64(-8));
+    show64(cbrt_float64(2));
+    show64(cbrt_float64(minus_zero));
+    show64(cbrt_float64(-inf));
+    print_byte(10);
+
+    start_line("sin_float64");
+    show64(sin_float64(PI / 6));
+    show64(sin_float64(minus_zero));
+    show64(sin_float64(PI / 2));
+    show64(sin_float64(inf));
+    print_byte(10);
+
+    start_line("cos_float64");
+    show64(cos_float64(0));
+    show64(cos_float64(PI / 3));
+    show64(cos_float64(PI));
+    show64(cos_float64(inf));
+    print_byte(10);
+
+    start_line("tan_float64");
+    show64(tan_float64(PI / 4));
+    show64(tan_float64(minus_zero));
+    show64(tan_float64(1));
+    print_byte(10);
+
+    start_line("asin_float64");
+    show64(asin_float64(1));
+    show64(asin_float64(-0.5));
+    show64(asin_float64(minus_zero));
+    show64(asin_float64(2));
+    print_byte(10);
+
+    start_line("acos_float64");
+    show64(acos_float64(1));
+    show64(acos_float64(0));
+    show64(acos_float64(-1));
+    show64(acos_float64(2));
+    print_byte(10);
+
+    start_line("atan_float64");
+    show64(atan_float64(1));
+    show64(atan_float64(minus_zero));
+    show64(atan_float64(inf));
+    show64(atan_float64(-inf));
+    print_byte(10);
+
+    // One point in each quadrant, y first, then the axes, where the zeros'
+    // signs choose between 0 and -0.0, and between π and -π.
+    start_line("atan2_float64");
+    show64(atan2_float64(1, 1));
+    show64(atan2_float64(1, -1));
+    show64(atan2_float64(-1, -1));
+    show64(atan2_float64(-1, 1));
+    print_byte(10);
+
+    start_line("atan2_float64 on the axes");
+    show64(atan2_float64(0, 0));
+    show64(atan2_float64(minus_zero, 0));
+    show64(atan2_float64(0, minus_zero));
+    show64(atan2_float64(minus_zero, minus_zero));
+    show64(atan2_float64(1, 0));
+    show64(atan2_float64(-1, 0));
+    show64(atan2_float64(nan, 1));
+    print_byte(10);
+
+    start_line("exp_float64");
+    show64(exp_float64(0));
+    show64(exp_float64(1));
+    show64(exp_float64(-inf));
+    show64(exp_float64(inf));
+    show64(exp_float64(-1000));
+    print_byte(10);
+
+    start_line("exp2_float64");
+    show64(exp2_float64(10));
+    show64(exp2_float64(-1));
+    show64(exp2_float64(0.5));
+    show64(exp2_float64(-inf));
+    print_byte(10);
+
+    start_line("log_float64");
+    show64(log_float64(1));
+    show64(log_float64(10));
+    show64(log_float64(0));
+    show64(log_float64(-1));
+    show64(log_float64(inf));
+    print_byte(10);
+
+    start_line("log2_float64");
+    show64(log2_float64(1024));
+    show64(log2_float64(0.5));
+    show64(log2_float64(0));
+    show64(log2_float64(-1));
+    print_byte(10);
+
+    start_line("log10_float64");
+    show64(log10_float64(1000));
+    show64(log10_float64(0.001));
+    show64(log10_float64(0));
+    show64(log10_float64(-1));
+    print_byte(10);
+
+    // A negative base to a power that isn't whole is NaN; 0 and -0.0 to a
+    // negative odd power are infinities of their signs; and an exponent of
+    // 0, or a base of 1, gives 1 even with a NaN.
+    start_line("pow_float64");
+    show64(pow_float64(2, 10));
+    show64(pow_float64(2, 0.5));
+    show64(pow_float64(2, -1));
+    show64(pow_float64(-2, 3));
+    show64(pow_float64(-8, 1.0 / 3));
+    show64(pow_float64(0, -1));
+    show64(pow_float64(minus_zero, -1));
+    show64(pow_float64(nan, 0));
+    show64(pow_float64(1, nan));
+    print_byte(10);
+
+    // An infinity wins over a NaN, and 1.5e308 twice has a hypotenuse past
+    // float64's largest.
+    start_line("hypot_float64");
+    show64(hypot_float64(3, 4));
+    show64(hypot_float64(-5, 12));
+    show64(hypot_float64(inf, nan));
+    show64(hypot_float64(1.5e308, 1.5e308));
+    print_byte(10);
+
+    start_line("floor_float64");
+    show64(floor_float64(2.5));
+    show64(floor_float64(-2.5));
+    show64(floor_float64(-0.5));
+    show64(floor_float64(minus_zero));
+    print_byte(10);
+
+    start_line("ceil_float64");
+    show64(ceil_float64(2.5));
+    show64(ceil_float64(-2.5));
+    show64(ceil_float64(-0.5));
+    print_byte(10);
+
+    // Halves go away from zero. 0.49999999999999994 is the float64 just
+    // below 0.5, which rounds to 0, where adding 0.5 and taking the floor
+    // would give 1.
+    start_line("round_float64");
+    show64(round_float64(0.5));
+    show64(round_float64(1.5));
+    show64(round_float64(2.5));
+    show64(round_float64(-0.5));
+    show64(round_float64(-2.5));
+    show64(round_float64(-0.4));
+    show64(round_float64(0.49999999999999994));
+    print_byte(10);
+
+    start_line("trunc_float64");
+    show64(trunc_float64(2.7));
+    show64(trunc_float64(-2.7));
+    show64(trunc_float64(-0.5));
+    print_byte(10);
+
+    // The remainder takes a's sign, whatever b's.
+    start_line("mod_float64");
+    show64(mod_float64(5.5, 2));
+    show64(mod_float64(-5.5, 2));
+    show64(mod_float64(5.5, -2));
+    show64(mod_float64(-5.5, -2));
+    show64(mod_float64(-4, 2));
+    show64(mod_float64(1, 0));
+    show64(mod_float64(1, inf));
     print_byte(10);
 }

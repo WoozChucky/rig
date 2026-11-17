@@ -7,7 +7,8 @@
 //
 // Everything else in Basic is written in Rig over these.
 //
-// Each of them links and runs on Windows (the UCRT) and Linux (glibc),
+// Each of them links and runs on Windows (the UCRT) and Linux (glibc's libc
+// and, for <math.h>, its libm, which every program links too, spec 10.6),
 // compiled and interpreted, with one declaration that serves both: where
 // C's types differ (fseek's long offset, fpos_t, struct timespec), the
 // declaration and its comment say how Basic stays within what both agree
@@ -130,3 +131,43 @@ C_TIME_UTC :: 1;
 // this declaration to _timespec64_get there, as a C program's call is
 // (issue #161, spec 10.6).
 c_timespec_get :: (time: *C_Timespec, base: s32) -> s32 #foreign libc "timespec_get";
+
+// C's <math.h> of a double, each called by math.rig's procedure of the
+// same name for float64 (c_sqrt by sqrt_float64, c_fmod by mod_float64).
+// The results are the C library's: glibc's libm on Linux and the UCRT's on
+// Windows, which may differ in the last bit, and on Windows a compiled
+// program's (ucrtbase.dll's) may differ in it from an interpreted one's
+// (the compiler's own copy, spec 10.8). A domain error, such as the square
+// root of -1, gives NaN; C's errno, which would tell it apart, isn't
+// reachable.
+c_sqrt :: (x: float64) -> float64 #foreign libc "sqrt";
+c_cbrt :: (x: float64) -> float64 #foreign libc "cbrt";
+c_sin :: (x: float64) -> float64 #foreign libc "sin";
+c_cos :: (x: float64) -> float64 #foreign libc "cos";
+c_tan :: (x: float64) -> float64 #foreign libc "tan";
+c_asin :: (x: float64) -> float64 #foreign libc "asin";
+c_acos :: (x: float64) -> float64 #foreign libc "acos";
+c_atan :: (x: float64) -> float64 #foreign libc "atan";
+
+// The angle of the point (x, y): y comes first, as in C.
+c_atan2 :: (y: float64, x: float64) -> float64 #foreign libc "atan2";
+
+c_exp :: (x: float64) -> float64 #foreign libc "exp";
+c_exp2 :: (x: float64) -> float64 #foreign libc "exp2";
+c_log :: (x: float64) -> float64 #foreign libc "log";
+c_log2 :: (x: float64) -> float64 #foreign libc "log2";
+c_log10 :: (x: float64) -> float64 #foreign libc "log10";
+c_pow :: (x: float64, y: float64) -> float64 #foreign libc "pow";
+c_hypot :: (x: float64, y: float64) -> float64 #foreign libc "hypot";
+c_floor :: (x: float64) -> float64 #foreign libc "floor";
+c_ceil :: (x: float64) -> float64 #foreign libc "ceil";
+
+// The nearest whole number, halves away from zero (2.5 is 3, -2.5 is -3),
+// not to the even one as the processor's own rounding would.
+c_round :: (x: float64) -> float64 #foreign libc "round";
+
+c_trunc :: (x: float64) -> float64 #foreign libc "trunc";
+
+// The remainder of x / y with x's sign, whatever y's: fmod(-5.5, 2) is
+// -1.5.
+c_fmod :: (x: float64, y: float64) -> float64 #foreign libc "fmod";

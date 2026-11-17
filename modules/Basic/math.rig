@@ -18,6 +18,16 @@
 //   negative value has no positive int: its negation wraps to itself
 //   (spec 5.8). abs of a float clears the sign bit, so -0.0 gives 0.0, and a
 //   NaN stays a NaN.
+//
+// The second half of the file is π and C's math functions. PI and TAU are
+// untyped float constants, so each takes either float type where it meets
+// one, rounded to it; where it meets none, as in x := PI;, it becomes a
+// float32, an untyped float's default (spec 3.12). C's functions of
+// <math.h> come one procedure per type too, each only a call of libc.rig's
+// c_ declaration and nothing else, so every edge value, -0.0, the
+// infinities and NaN, goes to C and comes back as C gives it, and the
+// results are the C library's (libc.rig says whose).
+#load "libc.rig";
 
 // The smaller of a and b; a when they're equal.
 min_int :: (a: int, b: int) -> int {
@@ -123,4 +133,139 @@ abs_float64 :: (value: float64) -> float64 {
     bits := cast(*u64) *copy;
     bits.* &= 0x7FFF_FFFF_FFFF_FFFF;
     return copy;
+}
+
+// π, the ratio of a circle's circumference to its diameter, and 2π, a
+// whole turn in radians: the float64s nearest them, untyped so that a
+// float32 takes them too.
+PI :: 3.141592653589793;
+TAU :: 6.283185307179586;
+
+// The square root of x: -0.0 for -0.0, inf for inf, and NaN below 0.
+sqrt_float64 :: (x: float64) -> float64 {
+    return c_sqrt(x);
+}
+
+// The cube root of x, negative for a negative x: -2 for -8, and -inf for
+// -inf.
+cbrt_float64 :: (x: float64) -> float64 {
+    return c_cbrt(x);
+}
+
+// The sine of an angle x in radians; -0.0 for -0.0, NaN for an infinity.
+sin_float64 :: (x: float64) -> float64 {
+    return c_sin(x);
+}
+
+// The cosine of an angle x in radians; NaN for an infinity.
+cos_float64 :: (x: float64) -> float64 {
+    return c_cos(x);
+}
+
+// The tangent of an angle x in radians; -0.0 for -0.0, NaN for an
+// infinity. No float64 is exactly π/2, so it is never infinite.
+tan_float64 :: (x: float64) -> float64 {
+    return c_tan(x);
+}
+
+// The angle in radians whose sine is x, from -π/2 to π/2; -0.0 for -0.0,
+// and NaN outside -1 to 1.
+asin_float64 :: (x: float64) -> float64 {
+    return c_asin(x);
+}
+
+// The angle in radians whose cosine is x, from 0 to π; NaN outside -1 to
+// 1.
+acos_float64 :: (x: float64) -> float64 {
+    return c_acos(x);
+}
+
+// The angle in radians whose tangent is x, from -π/2 to π/2, which it is
+// for inf; -0.0 for -0.0.
+atan_float64 :: (x: float64) -> float64 {
+    return c_atan(x);
+}
+
+// The angle of the point (x, y) from the positive x axis, from -π to π, in
+// the point's own quadrant, which atan of y / x can't tell: atan2(1, -1)
+// is 3π/4. y comes first, as in C. On the axes the zeros' signs choose:
+// (0, 0) is 0 and (-0.0, 0) is -0.0, (0, -0.0) is π and (-0.0, -0.0) is
+// -π.
+atan2_float64 :: (y: float64, x: float64) -> float64 {
+    return c_atan2(y, x);
+}
+
+// e to the power x: 0 for -inf, and inf past float64's largest.
+exp_float64 :: (x: float64) -> float64 {
+    return c_exp(x);
+}
+
+// 2 to the power x: 0 for -inf, and inf past float64's largest.
+exp2_float64 :: (x: float64) -> float64 {
+    return c_exp2(x);
+}
+
+// The natural logarithm of x, to base e: -inf for 0 or -0.0, and NaN below
+// 0.
+log_float64 :: (x: float64) -> float64 {
+    return c_log(x);
+}
+
+// The logarithm of x to base 2: -inf for 0 or -0.0, and NaN below 0.
+log2_float64 :: (x: float64) -> float64 {
+    return c_log2(x);
+}
+
+// The logarithm of x to base 10: -inf for 0 or -0.0, and NaN below 0.
+log10_float64 :: (x: float64) -> float64 {
+    return c_log10(x);
+}
+
+// base to the power exponent. A negative base has a real power only for a
+// whole exponent, so another gives NaN: pow(-8, 1.0 / 3) is NaN, not -2
+// (cbrt_float64 gives that). 0 and -0.0 to a negative odd power are inf
+// and -inf. An exponent of 0, or a base of 1, gives 1, even when the other
+// is NaN.
+pow_float64 :: (base: float64, exponent: float64) -> float64 {
+    return c_pow(base, exponent);
+}
+
+// The square root of x² + y², the length of the vector (x, y), without the
+// overflow or underflow that squaring would give on the way: only a
+// hypotenuse past float64's largest is inf. An infinite x or y gives inf,
+// even when the other is NaN.
+hypot_float64 :: (x: float64, y: float64) -> float64 {
+    return c_hypot(x, y);
+}
+
+// The nearest whole number at or below x: -3 for -2.5, -1 for -0.5; -0.0
+// for -0.0.
+floor_float64 :: (x: float64) -> float64 {
+    return c_floor(x);
+}
+
+// The nearest whole number at or above x: -2 for -2.5, and -0.0 for any
+// value between -1 and 0.
+ceil_float64 :: (x: float64) -> float64 {
+    return c_ceil(x);
+}
+
+// The nearest whole number to x, halves away from zero, as C's round: 2.5
+// is 3, -2.5 is -3, and -0.4 is -0.0. It rounds x itself, so the float64
+// just below 0.5 gives 0, where the floor of x + 0.5 would give 1.
+round_float64 :: (x: float64) -> float64 {
+    return c_round(x);
+}
+
+// x without its fraction, toward zero: -2 for -2.7, -0.0 for -0.5.
+trunc_float64 :: (x: float64) -> float64 {
+    return c_trunc(x);
+}
+
+// The remainder of a / b, C's fmod: a less the whole multiple of b toward
+// zero, so it has a's sign whatever b's (mod_float64(-5.5, 2) is -1.5, and
+// mod_float64(-4, 2) is -0.0). NaN for a b of 0 or an infinite a, and a
+// itself for an infinite b.
+mod_float64 :: (a: float64, b: float64) -> float64 {
+    return c_fmod(a, b);
 }
