@@ -19,7 +19,10 @@
 // Before any test the runner makes .build/tests, and in it an empty
 // directory, .build/tests/basic_file_empty_dir, which tests/run/basic_file
 // gives Basic's file procedures as a path: Basic, on C17 alone, can't make
-// one.
+// one. At its start the runner sets RIG_BASIC_TEST=set by bin/run-tests in
+// its own environment, which every program it runs inherits, compiled and
+// interpreted, so tests/run/basic_environment reads a variable whose value
+// it knows (and passes only under the runner).
 //
 // Then every program of tests/run again, interpreted: `bin/unit-tests
 // --interpret tests/run/NAME.rig`, with the words of NAME.flags after it,
@@ -2962,6 +2965,18 @@ int main(int argc, char **argv) {
     // instead of opening a dialog box and waiting for someone to click it.
     // Every program the runner starts inherits this.
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+#endif
+    // A variable every program the runner starts inherits, compiled and
+    // interpreted, so tests/run/basic_environment can read one whose value
+    // it knows. Each program starts with the runner's own environment: on
+    // Windows CreateProcessW is given no environment of its own, so it
+    // passes the process's, which _putenv_s changes as well as the C
+    // runtime's copy; on Linux posix_spawnp is given environ, which setenv
+    // changes.
+#ifdef _WIN32
+    _putenv_s("RIG_BASIC_TEST", "set by bin/run-tests");
+#else
+    setenv("RIG_BASIC_TEST", "set by bin/run-tests", 1);
 #endif
     Arena a = arena_make();
     Array<String> args = os_arguments(&a, argc, argv);
