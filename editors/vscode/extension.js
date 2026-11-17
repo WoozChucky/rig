@@ -47,7 +47,7 @@ const {
     launchConfiguration,
 } = require('./debug');
 const { samePath, parseDiagnostics, otherFilesError, characterOfByteColumn } = require('./diagnostics');
-const { declaresMain, pathOrder, searchable, doesntLoad, tooOld } = require('./program');
+const { declaresMain, pathOrder, searchable, doesntLoad, notTaken, tooOld } = require('./program');
 
 const windows = process.platform === 'win32';
 
@@ -935,6 +935,13 @@ function inFolder(document, folder) {
 // search the folder; and when rig is from before --stdin-for, which can't
 // check it with its program, and is said to be too old, once.
 //
+// A program may load the document only in an #if branch not taken on this
+// system (a file for another system), which rig says instead of checking it
+// (notTaken). That ends the search, as MAIN is its program, but not here:
+// the document shows no problems, MAIN is remembered as its program, and
+// the output channel Rig says why, once while the document is open
+// (this.toldNotTaken).
+//
 // The search runs a whole check for each main file it tries, so its answer
 // is remembered for the document (this.programs), and the next check tries
 // that main file alone. What the search saw may change, though: a main file
@@ -966,7 +973,10 @@ function inFolder(document, folder) {
 // once, with the button to the setting, and again only once the setting
 // changes.
 class LiveCheck {
-    constructor() {
+    // `output` is the output channel Rig, where what isn't a problem of the
+    // document is said.
+    constructor(output) {
+        this.output = output;
         this.collection = vscode.languages.createDiagnosticCollection('rig');
         this.timers = new Map();  // a document's uri (as a string) -> its pending onType check
         this.running = new Map(); // a document's uri -> the rig process checking it now
@@ -993,6 +1003,10 @@ class LiveCheck {
         this.toldMain = false;    // said once that rig.main is wrong
         this.toldOld = false;     // said once that the compiler is too old for --stdin-for
         this.toldTimeout = false; // said once that a check ran past rig.checkTimeout
+        // The uris of the documents whose program loads them only in an #if
+        // branch not taken, said in the output channel since they opened:
+        // each is dropped when its document closes (forget).
+        this.toldNotTaken = new Set();
     }
 
     // Whether a document is one to check: a .rig file on disk. An untitled
@@ -1031,11 +1045,13 @@ class LiveCheck {
 
     // A document closed, or no longer to be checked: no check, no problems,
     // and its program isn't remembered (it may have changed by the time
-    // the document is open again).
+    // the document is open again), nor that it was said to be loaded only
+    // in a branch not taken.
     forget(document) {
         if (!document || !document.uri) return;
         this.stop(document.uri.toString());
         this.programs.delete(document.uri.toString());
+        this.toldNotTaken.delete(document.uri.toString());
         this.collection.delete(document.uri);
     }
 
@@ -1187,8 +1203,11 @@ class LiveCheck {
         // rig couldn't be started or was stopped; 'elsewhere' when main's
         // program doesn't load the document, and the next main file is to be
         // tried; 'alone' when this rig is too old to know --stdin-for, which
-        // is said once, and the document is to be checked alone. Each rig
-        // gets the text as it is when it starts: what's on screen.
+        // is said once, and the document is to be checked alone. When main
+        // loads the document only in an #if branch not taken, that's 'done'
+        // too: no problems, main remembered, and why said in the output
+        // channel, unless it was since the document opened. Each rig gets
+        // the text as it is when it starts: what's on screen.
         const through = async (main) => {
             if (!current()) return 'done';
             const args = ['check', main, '--stdin-for', file];
@@ -1196,6 +1215,17 @@ class LiveCheck {
             if (!current()) return 'done';
             if (!result.error && !result.timedOut) {
                 if (doesntLoad(result.code, result.output)) return 'elsewhere';
+                if (notTaken(result.code, result.output)) {
+                    this.collection.set(document.uri, []);
+                    remember(main);
+                    if (!this.toldNotTaken.has(key)) {
+                        this.toldNotTaken.add(key);
+                        this.output.appendLine(
+                            `${file} isn't checked: ${main} loads it only in an #if branch not taken on this system.`,
+                        );
+                    }
+                    return 'done';
+                }
                 if (tooOld(result.code, result.output)) {
                     if (!this.toldOld) {
                         this.toldOld = true;
@@ -1363,12 +1393,16 @@ class LiveCheck {
 }
 
 function activate(context) {
-    const live = new LiveCheck();
+    // Where the extension says what isn't a problem of a document's: made
+    // once, and disposed of with the extension.
+    const output = vscode.window.createOutputChannel('Rig');
+    const live = new LiveCheck(output);
     // A .rig file created, changed or deleted, in VS Code or outside it,
     // may change the program of the documents it concerns. A change may be
     // a save's own, which forgets nothing more (changed).
     const rigFiles = vscode.workspace.createFileSystemWatcher('**/*.rig');
     context.subscriptions.push(
+        output,
         rigFiles,
         rigFiles.onDidCreate((uri) => live.forgetPrograms(uri)),
         rigFiles.onDidChange((uri) => live.changed(uri)),

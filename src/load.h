@@ -118,6 +118,23 @@
 // Build programs are recognised once the #ifs are decided: an #import
 // "Compiler" in a branch not taken isn't read, so it doesn't reach the
 // module, and a main there isn't declared.
+//
+// The file given with its text (rig check --stdin-for) may be one that only
+// a branch not taken loads: not part of the program on this system, so
+// never reached, though the program names it. The loader tells the two
+// apart for the driver, which says so (spec 10.1): it resolves the #loads
+// and #imports of each branch not taken, the arms of a decided chain other
+// than the taken one, and every branch of the #ifs inside such a branch,
+// at any depth, never decided, as it would follow them (the same paths,
+// the same identity), but reads nothing and says nothing, so a load naming
+// no file is no error there either. One that names the file sets
+// stdin_for_not_taken. The branches of a chain whose condition had an
+// error, at any depth inside them, aren't "not taken": the condition
+// decided nothing, so a load there naming the file sets stdin_for_undecided
+// instead, and the driver checks the program, whose errors (the
+// condition's) are what's to be said. A file that only a file loaded in a
+// branch not taken loads is neither: that file isn't read, so its loads
+// aren't known.
 
 #pragma once
 
@@ -149,6 +166,10 @@ struct Load_Options {
     String stdin_for;
     String stdin_text;
     bool *stdin_for_reached;       // when given, set to whether the program reached stdin_for
+    bool *stdin_for_not_taken;     // when given, set to whether a #load or an #import in a branch not
+                                   // taken (the rules above) names stdin_for
+    bool *stdin_for_undecided;     // when given, set to whether one in a branch of a chain whose
+                                   // condition failed, at any depth inside it, names stdin_for
     const Module_Places *modules;  // where #import looks, and where a module's files are (in_module); null:
                                    // module_places(), rig's own
     // A workspace's further files (spec 7.9), loaded right after the main
@@ -182,7 +203,9 @@ struct Load_Options {
 // `path` for the main file. stdin_text, as `text`, isn't copied: the tree's
 // names and `d` point into it, so the caller keeps it alive as long as
 // both. *stdin_for_reached, when given, says whether the program reached
-// it. modules, when given, are the places #import looks in, and that say
+// it; *stdin_for_not_taken and *stdin_for_undecided, when given, whether a
+// load in a branch not taken names it, and one in a branch of a failed
+// chain (above). modules, when given, are the places #import looks in, and that say
 // which files are a module's, in place of rig's own (module_places): the
 // tests' own modules. more_files, with their texts in more_texts, are
 // added right after the main file, as if it #loaded each first (a
