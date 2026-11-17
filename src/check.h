@@ -41,6 +41,13 @@ struct Checker {
                                  // neither branch's locals are declared, so from there on a name
                                  // declared nowhere may be one of them, and isn't reported as
                                  // unknown (checker.cpp's check_if_directive)
+    Ast_File *file;              // the program being checked
+    bool deciding;               // a decider (check_decider_new): it checks the top-level #ifs'
+                                 // conditions only, knowing the base's names alone, and refuses any
+                                 // #run they reach (check_run) and any name a top-level #if's branch
+                                 // declares (check_in_a_branch)
+    s64 base_procs;              // a decider's: file->procs.count and file->globals.count when it was
+    s64 base_globals;            // made, the base; what's added after them joined through a branch
 };
 
 // checker.cpp
@@ -100,6 +107,15 @@ bool check_proc_signature(Checker *c, Ast_Proc *proc);
 // count); a broken one is false, and so is one nested too deeply to check
 // here (said).
 bool check_reached_body(Checker *c, Ast_Proc *proc, Position at);
+
+// In deciding mode, for a name found nowhere: whether it's declared in a
+// top-level #if, in any branch of one, taken or not, decided or not, at any
+// depth, or among the declarations that joined the top level through a
+// taken branch since the base (spec 4.9). If so, "'NAME' is declared in a
+// top-level #if, so it can't decide another top-level #if" at `at`, missing
+// file or not (the name is known to be declared), and true. The callers,
+// which report a name declared nowhere, ask this first.
+bool check_in_a_branch(Checker *c, String name, Position at);
 
 // [count]element (type_array_of), or null after "'[N]T' is too big", at
 // `at`: larger than any type may be (TYPE_MAX_SIZE), its count read as

@@ -562,6 +562,28 @@
 //   information see that branch alone. The #if adds no code of its own: the
 //   taken statements are at their own positions, so an #if whose branch is
 //   on lines of its own has nothing at its line.
+// - A top-level #if is decided before anything else is checked, by a
+//   decider (check_decider_new) the loader makes once every file outside
+//   every #if is read: a checker that knows those files' declarations, the
+//   base, and the predeclared constants, nothing else. It decides each chain
+//   as decide_if does a body's, with the same two messages about the
+//   condition, and has two limits of its own. A name declared in a top-level
+//   #if's branch (any branch, taken or not, decided or not, at any depth),
+//   or in a file only a taken branch loads, reached from a condition
+//   directly or through constants and types, is "'LEVEL' is declared in a
+//   top-level #if, so it can't decide another top-level #if", at the use: it
+//   can't be known before the #ifs that declare it are decided. A #run
+//   reached from a condition, one whose operand is a constant too, is "a
+//   top-level #if's condition can't run code while compiling, for now", at
+//   the #run, which then has no value (has_failed_run). A condition in a body
+//   has neither limit.
+// - What the decider works out on the way (a constant's value, a struct's
+//   layout and Type, a signature) stays on the nodes, its messages said: the
+//   check after it finds them done. A condition with an error takes neither
+//   branch; the loader then counts the program as lacking a file
+//   (Ast_File.lost_a_file), so no name anywhere is unknown, nor main
+//   missing. check() itself decides no top-level #if: one the loader didn't
+//   decide (a tree from parse()) is as if no branch were taken.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
@@ -616,6 +638,21 @@ struct Compile_Time;  // run.h: the compile-time world
 // (spec 7.8): in `world`, which the caller keeps for the top-level runs;
 // without one, check() makes one of its own and frees it before returning.
 bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world = nullptr);
+
+struct Checker;
+
+// A checker for deciding the top-level #ifs of `file` (spec 4.9), which the
+// loader makes once every file outside every #if is read: it knows those
+// files' declarations (the base: the procs and globals file has now) and the
+// predeclared constants, and nothing else. It says nothing about them as it
+// declares them (check() does, later).
+Checker *check_decider_new(Ast_File *file, Arena *a, Diagnostics *d);
+
+// Decides the chain `first` begins (a top-level #if): decide_if, in deciding
+// mode, with file->lost_a_file as it is now.
+void check_decide(Checker *c, Ast_If_Directive *first);
+
+void check_decider_free(Checker *c);
 
 // Whether e, checked with no errors, is a place in memory: a variable, but
 // not a loop's iterator or index; p.*; a field of a place, or of a struct

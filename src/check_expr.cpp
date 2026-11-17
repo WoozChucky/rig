@@ -597,7 +597,10 @@ static void report_type_as_value(Checker *c, Ast_Name *name) {
 // it can't be called". Any other name is nothing to report when a #load
 // failed: the missing file may declare it (Checker.lost_a_file); nor after
 // a failed #if in the body: a branch may declare it (Checker.lost_a_local).
+// A decider, which knows only the base, says first whether a top-level #if's
+// branch declares it (check_in_a_branch).
 static void report_undeclared(Checker *c, Ast_Name *name, bool called) {
+    if (c->deciding && check_in_a_branch(c, name->name, name->pos)) return;
     if (!type_from_name(name->name)) {
         if (!c->lost_a_file && !c->lost_a_local) {
             diag_error(c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
