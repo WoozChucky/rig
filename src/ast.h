@@ -10,7 +10,9 @@
 // and array literals (int.[1, 2]), and code run while compiling (#run e).
 // And structs, declared at the top level, the files a program loads
 // (#load "PATH";), named there too, and the code it runs while compiling
-// for its effect (#run e; and #run { ... }), there too.
+// for its effect (#run e; and #run { ... }), there too. And code compiled
+// for one system and not another (#if c { ... } else { ... }), at the top
+// level and in a body.
 // Each node kind is a struct that starts with Ast, so a pointer to any node
 // is also an Ast *, and `kind` says which it is.
 //
@@ -69,6 +71,7 @@ enum Ast_Kind : u8 {
     AST_INDEX,         // Ast_Index: a[i]
     AST_LOAD,          // Ast_Load: #load "PATH"; or #import "NAME";
     AST_RUN,           // Ast_Run: #run e (an expression), or a top-level #run e; or #run { ... }
+    AST_IF_DIRECTIVE,  // Ast_If_Directive: #if c { ... } else ...
 };
 
 struct Ast {
@@ -466,6 +469,22 @@ struct Ast_Run : Ast {
                         // operand or what it reaches had errors, or it failed (said already)
 };
 
+// #if condition { ... } else ...: conditional compilation (spec 4.9), an
+// arm of a chain; pos is the '#if'. At the top level (is_top_level) each
+// branch's statements are top-level declarations in source order (procs,
+// broken entries included, globals, constants, structs, loads, runs and
+// nested #ifs); in a body, statements. The decision is on the chain's first
+// arm, made by the loader at the top level and by the checker in a body.
+struct Ast_If_Directive : Ast {
+    Ast *condition;
+    Ast_Block *then_block;
+    Ast *else_part;     // an Ast_Block, the next arm (else #if), or null
+    bool is_top_level;
+    bool decided;       // first arm: the chain was decided
+    bool failed;        // first arm: a condition had an error (said); no branch taken
+    Ast_Block *taken;   // first arm: the branch taken, an arm's then_block or the last else; null for none
+};
+
 // The systems a program can be built for (spec 2.5, 4.9), numbered as the
 // predeclared OS_WINDOWS and OS_LINUX are; 0 names none.
 enum System : u8 { SYSTEM_NONE = 0, SYSTEM_WINDOWS = 1, SYSTEM_LINUX = 2 };
@@ -480,8 +499,11 @@ System host_system();
 // Ast_Procs) are in procs; the globals, top-level variables (Ast_Var,
 // is_global set), constants (Ast_Const) and structs (Ast_Struct), in
 // globals; the loads and imports (Ast_Load), in loads; the top-level runs
-// (Ast_Run, is_top_level set), in runs. Each list is in source order on its
-// own; ast_declarations merges procs and globals back by position.
+// (Ast_Run, is_top_level set), in runs; the top-level #ifs (Ast_If_Directive,
+// is_top_level set, the first arm of each chain), in ifs. Each list is in
+// source order on its own; ast_declarations merges procs and globals back by
+// position. What a top-level #if's branches declare is in none of the lists
+// until the loader takes the branch (ast_add_declaration).
 //
 // lost_a_file is set when a #load or an #import failed (load.h's errors),
 // had no string to name a file by, wasn't at the top level, or was passed
@@ -503,6 +525,8 @@ struct Ast_File {
     Array<Ast *> globals;
     Array<Ast_Load *> loads;
     Array<Ast_Run *> runs;  // the top-level #runs, in source order, file by file in load order
+    Array<Ast_If_Directive *> ifs;  // the #ifs written at a file's top level (not nested in a branch), in
+                                    // source order, file by file in reading order
     bool lost_a_file;
     bool reaches_compiler;  // the loader added the Compiler module's module.rig (by #import or #load, or as the
                             // main file or a workspace's further file)
@@ -517,12 +541,18 @@ struct Ast_File {
 // called main is no procedure, and doesn't count.
 bool ast_is_build_program(Ast_File *file);
 
+// Adds top-level declaration `decl` to file's list for its kind: procs (Ast_Proc), loads, runs, ifs,
+// else globals. parse_into does, and the loader for a taken branch's declarations.
+void ast_add_declaration(Ast_File *file, Ast *decl);
+
 // The program's declarations (every file's: parse_into), procedures (broken
 // entries included) and globals together, in source order, file by file in
 // load order: what the checker goes through. Loads aren't among them: the
 // checker has nothing to do with them, the loader having read the files
-// they name. Nor are the top-level runs, which declare no name. The caller
-// frees the Array.
+// they name. Nor are the top-level runs, which declare no name, nor the
+// top-level #ifs, whose taken branches' declarations join the lists once
+// the loader decides them (ast_add_declaration). The caller frees the
+// Array.
 Array<Ast *> ast_declarations(Ast_File *file);
 
 // A new, zeroed node of struct T and kind `kind`, in the arena.
@@ -585,8 +615,12 @@ Token_Kind compound_operator(Token_Kind op);
 // #run e prints as (run (call f)) for #run f(), in an expression, a
 // statement or at the top level alike; a top-level #run { ... } as
 // (run (block ...)).
+// #if prints as if does, a chain nesting to the right, in a body and at
+// the top level alike, a top-level branch's block holding its declarations:
+//   (#if (name c) (block ...) (#if (name d) (block ...) (block ...)))
+//                 #if c { ... } else #if d { ... } else { ... }
 // Globals print as locals do, (var counter int) and (const LIMIT (int 100)),
-// a load as (load "world/map.rig"), and a top-level run as above, each on
-// a line of its own among the procedures, in source order.
+// a load as (load "world/map.rig"), and a top-level run and #if as above,
+// each on a line of its own among the procedures, in source order.
 String ast_dump(Arena *a, Ast_File *file);
 String ast_dump_node(Arena *a, Ast *node);

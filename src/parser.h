@@ -13,7 +13,9 @@
 //               | '#load' STRING ';'                                another file of the program
 //               | '#import' STRING ';'                              a module that ships with rig
 //               | run                                               code run while compiling
+//               | if_directive                                      conditional: its blocks hold top_level*
 //   run         = '#run' block | '#run' expression ';'
+//   if_directive = '#if' expression block ['else' (block | if_directive)]
 //   procedure   = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
 //                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
 //                                                                  (the STRING: the C function's name)
@@ -25,7 +27,7 @@
 //                   ['->' (type | '(' type {',' type} ')')] ['#c_call']
 //   block       = '{' statement* '}'
 //   statement   = declaration | multi_var | assignment | return | block
-//               | if | while | for | 'break' ';' | 'continue' ';' | expression ';'
+//               | if | if_directive | while | for | 'break' ';' | 'continue' ';' | expression ';'
 //   declaration = IDENT ':' type ['=' (expression | '---')] ';'
 //               | IDENT ':=' expression ';'
 //               | IDENT '::' expression ';'
@@ -229,6 +231,39 @@
 // declaration does; and a #run in column 1 ends a struct's fields, which
 // can't hold it.
 //
+// Code is compiled for one system and not another with #if (spec 4.9):
+// `#if OS == OS_WINDOWS { ... } else { ... }`, at the top level and as a
+// statement in a body, Jai's directive. The condition is any expression,
+// as an if's is, and the branch's '{' ends it; the branches are always
+// blocks, and `else #if` begins the chain's next arm, as `else if` does an
+// if's. `else if` after an #if would make an if statement the else part,
+// compiled whatever the condition: it's "an #if's else is a block or
+// another #if, as in else #if OS == OS_LINUX { ... }", at the `if`. In a
+// body each branch is a block of statements; at the top level, of
+// top-level declarations, nested #ifs included, and the #if is a
+// declaration of its own (Ast_File.ifs), its branches in none of the
+// file's lists: which is taken is the loader's to decide, a body's the
+// checker's. The parser reads every branch alike, so a syntax error in a
+// branch not taken is reported too. A struct's fields can't be
+// conditional, for now: an #if among them is "#if can't be among a
+// struct's fields, for now", at the '#if', and the struct is given up. #if
+// is no expression (`x := #if A {};` is "expected an expression"). A
+// top-level branch is a block for the nesting limit below, as a body's
+// blocks are. Its declarations may be written unindented, as C's #ifdef
+// has them: no column-1 rule ends a branch, only its '}'. Inside a branch,
+// the recovery below skips as at the top level, but stops at the '}' that
+// closes the branch, so a mistake inside it doesn't swallow what follows
+// the #if; and the end of the file before that '}' is "expected '}'"
+// there (unless a body never closed in the branch said so already), the
+// whole #if given up as a broken entry with no name. Otherwise the
+// recovery treats an #if as it treats a #run: it resumes at one that starts
+// a line outside any braces, and after a signature it's where the body's
+// '{' should be; one in column 1 is among the column-1 declarations a body
+// never closed is taken to end before (it doesn't end a body by itself:
+// unindented, it's a statement there), the skipping resumes at it inside
+// braces too, as at a procedure's declaration in column 1, and it ends a
+// struct's fields.
+//
 // Errors read "expected ';', found '}'". After one, the parser keeps what it
 // can of the declaration, its name, as a broken entry (Ast_Proc.is_broken;
 // the name only where the tokens still look like a declaration of it, as
@@ -237,8 +272,8 @@
 // start of a line, followed by '::', outside the braces of the body it gave
 // up in, or a procedure's, `name :: (`, in column 1; a global variable's
 // name in column 1, followed by ':' or ':=', outside any braces or
-// parameter list; or a #load or a #run starting a line outside any braces)
-// and goes on. Stray tokens in front of a declaration's name
+// parameter list; or a #load, a #run or an #if starting a line outside any
+// braces) and goes on. Stray tokens in front of a declaration's name
 // (`*greet :: () {}`) are reported and skipped, and the declaration after
 // them is parsed whole; so is a declaration later on the line of a global
 // that failed (`counter : int = 1 2; f :: () {}`), the global keeping its
@@ -249,12 +284,12 @@
 // #run { in column 1, which a body can't hold and which can only start a
 // top-level declaration: a constant in column 1 (`N :: 5;`) is a local
 // constant, as an indented one is. A struct's braces never closed end
-// there too, and at any #run in column 1. The body is then taken to end
-// before the column-1 declarations (IDENT ':', ':=' or '::', a #load or a
-// #run) right before that point, at its own level: "expected '}'" is
-// reported at the first of them, and the top level resumes there, so
-// they're read as the globals, constants, loads and runs they were meant
-// to be (an if's '}' forgotten, then globals). A #load among them isn't
+// there too, and at any #run or #if in column 1. The body is then taken to end
+// before the column-1 declarations (IDENT ':', ':=' or '::', a #load, a
+// #run or an #if) right before that point, at its own level: "expected
+// '}'" is reported at the first of them, and the top level resumes there,
+// so they're read as the globals, constants, loads, runs and #ifs they were
+// meant to be (an if's '}' forgotten, then globals). A #load among them isn't
 // misplaced after all, so it isn't reported. A struct is taken to end
 // before the #loads in column 1 right before that point, the same way, but
 // not before fields in column 1: a field is written as a global is, so
