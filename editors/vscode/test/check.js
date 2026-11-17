@@ -981,6 +981,14 @@ check('the grammar\'s other rules still colour as they did', () => {
     assertScopes('x := a @ b;', { '@': 'invalid.illegal.character.rig' });
     assertScopes('#load "load/shapes.rig";', { '#load': 'keyword.other.directive.rig' });
     assertScopes('defer free(p);', { defer: 'keyword.control.rig', free: 'entity.name.function.call.rig' });
+    // The predeclared constants (issue #147), from the checker's table; a
+    // name that only ends in one is the program's own.
+    assertScopes('#if OS == OS_WINDOWS {', {
+        '#if': 'keyword.other.directive.rig',
+        OS: 'support.constant.rig',
+        OS_WINDOWS: 'support.constant.rig',
+    });
+    assertScopes('MY_OS := OS_LINUX;', { MY_OS: null, OS_LINUX: 'support.constant.rig' });
 });
 
 // Every program of tests/run and tests/build (the build programs and the

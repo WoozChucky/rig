@@ -10,15 +10,17 @@
 // - Shapes: numbers, strings, comments, `name :: (`. They follow the lexer's
 //   rules (src/lexer.h, the comment above lex()), change rarely, and are
 //   written by hand in rig.tmLanguage.template.json.
-// - Word lists: the keywords, the type names, the operators. They change
-//   whenever the language grows, so nobody writes them by hand: where the
-//   template says @NAME@, this file fills in the words from the tables the
-//   lexer and the checker themselves use. The unity build makes those
-//   `static` tables visible here, so they're read, never copied.
+// - Word lists: the keywords, the type names, the predeclared constants, the
+//   operators. They change whenever the language grows, so nobody writes
+//   them by hand: where the template says @NAME@, this file fills in the
+//   words from the tables the lexer and the checker themselves use. The
+//   unity build makes those `static` tables visible here, so they're read,
+//   never copied.
 //
 //   @KEYWORDS_CONTROL@ ...   the lexer's KEYWORDS, each in the group that
 //                            KEYWORD_SCOPES below gives it
 //   @TYPES@                  the checker's NAMED_TYPES, then RESERVED_TYPES
+//   @PREDECLARED_CONSTANTS@  the checker's PREDECLARED_CONSTANTS (OS ...)
 //   @OPERATORS@              the lexer's PUNCTUATION, one regex
 //   "@OPERATOR_CAPTURES@"    the scope of each operator in that regex
 //
@@ -213,6 +215,8 @@ struct Grammar_Tables {
     s64 named_type_count;
     const char *const *reserved_types;
     s64 reserved_type_count;
+    const Predeclared_Constant *predeclared;  // src/checker.cpp
+    s64 predeclared_count;
 };
 
 static Grammar_Tables grammar_tables() {
@@ -220,6 +224,7 @@ static Grammar_Tables grammar_tables() {
         KEYWORDS,        GRAMMAR_COUNT(KEYWORDS),        KEYWORD_SCOPES, GRAMMAR_COUNT(KEYWORD_SCOPES),
         PUNCTUATION,     GRAMMAR_COUNT(PUNCTUATION),     OPERATOR_SCOPES, GRAMMAR_COUNT(OPERATOR_SCOPES),
         NAMED_TYPES,     GRAMMAR_COUNT(NAMED_TYPES),     RESERVED_TYPES, RESERVED_TYPE_COUNT,
+        PREDECLARED_CONSTANTS, GRAMMAR_COUNT(PREDECLARED_CONSTANTS),
     };
 }
 
@@ -400,6 +405,16 @@ static void grammar_out_types(Array<u8> *out, const Grammar_Tables *t) {
     }
 }
 
+// The predeclared constants' names as a regex's alternatives, OS|OS_WINDOWS,
+// in the checker's order. Names are letters, digits and '_', so nothing
+// needs escaping.
+static void grammar_out_predeclared(Array<u8> *out, const Grammar_Tables *t) {
+    for (s64 i = 0; i < t->predeclared_count; i++) {
+        if (i > 0) grammar_out(out, "|");
+        grammar_out(out, t->predeclared[i].name);
+    }
+}
+
 // The operators that get a scope (every punctuation token but the brackets),
 // longest first; within one length, in the lexer's order. operators[i] is
 // capture group i + 1 of the regex.
@@ -494,7 +509,7 @@ static String generate_grammar(Arena *a, String tmpl, const Grammar_Tables *t, A
     check_grammar_tables(a, t, problems);
 
     bool keywords_used[KEYWORD_GROUP_COUNT] = {};
-    bool types_used = false, operators_used = false, captures_used = false;
+    bool types_used = false, predeclared_used = false, operators_used = false, captures_used = false;
     Array<u8> out = {};
     s64 i = 0;
     while (i < tmpl.count) {
@@ -523,6 +538,9 @@ static String generate_grammar(Arena *a, String tmpl, const Grammar_Tables *t, A
         if (string_eq(name, str("TYPES"))) {
             known = types_used = true;
             grammar_out_types(&out, t);
+        } else if (string_eq(name, str("PREDECLARED_CONSTANTS"))) {
+            known = predeclared_used = true;
+            grammar_out_predeclared(&out, t);
         } else if (string_eq(name, str("OPERATORS"))) {
             known = operators_used = true;
             grammar_out_operators(&out, t);
@@ -559,6 +577,10 @@ static String generate_grammar(Arena *a, String tmpl, const Grammar_Tables *t, A
         }
     }
     if (!types_used) array_add(problems, str("the template has no @TYPES@: add a rule for the type names"));
+    if (!predeclared_used) {
+        array_add(problems,
+                  str("the template has no @PREDECLARED_CONSTANTS@: add a rule for the predeclared constants"));
+    }
     if (!operators_used || !captures_used) {
         array_add(problems, str("the template needs @OPERATORS@ and \"@OPERATOR_CAPTURES@\", the operator rule"));
     }
@@ -685,15 +707,19 @@ TEST(vscode_grammar_fills_in_the_placeholders) {
         {"<", OPERATORS_COMPARISON}, {"..", OPERATORS_RANGE}, {"(", OPERATORS_NONE}, {"<<", OPERATORS_BITWISE}};
     static Type *const named_types[] = {&type_int};
     static const char *const reserved_types[] = {"Any"};
+    static const Predeclared_Constant predeclared[] = {{"OS", SYSTEM_NONE, "the system"},
+                                                       {"OS_LINUX", SYSTEM_LINUX, "Linux"}};
     Grammar_Tables tables = {
         keywords,    GRAMMAR_COUNT(keywords),    keyword_scopes,  GRAMMAR_COUNT(keyword_scopes),
         punctuation, GRAMMAR_COUNT(punctuation), operator_scopes, GRAMMAR_COUNT(operator_scopes),
         named_types, GRAMMAR_COUNT(named_types), reserved_types,  GRAMMAR_COUNT(reserved_types),
+        predeclared, GRAMMAR_COUNT(predeclared),
     };
     const char *tmpl =
         "{\n"
         "    \"keywords\": \"@KEYWORDS_CONTROL@ @KEYWORDS_CONSTANT@\",\n"
         "    \"types\": \"@TYPES@\",\n"
+        "    \"constants\": \"@PREDECLARED_CONSTANTS@\",\n"
         "    \"operators\": {\n"
         "        \"match\": \"@OPERATORS@\",\n"
         "        \"captures\": \"@OPERATOR_CAPTURES@\"\n"
@@ -709,6 +735,7 @@ TEST(vscode_grammar_fills_in_the_placeholders) {
               "{\n"
               "    \"keywords\": \"if|while true\",\n"
               "    \"types\": \"int|Any\",\n"
+              "    \"constants\": \"OS|OS_LINUX\",\n"
               "    \"operators\": {\n"
               "        \"match\": \"(\\\\.\\\\.)|(<<)|(<)\",\n"
               "        \"captures\": {\n"
@@ -822,6 +849,8 @@ TEST(vscode_grammar_knows_every_placeholder) {
                               "@OPERATOR_CAPTURES@ must be a whole JSON string: \"@OPERATOR_CAPTURES@\""));
     CHECK(grammar_has_problem(problems, "the template has no @KEYWORDS_CONTROL@: add a rule for those keywords"));
     CHECK(grammar_has_problem(problems, "the template has no @TYPES@: add a rule for the type names"));
+    CHECK(grammar_has_problem(problems, "the template has no @PREDECLARED_CONSTANTS@: add a rule for the "
+                                        "predeclared constants"));
     CHECK(grammar_has_problem(problems,
                               "the template needs @OPERATORS@ and \"@OPERATOR_CAPTURES@\", the operator rule"));
 

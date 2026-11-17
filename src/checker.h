@@ -24,6 +24,13 @@
 //   is "'foo' is not a type"; a name declared nowhere, "unknown type
 //   'foo'". A built-in type's name always means the built-in type, so a
 //   struct can't take one: "'u8' is a built-in type", at its name.
+// - Three constants are predeclared (spec 2.5), untyped integers visible
+//   everywhere: OS_WINDOWS (1), OS_LINUX (2), and OS, the system the
+//   program is built for (Ast_File.system, else the host's), so
+//   OS == OS_WINDOWS is a constant bool. A top-level declaration can't take
+//   one of their names: "'OS' is predeclared: it's the system the program
+//   is built for", at its name, and it isn't declared. A local may hide
+//   one, as it may any of the top level's names.
 // - A name declared in a block (a variable or a constant) is visible from
 //   after its declaration to the end of the block. An inner block may
 //   declare the same name again, hiding the outer one; the same block may

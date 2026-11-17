@@ -485,6 +485,16 @@ Array<Ast *> ast_declarations(Ast_File *file) {
     return all;
 }
 
+// The compiler building rig answers, as for load.cpp's HOST_IS_WINDOWS:
+// rig runs where it was built for.
+System host_system() {
+#ifdef _WIN32
+    return SYSTEM_WINDOWS;
+#else
+    return SYSTEM_LINUX;
+#endif
+}
+
 bool ast_is_build_program(Ast_File *file) {
     if (!file->reaches_compiler) return false;
     for (s64 i = 0; i < file->procs.count; i++) {

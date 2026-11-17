@@ -466,6 +466,13 @@ struct Ast_Run : Ast {
                         // operand or what it reaches had errors, or it failed (said already)
 };
 
+// The systems a program can be built for (spec 2.5, 4.9), numbered as the
+// predeclared OS_WINDOWS and OS_LINUX are; 0 names none.
+enum System : u8 { SYSTEM_NONE = 0, SYSTEM_WINDOWS = 1, SYSTEM_LINUX = 2 };
+
+// The system rig runs on (_WIN32 decides, as load.cpp's HOST_IS_WINDOWS).
+System host_system();
+
 // A parsed file, or the files of a program parsed into one (parse_into):
 // their declarations, in source order, broken ones included; a file's
 // declarations come after those of the files loaded before it
@@ -486,6 +493,11 @@ struct Ast_Run : Ast {
 // reaches_compiler and compiler_pos are the loader's (load.h): whether the
 // program reached the Compiler module, which with no main makes it a build
 // program (ast_is_build_program, spec 7.9).
+//
+// system is the system the program is built for, what the predeclared OS
+// is (spec 2.5): SYSTEM_NONE, as parse() leaves it, means the host's
+// (host_system), the only one rig builds for today. A test may set another,
+// to check a program for either system on any host.
 struct Ast_File {
     Array<Ast_Proc *> procs;
     Array<Ast *> globals;
@@ -496,6 +508,7 @@ struct Ast_File {
                             // main file or a workspace's further file)
     Position compiler_pos;  // the #import or #load that first named it; its own 1:1 when it is the main file or a
                             // further file (load.h)
+    System system;          // what OS is (spec 2.5): SYSTEM_NONE means the host's (host_system)
 };
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler

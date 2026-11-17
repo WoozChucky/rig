@@ -1843,6 +1843,60 @@ bool check_proc_signature(Checker *c, Ast_Proc *proc) {
     return resolve_signature(c, proc);
 }
 
+// The predeclared constants (spec 2.5): the systems a program can be built
+// for, and the one it is. Each is an untyped integer constant, visible
+// everywhere as the program's own constants are, so OS == OS_WINDOWS is a
+// constant bool that folds. The VS Code grammar lists their names from this
+// table too (tests/unit/test_grammar.cpp).
+struct Predeclared_Constant {
+    const char *name;
+    System value;         // SYSTEM_NONE for OS, whose value is the program's (Ast_File.system)
+    const char *meaning;  // what the refusal of a top-level declaration says it is
+};
+
+static const Predeclared_Constant PREDECLARED_CONSTANTS[] = {
+    {"OS", SYSTEM_NONE, "the system the program is built for"},
+    {"OS_WINDOWS", SYSTEM_WINDOWS, "Windows, one of the systems OS may be"},
+    {"OS_LINUX", SYSTEM_LINUX, "Linux, one of the systems OS may be"},
+};
+
+// Whether `name` is a predeclared constant's; its entry through *entry.
+static bool is_predeclared(String name, const Predeclared_Constant **entry) {
+    for (const Predeclared_Constant &constant : PREDECLARED_CONSTANTS) {
+        if (string_eq(name, str(constant.name))) {
+            *entry = &constant;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Puts the predeclared constants in c->top_level, before the program's
+// names. Each is an Ast_Const as a checked `NAME :: 2;` would be: untyped,
+// folded, done, its value an integer literal of the same number (so
+// #run's walk, which reaches a constant's value, finds one). It's written
+// nowhere: its position is 0:0. OS's value is the program's system, the
+// host's when the tree names none.
+static void declare_predeclared(Checker *c, Ast_File *file) {
+    for (const Predeclared_Constant &entry : PREDECLARED_CONSTANTS) {
+        System value = entry.value;
+        if (value == SYSTEM_NONE) value = file->system ? file->system : host_system();
+        Ast_Int *number = ast_new<Ast_Int>(c->arena, AST_INT, {0, 0, 0});
+        number->value = value;
+        number->type = &type_untyped_int;
+        number->is_constant = true;
+        number->constant = value;
+        Ast_Const *constant = ast_new<Ast_Const>(c->arena, AST_CONST, {0, 0, 0});
+        constant->name = str(entry.name);
+        constant->value = number;
+        constant->type = &type_untyped_int;
+        constant->is_constant = true;
+        constant->constant = value;
+        constant->resolve = RESOLVE_DONE;
+        table_put(&c->top_level, constant->name, (Ast *)constant);
+    }
+}
+
 // The name a top-level declaration declares.
 static String declared_name(Ast *decl) {
     switch (decl->kind) {
@@ -1867,7 +1921,12 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // have a procedure's name. The whole declarations first, in source
     // order: a name declared twice is reported at the later one. Each
     // struct gets its Type here, still without its layout, so a pointer
-    // can name it from anywhere.
+    // can name it from anywhere. The predeclared constants come first
+    // (declare_predeclared): a top-level declaration of one of their names
+    // is refused, at its name, and isn't declared, so every use means the
+    // constant. (A local may hide one, as it may any of the top level's
+    // names.)
+    declare_predeclared(&c, file);
     Array<Ast *> declarations = ast_declarations(file);
     for (s64 i = 0; i < declarations.count; i++) {
         Ast *decl = declarations[i];
@@ -1892,6 +1951,11 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
             }
         }
         String name = declared_name(decl);
+        const Predeclared_Constant *predeclared = nullptr;
+        if (is_predeclared(name, &predeclared)) {
+            diag_error(d, decl->pos, "'" STR_FMT "' is predeclared: it's %s", STR_ARG(name), predeclared->meaning);
+            continue;
+        }
         Ast **earlier = table_get(&c.top_level, name);
         if (earlier) {
             Position at = (*earlier)->pos;
@@ -1907,7 +1971,9 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // about them either: a name that's also declared whole may only look
     // twice declared because of the syntax error, and calls are better
     // checked against the whole declaration, wherever it is. One with no
-    // name could have declared anything, main included.
+    // name could have declared anything, main included. One with a
+    // predeclared constant's name isn't declared either, silently: the
+    // name is the constant's.
     bool lost_a_name = false;
     for (s64 i = 0; i < file->procs.count; i++) {
         Ast_Proc *proc = file->procs[i];
