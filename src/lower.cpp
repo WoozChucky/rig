@@ -149,6 +149,20 @@
 //   that compares strings (lower_string_equal), and != negates it. A global
 //   holding a literal points at its bytes through a relocation
 //   (constant_bytes).
+// - defer (spec 6.12) is registered when it's reached, and emits nothing
+//   there: Lowering.defers lists the defers reached in the blocks being
+//   lowered, and each block that can be left (a block statement, an if's or
+//   an else's block, a loop's body, the body itself, each copy of deferred
+//   code) remembers where its own began, a mark. A body #if takes none: its
+//   defers are the enclosing block's. At each way out, a copy of every
+//   deferred statement it leaves is lowered there, the last registered
+//   first, down to the mark of the block it lands in (lower_defers): at a
+//   block's end if control gets there (leave_block), at a return all of
+//   them, after its values are worked out and its aggregates copied into
+//   the caller's temporaries, and at a break or a continue those since its
+//   loop's body began. Then the block drops its registrations. So the code
+//   grows by a copy per way out, with no flag tested at run time, and the
+//   interpreter, which runs the same IR, runs a #run's defers as compiled.
 // - Rig's main is C's main (ir.h): exported, its every return a ret of C's
 //   int 0, so the program needs no wrapper around it.
 // - A #compiler procedure (spec 7.9) is declared as any procedure is, its
@@ -167,7 +181,15 @@
 //   Each block that's a scope adds an Ir_Scope (lower_scoped_block, and the
 //   loops, which are one), and so does a declaration that hides a variable,
 //   for the rest of its block (lower_statement); each declaration adds an
-//   Ir_Var (add_local_var, and the parameters in lower_body).
+//   Ir_Var (add_local_var, and the parameters in lower_body). Each copy of
+//   deferred code is a scope of its own too, at the deferred statement,
+//   inside the scope the defer was reached in, its instructions at their
+//   own lines (lower_deferred); the ret or jump that leaves after the copies
+//   is where it is without them (a return's, break's or continue's at its
+//   keyword, an if's block's at its '}', a loop body's at the loop's
+//   keyword, the body's ret at its '}'), so a debugger steps through the
+//   deferred lines in the order they run, then to that place; a block
+//   statement has no jump of its own, and goes on to the next statement.
 //
 // Blocks are numbered in the order they're made, and made in the order
 // their code comes in the source, so the printed IR reads like the program.
@@ -217,6 +239,13 @@ struct Local {
     s32 value;
 };
 
+// A defer reached in a block being lowered (spec 6.12): its statement is
+// lowered again at each way out of the block (lower_defers).
+struct Deferred {
+    Ast_Defer *defer;
+    s32 scope;  // l->scope where the defer was reached: each copy's scope is inside it
+};
+
 // A loop being lowered, and the jumps out of its body whose targets aren't
 // made yet: each block listed ends in an IR_JUMP still to be pointed at the
 // loop's exit (a break) or at its next iteration (a continue: a while's
@@ -225,6 +254,7 @@ struct Loop {
     Ast *loop;  // the Ast_While or Ast_For
     Array<s32> breaks;
     Array<s32> continues;
+    s64 defers;  // l->defers.count when the loop's body began: what a break or continue leaves
 };
 
 struct Lowering {
@@ -247,6 +277,8 @@ struct Lowering {
     s32 block;                // the block instructions go into
     Array<Local> locals;      // the current procedure's variables and parameters so far
     Array<Loop> loops;        // the loops around the statement being lowered, innermost last
+    Array<Deferred> defers;   // the defers reached in the blocks being lowered, in the order reached,
+                              // the outermost block's first (lower_defers)
     bool bounds_checks;       // whether a[i] is checked against a's count: rig build's
                               // --no-bounds-checks clears it; always set on demand
     bool checking_bounds;     // whether this procedure's are: bounds_checks, unless it says #no_abc
@@ -1651,16 +1683,75 @@ static s32 lower_call(Lowering *l, Ast_Call *call) {
 }
 
 static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source);
+static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source);
+static Position statement_position(Ast *s);
+static void leave_block(Lowering *l, s64 mark, Ast_Proc *source);
+
+// One copy of a deferred statement (spec 6.12), lowered at the current
+// block, where a way out of the defer's block is taken. It's a scope of its
+// own, at the statement's position, inside the scope the defer was reached
+// in: so the locals of each copy are variables of their own, which a
+// debugger shows inside it, and its instructions are at their own lines. A
+// deferred block's statements go straight into that scope, which stands for
+// the block's own. The copy is a block of its own for defer, too: the
+// defers it reaches run at its end (leave_block).
+static void lower_deferred(Lowering *l, Deferred d, Ast_Proc *source) {
+    Ast *statement = d.defer->statement;
+    Position at = statement_position(statement);
+    place(l, at, d.scope);
+    l->scope = new_scope(l, at);
+    s64 mark = l->defers.count;
+    if (statement->kind == AST_BLOCK) {
+        lower_block(l, (Ast_Block *)statement, source);
+    } else {
+        lower_statement(l, statement, source);
+    }
+    // The checker refused every way out of deferred code but its end (a
+    // return, a break or continue whose loop is outside it): control always
+    // gets there.
+    RIG_ASSERT(!has_ended(l, l->block));
+    leave_block(l, mark, source);
+}
+
+// What a way out of blocks runs (spec 6.12): a copy of each registered
+// defer from the last down to index `down_to`, the last first, so a block's
+// run in reverse order and the innermost block's first. The registrations
+// stay: the blocks' other ways out copy them again. Each copy is at its own
+// lines; after them l->pos and l->scope are as they were, so the
+// instruction that leaves (a ret, a jump) is where it is with no defer, at
+// its return, break or continue, or at its block's '}'.
+static void lower_defers(Lowering *l, s64 down_to, Ast_Proc *source) {
+    Position pos = l->pos;
+    s32 scope = l->scope;
+    for (s64 i = l->defers.count - 1; i >= down_to; i--) {
+        // Passed by value: a copy registers defers of its own, which may
+        // move the list (they're gone again when the copy ends).
+        lower_deferred(l, l->defers[i], source);
+    }
+    place(l, pos, scope);
+}
+
+// The end of a block whose defers began at `mark`. When control gets there
+// (an IR block that has ended was left by a return, a break or a continue,
+// which ran them), a copy of each of the block's own; then their
+// registrations are dropped, ended or not, since they're the block's alone.
+static void leave_block(Lowering *l, s64 mark, Ast_Proc *source) {
+    if (!has_ended(l, l->block)) lower_defers(l, mark, source);
+    l->defers.count = mark;
+}
 
 // A block that's a scope of its own (ir.h's "Debug information"): a block
 // statement, or an if's or an else's. Its statements run in a new scope
 // inside the current one, starting at its '{' (and in those its hiding
-// declarations start inside it: lower_statement); then the current scope
-// is the one around it again.
+// declarations start inside it: lower_statement); then its defers, if
+// control gets to its end (leave_block); then the current scope is the one
+// around it again.
 static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) {
     s32 outer = l->scope;
+    s64 mark = l->defers.count;
     l->scope = new_scope(l, block->pos);
     lower_block(l, block, source);
+    leave_block(l, mark, source);
     l->scope = outer;
 }
 
@@ -1765,11 +1856,15 @@ static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
 // returns its Loop, whose jumps the caller points at their targets
 // (finish_loop) once they're made. The body is no scope of its own: its
 // statements run in the loop's, which is current, and the code after them,
-// the loop's own, is at the loop's keyword again.
+// the loop's own, is at the loop's keyword again. It's a block for defer
+// (spec 6.12), left at the end of every iteration: its defers run there,
+// if control gets to it, and a break or continue runs those from its mark.
 static Loop lower_loop_body(Lowering *l, Ast *loop, Ast_Block *body, Ast_Proc *source) {
     s32 scope = l->scope;
-    array_add(&l->loops, Loop{loop, {}, {}});
+    s64 mark = l->defers.count;
+    array_add(&l->loops, Loop{loop, {}, {}, mark});
     lower_block(l, body, source);
+    leave_block(l, mark, source);
     Loop done = l->loops[l->loops.count - 1];
     l->loops.count--;
     place(l, loop->pos, scope);
@@ -1995,11 +2090,16 @@ static void lower_for(Lowering *l, Ast_For *loop, Ast_Proc *source) {
 
 // break and continue: a jump out of the innermost loop's body, whose target
 // (its exit, or where its next iteration starts) is filled in when the
-// loop's lowering has made it.
-static void lower_jump(Lowering *l, Ast_Jump *jump) {
-    Loop *loop = &l->loops[l->loops.count - 1];
-    RIG_ASSERT(loop->loop == jump->loop);
+// loop's lowering has made it. First the defers of the blocks it leaves,
+// those registered since the loop's body began (spec 6.12); the jump stays
+// at the keyword. The copies may hold loops of their own, which move
+// l->loops as they come and go: the loop is found again after them.
+static void lower_jump(Lowering *l, Ast_Jump *jump, Ast_Proc *source) {
+    s64 innermost = l->loops.count - 1;
+    RIG_ASSERT(l->loops[innermost].loop == jump->loop);
+    lower_defers(l, l->loops[innermost].defers, source);
     emit_jump(l, l->block, -1);
+    Loop *loop = &l->loops[innermost];
     array_add(jump->kind == AST_BREAK ? &loop->breaks : &loop->continues, l->block);
 }
 
@@ -2078,7 +2178,8 @@ static Position statement_position(Ast *s) {
     case AST_WHILE:
     case AST_FOR:
     case AST_BREAK:
-    case AST_CONTINUE: return s->pos;
+    case AST_CONTINUE:
+    case AST_DEFER: return s->pos;
     default: return s->start;  // an expression
     }
 }
@@ -2156,9 +2257,12 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     case AST_RETURN: {
         // Each aggregate value is copied into its hidden parameter as soon
         // as it's worked out (the caller's temporary, which nothing else can
-        // reach); the scalar ones are the ret's values.
+        // reach); the scalar ones are the ret's values. Then every defer
+        // registered runs (spec 6.12), after the values: what they change is
+        // no longer what's returned. The ret stays at the return.
         Ast_Return *ret = (Ast_Return *)s;
         if (l->is_entry) {
+            lower_defers(l, 0, source);
             emit_entry_return(l);  // main returns nothing in Rig
             break;
         }
@@ -2173,6 +2277,7 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
                 array_add(&values, value);
             }
         }
+        lower_defers(l, 0, source);
         emit(l, IR_RET, IR_VOID)->args = values;
         break;
     }
@@ -2186,7 +2291,9 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
         // stops at the taken statements alone, so at the #if's line only when
         // the branch shares it (#if C { return 1; }). A hiding declaration in the branch
         // starts a scope that lasts to the end of the enclosing block, as its
-        // name does.
+        // name does; a defer in it is the enclosing block's too, run when
+        // that block is left (spec 6.12: the branch takes no mark of its
+        // own, leave_block).
         Ast_Block *taken = ((Ast_If_Directive *)s)->taken;
         if (taken) lower_block(l, taken, source);
         break;
@@ -2194,7 +2301,11 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     case AST_WHILE: lower_while(l, (Ast_While *)s, source); break;
     case AST_FOR: lower_for(l, (Ast_For *)s, source); break;
     case AST_BREAK:
-    case AST_CONTINUE: lower_jump(l, (Ast_Jump *)s); break;
+    case AST_CONTINUE: lower_jump(l, (Ast_Jump *)s, source); break;
+    // Registered, and nothing emitted (spec 6.12): its statement is lowered
+    // at each way out of its block instead (lower_defers), so its line has
+    // code only where its copies are.
+    case AST_DEFER: array_add(&l->defers, Deferred{(Ast_Defer *)s, l->scope}); break;
     default: lower_expr(l, s); break;  // a call, its value ignored
     }
 }
@@ -2834,6 +2945,7 @@ static void lower_body(Lowering *l, Ast_Proc *source, s32 index) {
     l->proc = l->module->procs[index];
     l->block = ir_new_block(l->arena, l->proc);
     l->locals.count = 0;
+    l->defers.count = 0;
     l->checking_bounds = l->bounds_checks && !source->no_bounds_checks;
     l->is_entry = string_eq(source->name, str("main"));
     // The body is scope 0, at its '{'. Its parameters are its first
@@ -2870,7 +2982,10 @@ static void lower_body(Lowering *l, Ast_Proc *source, s32 index) {
     if (!ir_block_has_ended(l->proc, l->block)) {
         // Control reaches the '}', where its return is. The checker made
         // sure that only happens in a procedure that returns nothing;
-        // anywhere else, the end can't be reached.
+        // anywhere else, the end can't be reached. Before the return, the
+        // body's defers (spec 6.12); none before an unreachable, which no
+        // run of the procedure gets to.
+        if (!source->results.count) lower_defers(l, 0, source);
         place(l, source->body->end, l->scope);  // the body's, or one a hiding declaration began
         if (l->is_entry) {
             emit_entry_return(l);
@@ -2878,6 +2993,10 @@ static void lower_body(Lowering *l, Ast_Proc *source, s32 index) {
             emit(l, source->results.count ? IR_UNREACHABLE : IR_RET, IR_VOID);
         }
     }
+    // The body's own registrations, mark 0, dropped as every block drops
+    // its own (leave_block, which can't serve here: it would copy them
+    // before an unreachable too).
+    l->defers.count = 0;
     l->is_entry = false;
 }
 
@@ -2889,6 +3008,7 @@ static void release_lowering(Lowering *l) {
     table_free(&l->constant_globals);
     array_free(&l->locals);
     array_free(&l->loops);
+    array_free(&l->defers);
     array_free(&l->sources);
     array_free(&l->waiting);
 }

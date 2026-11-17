@@ -292,6 +292,9 @@ static bool walk_node(Reach *r, Ast *node) {
         }
         return true;
     }
+    // A deferred statement is code wherever its block is left (spec 6.12):
+    // walked as any statement.
+    case AST_DEFER: array_add(nodes, ((Ast_Defer *)node)->statement); return true;
     case AST_BREAK:
     case AST_CONTINUE: return true;
     default: return walk_expression(r, node);

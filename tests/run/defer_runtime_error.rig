@@ -1,0 +1,13 @@
+// A runtime error runs no defers (issue #149, spec 8.1): the program stops
+// there. One in deferred code names the deferred statement's own position.
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    zero := 0;
+    defer puts("never: a runtime error runs no defers");
+    {
+        defer zero = 10 / zero;
+        puts("leaving the block");
+    }
+    puts("never: the program stopped");
+}

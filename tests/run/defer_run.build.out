@@ -1,0 +1,3 @@
+returning early
+the if's defer runs first
+the block's defer runs last

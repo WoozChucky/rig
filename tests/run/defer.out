@@ -1,0 +1,28 @@
+reverse: registered last, runs first
+reverse: registered second, runs second
+reverse: registered first, runs last
+deep: the innermost block's, first
+deep: the if's, second
+deep: the outer block's, third
+deep: the body's, last
+deep: returned 3
+loop: iteration 1
+loop: end of iteration 1
+loop: end of iteration 2
+loop: iteration 3
+loop: end of iteration 3
+loop: end of iteration 4
+break: the inner block's, first
+break: the loop body's, second
+break: after the loop
+early: reached, so it runs
+late: n is 2 when the block ends
+returned: 1
+pair: 1 2 3
+nested: the body
+nested: the deferred block
+nested: the deferred block's own defer
+looping: a deferred loop sums 8
+#if: after the #if
+#if: runs when the enclosing block ends
+#if: after the block

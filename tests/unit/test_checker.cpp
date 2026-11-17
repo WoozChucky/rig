@@ -6909,3 +6909,22 @@ TEST(a_run_in_deferred_code_checks_its_body_as_its_own) {
               "3:27: can't return from a deferred statement\n");
     arena_free(&a);
 }
+
+TEST(defer_in_code_a_run_runs) {
+    // Review Focus 3: a #run runs the IR compiled code runs, defers
+    // included. f's return works n out, 1, before its defer makes n 2.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "N :: #run f();\n"
+                          "f :: () -> int {\n"
+                          "    n := 1;\n"
+                          "    defer n = 2;\n"
+                          "    return n;\n"
+                          "}\n"
+                          "main :: () {}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(global_named(&c, "N")->is_constant);
+    CHECK_EQ(global_named(&c, "N")->constant, 1u);
+    token_list_free(c.list);
+    arena_free(&a);
+}
