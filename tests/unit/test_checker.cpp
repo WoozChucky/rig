@@ -6532,12 +6532,12 @@ TEST(deciding_leaves_the_rest_for_check) {
 
 TEST(deciding_and_checking_say_each_message_once) {
     // The decider says nothing about the names (a name already declared, a
-    // predeclared one): check() does. What the decider said about a
-    // declaration it worked out (B's unknown name, N's #run, refused), check()
-    // finds said, and doesn't say again.
+    // predeclared one, a built-in type's): check() does. What the decider
+    // said about a declaration it worked out (B's unknown name, N's #run,
+    // refused), check() finds said, and doesn't say again.
     Arena a = arena_make();
     Token_List *list = src("A :: 1;\nA :: 2;\nOS :: 3;\nB :: nope;\n#if B == 1 {}\nN :: #run f();\n#if N == 3 {}\n"
-                           "f :: () -> int { return 3; }\nmain :: () { x := B; y := N; }\n");
+                           "f :: () -> int { return 3; }\nmain :: () { x := B; y := N; }\nu8 :: struct { x: int; }\n");
     Ast_File *file = parse(list->tokens, &a, &list->diag);
     decide_all(file, &a, &list->diag);
     diag_sort(&list->diag);
@@ -6550,8 +6550,20 @@ TEST(deciding_and_checking_say_each_message_once) {
               "2:1: 'A' is already declared at test.rig:1:1\n"
               "3:1: 'OS' is predeclared: it's the system the program is built for\n"
               "4:6: unknown identifier 'nope'\n"
-              "6:6: a top-level #if's condition can't run code while compiling, for now\n");
+              "6:6: a top-level #if's condition can't run code while compiling, for now\n"
+              "10:1: 'u8' is a built-in type\n");
     token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(checking_a_branchs_name_outside_it_says_its_unknown) {
+    // Only the decider refuses a name a top-level #if's branch declares:
+    // check() finds such a name, used outside the branch, declared nowhere it
+    // can see, as any other.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "#if false { X :: 1; T :: struct { x: int; } }\nmain :: () { y := X; t : T; }\n"),
+              "2:19: unknown identifier 'X'\n"
+              "2:26: unknown type 'T'\n");
     arena_free(&a);
 }
 
