@@ -261,8 +261,9 @@
 // a line outside any braces, and after a signature it's where the body's
 // '{' should be; one in column 1 is among the column-1 declarations a body
 // never closed is taken to end before (it doesn't end a body by itself:
-// unindented, it's a statement there; unless a branch of it declares a
-// procedure or a struct, or holds a #run { }, which only a top-level #if's
+// unindented, it's a statement there; unless a branch of it, or of an #if
+// right inside one of its branches, declares a procedure or a struct, or
+// holds a #run { }, which only a top-level #if's
 // branch can, and it then ends the body as a procedure's declaration does),
 // the skipping resumes at it inside braces too, as at a procedure's
 // declaration in column 1, and it ends a struct's fields.
@@ -284,8 +285,9 @@
 //
 // A body never closed ends at the end of the file or at a procedure's or a
 // struct's declaration in column 1 (`name :: (` or `Name :: struct`), a
-// #run { in column 1, or an #if in column 1 whose branch declares a
-// procedure or a struct, or holds a #run { }: a body can't hold any of
+// #run { in column 1, or an #if in column 1 whose branch (or a nested
+// #if's, right inside one) declares a procedure or a struct, or holds a
+// #run { }: a body can't hold any of
 // them, and each can only start a top-level declaration. A constant in
 // column 1 (`N :: 5;`) is a local constant, as an indented one is. A
 // struct's braces never closed end there too, and at any #run or #if in

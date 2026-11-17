@@ -3197,6 +3197,12 @@ TEST(parse_if_directive_recovers_inside_a_branch) {
     CHECK_STR(parse_src(&a, "#if A { * } N :: 1;\nmain :: () {}\n", &errors),
               "(#if (name A) (block (broken)))\n(const N (int 1))\n(proc main (params) (block))\n");
     CHECK_STR(errors, "1:9: expected identifier, found '*'\n");
+    // A body never closed in a branch written the C way, unindented, ends
+    // before the next column-1 declaration, which stays in the branch: the
+    // branch still closes at its '}'.
+    CHECK_STR(parse_src(&a, "#if A {\nf :: () {\n    x := 1;\ng :: () {}\n}\nmain :: () {}\n", &errors),
+              "(#if (name A) (block (broken f) (proc g (params) (block))))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "4:1: expected '}', found identifier 'g'\n");
     arena_free(&a);
 }
 
@@ -3291,6 +3297,26 @@ TEST(parse_if_directive_in_column_1_resumes) {
     CHECK_STR(parse_src(&a, "f :: () {\n    x := 1;\n#if A {\n#run { g(); }\n}\nmain :: () {}\n", &errors),
               "(broken f)\n(#if (name A) (block (run (block (call g)))))\n(proc main (params) (block))\n");
     CHECK_STR(errors, "3:1: expected '}', found directive\n");
+    // So is one whose nested #if's branch declares it, right inside its
+    // braces, indented or not, in an else too.
+    CHECK_STR(parse_src(&a, "f :: () {\n    x := 1;\n#if A {\n    #if B {\n        g :: () {}\n    }\n}\nmain :: () {}\n",
+                        &errors),
+              "(broken f)\n(#if (name A) (block (#if (name B) (block (proc g (params) (block))))))\n"
+              "(proc main (params) (block))\n");
+    CHECK_STR(errors, "3:1: expected '}', found directive\n");
+    CHECK_STR(parse_src(&a, "f :: () {\n    x := 1;\n#if A {\n#if B {\ng :: () {}\n}\n}\nmain :: () {}\n", &errors),
+              "(broken f)\n(#if (name A) (block (#if (name B) (block (proc g (params) (block))))))\n"
+              "(proc main (params) (block))\n");
+    CHECK_STR(errors, "3:1: expected '}', found directive\n");
+    CHECK_STR(parse_src(&a, "f :: () {\n#if A {\n    #if B {} else #if C {} else {\n        S :: struct {}\n    }\n}\n", &errors),
+              "(broken f)\n(#if (name A) (block (#if (name B) (block) (#if (name C) (block) (block (struct S))))))\n");
+    CHECK_STR(errors, "2:1: expected '}', found directive\n");
+    // A procedure in a block of a nested branch, not right inside it, isn't
+    // one: no branch can hold a block, so the #if is a body's statement.
+    CHECK_STR(parse_src(&a, "f :: () {\n#if A {\n    #if B {\n        if c {\n            g :: () {}\n        }\n    }\n}\n}\n",
+                        &errors),
+              "(broken f)\n");
+    CHECK_STR(errors, "5:13: procedures can only be declared at the top level, for now\n");
 
     // A #load in the branch of a column-1 #if read again at the top level is
     // the top level's: it isn't misplaced, and its file is loaded. When the
