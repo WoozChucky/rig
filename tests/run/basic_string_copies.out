@@ -3,7 +3,7 @@ true true false true false
 [a, b, c]
 []
 [-]
-[x]
+[x] copied: true
 [a+b+c]
 [bbbbbb]
 [baba]
@@ -15,12 +15,15 @@ true true false true false
 []
 []
 []
+[hello] copied: true
 [HELLO, WöRLD! 09]
 [Àbc def]
 []
+[ABC] copied: true
+[09] copied: true
 empty results allocate: 0
 one allocation: 1
 views: 1 false [a+b]
-no memory: 7 true 4 true 6 true 5 true
+no memory: 7 true 4 true 6 true 5 true 3 true
 int's largest: true 9223372036854775807 true 9223372036854775806
-past it: true true true
+past it: true true true true true true true true
