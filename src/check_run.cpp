@@ -266,6 +266,13 @@ static bool walk_node(Reach *r, Ast *node) {
         array_add(nodes, branch->condition);
         return true;
     }
+    case AST_IF_DIRECTIVE: {
+        // Only the taken branch is code (spec 4.9): the others were never
+        // checked, and the condition, decided, is no code either.
+        Ast_Block *taken = ((Ast_If_Directive *)node)->taken;
+        if (taken) array_add(nodes, taken);
+        return true;
+    }
     case AST_WHILE: {
         Ast_While *loop = (Ast_While *)node;
         array_add(nodes, loop->body);
