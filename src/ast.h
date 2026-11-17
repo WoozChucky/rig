@@ -494,8 +494,8 @@ System host_system();
 
 // A parsed file, or the files of a program parsed into one (parse_into):
 // their declarations, in source order, broken ones included; a file's
-// declarations come after those of the files loaded before it
-// (Position.file's order). Procedures (and broken entries, which are
+// declarations come after those of the files loaded before it (load
+// order: order, below). Procedures (and broken entries, which are
 // Ast_Procs) are in procs; the globals, top-level variables (Ast_Var,
 // is_global set), constants (Ast_Const) and structs (Ast_Struct), in
 // globals; the loads and imports (Ast_Load), in loads; the top-level runs
@@ -504,6 +504,14 @@ System host_system();
 // source order on its own; ast_declarations merges procs and globals back by
 // position. What a top-level #if's branches declare is in none of the lists
 // until the loader takes the branch (ast_add_declaration).
+//
+// order is each file's place in load order (spec 2.13), by Position.file,
+// as Source_File.order is. Empty, as parse() and parse_into leave it, each
+// file is at its index: the order the files were read in, which is load
+// order unless a #load in a taken #if branch (spec 4.9) read a file after
+// one that comes later. The loader then sets it, and puts every list in it
+// (ast_sort_declarations); before() follows it, in ast_declarations and
+// ast_dump too.
 //
 // lost_a_file is set when a #load or an #import failed (load.h's errors),
 // had no string to name a file by, wasn't at the top level, or was passed
@@ -526,13 +534,14 @@ struct Ast_File {
     Array<Ast_Load *> loads;
     Array<Ast_Run *> runs;  // the top-level #runs, in source order, file by file in load order
     Array<Ast_If_Directive *> ifs;  // the #ifs written at a file's top level (not nested in a branch), in
-                                    // source order, file by file in reading order
+                                    // source order, file by file in load order
     bool lost_a_file;
     bool reaches_compiler;  // the loader added the Compiler module's module.rig (by #import or #load, or as the
                             // main file or a workspace's further file)
     Position compiler_pos;  // the #import or #load that first named it; its own 1:1 when it is the main file or a
                             // further file (load.h)
     System system;          // what OS is (spec 2.5): SYSTEM_NONE means the host's (host_system)
+    Array<s32> order;       // order[f]: file f's place in load order, as Source_File.order; empty: each file's index
 };
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler
@@ -554,6 +563,10 @@ void ast_add_declaration(Ast_File *file, Ast *decl);
 // the loader decides them (ast_add_declaration). The caller frees the
 // Array.
 Array<Ast *> ast_declarations(Ast_File *file);
+
+// Sorts procs, globals, loads, runs and ifs, each on its own and stably, by position: file by file in
+// load order (Ast_File.order), then line and column. The loader calls it once the #ifs are decided.
+void ast_sort_declarations(Ast_File *file);
 
 // A new, zeroed node of struct T and kind `kind`, in the arena.
 template<typename T>

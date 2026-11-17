@@ -65,6 +65,73 @@ TEST(dump_of_expressions) {
     arena_free(&a);
 }
 
+TEST(declarations_sort_in_load_order) {
+    // A file a taken #if branch loads (spec 4.9) may be read, and parsed
+    // into the tree, after a file that comes later in load order. Once the
+    // loader has given each file its place (Ast_File.order),
+    // ast_sort_declarations puts every list in it, and ast_declarations and
+    // ast_dump follow it too. Here file 1 comes first.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    s32 zero = diag_add_file(&d, str("zero.rig"),
+                             str("#load \"a.rig\";\nzero :: () {}\nZERO :: 0;\n#run zero();\n#if true {}\n"));
+    s32 one = diag_add_file(&d, str("one.rig"),
+                            str("#load \"b.rig\";\none :: () {}\nONE :: 1;\n#run one();\n#if false {}\n"));
+    Array<Token> zero_tokens = lex(&d, zero, &a);
+    Array<Token> one_tokens = lex(&d, one, &a);
+    Ast_File *file = arena_new<Ast_File>(&a);
+    parse_into(file, zero_tokens, &a, &d);
+    parse_into(file, one_tokens, &a, &d);
+    CHECK_EQ(d.error_count, 0);
+    // With no order, each file is at its index: nothing moves.
+    ast_sort_declarations(file);
+    CHECK_STR(ast_dump(&a, file),
+              "(load \"a.rig\")\n"
+              "(proc zero (params) (block))\n"
+              "(const ZERO (int 0))\n"
+              "(run (call zero))\n"
+              "(#if (bool true) (block))\n"
+              "(load \"b.rig\")\n"
+              "(proc one (params) (block))\n"
+              "(const ONE (int 1))\n"
+              "(run (call one))\n"
+              "(#if (bool false) (block))\n");
+
+    array_add(&file->order, 1);
+    array_add(&file->order, 0);
+    ast_sort_declarations(file);
+    CHECK(file->procs.count == 2 && file->procs[0]->pos.file == one && file->procs[1]->pos.file == zero);
+    CHECK(file->globals.count == 2 && file->globals[0]->pos.file == one && file->globals[1]->pos.file == zero);
+    CHECK(file->loads.count == 2 && file->loads[0]->pos.file == one && file->loads[1]->pos.file == zero);
+    CHECK(file->runs.count == 2 && file->runs[0]->pos.file == one && file->runs[1]->pos.file == zero);
+    CHECK(file->ifs.count == 2 && file->ifs[0]->pos.file == one && file->ifs[1]->pos.file == zero);
+    Array<Ast *> declarations = ast_declarations(file);
+    CHECK_EQ(declarations.count, 4);
+    if (declarations.count == 4) {
+        CHECK(declarations[0]->kind == AST_PROC && declarations[0]->pos.file == one);
+        CHECK(declarations[1]->kind == AST_CONST && declarations[1]->pos.file == one);
+        CHECK(declarations[2]->kind == AST_PROC && declarations[2]->pos.file == zero);
+        CHECK(declarations[3]->kind == AST_CONST && declarations[3]->pos.file == zero);
+    }
+    array_free(&declarations);
+    CHECK_STR(ast_dump(&a, file),
+              "(load \"b.rig\")\n"
+              "(proc one (params) (block))\n"
+              "(const ONE (int 1))\n"
+              "(run (call one))\n"
+              "(#if (bool false) (block))\n"
+              "(load \"a.rig\")\n"
+              "(proc zero (params) (block))\n"
+              "(const ZERO (int 0))\n"
+              "(run (call zero))\n"
+              "(#if (bool true) (block))\n");
+
+    array_free(&zero_tokens);
+    array_free(&one_tokens);
+    diag_free(&d);
+    arena_free(&a);
+}
+
 TEST(nodes_start_zeroed) {
     Arena a = arena_make();
     Ast_Proc *p = ast_new<Ast_Proc>(&a, AST_PROC, {0, 3, 7});
