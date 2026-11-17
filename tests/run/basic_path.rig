@@ -109,15 +109,19 @@ main :: () {
     // string after it, ".gz", is not read.
     show(slice("x.tar.gz", 0, 5));
 
-    // Every part is a view into the path, and a missing extension is an
-    // empty view at the path's end.
+    // Every part is a view into the path. A missing extension, and the
+    // name of a path that ends with a separator, are empty views at the
+    // path's end; the missing directory of a name alone is one at its start.
     p := "a/b/c.txt";
     f := "file";
+    q := "a/b/";
     print_string("views:");
     show_bool(path_directory(p).data == p.data);
     show_bool(path_file_name(p).data == p.data + 4);
     show_bool(path_extension(p).data == p.data + 5);
     show_bool(path_extension(f).data == f.data + 4);
+    show_bool(path_directory(f).data == f.data);
+    show_bool(path_file_name(q).data == q.data + 4);
     print_line("");
 
     print_string("separators:");

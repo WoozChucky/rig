@@ -180,7 +180,7 @@ The entries are one run of memory, a power of two of them, each a header (the ke
 
 ## Paths (`path.rig`)
 
-A path is a plain string, and its parts are views into it, cut out by `slice` and `advance`: nothing is copied, nothing asks the system whether a file is there, and no part reaches outside the path, so a zeroed path gives zeroed parts and a view of part of a string is read only as far as it goes. A part that isn't there is an empty view at the path's end. Both `/` and `\` separate a path's parts, on every system, and a join writes `/`, which both systems accept. Nothing else is special: a drive letter is part of the first name (`"C:\x"`'s directory is `"C:"`), and `\\server\share` is a path from the root whose first separator is doubled.
+A path is a plain string, and its parts are views into it, cut out by `slice` and `advance`: nothing is copied, nothing asks the system whether a file is there, and no part reaches outside the path, so a zeroed path gives zeroed parts and a view of part of a string is read only as far as it goes. A missing extension or file name is an empty view at the path's end, and a missing directory is one at its start. Both `/` and `\` separate a path's parts, on every system, and a join writes `/`, which both systems accept. Nothing else is special: a drive letter is part of the first name (`"C:\x"`'s directory is `"C:"`), and `\\server\share` is a path from the root whose first separator is doubled.
 
 - `is_path_separator(c: u8) -> bool`: `/` or `\`.
 - `path_directory(path: string) -> string`: what is before the last separator, without the separators that end it (`"a//b"` gives `"a"`, `"a/b/"` gives `"a/b"`); the first separator when only separators are left, the root (`"/b"` gives `"/"`); `""` with no separator.

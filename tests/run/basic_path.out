@@ -16,7 +16,7 @@
 [a] [..] [] [a/..]
 [C:\x] [y.rig] [.rig] [C:\x\y]
 [] [x.tar] [.tar] [x]
-views: true true true true
+views: true true true true true true
 separators: true true false false
 [a/b]
 [a/b]
