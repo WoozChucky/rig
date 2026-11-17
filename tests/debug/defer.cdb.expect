@@ -1,0 +1,4 @@
+12:         x := 1;
+11:         defer putchar(98);
+10:         defer putchar(97);
+14:     putchar(10);

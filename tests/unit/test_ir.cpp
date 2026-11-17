@@ -4328,3 +4328,477 @@ TEST(an_if_directive_makes_no_scope) {
     CHECK(contains(entry, "  %2 = local i64  ; 6:5 s1\n"));
     arena_free(&a);
 }
+
+// Issue #149: defer (spec 6.12).
+
+TEST(defer_runs_at_each_way_out_in_reverse_order) {
+    // A defer emits nothing where it is: its statement is lowered again at
+    // each way out of its block, the last registered first. The return runs
+    // the if's defer, then the body's; the body's '}' only the body's. Each
+    // copy is at the deferred statement's own line, in a scope of its own
+    // inside the one the defer was reached in, and the ret after the copies
+    // stays at the return, or at the '}'.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "putchar :: (c: s32) -> s32 #foreign libc;\n"
+                                                "f :: (early: bool) {\n"
+                                                "    defer putchar(97);\n"
+                                                "    if early {\n"
+                                                "        defer putchar(98);\n"
+                                                "        return;\n"
+                                                "    }\n"
+                                                "}\n"
+                                                "main :: () {}\n"));
+    CHECK_STR(proc_ir(ir, "f"), "proc @f(i1) {\n"
+                                "  ; source f at 2:1, body 2:20\n"
+                                "  ; scope 1 in 0 at 4:14\n"
+                                "  ; scope 2 in 1 at 5:15\n"
+                                "  ; scope 3 in 0 at 3:11\n"
+                                "  ; scope 4 in 0 at 3:11\n"
+                                "  ; var early bool slot %1 arg 1 in 0 at 2:7\n"
+                                "b0:\n"
+                                "  %1 = local i1\n"
+                                "  store i1 %0, %1\n"
+                                "  %2 = load i1 %1  ; 4:5 s0\n"
+                                "  branch %2, b1, b2  ; 4:5 s0\n"
+                                "b1:\n"
+                                "  %3 = const i32 98  ; 5:15 s2\n"
+                                "  %4 = call @putchar(%3)  ; 5:15 s2\n"
+                                "  %5 = const i32 97  ; 3:11 s3\n"
+                                "  %6 = call @putchar(%5)  ; 3:11 s3\n"
+                                "  ret  ; 6:9 s1\n"
+                                "b2:\n"
+                                "  %7 = const i32 97  ; 3:11 s4\n"
+                                "  %8 = call @putchar(%7)  ; 3:11 s4\n"
+                                "  ret  ; 8:1 s0\n"
+                                "}\n");
+    arena_free(&a);
+}
+
+TEST(defer_runs_where_an_if_arm_or_a_loop_body_ends) {
+    // Each arm of an if is a block of its own for defer: falling off its '}'
+    // runs its defer, in a scope inside the arm's, then jumps, at the '}', to
+    // the code after the if. A loop body's defer runs at the continue, whose
+    // jump to the step stays at its keyword, and at the body's end, whose
+    // jump stays at the loop's keyword.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "putchar :: (c: s32) -> s32 #foreign libc;\n"
+                                                "f :: (c: bool) {\n"
+                                                "    if c {\n"
+                                                "        defer putchar(97);\n"
+                                                "        putchar(98);\n"
+                                                "    } else {\n"
+                                                "        defer putchar(99);\n"
+                                                "    }\n"
+                                                "    putchar(100);\n"
+                                                "}\n"
+                                                "g :: () {\n"
+                                                "    for 1..2 {\n"
+                                                "        defer putchar(101);\n"
+                                                "        if it == 1 { continue; }\n"
+                                                "    }\n"
+                                                "}\n"
+                                                "main :: () {}\n"));
+    CHECK_STR(proc_ir(ir, "f"), "proc @f(i1) {\n"
+                                "  ; source f at 2:1, body 2:16\n"
+                                "  ; scope 1 in 0 at 3:10\n"
+                                "  ; scope 2 in 1 at 4:15\n"
+                                "  ; scope 3 in 0 at 6:12\n"
+                                "  ; scope 4 in 3 at 7:15\n"
+                                "  ; var c bool slot %1 arg 1 in 0 at 2:7\n"
+                                "b0:\n"
+                                "  %1 = local i1\n"
+                                "  store i1 %0, %1\n"
+                                "  %2 = load i1 %1  ; 3:5 s0\n"
+                                "  branch %2, b1, b2  ; 3:5 s0\n"
+                                "b1:\n"
+                                "  %3 = const i32 98  ; 5:9 s1\n"
+                                "  %4 = call @putchar(%3)  ; 5:9 s1\n"
+                                "  %5 = const i32 97  ; 4:15 s2\n"
+                                "  %6 = call @putchar(%5)  ; 4:15 s2\n"
+                                "  jump b3  ; 6:5 s0\n"
+                                "b2:\n"
+                                "  %7 = const i32 99  ; 7:15 s4\n"
+                                "  %8 = call @putchar(%7)  ; 7:15 s4\n"
+                                "  jump b3  ; 8:5 s0\n"
+                                "b3:\n"
+                                "  %9 = const i32 100  ; 9:5 s0\n"
+                                "  %10 = call @putchar(%9)  ; 9:5 s0\n"
+                                "  ret  ; 10:1 s0\n"
+                                "}\n");
+    CHECK_STR(proc_ir(ir, "g"), "proc @g() {\n"
+                                "  ; source g at 11:1, body 11:9\n"
+                                "  ; scope 1 in 0 at 12:5\n"
+                                "  ; scope 2 in 1 at 14:20\n"
+                                "  ; scope 3 in 1 at 13:15\n"
+                                "  ; scope 4 in 1 at 13:15\n"
+                                "  ; var it int slot %2 in 1 at 12:5\n"
+                                "  ; var it_index int slot %3 in 1 at 12:5\n"
+                                "b0:\n"
+                                "  %0 = const i64 1  ; 12:5 s0\n"
+                                "  %1 = const i64 2  ; 12:5 s0\n"
+                                "  %2 = local i64  ; 12:5 s0\n"
+                                "  store i64 %0, %2  ; 12:5 s0\n"
+                                "  %3 = local i64  ; 12:5 s0\n"
+                                "  %4 = const i64 0  ; 12:5 s0\n"
+                                "  store i64 %4, %3  ; 12:5 s0\n"
+                                "  %5 = cmp sgt i64 %0, %1  ; 12:5 s1\n"
+                                "  branch %5, b6, b1  ; 12:5 s1\n"
+                                "b1:\n"
+                                "  %6 = load i64 %2  ; 14:9 s1\n"
+                                "  %7 = const i64 1  ; 14:9 s1\n"
+                                "  %8 = cmp eq i64 %6, %7  ; 14:9 s1\n"
+                                "  branch %8, b2, b3  ; 14:9 s1\n"
+                                "b2:\n"
+                                "  %9 = const i32 101  ; 13:15 s3\n"
+                                "  %10 = call @putchar(%9)  ; 13:15 s3\n"
+                                "  jump b4  ; 14:22 s2\n"
+                                "b3:\n"
+                                "  %11 = const i32 101  ; 13:15 s4\n"
+                                "  %12 = call @putchar(%11)  ; 13:15 s4\n"
+                                "  jump b4  ; 12:5 s1\n"
+                                "b4:\n"
+                                "  %13 = load i64 %2  ; 12:5 s1\n"
+                                "  %14 = cmp eq i64 %13, %1  ; 12:5 s1\n"
+                                "  branch %14, b6, b5  ; 12:5 s1\n"
+                                "b5:\n"
+                                "  %15 = const i64 1  ; 12:5 s1\n"
+                                "  %16 = add i64 %13, %15  ; 12:5 s1\n"
+                                "  store i64 %16, %2  ; 12:5 s1\n"
+                                "  %17 = load i64 %3  ; 12:5 s1\n"
+                                "  %18 = const i64 1  ; 12:5 s1\n"
+                                "  %19 = add i64 %17, %18  ; 12:5 s1\n"
+                                "  store i64 %19, %3  ; 12:5 s1\n"
+                                "  jump b1  ; 12:5 s1\n"
+                                "b6:\n"
+                                "  ret  ; 16:1 s0\n"
+                                "}\n");
+    arena_free(&a);
+}
+
+TEST(defer_runs_after_the_return_values) {
+    // return x; works x out first, then runs the defers: the result is 1,
+    // though the deferred store makes x 2 before the ret.
+    Arena a = arena_make();
+    CHECK_STR(proc_ir(ir_print(&a, lower_source(&a,
+                                                "first :: () -> int {\n"
+                                                "    x := 1;\n"
+                                                "    defer x = 2;\n"
+                                                "    return x;\n"
+                                                "}\n"
+                                                "main :: () {}\n")),
+                      "first"),
+              "proc @first() -> i64 {\n"
+              "b0:\n"
+              "  %0 = local i64\n"
+              "  %1 = const i64 1\n"
+              "  store i64 %1, %0\n"
+              "  %2 = load i64 %0\n"
+              "  %3 = const i64 2\n"
+              "  store i64 %3, %0\n"
+              "  ret %2\n"
+              "}\n");
+    // An aggregate result is copied into the caller's temporary, the hidden
+    // %0, before the defers run.
+    String pair = proc_ir(ir_print(&a, lower_source(&a,
+                                                    "Pair :: struct { a: int; b: int; }\n"
+                                                    "pair :: () -> Pair {\n"
+                                                    "    p := Pair.{1, 2};\n"
+                                                    "    defer p.a = 3;\n"
+                                                    "    return p;\n"
+                                                    "}\n"
+                                                    "main :: () {}\n")),
+                          "pair");
+    s64 copy = index_of(pair, "copy %0, "), deferred = index_of(pair, "const i64 3"), ret = index_of(pair, "  ret\n");
+    CHECK(copy >= 0);
+    CHECK(copy < deferred);
+    CHECK(deferred < ret);
+    arena_free(&a);
+}
+
+TEST(defer_runs_when_break_and_continue_leave_nested_blocks) {
+    // Review Focus 1. The continue and the break leave the inner block and
+    // the loop's body: each runs the inner block's defer, then the body's,
+    // and nothing older, then jumps (to the step, to the exit). Falling off
+    // the inner block runs its own, and off the body the body's, before the
+    // jump to the step: a copy of each per way out, three of each.
+    Arena a = arena_make();
+    String g = proc_ir(ir_print(&a, lower_source(&a,
+                                                 "putchar :: (c: s32) -> s32 #foreign libc;\n"
+                                                 "g :: () {\n"
+                                                 "    for 1..3 {\n"
+                                                 "        defer putchar(97);\n"
+                                                 "        {\n"
+                                                 "            defer putchar(98);\n"
+                                                 "            if it == 2 { continue; }\n"
+                                                 "            if it == 3 { break; }\n"
+                                                 "        }\n"
+                                                 "    }\n"
+                                                 "}\n"
+                                                 "main :: () {}\n")),
+                       "g");
+    CHECK_STR(g, "proc @g() {\n"
+                 "b0:\n"
+                 "  %0 = const i64 1\n"
+                 "  %1 = const i64 3\n"
+                 "  %2 = local i64\n"
+                 "  store i64 %0, %2\n"
+                 "  %3 = local i64\n"
+                 "  %4 = const i64 0\n"
+                 "  store i64 %4, %3\n"
+                 "  %5 = cmp sgt i64 %0, %1\n"
+                 "  branch %5, b8, b1\n"
+                 "b1:\n"
+                 "  %6 = load i64 %2\n"
+                 "  %7 = const i64 2\n"
+                 "  %8 = cmp eq i64 %6, %7\n"
+                 "  branch %8, b2, b3\n"
+                 "b2:\n"
+                 "  %9 = const i32 98\n"
+                 "  %10 = call @putchar(%9)\n"
+                 "  %11 = const i32 97\n"
+                 "  %12 = call @putchar(%11)\n"
+                 "  jump b6\n"
+                 "b3:\n"
+                 "  %13 = load i64 %2\n"
+                 "  %14 = const i64 3\n"
+                 "  %15 = cmp eq i64 %13, %14\n"
+                 "  branch %15, b4, b5\n"
+                 "b4:\n"
+                 "  %16 = const i32 98\n"
+                 "  %17 = call @putchar(%16)\n"
+                 "  %18 = const i32 97\n"
+                 "  %19 = call @putchar(%18)\n"
+                 "  jump b8\n"
+                 "b5:\n"
+                 "  %20 = const i32 98\n"
+                 "  %21 = call @putchar(%20)\n"
+                 "  %22 = const i32 97\n"
+                 "  %23 = call @putchar(%22)\n"
+                 "  jump b6\n"
+                 "b6:\n"
+                 "  %24 = load i64 %2\n"
+                 "  %25 = cmp eq i64 %24, %1\n"
+                 "  branch %25, b8, b7\n"
+                 "b7:\n"
+                 "  %26 = const i64 1\n"
+                 "  %27 = add i64 %24, %26\n"
+                 "  store i64 %27, %2\n"
+                 "  %28 = load i64 %3\n"
+                 "  %29 = const i64 1\n"
+                 "  %30 = add i64 %28, %29\n"
+                 "  store i64 %30, %3\n"
+                 "  jump b1\n"
+                 "b8:\n"
+                 "  ret\n"
+                 "}\n");
+    CHECK_EQ(count_of(g, "const i32 98"), 3);
+    CHECK_EQ(count_of(g, "const i32 97"), 3);
+    // A loop inside deferred code: its break and continue leave only its
+    // own body, which has no defer, so they copy nothing, and the deferred
+    // block is copied once, at the body's end.
+    String main = proc_ir(ir_print(&a, lower_source(&a,
+                                                    "putchar :: (c: s32) -> s32 #foreign libc;\n"
+                                                    "main :: () {\n"
+                                                    "    defer { for 1..3 { if it == 2 { continue; } if it == 3 { break; } "
+                                                    "putchar(99); } }\n"
+                                                    "}\n")),
+                          "main");
+    CHECK_EQ(count_of(main, "const i32 99"), 1);
+    arena_free(&a);
+}
+
+TEST(break_and_continue_run_only_their_own_loops_defers) {
+    // Review Focus 1: the inner loop's break and continue run the defers
+    // registered since its own body began, never the outer loop body's or
+    // the procedure body's. The inner defer is copied at the break, the
+    // continue and the inner body's end; the outer body's only at its end,
+    // and the procedure body's only at its '}'.
+    Arena a = arena_make();
+    String g = proc_ir(ir_print(&a, lower_source(&a,
+                                                 "putchar :: (c: s32) -> s32 #foreign libc;\n"
+                                                 "g :: () {\n"
+                                                 "    defer putchar(97);\n"
+                                                 "    for 1..2 {\n"
+                                                 "        defer putchar(98);\n"
+                                                 "        for 1..3 {\n"
+                                                 "            defer putchar(99);\n"
+                                                 "            if it == 2 { break; }\n"
+                                                 "            if it == 3 { continue; }\n"
+                                                 "        }\n"
+                                                 "    }\n"
+                                                 "}\n"
+                                                 "main :: () {}\n")),
+                       "g");
+    CHECK_EQ(count_of(g, "const i32 99"), 3);
+    CHECK_EQ(count_of(g, "const i32 98"), 1);
+    CHECK_EQ(count_of(g, "const i32 97"), 1);
+    arena_free(&a);
+}
+
+TEST(no_defer_runs_before_an_unreachable_end) {
+    // f returns a value, so its '}' can't be reached, though the IR block
+    // after the loop is there: the unreachable that ends it has no copy of
+    // the body's defer before it. Only the return copies it.
+    Arena a = arena_make();
+    String f = proc_ir(ir_print(&a, lower_source(&a,
+                                                 "f :: () -> int {\n"
+                                                 "    defer g();\n"
+                                                 "    while true { return 1; }\n"
+                                                 "}\n"
+                                                 "g :: () {}\n"
+                                                 "main :: () {}\n")),
+                       "f");
+    CHECK_EQ(count_of(f, "call @g()"), 1);
+    s64 end = index_of(f, "  unreachable\n");
+    CHECK(end > 0);
+    String before = string_slice(f, 0, end);
+    s64 line = before.count - 1;
+    while (line > 0 && before.data[line - 1] != '\n') line--;
+    CHECK(!contains(string_slice(before, line, before.count - line), "call"));
+    arena_free(&a);
+}
+
+TEST(deferred_code_is_at_its_own_lines) {
+    // Review Focus 2. The deferred block declares t, and is copied at the
+    // return and at the body's '}': each copy has its own slot, in its own
+    // scope, both inside the body's, at the deferred statement's '{'. Each
+    // copy's instructions are at their own lines: putchar(t), a load and a
+    // call, twice.
+    Arena a = arena_make();
+    String f = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                       "putchar :: (c: s32) -> s32 #foreign libc;\n"
+                                                       "f :: (early: bool) {\n"
+                                                       "    defer {\n"
+                                                       "        t : s32 = 97;\n"
+                                                       "        putchar(t);\n"
+                                                       "    }\n"
+                                                       "    if early { return; }\n"
+                                                       "}\n"
+                                                       "main :: () {}\n")),
+                       "f");
+    CHECK(contains(f, "  ; scope 1 in 0 at 7:14\n"
+                      "  ; scope 2 in 0 at 3:11\n"
+                      "  ; scope 3 in 0 at 3:11\n"));
+    CHECK(contains(f, "  ; var t s32 slot %3 in 2 at 4:9\n"));
+    CHECK(contains(f, "  ; var t s32 slot %7 in 3 at 4:9\n"));
+    CHECK_EQ(count_of(f, "; var t s32 "), 2);
+    CHECK_EQ(count_of(f, "; 5:9 s"), 4);
+    CHECK_EQ(count_of(f, "; 5:9 s2\n"), 2);
+    CHECK_EQ(count_of(f, "; 5:9 s3\n"), 2);
+    arena_free(&a);
+}
+
+TEST(a_deferred_statement_that_is_not_a_block_is_a_block_for_defer) {
+    // defer defer g();: the copy of the outer defer, at the body's one way
+    // out, registers the inner one under its own mark, and runs it as it
+    // ends, once, before the body's older defer h().
+    Arena a = arena_make();
+    String f = proc_ir(ir_print(&a, lower_source(&a,
+                                                 "f :: () {\n"
+                                                 "    defer h();\n"
+                                                 "    defer defer g();\n"
+                                                 "}\n"
+                                                 "g :: () {}\n"
+                                                 "h :: () {}\n"
+                                                 "main :: () {}\n")),
+                       "f");
+    CHECK_EQ(count_of(f, "call @g()"), 1);
+    CHECK_EQ(count_of(f, "call @h()"), 1);
+    CHECK(index_of(f, "call @g()") < index_of(f, "call @h()"));
+    // A deferred #if whose branch declares m, copied at the return and at
+    // the '}': each copy's m is a variable of its own, in that copy's scope.
+    String k = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                       "k :: (early: bool) {\n"
+                                                       "    defer #if true { m := 1; }\n"
+                                                       "    if early { return; }\n"
+                                                       "}\n"
+                                                       "main :: () {}\n")),
+                       "k");
+    CHECK(contains(k, "  ; scope 2 in 0 at 2:11\n"
+                      "  ; scope 3 in 0 at 2:11\n"));
+    CHECK_EQ(count_of(k, "; var m int "), 2);
+    CHECK_EQ(count_of(k, " in 2 at 2:22\n"), 1);
+    CHECK_EQ(count_of(k, " in 3 at 2:22\n"), 1);
+    arena_free(&a);
+}
+
+TEST(a_defer_in_an_if_directive_belongs_to_the_enclosing_block) {
+    // A body #if makes no scope: the defer in its branch runs when the block
+    // around the #if ends, after the h() in it and before the one after it.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print(&a, lower_source(&a,
+                                                    "main :: () {\n"
+                                                    "    {\n"
+                                                    "        #if true { defer g(); }\n"
+                                                    "        h();\n"
+                                                    "    }\n"
+                                                    "    h();\n"
+                                                    "}\n"
+                                                    "g :: () {}\n"
+                                                    "h :: () {}\n")),
+                          "main");
+    s64 first_h = index_of(main, "call @h()"), g = index_of(main, "call @g()");
+    CHECK(first_h >= 0);
+    CHECK(first_h < g);
+    CHECK(index_of(string_slice(main, g, main.count - g), "call @h()") > 0);
+    CHECK_EQ(count_of(main, "call @g()"), 1);
+    arena_free(&a);
+}
+
+TEST(defer_in_main_runs_before_its_return) {
+    // main's return gives C's 0: its defers run before it, at the return
+    // and at the '}' alike.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print(&a, lower_source(&a,
+                                                    "main :: () {\n"
+                                                    "    defer g();\n"
+                                                    "    if true { return; }\n"
+                                                    "}\n"
+                                                    "g :: () {}\n")),
+                          "main");
+    CHECK_EQ(count_of(main, "  call @g()\n  %"), 2);
+    // Each call is followed by the 0 and the ret of it.
+    for (s64 at = 0;;) {
+        s64 i = index_of(string_slice(main, at, main.count - at), "  call @g()\n");
+        if (i < 0) break;
+        at += i + (s64)strlen("  call @g()\n");
+        String rest = string_slice(main, at, main.count - at);
+        s64 end = index_of(rest, "\n");
+        String line = string_slice(rest, 0, end);
+        CHECK(contains(line, " = const i32 0"));
+        String next = string_slice(rest, end + 1, rest.count - end - 1);
+        CHECK(index_of(next, "  ret %") == 0);
+    }
+    arena_free(&a);
+}
+
+TEST(deferred_loops_at_a_break_build) {
+    // Review Focus 4: the break's copy of the deferred code pushes 20 loops
+    // onto the list of loops being lowered, which may move it; the break's
+    // own loop is found again after the copies.
+    Arena a = arena_make();
+    CHECK(builds(&a, nested_source(&a, "main :: () {\n    for 1..2 {\n        defer {", "for 1..2 {", 20, "", "}",
+                                   "}\n        break;\n    }\n}\n")));
+    arena_free(&a);
+}
+
+TEST(defer_before_an_else_if_chain_of_10000_returns) {
+    // Review Focus 5: each of the 10001 returns copies the deferred
+    // statement, one add each, lowered in a loop down the chain.
+    const s64 ARMS = 10000;
+    Arena a = arena_make();
+    char *text = (char *)arena_alloc(&a, (u64)(ARMS * 64 + 4096), 1);
+    char *at = text;
+    at += sprintf(at, "count := 0;\n"
+                      "pick :: (x: int) -> int {\n"
+                      "    defer count += 1;\n");
+    at = else_if_arms(at, ARMS, "    ", "return %lld;");
+    sprintf(at, "    else { return -1; }\n"
+                "}\n"
+                "main :: () {}\n");
+    CHECK(builds(&a, text));
+    CHECK_EQ(count_of(proc_ir(ir_print(&a, lower_source(&a, text)), "pick"), "add i64"), 10001);
+    arena_free(&a);
+}

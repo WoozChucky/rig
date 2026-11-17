@@ -205,6 +205,15 @@
 //   is the constant true and that has no break of its own. An if, #if or
 //   while whose condition was an error doesn't reach its end either, so the
 //   condition's is the one message.
+// - defer S (spec 6.12): S is checked where the defer is, naming what's in
+//   scope there, in a scope of its own, so what it declares ends with it.
+//   It runs as its block is left, and leaves itself only by its end: a
+//   return anywhere in it is "can't return from a deferred statement", and a
+//   break or continue whose loop is outside it "'break' can't leave a
+//   deferred statement" (a loop inside it may break and continue), each at
+//   its keyword. A body a #run in deferred code reaches is checked as its
+//   own, its returns and jumps not deferred. A defer is no way out: a block
+//   ending with one reaches its end.
 // - An expression statement must be a call, whose value may be ignored
 //   (spec 6.7).
 //

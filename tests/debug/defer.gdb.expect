@@ -1,0 +1,7 @@
+main () at
+defer.rig:12
+x := 1;
+defer putchar(98);
+defer putchar(97);
+putchar(10);
+!.debug_names not created by gdb

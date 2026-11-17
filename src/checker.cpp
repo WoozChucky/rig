@@ -1267,7 +1267,15 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
 // - "'divmod' returns 2 values, but this return gives 1" ("gives none").
 // A return of a call with as many results (return divmod(a, b);) is one
 // value, the call's first result, so it doesn't count as several.
+// In deferred code (spec 6.12) a return is refused, at the 'return': that
+// code runs as its block is left, and leaves itself only by its end. Its
+// values are still checked, as expressions, against no result.
 static void check_return(Checker *c, Ast_Return *ret) {
+    if (c->deferring) {
+        diag_error(c->diag, ret->pos, "can't return from a deferred statement");
+        for (s64 i = 0; i < ret->values.count; i++) check_expression(c, ret->values[i]);
+        return;
+    }
     Ast_Proc *proc = c->proc;
     s64 want = proc->results.count, given = ret->values.count;
     if (want == given) {
@@ -1482,14 +1490,43 @@ static void check_for(Checker *c, Ast_For *loop) {
     pop_scope(c);
 }
 
-// break and continue act on the innermost loop around them.
+// break and continue act on the innermost loop around them. In deferred
+// code (spec 6.12) that loop must be inside the deferred statement: one
+// outside it would have the jump leave the deferred code, which leaves
+// itself only by its end. "'break' can't leave a deferred statement", at
+// the keyword, and the jump has no loop.
 static void check_jump(Checker *c, Ast_Jump *jump) {
+    const char *keyword = jump->kind == AST_BREAK ? "break" : "continue";
     if (c->loops.count == 0) {
-        diag_error(c->diag, jump->pos, "'%s' is only allowed inside a loop",
-                   jump->kind == AST_BREAK ? "break" : "continue");
+        diag_error(c->diag, jump->pos, "'%s' is only allowed inside a loop", keyword);
+        return;
+    }
+    if (c->deferring && c->loops.count <= c->defer_loops) {
+        diag_error(c->diag, jump->pos, "'%s' can't leave a deferred statement", keyword);
         return;
     }
     jump->loop = c->loops[c->loops.count - 1];
+}
+
+static void check_statement(Checker *c, Ast *statement);
+
+// defer S (spec 6.12): S is checked where the defer is, so it names what's
+// in scope there, in a scope of its own, as a block statement is: what it
+// declares (a deferred block's, or the taken branch of a deferred #if)
+// ends with it. While it's checked, it's the innermost deferred statement,
+// with the loops around it counted, for the refusals of return, break and
+// continue (check_return, check_jump); a defer inside it is innermost in
+// its turn, and the outer one is back after.
+static void check_defer(Checker *c, Ast_Defer *d) {
+    Ast_Defer *outer = c->deferring;
+    s64 outer_loops = c->defer_loops;
+    c->deferring = d;
+    c->defer_loops = c->loops.count;
+    push_scope(c);
+    check_statement(c, d->statement);
+    pop_scope(c);
+    c->deferring = outer;
+    c->defer_loops = outer_loops;
 }
 
 static void check_statement(Checker *c, Ast *statement) {
@@ -1506,6 +1543,7 @@ static void check_statement(Checker *c, Ast *statement) {
     case AST_FOR: check_for(c, (Ast_For *)statement); break;
     case AST_BREAK:
     case AST_CONTINUE: check_jump(c, (Ast_Jump *)statement); break;
+    case AST_DEFER: check_defer(c, (Ast_Defer *)statement); break;
     case AST_RUN:
         // A #run gives a value while compiling (spec 7.8), to be put where a
         // value goes; code run for its effect is a top-level #run. Not
@@ -1558,6 +1596,8 @@ static bool breaks_out_of(Ast *s, Ast *loop) {
     }
     case AST_WHILE: return breaks_out_of(((Ast_While *)s)->body, loop);
     case AST_FOR: return breaks_out_of(((Ast_For *)s)->body, loop);
+    // A defer too: a break in deferred code is of a loop inside it, or
+    // refused (check_jump), so it can't break out of `loop`.
     default: return false;
     }
 }
@@ -1617,6 +1657,9 @@ static bool goes_past(Ast *s) {
         bool forever = condition->is_constant && condition->constant == 1;
         return !forever || breaks_out_of(loop->body, loop);
     }
+    // A defer too: it only registers its statement, which runs when the
+    // block is left and can't leave itself but by its end (check_return,
+    // check_jump), so control always goes past it (spec 6.11).
     default: return true;
     }
 }
@@ -1636,8 +1679,9 @@ static bool reaches_end(Ast_Block *block) {
 // Checked in check()'s pass over the bodies, or earlier, where a #run
 // reaches it (check_reached_body): inside another body, or inside a
 // global's value in the pass before. So it's checked with a state of its
-// own: the procedure, the scopes, the loops and lost_a_local of whatever
-// was being checked are set aside, and back when it's done, as the levels are. While
+// own: the procedure, the scopes, the loops, the deferred statement
+// (Checker.deferring) and lost_a_local of whatever was being checked are
+// set aside, and back when it's done, as the levels are. While
 // it's under way, its block is on c->resolving, so a #run that needs it
 // then finds a circle.
 // Whether its check reported an error is kept (Ast_Proc.had_errors): a
@@ -1647,6 +1691,12 @@ static void check_body(Checker *c, Ast_Proc *proc) {
     Outer_Scopes outer_scopes = leave_scopes(c);  // and lost_a_local
     Array<Ast *> outer_loops = c->loops;
     c->loops = {};
+    // A body a #run in deferred code reaches isn't deferred code: its
+    // returns and jumps are its own.
+    Ast_Defer *outer_deferring = c->deferring;
+    s64 outer_defer_loops = c->defer_loops;
+    c->deferring = nullptr;
+    c->defer_loops = 0;
     s32 outer_levels = c->levels;
     proc->body_resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)proc->body);
@@ -1672,6 +1722,8 @@ static void check_body(Checker *c, Ast_Proc *proc) {
     proc->body_resolve = RESOLVE_DONE;
     array_free(&c->loops);
     c->loops = outer_loops;
+    c->deferring = outer_deferring;
+    c->defer_loops = outer_defer_loops;
     return_to_scopes(c, outer_scopes);
     c->levels = outer_levels;
     c->proc = outer_proc;

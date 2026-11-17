@@ -3463,3 +3463,117 @@ TEST(parse_if_directive_branches_arent_body_levels) {
     token_list_free(plain);
     arena_free(&a);
 }
+
+// Issue #149: defer (spec 6.12).
+
+TEST(parse_defer_forms) {
+    // defer and a statement, any but a declaration: a block, an if, another
+    // defer, an #if. return, break and continue parse too; the checker
+    // refuses them.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "defer free(p);", &errors), "(block (defer (call free (name p))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "defer count -= 1;", &errors), "(block (defer (assign -= (name count) (int 1))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "defer if open { close(); }", &errors),
+              "(block (defer (if (name open) (block (call close)))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "defer { a(); b(); }", &errors), "(block (defer (block (call a) (call b))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "defer defer f();", &errors), "(block (defer (defer (call f))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "defer #if A { x := 1; }", &errors),
+              "(block (defer (#if (name A) (block (var x _ (int 1))))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "defer return; defer break; defer continue;", &errors),
+              "(block (defer (return)) (defer (break)) (defer (continue)))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(parse_defer_refuses_a_declaration) {
+    // The deferred statement's block ends when it runs, so what it declared
+    // would end with it: refused at the declaration's first name, and the
+    // procedure given up. A declaration inside a deferred block or if is that
+    // block's, and fine.
+    Arena a = arena_make();
+    const char *declarations[] = {"defer x := 1;", "defer N :: 1;", "defer a, b := f();"};
+    for (s64 i = 0; i < 3; i++) {
+        String errors;
+        CHECK_STR(body_dump(&a, declarations[i], &errors), "(broken f)\n");
+        CHECK_STR(errors, "2:11: a deferred statement can't declare anything: its block ends when it runs\n");
+    }
+    String errors;
+    CHECK_STR(body_dump(&a, "defer { x := 1; }", &errors), "(block (defer (block (var x _ (int 1)))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "defer if c { x := 1; }", &errors),
+              "(block (defer (if (name c) (block (var x _ (int 1))))))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(parse_defer_errors) {
+    // A statement must follow the defer.
+    Arena a = arena_make();
+    String errors;
+    body_dump(&a, "defer;", &errors);
+    CHECK_STR(errors, "2:10: expected an expression, found ';'\n");
+    body_dump(&a, "defer", &errors);
+    CHECK_STR(errors, "3:1: expected an expression, found '}'\n");
+    arena_free(&a);
+}
+
+TEST(parse_defer_at_the_top_level) {
+    // defer is a statement: at the top level, and in a top-level #if's
+    // branch, it's refused at the keyword, a broken entry with no name, and
+    // the parser goes on with the next declaration.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "defer f();\nmain :: () {}\n", &errors), "(broken)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:1: defer can only be in a body\n");
+    // A declaration later on the same line is read: defer is a stray token.
+    CHECK_STR(parse_src(&a, "defer f :: () {}\nmain :: () {}\n", &errors),
+              "(proc f (params) (block))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:1: defer can only be in a body\n");
+    CHECK_STR(parse_src(&a, "#if true { defer f(); }\nmain :: () {}\n", &errors),
+              "(#if (bool true) (block (broken)))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:12: defer can only be in a body\n");
+    arena_free(&a);
+}
+
+TEST(parse_defers_nested_too_deeply) {
+    // Each defer is a block level (MAX_DEPTH), its statement a block of its
+    // own: the body and 999 defers are 1000 levels; the 1000th defer is the
+    // one too many, at its keyword. defer { ... } is two levels, the second
+    // its '{'. The deepest that parse build too: every stage walks a defer
+    // inside deferred code by recursion, lowering a copy inside a copy.
+    Arena a = arena_make();
+    String errors;
+    const char *deepest = nested_source(&a, "main :: () {\n    y := 1;\n", "defer ", 999, "y = 2;", "", "\n}\n");
+    parse_src(&a, deepest, &errors);
+    CHECK_STR(errors, "");
+    CHECK(builds(&a, deepest));
+    parse_src(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "defer ", 1000, "y = 2;", "", "\n}\n"), &errors);
+    CHECK_STR(errors, "3:5995: blocks are nested too deeply (more than 1000 levels)\n");
+    deepest = nested_source(&a, "main :: () {\n    y := 1;\n", "defer { ", 499, "y = 2;", " }", "\n}\n");
+    parse_src(&a, deepest, &errors);
+    CHECK_STR(errors, "");
+    CHECK(builds(&a, deepest));
+    parse_src(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "defer { ", 500, "y = 2;", " }", "\n}\n"), &errors);
+    CHECK_STR(errors, "3:3999: blocks are nested too deeply (more than 1000 levels)\n");
+    // A body's levels (Ast_Proc.body_levels) count each defer as a block:
+    // defer return; reaches as far as { return; } does, though no
+    // expression in it reaches that level.
+    Token_List *list = src("f :: () { defer return; }\nh :: () { { return; } }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    if (file->procs.count == 2) {
+        CHECK_EQ(file->procs[0]->body_levels, 2);
+        CHECK_EQ(file->procs[0]->body_levels, file->procs[1]->body_levels);
+    } else {
+        CHECK(!"the file has f and h");
+    }
+    token_list_free(list);
+    arena_free(&a);
+}

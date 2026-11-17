@@ -1,0 +1,27 @@
+tests/errors/defer_refused.rig:5:11: error: can't return from a deferred statement
+        defer return 1;
+              ^
+tests/errors/defer_refused.rig:6:21: error: can't return from a deferred statement
+        defer if true { return 2; }
+                        ^
+tests/errors/defer_refused.rig:11:15: error: 'break' can't leave a deferred statement
+            defer break;
+                  ^
+tests/errors/defer_refused.rig:12:15: error: 'continue' can't leave a deferred statement
+            defer continue;
+                  ^
+tests/errors/defer_refused.rig:13:28: error: 'break' can't leave a deferred statement
+            defer if it == 2 { break; }
+                               ^
+tests/errors/defer_refused.rig:14:28: error: 'continue' can't leave a deferred statement
+            defer if it == 3 { continue; }
+                               ^
+tests/errors/defer_refused.rig:18:1: error: defer can only be in a body
+    defer puts("not in a body");
+    ^
+tests/errors/defer_refused.rig:21:11: error: only a call can be a statement, for now
+        defer n + 1;
+              ^
+tests/errors/defer_refused.rig:25:11: error: a deferred statement can't declare anything: its block ends when it runs
+        defer x := 1;
+              ^

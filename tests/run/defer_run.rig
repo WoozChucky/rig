@@ -1,0 +1,31 @@
+// defer in code run while compiling (issue #149, spec 6.12, 7.8): a
+// top-level #run { }'s block is a body, whose defers run when it ends,
+// return; included, and a procedure a #run calls runs its defers as
+// compiled code does (the interpreter runs the same IR).
+puts :: (s: *u8) -> s32 #foreign libc;
+
+steps := 0;
+step :: () -> int {
+    steps += 1;
+    return steps;
+}
+// The value is worked out before the defer runs: 1, steps 2 after.
+FIRST :: #run first_step();
+first_step :: () -> int {
+    defer step();
+    return step();
+}
+
+#run {
+    defer puts("the block's defer runs last");
+    if FIRST == 1 && steps == 2 {
+        defer puts("the if's defer runs first");
+        puts("returning early");
+        return;
+    }
+    puts("never printed");
+}
+
+main :: () {
+    if FIRST == 1 { puts("FIRST is 1: worked out before the defer ran"); }
+}
