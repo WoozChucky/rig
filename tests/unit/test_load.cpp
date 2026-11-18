@@ -6,7 +6,8 @@
 // loader decides, the files a taken branch reads, load order, and
 // --stdin-for of a file only a branch not taken loads; then Preload, which
 // every program imports (issue #151), and which the tests before leave out
-// (no_preload_options).
+// (no_preload_options), but import_finds_basic_with_rigs_own_places, which
+// loads with rig's own places and finds Preload as file 1.
 // Each test writes its files under .build/tests/load/NAME/, NAME the
 // test's (or the test's with a suffix, when it needs a second directory),
 // and loads them from there. Uses test_os.cpp's SEPARATOR and reason.
@@ -37,10 +38,11 @@ static void write_source(Arena *a, String dir, const char *name, const char *tex
     CHECK(os_write_file(str(in_directory(a, dir, name)), str(text)));
 }
 
-// Options that leave Preload out (Load_Options.no_preload), which every
-// test of the loader's other rules gives: they count the files a program
-// reads and name them by index, and those with places of their own have
-// no Preload there. The tests of Preload, at the end, keep it.
+// Options that leave Preload out (Load_Options.no_preload), which the tests
+// of the loader's other rules give: they count the files a program reads
+// and name them by index, and those with places of their own have no
+// Preload there. The tests of Preload, at the end, keep it, as does
+// import_finds_basic_with_rigs_own_places.
 static Load_Options no_preload_options() {
     Load_Options options = {};
     options.no_preload = true;
@@ -2296,7 +2298,9 @@ TEST(stdin_for_imported_only_in_a_branch_not_taken) {
 // the main file, so it's file 1, and places it first in load order, before
 // the main file, so its declarations win a clash. Each test makes its own
 // places (test_places) and writes a Preload there, unless it says
-// otherwise; the tests above leave Preload out (Load_Options.no_preload).
+// otherwise; the tests above leave Preload out (Load_Options.no_preload),
+// but import_finds_basic_with_rigs_own_places, which loads with rig's own
+// places and finds Preload as file 1.
 
 // Places for a test of Preload, made under dir, with a Preload holding
 // `text` in the first; none when text is null.
@@ -2383,6 +2387,43 @@ TEST(preload_wins_a_clash) {
     arena_free(&a);
 }
 
+TEST(preload_wins_a_clash_with_the_files_it_loads) {
+    // The files Preload reaches, by a #load or by a taken #if's, come before
+    // the main file in load order too: Preload's walk ends before the main
+    // file is placed. So a name the main file declares that one of them
+    // declares is theirs, the error at the main file's declaration. Read,
+    // they're files 2 and 3, after the main file and Preload; in load order,
+    // Preload, its two files, then the main file.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "preload_wins_a_clash_with_the_files_it_loads");
+    Module_Places places =
+        preload_places(&a, dir, "#load \"more.rig\";\n#if true { #load \"branch.rig\"; }\npreloaded :: 1;\n");
+    String more = str(module_file(&a, places.places[0], "Preload", "more.rig"));
+    String branch = str(module_file(&a, places.places[0], "Preload", "branch.rig"));
+    CHECK(os_write_file(more, str("loaded :: 1;\n")));
+    CHECK(os_write_file(branch, str("branched :: 1;\n")));
+    Ast_File *tree = load_main_with_preload(&a, &d, dir, "loaded :: 2;\nbranched :: 2;\nmain :: () {}\n", &places);
+    CHECK_STR(messages(&a, &d), "");
+    const s32 order[4] = {3, 0, 1, 2};
+    CHECK_EQ(d.files.count, 4);
+    if (d.files.count == 4) {
+        CHECK_STR(d.files[2].path, string_cstr(&a, more));
+        CHECK_STR(d.files[3].path, string_cstr(&a, branch));
+        for (s64 i = 0; i < 4; i++) CHECK_EQ(d.files[i].order, order[i]);
+    }
+    CHECK(!check(tree, &a, &d));
+    String expected = string_printf(&a,
+                                    "1:1: 'loaded' is already declared at " STR_FMT ":1:1\n"
+                                    "2:1: 'branched' is already declared at " STR_FMT ":1:1\n",
+                                    STR_ARG(more), STR_ARG(branch));
+    CHECK_STR(messages(&a, &d), string_cstr(&a, expected));
+    CHECK_EQ(d.messages.count, 2);
+    for (s64 i = 0; i < d.messages.count; i++) CHECK_EQ(d.messages[i].pos.file, 0);
+    diag_free(&d);
+    arena_free(&a);
+}
+
 TEST(preload_imported_or_loaded_again_reads_nothing_more) {
     // Preload is a module as any other: an #import of it, or a #load of its
     // module.rig by its path, finds the file read already.
@@ -2444,7 +2485,9 @@ TEST(preload_before_a_workspaces_further_files) {
 
 TEST(preload_as_the_main_file) {
     // rig check modules/Preload/module.rig checks Preload's own file, which
-    // is then the program's Preload too: read once, a module's.
+    // is then the program's Preload too: read once, a module's. It's known
+    // by its identity, so a relative path names it as the absolute path the
+    // loader finds does.
     Arena a = arena_make();
     Diagnostics d = {};
     String dir = load_test_directory(&a, "preload_as_the_main_file");
@@ -2452,8 +2495,7 @@ TEST(preload_as_the_main_file) {
     Module_Places places = preload_places(&a, dir, text);
     Load_Options options = {};
     options.modules = &places;
-    Ast_File *tree =
-        load_program(&a, &d, str(module_file(&a, places.places[0], "Preload", "module.rig")), str(text), &options);
+    Ast_File *tree = load_program(&a, &d, str(in_directory(&a, dir, "first/Preload/module.rig")), str(text), &options);
     CHECK_STR(messages(&a, &d), "");
     CHECK_EQ(tree->load_failure.count, 0);
     CHECK_EQ(d.files.count, 1);
@@ -2464,7 +2506,8 @@ TEST(preload_as_the_main_file) {
 
 TEST(preload_given_with_its_text) {
     // rig check --stdin-for Preload's module.rig, as an editor checks it
-    // unsaved: its text is the one given, which every program reaches.
+    // unsaved, by a relative path: its text is the one given, which every
+    // program reaches.
     Arena a = arena_make();
     Diagnostics d = {};
     String dir = load_test_directory(&a, "preload_given_with_its_text");
@@ -2473,7 +2516,7 @@ TEST(preload_given_with_its_text) {
     bool reached = false;
     Load_Options options = {};
     options.modules = &places;
-    options.stdin_for = str(module_file(&a, places.places[0], "Preload", "module.rig"));
+    options.stdin_for = str(in_directory(&a, dir, "first/Preload/module.rig"));
     options.stdin_text = str("given :: () {}\n");
     options.stdin_for_reached = &reached;
     Ast_File *tree =
@@ -2492,12 +2535,20 @@ TEST(missing_preload_stops_the_loading) {
     // Places with no Preload: the loading stops before anything is parsed,
     // the tree saying why (Ast_File.load_failure), and nothing reported, so
     // the main file's syntax error and its #load of a file that isn't there
-    // aren't said.
+    // aren't said; and with only the main file registered, a workspace's
+    // further file not added.
     Arena a = arena_make();
     Diagnostics d = {};
     String dir = load_test_directory(&a, "missing_preload_stops_the_loading");
     Module_Places places = preload_places(&a, dir, nullptr);
-    Ast_File *tree = load_main_with_preload(&a, &d, dir, "#load \"nope.rig\";\nmain :: () { x }\n", &places);
+    const char *text = "#load \"nope.rig\";\nmain :: () { x }\n";
+    write_source(&a, dir, "main.rig", text);
+    write_source(&a, dir, "x.rig", "x :: () {}\n");
+    Load_Options options = {};
+    options.modules = &places;
+    array_add(&options.more_files, str(in_directory(&a, dir, "x.rig")));
+    array_add(&options.more_texts, str("x :: () {}\n"));
+    Ast_File *tree = load_program(&a, &d, str(in_directory(&a, dir, "main.rig")), str(text), &options);
     String expected = string_printf(&a, "there's no module 'Preload' (looked in " STR_FMT " and " STR_FMT ")",
                                     STR_ARG(places.places[0]), STR_ARG(places.places[1]));
     CHECK_STR(tree->load_failure, string_cstr(&a, expected));
@@ -2505,6 +2556,8 @@ TEST(missing_preload_stops_the_loading) {
     CHECK_EQ(d.files.count, 1);
     CHECK_EQ(tree->procs.count, 0);
     CHECK_EQ(tree->loads.count, 0);
+    array_free(&options.more_files);
+    array_free(&options.more_texts);
     diag_free(&d);
     arena_free(&a);
 }

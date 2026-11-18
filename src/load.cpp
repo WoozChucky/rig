@@ -458,39 +458,48 @@ static bool earlier_in_file(Position a, Position b) {
     return a.line != b.line ? a.line < b.line : a.col < b.col;
 }
 
-// The walk of load.h: from `preload`, Preload's index (-1 when the program
-// doesn't import it, Load_Options.no_preload), then the main file and the
-// `further_files` after it, each file placed is walked in turn, its own
-// top-level #loads, #imports and #ifs in source order (merged by position
-// from its File_Items): a load places its file, and an #if is decided
-// (decide_in_load_order). A queue, as the reading is, so a chain of loads
-// of any length takes no more stack than one file. Every file read is
-// placed: Preload first, so its declarations come first (load.h), then the
-// main file and the further files, among whose indexes Preload's is (it's
-// skipped there, placed already), each other one at its first #load in
-// load order, at the latest at the #load that read it, which is in a file
-// placed before it. Each file's place is then its order (Source_File.order,
-// Ast_File.order), and the tree's lists are put in it.
-static void walk_in_load_order(Loading *l, s32 preload, s32 main_file, s32 further_files) {
+// Walks the files placed from the walk's `from`th on, in turn, until none
+// is left: each file's own top-level #loads, #imports and #ifs in source
+// order (merged by position from its File_Items), a load placing its file,
+// and an #if decided (decide_in_load_order). A queue, as the reading is,
+// so a chain of loads of any length takes no more stack than one file.
+static void walk_placed(Loading *l, Walk *walk, s64 from) {
     Ast_File *tree = l->tree;
-    Diagnostics *d = l->d;
-    Walk walk = {};
-    place_in_load_order(&walk, preload);
-    for (s32 f = main_file; f <= main_file + further_files; f++) place_in_load_order(&walk, f);
-    for (s64 w = 0; w < walk.files.count; w++) {
-        s32 file = walk.files[w];
+    for (s64 w = from; w < walk->files.count; w++) {
+        s32 file = walk->files[w];
         File_Items items = l->items[file];
         s64 k = items.first_load, i = items.first_if;
         while (k < items.end_load || i < items.end_if) {
             bool load_first = i == items.end_if ||
                               (k < items.end_load && earlier_in_file(tree->loads[k]->pos, tree->ifs[i]->pos));
             if (load_first) {
-                place_in_load_order(&walk, tree->loads[k++]->file);
+                place_in_load_order(walk, tree->loads[k++]->file);
             } else {
-                decide_in_load_order(l, &walk, tree->ifs[i++], file);
+                decide_in_load_order(l, walk, tree->ifs[i++], file);
             }
         }
     }
+}
+
+// The walk of load.h: from `preload`, Preload's index (-1 when the program
+// doesn't import it, Load_Options.no_preload), walked to its end first
+// (walk_placed), so Preload and every file it reaches come before the main
+// file, and their declarations first (load.h); then the main file and the
+// `further_files` after it, among whose indexes Preload's is (it's skipped
+// there, placed already), walked from where Preload's walk ended. Every
+// file read is placed: those named here where said, each other one at its
+// first #load in load order, at the latest at the #load that read it,
+// which is in a file placed before it. Each file's place is then its order
+// (Source_File.order, Ast_File.order), and the tree's lists are put in it.
+static void walk_in_load_order(Loading *l, s32 preload, s32 main_file, s32 further_files) {
+    Ast_File *tree = l->tree;
+    Diagnostics *d = l->d;
+    Walk walk = {};
+    place_in_load_order(&walk, preload);
+    walk_placed(l, &walk, 0);
+    s64 program = walk.files.count;
+    for (s32 f = main_file; f <= main_file + further_files; f++) place_in_load_order(&walk, f);
+    walk_placed(l, &walk, program);
     RIG_ASSERT(walk.files.count == d->files.count - main_file);
     // The files before the main file, none unless the caller's d had some,
     // are no part of the program, and keep their indexes.

@@ -73,13 +73,14 @@
 // Every program imports the module Preload (spec 2.14), with no #import:
 // what the language itself refers to. The loader looks for it in the
 // places as for any module (module_lookup), and reads its module.rig right
-// after the main file, before a workspace's further files, so it's file 1
-// of every program, named by its absolute path. From there it's known by
-// its identity as any file is: an #import "Preload"; or a #load of its
-// path reads nothing more, a further file that is it adds nothing, and a
-// main file that is it reads nothing more. Read second, it's placed first
-// in load order, before the main file (below), so its declarations come
-// first and win a clash: a program declaring a name Preload declares is
+// after the main file, before a workspace's further files, so it's file 1,
+// named by its absolute path, unless it's the main file itself (below).
+// From there it's known by its identity as any file is: an #import
+// "Preload"; or a #load of its path reads nothing more, a further file that
+// is it adds nothing, and a main file that is it reads nothing more. Read
+// second, it's placed first in load order, before the main file (below),
+// with every file it reaches, so its declarations come first and win a
+// clash: a program declaring a name Preload declares is
 // told so at its own declaration, naming Preload's (checker.h), and every
 // use of the name, Preload's own included, finds Preload's. When the
 // places have no Preload, or its module.rig can't be read, the loading
@@ -112,11 +113,11 @@
 //
 // A top-level #if (spec 4.9) is decided here, between loading and checking,
 // once every file outside every #if is read (the queue above). The files
-// are walked in load order, from Preload, then the main file and the
-// further files, each file's top-level #loads, #imports and #ifs in source
-// order: a #load
-// places the file it names after the files placed so far, unless it's
-// placed already, and an #if is decided where it is met, by a decider
+// are walked in load order, from Preload, and every file it reaches, then
+// the main file and the further files, each file's top-level #loads,
+// #imports and #ifs in source order: a #load places the file it names
+// after the files placed so far, unless it's placed already, and an #if is
+// decided where it is met, by a decider
 // (check_decider_new, checker.h) made at the first one, which knows the
 // declarations read before it: those outside every #if, the base. The
 // taken branch's declarations then join the tree, as if written in place
@@ -136,7 +137,7 @@
 // by and the tree's lists are put in (ast_sort_declarations), so the
 // declarations, the top-level #runs and the errors come file by file in it.
 // It differs from the reading order in Preload's place, read right after
-// the main file and placed before it, and when a taken branch's #load comes
+// the main file and placed before it with the files it reaches, and when a taken branch's #load comes
 // before a #load outside every #if: main.rig's `#if true { #load "b.rig"; }`
 // before its `#load "a.rig";` places b before a, though a is read first.
 // A file keeps what the reading order gave it, though: its index
