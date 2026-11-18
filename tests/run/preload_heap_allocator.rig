@@ -6,15 +6,17 @@
 puts :: (s: *u8) -> s32 #foreign libc;
 free :: (memory: *void) #foreign libc;
 
-// 8 ints from the allocator, written, grown to 16 with the first 8 kept,
-// and given back: true when every step worked.
+// 8 ints from the allocator, written, grown to 16 with the first 8 kept
+// and the new 8 written too, and given back: true when every step worked.
 round_trip :: (a: Allocator) -> bool {
     numbers : *int = a.proc(ALLOCATE, 8 * size_of(int), 0, null, a.data);
     if numbers == null { return false; }
     for 0..7 { (numbers + it).* = it; }
     numbers = a.proc(RESIZE, 16 * size_of(int), 8 * size_of(int), numbers, a.data);
     if numbers == null { return false; }
-    kept := (numbers + 7).* == 7;
+    for 8..15 { (numbers + it).* = it; }
+    kept := true;
+    for 0..15 { if (numbers + it).* != it { kept = false; } }
     a.proc(FREE, 0, 0, numbers, a.data);
     return kept;
 }

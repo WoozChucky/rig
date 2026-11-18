@@ -306,7 +306,7 @@ What Basic would do differently once Rig has it:
 - No type aliases, so the allocator's procedure type, the key comparison the tables' probe takes, and the comparisons of the sorts and `binary_search`, are written out wherever they're used, and a time is a struct of one field, `Time`, rather than an `int` of a type of its own.
 - No overloading or generics, so procedures are named by type (`min_int`, `min_float64`), the collections are untyped, handing out `*void`, sorting and searching take an element's size and compare through pointers, and there is one kind of table per kind of key, `Table` and `Int_Table`, with the same fields.
 - No way for a struct to take in another's fields, as Jai's `using` does, so both kinds of table entry repeat the fields of `Table_Entry_Header`, and the code they share reads an entry's start through it.
-- No enums, so an allocator's modes, a table entry's states and a file's modes are constants.
+- No enums, so a table entry's states and a file's modes are constants.
 - No command-line arguments: a program's start doesn't keep them for Rig code to read (#152).
 - No `Any` or variadic Rig procedures (#153, #150), so there is no formatted `print` (#154): a line is printed a piece at a time, with `print_string`, `print_int` and the rest.
 - No context (#156), so a procedure that allocates takes its allocator as an argument, and the file procedures copy a path for C into memory from the heap, since most of their signatures take no allocator (`read_entire_file`'s is for the file's contents).

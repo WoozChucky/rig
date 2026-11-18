@@ -1,9 +1,11 @@
-// Basic's allocators (issue #134): the heap, used directly, and an arena and
-// a pool, each given its memory by an allocator of this program's own that
-// counts what it asks the heap to do, or by one that gives nothing.
+// Preload's heap (issue #151), used directly, and Basic's allocators (issue
+// #134), an arena and a pool, each given its memory by an allocator of this
+// program's own that counts what it asks the heap to do, or by one that
+// gives nothing.
 //
 // The program also declares C's malloc itself, under C's own name, which
-// Basic leaves free to declare: Basic's own is c_malloc (issue #135).
+// Basic and Preload leave free to declare: Basic's own is c_malloc (issue
+// #135) and Preload's, which the heap calls, is __malloc.
 #import "Basic";
 
 malloc :: (size: u64) -> *void #foreign libc;
