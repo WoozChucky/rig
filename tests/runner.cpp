@@ -4,12 +4,14 @@
 // tests/run/NAME.rig is built with `RIG build tests/run/NAME.rig -o
 // .build/tests/NAME`, followed by the words of NAME.flags when there is one
 // (`--no-bounds-checks`; words separated by spaces, tabs or line breaks,
-// on any number of lines: add_flags), and run; its stdout must equal
-// NAME.out, its exit code the number in NAME.exit (0 when there's none),
-// and its stderr NAME.err (a runtime error's message, say), or be empty
-// when there's no NAME.err. What rig build itself prints to stdout, what
-// the program's top-level #runs print while compiling (spec 7.8), must
-// equal NAME.build.out, or be empty when there's none. A program prints
+// on any number of lines: add_flags), then --quiet, and run; its stdout
+// must equal NAME.out, its exit code the number in NAME.exit (0 when
+// there's none), and its stderr NAME.err (a runtime error's message, say),
+// or be empty when there's no NAME.err. What rig build itself prints to
+// stdout, what the program's top-level #runs print while compiling (spec
+// 7.8), must equal NAME.build.out, or be empty when there's none: --quiet
+// leaves out the report of its phases' times (spec 10.1), which differ
+// from one run to the next, so a .build.out holds none. A program prints
 // while compiling only from its top-level #runs: rig check runs its
 // expression #runs too, and must print nothing (check_tests).
 // On Windows the program's newlines are normalised first, since C's
@@ -46,7 +48,9 @@
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, its stdout is empty (none prints from a top-level #run), and it
-// writes neither an object file nor a program. A build program (spec 7.9)
+// writes neither an object file nor a program. It's built without --quiet,
+// as are the fixed cases below whose build fails, so an empty stdout also
+// shows that a build that fails prints no report. A build program (spec 7.9)
 // there is named build_*.rig, and built without -o, which rig refuses for
 // one; it must not make tests/errors/.build either, where its workspaces'
 // objects would go. In a .err, and in tests/build's expected.err (below),
@@ -72,12 +76,13 @@
 // After tests/errors, tests/build: each subdirectory NAME holding a
 // build.rig is a build program's case (spec 7.9), with the files of the
 // programs its workspaces build, at any depth (build_directory_test). It's
-// copied to .build/tests/build/NAME, emptied first, and `RIG build` runs
-// there with no file, so rig builds the copy's build.rig and writes its
-// programs and their .build there, never in tests/. rig's exit code must
-// be the number in NAME/expected.exit (0 when there's none), its stdout
-// NAME/expected.build.out (what the top-level #runs print while compiling,
-// the build program's and then each workspace's), and its stderr
+// copied to .build/tests/build/NAME, emptied first, and `RIG build --quiet`
+// runs there with no file, so rig builds the copy's build.rig and writes
+// its programs and their .build there, never in tests/. rig's exit code
+// must be the number in NAME/expected.exit (0 when there's none), its
+// stdout NAME/expected.build.out (what the top-level #runs print while
+// compiling, the build program's and then each workspace's, and no
+// report: --quiet, as for tests/run), and its stderr
 // NAME/expected.err (its placeholders as above), each empty when there's
 // none. NAME/expected.programs names the executables rig must build, one a
 // line, without the host's suffix (.exe on Windows): each is run in the
@@ -100,8 +105,16 @@
 // (workspace_output_order_test), tests/build/options once more, where the
 // workspaces whose bounds checks are left on by default, unoptimised and
 // optimised, stop at their index past the end (checked_workspace_test),
-// bin/unit-tests --interpret of two programs that call a #compiler
-// procedure, at run time and in a constant's #run (each refused as rig
+// rig build's report, without --quiet, checked by its shape, its times
+// adding up and its lines counted: of tests/run/hello.rig, its lines and
+// Preload's (report_test), of tests/build/two_workspaces, after what its
+// #runs print, the build program's block, each workspace's, then all
+// (build_program_report_test), and of tests/build/options, whose optimised
+// workspaces have an optimising line (optimised_report_test); and none
+// from tests/build/workspace_failures, which fails though a workspace of it
+// built (failed_workspace_report_test), bin/unit-tests --interpret of two
+// programs that call a #compiler procedure, at run time and in a
+// constant's #run (each refused as rig
 // build refuses it, with nothing run), of a build program with errors
 // (said as rig build says them), and of one without (which it refuses on
 // stderr before its top-level #runs: there's no main to run), rig build of
@@ -589,12 +602,15 @@ static String held_to_expected(Arena *a, String name, Process_Result *ran, Strin
     return {};
 }
 
-// A program that must build, printing its .build.out (nothing without
-// one), run and print its .out. {} when it passes, otherwise why not.
+// A program that must build, with --quiet, printing its .build.out (nothing
+// without one), run and print its .out. {} when it passes, otherwise why
+// not.
 static String run_test(Arena *a, String rig, String name) {
     String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
     Array<String> argv = build_command(a, rig, "tests/run", name, program);
     add_flags(a, &argv, name);
+    // No report: what rig build prints is the top-level #runs' alone.
+    array_add(&argv, str("--quiet"));
     String build_out = {};
     String why = build_program(a, argv, {}, program, &build_out);
     if (why.count) return why;
@@ -1008,11 +1024,12 @@ static String built_program_test(Arena *a, String program, String directory, Str
 }
 
 // `RIG build`, with no file, in `dir`, a copy of tests/build/NAME made
-// there (emptied first), its stdout and stderr in one pipe when `merged`.
-// False, with why not, when it couldn't be copied, or rig couldn't be run
-// or took too long.
+// there (emptied first), its stdout and stderr in one pipe when `merged`,
+// and with --quiet when `quiet`, so a build that succeeds prints no report
+// after what its #runs print. False, with why not, when it couldn't be
+// copied, or rig couldn't be run or took too long.
 static bool build_copy(Arena *a, String rig, String name, String dir, bool merged, Process_Result *built,
-                       String *why) {
+                       String *why, bool quiet = true) {
     String source = string_printf(a, "tests/build/" STR_FMT, STR_ARG(name));
     remove_tree(a, dir);
     if (os_file_exists(dir)) {
@@ -1027,6 +1044,7 @@ static bool build_copy(Arena *a, String rig, String name, String dir, bool merge
     Array<String> argv = {};
     array_add(&argv, rig);
     array_add(&argv, str("build"));
+    if (quiet) array_add(&argv, str("--quiet"));
     if (!merged) {
         bool started = run(a, argv, dir, built, why);
         array_free(&argv);
@@ -1061,8 +1079,8 @@ static Array<String> names_in(String list) {
 }
 
 // A case of tests/build: the directory tests/build/NAME, holding build.rig,
-// copied to .build/tests/build/NAME (emptied first), where `RIG build` runs
-// with no file. Its exit code, stdout and stderr must be NAME's
+// copied to .build/tests/build/NAME (emptied first), where `RIG build
+// --quiet` runs with no file. Its exit code, stdout and stderr must be NAME's
 // expected.exit, expected.build.out and expected.err (0 and nothing without
 // them; expected.err's @NO_SUCH_FILE@ replaced, no_such_file_message), and
 // no file expected.absent names, one a line, may be in the copy, as named,
@@ -1129,10 +1147,10 @@ static String build_directory_test(Arena *a, String rig, String name) {
     return why;
 }
 
-// `RIG build SUB/build.rig` run in `dir`, SUB a copy of tests/build/NAME
-// made there: rig must exit 0, write nothing to stderr, and print NAME's
-// expected.build.out (nothing when there's none). {} when it does,
-// otherwise why not.
+// `RIG build SUB/build.rig --quiet` run in `dir`, SUB a copy of
+// tests/build/NAME made there: rig must exit 0, write nothing to stderr,
+// and print NAME's expected.build.out (nothing when there's none). {} when
+// it does, otherwise why not.
 static String build_elsewhere(Arena *a, String rig, String dir, String name, String sub) {
     String source = string_printf(a, "tests/build/" STR_FMT, STR_ARG(name));
     String copy = string_printf(a, STR_FMT "/" STR_FMT, STR_ARG(dir), STR_ARG(sub));
@@ -1146,6 +1164,7 @@ static String build_elsewhere(Arena *a, String rig, String dir, String name, Str
     array_add(&argv, rig);
     array_add(&argv, str("build"));
     array_add(&argv, string_printf(a, STR_FMT "/build.rig", STR_ARG(sub)));
+    array_add(&argv, str("--quiet"));
     Process_Result built = {};
     String why = {};
     bool started = run(a, argv, dir, &built, &why);
@@ -1642,8 +1661,8 @@ struct Command_Case {
 };
 
 static const Command_Case COMMAND_CASES[] = {
-    {"no command", {nullptr}, 2, "usage: rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks]\n"},
-    {"an unknown command", {"frob"}, 2, "usage: rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks]\n"},
+    {"no command", {nullptr}, 2, "usage: rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks] [--quiet]\n"},
+    {"an unknown command", {"frob"}, 2, "usage: rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks] [--quiet]\n"},
     // Run in the repository's root, which has no build.rig.
     {"rig build with no file", {"build"}, 1, "rig: error: no file given and no build.rig in the current directory\n"},
     {"--no-bounds-checks twice", {"build", "tests/run/hello.rig", "--no-bounds-checks", "--no-bounds-checks"}, 2,
@@ -1653,6 +1672,7 @@ static const Command_Case COMMAND_CASES[] = {
      1,
      "rig: error: no file given and no build.rig in the current directory\n"},
     {"rig check with --no-bounds-checks", {"check", "--no-bounds-checks", "tests/run/hello.rig"}, 2, "usage: "},
+    {"--quiet twice", {"build", "tests/run/hello.rig", "--quiet", "--quiet"}, 2, "usage: "},
     {"rig build with two files", {"build", "tests/run/hello.rig", "tests/run/hello.rig"}, 2, "usage: "},
     {"-o with no name", {"build", "tests/run/hello.rig", "-o"}, 2, "usage: "},
     {"-o with an empty name", {"build", "tests/run/hello.rig", "-o", ""}, 2, "usage: "},
@@ -1887,6 +1907,272 @@ static String version_test(Arena *a, String rig, bool verbose) {
     }
     line_of(result.out, index, &exists);
     if (exists) return string_printf(a, "stdout has more than %lld lines", (long long)index);
+    return {};
+}
+
+// --- rig build's report ------------------------------------------------------
+//
+// A rig build that succeeds ends with a report of where its time went (spec
+// 10.1), unless it's given --quiet. Its times change from one run to the
+// next, so it's checked by its shape, every time, line count and rate made
+// a letter, and the times are held only to each other: a block's phases
+// add up to no more than its total. The line counts are known, and checked.
+
+// The lines of `text` as rig counts a file's: one for each '\n', and one
+// more when text follows the last.
+static s64 text_lines(String text) {
+    s64 lines = 0;
+    for (s64 i = 0; i < text.count; i++) {
+        if (text.data[i] == '\n') lines++;
+    }
+    if (text.count && text.data[text.count - 1] != '\n') lines++;
+    return lines;
+}
+
+// The number `digits` (all digits) is.
+static s64 digits_value(String digits) {
+    s64 value = 0;
+    for (s64 i = 0; i < digits.count; i++) value = value * 10 + (digits.data[i] - '0');
+    return value;
+}
+
+// Takes a time as the report prints it, "W.FF", and gives it in hundredths
+// of a millisecond; -1, taking nothing, when there's none.
+static s64 take_time(Cursor *c) {
+    s64 start = c->at;
+    String whole = take_run(c, DIGITS, -1);
+    String hundredths = {};
+    if (!whole.count || !take(c, ".") || !(hundredths = take_run(c, DIGITS, 2)).count) {
+        c->at = start;
+        return -1;
+    }
+    return digits_value(whole) * 100 + digits_value(hundredths);
+}
+
+// A report read back: `shape`, its text with every time "T" (a number
+// followed by " ms", with the spaces before it, becomes " T"), every line
+// count "L" and every rate "R"; `lines`, each total's and all's line count,
+// in order; `why`, {} when in every block the phases' times add up to no
+// more than its total, give or take 0.01 ms a phase (the rounding), else
+// why not.
+struct Read_Report {
+    String shape;
+    Array<s64> lines;  // the caller's to free
+    String why;
+};
+
+// A line with a time is a phase's when it's indented and has nothing after
+// " ms", a total's when it's indented and has its lines and rate after, and
+// all's when it isn't indented; a line with no time is a block's title.
+static Read_Report report_read(Arena *a, String text) {
+    Read_Report r = {};
+    r.shape = string_printf(a, "");
+    String title = {};
+    s64 phases_sum = 0, phases = 0;
+    for (s64 start = 0; start < text.count;) {
+        s64 end = start;
+        while (end < text.count && text.data[end] != '\n') end++;
+        String line = string_slice(text, start, end - start);
+        String newline = str(end < text.count ? "\n" : "");
+        start = end + 1;
+        // The time: a run of spaces, the number, then " ms".
+        s64 at = -1, time = -1;
+        Cursor c = {line, 0};
+        for (s64 i = 0; i < line.count && at < 0; i++) {
+            if (line.data[i] != ' ' || (i > 0 && line.data[i - 1] == ' ')) continue;
+            c.at = i;
+            take_run(&c, " ", -1);
+            time = take_time(&c);
+            if (time >= 0 && take(&c, " ms")) at = i;
+        }
+        if (at < 0) {
+            r.shape = string_printf(a, STR_FMT STR_FMT STR_FMT, STR_ARG(r.shape), STR_ARG(line), STR_ARG(newline));
+            title = line;
+            phases_sum = phases = 0;
+            continue;
+        }
+        String shaped = string_printf(a, STR_FMT STR_FMT " T ms", STR_ARG(r.shape), STR_ARG(string_slice(line, 0, at)));
+        s64 rest = c.at;
+        String lines = {};
+        bool counted = take(&c, "  ") && (lines = take_run(&c, DIGITS, -1)).count && take(&c, " lines, ") &&
+                       take_run(&c, DIGITS, -1).count && take(&c, " lines/s") && c.at == line.count;
+        if (counted) {
+            r.shape = string_printf(a, STR_FMT "  L lines, R lines/s" STR_FMT, STR_ARG(shaped), STR_ARG(newline));
+            array_add(&r.lines, digits_value(lines));
+        } else {
+            r.shape = string_printf(a, STR_FMT STR_FMT STR_FMT, STR_ARG(shaped),
+                                    STR_ARG(string_slice(line, rest, line.count - rest)), STR_ARG(newline));
+        }
+        bool indented = starts_with(line, " ");
+        if (indented && !counted) {
+            phases_sum += time;
+            phases++;
+        } else if (indented && phases_sum > time + phases && !r.why.count) {
+            r.why = string_printf(a, "the phases of '" STR_FMT "' add up to %lld.%02lld ms, more than its total",
+                                  STR_ARG(title), (long long)(phases_sum / 100), (long long)(phases_sum % 100));
+        }
+    }
+    return r;
+}
+
+// The shape of a block (report_read's) for an ordinary program or a
+// workspace titled `title`, with or without its optimising line.
+static String program_block_shape(Arena *a, String title, bool optimised) {
+    return string_printf(a,
+                         STR_FMT "\n"
+                                 "  loading T ms\n"
+                                 "  checking T ms\n"
+                                 "  #run T ms\n"
+                                 "  lowering T ms\n"
+                                 "  llvm module T ms\n"
+                                 "%s"
+                                 "  object file T ms\n"
+                                 "  linking T ms\n"
+                                 "  total T ms  L lines, R lines/s\n",
+                         STR_ARG(title), optimised ? "  optimising T ms\n" : "");
+}
+
+// The shape of a build program's block, build.rig's (rig build with no
+// file), which stops at #run, and of the all line that ends its report.
+static const char *BUILD_PROGRAM_BLOCK_SHAPE = "build.rig\n"
+                                               "  loading T ms\n"
+                                               "  checking T ms\n"
+                                               "  #run T ms\n"
+                                               "  total T ms  L lines, R lines/s\n";
+static const char *ALL_SHAPE = "all T ms  L lines, R lines/s\n";
+
+// rig build tests/run/hello.rig -o .build/tests/report: exit 0, nothing on
+// stderr, and stdout the report alone: one block, every phase but
+// optimising (rig build of a file is never optimised), adding up, and its
+// lines hello.rig's and Preload's, which every program imports (spec
+// 2.14). {} when it is, otherwise why not.
+static String report_test(Arena *a, String rig) {
+    String program = string_printf(a, ".build/tests/report%s", EXE);
+    remove(string_cstr(a, program));
+    Array<String> argv = {};
+    array_add(&argv, rig);
+    array_add(&argv, str("build"));
+    array_add(&argv, str("tests/run/hello.rig"));
+    array_add(&argv, str("-o"));
+    array_add(&argv, str(".build/tests/report"));
+    Process_Result built = {};
+    String why = {};
+    bool started = run(a, argv, {}, &built, &why);
+    array_free(&argv);
+    if (!started) return why;
+    if (built.exit_code != 0) {
+        return with_stderr(a, string_printf(a, "rig build exited with " STR_FMT, STR_ARG(exit_code_text(a, built.exit_code))),
+                           built.err);
+    }
+    if (built.err.count) return with_stderr(a, str("rig build wrote to stderr"), built.err);
+    if (!os_file_exists(program)) return string_printf(a, "rig build wrote no " STR_FMT, STR_ARG(program));
+    String hello = {}, preload = {};
+    if (!os_read_file(a, str("tests/run/hello.rig"), &hello) ||
+        !os_read_file(a, str("modules/Preload/module.rig"), &preload)) {
+        return str("can't read tests/run/hello.rig or modules/Preload/module.rig");
+    }
+    Read_Report r = report_read(a, built.out);
+    String expected = program_block_shape(a, str("tests/run/hello.rig"), false);
+    s64 lines = text_lines(hello) + text_lines(preload);
+    if (!string_eq(r.shape, expected)) {
+        why = first_difference(a, "the report's shape", expected, r.shape);
+    } else if (r.why.count) {
+        why = r.why;
+    } else if (r.lines[0] != lines) {
+        why = string_printf(a, "the report counts %lld lines, not hello.rig's and Preload's %lld",
+                            (long long)r.lines[0], (long long)lines);
+    }
+    array_free(&r.lines);
+    return why;
+}
+
+// A workspace a build program's report has a block for, in order.
+struct Report_Workspace {
+    const char *name;
+    bool optimised;
+};
+
+// tests/build/NAME built in .build/tests/report-NAME (build_copy, without
+// --quiet): exit 0, nothing on stderr, and stdout NAME's expected.build.out
+// (nothing when there's none), then the report: the build program's block,
+// each workspace's, `workspaces` in order, then all's line; its phases
+// adding up, and all's lines the blocks' summed. {} when it is, otherwise
+// why not.
+static String build_program_report(Arena *a, String rig, const char *name, const Report_Workspace *workspaces,
+                                   s64 count) {
+    String expected_out = {};
+    os_read_file(a, string_printf(a, "tests/build/%s/expected.build.out", name), &expected_out);
+    Process_Result built = {};
+    String why = {};
+    String dir = string_printf(a, ".build/tests/report-%s", name);
+    if (!build_copy(a, rig, str(name), dir, false, &built, &why, false)) return why;
+    if (built.exit_code != 0) {
+        return with_stderr(a, string_printf(a, "rig build exited with " STR_FMT, STR_ARG(exit_code_text(a, built.exit_code))),
+                           built.err);
+    }
+    if (built.err.count) return with_stderr(a, str("rig build wrote to stderr"), built.err);
+    String before = string_slice(built.out, 0, built.out.count < expected_out.count ? built.out.count : expected_out.count);
+    if (!string_eq(before, expected_out)) {
+        return first_difference(a, "rig build's stdout before the report", expected_out, before);
+    }
+    String expected = str(BUILD_PROGRAM_BLOCK_SHAPE);
+    for (s64 i = 0; i < count; i++) {
+        String title = string_printf(a, "workspace '%s'", workspaces[i].name);
+        expected = string_printf(a, STR_FMT STR_FMT, STR_ARG(expected),
+                                 STR_ARG(program_block_shape(a, title, workspaces[i].optimised)));
+    }
+    expected = string_printf(a, STR_FMT "%s", STR_ARG(expected), ALL_SHAPE);
+    Read_Report r = report_read(a, string_slice(built.out, before.count, built.out.count - before.count));
+    if (!string_eq(r.shape, expected)) {
+        why = first_difference(a, "the report's shape", expected, r.shape);
+    } else if (r.why.count) {
+        why = r.why;
+    } else {
+        s64 sum = 0;
+        for (s64 i = 0; i + 1 < r.lines.count; i++) sum += r.lines[i];
+        if (r.lines[r.lines.count - 1] != sum) {
+            why = string_printf(a, "all counts %lld lines, but its blocks %lld", (long long)r.lines[r.lines.count - 1],
+                                (long long)sum);
+        }
+    }
+    array_free(&r.lines);
+    return why;
+}
+
+// tests/build/two_workspaces's report: the build program's own phases, up
+// to #run, then greeter's and counter's, every phase but optimising, then
+// all, after what the #runs printed.
+static String build_program_report_test(Arena *a, String rig) {
+    const Report_Workspace workspaces[] = {{"greeter", false}, {"counter", false}};
+    return build_program_report(a, rig, "two_workspaces", workspaces, 2);
+}
+
+// tests/build/options's report: the workspaces built with optimize, fast
+// and checked_fast, have their optimising line, and the others none.
+static String optimised_report_test(Arena *a, String rig) {
+    const Report_Workspace workspaces[] = {
+        {"plain", false}, {"fast", true}, {"unchecked", false}, {"checked", false}, {"checked_fast", true},
+    };
+    return build_program_report(a, rig, "options", workspaces, 5);
+}
+
+// tests/build/workspace_failures built in .build/tests/report-failed
+// (build_copy, without --quiet): two of its workspaces fail and the last,
+// fine, builds, and rig exits 1 with nothing on stdout: a build that fails
+// prints no report, whatever it built. {} when it does, otherwise why not.
+static String failed_workspace_report_test(Arena *a, String rig) {
+    Process_Result built = {};
+    String why = {};
+    String dir = str(".build/tests/report-failed");
+    if (!build_copy(a, rig, str("workspace_failures"), dir, false, &built, &why, false)) return why;
+    if (built.exit_code != 1) {
+        return with_stderr(
+            a, string_printf(a, "rig build exited with " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, built.exit_code))),
+            built.err);
+    }
+    String fine = string_printf(a, STR_FMT "/fine%s", STR_ARG(dir), EXE);
+    if (!os_file_exists(fine)) return string_printf(a, "rig build wrote no " STR_FMT, STR_ARG(fine));
+    if (built.out.count) return first_difference(a, "rig build's stdout", {}, built.out);
     return {};
 }
 
@@ -2437,10 +2723,11 @@ static const Command_Case CHECK_CASES[] = {
     {"rig check with no file",
      {"check"},
      2,
-     "usage: rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks]\n"
+     "usage: rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks] [--quiet]\n"
      "       rig check FILE.rig [--stdin | --stdin-for FILE.rig]\n"},
     {"rig check with two files", {"check", "tests/run/hello.rig", "tests/run/hello.rig"}, 2, "usage: "},
     {"rig check with -o", {"check", "tests/run/hello.rig", "-o", ".build/tests/output.RIG"}, 2, "usage: "},
+    {"rig check with --quiet", {"check", "tests/run/hello.rig", "--quiet"}, 2, "usage: "},
     {"rig check with --stdin twice", {"check", "--stdin", "tests/run/hello.rig", "--stdin"}, 2, "usage: "},
     {"rig check of a file not ending in .rig",
      {"check", "tests/run/hello.out"},
@@ -3230,6 +3517,14 @@ int main(int argc, char **argv) {
            workspace_output_order_test(&a, rig, str("workspace_unreadable"), false), &passed, &failed);
     report("a workspace whose bounds checks are on by default is bounds-checked, optimised or not",
            checked_workspace_test(&a, rig), &passed, &failed);
+    report("rig build's report: every phase, hello.rig's and Preload's lines", report_test(&a, rig), &passed,
+           &failed);
+    report("a build program's report: its own phases, each workspace's, then all", build_program_report_test(&a, rig),
+           &passed, &failed);
+    report("an optimised workspace's report has its optimising line", optimised_report_test(&a, rig), &passed,
+           &failed);
+    report("a build program with a failed workspace prints no report", failed_workspace_report_test(&a, rig), &passed,
+           &failed);
     report("interpreted: a #compiler call refused when lowering, nothing run",
            interpreted_error_test(&a, unit_tests, "compiler_called_at_run_time"), &passed, &failed);
     report("interpreted: a constant's #run calling the Compiler module, refused as rig build refuses it",

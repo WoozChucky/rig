@@ -11,9 +11,9 @@
 // it fails. bin/unit-tests --interpret takes the same steps
 // (tests/unit/interpret_mode.cpp).
 //
-// rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks] reads the file (by
-// default build.rig in the current directory), Preload, the module every
-// program imports (spec 2.13), the files it #loads and the modules it
+// rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks] [--quiet] reads the
+// file (by default build.rig in the current directory), Preload, the module
+// every program imports (spec 2.13), the files it #loads and the modules it
 // #imports, lexes, parses and checks them, and stops there with the
 // diagnostics on stderr if anything was wrong (exit 1); a Preload it can't
 // find or read stops it before anything is parsed, said alone ("rig:
@@ -57,6 +57,16 @@
 // build program is an error in the build program, at the call that made
 // it, after its files' own errors, a #load that failed, say.
 //
+// A rig build that succeeds ends with its report (spec 10.1,
+// build_report.h), on stdout, after everything the #runs printed: each
+// phase's time, the total, and the lines compiled, a block for the program,
+// or for the build program and then each workspace, and for a build
+// program the whole build's time last. Each phase is measured once, around
+// it, on a clock that only goes forward (os_nanoseconds; Compilation says
+// where). --quiet leaves the report out. A build that fails prints none,
+// even when some workspaces were built, and rig check and interpret mode,
+// which take the same steps but not build(), print none either.
+//
 // The checker runs even when the parser found errors, so a syntax error in
 // one procedure and a type error in another are reported in one build. A
 // declaration the parser gave up on stays in the tree as a broken entry, its
@@ -71,6 +81,7 @@
 // (a/hello.rig, b/hello.rig) share .build/hello.o: one at a time, they're
 // fine; at the same time, one could link the other's object.
 
+#include "build_report.h"
 #include "compiler_module.h"
 #include "link.h"
 #include "load.h"
@@ -131,12 +142,21 @@ String executable_path(Arena *a, String output, String name, Target t) {
 // compiler_module_call with the compilation's Build_State: in a build
 // program they make its workspaces, and in any other create_workspace
 // fails.
+//
+// Each step puts its phase's time in `times`, for rig build's report
+// (build_report.h), read once around the step on the monotonic clock
+// (os_nanoseconds): compilation_load loading's, and the lines read;
+// compilation_check checking, less the expression #runs' time, which
+// compilation_end_runs takes from the world as #run's, the top-level runs'
+// with it; compilation_lower lowering; emit_and_link LLVM's three parts and
+// linking. The total is the caller's (build_steps, build_workspace).
 struct Compilation {
     Arena *arena;
     Diagnostics d;
     Ast_File *tree;
     Build_State build;    // its calls of the Compiler module (compiler_module_call)
     Compile_Time *world;  // from compilation_check until compilation_end_runs
+    Build_Times times;
 };
 
 // Loads the program whose main file, named `path`, holds `text`, read by
@@ -177,6 +197,7 @@ static void compilation_load_text(Compilation *c, String path, String text, cons
 // loader puts them right after the main file (load.h).
 static bool compilation_load(Compilation *c, String path, bool from_stdin, String stdin_for,
                              Array<String> more_files = {}) {
+    s64 start = os_nanoseconds();
     Arena *a = c->arena;
     String text = {};
     bool read = from_stdin ? os_read_stdin(a, &text) : os_read_file(a, path, &text);
@@ -218,6 +239,10 @@ static bool compilation_load(Compilation *c, String path, bool from_stdin, Strin
     options.more_texts = more_texts;
     compilation_load_text(c, path, text, &options);
     array_free(&more_texts);
+    // Loading ends here: what's below only decides whether to stop, and a
+    // build that stops prints no report.
+    c->times.phases[PHASE_LOADING] = os_nanoseconds() - start;
+    c->times.lines = program_lines(&c->d);
     // No Preload to be found or read: the loader stopped before parsing
     // anything, so nothing is to be checked, and what it says about
     // stdin_for would be about a program it never read.
@@ -242,12 +267,16 @@ static bool compilation_load(Compilation *c, String path, bool from_stdin, Strin
 // calls compiler_module_call answers on c->build, a build program's or not
 // as the tree says (ast_is_build_program). From here, a #run's exit() prints
 // the diagnostics found so far as it ends the process (diag_print_at_exit).
+// The expression #runs run while it checks, and their time is #run's, not
+// checking's: the world is new, so all it has run by the end is theirs.
 static bool compilation_check(Compilation *c) {
+    s64 start = os_nanoseconds();
     diag_print_at_exit(&c->d);
     c->world = compile_time_new(&c->d);
     c->build.is_build_program = ast_is_build_program(c->tree);
     compile_time_set_compiler(c->world, compiler_module_call, &c->build);
     check(c->tree, c->arena, &c->d, c->world);
+    c->times.phases[PHASE_CHECKING] = os_nanoseconds() - start - compile_time_nanoseconds(c->world);
     return c->d.error_count == 0;
 }
 
@@ -259,9 +288,11 @@ static bool compilation_run(Compilation *c) {
 }
 
 // The runs are over: an exit() no longer prints the diagnostics, and the
-// compile-time world is freed. Nothing when there's no world.
+// compile-time world is freed, its runs' time, expression and top-level,
+// taken first as #run's. Nothing when there's no world.
 static void compilation_end_runs(Compilation *c) {
     if (!c->world) return;
+    c->times.phases[PHASE_RUN] = compile_time_nanoseconds(c->world);
     diag_print_at_exit(nullptr);
     compile_time_free(c->world);
     c->world = nullptr;
@@ -275,7 +306,9 @@ static void compilation_end_runs(Compilation *c) {
 // the debug information does; the module keeps its own copies.
 static Ir_Module *compilation_lower(Compilation *c, bool bounds_checks) {
     s64 errors = c->d.error_count;
+    s64 start = os_nanoseconds();
     Ir_Module *module = ir_lower(c->tree, &c->d, c->arena, bounds_checks);
+    c->times.phases[PHASE_LOWERING] = os_nanoseconds() - start;
     return c->d.error_count == errors ? module : nullptr;
 }
 
@@ -311,7 +344,9 @@ static const char *object_extension(Target t) {
 // the object file `object` in the directory `objects`, made if it isn't
 // there, and linked into the executable `executable`; returns the exit
 // code. Lowering's errors are printed as diagnostics, and nothing is
-// written; the rest are said as "rig: error: ...".
+// written; the rest are said as "rig: error: ...". c->times gets LLVM's
+// parts' times (Llvm_Times) and linking's, and says it was lowered, and
+// optimised when it was.
 static int emit_and_link(Compilation *c, bool bounds_checks, bool optimize, String objects, String object,
                          String executable) {
     // stdout is buffered when it's a pipe: what the #runs printed comes out
@@ -331,7 +366,14 @@ static int emit_and_link(Compilation *c, bool bounds_checks, bool optimize, Stri
         return 1;
     }
     String error = {};
-    if (!llvm_emit_object(module, target, object, optimize, a, &error)) {
+    Llvm_Times llvm = {};
+    bool emitted = llvm_emit_object(module, target, object, optimize, a, &error, &llvm);
+    c->times.lowered = true;
+    c->times.optimised = optimize;
+    c->times.phases[PHASE_LLVM_MODULE] = llvm.module;
+    c->times.phases[PHASE_OPTIMISING] = llvm.optimising;
+    c->times.phases[PHASE_OBJECT] = llvm.object;
+    if (!emitted) {
         // LLVM's message is the system's alone ("permission denied"); the
         // path says which file.
         fprintf(stderr, "rig: error: cannot write '" STR_FMT "': " STR_FMT "\n", STR_ARG(object), STR_ARG(error));
@@ -339,7 +381,9 @@ static int emit_and_link(Compilation *c, bool bounds_checks, bool optimize, Stri
     }
     Array<String> object_files = {};
     array_add(&object_files, object);
+    s64 start = os_nanoseconds();
     bool linked = link_executable(a, target, object_files, executable, &error);
+    c->times.phases[PHASE_LINKING] = os_nanoseconds() - start;
     array_free(&object_files);
     if (!linked) {
         // The linker's own output, or what's missing, then rig's verdict.
@@ -420,8 +464,11 @@ static bool workspace_steps(Compilation *build, Build_Workspace *w, Compilation 
 // program that is itself a build program is an error in `build`'s
 // diagnostics instead, at the create_workspace call that made it, printed
 // right then, after the errors loading its files found, and isn't checked.
-// True when it built.
-static bool build_workspace(Compilation *build, Build_Workspace *w) {
+// True when it built. `block` gets its part of rig build's report, titled
+// "workspace 'NAME'" in `build`'s arena: its compilation's times, and its
+// total, from here to its end.
+static bool build_workspace(Compilation *build, Build_Workspace *w, Report_Block *block) {
+    s64 start = os_nanoseconds();
     // stdout is buffered when it's a pipe: what the build program's and the
     // earlier workspaces' #runs printed comes out before a file of this one
     // that can't be read is said, as diag_print has it.
@@ -432,6 +479,11 @@ static bool build_workspace(Compilation *build, Build_Workspace *w) {
     bool built = workspace_steps(build, w, &c);
     compilation_free(&c);
     arena_free(&arena);
+    // load_shown_name, as the build program's messages show a name.
+    String name = load_shown_name(build->arena, w->name);
+    block->title = string_printf(build->arena, "workspace '" STR_FMT "'", STR_ARG(name));
+    block->times = c.times;
+    block->times.total = os_nanoseconds() - start;
     return built;
 }
 
@@ -442,8 +494,8 @@ static bool build_workspace(Compilation *build, Build_Workspace *w) {
 // create_workspace call that made it, and these are printed together. Then
 // each workspace with files is built (build_workspace), in the order they
 // were made, whether one before it failed or not; the exit code is 1 when
-// anything failed.
-static int build_workspaces(Compilation *c) {
+// anything failed. `report` gets a block for each workspace built.
+static int build_workspaces(Compilation *c, Array<Report_Block> *report) {
     Build_State *s = &c->build;
     if (!s->workspaces.count) {
         diag_error(&c->d, c->tree->compiler_pos, "the build program created no workspace");
@@ -462,7 +514,13 @@ static int build_workspaces(Compilation *c) {
     bool failed = c->d.error_count > 0;
     for (s64 i = 0; i < s->workspaces.count; i++) {
         Build_Workspace *w = &s->workspaces[i];
-        if (w->files.count && !build_workspace(c, w)) failed = true;
+        if (!w->files.count) continue;
+        Report_Block block = {};
+        if (build_workspace(c, w, &block)) {
+            array_add(report, block);
+        } else {
+            failed = true;
+        }
     }
     return failed ? 1 : 0;
 }
@@ -473,8 +531,12 @@ static int build_workspaces(Compilation *c) {
 // --no-bounds-checks, since its build options decide what they would (exit
 // 2, said for -o alone when both are given), before anything runs. A
 // failed top-level #run stops the build there (exit 1): no workspace is
-// built.
-static int build_steps(Compilation *c, String path, String output, bool bounds_checks) {
+// built. `report` gets the program's block of rig build's report, titled
+// `path`, its total from here to its executable written; or a build
+// program's, its total from here to its #runs' end, and then each
+// workspace's (build_workspaces).
+static int build_steps(Compilation *c, String path, String output, bool bounds_checks, Array<Report_Block> *report) {
+    s64 start = os_nanoseconds();
     if (!compilation_load(c, path, false, {})) return 1;
     if (!compilation_check(c)) {
         compilation_print(c);
@@ -500,15 +562,33 @@ static int build_steps(Compilation *c, String path, String output, bool bounds_c
         return 1;
     }
     compilation_end_runs(c);
-    if (build_program) return build_workspaces(c);
-    return build_executable(c, path, output, bounds_checks);
+    if (build_program) {
+        c->times.total = os_nanoseconds() - start;
+        array_add(report, {path, c->times});
+        return build_workspaces(c, report);
+    }
+    int status = build_executable(c, path, output, bounds_checks);
+    c->times.total = os_nanoseconds() - start;
+    array_add(report, {path, c->times});
+    return status;
 }
 
 // rig build's work; returns the exit code. `output` may be {}: the default.
-static int build(Arena *a, String path, String output, bool bounds_checks) {
+// A build that succeeds ends with its report (build_report.h) on stdout,
+// unless `quiet`: after everything the #runs printed, every workspace's
+// included, and with the whole build's time last, from here to its end.
+static int build(Arena *a, String path, String output, bool bounds_checks, bool quiet) {
+    s64 start = os_nanoseconds();
     Compilation c = {};
     c.arena = a;
-    int status = build_steps(&c, path, output, bounds_checks);
+    Array<Report_Block> report = {};
+    int status = build_steps(&c, path, output, bounds_checks, &report);
+    if (status == 0 && !quiet) {
+        String text = build_report_text(a, report, os_nanoseconds() - start);
+        fwrite(text.data, 1, (size_t)text.count, stdout);
+        fflush(stdout);
+    }
+    array_free(&report);
     compilation_free(&c);
     return status;
 }
@@ -526,9 +606,11 @@ static bool source_named_rig(String path) {
 }
 
 // rig build's command line: the words after "build", [FILE.rig] [-o OUTPUT]
-// [--no-bounds-checks], in any order. Returns the exit code; 2 with the
-// usage for a malformed line (two files, -o with no name or an empty one,
-// -o twice, --no-bounds-checks twice, or rig check's --stdin-for anywhere,
+// [--no-bounds-checks] [--quiet], in any order; --quiet leaves out the
+// report (build), and a build program may be given it, as it isn't a build
+// option. Returns the exit code; 2 with the usage for a malformed line (two
+// files, -o with no name or an empty one, -o twice, --no-bounds-checks
+// twice, --quiet twice, or rig check's --stdin-for anywhere,
 // -o's name included: a build is of the files on disk, and the word is a
 // mistake for rig check, not a file's name). With no file, it builds
 // build.rig in the current directory, the build program's usual name (spec
@@ -544,7 +626,7 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
         }
     }
     String path = {}, output = {};
-    bool have_path = false, have_output = false, bounds_checks = true;
+    bool have_path = false, have_output = false, bounds_checks = true, quiet = false;
     for (s64 i = 0; i < words.count; i++) {
         if (string_eq(words[i], str("--no-bounds-checks"))) {
             if (!bounds_checks) {
@@ -552,6 +634,12 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
                 return 2;
             }
             bounds_checks = false;
+        } else if (string_eq(words[i], str("--quiet"))) {
+            if (quiet) {
+                print_usage();
+                return 2;
+            }
+            quiet = true;
         } else if (string_eq(words[i], str("-o"))) {
             if (i + 1 >= words.count || have_output || words[i + 1].count == 0) {
                 print_usage();
@@ -579,7 +667,7 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
         fprintf(stderr, "rig: error: the output '" STR_FMT "' ends in .rig; is it the source file?\n", STR_ARG(output));
         return 1;
     }
-    return build(a, path, output, bounds_checks);
+    return build(a, path, output, bounds_checks, quiet);
 }
 
 // rig check's command line: the words after "check", FILE.rig [--stdin |
@@ -592,7 +680,8 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
 // --stdin twice, --stdin-for with no name or an empty one, twice, or with
 // --stdin, or -o: check writes nothing, so there is no output to name, nor
 // --no-bounds-checks: it is the program's, which is never lowered, not a
-// #run's code's), with the usage. The word after --stdin-for is its
+// #run's code's, nor --quiet: check prints no report to leave out), with the
+// usage. The word after --stdin-for is its
 // file whatever it is, as -o's is its output: in --stdin-for --stdin, the
 // file is named --stdin, which isn't a .rig file.
 //
@@ -638,7 +727,8 @@ int command_check(Arena *a, Array<String> words, void (*print_usage)()) {
         } else if (string_eq(words[i], str("--stdin")) && !from_stdin && !have_stdin_for) {
             from_stdin = true;
         } else if (string_eq(words[i], str("--stdin")) || string_eq(words[i], str("-o")) ||
-                   string_eq(words[i], str("--no-bounds-checks")) || have_path) {
+                   string_eq(words[i], str("--no-bounds-checks")) || string_eq(words[i], str("--quiet")) ||
+                   have_path) {
             print_usage();
             return 2;
         } else {
