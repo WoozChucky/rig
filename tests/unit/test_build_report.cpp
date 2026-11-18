@@ -21,6 +21,9 @@ TEST(milliseconds_text_has_two_decimals_rounded_half_up) {
     CHECK_STR(milliseconds_text(&a, 4999), "0.00");
     CHECK_STR(milliseconds_text(&a, 5000), "0.01");
     CHECK_STR(milliseconds_text(&a, 125000), "0.13");
+    // Rounding the hundredths carries into the whole milliseconds.
+    CHECK_STR(milliseconds_text(&a, 999999), "1.00");
+    CHECK_STR(milliseconds_text(&a, 9995000), "10.00");
     CHECK_STR(milliseconds_text(&a, 42810000), "42.81");
     CHECK_STR(milliseconds_text(&a, 1234567890000), "1234567.89");
     arena_free(&a);

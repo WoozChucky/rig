@@ -1,5 +1,6 @@
 // build_report.h: the text of rig build's report (spec 10.1), which a build
-// that succeeds ends with, on its standard output: where its time went.
+// that succeeds ends with, on its standard output, unless --quiet is given:
+// where its time went.
 //
 // A block a compilation: an ordinary program's, or a build program's and
 // then each workspace's it built (spec 7.9). A block has a title line, a
