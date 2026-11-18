@@ -1,0 +1,8 @@
+// A #run's result can't hold a type's description, nor an Any (issue
+// #153, spec 7.8): each holds an address in the compiler's memory.
+as_any :: (a: Any) -> Any { return a; }
+INFO :: #run type_info(int);
+HELD :: #run as_any(5);
+main :: () {
+    info := #run type_info(u8);
+}

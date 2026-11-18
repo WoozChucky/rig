@@ -7702,3 +7702,45 @@ TEST(several_results_dont_convert_to_any) {
               "5:5: a value of type 'int' doesn't convert to 'Any' implicitly\n");
     arena_free(&a);
 }
+
+TEST(a_run_describes_types_declared_after_it) {
+    // A #run runs in the declaration pass, before resolve_late_fields: the
+    // structs a description reaches, Late and, only through Late's pointer,
+    // Later, are laid out and their late fields made by the walk, so the
+    // interpreter describes them whole, as compiled code does.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "LATER :: #run pointee_size(type_info(Late));\n"
+                                 "TAG :: #run fields(Late.{});\n"
+                                 "pointee_size :: (t: *Type_Info) -> int {\n"
+                                 "    s := cast(*Type_Info_Struct) t;\n"
+                                 "    return (cast(*Type_Info_Pointer) s.members[0].type).pointer_to.size;\n"
+                                 "}\n"
+                                 "fields :: (a: Any) -> int { return (cast(*Type_Info_Struct) a.type).members.count; }\n"
+                                 "Late :: struct { next: *Later; }\n"
+                                 "Later :: struct { a: u8; b: int; }\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    const char *names[] = {"LATER", "TAG"};
+    s64 values[] = {16, 1};
+    for (s64 i = 0; i < 2; i++) {
+        Ast *k = top_level_named(tree, names[i]);
+        CHECK_EQ(k->kind, AST_CONST);
+        CHECK(k->is_constant);
+        CHECK_EQ(k->constant, values[i]);
+    }
+    arena_free(&a);
+}
+
+TEST(describing_a_struct_being_laid_out_is_a_circle) {
+    // Describing *S describes S, which needs S's layout: in one of S's own
+    // counts that's a circle, said at the struct, as reaching S by value is.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "S :: struct { a: [#run one(type_info(*S))]u8; }\n"
+                                     "one :: (t: *Type_Info) -> int { return 1; }\n"
+                                     "main :: () { }\n"),
+              "1:1: 'S' is defined in terms of itself\n");
+    arena_free(&a);
+}

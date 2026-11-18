@@ -730,8 +730,8 @@ static bool walk_described(Reach *r, Type *t);
 
     FIELDS :: #run field_count(type_info(Late));
     LATER_SIZE :: #run pointee_size(type_info(Late), 1);
-    SAME :: #run type_info(Late) == type_info(Late);
-    DIFFERENT :: #run type_info(int) == type_info(s64);
+    SAME :: #run (type_info(Late) == type_info(Late));
+    DIFFERENT :: #run (type_info(int) == type_info(s64));
     TAG :: #run tag_of(Late.{});
 
     field_count :: (t: *Type_Info) -> int { return (cast(*Type_Info_Struct) t).members.count; }

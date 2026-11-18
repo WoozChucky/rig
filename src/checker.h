@@ -545,12 +545,16 @@
 //   walk): the procedures its code calls or names, whose bodies are checked
 //   there and then if their turn hasn't come (check_reached_body), the
 //   globals and constants it names, and the struct types of what it
-//   reaches. An error anywhere there stops it, saying nothing new: the
-//   error was said where it is. The #run keeps its type but has no value,
-//   and what needs that value (an array's count, a constant, a global)
-//   says nothing more either. Each body, global and constant records
-//   whether its own check had errors (Ast_Proc.had_errors,
-//   Ast_Var.had_errors, Ast_Const.had_errors).
+//   reaches. A type it describes (type_info(T), a value converted to Any)
+//   has every struct its description reaches laid out, behind pointers
+//   too, and their late fields made: the interpreter makes the
+//   descriptions as it runs, so a #run describes a struct declared after
+//   it as compiled code does (spec 3.16, 10.8). An error anywhere there
+//   stops it, saying nothing new: the error was said where it is. The
+//   #run keeps its type but has no value, and what needs that value (an
+//   array's count, a constant, a global) says nothing more either. Each
+//   body, global and constant records whether its own check had errors
+//   (Ast_Proc.had_errors, Ast_Var.had_errors, Ast_Const.had_errors).
 // - It runs in the compilation's one compile-time world (run.h), and its
 //   result is baked into the tree, a typed constant (run.cpp): a number, a
 //   bool or null as one, a procedure value as the procedure's name, and
@@ -577,8 +581,9 @@
 //   one whose value the body needs, through a constant say) is a circle,
 //   "'f' is defined in terms of itself", at the #run, as a global's is
 //   (spec 4.8): the bodies in it have errors, and the globals in it no
-//   type. So is a struct a #run in one of its counts reaches, by value or
-//   through a pointer it moves or indexes, while its layout is under way:
+//   type. So is a struct a #run in one of its counts reaches, by value,
+//   through a pointer it moves or indexes, or in a type it describes
+//   (type_info(*S)), while its layout is under way:
 //   "'S' is defined in terms of itself", at the struct. Bodies checked
 //   inside one another nest as declarations do (at most MAX_DEPTH levels
 //   deep, open_declaration), a body's own levels its blocks and the
