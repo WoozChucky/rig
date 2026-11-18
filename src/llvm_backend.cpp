@@ -1537,7 +1537,8 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
         const char *name = (const char *)v->name.data;
         unsigned line = (unsigned)v->pos.line;
         if (v->kind == IR_VAR_GLOBAL) {
-            // Data: its const.N, in its block (see above).
+            // Data, a pointer to a literal or a procedure that hides a name:
+            // its const.N, in its block (see above).
             LLVMMetadataRef variable = LLVMDIBuilderCreateGlobalVariableExpression(
                 b->debug, scope, name, (size_t)v->name.count, "", 0, file, line, type, 1, plain, nullptr, 0);
             LLVMGlobalAddDebugInfo(llvm_global(body, v->value), variable);

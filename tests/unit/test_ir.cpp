@@ -3121,8 +3121,7 @@ TEST(a_constant_that_hides_a_name_starts_a_scope) {
                                                 "}\n"));
     String f = proc_ir(ir, "f");
     CHECK(contains(f, "  ; scope 1 in 0 at 3:11\n"));
-    CHECK(contains(f, "  ; var RATIO int slot %"));
-    CHECK(contains(f, " in 1 at 3:11\n"));
+    CHECK(contains(f, "  ; var RATIO int slot %0 in 1 at 3:11\n"));
     String main = proc_ir(ir, "main");
     CHECK(contains(main, "  ; scope 1 in 0 at 6:5\n"
                          "  ; scope 2 in 1 at 8:5\n"
@@ -3133,8 +3132,7 @@ TEST(a_constant_that_hides_a_name_starts_a_scope) {
                          "  ; scope 7 in 6 at 16:9\n"));
     CHECK(contains(main, "  ; var LIMIT int constant 99 in 1 at 6:5\n"));
     CHECK(contains(main, "  ; var STEP int constant 2 in 2 at 10:9\n"));
-    CHECK(contains(main, "  ; var LIMIT int slot %"));
-    CHECK(contains(main, " in 5 at 13:9\n"));
+    CHECK(contains(main, "  ; var LIMIT int slot %6 in 5 at 13:9\n"));
     CHECK(contains(main, "  ; var b int constant 4 in 7 at 16:9\n"));
     arena_free(&a);
 }
@@ -3166,9 +3164,38 @@ TEST(a_procedure_constant_that_hides_a_name_starts_a_scope) {
     CHECK(contains(main, "  ; scope 1 in 0 at 6:5\n"
                          "  ; scope 2 in 1 at 8:5\n"
                          "  ; scope 3 in 2 at 9:9\n"));
-    CHECK(contains(main, "  ; var OP (int, int) -> int global @const."));
-    CHECK(contains(main, " in 1 at 6:5\n"));
+    CHECK(contains(main, "  ; var OP (int, int) -> int global @const.0 in 1 at 6:5\n"));
     CHECK(contains(main, "  ; var add int constant 5 in 3 at 9:9\n"));
+    arena_free(&a);
+}
+
+TEST(a_variable_that_hides_a_procedure_starts_a_scope) {
+    // A procedure is a name a debugger shows: a variable that hides one
+    // starts a scope at its declaration, as one hiding a variable does, and
+    // so does a declaration of several names, one of which hides one.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                          "add :: (a: int, b: int) -> int { return a + b; }\n"  // 1
+                                                          "two :: () -> int, int { return 1, 2; }\n"             // 2
+                                                          "main :: () {\n"                                       // 3
+                                                          "    x := 1;\n"                                        // 4
+                                                          "    {\n"                                              // 5
+                                                          "        add := 3;\n"                                  // 6
+                                                          "        x += add;\n"                                  // 7
+                                                          "    }\n"
+                                                          "    {\n"                                              // 9
+                                                          "        k, add := two();\n"                           // 10
+                                                          "        x += k + add;\n"                              // 11
+                                                          "    }\n"
+                                                          "}\n")),
+                          "main");
+    CHECK(contains(main, "  ; scope 1 in 0 at 5:5\n"
+                         "  ; scope 2 in 1 at 6:9\n"
+                         "  ; scope 3 in 0 at 9:5\n"
+                         "  ; scope 4 in 3 at 10:9\n"));
+    CHECK(contains(main, "  ; var add int slot %2 in 2 at 6:9\n"));
+    CHECK(contains(main, "  ; var k int slot %7 in 4 at 10:9\n"));
+    CHECK(contains(main, "  ; var add int slot %8 in 4 at 10:12\n"));
     arena_free(&a);
 }
 
@@ -3261,11 +3288,36 @@ TEST(a_constant_after_a_return_is_recorded) {
                                                           "}\n")),
                           "main");
     CHECK(!contains(main, "; var LIMIT "));
-    CHECK(contains(main, "  ; var NAME string global @const."));
-    CHECK(contains(main, " in 0 at 6:5\n"));
+    CHECK(contains(main, "  ; var NAME string global @const.0 in 0 at 6:5\n"));
     CHECK(contains(main, "  ; var W int constant 1 in 0 at 7:"));
     CHECK(!contains(main, "; var INNER "));
     CHECK_EQ(count_of(main, "  ; scope "), 2);
+    arena_free(&a);
+}
+
+TEST(a_constant_after_a_block_that_returns_is_recorded) {
+    // A standalone block is lowered into the IR block around it, so after
+    // one that returns, the code around can't go on either: the constants
+    // after it are recorded in the body's scope, but one that hides a name
+    // isn't, a procedure's (OP) included, and starts no scope (main's one
+    // scope is the block's).
+    Arena a = arena_make();
+    String main = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                          "LIMIT :: 12;\n"                                       // 1
+                                                          "OP :: 5;\n"                                           // 2
+                                                          "add :: (a: int, b: int) -> int { return a + b; }\n"  // 3
+                                                          "main :: () {\n"                                       // 4
+                                                          "    x := 1;\n"                                        // 5
+                                                          "    { x += 1; return; }\n"                            // 6
+                                                          "    LIMIT :: 3;\n"                                    // 7
+                                                          "    OP :: add;\n"                                     // 8
+                                                          "    STEP :: 2;\n"                                     // 9
+                                                          "}\n")),
+                          "main");
+    CHECK(!contains(main, "; var LIMIT "));
+    CHECK(!contains(main, "; var OP "));
+    CHECK(contains(main, "  ; var STEP int constant 2 in 0 at 9:5\n"));
+    CHECK_EQ(count_of(main, "  ; scope "), 1);
     arena_free(&a);
 }
 
@@ -3293,8 +3345,7 @@ TEST(a_constant_after_a_hiding_one_is_in_its_blocks_scope) {
     CHECK(contains(main, "  ; scope 2 in 1 at 6:9\n"));
     CHECK(contains(main, "  ; var LIMIT int constant 99 in 2 at 6:9\n"));
     CHECK(contains(main, "  ; var STEP int constant 2 in 1 at 7:9\n"));
-    CHECK(contains(main, "  ; var NAME string global @const."));
-    CHECK(contains(main, " in 1 at 8:9\n"));
+    CHECK(contains(main, "  ; var NAME string global @const.0 in 1 at 8:9\n"));
     CHECK(contains(main, "  ; var W int constant 1 in 1 at 9:"));
     arena_free(&a);
 }

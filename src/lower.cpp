@@ -273,7 +273,8 @@ struct Deferred {
                   // lowering's errors again (Lowering.repeating)
 };
 
-// A data constant recorded for a debugger (add_constant), whose const.N is
+// A constant recorded for a debugger at a const.N (add_constant: data, a
+// pointer to a literal, or a procedure that hides a name), whose const.N is
 // found once every body is lowered (resolve_constant_globals): the Ir_Var
 // is proc->vars[var], or module->constants[var] when proc is null.
 struct Pending_Constant {
@@ -304,16 +305,18 @@ struct Lowering {
     // Each string literal node's str.N, by pointer_key: one per literal,
     // however many uses and constants reach it (literal_global).
     Table<s32> literal_globals;
-    // Each data constant's const.N, by pointer_key, made once a use needs
-    // it (constant_global) or, for one no code reads, after every body
-    // (resolve_constant_globals); and each expression #run's baked
-    // aggregate's (run_global).
+    // Each constant's const.N, by pointer_key, made once a use needs it (a
+    // data constant's bytes read at run time: constant_global) or, for one
+    // no code reads, after every body (resolve_constant_globals: data, a
+    // pointer to a literal, a procedure that hides a name); and each
+    // expression #run's baked aggregate's (run_global).
     Table<s32> constant_globals;
     s32 constant_count;       // the const.N globals made so far
     // The constants recorded for a debugger (ir.h's "Constants"): each
     // top-level one's index in module->constants, by name, which a body's
-    // declaration may hide (hides_a_name); and the data constants whose
-    // const.N is found after every body (resolve_constant_globals).
+    // declaration may hide (hides_a_name); and those at a const.N (data, a
+    // pointer to a literal, a procedure that hides a name), whose const.N is
+    // found after every body (resolve_constant_globals).
     Table<s32> constant_index;
     Array<Pending_Constant> pending_constants;
     bool for_debugger;        // the const.N being made is for a debugger alone, which no code
@@ -356,7 +359,7 @@ struct Lowering {
     s32 block_scope;          // the scope of the block whose statements are being lowered (lower_block),
                               // which a hiding declaration's doesn't replace: where a constant that
                               // hides nothing is recorded (lower_statement's AST_CONST)
-    bool is_entry;           // the procedure being lowered is Rig's main, C's main: its returns
+    bool is_entry;            // the procedure being lowered is Rig's main, C's main: its returns
                               // give C's int, 0
     Array<Ast_Proc *> sources;  // by index in module->procs, whole or on demand: the procedure of the
                                 // source each lowers; null, or past its end, for the compiler's own
@@ -504,13 +507,15 @@ static void add_constant(Lowering *l, Ast_Const *c, s32 scope) {
 
 // Whether a local or a constant named `name`, declared here, hides a name
 // a debugger shows here: a global variable, a top-level constant, a
-// procedure (a debugger knows it by its name), a parameter, or a local or a
-// constant of the current scope or of one around it (one of a block that
-// has ended is visible no more). Such a declaration starts a scope of its
-// own (lower_statement says why). On demand, a global or a procedure no
-// body has used yet isn't seen, nor any constant, which that lowering
-// doesn't record; that changes only the scopes, which a compile-time
-// module, never compiled, gives no debugger.
+// procedure, a parameter, or a local or a constant of the current scope or
+// of one around it (one of a block that has ended is visible no more).
+// Such a declaration starts a scope of its own (lower_statement says why).
+// Any procedure's name counts, though a debugger knows some by no such
+// name (a #compiler one has no code, a foreign one may have another C name:
+// Preload's __free is C's free): a scope that hides nothing is harmless.
+// On demand, a global or a procedure no body has used yet isn't seen, nor
+// any constant, which that lowering doesn't record; that changes only the
+// scopes, which a compile-time module, never compiled, gives no debugger.
 static bool hides_a_name(Lowering *l, String name) {
     if (table_get(&l->global_index, name)) return true;
     if (table_get(&l->constant_index, name)) return true;
@@ -2419,10 +2424,10 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     // debugger shows is in a scope of its own from here to the block's end,
     // as a variable that hides one is (above), one naming a procedure too,
     // as its address (add_constant): else a debugger would show the name it
-    // hides. Once the block's code can't go on (after a return, a break or
-    // a continue, or an if whose every branch ends in one), nothing follows
-    // that has code, so it would never be shown: it's neither recorded nor
-    // given a scope.
+    // hides. Once the block's code can't go on (its IR block has ended, as
+    // after a return, a break or a continue, or a block or an if that
+    // always ends in one), nothing follows that has code, so it would never
+    // be shown: it's neither recorded nor given a scope.
     case AST_CONST: {
         Ast_Const *constant = (Ast_Const *)s;
         if (!hides_a_name(l, constant->name)) {
@@ -2515,16 +2520,17 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     }
 }
 
-// The block's statements in order. Once the IR block has ended (after a
-// return, a break or a continue, or an if whose every branch ends in one),
-// the rest can't run: they aren't lowered, and couldn't be, since
-// nothing may follow a terminator. Only their constants are, a taken #if
-// branch's too, since they need no code: the block's scope has code before
-// them, where a debugger shows them as it shows any of the block's names
-// (ir.h's "Constants"), but for one that hides a name (lower_statement). A
-// nested block's constants aren't: that block's scope has no code for a
-// debugger to stop in. A taken #if branch's statements are lowered this way
-// alone, in the block around it (lower_statement).
+// The block's statements in order. Once the IR block has ended (as after a
+// return, a break or a continue, or after a block or an if that always
+// ends in one: lower_scoped_block and lower_if leave the IR block they end
+// in current), the rest can't run: they aren't lowered, and couldn't be,
+// since nothing may follow a terminator. Only their constants are, a taken
+// #if branch's too, since they need no code: the block's scope has code
+// before them, where a debugger shows them as it shows any of the block's
+// names (ir.h's "Constants"), but for one that hides a name
+// (lower_statement). A nested block's constants aren't: that block's scope
+// has no code for a debugger to stop in. A taken #if branch's statements
+// are lowered this way alone, in the block around it (lower_statement).
 static void lower_statements(Lowering *l, Ast_Block *block, Ast_Proc *source) {
     for (s64 i = 0; i < block->statements.count; i++) {
         Ast *s = block->statements[i];
@@ -2785,23 +2791,27 @@ static s32 read_only_global(Lowering *l, const void *node, Type *t, Ast *value) 
     return global;
 }
 
-// Data constant `constant`'s read-only global, const.N (read_only_global),
-// made the first time a use needs it, the same after; its index. A constant
+// Constant `constant`'s read-only global, const.N (read_only_global), made
+// the first time it's needed, the same after; its index. A data constant
 // whose bytes a use reads at run time has one, wherever it's used, made at
 // that use; one used only folded (PRIMES[2], NAME.count), or only as its
 // literal's address (a pointer constant, puts(NAME)), or not at all, gets
 // one after every body, for a debugger alone (resolve_constant_globals),
-// which no code reads. The bytes are the value node's, not `data`'s, which
-// is null for a part a literal leaves out: constant_bytes finds the literal
-// itself. A pointer constant's are 8 bytes, a relocation to its literal.
+// which no code reads, and so does a procedure constant that hides a name
+// (add_constant), whose uses are the procedure's address. The bytes are
+// the value node's, not `data`'s, which is null for a part a literal leaves
+// out: constant_bytes finds the literal itself. A pointer constant's are 8
+// bytes, a relocation to its literal, and a procedure constant's 8 bytes,
+// a relocation to the procedure (Lowering.for_debugger says when it's null).
 static s32 constant_global(Lowering *l, Ast_Const *constant) {
     return read_only_global(l, constant, constant->type, constant->value);
 }
 
-// The const.N of each data constant recorded for a debugger (add_constant),
-// once every body is lowered: the one a use made, or, when no code reads
-// the constant, one made now, in the order the constants were recorded, so
-// the numbers a use gives are those it would give with no debugger. Each
+// The const.N of each constant recorded for a debugger at one (add_constant:
+// data, a pointer to a literal, a procedure that hides a name), once every
+// body is lowered: the one a use made, or, when no code reads the constant,
+// one made now, in the order the constants were recorded, so the numbers a
+// use gives are those it would give with no debugger. Each
 // copy of deferred code recorded the same constant again, and finds the
 // same const.N. One made here holds no address of a foreign procedure
 // nothing else uses (Lowering.for_debugger), so the program needs no
