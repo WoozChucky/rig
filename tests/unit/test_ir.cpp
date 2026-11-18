@@ -4942,11 +4942,22 @@ TEST(a_call_through_a_variadic_value_gathers) {
 }
 
 TEST(a_variadic_struct_declared_later_builds) {
-    // The parameter's []Late needs no layout, but the gathered [2]Late
-    // does, and has it before lowering.
+    // The parameter's []Late needs no layout, but the gathered [3]Late
+    // does, and gets it where it's made. The #run checks g's body during
+    // the declarations, before Late's turn, and its arguments (p.*) don't
+    // lay Late out; a [3]Late made then without the layout would be a
+    // 0-byte temporary, not 48 bytes.
     Arena a = arena_make();
-    CHECK(builds(&a, "f :: (points: ..Late) -> int { return points.count; }\n"
-                     "main :: () { n := f(.{1}, Late.{2}); }\n"
-                     "Late :: struct { x: int; }\n"));
+    String g = proc_ir(ir_print(&a, lower_source(&a,
+                                                 "N :: #run g(null);\n"
+                                                 "g :: (p: *Late) -> int {\n"
+                                                 "    if p == null { return 0; }\n"
+                                                 "    return f(p.*, p.*, p.*);\n"
+                                                 "}\n"
+                                                 "f :: (points: ..Late) -> int { return points.count; }\n"
+                                                 "Late :: struct { x: int; y: int; }\n"
+                                                 "main :: () { }\n")),
+                       "g");
+    CHECK(contains(g, "local 48 align 8\n"));
     arena_free(&a);
 }
