@@ -683,3 +683,25 @@ TEST(touching_reserved_addresses_faults) {
     array_free(&argv);
     arena_free(&a);
 }
+
+TEST(os_nanoseconds_goes_forward_finer_than_a_millisecond) {
+    // GetTickCount64, which the timeouts use, moves in steps of 10-16 ms:
+    // too coarse for a phase that takes 0.05 ms.
+    s64 first = os_nanoseconds();
+    s64 next = first;
+    for (s64 i = 0; i < 100000000 && next == first; i++) next = os_nanoseconds();
+    CHECK(next > first);
+    CHECK(next - first < 1000000);
+    CHECK(os_nanoseconds() >= next);
+}
+
+#ifdef _WIN32
+TEST(ticks_to_nanoseconds_after_a_month_of_uptime) {
+    // ticks * 1000000000 overflows an s64 after 15 minutes at 10 MHz.
+    s64 frequency = 10000000;
+    s64 month = 30LL * 24 * 3600;
+    CHECK_EQ(ticks_to_nanoseconds(month * frequency, frequency), month * 1000000000);
+    CHECK_EQ(ticks_to_nanoseconds(month * frequency + 3, frequency), month * 1000000000 + 300);
+    CHECK_EQ(ticks_to_nanoseconds(1, 3), 333333333);
+}
+#endif

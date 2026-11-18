@@ -208,6 +208,13 @@ static s64 milliseconds_now() {
     return (s64)t.tv_sec * 1000 + t.tv_nsec / 1000000;
 }
 
+// The same clock, to the nanosecond.
+s64 os_nanoseconds() {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (s64)t.tv_sec * 1000000000 + t.tv_nsec;
+}
+
 bool os_run(Arena *a, Array<String> argv, Process_Result *result) { return os_run_for(a, argv, {}, 0, result); }
 
 bool os_run_in(Arena *a, Array<String> argv, String directory, Process_Result *result) {

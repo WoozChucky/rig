@@ -351,6 +351,30 @@ static DWORD time_left(ULONGLONG deadline) {
     return now >= deadline ? 0 : (DWORD)(deadline - now);
 }
 
+// The performance counter's ticks as nanoseconds, `frequency` ticks a
+// second. ticks * 1000000000 would overflow an s64 after 15 minutes of
+// uptime at the usual 10 MHz, so the whole seconds and the ticks left over
+// are converted apart; the second product stays below frequency * 10^9,
+// which fits for any frequency under 9 GHz.
+static s64 ticks_to_nanoseconds(s64 ticks, s64 frequency) {
+    return ticks / frequency * 1000000000 + ticks % frequency * 1000000000 / frequency;
+}
+
+// QueryPerformanceCounter, not GetTickCount64: its steps are well under a
+// microsecond, where GetTickCount64's are 10-16 ms. Its frequency is fixed
+// at the system's start, so it is read once.
+s64 os_nanoseconds() {
+    static s64 frequency = 0;
+    if (!frequency) {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        frequency = f.QuadPart;
+    }
+    LARGE_INTEGER ticks;
+    QueryPerformanceCounter(&ticks);
+    return ticks_to_nanoseconds(ticks.QuadPart, frequency);
+}
+
 bool os_run(Arena *a, Array<String> argv, Process_Result *result) { return os_run_for(a, argv, {}, 0, result); }
 
 bool os_run_in(Arena *a, Array<String> argv, String directory, Process_Result *result) {
