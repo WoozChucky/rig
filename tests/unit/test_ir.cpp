@@ -5802,18 +5802,27 @@ TEST(a_default_values_bounds_checks_follow_its_procedure) {
     // A default is written in its procedure's declaration, so its bounds
     // checks are that procedure's, as its #no_abc says, whoever calls it:
     // unchecked's default isn't checked in main, checked's is in caller,
-    // though caller is #no_abc.
+    // though caller is #no_abc. After the call, the caller's own indexing
+    // is the caller's again: one check in each, main's own and checked's
+    // default. --no-bounds-checks turns a default's checks off too.
     Arena a = arena_make();
-    String ir = ir_print(&a, lower_source(&a, "items := int.[1, 2, 3];\n"
-                                              "i := 1;\n"
-                                              "unchecked :: (k: int = items[i]) -> int #no_abc { return k; }\n"
-                                              "checked :: (k: int = items[i]) -> int { return k; }\n"
-                                              "caller :: () -> int #no_abc { return checked(); }\n"
-                                              "main :: () {\n"
-                                              "    n := unchecked();\n"
-                                              "}\n"));
-    CHECK(!contains(proc_ir(ir, "main"), "__rig_bounds_failed"));
-    CHECK(contains(proc_ir(ir, "caller"), "call @__rig_bounds_failed("));
+    const char *source = "items := int.[1, 2, 3];\n"
+                         "i := 1;\n"
+                         "unchecked :: (k: int = items[i]) -> int #no_abc { return k; }\n"
+                         "checked :: (k: int = items[i]) -> int { return k; }\n"
+                         "caller :: () -> int #no_abc {\n"
+                         "    k := checked();\n"
+                         "    return k + items[i];\n"
+                         "}\n"
+                         "main :: () {\n"
+                         "    n := unchecked();\n"
+                         "    m := items[i];\n"
+                         "}\n";
+    String ir = ir_print(&a, lower_source(&a, source));
+    CHECK_EQ(count_of(proc_ir(ir, "main"), "call @__rig_bounds_failed("), 1);
+    CHECK_EQ(count_of(proc_ir(ir, "caller"), "call @__rig_bounds_failed("), 1);
+    String off = ir_print(&a, lower_file(&a, "test.rig", source, false));
+    CHECK(!contains(off, "__rig_bounds_failed"));
     arena_free(&a);
 }
 
