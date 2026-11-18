@@ -64,7 +64,8 @@ struct Checker {
                                  // context is (spec 7.10); set aside with the scopes, so a declaration
                                  // worked out inside a body isn't code
     bool contextless;            // a #c_call procedure's body is being checked (not main's), outside its
-                                 // push_contexts: C called it with no context (spec 7.6, 7.10); set
+                                 // push_contexts and what's worked out while compiling (checker.cpp's
+                                 // check_const): C called it with no context (spec 7.6, 7.10); set
                                  // aside with the scopes too
     Ast_File *file;              // the program being checked
     bool deciding;               // a decider (check_decider_new): it checks the top-level #ifs'

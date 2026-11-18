@@ -629,10 +629,13 @@
 // - What needs none: a call of a #c_call or foreign procedure that leaves
 //   out no such default, a procedure's value (f := twice;), and a #run,
 //   whose operand runs with its own context (a default that is a #run
-//   needs none of the caller's). A push's own value is checked outside its
-//   block, so push_context context { } is refused there and push_context
+//   needs none of the caller's). Nor does what's worked out while
+//   compiling, a local constant's value, an array's count or an #if's
+//   condition: one that needs a context isn't known while compiling, as in
+//   any body. A push's own value is checked outside its block, so
+//   push_context context { } is refused there and push_context
 //   default_context { } is fine; inside the block all three are fine,
-//   deferred code included.
+//   deferred code included, and after it the body has none again.
 //
 // Code run while compiling (issue #115, spec 7.8).
 // - #run e is an expression, of e's type: an untyped constant's default

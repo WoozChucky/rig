@@ -15,4 +15,8 @@ calls :: () #c_call {
 leaves_out :: () #c_call {
     n := sized();
 }
+// A value with no name of its own is named by its type.
+through :: (ops: *[1](int) -> int) #c_call {
+    n := ops.*[0](1);
+}
 main :: () { }

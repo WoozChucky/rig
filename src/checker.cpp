@@ -31,9 +31,15 @@ Type *check_array_type(Checker *c, Type *element, u64 count, Position at) {
 //   compiling" (a variable, a call), unless it needs a #run with no value,
 //   whose failure was said (has_failed_run);
 // - below 0: "an array's count can't be negative (-1)".
-// An untyped constant becomes an int, as one that meets no type does.
+// An untyped constant becomes an int, as one that meets no type does. In a
+// #c_call body it needs no context, as a local constant's value doesn't
+// (check_const).
 static bool check_array_count(Checker *c, Ast *count, u64 *out) {
-    if (!check_operand(c, count)) return false;
+    bool outer_contextless = c->contextless;
+    c->contextless = false;
+    Type *checked = check_operand(c, count);
+    c->contextless = outer_contextless;
+    if (!checked) return false;
     check_default_type(c, count);
     Type *t = count->type;
     if (!t) return false;  // an untyped float too large for a float32, reported
@@ -726,9 +732,15 @@ static void check_const_value(Checker *c, Ast_Const *constant) {
     constant->type = t;
 }
 
-// A local constant, declared from here to the end of its block.
+// A local constant, declared from here to the end of its block. Its value
+// is worked out while compiling, never with the caller's context, so a
+// #c_call body's having none (Checker.contextless) is nothing to it: one
+// that needs a context isn't known while compiling, as in any body.
 static void check_const(Checker *c, Ast_Const *constant) {
+    bool outer_contextless = c->contextless;
+    c->contextless = false;
     check_const_value(c, constant);
+    c->contextless = outer_contextless;
     declare(c, constant->name, constant);
 }
 
@@ -1466,9 +1478,13 @@ static void check_if(Checker *c, Ast_If *branch) {
 // must be known while compiling", unless it needs a #run with no value,
 // whose failure was said: has_failed_run); or the condition's own error,
 // which check_operand reports where it is (an unknown identifier at its
-// name).
+// name). In a #c_call body it needs no context, as a local constant's value
+// doesn't (check_const).
 static bool check_if_condition(Checker *c, Ast *condition) {
+    bool outer_contextless = c->contextless;
+    c->contextless = false;
     Type *t = check_operand(c, condition);
+    c->contextless = outer_contextless;
     if (!t) return false;
     if (t != &type_bool) {
         diag_error(c->diag, condition->start, "the condition of '#if' must be a bool, not '" STR_FMT "'",
@@ -1728,6 +1744,8 @@ static bool breaks_out_of(Ast *s, Ast *loop) {
         }
         return false;
     }
+    // A push is its block (spec 6.13): a break in it leaves the loop around.
+    case AST_PUSH_CONTEXT: return breaks_out_of(((Ast_Push_Context *)s)->block, loop);
     case AST_IF: {
         // Arm by arm along an else-if chain, in a loop (parse_if says why),
         // then the last else's block, if there is one.
@@ -1746,8 +1764,6 @@ static bool breaks_out_of(Ast *s, Ast *loop) {
     }
     case AST_WHILE: return breaks_out_of(((Ast_While *)s)->body, loop);
     case AST_FOR: return breaks_out_of(((Ast_For *)s)->body, loop);
-    // A push is its block (spec 6.13): a break in it leaves the loop around.
-    case AST_PUSH_CONTEXT: return breaks_out_of(((Ast_Push_Context *)s)->block, loop);
     // A defer too: a break in deferred code is of a loop inside it, or
     // refused (check_jump), so it can't break out of `loop`.
     default: return false;
@@ -1783,6 +1799,9 @@ static bool goes_past(Ast *s) {
     switch (s->kind) {
     case AST_RETURN: return false;
     case AST_BLOCK: return reaches_end((Ast_Block *)s);
+    // A push_context is its block (spec 6.13): it goes past when the block
+    // reaches its end.
+    case AST_PUSH_CONTEXT: return reaches_end(((Ast_Push_Context *)s)->block);
     case AST_IF: {
         // Arm by arm along an else-if chain, in a loop (parse_if says why):
         // control goes past the chain when an arm's condition may be false
@@ -1809,9 +1828,6 @@ static bool goes_past(Ast *s) {
         bool forever = condition->is_constant && condition->constant == 1;
         return !forever || breaks_out_of(loop->body, loop);
     }
-    // A push_context is its block (spec 6.13): it goes past when the block
-    // reaches its end.
-    case AST_PUSH_CONTEXT: return reaches_end(((Ast_Push_Context *)s)->block);
     // A defer too: it only registers its statement, which runs when the
     // block is left and can't leave itself but by its end (check_return,
     // check_jump), so control always goes past it (spec 6.11).

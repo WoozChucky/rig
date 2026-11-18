@@ -8254,6 +8254,10 @@ TEST(context_is_a_place) {
     Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
     CHECK_STR(type_name(&a, body->statements[0]->type), "Context");
     CHECK_STR(type_name(&a, body->statements[1]->type), "*Context");
+    // main starts with default_context, even marked #c_call.
+    CHECK_STR(check_with_preload(&a, "twice :: (n: int) -> int { return n * 2; }\n"
+                                     "main :: () #c_call { a := context.allocator; n := twice(1); }\n"),
+              "");
     arena_free(&a);
 }
 
@@ -8272,16 +8276,68 @@ TEST(context_is_only_in_code) {
               "2:10: 'context' is only in a body, where a procedure runs\n"
               "3:21: 'context' is only in a body, where a procedure runs\n"
               "5:10: the value of constant 'C' isn't known while compiling\n");
+    // A top-level #if's condition is decided before anything runs.
+    CHECK_STR(check_with_preload(&a, "#if context.temporary_storage == null {\n"
+                                     "    A :: 1;\n"
+                                     "}\n"
+                                     "main :: () { }\n"),
+              "1:5: 'context' is only in a body, where a procedure runs\n");
+    arena_free(&a);
+}
+
+TEST(context_is_set_aside_with_the_scopes) {
+    // A body checked on demand inside a #c_call body has a context of its
+    // own, and once it's done the #c_call body has none again: twice's call
+    // after later's is refused. A global worked out inside a body is no
+    // code of it: G's value can't read context, though f's body needs it.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "twice :: (n: int) -> int { return n * 2; }\n"
+                                     "cb :: () #c_call {\n"
+                                     "    x := #run later();\n"
+                                     "    z := twice(2);\n"
+                                     "}\n"
+                                     "later :: () -> int { return 1; }\n"
+                                     "main :: () { }\n"),
+              "4:10: 'twice' needs a context; a #c_call procedure has none until it pushes one, as in "
+              "push_context default_context { ... }\n");
+    CHECK_STR(check_with_preload(&a, "X :: #run f();\n"
+                                     "f :: () -> int { a := G; return 1; }\n"
+                                     "G := context.allocator;\n"
+                                     "main :: () { }\n"),
+              "3:6: 'context' is only in a body, where a procedure runs\n");
+    arena_free(&a);
+}
+
+TEST(a_c_call_bodys_compile_time_values_need_no_context) {
+    // A local constant's value, an array's count and an #if's condition are
+    // worked out while compiling, never with the caller's context, so in a
+    // #c_call body they're what they are in any body: not known while
+    // compiling, and nothing about a context.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "twice :: (n: int) -> int { return n * 2; }\n"
+                                     "cb :: () #c_call {\n"
+                                     "    C :: twice(1);\n"
+                                     "    D :: context;\n"
+                                     "    x: [twice(2)]int;\n"
+                                     "    #if twice(3) == 6 { }\n"
+                                     "}\n"
+                                     "main :: () { }\n"),
+              "3:10: the value of constant 'C' isn't known while compiling\n"
+              "4:10: the value of constant 'D' isn't known while compiling\n"
+              "5:9: an array's count must be known while compiling\n"
+              "6:9: the condition of '#if' must be known while compiling\n");
     arena_free(&a);
 }
 
 TEST(context_in_a_default_and_a_runs_block) {
     // A default value is worked out in the caller, so it may read the
     // caller's context; a top-level #run's block is a body that runs (check
-    // never runs it).
+    // never runs it), and so is its expression.
     Arena a = arena_make();
     CHECK_STR(check_with_preload(&a, "take :: (size: int, a: Allocator = context.allocator) -> int { return size; }\n"
+                                     "use :: (a: Allocator) { }\n"
                                      "#run { c := context; }\n"
+                                     "#run use(context.allocator);\n"
                                      "main :: () { n := take(1); }\n"),
               "");
     arena_free(&a);
@@ -8357,7 +8413,14 @@ TEST(a_c_call_body_has_no_context_until_it_pushes_one) {
     // twice, outer's leaves out inner's. A #c_call or foreign callee that
     // leaves out no such default needs none, nor does a procedure's value,
     // nor a #run, which runs with its own context while compiling (ran's
-    // default too). Inside a push all three are fine, deferred code too.
+    // default too). Inside a push all three are fine, deferred code too;
+    // after it the body has none again, and code deferred outside every push
+    // has none either. Each default says for itself whether it needs one
+    // (two's b doesn't), the first one left out that does is named (many's
+    // b), and a callee that takes one is said once, whatever it leaves out
+    // (take). A call through a #c_call value needs none (v's); one through
+    // any other value does, and names its type when it has no name
+    // (through's).
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     const char *source = "twice :: (n: int) -> int { return n * 2; }\n"
@@ -8380,9 +8443,23 @@ TEST(a_c_call_body_has_no_context_until_it_pushes_one) {
                          "        h := context.allocator;\n"
                          "        defer twice(7);\n"
                          "    }\n"
+                         "    k := twice(8);\n"
+                         "    l := context.allocator;\n"
+                         "    defer twice(9);\n"
+                         "    v := cv;\n"
+                         "    m := v(1);\n"
+                         "    o := two(1);\n"
+                         "    p := many();\n"
+                         "    q := take();\n"
                          "}\n"
                          "main :: () { }\n"
-                         "ran :: (k: int = #run twice(2)) -> int #c_call { return k; }\n";
+                         "ran :: (k: int = #run twice(2)) -> int #c_call { return k; }\n"
+                         "cv :: (n: int) -> int #c_call { return n; }\n"
+                         "two :: (a: int = context.temporary_storage.size, b: int = 1) -> int #c_call { return a + b; }\n"
+                         "many :: (a: int = 1, b: int = context.temporary_storage.size,\n"
+                         "         c: int = context.temporary_storage.size) -> int #c_call { return a; }\n"
+                         "take :: (a: Allocator = context.allocator) -> int { return 1; }\n"
+                         "through :: (ops: *[1](int) -> int) #c_call { n := ops.*[0](1); }\n";
     CHECK_STR(check_with_preload(&a, source, &tree),
               "8:10: 'sized' leaves out 'n', whose default value needs a context; a #c_call procedure has none "
               "until it pushes one, as in push_context default_context { ... }\n"
@@ -8391,12 +8468,27 @@ TEST(a_c_call_body_has_no_context_until_it_pushes_one) {
               "10:10: 'outer' leaves out 'k', whose default value needs a context; a #c_call procedure has none "
               "until it pushes one, as in push_context default_context { ... }\n"
               "15:18: a #c_call procedure has no context until it pushes one, as in push_context default_context "
-              "{ ... }\n");
+              "{ ... }\n"
+              "21:10: 'twice' needs a context; a #c_call procedure has none until it pushes one, as in "
+              "push_context default_context { ... }\n"
+              "22:10: a #c_call procedure has no context until it pushes one, as in push_context default_context "
+              "{ ... }\n"
+              "23:11: 'twice' needs a context; a #c_call procedure has none until it pushes one, as in "
+              "push_context default_context { ... }\n"
+              "27:10: 'many' leaves out 'b', whose default value needs a context; a #c_call procedure has none "
+              "until it pushes one, as in push_context default_context { ... }\n"
+              "28:10: 'take' needs a context; a #c_call procedure has none until it pushes one, as in "
+              "push_context default_context { ... }\n"
+              "37:51: '(int) -> int' needs a context; a #c_call procedure has none until it pushes one, as in "
+              "push_context default_context { ... }\n");
     const char *needing[] = {"sized", "inner", "outer"};
     for (s64 i = 0; i < 3; i++) {
         CHECK(((Ast_Proc *)top_level_named(tree, needing[i]))->params[0]->default_needs_context);
     }
     CHECK(!((Ast_Proc *)top_level_named(tree, "plain"))->params[0]->default_needs_context);
     CHECK(!((Ast_Proc *)top_level_named(tree, "ran"))->params[0]->default_needs_context);
+    Ast_Proc *two = (Ast_Proc *)top_level_named(tree, "two");
+    CHECK(two->params[0]->default_needs_context);
+    CHECK(!two->params[1]->default_needs_context);
     arena_free(&a);
 }
