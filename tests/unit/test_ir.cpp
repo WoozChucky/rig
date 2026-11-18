@@ -5606,3 +5606,94 @@ TEST(a_global_holds_a_descriptions_address) {
     CHECK(contains(ir, "global @h2: 8 align 8 = zero reloc 0 @type_info."));
     arena_free(&a);
 }
+
+TEST(an_any_holds_a_places_address_or_a_copys) {
+    // Converting to Any (spec 3.16): the value's address first, then the
+    // Any's 16 bytes, its type's description's address at 0 and the value's
+    // at 8. n is a place, so the Any holds n's own slot, %0; 7 isn't, so it's
+    // put into a temporary of its own, an i64 slot, whose address the Any
+    // holds. Each Any is then passed as any struct argument is, copied.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "show :: (a: Any) { }\n"
+                                                    "main :: () {\n"
+                                                    "    n := 42;\n"
+                                                    "    show(n);\n"
+                                                    "    show(7);\n"
+                                                    "}\n"));
+    CHECK_STR(proc_ir(ir, "main"),
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  %0 = local i64\n"
+              "  %1 = const i64 42\n"
+              "  store i64 %1, %0\n"
+              "  %2 = local 16 align 8\n"
+              "  %3 = addr @type_info.0\n"
+              "  store ptr %3, %2\n"
+              "  %4 = const i64 8\n"
+              "  %5 = ptradd %2, %4\n"
+              "  store ptr %0, %5\n"
+              "  %6 = local 16 align 8\n"
+              "  copy %6, %2, 16\n"
+              "  call @show(%6)\n"
+              "  %7 = local i64\n"
+              "  %8 = const i64 7\n"
+              "  store i64 %8, %7\n"
+              "  %9 = local 16 align 8\n"
+              "  %10 = addr @type_info.0\n"
+              "  store ptr %10, %9\n"
+              "  %11 = const i64 8\n"
+              "  %12 = ptradd %9, %11\n"
+              "  store ptr %7, %12\n"
+              "  %13 = local 16 align 8\n"
+              "  copy %13, %9, 16\n"
+              "  call @show(%13)\n"
+              "  %14 = const i32 0\n"
+              "  ret %14\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(an_any_is_passed_as_itself) {
+    // An Any going where an Any goes isn't converted again (Review Focus 5):
+    // only n's two conversions, in a's declaration and in the literal, make
+    // an Any, each with int's description; show(a) and the literal's a copy
+    // a's 16 bytes as they are.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "show :: (a: Any) { }\n"
+                                                    "main :: () {\n"
+                                                    "    n := 1;\n"
+                                                    "    a : Any = n;\n"
+                                                    "    show(a);\n"
+                                                    "    many := Any.[n, a];\n"
+                                                    "}\n"));
+    CHECK_EQ(count_of(proc_ir(ir, "main"), "addr @type_info."), 2);
+    arena_free(&a);
+}
+
+TEST(each_gathered_any_argument_converts) {
+    // A ..Any parameter's arguments one by one are built into a [3]Any, 48
+    // bytes, each converted as it's put there: n, then copies of 2 and of
+    // "three", each with its type's description.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "log :: (args: ..Any) { }\n"
+                                                    "main :: () {\n"
+                                                    "    n := 1;\n"
+                                                    "    log(n, 2, \"three\");\n"
+                                                    "}\n"));
+    String main = proc_ir(ir, "main");
+    CHECK_EQ(count_of(main, "addr @type_info."), 3);
+    CHECK(contains(main, "local 48 align 8\n"));
+    arena_free(&a);
+}
+
+TEST(a_cast_to_any_converts) {
+    // cast(Any) 5 is the conversion (spec 3.14's first row): 5 is put into
+    // an int temporary, and the Any holds its address with int's
+    // description's.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "main :: () {\n    a := cast(Any) 5;\n}\n"));
+    String main = proc_ir(ir, "main");
+    CHECK(contains(main, "addr @type_info.0\n"));
+    CHECK(contains(main, "local i64\n"));
+    arena_free(&a);
+}

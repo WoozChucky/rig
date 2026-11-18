@@ -165,6 +165,19 @@
 //   that compares strings (lower_string_equal), and != negates it. A global
 //   holding a literal points at its bytes through a relocation
 //   (constant_bytes).
+// - Any (issue #153, spec 3.16) is a struct of Preload's, 16 bytes: a
+//   description's address, then a value's. Where the checker converted a
+//   value to one (Ast.to_any), it's built in a slot of its own, the value's
+//   address worked out first: a place's own, its checks included, so the
+//   Any sees the place change and writing through it changes the place; or
+//   a copy's, a temporary of the value's type the value is put into
+//   (lower_value_address). Then the Any's slot gets the value's type's
+//   description's address and the value's (lower_any). An Any going where
+//   an Any goes is copied as any struct is, never converted again. Both
+//   slots are the procedure's, one per conversion lowered, filled again
+//   each time it runs: a copy lives as long as the procedure's frame, but
+//   the language promises it only to the end of the statement holding the
+//   conversion.
 // - Types' descriptions (issue #153, spec 3.16, 5.19). type_info(T) is the
 //   address of T's description, a read-only global, type_info.N, laid out
 //   as Preload's struct for T's kind (types.h's TYPE_INFO_* constants).
@@ -906,17 +919,68 @@ static s32 lower_view_of(Lowering *l, Ast *e) {
     return view_of_copy(l, e->type, lower_expr(l, e));
 }
 
+static s32 lower_any(Lowering *l, Ast *e, Type *any);
+
 // The value of `e`, of the type `to` its use wants (the checker said it
-// converts): a constant made at that type, e's value widened to it, an
+// converts): an Any holding it (lower_any) where the checker converted it
+// to one, a constant made at that type, e's value widened to it, an
 // array's view (lower_view_of), or, where a string meets a *u8, the address
 // of the string literal's bytes it is (literal_address): a literal, or
 // constant data holding one, the only strings the checker lets become a
 // pointer (spec 3.8). Returns the value's number.
 static s32 lower_value(Lowering *l, Ast *e, Type *to) {
+    // The Any first: a converted constant (show(5)) is copied into a
+    // temporary, not made at the Any's type. At its own type, the value
+    // lowers as any other (lower_value_address's copy asks for it so).
+    if (e->to_any != ANY_NONE && to != e->type) return lower_any(l, e, to);
     if (e->is_constant) return emit_constant(l, ir_type_of(to), e->constant);
     if (to && to->kind == TYPE_VIEW && e->type->kind == TYPE_ARRAY) return lower_view_of(l, e);
     if (to && type_is_pointer(to) && e->type == &type_string) return literal_bytes(l, literal_address(e));
     return resize(l, lower_expr(l, e), e->type, ir_type_of(to));
+}
+
+// The address of e's value: when `place` (expr_is_place, asked by the
+// caller), its own (lower_address, its checks included); otherwise a copy
+// in a temporary of its own, a slot of e's type, one per place in the
+// source, the value put there as it's worked out (a constant made at e's
+// type). The rule converting to Any follows (spec 3.16), and #156's
+// push_context will.
+//
+//     %t = local i64             (a copy of 7)
+//     %7 = const i64 7
+//     store i64 %7, %t
+static s32 lower_value_address(Lowering *l, Ast *e, bool place) {
+    if (place) return lower_address(l, e);
+    s32 copy = emit_slot(l, e->type);
+    emit_put(l, e->type, lower_value(l, e, e->type), copy);
+    return copy;
+}
+
+// e's value as an Any of struct type `any` (e->to_any set): a slot of its
+// own holding e's type's description's address (type_info_global) at
+// ANY_TYPE_OFFSET and lower_value_address's at ANY_VALUE_OFFSET; its
+// address. The value's address is worked out first, a place's checks and
+// a copy's value included, then the Any is filled (spec 3.16):
+//
+//     %a = local 16 align 8
+//     %d = addr @type_info.N
+//     store ptr %d, %a
+//     %8 = const i64 8
+//     %v = ptradd %a, %8
+//     store ptr %value, %v
+//
+// The Any's slot, and a copy's, are slots of the procedure's frame, one per
+// conversion lowered, filled again each time it runs: the language promises
+// the copy only to the end of the statement holding the conversion.
+static s32 lower_any(Lowering *l, Ast *e, Type *any) {
+    RIG_ASSERT(type_is_aggregate(any) && any->size == ANY_SIZE);
+    s32 value = lower_value_address(l, e, e->to_any == ANY_PLACE);
+    s32 slot = emit_slot(l, any);
+    Ir_Instr *description = emit(l, IR_ADDR, IR_PTR);
+    description->target = type_info_global(l, e->type);
+    emit_store(l, IR_PTR, description->result, emit_field_address(l, slot, ANY_TYPE_OFFSET));
+    emit_store(l, IR_PTR, value, emit_field_address(l, slot, ANY_VALUE_OFFSET));
+    return slot;
 }
 
 // A shift's amount, for a shift of a `t`: converted to t (by its own sign),
@@ -1196,12 +1260,15 @@ static s32 lower_float_cast(Lowering *l, s32 v, Type *from, Type *to) {
 // - A pointer to a pointer is the same address; to an int, s64 or u64 it's
 //   ptrtoint, and from one inttoptr: the address as a number and back,
 //   unchecked (spec 3.14).
+// - cast(Any) e is e's conversion to Any (lower_any), as where it meets an
+//   Any without a cast (spec 3.14, 3.16), a constant e included.
 // The value may be a constant even when the cast isn't (cast(*int) 4096):
 // it's made at its own type.
 static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
     Type *from = cast->value->type, *to = cast->type;
-    // An array to a view converts as anywhere else, and so does a string
-    // literal, or a string constant, to *u8.
+    // A value to an Any, an array to a view, and a string literal, or a
+    // string constant, to *u8 convert as anywhere else.
+    if (cast->value->to_any != ANY_NONE) return lower_value(l, cast->value, to);
     if (from->kind == TYPE_ARRAY && to->kind == TYPE_VIEW) return lower_value(l, cast->value, to);
     if (type_is_pointer(to) && from == &type_string) return lower_value(l, cast->value, to);
     Ir_Type have = ir_type_of(from), want = ir_type_of(to);
