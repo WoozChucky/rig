@@ -1,0 +1,14 @@
+// Basic's print (issue #154) given a null builder: print_to_builder stops
+// with the language's null pointer dereference (spec 8.4), as
+// append_string does, rather than printing to standard output, as a null
+// builder means to the procedures under it. It stops at the line of
+// print.rig that basic_print_null_builder.err names. Edit one, edit the
+// other.
+#import "Basic";
+
+main :: () {
+    print("before\n");
+    builder : *String_Builder = null;
+    print_to_builder(builder, "{}", 1);
+    print("not reached\n");
+}

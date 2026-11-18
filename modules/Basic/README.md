@@ -156,7 +156,7 @@ An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` h
 
 ## String builder (`builder.rig`)
 
-Text put together a piece at a time, in memory of the builder's own from the allocator it is given, and copied out as one string. When an append doesn't fit, the capacity becomes the larger of 64 and twice the old one, doubled again until it fits, and the memory moves with `resize`. Numbers are written on the stack first, so nothing but the builder's memory is allocated. An allocator that has no memory to give stops the program at the next write, with the language's `null pointer dereference`.
+Text put together a piece at a time, in memory of the builder's own from the allocator it is given, and copied out as one string. `print_to_builder` (`print.rig`) appends formatted text to one. When an append doesn't fit, the capacity becomes the larger of 64 and twice the old one, doubled again until it fits, and the memory moves with `resize`. Numbers are written on the stack first, so nothing but the builder's memory is allocated. An allocator that has no memory to give stops the program at the next write, with the language's `null pointer dereference`.
 
 - `String_Builder`: `allocator: Allocator`, `data: *u8`, `count: int` (the bytes built) and `capacity: int` (the bytes `data` has room for).
 - `builder_init(builder: *String_Builder, allocator: Allocator)`: an empty builder whose memory comes from `allocator`, taken at the first append that needs it.
@@ -303,6 +303,19 @@ Everything goes to standard output through C's `putchar`, so it comes out in ord
 - `print_or_append(builder: *String_Builder, s: string)`: writes the bytes of `s` to `builder`, or to standard output when it is null.
 - `print_quoted(builder: *String_Builder, s: string)`: writes `s` in double quotes, with the escapes below.
 - `print_item(builder: *String_Builder, item: Any, nested: bool)`: writes the value `item` holds, as below; `nested` says it is inside a struct, an array, a view or `{!EXTRA: ...}`, where a string is quoted.
+- `print_formatted(builder: *String_Builder, format: string, args: []Any)`: writes `format` with each `{}` replaced by the next of `args`, as below; `print` and `print_to_builder` are it.
+- `print(format: string, args: ..Any)`: writes `format` to standard output with its `{}`s replaced by the arguments, in order: `print("{} is {}\n", name, age)`. A `[]Any` already made is forwarded with `..`, as in `print(format, ..args)`; passed without it, it is one argument, a view.
+- `print_to_builder(builder: *String_Builder, format: string, args: ..Any)`: appends what `print` would write to `builder`, and writes nothing to standard output. A null `builder` stops the program with `null pointer dereference`, as `append_string` does.
+
+The format, read left to right:
+
+- `{}` takes the next argument and writes it; a string argument is its bytes, braces included, which are no format.
+- `{{` writes `{`, and `}}` writes `}`. A `}` on its own is written as it is, so `}}}` is `}}`, and `{{}` is `{` and then a lone `}`.
+- Any other `{` begins a placeholder this version doesn't know, as `{x}` or `{:x}`: the bytes from it to the next `}`, or to the end of the format when there's none, are written as `{!BAD}` and take no argument. So `{a{b}` is one `{!BAD}`, and format options are free to mean something later.
+- A `{}` with no argument left writes `{!MISSING}`.
+- Arguments left over are written after the text as ` {!EXTRA: 4, "x"}`, each as inside a struct, so a string is quoted, separated by `, `.
+
+The format is a value the compiler doesn't read, as C's isn't (spec 7.6), so a count that doesn't match writes a marker and never stops the program. What can't convert to `Any` (spec 3.16) can't be an argument: `print("{}\n", .["a", "b"])` is refused, since the literal's type isn't known. `print` works in a `#run` too, its output the compiler's (spec 7.8, 10.8).
 
 How each value is written:
 
@@ -327,5 +340,4 @@ What Basic would do differently once Rig has it:
 - No way for a struct to take in another's fields, as Jai's `using` does, so both kinds of table entry repeat the fields of `Table_Entry_Header`, and the code they share reads an entry's start through it.
 - No enums, so a table entry's states and a file's modes are constants.
 - No command-line arguments: a program's start doesn't keep them for Rig code to read (#152).
-- No formatted `print` yet (#154): a line is printed a piece at a time, with `print_string`, `print_int` and the rest.
 - No context (#156), so a procedure that allocates takes its allocator as an argument, and the file procedures copy a path for C into memory from the heap, since most of their signatures take no allocator (`read_entire_file`'s is for the file's contents).

@@ -1,0 +1,82 @@
+// Basic's print (issue #154): the format's placeholders, {} and the
+// escaped braces {{ and }}, a lone }, and the markers for what doesn't
+// match, {!BAD}, {!MISSING} and {!EXTRA: ...}, at the format's edges too;
+// an argument's braces, which are no format; arguments forwarded with ..,
+// and a []Any passed whole, as one argument; output in order with C's
+// printf; and print_to_builder, which appends the same text to a string
+// builder. The same compiled and interpreted.
+#import "Basic";
+
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Vec2 :: struct { x: int; y: int; }
+
+// Forwards its arguments to print, spread with .., so each is one of
+// print's.
+log :: (format: string, args: ..Any) {
+    print(format, ..args);
+}
+
+// Passes its arguments to print as they came, a []Any, so they are one
+// argument of print's, written as a view.
+whole :: (format: string, args: ..Any) {
+    print(format, args);
+}
+
+main :: () {
+    name := "Ada";
+    age := 36;
+    print("{} is {}\n", name, age);
+    print("{} {} {}\n", 1.5, true, Vec2.{1, 2});
+
+    // Braces: escaped, a lone }, and {{} as { and then a lone }.
+    print("{{}} {{ }} }\n");
+    print("{{}\n");
+    print("}}}\n");
+
+    // A placeholder this version doesn't know takes no argument, and runs
+    // to the next }, or to the format's end.
+    print("{x} {:x} {}\n", 7);
+    print("{a{b} {}\n", 1);
+
+    // Counts that don't match.
+    print("{} {}\n", 1);
+    print("{}|", 1, 4, "x", Vec2.{1, 2});
+    print("\n");
+    print("tail {", 9);
+    print("\n");
+    print("a {b");
+    print("\n");
+    print("{");
+    print("\n");
+
+    // An empty format, a format of placeholders alone, an empty argument,
+    // and an argument whose braces are its bytes, not a format.
+    print("");
+    print("{}{}{}", 1, 2, 3);
+    print("\n");
+    print("[{}]\n", "");
+    print("{}\n", "{}");
+    print("{}\n", string.["a", "b"]);
+
+    log("{} and {}\n", "forwarded", 2);
+    whole("{} {}\n", 1, "x");
+
+    // Basic and C write through the same stdout buffer.
+    printf("printf, in order\n");
+    print("{}", 5);
+    print_string(" and ");
+    printf("%d", 6);
+    print("\n");
+
+    // print_to_builder appends, and writes nothing to standard output.
+    b : String_Builder;
+    builder_init(*b, HEAP_ALLOCATOR);
+    print_to_builder(*b, "{} + {} = {}", 1, 2, 3);
+    print_to_builder(*b, " {}", "!");
+    print_to_builder(*b, " {} {}", "x");
+    built := builder_to_string(*b, HEAP_ALLOCATOR);
+    print_line(built);
+    free(built.data, HEAP_ALLOCATOR);
+    builder_free(*b);
+}

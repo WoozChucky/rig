@@ -1,0 +1,21 @@
+tests/errors/basic_print_arguments.rig:12:19: error: this literal's type isn't known; write it before the '.', as in int.[1, 2]
+        print("{}\n", .["a", "b"]);
+                      ^
+tests/errors/basic_print_arguments.rig:13:19: error: this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}
+        print("{}\n", .{1, 2});
+                      ^
+tests/errors/basic_print_arguments.rig:14:19: error: 'greet' returns nothing, so it has no value
+        print("{}\n", greet());
+                      ^
+tests/errors/basic_print_arguments.rig:15:11: error: argument 1 of 'print' has type 'int', which can't be converted to 'string'
+        print(5);
+              ^
+tests/errors/basic_print_arguments.rig:16:5: error: 'print' takes at least 1 argument, but 0 were given
+        print();
+        ^
+tests/errors/basic_print_arguments.rig:18:22: error: argument 1 of 'print_to_builder' has type 'String_Builder', which can't be converted to '*String_Builder'
+        print_to_builder(b, "{}", 1);
+                         ^
+tests/errors/basic_print_arguments.rig:20:17: error: '..' spreads a '[2]int' into 'args', which needs a '[]Any'
+        print("{}", ..v);
+                    ^

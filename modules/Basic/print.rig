@@ -289,3 +289,94 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
         print_or_append(builder, "]");
     }
 }
+
+// Writes format to builder, or to standard output when builder is null,
+// with each {} in it replaced by the next of args, written as print_item
+// writes it at the top, so a string is its bytes. The format is read left
+// to right:
+//
+//   - {} takes the next argument, or writes {!MISSING} when none is left.
+//   - {{ writes {, and }} writes }.
+//   - Any other { begins a placeholder this version doesn't know, {x} or
+//     {:x}: the bytes from it to the next }, or to the format's end when
+//     there's none, are written as {!BAD}, and take no argument. So
+//     {a{b} is one {!BAD}, and a format's last { is {!BAD} too.
+//   - A } on its own is written as it is, so }}} is }}, and {{} is { and
+//     then a lone }.
+//   - Every other byte is written as it is, a run of them, up to the next
+//     brace, at once.
+//
+// The arguments left over once the format ends are written after it, a
+// space and then {!EXTRA: 4, "x"}: each nested, as inside a struct, so a
+// string is quoted, with a comma and a space between them. The format is a value the compiler
+// doesn't read, as C's isn't (spec 7.6), so a count that doesn't match
+// writes a marker rather than stopping the program. An argument's own
+// braces are its bytes, not a format: they're written as they are.
+print_formatted :: (builder: *String_Builder, format: string, args: []Any) {
+    OPEN :: "{";
+    CLOSE :: "}";
+    next := 0; // the argument the next {} takes
+    i := 0;
+    while i < format.count {
+        // The byte after this one, or 0 at the format's last byte, which
+        // no brace is.
+        after : u8 = 0;
+        if i + 1 < format.count { after = format[i + 1]; }
+        if format[i] == OPEN[0] && after == OPEN[0] {
+            print_or_append(builder, OPEN);
+            i += 2;
+        } else if format[i] == OPEN[0] && after == CLOSE[0] {
+            if next < args.count {
+                print_item(builder, args[next], false);
+                next += 1;
+            } else {
+                print_or_append(builder, "{!MISSING}");
+            }
+            i += 2;
+        } else if format[i] == OPEN[0] {
+            print_or_append(builder, "{!BAD}");
+            i += 1;
+            while i < format.count && format[i] != CLOSE[0] { i += 1; }
+            i += 1; // past the }, or past the end, which ends the loop
+        } else if format[i] == CLOSE[0] && after == CLOSE[0] {
+            print_or_append(builder, CLOSE);
+            i += 2;
+        } else if format[i] == CLOSE[0] {
+            print_or_append(builder, CLOSE);
+            i += 1;
+        } else {
+            start := i;
+            while i < format.count && format[i] != OPEN[0] && format[i] != CLOSE[0] { i += 1; }
+            print_or_append(builder, slice(format, start, i - start));
+        }
+    }
+    if next < args.count {
+        print_or_append(builder, " {!EXTRA: ");
+        for next..args.count - 1 {
+            if it > next { print_or_append(builder, ", "); }
+            print_item(builder, args[it], true);
+        }
+        print_or_append(builder, "}");
+    }
+}
+
+// Writes format to standard output with its {}s replaced by args, as
+// print_formatted says: print("{} is {}\n", name, age). Each argument is
+// any value, gathered as an Any (spec 5.10, 3.16), and a []Any already
+// made is forwarded with .., as in print(format, ..args); passed without
+// it, it is one argument, a view. Like the rest of this file, it writes
+// as it goes, through c_putchar, and allocates nothing.
+print :: (format: string, args: ..Any) {
+    print_formatted(null, format, args);
+}
+
+// Appends what print would write to builder (builder.rig), whose memory
+// grows as append_string's does, and writes nothing to standard output.
+print_to_builder :: (builder: *String_Builder, format: string, args: ..Any) {
+    // A null builder is standard output to print_formatted, so it's read
+    // here first, to stop the program with the language's null pointer
+    // dereference (spec 8.4), as append_string does, rather than print.
+    // tests/run/basic_print_null_builder.err names this line.
+    count := builder.count;
+    print_formatted(builder, format, args);
+}
