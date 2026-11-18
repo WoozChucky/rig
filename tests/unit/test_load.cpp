@@ -2507,7 +2507,8 @@ TEST(preload_as_the_main_file) {
 TEST(preload_given_with_its_text) {
     // rig check --stdin-for Preload's module.rig, as an editor checks it
     // unsaved, by a relative path: its text is the one given, which every
-    // program reaches.
+    // program reaches, and it's named by its absolute path, as on disk, not
+    // by the relative one it was given by.
     Arena a = arena_make();
     Diagnostics d = {};
     String dir = load_test_directory(&a, "preload_given_with_its_text");
@@ -2524,7 +2525,10 @@ TEST(preload_given_with_its_text) {
     CHECK_STR(messages(&a, &d), "");
     CHECK(reached);
     CHECK_EQ(d.files.count, 2);
-    if (d.files.count == 2) CHECK_STR(d.files[1].text, "given :: () {}\n");
+    if (d.files.count == 2) {
+        CHECK_STR(d.files[1].text, "given :: () {}\n");
+        CHECK_STR(d.files[1].path, module_file(&a, places.places[0], "Preload", "module.rig"));
+    }
     CHECK(check(tree, &a, &d));
     CHECK_STR(messages(&a, &d), "");
     diag_free(&d);
@@ -2536,7 +2540,10 @@ TEST(missing_preload_stops_the_loading) {
     // the tree saying why (Ast_File.load_failure), and nothing reported, so
     // the main file's syntax error and its #load of a file that isn't there
     // aren't said; and with only the main file registered, a workspace's
-    // further file not added.
+    // further file not added. The --stdin-for answers are still set, as at
+    // the end of any loading: the main file, given with its text, was
+    // reached, and neither left in a branch not taken nor undecided (each
+    // flag starts as the opposite, to show it was set).
     Arena a = arena_make();
     Diagnostics d = {};
     String dir = load_test_directory(&a, "missing_preload_stops_the_loading");
@@ -2544,11 +2551,18 @@ TEST(missing_preload_stops_the_loading) {
     const char *text = "#load \"nope.rig\";\nmain :: () { x }\n";
     write_source(&a, dir, "main.rig", text);
     write_source(&a, dir, "x.rig", "x :: () {}\n");
+    String path = str(in_directory(&a, dir, "main.rig"));
+    bool reached = false, not_taken = true, undecided = true;
     Load_Options options = {};
     options.modules = &places;
     array_add(&options.more_files, str(in_directory(&a, dir, "x.rig")));
     array_add(&options.more_texts, str("x :: () {}\n"));
-    Ast_File *tree = load_program(&a, &d, str(in_directory(&a, dir, "main.rig")), str(text), &options);
+    options.stdin_for = path;
+    options.stdin_text = str(text);
+    options.stdin_for_reached = &reached;
+    options.stdin_for_not_taken = &not_taken;
+    options.stdin_for_undecided = &undecided;
+    Ast_File *tree = load_program(&a, &d, path, str(text), &options);
     String expected = string_printf(&a, "there's no module 'Preload' (looked in " STR_FMT " and " STR_FMT ")",
                                     STR_ARG(places.places[0]), STR_ARG(places.places[1]));
     CHECK_STR(tree->load_failure, string_cstr(&a, expected));
@@ -2556,6 +2570,9 @@ TEST(missing_preload_stops_the_loading) {
     CHECK_EQ(d.files.count, 1);
     CHECK_EQ(tree->procs.count, 0);
     CHECK_EQ(tree->loads.count, 0);
+    CHECK(reached);
+    CHECK(!not_taken);
+    CHECK(!undecided);
     array_free(&options.more_files);
     array_free(&options.more_texts);
     diag_free(&d);
