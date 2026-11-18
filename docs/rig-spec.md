@@ -2476,7 +2476,7 @@ A **build program** (section 7.9) isn't made into an executable: once its top-le
 - The object file, one for the whole program, is written to a directory `.build` in the current directory, made if needed, named after the main file: `.build/hello.obj` on Windows, `.build/hello.o` on Linux.
 - On Windows the program's debug information is written beside it: the executable's name with `.pdb` for its `.exe` (in any case), `hello.pdb` for `hello.exe`, or with `.pdb` added to a name with another extension, `out.bin.pdb` for `out.bin` (section 10.7).
 
-**The report.** A `rig build` that succeeds ends with a report of where its time went, on its standard output, after everything the `#run`s printed: the main file's path as it was given, then a line for each stage of section 10.2 with its time in milliseconds, to two decimals, and the total, with the lines compiled and how many a second. For `rig build hello.rig`, hello world's two lines and Preload's:
+**The report.** A `rig build` that succeeds ends with a report of where its time went, on its standard output, after everything the `#run`s printed: the main file's path as it was given, then a line for each part of the build with its time in milliseconds, to two decimals, and the total, with the lines compiled and how many a second. The parts are the stages of section 10.2, stages 1 to 3 on one line and stage 6 on two or three, and the `#run`s, on a line of their own (below). For `rig build hello.rig`, hello world's two lines and Preload's:
 
 ```text
 hello.rig
@@ -2573,7 +2573,7 @@ The compiler is a single program written in C++, with LLVM linked into it. It co
 
 A build program (section 7.9) goes through stages 1 to 4, and its top-level `#run`s run, but it isn't lowered into a program of its own: each of its workspaces goes through every stage instead, as a program of its own.
 
-`rig build`'s report (section 10.1) gives each stage's time.
+`rig build`'s report (section 10.1) gives the stages' times, the `#run`s' on a line of their own: the checker's line leaves out the expression `#run`s it runs.
 
 No integer instruction carries LLVM's `nsw`, `nuw` or `exact` flags, and no float instruction carries fast-math flags: Rig's integers wrap and its floats are IEEE 754's. No pointer arithmetic is marked `inbounds`, copies are `memmove`s (the two sides may overlap), and no pointer is assumed non-null. So an optimised program does what an unoptimised one does: the optimiser takes none of these for undefined. Optimised, every procedure is also marked as knowing none of the C library's functions, as clang's `-fno-builtin` marks a function: a program's own procedure may have a C function's name (section 7.6), and LLVM would otherwise take it for C's, and C's for it. And optimised, every stack slot is zeroed before the procedure's body runs, so a `---` local read before it is assigned is still an unspecified value (section 8.6): zero the first time, and in a loop the value the slot held in the iteration before, as unoptimised, and never a read of memory nothing stored, which the optimiser would take as undefined and could remove the code after.
 

@@ -81,18 +81,18 @@
 // its programs and their .build there, never in tests/. rig's exit code
 // must be the number in NAME/expected.exit (0 when there's none), its
 // stdout NAME/expected.build.out (what the top-level #runs print while
-// compiling, the build program's and then each workspace's, and no
-// report: --quiet, as for tests/run), and its stderr
-// NAME/expected.err (its placeholders as above), each empty when there's
-// none. NAME/expected.programs names the executables rig must build, one a
-// line, without the host's suffix (.exe on Windows): each is run in the
-// copy, and must exit 0, write nothing to stderr, and print
-// NAME/PROGRAM.out. Without expected.programs rig must build nothing, so
-// make no .build in the copy. NAME/expected.absent names files, one a line,
-// relative to the copy, that rig must not make, as named, with the host's
-// executable suffix, or with its object file's (.obj or .o): a failed
-// workspace's program and object. rig is never given -o there, and none of
-// it is interpreted: bin/unit-tests --interpret refuses a build program.
+// compiling, the build program's and then each workspace's, and no report:
+// --quiet, as for tests/run), and its stderr NAME/expected.err (its
+// placeholders as above), each empty when there's none.
+// NAME/expected.programs names the executables rig must build, one a line,
+// without the host's suffix (.exe on Windows): each is run in the copy, and
+// must exit 0, write nothing to stderr, and print NAME/PROGRAM.out. Without
+// expected.programs rig must build nothing, so make no .build in the copy.
+// NAME/expected.absent names files, one a line, relative to the copy, that
+// rig must not make, as named, with the host's executable suffix, or with
+// its object file's (.obj or .o): a failed workspace's program and object.
+// rig is never given -o there, and none of it is interpreted:
+// bin/unit-tests --interpret refuses a build program.
 //
 // Then a few fixed cases: rig build sub/build.rig from its parent (a build
 // program's files, objects and programs are relative to its own directory,
@@ -104,44 +104,43 @@
 // output before a workspace's file that can't be read is said
 // (workspace_output_order_test), tests/build/options once more, where the
 // workspaces whose bounds checks are left on by default, unoptimised and
-// optimised, stop at their index past the end (checked_workspace_test),
-// rig build's report, without --quiet, checked by its shape, its times
-// adding up and its lines counted: of tests/run/hello.rig, its lines and
-// Preload's (hello_report_test), of tests/run/run_slow.rig, whose slow
-// constant's #run is counted once, in #run and not in checking too
+// optimised, stop at their index past the end (checked_workspace_test), rig
+// build's report, without --quiet, checked by its shape, its times adding
+// up and its lines counted: of tests/run/hello.rig, its lines and Preload's
+// (hello_report_test), of tests/run/run_slow.rig, whose slow constant's
+// #run is counted once, in #run and not in checking too
 // (slow_run_report_test), of tests/run/basic_string.rig, whose Basic makes
 // checking and lowering take measurable time (basic_report_test), of
-// tests/build/two_workspaces, after what its
-// #runs print, the build program's block, each workspace's, then all
-// (build_program_report_test), and of tests/build/options, whose optimised
-// workspaces have an optimising line (optimised_report_test); and none
-// from tests/build/workspace_failures, which fails though a workspace of it
+// tests/build/two_workspaces, after what its #runs print, the build
+// program's block, each workspace's, then all (build_program_report_test),
+// and of tests/build/options, whose optimised workspaces have an optimising
+// line (optimised_report_test), no report from
+// tests/build/workspace_failures, which fails though a workspace of it
 // built (failed_workspace_report_test), nor from tests/build/exit_fails and
 // tests/build/workspace_exit, whose #runs end rig with exit()
-// (exit_report_test), bin/unit-tests --interpret of two
-// programs that call a #compiler procedure, at run time and in a
-// constant's #run (each refused as rig
-// build refuses it, with nothing run), of a build program with errors
-// (said as rig build says them), and of one without (which it refuses on
-// stderr before its top-level #runs: there's no main to run), rig build of
-// a build program with -o, --no-bounds-checks or both (refused on stderr
-// before its top-level #runs, -o's refusal alone when both are given, but
-// after its errors), a failed top-level #run's error after the runs'
-// output, and after a later run's exit(), when stdout and stderr are one
-// pipe (run_output_order_test), rig check's output of a constant's #run
-// before its diagnostics, in one pipe (check_run_output_test), a .build/
-// or an object file rig can't write, a workspace's .build/ that it can't
-// make, said after what the workspace's #run printed when both are in one
-// pipe (workspace_unwritable_test), rig check (alone, and with --stdin-for a
+// (exit_report_test), bin/unit-tests --interpret of two programs that call
+// a #compiler procedure, at run time and in a constant's #run (each refused
+// as rig build refuses it, with nothing run), of a build program with
+// errors (said as rig build says them), and of one without (which it
+// refuses on stderr before its top-level #runs: there's no main to run),
+// rig build of a build program with -o, --no-bounds-checks or both (refused
+// on stderr before its top-level #runs, -o's refusal alone when both are
+// given, but after its errors), a failed top-level #run's error after the
+// runs' output, and after a later run's exit(), when stdout and stderr are
+// one pipe (run_output_order_test), rig check's output of a constant's #run
+// before its diagnostics, in one pipe (check_run_output_test), a .build/ or
+// an object file rig can't write, a workspace's .build/ that it can't make,
+// said after what the workspace's #run printed when both are in one pipe
+// (workspace_unwritable_test), rig check (alone, and with --stdin-for a
 // file it doesn't load), rig build and bin/unit-tests --interpret of
 // tests/run/hello.rig by copies of rig and bin/unit-tests in
 // .build/tests/no-preload/bin, with no modules/ beside them or above: each
 // says there's no module 'Preload', alone on stderr (not that the program
 // doesn't load the --stdin-for file), exit 1, and the build makes nothing,
 // and rig check by such a copy of a main file that isn't there says that
-// file can't be read instead (no_preload_test), the command line's mistakes,
-// and rig version's output, by its shape (version_test: it names the commit
-// rig was built from).
+// file can't be read instead (no_preload_test), the command line's
+// mistakes, and rig version's output, by its shape (version_test: it names
+// the commit rig was built from).
 //
 // Then rig check on every program of tests/run and tests/errors (not
 // tests/build's), from a file and from stdin under the file's name, a loaded
@@ -1513,10 +1512,10 @@ static String unwritable_test(Arena *a, String rig, bool object_blocked) {
 // top-level #run prints a line, can't have its object written, since its
 // .build is relative to the build program's directory (spec 7.9). Its
 // stdout and stderr in one pipe must be that line, then rig's error naming
-// sub/.build, and nothing after it (no report), and rig must exit 1. stdout is a pipe, so C buffers it, and
-// rig flushes it before saying the error. The files are written here, as a
-// case of tests/build has no .build file and its stderr has no reason in
-// it, which is the system's.
+// sub/.build, and nothing after it (no report), and rig must exit 1. stdout
+// is a pipe, so C buffers it, and rig flushes it before saying the error.
+// The files are written here, as a case of tests/build has no .build file
+// and its stderr has no reason in it, which is the system's.
 static String workspace_unwritable_test(Arena *a, String rig) {
     String dir = str(".build/tests/objects-blocked");
     remove_tree(a, dir);
@@ -2156,7 +2155,7 @@ static String report_test(Arena *a, String rig, const char *name, s64 least_run,
     } else if (r.why.count) {
         why = r.why;
     } else if (r.runs[0] < least_run) {
-        why = string_printf(a, "#run took %lld.%02lld ms, less than %lld.%02lld ms",(long long)(r.runs[0] / 100),
+        why = string_printf(a, "#run took %lld.%02lld ms, less than %lld.%02lld ms", (long long)(r.runs[0] / 100),
                             (long long)(r.runs[0] % 100), (long long)(least_run / 100), (long long)(least_run % 100));
     } else if (r.lines[0] != lines) {
         why = string_printf(a, "the report counts %lld lines, not %s.rig's and its modules' %lld",
