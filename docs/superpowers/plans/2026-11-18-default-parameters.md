@@ -56,9 +56,9 @@
   - Branch `issue/155-default-parameters`, worktree `C:\dev\rig-wt\155`. This plan is its first commit, as `docs/superpowers/plans/2026-11-18-default-parameters.md`. Push it, then open a draft PR: `Fixes #155`, labels `language` and `enhancement`, milestone `4: The Basic module`. Push after each commit.
   - **Commit messages:** a short imperative summary line, a blank line, an optional body, and nothing else. No trailers, no attribution lines.
   - Other work is in flight:
-    - A polish PR (#182, #183) changes comments in `src/os.h`, `driver.cpp`, `tests/runner.cpp`, `check_run.cpp`, `lower.cpp`, `checker.h`, `parser.cpp`, `check_expr.cpp`, `llvm_backend.cpp`, Preload's README, and spec 4.3, 10.1 and 10.2.
-    - #154 (formatted `print`) changes `modules/Basic/` and spec 2.14, and may change the examples of spec 3.16 and of 7.2's variadic part.
-    - This plan doesn't touch `modules/`, `src/os.h`, `driver.cpp`, `tests/runner.cpp`, `llvm_backend.cpp`, or spec 2.14, 3.16, 4.3, 10.1 and 10.2. In the shared source files, change only this plan's own lines. In spec 7.2, add the new paragraphs after the variadic example, without touching it.
+    - The polish PR #184 (issues #182, #183) changes comments in `src/os.h`, `driver.cpp`, `run.cpp`, `run.h`, `tests/runner.cpp`, `check_run.cpp` (and its `walk_struct`), `lower.cpp`, `checker.h`, `parser.cpp`, `check_expr.cpp`, `llvm_backend.cpp`, Preload's README, and spec 4.3, 10.1 and 10.2. It also touches `tests/unit/test_checker.cpp` and `test_parser.cpp`, which this plan adds tests to.
+    - #154 (formatted `print`, PR #185) changes `modules/Basic/`, `README.md` (line 94), spec 3.16 (one example), `tests/run/basic_print_*` and `tests/errors/basic_print_arguments`. It leaves 5.10 and 7.2 alone.
+    - This plan doesn't touch `modules/`, `README.md`, `src/os.h`, `driver.cpp`, `run.cpp`, `run.h`, `tests/runner.cpp`, `llvm_backend.cpp`, or spec 2.14, 3.16, 4.3, 10.1 and 10.2. In the shared source and test files, change only this plan's own lines. In spec 7.2, add the new paragraphs after the variadic example, without touching it.
     - When either PR merges into main first, `git merge origin/main` (a merge commit), resolve, rebuild and retest.
   - Before the PR is marked ready, an independent review runs. Fix every finding in production code and tests, minor ones included, and any wrong comment or doc. Comment and doc *polish* never holds the PR: it becomes GitHub issues labelled `documentation`.
 
@@ -66,40 +66,41 @@
 
 1. **Today:** `repeat :: (s: string, times: int = 2) { }` is `1:34: expected ')', found '='`. `t : (a: int = 1) -> int;` is `1:13: expected ')', found '='`. `f :: (n := 0) { }` is `1:9: expected ')', found ':='`, because `procedure_follows` doesn't take `(n :=` as a signature, so the parser reads a constant. (Run with `bin\rig.exe check` at e4bb35f.)
 2. **Parser** (`parser.cpp`; grammar and prose at `parser.h:1-60`, `params` and `param` at `20-21`, `proc_param` at `26`):
-   - `parse_constant` (`782-792`) shows how a value's levels are taken: `take_deepest` before and after `parse_expression(p, 1)`.
+   - `parse_constant` (`782-790`) shows how a value's levels are taken: `take_deepest` before and after `parse_expression(p, 1)`.
    - `procedure_follows` (`706-711`) takes `'(' ')'`, `'(' '..'` and `'(' IDENT ':'` as a signature.
-   - `count_open` (`1981-2006`, for the recovery) counts a list's parentheses from `'(' IDENT ':'` or `'(' IDENT IDENT`. Its comment says "A list holds no braces".
-   - `parse_proc_type` (`1459-1506`): its parameter loop is at `1463-1480`. On a mistake it reports and returns null.
-   - `parse_whole_type` (`1548-1554`). `parse_param` (`1562-1578`). `parse_procedure` (`1631-1752`; its comment at `1602-1630`, the parameter loop at `1635-1649`).
-   - A parameter's default is parsed before `p->body_deepest = 0` (`1746`), so its levels don't count in the body's.
-   - A call of a name is one level (`set_height(p, height + 1)`, `parse_postfix` `519-541`).
+   - `count_open` (`1981-2000`, for the recovery) counts a list's parentheses from `'(' IDENT ':'` or `'(' IDENT IDENT`. Its comment says "A list holds no braces".
+   - `parse_proc_type` (`1459-1501`): its parameter loop is at `1463-1484`. On a mistake it reports and returns null.
+   - `parse_whole_type` (`1548-1554`). `parse_param` (`1562-1573`, its comment from `1556`). `parse_procedure` (`1631-1728`; its comment at `1595-1630`, the parameter loop at `1635-1651`).
+   - A parameter's default is parsed before `p->body_deepest = 0` (`1722`), so its levels don't count in the body's.
+   - A call of a name is one level (`set_height(p, height + 1)`, the call in `parse_postfix` at `517-536`).
 3. **AST** (`ast.h`): `Ast_Param` (`129-134`), `Ast_Proc` (`170-204`), `Ast_Call` (`376-388`). In `Ast_Call`, `proc` is set for a procedure's name and for a constant naming one (`OP :: add;`). `ast.cpp`'s parameter dump is at `155-164` (`(rest (.. int))`).
 4. **Checker, declarations** (`checker.cpp`; the rules in `checker.h`, "Variadic Rig procedures" at `479-596`, "Procedures the compiler does" from `597`):
    - `Outer_Scopes`, `leave_scopes` and `return_to_scopes` (`272-299`): a declaration worked out where it's needed has the top level's names only.
    - `declare` (`329-339`) reports a name declared twice. `check_var_value` (`345-367`) converts a typed variable's value with `check_convert` and `report_no_conversion`.
    - `check_body` (`1782-1823`) declares the parameters at `1800`, and `leave_scopes` at its start sets the outer state aside.
-   - `check_signature` (`2000-2050`): parameter types at `2004-2025`, results at `2026-2031`, `proc->type` at `2049`.
+   - `check_signature` (`2000-2049`): parameter types at `2004-2023`, results at `2024-2029`, `proc->type` at `2048`. Its only caller is `resolve_signature` (`2088`), with `base` = the level `open_declaration` started from.
    - `resolve_signature` (`2067-2096`): its levels loop is at `2076-2082`, then `open_declaration`, `leave_scopes`, `RESOLVE_UNDER_WAY` (a circle is `'f' is defined in terms of itself`, at `proc->pos`), and `had_errors`.
    - `Checker` is at `check.h:12-64`.
 5. **Checker, expressions** (`check_expr.cpp`):
    - `report_no_conversion` (`221-226`). `check_convert` (`471-542`): an untyped constant takes the type, `.{...}` and `.[...]` take it, `null` takes a pointer, and a value converts to `Any`.
    - `check_name` (`652-695`; `AST_PARAM` at `661-662`). `check_argument` (`806-815`).
-   - `check_callee` (`866-923`): a name that is a variable or a parameter goes through `check_expression`, so `check_name` sees it.
-   - `check_call` (`925-1000`): the count and its message at `952-963`, conversions of the fixed arguments at `970-972`, C's extra arguments at `976-989`.
-6. **`#run`'s walk** (`check_run.cpp`): a worklist, not a recursion. `walk_proc` (`151-163`) checks a reached procedure's signature and body, then reaches its types and its body. A call's arguments and its procedure are reached at `199-210`. A `#run` in an expression is checked once, where it's met (`check_run`, from `461`).
+   - `check_callee` (`866-907`): a name that is a variable or a parameter goes through `check_expression`, so `check_name` sees it. A procedure's name sets `call->proc` without `check_name`.
+   - `check_call` (`925-998`): the count and its message at `956-963`, conversions of the fixed arguments at `971-973` (`call->args[i]` for every `i < fixed`, so they must stop at the given ones), C's extra arguments at `977-991`.
+6. **`#run`'s walk** (`check_run.cpp`): a worklist, not a recursion. `walk_proc` (`151-163`) checks a reached procedure's signature and body, then reaches its types and its body. A call's arguments and its procedure are reached at `199-210`. A `#run` in an expression is checked once, where it's met (`check_run`, from `438`).
 7. **Lowering** (`lower.cpp`):
-   - `Lowering` (`332-416`): `pos`, the statement's, at `399`, set by `place` per statement (`2492`).
+   - `Lowering` (`332-416`): `pos`, the statement's, at `399`, set per statement by `lower_statement` (`l->pos = statement_position(s)`, `2492`), and by `place` (`419`) for a loop's or an if's own code.
    - `emit_in` (`467-472`), `emit_call` (`478-483`) and `emit_call_indirect` (`487-492`) give each instruction `l->pos`.
    - `runtime_error_prefix` (`1030-1033`) names `at`'s file. `emit_runtime_check` (`1054-1068`) and `emit_bounds_check` (around `1475-1500`) set `l->pos = at` for the panic.
-   - `lower_argument` (`1785-1791`) converts a value to its parameter's type and copies an aggregate. `lower_call_results` (`1893-1949`): given arguments at `1904-1910`; the `#compiler` call at `1915-1930` sets `l->pos = call->callee->pos` and reports `'NAME' can only be called while compiling` there, unless `on_demand` or `repeating`. That message is the only `diag_error` in lowering.
+   - `lower_argument` (`1785-1791`) converts a value to its parameter's type and copies an aggregate. `lower_call_results` (`1893-1948`): given arguments at `1904-1913` (`fixed` is `call->args.count` without a `..T`); the `#compiler` call at `1916-1929` sets `l->pos = call->callee->pos` and reports `'NAME' can only be called while compiling` there, unless `on_demand` or `repeating`. That message is the only `diag_error` in lowering.
    - Caches keyed by node or name (`literal_globals`, `constant_globals`, `type_infos`, `proc_index`) make lowering one AST node in many places safe.
 8. **Backend and interpreter:**
    - `llvm_backend.cpp`'s `set_location` asserts `instr->pos.file == body->file` (`1199`). An instruction positioned in another file than its procedure's crashes `rig build`, which always writes debug information (spec 10.7).
    - `interp_fail` (`interp.cpp:472-490`) makes a failed `#run`'s frames from each instruction's `pos`.
    - `ir.h:94-110` says each instruction is at its statement's first token, and a runtime check's failure at the check.
-9. **The stack:** the compiler runs on `RIG_STACK_SIZE`, 8 MB (`os.h:126-133`), and its recursions are bounded by MAX_DEPTH, 1000 (`ast.h:37`; issues #68, #77). Lowering a default inline recurses once per default that a default's call fills in. Nothing bounds a chain declared in the order it's needed, which the checker works out at level 0 each time (spec 9.4).
+9. **The stack:** the compiler runs on `RIG_STACK_SIZE`, 8 MB (`os.h:126-134`), and its recursions are bounded by MAX_DEPTH, 1000 (`ast.h:37`; issues #68, #77). Lowering a default inline recurses once per default that a default's call fills in. Nothing bounds a chain declared in the order it's needed, which the checker works out at level 0 each time (spec 9.4).
 10. **Test helpers:**
-    - `parse_src` (`test_parser.cpp`), `builds` (`test_parser.cpp:1030`: checks, lowers, makes LLVM IR), `check_source` (`helpers.cpp:146`: messages sorted by position), `check_src` (`test_checker.cpp:311`), `check_module_source` (`test_checker.cpp:5965`: a module's file, for `#compiler`), `global_named`.
+    - `parse_src` (`test_parser.cpp:301`), `builds` (`test_parser.cpp:1030`: checks, lowers, makes LLVM IR), `check_source` (`helpers.cpp:146`: messages sorted by position, no Preload), `check_src` (`test_checker.cpp:311`), `check_module_source` (`test_checker.cpp:5965`: a module's file, for `#compiler`), `global_named` (`test_checker.cpp:1647`).
+    - They are file-level `static`s, visible only below their definition in the unity build (`unit.cpp` includes `helpers.cpp`, `test_parser.cpp`, `test_checker.cpp`, then `test_ir.cpp`). So each task's new tests go in a new section at the end of their file, after the helpers they use (`check_module_source` is in the middle of `test_checker.cpp`).
     - `lower_source` (`helpers.cpp:172`, `test.rig`), `proc_ir` (`test_ir.cpp:126`), `message_of` (`test_ir.cpp:1063`: a global's bytes), `ir_print`, `ir_print_debug` (each instruction ends `  ; L:C sN`), `contains`, `index_of`, `count_of`.
     - `tests/run/load/` holds files that `tests/run` programs load. `load_runtime_error` shows a runtime error naming a loaded file.
 11. **Editor:** the grammar already colours `times: int = 2`, `separator: string = " "`, `p: Vec2 = .{1, 2}`, `q: Vec2 = Vec2.{3, 4}`, `x: int = h(1, 2)`, `cb: (int) -> int = twice` and `t : (a: int = 1) -> int;` right. `=` is `keyword.operator.assignment.rig`, the types are theirs, `h` is a call, and names have no scope. (Checked with `check.js`'s tokenizer.)
@@ -250,7 +251,7 @@ s32 default_levels;  // the deepest levels of default_value (MAX_DEPTH), as Ast_
   - `procedure_follows` and `count_open`: `'(' IDENT ':='` begins a parameter list (Decision 3). Their comments say so, and `count_open`'s says a default's literal braces end the count (Decision 12).
   - `ast.cpp`: the parameter's dump adds ` (default VALUE)` (Decision 2). Its comment shows it.
   - `parser.h`: `param` with `['=' expression]`; prose that a default's place and its rules are the checker's, that a procedure type has none (the message), and the `:=` message.
-  - The grammar template: Decision 13's lookahead, and the lookahead's comment says `IDENT ':'` or `IDENT ':='`. Regenerate with `RIG_BLESS=1 .\bin\unit-tests.exe vscode_grammar`.
+  - The grammar template: Decision 13's lookahead, and the lookahead's comment says `IDENT ':'` or `IDENT ':='`. Regenerate with `$env:RIG_BLESS = '1'; .\bin\unit-tests.exe vscode_grammar; Remove-Item Env:RIG_BLESS` in PowerShell (`RIG_BLESS=1 bin/unit-tests vscode_grammar` in bash).
 - [ ] **Step 4: Run all tests** on both hosts, `check.js` included.
 - [ ] **Step 5: Commit** `Parse default parameter values`. Push.
 
@@ -358,7 +359,7 @@ static s64 required_arguments(Ast_Proc *proc);
 
 - [ ] **Step 1: Write the failing tests.**
   - `test_checker.cpp`, under the Task 2 heading:
-    - `calls_leave_out_parameters_with_default_values`: `check_src` of `repeat :: (s: string, times: int = 2, separator: string = " ") { }\nR :: repeat;\nmain :: () {\n    repeat("ho");\n    repeat("ho", 3);\n    repeat("ho", 3, "-");\n    R("hi");\n    b : u8 = 4;\n    repeat("ho", b);\n}\n`. No messages. In main, statement 6's second argument has type `u8`, converted to `int` as any argument is.
+    - `calls_leave_out_parameters_with_default_values`: `check_src` of `repeat :: (s: string, times: int = 2, separator: string = " ") { }\nR :: repeat;\nmain :: () {\n    repeat("ho");\n    repeat("ho", 3);\n    repeat("ho", 3, "-");\n    R("hi");\n    b : u8 = 4;\n    repeat("ho", b);\n}\n`. No messages. In main, the sixth statement's (`statements[5]`, `repeat("ho", b)`) second argument has type `u8`, converted to `int` as any argument is (`check_convert` keeps a typed value's own type).
     - `the_count_of_a_call_with_default_values`: `check_source` of `pair :: (a: int, b: int = 0) { }\nmaybe :: (n: int = 0) { }\nlater :: (a: int = 1, b: int, c: int = 3) { }\nmain :: () {\n    pair();\n    maybe(1, 2);\n    later(1);\n    later(1, 2, 3, 4);\n}\n` gives:
       ```
       3:23: 'b' needs a default value, since a parameter before it has one
@@ -367,7 +368,7 @@ static s64 required_arguments(Ast_Proc *proc);
       7:5: 'later' takes 2 or 3 arguments, but 1 was given
       8:5: 'later' takes 2 or 3 arguments, but 4 were given
       ```
-    - `default_values_nested_too_deeply` (Review Focus 3): sources made in a loop, `p0 :: (x: int = 0) -> int { return x; }\n` then `pK :: (x: int = pJ()) -> int { return x; }\n` for K from 1, J = K - 1, then `main :: () { }\n`.
+    - `default_values_nested_too_deeply` (Review Focus 3): sources made in a loop by a `static` helper in `test_checker.cpp` (say `default_chain(Arena *a, s64 last)`, the procedures `p0` to `p<last>` without `main`), which Task 4's `test_ir.cpp` test reuses, `p0 :: (x: int = 0) -> int { return x; }\n` then `pK :: (x: int = pJ()) -> int { return x; }\n` for K from 1, J = K - 1, then `main :: () { }\n`.
       - Up to `p1000` (1001 procedures): `check_source` gives `""`.
       - Up to `p1001`: exactly `1002:20: this default value is nested too deeply with the default values its calls fill in (more than 1000 levels)\n` (Decision 8).
   - `tests/errors/default_value_calls.rig`. Its `.err` has the seven messages, each with its line and caret:
