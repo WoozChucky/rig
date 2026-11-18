@@ -2175,9 +2175,9 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
 // another's default: `g :: (n: int = h())` with `h :: (m: int = g(1))`),
 // is a circle, found as a global's is (resolve_global): "'f' is defined in
 // terms of itself", once. In a type's circle every declaration in it has no
-// type, so nothing more is said; in a default's, only the call that closes
-// it has none: the procedure's type doesn't depend on its defaults, so it
-// keeps it and its other uses are checked. Unreported, g had no type and
+// type, so nothing more is said; in a default's, the calls along the circle
+// have none, but each procedure keeps its type, which doesn't depend on its
+// defaults, so its other uses are checked. Unreported, g had no type and
 // said nothing, [g] neither, and rig build crashed.
 //
 // Whether the signature is known now: false in a circle, under way or

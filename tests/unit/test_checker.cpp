@@ -7926,6 +7926,12 @@ TEST(a_default_value_uses_no_parameter) {
               "4:16: a default value can't use the parameter 'n'\n"
               "5:31: a default value can't use the parameter 'times'\n"
               "6:35: a default value can't use the parameter 'n'\n");
+    // One in a #run in a default is refused once, as a default's, not again
+    // as the #run's.
+    CHECK_STR(check_source(&a, "g :: (k: int) -> int { return k; }\n"
+                               "f :: (n: int, m: int = #run g(n)) { }\n"
+                               "main :: () { }\n"),
+              "2:31: a default value can't use the parameter 'n'\n");
     arena_free(&a);
 }
 

@@ -119,7 +119,9 @@ static const char *local_kind(Ast *decl) {
 // iterators don't exist yet. Each name of one in it is "#run can't use 'x':
 // it's a local, which doesn't exist while compiling", at the name. Its local
 // constants are known while compiling, and are fine. A #run inside it had
-// its own operand checked so. True when there's none.
+// its own operand checked so. In a default value (Checker.default_of), a
+// parameter was refused already, by check_name or check_addressable, and
+// isn't said again. True when there's none.
 static bool uses_no_locals(Checker *c, Ast *operand) {
     Array<Ast *> pending = {};
     array_add(&pending, operand);
@@ -133,6 +135,10 @@ static bool uses_no_locals(Checker *c, Ast *operand) {
         Ast_Name *name = (Ast_Name *)e;
         const char *what = local_kind(name->decl);
         if (!what) continue;
+        if (c->default_of && name->decl->kind == AST_PARAM) {
+            none = false;
+            continue;
+        }
         diag_error(c->diag, name->pos, "#run can't use '" STR_FMT "': it's %s, which doesn't exist while compiling",
                    STR_ARG(name->name), what);
         none = false;

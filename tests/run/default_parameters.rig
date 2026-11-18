@@ -86,7 +86,10 @@ main :: () {
     printf("%lld %lld %lld\n", place(), place(.{3, 4}), place(.{3, 4}, 100));
     printf("%lld\n", from());
     counter = 41;
-    printf("%lld %lld\n", current(), fresh());
+    // A default's names are the top level's, whichever body's call leaves
+    // it out: this local isn't the counter current and fresh read.
+    counter := 1000;
+    printf("%lld %lld %lld\n", current(), fresh(), counter);
     printf("%lld %lld %lld\n", strtoll("42"), strtoll("ff", null, 16), strtoll("-17"));
     say();
     say("told");
