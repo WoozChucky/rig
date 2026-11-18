@@ -7740,8 +7740,10 @@ TEST(each_path_of_a_description_lays_out_what_it_reaches) {
     // struct reaching another through a pointer (ANY), an Any of a pointer
     // (POINTER), an Any of a procedure taking a pointer (PROC), and
     // descriptions reaching a struct only through a procedure type's
-    // parameter (PARAM) or a view's element (VIEW). Each reads that
-    // struct's size through the description.
+    // parameter (PARAM) or result (RESULT), a view's element (VIEW), a fixed
+    // array's element's pointer (ARRAY: making [2]R lays out R, but not the
+    // Z behind R's late field) or a fixed array of pointers (ARRAY_POINTER).
+    // Each reads that struct's size through the description.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a,
@@ -7749,7 +7751,10 @@ TEST(each_path_of_a_description_lays_out_what_it_reaches) {
                                  "POINTER :: #run pointer_size(cast(*Third) null);\n"
                                  "PROC :: #run param_pointee_size(takes);\n"
                                  "PARAM :: #run param_size(type_info((P) -> int));\n"
+                                 "RESULT :: #run result_size(type_info(() -> Res));\n"
                                  "VIEW :: #run element_size(type_info([]Q));\n"
+                                 "ARRAY :: #run array_pointee_size(type_info([2]R));\n"
+                                 "ARRAY_POINTER :: #run array_pointer_size(type_info([2]*A));\n"
                                  "pointee_size :: (a: Any) -> int {\n"
                                  "    s := cast(*Type_Info_Struct) a.type;\n"
                                  "    return (cast(*Type_Info_Pointer) s.members[0].type).pointer_to.size;\n"
@@ -7762,20 +7767,35 @@ TEST(each_path_of_a_description_lays_out_what_it_reaches) {
                                  "param_size :: (t: *Type_Info) -> int {\n"
                                  "    return (cast(*Type_Info_Procedure) t).parameter_types[0].size;\n"
                                  "}\n"
+                                 "result_size :: (t: *Type_Info) -> int {\n"
+                                 "    return (cast(*Type_Info_Procedure) t).result_types[0].size;\n"
+                                 "}\n"
                                  "element_size :: (t: *Type_Info) -> int { return (cast(*Type_Info_Array) t).element_type.size; }\n"
+                                 "array_pointee_size :: (t: *Type_Info) -> int {\n"
+                                 "    s := cast(*Type_Info_Struct) (cast(*Type_Info_Array) t).element_type;\n"
+                                 "    return (cast(*Type_Info_Pointer) s.members[0].type).pointer_to.size;\n"
+                                 "}\n"
+                                 "array_pointer_size :: (t: *Type_Info) -> int {\n"
+                                 "    p := cast(*Type_Info_Pointer) (cast(*Type_Info_Array) t).element_type;\n"
+                                 "    return p.pointer_to.size;\n"
+                                 "}\n"
                                  "takes :: (x: *Other) -> int { return 0; }\n"
                                  "Late :: struct { next: *Later; }\n"
                                  "Later :: struct { a: u8; b: int; }\n"
                                  "Third :: struct { a: int; b: int; c: int; }\n"
                                  "Other :: struct { a: int; }\n"
                                  "P :: struct { a: int; b: int; }\n"
+                                 "Res :: struct { a: int; b: int; c: int; }\n"
                                  "Q :: struct { a: int; b: int; c: int; }\n"
+                                 "R :: struct { p: *Z; }\n"
+                                 "Z :: struct { a: int; b: int; c: int; }\n"
+                                 "A :: struct { a: u8; b: int; }\n"
                                  "main :: () { }\n",
                                  &tree),
               "");
-    const char *names[] = {"ANY", "POINTER", "PROC", "PARAM", "VIEW"};
-    s64 values[] = {16, 24, 8, 16, 24};
-    for (s64 i = 0; i < 5; i++) {
+    const char *names[] = {"ANY", "POINTER", "PROC", "PARAM", "RESULT", "VIEW", "ARRAY", "ARRAY_POINTER"};
+    s64 values[] = {16, 24, 8, 16, 24, 24, 24, 16};
+    for (s64 i = 0; i < 8; i++) {
         Ast *k = top_level_named(tree, names[i]);
         CHECK_EQ(k->kind, AST_CONST);
         CHECK(k->is_constant);
@@ -7800,4 +7820,30 @@ TEST(describing_a_struct_being_laid_out_is_a_circle) {
                                      "main :: () { }\n"),
               "1:1: 'S' is defined in terms of itself\n");
     arena_free(&a);
+}
+
+TEST(a_description_reaching_a_field_with_no_type_doesnt_run) {
+    // Describing Bad reaches Holder through Bad's pointer, and Holder's late
+    // field has no type: the walk stops there, so the #run doesn't run and
+    // BAD has no value, and the field's error is said once, whether
+    // type_info describes Bad or a conversion to Any does.
+    const char *sources[] = {"BAD :: #run one(type_info(Bad));\n"
+                             "one :: (t: *Type_Info) -> int { return 1; }\n"
+                             "Bad :: struct { next: *Holder; }\n"
+                             "Holder :: struct { x: *Nope; }\n"
+                             "main :: () { }\n",
+                             "BAD :: #run one(cast(*Bad) null);\n"
+                             "one :: (a: Any) -> int { return 1; }\n"
+                             "Bad :: struct { next: *Holder; }\n"
+                             "Holder :: struct { x: *Nope; }\n"
+                             "main :: () { }\n"};
+    for (s64 i = 0; i < 2; i++) {
+        Arena a = arena_make();
+        Ast_File *tree = nullptr;
+        CHECK_STR(check_with_preload(&a, sources[i], &tree), "4:24: unknown type 'Nope'\n");
+        Ast *k = top_level_named(tree, "BAD");
+        CHECK_EQ(k->kind, AST_CONST);
+        CHECK(!k->is_constant);
+        arena_free(&a);
+    }
 }
