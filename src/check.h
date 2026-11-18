@@ -57,6 +57,10 @@ struct Checker {
                                  // declares (check_in_a_branch)
     s64 base_procs;              // a decider's: file->procs.count and file->globals.count when it was
     s64 base_globals;            // made, the base; what's added after them joined through a branch
+    Type *type_info_type;        // Preload's Type_Info (spec 3.16): what type_info(T) points at; null
+                                 // without Preload (checker.cpp's declare_top_level finds both)
+    Type *any_type;              // Preload's Any (spec 3.16): what every value converts to; null
+                                 // without Preload
 };
 
 // checker.cpp
@@ -74,7 +78,8 @@ Ast *check_lookup(Checker *c, String name);
 Type *resolve_type(Checker *c, Ast_Type *written);
 
 // resolve_type, but void itself is a type too: for size_of, which says
-// what's wrong with it.
+// what's wrong with it, and type_info, which describes it (what a *void
+// points at).
 Type *resolve_type_or_void(Checker *c, Ast_Type *written);
 
 // Makes sure the type of field `index` of struct t is known: a late field's
@@ -163,15 +168,19 @@ Type *check_operand(Checker *c, Ast *e);
 
 // Whether e's value converts implicitly to `to`, where a declaration, an
 // assignment, an argument, a return, an operator or a literal's field puts
-// it (spec 6.4). An untyped constant takes the type `to` if it can: an
+// it (spec 3.13). An untyped constant takes the type `to` if it can: an
 // untyped integer an integer or float type, an untyped float a float type;
 // its value is converted to the type's (Ast.constant). A constant that
 // doesn't fit is reported here, then counted as converting, so the caller
 // doesn't report it again. .{...} takes the struct type `to`, its values
 // checked against its fields here ("a '.{' literal needs a struct type, not
 // 'int'" for any other, also counted as converting); .[...] an array type,
-// or a view type, becoming then an array of its own count. True also when
-// either type is unknown (null): the error was reported already.
+// or a view type, becoming then an array of its own count. Any value
+// converts to Preload's Any (spec 3.16), keeping its own type: Ast.to_any
+// says whether the Any holds the value's own address or a copy's, and a
+// literal without its type is reported, as check_default_type reports it.
+// True also when either type is unknown (null): the error was reported
+// already.
 bool check_convert(Checker *c, Ast *e, Type *to);
 
 // "a value of type 'A' doesn't convert to 'B' implicitly", at the value.

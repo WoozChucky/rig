@@ -1,0 +1,73 @@
+// type_info(T) (issue #153, spec 3.16, 5.19): a description of each
+// type, laid out as Preload's structs, read here as any data is. One
+// description per type: int and s64 have two, float and float32 one.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Mixed :: struct { a: u8; b: s32; c: u8; name: string; }
+Empty :: struct { }
+Node :: struct { value: int; next: *Node; }
+
+// A global may hold a description's address, the linker writing it.
+int_info := type_info(int);
+kinds : []*Type_Info = .[type_info(u8), type_info(string)];
+node_info : *Type_Info_Struct = cast(*Type_Info_Struct) type_info(Node);
+
+// A line for t: its tag, size and alignment, then what its kind adds.
+describe :: (t: *Type_Info) {
+    printf("%lld %lld %lld", t.tag, t.size, t.alignment);
+    if t.tag == TYPE_INFO_INTEGER {
+        printf(" signed %d", (cast(*Type_Info_Integer) t).signed);
+    } else if t.tag == TYPE_INFO_POINTER {
+        printf(" to %lld", (cast(*Type_Info_Pointer) t).pointer_to.tag);
+    } else if t.tag == TYPE_INFO_ARRAY {
+        a := cast(*Type_Info_Array) t;
+        printf(" of %lld kind %lld count %lld", a.element_type.tag, a.array_kind, a.count);
+    } else if t.tag == TYPE_INFO_STRUCT {
+        s := cast(*Type_Info_Struct) t;
+        printf(" %.*s", cast(s32) s.name.count, s.name.data);
+        for s.members { printf(" %.*s:%lld@%lld", cast(s32) it.name.count, it.name.data, it.type.tag, it.offset); }
+    } else if t.tag == TYPE_INFO_PROCEDURE {
+        p := cast(*Type_Info_Procedure) t;
+        printf(" (");
+        for p.parameter_types { printf(" %lld", it.tag); }
+        printf(" ) ->");
+        for p.result_types { printf(" %lld", it.tag); }
+        printf(" c_call %d variadic %d", p.is_c_call, p.is_variadic);
+    }
+    printf("\n");
+}
+
+main :: () {
+    describe(type_info(s8));
+    describe(type_info(s16));
+    describe(type_info(s32));
+    describe(type_info(s64));
+    describe(type_info(u8));
+    describe(type_info(u16));
+    describe(type_info(u32));
+    describe(type_info(u64));
+    describe(type_info(int));
+    describe(type_info(float));
+    describe(type_info(float64));
+    describe(type_info(bool));
+    describe(type_info(string));
+    describe(type_info(*int));
+    describe(type_info(*void));
+    describe(type_info(void));
+    describe(type_info([3]u16));
+    describe(type_info([]Mixed));
+    describe(type_info(Mixed));
+    describe(type_info(Empty));
+    describe(type_info(Node));
+    describe(type_info((int, ..u8) -> bool));
+    describe(type_info((*void, *void) -> s32 #c_call));
+    describe(type_info(() -> (int, string)));
+    describe(type_info(Any));
+    printf("%d %d %d %d\n", type_info(int) == type_info(int), type_info(int) == type_info(s64),
+           type_info(float) == type_info(float32), type_info([]int) == type_info([]int));
+    // A self-referring struct points back at its own description.
+    next := cast(*Type_Info_Pointer) node_info.members[1].type;
+    printf("%d\n", next.pointer_to == type_info(Node));
+    printf("%d %lld %lld %.*s\n", int_info == type_info(int), kinds[0].tag, kinds[1].tag,
+           cast(s32) node_info.name.count, node_info.name.data);
+}

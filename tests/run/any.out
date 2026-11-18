@@ -1,0 +1,38 @@
+int 2
+n 3
+int 7
+int 21
+int 10
+float32 1.50
+*void 1
+u8 200
+int 4
+int 5
+Vec2 3 4
+string hi
+a procedure
+int 3
+int 6
+int 7
+int 6
+string two
+Vec2 1 7
+int 1
+int 2
+u8 9
+float32 2.50
+int 10
+int 21
+int 30
+int 6
+int 10
+2int 30
+int 6
+string three
+int 10
+int 8
+Vec2 1 7
+*int 8
+a procedure
+Vec2 5 7
+int 9

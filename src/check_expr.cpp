@@ -304,7 +304,7 @@ Ast *literal_field_value(Ast_Literal *literal, Type *t, s32 field) {
 // value when `part` is itself constant data (a constant holding data, or a
 // field or an element of one), followed in turn; otherwise `part` itself, a
 // scalar as the literal wrote it (a constant, a procedure's name, a string
-// literal's address or a cast of one).
+// literal's address, a type's description's or a cast of one).
 static Ast *part_value(Ast *part) {
     Ast *value;
     return constant_data(part, &value) ? value : part;
@@ -327,10 +327,15 @@ bool constant_data(Ast *e, Ast **value) {
         if (!literal->is_data) {
             bool known = true;
             for (s64 i = 0; i < literal->values.count && known; i++) {
+                // A value converted to an Any is none, though it may be a
+                // constant: the Any holds an address, a place's or a copy's
+                // in the procedure's frame, that only the code doing the
+                // conversion gives it (spec 3.16).
                 Ast *part = literal->values[i];
                 Ast *ignored;
-                known = part->is_constant || procedure_address(part) || literal_address(part) ||
-                        constant_data(part, &ignored);
+                known = part->to_any == ANY_NONE &&
+                        (part->is_constant || procedure_address(part) || literal_address(part) ||
+                         type_info_address(part) || constant_data(part, &ignored));
             }
             literal->is_data = known ? 1 : -1;
         }
@@ -447,9 +452,31 @@ static void convert_array_literal(Checker *c, Ast_Literal *literal, Type *to) {
     check_element_values(c, literal, to->element);
 }
 
+// e, of a type other than Any, going where an Any goes (check_convert,
+// spec 3.16). Every value converts, keeping its own type; e->to_any says
+// how the Any will hold it, for lowering and for the checks of constants
+// and globals: a place's own address (expr_is_place), or a copy's, in a
+// temporary of the procedure's. A value whose type comes from where it
+// goes takes its default one first: an untyped constant an int or a
+// float32, null a *void. A literal without its type has none to take
+// ("this literal's type isn't known; write it before the '.', as in
+// Vec2.{1, 2}", check_default_type), and is left with no type.
+static void convert_to_any(Checker *c, Ast *e) {
+    if (e->type == &type_null) e->type = type_pointer_to(&type_void);
+    check_default_type(c, e);
+    if (!e->type) return;
+    e->to_any = expr_is_place(e) ? ANY_PLACE : ANY_COPY;
+}
+
 bool check_convert(Checker *c, Ast *e, Type *to) {
     Type *from = e->type;
     if (!from || !to) return true;
+    // Any value converts to Preload's Any (spec 3.16), which only Any
+    // itself does: nothing converts from it, nor to a []Any or a *Any.
+    if (to == c->any_type && from != to) {
+        convert_to_any(c, e);
+        return true;
+    }
     // .{...} takes the struct type it meets, and its values are checked
     // against that struct's fields now, nested .{...} included. Any other
     // type has no fields to give it: reported here, as a constant that
@@ -1661,13 +1688,16 @@ static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to
 // - A procedure value to or from *void: check_proc_cast.
 // - A string to a []u8 and a []u8 to a string: the same view, retyped
 //   (spec 3.14), the same bytes (is_bytes_retyped).
+// - Any value to Preload's Any: its conversion (check_convert, spec 3.16),
+//   never a constant.
 // - Anything else casts only where it converts implicitly: to its own
 //   type, null to a pointer, an array to a view of it, or a string literal,
 //   or constant data holding one (is_literal_string, spec 3.8), to *u8.
 //   Otherwise "can't cast 'A' to 'B'".
 // - cast,trunc takes integers only: "cast,trunc only takes integers".
-// A cast of a constant is a constant of T: a checked cast's is the same
-// number, a cast,trunc's is wrapped to T as at run time (wrap_to).
+// A cast of a constant is a constant of T, but a cast to Any: a checked
+// cast's is the same number, a cast,trunc's is wrapped to T as at run time
+// (wrap_to).
 static Type *check_cast(Checker *c, Ast_Cast *cast) {
     Type *to = resolve_type(c, cast->type_expr);
     Type *from = check_value(c, cast->value);
@@ -1677,6 +1707,14 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
     if (cast->is_trunc && !integers) {
         diag_error(c->diag, cast->pos, "cast,trunc only takes integers");
         return nullptr;
+    }
+    if (to == c->any_type && from != to) {
+        // Any value's conversion to Any (spec 3.16), a pointer's and a
+        // procedure value's too, which the cases below would refuse. The
+        // Any holds an address, so it's no constant, its value's constant
+        // or not.
+        check_convert(c, value, to);
+        return value->type ? to : nullptr;
     }
     if (from->kind == TYPE_PROC || to->kind == TYPE_PROC) return check_proc_cast(c, cast, from, to);
     if (type_is_number(from) && type_is_number(to) && !integers) return check_float_cast(c, cast, to);
@@ -1900,8 +1938,9 @@ static Type *check_deref(Checker *c, Ast_Deref *deref) {
 // struct's field and an array's element can be: one reached through a
 // pointer, or a view's, never is). The type is set here, though
 // check_expression sets it once the check returns, since constant_data
-// reads it. An aggregate part, or a pointer to a string literal's bytes or a
-// procedure, doesn't fold: it stays a part of the data.
+// reads it. An aggregate part, or a pointer to a string literal's bytes, a
+// procedure or a type's description, doesn't fold: it stays a part of the
+// data.
 static void fold_constant_part(Ast *part, Type *t) {
     part->type = t;
     Ast *value;
@@ -2003,6 +2042,40 @@ static Type *check_size_of(Checker *c, Ast_Size_Of *size_of) {
     size_of->is_constant = true;
     size_of->constant = (u64)t->size;
     return &type_untyped_int;
+}
+
+// type_info(T): the address of T's description (spec 5.19), a pointer to
+// Preload's Type_Info, which lowering writes into the program's read-only
+// data. T is any type, void included (what a *void points at). The address
+// is the linker's to write, so it's no constant. Without Preload there is
+// no Type_Info to point at: "'type_info' needs Preload's 'Type_Info', which
+// the program doesn't have", at the name.
+static Type *check_type_info(Checker *c, Ast_Type_Info *info) {
+    Type *t = resolve_type_or_void(c, info->type_expr);
+    if (!t) return nullptr;
+    if (!c->type_info_type) {
+        diag_error(c->diag, info->pos, "'type_info' needs Preload's 'Type_Info', which the program doesn't have");
+        return nullptr;
+    }
+    info->described = t;
+    return type_pointer_to(c->type_info_type);
+}
+
+// Casts between pointers are walked through, and a field or an element of
+// constant data goes on from the node holding its value (constant_data), as
+// procedure_address does.
+Ast_Type_Info *type_info_address(Ast *e) {
+    for (;;) {
+        if (!e->type || !type_is_pointer(e->type)) return nullptr;
+        if (e->kind == AST_TYPE_INFO) return (Ast_Type_Info *)e;
+        if (e->kind == AST_CAST) {
+            e = ((Ast_Cast *)e)->value;
+            continue;
+        }
+        Ast *value;
+        if (!constant_data(e, &value) || !value) return nullptr;
+        e = value;
+    }
 }
 
 // a.count and a.data of an array, a view or a string a (spec 5.12), the only
@@ -2217,6 +2290,7 @@ Type *check_expression(Checker *c, Ast *e) {
         break;
     case AST_DEREF: t = check_deref(c, (Ast_Deref *)e); break;
     case AST_SIZE_OF: t = check_size_of(c, (Ast_Size_Of *)e); break;
+    case AST_TYPE_INFO: t = check_type_info(c, (Ast_Type_Info *)e); break;
     case AST_MEMBER: t = check_member(c, (Ast_Member *)e); break;
     case AST_LITERAL: t = check_literal(c, (Ast_Literal *)e); break;
     case AST_INDEX: t = check_index(c, (Ast_Index *)e); break;

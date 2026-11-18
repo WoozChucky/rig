@@ -1,0 +1,111 @@
+// Any (issue #153, spec 3.16): every value converts to it. A place gives
+// its own address, so the Any sees the place change, and writing through
+// value_pointer changes the place; anything else is copied into a
+// temporary, which lives until the end of the statement. An Any converts
+// to Any as itself.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+putchar :: (c: s32) -> s32 #foreign libc;
+
+Vec2 :: struct { x: int; y: int; }
+Holder :: struct { a: Any; n: int; }
+
+LIMIT :: 10;
+// A global is a place too: an Any holds its address.
+counter := 1;
+
+// What a holds, by its type.
+show :: (a: Any) {
+    t := a.type;
+    if t == type_info(int) {
+        printf("int %lld\n", (cast(*int) a.value_pointer).*);
+    } else if t == type_info(u8) {
+        printf("u8 %d\n", (cast(*u8) a.value_pointer).*);
+    } else if t == type_info(float32) {
+        printf("float32 %.2f\n", (cast(*float32) a.value_pointer).*);
+    } else if t == type_info(string) {
+        s := (cast(*string) a.value_pointer).*;
+        printf("string %.*s\n", cast(s32) s.count, s.data);
+    } else if t == type_info(*void) {
+        printf("*void %d\n", (cast(**void) a.value_pointer).* == null);
+    } else if t == type_info(*int) {
+        printf("*int %lld\n", (cast(**int) a.value_pointer).*.*);
+    } else if t == type_info(Vec2) {
+        v := (cast(*Vec2) a.value_pointer).*;
+        printf("Vec2 %lld %lld\n", v.x, v.y);
+    } else if t.tag == TYPE_INFO_PROCEDURE {
+        printf("a procedure\n");
+    } else {
+        printf("tag %lld\n", t.tag);
+    }
+}
+
+show_all :: (args: ..Any) { for args { show(it); } }
+forward :: (args: ..Any) { show_all(..args); }
+twice :: (k: int) { show(k); }
+make :: () -> int { return 5; }
+// p.* is a place: the Any holds the caller's int's address.
+as_any :: (p: *int) -> Any { return p.*; }
+
+// Prints n's digit as it's evaluated.
+note :: (n: int) -> int {
+    putchar(cast(s32) n + 48);
+    return n;
+}
+
+main :: () {
+    n := 1;
+    a : Any = n;
+    n = 2;
+    show(a);
+    (cast(*int) a.value_pointer).* = 3;
+    printf("n %lld\n", n);
+    v := Vec2.{1, 2};
+    p := *v;
+    xs := int.[10, 20, 30];
+    view : []int = xs;
+    b : Any = p.y;
+    c : Any = view[1];
+    v.y = 7;
+    xs[1] = 21;
+    show(b);
+    show(c);
+    show(LIMIT);
+    show(1.5);
+    show(null);
+    show(cast(u8) 200);
+    twice(4);
+    show(make());
+    show(Vec2.{3, 4});
+    show("hi");
+    show(make);
+    show(a);
+    r := as_any(*n);
+    n = 6;
+    show(r);
+    show(n + 1);
+    show_all(n, "two", v);
+    // Each copy has its own temporary, two of one type in one statement
+    // too.
+    show_all(1, 2);
+    forward(cast(u8) 9, 2.5);
+    for xs { show(it); }
+    show(Holder.{a = n}.a);
+    show(cast(Any) LIMIT);
+    show(xs[note(2)]);
+    show_all(..Any.[n, "three", LIMIT]);
+    // cast(Any) converts a value of any type as a declaration does: d
+    // holds n's own address.
+    d := cast(Any) n;
+    n = 8;
+    show(d);
+    show(cast(Any) v);
+    show(cast(Any) *n);
+    show(cast(Any) make);
+    // So does an assignment: a holds v's address after it.
+    a = v;
+    v.x = 5;
+    show(a);
+    g : Any = counter;
+    counter = 9;
+    show(g);
+}

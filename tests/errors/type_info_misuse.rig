@@ -1,0 +1,13 @@
+// type_info(T) (issue #153, spec 5.19): its argument is a type, not a
+// value, and its value is an address, which a constant can't hold, as
+// it holds no pointer but null or a string literal's address (spec 4.2).
+Vec2 :: struct { x: int; y: int; }
+INFO :: type_info(Vec2);
+
+main :: () {
+    n := 1;
+    a := type_info(n);
+    b := type_info(Nope);
+    c := type_info(main);
+    LOCAL :: type_info(int);
+}

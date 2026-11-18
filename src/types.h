@@ -96,6 +96,51 @@ const s64 TYPE_MAX_SIZE = (s64)1 << 40;
 const s64 VIEW_COUNT_OFFSET = 0;
 const s64 VIEW_DATA_OFFSET = 8;
 
+// Preload's type information (spec 3.16), mirrored here as a view's layout
+// is: the structs a description is made of, where their fields are, and the
+// tags. Preload declares them in Rig (modules/Preload/module.rig) and the
+// compiler lays them out as it lays out any struct; lowering writes each
+// description from these. tests/unit/test_checker.cpp's
+// preloads_type_info_is_laid_out_as_rig_writes_it holds the two together:
+// a change to one is a change to the other.
+//
+// Every description starts with a Type_Info (its tag, size and alignment),
+// which each kind's struct holds as its first field, info, so a *Type_Info
+// is cast to the struct its tag names. Floats, bool, string and void have
+// the plain Type_Info.
+enum Type_Info_Tag : s64 {
+    TYPE_INFO_INTEGER = 0, TYPE_INFO_FLOAT = 1, TYPE_INFO_BOOL = 2, TYPE_INFO_STRING = 3,
+    TYPE_INFO_POINTER = 4, TYPE_INFO_PROCEDURE = 5, TYPE_INFO_VOID = 6, TYPE_INFO_STRUCT = 7,
+    TYPE_INFO_ARRAY = 8,
+};
+// Type_Info_Array's array_kind: an array, [N]T, or a view, []T.
+const s64 ARRAY_FIXED = 0, ARRAY_VIEW = 1;
+// Type_Info: tag, size and alignment, each an int.
+const s64 TYPE_INFO_TAG_OFFSET = 0, TYPE_INFO_SIZE_OFFSET = 8, TYPE_INFO_ALIGNMENT_OFFSET = 16;
+const s64 TYPE_INFO_SIZE = 24;            // a plain Type_Info: a float, bool, string, void
+// Type_Info_Integer: info, then signed, a bool.
+const s64 TYPE_INFO_SIGNED_OFFSET = 24, TYPE_INFO_INTEGER_SIZE = 32;
+// Type_Info_Pointer: info, then pointer_to, a *Type_Info.
+const s64 TYPE_INFO_POINTER_TO_OFFSET = 24, TYPE_INFO_POINTER_SIZE = 32;
+// Type_Info_Procedure: info, the views parameter_types and result_types (of
+// *Type_Info), then the bools is_c_call and is_variadic.
+const s64 TYPE_INFO_PARAMETERS_OFFSET = 24, TYPE_INFO_RESULTS_OFFSET = 40, TYPE_INFO_IS_C_CALL_OFFSET = 56,
+          TYPE_INFO_IS_VARIADIC_OFFSET = 57, TYPE_INFO_PROCEDURE_SIZE = 64;
+// Type_Info_Struct: info, name, a string, then members, a view of
+// Type_Info_Struct_Member.
+const s64 TYPE_INFO_NAME_OFFSET = 24, TYPE_INFO_MEMBERS_OFFSET = 40, TYPE_INFO_STRUCT_SIZE = 56;
+// Type_Info_Struct_Member: name, a string; type, a *Type_Info; offset, an int.
+const s64 TYPE_INFO_MEMBER_NAME_OFFSET = 0, TYPE_INFO_MEMBER_TYPE_OFFSET = 16, TYPE_INFO_MEMBER_OFFSET_OFFSET = 24,
+          TYPE_INFO_MEMBER_SIZE = 32;
+// Type_Info_Array: info, element_type, a *Type_Info, then the ints
+// array_kind and count (N, or -1 for a view).
+const s64 TYPE_INFO_ELEMENT_OFFSET = 24, TYPE_INFO_ARRAY_KIND_OFFSET = 32, TYPE_INFO_COUNT_OFFSET = 40,
+          TYPE_INFO_ARRAY_SIZE = 48;
+// Any: type, the value's *Type_Info, then value_pointer, its address.
+const s64 ANY_TYPE_OFFSET = 0, ANY_VALUE_OFFSET = 8, ANY_SIZE = 16;
+// Every description, member and Any is aligned to 8.
+const s32 TYPE_INFO_ALIGN = 8;
+
 // The type a built-in name means (s8 s16 s32 s64 u8 u16 u32 u64 int bool
 // float32 float64 float void string), or null. int is s64's size and sign, but its
 // own type, so messages say int where the program did (spec 6.4: int is

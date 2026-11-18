@@ -1,0 +1,39 @@
+tests/errors/any_conversions.rig:11:21: error: a constant's pointer can only be null or a string literal's address
+    HELD :: Holder.{a = 5};
+                        ^
+tests/errors/any_conversions.rig:12:21: error: a global's value must be known while compiling, for now
+    held := Holder.{a = 5};
+                        ^
+tests/errors/any_conversions.rig:13:13: error: a global's value must be known while compiling, for now
+    any : Any = 7;
+                ^
+tests/errors/any_conversions.rig:16:10: error: this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}
+        show(.{1, 2});
+             ^
+tests/errors/any_conversions.rig:17:10: error: this literal's type isn't known; write it before the '.', as in int.[1, 2]
+        show(.[1, 2]);
+             ^
+tests/errors/any_conversions.rig:18:10: error: 'main' can't be a value: it's where the program starts
+        show(main);
+             ^
+tests/errors/any_conversions.rig:19:10: error: 'Vec2' is a type, not a value
+        show(Vec2);
+             ^
+tests/errors/any_conversions.rig:20:10: error: 'greet' returns nothing, so it has no value
+        show(greet());
+             ^
+tests/errors/any_conversions.rig:21:10: error: 'printf' can't be a value: it takes C's '..', which no procedure type can say
+        show(printf);
+             ^
+tests/errors/any_conversions.rig:22:10: error: 'create_workspace' can't be a value: the compiler does it
+        show(create_workspace);
+             ^
+tests/errors/any_conversions.rig:24:20: error: a value of type '[2]int' doesn't convert to '[]Any' implicitly
+        view : []Any = ints;
+                       ^
+tests/errors/any_conversions.rig:25:16: error: a value of type '*int' doesn't convert to '*Any' implicitly
+        p : *Any = *ints[0];
+                   ^
+tests/errors/any_conversions.rig:27:15: error: a value of type 'Any' doesn't convert to 'int' implicitly
+        n : int = a;
+                  ^

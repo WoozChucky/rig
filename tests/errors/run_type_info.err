@@ -1,0 +1,9 @@
+tests/errors/run_type_info.rig:4:9: error: #run's result holds a pointer, which can't be baked, for now
+    INFO :: #run type_info(int);
+            ^
+tests/errors/run_type_info.rig:5:9: error: #run's result holds a pointer, which can't be baked, for now
+    HELD :: #run as_any(5);
+            ^
+tests/errors/run_type_info.rig:7:13: error: #run's result holds a pointer, which can't be baked, for now
+        info := #run type_info(u8);
+                ^

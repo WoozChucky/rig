@@ -173,6 +173,57 @@ static Ir_Module *lower_source(Arena *a, const char *text) {
     return lower_file(a, "test.rig", text, true);
 }
 
+// A program whose main file, test.rig, is `text` (it needn't exist), loaded
+// as rig loads it, with Preload from rig's own places (load_program with no
+// options), and checked: its messages, as check_source gives them ("" when
+// it checks; Preload has none). Its tree in *tree when given, in the arena.
+// The tests of what Preload declares (type information and Any, issue #153)
+// use it: check_source parses one file, without Preload.
+static String check_with_preload(Arena *a, const char *text, Ast_File **tree = nullptr) {
+    Diagnostics d = {};
+    Ast_File *file = load_program(a, &d, str("test.rig"), str(text));
+    CHECK_STR(file->load_failure, "");
+    check(file, a, &d);
+    diag_sort(&d);
+    String result = messages(a, &d);
+    diag_free(&d);
+    if (tree) *tree = file;
+    return result;
+}
+
+// The same program, which must check cleanly, lowered as rig build lowers it
+// (bounds checked); the module lives in the arena.
+static Ir_Module *lower_with_preload(Arena *a, const char *text) {
+    Diagnostics d = {};
+    Ast_File *file = load_program(a, &d, str("test.rig"), str(text));
+    CHECK_STR(file->load_failure, "");
+    bool ok = d.error_count == 0 && check(file, a, &d);
+    if (!ok) fprintf(stderr, "lower_with_preload: doesn't check:\n%.*s", STR_ARG(messages(a, &d)));
+    RIG_ASSERT(ok);
+    Ir_Module *m = ir_lower(file, &d, a, true);
+    diag_free(&d);
+    return m;
+}
+
+// The top-level declaration (procedure, global, constant or struct) of f
+// called `name`, which must exist.
+static Ast *top_level_named(Ast_File *f, const char *name) {
+    for (s64 i = 0; i < f->procs.count; i++) {
+        if (string_eq(f->procs[i]->name, str(name))) return f->procs[i];
+    }
+    for (s64 i = 0; i < f->globals.count; i++) {
+        Ast *g = f->globals[i];
+        String n = g->kind == AST_VAR      ? ((Ast_Var *)g)->name
+                   : g->kind == AST_STRUCT ? ((Ast_Struct *)g)->name
+                   : g->kind == AST_CONST  ? ((Ast_Const *)g)->name
+                                           : String{};
+        if (string_eq(n, str(name))) return g;
+    }
+    fprintf(stderr, "top_level_named: no top-level declaration is called '%s'\n", name);
+    RIG_ASSERT(!"no such top-level declaration");
+    return nullptr;
+}
+
 // Parses, checks and lowers the tokens, which must check cleanly; the module
 // lives in the arena.
 static Ir_Module *lower_tokens(Arena *a, const char *description) {

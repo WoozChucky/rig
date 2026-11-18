@@ -211,8 +211,8 @@
             ]
         },
         "size-of": {
-            "comment": "size_of(T): T is a type (#type), up to the ')' or the line's end, as in #cast-type. size_of is a name, not a keyword (spec A.4), so it's coloured as a call, as before it took its type.",
-            "begin": "\\b(size_of)\\s*(\\()",
+            "comment": "size_of(T) and type_info(T) (spec 5.19): T is a type (#type), up to the ')' or the line's end, as in #cast-type. Both are names, not keywords (spec A.4), so they're coloured as calls, as before they took their types.",
+            "begin": "\\b(size_of|type_info)\\s*(\\()",
             "beginCaptures": {
                 "1": {
                     "name": "entity.name.function.call.rig"

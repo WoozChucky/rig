@@ -12,10 +12,12 @@
 // The walk is conservative: it follows every name lowering can follow
 // (calls, procedure values, constants and their data, globals' values), so
 // whatever the #run's code is lowered with is checked, whether or not it
-// runs. And it fails where lowering couldn't go on: a value, a parameter or
-// a result with no type, a #run with no value, a procedure that is broken
-// or had errors, a struct still being laid out, a struct field whose type
-// is still unknown.
+// runs. A type's description (type_info(T), a value converted to Any) is
+// lowered with every type it reaches, so the walk follows those too, behind
+// pointers as well (walk_described). And it fails where lowering couldn't
+// go on: a value, a parameter or a result with no type, a #run with no
+// value, a procedure that is broken or had errors, a struct still being
+// laid out, a struct field whose type is still unknown.
 
 #include "check.h"
 
@@ -24,21 +26,28 @@
 struct Reach {
     Checker *c;
     Ast_Run *run;
-    Array<Ast *> nodes;   // expressions, statements, and the declarations names reach
-    Array<Type *> types;  // the types of what's reached (walk_type)
-    Table<bool> seen;     // the declarations and types met so far, by address: each walked once,
-                          // so a procedure that calls itself, or a struct that holds a view of
-                          // itself, is walked once
-    Arena keys;           // seen's keys
+    Array<Ast *> nodes;          // expressions, statements, and the declarations names reach
+    Array<Type *> types;         // the types of what's reached (walk_type)
+    Array<Type *> described;     // types whose descriptions the code needs, still to walk (walk_described)
+    Table<bool> seen;            // the declarations and types met so far, by address: each walked once,
+                                 // so a procedure that calls itself, or a struct that holds a view of
+                                 // itself, is walked once
+    Table<bool> described_seen;  // each walked once for its description, apart from `seen`: a type
+                                 // walked for its layout still needs walking behind its pointers
+    Arena keys;                  // seen's and described_seen's keys
 };
 
-// Whether `address` is met for the first time; it's seen from now on, its
-// key (base.h's pointer_key) copied into the walk's own arena.
-static bool first_time(Reach *r, const void *address) {
+// Whether `address` is met for the first time in `seen`; it's seen from now
+// on, its key (base.h's pointer_key) copied into the walk's own arena.
+static bool first_in(Reach *r, Table<bool> *seen, const void *address) {
     String key = pointer_key(&address);
-    if (table_get(&r->seen, key)) return false;
-    table_put(&r->seen, string_copy(&r->keys, key), true);
+    if (table_get(seen, key)) return false;
+    table_put(seen, string_copy(&r->keys, key), true);
     return true;
+}
+
+static bool first_time(Reach *r, const void *address) {
+    return first_in(r, &r->seen, address);
 }
 
 // A declaration a name or a call reaches (a procedure, a global, a
@@ -51,12 +60,18 @@ static void reach_type(Reach *r, Type *t) {
     if (t && first_time(r, t)) array_add(&r->types, t);
 }
 
+// A type whose description the #run's code needs (type_info(T), a value
+// converted to Any), to walk for it if it's the first time (walk_described).
+static void reach_described(Reach *r, Type *t) {
+    if (first_in(r, &r->described_seen, t)) array_add(&r->described, t);
+}
+
 // What expression e holds, onto `list`, the last first, so a worklist pops
 // them in source order: a call's callee and arguments, an operator's
 // operands (a spread's too), a cast's value, a field's struct, an element's
 // array and index, a literal's values. Nothing for a name, a number, a
-// string, a bool, null, size_of or a #run, whose operand was checked as it
-// was.
+// string, a bool, null, size_of, type_info or a #run, whose operand was
+// checked as it was.
 static void push_operands(Array<Ast *> *list, Ast *e) {
     switch (e->kind) {
     case AST_CALL: {
@@ -157,9 +172,15 @@ static bool walk_proc(Reach *r, Ast_Proc *proc) {
 // procedure, but never main, where the program starts: "main is where the
 // program starts; #run can't call it", at the #run. A #run is walked
 // through its value: one with none failed, or reached errors, said already.
+// type_info(T) needs T's description, and a value converted to Any its
+// type's (Ast.to_any): lowering the #run's code writes those descriptions
+// (lower.cpp's describe_type), from every type they reach, so what they
+// reach is walked for them (reach_described).
 static bool walk_expression(Reach *r, Ast *e) {
     if (!e->type) return false;
     reach_type(r, e->type);
+    if (e->to_any != ANY_NONE) reach_described(r, e->type);
+    if (e->kind == AST_TYPE_INFO) reach_described(r, ((Ast_Type_Info *)e)->described);
     if (e->kind == AST_BINARY) {
         // Pointer arithmetic's operands are taken at the pointer's type
         // (Ast_Binary.operand_type); a comparison's may be too, but needs no
@@ -327,6 +348,40 @@ static bool walk_type(Reach *r, Type *t) {
     return true;
 }
 
+// A type described (spec 3.16): its description holds its size and
+// alignment, a struct's its members' names, types and offsets, and points
+// at the descriptions of the types it's made of, which lowering makes too
+// (lower.cpp's describe_type), before the interpreter maps them into its
+// own memory. So every struct it reaches, behind a pointer too, and
+// through arrays, views and procedure types' parameters and results, is
+// laid out (check_finished_layout) and has its late fields made
+// (check_late_field), as walk_type does for a struct held by value: a #run
+// may describe a struct declared after it, reached only through another's
+// pointer, before resolve_late_fields. Each type is walked once, so a
+// struct that points at itself ends. False when a struct has no layout, or
+// is still being laid out (describing *S in one of S's counts is a circle,
+// as reaching S by value is), or a field has no type: errors, said.
+static bool walk_described(Reach *r, Type *t) {
+    switch (t->kind) {
+    case TYPE_POINTER: reach_described(r, t->pointee); return true;
+    case TYPE_ARRAY:
+    case TYPE_VIEW: reach_described(r, t->element); return true;
+    case TYPE_PROC:
+        for (s64 i = 0; i < t->param_count; i++) reach_described(r, t->params[i]);
+        for (s64 i = 0; i < t->result_count; i++) reach_described(r, t->results[i]);
+        return true;
+    case TYPE_STRUCT:
+        if (!check_finished_layout(r->c, t)) return false;
+        for (s64 i = 0; i < t->fields.count; i++) {
+            check_late_field(r->c, t, (s32)i);
+            if (!t->fields[i].type) return false;
+            reach_described(r, t->fields[i].type);
+        }
+        return true;
+    default: return true;  // an integer, a float, a bool, a string or void: nothing more
+    }
+}
+
 // Walks what #run `run` reaches, from its operand (an expression's) or its
 // procedure (a block's), and its own type: true when nothing in it has an
 // error, so it can run. A local in an expression's operand is said
@@ -345,12 +400,20 @@ static bool reach_run(Checker *c, Ast_Run *run, Type *t) {
     }
     reach_type(&r, t);
     bool clean = true;
-    while (clean && (r.types.count || r.nodes.count)) {
-        clean = r.types.count ? walk_type(&r, array_pop(&r.types)) : walk_node(&r, array_pop(&r.nodes));
+    while (clean && (r.types.count || r.described.count || r.nodes.count)) {
+        if (r.types.count) {
+            clean = walk_type(&r, array_pop(&r.types));
+        } else if (r.described.count) {
+            clean = walk_described(&r, array_pop(&r.described));
+        } else {
+            clean = walk_node(&r, array_pop(&r.nodes));
+        }
     }
     array_free(&r.nodes);
     array_free(&r.types);
+    array_free(&r.described);
     table_free(&r.seen);
+    table_free(&r.described_seen);
     arena_free(&r.keys);
     return no_locals && clean;
 }

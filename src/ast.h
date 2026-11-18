@@ -7,9 +7,10 @@
 // assignments, returns, if, while, for, break, continue, defer and
 // expressions; expressions made of calls, names, strings, integers,
 // floats, bools, null, operators, casts, addresses and dereferences,
-// size_of, fields (e.x), struct literals (Vec2.{1, 2}), elements (a[i])
-// and array literals (int.[1, 2]), spreads (..xs, a view passed as a
-// '..T' parameter's arguments), and code run while compiling (#run e).
+// size_of, type_info, fields (e.x), struct literals (Vec2.{1, 2}),
+// elements (a[i]) and array literals (int.[1, 2]), spreads (..xs, a view
+// passed as a '..T' parameter's arguments), and code run while compiling
+// (#run e).
 // And structs, declared at the top level, the files a program loads
 // (#load "PATH";), named there too, and the code it runs while compiling
 // for its effect (#run e; and #run { ... }), there too. And code compiled
@@ -76,6 +77,14 @@ enum Ast_Kind : u8 {
     AST_IF_DIRECTIVE,  // Ast_If_Directive: #if c { ... } else ...
     AST_DEFER,         // Ast_Defer: defer statement;  defer { ... }
     AST_SPREAD,        // Ast_Spread: ..e, a view spread into a '..T' parameter
+    AST_TYPE_INFO,     // Ast_Type_Info: type_info(T)
+};
+
+// How a value becomes an Any where the checker converts it (spec 3.16).
+enum Ast_Any : u8 {
+    ANY_NONE,   // it doesn't: its own type is where it goes (an Any included)
+    ANY_PLACE,  // a place (expr_is_place): the Any holds its own address
+    ANY_COPY,   // anything else: the Any holds the address of a copy in a temporary
 };
 
 struct Ast {
@@ -87,6 +96,7 @@ struct Ast {
                        // value points here (ast_new sets it to pos, the parser
                        // moves it left for operators, calls and parentheses)
     Type *type;        // filled in by the checker; null until then, or after an error
+    Ast_Any to_any;    // set by check_convert; the value keeps its own type
     bool is_constant;  // the checker knows the value while compiling, one scalar (spec 5.9); never
                        // set for data (a string, a struct, an array: Ast_Const.is_data)
     u64 constant;      // that value's bits: an integer's sign-extended to 64 bits when its
@@ -294,6 +304,13 @@ struct Ast_Deref : Ast {
 // name size_of.
 struct Ast_Size_Of : Ast {
     Ast_Type *type_expr;
+};
+
+// type_info(T): the address of T's description (spec 5.19), a *Type_Info,
+// no constant. pos is the name type_info.
+struct Ast_Type_Info : Ast {
+    Ast_Type *type_expr;
+    Type *described;  // T, once checked (void too)
 };
 
 // e.x: the field x of the struct e, or of the struct e points at (one
@@ -636,6 +653,7 @@ Token_Kind compound_operator(Token_Kind op);
 //   (const N (int 10))    N :: 10;          (assign += (name x) (int 2))
 //   (return)  (return (name x))  (unary - (name a))  (binary * (name b) (name c))
 //   (unary * (name x))  *x;    (deref (name p))  p.*;   (null)   (size_of (ptr int))  size_of(*int)
+//   (type_info (ptr Vec2))  type_info(*Vec2)
 //   (bool true)   (float 1.5)   (break)   (continue)   (while (name c) (block ...))
 //   (if (name c) (block ...) (if (name d) (block ...) (block ...)))
 //                 if c { ... } else if d { ... } else { ... }

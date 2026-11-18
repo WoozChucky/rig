@@ -330,15 +330,19 @@ struct Ir_Reloc {
 //     a global's own copy of a baked string's bytes;
 //   - read-only bytes (type IR_VOID, has_layout and is_read_only set),
 //     `const.N`: a data constant's, an expression #run's baked aggregate's,
-//     or the elements a view in either sees; laid out as a variable of
-//     bytes is, relocations too, but never written, so the object file has
-//     them as a constant;
+//     or the elements a view in either sees; or `type_info.N`, a type's
+//     description (spec 3.16), and the arrays one points at,
+//     `type_info.N.members`, `type_info.N.parameters` and
+//     `type_info.N.results`; laid out as a variable of bytes is,
+//     relocations too, but never written, so the object file has them as a
+//     constant;
 //   - a string literal's constant bytes (type IR_VOID, has_layout not set):
 //     `bytes`, with a terminating zero, read-only.
 // So a global of type IR_VOID is a literal's bytes only when has_layout is
 // false; printing, the backend and IR_PANIC all ask.
 struct Ir_Global {
-    String name;            // "str.0", "const.0", "array.0", "string.0", or a Rig global's name
+    String name;            // "str.0", "const.0", "array.0", "string.0", "type_info.0" (and its arrays,
+                            // "type_info.0.members", ".parameters", ".results"), or a Rig global's name
     Ir_Type type;           // IR_VOID: bytes (a variable's, a constant's or a literal's); otherwise a
                             // variable of this type
     String bytes;           // IR_VOID: a literal's bytes, with a terminating zero; a variable's or a
@@ -346,14 +350,15 @@ struct Ir_Global {
     u64 initial;            // a scalar variable's first value, its bits (a float's as IR_CONST keeps them)
     bool has_layout;        // IR_VOID: bytes with a size, an alignment and relocations, a variable's or a
                             // constant's; not set for a string literal's bytes (str.N)
-    bool is_read_only;      // has_layout: a constant's or a #run's baked bytes (const.N), which the
-                            // program never writes: a constant in the object file
+    bool is_read_only;      // has_layout: a constant's or a #run's baked bytes (const.N), or a type's
+                            // description (type_info.N), which the program never writes: a
+                            // constant in the object file
     s64 size;               // has_layout: its size, bytes.count or more
     u32 align;              // has_layout: its alignment, a power of 2
     Array<Ir_Reloc> relocs; // has_layout: where it holds addresses, by increasing offset
     Type *rig_type;         // a Rig global's type, for a debugger; null for what the compiler
-                            // makes (str.N, string.N, array.N, const.N), which the source doesn't
-                            // name
+                            // makes (str.N, string.N, array.N, const.N, type_info.N), which the
+                            // source doesn't name
     Position pos;           // a Rig global's declaration: its name
 };
 

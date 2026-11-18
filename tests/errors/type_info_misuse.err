@@ -1,0 +1,15 @@
+tests/errors/type_info_misuse.rig:5:9: error: a constant's pointer can only be null or a string literal's address
+    INFO :: type_info(Vec2);
+            ^
+tests/errors/type_info_misuse.rig:9:20: error: 'n' is not a type
+        a := type_info(n);
+                       ^
+tests/errors/type_info_misuse.rig:10:20: error: unknown type 'Nope'
+        b := type_info(Nope);
+                       ^
+tests/errors/type_info_misuse.rig:11:20: error: 'main' is not a type
+        c := type_info(main);
+                       ^
+tests/errors/type_info_misuse.rig:12:14: error: a constant's pointer can only be null or a string literal's address
+        LOCAL :: type_info(int);
+                 ^

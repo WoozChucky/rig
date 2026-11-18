@@ -7279,3 +7279,579 @@ TEST(variadic_calls_run_while_compiling) {
     token_list_free(c.list);
     arena_free(&a);
 }
+
+// Issue #153: type info and Any (spec 3.16, 5.19).
+
+// One field of a Preload struct, where types.h says it is, and its type:
+// lowering writes each field in that type's shape (a bool is one byte, a
+// view's items are where its data points), so a type that kept the offset
+// but changed the shape would be read wrong.
+struct Preload_Field {
+    const char *name;
+    s64 offset;
+    const char *type;
+};
+
+// One struct Preload declares for type information, and its layout as
+// types.h mirrors it: its size and its fields, in order.
+struct Preload_Struct {
+    const char *name;
+    s64 size;
+    Preload_Field fields[5];
+    s64 field_count;
+};
+
+TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
+    // Lowering writes each description from types.h's constants; the
+    // program reads it through Preload's structs, which the checker lays
+    // out as any struct. The two must agree: each struct's size, alignment,
+    // field offsets and field types, and each tag's value. Each kind's struct starts
+    // with its Type_Info, info, so a *Type_Info casts to it.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
+    Preload_Struct structs[] = {
+        {"Type_Info",
+         TYPE_INFO_SIZE,
+         {{"tag", TYPE_INFO_TAG_OFFSET, "int"},
+          {"size", TYPE_INFO_SIZE_OFFSET, "int"},
+          {"alignment", TYPE_INFO_ALIGNMENT_OFFSET, "int"}},
+         3},
+        {"Type_Info_Integer",
+         TYPE_INFO_INTEGER_SIZE,
+         {{"info", 0, "Type_Info"}, {"signed", TYPE_INFO_SIGNED_OFFSET, "bool"}},
+         2},
+        {"Type_Info_Pointer",
+         TYPE_INFO_POINTER_SIZE,
+         {{"info", 0, "Type_Info"}, {"pointer_to", TYPE_INFO_POINTER_TO_OFFSET, "*Type_Info"}},
+         2},
+        {"Type_Info_Procedure",
+         TYPE_INFO_PROCEDURE_SIZE,
+         {{"info", 0, "Type_Info"},
+          {"parameter_types", TYPE_INFO_PARAMETERS_OFFSET, "[]*Type_Info"},
+          {"result_types", TYPE_INFO_RESULTS_OFFSET, "[]*Type_Info"},
+          {"is_c_call", TYPE_INFO_IS_C_CALL_OFFSET, "bool"},
+          {"is_variadic", TYPE_INFO_IS_VARIADIC_OFFSET, "bool"}},
+         5},
+        {"Type_Info_Struct",
+         TYPE_INFO_STRUCT_SIZE,
+         {{"info", 0, "Type_Info"},
+          {"name", TYPE_INFO_NAME_OFFSET, "string"},
+          {"members", TYPE_INFO_MEMBERS_OFFSET, "[]Type_Info_Struct_Member"}},
+         3},
+        {"Type_Info_Struct_Member",
+         TYPE_INFO_MEMBER_SIZE,
+         {{"name", TYPE_INFO_MEMBER_NAME_OFFSET, "string"},
+          {"type", TYPE_INFO_MEMBER_TYPE_OFFSET, "*Type_Info"},
+          {"offset", TYPE_INFO_MEMBER_OFFSET_OFFSET, "int"}},
+         3},
+        {"Type_Info_Array",
+         TYPE_INFO_ARRAY_SIZE,
+         {{"info", 0, "Type_Info"},
+          {"element_type", TYPE_INFO_ELEMENT_OFFSET, "*Type_Info"},
+          {"array_kind", TYPE_INFO_ARRAY_KIND_OFFSET, "int"},
+          {"count", TYPE_INFO_COUNT_OFFSET, "int"}},
+         4},
+        {"Any", ANY_SIZE, {{"type", ANY_TYPE_OFFSET, "*Type_Info"}, {"value_pointer", ANY_VALUE_OFFSET, "*void"}}, 2},
+    };
+    for (s64 i = 0; i < (s64)(sizeof structs / sizeof structs[0]); i++) {
+        Preload_Struct *s = &structs[i];
+        Ast *decl = top_level_named(tree, s->name);
+        CHECK_EQ(decl->kind, AST_STRUCT);
+        if (decl->kind != AST_STRUCT) continue;
+        Type *t = ((Ast_Struct *)decl)->declared;
+        CHECK_EQ(t->size, s->size);
+        CHECK_EQ(t->align, TYPE_INFO_ALIGN);
+        CHECK_EQ(t->fields.count, s->field_count);  // no field types.h doesn't know
+        for (s64 f = 0; f < s->field_count; f++) {
+            s32 index = type_field_index(t, str(s->fields[f].name));
+            CHECK_EQ(index, f);  // in the issue's order
+            if (index < 0) continue;
+            CHECK_EQ(t->fields[index].offset, s->fields[f].offset);
+            CHECK_STR(type_name(&a, t->fields[index].type), s->fields[f].type);
+        }
+    }
+    // The tags, numbered as Jai's, and the array kinds: constants until
+    // enums.
+    struct {
+        const char *name;
+        s64 value;
+    } constants[] = {
+        {"TYPE_INFO_INTEGER", TYPE_INFO_INTEGER},
+        {"TYPE_INFO_FLOAT", TYPE_INFO_FLOAT},
+        {"TYPE_INFO_BOOL", TYPE_INFO_BOOL},
+        {"TYPE_INFO_STRING", TYPE_INFO_STRING},
+        {"TYPE_INFO_POINTER", TYPE_INFO_POINTER},
+        {"TYPE_INFO_PROCEDURE", TYPE_INFO_PROCEDURE},
+        {"TYPE_INFO_VOID", TYPE_INFO_VOID},
+        {"TYPE_INFO_STRUCT", TYPE_INFO_STRUCT},
+        {"TYPE_INFO_ARRAY", TYPE_INFO_ARRAY},
+        {"ARRAY_FIXED", ARRAY_FIXED},
+        {"ARRAY_VIEW", ARRAY_VIEW},
+    };
+    for (s64 i = 0; i < (s64)(sizeof constants / sizeof constants[0]); i++) {
+        Ast *k = top_level_named(tree, constants[i].name);
+        CHECK_EQ(k->kind, AST_CONST);
+        CHECK(k->is_constant);
+        CHECK_EQ(k->constant, constants[i].value);
+    }
+    // Declaring them describes nothing: a program that uses no type
+    // information lowers as it did, with no description in its data.
+    CHECK(!contains(ir_print(&a, lower_with_preload(&a, "main :: () { }\n")), "type_info"));
+    arena_free(&a);
+}
+
+TEST(type_info_points_at_a_description) {
+    // type_info(T) is a *Type_Info, Preload's, whatever T is: a struct,
+    // void (what a *void points at), an alias (float is float32) or a
+    // procedure type, a '..T' parameter's included. It's an address the
+    // linker writes, so no constant.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Vec2 :: struct { x: int; y: int; }\n"
+                                 "main :: () {\n"
+                                 "    t := type_info(Vec2);\n"
+                                 "    v := type_info(void);\n"
+                                 "    f := type_info(float);\n"
+                                 "    p := type_info((int, ..u8) -> bool);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    Ast *main = top_level_named(tree, "main");
+    CHECK_EQ(main->kind, AST_PROC);
+    Array<Ast *> statements = ((Ast_Proc *)main)->body->statements;
+    const char *described[] = {"Vec2", "void", "float32", "(int, ..u8) -> bool"};
+    CHECK_EQ(statements.count, 4);
+    for (s64 i = 0; i < statements.count && i < 4; i++) {
+        CHECK_EQ(statements[i]->kind, AST_VAR);
+        Ast_Var *var = (Ast_Var *)statements[i];
+        CHECK_STR(type_name(&a, var->type), "*Type_Info");
+        CHECK_EQ(var->value->kind, AST_TYPE_INFO);
+        if (var->value->kind != AST_TYPE_INFO) continue;
+        Ast_Type_Info *info = (Ast_Type_Info *)var->value;
+        CHECK(!info->is_constant);
+        CHECK_STR(type_name(&a, info->described), described[i]);
+    }
+    arena_free(&a);
+}
+
+TEST(type_info_needs_preload) {
+    // Without Preload (a test's single file) there is no Type_Info for
+    // type_info to point at. A program's own struct called Type_Info isn't
+    // Preload's: only a module's file declares the one type_info points at.
+    // The argument is a type first, with its own messages: an unknown one
+    // says only that.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "main :: () {\n    t := type_info(int);\n}\n"),
+              "2:10: 'type_info' needs Preload's 'Type_Info', which the program doesn't have\n");
+    CHECK_STR(check_source(&a, "Type_Info :: struct { tag: s64; }\nmain :: () {\n    t := type_info(int);\n}\n"),
+              "3:10: 'type_info' needs Preload's 'Type_Info', which the program doesn't have\n");
+    CHECK_STR(check_source(&a, "main :: () {\n    t := type_info(Nope);\n}\n"), "2:20: unknown type 'Nope'\n");
+    arena_free(&a);
+}
+
+TEST(a_global_may_hold_a_description_a_constant_cant) {
+    // A global's value may be a description's address, alone, cast between
+    // pointers, or in a literal or a view's array, a cast of such a literal
+    // or a field of one included: the linker writes it, as it does a string
+    // literal's or a procedure's (spec 4.3). Not as an integer, which would
+    // need the linker to write a number. A constant holds no pointer but
+    // null or a string literal's address (spec 4.2), so none of the
+    // constants is one, a literal's field or a field of one included.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "Vec2 :: struct { x: int; }\n"
+                                     "info := type_info(int);\n"
+                                     "kinds : []*Type_Info = .[type_info(u8), type_info(string)];\n"
+                                     "vec2 : *Type_Info_Struct = cast(*Type_Info_Struct) type_info(Vec2);\n"
+                                     "holder := Holder.{type_info(bool)};\n"
+                                     "Holder :: struct { t: *Type_Info; }\n"
+                                     "INFO :: type_info(int);\n"
+                                     "KIND :: cast(*Type_Info_Struct) type_info(Vec2);\n"
+                                     "h1 := cast(Holder) Holder.{type_info(bool)};\n"
+                                     "h2 := Holder.{type_info(bool)}.t;\n"
+                                     "n := cast(int) type_info(Vec2);\n"
+                                     "u := cast(u64) type_info(int);\n"
+                                     "H :: Holder.{type_info(int)};\n"
+                                     "T :: Holder.{type_info(int)}.t;\n"
+                                     "main :: () { }\n"),
+              "7:9: a constant's pointer can only be null or a string literal's address\n"
+              "8:9: a constant's pointer can only be null or a string literal's address\n"
+              "11:6: a global's value must be known while compiling, for now\n"
+              "12:6: a global's value must be known while compiling, for now\n"
+              "13:14: a constant's pointer can only be null or a string literal's address\n"
+              "14:6: a constant's pointer can only be null or a string literal's address\n");
+    // A description is known while compiling, though no constant may hold
+    // it: in a cast literal a constant can't take, the value that isn't
+    // known is the global after it, not the description (is_known).
+    CHECK_STR(check_with_preload(&a, "Pair :: struct { t: *Type_Info; n: int; }\n"
+                                     "count := 3;\n"
+                                     "K :: cast(Pair) Pair.{type_info(int), count};\n"
+                                     "main :: () { }\n"),
+              "3:39: the value of constant 'K' isn't known while compiling\n");
+    arena_free(&a);
+}
+
+// The value a statement `show(v);` passes, its one argument; the statement
+// must be such a call.
+static Ast *shown_value(Ast *statement) {
+    RIG_ASSERT(statement->kind == AST_CALL && ((Ast_Call *)statement)->args.count == 1);
+    return ((Ast_Call *)statement)->args[0];
+}
+
+// The procedure `name`'s body, in a tree that has it.
+static Array<Ast *> body_of(Ast_File *tree, const char *name) {
+    Ast *proc = top_level_named(tree, name);
+    RIG_ASSERT(proc->kind == AST_PROC);
+    return ((Ast_Proc *)proc)->body->statements;
+}
+
+TEST(converting_to_any_takes_a_place_or_makes_a_copy) {
+    // A value going where an Any goes keeps its own type, and is marked
+    // with how the Any will hold it: a place (a variable, a field through a
+    // pointer, a view's element) gives its own address; anything else, a
+    // parameter and a loop's iterator included, is copied. An untyped
+    // constant takes its default type first (int, float32), null is a
+    // *void, and a value of type Any converts as itself.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Vec2 :: struct { x: int; y: int; }\n"
+                                 "show :: (a: Any) { }\n"
+                                 "make :: () -> int { return 1; }\n"
+                                 "twice :: (k: int) { show(k); }\n"
+                                 "main :: () {\n"
+                                 "    n := 42;\n"
+                                 "    v := Vec2.{1, 2};\n"
+                                 "    p := *v;\n"
+                                 "    xs : []int = .[1, 2];\n"
+                                 "    a : Any = n;\n"
+                                 "    show(n);\n"
+                                 "    show(p.x);\n"
+                                 "    show(xs[1]);\n"
+                                 "    show(5);\n"
+                                 "    show(1.5);\n"
+                                 "    show(null);\n"
+                                 "    show(make());\n"
+                                 "    show(Vec2.{3, 4});\n"
+                                 "    show(make);\n"
+                                 "    show(a);\n"
+                                 "    for xs { show(it); }\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    Array<Ast *> body = body_of(tree, "main");
+    CHECK_EQ(body.count, 16);
+    if (body.count != 16) {
+        arena_free(&a);
+        return;
+    }
+    CHECK_EQ(body[4]->kind, AST_VAR);
+    Ast *declared = ((Ast_Var *)body[4])->value;
+    CHECK_EQ(declared->to_any, ANY_PLACE);
+    CHECK_STR(type_name(&a, declared->type), "int");
+    struct {
+        Ast_Any to_any;
+        const char *type;
+    } shown[] = {
+        {ANY_PLACE, "int"},        // show(n);
+        {ANY_PLACE, "int"},        // show(p.x);
+        {ANY_PLACE, "int"},        // show(xs[1]);
+        {ANY_COPY, "int"},         // show(5);
+        {ANY_COPY, "float32"},     // show(1.5);
+        {ANY_COPY, "*void"},       // show(null);
+        {ANY_COPY, "int"},         // show(make());
+        {ANY_COPY, "Vec2"},        // show(Vec2.{3, 4});
+        {ANY_COPY, "() -> int"},   // show(make);
+        {ANY_NONE, "Any"},         // show(a);
+    };
+    for (s64 i = 0; i < (s64)(sizeof shown / sizeof shown[0]); i++) {
+        Ast *value = shown_value(body[5 + i]);
+        CHECK_EQ(value->to_any, shown[i].to_any);
+        CHECK_STR(type_name(&a, value->type), shown[i].type);
+    }
+    CHECK_EQ(body[15]->kind, AST_FOR);
+    Ast *it = shown_value(((Ast_For *)body[15])->body->statements[0]);
+    CHECK_EQ(it->to_any, ANY_COPY);
+    CHECK_STR(type_name(&a, it->type), "int");
+    Ast *k = shown_value(body_of(tree, "twice")[0]);
+    CHECK_EQ(k->to_any, ANY_COPY);
+    CHECK_STR(type_name(&a, k->type), "int");
+    arena_free(&a);
+}
+
+TEST(a_literal_holding_an_any_is_no_constant_data) {
+    // 5 converted to an Any is still the constant 5, but the Any holds its
+    // address, a copy's in the procedure's frame: no constant can hold it
+    // (spec 4.2), and a global's value can't be one, for now (spec 4.3),
+    // whether in a literal's field or alone, or cast to Any.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "Holder :: struct { a: Any; }\n"
+                                     "HELD :: Holder.{a = 5};\n"
+                                     "held := Holder.{a = 5};\n"
+                                     "any : Any = 7;\n"
+                                     "CAST :: cast(Any) 5;\n"
+                                     "cast_any := cast(Any) 5;\n"
+                                     "main :: () { }\n"),
+              "2:21: a constant's pointer can only be null or a string literal's address\n"
+              "3:21: a global's value must be known while compiling, for now\n"
+              "4:13: a global's value must be known while compiling, for now\n"
+              "5:9: a constant's pointer can only be null or a string literal's address\n"
+              "6:13: a global's value must be known while compiling, for now\n");
+    // In a literal cast to its own type, which a constant takes when its
+    // values are known, the value converted is the one said so, as it is
+    // without the cast.
+    CHECK_STR(check_with_preload(&a, "Holder :: struct { a: Any; }\n"
+                                     "C :: cast(Holder) Holder.{a = 5};\n"
+                                     "D :: cast(Holder) Holder.{a = cast(Any) 5};\n"
+                                     "main :: () { }\n"),
+              "2:31: a constant's pointer can only be null or a string literal's address\n"
+              "3:31: a constant's pointer can only be null or a string literal's address\n");
+    // A global whose value reaches such a literal only through constant
+    // data, a field of it or a cast of it to its own type, finds no data
+    // there (constant_data): its value isn't known.
+    CHECK_STR(check_with_preload(&a, "Holder :: struct { a: Any; }\n"
+                                     "field := Holder.{a = 5}.a;\n"
+                                     "casted := cast(Holder) Holder.{a = 5};\n"
+                                     "main :: () { }\n"),
+              "2:10: a global's value must be known while compiling, for now\n"
+              "3:11: a global's value must be known while compiling, for now\n");
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, "Holder :: struct { a: Any; }\n"
+                                     "main :: () { h := Holder.{a = 5}; }\n",
+                                     &tree),
+              "");
+    Array<Ast *> body = body_of(tree, "main");
+    CHECK_EQ(body.count, 1);
+    if (body.count == 1 && body[0]->kind == AST_VAR) {
+        Ast *data;
+        CHECK(!constant_data(((Ast_Var *)body[0])->value, &data));
+    }
+    // A #run's value converted to an Any is no more a constant's than 5
+    // is, though a constant may hold a #run's value: the conversion is
+    // checked first (check_constant_value). A #run with no value says its
+    // failure, and nothing more.
+    CHECK_STR(check_with_preload(&a, "fail :: () -> int { a : [2]int; i := 2; return a[i]; }\n"
+                                     "five :: () -> int { return 5; }\n"
+                                     "Holder :: struct { a: Any; }\n"
+                                     "HELD :: Holder.{a = #run five()};\n"
+                                     "held := Holder.{a = #run five()};\n"
+                                     "FAILED :: Holder.{a = #run fail()};\n"
+                                     "CAST :: cast(Any) #run fail();\n"
+                                     "failed := Holder.{a = #run fail()};\n"
+                                     "any : Any = #run fail();\n"
+                                     "cast_failed := cast(Any) #run fail();\n"
+                                     "main :: () { }\n"),
+              "4:21: a constant's pointer can only be null or a string literal's address\n"
+              "5:21: a global's value must be known while compiling, for now\n"
+              "6:23: #run failed: runtime error: index 2 is out of bounds (count 2)\n"
+              "    in fail (test.rig:1:49)\n"
+              "    in #run (test.rig:6:23)\n"
+              "7:19: #run failed: runtime error: index 2 is out of bounds (count 2)\n"
+              "    in fail (test.rig:1:49)\n"
+              "    in #run (test.rig:7:19)\n"
+              "8:23: #run failed: runtime error: index 2 is out of bounds (count 2)\n"
+              "    in fail (test.rig:1:49)\n"
+              "    in #run (test.rig:8:23)\n"
+              "9:13: #run failed: runtime error: index 2 is out of bounds (count 2)\n"
+              "    in fail (test.rig:1:49)\n"
+              "    in #run (test.rig:9:13)\n"
+              "10:26: #run failed: runtime error: index 2 is out of bounds (count 2)\n"
+              "    in fail (test.rig:1:49)\n"
+              "    in #run (test.rig:10:26)\n");
+    arena_free(&a);
+}
+
+TEST(a_cast_to_any_is_no_constant) {
+    // cast(Any) e is e's conversion to Any (spec 3.14), for any value: a
+    // constant, a pointer and a procedure value too, which casts to other
+    // types refuse. The cast is an Any, never a constant, though its value
+    // may be one. An untyped float takes its default type, a float32, not
+    // the float64 a cast first makes of it (spec 3.12).
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "main :: () {\n"
+                                 "    a := cast(Any) 5;\n"
+                                 "    p := cast(Any) *a;\n"
+                                 "    f := cast(Any) helper;\n"
+                                 "    x := cast(Any) 1.5;\n"
+                                 "}\n"
+                                 "helper :: () { }\n",
+                                 &tree),
+              "");
+    Array<Ast *> body = body_of(tree, "main");
+    const char *types[] = {"int", "*Any", "()", "float32"};
+    CHECK_EQ(body.count, 4);
+    for (s64 i = 0; i < body.count && i < 4; i++) {
+        CHECK_EQ(body[i]->kind, AST_VAR);
+        Ast *cast = ((Ast_Var *)body[i])->value;
+        CHECK_EQ(cast->kind, AST_CAST);
+        if (cast->kind != AST_CAST) continue;
+        CHECK_STR(type_name(&a, cast->type), "Any");
+        CHECK(!cast->is_constant);
+        Ast *value = ((Ast_Cast *)cast)->value;
+        CHECK_EQ(value->to_any, ANY_COPY);
+        CHECK_STR(type_name(&a, value->type), types[i]);
+    }
+    arena_free(&a);
+}
+
+TEST(several_results_dont_convert_to_any) {
+    // a, b = f(); converts no result to an Any, for now (the maintainer's
+    // choice; a later issue may add it): the result is no node to mark.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "f :: () -> int, int { return 1, 2; }\n"
+                                     "main :: () {\n"
+                                     "    a : Any;\n"
+                                     "    b : int;\n"
+                                     "    a, b = f();\n"
+                                     "}\n"),
+              "5:5: a value of type 'int' doesn't convert to 'Any' implicitly\n");
+    arena_free(&a);
+}
+
+TEST(a_run_describes_types_declared_after_it) {
+    // A #run runs in the declaration pass, before resolve_late_fields: the
+    // structs a description reaches, Late and, only through Late's pointer,
+    // Later, are laid out and their late fields made by the walk, so the
+    // interpreter describes them whole, as compiled code does.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "LATER :: #run pointee_size(type_info(Late));\n"
+                                 "TAG :: #run fields(Late.{});\n"
+                                 "pointee_size :: (t: *Type_Info) -> int {\n"
+                                 "    s := cast(*Type_Info_Struct) t;\n"
+                                 "    return (cast(*Type_Info_Pointer) s.members[0].type).pointer_to.size;\n"
+                                 "}\n"
+                                 "fields :: (a: Any) -> int { return (cast(*Type_Info_Struct) a.type).members.count; }\n"
+                                 "Late :: struct { next: *Later; }\n"
+                                 "Later :: struct { a: u8; b: int; }\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    const char *names[] = {"LATER", "TAG"};
+    s64 values[] = {16, 1};
+    for (s64 i = 0; i < 2; i++) {
+        Ast *k = top_level_named(tree, names[i]);
+        CHECK_EQ(k->kind, AST_CONST);
+        CHECK(k->is_constant);
+        CHECK_EQ(k->constant, values[i]);
+    }
+    arena_free(&a);
+}
+
+TEST(each_path_of_a_description_lays_out_what_it_reaches) {
+    // Each #run here is the first to describe the structs it reaches, all
+    // declared after it, so only its own walk lays them out: an Any of a
+    // struct reaching another through a pointer (ANY), an Any of a pointer
+    // (POINTER), an Any of a procedure taking a pointer (PROC), and
+    // descriptions reaching a struct only through a procedure type's
+    // parameter (PARAM) or result (RESULT), a view's element (VIEW), a fixed
+    // array's element's pointer (ARRAY: making [2]R lays out R, but not the
+    // Z behind R's late field) or a fixed array of pointers (ARRAY_POINTER).
+    // Each reads that struct's size through the description.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "ANY :: #run pointee_size(Late.{});\n"
+                                 "POINTER :: #run pointer_size(cast(*Third) null);\n"
+                                 "PROC :: #run param_pointee_size(takes);\n"
+                                 "PARAM :: #run param_size(type_info((P) -> int));\n"
+                                 "RESULT :: #run result_size(type_info(() -> Res));\n"
+                                 "VIEW :: #run element_size(type_info([]Q));\n"
+                                 "ARRAY :: #run array_pointee_size(type_info([2]R));\n"
+                                 "ARRAY_POINTER :: #run array_pointer_size(type_info([2]*A));\n"
+                                 "pointee_size :: (a: Any) -> int {\n"
+                                 "    s := cast(*Type_Info_Struct) a.type;\n"
+                                 "    return (cast(*Type_Info_Pointer) s.members[0].type).pointer_to.size;\n"
+                                 "}\n"
+                                 "pointer_size :: (a: Any) -> int { return (cast(*Type_Info_Pointer) a.type).pointer_to.size; }\n"
+                                 "param_pointee_size :: (a: Any) -> int {\n"
+                                 "    p := cast(*Type_Info_Procedure) a.type;\n"
+                                 "    return (cast(*Type_Info_Pointer) p.parameter_types[0]).pointer_to.size;\n"
+                                 "}\n"
+                                 "param_size :: (t: *Type_Info) -> int {\n"
+                                 "    return (cast(*Type_Info_Procedure) t).parameter_types[0].size;\n"
+                                 "}\n"
+                                 "result_size :: (t: *Type_Info) -> int {\n"
+                                 "    return (cast(*Type_Info_Procedure) t).result_types[0].size;\n"
+                                 "}\n"
+                                 "element_size :: (t: *Type_Info) -> int { return (cast(*Type_Info_Array) t).element_type.size; }\n"
+                                 "array_pointee_size :: (t: *Type_Info) -> int {\n"
+                                 "    s := cast(*Type_Info_Struct) (cast(*Type_Info_Array) t).element_type;\n"
+                                 "    return (cast(*Type_Info_Pointer) s.members[0].type).pointer_to.size;\n"
+                                 "}\n"
+                                 "array_pointer_size :: (t: *Type_Info) -> int {\n"
+                                 "    p := cast(*Type_Info_Pointer) (cast(*Type_Info_Array) t).element_type;\n"
+                                 "    return p.pointer_to.size;\n"
+                                 "}\n"
+                                 "takes :: (x: *Other) -> int { return 0; }\n"
+                                 "Late :: struct { next: *Later; }\n"
+                                 "Later :: struct { a: u8; b: int; }\n"
+                                 "Third :: struct { a: int; b: int; c: int; }\n"
+                                 "Other :: struct { a: int; }\n"
+                                 "P :: struct { a: int; b: int; }\n"
+                                 "Res :: struct { a: int; b: int; c: int; }\n"
+                                 "Q :: struct { a: int; b: int; c: int; }\n"
+                                 "R :: struct { p: *Z; }\n"
+                                 "Z :: struct { a: int; b: int; c: int; }\n"
+                                 "A :: struct { a: u8; b: int; }\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    const char *names[] = {"ANY", "POINTER", "PROC", "PARAM", "RESULT", "VIEW", "ARRAY", "ARRAY_POINTER"};
+    s64 values[] = {16, 24, 8, 16, 24, 24, 24, 16};
+    for (s64 i = 0; i < 8; i++) {
+        Ast *k = top_level_named(tree, names[i]);
+        CHECK_EQ(k->kind, AST_CONST);
+        CHECK(k->is_constant);
+        CHECK_EQ(k->constant, values[i]);
+    }
+    arena_free(&a);
+}
+
+TEST(describing_a_struct_being_laid_out_is_a_circle) {
+    // Describing *S describes S, which needs S's layout: in one of S's own
+    // counts that's a circle, said at the struct, as reaching S by value is,
+    // whether type_info describes it or a conversion to Any does.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "S :: struct { a: [#run one(type_info(*S))]u8; }\n"
+                                     "one :: (t: *Type_Info) -> int { return 1; }\n"
+                                     "main :: () { }\n"),
+              "1:1: 'S' is defined in terms of itself\n");
+    arena_free(&a);
+    a = arena_make();
+    CHECK_STR(check_with_preload(&a, "S :: struct { a: [#run one(cast(*S) null)]u8; }\n"
+                                     "one :: (a: Any) -> int { return 1; }\n"
+                                     "main :: () { }\n"),
+              "1:1: 'S' is defined in terms of itself\n");
+    arena_free(&a);
+}
+
+TEST(a_description_reaching_a_field_with_no_type_doesnt_run) {
+    // Describing Bad reaches Holder through Bad's pointer, and Holder's late
+    // field has no type: the walk stops there, so the #run doesn't run and
+    // BAD has no value, and the field's error is said once, whether
+    // type_info describes Bad or a conversion to Any does.
+    const char *sources[] = {"BAD :: #run one(type_info(Bad));\n"
+                             "one :: (t: *Type_Info) -> int { return 1; }\n"
+                             "Bad :: struct { next: *Holder; }\n"
+                             "Holder :: struct { x: *Nope; }\n"
+                             "main :: () { }\n",
+                             "BAD :: #run one(cast(*Bad) null);\n"
+                             "one :: (a: Any) -> int { return 1; }\n"
+                             "Bad :: struct { next: *Holder; }\n"
+                             "Holder :: struct { x: *Nope; }\n"
+                             "main :: () { }\n"};
+    for (s64 i = 0; i < 2; i++) {
+        Arena a = arena_make();
+        Ast_File *tree = nullptr;
+        CHECK_STR(check_with_preload(&a, sources[i], &tree), "4:24: unknown type 'Nope'\n");
+        Ast *k = top_level_named(tree, "BAD");
+        CHECK_EQ(k->kind, AST_CONST);
+        CHECK(!k->is_constant);
+        arena_free(&a);
+    }
+}

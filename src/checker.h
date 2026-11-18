@@ -119,7 +119,8 @@
 //   the cast, and any other value is checked at run time. From a bool to an
 //   integer: 0 or 1. An integer to a bool: "can't cast 'int' to 'bool':
 //   compare instead, as in x != 0". A pointer to and from a pointer or a
-//   64-bit integer (below); a string to and from a []u8 (below). Anything
+//   64-bit integer (below); a string to and from a []u8 (below); any value
+//   to Any, its conversion (Type information and Any, below). Anything
 //   else only to the type it converts to implicitly (its own, an array's
 //   view, or a string literal's *u8); otherwise "can't cast 'string' to
 //   'int'".
@@ -133,7 +134,7 @@
 //   'float32' to 'bool': compare instead, as in x != 0".
 // - A cast of a constant is a constant of T, folded by the same rules
 //   (cast(s32) 1e30 is 2147483647); an untyped integer is an int first, an
-//   untyped float a float64.
+//   untyped float a float64. cast(Any) e is never a constant.
 //
 // Bools and comparisons.
 // - true and false are bool constants. A bool isn't an integer, and
@@ -243,7 +244,7 @@
 //   on a *void: "can't dereference a '*void'; cast it to a pointer to
 //   something first". Lowering checks p for null at run time.
 // - null is a constant of type_null, which converts to every pointer type
-//   and to nothing else; alone (x := null;, null == null) it's "null needs
+//   and to Any, as a *void, and to nothing else; alone (x := null;, null == null) it's "null needs
 //   a pointer type, as in p : *int = null;". So a global can start as null.
 // - void is a type only as a pointer's target, *void: anywhere else it's
 //   "'void' is only a pointer's target, as in *void". A *void converts
@@ -265,7 +266,7 @@
 //   '*u8' for '=='; cast one of them", or with something not a pointer,
 //   "mismatched types '*int' and 'int' for '<'".
 // - cast(T) e casts a pointer to any pointer, and to and from int, s64 and
-//   u64 (the address), unchecked; otherwise "can't cast '*int' to 'u32'; a
+//   u64 (the address), unchecked, and to Any; otherwise "can't cast '*int' to 'u32'; a
 //   pointer casts to another pointer or to a 64-bit integer". null casts to
 //   a pointer and stays a constant; no other pointer cast is one.
 // - size_of(T) is T's size in bytes, an untyped integer constant;
@@ -304,10 +305,11 @@
 //   condition): "this literal's type isn't known; write it before the '.',
 //   as in Vec2.{1, 2}". Given to something that isn't a struct: "a '.{'
 //   literal needs a struct type, not 'int'".
-// - A struct value converts only to its own type: it's copied whole by an
-//   assignment, as an argument and as a result (several results too);
-//   `x : Vec2;` is zeroed, `x : Vec2 = ---;` left as it is. A cast takes a
-//   struct only to its own type. No operator takes a struct ("'+' needs
+// - A struct value converts only to its own type, or to Any (Type
+//   information and Any, below): it's copied whole by an assignment, as an
+//   argument and as a result (several results too); `x : Vec2;` is zeroed,
+//   `x : Vec2 = ---;` left as it is. A cast takes a struct only to its own
+//   type, or to Any. No operator takes a struct ("'+' needs
 //   numbers, not 'Vec2'", the == rule above), nor does a condition.
 // - size_of(Vec2) is its size.
 // - A foreign procedure takes and returns no struct, for now: "a foreign
@@ -363,7 +365,8 @@
 //   it's used.
 // - [N]T converts implicitly to []T, a view of its N elements, wherever a
 //   value converts (a declaration, an assignment, an argument, a return, a
-//   cast); nothing else converts to or from either but its own type. No
+//   cast); nothing else converts to or from either but its own type, and
+//   either converts to Any (Type information and Any, below). No
 //   operator takes them ("'==' needs numbers, bools, pointers, procedure
 //   values or strings, not '[3]int'").
 // - T.[a, b] is a [2]T, each value converting to T; .[a, b] takes its type
@@ -404,7 +407,8 @@
 //   type ("mismatched types 'string' and '*u8' for '=='"), and has no order
 //   or arithmetic ("'<' needs numbers, not 'string'").
 // - cast(string) v of a []u8 v and cast([]u8) s of a string s are the same
-//   view, retyped. Nothing else casts to or from a string.
+//   view, retyped. Nothing else casts to or from a string, but a string
+//   to Any.
 // - A literal's bytes are read-only, as in C: s[0] = 65 for s := "abc"
 //   writes them, a memory error (spec 6.4), not caught.
 // - A foreign procedure takes no string: "a foreign procedure can't take a
@@ -541,12 +545,17 @@
 //   walk): the procedures its code calls or names, whose bodies are checked
 //   there and then if their turn hasn't come (check_reached_body), the
 //   globals and constants it names, and the struct types of what it
-//   reaches. An error anywhere there stops it, saying nothing new: the
-//   error was said where it is. The #run keeps its type but has no value,
-//   and what needs that value (an array's count, a constant, a global)
-//   says nothing more either. Each body, global and constant records
-//   whether its own check had errors (Ast_Proc.had_errors,
-//   Ast_Var.had_errors, Ast_Const.had_errors).
+//   reaches. A type it describes (type_info(T), a value converted to Any)
+//   has every struct its description reaches laid out, behind pointers
+//   too, and their late fields made: the #run's lowering writes the
+//   descriptions, which the interpreter then holds in its own memory, so a
+//   #run describes a struct declared after it as compiled code does (spec
+//   3.16, 10.8). An error anywhere there
+//   stops it, saying nothing new: the error was said where it is. The
+//   #run keeps its type but has no value, and what needs that value (an
+//   array's count, a constant, a global) says nothing more either. Each
+//   body, global and constant records whether its own check had errors
+//   (Ast_Proc.had_errors, Ast_Var.had_errors, Ast_Const.had_errors).
 // - It runs in the compilation's one compile-time world (run.h), and its
 //   result is baked into the tree, a typed constant (run.cpp): a number, a
 //   bool or null as one, a procedure value as the procedure's name, and
@@ -573,8 +582,9 @@
 //   one whose value the body needs, through a constant say) is a circle,
 //   "'f' is defined in terms of itself", at the #run, as a global's is
 //   (spec 4.8): the bodies in it have errors, and the globals in it no
-//   type. So is a struct a #run in one of its counts reaches, by value or
-//   through a pointer it moves or indexes, while its layout is under way:
+//   type. So is a struct a #run in one of its counts reaches, by value,
+//   through a pointer it moves or indexes, or in a type it describes
+//   (type_info(*S)), while its layout is under way:
 //   "'S' is defined in terms of itself", at the struct. Bodies checked
 //   inside one another nest as declarations do (at most MAX_DEPTH levels
 //   deep, open_declaration), a body's own levels its blocks and the
@@ -645,6 +655,57 @@
 //   (Ast_File.lost_a_file), so no name anywhere is unknown, nor main
 //   missing. check() itself decides no top-level #if: one the loader didn't
 //   decide (a tree from parse()) is as if no branch were taken.
+//
+// Type information and Any (issue #153, spec 3.16, 5.19).
+// - type_info(T) is the address of T's description, a *Type_Info: Preload
+//   declares Type_Info and the structs each kind of type is described by
+//   (spec 3.16). It's predeclared, not a keyword: the name followed by '('
+//   (parser.h). Its argument is a type, any type, void included (what a
+//   *void points at), with a type's own messages ("'n' is not a type",
+//   "unknown type 'Nope'").
+// - The checker finds Preload's Type_Info and Any by name at the top level,
+//   structs declared in a module's file (Source_File.in_module, load.h):
+//   a program can't declare either, Preload having them. Without Preload
+//   (a test's single file, or Load_Options.no_preload) type_info(T) is
+//   "'type_info' needs Preload's 'Type_Info', which the program doesn't
+//   have", at the name.
+// - Its value is an address the linker writes, so it's no constant: a
+//   constant can't hold it, as it holds no pointer but null or a string
+//   literal's address, "a constant's pointer can only be null or a string
+//   literal's address" (a cast of it too, or a literal holding it). A
+//   global may hold it, as it is, cast to another pointer (not to an
+//   integer), or in a literal or a view's array, a cast of such a literal
+//   or a field of one included: the linker writes its address there, as a
+//   string literal's (type_info_address).
+// - Every value converts to Preload's Any, wherever a value goes into
+//   something of a known type (check_convert): a declaration with a type,
+//   an assignment, an argument, a '..Any' one included, a return, a field
+//   or an element of a literal. The value keeps its own type, and
+//   Ast.to_any says how the Any holds it: a place's own address
+//   (expr_is_place: a variable, p.x, xs[1]), or else a copy's, in a
+//   temporary of the procedure's (a constant, a call's result, a
+//   parameter, a loop's iterator). A value of type Any goes as itself.
+// - A value whose type comes from where it goes takes its default one
+//   first: an untyped constant an int or a float32, null a *void. A literal
+//   without its type has none: "this literal's type isn't known; write it
+//   before the '.', as in Vec2.{1, 2}" (int.[1, 2] for .[...]). What isn't
+//   a value keeps its own message ("'Vec2' is a type, not a value",
+//   "'greet' returns nothing, so it has no value").
+// - Only Any itself: a [2]int doesn't convert to a []Any, nor a *int to a
+//   *Any, and nothing converts from an Any but to Any ("a value of type
+//   'Any' doesn't convert to 'int' implicitly"): the program reads one
+//   through its fields, as (cast(*int) a.value_pointer).* when a.type ==
+//   type_info(int). cast(Any) e is e's conversion, for any value, a
+//   pointer and a procedure value included, never a constant.
+// - A constant can't hold a converted Any, though its value may be a
+//   constant: the Any holds the value's address, "a constant's pointer can
+//   only be null or a string literal's address", at the value (or its
+//   cast to Any). Nor can a global's value, for now: "a global's value
+//   must be known while compiling, for now". A literal holding one is no
+//   constant data (constant_data).
+// - a, b = f(); converts no result to an Any, for now: "a value of type
+//   'int' doesn't convert to 'Any' implicitly", at the target, as for any
+//   other type a result doesn't convert to.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
@@ -762,9 +823,9 @@ bool is_literal_string(Ast *e);
 // holding its value, following names, fields, elements and casts:
 // - a string literal;
 // - a struct or array literal whose every value is is_constant, a procedure
-//   (procedure_address), a string literal's address (literal_address) or
-//   constant data, found the first time it's asked and kept
-//   (Ast_Literal.is_data);
+//   (procedure_address), a string literal's address (literal_address), a
+//   type's description's (type_info_address) or constant data, found the
+//   first time it's asked and kept (Ast_Literal.is_data);
 // - the name of a constant with is_data (its `data`);
 // - a field of constant data (a struct's, not reached through a pointer),
 //   or an element of it (an array's) at an is_constant index;
@@ -779,8 +840,9 @@ bool is_literal_string(Ast *e);
 // A field's or element's value node that is itself constant data is
 // followed in turn. So *value is a string or struct or array literal, or a
 // scalar field's or element's value node as the literal wrote it (a
-// constant, a procedure's name, a string literal, or a cast of one, which
-// literal_address and procedure_address walk on from); or a #run's baked
+// constant, a procedure's name, a string literal, a type_info(T), or a cast
+// of one, which literal_address, procedure_address and type_info_address
+// walk on from); or a #run's baked
 // value, one of the same; or null when a literal leaves the field out
 // (zero), and so for any field or element of such a null part. A string's
 // element is a byte that no node holds: not constant data; nor is a field
@@ -812,3 +874,11 @@ Type *call_variadic_type(Ast_Call *call);
 // written there by the linker, as a string literal's is: the checker asks
 // this to allow it, and lowering to write it (constant_bytes).
 Ast_Proc *procedure_address(Ast *e);
+
+// The type_info(T) whose description's address e, checked, is: the node
+// itself, a field or an element of constant data that holds one
+// (Holder.{type_info(int)}.t, constant_data), or a cast of any of them
+// between pointer types; null otherwise, a cast to an integer too. A global
+// may hold one, its address written by the linker (spec 4.3): the checker
+// asks this to allow it, and lowering to write it.
+Ast_Type_Info *type_info_address(Ast *e);

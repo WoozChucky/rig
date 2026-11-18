@@ -374,6 +374,11 @@ static void dump(Array<u8> *buffer, Ast *node) {
         dump_type(buffer, ((Ast_Size_Of *)node)->type_expr);
         out(buffer, ")");
         break;
+    case AST_TYPE_INFO:
+        out(buffer, "(type_info ");
+        dump_type(buffer, ((Ast_Type_Info *)node)->type_expr);
+        out(buffer, ")");
+        break;
     case AST_STRUCT: {
         Ast_Struct *s = (Ast_Struct *)node;
         out(buffer, "(struct ");

@@ -136,7 +136,7 @@ digit      = "0" … "9" .
 
 A name that contains a byte from 0x80 up, such as `função`, is one bad token, reported once at that byte: `non-ASCII characters can only be in strings and comments, for now`.
 
-Some identifiers are predeclared rather than reserved: the names of the built-in types (section 3), `size_of` (section 5.16), the loop variables `it` and `it_index` (section 6.8), and the constants `OS`, `OS_WINDOWS` and `OS_LINUX`, untyped integer constants that name the system a program is built for (section 4.9). How each can be used is described with it.
+Some identifiers are predeclared rather than reserved: the names of the built-in types (section 3), `size_of` (section 5.16), `type_info` (section 5.19), the loop variables `it` and `it_index` (section 6.8), and the constants `OS`, `OS_WINDOWS` and `OS_LINUX`, untyped integer constants that name the system a program is built for (section 4.9). How each can be used is described with it.
 
 The three constants are the top level's, visible everywhere, and a top-level declaration can't take one of their names: it is `'OS' is predeclared: it's the system the program is built for`, `'OS_WINDOWS' is predeclared: it's Windows, one of the systems OS may be` or `'OS_LINUX' is predeclared: it's Linux, one of the systems OS may be`, at the declaration's name, and the name keeps meaning the constant. A local may hide them, as it may any top-level name (section 4.7).
 
@@ -327,7 +327,7 @@ Hello from Basic
 - **An `#import` that fails**, with one of the errors above, leaves the program without the module, as a `#load` that fails leaves it without its file: while one has failed, no name anywhere in the program is reported as unknown, nor `main` as missing (section 2.13).
 - **One top level.** For now a module's declarations join the program's one top level, as a loaded file's do (section 4.6): a program that imports Basic can't declare a procedure, struct or constant of a name Basic declares, and no program can declare one of a name Preload declares (below). Modules with scopes of their own come later, with `#import` of a program's own modules and of modules fetched from elsewhere.
 - **The modules that ship with rig** are three. `Preload` is what the language itself refers to, and every program imports it (below). `Basic` is Rig's first library, written in Rig over a thin layer of C. `Compiler` is what a build program uses to build other programs (section 7.9). The `README.md` in the directories of `Preload` and `Basic` lists what each declares.
-- **Preload.** Every program imports `Preload` without an `#import`: an ordinary program, a build program and each of its workspaces (section 7.9), a program `rig check` checks, with `--stdin` and `--stdin-for` too (section 10.1), and one the test mode runs interpreted (section 10.8); the compile-time world where `#run` runs has it too (section 7.8). For now it holds the allocator's shape, `Allocator`, its modes and the heap allocator, `HEAP_ALLOCATOR`. In load order it comes first (section 2.13), before the main file, and so before a workspace's other files (section 7.9) and the files the main file's own `#load`s and `#import`s reach: its declarations come before the program's, so a program that declares one of its names is told so at its own declaration, `'Allocator' is already declared at .../Preload/module.rig:L:C`, and every use of the name, the program's and Preload's own, finds Preload's. Its `module.rig` is read right after the main file. An `#import "Preload";`, or a `#load` of its `module.rig` by its path, reads nothing more, as for any module. Its files are a module's, named by their absolute paths, and its declarations join the one top level (above); every name it declares for its own use starts with two underscores (`__malloc`), and its plain names (`Allocator`, the modes, `heap_allocator_proc` and `HEAP_ALLOCATOR`) are the ones for programs to use, a convention the compiler doesn't enforce. It is looked for where any module is, before anything is checked: one in neither place is `rig: error: there's no module 'Preload' (looked in DIR1 and DIR2)`, and a `module.rig` that is there but can't be read is `rig: error: cannot read 'PATH': MESSAGE`, PATH its absolute path, each said alone, with status 1 (section 10.1), since no `#import` names it for the message to be at and nothing of the program means anything without it.
+- **Preload.** Every program imports `Preload` without an `#import`: an ordinary program, a build program and each of its workspaces (section 7.9), a program `rig check` checks, with `--stdin` and `--stdin-for` too (section 10.1), and one the test mode runs interpreted (section 10.8); the compile-time world where `#run` runs has it too (section 7.8). For now it holds the allocator's shape, `Allocator`, its modes and the heap allocator, `HEAP_ALLOCATOR`, and type information and `Any` (section 3.16). In load order it comes first (section 2.13), before the main file, and so before a workspace's other files (section 7.9) and the files the main file's own `#load`s and `#import`s reach: its declarations come before the program's, so a program that declares one of its names is told so at its own declaration, `'Allocator' is already declared at .../Preload/module.rig:L:C`, and every use of the name, the program's and Preload's own, finds Preload's. Its `module.rig` is read right after the main file. An `#import "Preload";`, or a `#load` of its `module.rig` by its path, reads nothing more, as for any module. Its files are a module's, named by their absolute paths, and its declarations join the one top level (above); every name it declares for its own use starts with two underscores (`__malloc`), and its plain names (`Allocator`, the modes, `heap_allocator_proc` and `HEAP_ALLOCATOR`; `Any`, the `Type_Info` structs, the `TYPE_INFO_*` tags, `ARRAY_FIXED` and `ARRAY_VIEW`) are the ones for programs to use, a convention the compiler doesn't enforce. It is looked for where any module is, before anything is checked: one in neither place is `rig: error: there's no module 'Preload' (looked in DIR1 and DIR2)`, and a `module.rig` that is there but can't be read is `rig: error: cannot read 'PATH': MESSAGE`, PATH its absolute path, each said alone, with status 1 (section 10.1), since no `#import` names it for the message to be at and nothing of the program means anything without it.
 
 So a program that imports nothing has Preload's allocator:
 
@@ -365,7 +365,7 @@ Every value and every expression in Rig has a type, known while compiling. The t
 - array types `[N]T` (section 3.6);
 - view types `[]T` (section 3.7);
 - `string` (section 3.8);
-- struct types, declared by the program (section 3.9);
+- struct types, declared by the program (section 3.9), and Preload's, which every program has (section 2.14), among them `Any`, a value of any type with its type's description (section 3.16);
 - procedure types `(int, int) -> int`, the types of procedure values (section 3.15).
 
 `void` is not a type of values: it appears only as what a `*void` points at (section 3.10). Untyped constants have types of their own until they meet one (section 3.12).
@@ -458,7 +458,7 @@ main :: () {
 S is 12 bytes
 ```
 
-A field's type may be any type but `void`, but a struct cannot hold itself by value, directly or through other structs or arrays: that is `'Node' contains itself; it can hold a pointer to itself, *Node`. Anything behind a pointer or in a view lies elsewhere, so `*Node`, `[]Node`, `[2]*Node` and `*[2]Node` are all allowed as fields of `Node`. A struct whose size would depend on itself through a constant or a global, as in an array count, is `'S' is defined in terms of itself`.
+A field's type may be any type but `void`, but a struct cannot hold itself by value, directly or through other structs or arrays: that is `'Node' contains itself; it can hold a pointer to itself, *Node`. Anything behind a pointer or in a view lies elsewhere, so `*Node`, `[]Node`, `[2]*Node` and `*[2]Node` are all allowed as fields of `Node`. A struct whose size would depend on itself through a constant or a global, as in an array count, is `'S' is defined in terms of itself`, and so is one whose array count runs code describing it, behind a pointer too, which needs its layout first (section 7.8).
 
 A struct value is copied whole by assignment, as an argument and as a result. Structs are not compared by any operator.
 
@@ -493,19 +493,19 @@ Numeric literals and arithmetic on them have no fixed type until they meet one.
 - **Arithmetic on untyped constants** is exact and stays untyped. Untyped integer arithmetic must stay within `int`'s range, or it is `constant overflows 'int'`. When an untyped float takes part, the result is an untyped float, computed in double precision with any untyped integer converted to a double (`1 + 0.5` is the untyped float 1.5). An operation on finite untyped floats whose result is infinite is `constant overflows 'float64'`, except a division by zero, which gives an infinity or NaN.
 - A **constant declared from an untyped constant** (`N :: 5;`) is untyped too, and meets types as a literal does.
 
-Where an untyped constant meets a type, in a declaration with a type, an assignment, an argument, a return, a field or element of a literal, or an operand of an operator whose other operand is typed, it takes that type:
+Where an untyped constant meets a type, in a declaration with a type, an assignment, an argument, a return, a field or element of a literal, or an operand of an operator whose other operand is typed, it takes that type (`Any` aside, below):
 
 - An untyped integer takes any integer type whose range holds its value, or any float type (it is converted to the nearest value of that type). A value outside the range is `300 doesn't fit in 'u8'`.
 - An untyped float takes any float type. Taking `float32`, its value must be within `float32`'s range (`1e+300 doesn't fit in 'float32'`, the value written as C's `%g` writes it) and is rounded to it. An untyped float never becomes an integer implicitly: `x : int = 1.5;` is `a value of type 'float32' doesn't convert to 'int' implicitly`.
 
-Where it meets no type, as in `x := 5;`, an untyped integer becomes an `int` and an untyped float a `float32`. For that reason messages name an untyped integer `int` and an untyped float `float32`. One place differs: passed to a variadic foreign procedure after its parameters, where C receives a `double`, an untyped float becomes a `float64` (section 7.6).
+Where it meets no type, as in `x := 5;`, an untyped integer becomes an `int` and an untyped float a `float32`. For that reason messages name an untyped integer `int` and an untyped float `float32`. It takes its default type too where it meets `Any`, which holds a value of any type, a cast to `Any` included: `a : Any = 1.5;` and `cast(Any) 1.5` hold a `float32` (section 3.16). One place differs: passed to a variadic foreign procedure after its parameters, where C receives a `double`, an untyped float becomes a `float64` (section 7.6).
 
 Two other kinds of value take their type from where they are used:
 
 - `null` takes the pointer type or procedure type it meets (sections 3.5, 3.15);
-- a compound literal written without its type, `.{...}` or `.[...]`, takes the struct, array or view type it meets, or the type of a cast around it (section 5.17).
+- a compound literal written without its type, `.{...}` or `.[...]`, takes the struct, array or view type it meets, or the type of a cast around it, but not `Any` (section 5.17).
 
-Neither has a default type: with nothing to take a type from, each is an error. The one exception is `null` passed to a variadic foreign procedure after its parameters, which is a `*void`, C's `NULL` (section 7.6).
+Neither has a default type: with nothing to take a type from, each is an error, and a literal without its type that meets `Any` has nothing to take one from either (section 5.17). The exceptions are two places where `null` is a `*void`: passed to a variadic foreign procedure after its parameters, as C's `NULL` (section 7.6), and meeting `Any` (section 3.16).
 
 ### 3.13 Implicit conversions
 
@@ -520,6 +520,7 @@ A value converts implicitly to another type only in these cases:
 - `[N]T` to `[]T`, a view of the array's `N` elements (section 5.17 says which memory the view points at).
 - A string literal, or a string that is constant data holding one (a string constant, a string field or element of constant data, or a `#run`'s string), to `*u8` (section 3.8).
 - `.{...}` to a struct type, and `.[...]` to an array or view type (section 5.17).
+- Any value to `Any`, Preload's struct of the value's address and its type's description; a value of type `Any` converts as itself (section 3.16).
 
 Nothing else converts implicitly: not an integer to a narrower integer, not between integers and floats, not `float64` to `float32`, not between `bool` and any number, not between pointers to different types other than through `*void`, and not between procedure types, nor between a procedure value and a pointer. Such a value is `a value of type 'int' doesn't convert to 'float32' implicitly`. A value always converts to its own type.
 
@@ -537,7 +538,7 @@ Cast = "cast" [ "," "trunc" ] "(" Type ")" Unary .
 
 | From | To | Result |
 |---|---|---|
-| any type | a type it converts to implicitly (its own included) | the implicit conversion (section 3.13), except for an untyped float (below) |
+| any type | a type it converts to implicitly (its own included) | the implicit conversion (section 3.13), except for an untyped float (below); `cast(Any) e` converts a value of any type, a pointer and a procedure value included (section 3.16) |
 | integer | integer | the same number. If `e` is a constant, a value outside `T`'s range is the compile-time error `300 doesn't fit in 'u8'`, at the cast; otherwise the value is checked at run time (section 8.3). |
 | `bool` | integer | 1 for `true`, 0 for `false` |
 | integer or float | float | the nearest value of `T`, ties to even (`float32` to `float64` is exact) |
@@ -553,13 +554,13 @@ Cast = "cast" [ "," "trunc" ] "(" Type ")" Unary .
 Any other cast is an error:
 
 - a number to `bool`: `can't cast 'int' to 'bool': compare instead, as in x != 0`;
-- a procedure value to anything but its own type and `*void`, or anything but `*void` and `null` to a procedure type: `can't cast '(int) -> int' to '(s32) -> s32'; a procedure value casts only to and from *void`;
-- a pointer to any type but a pointer or a 64-bit integer, or a number or `bool` to a pointer: `can't cast '*int' to 'u32'; a pointer casts to another pointer or to a 64-bit integer`;
+- a procedure value to anything but its own type, `*void` and `Any`, or anything but `*void` and `null` to a procedure type: `can't cast '(int) -> int' to '(s32) -> s32'; a procedure value casts only to and from *void`;
+- a pointer to any type but a pointer, a 64-bit integer or `Any`, or a number or `bool` to a pointer: `can't cast '*int' to 'u32'; a pointer casts to another pointer or to a 64-bit integer`;
 - anything else: `can't cast 'string' to 'int'`.
 
 `cast,trunc(T) e` takes an integer and gives an integer, and nothing else (`cast,trunc only takes integers`). It never fails: narrowing keeps the low bits, widening extends by the sign of `e`'s type (sign extension from a signed type, zero extension from an unsigned one), and between types of the same width the bits are kept and read by `T`'s sign. So `cast,trunc(u8) 300` is 44 and `cast,trunc(s8) 200` is -56.
 
-A cast of a constant is a constant of type `T`, folded by the same rules: `cast(s32) 1e30` is 2147483647. In a cast, an untyped integer operand is an `int` first, and an untyped float operand a `float64`. So a cast of an untyped float to `float32` rounds from the double, and a value beyond `float32`'s range becomes an infinity: `cast(float32) 1e300` is infinity, where the implicit conversion in `x : float32 = 1e300;` is an error.
+A cast of a constant is a constant of type `T`, folded by the same rules: `cast(s32) 1e30` is 2147483647. In a cast, an untyped integer operand is an `int` first, and an untyped float operand a `float64`. So a cast of an untyped float to `float32` rounds from the double, and a value beyond `float32`'s range becomes an infinity: `cast(float32) 1e300` is infinity, where the implicit conversion in `x : float32 = 1e300;` is an error. `cast(Any) e` is the exception to both: it is the conversion to `Any` (section 3.16), which makes no constant and gives an untyped constant its default type, so `cast(Any) 1.5` holds a `float32`, as `a : Any = 1.5;` does.
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;
@@ -606,7 +607,7 @@ ProcResults = Type | "(" Type { "," Type } ")" .
 
 A procedure type is the type of a **procedure value**, which names a procedure that can be called through it (section 5.10). It is written as a procedure's signature (section 7.1) with no body: `(int, int) -> int` takes two `int`s and returns an `int`. The parameters' names are optional and are not part of the type, so `(a: int, b: int) -> int` and `(int, int) -> int` are the same type. A procedure type with no results has no arrow: `(int)` takes an `int` and returns nothing, and `()` takes nothing and returns nothing. Several results are written in parentheses, `(int) -> (int, int)`, since a type ends at a `,`: so a procedure type can be written anywhere a type goes, a parameter list included, `process :: (f: (int) -> int, x: int) -> int`. After a `->`, parentheses followed by another `->` are a procedure type, the one result (`() -> (int) -> int` returns a `(int) -> int`), and any other parentheses hold the results (`() -> (int)` returns an `int`). A `#c_call` at the end marks the procedure type it ends, the innermost one: in `() -> (int) -> int #c_call` it is the result's. A procedure type's last parameter may be written `..T`, the type of a variadic procedure, whose last parameter is `name: ..T` (section 7.2): `(first: int, rest: ..int) -> int` has the type `(int, ..int) -> int`. Its `..T` is the last parameter, as in a signature (`'..' must be the last parameter`, at the `..`). C's bare `..` has no place in a procedure type, since a procedure that takes it can't be a value (below): `a procedure type can't take '..': a procedure that takes C's '..' can't be a value`.
 
-A procedure type goes wherever a type goes: a variable's, a constant's, a parameter's, a result's, a struct field's, an array's or a view's elements (`[4](int) -> int`), a pointer's target, a cast's and `size_of`'s. Its `(` is a level of the type, as a `*` is (section 9.4).
+A procedure type goes wherever a type goes: a variable's, a constant's, a parameter's, a result's, a struct field's, an array's or a view's elements (`[4](int) -> int`), a pointer's target, a cast's, `size_of`'s and `type_info`'s. Its `(` is a level of the type, as a `*` is (section 9.4).
 
 **Identity.** Two procedure types are the same type when their parameter types are the same, in order, their result types are the same, in order, both are marked `#c_call` or neither is, and both take a `..T` last or neither does. So `(int, ..int) -> int` is not `(int, []int) -> int`, though its last parameter is a `[]int` in the procedure's body, and neither converts to the other. Messages write a procedure type in that form, with no names: `(int, int) -> int`, `(int) -> (int, int)`, `(*void, *void) -> s32 #c_call`, `(int, ..int) -> int`, `()`.
 
@@ -652,6 +653,110 @@ main :: () {
 25
 ```
 
+### 3.16 Type information and Any
+
+A program can find out, while it runs, what type a value has. `type_info(T)` (section 5.19) gives a `*Type_Info`, the address of a **description** of type `T`, laid out as structs the program reads as it reads any data, and an `Any` pairs a value's address with its type's description. Every value converts to `Any` implicitly (below), so a procedure that takes an `Any` takes a value of any type and finds out what it is. This is Jai's type information, trimmed to Rig's types. The structs, their tags and `Any` are Preload's (section 2.14), so every program has them:
+
+```text
+TYPE_INFO_INTEGER   :: 0;  TYPE_INFO_FLOAT   :: 1;  TYPE_INFO_BOOL   :: 2;
+TYPE_INFO_STRING    :: 3;  TYPE_INFO_POINTER :: 4;  TYPE_INFO_PROCEDURE :: 5;
+TYPE_INFO_VOID      :: 6;  TYPE_INFO_STRUCT  :: 7;  TYPE_INFO_ARRAY  :: 8;
+
+Type_Info :: struct { tag: int; size: int; alignment: int; }
+
+Type_Info_Integer   :: struct { info: Type_Info; signed: bool; }
+Type_Info_Pointer   :: struct { info: Type_Info; pointer_to: *Type_Info; }
+Type_Info_Procedure :: struct { info: Type_Info; parameter_types: []*Type_Info; result_types: []*Type_Info;
+                                is_c_call: bool; is_variadic: bool; }
+Type_Info_Struct    :: struct { info: Type_Info; name: string; members: []Type_Info_Struct_Member; }
+Type_Info_Struct_Member :: struct { name: string; type: *Type_Info; offset: int; }
+Type_Info_Array     :: struct { info: Type_Info; element_type: *Type_Info; array_kind: int; count: int; }
+ARRAY_FIXED :: 0;  ARRAY_VIEW :: 1;
+
+Any :: struct { type: *Type_Info; value_pointer: *void; }
+```
+
+**The descriptions.** Every description starts with a `Type_Info`: its `tag` is the type's kind, one of the nine tags (constants, numbered as Jai's tags are, until Rig has enums), and its `size` and `alignment` are the type's, in bytes (section 3.11), `void`'s being 0 and 1. A kind with more to say has a struct of its own, whose first field, `info`, is that `Type_Info` (Rig has no `using`, so it is read as `t.info.size`), and a `*Type_Info` whose tag says the kind is cast to the kind's struct: `cast(*Type_Info_Struct) t` when `t.tag == TYPE_INFO_STRUCT`.
+
+- **Integers**, `s8` to `u64` and `int` (`TYPE_INFO_INTEGER`): a `Type_Info_Integer`, whose `signed` says whether the type is signed.
+- **Floats, `bool`, `string` and `void`** (`TYPE_INFO_FLOAT`, `TYPE_INFO_BOOL`, `TYPE_INFO_STRING`, `TYPE_INFO_VOID`): a plain `Type_Info`. A float's `size` says which float it is. A `string` has a tag of its own, and is not described as a view of `u8` (section 3.8). `void`'s description describes what a `*void` points at (section 3.10).
+- **Pointers** (`TYPE_INFO_POINTER`): a `Type_Info_Pointer`, whose `pointer_to` is the description of what it points at, `void`'s for a `*void`.
+- **Arrays and views** (`TYPE_INFO_ARRAY`) share a `Type_Info_Array`: `element_type` is the elements' description, `array_kind` is `ARRAY_FIXED` for an array `[N]T` and `ARRAY_VIEW` for a view `[]T`, and `count` is the array's `N`, or -1 for a view.
+- **Structs** (`TYPE_INFO_STRUCT`): a `Type_Info_Struct`, whose `name` is the struct's declared name and whose `members` are its fields in order, none for a struct with none. Each is a `Type_Info_Struct_Member`: the field's `name`, its type's description, `type`, and its `offset`, in bytes from the struct's start (section 3.9).
+- **Procedure types** (`TYPE_INFO_PROCEDURE`, section 3.15): a `Type_Info_Procedure`, whose `parameter_types` and `result_types` are the descriptions of its parameters' types and of its results', in order. `is_c_call` says whether it is marked `#c_call`, and `is_variadic` whether its last parameter is a `..T`, which `parameter_types` describes as a `[]T`, its type in the procedure's body (section 7.2).
+
+Laid out as section 3.9 says, `Type_Info` is 24 bytes, `Type_Info_Integer` and `Type_Info_Pointer` 32, `Type_Info_Procedure` 64, `Type_Info_Struct` 56, `Type_Info_Struct_Member` 32, `Type_Info_Array` 48 and `Any` 16, each aligned to 8.
+
+**One description per type.** Types that are the same type by section 3.1's identity have one description, at one address, so `a.type == type_info(int)` tells types apart by their descriptions' addresses. `int` and `s64` are two types, with two descriptions, the same in all but their addresses; `float` is `float32`, with one. A description points at the descriptions of the types it is made of, so a struct that holds a pointer to itself (`Node :: struct { next: *Node; }`) is described by pointing back at its own description: the descriptions are cyclic, not infinite.
+
+**Where they live.** The compiler writes each description into the program's read-only data (section 10.3), once, and only for the types the program uses: those `type_info` names, those of the values it converts to `Any`, and every type their descriptions reach (fields, elements, pointees, parameters and results). Names are string literals there, and the arrays that the views of members, parameter types and result types see are read-only too. Writing any of it is a memory error that no check catches (section 8.6). Code run while compiling has descriptions of its own, laid out the same (section 7.8).
+
+**Any.** `Any` is an ordinary struct, so it has a description of its own, a struct named `Any`: its `type` is a value's type's description, and its `value_pointer` the value's address. A value converts to `Any` implicitly wherever a value goes into something of a known type (section 3.13): a variable's declaration with a type, an assignment, an argument, a `..Any` one included (section 5.10), a return, a field or element of a compound literal, and a cast, `cast(Any) e`, which is this conversion for a value of any type, a pointer and a procedure value included (section 3.14).
+
+- **A place** (section 5.1) gives its own address, so the `Any` sees later changes to it, and writing through `value_pointer` changes it. That includes an element of a view and a field reached through a pointer. The place is worked out once, where the conversion is, its checks included (a null pointer, an index out of bounds, section 8).
+- **Any other value** (a constant, a parameter, a loop's iterator, a call's result, an operator's, a literal, a procedure's name) is copied into a temporary of the procedure that converts it, and the `Any` points at the copy. The temporary lives until the end of the statement holding the conversion: an `Any` of it used after that, returned or kept in a global, is a memory error that no check catches (section 8.6), as a view of a temporary is (section 5.17).
+- **A value of type `Any`** converts as itself, not wrapped in another `Any`: passed on, it holds the value it held.
+- **A value with no type of its own** takes one first: an untyped constant takes its default type (section 3.12), `int` for an integer and `float32` for a float, and `null` is a `*void`, as for C's `..` (section 7.6). A compound literal without its type has none to take: `this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}` (`int.[1, 2]` for `.[...]`, section 5.17).
+- **What isn't a value** doesn't convert, and keeps its message: `main` (`'main' can't be a value: it's where the program starts`, section 7.4), a variadic foreign procedure (section 3.15), a `#compiler` procedure (section 7.9), a struct's name (`'Vec2' is a type, not a value`, section 4.5) and a call that returns nothing (`'greet' returns nothing, so it has no value`, section 5.10).
+
+A value converts only to `Any` itself: an `[N]int` doesn't become a `[]Any` (`a value of type '[2]int' doesn't convert to '[]Any' implicitly`), nor a `*int` a `*Any`. Nothing converts from `Any` implicitly (`a value of type 'Any' doesn't convert to 'int' implicitly`): the program reads the value by casting `value_pointer` once `type` says what it is. A constant can't hold a converted `Any`, which holds addresses: `HELD :: Holder.{a = 5};` is `a constant's pointer can only be null or a string literal's address`, at the value converted to `Any` (the `5`, section 4.2). Nor, for now, can a global's value: `any : Any = 7;` is `a global's value must be known while compiling, for now` (section 4.3). And for now the results of a call given to several targets don't convert to `Any`: `a, b = f();` with an `Any` target is `a value of type 'int' doesn't convert to 'Any' implicitly`, at the target (section 6.4).
+
+```rig
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+
+describe :: (a: Any) {
+    if a.type == type_info(int) {
+        print_string("an int: ");
+        print_int((cast(*int) a.value_pointer).*);
+    } else if a.type.tag == TYPE_INFO_STRUCT {
+        s := cast(*Type_Info_Struct) a.type;
+        print_string(s.name);
+        print_string(" with ");
+        print_int(s.members.count);
+        print_string(" fields");
+    }
+    print_byte(10);
+}
+
+main :: () {
+    n := 42;
+    describe(n);                 // an int: 42 (n's own address)
+    describe(Vec2.{1, 2});       // Vec2 with 2 fields (a temporary)
+}
+```
+
+The program prints:
+
+```text
+an int: 42
+Vec2 with 2 fields
+```
+
+An `Any` of a place sees the place, and changes it:
+
+```rig
+#import "Basic";
+
+as_int :: (a: Any) -> int { return (cast(*int) a.value_pointer).*; }
+
+main :: () {
+    n := 1;
+    a : Any = n;             // n's own address
+    n = 2;
+    print_int(as_int(a));    // 2: a sees n change
+    (cast(*int) a.value_pointer).* = 3;
+    print_string(" ");
+    print_int(n);            // 3
+    print_byte(10);
+}
+```
+
+```text
+2 3
+```
+
 ## 4. Declarations and scope
 
 ### 4.1 Declarations
@@ -691,7 +796,7 @@ ConstDecl = identifier "::" Expression ";" .
 
 A constant's value may also be a `#run`, worked out by running code while compiling (section 7.8): `LIMIT :: #run triangle(4);`, `PRIMES :: #run primes();`. It holds what the `#run` gives, baked into the program as if it had been written: any of the above but a pointer other than `null`, and views too, as its own value or inside its data, which a written constant can't hold (below). A view's elements are then read-only data of the constant's, as its strings' bytes are.
 
-A value that isn't known while compiling is `the value of constant 'N' isn't known while compiling`, at the value, or at the first value inside its literals that isn't: in `LIVE :: Holder.{n = count};`, for a variable `count`, at `count`. A pointer, the constant's own or one inside its data, is `null` or a string literal's address; a cast that makes any other pointer, from a number, a procedure or a pointer variable (`cast(*int) 4096`, `cast(*void) add`), is `a constant's pointer can only be null or a string literal's address`. A written constant makes no view, as its own value or inside its data, since a view would see memory of its own: `VIEW :: cast([]u8) "hi";` is `a constant can't hold a view; only a string or an array can be one`, at the value, and so is an array given to a view field, a `#run`'s array included. A `#run`'s view is copied (above), so a constant may hold one wherever it comes from: the `#run` itself, another constant holding it (`V2 :: V;`), or a part of one, in a literal too (`H :: Holder.{v = V};`). A view field that a struct literal leaves out is allowed: it is the empty view. Where a view is needed, an array constant converts to one, and a string constant is one already (section 3.13).
+A value that isn't known while compiling is `the value of constant 'N' isn't known while compiling`, at the value, or at the first value inside its literals that isn't: in `LIVE :: Holder.{n = count};`, for a variable `count`, at `count`. A pointer, the constant's own or one inside its data, is `null` or a string literal's address; a cast that makes any other pointer, from a number, a procedure or a pointer variable (`cast(*int) 4096`, `cast(*void) add`), is `a constant's pointer can only be null or a string literal's address`. So is a type's description's address, `type_info(T)` (section 5.19), as it is or cast, and a value converted to `Any` (section 3.16), which holds addresses: `INFO :: type_info(int);` is refused so, at the value, and so is `HELD :: Holder.{a = 5};`, for an `Any` field `a`, at the value converted to `Any` (the `5`). A written constant makes no view, as its own value or inside its data, since a view would see memory of its own: `VIEW :: cast([]u8) "hi";` is `a constant can't hold a view; only a string or an array can be one`, at the value, and so is an array given to a view field, a `#run`'s array included. A `#run`'s view is copied (above), so a constant may hold one wherever it comes from: the `#run` itself, another constant holding it (`V2 :: V;`), or a part of one, in a literal too (`H :: Holder.{v = V};`). A view field that a struct literal leaves out is allowed: it is the empty view. Where a view is needed, an array constant converts to one, and a string constant is one already (section 3.13).
 
 A constant that names a procedure, `OP :: add;` (or `OP :: OTHER;`, where `OTHER` names one), stands for that procedure: its type is the procedure's type (section 3.15), and `OP(1, 2)` calls `add` as `add(1, 2)` does. Casts may be written around the name when they end at the procedure's own type, as `cast((int, int) -> int) cast(*void) add` does; a constant that would name a procedure as another type is refused, since a call of it calls the procedure: `'add' is a '(int, int) -> int', so a constant can't name it as a '(int) -> int'`. A constant cannot name `main`, which is no value (section 7.4).
 
@@ -759,7 +864,10 @@ A local variable is declared after its value is worked out, so `x := x + 1;` in 
 - for a view, an array literal, or an array that is constant data (`primes : []int = PRIMES;`): the compiler makes a global array of its own for it, a copy, and the view points at it;
 - a string literal or a string constant, as a `string`, a `*u8` or a `[]u8`, or through casts that keep its address (`cast(*void) cast(*u8) "x"`), or as a field or element of one: the linker writes the literal's address into the global. A literal's address cast to an integer is not allowed;
 - a procedure's name, or a constant that names one, as a procedure value or cast to `*void`, or as a field or element of a literal: the linker writes the procedure's address (section 3.15);
+- a type's description's address, `type_info(T)` (section 5.19), as it is, through casts to other pointer types (`cast(*Type_Info_Struct) type_info(Node)`), or as a field or element of a literal, a cast of such a literal or a field of one included: the linker writes the description's address, as for a string literal. One cast to an integer is not allowed;
 - a `#run` (section 7.8), or a constant holding one's value, or either as a field or element of a literal (`numbers : []int = #run make();`, `copy := NAME;` for `NAME :: #run name();`). The global gets its own copy of the value, writable, and unlike a literal's, its strings' bytes are copied too, as its views' elements are: into data of the global's own, which the program may change (`copy[0] = 82;`).
+
+A value converted to `Any` (section 3.16) is not allowed, for now, alone or in a literal, whatever the value: `any : Any = 7;` and `held := Holder.{a = 5};`, for an `Any` field `a`, are `a global's value must be known while compiling, for now`, at the value converted, or at the global's whole value when that is a cast to `Any` (`any := cast(Any) 7;`), or a cast or a field of a literal holding one (`held := cast(Holder) Holder.{a = 5};`).
 
 A global with no value, or with `---`, starts at zero.
 
@@ -865,7 +973,7 @@ example.rig:1:1: error: 'A' is defined in terms of itself
     ^
 ```
 
-The same holds for a global variable's value, a struct's size (a struct cannot hold itself, section 3.9) and a procedure's signature whose array count needs a global whose value calls it, and for a constant or a global whose `#run` reaches code that needs its value (section 7.8): `M :: #run k();`, where `k` returns `M`, is `'M' is defined in terms of itself`.
+The same holds for a global variable's value, a struct's size (a struct cannot hold itself, section 3.9) and a procedure's signature whose array count needs a global whose value calls it, and for a constant or a global whose `#run` reaches code that needs its value (section 7.8): `M :: #run k();`, where `k` returns `M`, is `'M' is defined in terms of itself`. So is a struct one of whose array counts runs code describing it, by `type_info` or by converting a value to `Any`, even behind a pointer, since the description needs the struct's layout (section 7.8).
 
 A procedure's body is checked where a `#run` first reaches it, before the `#run` runs (section 7.8), so a body is worked out where it is needed too. A body needed while it is being checked, as `f`'s is by `x := #run f();` in its own body, or by a `#run` there that calls a procedure calling `f`, is a cycle of its own, reported at the `#run` that needed it: `'f' is defined in terms of itself`.
 
@@ -968,7 +1076,7 @@ Each system takes its own branches, and the program prints the same on both: `11
 
 ### 5.1 Operands and places
 
-The simplest expressions are operands: a literal (sections 2.8 to 2.11), the name of a variable, a parameter, a constant or a procedure (whose value is a procedure value, section 3.15), a compound literal (section 5.17), `size_of(T)` (section 5.16), and an expression in parentheses, which only groups.
+The simplest expressions are operands: a literal (sections 2.8 to 2.11), the name of a variable, a parameter, a constant or a procedure (whose value is a procedure value, section 3.15), a compound literal (section 5.17), `size_of(T)` (section 5.16), `type_info(T)` (section 5.19), and an expression in parentheses, which only groups.
 
 Some expressions denote memory. These are **places**: they can be assigned to (section 6.4) and their address can be taken (section 5.13). The places are:
 
@@ -1095,7 +1203,7 @@ A constant expression is one whose value is known while compiling. The compiler 
 **Constant data** is a value known while compiling that is a string, a struct or an array, or a string's bytes seen as a `[]u8`:
 
 - a string literal;
-- a struct or array literal whose every value is a constant, a procedure (its name, or a constant naming one, section 3.15), a string literal's address (section 3.8) or constant data, nested to any depth;
+- a struct or array literal whose every value is a constant, a procedure (its name, or a constant naming one, section 3.15), a string literal's address (section 3.8) or constant data, nested to any depth, and none of them converted to `Any`, which a constant can't hold (section 3.16);
 - the name of a constant holding data (section 4.2);
 - a field of constant data, of a struct and not reached through a pointer, and an element of an array that is constant data, at a constant index;
 - a cast of constant data to its own type, or between `string` and `[]u8`;
@@ -1229,7 +1337,7 @@ ArrayLiteral  = [ identifier ] "." "[" [ Expression { "," Expression } [ "," ] ]
 
 The type before the `.` is a name written directly before it, never a name in parentheses: `(Vec2).{1}` is not a literal. A comma may follow the last value.
 
-**Literals without a type.** `.{1, 2}` and `.[1, 2]` take their type from where they are used: a variable's declared type, an assignment's target, a parameter, a result, a field or element of an enclosing literal, or a cast (`cast([]int) .[1, 2]`). `.{...}` must meet a struct type. `.[...]` must meet an array type, whose count it must give exactly (`'[3]int' has 3 elements, but this literal gives 2`), or a view type `[]T`, for which it makes a `[N]T` of its `N` values, and the view is of that array. Meeting anything else is `a '.[' literal needs an array or a view type, not 'int'`. With nothing to take a type from, as in `x := .{1, 2};` or an operator's operand, a literal is `this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}` (`int.[1, 2]` for an array literal).
+**Literals without a type.** `.{1, 2}` and `.[1, 2]` take their type from where they are used: a variable's declared type, an assignment's target, a parameter, a result, a field or element of an enclosing literal, or a cast (`cast([]int) .[1, 2]`). `.{...}` must meet a struct type. `.[...]` must meet an array type, whose count it must give exactly (`'[3]int' has 3 elements, but this literal gives 2`), or a view type `[]T`, for which it makes a `[N]T` of its `N` values, and the view is of that array. Meeting anything else is `a '.[' literal needs an array or a view type, not 'int'`. With nothing to take a type from, as in `x := .{1, 2};` or an operator's operand, a literal is `this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}` (`int.[1, 2]` for an array literal). So is a literal without its type that meets `Any`, a cast to `Any` included (`d : Any = .{null, null};`, `cast(Any) .{1, 2}`): `Any` is a struct, but it holds a value of any type, so it gives the literal no type to take (section 3.16).
 
 A literal's values are all evaluated, in the order written, before the literal is stored anywhere, so `v = Vec2.{v.y, v.x};` swaps `v`'s fields.
 
@@ -1274,6 +1382,7 @@ array literals
 - An assignment works out its target's place (the target's own operands left to right, and their checks) before it evaluates the value, then stores. A compound assignment works out its target's place once.
 - An assignment to several targets makes the call first, then stores each result into its target in order, each target's place being worked out just before its store.
 - A `for` over a range evaluates its first end, then its last, once each, before the first iteration; a `for` over a sequence evaluates the sequence once (sections 6.7, 6.8).
+- A value converted to `Any` is worked out where it is written, in the order above, and the `Any` is made then: a place's address is taken, its checks made, once, and any other value is copied into its temporary, which lives until the end of the statement holding the conversion (section 3.16).
 
 ```rig
 putchar :: (c: s32) -> s32 #foreign libc;
@@ -1293,6 +1402,10 @@ main :: () {
 ```text
 012
 ```
+
+### 5.19 type_info
+
+`type_info(T)` is the address of type `T`'s description (section 3.16), a `*Type_Info`. Its argument is a type, not a value: `type_info(n)`, for a variable `n`, is `'n' is not a type`. `void` is one too: `type_info(void)` describes what a `*void` points at. `type_info` is not a keyword: the name `type_info` followed by `(` is this operator, and anywhere else it is an ordinary name. It is no constant: an address, as a string literal's is, so a constant can't hold one, as it is or cast (`a constant's pointer can only be null or a string literal's address`, section 4.2), but a global's value may be one, the linker writing its address (section 4.3).
 
 ## 6. Statements
 
@@ -1338,7 +1451,7 @@ MultiAssignment = Expression "," Expression { "," Expression } "=" Expression ";
 
 `x op= e;` is `x = x op e;` with the place `x` worked out once, for each binary operator `op` of `+ - * / % & | ^ << >>`. The value `e` converts implicitly to the type of `x` (for a shift it may be any integer), and the operation is done at that type, so for `x : u8`, `x += 300;` is `300 doesn't fit in 'u8'`. A pointer takes `+=` and `-=` by an integer (section 5.14).
 
-`a, b = f();` assigns the results of a call to several targets, each result converting to its target's type. It takes `=` only (`a, b += f();` is `expected '=', found '+='`), and the value must be a call with as many results as there are targets. The call runs before any target is worked out (section 5.18), so `a, b = swap(a, b);` passes the old values.
+`a, b = f();` assigns the results of a call to several targets, each result converting to its target's type, but not, for now, to `Any` (`a value of type 'int' doesn't convert to 'Any' implicitly`, at the target, section 3.16). It takes `=` only (`a, b += f();` is `expected '=', found '+='`), and the value must be a call with as many results as there are targets. The call runs before any target is worked out (section 5.18), so `a, b = swap(a, b);` passes the old values.
 
 ### 6.5 if
 
@@ -1902,10 +2015,13 @@ main :: () {
 - An expression's `#run` runs when the checker first needs its value: a constant's or a global's when that declaration is worked out (section 4.8), one in a body when the body is checked. Each `#run` runs once, however often the code around it would run: one in a loop's body, or in a procedure called many times, runs once while compiling, and the program has its value every time. Every body is checked, so a `#run` in a procedure the program never calls runs too; one in an `#if`'s branch not taken never runs (section 4.9).
 - Before it runs, everything it reaches is checked: the procedures its operand calls or takes as values, the procedures those reach in turn, the constants and globals they name, and the structs of the values they use, whether or not the code would get to them when it runs. When any of that has errors, they are reported where they are, and the `#run` doesn't run. It says nothing more, and neither does what needs its value (an array's count, a constant made from it, an operator on it), so one mistake gives one message.
 - A `#run` whose value is needed while it is being worked out is a cycle (section 4.8): `M :: #run k();`, where `k` returns `M`, is `'M' is defined in terms of itself`, at `M`. So is a body a `#run` needs while that body is being checked, as `x := #run f();` in `f`'s own body: `'f' is defined in terms of itself`, at the `#run`.
+- A type the code describes, by `type_info` or by converting a value to `Any` (section 3.16), needs every struct its description reaches laid out first, behind pointers, in views and in procedure types too, since the description holds their sizes and offsets. So a `#run` in one of struct `S`'s own array counts that describes `S`, `*S` or any type reaching `S` (`[#run one(type_info(*S))]u8`, or `[#run one(cast(*S) null)]u8` for a `one` that takes an `Any`) is `'S' is defined in terms of itself`, at `S`, as one that reaches `S` by value is.
 - `main`, where the program starts (section 7.4), is never run while compiling: a call of `main` anywhere in what a `#run` reaches is `main is where the program starts; #run can't call it`, at the `#run`. A `#run` in `main`'s body is fine.
 - The top-level `#run`s run in `rig build` only, once the whole program has checked with no errors, so after every expression's `#run`. They run file by file in load order (section 2.13), and in source order within a file: a loaded file's `#run`s run after every one of the file whose `#load` of it is met first, not at that `#load`. That is the load order with only the taken branches of the top-level `#if`s written, a taken branch's `#run`s running in the `#if`'s place, and a branch not taken's never (section 4.9). `rig check` checks them as `rig build` does, what they reach and `main` included, but never runs them (section 10.1). A top-level `#run` that fails doesn't stop the ones after it, and every diagnostic is printed after the last of them. A build program's top-level `#run`s make the workspaces it builds, and come before them: the workspaces are built once the last `#run` has run, and none is when one of them failed (section 7.9).
 
 **One world.** Every `#run` of a compilation runs in one compile-time world: one interpreter, holding one copy of the program's globals, Preload's among them (section 2.14), which start from their written values (section 4.3) and which every `#run` shares. So one `#run` can set up what a later one reads. The program's own globals are untouched: the program starts with their written values, whatever the `#run`s did to theirs.
+
+**Type information.** The compile-time world has descriptions of its own (section 3.16), made in the interpreter's memory, laid out as the program's, the first time a `#run`'s code needs each, and once per type for every `#run` of the compilation: two `#run`s that describe one type get the same address, so one may keep a description in a global for a later one to compare. So code that reads type information, or takes an `Any`, runs in a `#run` as it runs compiled, a struct declared after the `#run` included. A description's address is the compiler's, and can't be baked into the program (below).
 
 **Results.** The value of an expression's `#run` is baked into the program: made into the value it would be if it had been written in the source, which the program has as it has a constant's (section 4.2). It may be:
 
@@ -1916,7 +2032,7 @@ main :: () {
 
 Strings and views are baked deeply: the bytes or elements they point at are copied as they are when the `#run` ends, wherever they lived while compiling (in a global, in memory `malloc` gave, on the interpreter's stack), and the baked string or view points at the copy. That includes a local or a temporary of the `#run`'s code: nothing runs between the end of the `#run` and the baking, so that memory still holds what the code left there, though the procedure it belonged to has returned. A call the code made after that procedure returned may have written over it, as it may over any returned procedure's locals (section 5.17): then what that call wrote is what's copied. A later `#run` that changes the memory leaves the copy as it was. A view whose data isn't memory the compiler may read is a memory error that no check catches (section 8.6). Some results can't be baked, each said at the `#run`, which then has no value:
 
-- Any other pointer, the result itself or one inside it, points into the compiler's own memory, which the program won't have: `#run's result holds a pointer, which can't be baked, for now`. That includes a `*u8` pointing at a string's bytes, and a procedure value that names no procedure of the program (one made from an integer). A table of C strings can hold `string`s instead, or be a constant written as a literal (section 4.2).
+- Any other pointer, the result itself or one inside it, points into the compiler's own memory, which the program won't have: `#run's result holds a pointer, which can't be baked, for now`. That includes a `*u8` pointing at a string's bytes, a procedure value that names no procedure of the program (one made from an integer), a type's description's address, `type_info(T)`, and an `Any`, which holds two addresses (section 3.16). A table of C strings can hold `string`s instead, or be a constant written as a literal (section 4.2).
 - A view or a string whose count is below zero has no elements to copy: `#run failed: its result holds a view with a negative count` (`a string with a negative count` for a string).
 - A view is baked as the array of its elements, `[N]T` for a count of `N`: one whose elements would make that array larger than any type may be (section 3.11) is `'[N]T' is too big`, as `'[1152921504606846976]int' is too big` for a `[]int` counting 2^60.
 
@@ -2190,9 +2306,10 @@ Bounds checks are turned off for a procedure by `#no_abc`, and for a whole progr
 
 These are memory errors, which the program must avoid and no check catches:
 
-- using a pointer or a view to memory that is no longer valid: a local or a temporary of a procedure that has returned (section 5.17), the temporary array a call's `..` arguments are gathered into once the statement holding the call has ended (a callee mustn't keep a view of it past that, section 5.10), or memory given back to the C library;
+- using a pointer or a view to memory that is no longer valid: a local or a temporary of a procedure that has returned (section 5.17), the temporary array a call's `..` arguments are gathered into once the statement holding the call has ended (a callee mustn't keep a view of it past that, section 5.10), the temporary copy an `Any` of a value that isn't a place points at once the statement holding the conversion has ended (an `Any` returned or kept in a global, section 3.16), or memory given back to the C library;
 - moving a pointer outside the memory it points into and using it, and indexing a pointer outside its memory;
 - writing the bytes of a string literal or a constant's data, which are read-only, through a view or a pointer to them (sections 3.8, 5.17): `cast([]u8) NAME`, a view of an array constant, or a string constant's `.data`; and so the data a `#run` baked, its views' elements and its strings' bytes, wherever the program uses it (a constant, a local's value, an argument, an operand), but in a global variable's declared value, which gets a writable copy of its own (sections 4.3, 7.8): a `#run`'s value assigned to a global later is read-only data still;
+- writing a type's description, its name's bytes or the arrays its views see, which are read-only data too (section 3.16), through a `*Type_Info` or a view;
 - using a misaligned pointer made by a cast;
 - calling a procedure value made by a cast from a `*void` that doesn't hold the address of a procedure of that type (section 3.15);
 - calling a procedure value read from a variable declared with `---` before it is assigned: it holds no procedure, and need not be null, so the null check (section 8.4) may pass it;
@@ -2301,6 +2418,8 @@ The sections defining each construct give its messages. Some of those met most o
 | `main is where the program starts; #run can't call it` | 7.8 |
 | `#run failed: runtime error: index 10 is out of bounds (count 10)` | 7.8 |
 | `#run's result holds a pointer, which can't be baked, for now` | 7.8 |
+| `a constant's pointer can only be null or a string literal's address` | 4.2, 3.16 |
+| `a global's value must be known while compiling, for now` | 4.3, 3.16 |
 | `a foreign procedure's C name can't be empty` | 7.6 |
 | `'fr ee' can't be a C function's name: it has white space` | 7.6 |
 | `'main' can't be a C function's name: it's where the program starts` | 7.6 |
@@ -2329,7 +2448,7 @@ The compiler limits how deeply a program's constructs nest:
 
 - An expression nests at most 1000 levels: each parenthesis, prefix operator, cast, call, dereference, field, element, compound literal and binary operator is a level above what it holds, so a chain of 1001 `+` is too deep. Deeper is `this expression is nested too deeply (more than 1000 levels)`, at the start of the outermost expression.
 - Blocks nest at most 1000 levels, a procedure's body the first: `blocks are nested too deeply (more than 1000 levels)`, at the `{` one too many. A top-level `#if`'s branch is a block for this limit, so top-level `#if`s nest at most 1000 levels, and a procedure declared in branches has its body that many levels down already. In a body an `#if`'s branch is a block too, and so is each `defer`, whose statement is a block of its own (section 6.12): `defer { ... }` is two levels, the `defer` and its `{`, and the one too many is reported at whichever of them it is: a `defer` at its keyword, a `{` at the `{`.
-- A written type nests at most 1000 levels, each `*`, `[]`, `[N]` and procedure type's `(` one: `types are nested too deeply (more than 1000 levels)`. Types and expressions inside each other count together: an array's count is inside its `[N]` level, and the type of `size_of` and of a cast is a level below the expression.
+- A written type nests at most 1000 levels, each `*`, `[]`, `[N]` and procedure type's `(` one: `types are nested too deeply (more than 1000 levels)`. Types and expressions inside each other count together: an array's count is inside its `[N]` level, and the type of `size_of`, of `type_info` and of a cast is a level below the expression.
 - Top-level declarations worked out inside one another (a constant whose value names a constant declared after it, and so on) nest at most 1000 levels: `'A1001' is nested too deeply in the declarations that need it (more than 1000 levels)`. Declared in the order they are needed, a chain of any length compiles. A body a `#run` needs (section 7.8) is worked out inside the declaration or the body holding the `#run`, its blocks, expressions and types counted together from where that one is: a chain of bodies each running the next goes no deeper than 1000 levels either, and the body one too many is reported at its procedure's name, in the same words.
 
 An `else if` chain, and an `else #if` chain, may have any number of arms.
@@ -2469,6 +2588,7 @@ After lowering, beside the LLVM and linker stages, a stage can run the IR rather
 - **Arrays** are their elements one after another.
 - **Views and strings** are 16 bytes: the count, a 64-bit signed integer, at offset 0, and the data pointer at offset 8.
 - **String literals and constants' data** are private, read-only constant data in the object file. A string literal is its bytes followed by one zero byte, once for each literal written in the source that the program uses at run time, or that a constant holds, however many uses reach it, and not at all when it is only folded (`"abc".count`, section 5.9). A constant holding data (section 4.2) is there once, read by the code when the program uses it at run time: its value, laid out as its type is, with relocations for the addresses inside it (a string literal's, a procedure's), which the linker resolves (in one no code reads, a foreign procedure's address is null when the program doesn't otherwise use that procedure, section 4.2). A string constant is a 16-byte string there, whose data points at its literal's bytes; where it becomes a `*u8`, it is the literal's address itself. A pointer constant holding a string literal's address is 8 bytes there, that address, which a debugger reads (section 10.7) and no code does: each use is the address itself. A `#run`'s value that holds data (section 7.8), a string, a struct, an array or a view, is constant data too, its views' elements in constant data of their own, which the view points at: an expression's `#run` there once for each such `#run` the program uses at run time (a string `#run` used only where it becomes a `*u8` is its literal's address itself, as a string constant is), and a constant's once, whether code reads it or not, as any constant holding data is (section 4.2); one that is a number, a `bool`, `null` or a procedure occupies no storage, as such a constant doesn't (section 4.2).
+- **Type descriptions** (section 3.16) are private, read-only constant data too, once for each type the program describes (by `type_info`, or by converting a value of it to `Any`) and for each type their descriptions reach, laid out as Preload's structs are: each a description of its kind's struct, with relocations, which the linker resolves, for the addresses inside it: the descriptions it points at, made before it or after, the bytes of its names, each a zero-ended string literal's of its own, and the read-only arrays its views see (a struct's members, a procedure type's parameter and result types), made only when not empty. An `Any` is 16 bytes, the description's address at offset 0 and the value's at 8, made in a slot of its procedure's frame where the conversion is (section 5.18).
 - **Global variables** are data local to the program, initialised with their values' bytes. A global holding a string literal's or an array's address gets it through a relocation, which the linker resolves. The bytes of the strings a `#run` gave a global, and the elements of its views, are data local to the program too, writable, of that global's own (section 4.3).
 - **Local variables** live in their procedure's stack frame. Every stack slot is allocated once, at the procedure's start, however often the block that declares it runs. That is unoptimised code; with a workspace's `optimize` (section 7.9), LLVM may keep a local in registers instead (section 10.7).
 
@@ -2580,6 +2700,7 @@ The compiler can run a program's code itself, while compiling, on its interprete
 **Memory.** The interpreter's memory is native memory of the compiler's own, laid out as the target's (section 10.3), so a pointer is a plain address, and C's functions (`malloc`, `memcpy`, `strlen`) work on interpreted data directly. So a memory error that no check catches (section 8.6), such as a write through a dangling pointer, or past a local array with bounds checks off, or by C given a bad pointer, is one in the compiler's own memory, which holds the interpreter's stack and globals and the compiler's own data: it may corrupt the compiler or stop it, as it would the compiled program.
 
 - **Globals** are made in memory from their bytes, and the addresses they hold (a string literal's, another global's, a procedure's) are written into them: a Rig procedure's is the address standing for it (below), a foreign one's its C function's. They are all writable, a string literal's bytes and a constant's data too, which a compiled program keeps read-only (writing them is a memory error no check catches, sections 3.8, 5.17 and 8.6). A `#run` that writes them so has made that memory error too: the `#run`s after it may see what it wrote, but the program keeps the value the constant was written or baked with. They last as long as the interpreter: what one run leaves in a global, the next run sees, as every `#run` of a compilation shares them (section 7.8). The program's own globals are not these: it starts from their written values.
+- **Type descriptions** (section 3.16) are globals of the compile-time module too. A `#run`'s lowering writes those its code needs, on demand, before it runs, each the first time any `#run` needs it, and the interpreter maps them into its memory as it maps any global, laid out as the compiled program's (section 10.3), with the addresses they hold written in: once per type for the compile-time world, so every `#run` of the compilation sees one description per type, at one address.
 - **Locals** live on the interpreter's own data stack, of 8 MB. Each call of a procedure gives it one slot per local and per temporary, at its start, however often the block that makes it runs, as the compiled program's frame has one per stack slot (section 10.3): a loop that declares a local, or makes a temporary, uses the same slot on every turn.
 - **Calls** keep their bookkeeping (each frame's values and the call it came from) on that stack too, so recursion that never ends runs out of it, however small its frames, and fails with the runtime error `stack overflow` (below), where the compiled program would crash. The interpreter keeps its frames there and never recurses itself, so deep recursion in Rig can't overflow the compiler's own stack.
 
@@ -2745,6 +2866,7 @@ Primary       = identifier
               | int_lit | float_lit | string_lit
               | "true" | "false" | "null"
               | "size_of" "(" Type ")"
+              | "type_info" "(" Type ")"
               | "(" Expression ")"
               | "." StructBody
               | "." ArrayBody .
@@ -2754,7 +2876,7 @@ Field         = [ identifier "=" ] Expression .
 ArrayBody     = "[" [ Expression { "," Expression } [ "," ] ] "]" .
 ```
 
-Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; the comparisons; `+ - | ^`; `* / % << >> &`. Each level associates to the left. A `TypedLiteral` follows only a `Primary` that is an identifier not in parentheses, which names the literal's type (section 5.17). In `Primary`, `size_of` is an identifier followed by `(`, and `trunc` in `Cast` is an identifier, not a keyword. A `#run` in `Unary` takes an expression only, never a `Block`, which only a `RunDecl` has (section 7.8). A `..` in `Unary` is a spread, a prefix operator as `-` is, so `..a + b` is `(..a) + b`; the grammar allows it wherever a `Unary` goes, and the checker only as a call's last argument for a `..T` parameter (section 5.10). In a `StructBody` the fields are all named or all unnamed; an `ArrayBody`'s values are never named.
+Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; the comparisons; `+ - | ^`; `* / % << >> &`. Each level associates to the left. A `TypedLiteral` follows only a `Primary` that is an identifier not in parentheses, which names the literal's type (section 5.17). In `Primary`, `size_of` and `type_info` are each an identifier followed by `(`, and `trunc` in `Cast` is an identifier, not a keyword. A `#run` in `Unary` takes an expression only, never a `Block`, which only a `RunDecl` has (section 7.8). A `..` in `Unary` is a spread, a prefix operator as `-` is, so `..a + b` is `(..a) + b`; the grammar allows it wherever a `Unary` goes, and the checker only as a call's last argument for a `..T` parameter (section 5.10). In a `StructBody` the fields are all named or all unnamed; an `ArrayBody`'s values are never named.
 
 ## Appendix B: Index of keywords and operators
 
@@ -2782,6 +2904,7 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `#run` | code run while compiling | 7.8 |
 | `#if` | conditional compilation | 4.9 |
 | `size_of` | a type's size | 5.16 |
+| `type_info` | a type's description | 5.19, 3.16 |
 | `it`, `it_index` | a loop's iterator and index | 6.7, 6.8 |
 | `OS`, `OS_WINDOWS`, `OS_LINUX` | the system a program is built for | 2.5, 4.9 |
 | `+` `-` `*` `/` | arithmetic | 5.3, 5.4 |
