@@ -131,6 +131,10 @@ struct Ast_Param : Ast {
     Ast_Type *type_expr;
     bool is_variadic;  // name: ..T, the last parameter (spec 7.2): type_expr is T, and its type []T
     Position dots;     // where that '..' is written
+    Ast *default_value;  // = e: what a call that leaves the parameter out passes, worked out at that
+                         // call (spec 7.2); null without one. Checked with the signature
+    Position equals;     // where that '=' is written
+    s32 default_levels;  // the deepest levels of default_value (MAX_DEPTH), as Ast_Const.levels
 };
 
 struct Ast_Proc;

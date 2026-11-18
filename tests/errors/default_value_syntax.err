@@ -1,0 +1,9 @@
+tests/errors/default_value_syntax.rig:4:13: error: a procedure type can't have default values
+    t : (a: int = 1) -> int;
+                ^
+tests/errors/default_value_syntax.rig:5:22: error: a procedure type can't have default values
+    apply :: (f: (n: int = 1) -> int) { }
+                         ^
+tests/errors/default_value_syntax.rig:6:9: error: a parameter needs its type, as in n: int = 0
+    f :: (n := 0) { }
+            ^

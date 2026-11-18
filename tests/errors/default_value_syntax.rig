@@ -1,0 +1,7 @@
+// Where a default value can't be written (issue #155, spec 3.15, 7.2): a
+// procedure type keeps none, since a call through a value gives every
+// argument; and a parameter with one still needs its type, for now.
+t : (a: int = 1) -> int;
+apply :: (f: (n: int = 1) -> int) { }
+f :: (n := 0) { }
+main :: () { }

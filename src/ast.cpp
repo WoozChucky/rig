@@ -153,13 +153,20 @@ static void dump(Array<u8> *buffer, Ast *node) {
         break;
     }
     case AST_PARAM: {
-        // (rest int), or (rest (.. int)) for rest: ..int.
+        // (rest int), or (rest (.. int)) for rest: ..int; a default value
+        // follows the type, (times int (default (int 2))) for times: int = 2.
         Ast_Param *param = (Ast_Param *)node;
         out(buffer, "(");
         out(buffer, param->name);
         out(buffer, param->is_variadic ? " (.. " : " ");
         dump_type(buffer, param->type_expr);
-        out(buffer, param->is_variadic ? "))" : ")");
+        if (param->is_variadic) out(buffer, ")");
+        if (param->default_value) {
+            out(buffer, " (default ");
+            dump(buffer, param->default_value);
+            out(buffer, ")");
+        }
+        out(buffer, ")");
         break;
     }
     case AST_TYPE_NAME:
