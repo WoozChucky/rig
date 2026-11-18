@@ -1545,8 +1545,13 @@ static String workspace_unwritable_test(Arena *a, String rig) {
 // what --stdin-for's file is to the program. Only the program the command
 // runs is copied: rig for check, stdin-for and build, bin/unit-tests for
 // interpret.
+//
+// "missing" is rig check of a main file that isn't there: Preload is looked
+// for once the main file is read (spec 10.1), so the main file that can't
+// be read is said, alone, not the missing Preload.
 static String no_preload_test(Arena *a, String rig, String unit_tests, const char *command) {
     bool interpreted = strcmp(command, "interpret") == 0;
+    bool missing = strcmp(command, "missing") == 0;
     const char *name = interpreted ? "unit-tests" : "rig";
     String dir = str(".build/tests/no-preload");
     String bin = string_printf(a, STR_FMT "/bin", STR_ARG(dir));
@@ -1576,8 +1581,8 @@ static String no_preload_test(Arena *a, String rig, String unit_tests, const cha
     bool stdin_for = strcmp(command, "stdin-for") == 0;
     Array<String> argv = {};
     array_add(&argv, copy);
-    array_add(&argv, interpreted ? str("--interpret") : stdin_for ? str("check") : str(command));
-    array_add(&argv, str("../../../tests/run/hello.rig"));
+    array_add(&argv, interpreted ? str("--interpret") : stdin_for || missing ? str("check") : str(command));
+    array_add(&argv, missing ? str("../../../tests/missing.rig") : str("../../../tests/run/hello.rig"));
     Process_Result r = {};
     String why = {};
     bool started;
@@ -1595,8 +1600,10 @@ static String no_preload_test(Arena *a, String rig, String unit_tests, const cha
     r.err = with_module_placeholders(a, r.err, modules, bin_modules);
     String expected = string_printf(
         a, "%s: error: there's no module 'Preload' (looked in @BIN_MODULES@ and @MODULES@)\n", name);
+    if (missing) expected = str("rig: error: cannot read '../../../tests/missing.rig': ");
     String what = interpreted ? str("unit-tests --interpret")
                   : stdin_for ? str("rig check --stdin-for")
+                  : missing   ? str("rig check of a missing file")
                               : string_printf(a, "rig %s", command);
     if (r.exit_code != 1) {
         return with_stderr(a,
@@ -1607,7 +1614,17 @@ static String no_preload_test(Arena *a, String rig, String unit_tests, const cha
     if (r.out.count) {
         return string_printf(a, STR_FMT " wrote to stdout: \"" STR_FMT "\"", STR_ARG(what), STR_ARG(r.out));
     }
-    if (!string_eq(r.err, expected)) return first_difference(a, "stderr", expected, r.err);
+    if (missing) {
+        // The OS's words follow, on the one line.
+        s64 line_end = 0;
+        while (line_end < r.err.count && r.err.data[line_end] != '\n') line_end++;
+        if (!starts_with(r.err, string_cstr(a, expected)) || line_end + 1 != r.err.count) {
+            return string_printf(a, "stderr: expected \"" STR_FMT "...\" alone, got \"" STR_FMT "\"",
+                                 STR_ARG(expected), STR_ARG(r.err));
+        }
+    } else if (!string_eq(r.err, expected)) {
+        return first_difference(a, "stderr", expected, r.err);
+    }
     String made[2] = {string_printf(a, STR_FMT "/.build", STR_ARG(dir)), program};
     for (String path : made) {
         if (os_file_exists(path)) return string_printf(a, STR_FMT " made " STR_FMT, STR_ARG(what), STR_ARG(path));
@@ -3248,6 +3265,8 @@ int main(int argc, char **argv) {
            no_preload_test(&a, rig, unit_tests, "build"), &passed, &failed);
     report("interpreted without modules/Preload beside it: said, nothing run",
            no_preload_test(&a, rig, unit_tests, "interpret"), &passed, &failed);
+    report("rig check of a missing file without modules/Preload beside it: the file said, not Preload",
+           no_preload_test(&a, rig, unit_tests, "missing"), &passed, &failed);
     for (const Command_Case &c : COMMAND_CASES) {
         report(string_cstr(&a, string_printf(&a, "rig: %s", c.what)), command_test(&a, rig, &c), &passed, &failed);
     }
