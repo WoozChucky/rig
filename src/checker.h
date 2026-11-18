@@ -119,7 +119,8 @@
 //   the cast, and any other value is checked at run time. From a bool to an
 //   integer: 0 or 1. An integer to a bool: "can't cast 'int' to 'bool':
 //   compare instead, as in x != 0". A pointer to and from a pointer or a
-//   64-bit integer (below); a string to and from a []u8 (below). Anything
+//   64-bit integer (below); a string to and from a []u8 (below); any value
+//   to Any, its conversion (Type information and Any, below). Anything
 //   else only to the type it converts to implicitly (its own, an array's
 //   view, or a string literal's *u8); otherwise "can't cast 'string' to
 //   'int'".
@@ -133,7 +134,7 @@
 //   'float32' to 'bool': compare instead, as in x != 0".
 // - A cast of a constant is a constant of T, folded by the same rules
 //   (cast(s32) 1e30 is 2147483647); an untyped integer is an int first, an
-//   untyped float a float64.
+//   untyped float a float64. cast(Any) e is never a constant.
 //
 // Bools and comparisons.
 // - true and false are bool constants. A bool isn't an integer, and
@@ -243,7 +244,7 @@
 //   on a *void: "can't dereference a '*void'; cast it to a pointer to
 //   something first". Lowering checks p for null at run time.
 // - null is a constant of type_null, which converts to every pointer type
-//   and to nothing else; alone (x := null;, null == null) it's "null needs
+//   and to Any, as a *void, and to nothing else; alone (x := null;, null == null) it's "null needs
 //   a pointer type, as in p : *int = null;". So a global can start as null.
 // - void is a type only as a pointer's target, *void: anywhere else it's
 //   "'void' is only a pointer's target, as in *void". A *void converts
@@ -265,7 +266,7 @@
 //   '*u8' for '=='; cast one of them", or with something not a pointer,
 //   "mismatched types '*int' and 'int' for '<'".
 // - cast(T) e casts a pointer to any pointer, and to and from int, s64 and
-//   u64 (the address), unchecked; otherwise "can't cast '*int' to 'u32'; a
+//   u64 (the address), unchecked, and to Any; otherwise "can't cast '*int' to 'u32'; a
 //   pointer casts to another pointer or to a 64-bit integer". null casts to
 //   a pointer and stays a constant; no other pointer cast is one.
 // - size_of(T) is T's size in bytes, an untyped integer constant;
@@ -304,10 +305,11 @@
 //   condition): "this literal's type isn't known; write it before the '.',
 //   as in Vec2.{1, 2}". Given to something that isn't a struct: "a '.{'
 //   literal needs a struct type, not 'int'".
-// - A struct value converts only to its own type: it's copied whole by an
-//   assignment, as an argument and as a result (several results too);
-//   `x : Vec2;` is zeroed, `x : Vec2 = ---;` left as it is. A cast takes a
-//   struct only to its own type. No operator takes a struct ("'+' needs
+// - A struct value converts only to its own type, or to Any (Type
+//   information and Any, below): it's copied whole by an assignment, as an
+//   argument and as a result (several results too); `x : Vec2;` is zeroed,
+//   `x : Vec2 = ---;` left as it is. A cast takes a struct only to its own
+//   type, or to Any. No operator takes a struct ("'+' needs
 //   numbers, not 'Vec2'", the == rule above), nor does a condition.
 // - size_of(Vec2) is its size.
 // - A foreign procedure takes and returns no struct, for now: "a foreign
@@ -363,7 +365,8 @@
 //   it's used.
 // - [N]T converts implicitly to []T, a view of its N elements, wherever a
 //   value converts (a declaration, an assignment, an argument, a return, a
-//   cast); nothing else converts to or from either but its own type. No
+//   cast); nothing else converts to or from either but its own type, and
+//   either converts to Any (Type information and Any, below). No
 //   operator takes them ("'==' needs numbers, bools, pointers, procedure
 //   values or strings, not '[3]int'").
 // - T.[a, b] is a [2]T, each value converting to T; .[a, b] takes its type
@@ -404,7 +407,8 @@
 //   type ("mismatched types 'string' and '*u8' for '=='"), and has no order
 //   or arithmetic ("'<' needs numbers, not 'string'").
 // - cast(string) v of a []u8 v and cast([]u8) s of a string s are the same
-//   view, retyped. Nothing else casts to or from a string.
+//   view, retyped. Nothing else casts to or from a string, but a string
+//   to Any.
 // - A literal's bytes are read-only, as in C: s[0] = 65 for s := "abc"
 //   writes them, a memory error (spec 6.4), not caught.
 // - A foreign procedure takes no string: "a foreign procedure can't take a

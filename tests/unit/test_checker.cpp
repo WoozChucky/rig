@@ -7605,6 +7605,54 @@ TEST(a_literal_holding_an_any_is_no_constant_data) {
                                      "main :: () { }\n"),
               "2:31: a constant's pointer can only be null or a string literal's address\n"
               "3:31: a constant's pointer can only be null or a string literal's address\n");
+    // A global whose value reaches such a literal only through constant
+    // data, a field of it or a cast of it to its own type, finds no data
+    // there (constant_data): its value isn't known.
+    CHECK_STR(check_with_preload(&a, "Holder :: struct { a: Any; }\n"
+                                     "field := Holder.{a = 5}.a;\n"
+                                     "casted := cast(Holder) Holder.{a = 5};\n"
+                                     "main :: () { }\n"),
+              "2:10: a global's value must be known while compiling, for now\n"
+              "3:11: a global's value must be known while compiling, for now\n");
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, "Holder :: struct { a: Any; }\n"
+                                     "main :: () { h := Holder.{a = 5}; }\n",
+                                     &tree),
+              "");
+    Array<Ast *> body = body_of(tree, "main");
+    CHECK_EQ(body.count, 1);
+    if (body.count == 1 && body[0]->kind == AST_VAR) {
+        Ast *data;
+        CHECK(!constant_data(((Ast_Var *)body[0])->value, &data));
+    }
+    // A #run's value converted to an Any is no more a constant's than 5
+    // is, though a constant may hold a #run's value: the conversion is
+    // checked first (check_constant_value). A #run with no value says its
+    // failure, and nothing more.
+    CHECK_STR(check_with_preload(&a, "fail :: () -> int { a : [2]int; i := 2; return a[i]; }\n"
+                                     "five :: () -> int { return 5; }\n"
+                                     "Holder :: struct { a: Any; }\n"
+                                     "HELD :: Holder.{a = #run five()};\n"
+                                     "held := Holder.{a = #run five()};\n"
+                                     "FAILED :: Holder.{a = #run fail()};\n"
+                                     "CAST :: cast(Any) #run fail();\n"
+                                     "failed := Holder.{a = #run fail()};\n"
+                                     "any : Any = #run fail();\n"
+                                     "main :: () { }\n"),
+              "4:21: a constant's pointer can only be null or a string literal's address\n"
+              "5:21: a global's value must be known while compiling, for now\n"
+              "6:23: #run failed: runtime error: index 2 is out of bounds (count 2)\n"
+              "    in fail (test.rig:1:49)\n"
+              "    in #run (test.rig:6:23)\n"
+              "7:19: #run failed: runtime error: index 2 is out of bounds (count 2)\n"
+              "    in fail (test.rig:1:49)\n"
+              "    in #run (test.rig:7:19)\n"
+              "8:23: #run failed: runtime error: index 2 is out of bounds (count 2)\n"
+              "    in fail (test.rig:1:49)\n"
+              "    in #run (test.rig:8:23)\n"
+              "9:13: #run failed: runtime error: index 2 is out of bounds (count 2)\n"
+              "    in fail (test.rig:1:49)\n"
+              "    in #run (test.rig:9:13)\n");
     arena_free(&a);
 }
 

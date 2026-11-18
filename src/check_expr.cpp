@@ -328,8 +328,9 @@ bool constant_data(Ast *e, Ast **value) {
             bool known = true;
             for (s64 i = 0; i < literal->values.count && known; i++) {
                 // A value converted to an Any is none, though it may be a
-                // constant: the Any holds an address in the procedure's
-                // frame (spec 3.16).
+                // constant: the Any holds an address, a place's or a copy's
+                // in the procedure's frame, that only the code doing the
+                // conversion gives it (spec 3.16).
                 Ast *part = literal->values[i];
                 Ast *ignored;
                 known = part->to_any == ANY_NONE &&
@@ -1694,8 +1695,9 @@ static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to
 //   or constant data holding one (is_literal_string, spec 3.8), to *u8.
 //   Otherwise "can't cast 'A' to 'B'".
 // - cast,trunc takes integers only: "cast,trunc only takes integers".
-// A cast of a constant is a constant of T: a checked cast's is the same
-// number, a cast,trunc's is wrapped to T as at run time (wrap_to).
+// A cast of a constant is a constant of T, but a cast to Any: a checked
+// cast's is the same number, a cast,trunc's is wrapped to T as at run time
+// (wrap_to).
 static Type *check_cast(Checker *c, Ast_Cast *cast) {
     Type *to = resolve_type(c, cast->type_expr);
     Type *from = check_value(c, cast->value);

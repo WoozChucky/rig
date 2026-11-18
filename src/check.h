@@ -167,7 +167,7 @@ Type *check_operand(Checker *c, Ast *e);
 
 // Whether e's value converts implicitly to `to`, where a declaration, an
 // assignment, an argument, a return, an operator or a literal's field puts
-// it (spec 6.4). An untyped constant takes the type `to` if it can: an
+// it (spec 3.13). An untyped constant takes the type `to` if it can: an
 // untyped integer an integer or float type, an untyped float a float type;
 // its value is converted to the type's (Ast.constant). A constant that
 // doesn't fit is reported here, then counted as converting, so the caller

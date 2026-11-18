@@ -447,7 +447,8 @@ static void check_global_var(Checker *c, Ast_Var *var) {
 
 // Whether e is known while compiling, as a literal's value of constant
 // data must be (constant_data). A value converted to an Any isn't, though
-// it may be a constant: the Any holds its copy's address.
+// it may be a constant: the Any holds an address, the value's own or its
+// copy's.
 static bool is_known(Ast *e) {
     Ast *data;
     if (e->to_any != ANY_NONE) return false;
