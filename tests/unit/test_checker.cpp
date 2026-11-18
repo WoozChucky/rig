@@ -8132,3 +8132,29 @@ TEST(default_values_nested_too_deeply) {
     }
     arena_free(&a);
 }
+
+TEST(default_values_run_while_compiling) {
+    // A #run whose call leaves a parameter out runs the default with it, so
+    // the walk goes into a reached procedure's defaults: g, which only f's
+    // default calls, has its body checked before the #run runs. A #run in a
+    // default ran once, while checking the signature.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "N :: #run f();\n"
+                              "M :: #run f(5);\n"
+                              "A :: #run answer();\n"
+                              "f :: (n: int = g()) -> int { return n * 2; }\n"
+                              "g :: () -> int { return 21; }\n"
+                              "twice :: (n: int) -> int { return n * 2; }\n"
+                              "answer :: (n: int = #run twice(21)) -> int { return n; }\n"
+                              "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    const char *names[] = {"N", "M", "A"};
+    u64 values[] = {42, 10, 42};
+    for (s64 i = 0; i < 3; i++) {
+        Ast *constant = global_named(&c, names[i]);
+        CHECK(constant->is_constant);
+        CHECK_EQ(constant->constant, values[i]);
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}

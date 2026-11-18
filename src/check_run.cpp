@@ -10,7 +10,8 @@
 // the struct, a body nested too deeply at its name.
 //
 // The walk is conservative: it follows every name lowering can follow
-// (calls, procedure values, constants and their data, globals' values), so
+// (calls, procedure values, constants and their data, globals' values, a
+// reached procedure's default values, which its callers' code holds), so
 // whatever the #run's code is lowered with is checked, whether or not it
 // runs. A type's description (type_info(T), a value converted to Any) is
 // lowered with every type it reaches, so the walk follows those too, behind
@@ -142,12 +143,16 @@ static bool uses_no_locals(Checker *c, Ast *operand) {
 
 // A procedure reached, by a call or as a value: its signature and its body
 // checked (check_reached_body, which checks a body not checked yet, and
-// finds a circle), neither with errors; then its body walked, and its
-// parameters' and results' types reached. Each must have one: a type with
-// an error counted to another declaration (`a: [K]int`, K's value wrong)
-// leaves the procedure without errors of its own, but its parameter with
-// no type. A foreign one has no body, nor has a #compiler one: C's code is
-// called as it is, and the compiler does the other itself.
+// finds a circle), neither with errors; then its parameters' default values
+// and its body walked, and its parameters' and results' types reached. Each
+// must have one: a type with an error counted to another declaration (`a:
+// [K]int`, K's value wrong) leaves the procedure without errors of its own,
+// but its parameter with no type. A default value (spec 7.2) is lowered
+// with each call that leaves its parameter out, as the caller's code, so
+// what it calls is walked as the body's calls are, whether or not a call
+// the #run makes leaves it out. A foreign one has no body, nor has a
+// #compiler one: C's code is called as it is, and the compiler does the
+// other itself.
 static bool walk_proc(Reach *r, Ast_Proc *proc) {
     if (proc->is_broken || !check_proc_signature(r->c, proc) || proc->had_errors) return false;
     if (!check_reached_body(r->c, proc, r->run->pos)) return false;
@@ -159,7 +164,12 @@ static bool walk_proc(Reach *r, Ast_Proc *proc) {
         if (!proc->results[i]->type) return false;
         reach_type(r, proc->results[i]->type);
     }
+    // The body pushed first and the defaults after it, the last first, so
+    // the worklist pops them in source order: the defaults, then the body.
     if (proc->body) array_add(&r->nodes, proc->body);
+    for (s64 i = proc->params.count - 1; i >= 0; i--) {
+        if (proc->params[i]->default_value) array_add(&r->nodes, proc->params[i]->default_value);
+    }
     return true;
 }
 

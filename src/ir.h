@@ -116,7 +116,11 @@
 //   instruction with a line, once they're done).
 //   Every position in a procedure, its scopes' and its variables' too, is
 //   in the procedure's own file (Ir_Proc.pos's): a backend names that file
-//   once, in the procedure's debug scope, and each line in it.
+//   once, in the procedure's debug scope, and each line in it. So a call's
+//   default values (spec 7.2), the caller's code though they may be written
+//   in another file, are at the statement holding the call, every
+//   instruction of them, a runtime check's failure too; the check's message
+//   still names its own place, in the default.
 // - Scopes. A lexical block is a part of a procedure where some names are
 //   visible: each Ir_Scope is one, the body scope 0, and each instruction
 //   with a position says which it runs in (Ir_Instr.scope; one without, in
