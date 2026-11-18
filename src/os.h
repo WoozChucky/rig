@@ -1,7 +1,7 @@
 // os.h: what Rig needs from the operating system: files, directories,
-// running other programs (the linker, the tests' programs), the compiler's
-// stack, and, for compile-time execution, address space and the system's C
-// functions by name. One interface, two implementations: os_windows.cpp and
+// running other programs (the linker, the tests' programs), a clock for
+// timing the compiler's phases, the compiler's stack, and, for compile-time
+// execution, address space and the system's C functions by name. One interface, two implementations: os_windows.cpp and
 // os_linux.cpp; all.cpp includes the host's.
 //
 // Paths are UTF-8 Strings on both systems; on Windows either slash works.
