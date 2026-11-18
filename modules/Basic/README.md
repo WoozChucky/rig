@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, π and C's math functions (roots, trigonometry, exponentials and logarithms, powers, rounding), copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (an arena and a pool, over Preload's heap), a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and printing to standard output (issues #134, #145 and #148).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, π and C's math functions (roots, trigonometry, exponentials and logarithms, powers, rounding), copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (an arena and a pool, over Preload's heap), a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and formatted printing to standard output and to a string builder (issues #134, #145, #148 and #154).
 
 ## Importing it
 

@@ -7,7 +7,8 @@
 // pool, over Preload's heap), a string builder, a growable array, hash
 // tables, sorting and searching, paths, files, the clock and the calendar,
 // random numbers, the environment's variables and commands run by the
-// system's shell, and printing to standard output.
+// system's shell, and formatted printing to standard output and to a string
+// builder.
 //
 // Basic ships with rig, so a program imports all of it through this file
 // by the module's name (spec 2.14):
