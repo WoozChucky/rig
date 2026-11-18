@@ -396,7 +396,8 @@ static void check_var(Checker *c, Ast_Var *var) {
 // global, a field or an element may hold a procedure, or a constant naming
 // one, as it is or cast to *void. So is a type's description's
 // (type_info_address, spec 5.19): type_info(T), as it is or cast to another
-// pointer.
+// pointer (not to an integer), or a field or an element of constant data
+// holding one.
 //
 // Constant data is known while compiling too (constant_data, spec 4.3): a
 // constant holding a string, a struct or an array (`origin := ORIGIN;`), a
@@ -435,7 +436,8 @@ static void check_global_var(Checker *c, Ast_Var *var) {
 // data must be (constant_data).
 static bool is_known(Ast *e) {
     Ast *data;
-    return e->is_constant || procedure_address(e) || literal_address(e) || constant_data(e, &data);
+    return e->is_constant || procedure_address(e) || literal_address(e) || type_info_address(e) ||
+           constant_data(e, &data);
 }
 
 // Whether e is a field or an element of constant data whose literal gave

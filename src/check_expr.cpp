@@ -304,7 +304,7 @@ Ast *literal_field_value(Ast_Literal *literal, Type *t, s32 field) {
 // value when `part` is itself constant data (a constant holding data, or a
 // field or an element of one), followed in turn; otherwise `part` itself, a
 // scalar as the literal wrote it (a constant, a procedure's name, a string
-// literal's address or a cast of one).
+// literal's address, a type's description's or a cast of one).
 static Ast *part_value(Ast *part) {
     Ast *value;
     return constant_data(part, &value) ? value : part;
@@ -330,7 +330,7 @@ bool constant_data(Ast *e, Ast **value) {
                 Ast *part = literal->values[i];
                 Ast *ignored;
                 known = part->is_constant || procedure_address(part) || literal_address(part) ||
-                        constant_data(part, &ignored);
+                        type_info_address(part) || constant_data(part, &ignored);
             }
             literal->is_data = known ? 1 : -1;
         }
@@ -1900,8 +1900,9 @@ static Type *check_deref(Checker *c, Ast_Deref *deref) {
 // struct's field and an array's element can be: one reached through a
 // pointer, or a view's, never is). The type is set here, though
 // check_expression sets it once the check returns, since constant_data
-// reads it. An aggregate part, or a pointer to a string literal's bytes or a
-// procedure, doesn't fold: it stays a part of the data.
+// reads it. An aggregate part, or a pointer to a string literal's bytes, a
+// procedure or a type's description, doesn't fold: it stays a part of the
+// data.
 static void fold_constant_part(Ast *part, Type *t) {
     part->type = t;
     Ast *value;
@@ -2022,9 +2023,21 @@ static Type *check_type_info(Checker *c, Ast_Type_Info *info) {
     return type_pointer_to(c->type_info_type);
 }
 
+// Casts between pointers are walked through, and a field or an element of
+// constant data goes on from the node holding its value (constant_data), as
+// procedure_address does.
 Ast_Type_Info *type_info_address(Ast *e) {
-    while (e->kind == AST_CAST && e->type && type_is_pointer(e->type)) e = ((Ast_Cast *)e)->value;
-    return e->kind == AST_TYPE_INFO && e->type ? (Ast_Type_Info *)e : nullptr;
+    for (;;) {
+        if (!e->type || !type_is_pointer(e->type)) return nullptr;
+        if (e->kind == AST_TYPE_INFO) return (Ast_Type_Info *)e;
+        if (e->kind == AST_CAST) {
+            e = ((Ast_Cast *)e)->value;
+            continue;
+        }
+        Ast *value;
+        if (!constant_data(e, &value) || !value) return nullptr;
+        e = value;
+    }
 }
 
 // a.count and a.data of an array, a view or a string a (spec 5.12), the only

@@ -662,9 +662,11 @@
 // - Its value is an address the linker writes, so it's no constant: a
 //   constant can't hold it, as it holds no pointer but null or a string
 //   literal's address, "a constant's pointer can only be null or a string
-//   literal's address" (a cast of it too). A global may hold it, as it is,
-//   cast to another pointer, or in a literal or a view's array: the linker
-//   writes its address there, as a string literal's (type_info_address).
+//   literal's address" (a cast of it too, or a literal holding it). A
+//   global may hold it, as it is, cast to another pointer (not to an
+//   integer), or in a literal or a view's array, a cast of such a literal
+//   or a field of one included: the linker writes its address there, as a
+//   string literal's (type_info_address).
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
@@ -782,9 +784,9 @@ bool is_literal_string(Ast *e);
 // holding its value, following names, fields, elements and casts:
 // - a string literal;
 // - a struct or array literal whose every value is is_constant, a procedure
-//   (procedure_address), a string literal's address (literal_address) or
-//   constant data, found the first time it's asked and kept
-//   (Ast_Literal.is_data);
+//   (procedure_address), a string literal's address (literal_address), a
+//   type's description's (type_info_address) or constant data, found the
+//   first time it's asked and kept (Ast_Literal.is_data);
 // - the name of a constant with is_data (its `data`);
 // - a field of constant data (a struct's, not reached through a pointer),
 //   or an element of it (an array's) at an is_constant index;
@@ -799,8 +801,9 @@ bool is_literal_string(Ast *e);
 // A field's or element's value node that is itself constant data is
 // followed in turn. So *value is a string or struct or array literal, or a
 // scalar field's or element's value node as the literal wrote it (a
-// constant, a procedure's name, a string literal, or a cast of one, which
-// literal_address and procedure_address walk on from); or a #run's baked
+// constant, a procedure's name, a string literal, a type_info(T), or a cast
+// of one, which literal_address, procedure_address and type_info_address
+// walk on from); or a #run's baked
 // value, one of the same; or null when a literal leaves the field out
 // (zero), and so for any field or element of such a null part. A string's
 // element is a byte that no node holds: not constant data; nor is a field
@@ -834,7 +837,9 @@ Type *call_variadic_type(Ast_Call *call);
 Ast_Proc *procedure_address(Ast *e);
 
 // The type_info(T) whose description's address e, checked, is: the node
-// itself, or a cast of it between pointer types; null otherwise. A global
+// itself, a field or an element of constant data that holds one
+// (Holder.{type_info(int)}.t, constant_data), or a cast of any of them
+// between pointer types; null otherwise, a cast to an integer too. A global
 // may hold one, its address written by the linker (spec 4.3): the checker
 // asks this to allow it, and lowering to write it.
 Ast_Type_Info *type_info_address(Ast *e);

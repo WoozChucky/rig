@@ -7438,19 +7438,24 @@ TEST(type_info_points_at_a_description) {
 
 TEST(type_info_needs_preload) {
     // Without Preload (a test's single file) there is no Type_Info for
-    // type_info to point at.
+    // type_info to point at. A program's own struct called Type_Info isn't
+    // Preload's: only a module's file declares the one type_info points at.
     Arena a = arena_make();
     CHECK_STR(check_source(&a, "main :: () {\n    t := type_info(int);\n}\n"),
               "2:10: 'type_info' needs Preload's 'Type_Info', which the program doesn't have\n");
+    CHECK_STR(check_source(&a, "Type_Info :: struct { tag: s64; }\nmain :: () {\n    t := type_info(int);\n}\n"),
+              "3:10: 'type_info' needs Preload's 'Type_Info', which the program doesn't have\n");
     arena_free(&a);
 }
 
 TEST(a_global_may_hold_a_description_a_constant_cant) {
     // A global's value may be a description's address, alone, cast between
-    // pointers, or in a literal or a view's array: the linker writes it, as
-    // it does a string literal's (spec 4.3). A constant holds no pointer but
-    // null or a string literal's address (spec 4.2), so neither of the
-    // constants is one.
+    // pointers, or in a literal or a view's array, a cast of such a literal
+    // or a field of one included: the linker writes it, as it does a string
+    // literal's or a procedure's (spec 4.3). Not as an integer, which would
+    // need the linker to write a number. A constant holds no pointer but
+    // null or a string literal's address (spec 4.2), so none of the
+    // constants is one, a literal's field or a field of one included.
     Arena a = arena_make();
     CHECK_STR(check_with_preload(&a, "Vec2 :: struct { x: int; }\n"
                                      "info := type_info(int);\n"
@@ -7460,8 +7465,18 @@ TEST(a_global_may_hold_a_description_a_constant_cant) {
                                      "Holder :: struct { t: *Type_Info; }\n"
                                      "INFO :: type_info(int);\n"
                                      "KIND :: cast(*Type_Info_Struct) type_info(Vec2);\n"
+                                     "h1 := cast(Holder) Holder.{type_info(bool)};\n"
+                                     "h2 := Holder.{type_info(bool)}.t;\n"
+                                     "n := cast(int) type_info(Vec2);\n"
+                                     "u := cast(u64) type_info(int);\n"
+                                     "H :: Holder.{type_info(int)};\n"
+                                     "T :: Holder.{type_info(int)}.t;\n"
                                      "main :: () { }\n"),
               "7:9: a constant's pointer can only be null or a string literal's address\n"
-              "8:9: a constant's pointer can only be null or a string literal's address\n");
+              "8:9: a constant's pointer can only be null or a string literal's address\n"
+              "11:6: a global's value must be known while compiling, for now\n"
+              "12:6: a global's value must be known while compiling, for now\n"
+              "13:14: a constant's pointer can only be null or a string literal's address\n"
+              "14:6: a constant's pointer can only be null or a string literal's address\n");
     arena_free(&a);
 }

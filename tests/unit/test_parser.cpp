@@ -1734,6 +1734,14 @@ TEST(types_and_expressions_share_max_depth) {
     CHECK_STR(check_source(&a, nested_source(&a, nested_source(&a, cast, "(", 500, "cast(", "", ""), "*", 500,
                                              "int) y", "", nested_source(&a, "", ")", 500, ";\n}\n", "", ""))),
               types_too_deep(&a, 3, (s64)strlen("    x := ") + 1 + 500 + 5 + 499));
+    // type_info's type is read a level down too, as size_of's is: each
+    // [type_info( is two levels, and the 501st '[' is one too many. Parsed
+    // alone, as a count must be an integer and type_info's value isn't.
+    String errors = {};
+    parse_src(&a, nested_source(&a, local, "[type_info(", 500, "u8", ")]u8", ";\n}\n"), &errors);
+    CHECK_STR(errors, "");
+    parse_src(&a, nested_source(&a, local, "[type_info(", 501, "u8", ")]u8", ";\n}\n"), &errors);
+    CHECK_STR(errors, types_too_deep(&a, 2, x_col + 500 * 11));
     arena_free(&a);
 }
 
