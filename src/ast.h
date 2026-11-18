@@ -112,9 +112,8 @@ struct Ast_Type : Ast {
                                 // written, aren't part of the type, and aren't kept)
     Array<Ast_Type *> results;  // AST_TYPE_PROC: the results' types: none, one or several
     bool is_c_call;             // AST_TYPE_PROC: marked #c_call, C's calling convention (spec 7.6)
-    bool is_variadic;           // AST_TYPE_PROC: its last parameter is written ..T: params' last is T
-                                // (spec 3.15)
-    Position dots;              // where that '..' is written
+    bool is_variadic;           // AST_TYPE_PROC: its last parameter is written ..T, params' last T (spec 3.15)
+    Position dots;              // AST_TYPE_PROC: where that '..' is written
 };
 
 struct Ast_Param : Ast {
@@ -545,8 +544,7 @@ System host_system();
 // right after the main file, is placed first in load order with every file
 // it reaches, before the main file and the files after it (spec 2.13); and
 // when a #load in a taken #if branch (spec 4.9) read a file after one that
-// comes later. before() follows it, in
-// ast_declarations and ast_dump too.
+// comes later. before() follows it, in ast_declarations and ast_dump too.
 //
 // lost_a_file is set when a #load or an #import failed (load.h's errors),
 // had no string to name a file by, wasn't at the top level, or was passed
@@ -560,6 +558,11 @@ System host_system();
 // reaches_compiler and compiler_pos are the loader's (load.h): whether the
 // program reached the Compiler module, which with no main makes it a build
 // program (ast_is_build_program, spec 7.9).
+//
+// load_failure is the loader's too (load.h): why the program couldn't be
+// loaded at all, Preload not found or not read, for the caller to say after
+// its own prefix, "rig: error: " for rig and "unit-tests: error: " for the
+// interpret mode; empty when it was loaded. It is in the arena.
 //
 // system is the system the program is built for, what the predeclared OS
 // is (spec 2.5): SYSTEM_NONE, as parse() leaves it, means the host's
@@ -579,8 +582,8 @@ struct Ast_File {
                             // further file (load.h)
     System system;          // what OS is (spec 2.5): SYSTEM_NONE means the host's (host_system)
     Array<s32> order;       // order[f]: file f's place in load order, as Source_File.order; empty: each file's index
-    String load_failure;    // the loader's: why the program couldn't be loaded at all, said as "rig: error: MESSAGE"
-                            // (load.h): Preload not found or not read; empty when it was. In the arena.
+    String load_failure;    // why the program couldn't be loaded at all (above): Preload not found or not read;
+                            // empty when it was
 };
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler
@@ -658,7 +661,10 @@ Token_Kind compound_operator(Token_Kind op);
 //                                            cmp :: (a: *void) -> s32 #c_call { ... }
 //   (proc make (params (name string)) (returns Workspace) (compiler))
 //                                            make :: (name: string) -> Workspace #compiler;
+//   (proc sum (params (first int) (rest (.. int))) (returns int) (block ...))
+//                                            sum :: (first: int, rest: ..int) -> int { ... }
 //   (proc-type (params int int) (returns int))   (int, int) -> int
+//   (proc-type (params int (.. int)) (returns int))   (int, ..int) -> int
 //   (proc-type (params (ptr void)) (returns s32) (c_call))   (p: *void) -> s32 #c_call
 //   (proc-type (params))   ()
 // An array's count prints as written: (array (name N) int) for [N]int.
@@ -673,6 +679,8 @@ Token_Kind compound_operator(Token_Kind op);
 //                 #if c { ... } else #if d { ... } else { ... }
 // defer prints as (defer (call free (name p))) for defer free(p);, and as
 // (defer (block ...)) for defer { ... }.
+// A spread prints as (spread E): (call sum (int 0) (spread (name values)))
+// for sum(0, ..values).
 // Globals print as locals do, (var counter int) and (const LIMIT (int 100)),
 // a load as (load "world/map.rig"), and a top-level run and #if as above,
 // each on a line of its own among the procedures, in source order. On a

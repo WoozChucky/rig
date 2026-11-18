@@ -12,21 +12,20 @@
 // (tests/unit/interpret_mode.cpp).
 //
 // rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks] reads the file (by
-// default build.rig in the current directory), Preload, the module every
-// program imports (spec 2.13), the files it #loads and the modules it
-// #imports, lexes, parses and checks them, and stops there with the
-// diagnostics on stderr if anything was wrong (exit 1); a Preload it can't
-// find or read stops it before anything is parsed, said alone ("rig:
-// error: ...", compilation_load), and so does rig check. Otherwise it
-// lowers the program (without the bounds checks of a[i] with
-// --no-bounds-checks, spec 8.5). Lowering finds errors of its own, a call
-// of a #compiler procedure the program would make (spec 7.9), printed as
-// the others are, and then rig stops there too, writing no object (exit
-// 1). Otherwise it has LLVM write the object file .build/NAME.obj
-// (Windows) or .build/NAME.o (Linux) in the current directory, and links
-// it into OUTPUT, by default NAME.exe or NAME in the current directory,
-// NAME being FILE.rig's name (the main file's) without its directory and
-// .rig (exit 0).
+// default build.rig in the current directory), then Preload, the module
+// every program imports (spec 2.14), then the files they #load and the
+// modules they #import, lexes, parses and checks them, and stops there with
+// the diagnostics on stderr if anything was wrong (exit 1); a Preload it
+// can't find or read stops it before anything is parsed, said alone ("rig:
+// error: ...", compilation_load), and so does rig check. Otherwise it lowers
+// the program (without the bounds checks of a[i] with --no-bounds-checks,
+// spec 8.5). Lowering finds errors of its own, a call of a #compiler
+// procedure the program would make (spec 7.9), printed as the others are,
+// and then rig stops there too, writing no object (exit 1). Otherwise it has
+// LLVM write the object file .build/NAME.obj (Windows) or .build/NAME.o
+// (Linux) in the current directory, and links it into OUTPUT, by default
+// NAME.exe or NAME in the current directory, NAME being FILE.rig's name (the
+// main file's) without its directory and .rig (exit 0).
 //
 // The checker runs the program's expression #runs while it checks, where it
 // first needs their values (spec 7.8), in rig check too: what they print
@@ -115,11 +114,14 @@ String executable_path(Arena *a, String output, String name, Target t) {
 //
 // The tree, the texts and the module live in the arena; the rest is the
 // compilation's own, freed by compilation_free. The loader lexes and parses
-// the main file and every file it #loads or #imports into the one tree,
-// and registers each with d: messages name a file by its path as given (a
-// loaded one's from the file that loads it, an imported one's absolute,
-// load.h), the debug information by its absolute path, from the directory
-// rig runs in (ir_lower). #import looks in rig's own places (module_places).
+// the main file, Preload and every file they #load or #import into the one
+// tree, and registers each with d: messages name a file by its path as
+// given (a loaded one's from the file that loads it, an imported one's and
+// Preload's absolute, load.h), the debug information by its absolute path,
+// from the directory rig runs in (ir_lower). #import and Preload are looked
+// for in rig's own places (module_places); a Preload not found there, or
+// not read, stops the loading before anything is parsed
+// (Ast_File.load_failure).
 //
 // From compilation_check until compilation_end_runs, a #run's code may end
 // the process (C's exit), and the diagnostics found by then are printed as

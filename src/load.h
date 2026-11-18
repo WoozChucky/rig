@@ -71,23 +71,22 @@
 //   there's no module 'Nope' (looked in DIR1 and DIR2)   (the places, as Module_Places has them)
 //
 // Every program imports the module Preload (spec 2.14), with no #import:
-// what the language itself refers to. The loader looks for it in the
-// places as for any module (module_lookup), and reads its module.rig right
-// after the main file, before a workspace's further files, so it's file 1,
-// named by its absolute path, unless it's the main file itself (below).
-// From there it's known by its identity as any file is: an #import
-// "Preload"; or a #load of its path reads nothing more, a further file that
-// is it adds nothing, and a main file that is it reads nothing more. Read
-// second, it's placed first in load order, before the main file (below),
-// with every file it reaches, so its declarations come first and win a
-// clash: a program declaring a name Preload declares is
-// told so at its own declaration, naming Preload's (checker.h), and every
-// use of the name, Preload's own included, finds Preload's. When the
-// places have no Preload, or its module.rig can't be read, the loading
-// stops before anything is parsed, with only the main file registered,
-// and the tree says why (Ast_File.load_failure), which the driver says as
-// rig: error: MESSAGE, status 1. No #import names Preload, so there's no
-// string to report it at:
+// what the language itself refers to. The loader looks for it in the places
+// as for any module (module_lookup), and reads its module.rig right after
+// the main file, before a workspace's further files, so it's file 1, named
+// by its absolute path, unless it's the main file itself (below). From there
+// it's known by its identity as any file is: an #import "Preload"; or a
+// #load of its path reads nothing more, a further file that is it adds
+// nothing, and a main file that is it reads nothing more. Read second, it's
+// placed first in load order, before the main file (below), with every file
+// it reaches, so its declarations come first and win a clash: a program
+// declaring a name Preload declares is told so at its own declaration,
+// naming Preload's (checker.h), and every use of the name, Preload's own
+// included, finds Preload's. When the places have no Preload, or its
+// module.rig can't be read, the loading stops before anything is parsed,
+// with only the main file registered, and the tree says why
+// (Ast_File.load_failure), which the driver says as rig: error: MESSAGE,
+// status 1. No #import names Preload, so there's no string to report it at:
 //   there's no module 'Preload' (looked in DIR1 and DIR2)   (an #import's words)
 //   cannot read 'PATH': MESSAGE                             (PATH absolute, MESSAGE the system's)
 // Load_Options.no_preload leaves Preload out: for the tests of the other
@@ -112,39 +111,39 @@
 // isn't an executable itself.
 //
 // A top-level #if (spec 4.9) is decided here, between loading and checking,
-// once every file outside every #if is read (the queue above). The files
-// are walked in load order, from Preload, and every file it reaches, then
-// the main file and the further files, each file's top-level #loads,
-// #imports and #ifs in source order: a #load places the file it names
-// after the files placed so far, unless it's placed already, and an #if is
-// decided where it is met, by a decider
-// (check_decider_new, checker.h) made at the first one, which knows the
-// declarations read before it: those outside every #if, the base. The
-// taken branch's declarations then join the tree, as if written in place
-// of the #if. Its #loads and #imports are followed there, by the rules
+// once every file outside every #if is read (the queue above). The files are
+// walked in load order, from Preload, and every file it reaches, then the
+// main file and the further files, each file's top-level #loads, #imports
+// and #ifs in source order: a #load places the file it names after the files
+// placed so far, unless it's placed already, and an #if is decided where it
+// is met, by a decider (check_decider_new, checker.h) made at the first one,
+// which knows the declarations read before it: those outside every #if, the
+// base. The taken branch's declarations then join the tree, as if written in
+// place of the #if. Its #loads and #imports are followed there, by the rules
 // above, and the files they reach are read at once, with the files those
 // load in turn (their own top-level #ifs decided when the walk reaches
 // them). Its nested #ifs are decided in their turn, in source order. The
 // branches not taken, and every branch of a chain whose condition had an
 // error, are left as they are: nothing in them is declared or read, so a
 // file one of them names that isn't there is no error. A condition with an
-// error leaves the program lacking what its branches may have declared, as
-// a failed #load does (Ast_File.lost_a_file).
+// error leaves the program lacking what its branches may have declared, as a
+// failed #load does (Ast_File.lost_a_file).
 //
-// The walk's order is the load order (spec 2.13): the one the program
-// would have with only its taken branches written. Each file's place in it
-// is its order (Source_File.order, Ast_File.order), which the errors sort
-// by and the tree's lists are put in (ast_sort_declarations), so the
-// declarations, the top-level #runs and the errors come file by file in it.
-// It differs from the reading order in Preload's place, read right after
-// the main file and placed before it with the files it reaches, and when a taken branch's #load comes
-// before a #load outside every #if: main.rig's `#if true { #load "b.rig"; }`
-// before its `#load "a.rig";` places b before a, though a is read first.
-// A file keeps what the reading order gave it, though: its index
-// (Position.file), its name (a file loaded both in a branch and outside
-// every #if, by two spellings, is named by the #load read first), and the
-// place where "cannot read" is said; and the program keeps the #import or
-// #load read first that named the Compiler module (Ast_File.compiler_pos).
+// The walk's order is the load order (spec 2.13): the one the program would
+// have with only its taken branches written. Each file's place in it is its
+// order (Source_File.order, Ast_File.order), which the errors sort by and
+// the tree's lists are put in (ast_sort_declarations), so the declarations,
+// the top-level #runs and the errors come file by file in it. It differs
+// from the reading order in Preload's place, read right after the main file
+// and placed before it with the files it reaches, and when a taken branch's
+// #load comes before a #load outside every #if: main.rig's
+// `#if true { #load "b.rig"; }` before its `#load "a.rig";` places b before
+// a, though a is read first. A file keeps what the reading order gave it,
+// though: its index (Position.file), its name (a file loaded both in a
+// branch and outside every #if, by two spellings, is named by the #load read
+// first), and the place where "cannot read" is said; and the program keeps
+// the #import or #load read first that named the Compiler module
+// (Ast_File.compiler_pos).
 //
 // Build programs are recognised once the #ifs are decided: an #import
 // "Compiler" in a branch not taken isn't read, so it doesn't reach the
@@ -205,9 +204,8 @@ struct Load_Options {
                                    // (in_module); null: module_places(), rig's own
     // A workspace's further files (spec 7.9), loaded right after the main
     // file and Preload, before the main file's #loads, in this order, as if
-    // it #loaded each first;
-    // named by their paths as given. more_texts holds their texts, read by
-    // the caller, one for each.
+    // it #loaded each first; named by their paths as given. more_texts holds
+    // their texts, read by the caller, one for each.
     Array<String> more_files;
     Array<String> more_texts;
     System system;  // what OS is (Ast_File.system); SYSTEM_NONE, the default: the host's. For tests.
@@ -227,12 +225,11 @@ struct Load_Options {
 // module's (Source_File.in_module), the main file first.
 // Errors go to `d`; the tree is returned even with errors, never null, so
 // the checker still runs and reports what it finds in the rest. A Preload
-// that can't be found or read is no error in `d`: the tree is returned
-// with nothing parsed, only the main file registered, and its load_failure
-// saying why (above), for the caller to say. The tree
-// and the texts read are in the arena; the files' paths are copied into
-// `d` (diag_add_file), so they last as long as it does; each file's tokens
-// are freed once it's parsed.
+// that can't be found or read is no error in `d`: the tree is returned with
+// nothing parsed, only the main file registered, and its load_failure saying
+// why (above), for the caller to say. The tree and the texts read are in the
+// arena; the files' paths are copied into `d` (diag_add_file), so they last
+// as long as it does; each file's tokens are freed once it's parsed.
 //
 // The options (Load_Options), when given: with stdin_for (when not empty),
 // a file whose text is stdin_text instead of what's on disk, wherever the

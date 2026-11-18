@@ -229,6 +229,10 @@ Type *type_proc_of(Type **params, s64 param_count, Type **results, s64 result_co
     return t;
 }
 
+bool type_proc_same_but_c_call(Type *a, Type *b) {
+    return proc_type_is(b, a->params, a->param_count, a->results, a->result_count, b->is_c_call, a->is_variadic);
+}
+
 // What a message names t after: a pointer's target, an array's or a view's
 // elements; null for any other type, named by its own name alone (a string
 // has u8 elements, but is "string").

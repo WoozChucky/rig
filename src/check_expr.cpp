@@ -206,8 +206,7 @@ static String conversion_hint(Checker *c, Ast *value, Type *from, Type *to) {
         return string_printf(c->arena, "; cast it with cast(" STR_FMT ")", STR_ARG(type_name(c->arena, to)));
     }
     if (!from || !to || from->kind != TYPE_PROC || to->kind != TYPE_PROC || from->is_c_call == to->is_c_call ||
-        type_proc_of(from->params, from->param_count, from->results, from->result_count, to->is_c_call,
-                     from->is_variadic) != to) {
+        !type_proc_same_but_c_call(from, to)) {
         return {};
     }
     if (from->is_c_call) {
@@ -617,8 +616,8 @@ static void report_undeclared(Checker *c, Ast_Name *name, bool called) {
 
 // A name used as a value: a variable's or parameter's value, or a
 // constant's, which is known while compiling, or a procedure, of its
-// procedure type (a constant naming one too); one taking a '..T' too, its
-// type saying so (spec 3.15). One that takes C's bare '..' has no
+// procedure type (a constant naming one too), one taking a '..T' included,
+// its type saying so (spec 3.15). One that takes C's bare '..' has no
 // procedure type: "'printf' can't be a value: it takes C's '..', which no
 // procedure type can say". Nor is main a value: "'main' can't be a value:
 // it's where the program starts"; nor a #compiler one: "'create_workspace'
@@ -686,19 +685,19 @@ static void give_extra_argument_a_type(Checker *c, Ast *arg) {
     }
 }
 
-// Argument `index` (from 0) of a call of the variadic foreign procedure
-// `proc`, one after its fixed parameters, checked already (check_value):
-// what C's '...' receives. No parameter gives it a type, so it keeps its
-// own, or takes a default (give_extra_argument_a_type), which must be one
-// C can take: a number, a bool or a pointer, which lowering passes after
-// C's default argument promotions (type_c_promoted). A string literal goes
-// as a C string, its bytes' address, as it does to a *u8 (lowering looks
-// at the literal, whose type stays string), and so does constant data
-// holding one (is_literal_string): a constant, or a string field or element
-// of one. C passes structs by rules Rig doesn't follow, and has no views or
-// other Rig strings: each is refused, with what to pass instead. So is a
-// compound literal without its type: being told to write its type would
-// only lead to the same refusal.
+// Argument `index` (from 0) of a call of `proc`, a foreign procedure that
+// takes C's '..', one after its fixed parameters, checked already
+// (check_value): what C's '...' receives. No parameter gives it a type, so
+// it keeps its own, or takes a default (give_extra_argument_a_type), which
+// must be one C can take: a number, a bool or a pointer, which lowering
+// passes after C's default argument promotions (type_c_promoted). A string
+// literal goes as a C string, its bytes' address, as it does to a *u8
+// (lowering looks at the literal, whose type stays string), and so does
+// constant data holding one (is_literal_string): a constant, or a string
+// field or element of one. C passes structs by rules Rig doesn't follow, and
+// has no views or other Rig strings: each is refused, with what to pass
+// instead. So is a compound literal without its type: being told to write
+// its type would only lead to the same refusal.
 static void check_extra_argument(Checker *c, Ast_Proc *proc, Ast *arg, s64 index) {
     Type *t = arg->type;
     if (!t) return;  // its own mistake, reported already
@@ -740,7 +739,8 @@ Type *call_result_type(Ast_Call *call, s64 i) {
 
 // Whether the procedure `call` calls takes a '..T' parameter, directly or
 // through a value: even one whose T is an error, which has no type, or one
-// refused on a foreign procedure, whose type is still its []T.
+// refused on a foreign, a #c_call or a #compiler procedure, whose type is
+// still its []T, so its calls gather and spread as any other's.
 static bool takes_variadic(Ast_Call *call) {
     if (!call->proc) return call->callee_type->is_variadic;
     Array<Ast_Param *> &params = call->proc->params;
@@ -756,16 +756,17 @@ Type *call_variadic_type(Ast_Call *call) {
 // A spread that is one of a call's arguments, ..e: e is checked as an
 // operand, so it keeps a type of its own, which a parameter never gives it
 // (.. .[1, 2] is a literal whose type isn't known), and the spread has that
-// type, for check_call to take or refuse. Any other spread, an argument's
-// part or none, is check_spread's.
+// type, for check_call to take or refuse. A spread anywhere else (a
+// variable's value, an operand, a part of an argument) is check_spread's.
 static void check_spread_argument(Checker *c, Ast_Spread *spread) {
     spread->type = check_operand(c, spread->operand);
 }
 
 // "only the arguments of a '..' parameter can be spread, as in
-// f(..values)", at a call's spread argument that no '..T' parameter takes,
-// or that isn't the last argument. It then has no type: it counts as an
-// argument of its own position, and nothing more is said about it.
+// f(..values)", at the spread's '..': a call's spread argument that no
+// '..T' parameter takes, or that isn't the last argument (check_call), or a
+// spread anywhere else (check_spread). It then has no type, so nothing more
+// is said about it; a call's argument counts as one of its own position.
 static void refuse_spread(Checker *c, Ast *spread) {
     diag_error(c->diag, spread->pos, "only the arguments of a '..' parameter can be spread, as in f(..values)");
     spread->type = nullptr;
@@ -882,10 +883,10 @@ static bool check_callee(Checker *c, Ast_Call *call) {
 // are reported even when the callee is wrong, after its: in source order (a
 // spread argument's operand by check_spread_argument). Then the arguments
 // against the parameters, the same for a procedure and for a value of a
-// procedure type, named in the messages by callee_name: as many as there
-// are ("'f' takes 2 arguments, but 1 was given", at the callee; a variadic
-// foreign procedure "at least" its fixed ones), each converting to its
-// parameter's type. A callee with a '..T' parameter takes at least the
+// procedure type, named in the messages by callee_name: as many as there are
+// ("'f' takes 2 arguments, but 1 was given", at the callee; a foreign
+// procedure taking C's '..' "at least" its fixed ones), each converting to
+// its parameter's type. A callee with a '..T' parameter takes at least the
 // others, its fixed ones, and then any number more, or one spread
 // (check_variadic_arguments). A spread is only that: the last argument of
 // such a call. Anywhere else among the arguments it's refused
@@ -1857,7 +1858,7 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing) {
         // Looked up here rather than checked as a value, so a procedure's
         // name is "can't assign to 'f': it's a procedure" (name_is_place),
         // said of the name itself, not a mistake found in the procedure's
-        // value, such as a variadic one's "'printf' can't be a value".
+        // value, such as "'printf' can't be a value" for one taking C's '..'.
         Ast_Name *name = (Ast_Name *)e;
         Ast *decl = check_lookup(c, name->name);
         name->decl = decl;
@@ -2187,7 +2188,7 @@ static Type *check_literal(Checker *c, Ast_Literal *literal) {
 // checked, for mistakes of its own. It has no type, so nothing more is said
 // about it.
 static Type *check_spread(Checker *c, Ast_Spread *spread) {
-    diag_error(c->diag, spread->pos, "only the arguments of a '..' parameter can be spread, as in f(..values)");
+    refuse_spread(c, spread);
     check_value(c, spread->operand);
     return nullptr;
 }
