@@ -132,7 +132,8 @@ struct Ast_Param : Ast {
     bool is_variadic;  // name: ..T, the last parameter (spec 7.2): type_expr is T, and its type []T
     Position dots;     // where that '..' is written
     Ast *default_value;  // = e: what a call that leaves the parameter out passes, worked out at that
-                         // call (spec 7.2); null without one. Checked with the signature
+                         // call (spec 7.2); null without one. Checked with the signature, converted
+                         // to the parameter's type (checker.cpp's check_defaults)
     Position equals;     // where that '=' is written
     s32 default_levels;  // the deepest levels of default_value (MAX_DEPTH), as Ast_Const.levels
 };
@@ -205,6 +206,10 @@ struct Ast_Proc : Ast {
                                 // types in them together (MAX_DEPTH, counted as that at most): checked
                                 // where a #run reaches it, what it needs starts a level below
                                 // (checker.cpp's check_reached_body)
+    s32 defaults_depth;         // how deep lowering goes in a call that leaves every parameter with a
+                                // default value out: its deepest default's levels and those of the
+                                // defaults its calls fill in (checker.cpp's check_defaults, MAX_DEPTH);
+                                // 0 without defaults
 };
 
 // A variable: `x : T = e;`, `x := e;` (its type is e's), `x : T;` (zeroed)

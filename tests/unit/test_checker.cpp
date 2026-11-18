@@ -7846,3 +7846,96 @@ TEST(a_description_reaching_a_field_with_no_type_doesnt_run) {
         arena_free(&a);
     }
 }
+
+// Issue #155: default parameter values (spec 7.2, 5.10).
+
+TEST(default_values_take_their_parameters_types) {
+    // Each default converts to its parameter's type as a typed variable's
+    // value does: an untyped constant takes it, .{...} takes the struct, and
+    // null the pointer. A string literal passed as a *u8 keeps its type, as
+    // check_convert keeps it. The procedure's type carries no default.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "Vec2 :: struct { x: float; y: float; }\n"
+                              "f :: (a: int, b: u8 = 200, c: float32 = 1, p: Vec2 = .{1, 2}, s: *u8 = \"x\", "
+                              "q: *int = null) { }\n"
+                              "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Proc *f = c.file->procs[0];
+    const char *types[] = {"u8", "float32", "Vec2", "string", "*int"};
+    for (s64 i = 1; i <= 5; i++) CHECK_STR(type_name(&a, f->params[i]->default_value->type), types[i - 1]);
+    CHECK_STR(type_name(&a, f->type), "(int, u8, float32, Vec2, *u8, *int)");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(where_default_values_cant_be) {
+    // A parameter without a default after one with is said at its name, each
+    // one. A '..T' parameter, C's '..' and #compiler refuse defaults for now,
+    // once, at the first default's '=', and then say no gap.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "gap :: (a: int = 1, b: int, c: int = 3) { }\n"
+                               "later :: (a: int = 1, b: int, c: int) { }\n"
+                               "gathers :: (first: int = 0, rest: ..int) { }\n"
+                               "c_like :: (format: *u8 = \"%d\", ..) -> s32 #foreign libc \"printf\";\n"
+                               "main :: () { }\n"),
+              "1:21: 'b' needs a default value, since a parameter before it has one\n"
+              "2:23: 'b' needs a default value, since a parameter before it has one\n"
+              "2:31: 'c' needs a default value, since a parameter before it has one\n"
+              "3:24: a procedure with a '..' parameter can't have default values, for now\n"
+              "4:24: a procedure that takes C's '..' can't have default values, for now\n");
+    CHECK_STR(check_module_source(&a, "compiled :: (n: int = 1) #compiler;\nmain :: () { }\n"),
+              "1:21: a #compiler procedure can't have default values, for now\n");
+    arena_free(&a);
+}
+
+TEST(a_default_value_uses_no_parameter) {
+    // A default's names are the top level's, but the procedure's parameters
+    // hide them there, as in the body, and using one is refused: a global
+    // times doesn't stand in for the parameter. A parameter after the
+    // default, one called through and the default's own are refused too.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "times :: 5;\n"
+                               "f :: (times: int, n: int = times, m: int = k, k: int = 0) { }\n"
+                               "g :: (cb: () -> int, n: int = cb()) { }\n"
+                               "h :: (n: int = n + 1) { }\n"
+                               "main :: () { }\n"),
+              "2:28: a default value can't use the parameter 'times'\n"
+              "2:44: a default value can't use the parameter 'k'\n"
+              "3:31: a default value can't use the parameter 'cb'\n"
+              "4:16: a default value can't use the parameter 'n'\n");
+    arena_free(&a);
+}
+
+TEST(a_default_that_needs_its_own_signature) {
+    // A default is checked while its signature is under way, so one that
+    // calls its own procedure, directly or through another's default, is the
+    // circle a global's value makes: said once, at the procedure.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "f :: (n: int = f(1)) -> int { return n; }\n"
+                               "g :: (n: int = h()) -> int { return n; }\n"
+                               "h :: (m: int = g(1)) -> int { return m; }\n"
+                               "main :: () { }\n"),
+              "1:1: 'f' is defined in terms of itself\n"
+              "2:1: 'g' is defined in terms of itself\n");
+    arena_free(&a);
+}
+
+TEST(a_default_names_what_is_declared_later) {
+    // The signature is checked in the declarations pass, before Late's and
+    // LIMIT's turn: each is worked out where the default needs it, the
+    // literal laid out as a Late and the constant folded.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "f :: (p: Late = .{1, 2}, n: int = LIMIT) -> int { return p.x + n; }\n"
+                              "LIMIT :: 10;\n"
+                              "Late :: struct { x: int; y: int; }\n"
+                              "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Proc *f = c.file->procs[0];
+    CHECK_STR(type_name(&a, f->params[0]->default_value->type), "Late");
+    Ast *limit = f->params[1]->default_value;
+    CHECK(limit->is_constant);
+    CHECK_EQ(limit->constant, 10);
+    CHECK_STR(type_name(&a, limit->type), "int");
+    token_list_free(c.list);
+    arena_free(&a);
+}

@@ -648,7 +648,8 @@ static void report_undeclared(Checker *c, Ast_Name *name, bool called) {
 // procedure type: "'printf' can't be a value: it takes C's '..', which no
 // procedure type can say". Nor is main a value: "'main' can't be a value:
 // it's where the program starts"; nor a #compiler one: "'create_workspace'
-// can't be a value: the compiler does it".
+// can't be a value: the compiler does it". In a default value, a
+// parameter is "a default value can't use the parameter 'times'".
 static Type *check_name(Checker *c, Ast_Name *name) {
     Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
@@ -657,8 +658,19 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         return nullptr;
     }
     switch (decl->kind) {
-    case AST_VAR:
-    case AST_PARAM: return decl->type;
+    case AST_VAR: return decl->type;
+    case AST_PARAM:
+        // A default value is worked out in the caller, before the call it
+        // fills in, where none of the procedure's parameters exists yet
+        // (spec 7.2). They hide the top level's names there all the same
+        // (checker.cpp's check_defaults), so the name is the parameter, not
+        // a global of its name, and is refused.
+        if (c->default_of) {
+            diag_error(c->diag, name->pos, "a default value can't use the parameter '" STR_FMT "'",
+                       STR_ARG(name->name));
+            return nullptr;
+        }
+        return decl->type;
     case AST_CONST:
         name->is_constant = decl->is_constant;
         name->constant = decl->constant;

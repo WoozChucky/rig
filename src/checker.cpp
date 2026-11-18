@@ -272,6 +272,8 @@ static void pop_scope(Checker *c) {
 struct Outer_Scopes {
     Array<Table<Ast *>> scopes;  // Checker.scopes
     bool lost_a_local;           // Checker.lost_a_local
+    Ast_Proc *default_of;        // Checker.default_of
+    s32 filled_depth;            // Checker.filled_depth
 };
 
 // A declaration worked out where it's first needed (a global, a constant, a
@@ -282,20 +284,29 @@ struct Outer_Scopes {
 // checker goes on with none. So is lost_a_local, which is about those
 // scopes: a failed #if in the body that needed it may hide a local's name,
 // never a top-level one, so the declaration's unknown names are reported.
+// So are default_of and filled_depth, which are about the default value
+// being checked (check_defaults): a declaration worked out inside one is
+// no default's, so a body's parameters aren't refused in it, and the
+// defaults its own calls fill in are lowered with it, not with that
+// default's calls, so they don't count in its depth.
 static Outer_Scopes leave_scopes(Checker *c) {
-    Outer_Scopes outer = {c->scopes, c->lost_a_local};
+    Outer_Scopes outer = {c->scopes, c->lost_a_local, c->default_of, c->filled_depth};
     c->scopes = {};
     c->lost_a_local = false;
+    c->default_of = nullptr;
+    c->filled_depth = 0;
     return outer;
 }
 
 // Back to the scopes leave_scopes set aside, every scope opened since
-// closed, and to their lost_a_local.
+// closed, and to their lost_a_local, default_of and filled_depth.
 static void return_to_scopes(Checker *c, Outer_Scopes outer) {
     RIG_ASSERT(c->scopes.count == 0);
     array_free(&c->scopes);
     c->scopes = outer.scopes;
     c->lost_a_local = outer.lost_a_local;
+    c->default_of = outer.default_of;
+    c->filled_depth = outer.filled_depth;
 }
 
 static void resolve_global(Checker *c, Ast *decl);
@@ -1965,6 +1976,84 @@ static void check_c_name(Checker *c, Ast_Proc *proc) {
     }
 }
 
+// A procedure's default values (issue #155, spec 7.2), checked with its
+// signature, once every parameter's type is known, `base` being the
+// signature's level (check_signature's).
+//
+// A call gives the parameters in order, and leaves out the last ones: so
+// once a parameter has a default, every one after it has one, or it's
+// "'separator' needs a default value, since a parameter before it has
+// one", at each one's name that doesn't. A procedure with a '..T'
+// parameter, one that takes C's '..' and a #compiler one take none for
+// now: "a procedure with a '..' parameter can't have default values, for
+// now" ("a procedure that takes C's '..' ...", "a #compiler procedure
+// ..."), once, at the first default's '='. Their defaults then go
+// unchecked, and no gap is said: the procedure can have none anyway.
+//
+// A default is worked out at each call that leaves it out, in the caller,
+// but means the same at every one: its names are the top level's, as the
+// signature's types' are (resolve_signature sets the scopes aside). Except
+// the procedure's own parameters, which hide the top level's names there as
+// they do in the body (spec 4.7), so they're put in a scope of their own
+// (table_put: the body says a name declared twice, declare), and
+// c->default_of makes check_name refuse each: "a default value can't use
+// the parameter 'times'", at the name. A global times can't stand in for
+// the parameter, which is what the default would seem to mean.
+//
+// Each converts to its parameter's type as a typed variable's value does
+// (check_var_value): an untyped constant takes the type ("300 doesn't fit
+// in 'u8'"), .{...} takes a struct, null a pointer, and anything else is
+// "a value of type 'string' doesn't convert to 'int' implicitly", at the
+// default. A parameter whose type is an error has its default's own
+// mistakes said, and nothing more. The default's levels start from the
+// signature's, as a type's do (check_signature).
+//
+// The signature is under way all the while, so a default that needs it, by
+// a call of its own procedure (f :: (n: int = f(1))) or through another's
+// default that does, is the circle a global's value makes: "'f' is defined
+// in terms of itself", at the procedure, once (resolve_signature). Errors
+// in a default are the signature's (Ast_Proc.had_errors), so a #run that
+// reaches the procedure doesn't run.
+//
+// proc->defaults_depth is its deepest default's levels: how deep lowering
+// goes in a call that leaves every one out.
+static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
+    Array<Ast_Param *> &params = proc->params;
+    s64 first = 0;
+    while (first < params.count && !params[first]->default_value) first++;
+    if (first == params.count) return;
+    const char *refused = params[params.count - 1]->is_variadic ? "a procedure with a '..' parameter"
+                          : proc->is_c_variadic                  ? "a procedure that takes C's '..'"
+                          : proc->is_compiler                    ? "a #compiler procedure"
+                                                                 : nullptr;
+    if (refused) {
+        diag_error(c->diag, params[first]->equals, "%s can't have default values, for now", refused);
+        return;
+    }
+    for (s64 i = first + 1; i < params.count; i++) {
+        if (params[i]->default_value) continue;
+        diag_error(c->diag, params[i]->pos, "'" STR_FMT "' needs a default value, since a parameter before it has one",
+                   STR_ARG(params[i]->name));
+    }
+    push_scope(c);
+    Table<Ast *> *scope = &c->scopes[c->scopes.count - 1];
+    for (s64 i = 0; i < params.count; i++) table_put(scope, params[i]->name, (Ast *)params[i]);
+    c->default_of = proc;
+    s32 depth = 0;
+    for (s64 i = first; i < params.count; i++) {
+        Ast_Param *param = params[i];
+        Ast *value = param->default_value;
+        if (!value) continue;
+        c->levels = base + param->default_levels + 1;
+        check_value(c, value);
+        if (!check_convert(c, value, param->type)) report_no_conversion(c, value, param->type);
+        if (param->default_levels > depth) depth = param->default_levels;
+    }
+    c->default_of = nullptr;
+    pop_scope(c);
+    proc->defaults_depth = depth;
+}
+
 // A procedure's signature: its parameters' types and its results' types,
 // each stored on its node (Ast_Param.type, Ast_Type.type), and its library
 // and C name.
@@ -1992,6 +2081,10 @@ static void check_c_name(Checker *c, Ast_Proc *proc) {
 // Each type starts where the signature does, at `base`: a global it needs
 // (an array's count) starts a level below its own levels (Ast_Type.levels,
 // open_declaration).
+//
+// Then the parameters' default values (check_defaults), once every type is
+// known, each converting to its parameter's: still under way, so one that
+// needs this signature is a circle.
 //
 // The procedure's type (Ast.type) is its signature's procedure type: #c_call
 // when it's marked so, or foreign (C's own), and variadic with a '..T'. One
@@ -2045,18 +2138,22 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
     if (proc->is_compiler && !c->diag->files[proc->compiler_pos.file].in_module) {
         diag_error(c->diag, proc->compiler_pos, "#compiler is only for the modules that ship with rig");
     }
+    check_defaults(c, proc, base);
     proc->type = refused ? nullptr : proc_type_of_signature(proc);
 }
 
 // A procedure's signature, checked the first time it's needed: in its turn
 // in source order (check()), or earlier, by a call in a global's value,
-// which is checked against it (check_proc_signature). Its levels are its
-// deepest type's (open_declaration). A signature that needs itself, its
-// array's count naming a global whose value calls it (`f :: (a: [g]int)
-// ...; g := f(1);`), is a circle, found as a global's is (resolve_global):
-// "'f' is defined in terms of itself", once, and every declaration in it
-// has no type, so nothing more is said. Unreported, g had no type and said
-// nothing, [g] neither, and rig build crashed.
+// which is checked against it (check_proc_signature), or in a default value
+// (check_defaults). Its levels are its deepest type's or default's
+// (open_declaration). A signature that needs itself, its array's count
+// naming a global whose value calls it (`f :: (a: [g]int) ...; g :=
+// f(1);`), or a default calling it (`f :: (n: int = f(1))`, or through
+// another's default: `g :: (n: int = h())` with `h :: (m: int = g(1))`),
+// is a circle, found as a global's is (resolve_global): "'f' is defined in
+// terms of itself", once, and every declaration in it has no type, so
+// nothing more is said. Unreported, g had no type and said nothing, [g]
+// neither, and rig build crashed.
 //
 // Whether the signature is known now: false in a circle, under way or
 // found in one, and when it's nested too deeply to check here (said), so a
@@ -2075,7 +2172,9 @@ static bool resolve_signature(Checker *c, Ast_Proc *proc) {
     }
     s32 levels = 0, outer;
     for (s64 i = 0; i < proc->params.count; i++) {
-        if (proc->params[i]->type_expr->levels > levels) levels = proc->params[i]->type_expr->levels;
+        Ast_Param *param = proc->params[i];
+        if (param->type_expr->levels > levels) levels = param->type_expr->levels;
+        if (param->default_value && param->default_levels > levels) levels = param->default_levels;
     }
     for (s64 i = 0; i < proc->results.count; i++) {
         if (proc->results[i]->levels > levels) levels = proc->results[i]->levels;
