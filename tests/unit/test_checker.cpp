@@ -7901,6 +7901,14 @@ TEST(where_default_values_cant_be) {
               "3:25: 'c_like' takes at least 1 argument, but 0 were given\n");
     CHECK_STR(check_module_source(&a, "compiled :: (n: int = 1) #compiler;\nmain :: () { compiled(); }\n"),
               "1:21: a #compiler procedure can't have default values, for now\n");
+    // main takes no parameters, so it has no defaults: one with a default is
+    // said as any parameter is, by main's own message. The default is still
+    // checked, as any procedure's is, so a wrong one says so too.
+    CHECK_STR(check_source(&a, "main :: (n: int = 0) { }\n"),
+              "1:1: 'main' must take no arguments and return nothing\n");
+    CHECK_STR(check_source(&a, "main :: (n: int = \"x\") { }\n"),
+              "1:1: 'main' must take no arguments and return nothing\n"
+              "1:19: a value of type 'string' doesn't convert to 'int' implicitly\n");
     arena_free(&a);
 }
 
