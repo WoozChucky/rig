@@ -34,8 +34,9 @@
 //   IR_ADDR.
 // - Constants, local or top-level (spec 4.2). A use of a number, a bool or
 //   null is a constant already, and so is a part of constant data the
-//   checker folded (PRIMES[2], ORIGIN.x, NAME.count): a constant used only
-//   so never reaches the IR. A constant naming a procedure is its address.
+//   checker folded (PRIMES[2], ORIGIN.x, NAME.count): such a use never
+//   reaches the IR's code (the constant itself is still recorded for a
+//   debugger, below). A constant naming a procedure is its address.
 //   A string, struct or array constant whose bytes a use reads at run time
 //   (PRIMES[i], for PRIMES, a copy of ORIGIN) is one read-only global of
 //   bytes, const.N, made where such a use first needs it (constant_global)
@@ -303,9 +304,10 @@ struct Lowering {
     // Each string literal node's str.N, by pointer_key: one per literal,
     // however many uses and constants reach it (literal_global).
     Table<s32> literal_globals;
-    // Each data constant's const.N, by pointer_key, once a use needs it
-    // (constant_global), and each expression #run's baked aggregate's
-    // (run_global).
+    // Each data constant's const.N, by pointer_key, made once a use needs
+    // it (constant_global) or, for one no code reads, after every body
+    // (resolve_constant_globals); and each expression #run's baked
+    // aggregate's (run_global).
     Table<s32> constant_globals;
     s32 constant_count;       // the const.N globals made so far
     // The constants recorded for a debugger (ir.h's "Constants"): each
@@ -2480,11 +2482,17 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
 
 // The block's statements in order. Once the IR block has ended (after a
 // return), the rest can't run: they aren't lowered, and couldn't be, since
-// nothing may follow a terminator.
+// nothing may follow a terminator. Only their constants are, a taken #if
+// branch's too, since they need no code: the block's scope has code before
+// them, where a debugger shows them as it shows any of the block's names
+// (ir.h's "Constants"). A nested block's constants aren't: that block's
+// scope has no code for a debugger to stop in.
 static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source) {
     for (s64 i = 0; i < block->statements.count; i++) {
-        if (ir_block_has_ended(l->proc, l->block)) return;
-        lower_statement(l, block->statements[i], source);
+        Ast *s = block->statements[i];
+        bool may_hold_constants = s->kind == AST_CONST || s->kind == AST_IF_DIRECTIVE;
+        if (ir_block_has_ended(l->proc, l->block) && !may_hold_constants) continue;
+        lower_statement(l, s, source);
     }
 }
 

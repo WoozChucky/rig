@@ -1495,8 +1495,9 @@ TEST(ir_of_globals) {
     // A global variable is an internal global of its type, its first value
     // known while compiling (zero without one, or with ---), read and
     // written through its address. A constant used only folded, as these
-    // are, never reaches the IR: its uses are constants already. String
-    // literals keep their own count.
+    // are, has no code in the IR: its uses are constants already (ir_print
+    // leaves out its debugger record). String literals keep their own
+    // count.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_source(&a,
                                           "puts :: (s: *u8) -> s32 #foreign libc;\n"
@@ -3111,6 +3112,9 @@ TEST(a_constant_that_hides_a_name_starts_a_scope) {
                                                 "    {\n"                    // 12
                                                 "        LIMIT := 5;\n"      // 13: a variable hiding main's LIMIT
                                                 "    }\n"
+                                                "    {\n"                    // 15
+                                                "        b :: 4;\n"          // 16: a constant hiding main's b
+                                                "    }\n"
                                                 "}\n"));
     String f = proc_ir(ir, "f");
     CHECK(contains(f, "  ; scope 1 in 0 at 3:11\n"));
@@ -3121,11 +3125,14 @@ TEST(a_constant_that_hides_a_name_starts_a_scope) {
                          "  ; scope 2 in 1 at 8:5\n"
                          "  ; scope 3 in 2 at 9:9\n"
                          "  ; scope 4 in 1 at 12:5\n"
-                         "  ; scope 5 in 4 at 13:9\n"));
+                         "  ; scope 5 in 4 at 13:9\n"
+                         "  ; scope 6 in 1 at 15:5\n"
+                         "  ; scope 7 in 6 at 16:9\n"));
     CHECK(contains(main, "  ; var LIMIT int constant 99 in 1 at 6:5\n"));
     CHECK(contains(main, "  ; var STEP int constant 2 in 3 at 10:9\n"));
     CHECK(contains(main, "  ; var LIMIT int slot %"));
     CHECK(contains(main, " in 5 at 13:9\n"));
+    CHECK(contains(main, "  ; var b int constant 4 in 7 at 16:9\n"));
     arena_free(&a);
 }
 
@@ -3133,8 +3140,10 @@ TEST(constants_in_deferred_code_and_an_if_directive) {
     // Review Focus 1 and 3: each copy of deferred code declares its own
     // constants, in its copy's scope, the data ones sharing one const.N; a
     // taken #if branch's constant is in the block around it (spec 4.9); and
-    // a #run's procedure, lowered on demand, records nothing, while the
-    // constant the #run gives is a typed int.
+    // the program's own lowering of a #run's procedure records its
+    // constants as any body's (on demand it records none:
+    // lowering_on_demand_records_no_constant), while the constant the #run
+    // gives is a typed int.
     Arena a = arena_make();
     String ir = ir_print_debug(&a, lower_source(&a,
                                                 "seven :: () -> int { K :: 7; return K; }\n"              // 1
@@ -3165,6 +3174,54 @@ TEST(constants_in_deferred_code_and_an_if_directive) {
     }
     CHECK(contains(main, "  ; var W int constant 1 in 0 at 7:"));
     CHECK(contains(proc_ir(ir, "seven"), "  ; var K int constant 7 in 0 at 1:22\n"));
+    arena_free(&a);
+}
+
+TEST(lowering_on_demand_records_no_constant) {
+    // Review Focus 3: a #run's procedure, lowered on demand, records none
+    // of its constants, nor any top-level one: a compile-time module is
+    // never compiled, so nothing describes it, and its data constants'
+    // const.N would never be found (resolve_constant_globals).
+    Arena a = arena_make();
+    Lowered_Runs r = lower_runs_of(&a,
+                                   "seven :: () -> int { K :: 7; D :: int.[1, 2]; return K + D[0]; }\n"
+                                   "C :: #run seven();\n"
+                                   "main :: () { }\n");
+    ir_lower_run(r.lowering, constant_run(r.file, "C"));
+    CHECK_EQ(r.module->constants.count, 0);
+    Ir_Proc *seven = nullptr;
+    for (s64 i = 0; i < r.module->procs.count; i++) {
+        if (string_eq(r.module->procs[i]->name, str("seven"))) seven = r.module->procs[i];
+    }
+    CHECK(seven != nullptr);
+    if (seven) {
+        for (s64 i = 0; i < seven->vars.count; i++) {
+            CHECK(seven->vars[i].kind != IR_VAR_CONSTANT && seven->vars[i].kind != IR_VAR_GLOBAL);
+        }
+    }
+    lowered_runs_free(&r);
+    arena_free(&a);
+}
+
+TEST(a_constant_after_a_return_is_recorded) {
+    // A block's statements after it has returned aren't lowered, but its
+    // constants need no code: they're recorded all the same, a taken #if
+    // branch's too, since a debugger shows the block's names wherever its
+    // scope has code (at x := 1;, here).
+    Arena a = arena_make();
+    String main = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                          "main :: () {\n"                                            // 1
+                                                          "    x := 1;\n"                                             // 2
+                                                          "    if x > 0 { return; } else { return; }\n"               // 3
+                                                          "    LIMIT :: 3;\n"                                         // 4
+                                                          "    NAME :: \"late\";\n"                                   // 5
+                                                          "    #if OS == OS_WINDOWS { W :: 1; } else { W :: 1; }\n"  // 6
+                                                          "}\n")),
+                          "main");
+    CHECK(contains(main, "  ; var LIMIT int constant 3 in 0 at 4:5\n"));
+    CHECK(contains(main, "  ; var NAME string global @const."));
+    CHECK(contains(main, " in 0 at 5:5\n"));
+    CHECK(contains(main, "  ; var W int constant 1 in 0 at 6:"));
     arena_free(&a);
 }
 
@@ -4378,6 +4435,29 @@ TEST(baked_views_and_strings_in_constants_and_globals) {
     CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.4: 32 align 8 = \"%s%s\" reloc 8 @str.",
                                                      count, count))));
     CHECK(contains(ir, " reloc 24 @const.5\n"));
+    arena_free(&a);
+}
+
+TEST(an_unread_run_constant_is_recorded) {
+    // Issue #172: a data constant a #run gave, which no code reads, gets
+    // its const.N after every body, as a written one does (ir.h's
+    // "Constants"): a baked view's is 16 bytes whose data is a relocation
+    // to its elements, another const.N.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "store : [3]int;\n"                                                                  // 1
+                                                "make :: () -> []int { store[0] = 7; store[1] = 8; store[2] = 9; return store; }\n"  // 2
+                                                "VIEW :: #run make();\n"                                                             // 3
+                                                "main :: () { }\n"));
+    CHECK(contains(ir, "; const VIEW []int global @const.0 at 3:1\n"));
+    CHECK(contains(ir, "const @const.1: 24 align 8 = \""
+                       "\\07\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\09\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    CHECK(contains(ir, "const @const.0: 16 align 8 = \""
+                       "\\03\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @const.1\n"));
+    CHECK(!contains(proc_ir(ir, "main"), "addr @const."));
     arena_free(&a);
 }
 
