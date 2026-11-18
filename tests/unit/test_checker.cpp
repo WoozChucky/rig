@@ -7871,19 +7871,20 @@ TEST(default_values_take_their_parameters_types) {
 TEST(where_default_values_cant_be) {
     // A parameter without a default after one with is said at its name, each
     // one. A '..T' parameter, C's '..' and #compiler refuse defaults for now,
-    // once, at the first default's '=', and then say no gap.
+    // once, at the first default's '=', and then say no gap and check none
+    // of the defaults: the second one's string goes unsaid.
     Arena a = arena_make();
     CHECK_STR(check_source(&a, "gap :: (a: int = 1, b: int, c: int = 3) { }\n"
                                "later :: (a: int = 1, b: int, c: int) { }\n"
-                               "gathers :: (first: int = 0, rest: ..int) { }\n"
-                               "c_like :: (format: *u8 = \"%d\", ..) -> s32 #foreign libc \"printf\";\n"
+                               "gathers :: (first: int = 0, second: int = \"x\", rest: ..int) { }\n"
+                               "c_like :: (format: *u8 = \"%d\", n: int = \"y\", ..) -> s32 #foreign libc \"printf\";\n"
                                "main :: () { }\n"),
               "1:21: 'b' needs a default value, since a parameter before it has one\n"
               "2:23: 'b' needs a default value, since a parameter before it has one\n"
               "2:31: 'c' needs a default value, since a parameter before it has one\n"
               "3:24: a procedure with a '..' parameter can't have default values, for now\n"
               "4:24: a procedure that takes C's '..' can't have default values, for now\n");
-    CHECK_STR(check_module_source(&a, "compiled :: (n: int = 1) #compiler;\nmain :: () { }\n"),
+    CHECK_STR(check_module_source(&a, "compiled :: (n: int = 1, m: int = \"z\") #compiler;\nmain :: () { }\n"),
               "1:21: a #compiler procedure can't have default values, for now\n");
     arena_free(&a);
 }
@@ -7892,17 +7893,75 @@ TEST(a_default_value_uses_no_parameter) {
     // A default's names are the top level's, but the procedure's parameters
     // hide them there, as in the body, and using one is refused: a global
     // times doesn't stand in for the parameter. A parameter after the
-    // default, one called through and the default's own are refused too.
+    // default, one called through, one whose address is taken and the
+    // default's own are refused too.
     Arena a = arena_make();
-    CHECK_STR(check_source(&a, "times :: 5;\n"
+    CHECK_STR(check_source(&a, "times := 5;\n"
                                "f :: (times: int, n: int = times, m: int = k, k: int = 0) { }\n"
                                "g :: (cb: () -> int, n: int = cb()) { }\n"
                                "h :: (n: int = n + 1) { }\n"
+                               "p :: (times: int, at: *int = *times) { }\n"
                                "main :: () { }\n"),
               "2:28: a default value can't use the parameter 'times'\n"
               "2:44: a default value can't use the parameter 'k'\n"
               "3:31: a default value can't use the parameter 'cb'\n"
-              "4:16: a default value can't use the parameter 'n'\n");
+              "4:16: a default value can't use the parameter 'n'\n"
+              "5:31: a default value can't use the parameter 'times'\n");
+    arena_free(&a);
+}
+
+TEST(a_default_under_a_broken_parameter) {
+    // The parameters are put in the default's scope as they are, not
+    // declared again, so a name declared twice is said once, by the body. A
+    // default whose parameter's type is an error says its own mistakes,
+    // and no conversion to the missing type.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "f :: (a: int, a: int = 1) { }\nmain :: () { }\n"),
+              "1:15: 'a' is already declared at test.rig:1:7\n");
+    CHECK_STR(check_source(&a, "f :: (n: Nope = 1 + \"x\") { }\nmain :: () { }\n"),
+              "1:10: unknown type 'Nope'\n"
+              "1:19: '+' needs numbers, not 'string'\n");
+    CHECK_STR(check_source(&a, "h :: (x: Nope = \"a\") { }\nmain :: () { }\n"), "1:10: unknown type 'Nope'\n");
+    arena_free(&a);
+}
+
+TEST(an_error_in_a_default_stops_a_run_reaching_it) {
+    // A default's errors are its signature's, so a #run that calls the
+    // procedure doesn't run, whether the #run's turn comes first or the
+    // procedure's, and the constant is left with no value.
+    Arena a = arena_make();
+    const char *sources[] = {
+        "X :: #run f(1);\nf :: (n: int = \"two\") -> int { return n; }\nmain :: () { }\n",
+        "f :: (n: int = \"two\") -> int { return n; }\nX :: #run f(1);\nmain :: () { }\n",
+    };
+    const char *expected[] = {
+        "2:16: a value of type 'string' doesn't convert to 'int' implicitly\n",
+        "1:16: a value of type 'string' doesn't convert to 'int' implicitly\n",
+    };
+    for (s64 i = 0; i < 2; i++) {
+        Checked c = check_src(&a, sources[i]);
+        CHECK_STR(messages(&a, &c.list->diag), expected[i]);
+        CHECK(!global_named(&c, "X")->is_constant);
+        token_list_free(c.list);
+    }
+    arena_free(&a);
+}
+
+TEST(a_defaults_levels_count_toward_those_it_needs) {
+    // A default's levels start from its signature's, as a type's do: 999
+    // parentheses around N put N at 1000, and 1000 at 1001. And a
+    // signature's levels count its deepest default's: x's value, a name, is
+    // no level, so f's signature, which it needs, is at 1, and its default
+    // fits with 999 parentheses and not with 1000.
+    Arena a = arena_make();
+    const char *after = ") { }\nN :: 1;\nmain :: () { }\n";
+    CHECK(builds(&a, nested_source(&a, "f :: (n: int = ", "(", 999, "N", ")", after)));
+    CHECK_STR(check_source(&a, nested_source(&a, "f :: (n: int = ", "(", 1000, "N", ")", after)),
+              needed_too_deeply(&a, 2, "N"));
+    const char *before = "x := f;\nf :: (n: int = ";
+    const char *body = ") -> int { return n; }\nmain :: () { }\n";
+    CHECK(builds(&a, nested_source(&a, before, "(", 999, "1", ")", body)));
+    CHECK_STR(check_source(&a, nested_source(&a, before, "(", 1000, "1", ")", body)), needed_too_deeply(&a, 2, "f"));
     arena_free(&a);
 }
 

@@ -641,6 +641,12 @@ static void report_undeclared(Checker *c, Ast_Name *name, bool called) {
     }
 }
 
+// "a default value can't use the parameter 'times'", at a parameter's name
+// in one of its procedure's default values (Checker.default_of).
+static void report_parameter_in_default(Checker *c, Ast_Name *name) {
+    diag_error(c->diag, name->pos, "a default value can't use the parameter '" STR_FMT "'", STR_ARG(name->name));
+}
+
 // A name used as a value: a variable's or parameter's value, or a
 // constant's, which is known while compiling, or a procedure, of its
 // procedure type (a constant naming one too), one taking a '..T' included,
@@ -666,8 +672,7 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         // (checker.cpp's check_defaults), so the name is the parameter, not
         // a global of its name, and is refused.
         if (c->default_of) {
-            diag_error(c->diag, name->pos, "a default value can't use the parameter '" STR_FMT "'",
-                       STR_ARG(name->name));
+            report_parameter_in_default(c, name);
             return nullptr;
         }
         return decl->type;
@@ -1914,6 +1919,13 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing) {
         name->decl = decl;
         if (!decl) {
             report_undeclared(c, name, false);
+            return false;
+        }
+        // In a default value a parameter is refused as check_name refuses
+        // its value: it doesn't exist where the default is worked out, so
+        // that it has no address isn't the mistake.
+        if (decl->kind == AST_PARAM && c->default_of) {
+            report_parameter_in_default(c, name);
             return false;
         }
         if (!name_is_place(c, name, for_writing)) return false;

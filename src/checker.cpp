@@ -1996,17 +1996,19 @@ static void check_c_name(Checker *c, Ast_Proc *proc) {
 // the procedure's own parameters, which hide the top level's names there as
 // they do in the body (spec 4.7), so they're put in a scope of their own
 // (table_put: the body says a name declared twice, declare), and
-// c->default_of makes check_name refuse each: "a default value can't use
-// the parameter 'times'", at the name. A global times can't stand in for
-// the parameter, which is what the default would seem to mean.
+// c->default_of makes check_name, and check_addressable for its address,
+// refuse each: "a default value can't use the parameter 'times'", at the
+// name. A global times can't stand in for the parameter, which is what the
+// default would seem to mean.
 //
 // Each converts to its parameter's type as a typed variable's value does
 // (check_var_value): an untyped constant takes the type ("300 doesn't fit
 // in 'u8'"), .{...} takes a struct, null a pointer, and anything else is
 // "a value of type 'string' doesn't convert to 'int' implicitly", at the
 // default. A parameter whose type is an error has its default's own
-// mistakes said, and nothing more. The default's levels start from the
-// signature's, as a type's do (check_signature).
+// mistakes said, and nothing more, as a variable whose type is one does:
+// a .{...}'s values, which need the type, go unchecked. The default's
+// levels start from the signature's, as a type's do (check_signature).
 //
 // The signature is under way all the while, so a default that needs it, by
 // a call of its own procedure (f :: (n: int = f(1))) or through another's
