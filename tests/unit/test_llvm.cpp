@@ -1926,8 +1926,9 @@ TEST(llvm_read_only_global) {
     // A data constant's bytes are an LLVM constant, laid out as a variable
     // of bytes is (a packed struct around each address, or an array of
     // bytes), private and aligned as the IR says. Unlike a string literal's
-    // bytes it isn't unnamed_addr, and, as the compiler makes it, it has no
-    // debug information, though the module has some.
+    // bytes it isn't unnamed_addr, and, made here with no constant naming
+    // it (Ir_Module.constants), it has no debug information, though the
+    // module has some.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a, "main :: () { }\n");
     s32 text = add_string(m, "str.0", "abc");
@@ -1954,8 +1955,9 @@ TEST(llvm_read_only_global) {
 
 TEST(llvm_data_constant_is_private_constant) {
     // Issue #113: a data constant lowered from source is the same LLVM
-    // constant, its string literal's and procedure's addresses inside it,
-    // and a debugger is told nothing of it: no global variable at all.
+    // constant, its string literal's and procedure's addresses inside it.
+    // Issue #172: a debugger shows it, by a global variable named as the
+    // constant and attached to it.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "puts :: (s: *u8) -> s32 #foreign libc;\n"
@@ -1970,8 +1972,171 @@ TEST(llvm_data_constant_is_private_constant) {
         CHECK(contains(table, "ptr @str."));
         CHECK(contains(table, "ptr @add"));
         CHECK(contains(table, "align 8"));
-        CHECK(!contains(table, "unnamed_addr") && !contains(table, "!dbg"));
-        CHECK_EQ(count_of(text, "!DIGlobalVariable("), 0);
+        CHECK(!contains(table, "unnamed_addr") && contains(table, "!dbg"));
+        CHECK_EQ(count_of(text, "!DIGlobalVariable(name: \"OPS\""), 1);
+    }
+    arena_free(&a);
+}
+
+// Issue #172: named constants. The DIGlobalVariableExpression whose
+// variable is the DIGlobalVariable named `name`: its node ("!12"); {} when
+// there's none.
+static String global_variable_expression(Arena *a, String text, const char *name) {
+    const char *global = string_cstr(a, string_printf(a, "!DIGlobalVariable(name: \"%s\"", name));
+    String variable = defined_node(line_with(text, global));
+    if (variable.count == 0) return {};
+    const char *needle =
+        string_cstr(a, string_printf(a, "!DIGlobalVariableExpression(var: " STR_FMT ", ", STR_ARG(variable)));
+    return defined_node(line_with(text, needle));
+}
+
+// The expression of the DIGlobalVariableExpression whose variable is the
+// DIGlobalVariable named `name`: "!DIExpression(...)"; {} when none.
+static String constant_expression(Arena *a, String text, const char *name) {
+    String node = global_variable_expression(a, text, name);
+    if (node.count == 0) return {};
+    String line = node_line(a, text, node);
+    s64 at = index_of(line, "expr: ");
+    if (at < 0) return {};
+    // The expression runs to the line's last ')', which closes the global
+    // variable expression.
+    at += (s64)strlen("expr: ");
+    return string_slice(line, at, line.count - 1 - at);
+}
+
+// The line of the LLVM global that metadata node `node` (a global variable
+// expression) is attached to; {} when none is. A global may have several.
+static String global_attached_to(Arena *a, String text, String node) {
+    String line = line_with(text, string_cstr(a, string_printf(a, "!dbg " STR_FMT "\n", STR_ARG(node))));
+    if (line.count > 0) return line;
+    return line_with(text, string_cstr(a, string_printf(a, "!dbg " STR_FMT ",", STR_ARG(node))));
+}
+
+// Whether the tuple metadata node `tuple` ("!{!3, !7}", defined on its own
+// line) lists node `node`.
+static bool tuple_lists(Arena *a, String text, String tuple, String node) {
+    String line = node_line(a, text, tuple);
+    return contains(line, string_cstr(a, string_printf(a, STR_FMT ",", STR_ARG(node)))) ||
+           contains(line, string_cstr(a, string_printf(a, STR_FMT "}", STR_ARG(node))));
+}
+
+TEST(llvm_constants_have_debug_info) {
+    // Issue #172. A top-level number, bool or null is a global variable
+    // expression of its value, attached to nothing (CodeView's S_CONSTANT,
+    // DWARF's DW_AT_const_value); data is one attached to its const.N. A
+    // body's number is a local variable whose value a #dbg_value gives, as
+    // an i64 (a float's bits); a body's data a global variable scoped to
+    // its block, in its subprogram's retained nodes.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Point :: struct { x: int; y: int; }\n"     // 1
+                                "LIMIT :: 12;\n"                             // 2
+                                "RATIO :: 0.1;\n"
+                                "HALF :: cast(float32) 1.5;\n"
+                                "SMALL :: cast(s8) -5;\n"
+                                "READY :: true;\n"
+                                "NOTHING :: null;\n"
+                                "NAME :: \"rig\";\n"                         // 8
+                                "add :: (a: int, b: int) -> int { return a + b; }\n"
+                                "OP :: add;\n"
+                                "main :: () {\n"                             // 11
+                                "    STEP :: 7;\n"
+                                "    SCALE :: cast(float32) 0.25;\n"
+                                "    { CORNER :: Point.{7, 8}; i := 1; }\n"  // 14
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(line_with(text, "!DIGlobalVariable(name: \"LIMIT\""), "line: 2, "));
+        CHECK(contains(line_with(text, "!DIGlobalVariable(name: \"LIMIT\""), "isLocal: true, isDefinition: true"));
+        CHECK(string_eq(constant_expression(&a, text, "LIMIT"),
+                        str("!DIExpression(DW_OP_constu, 12, DW_OP_stack_value)")));
+        CHECK(contains(constant_expression(&a, text, "RATIO"), "DW_OP_constu, 4591870180066957722, "));
+        CHECK(contains(constant_expression(&a, text, "HALF"), "DW_OP_constu, 1069547520, "));
+        CHECK(contains(constant_expression(&a, text, "SMALL"), "DW_OP_constu, 18446744073709551611, "));
+        CHECK(contains(constant_expression(&a, text, "READY"), "DW_OP_constu, 1, "));
+        CHECK(contains(constant_expression(&a, text, "NOTHING"), "DW_OP_constu, 0, "));
+        CHECK(string_eq(constant_expression(&a, text, "NAME"), str("!DIExpression()")));
+        CHECK(!contains(text, "!DIGlobalVariable(name: \"OP\""));
+        // NAME's is attached to its const.N; LIMIT's to nothing, the unit
+        // lists it.
+        String name = global_variable_expression(&a, text, "NAME");
+        CHECK(name.count > 0 && starts_with(global_attached_to(&a, text, name), "@const."));
+        String limit = global_variable_expression(&a, text, "LIMIT");
+        CHECK(limit.count > 0 && global_attached_to(&a, text, limit).count == 0);
+        String unit_globals = attached(&a, line_with(text, "!DICompileUnit("), "globals:");
+        CHECK(unit_globals.count > 0 && tuple_lists(&a, text, unit_globals, limit));
+        // STEP and SCALE: local variables of main, their values by
+        // #dbg_value, SCALE's as a float32's bits in an i64.
+        String main_line = line_with(text, "!DISubprogram(name: \"main\"");
+        String main = defined_node(main_line);
+        String step_line = line_with(text, "!DILocalVariable(name: \"STEP\"");
+        CHECK(contains(step_line, string_cstr(&a, string_printf(&a, "scope: " STR_FMT ",", STR_ARG(main)))));
+        CHECK(contains(step_line, "line: 12, "));
+        String step = defined_node(step_line);
+        CHECK(step.count > 0 &&
+              contains(text, string_cstr(&a, string_printf(&a, "#dbg_value(i64 7, " STR_FMT ", !DIExpression(), ",
+                                                           STR_ARG(step)))));
+        String scale = defined_node(line_with(text, "!DILocalVariable(name: \"SCALE\""));
+        CHECK(scale.count > 0 &&
+              contains(text, string_cstr(&a, string_printf(&a, "#dbg_value(i64 1048576000, " STR_FMT ", ",
+                                                           STR_ARG(scale)))));
+        CHECK(!contains(text, "!DIGlobalVariable(name: \"STEP\""));
+        // CORNER: a global variable whose scope is the block's lexical
+        // block, inside main, attached to its const.N, in main's retained
+        // nodes (not the unit's globals, which LLVM's verifier refuses).
+        String corner_line = line_with(text, "!DIGlobalVariable(name: \"CORNER\"");
+        String block = attached(&a, corner_line, "scope:");
+        CHECK(contains(node_line(&a, text, block),
+                       string_cstr(&a, string_printf(&a, "!DILexicalBlock(scope: " STR_FMT ",", STR_ARG(main)))));
+        CHECK(contains(corner_line, "line: 14, "));
+        String corner = global_variable_expression(&a, text, "CORNER");
+        CHECK(corner.count > 0 && starts_with(global_attached_to(&a, text, corner), "@const."));
+        CHECK(tuple_lists(&a, text, attached(&a, main_line, "retainedNodes:"), corner));
+        CHECK(!tuple_lists(&a, text, unit_globals, corner));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_constants_in_deferred_code) {
+    // Review Focus 1: a data constant in deferred code copied twice is one
+    // const.N with two !dbg, one per copy's variable, and the module
+    // verifies (llvm_text checks it); each copy's number is a variable of
+    // its own.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "seven :: () -> int { K :: 7; return K; }\n"
+                                "C :: #run seven();\n"
+                                "main :: () {\n"
+                                "    i := 0;\n"
+                                "    defer { K :: 3; D :: int.[1, 2]; i = K + D[i]; }\n"
+                                "    if i == 0 { return; }\n"
+                                "    #if OS == OS_WINDOWS { W :: 1; } else { W :: 1; }\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK_EQ(count_of(line_with(text, "@const.0 = "), "!dbg"), 2);
+        CHECK_EQ(count_of(text, "!DIGlobalVariable(name: \"D\""), 2);
+        // seven's K, and main's two copies.
+        CHECK_EQ(count_of(text, "!DILocalVariable(name: \"K\""), 3);
+        CHECK(contains(text, "#dbg_value(i64 3, "));
+        CHECK(contains(constant_expression(&a, text, "C"), "DW_OP_constu, 7, "));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_unread_constant_data_survives_optimisation) {
+    // Review Focus 5: a data constant no code reads, optimised: LLVM's O2
+    // may drop its const.N, and the module still verifies.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, "ORIGIN :: int.[3, 4];\nmain :: () { }\n");
+    for (int t = 0; t < 2; t++) {
+        String plain = {}, optimised = {}, error = {};
+        CHECK(llvm_ir_text(&a, m, (Target)t, &plain, &error, false));
+        CHECK(contains(line_with(plain, "@const.0 = "), "!dbg"));
+        CHECK(contains(plain, "!DIGlobalVariable(name: \"ORIGIN\""));
+        bool ok = llvm_ir_text(&a, m, (Target)t, &optimised, &error, true);
+        CHECK(ok);
+        if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
     }
     arena_free(&a);
 }

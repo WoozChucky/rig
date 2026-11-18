@@ -624,12 +624,27 @@ static LLVMValueRef llvm_global(Body *body, s32 n) {
 //   its name, line and type, and where it lives, said by a declare record
 //   (#dbg_declare) naming its stack slot; a global (DIGlobalVariable)
 //   attached to the LLVM global that holds it.
+// - Constants (ir.h's "Constants", issue #172), each named as in the
+//   source, of the type a debugger shows it as. A top-level number, bool
+//   or null is a DIGlobalVariable attached to nothing, in a global
+//   variable expression whose expression is its value (DW_OP_constu V,
+//   DW_OP_stack_value): CodeView's S_CONSTANT, DWARF's DW_AT_const_value.
+//   A body's is a DILocalVariable in its scope whose value a value record
+//   (#dbg_value) gives, for the whole of its scope: S_CONSTANT and
+//   DW_AT_const_value inside its block. (A global variable expression
+//   scoped to the block, as C's static local, won't do for a value:
+//   CodeView writes a constant one at the top level whatever its scope,
+//   so a block's LIMIT would hide nothing, and DWARF gives it no location
+//   at all.) A constant holding data, or a pointer to a literal, is a
+//   DIGlobalVariable attached to its read-only const.N, as a Rig global is
+//   to its own: a body's scoped to its block.
 //
 // The IR knows all of it (ir.h's "Debug information"): each instruction's
 // position and scope, each procedure's source name, position, scopes and
-// variables, each global's Rig type, the module's source files, which a
-// position's file indexes. Only modules with source files get any; the
-// procedures the compiler makes have no source name and get none.
+// variables, each global's Rig type, the top-level constants, the module's
+// source files, which a position's file indexes. Only modules with source
+// files get any; the procedures the compiler makes have no source name and
+// get none.
 
 // A source file's name in CodeView. LLVM's CodeView writer makes the full
 // path of each file it names (CodeViewDebug's getFullFilepath) from the
@@ -1375,6 +1390,20 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
     }
 }
 
+// A number constant's bits (Ir_Var.constant) as its debug information
+// gives them, which a debugger reads by the constant's type, its low bytes
+// as wide as the type: a float32's, which the IR keeps as a double's,
+// become the float's own 32 bits, zero-extended. The double is a float32's
+// value already (the checker rounds it: check_expr.cpp's round_to), an
+// infinity or a NaN included, so the cast is exact. Any other is unchanged.
+static u64 debug_constant_bits(Type *t, u64 bits) {
+    if (t->kind != TYPE_FLOAT || t->size != 4) return bits;
+    f32 value = (f32)f64_from_bits(bits);
+    u32 narrow = 0;
+    memcpy(&narrow, &value, sizeof narrow);
+    return narrow;
+}
+
 // Procedure p's variables (Ir_Var), each a DILocalVariable in its scope,
 // at its line, of its type, and declared where it lives: a declare record
 // (#dbg_declare) says the variable is the memory a stack slot (an alloca)
@@ -1424,6 +1453,23 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
 //   copied it there.) It's
 //   artificial (DW_AT_artificial): made by the compiler, not declared in
 //   the source.
+// - A constant that is a number, a bool or null (IR_VAR_CONSTANT) has no
+//   storage: it's a DILocalVariable whose value a value record
+//   (#dbg_value) at the same place gives, for the whole of its scope, so
+//   LLVM writes it as a constant inside its block (CodeView's S_CONSTANT,
+//   DWARF's DW_AT_const_value; the debug comment says why not a global
+//   variable expression). The value is an i64 of its bits, a float's too
+//   (debug_constant_bits): given a double, LLVM's CodeView writer drops it
+//   (cdb's <value unavailable>), while the variable's type tells a
+//   debugger how to read the bits. Having no storage, it isn't one of the
+//   variables VS Code's Variables view lists (that's a frame's locals with
+//   a place in memory), though its Watch, hover and Debug Console find it.
+// - A constant in read-only data (IR_VAR_GLOBAL) is a DIGlobalVariable
+//   scoped to its block, attached to its const.N (llvm_global, of the
+//   globals build_body set). The DIBuilder lists it in its subprogram's
+//   retained nodes, as LLVM's verifier wants a function's own globals. In
+//   deferred code each copy declares it again: one const.N with a
+//   variable per copy, each in its copy's block.
 //
 // Those stores run before the body, with no location (the builder has
 // none yet), as lowering's stores of the scalar parameters have none: the
@@ -1437,9 +1483,7 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
     // The slots of the aggregate parameters' addresses and of the result
     // pointers first, every alloca together at the top, then the stores into
     // them. The result pointers are the IR's first parameters, %0 on (spec
-    // 10.4).
-    // A body's constants (IR_VAR_CONSTANT, IR_VAR_GLOBAL) have no storage
-    // here, and aren't described yet.
+    // 10.4). A constant has no storage here.
     LLVMValueRef *storage = arena_new_array<LLVMValueRef>(a, p->vars.count ? p->vars.count : 1);
     for (s64 i = 0; i < p->vars.count; i++) {
         Ir_Var *v = &p->vars[i];
@@ -1484,16 +1528,22 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
     }
     for (s64 i = 0; i < p->vars.count; i++) {
         Ir_Var *v = &p->vars[i];
-        if (v->kind == IR_VAR_CONSTANT || v->kind == IR_VAR_GLOBAL) continue;
         RIG_ASSERT(v->scope >= 0 && v->scope < body->scope_count);
         RIG_ASSERT(v->pos.file == body->file);
         LLVMMetadataRef scope = body->scopes[v->scope];
         LLVMMetadataRef type = debug_type(b, v->type);
+        const char *name = (const char *)v->name.data;
+        unsigned line = (unsigned)v->pos.line;
+        if (v->kind == IR_VAR_GLOBAL) {
+            // Data: its const.N, in its block (see above).
+            LLVMMetadataRef variable = LLVMDIBuilderCreateGlobalVariableExpression(
+                b->debug, scope, name, (size_t)v->name.count, "", 0, file, line, type, 1, plain, nullptr, 0);
+            LLVMGlobalAddDebugInfo(llvm_global(body, v->value), variable);
+            continue;
+        }
         // An aggregate parameter: a pointer in its slot (see above). A
         // visible parameter's ArgNo counts the result pointers before it.
         if (v->kind == IR_VAR_ADDRESS) type = debug_pointer(b, type);
-        const char *name = (const char *)v->name.data;
-        unsigned line = (unsigned)v->pos.line;
         // AlwaysPreserve: kept even if LLVM finds no use of it (an optimiser
         // could drop a variable that's never read; a debugger still shows
         // it).
@@ -1507,7 +1557,13 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
         // (column 0 on Windows, as every location there: set_location).
         unsigned column = b->target == TARGET_WINDOWS_X64 ? 0 : (unsigned)v->pos.col;
         LLVMMetadataRef location = LLVMDIBuilderCreateDebugLocation(c, line, column, scope, nullptr);
-        LLVMDIBuilderInsertDeclareRecordAtEnd(b->debug, storage[i], variable, plain, location, body->blocks[0]);
+        if (v->kind == IR_VAR_CONSTANT) {
+            // A number: its value, as an i64 of its bits (see above).
+            LLVMValueRef bits = LLVMConstInt(LLVMInt64TypeInContext(c), debug_constant_bits(v->type, v->constant), 0);
+            LLVMDIBuilderInsertDbgValueRecordAtEnd(b->debug, bits, variable, plain, location, body->blocks[0]);
+        } else {
+            LLVMDIBuilderInsertDeclareRecordAtEnd(b->debug, storage[i], variable, plain, location, body->blocks[0]);
+        }
     }
 }
 
@@ -1772,6 +1828,37 @@ static void declare_foreign_functions(Backend *b, Ir_Module *m, Arena *a, LLVMVa
     }
 }
 
+// The top-level constants (Ir_Module.constants) a debugger shows, each a
+// DIGlobalVariable named as in the source, of the type it's shown as,
+// local to the unit as a Rig global is, at its line of the file that
+// declares it (the debug comment's "Constants"). A number, a bool or null
+// (IR_VAR_CONSTANT) is in a global variable expression of its value,
+// DW_OP_constu of its bits and DW_OP_stack_value, attached to nothing: the
+// DIBuilder lists it in the unit's globals, and LLVM writes it as
+// CodeView's S_CONSTANT, DWARF's DW_AT_const_value. (A negative integer's
+// bits are its two's complement, extended to 64: a debugger reads them by
+// the type, as wide as it is, signed or not.) Data, or a pointer to a
+// literal (IR_VAR_GLOBAL), is in one whose expression is empty, attached
+// to its const.N, `globals`' LLVM global: its memory is the variable.
+static void describe_constants(Backend *b, Ir_Module *m, LLVMValueRef *globals) {
+    LLVMMetadataRef plain = LLVMDIBuilderCreateExpression(b->debug, nullptr, 0);
+    for (s64 i = 0; i < m->constants.count; i++) {
+        Ir_Var *v = &m->constants[i];
+        LLVMMetadataRef expression = v->kind == IR_VAR_CONSTANT
+            ? LLVMDIBuilderCreateConstantValueExpression(b->debug, debug_constant_bits(v->type, v->constant))
+            : plain;
+        LLVMMetadataRef variable = LLVMDIBuilderCreateGlobalVariableExpression(
+            b->debug, b->unit, (const char *)v->name.data, (size_t)v->name.count, "", 0, debug_file(b, v->pos),
+            (unsigned)v->pos.line, debug_type(b, v->type), 1, expression, nullptr, 0);
+        if (v->kind == IR_VAR_GLOBAL) {
+            RIG_ASSERT(v->value >= 0 && v->value < m->globals.count);
+            LLVMGlobalAddDebugInfo(globals[v->value], variable);
+        } else {
+            RIG_ASSERT(v->kind == IR_VAR_CONSTANT);
+        }
+    }
+}
+
 // Builds and verifies the LLVM module for `m`, and the target machine that
 // compiles it. When `optimize` is set, the module is built to be optimised
 // (Backend.optimize says how) and the machine compiles at LLVM's default
@@ -1867,7 +1954,10 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, bool optimize, Are
     // file that declares it, in a global variable expression whose
     // expression is empty (the variable is the global's memory itself),
     // attached to the LLVM global (!dbg). What the compiler makes (str.N,
-    // array.N, const.N) has no Rig type, and none.
+    // array.N, const.N) has no Rig type, and none of its own: a const.N
+    // gets its constant's variable instead, from the constants
+    // (describe_constants, and declare_variables for a body's), one per
+    // declaration of it.
     for (s64 i = 0; b->debug && i < m->globals.count; i++) {
         Ir_Global *g = &m->globals[i];
         if (!g->rig_type) continue;
@@ -1877,6 +1967,7 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, bool optimize, Are
             (unsigned)g->pos.line, debug_type(b, g->rig_type), 1, expression, nullptr, 0);
         LLVMGlobalAddDebugInfo(globals[i], variable);
     }
+    if (b->debug) describe_constants(b, m, globals);
 
     // Every function of the program first, so a body can call one defined
     // after it. (The foreign ones are declared already.) A #compiler
