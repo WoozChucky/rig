@@ -178,11 +178,12 @@
 //   "the value of constant 'N' isn't known while compiling", at the first
 //   value inside e that isn't. A pointer, in data or alone, is null or a
 //   string literal's address: any cast (from a number, a procedure or a
-//   pointer variable) or a procedure is "a constant's pointer can only be
-//   null or a string literal's address". No part of a constant written in
-//   the source is a view, which would see memory of its own: "a constant
-//   can't hold a view; only a string or an array can be one" (a #run's
-//   baked view is the exception, below).
+//   pointer variable), a procedure, a type's description (type_info(T)) or
+//   a value converted to Any is "a constant's pointer can only be null or a
+//   string literal's address". No part of a constant written in the source
+//   is a view, which would see memory of its own: "a constant can't hold a
+//   view; only a string or an array can be one" (a #run's baked view is the
+//   exception, below).
 // - The condition of if and while is a bool: "the condition of 'if' must
 //   be a bool, not 'int'".
 // - for a..b: the ends are integers meeting as an arithmetic operator's
@@ -244,8 +245,9 @@
 //   on a *void: "can't dereference a '*void'; cast it to a pointer to
 //   something first". Lowering checks p for null at run time.
 // - null is a constant of type_null, which converts to every pointer type
-//   and to Any, as a *void, and to nothing else; alone (x := null;, null == null) it's "null needs
-//   a pointer type, as in p : *int = null;". So a global can start as null.
+//   and to Any, as a *void, and to nothing else; alone (x := null;,
+//   null == null) it's "null needs a pointer type, as in p : *int = null;".
+//   So a global can start as null.
 // - void is a type only as a pointer's target, *void: anywhere else it's
 //   "'void' is only a pointer's target, as in *void". A *void converts
 //   implicitly to and from every pointer type, as C's void * does; no other
@@ -266,9 +268,10 @@
 //   '*u8' for '=='; cast one of them", or with something not a pointer,
 //   "mismatched types '*int' and 'int' for '<'".
 // - cast(T) e casts a pointer to any pointer, and to and from int, s64 and
-//   u64 (the address), unchecked, and to Any; otherwise "can't cast '*int' to 'u32'; a
-//   pointer casts to another pointer or to a 64-bit integer". null casts to
-//   a pointer and stays a constant; no other pointer cast is one.
+//   u64 (the address), unchecked, and to Any; otherwise "can't cast '*int'
+//   to 'u32'; a pointer casts to another pointer or to a 64-bit integer".
+//   null casts to a pointer and stays a constant; no other pointer cast is
+//   one.
 // - size_of(T) is T's size in bytes, an untyped integer constant;
 //   size_of(void) is "'void' has no size".
 //
@@ -361,8 +364,8 @@
 //   constant's name does, so N :: PRIMES[2]; can size an array, and so do
 //   ORIGIN.y, a string's byte (NAME[1], a u8) and a string's .count (an
 //   int, its literal's count, 0 when a literal leaves it out). An aggregate
-//   part, a string literal's address or a procedure stays data, read where
-//   it's used.
+//   part, a string literal's address, a procedure or a type's description's
+//   address stays data, read where it's used.
 // - [N]T converts implicitly to []T, a view of its N elements, wherever a
 //   value converts (a declaration, an assignment, an argument, a return, a
 //   cast); nothing else converts to or from either but its own type, and
@@ -546,16 +549,16 @@
 //   there and then if their turn hasn't come (check_reached_body), the
 //   globals and constants it names, and the struct types of what it
 //   reaches. A type it describes (type_info(T), a value converted to Any)
-//   has every struct its description reaches laid out, behind pointers
-//   too, and their late fields made: the #run's lowering writes the
+//   has every struct its description reaches laid out, behind pointers too,
+//   and their late fields made: the #run's lowering writes the
 //   descriptions, which the interpreter then holds in its own memory, so a
 //   #run describes a struct declared after it as compiled code does (spec
-//   3.16, 10.8). An error anywhere there
-//   stops it, saying nothing new: the error was said where it is. The
-//   #run keeps its type but has no value, and what needs that value (an
-//   array's count, a constant, a global) says nothing more either. Each
-//   body, global and constant records whether its own check had errors
-//   (Ast_Proc.had_errors, Ast_Var.had_errors, Ast_Const.had_errors).
+//   3.16, 10.8). An error anywhere there stops it, saying nothing new: the
+//   error was said where it is. The #run keeps its type but has no value,
+//   and what needs that value (an array's count, a constant, a global) says
+//   nothing more either. Each body, global and constant records whether its
+//   own check had errors (Ast_Proc.had_errors, Ast_Var.had_errors,
+//   Ast_Const.had_errors).
 // - It runs in the compilation's one compile-time world (run.h), and its
 //   result is baked into the tree, a typed constant (run.cpp): a number, a
 //   bool or null as one, a procedure value as the procedure's name, and
@@ -842,12 +845,11 @@ bool is_literal_string(Ast *e);
 // scalar field's or element's value node as the literal wrote it (a
 // constant, a procedure's name, a string literal, a type_info(T), or a cast
 // of one, which literal_address, procedure_address and type_info_address
-// walk on from); or a #run's baked
-// value, one of the same; or null when a literal leaves the field out
-// (zero), and so for any field or element of such a null part. A string's
-// element is a byte that no node holds: not constant data; nor is a field
-// or an element of a value a literal gives with the wrong type, reported
-// (Line.{a = 5}.a.x).
+// walk on from); or a #run's baked value, one of the same; or null when a
+// literal leaves the field out (zero), and so for any field or element of
+// such a null part. A string's element is a byte that no node holds: not
+// constant data; nor is a field or an element of a value a literal gives
+// with the wrong type, reported (Line.{a = 5}.a.x).
 bool constant_data(Ast *e, Ast **value);
 
 // The value struct literal `literal`, of struct type t, gives field `field`,

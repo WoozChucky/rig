@@ -324,6 +324,20 @@ static bool walk_node(Reach *r, Ast *node) {
     }
 }
 
+// A struct reached, held by value (walk_type) or described (walk_described):
+// laid out (check_finished_layout), and each field's type made
+// (check_late_field) and handed to `reach`. False when the struct has no
+// layout, or is still being laid out, or a field has no type: errors, said.
+static bool walk_struct(Reach *r, Type *t, void (*reach)(Reach *r, Type *t)) {
+    if (!check_finished_layout(r->c, t)) return false;
+    for (s64 i = 0; i < t->fields.count; i++) {
+        check_late_field(r->c, t, (s32)i);
+        if (!t->fields[i].type) return false;
+        reach(r, t->fields[i].type);
+    }
+    return true;
+}
+
 // A type reached: each struct in it, held by value, through arrays and
 // views, has every field's type made now (check_late_field). The #run may
 // come in the declaration pass, before resolve_late_fields has made a late
@@ -339,13 +353,7 @@ static bool walk_type(Reach *r, Type *t) {
         return true;
     }
     if (t->kind != TYPE_STRUCT) return true;
-    if (!check_finished_layout(r->c, t)) return false;
-    for (s64 i = 0; i < t->fields.count; i++) {
-        check_late_field(r->c, t, (s32)i);
-        if (!t->fields[i].type) return false;
-        reach_type(r, t->fields[i].type);
-    }
-    return true;
+    return walk_struct(r, t, reach_type);
 }
 
 // A type described (spec 3.16): its description holds its size and
@@ -370,14 +378,7 @@ static bool walk_described(Reach *r, Type *t) {
         for (s64 i = 0; i < t->param_count; i++) reach_described(r, t->params[i]);
         for (s64 i = 0; i < t->result_count; i++) reach_described(r, t->results[i]);
         return true;
-    case TYPE_STRUCT:
-        if (!check_finished_layout(r->c, t)) return false;
-        for (s64 i = 0; i < t->fields.count; i++) {
-            check_late_field(r->c, t, (s32)i);
-            if (!t->fields[i].type) return false;
-            reach_described(r, t->fields[i].type);
-        }
-        return true;
+    case TYPE_STRUCT: return walk_struct(r, t, reach_described);
     default: return true;  // an integer, a float, a bool, a string or void: nothing more
     }
 }
