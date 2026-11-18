@@ -1,7 +1,7 @@
 // os.h: what Rig needs from the operating system: files, directories,
-// running other programs (the linker, the tests' programs), the compiler's
-// stack, and, for compile-time execution, address space and the system's C
-// functions by name. One interface, two implementations: os_windows.cpp and
+// running other programs (the linker, the tests' programs), a clock for
+// timing the compiler's phases, the compiler's stack, and, for compile-time
+// execution, address space and the system's C functions by name. One interface, two implementations: os_windows.cpp and
 // os_linux.cpp; all.cpp includes the host's.
 //
 // Paths are UTF-8 Strings on both systems; on Windows either slash works.
@@ -115,6 +115,14 @@ bool os_run_merged(Arena *a, Array<String> argv, String directory, s32 seconds, 
 
 // Why the last failing os_ function failed, as a sentence from the system.
 String os_error_message(Arena *a);
+
+// Nanoseconds on a clock that only goes forward, from some fixed point (the
+// system's start, say), for timing what the compiler does: one reading
+// means nothing alone, only the difference of two. Fine enough for a phase
+// that takes microseconds, unlike the timeouts' clock. Windows:
+// QueryPerformanceCounter; Linux: clock_gettime's CLOCK_MONOTONIC. Neither
+// follows the time of day, which jumps when it's set.
+s64 os_nanoseconds();
 
 // The stack the compiler works on, on every system (issue #77): the parser,
 // the checker and lowering recurse a level at a time, up to MAX_DEPTH

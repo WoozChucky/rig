@@ -1867,9 +1867,9 @@ static void describe_constants(Backend *b, Ir_Module *m, LLVMValueRef *globals) 
 // (Backend.optimize says how) and the machine compiles at LLVM's default
 // level, which optimises; otherwise the machine compiles at its lowest.
 // When `optimize` is set, the module itself is optimised afterwards, by
-// run_passes (backend_prepare). False with `error` set when LLVM doesn't
-// know the target or the module doesn't verify; either way the caller calls
-// backend_free.
+// run_passes (backend_prepare, llvm_emit_object). False with `error` set
+// when LLVM doesn't know the target or the module doesn't verify; either way
+// the caller calls backend_free.
 static bool backend_build(Backend *b, Ir_Module *m, Target t, bool optimize, Arena *a, String *error) {
     initialise_llvm();
     const char *triple = target_triple(t);
@@ -2050,10 +2050,11 @@ static void backend_free(Backend *b) {
     if (b->context) LLVMContextDispose(b->context);
 }
 
-// The module both public functions start from: built and verified, then
-// optimised when `optimize` is set. False with `error` set when LLVM doesn't
-// know the target, the module doesn't verify or LLVM refuses the pipeline;
-// either way the caller calls backend_free.
+// The module llvm_ir_text prints: built and verified, then optimised when
+// `optimize` is set. False with `error` set when LLVM doesn't know the
+// target, the module doesn't verify or LLVM refuses the pipeline; either way
+// the caller calls backend_free. llvm_emit_object takes the same two steps
+// itself, to time each.
 static bool backend_prepare(Backend *b, Ir_Module *m, Target t, bool optimize, Arena *a, String *error) {
     return backend_build(b, m, t, optimize, a, error) && (!optimize || run_passes(b, a, error));
 }
@@ -2066,10 +2067,22 @@ bool llvm_ir_text(Arena *a, Ir_Module *m, Target t, String *text, String *error,
     return ok;
 }
 
-bool llvm_emit_object(Ir_Module *m, Target t, String path, bool optimize, Arena *a, String *error) {
+// backend_prepare's two steps, then the object file, the clock read around
+// each (Llvm_Times); a step not reached takes no time.
+bool llvm_emit_object(Ir_Module *m, Target t, String path, bool optimize, Arena *a, String *error,
+                      Llvm_Times *times) {
+    Llvm_Times taken = {};
     Backend b = {};
-    bool ok = backend_prepare(&b, m, t, optimize, a, error);
+    s64 start = os_nanoseconds();
+    bool ok = backend_build(&b, m, t, optimize, a, error);
+    taken.module = os_nanoseconds() - start;
+    if (ok && optimize) {
+        start = os_nanoseconds();
+        ok = run_passes(&b, a, error);
+        taken.optimising = os_nanoseconds() - start;
+    }
     if (ok) {
+        start = os_nanoseconds();
         char *message = nullptr;
         // LLVM takes a char *, though it doesn't change the name.
         if (LLVMTargetMachineEmitToFile(b.machine, b.module, (char *)string_cstr(a, path), LLVMObjectFile,
@@ -2079,7 +2092,9 @@ bool llvm_emit_object(Ir_Module *m, Target t, String path, bool optimize, Arena 
         } else if (message) {
             LLVMDisposeMessage(message);
         }
+        taken.object = os_nanoseconds() - start;
     }
     backend_free(&b);
+    if (times) *times = taken;
     return ok;
 }

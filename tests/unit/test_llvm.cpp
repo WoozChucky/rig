@@ -1,5 +1,6 @@
 // test_llvm.cpp: Rig's IR to LLVM IR and object files: hello world from
-// tokens (issue #10), then IR built by hand for issues #32 to #37 (integer
+// tokens (issue #10), with the time each part of its object takes (#173),
+// then IR built by hand for issues #32 to #37 (integer
 // widths, blocks and branches, the runtime's panic, several results) and
 // #52 (the panic flushing first); C functions declared on Windows under
 // the Universal C Runtime's names, the time functions' 64-bit ones (#161)
@@ -122,9 +123,35 @@ TEST(objects_for_both_targets) {
     arena_free(&a);
 }
 
+TEST(llvm_emit_object_gives_its_parts_times) {
+    // rig build's report (spec 10.1) has a line for each part of making the
+    // object file: the module built and verified, optimising it (only with
+    // optimize: none without) and the object file written.
+    Arena a = arena_make();
+    Ir_Module *m = lower_tokens(&a, HELLO);
+    os_make_directory(str(".build"));
+    const char *path = ".build/llvm-times.o";
+    for (int optimize = 0; optimize < 2; optimize++) {
+        remove(path);
+        Llvm_Times times = {};
+        String error = {};
+        bool ok = llvm_emit_object(m, target_host(), str(path), optimize, &a, &error, &times);
+        CHECK(ok);
+        if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+        CHECK(times.module > 0);
+        if (optimize) CHECK(times.optimising > 0);
+        else CHECK_EQ(times.optimising, 0);
+        CHECK(times.object > 0);
+    }
+    arena_free(&a);
+}
+
 TEST(llvm_reports_a_module_that_doesnt_verify) {
     // An IR the lowering never makes: a procedure returning i32 whose ret
-    // gives nothing. Both entry points refuse it with LLVM's reason.
+    // gives nothing. Both entry points refuse it with LLVM's reason. The
+    // object file's times then have the module's, and 0 for the parts never
+    // reached (optimising and the object file), whatever the caller's
+    // struct held.
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
     Ir_Proc *p = new_proc_returning(m, &a, "main", IR_I32);
@@ -133,9 +160,15 @@ TEST(llvm_reports_a_module_that_doesnt_verify) {
     String text = {}, error = {};
     CHECK(!llvm_ir_text(&a, m, target_host(), &text, &error));
     CHECK(contains(error, "return"));
-    error = {};
-    CHECK(!llvm_emit_object(m, target_host(), str(".build/never.o"), false, &a, &error));
-    CHECK(contains(error, "return"));
+    for (int optimize = 0; optimize < 2; optimize++) {
+        error = {};
+        Llvm_Times times = {-1, -1, -1};
+        CHECK(!llvm_emit_object(m, target_host(), str(".build/never.o"), optimize, &a, &error, &times));
+        CHECK(contains(error, "return"));
+        CHECK(times.module > 0);
+        CHECK_EQ(times.optimising, 0);
+        CHECK_EQ(times.object, 0);
+    }
     arena_free(&a);
 }
 

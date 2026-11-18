@@ -2036,7 +2036,7 @@ The strings these procedures are given are copied as they are given, so the prog
 5. Each workspace with no files is `workspace 'game' has no files`, at the name of the `create_workspace` call that made it. These are reported together, before any workspace is built.
 6. Each workspace with files is built, in the order they were made, as a separate compilation: its program has its own globals and its own `#run`s, which run while it compiles and print then, and none of the build program's or another workspace's. It is built as `rig build` builds a program (section 10.1), its files loaded, checked, its top-level `#run`s run, lowered, compiled and linked, with its build options. Its diagnostics are printed when its compilation ends, before the next workspace is built. A workspace that fails doesn't stop the ones after it.
 7. A workspace whose program is itself a build program isn't built: it is an error of the build program, `workspace 'game' is a build program; a workspace builds an ordinary program`, at the name of the `create_workspace` call that made it, reported after what loading the workspace's files found (a `#load` that failed, which may be why it has no `main`).
-8. rig exits with status 1 when anything failed, and 0 when every workspace was built.
+8. rig exits with status 1 when anything failed. When every workspace was built, it prints its report, the build program's stages and then each workspace's, unless `--quiet` was given (section 10.1), and exits with status 0.
 
 **A workspace's files.** The first file added is the program's main file. The others are loaded right after it, in the order they were added, before the files it loads, as if the main file `#load`ed each of them first (section 2.13), only Preload coming before them, ahead of the main file (section 2.14); each is known by its identity, so a file added twice is loaded once. A file's own `#load`s are relative to it, as always: `src/main.rig`'s `#load "player.rig";` loads `src/player.rig`. A file that can't be read when its workspace is built (it was there when it was added) is `rig: error: cannot read 'PATH': MESSAGE`, as for a main file, and that workspace fails.
 
@@ -2341,7 +2341,7 @@ This section describes the compiler in this repository: how it compiles a Rig pr
 ### 10.1 The rig command
 
 ```text
-rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks]
+rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks] [--quiet]
 rig check FILE.rig [--stdin | --stdin-for FILE.rig]
 rig version [--verbose]
 ```
@@ -2353,8 +2353,64 @@ A **build program** (section 7.9) isn't made into an executable: once its top-le
 - The executable is written to the current directory, named after the main file without its directory and its `.rig`: `hello.exe` on Windows, `hello` on Linux, for `src/hello.rig`.
 - `-o OUTPUT` names the executable otherwise. On Windows a name whose file name has no extension gets `.exe`. An output ending in `.rig` is refused: `rig: error: the output 'hello.rig' ends in .rig; is it the source file?`.
 - `--no-bounds-checks` leaves out every bounds check (section 8.5) of the program. The code that `#run`s run while compiling keeps them (section 7.8).
+- `--quiet` leaves out the report (below). It is no build option, so a build program takes it too.
 - The object file, one for the whole program, is written to a directory `.build` in the current directory, made if needed, named after the main file: `.build/hello.obj` on Windows, `.build/hello.o` on Linux.
 - On Windows the program's debug information is written beside it: the executable's name with `.pdb` for its `.exe` (in any case), `hello.pdb` for `hello.exe`, or with `.pdb` added to a name with another extension, `out.bin.pdb` for `out.bin` (section 10.7).
+
+**The report.** A `rig build` that succeeds ends with a report of where its time went, on its standard output, after everything the `#run`s printed: the main file's path as it was given, then a line for each stage of section 10.2 with its time in milliseconds, to two decimals, and the total, with the lines compiled and how many a second. For `rig build hello.rig`, hello world's two lines and Preload's:
+
+```text
+hello.rig
+  loading          0.57 ms
+  checking         0.04 ms
+  #run             0.00 ms
+  lowering         0.04 ms
+  llvm module      0.90 ms
+  object file      2.47 ms
+  linking         38.66 ms
+  total           42.81 ms  84 lines, 1962 lines/s
+```
+
+- `loading` is stages 1 to 3: reading the files, lexing and parsing them, and deciding the top-level `#if`s (section 4.9).
+- `checking` is stage 4, less the time of the expression `#run`s it runs, which is `#run`'s.
+- `#run` is every `#run`'s, expression and top-level, each from lowering what it reaches into the compile-time module to its end on the interpreter, the first one's setting up of the compile-time world included (sections 7.8 and 10.8).
+- `lowering` is stage 5.
+- `llvm module`, `optimising` and `object file` are stage 6: the IR into LLVM's module, which LLVM verifies; the module through LLVM's `default<O2>` pipeline, a line only for a workspace with `optimize` (section 7.9); and the object file's code made and written.
+- `linking` is stage 7.
+- `total` is the whole compilation's, from before the main file is read to the executable written: a little more than its stages' sum.
+
+The lines are those of every file the program read, each counted once however many times it is loaded: the main file, Preload, every file they `#load`, every file of every module they import, and a workspace's other files (section 7.9). A file in an `#if` branch not taken isn't read, so isn't counted. A file's lines are those section 2.2 numbers: one for each line break, and one more when text follows the last.
+
+A build program's report (section 7.9) has its own stages under its path (`build.rig` when no file was given), which stop at `#run`, since it isn't lowered (section 10.2), its total ending when its top-level `#run`s have; then each workspace's it built, in the order they were made, under `workspace 'NAME'`, its total from before its first file is read to its executable written, its lines its own program's, Preload's included; then `all`, the whole `rig build`'s time, and every block's lines together. For `tests/build/two_workspaces`, after what its `#run`s printed:
+
+```text
+build.rig
+  loading          0.68 ms
+  checking         0.05 ms
+  #run             0.23 ms
+  total            0.98 ms  178 lines, 181633 lines/s
+workspace 'greeter'
+  loading          0.35 ms
+  checking         0.01 ms
+  #run             0.02 ms
+  lowering         0.04 ms
+  llvm module      0.66 ms
+  object file      2.67 ms
+  linking         41.35 ms
+  total           45.26 ms  99 lines, 2187 lines/s
+workspace 'counter'
+  loading          0.49 ms
+  checking         0.02 ms
+  #run             0.03 ms
+  lowering         0.02 ms
+  llvm module      0.20 ms
+  object file      1.33 ms
+  linking         36.25 ms
+  total           38.48 ms  98 lines, 2547 lines/s
+all               84.90 ms  375 lines, 4417 lines/s
+```
+
+Each time is measured once, around its stage, on a clock that only goes forward. The times differ from one build to the next, and the first program a `rig build` compiles pays for setting LLVM up in its `llvm module`. A build that fails prints no report, even when some of a build program's workspaces were built, and nor does one that a `#run` ends with C's `exit`, whatever status it gives (section 7.8). `rig check` prints none.
 
 **`rig check`** reads and checks the program as `rig build` does, the files it loads or imports included, prints the same diagnostics, and stops: it writes no file. A build program is checked as any program is, and builds nothing (section 7.9). Checking runs the program's expression `#run`s, since types can depend on them (`[LIMIT]int`), and what they print goes where it would from any program, to `rig check`'s standard output or its standard error; it never runs the top-level `#run`s, which it checks all the same (section 7.8), so a program whose only error is a top-level `#run` that fails checks with none. It checks the program for the system rig runs on, as `rig build` builds it: only the taken branches of its `#if`s (section 4.9), so on Windows a branch for Linux shows its syntax errors and nothing else. With `--stdin` it reads the main file from standard input, which lets an editor check text that is not saved. `FILE.rig` is then the name its diagnostics give it, and its `#load`s are found from `FILE.rig`'s directory, as if the text were in that file; the file need not exist. The files it loads are read from disk. With `--stdin-for LOADED.rig` (the usage's second `FILE.rig`) the program is `FILE.rig`'s, read from disk, but for `LOADED.rig`, whose text is read from standard input wherever the program loads or imports it (Preload's `module.rig` included, which every program imports, section 2.14), which lets an editor check a file a program loads as part of that program: checked alone, it would have no `main`, and the names the program's other files declare would be unknown. `LOADED.rig`, like `FILE.rig`, is a path from the current directory, not from `FILE.rig`'s; it is then known as `#load` knows a file (section 2.13), so the `#load` may write its path otherwise (`./b.rig` or `sub/../b.rig` for `b.rig`, and on Windows `B.RIG`), and it need not exist. Its diagnostics name it as its `#load` does, or by its absolute path when it is a module's `module.rig`, Preload's included (section 2.14). When `LOADED.rig` is `FILE.rig` itself, the option is `--stdin`.
 
@@ -2382,7 +2438,7 @@ build: release
 
 Both `build` and `check` take only a source file whose name ends in `.rig`, in any case: `rig: error: 'hello.txt' isn't a .rig file`. So does `--stdin-for`, its file's name judged after the main file's, and both before anything is read. A main file that cannot be read is `rig: error: cannot read 'hello.rig': MESSAGE`, with the system's reason (`rig: error: cannot read standard input: MESSAGE` with `--stdin`). With `--stdin-for` the main file is read from disk first, and standard input only once it has been, so a main file that cannot be read is said without waiting for standard input; standard input that cannot be read is then `rig: error: cannot read standard input: MESSAGE`. Preload, which every program imports, is looked for once the main file is read, and standard input with `--stdin` or `--stdin-for`: one that can't be found is `rig: error: there's no module 'Preload' (looked in DIR1 and DIR2)`, and one that can't be read `rig: error: cannot read 'PATH': MESSAGE`, alone, before anything is checked or whether the program loads the `--stdin-for` file is said (section 2.14). A loaded file that cannot be read, or isn't a `.rig` file, is a diagnostic at its `#load`'s string instead (section 2.13). A program that never loads the `--stdin-for` file is `rig: error: 'main.rig' doesn't load 'helper.rig'`, the two files named as the command line names them, alone: nothing is checked, and what loading the program found isn't printed, since that file isn't part of it. A program that loads it only in a branch of an `#if` not taken on this system, at any depth in that branch, is `rig: error: 'main.rig' loads 'linux.rig' only in an #if branch not taken`, alone too: the file isn't part of the program here, though it is on the other system, and an editor then shows nothing for it (the VS Code extension says why, once, in its output channel, `Rig`). A file that only a file loaded in a branch not taken loads is `doesn't load`, since that file isn't read. When a `#load` or an `#import` in any branch of an `#if` chain one of whose conditions has an error (any arm, before or after it), at any depth in it, names the file, rig says neither, even when one in a branch not taken names it too: no branch was taken, so the file may well be part of the program, which is checked, its errors printed, the condition's among them.
 
-The exit status is 0 on success; 1 when the program has errors (a `#run` that fails among them), cannot be read, has no Preload that can be found and read (section 2.14), doesn't load the `--stdin-for` file or loads it only in an `#if` branch not taken, or cannot be built or linked, when `rig build` is given no file and there is no `build.rig`, and when one of a build program's workspaces fails or the build program has an error of its own (section 7.9); and 2 when the command line is malformed (no command or an unknown one, no file for `rig check`, two files, an option given twice, `-o` or `--stdin-for` without a name or with an empty one, `--stdin` with `--stdin-for`, `-o` or `--no-bounds-checks` given to `rig check`, `--stdin-for` given to `rig build`, even as `-o`'s name, or anything but `--verbose` after `rig version`), in which case the usage is printed, and when `-o` or `--no-bounds-checks` is given with a build program (above), in which case it isn't. A word that is not an option is taken as the file's name: an unknown option alone is a file that isn't a `.rig` file, and beside the file it is a second file. The word after `-o` or `--stdin-for` is its name, whatever it is: `--stdin-for --stdin` names a file `--stdin`, which isn't a `.rig` file. A `#run` whose code calls C's `exit` ends `rig` there, `rig build` or `rig check`, with the status it gives, after the diagnostics found so far (section 7.8).
+The exit status is 0 on success; 1 when the program has errors (a `#run` that fails among them), cannot be read, has no Preload that can be found and read (section 2.14), doesn't load the `--stdin-for` file or loads it only in an `#if` branch not taken, or cannot be built or linked, when `rig build` is given no file and there is no `build.rig`, and when one of a build program's workspaces fails or the build program has an error of its own (section 7.9); and 2 when the command line is malformed (no command or an unknown one, no file for `rig check`, two files, an option given twice, `-o` or `--stdin-for` without a name or with an empty one, `--stdin` with `--stdin-for`, `-o`, `--no-bounds-checks` or `--quiet` given to `rig check`, `--stdin-for` given to `rig build`, even as `-o`'s name, or anything but `--verbose` after `rig version`), in which case the usage is printed, and when `-o` or `--no-bounds-checks` is given with a build program (above), in which case it isn't. A word that is not an option is taken as the file's name: an unknown option alone is a file that isn't a `.rig` file, and beside the file it is a second file. The word after `-o` or `--stdin-for` is its name, whatever it is: `--stdin-for --stdin` names a file `--stdin`, which isn't a `.rig` file. A `#run` whose code calls C's `exit` ends `rig` there, `rig build` or `rig check`, with the status it gives, after the diagnostics found so far (section 7.8).
 
 ### 10.2 The compiler's stages
 
@@ -2397,6 +2453,8 @@ The compiler is a single program written in C++, with LLVM linked into it. It co
 7. **Linker** (`src/link.cpp`): the object file into an executable with the platform's linker (section 10.6).
 
 A build program (section 7.9) goes through stages 1 to 4, and its top-level `#run`s run, but it isn't lowered into a program of its own: each of its workspaces goes through every stage instead, as a program of its own.
+
+`rig build`'s report (section 10.1) gives each stage's time.
 
 No integer instruction carries LLVM's `nsw`, `nuw` or `exact` flags, and no float instruction carries fast-math flags: Rig's integers wrap and its floats are IEEE 754's. No pointer arithmetic is marked `inbounds`, copies are `memmove`s (the two sides may overlap), and no pointer is assumed non-null. So an optimised program does what an unoptimised one does: the optimiser takes none of these for undefined. Optimised, every procedure is also marked as knowing none of the C library's functions, as clang's `-fno-builtin` marks a function: a program's own procedure may have a C function's name (section 7.6), and LLVM would otherwise take it for C's, and C's for it. And optimised, every stack slot is zeroed before the procedure's body runs, so a `---` local read before it is assigned is still an unspecified value (section 8.6): zero the first time, and in a loop the value the slot held in the iteration before, as unoptimised, and never a read of memory nothing stored, which the optimiser would take as undefined and could remove the code after.
 
