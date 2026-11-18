@@ -16,12 +16,18 @@
 // print_item writes a value of any type, through its type info (spec
 // 3.16): it reads an Any by its description, as the type's kind says, and
 // writes a struct's fields and an array's or a view's elements each as an
-// Any of its own. The procedures that write values take a string builder
+// Any of its own.
+//
+// print and print_to_builder write a format whose {} placeholders take
+// ..Any arguments, each written by print_item, through print_formatted,
+// the one format walk. The helpers under them, print_or_append,
+// print_quoted, print_item and print_formatted, take a string builder
 // (builder.rig) first, and a null one means standard output: Rig has no
 // closures or generics, so a builder that may be null is the simplest way
-// for one walk to write to either. Written to standard output, nothing is
-// allocated; appended to a builder, its memory grows as append_string's
-// does.
+// for one walk to write to either. print passes null; print_to_builder
+// takes a builder and stops the program on a null one. Written to
+// standard output, nothing is allocated; appended to a builder, its
+// memory grows as append_string's does.
 #load "libc.rig";
 #load "numbers.rig";
 #load "string.rig";
@@ -300,7 +306,7 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
 //   - Any other { begins a placeholder this version doesn't know, {x} or
 //     {:x}: the bytes from it to the next }, or to the format's end when
 //     there's none, are written as {!BAD}, and take no argument. So
-//     {a{b} is one {!BAD}, and a format's last { is {!BAD} too.
+//     {a{b} is one {!BAD}, and a { at the format's very end is {!BAD} too.
 //   - A } on its own is written as it is, so }}} is }}, and {{} is { and
 //     then a lone }.
 //   - Every other byte is written as it is, a run of them, up to the next

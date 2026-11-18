@@ -69,13 +69,16 @@ main :: () {
     printf("%d", 6);
     print("\n");
 
-    // print_to_builder appends, and writes nothing to standard output.
+    // print_to_builder appends, and writes nothing to standard output: the
+    // builder's text comes after "built: ", which is printed once the
+    // appends are done.
     b : String_Builder;
     builder_init(*b, HEAP_ALLOCATOR);
     print_to_builder(*b, "{} + {} = {}", 1, 2, 3);
     print_to_builder(*b, " {}", "!");
     print_to_builder(*b, " {} {}", "x");
     built := builder_to_string(*b, HEAP_ALLOCATOR);
+    print_string("built: ");
     print_line(built);
     free(built.data, HEAP_ALLOCATOR);
     builder_free(*b);
