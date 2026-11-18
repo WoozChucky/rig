@@ -1,11 +1,12 @@
-// Basic's C layer: the only C functions Basic calls, each declared under a
+// Basic's C layer: the C functions Basic declares, each declared under a
 // name of its own that starts with c_ (#foreign libc "NAME", spec 7.6).
 // Every name Basic declares is the program's too, since a program has one
 // top level, so if Basic took C's own names, a program that loads it
 // couldn't declare putchar or malloc itself. With the c_ names it can, and
 // a program's putchar and Basic's c_putchar are the same C function.
 //
-// Everything else in Basic is written in Rig over these.
+// Everything else in Basic is written in Rig over these and over Preload's
+// heap allocator (spec 2.14).
 //
 // Each of them links and runs on Windows (the UCRT) and Linux (glibc's libc
 // and, for <math.h>, its libm, which every program links too, spec 10.6),
@@ -33,10 +34,11 @@
 // bytes stay in order with the ones a program writes with C's printf.
 c_putchar :: (c: s32) -> s32 #foreign libc "putchar";
 
-// The C heap, which Basic's heap allocator (allocators.rig) hands out and
-// takes back. The allocator helpers never ask for 0 bytes, so c_malloc and
-// c_realloc are never called with a size of 0, whose result C leaves to
-// each C library.
+// C's heap, for a program that imports Basic. Basic itself takes heap
+// memory through Preload's heap allocator (HEAP_ALLOCATOR, spec 2.14),
+// which declares these three under names of its own, so it doesn't call
+// them. What C's malloc and realloc give for a size of 0 is left to each C
+// library, and Basic's allocator helpers never ask for it.
 c_malloc :: (size: u64) -> *void #foreign libc "malloc";
 c_realloc :: (memory: *void, size: u64) -> *void #foreign libc "realloc";
 c_free :: (memory: *void) #foreign libc "free";

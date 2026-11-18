@@ -1,0 +1,5 @@
+allocated, resized and freed on the heap
+and while compiling
+64 bytes from the heap
+FREE_ALL gives null
+the modes are 0 to 3

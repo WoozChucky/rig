@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, π and C's math functions (roots, trigonometry, exponentials and logarithms, powers, rounding), copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (the heap, an arena and a pool), a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and printing to standard output (issues #134, #145 and #148).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, π and C's math functions (roots, trigonometry, exponentials and logarithms, powers, rounding), copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (an arena and a pool, over Preload's heap), a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and printing to standard output (issues #134, #145 and #148).
 
 ## Importing it
 
@@ -16,12 +16,12 @@ rig finds `Basic/module.rig` in the `modules` directory beside it, or in the one
 
 ## Its C layer
 
-`libc.rig` declares the only C functions Basic calls, each under a name of its own that starts with `c_` (`#foreign libc "NAME"`, spec 7.6). So a program that loads Basic keeps C's own names: it may declare C's `putchar`, `malloc`, `realloc`, `fopen`, `getenv` and the rest itself. `free` is the exception, since Basic's allocators take that name for their own helper and `c_free` is taken too, so such a program declares C's `free` under another name, as in `libc_free :: (p: *void) #foreign libc "free";`.
+`libc.rig` holds the C functions Basic declares, each under a name of its own that starts with `c_` (`#foreign libc "NAME"`, spec 7.6). So a program that loads Basic keeps C's own names: it may declare C's `putchar`, `malloc`, `realloc`, `fopen`, `getenv` and the rest itself. `free` is the exception, since Basic's allocators take that name for their own helper and `c_free` is taken too, so such a program declares C's `free` under another name, as in `libc_free :: (p: *void) #foreign libc "free";`.
 
 Each links and runs on Windows (the UCRT) and Linux (glibc's `libc`, and its `libm` for `<math.h>`, which every program links too, spec 10.6), compiled and interpreted, with one declaration that serves both: where C's types differ (`fseek`'s `long` offset, `fpos_t`, `struct timespec`), the declaration and its comment say how Basic stays within what both agree on. `libc.rig`'s header says which C functions Basic leaves out, and why: `ftell` (C's `long`, 32 bits on Windows), `_ftelli64` and `ftello` (one system each), `time` (whole seconds) and `clock` (a different clock on each system).
 
 - `c_putchar(c: s32) -> s32`: C's `putchar`, the one call that writes a byte to standard output.
-- `c_malloc(size: u64) -> *void`, `c_realloc(memory: *void, size: u64) -> *void`, `c_free(memory: *void)`: C's `malloc`, `realloc` and `free`, the heap allocator's memory. Basic never calls them with a size of 0.
+- `c_malloc(size: u64) -> *void`, `c_realloc(memory: *void, size: u64) -> *void`, `c_free(memory: *void)`: C's `malloc`, `realloc` and `free`, the C heap for a program that imports Basic. Basic itself takes heap memory through Preload's `HEAP_ALLOCATOR`, which declares the three under names of its own, so it doesn't call these. What C gives for a size of 0 is left to each C library, and Basic's allocator helpers never ask for it.
 - `C_Fpos`: C's `fpos_t`, `position: s64` (the offset) and `reserved: u64`, 16 bytes, which holds the UCRT's 8 and glibc's 16.
 - `C_SEEK_SET`, `C_SEEK_END`: `fseek`'s origins, 0 and 2.
 - `c_fopen(path: *u8, mode: *u8) -> *void`, `c_fclose(file: *void) -> s32`: C's `fopen` and `fclose`; a `FILE *`, or null when the file can't be opened.
@@ -137,15 +137,12 @@ The procedures that cut strings up and search them, from `strings_equal` to `spl
 
 ## Allocators (`allocators.rig`)
 
-An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` holds a procedure and the data it works on, and the procedure is called with a mode, `ALLOCATE`, `RESIZE`, `FREE` or `FREE_ALL`. Basic's three, `heap_allocator_proc`, `arena_allocator_proc` and `pool_allocator_proc`, are each of that procedure's type, `(mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void`. A program calls the four helpers rather than an allocator's procedure. They settle the edges, so an allocator is only ever asked for more than 0 bytes and only ever given memory that isn't null to resize or free. An allocator that can't give memory returns null. The heap's memory is aligned as C's `malloc` aligns it, and an arena's or a pool's to 8 bytes when its parent's is, as the heap's is.
+An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` holds a procedure and the data it works on, and the procedure is called with a mode, `ALLOCATE`, `RESIZE`, `FREE` or `FREE_ALL`. `Allocator`, the modes and the heap allocator, `heap_allocator_proc` and `HEAP_ALLOCATOR`, are Preload's, which every program imports without asking, Basic or not: [`../Preload/README.md`](../Preload/README.md) lists them. Basic adds the helpers, an arena and a pool. Its two allocators, `arena_allocator_proc` and `pool_allocator_proc`, are each of an allocator procedure's type, `(mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void`, as the heap's is. A program calls the four helpers rather than an allocator's procedure. They settle the edges, so an allocator is only ever asked for more than 0 bytes and only ever given memory that isn't null to resize or free. An allocator that can't give memory returns null. The heap's memory is aligned as C's `malloc` aligns it, and an arena's or a pool's to 8 bytes when its parent's is, as the heap's is.
 
-- `ALLOCATE`, `RESIZE`, `FREE`, `FREE_ALL`: the modes, 0 to 3.
-- `Allocator`: `proc: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void` and `data: *void`.
 - `alloc(size: int, allocator: Allocator) -> *void`: `size` bytes, or null; null for a size of 0 or less, without asking the allocator.
 - `resize(memory: *void, old_size: int, new_size: int, allocator: Allocator) -> *void`: `memory` made `new_size` bytes long, perhaps moved, its first bytes kept; null when the allocator can't, and `memory` is as it was. Resizing null is `alloc`, and resizing to 0 or less is `free` and gives null.
 - `free(memory: *void, allocator: Allocator)`: gives `memory` back; freeing null does nothing.
 - `free_all(allocator: Allocator)`: gives back everything the allocator gave, for an arena or a pool; the heap's does nothing.
-- `heap_allocator_proc`, `HEAP_ALLOCATOR`: C's heap, through `c_malloc`, `c_realloc` and `c_free`.
 - `Arena_Block`: an arena block's header, `previous: *Arena_Block` and `size: int`, 16 bytes, with its `size` bytes after it.
 - `Arena`: `parent: Allocator`, `block_size: int`, `block: *Arena_Block` (the newest) and `used: int` (its bytes handed out).
 - `arena_init(arena: *Arena, block_size: int, parent: Allocator)`: an empty arena whose blocks of `block_size` bytes (4096 for 0 or less) come from `parent`.
