@@ -668,12 +668,12 @@ static Type *check_name(Checker *c, Ast_Name *name) {
     }
 }
 
-// An extra argument (one after a variadic procedure's fixed parameters)
-// that has no type of its own yet takes Rig's default, as where it meets
-// no type: an untyped integer an int; an untyped float a float64, though a
-// float32 is the default elsewhere, since C receives a double either way
-// and rounding it to a float32 first would only lose digits; null a *void,
-// C's NULL. Anything else keeps its type.
+// An extra argument (one after the fixed parameters of a procedure that
+// takes C's '..') that has no type of its own yet takes Rig's default, as
+// where it meets no type: an untyped integer an int; an untyped float a
+// float64, though a float32 is the default elsewhere, since C receives a
+// double either way and rounding it to a float32 first would only lose
+// digits; null a *void, C's NULL. Anything else keeps its type.
 static void give_extra_argument_a_type(Checker *c, Ast *arg) {
     Type *t = arg->type;
     if (t == &type_untyped_int) {
@@ -834,10 +834,11 @@ static Type *check_call(Checker *c, Ast_Call *call) {
                            STR_ARG(type_name(c->arena, to)), STR_ARG(conversion_hint(c, arg, from, to)));
             }
         }
-        // A Rig procedure with '..' was reported, and is variadic only so
-        // its calls say nothing more: what C would refuse is no mistake of
-        // theirs, since no C function receives it. Its extra arguments just
-        // take their default types, and a literal without one stays unknown.
+        // A Rig procedure with C's bare '..' was reported, and takes C's
+        // '..' only so its calls say nothing more: what C would refuse is no
+        // mistake of theirs, since no C function receives it. Its extra
+        // arguments just take their default types, and a literal without one
+        // stays unknown.
         for (s64 i = n; i < given; i++) {
             Ast *arg = call->args[i];
             if (proc->is_foreign) {

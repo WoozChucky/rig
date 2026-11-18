@@ -1546,11 +1546,11 @@ static s32 lower_expr(Lowering *l, Ast *e) {
     }
 }
 
-// The type an argument after a variadic procedure's fixed parameters is
-// passed as: a string literal, or constant data holding one (NAME for
-// `NAME :: "rig";`, is_literal_string, the checker's rule), as a C string,
-// a *u8 (lower_value then gives the literal's bytes' address), anything
-// else as C's default argument promotions make its type.
+// The type an argument after the fixed parameters of a procedure that
+// takes C's '..' is passed as: a string literal, or constant data holding
+// one (NAME for `NAME :: "rig";`, is_literal_string, the checker's rule),
+// as a C string, a *u8 (lower_value then gives the literal's bytes'
+// address), anything else as C's default argument promotions make its type.
 static Type *extra_argument_type(Ast *arg) {
     if (is_literal_string(arg)) return type_pointer_to(type_from_name(str("u8")));
     return type_c_promoted(arg->type);
