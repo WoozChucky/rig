@@ -154,18 +154,22 @@
 //   or not, so a debugger shows each by its name, as C's debuggers show an
 //   enum's values. A constant naming a procedure isn't one (the debugger
 //   knows the procedure by its own name), and neither are the predeclared
-//   OS, OS_WINDOWS and OS_LINUX, which the program doesn't declare. Each is
-//   an Ir_Var: a top-level one in Ir_Module.constants, a body's in its
-//   procedure's vars, with its variables, in the scope current at its
-//   declaration. A number, a bool or null is IR_VAR_CONSTANT, its bits, no
-//   storage: a debugger knows its value, and nothing in memory holds it. A
-//   constant holding data (a string, a struct, an array, a #run's view),
-//   or a pointer to a string literal, is IR_VAR_GLOBAL, its read-only
-//   const.N, which a debugger reads as it reads a global: the one its uses
-//   read at run time, or, when no code reads it, one made for the debugger
-//   alone, after every body (a pointer's is 8 bytes holding its literal's
-//   address, since CodeView can't give an address as a constant's value).
-//   Its type is the one a debugger shows: an untyped integer's int (spec
+//   OS, OS_WINDOWS and OS_LINUX, which the program doesn't declare, nor one
+//   in a block nested in code that can't run (after a return, a break or a
+//   continue), whose scope has no code for a debugger to stop in
+//   (lower.cpp's lower_block). Each is an Ir_Var: a top-level one in
+//   Ir_Module.constants, a body's in its procedure's vars, with its
+//   variables, in the scope current at its declaration. A number, a bool or
+//   null is IR_VAR_CONSTANT, its bits, no storage: a debugger knows its
+//   value, and nothing in memory holds it. A constant holding data (a
+//   string, a struct, an array, a #run's view), or a pointer to a string
+//   literal, is IR_VAR_GLOBAL, its read-only const.N, which a debugger
+//   reads as it reads a global: the one its uses read at run time, or,
+//   when no code reads it, one made for the debugger alone, after every
+//   body (a pointer's is 8 bytes holding its literal's address, since
+//   CodeView can't give an address as a constant's value; a foreign
+//   procedure's address is null there, so the program needs no C function
+//   it doesn't call). Its type is the one a debugger shows: an untyped integer's int (spec
 //   3.12's default, which every untyped integer constant fits), an untyped
 //   float's float64 (its value is a double's: as a float32, 0.1 would show
 //   0.100000001), null's *void. Now that constants are shown, a body's

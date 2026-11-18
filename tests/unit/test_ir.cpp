@@ -3086,7 +3086,8 @@ TEST(ir_records_every_constant) {
     // What no code reads is in read-only data all the same, and no code
     // reads it: main addresses PRIMES's only.
     CHECK(contains(ir, "const @const.2: 16 align 8 = \"\\03\\00\\00\\00\\00\\00\\00\\00\\04"));
-    CHECK(contains(ir, "const @const.3: 8 align 8 = zero reloc 0 @str."));
+    CHECK(contains(ir, "const @const.3: 8 align 8 = zero reloc 0 @str.2\n"));
+    CHECK(contains(ir, "global @str.2 = \"hi\\00\"\n"));
     CHECK_EQ(count_of(main, "addr @const."), 1);
     arena_free(&a);
 }
@@ -3207,7 +3208,8 @@ TEST(a_constant_after_a_return_is_recorded) {
     // A block's statements after it has returned aren't lowered, but its
     // constants need no code: they're recorded all the same, a taken #if
     // branch's too, since a debugger shows the block's names wherever its
-    // scope has code (at x := 1;, here).
+    // scope has code (at x := 1;, here). A nested block's aren't: its scope
+    // has no code, and it makes none (main's two scopes are the if's).
     Arena a = arena_make();
     String main = proc_ir(ir_print_debug(&a, lower_source(&a,
                                                           "main :: () {\n"                                            // 1
@@ -3216,12 +3218,15 @@ TEST(a_constant_after_a_return_is_recorded) {
                                                           "    LIMIT :: 3;\n"                                         // 4
                                                           "    NAME :: \"late\";\n"                                   // 5
                                                           "    #if OS == OS_WINDOWS { W :: 1; } else { W :: 1; }\n"  // 6
+                                                          "    { INNER :: 5; }\n"                                    // 7
                                                           "}\n")),
                           "main");
     CHECK(contains(main, "  ; var LIMIT int constant 3 in 0 at 4:5\n"));
     CHECK(contains(main, "  ; var NAME string global @const."));
     CHECK(contains(main, " in 0 at 5:5\n"));
     CHECK(contains(main, "  ; var W int constant 1 in 0 at 6:"));
+    CHECK(!contains(main, "; var INNER "));
+    CHECK_EQ(count_of(main, "  ; scope "), 2);
     arena_free(&a);
 }
 
@@ -4031,20 +4036,30 @@ TEST(pointer_constant_is_its_literal_bytes) {
     // a use reads: a use is the address of the literal's bytes, str.N, and
     // so is a string constant cast to *u8. Each has its const.N for a
     // debugger (spec 4.2), a pointer constant's 8 bytes its literal's
-    // address, but no code reads one.
+    // address, but no code reads one: GREETING's points at "hi", the
+    // str.N main's puts(GREETING) addresses, and SYMBOL's at OPS[1]'s "-",
+    // the one puts(SYMBOL) addresses.
     Arena a = arena_make();
-    String ir = ir_print(&a, lower_source(&a,
-                                          "puts :: (s: *u8) -> s32 #foreign libc;\n"
-                                          "Op :: struct { symbol: *u8; n: int; }\n"
-                                          "OPS :: Op.[.{\"+\", 1}, .{\"-\", 2}];\n"
-                                          "GREETING :: cast(*u8) \"hi\";\n"
-                                          "SYMBOL :: OPS[1].symbol;\n"
-                                          "NAME :: \"rig\";\n"
-                                          "main :: () { puts(GREETING); puts(SYMBOL); puts(cast(*u8) NAME); }\n"));
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "puts :: (s: *u8) -> s32 #foreign libc;\n"  // 1
+                                                "Op :: struct { symbol: *u8; n: int; }\n"   // 2
+                                                "OPS :: Op.[.{\"+\", 1}, .{\"-\", 2}];\n"   // 3
+                                                "GREETING :: cast(*u8) \"hi\";\n"           // 4
+                                                "SYMBOL :: OPS[1].symbol;\n"                // 5
+                                                "NAME :: \"rig\";\n"                        // 6
+                                                "main :: () { puts(GREETING); puts(SYMBOL); puts(cast(*u8) NAME); }\n"));
     CHECK_EQ(count_of(ir, "const @const."), 4);
-    CHECK(contains(ir, ": 8 align 8 = zero reloc 0 @str."));
+    CHECK_EQ(count_of(ir, ": 8 align 8 = zero reloc 0 @str."), 2);
+    CHECK(contains(ir, "; const GREETING *u8 global @const.1 at 4:1\n"));
+    CHECK(contains(ir, "; const SYMBOL *u8 global @const.2 at 5:1\n"));
+    CHECK(contains(ir, "global @str.0 = \"hi\\00\"\n"));
+    CHECK(contains(ir, "global @str.1 = \"-\\00\"\n"));
+    CHECK(contains(ir, "const @const.1: 8 align 8 = zero reloc 0 @str.0\n"));
+    CHECK(contains(ir, "const @const.2: 8 align 8 = zero reloc 0 @str.1\n"));
     String main = proc_ir(ir, "main");
     CHECK_EQ(count_of(main, "addr @str."), 3);
+    CHECK(contains(main, "addr @str.0"));
+    CHECK(contains(main, "addr @str.1"));
     CHECK(!contains(main, "addr @const."));
     arena_free(&a);
 }
@@ -4458,6 +4473,27 @@ TEST(an_unread_run_constant_is_recorded) {
                        "\\03\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @const.1\n"));
     CHECK(!contains(proc_ir(ir, "main"), "addr @const."));
+    arena_free(&a);
+}
+
+TEST(an_unread_constant_needs_no_foreign_procedure) {
+    // A const.N made for a debugger alone holds no foreign procedure's
+    // address, but null: a relocation would make the program need a C
+    // function no code calls, which the linker, or the interpreter, may not
+    // find. A Rig procedure's address stays, its body always compiled, and
+    // a constant that code reads keeps both.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "nowhere :: () #foreign libc \"rig_no_such_function\";\n"  // 1
+                                                "tick :: () { }\n"                                          // 2
+                                                "Ops :: struct { run: () #c_call; step: (); }\n"           // 3
+                                                "TABLE :: Ops.{nowhere, tick};\n"                           // 4
+                                                "USED :: Ops.{nowhere, tick};\n"                            // 5
+                                                "main :: () { ops := USED; }\n"));
+    CHECK(contains(ir, "; const TABLE Ops global @const.1 at 4:1\n"));
+    CHECK(contains(ir, "; const USED Ops global @const.0 at 5:1\n"));
+    CHECK(contains(ir, "const @const.1: 16 align 8 = zero reloc 8 @tick\n"));
+    CHECK(contains(ir, "const @const.0: 16 align 8 = zero reloc 0 @nowhere reloc 8 @tick\n"));
     arena_free(&a);
 }
 

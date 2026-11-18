@@ -316,6 +316,8 @@ struct Lowering {
     // const.N is found after every body (resolve_constant_globals).
     Table<s32> constant_index;
     Array<Pending_Constant> pending_constants;
+    bool for_debugger;        // the const.N being made is for a debugger alone, which no code
+                              // reads: a foreign procedure's address in it is null (constant_bytes)
     Ir_Proc *proc;            // the procedure whose body is being lowered
     s32 block;                // the block instructions go into
     Array<Local> locals;      // the current procedure's variables and parameters so far
@@ -1925,8 +1927,9 @@ static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) 
 //   after:
 //
 // A branch that doesn't reach its end (it returns) doesn't jump; when
-// neither does, there's no `after` at all, and nothing that follows is
-// lowered: the current block has ended.
+// neither does, there's no `after` at all, and no code that follows is
+// lowered: the current block has ended. Only the constants after it are
+// recorded (lower_block).
 //
 // else if is an if inside the else part, so a chain of them is ifs inside
 // ifs, but it's lowered in a loop rather than by lower_if calling itself
@@ -2585,8 +2588,13 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
         return;
     }
     // A procedure's address (a procedure value, or a *void cast from one).
+    // In a const.N for a debugger alone (Lowering.for_debugger), a foreign
+    // one's is null, zeros: a relocation would make the program need a C
+    // function no code calls, which the linker, or the interpreter, may not
+    // find (a portable table naming one a host lacks).
     Ast_Proc *proc = procedure_address(value);
     if (proc) {
+        if (proc->is_foreign && l->for_debugger) return;
         array_add(relocs, Ir_Reloc{offset, proc_index_of(l, proc), true});
         return;
     }
@@ -2749,13 +2757,16 @@ static s32 constant_global(Lowering *l, Ast_Const *constant) {
 // the constant, one made now, in the order the constants were recorded, so
 // the numbers a use gives are those it would give with no debugger. Each
 // copy of deferred code recorded the same constant again, and finds the
-// same const.N.
+// same const.N. One made here holds no foreign procedure's address
+// (Lowering.for_debugger), so the program needs no symbol it didn't.
 static void resolve_constant_globals(Lowering *l) {
+    l->for_debugger = true;
     for (s64 i = 0; i < l->pending_constants.count; i++) {
         Pending_Constant *pending = &l->pending_constants[i];
         Ir_Var *v = pending->proc ? &pending->proc->vars[pending->var] : &l->module->constants[pending->var];
         v->value = constant_global(l, pending->decl);
     }
+    l->for_debugger = false;
 }
 
 // An expression #run's baked aggregate, used at run time: one read-only
