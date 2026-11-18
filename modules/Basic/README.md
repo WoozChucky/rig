@@ -305,7 +305,7 @@ What is written to standard output goes through C's `putchar`, so it comes out i
 - `print_item(builder: *String_Builder, item: Any, nested: bool)`: writes the value `item` holds, as below; `nested` says it is inside a struct, an array, a view or `{!EXTRA: ...}`, where a string is quoted.
 - `print_formatted(builder: *String_Builder, format: string, args: []Any)`: writes `format` with each `{}` replaced by the next of `args`, as below; `print` and `print_to_builder` are it.
 - `print(format: string, args: ..Any)`: writes `format` to standard output with its `{}`s replaced by the arguments, in order: `print("{} is {}\n", name, age)`. A `[]Any` already made is forwarded with `..`, as in `print(format, ..args)`; passed without it, it is one argument, a view.
-- `print_to_builder(builder: *String_Builder, format: string, args: ..Any)`: appends what `print` would write to `builder`, and writes nothing to standard output. A null `builder` stops the program with `null pointer dereference`, whatever the format. Unlike `append_string`'s `s`, the format and the arguments must not view the builder's own text: it is read over many appends, and when one grows the builder its memory may move, leaving what is still to be read in freed memory (spec 8.6).
+- `print_to_builder(builder: *String_Builder, format: string, args: ..Any)`: appends what `print` would write to `builder`, and writes nothing to standard output. A null `builder` stops the program with `null pointer dereference`, whatever the format. The format and the arguments may view the builder's own text, as `append_string`'s `s` may: the text is written into a builder of its own first, from the same allocator, and then appended at once.
 
 The format, read left to right:
 

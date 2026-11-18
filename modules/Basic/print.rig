@@ -27,8 +27,8 @@
 // closures or generics, so a builder that may be null is the simplest way
 // for one walk to write to either. print passes null; print_to_builder
 // takes a builder and stops the program on a null one. Written to
-// standard output, nothing is allocated; appended to a builder, its
-// memory grows as append_string's does.
+// standard output, nothing is allocated; print_to_builder writes into a
+// builder of its own first, then appends that to the one it is given.
 #load "libc.rig";
 #load "numbers.rig";
 #load "string.rig";
@@ -384,15 +384,22 @@ print :: (format: string, args: ..Any) {
 // Appends what print would write to builder (builder.rig), whose memory
 // grows as append_string's does, and writes nothing to standard output.
 //
-// Unlike append_string's s, the format and the arguments must not view
-// the builder's own text: the text is read a piece at a time, over many
-// appends, and when one grows the builder its memory may move, leaving
-// the pieces not yet read in memory already freed (spec 8.6).
+// The format and the arguments may view the builder's own text, as
+// append_string's s may: all is written into a builder of its own first,
+// from the same allocator, and then appended at once, so nothing of
+// builder moves while it is read. That builder's memory is given back.
 print_to_builder :: (builder: *String_Builder, format: string, args: ..Any) {
     // A null builder is standard output to print_formatted, so it's read
     // here first, to stop the program with the language's null pointer
     // dereference (spec 8.4), whatever the format, rather than print.
     // tests/run/basic_print_null_builder.err names this line.
     count := builder.count;
-    print_formatted(builder, format, args);
+    scratch : String_Builder;
+    builder_init(*scratch, builder.allocator);
+    print_formatted(*scratch, format, args);
+    text : string;
+    text.data = scratch.data;
+    text.count = scratch.count;
+    append_string(builder, text);
+    builder_free(*scratch);
 }
