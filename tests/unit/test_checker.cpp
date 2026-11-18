@@ -7279,3 +7279,111 @@ TEST(variadic_calls_run_while_compiling) {
     token_list_free(c.list);
     arena_free(&a);
 }
+
+// Issue #153: type info and Any (spec 3.16, 5.19).
+
+// One field of a Preload struct and where types.h says it is.
+struct Preload_Field {
+    const char *name;
+    s64 offset;
+};
+
+// One struct Preload declares for type information, and its layout as
+// types.h mirrors it: its size and its fields, in order.
+struct Preload_Struct {
+    const char *name;
+    s64 size;
+    Preload_Field fields[5];
+    s64 field_count;
+};
+
+TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
+    // Lowering writes each description from types.h's constants; the
+    // program reads it through Preload's structs, which the checker lays
+    // out as any struct. The two must agree: each struct's size, alignment
+    // and field offsets, and each tag's value. Each kind's struct starts
+    // with its Type_Info, info, so a *Type_Info casts to it.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
+    Preload_Struct structs[] = {
+        {"Type_Info",
+         TYPE_INFO_SIZE,
+         {{"tag", TYPE_INFO_TAG_OFFSET}, {"size", TYPE_INFO_SIZE_OFFSET}, {"alignment", TYPE_INFO_ALIGNMENT_OFFSET}},
+         3},
+        {"Type_Info_Integer", TYPE_INFO_INTEGER_SIZE, {{"info", 0}, {"signed", TYPE_INFO_SIGNED_OFFSET}}, 2},
+        {"Type_Info_Pointer", TYPE_INFO_POINTER_SIZE, {{"info", 0}, {"pointer_to", TYPE_INFO_POINTER_TO_OFFSET}}, 2},
+        {"Type_Info_Procedure",
+         TYPE_INFO_PROCEDURE_SIZE,
+         {{"info", 0},
+          {"parameter_types", TYPE_INFO_PARAMETERS_OFFSET},
+          {"result_types", TYPE_INFO_RESULTS_OFFSET},
+          {"is_c_call", TYPE_INFO_IS_C_CALL_OFFSET},
+          {"is_variadic", TYPE_INFO_IS_VARIADIC_OFFSET}},
+         5},
+        {"Type_Info_Struct",
+         TYPE_INFO_STRUCT_SIZE,
+         {{"info", 0}, {"name", TYPE_INFO_NAME_OFFSET}, {"members", TYPE_INFO_MEMBERS_OFFSET}},
+         3},
+        {"Type_Info_Struct_Member",
+         TYPE_INFO_MEMBER_SIZE,
+         {{"name", TYPE_INFO_MEMBER_NAME_OFFSET},
+          {"type", TYPE_INFO_MEMBER_TYPE_OFFSET},
+          {"offset", TYPE_INFO_MEMBER_OFFSET_OFFSET}},
+         3},
+        {"Type_Info_Array",
+         TYPE_INFO_ARRAY_SIZE,
+         {{"info", 0},
+          {"element_type", TYPE_INFO_ELEMENT_OFFSET},
+          {"array_kind", TYPE_INFO_ARRAY_KIND_OFFSET},
+          {"count", TYPE_INFO_COUNT_OFFSET}},
+         4},
+        {"Any", ANY_SIZE, {{"type", ANY_TYPE_OFFSET}, {"value_pointer", ANY_VALUE_OFFSET}}, 2},
+    };
+    Type *type_info = ((Ast_Struct *)top_level_named(tree, "Type_Info"))->declared;
+    for (s64 i = 0; i < (s64)(sizeof structs / sizeof structs[0]); i++) {
+        Preload_Struct *s = &structs[i];
+        Ast *decl = top_level_named(tree, s->name);
+        CHECK_EQ(decl->kind, AST_STRUCT);
+        if (decl->kind != AST_STRUCT) continue;
+        Type *t = ((Ast_Struct *)decl)->declared;
+        CHECK_EQ(t->size, s->size);
+        CHECK_EQ(t->align, TYPE_INFO_ALIGN);
+        CHECK_EQ(t->fields.count, s->field_count);  // no field types.h doesn't know
+        for (s64 f = 0; f < s->field_count; f++) {
+            s32 index = type_field_index(t, str(s->fields[f].name));
+            CHECK_EQ(index, f);  // in the issue's order
+            if (index < 0) continue;
+            CHECK_EQ(t->fields[index].offset, s->fields[f].offset);
+            if (strcmp(s->fields[f].name, "info") == 0) CHECK(t->fields[index].type == type_info);
+        }
+    }
+    // The tags, numbered as Jai's, and the array kinds: constants until
+    // enums.
+    struct {
+        const char *name;
+        s64 value;
+    } constants[] = {
+        {"TYPE_INFO_INTEGER", TYPE_INFO_INTEGER},
+        {"TYPE_INFO_FLOAT", TYPE_INFO_FLOAT},
+        {"TYPE_INFO_BOOL", TYPE_INFO_BOOL},
+        {"TYPE_INFO_STRING", TYPE_INFO_STRING},
+        {"TYPE_INFO_POINTER", TYPE_INFO_POINTER},
+        {"TYPE_INFO_PROCEDURE", TYPE_INFO_PROCEDURE},
+        {"TYPE_INFO_VOID", TYPE_INFO_VOID},
+        {"TYPE_INFO_STRUCT", TYPE_INFO_STRUCT},
+        {"TYPE_INFO_ARRAY", TYPE_INFO_ARRAY},
+        {"ARRAY_FIXED", ARRAY_FIXED},
+        {"ARRAY_VIEW", ARRAY_VIEW},
+    };
+    for (s64 i = 0; i < (s64)(sizeof constants / sizeof constants[0]); i++) {
+        Ast *k = top_level_named(tree, constants[i].name);
+        CHECK_EQ(k->kind, AST_CONST);
+        CHECK(k->is_constant);
+        CHECK_EQ(k->constant, constants[i].value);
+    }
+    // Declaring them describes nothing: a program that uses no type
+    // information lowers as it did, with no description in its data.
+    CHECK(!contains(ir_print(&a, lower_with_preload(&a, "main :: () { }\n")), "type_info"));
+    arena_free(&a);
+}

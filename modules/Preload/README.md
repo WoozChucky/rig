@@ -43,7 +43,83 @@ main :: () {
 
 `__malloc`, `__realloc` and `__free` are C's `malloc`, `realloc` and `free` (`#foreign libc "NAME"`, spec 7.6) under Preload's own names, not for programs: they leave C's names to the program, which may declare C's `malloc`, `realloc` or `free` itself, the same C functions.
 
+### Type information and Any
+
+`type_info(T)` (spec 5.19) gives a `*Type_Info`, the address of a description of type `T` laid out as the structs below: Jai's type information, trimmed to Rig's types (issue #153). Every value converts implicitly to an `Any` (spec 3.16), which pairs the value's address with its type's description, so code can take values of any type and find out what each is.
+
+There is one description per type, so `a.type == type_info(int)` tells types apart by address. `int` and `s64` are two types with two descriptions, the same in all but their addresses; `float` is `float32`. The compiler writes the descriptions in the program's read-only data, only for the types the program uses and those they reach, and in the interpreter's memory for `#run`. Writing one is a memory error no check catches (spec 8.6).
+
+The tags, a `Type_Info`'s `tag`, numbered as Jai's are:
+
+- `TYPE_INFO_INTEGER` 0, `TYPE_INFO_FLOAT` 1, `TYPE_INFO_BOOL` 2, `TYPE_INFO_STRING` 3, `TYPE_INFO_POINTER` 4, `TYPE_INFO_PROCEDURE` 5, `TYPE_INFO_VOID` 6, `TYPE_INFO_STRUCT` 7, `TYPE_INFO_ARRAY` 8.
+
+Every description starts with a `Type_Info`. Each kind's struct holds it as its first field, `info`, so a `*Type_Info` whose tag says the kind is cast to the kind's struct. Floats, `bool`, `string` and `void` have the plain `Type_Info`.
+
+- `Type_Info`:
+  - `tag: int`: the kind, one of the tags.
+  - `size: int`, `alignment: int`: the type's size and alignment in bytes (spec 3.11); `void`'s are 0 and 1. A float's size says which float it is.
+- `Type_Info_Integer` (`TYPE_INFO_INTEGER`, for `s8` to `u64` and `int`):
+  - `info: Type_Info`.
+  - `signed: bool`: whether the integer type is signed.
+- `Type_Info_Pointer` (`TYPE_INFO_POINTER`):
+  - `info: Type_Info`.
+  - `pointer_to: *Type_Info`: what it points at; `void`'s description for a `*void`.
+- `Type_Info_Procedure` (`TYPE_INFO_PROCEDURE`):
+  - `info: Type_Info`.
+  - `parameter_types: []*Type_Info`, `result_types: []*Type_Info`: the parameters' types and the results', in order.
+  - `is_c_call: bool`: whether it is called as C calls (`#c_call`).
+  - `is_variadic: bool`: whether its last parameter is a `..T`, whose type is then described as `[]T`.
+- `Type_Info_Struct` (`TYPE_INFO_STRUCT`):
+  - `info: Type_Info`.
+  - `name: string`: the struct's declared name.
+  - `members: []Type_Info_Struct_Member`: its fields, in order; none for a struct with none. A struct that holds a pointer to itself points back at its own description.
+- `Type_Info_Struct_Member`, one field of a struct:
+  - `name: string`: the field's name.
+  - `type: *Type_Info`: its type's description.
+  - `offset: int`: where it is, in bytes from the struct's start (spec 3.9).
+- `Type_Info_Array` (`TYPE_INFO_ARRAY`, for an array `[N]T` and a view `[]T` alike):
+  - `info: Type_Info`.
+  - `element_type: *Type_Info`: `T`'s description.
+  - `array_kind: int`: `ARRAY_FIXED` (0) for an array, `ARRAY_VIEW` (1) for a view.
+  - `count: int`: the array's `N`, or -1 for a view. A string isn't described as a view: it has its own tag.
+
+`Any` is an ordinary struct, so it has a description of its own, a struct named `Any`:
+
+- `type: *Type_Info`: the value's type's description.
+- `value_pointer: *void`: its address. A place (spec 5.1) converts by its own address, so the `Any` sees later changes to it and writing through `value_pointer` changes it; any other value is copied into a temporary, which lives until the end of the statement holding the conversion. An `Any` converts to `Any` as itself.
+
+Reading one: compare `a.type` with `type_info(T)` for a type known in advance, or read its `tag`, then cast: `cast(*int) a.value_pointer` for the value, `cast(*Type_Info_Struct) a.type` for the struct's description when the tag says `TYPE_INFO_STRUCT`. Nothing converts from `Any` implicitly.
+
+```rig
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Vec2 :: struct { x: float; y: float; }
+
+describe :: (a: Any) {
+    if a.type == type_info(int) {
+        printf("an int: %lld\n", (cast(*int) a.value_pointer).*);
+    } else if a.type.tag == TYPE_INFO_STRUCT {
+        s := cast(*Type_Info_Struct) a.type;
+        printf("%.*s with %lld fields\n", cast(s32) s.name.count, s.name.data, s.members.count);
+    }
+}
+
+main :: () {
+    n := 42;
+    describe(n);             // n's own address
+    describe(Vec2.{1, 2});   // a temporary's
+}
+```
+
+It prints:
+
+```text
+an int: 42
+Vec2 with 2 fields
+```
+
 ## Waiting on the language
 
 - No type aliases, so the allocator's procedure type is written out, in `Allocator` and in each allocator procedure.
-- No enums, so the allocator's modes are constants.
+- No enums, so the allocator's modes and the type information's tags are constants.
+- No `using`, so each kind's type information struct holds its `Type_Info` as a field, `info`, and reads it as `t.info.size`.
