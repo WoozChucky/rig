@@ -78,7 +78,7 @@ The steps the scripts take, one at a time, for those who would rather see each o
 | VS Code 1.75 or later | [rig-vscode.vsix](https://github.com/WoozChucky/rig/releases/latest/download/rig-vscode.vsix): the extension |
 | | [SHA256SUMS](https://github.com/WoozChucky/rig/releases/latest/download/SHA256SUMS): the SHA-256 of each of the three |
 
-The links always get the latest release. The commands below download it, check it, and install it for your user alone, with no administrator rights. Each archive's files are at its top level: the linker and the `modules` folder must stay in the same folder as `rig`, which runs the linker from there and finds there the modules a program imports (`#import "Basic";`).
+The links always get the latest release. The commands below download it, check it, and install it for your user alone, with no administrator rights. Each archive's files are at its top level: the linker and the `modules` folder must stay in the same folder as `rig`, which runs the linker from there and finds there Preload, which every program imports, and the modules a program imports (`#import "Basic";`): without that folder rig compiles nothing.
 
 ### Windows
 

@@ -4,12 +4,11 @@
 // call to C's heap at a time, a run of blocks given back all at once (an
 // arena), or slots of one size (a pool).
 //
-// An allocator is Jai's shape: one procedure and the data it works on. The
-// procedure is called with a mode, ALLOCATE, RESIZE, FREE or FREE_ALL, and
-// does what the mode says, with the data as its last argument: an arena's
-// procedure gets its Arena, a pool's its Pool, the heap's nothing. Anything
-// that holds an Allocator can be given any of them, or one a program writes
-// itself, without knowing which.
+// An allocator's shape (Allocator), its modes (ALLOCATE, RESIZE, FREE and
+// FREE_ALL) and the heap (heap_allocator_proc and HEAP_ALLOCATOR) are
+// Preload's, which every program imports without asking (spec 2.14; its
+// README.md lists them). This file adds what is built over them: the four
+// helpers, an arena and a pool.
 //
 // A program calls the four helpers, alloc, resize, free and free_all,
 // rather than an allocator's procedure. They settle the edges once, so no
@@ -17,30 +16,7 @@
 // than 0 bytes, and only ever given memory that isn't null to resize or
 // free. An allocator that can't give memory returns null, and the helpers
 // pass that on.
-#load "libc.rig";
 #load "memory.rig";
-
-// The modes an allocator procedure is called with (constants until enums).
-ALLOCATE :: 0;
-RESIZE :: 1;
-FREE :: 2;
-FREE_ALL :: 3;
-
-// Jai's shape: one procedure and its data. The procedure type is written
-// out, since Rig has no type aliases yet.
-//
-// The procedure is called as proc(mode, size, old_size, old_memory, data):
-//
-// - ALLOCATE: size bytes, or null.
-// - RESIZE: old_memory, which holds old_size bytes, made size bytes long,
-//   moved or not, with the first of its old bytes kept; or null, and then
-//   old_memory is as it was.
-// - FREE: gives old_memory back. Returns null.
-// - FREE_ALL: gives back everything the allocator gave. Returns null.
-Allocator :: struct {
-    proc: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void;
-    data: *void;
-}
 
 // size bytes from allocator, or null when it has none to give. A size of 0
 // or less gives null without asking the allocator.
@@ -83,22 +59,6 @@ free :: (memory: *void, allocator: Allocator) {
 free_all :: (allocator: Allocator) {
     allocator.proc(FREE_ALL, 0, 0, null, allocator.data);
 }
-
-// The heap: C's malloc, realloc and free, through Basic's C layer. Its
-// memory is aligned for any type, as C's is.
-//
-// FREE_ALL does nothing: the heap doesn't know what it gave, so each piece
-// goes back with free. The sizes are above 0 (the helpers see to it), so
-// they convert to C's size_t, a u64, unchanged.
-heap_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
-    if mode == ALLOCATE { return c_malloc(cast(u64) size); }
-    if mode == RESIZE { return c_realloc(old_memory, cast(u64) size); }
-    if mode == FREE { c_free(old_memory); }
-    return null;
-}
-
-// The heap as an Allocator. It needs no data.
-HEAP_ALLOCATOR :: Allocator.{heap_allocator_proc, null};
 
 // The header at the start of each of an arena's blocks: the block made
 // before it, and how many bytes follow the header. The header is 16 bytes,

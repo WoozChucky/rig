@@ -12,9 +12,12 @@
 // (tests/unit/interpret_mode.cpp).
 //
 // rig build [FILE.rig] [-o OUTPUT] [--no-bounds-checks] reads the file (by
-// default build.rig in the current directory), the files it #loads and the
-// modules it #imports, lexes, parses and checks them, and stops there with
-// the diagnostics on stderr if anything was wrong (exit 1). Otherwise it
+// default build.rig in the current directory), Preload, the module every
+// program imports (spec 2.13), the files it #loads and the modules it
+// #imports, lexes, parses and checks them, and stops there with the
+// diagnostics on stderr if anything was wrong (exit 1); a Preload it can't
+// find or read stops it before anything is parsed, said alone ("rig:
+// error: ...", compilation_load), and so does rig check. Otherwise it
 // lowers the program (without the bounds checks of a[i] with
 // --no-bounds-checks, spec 8.5). Lowering finds errors of its own, a call
 // of a #compiler procedure the program would make (spec 7.9), printed as
@@ -147,9 +150,10 @@ static void compilation_load_text(Compilation *c, String path, String text, cons
 // Reads the main file (the file at `path`, or with from_stdin standard
 // input, named `path` all the same), and stdin_for's text, and loads
 // (compilation_load_text). False when nothing could be loaded: the main file
-// or standard input couldn't be read, or the program doesn't reach stdin_for
-// (unless a failed #if's branch names it, below), said on stderr ("rig:
-// error: ...").
+// or standard input couldn't be read, Preload, which every program imports,
+// couldn't be found or read (Ast_File.load_failure, load.h), or the program
+// doesn't reach stdin_for (unless a failed #if's branch names it, below),
+// said on stderr ("rig: error: ...").
 //
 // stdin_for, when not empty, is the file whose text is read from standard
 // input once the main file has been read (rig check --stdin-for): one the
@@ -214,6 +218,13 @@ static bool compilation_load(Compilation *c, String path, bool from_stdin, Strin
     options.more_texts = more_texts;
     compilation_load_text(c, path, text, &options);
     array_free(&more_texts);
+    // No Preload to be found or read: the loader stopped before parsing
+    // anything, so nothing is to be checked, and what it says about
+    // stdin_for would be about a program it never read.
+    if (c->tree->load_failure.count) {
+        fprintf(stderr, "rig: error: " STR_FMT "\n", STR_ARG(c->tree->load_failure));
+        return false;
+    }
     if (stdin_for.count && !reached && !undecided) {
         if (not_taken) {
             fprintf(stderr, "rig: error: '" STR_FMT "' loads '" STR_FMT "' only in an #if branch not taken\n",

@@ -7,12 +7,16 @@
 // runner has no compiler in it, and it is a process of its own because a
 // program's exit really exits.
 //
-// It reads, lexes, parses, checks and lowers FILE, every file it #loads and
-// every module it #imports, as rig build does, without the bounds checks of
-// a[i] with --no-bounds-checks, running its #runs as rig build does, the
-// top-level ones too; a program with errors (a failed top-level run's
-// among them) gets its diagnostics on stderr, as rig build prints them, and
-// exit status 1, and isn't run. A build program (spec 7.9), which has no main, is
+// It reads, lexes, parses, checks and lowers FILE, Preload (the module
+// every program imports, spec 2.13), every file it #loads and every module
+// it #imports, as rig build does, without the bounds checks of a[i] with
+// --no-bounds-checks, running its #runs as rig build does, the top-level
+// ones too; a program with errors (a failed top-level run's among them)
+// gets its diagnostics on stderr, as rig build prints them, and exit status
+// 1, and isn't run. A Preload that can't be found or read stops it before
+// anything is parsed: the loader's reason, as rig says it, after
+// "unit-tests: error: " (there's no module 'Preload' (looked in DIR1 and
+// DIR2), or cannot read 'PATH': MESSAGE), exit status 1. A build program (spec 7.9), which has no main, is
 // refused once it has checked, before its top-level #runs: "unit-tests:
 // error: a build program can't be interpreted", exit status 1. Otherwise it
 // interprets main, and exits with main's status, 0, unless the program
@@ -102,6 +106,16 @@ static void interpret_mode(void *data) {
     Compilation c = {};
     c.arena = &a;
     compilation_load_text(&c, path, text, nullptr);
+    // No Preload to be found or read: nothing was parsed, so nothing is
+    // checked or run, and the loader's reason is said as rig says it, in
+    // bin/unit-tests's name.
+    if (c.tree->load_failure.count) {
+        fprintf(stderr, "unit-tests: error: " STR_FMT "\n", STR_ARG(c.tree->load_failure));
+        compilation_free(&c);
+        arena_free(&a);
+        mode->status = 1;
+        return;
+    }
     bool ok = compilation_check(&c);
     if (ok && c.build.is_build_program) {
         compilation_free(&c);

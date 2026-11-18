@@ -1,0 +1,30 @@
+tests/errors/variadic_rig_calls.rig:12:5: error: 'sum' takes at least 1 argument, but 0 were given
+        sum();
+        ^
+tests/errors/variadic_rig_calls.rig:13:5: error: 'sum' takes at least 1 argument, but 0 were given
+        sum(..ints);
+        ^
+tests/errors/variadic_rig_calls.rig:14:15: error: argument 3 of 'sum' has type 'string', which can't be converted to 'int'
+        sum(1, 2, "three");
+                  ^
+tests/errors/variadic_rig_calls.rig:15:12: error: '..' spreads a '[2]u8' into 'rest', which needs a '[]int'
+        sum(1, ..bytes);
+               ^
+tests/errors/variadic_rig_calls.rig:16:15: error: 'sum' takes its '..' arguments one by one or as one spread view, not both
+        sum(1, 2, ..ints);
+                  ^
+tests/errors/variadic_rig_calls.rig:17:9: error: only the arguments of a '..' parameter can be spread, as in f(..values)
+        sum(..ints, 1);
+            ^
+tests/errors/variadic_rig_calls.rig:18:11: error: only the arguments of a '..' parameter can be spread, as in f(..values)
+        apply(..ints);
+              ^
+tests/errors/variadic_rig_calls.rig:19:20: error: only the arguments of a '..' parameter can be spread, as in f(..values)
+        printf("%d\n", ..ints);
+                       ^
+tests/errors/variadic_rig_calls.rig:20:10: error: only the arguments of a '..' parameter can be spread, as in f(..values)
+        x := ..ints;
+             ^
+tests/errors/variadic_rig_calls.rig:22:10: error: '..' spreads a '[2]u8' into '..int', which needs a '[]int'
+        s(1, ..bytes);
+             ^

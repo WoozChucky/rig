@@ -1,13 +1,15 @@
 // ast.h: the syntax tree, what the parser makes of the tokens.
 //
-// Procedures (with a body, or #foreign), their parameters and types, and
-// global variables and constants; in a body, blocks of statements: local
-// variables and constants (several variables at once, from a call's
-// results), assignments, returns, if, while, for, break, continue, defer
-// and expressions; expressions made of calls, names, strings, integers,
+// Procedures (with a body, or #foreign), their parameters (the last may be
+// '..T', taking any number of arguments) and types, and global variables
+// and constants; in a body, blocks of statements: local variables and
+// constants (several variables at once, from a call's results),
+// assignments, returns, if, while, for, break, continue, defer and
+// expressions; expressions made of calls, names, strings, integers,
 // floats, bools, null, operators, casts, addresses and dereferences,
 // size_of, fields (e.x), struct literals (Vec2.{1, 2}), elements (a[i])
-// and array literals (int.[1, 2]), and code run while compiling (#run e).
+// and array literals (int.[1, 2]), spreads (..xs, a view passed as a
+// '..T' parameter's arguments), and code run while compiling (#run e).
 // And structs, declared at the top level, the files a program loads
 // (#load "PATH";), named there too, and the code it runs while compiling
 // for its effect (#run e; and #run { ... }), there too. And code compiled
@@ -73,6 +75,7 @@ enum Ast_Kind : u8 {
     AST_RUN,           // Ast_Run: #run e (an expression), or a top-level #run e; or #run { ... }
     AST_IF_DIRECTIVE,  // Ast_If_Directive: #if c { ... } else ...
     AST_DEFER,         // Ast_Defer: defer statement;  defer { ... }
+    AST_SPREAD,        // Ast_Spread: ..e, a view spread into a '..T' parameter
 };
 
 struct Ast {
@@ -109,11 +112,16 @@ struct Ast_Type : Ast {
                                 // written, aren't part of the type, and aren't kept)
     Array<Ast_Type *> results;  // AST_TYPE_PROC: the results' types: none, one or several
     bool is_c_call;             // AST_TYPE_PROC: marked #c_call, C's calling convention (spec 7.6)
+    bool is_variadic;           // AST_TYPE_PROC: its last parameter is written ..T: params' last is T
+                                // (spec 3.15)
+    Position dots;              // where that '..' is written
 };
 
 struct Ast_Param : Ast {
     String name;
     Ast_Type *type_expr;
+    bool is_variadic;  // name: ..T, the last parameter (spec 7.2): type_expr is T, and its type []T
+    Position dots;     // where that '..' is written
 };
 
 struct Ast_Proc;
@@ -146,14 +154,17 @@ enum Ast_Resolve : u8 {
 // parser.cpp's broken_entry), and empty otherwise.
 //
 // Ast.type is the procedure's type, a TYPE_PROC, once its signature is
-// checked: null for a variadic one, which no procedure type can say, and
+// checked, variadic for one whose last parameter is a '..T' (spec 3.15):
+// null for one that takes C's '..', which no procedure type can say, for
+// one refused a '..T' (a foreign, #c_call or #compiler procedure), and
 // when a parameter's or a result's type was an error.
 struct Ast_Proc : Ast {
     String name;
-    Array<Ast_Param *> params;  // the named parameters (a variadic one's fixed parameters)
-    bool is_variadic;           // its list ends with '..': it takes more arguments after
-                                // params, as a C function declared with '...' does (spec 7.6)
-    Position variadic_pos;      // where that '..' is written
+    Array<Ast_Param *> params;  // the named parameters (with C's '..', its fixed parameters)
+    bool is_c_variadic;         // its list ends with C's bare '..': it takes more arguments after
+                                // params, as a C function declared with '...' does (spec 7.6); a
+                                // '..T' parameter is Ast_Param.is_variadic
+    Position c_dots_pos;        // where that '..' is written
     Array<Ast_Type *> results;  // what it returns: none, one or several (-> int, int)
     Ast_Block *body;            // null for a foreign procedure and a #compiler one
     bool is_foreign;
@@ -266,6 +277,13 @@ struct Ast_Unary : Ast {
     Ast *operand;
 };
 
+// ..e: e's elements passed as a call's '..' arguments (spec 5.10), only as
+// the last argument of a call whose callee takes a '..T' parameter: the
+// checker refuses it anywhere else. A prefix operator; pos is the '..'.
+struct Ast_Spread : Ast {
+    Ast *operand;
+};
+
 // e.*: what the pointer e points at (C's *e). A postfix operator, as a call
 // is, so it binds tighter than any prefix one: *p.* is *(p.*). pos is the
 // '.', where a null pointer's runtime error points.
@@ -347,6 +365,10 @@ struct Ast_Call : Ast {
     Type *callee_type;  // a call through a procedure value (a variable, a field, an element, a
                         // call's result): the value's procedure type, found by the checker;
                         // null when `proc` is the procedure called
+    Type *gathered;     // the [N]T a call's one-by-one '..' arguments go into (N from 0), set by
+                        // the checker, laid out; lowering builds it in a temporary of the
+                        // caller's (none for N = 0: the view is zeroed); null when the
+                        // callee takes no ..T or the call spreads (spec 5.10, 10.4)
 };
 
 struct Ast_Name : Ast {
@@ -518,9 +540,13 @@ System host_system();
 // as Source_File.order is. Empty, as parse() and parse_into leave it, each
 // file is at its index: the order the files were read in. The loader sets
 // it for every program it loads (walk_in_load_order), and puts every list
-// in it (ast_sort_declarations): it differs from the reading order only
+// in it (ast_sort_declarations): it differs from the reading order in
+// Preload's place, and that of the files it reaches: Preload, file 1, read
+// right after the main file, is placed first in load order with every file
+// it reaches, before the main file and the files after it (spec 2.13); and
 // when a #load in a taken #if branch (spec 4.9) read a file after one that
-// comes later. before() follows it, in ast_declarations and ast_dump too.
+// comes later. before() follows it, in
+// ast_declarations and ast_dump too.
 //
 // lost_a_file is set when a #load or an #import failed (load.h's errors),
 // had no string to name a file by, wasn't at the top level, or was passed
@@ -553,6 +579,8 @@ struct Ast_File {
                             // further file (load.h)
     System system;          // what OS is (spec 2.5): SYSTEM_NONE means the host's (host_system)
     Array<s32> order;       // order[f]: file f's place in load order, as Source_File.order; empty: each file's index
+    String load_failure;    // the loader's: why the program couldn't be loaded at all, said as "rig: error: MESSAGE"
+                            // (load.h): Preload not found or not read; empty when it was. In the arena.
 };
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler

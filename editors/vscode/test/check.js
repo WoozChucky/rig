@@ -852,6 +852,21 @@ check('the grammar colours the types of procedure types', () => {
     assertScopes('cb : (*Vec2) -> s32 #c_call;', { Vec2: TYPE, '#c_call': 'keyword.other.directive.rig' });
 });
 
+// A '..T' parameter's '..' and a spread's are the range's operator, as C's
+// bare '..' is; the T after it is a type, and the names around it aren't.
+check('the grammar colours a \'..T\' parameter and a spread', () => {
+    const RANGE = 'keyword.operator.range.rig';
+    assertScopes('sum :: (first: int, rest: ..int) -> int {', {
+        rest: null,
+        '..': RANGE,
+        int: [PRIMITIVE, PRIMITIVE, PRIMITIVE],
+    });
+    assertScopes('total_x :: (points: ..Vec2) -> int {', { points: null, '..': RANGE, Vec2: TYPE });
+    assertScopes('op : (int, ..int) -> int;', { '..': RANGE, int: [PRIMITIVE, PRIMITIVE, PRIMITIVE] });
+    assertScopes('n := sum(0, ..more);', { more: null, '..': RANGE, sum: 'entity.name.function.call.rig' });
+    assertScopes('x := sum(1, ..f(a), ..b[0]);', { '..': [RANGE, RANGE], b: null });
+});
+
 check('the grammar colours the type of a literal, a cast and size_of', () => {
     assertScopes('v := Vec2.{1, 2};', { v: null, Vec2: TYPE, '.': 'punctuation.accessor.rig' });
     assertScopes('ps := Vec2.[.{1, 2}, .{3, 4}];', { Vec2: TYPE, ps: null });
@@ -1026,8 +1041,9 @@ check('the grammar colours the types in every program of tests/run and tests/bui
     assert.ok(files.length > 50, `only ${files.length} programs`);
 
     const sources = new Map(files.map((f) => [f, fs.readFileSync(f, 'utf8')]));
-    // The structs a program may name: its own, and those of the modules a
-    // program #imports or #loads (modules/Basic's Allocator, say).
+    // The structs a program may name: its own, Preload's, which every
+    // program imports (modules/Preload's Allocator, say), and those of the
+    // modules a program #imports or #loads.
     const modules = [];
     const walkModules = (dir) => {
         if (!fs.existsSync(dir)) return;

@@ -1,6 +1,7 @@
-// '..' stands for C's '...': a Rig procedure has no way to reach the
-// arguments it doesn't name, so only a foreign one may end with it. Its
-// calls aren't reported too, whatever their extra arguments are.
+// C's bare '..' stands for C's '...': a Rig procedure has no way to reach
+// the arguments it doesn't name, so only a foreign one may end with it; a
+// Rig procedure takes more arguments as '..T', a view of them. Its calls
+// aren't reported too, whatever their extra arguments are.
 sum :: (count: int, ..) -> int { return count; }
 
 Vec2 :: struct { x: float; y: float; }

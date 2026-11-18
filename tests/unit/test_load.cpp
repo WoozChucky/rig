@@ -4,7 +4,10 @@
 // --stdin-for); then #import's modules, build programs, and a workspace's
 // further files (issue #116); then top-level #if (issue #147): what the
 // loader decides, the files a taken branch reads, load order, and
-// --stdin-for of a file only a branch not taken loads.
+// --stdin-for of a file only a branch not taken loads; then Preload, which
+// every program imports (issue #151), and which the tests before leave out
+// (no_preload_options), but import_finds_basic_with_rigs_own_places, which
+// loads with rig's own places and finds Preload as file 1.
 // Each test writes its files under .build/tests/load/NAME/, NAME the
 // test's (or the test's with a suffix, when it needs a second directory),
 // and loads them from there. Uses test_os.cpp's SEPARATOR and reason.
@@ -35,12 +38,24 @@ static void write_source(Arena *a, String dir, const char *name, const char *tex
     CHECK(os_write_file(str(in_directory(a, dir, name)), str(text)));
 }
 
+// Options that leave Preload out (Load_Options.no_preload), which the tests
+// of the loader's other rules give: they count the files a program reads
+// and name them by index, and those with places of their own have no
+// Preload there. The tests of Preload, at the end, keep it, as does
+// import_finds_basic_with_rigs_own_places.
+static Load_Options no_preload_options() {
+    Load_Options options = {};
+    options.no_preload = true;
+    return options;
+}
+
 // load_program on dir/main.rig, read from the file as rig build reads it.
 static Ast_File *load_main(Arena *a, Diagnostics *d, String dir) {
     String path = str(in_directory(a, dir, "main.rig"));
     String text = {};
     CHECK(os_read_file(a, path, &text));
-    return load_program(a, d, path, text);
+    Load_Options options = no_preload_options();
+    return load_program(a, d, path, text, &options);
 }
 
 // `relative`, a path from the directory rig runs in with '/' between its
@@ -194,7 +209,8 @@ TEST(load_from_a_verbatim_main_path) {
     String verbatim = string_printf(&a, "\\\\?\\%s", in_current_directory(&a, str(in_directory(&a, dir, "main.rig"))));
     String text = {};
     CHECK(os_read_file(&a, verbatim, &text));
-    Ast_File *tree = load_program(&a, &d, verbatim, text);
+    Load_Options options = no_preload_options();
+    Ast_File *tree = load_program(&a, &d, verbatim, text, &options);
     CHECK_STR(messages(&a, &d), "");
     CHECK_EQ(d.files.count, 3);
     if (d.files.count == 3) {
@@ -714,7 +730,9 @@ TEST(load_failure_loses_a_file) {
     };
     for (s64 i = 0; i < (s64)(sizeof cases / sizeof cases[0]); i++) {
         Diagnostics d = {};
-        Ast_File *tree = load_program(&a, &d, str(in_directory(&a, dir, "main.rig")), str(cases[i].text));
+        Load_Options options = no_preload_options();
+        String path = str(in_directory(&a, dir, "main.rig"));
+        Ast_File *tree = load_program(&a, &d, path, str(cases[i].text), &options);
         // Which case failed, as a '1 != 0' alone doesn't say.
         if (tree->lost_a_file != cases[i].lost) fprintf(stderr, "  case %lld: %s", (long long)i, cases[i].text);
         CHECK_EQ(tree->lost_a_file, cases[i].lost);
@@ -740,7 +758,8 @@ TEST(load_with_stdin_path) {
 #endif
     String path = str(in_directory(&a, dir, "absent.rig"));
     CHECK(!os_file_exists(path));
-    load_program(&a, &d, path, str("#load \"b.rig\";\nmain :: () { helper(); }\n"));
+    Load_Options options = no_preload_options();
+    load_program(&a, &d, path, str("#load \"b.rig\";\nmain :: () { helper(); }\n"), &options);
     CHECK_STR(messages(&a, &d), "");
     CHECK_EQ(d.files.count, 2);
     if (d.files.count == 2) {
@@ -801,7 +820,7 @@ static Ast_File *load_main_with_stdin_for(Arena *a, Diagnostics *d, String dir, 
     String path = str(in_directory(a, dir, "main.rig"));
     String main_text = {};
     CHECK(os_read_file(a, path, &main_text));
-    Load_Options options = {};
+    Load_Options options = no_preload_options();
     options.stdin_for = file;
     options.stdin_text = str(text);
     options.stdin_for_reached = reached;
@@ -1144,7 +1163,7 @@ static const char *module_file(Arena *a, String place, const char *module, const
 static Ast_File *load_main_importing(Arena *a, Diagnostics *d, String dir, const char *text,
                                      const Module_Places *places) {
     write_source(a, dir, "main.rig", text);
-    Load_Options options = {};
+    Load_Options options = no_preload_options();
     options.modules = places;
     return load_program(a, d, str(in_directory(a, dir, "main.rig")), str(text), &options);
 }
@@ -1389,7 +1408,7 @@ TEST(a_main_file_inside_a_place_is_a_modules) {
     Module_Places places = test_places(&a, dir);
     const char *text = "alpha :: () {}\n";
     write_module(&a, places.places[0], "Alpha", text);
-    Load_Options options = {};
+    Load_Options options = no_preload_options();
     options.modules = &places;
     load_program(&a, &d, str(in_directory(&a, dir, "first/Alpha/module.rig")), str(text), &options);
     CHECK_STR(messages(&a, &d), "");
@@ -1429,7 +1448,7 @@ TEST(places_in_another_case_hold_the_same_files_on_windows) {
     write_source(&a, dir, "firstly/x.rig", "x :: () {}\n");
     Module_Places upper = {};
     for (s64 i = 0; i < 2; i++) upper.places[i] = upper_cased(&a, places.places[i]);
-    Load_Options options = {};
+    Load_Options options = no_preload_options();
     options.modules = &upper;
     load_program(&a, &d, str(in_directory(&a, dir, "first/Alpha/module.rig")), str(text), &options);
     CHECK_STR(messages(&a, &d), "");
@@ -1446,17 +1465,24 @@ TEST(places_in_another_case_hold_the_same_files_on_windows) {
 
 TEST(import_finds_basic_with_rigs_own_places) {
     // With no places given, the loader looks in rig's own: the running
-    // program's, bin/unit-tests's, which find the repository's Basic.
+    // program's, bin/unit-tests's, which find the repository's Preload and
+    // Basic. Preload, which every program imports, is file 1, read right
+    // after the main file (issue #151), so Basic is file 2.
     Arena a = arena_make();
     Diagnostics d = {};
     const char *text = "#import \"Basic\";\nmain :: () {}\n";
     load_program(&a, &d, str("main.rig"), str(text));
     CHECK_STR(messages(&a, &d), "");
     Module_Places places = module_places(&a);
+    String preload = module_lookup(&a, &places, str("Preload"));
     String basic = module_lookup(&a, &places, str("Basic"));
+    CHECK(preload.count > 0);
     CHECK(basic.count > 0);
-    CHECK(d.files.count > 1);
-    if (d.files.count > 1) CHECK_STR(d.files[1].path, string_cstr(&a, basic));
+    CHECK(d.files.count > 2);
+    if (d.files.count > 2) {
+        CHECK_STR(d.files[1].path, string_cstr(&a, preload));
+        CHECK_STR(d.files[2].path, string_cstr(&a, basic));
+    }
     diag_free(&d);
     arena_free(&a);
 }
@@ -1518,7 +1544,7 @@ TEST(the_compiler_module_makes_a_build_program) {
     // The module's own file as the main file, as rig check
     // modules/Compiler/module.rig checks it: it reaches itself, at its 1:1.
     Diagnostics d = {};
-    Load_Options options = {};
+    Load_Options options = no_preload_options();
     options.modules = &places;
     String text = str("// The Compiler module, for the tests.\n");
     String module = str(module_file(&a, places.places[0], "Compiler", "module.rig"));
@@ -1565,7 +1591,7 @@ TEST(more_files_load_after_the_main_file) {
     String path = str(in_directory(&a, dir, "main.rig"));
     String text = {};
     CHECK(os_read_file(&a, path, &text));
-    Load_Options options = {};
+    Load_Options options = no_preload_options();
     const char *more[] = {"a.rig", "b.rig"};
     for (const char *name : more) {
         String file = str(in_directory(&a, dir, name));
@@ -1607,7 +1633,7 @@ TEST(more_files_are_each_loaded_once) {
     String path = str(in_directory(&a, dir, "main.rig"));
     String text = {};
     CHECK(os_read_file(&a, path, &text));
-    Load_Options options = {};
+    Load_Options options = no_preload_options();
     const char *more[] = {"main.rig", "a.rig", "./a.rig", "b.rig", "c.rig", "a.rig"};
     for (const char *name : more) {
         String file = str(in_directory(&a, dir, name));
@@ -1647,7 +1673,7 @@ TEST(a_further_file_can_be_the_compiler_module) {
     String path = str(in_directory(&a, dir, "main.rig"));
     String text = {};
     CHECK(os_read_file(&a, path, &text));
-    Load_Options options = {};
+    Load_Options options = no_preload_options();
     options.modules = &places;
     String module = str(module_file(&a, places.places[0], "Compiler", "module.rig"));
     String module_text = {};
@@ -1684,7 +1710,7 @@ TEST(a_further_file_can_be_the_compiler_module) {
 // takes the main file's text), with OS `system` (Load_Options.system). The
 // files it loads are dir's.
 static Ast_File *load_text(Arena *a, Diagnostics *d, String dir, const char *text, System system) {
-    Load_Options options = {};
+    Load_Options options = no_preload_options();
     options.system = system;
     return load_program(a, d, str(in_directory(a, dir, "main.rig")), str(text), &options);
 }
@@ -2082,7 +2108,7 @@ TEST(if_decides_build_programs) {
     };
     for (const Build_Program_Case &c : cases) {
         Diagnostics d = {};
-        Load_Options options = {};
+        Load_Options options = no_preload_options();
         options.modules = &places;
         Ast_File *tree = load_program(&a, &d, str(in_directory(&a, dir, "main.rig")), str(c.text), &options);
         CHECK_STR(messages(&a, &d), "");
@@ -2169,7 +2195,7 @@ TEST(stdin_for_loaded_only_in_a_branch_not_taken) {
     for (const Not_Taken_Case &c : cases) {
         Diagnostics d = {};
         bool reached = !c.reached, not_taken = !c.not_taken, undecided = !c.undecided;
-        Load_Options options = {};
+        Load_Options options = no_preload_options();
         options.system = c.system;
         options.stdin_for = str(in_directory(&a, dir, "l.rig"));
         options.stdin_text = str("L :: 2;\n");
@@ -2195,7 +2221,7 @@ TEST(stdin_for_in_branches_nested_a_thousand_levels) {
     const char *text = nested_source(&a, "#if false {", "#if true {", MAX_DEPTH - 1, "#load \"l.rig\";", "}", "}\n");
     Diagnostics d = {};
     bool reached = true, not_taken = false, undecided = true;
-    Load_Options options = {};
+    Load_Options options = no_preload_options();
     options.stdin_for = str(in_directory(&a, dir, "l.rig"));
     options.stdin_text = str("L :: 2;\n");
     options.stdin_for_reached = &reached;
@@ -2226,7 +2252,7 @@ TEST(stdin_for_in_a_chain_of_10000_arms) {
     }
     Diagnostics d = {};
     bool reached = true, not_taken = false, undecided = true;
-    Load_Options options = {};
+    Load_Options options = no_preload_options();
     options.stdin_for = str(in_directory(&a, dir, "l.rig"));
     options.stdin_text = str("L :: 2;\n");
     options.stdin_for_reached = &reached;
@@ -2251,7 +2277,7 @@ TEST(stdin_for_imported_only_in_a_branch_not_taken) {
     write_module(&a, places.places[0], "Mod", "M :: 1;\n");
     Diagnostics d = {};
     bool reached = true, not_taken = false, undecided = true;
-    Load_Options options = {};
+    Load_Options options = no_preload_options();
     options.modules = &places;
     options.stdin_for = str(module_file(&a, places.places[0], "Mod", "module.rig"));
     options.stdin_text = str("M :: 2;\n");
@@ -2263,6 +2289,353 @@ TEST(stdin_for_imported_only_in_a_branch_not_taken) {
     CHECK(!reached);
     CHECK(not_taken);
     CHECK(!undecided);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+// Issue #151: Preload (spec 2.13, 2.14). Every program imports the module
+// Preload without an #import: the loader reads its module.rig right after
+// the main file, so it's file 1, and places it first in load order, before
+// the main file, so its declarations win a clash. Each test makes its own
+// places (test_places) and writes a Preload there, unless it says
+// otherwise; the tests above leave Preload out (Load_Options.no_preload),
+// but import_finds_basic_with_rigs_own_places, which loads with rig's own
+// places and finds Preload as file 1.
+
+// Places for a test of Preload, made under dir, with a Preload holding
+// `text` in the first; none when text is null.
+static Module_Places preload_places(Arena *a, String dir, const char *text) {
+    Module_Places places = test_places(a, dir);
+    if (text) write_module(a, places.places[0], "Preload", text);
+    return places;
+}
+
+// load_program on dir/main.rig, holding `text`, with `places`, Preload
+// imported as rig imports it.
+static Ast_File *load_main_with_preload(Arena *a, Diagnostics *d, String dir, const char *text,
+                                        const Module_Places *places) {
+    write_source(a, dir, "main.rig", text);
+    Load_Options options = {};
+    options.modules = places;
+    return load_program(a, d, str(in_directory(a, dir, "main.rig")), str(text), &options);
+}
+
+TEST(preload_comes_first_in_load_order) {
+    // The main file is file 0, Preload file 1, then the files the main file
+    // loads and imports, in the order they're met: the reading order. In
+    // load order Preload comes first, then the main file and the rest, so
+    // its global is the first, and its top-level #run runs before the main
+    // file's.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "preload_comes_first_in_load_order");
+    Module_Places places = preload_places(&a, dir, "preloaded :: 1;\n#run {}\n");
+    write_source(&a, dir, "b.rig", "b :: () {}\n");
+    write_module(&a, places.places[0], "Alpha", "alpha :: () {}\n");
+    Ast_File *tree =
+        load_main_with_preload(&a, &d, dir, "#run {}\n#load \"b.rig\";\n#import \"Alpha\";\nmain :: () {}\n", &places);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(tree->load_failure.count, 0);
+    const char *read[4] = {
+        in_directory(&a, dir, "main.rig"),
+        module_file(&a, places.places[0], "Preload", "module.rig"),
+        in_directory(&a, dir, "b.rig"),
+        module_file(&a, places.places[0], "Alpha", "module.rig"),
+    };
+    const s32 order[4] = {1, 0, 2, 3};
+    CHECK_EQ(d.files.count, 4);
+    CHECK_EQ(tree->order.count, 4);
+    if (d.files.count == 4 && tree->order.count == 4) {
+        for (s64 i = 0; i < 4; i++) {
+            CHECK_STR(d.files[i].path, read[i]);
+            CHECK_EQ(d.files[i].order, order[i]);
+            CHECK_EQ(tree->order[i], order[i]);
+        }
+        CHECK(d.files[1].in_module);
+    }
+    CHECK_EQ(tree->globals.count, 1);
+    if (tree->globals.count == 1) {
+        CHECK_STR(((Ast_Const *)tree->globals[0])->name, "preloaded");
+        CHECK_EQ(tree->globals[0]->pos.file, 1);
+    }
+    CHECK_EQ(tree->runs.count, 2);
+    if (tree->runs.count == 2) {
+        CHECK_EQ(tree->runs[0]->pos.file, 1);
+        CHECK_EQ(tree->runs[1]->pos.file, 0);
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(preload_wins_a_clash) {
+    // A name the program declares that Preload declares too is Preload's,
+    // which comes first in load order: the error is at the program's
+    // declaration, naming Preload's.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "preload_wins_a_clash");
+    Module_Places places = preload_places(&a, dir, "preloaded :: 1;\n");
+    Ast_File *tree = load_main_with_preload(&a, &d, dir, "preloaded :: 2;\nmain :: () {}\n", &places);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK(!check(tree, &a, &d));
+    String expected = string_printf(&a, "1:1: 'preloaded' is already declared at %s:1:1\n",
+                                    module_file(&a, places.places[0], "Preload", "module.rig"));
+    CHECK_STR(messages(&a, &d), string_cstr(&a, expected));
+    CHECK_EQ(d.messages.count, 1);
+    if (d.messages.count == 1) CHECK_EQ(d.messages[0].pos.file, 0);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(preload_wins_a_clash_with_the_files_it_loads) {
+    // The files Preload reaches, by a #load or by a taken #if's, come before
+    // the main file in load order too: Preload's walk ends before the main
+    // file is placed. So a name the main file declares that one of them
+    // declares is theirs, the error at the main file's declaration. Read,
+    // they're files 2 and 3, after the main file and Preload; in load order,
+    // Preload, its two files, then the main file.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "preload_wins_a_clash_with_the_files_it_loads");
+    Module_Places places =
+        preload_places(&a, dir, "#load \"more.rig\";\n#if true { #load \"branch.rig\"; }\npreloaded :: 1;\n");
+    String more = str(module_file(&a, places.places[0], "Preload", "more.rig"));
+    String branch = str(module_file(&a, places.places[0], "Preload", "branch.rig"));
+    CHECK(os_write_file(more, str("loaded :: 1;\n")));
+    CHECK(os_write_file(branch, str("branched :: 1;\n")));
+    Ast_File *tree = load_main_with_preload(&a, &d, dir, "loaded :: 2;\nbranched :: 2;\nmain :: () {}\n", &places);
+    CHECK_STR(messages(&a, &d), "");
+    const s32 order[4] = {3, 0, 1, 2};
+    CHECK_EQ(d.files.count, 4);
+    if (d.files.count == 4) {
+        CHECK_STR(d.files[2].path, string_cstr(&a, more));
+        CHECK_STR(d.files[3].path, string_cstr(&a, branch));
+        for (s64 i = 0; i < 4; i++) CHECK_EQ(d.files[i].order, order[i]);
+    }
+    CHECK(!check(tree, &a, &d));
+    String expected = string_printf(&a,
+                                    "1:1: 'loaded' is already declared at " STR_FMT ":1:1\n"
+                                    "2:1: 'branched' is already declared at " STR_FMT ":1:1\n",
+                                    STR_ARG(more), STR_ARG(branch));
+    CHECK_STR(messages(&a, &d), string_cstr(&a, expected));
+    CHECK_EQ(d.messages.count, 2);
+    for (s64 i = 0; i < d.messages.count; i++) CHECK_EQ(d.messages[i].pos.file, 0);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(preload_and_the_main_file_load_an_unreadable_file) {
+    // A file that both Preload and the main file load, there but unreadable
+    // (a directory), is reported once, at its first #load in reading order,
+    // not load order: Preload comes first in load order, but its module.rig
+    // is read after the main file, whose #load is met first.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "preload_and_the_main_file_load_an_unreadable_file");
+    Module_Places places = preload_places(&a, dir, "#load \"x.rig\";\npreloaded :: 1;\n");
+    String x = str(module_file(&a, places.places[0], "Preload", "x.rig"));
+    CHECK(os_make_directory(x));
+    String text = string_printf(&a, "#load \"%s\";\nmain :: () {}\n",
+                                absolute_in_a_string(&a, dir, "first/Preload/x.rig"));
+    load_main_with_preload(&a, &d, dir, string_cstr(&a, text), &places);
+    CHECK_EQ(d.files.count, 2);
+    CHECK_EQ(d.messages.count, 1);
+    if (d.messages.count == 1) check_cannot_read(&a, &d.messages[0], 0, 1, 7, x);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(preload_imported_or_loaded_again_reads_nothing_more) {
+    // Preload is a module as any other: an #import of it, or a #load of its
+    // module.rig by its path, finds the file read already.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "preload_imported_or_loaded_again_reads_nothing_more");
+    Module_Places places = preload_places(&a, dir, "preloaded :: 1;\n");
+    String text = string_printf(&a, "#import \"Preload\";\n#load \"%s\";\nmain :: () {}\n",
+                                absolute_in_a_string(&a, dir, "first/Preload/module.rig"));
+    Ast_File *tree = load_main_with_preload(&a, &d, dir, string_cstr(&a, text), &places);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 2);
+    CHECK_EQ(tree->loads.count, 2);
+    for (s64 k = 0; k < tree->loads.count; k++) CHECK_EQ(tree->loads[k]->file, 1);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(preload_before_a_workspaces_further_files) {
+    // A workspace's further files come after Preload, in reading order and
+    // in load order: main, Preload, x.rig are read, and Preload, main, x.rig
+    // their load order. Preload's module.rig and the main file among them
+    // add nothing.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "preload_before_a_workspaces_further_files");
+    Module_Places places = preload_places(&a, dir, "preloaded :: 1;\n");
+    write_source(&a, dir, "main.rig", "main :: () {}\n");
+    write_source(&a, dir, "x.rig", "x :: () {}\n");
+    String path = str(in_directory(&a, dir, "main.rig"));
+    String preload = str(module_file(&a, places.places[0], "Preload", "module.rig"));
+    Load_Options options = {};
+    options.modules = &places;
+    String more[3] = {str(in_directory(&a, dir, "x.rig")), preload, path};
+    for (s64 i = 0; i < 3; i++) {
+        String file_text = {};
+        CHECK(os_read_file(&a, more[i], &file_text));
+        array_add(&options.more_files, more[i]);
+        array_add(&options.more_texts, file_text);
+    }
+    Ast_File *tree = load_program(&a, &d, path, str("main :: () {}\n"), &options);
+    CHECK_STR(messages(&a, &d), "");
+    const char *read[3] = {string_cstr(&a, path), string_cstr(&a, preload), in_directory(&a, dir, "x.rig")};
+    const s32 order[3] = {1, 0, 2};
+    CHECK_EQ(d.files.count, 3);
+    CHECK_EQ(tree->order.count, 3);
+    if (d.files.count == 3 && tree->order.count == 3) {
+        for (s64 i = 0; i < 3; i++) {
+            CHECK_STR(d.files[i].path, read[i]);
+            CHECK_EQ(d.files[i].order, order[i]);
+            CHECK_EQ(tree->order[i], order[i]);
+        }
+    }
+    array_free(&options.more_files);
+    array_free(&options.more_texts);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(preload_as_the_main_file) {
+    // rig check modules/Preload/module.rig checks Preload's own file, which
+    // is then the program's Preload too: read once, a module's. It's known
+    // by its identity, so a relative path names it as the absolute path the
+    // loader finds does.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "preload_as_the_main_file");
+    const char *text = "preloaded :: 1;\n";
+    Module_Places places = preload_places(&a, dir, text);
+    Load_Options options = {};
+    options.modules = &places;
+    Ast_File *tree = load_program(&a, &d, str(in_directory(&a, dir, "first/Preload/module.rig")), str(text), &options);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(tree->load_failure.count, 0);
+    CHECK_EQ(d.files.count, 1);
+    if (d.files.count == 1) CHECK(d.files[0].in_module);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(preload_given_with_its_text) {
+    // rig check --stdin-for Preload's module.rig, as an editor checks it
+    // unsaved, by a relative path: its text is the one given, which every
+    // program reaches, and it's named by its absolute path, as on disk, not
+    // by the relative one it was given by.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "preload_given_with_its_text");
+    Module_Places places = preload_places(&a, dir, "preloaded :: 1;\n");
+    write_source(&a, dir, "main.rig", "main :: () { given(); }\n");
+    bool reached = false;
+    Load_Options options = {};
+    options.modules = &places;
+    options.stdin_for = str(in_directory(&a, dir, "first/Preload/module.rig"));
+    options.stdin_text = str("given :: () {}\n");
+    options.stdin_for_reached = &reached;
+    Ast_File *tree =
+        load_program(&a, &d, str(in_directory(&a, dir, "main.rig")), str("main :: () { given(); }\n"), &options);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK(reached);
+    CHECK_EQ(d.files.count, 2);
+    if (d.files.count == 2) {
+        CHECK_STR(d.files[1].text, "given :: () {}\n");
+        CHECK_STR(d.files[1].path, module_file(&a, places.places[0], "Preload", "module.rig"));
+    }
+    CHECK(check(tree, &a, &d));
+    CHECK_STR(messages(&a, &d), "");
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(missing_preload_stops_the_loading) {
+    // Places with no Preload: the loading stops before anything is parsed,
+    // the tree saying why (Ast_File.load_failure), and nothing reported, so
+    // the main file's syntax error and its #load of a file that isn't there
+    // aren't said; and with only the main file registered, a workspace's
+    // further file not added. The --stdin-for answers are still set, as at
+    // the end of any loading: the main file, given with its text, was
+    // reached, and neither left in a branch not taken nor undecided (each
+    // flag starts as the opposite, to show it was set).
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "missing_preload_stops_the_loading");
+    Module_Places places = preload_places(&a, dir, nullptr);
+    const char *text = "#load \"nope.rig\";\nmain :: () { x }\n";
+    write_source(&a, dir, "main.rig", text);
+    write_source(&a, dir, "x.rig", "x :: () {}\n");
+    String path = str(in_directory(&a, dir, "main.rig"));
+    bool reached = false, not_taken = true, undecided = true;
+    Load_Options options = {};
+    options.modules = &places;
+    array_add(&options.more_files, str(in_directory(&a, dir, "x.rig")));
+    array_add(&options.more_texts, str("x :: () {}\n"));
+    options.stdin_for = path;
+    options.stdin_text = str(text);
+    options.stdin_for_reached = &reached;
+    options.stdin_for_not_taken = &not_taken;
+    options.stdin_for_undecided = &undecided;
+    Ast_File *tree = load_program(&a, &d, path, str(text), &options);
+    String expected = string_printf(&a, "there's no module 'Preload' (looked in " STR_FMT " and " STR_FMT ")",
+                                    STR_ARG(places.places[0]), STR_ARG(places.places[1]));
+    CHECK_STR(tree->load_failure, string_cstr(&a, expected));
+    CHECK_EQ(d.messages.count, 0);
+    CHECK_EQ(d.files.count, 1);
+    CHECK_EQ(tree->procs.count, 0);
+    CHECK_EQ(tree->loads.count, 0);
+    CHECK(reached);
+    CHECK(!not_taken);
+    CHECK(!undecided);
+    array_free(&options.more_files);
+    array_free(&options.more_texts);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(unreadable_preload_stops_the_loading) {
+    // A Preload module.rig that is there but can't be read, a directory:
+    // the loading stops, the tree saying why, in the main file's words.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "unreadable_preload_stops_the_loading");
+    Module_Places places = preload_places(&a, dir, nullptr);
+    CHECK(os_make_directory(str(in_directory(&a, dir, "first/Preload"))));
+    CHECK(os_make_directory(str(in_directory(&a, dir, "first/Preload/module.rig"))));
+    Ast_File *tree = load_main_with_preload(&a, &d, dir, "main :: () {}\n", &places);
+    String start = string_printf(&a, "cannot read '%s': ", module_file(&a, places.places[0], "Preload", "module.rig"));
+    CHECK(tree->load_failure.count > start.count);
+    if (tree->load_failure.count > start.count) {
+        CHECK_STR(string_slice(tree->load_failure, 0, start.count), string_cstr(&a, start));
+    }
+    CHECK_EQ(d.messages.count, 0);
+    CHECK_EQ(d.files.count, 1);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(no_preload_loads_without_it) {
+    // Load_Options.no_preload leaves Preload out: places with none are no
+    // failure, and the program is its main file alone.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "no_preload_loads_without_it");
+    Module_Places places = preload_places(&a, dir, nullptr);
+    write_source(&a, dir, "main.rig", "main :: () {}\n");
+    Load_Options options = {};
+    options.modules = &places;
+    options.no_preload = true;
+    Ast_File *tree = load_program(&a, &d, str(in_directory(&a, dir, "main.rig")), str("main :: () {}\n"), &options);
+    CHECK_EQ(tree->load_failure.count, 0);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(d.files.count, 1);
     diag_free(&d);
     arena_free(&a);
 }
