@@ -7096,3 +7096,122 @@ TEST(where_a_variadic_parameter_cant_be) {
               "3:24: 'f' can't be a value: the compiler does it\n");
     arena_free(&a);
 }
+
+TEST(variadic_arguments_convert_to_the_element_type) {
+    // The arguments after the fixed ones each convert to T, as an argument
+    // to a T parameter does (an untyped constant and a .{...} take T), and
+    // go into a [N]T of the caller's, N from 0: the same through a value.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                          "Vec2 :: struct { x: float; y: float; }\n"
+                          "points :: (all: ..Vec2) { }\n"
+                          "main :: () {\n"
+                          "    b : u8 = 7;\n"
+                          "    sum(1, b, 7);\n"
+                          "    sum(1);\n"
+                          "    points(.{1, 2}, Vec2.{3, 4});\n"
+                          "    s := sum;\n"
+                          "    s(1, 2);\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Array<Ast *> &body = c.file->procs[2]->body->statements;
+    Ast_Call *gathers = (Ast_Call *)body[1];
+    CHECK_STR(type_name(&a, gathers->args[0]->type), "int");
+    CHECK_STR(type_name(&a, gathers->args[1]->type), "u8");
+    CHECK_STR(type_name(&a, gathers->args[2]->type), "int");
+    CHECK(gathers->gathered);
+    CHECK_STR(type_name(&a, gathers->gathered), "[2]int");
+    Ast_Call *none = (Ast_Call *)body[2];
+    CHECK(none->gathered);
+    CHECK_STR(type_name(&a, none->gathered), "[0]int");
+    Ast_Call *structs = (Ast_Call *)body[3];
+    CHECK_STR(type_name(&a, structs->args[0]->type), "Vec2");
+    CHECK_STR(type_name(&a, structs->args[1]->type), "Vec2");
+    CHECK(structs->gathered);
+    CHECK_STR(type_name(&a, structs->gathered), "[2]Vec2");
+    Ast_Call *through = (Ast_Call *)body[5];
+    CHECK(through->gathered);
+    CHECK_STR(type_name(&a, through->gathered), "[1]int");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(variadic_spreads) {
+    // ..e as the last argument passes e as the '..T' parameter's view: a
+    // [N]T or a []T, exactly, its elements never converted. The spread
+    // stands for all the '..' arguments, so the fixed ones come before it,
+    // all of them, and nothing is gathered. Its operand has its own type.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                          "main :: () {\n"
+                          "    ints := int.[1, 2];\n"
+                          "    view : []int = ints;\n"
+                          "    sum(1, ..ints);\n"
+                          "    sum(1, ..view);\n"
+                          "    sum(1, ..int.[3]);\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Array<Ast *> &body = c.file->procs[1]->body->statements;
+    const char *types[] = {"[2]int", "[]int", "[1]int"};
+    for (s64 i = 0; i < 3; i++) {
+        Ast_Call *call = (Ast_Call *)body[2 + i];
+        CHECK(!call->gathered);
+        Ast *last = call->args[call->args.count - 1];
+        CHECK_EQ(last->kind, AST_SPREAD);
+        CHECK_STR(type_name(&a, last->type), types[i]);
+    }
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                           "main :: () {\n"
+                           "    s32s : []s32;\n"
+                           "    sum(1, ..s32s);\n"
+                           "    sum(..s32s);\n"
+                           "    sum(1, .. .[1, 2]);\n"
+                           "}\n"),
+              "4:12: '..' spreads a '[]s32' into 'rest', which needs a '[]int'\n"
+              "5:5: 'sum' takes at least 1 argument, but 0 were given\n"
+              "6:15: this literal's type isn't known; write it before the '.', as in int.[1, 2]\n");
+    arena_free(&a);
+}
+
+TEST(variadic_temporary_too_big) {
+    // The gathered [N]T is a type like any array's: past the largest size
+    // it's too big, at the first '..' argument, as a literal's would be.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Big :: struct { bytes: [549755813888]u8; }\n"
+                           "f :: (rest: ..Big) { }\n"
+                           "main :: () {\n"
+                           "    b : *Big = null;\n"
+                           "    f(b.*, b.*);\n"
+                           "    f(b.*, b.*, b.*);\n"
+                           "}\n"),
+              "6:7: '[3]Big' is too big\n");
+    arena_free(&a);
+}
+
+TEST(a_call_of_a_broken_variadic_says_nothing_more) {
+    // A '..T' whose T is an error has no type: its calls take any number of
+    // arguments and any spread, and say nothing about them, but still need
+    // the fixed ones. A refused '..T', a foreign procedure's, is still one
+    // its calls gather into, with nothing more said.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: (first: int, rest: ..Nope) { }\n"
+                           "c_sum :: (count: int, values: ..int) -> int #foreign libc;\n"
+                           "main :: () {\n"
+                           "    xs := u8.[1, 2];\n"
+                           "    f(1, \"x\", 2.5);\n"
+                           "    f(1, ..xs);\n"
+                           "    f();\n"
+                           "    c_sum(1, 2, 3);\n"
+                           "}\n"),
+              "1:27: unknown type 'Nope'\n"
+              "2:31: a foreign procedure can't take '..int': C's other arguments are written '..' alone, "
+              "as in (format: *u8, ..)\n"
+              "7:5: 'f' takes at least 1 argument, but 0 were given\n");
+    arena_free(&a);
+}

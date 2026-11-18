@@ -496,6 +496,29 @@
 //   procedure can't take a '(..int) -> int': C can't pass the view a '..'
 //   parameter takes" ("a #c_call procedure ...", "... can't return ..."),
 //   at the type.
+// - A call gives at least the fixed parameters, the others ("'sum' takes at
+//   least 1 argument, but 0 were given", at the callee), and then any
+//   number more, none included, each converting to T as an argument to a T
+//   parameter does ("argument 3 of 'sum' has type 'string', which can't be
+//   converted to 'int'", counted over all the arguments): an untyped
+//   constant or a .{...} takes T. They go, in order, into a [N]T of the
+//   caller's (Ast_Call.gathered), which the parameter is a view of: an
+//   array type as any other, so too many large T's are "'[3]Big' is too
+//   big", at the first of them. A call through a value gathers the same.
+// - Or the call's last argument spreads a view into the parameter, ..e: e's
+//   type, its own (.. .[1, 2] is "this literal's type isn't known; ..."),
+//   must be exactly []T or [N]T, its elements never converted: "'..'
+//   spreads a '[]int' into 'rest', which needs a '[]Any'", at the '..';
+//   through a value, the parameter is named by its type, "... into
+//   '..int', ...". The spread is all the '..' arguments: the fixed ones
+//   come before it, all of them (the count doesn't include it), and no
+//   more: "'sum' takes its '..' arguments one by one or as one spread view,
+//   not both", at the '..'.
+// - A spread anywhere else, an argument that isn't the last, one of a
+//   procedure with no '..T' (C's '..' included), a part of an argument, a
+//   variable's value, is "only the arguments of a '..' parameter can be
+//   spread, as in f(..values)", at its '..'. It has no type: nothing more is
+//   said about it, and it counts as an argument of its own position.
 //
 // Code run while compiling (issue #115, spec 7.8).
 // - #run e is an expression, of e's type: an untyped constant's default
@@ -774,6 +797,11 @@ Ast *literal_field_value(Ast_Literal *literal, Type *t, s32 field);
 // that checked with a type.
 s64 call_result_count(Ast_Call *call);
 Type *call_result_type(Ast_Call *call, s64 i);
+
+// The []T of the ..T parameter of the procedure `call` calls, directly or
+// through a value; null when it takes none (C's '..' included), or when T
+// was an error. For a call that checked with a callee.
+Type *call_variadic_type(Ast_Call *call);
 
 // The procedure whose address e, checked, is: a procedure's name, a
 // constant that names one (OP :: add;), a field or an element of constant
