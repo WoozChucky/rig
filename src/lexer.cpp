@@ -152,7 +152,7 @@ static void lex_non_ascii_name(Lexer *l, Position pos, s64 start) {
 }
 
 // A word is read whole first and only then compared with the keywords, so
-// "iffy" is one identifier, not the keyword "if" followed by "fy". Sixteen
+// "iffy" is one identifier, not the keyword "if" followed by "fy". Eighteen
 // short comparisons cost less than hashing; a Table would pay off only with
 // many more keywords.
 static void lex_word(Lexer *l, Position pos, s64 start) {

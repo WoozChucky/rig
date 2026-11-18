@@ -3820,6 +3820,29 @@ TEST(push_context_is_only_in_a_body) {
     CHECK_STR(parse_src(&a, "push_context c { }\nmain :: () { }\n", &errors),
               "(broken)\n(proc main (params) (block))\n");
     CHECK_STR(errors, "1:1: push_context can only be in a body\n");
+    // A declaration later on the same line is read: push_context is a stray
+    // token.
+    CHECK_STR(parse_src(&a, "push_context f :: () { }\nmain :: () { }\n", &errors),
+              "(proc f (params) (block))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:1: push_context can only be in a body\n");
+    CHECK_STR(parse_src(&a, "#if true { push_context c { } }\nmain :: () { }\n", &errors),
+              "(#if (bool true) (block (broken)))\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:12: push_context can only be in a body\n");
+    arena_free(&a);
+}
+
+TEST(push_context_errors) {
+    // An expression and a block must follow the keyword. When either fails,
+    // the statement is given up, and with it the procedure, as for any
+    // statement that fails; the parser goes on with the next declaration.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "f :: () { push_context { } }\nmain :: () { }\n", &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:24: expected an expression, found '{'\n");
+    CHECK_STR(parse_src(&a, "f :: () { push_context c; }\nmain :: () { }\n", &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:25: expected '{', found ';'\n");
     arena_free(&a);
 }
 
