@@ -1,7 +1,8 @@
-// Basic's print: writing to standard output. Every byte goes out through
-// c_putchar, C's putchar (libc.rig), so it passes through C's own stdout
-// buffer, and what a program prints with Basic and with C's printf comes
-// out in the order it was printed, compiled and interpreted.
+// Basic's print: writing to standard output, or to a string builder. Every
+// byte written to standard output goes out through c_putchar, C's putchar
+// (libc.rig), so it passes through C's own stdout buffer, and what a
+// program prints with Basic and with C's printf comes out in the order it
+// was printed, compiled and interpreted.
 //
 // A string is bytes, and they're written as they are: no encoding is
 // checked or changed, so UTF-8 text prints as UTF-8. There's no portable
@@ -11,7 +12,7 @@
 // so Basic prints only to standard output.
 //
 // Numbers are written into a buffer on the stack by numbers.rig and then
-// printed, so printing never allocates.
+// printed, so printing to standard output never allocates.
 //
 // print_item writes a value of any type, through its type info (spec
 // 3.16): it reads an Any by its description, as the type's kind says, and
@@ -173,11 +174,13 @@ print_quoted :: (builder: *String_Builder, s: string) {
 // description of void, which only an Any made by hand can hold, writes
 // void; and a tag that isn't one of the nine writes nothing.
 //
-// Values nest by value, so every nesting is finite, but for an Any that
-// holds a value it is itself part of: the struct it is a field of
-// (h.a = h;), the array it is an element of (arr[0] = arr;), or anything
-// that contains it deeper down. Writing that one recurses until the stack
-// runs out, as recursion that never ends does.
+// A pointer isn't followed, but a view's data and an Any's value_pointer
+// are, so a view or an Any that reaches a value it is part of makes a
+// cycle: a struct whose view field views an array holding it
+// (nodes[0].kids = nodes;), the struct an Any is a field of (h.a = h;),
+// the array it is an element of (arr[0] = arr;), or anything that
+// contains it deeper down. Writing that one recurses until the stack runs
+// out, as recursion that never ends does.
 print_item :: (builder: *String_Builder, item: Any, nested: bool) {
     t := item.type;
     p := item.value_pointer;
@@ -370,18 +373,23 @@ print_formatted :: (builder: *String_Builder, format: string, args: []Any) {
 // print_formatted says: print("{} is {}\n", name, age). Each argument is
 // any value, gathered as an Any (spec 5.10, 3.16), and a []Any already
 // made is forwarded with .., as in print(format, ..args); passed without
-// it, it is one argument, a view. Like the rest of this file, it writes
-// as it goes, through c_putchar, and allocates nothing.
+// it, it is one argument, a view. Like all this file writes to standard
+// output, it writes as it goes, through c_putchar, and allocates nothing.
 print :: (format: string, args: ..Any) {
     print_formatted(null, format, args);
 }
 
 // Appends what print would write to builder (builder.rig), whose memory
 // grows as append_string's does, and writes nothing to standard output.
+//
+// Unlike append_string's s, the format and the arguments must not view
+// the builder's own text: the text is read a piece at a time, over many
+// appends, and when one grows the builder its memory may move, leaving
+// the pieces not yet read in memory already freed (spec 8.6).
 print_to_builder :: (builder: *String_Builder, format: string, args: ..Any) {
     // A null builder is standard output to print_formatted, so it's read
     // here first, to stop the program with the language's null pointer
-    // dereference (spec 8.4), as append_string does, rather than print.
+    // dereference (spec 8.4), whatever the format, rather than print.
     // tests/run/basic_print_null_builder.err names this line.
     count := builder.count;
     print_formatted(builder, format, args);

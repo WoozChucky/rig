@@ -292,7 +292,7 @@ A variable of the environment the program was started with, through C's `getenv`
 
 ## Print (`print.rig`)
 
-Everything goes to standard output through C's `putchar`, so it comes out in order with what a program writes with C's `printf`, compiled and interpreted. Bytes are written as they are, so UTF-8 text prints as UTF-8. A value of any type is written through its type info (`Any`, spec 3.16). The procedures that take a `builder` append to it instead, or write to standard output when it is null: Rig has no closures or generics, so a pointer that may be null lets one walk write to either. Written to standard output, nothing is allocated.
+What is written to standard output goes through C's `putchar`, so it comes out in order with what a program writes with C's `printf`, compiled and interpreted. Bytes are written as they are, so UTF-8 text prints as UTF-8. A value of any type is written through its type info (`Any`, spec 3.16). The procedures that take a `builder` append to it instead, or write to standard output when it is null: Rig has no closures or generics, so a pointer that may be null lets one walk write to either. Written to standard output, nothing is allocated.
 
 - `print_string(s: string)`: writes the bytes of `s`; an empty or zeroed string writes nothing.
 - `print_byte(byte: u8)`: writes the byte itself, not its number.
@@ -305,7 +305,7 @@ Everything goes to standard output through C's `putchar`, so it comes out in ord
 - `print_item(builder: *String_Builder, item: Any, nested: bool)`: writes the value `item` holds, as below; `nested` says it is inside a struct, an array, a view or `{!EXTRA: ...}`, where a string is quoted.
 - `print_formatted(builder: *String_Builder, format: string, args: []Any)`: writes `format` with each `{}` replaced by the next of `args`, as below; `print` and `print_to_builder` are it.
 - `print(format: string, args: ..Any)`: writes `format` to standard output with its `{}`s replaced by the arguments, in order: `print("{} is {}\n", name, age)`. A `[]Any` already made is forwarded with `..`, as in `print(format, ..args)`; passed without it, it is one argument, a view.
-- `print_to_builder(builder: *String_Builder, format: string, args: ..Any)`: appends what `print` would write to `builder`, and writes nothing to standard output. A null `builder` stops the program with `null pointer dereference`, as `append_string` does.
+- `print_to_builder(builder: *String_Builder, format: string, args: ..Any)`: appends what `print` would write to `builder`, and writes nothing to standard output. A null `builder` stops the program with `null pointer dereference`, whatever the format. Unlike `append_string`'s `s`, the format and the arguments must not view the builder's own text: it is read over many appends, and when one grows the builder its memory may move, leaving what is still to be read in freed memory (spec 8.6).
 
 The format, read left to right:
 
@@ -329,7 +329,7 @@ How each value is written:
 - **Arrays and views:** `[1, 2, 3]`; empty, or a view with a count of 0 or less, `[]`. A view with null data and a count above 0 stops the program with `null pointer dereference` before any of it is written, as indexing it would (spec 8.4). A string with null data and a count above 0 stops where its first byte is read, after its opening `"` when it is nested.
 - **`Any`**, as a field or an element: the value it holds, written as that field or element would be. A zeroed `Any`, whose type is null, as a zeroed struct's `Any` field is, writes `null`.
 - **`void`:** a description of `void`, which only an `Any` made by hand can hold, writes `void`; a tag that isn't one of the nine writes nothing.
-- **Cycles:** every nesting is by value, so it is finite, but for an `Any` that holds a value it is itself part of: the struct it is a field of (`h.a = h;`), the array it is an element of (`arr[0] = arr;`), or anything that contains it deeper down. That one is written by recursing until the stack runs out, as recursion that never ends does: interpreted, `stack overflow`; compiled, the program crashes, and what C still buffers of its output is lost. It is the program's mistake, and isn't caught.
+- **Cycles:** a pointer isn't followed, but a view's data and an `Any`'s `value_pointer` are, so a view or an `Any` that reaches a value it is part of makes a cycle: a struct whose view field views an array holding it (`nodes[0].kids = nodes;`), the struct an `Any` is a field of (`h.a = h;`), the array it is an element of (`arr[0] = arr;`), or anything that contains it deeper down. That one is written by recursing until the stack runs out, as recursion that never ends does: interpreted, `stack overflow`; compiled, the program crashes, and what C still buffers of its output is lost. It is the program's mistake, and isn't caught.
 
 ## Waiting on the language
 

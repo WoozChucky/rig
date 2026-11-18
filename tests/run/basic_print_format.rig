@@ -66,7 +66,7 @@ main :: () {
     printf("printf, in order\n");
     print("{}", 5);
     print_string(" and ");
-    printf("%d", 6);
+    printf("%d", cast(s32) 6);
     print("\n");
 
     // print_to_builder appends, and writes nothing to standard output: the
