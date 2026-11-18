@@ -15,30 +15,30 @@ dv /t
 bc *
 bp `aggregates.rig:50`
 g
-.call aggregates!make(&q, 9)
+.call aggregates!make(&q, context, 9)
 g
 ?? q
-.call aggregates!sum(&q)
+.call aggregates!sum(context, &q)
 g
-.call aggregates!name(&w, 2)
+.call aggregates!name(&w, context, 2)
 g
 ?? w
-.call aggregates!both(&b, 7)
+.call aggregates!both(&b, context, 7)
 g
 ?? b[1]
 .call aggregates!make(9)
-.call aggregates!pairs(&x, &y, 3)
+.call aggregates!pairs(&x, &y, context, 3)
 g
 ?? x
 ?? y
-.call aggregates!split(&z, 4)
+.call aggregates!split(&z, context, 4)
 g
 ?? z
 bp `aggregates.rig:36`
 g
 dv /t
 ?? p->b
-.call aggregates!twice(4)
+.call aggregates!twice(context, 4)
 g
 bp `aggregates.rig:64`
 g

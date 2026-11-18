@@ -2,11 +2,11 @@
 // with procedure_values.gdb and under cdb with procedure_values.cdb). A
 // procedure value is described as a C function pointer is (spec 10.7): a
 // debugger shows it as an address and the procedure there, a null one as
-// zero, and calls the procedure through it. Its type is the procedure's,
-// as a direct call passes the arguments: swap's Pair by address, and the
-// Pair it returns through a pointer first. gdb calls through a value as C
-// does, `print f(10, 20)`; cdb's .call takes only a procedure's name, so it
-// calls through a value with C++'s evaluator, `.call @@c++(f)(10, 20)`.
+// zero, and calls the procedure through it. Its type is the procedure's, as
+// a direct call passes the arguments: swap's Pair by address, the Pair it
+// returns through a pointer first, then the context (spec 7.10). gdb calls
+// through a value as C does, `print f(context, 10, 20)`; cdb's .call takes a
+// name only, so C++'s evaluator calls it, `.call @@c++(f)(context, 10, 20)`.
 printf :: (format: *u8, ..) -> s32 #foreign libc;
 
 Pair :: struct { a: int; b: int; }

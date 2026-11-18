@@ -31,6 +31,22 @@
 //   A parameter's default value (spec 7.2) is the caller's code too: a call
 //   that leaves the parameter out works the value out and passes it, as if
 //   it were written there, so the callee never knows (lower_call_results).
+// - The context (spec 7.10, 10.4). Every procedure with a body but a
+//   #c_call one and main takes a *Context, a hidden ptr parameter after
+//   the result pointers and before the visible ones (takes_context), and a
+//   value of a procedure type that isn't #c_call holds such a procedure
+//   (type_takes_context): foreign and #compiler procedures take none. A
+//   body keeps the current context's address in a slot of its own
+//   (Lowering.context), set in its prologue, with no position, as a scalar
+//   parameter's is: the hidden parameter stored there; or, in main and in
+//   each #run's procedure, which nothing gives one, default_context's
+//   address, once Preload's __runtime_init has set it up (lower_body's
+//   Context_Source, emit_startup_context). A #c_call procedure has no slot.
+//   `context` is a load of the slot, its value and its address alike, and
+//   every call of a procedure that takes the context loads it and passes
+//   it right after the result temporaries; a default value's context is
+//   the caller's, as all of its code is. Without Preload (a unit test's
+//   single file) there is no context, and no procedure takes one.
 // - A global variable is an Ir_Global of its type, whose first value (the
 //   constant the checker made sure it has, or zero) is in the program's
 //   file. It's read and written as a slot is, through its address, an
@@ -211,7 +227,9 @@
 //   grows by a copy per way out, with no flag tested at run time, and the
 //   interpreter, which runs the same IR, runs a #run's defers as compiled.
 // - Rig's main is C's main (ir.h): exported, its every return a ret of C's
-//   int 0, so the program needs no wrapper around it.
+//   int 0, so the program needs no wrapper around it. Its prologue calls
+//   Preload's __runtime_init, then keeps default_context's address as its
+//   context (emit_startup_context), before its first line.
 // - A #compiler procedure (spec 7.9) is declared as any procedure is, its
 //   struct and string parameters and results passed as a Rig procedure's
 //   are (above), but with no body: the compiler does it, while compiling,
@@ -236,7 +254,11 @@
 //   debugger shows, for the rest of its block (lower_statement); each
 //   declaration adds an Ir_Var (add_local_var, add_constant, and the
 //   parameters in lower_body), a top-level constant one in the module's
-//   constants (ir_lower). Each copy of
+//   constants (ir_lower), and so does the context, an artificial one: the
+//   hidden parameter, arg 1, or main's and a run's slot, a local
+//   (lower_body). __runtime_init has no debug information at all
+//   (Ir_Proc.no_debug_info), and main's call of it no position, so `break
+//   main` stops at main's first line with the context set up. Each copy of
 //   deferred code is a scope of its own too, at the deferred statement,
 //   inside the scope the defer was reached in, its instructions at their
 //   own lines (lower_deferred); the ret or jump that leaves after the copies
@@ -281,7 +303,10 @@
 // - The run's procedure, run.N: an expression #run's returns its operand's
 //   value, as a procedure with that result would; a top-level #run e;
 //   evaluates e; a top-level #run { } is its block, lowered as a body. Its
-//   source_name is #run, so a failure's outer frame reads "in #run".
+//   source_name is #run, so a failure's outer frame reads "in #run". Each
+//   starts as main does, calling __runtime_init, then with the world's
+//   default_context as its context: only the world's first call sets it
+//   up, so every run has the same one.
 // - Compile-time code never reaches the program: it is lowered into its
 //   own module, and the program's ir_lower never lowers a run's code. What
 //   a #run gives the program is its value, baked into the tree, which
@@ -415,6 +440,14 @@ struct Lowering {
                               // hides nothing is recorded (lower_statement's AST_CONST)
     bool is_entry;            // the procedure being lowered is Rig's main, C's main: its returns
                               // give C's int, 0
+    // The context (spec 7.10): Preload's declarations of it, from the tree
+    // (Ast_File's), all null without Preload, whose procedures take none;
+    // and where the procedure being lowered keeps the current one.
+    Type *context_type;        // Preload's Context
+    Ast_Var *default_context;  // the global main and each run's procedure start with
+    Ast_Proc *runtime_init;    // __runtime_init, which sets it up, called first by those
+    s32 context;               // the slot (an IR_LOCAL ptr) holding the current context's address;
+                               // -1 without one: a #c_call procedure, the compiler's own, no Preload
     Array<Ast_Proc *> sources;  // by index in module->procs, whole or on demand: the procedure of the
                                 // source each lowers; null, or past its end, for the compiler's own
                                 // and the runs' (set_source, ir_lowering_source)
@@ -539,7 +572,7 @@ static s32 new_scope(Lowering *l, Position pos) {
 // Records the variable `decl` (an Ast_Var: a local, an iterator, it_index)
 // living in the stack slot %slot, declared in `scope`.
 static void add_local_var(Lowering *l, Ast_Var *decl, s32 slot, s32 scope) {
-    array_add(&l->proc->vars, Ir_Var{decl->name, decl->type, decl->pos, scope, IR_VAR_SLOT, slot, 0, 0});
+    array_add(&l->proc->vars, Ir_Var{decl->name, decl->type, decl->pos, scope, IR_VAR_SLOT, slot, 0, 0, false});
 }
 
 // The type a debugger shows constant type t as (ir.h's "Constants"): an
@@ -571,7 +604,7 @@ static bool is_shown_constant(Ast_Const *c) { return !c->proc && (c->is_constant
 static void add_constant(Lowering *l, Ast_Const *c, s32 scope) {
     if (l->on_demand) return;
     bool in_memory = c->is_data || c->proc;
-    Ir_Var v = {c->name, debug_constant_type(c->type), c->pos, scope, IR_VAR_CONSTANT, -1, 0, c->constant};
+    Ir_Var v = {c->name, debug_constant_type(c->type), c->pos, scope, IR_VAR_CONSTANT, -1, 0, c->constant, false};
     if (in_memory) {
         v.kind = IR_VAR_GLOBAL;
         v.constant = 0;
@@ -869,6 +902,42 @@ static s32 aggregate_results(Ast_Proc *proc) {
         if (type_is_aggregate(proc->results[i]->type)) count++;
     }
     return count;
+}
+
+// Where a body gets the context it runs with (spec 7.10, 10.4; lower_body).
+enum Context_Source : u8 {
+    CONTEXT_NONE,     // none: a #c_call procedure, which C calls with none, until it pushes one;
+                      // or a program without Preload (a unit test's single file)
+    CONTEXT_PARAM,    // the hidden parameter, after the result pointers
+    CONTEXT_STARTUP,  // __runtime_init(), then *default_context: main, and each #run's procedure
+};
+
+// Whether procedure `proc`'s IR takes the context, a ptr after its result
+// pointers, and so every direct call of it passes the caller's: it has a
+// body, and is neither #c_call (C calls it with none) nor main (C's entry
+// point, which starts with the default context). False without Preload.
+// main is main by its name, as declare_proc decides. (The checker's
+// needs_a_context says the same.)
+static bool takes_context(Lowering *l, Ast_Proc *proc) {
+    return l->context_type && !proc->is_foreign && !proc->is_compiler && !proc->is_c_call &&
+           !string_eq(proc->name, str("main"));
+}
+
+// Whether a call through a value of procedure type t passes the context: t
+// isn't #c_call. Every value of such a type names a procedure that takes
+// it: main can't be a value, a foreign procedure's value is #c_call, and a
+// #compiler one is no value (spec 3.15). False without Preload.
+static bool type_takes_context(Lowering *l, Type *t) {
+    return l->context_type && t->kind == TYPE_PROC && !t->is_c_call;
+}
+
+// The current context's address, loaded from the procedure's slot
+// (Lowering.context): what `context` is, its value and its address alike
+// (a struct's value is its address), and what a call passes a callee that
+// takes it. The checker made sure there is one wherever it's needed.
+static s32 load_context(Lowering *l) {
+    RIG_ASSERT(l->context >= 0);
+    return emit_load(l, IR_PTR, l->context);
 }
 
 static s32 lower_expr(Lowering *l, Ast *e);
@@ -1610,7 +1679,8 @@ static s32 lower_index_address(Lowering *l, Ast_Index *ix) {
 // The address of a place in memory (the checker's check_addressable): what
 // *e gives, and where an assignment to e stores. A variable's is its slot,
 // or its global's addr; p.*'s is p's value, once checked not to be null, at
-// the '.'; a field's, its struct's plus the field's offset. A place's
+// the '.'; a field's, its struct's plus the field's offset; context's, the
+// address the procedure's slot holds (load_context). A place's
 // operands, and its checks, are worked out here, before any value an
 // assignment stores (spec 6.5's order).
 static s32 lower_address(Lowering *l, Ast *e) {
@@ -1622,6 +1692,7 @@ static s32 lower_address(Lowering *l, Ast *e) {
     }
     if (e->kind == AST_MEMBER) return lower_member_address(l, (Ast_Member *)e);
     if (e->kind == AST_INDEX) return lower_index_address(l, (Ast_Index *)e);
+    if (e->kind == AST_CONTEXT) return load_context(l);  // the current context's own address
     RIG_ASSERT(e->kind == AST_NAME);  // a variable: the checker allowed nothing else
     return address_of(l, ((Ast_Name *)e)->decl);
 }
@@ -1790,6 +1861,9 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         addr->target = global;
         return addr->result;
     }
+    // context (spec 7.10): a Context, whose value, as any aggregate's, is
+    // its address, the one the procedure's slot holds.
+    case AST_CONTEXT: return load_context(l);
     default: RIG_ASSERT(!"not a value"); return -1;
     }
 }
@@ -1808,12 +1882,15 @@ static Type *extra_argument_type(Ast *arg) {
 // call through a value of t (IR_CALL_INDIRECT): the parameters and results
 // a procedure of that signature has (declare_proc makes a procedure's the
 // same way), so the call passes what the procedure expects, whichever it
-// is. The Rig results are kept too, for the backend's sret.
+// is: the result pointers, the context's ptr when t isn't #c_call
+// (type_takes_context), then the visible parameters. The Rig results are
+// kept too, for the backend's sret.
 static Ir_Proc *signature_of(Lowering *l, Type *t) {
     Ir_Proc *p = arena_new<Ir_Proc>(l->arena);  // in no module: only a call's signature
     for (s64 k = 0; k < t->result_count; k++) {
         if (type_is_aggregate(t->results[k])) ir_add_param(p, IR_PTR, IR_EXT_NONE);
     }
+    if (type_takes_context(l, t)) ir_add_param(p, IR_PTR, IR_EXT_NONE);
     for (s64 k = 0; k < t->param_count; k++) ir_add_param(p, ir_type_of(t->params[k]), ir_ext_of(t->params[k]));
     for (s64 k = 0; k < t->result_count; k++) {
         Type *result = t->results[k];
@@ -1875,6 +1952,10 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //   there. Never the place the result is going, which the callee might read
 //   (f returning g2, g1 for `g1, g2 = f();`): the caller copies the
 //   temporaries there once the call is done.
+// - Then, when the callee takes the context (spec 7.10: a procedure with a
+//   body but a #c_call one or main, takes_context; through a value, one of
+//   a type that isn't #c_call, type_takes_context), the caller's current
+//   one, its address loaded from the caller's slot (Lowering.context).
 // - Then the arguments, in order, each converted to its parameter's type;
 //   an aggregate one is copied into a temporary as soon as it's worked out,
 //   and the temporary's address passed. So the callee's parameter is the
@@ -1888,8 +1969,9 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 // - Then, in a direct call that leaves parameters out (spec 5.10, 7.2),
 //   each one's default value, in parameter order, passed as an argument
 //   is: its code is the caller's, worked out again at each call, after the
-//   arguments given. All of it, the defaults its own calls fill in too, is
-//   at the statement holding the outermost such call (Lowering.filling,
+//   arguments given, its context the caller's current one. All of it, the
+//   defaults its own calls fill in too, is at the statement holding the
+//   outermost such call (Lowering.filling,
 //   emitted_at), whatever file the default is written in; a runtime check
 //   in it still names its own place in its message (runtime_error_prefix),
 //   and while compiling its failure is there too (fail_in_place). Its
@@ -1914,6 +1996,15 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //   literal's bytes' address, a C string (the checker allows no other
 //   aggregate there).
 // - The scalar results are the call's values, consecutive (ir_emit_call).
+//
+// (The calls below but the first are of procedures that take no context,
+// as without Preload: a unit test's single file.)
+//
+//     n := twice(4);             %2 = local i64            (n; main's context in the slot %0)
+//                                %3 = load ptr %0          (the context)
+//                                %4 = const i64 4
+//                                %5 = call @twice(%3, %4)
+//                                store i64 %5, %2
 //
 //     v := make(3);              %0 = local 8 align 4      (v)
 //                                %1 = local 8 align 4      (the result)
@@ -1962,6 +2053,10 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
         if (type_is_aggregate(t)) array_add(&args, emit_slot(l, t));
     }
     s32 hidden = (s32)args.count;
+    // The caller's current context, when the callee takes it: loaded once,
+    // before the arguments. An argument may change the context's fields,
+    // never which context is current, so the order can't show.
+    if (proc ? takes_context(l, proc) : type_takes_context(l, callee)) array_add(&args, load_context(l));
     // A '..T' parameter's []T, the last parameter; the arguments before it
     // are the fixed ones (without one, all of them: C's extra ones too).
     Type *view = call_variadic_type(call);
@@ -3574,6 +3669,10 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
     for (s64 k = 0; k < source->results.count; k++) {
         if (type_is_aggregate(source->results[k]->type)) ir_add_param(p, IR_PTR, IR_EXT_NONE);
     }
+    // The context (spec 7.10), a *Context, after the result pointers and
+    // before the visible parameters, for every procedure that takes it
+    // (takes_context): its caller's current one.
+    if (takes_context(l, source)) ir_add_param(p, IR_PTR, IR_EXT_NONE);
     for (s64 k = 0; k < source->params.count; k++) {
         Type *t = source->params[k]->type;
         ir_add_param(p, ir_type_of(t), ir_ext_of(t));
@@ -3596,6 +3695,11 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
         p->pos = source->pos;
         p->body = source->body->pos;
         for (s64 k = 0; k < source->results.count; k++) array_add(&p->source_results, source->results[k]->type);
+        // Preload's __runtime_init, which main calls before its first line,
+        // has no debug information (ir.h's "Positions"): a debugger steps
+        // over the call, and `break main` stops at main's first line, the
+        // context set up.
+        p->no_debug_info = source == l->runtime_init;
     }
     s32 index = (s32)(l->module->procs.count - 1);
     table_put(&l->proc_index, source->name, index);
@@ -3604,16 +3708,49 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
     return index;
 }
 
+// The prologue of main and of each #run's procedure, which nothing gives a
+// context (CONTEXT_STARTUP): Preload's __runtime_init called, which sets
+// default_context up the first time, then a slot holding default_context's
+// address, the current context from here on (Lowering.context): the
+// variable context, artificial, in the body's scope, at `pos`, the
+// procedure's name (a run's: the #run). All of it with no position (ir.h's
+// "Positions"): the call too, so `break main` stops at main's first line,
+// once it's done, and a debugger steps over it.
+//
+//     call @__runtime_init()
+//     %0 = local ptr
+//     %1 = addr @default_context
+//     store ptr %1, %0
+static void emit_startup_context(Lowering *l, Position pos) {
+    place(l, {}, -1);
+    emit_call(l, proc_index_of(l, l->runtime_init), {});
+    s32 slot = emit(l, IR_LOCAL, IR_PTR)->result;
+    emit_store(l, IR_PTR, address_of(l, l->default_context), slot);
+    l->context = slot;
+    array_add(&l->proc->vars,
+              Ir_Var{str("context"), type_pointer_to(l->context_type), pos, 0, IR_VAR_SLOT, slot, 0, 0, true});
+}
+
 // The body of procedure `source` (not a foreign or #compiler one), lowered
 // into module->procs[index]: the procedure declare_proc made for it, or the
-// run.N of a #run { } (ir_lower_run).
-static void lower_body(Lowering *l, Ast_Proc *source, s32 index) {
+// run.N of a #run { } (ir_lower_run, `is_run`).
+static void lower_body(Lowering *l, Ast_Proc *source, s32 index, bool is_run) {
     l->proc = l->module->procs[index];
     l->block = ir_new_block(l->arena, l->proc);
     l->locals.count = 0;
     l->defers.count = 0;
     l->checking_bounds = l->bounds_checks && !source->no_bounds_checks;
     l->is_entry = string_eq(source->name, str("main"));
+    // Where the body's context comes from (spec 7.10): main and a run's
+    // procedure start with the default one, even a main marked #c_call; a
+    // procedure that takes it (takes_context) is given its caller's; a
+    // #c_call procedure, which C calls with none, and every procedure of a
+    // program without Preload, have none.
+    Context_Source from = !l->context_type          ? CONTEXT_NONE
+                          : is_run || l->is_entry   ? CONTEXT_STARTUP
+                          : takes_context(l, source) ? CONTEXT_PARAM
+                                                     : CONTEXT_NONE;
+    l->context = -1;
     // The body is scope 0, at its '{'. Its parameters are its first
     // variables. A scalar one is stored on entry into a slot of its own,
     // and every use reads it from there, as clang does at -O0 (the header's
@@ -3621,28 +3758,46 @@ static void lower_body(Lowering *l, Ast_Proc *source, s32 index) {
     // caller's copy. The hidden result pointers before them are no variable
     // here, and don't count in `arg` (the backend describes each to a
     // debugger as the artificial parameter result$, from source_results:
-    // llvm_backend.cpp's declare_variables).
+    // llvm_backend.cpp's declare_variables). The context, when it's the
+    // hidden parameter after them, is the first variable, arg 1, kept in a
+    // slot as a scalar parameter is, which holds the current context from
+    // here on (Lowering.context): context, artificial, at the procedure's
+    // name. The visible parameters come after it, their values and their
+    // `arg`s one more.
+    // None of it has a position: this is the prologue's work, before any
+    // line of the body (a debugger's breakpoint on the procedure stops
+    // after it, at the first instruction with a line).
     l->scope = -1;
     s32 body_scope = new_scope(l, source->body->pos);
     s32 hidden = aggregate_results(source);
+    place(l, {}, -1);
+    s32 first = hidden;  // the first visible parameter's value
+    if (from == CONTEXT_PARAM) {
+        s32 slot = emit(l, IR_LOCAL, IR_PTR)->result;
+        emit_store(l, IR_PTR, hidden, slot);
+        l->context = slot;
+        array_add(&l->proc->vars, Ir_Var{str("context"), type_pointer_to(l->context_type), source->pos, 0,
+                                         IR_VAR_SLOT, slot, 1, 0, true});
+        first++;
+    }
     for (s64 k = 0; k < source->params.count; k++) {
         Ast_Param *param = source->params[k];
-        s32 value = hidden + (s32)k, arg = (s32)k + 1;  // the k-th visible parameter is the value hidden + k
+        // The k-th visible parameter is the value first + k, its arg one
+        // more than the parameters before it, the context's included.
+        s32 value = first + (s32)k, arg = first - hidden + (s32)k + 1;
         if (type_is_aggregate(param->type)) {
             array_add(&l->locals, {(Ast *)param, value});
-            array_add(&l->proc->vars, Ir_Var{param->name, param->type, param->pos, 0, IR_VAR_ADDRESS, value, arg, 0});
+            array_add(&l->proc->vars,
+                      Ir_Var{param->name, param->type, param->pos, 0, IR_VAR_ADDRESS, value, arg, 0, false});
             continue;
         }
-        // No position: this is the prologue's work, before any line of the
-        // body (a debugger's breakpoint on the procedure stops after it, at
-        // the first instruction with a line).
-        place(l, {}, -1);
         Ir_Type type = ir_type_of(param->type);
         s32 slot = emit(l, IR_LOCAL, type)->result;
         emit_store(l, type, value, slot);
         array_add(&l->locals, {(Ast *)param, slot});
-        array_add(&l->proc->vars, Ir_Var{param->name, param->type, param->pos, 0, IR_VAR_SLOT, slot, arg, 0});
+        array_add(&l->proc->vars, Ir_Var{param->name, param->type, param->pos, 0, IR_VAR_SLOT, slot, arg, 0, false});
     }
+    if (from == CONTEXT_STARTUP) emit_startup_context(l, source->pos);
     place(l, source->body->pos, body_scope);
     lower_block(l, source->body, source);
     if (!ir_block_has_ended(l->proc, l->block)) {
@@ -3664,6 +3819,7 @@ static void lower_body(Lowering *l, Ast_Proc *source, s32 index) {
     // before an unreachable too).
     l->defers.count = 0;
     l->is_entry = false;
+    l->context = -1;
 }
 
 // The tables and arrays a lowering keeps, freed.
@@ -3694,6 +3850,14 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     l.string_equal = -1;
     l.module = m;
     l.block = -1;
+    // Preload's context, which every procedure but a #c_call one takes
+    // (null without Preload: none does); no slot yet, as a zeroed one would
+    // say %0.
+    l.context_type = f->context_type;
+    l.default_context = f->default_context;
+    l.runtime_init = f->runtime_init;
+    l.context = -1;
+    m->context_type = f->context_type;
 
     // The source files, for a debugger (ir.h), every one the program was
     // loaded from, in its order, so a position's file indexes them: the
@@ -3736,7 +3900,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     // Then the bodies: a foreign procedure's is C's, and a #compiler one's
     // the compiler's own.
     for (s64 i = 0; i < f->procs.count; i++) {
-        if (!f->procs[i]->is_foreign && !f->procs[i]->is_compiler) lower_body(&l, f->procs[i], (s32)i);
+        if (!f->procs[i]->is_foreign && !f->procs[i]->is_compiler) lower_body(&l, f->procs[i], (s32)i, false);
     }
 
     // Every data constant's const.N, for a debugger, now that the bodies'
@@ -3755,7 +3919,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     return m;
 }
 
-Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a) {
+Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file) {
     RIG_ASSERT(m->procs.count == 0);
     Lowering *l = (Lowering *)heap_realloc(nullptr, sizeof(Lowering));
     *l = {};
@@ -3767,6 +3931,14 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a) {
     l->bounds_failed = -1;
     l->string_equal = -1;
     l->block = -1;
+    // The tree's context, as ir_lower takes it; none without a tree.
+    if (file) {
+        l->context_type = file->context_type;
+        l->default_context = file->default_context;
+        l->runtime_init = file->runtime_init;
+        m->context_type = file->context_type;
+    }
+    l->context = -1;
     // The longest prefix a bounds check can pass __rig_bounds_failed, from
     // any of the program's files, all loaded before the checker (and so any
     // #run) starts: "PATH:L:C: runtime error: ", PATH the longest path, L
@@ -3796,9 +3968,10 @@ s32 ir_lower_run(Lowering *l, Ast_Run *run) {
     if (run->proc) {
         // #run { ... }: its block, a body of a procedure with no parameters
         // or results, each statement at its own place, its return ending
-        // the run.
+        // the run. It starts with the default context (lower_body's
+        // CONTEXT_STARTUP), as main does.
         p->body = run->proc->body->pos;
-        lower_body(l, run->proc, index);
+        lower_body(l, run->proc, index, true);
     } else {
         // #run e: e's value, the run's type, is its one result, as a
         // procedure returning it gives it (declare_proc); a top-level
@@ -3819,6 +3992,10 @@ s32 ir_lower_run(Lowering *l, Ast_Run *run) {
         l->is_entry = false;
         l->scope = -1;
         s32 scope = new_scope(l, run->pos);
+        // The operand's context is the run's own, the world's default one,
+        // as a block run's is (emit_startup_context).
+        l->context = -1;
+        if (l->context_type) emit_startup_context(l, run->pos);
         place(l, run->pos, scope);
         if (!t) {
             if (!run->operand->is_constant) lower_expr(l, run->operand);
@@ -3837,7 +4014,7 @@ s32 ir_lower_run(Lowering *l, Ast_Run *run) {
     // order they were declared.
     for (s64 i = 0; i < l->waiting.count; i++) {
         s32 k = l->waiting[i];
-        lower_body(l, l->sources[k], k);
+        lower_body(l, l->sources[k], k, false);
     }
     l->waiting.count = 0;
     return index;

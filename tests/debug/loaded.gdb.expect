@@ -1,6 +1,8 @@
-helper (n=21) at @ROOT@/tests/debug/load/helper.rig:5
+helper (context=0x
+n=21) at @ROOT@/tests/debug/load/helper.rig:5
 return doubled;
-#0  helper (n=21) at
+#0  helper (context=0x
+n=21) at
 helper.rig:5
 #1
 in main () at

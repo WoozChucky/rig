@@ -3789,17 +3789,33 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
             }
             s32 first_line = p->pos.line;
             s32 last_line = from_source ? tree->procs[k]->body->end.line : 0;
-            s64 prologue = 0;  // the entry block's first instructions: a slot and a store per scalar parameter
-            for (s64 v = 0; v < p->vars.count; v++) {
-                if (p->vars[v].arg > 0 && p->vars[v].kind == IR_VAR_SLOT) prologue += 2;
+            // The entry block's first instructions, with no position: a slot
+            // and a store per scalar parameter, the context's included; then,
+            // in main, which starts with the default context, the call of
+            // __runtime_init, the context's slot, default_context's address
+            // and the store (issue #156).
+            Ir_Op ops[64];
+            s64 prologue = 0;
+            for (s64 v = 0; v < p->vars.count && prologue + 2 <= 64; v++) {
+                if (p->vars[v].arg > 0 && p->vars[v].kind == IR_VAR_SLOT) {
+                    ops[prologue++] = IR_LOCAL;
+                    ops[prologue++] = IR_STORE;
+                }
+            }
+            for (s64 v = 0; v < p->vars.count && prologue + 4 <= 64; v++) {
+                if (p->vars[v].artificial && p->vars[v].arg == 0) {
+                    ops[prologue++] = IR_CALL;
+                    ops[prologue++] = IR_LOCAL;
+                    ops[prologue++] = IR_ADDR;
+                    ops[prologue++] = IR_STORE;
+                }
             }
             for (s64 b = 0; b < p->blocks.count; b++) {
                 Ir_Block *block = p->blocks[b];
                 for (s64 n = 0; n < block->instrs.count; n++) {
                     Ir_Instr *instr = &block->instrs[n];
                     bool nowhere = instr->pos.line == 0 && instr->scope == -1;
-                    bool in_prologue = b == 0 && n < prologue && (n % 2 == 0 ? instr->op == IR_LOCAL
-                                                                              : instr->op == IR_STORE);
+                    bool in_prologue = b == 0 && n < prologue && instr->op == ops[n];
                     bool placed = from_source ? (in_prologue ? nowhere
                                                              : instr->pos.file == p->pos.file &&
                                                                    instr->pos.line >= first_line &&
@@ -4502,7 +4518,7 @@ TEST(lowering_on_demand_sizes_the_bounds_buffer_for_the_longest_path) {
     diag_add_file(&d, str("main.rig"), str(""));
     diag_add_file(&d, str("some/deeper/dir/loaded.rig"), str(""));
     Ir_Module *m = arena_new<Ir_Module>(&a);
-    Lowering *l = ir_lowering_new(m, &d, &a);
+    Lowering *l = ir_lowering_new(m, &d, &a, nullptr);  // no tree: no context
     CHECK(contains(proc_ir(ir_print(&a, m), "__rig_bounds_failed"), "local 138 align 1"));
     ir_lowering_free(l);
     diag_free(&d);
@@ -5610,7 +5626,7 @@ TEST(a_global_holds_a_descriptions_address) {
 TEST(an_any_holds_a_places_address_or_a_copys) {
     // Converting to Any (spec 3.16): the value's address first, then the
     // Any's 16 bytes, its type's description's address at 0 and the value's
-    // at 8. n is a place, so the Any holds n's own slot, %0; 7 isn't, so it's
+    // at 8. n is a place, so the Any holds n's own slot, %2; 7 isn't, so it's
     // put into a temporary of its own, an i64 slot, whose address the Any
     // holds. Each Any is then passed as any struct argument is, copied.
     Arena a = arena_make();
@@ -5623,32 +5639,38 @@ TEST(an_any_holds_a_places_address_or_a_copys) {
     CHECK_STR(proc_ir(ir, "main"),
               "proc @main() -> i32 {\n"
               "b0:\n"
-              "  %0 = local i64\n"
-              "  %1 = const i64 42\n"
-              "  store i64 %1, %0\n"
-              "  %2 = local 16 align 8\n"
-              "  %3 = addr @type_info.0\n"
-              "  store ptr %3, %2\n"
-              "  %4 = const i64 8\n"
-              "  %5 = ptradd %2, %4\n"
-              "  store ptr %0, %5\n"
-              "  %6 = local 16 align 8\n"
-              "  copy %6, %2, 16\n"
-              "  call @show(%6)\n"
-              "  %7 = local i64\n"
-              "  %8 = const i64 7\n"
-              "  store i64 %8, %7\n"
+              "  call @__runtime_init()\n"
+              "  %0 = local ptr\n"
+              "  %1 = addr @default_context\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local i64\n"
+              "  %3 = const i64 42\n"
+              "  store i64 %3, %2\n"
+              "  %4 = load ptr %0\n"
+              "  %5 = local 16 align 8\n"
+              "  %6 = addr @type_info.0\n"
+              "  store ptr %6, %5\n"
+              "  %7 = const i64 8\n"
+              "  %8 = ptradd %5, %7\n"
+              "  store ptr %2, %8\n"
               "  %9 = local 16 align 8\n"
-              "  %10 = addr @type_info.0\n"
-              "  store ptr %10, %9\n"
-              "  %11 = const i64 8\n"
-              "  %12 = ptradd %9, %11\n"
-              "  store ptr %7, %12\n"
+              "  copy %9, %5, 16\n"
+              "  call @show(%4, %9)\n"
+              "  %10 = load ptr %0\n"
+              "  %11 = local i64\n"
+              "  %12 = const i64 7\n"
+              "  store i64 %12, %11\n"
               "  %13 = local 16 align 8\n"
-              "  copy %13, %9, 16\n"
-              "  call @show(%13)\n"
-              "  %14 = const i32 0\n"
-              "  ret %14\n"
+              "  %14 = addr @type_info.0\n"
+              "  store ptr %14, %13\n"
+              "  %15 = const i64 8\n"
+              "  %16 = ptradd %13, %15\n"
+              "  store ptr %11, %16\n"
+              "  %17 = local 16 align 8\n"
+              "  copy %17, %13, 16\n"
+              "  call @show(%10, %17)\n"
+              "  %18 = const i32 0\n"
+              "  ret %18\n"
               "}\n");
     arena_free(&a);
 }
@@ -5880,5 +5902,193 @@ TEST(a_chain_of_default_values_at_the_limit_builds) {
     const char *source = joined(&a, default_chain(&a, 1000), "main :: () {\n    n := p1000();\n}\n");
     CHECK(builds(&a, source));
     CHECK_EQ(count_of(proc_ir(ir_print(&a, lower_source(&a, source)), "main"), "call @p"), 1001);
+    arena_free(&a);
+}
+
+// Issue #156: the context (spec 7.10, 10.4).
+
+// The first line of `text` holding `needle`, without its "\n"; {} when
+// there's none.
+static String line_holding(String text, const char *needle) {
+    s64 at = index_of(text, needle);
+    if (at < 0) return {};
+    s64 start = at, end = at;
+    while (start > 0 && text.data[start - 1] != '\n') start--;
+    while (end < text.count && text.data[end] != '\n') end++;
+    return string_slice(text, start, end - start);
+}
+
+TEST(rig_procedures_take_the_context) {
+    // twice takes its caller's context, a ptr after its result pointers
+    // (none here), stored into a slot of its own before the body, as a
+    // scalar parameter is. main takes none: it calls __runtime_init, then
+    // keeps default_context's address in its slot, and passes that to
+    // twice, before the arguments.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "twice :: (n: int) -> int { return n * 2; }\n"
+                                                    "main :: () {\n"
+                                                    "    n := twice(4);\n"
+                                                    "}\n"));
+    CHECK_STR(proc_ir(ir, "twice"),
+              "proc @twice(ptr, i64) -> i64 {\n"
+              "b0:\n"
+              "  %2 = local ptr\n"
+              "  store ptr %0, %2\n"
+              "  %3 = local i64\n"
+              "  store i64 %1, %3\n"
+              "  %4 = load i64 %3\n"
+              "  %5 = const i64 2\n"
+              "  %6 = mul i64 %4, %5\n"
+              "  ret %6\n"
+              "}\n");
+    CHECK_STR(proc_ir(ir, "main"),
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  call @__runtime_init()\n"
+              "  %0 = local ptr\n"
+              "  %1 = addr @default_context\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local i64\n"
+              "  %3 = load ptr %0\n"
+              "  %4 = const i64 4\n"
+              "  %5 = call @twice(%3, %4)\n"
+              "  store i64 %5, %2\n"
+              "  %6 = const i32 0\n"
+              "  ret %6\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(the_context_comes_after_the_result_pointers) {
+    // The hidden parameters in order: a pointer per aggregate result, then
+    // the context, then the visible parameters; a call passes them so, the
+    // context loaded from main's slot, %0.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "Pair :: struct { a: int; b: int; }\n"
+                                                    "make :: (n: int) -> Pair { return Pair.{n, n}; }\n"
+                                                    "both :: (n: int) -> Pair, Pair { return Pair.{n, n}, Pair.{n, n}; }\n"
+                                                    "main :: () {\n"
+                                                    "    p := make(1);\n"
+                                                    "}\n"));
+    CHECK(contains(ir, "proc @make(ptr, ptr, i64) {\n"));
+    CHECK(contains(ir, "proc @both(ptr, ptr, ptr, i64) {\n"));
+    CHECK(contains(proc_ir(ir, "main"), "  %3 = local 16 align 8\n"
+                                        "  %4 = load ptr %0\n"
+                                        "  %5 = const i64 1\n"
+                                        "  call @make(%3, %4, %5)\n"));
+    arena_free(&a);
+}
+
+TEST(c_procedures_take_no_context) {
+    // C calls a #c_call procedure with none, so it has no context (Decision
+    // 15): no parameter, no slot, no startup. A call of one, or of a foreign
+    // procedure, passes none; and __runtime_init, #c_call, has none either.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "cb :: (n: s32) -> s32 #c_call {\n"
+                                                    "    m := other(n);\n"
+                                                    "    return m;\n"
+                                                    "}\n"
+                                                    "other :: (n: s32) -> s32 #c_call { return n; }\n"
+                                                    "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                                                    "main :: () {\n"
+                                                    "    puts(\"hi\");\n"
+                                                    "    k := cb(1);\n"
+                                                    "}\n"));
+    CHECK_STR(proc_ir(ir, "cb"),
+              "proc @cb(i32) -> i32 {\n"
+              "b0:\n"
+              "  %1 = local i32\n"
+              "  store i32 %0, %1\n"
+              "  %2 = local i32\n"
+              "  %3 = load i32 %1\n"
+              "  %4 = call @other(%3)\n"
+              "  store i32 %4, %2\n"
+              "  %5 = load i32 %2\n"
+              "  ret %5\n"
+              "}\n");
+    String main = proc_ir(ir, "main");
+    String puts = line_holding(main, "call @puts(");
+    String cb = line_holding(main, "call @cb(");
+    CHECK(puts.count > 0 && !contains(puts, ","));
+    CHECK(cb.count > 0 && !contains(cb, ","));
+    String init = proc_ir(ir, "__runtime_init");
+    CHECK(init.count > 0);
+    CHECK(!contains(init, "local ptr"));
+    CHECK(!contains(init, "call @__runtime_init"));
+    arena_free(&a);
+}
+
+TEST(a_call_through_a_value_passes_the_context) {
+    // f's type isn't #c_call, so the procedure it holds takes the context,
+    // loaded from main's slot after f's value is; g's is #c_call, and its
+    // call passes none.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print(&a, lower_with_preload(&a, "twice :: (n: int) -> int { return n; }\n"
+                                                              "compare :: (a: *void, b: *void) -> s32 #c_call { return 0; }\n"
+                                                              "main :: () {\n"
+                                                              "    f := twice;\n"
+                                                              "    m := f(6);\n"
+                                                              "    g := compare;\n"
+                                                              "    k := g(null, null);\n"
+                                                              "}\n")),
+                          "main");
+    s64 value = index_of(main, "  %5 = load ptr %2\n");
+    s64 context = index_of(main, "  %6 = load ptr %0\n");
+    CHECK(value >= 0 && context > value);
+    CHECK(contains(main, "= call %5(%6, %7)\n"));
+    CHECK_EQ(count_of(main, "load ptr %0"), 1);
+    s64 f = index_of(main, "= call %5(");
+    String after = f < 0 ? String{} : string_slice(main, f + 1, main.count - f - 1);
+    String g = line_holding(after, "= call %");
+    CHECK(g.count > 0);
+    CHECK_EQ(count_of(g, ", "), 1);
+    arena_free(&a);
+}
+
+TEST(a_default_reads_the_callers_context) {
+    // A default value is the caller's code (#155), so context there is the
+    // caller's: main's slot, %0, and in f its hidden parameter's slot, %1.
+    // Each call passes that context first, and a copy of its allocator for
+    // a, after the 1 or the 2.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "get :: (n: int, a: Allocator = context.allocator) -> int { return n; }\n"
+                                                    "f :: () { n := get(1); }\n"
+                                                    "main :: () { n := get(2); }\n"));
+    String main = proc_ir(ir, "main"), f = proc_ir(ir, "f");
+    CHECK(contains(main, "  %3 = load ptr %0\n"
+                         "  %4 = const i64 2\n"
+                         "  %5 = load ptr %0\n"
+                         "  %6 = local 16 align 8\n"
+                         "  copy %6, %5, 16\n"
+                         "  %7 = call @get(%3, %4, %6)\n"));
+    CHECK(contains(f, "  %3 = load ptr %1\n"
+                      "  %4 = const i64 1\n"
+                      "  %5 = load ptr %1\n"
+                      "  %6 = local 16 align 8\n"
+                      "  copy %6, %5, 16\n"
+                      "  %7 = call @get(%3, %4, %6)\n"));
+    CHECK_EQ(count_of(main, "load ptr %0"), 2);
+    CHECK_EQ(count_of(f, "load ptr %1"), 2);
+    arena_free(&a);
+}
+
+TEST(the_context_is_an_artificial_variable) {
+    // For a debugger: twice's hidden parameter is its first parameter,
+    // context, artificial, at its name, and n its second. main's slot is a
+    // local context, artificial. cb has none, and __runtime_init no debug
+    // information at all.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_with_preload(&a, "twice :: (n: int) -> int { return n; }\n"
+                                                          "cb :: () #c_call { }\n"
+                                                          "main :: () { }\n"));
+    String twice = proc_ir(ir, "twice");
+    CHECK(contains(twice, "; var context *Context slot %2 arg 1 artificial in 0 at 1:1\n"));
+    CHECK(contains(twice, "; var n int slot %3 arg 2 in 0 at 1:11\n"));
+    String cb = proc_ir(ir, "cb");
+    CHECK(cb.count > 0 && !contains(cb, "; var context"));
+    CHECK(contains(proc_ir(ir, "main"), "; var context *Context slot %0 artificial in 0 at 3:1\n"));
+    String init = line_holding(ir, "; source __runtime_init at ");
+    CHECK(init.count > 0);
+    CHECK(init.count >= 15 && string_eq(string_slice(init, init.count - 15, 15), str(", no debug info")));
     arena_free(&a);
 }

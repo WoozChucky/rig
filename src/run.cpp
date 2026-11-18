@@ -100,10 +100,14 @@ void compile_time_set_compiler(Compile_Time *ct, Interp_Compiler_Call *call, voi
 
 // The module, its lowering and the interpreter, made the first time a run
 // needs them; the interpreter gets the world's hook for #compiler calls.
-static void make_parts(Compile_Time *ct) {
+// The lowering takes the context from `file`, the checked tree (spec
+// 7.10): each run's procedure calls __runtime_init first, which sets up
+// the world's own default_context at the first run and does nothing after,
+// so every run starts with it, and they share its temporary storage.
+static void make_parts(Compile_Time *ct, Ast_File *file) {
     ct->arena = arena_make();
     ct->module = arena_new<Ir_Module>(&ct->arena);
-    ct->lowering = ir_lowering_new(ct->module, ct->diag, &ct->arena);
+    ct->lowering = ir_lowering_new(ct->module, ct->diag, &ct->arena, file);
     ct->interp = interp_new(ct->module);
     interp_set_compiler(ct->interp, ct->compiler, ct->compiler_context);
 }
@@ -373,8 +377,9 @@ static void report_failure(Compile_Time *ct, Ast_Run *run, Interp_Result *result
     array_free(&paths);
 }
 
-// What every run does, an expression's or a top-level one's, in order:
-// 1. The world's parts, the first time.
+// What every run of `file`'s does, an expression's or a top-level one's,
+// in order:
+// 1. The world's parts, the first time (make_parts).
 // 2. The run's procedure, lowered with everything it reaches.
 // 3. What the compiler printed so far is written out first (fflush), so it
 //    comes before what the run prints, in order. Then the run, given `args`,
@@ -386,10 +391,11 @@ static void report_failure(Compile_Time *ct, Ast_Run *run, Interp_Result *result
 // #run in a run's code has already run, and its value is baked. The depth
 // count is a guard: only a run that starts with none under way adds its
 // time, so if one ever ran inside another, it wouldn't be counted twice.
-static void run_procedure(Compile_Time *ct, Ast_Run *run, Array<u64> args, Arena *scratch, Interp_Result *result) {
+static void run_procedure(Compile_Time *ct, Ast_File *file, Ast_Run *run, Array<u64> args, Arena *scratch,
+                          Interp_Result *result) {
     s64 start = os_nanoseconds();
     ct->running++;
-    if (!ct->module) make_parts(ct);
+    if (!ct->module) make_parts(ct, file);
     s32 proc = ir_lower_run(ct->lowering, run);
     fflush(nullptr);
     interp_run(ct->interp, proc, args, scratch, result);
@@ -420,7 +426,7 @@ bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run) {
     }
     Arena scratch = arena_make();
     Interp_Result result = {};
-    run_procedure(ct, run, args, &scratch, &result);
+    run_procedure(ct, c->file, run, args, &scratch, &result);
     Ast *value = nullptr;
     if (result.ok) {
         Baking baking = {ct, c, run, nullptr};
@@ -452,7 +458,7 @@ void compile_time_run_top_level(Compile_Time *ct, Ast_File *file) {
     for (s64 i = 0; i < file->runs.count; i++) {
         Arena scratch = arena_make();
         Interp_Result result = {};
-        run_procedure(ct, file->runs[i], {}, &scratch, &result);
+        run_procedure(ct, file, file->runs[i], {}, &scratch, &result);
         array_free(&result.results);
         array_free(&result.frames);
         arena_free(&scratch);

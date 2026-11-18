@@ -4,12 +4,13 @@ y := x + 1;
 $1 = 5
 procedure_constant.rig:15
 z := OP(y, 2);
-$2 = (int (*)(int, int)) 0x
+$2 = (int (*)(struct Context *, int, int)) 0x
 <add>
-type = int (*)(int, int)
+type = int (*)(struct Context *, int, int)
 OP = 0x
 <add>
 y = 6
+context = 0x
 x = 5
 $3 = 3
 procedure_constant.rig:18

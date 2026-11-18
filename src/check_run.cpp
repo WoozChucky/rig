@@ -11,9 +11,10 @@
 //
 // The walk is conservative: it follows every name lowering can follow
 // (calls, procedure values, constants and their data, globals' values, a
-// reached procedure's default values, which its callers' code holds), so
-// whatever the #run's code is lowered with is checked, whether or not it
-// runs. A type's description (type_info(T), a value converted to Any) is
+// reached procedure's default values, which its callers' code holds), and
+// Preload's __runtime_init, which every run's procedure calls first (spec
+// 7.10), so whatever the #run's code is lowered with is checked, whether or
+// not it runs. A type's description (type_info(T), a value converted to Any) is
 // lowered with every type it reaches, so the walk follows those too, behind
 // pointers as well (walk_described). And it fails where lowering couldn't
 // go on: a value, a parameter or a result with no type, a #run with no
@@ -423,6 +424,11 @@ static bool reach_run(Checker *c, Ast_Run *run, Type *t) {
     } else {
         reach_decl(&r, run->proc);
     }
+    // Every run's procedure calls Preload's __runtime_init first (lowering's
+    // startup, spec 7.10), so its body is reached too, and checked before
+    // the run is lowered: a constant's #run in the declarations pass, before
+    // any body is checked, included.
+    if (c->file->runtime_init) reach_decl(&r, c->file->runtime_init);
     reach_type(&r, t);
     bool clean = true;
     while (clean && (r.types.count || r.described.count || r.nodes.count)) {

@@ -2788,3 +2788,63 @@ TEST(llvm_optimised_module_takes_the_memory_functions_names) {
     }
     arena_free(&a);
 }
+
+// Issue #156: the context (spec 7.10, 10.7).
+
+TEST(llvm_describes_the_context) {
+    // twice's hidden parameter is its first parameter variable, context,
+    // artificial, a pointer to Preload's Context, and n its second; main's
+    // slot is an artificial local context, and cb has none. __runtime_init
+    // has no subprogram, and main's call of it no location, so a debugger
+    // steps over it. twice's type, and the type of a procedure value of
+    // it, list the context's pointer after the (none) result pointers, so
+    // a debugger's call passes it.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a, "twice :: (n: int) -> int { return n; }\n"
+                                          "cb :: () #c_call { }\n"
+                                          "main :: () {\n"
+                                          "    f := twice;\n"
+                                          "    n := f(3);\n"
+                                          "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        String twice = defined_node(line_with(text, "!DISubprogram(name: \"twice\""));
+        String main = defined_node(line_with(text, "!DISubprogram(name: \"main\""));
+        String cb = defined_node(line_with(text, "!DISubprogram(name: \"cb\""));
+        String integer = defined_node(line_with(text, "!DIBasicType(name: \"int\""));
+        String context = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Context\""));
+        String to_context = pointer_node(&a, text, context);
+        CHECK(twice.count > 0 && main.count > 0 && cb.count > 0 && integer.count > 0 && to_context.count > 0);
+
+        const char *parameter_of_twice = string_cstr(
+            &a, string_printf(&a, "!DILocalVariable(name: \"context\", arg: 1, scope: " STR_FMT ",", STR_ARG(twice)));
+        String parameter = line_with(text, parameter_of_twice);
+        CHECK(contains(parameter, "flags: DIFlagArtificial)"));
+        CHECK(string_eq(attached(&a, parameter, "type:"), to_context));
+        const char *n = string_cstr(
+            &a, string_printf(&a, "!DILocalVariable(name: \"n\", arg: 2, scope: " STR_FMT ",", STR_ARG(twice)));
+        CHECK(contains(text, n));
+
+        const char *local_of_main = string_cstr(
+            &a, string_printf(&a, "!DILocalVariable(name: \"context\", scope: " STR_FMT ",", STR_ARG(main)));
+        String local = line_with(text, local_of_main);
+        CHECK(contains(local, "flags: DIFlagArtificial)"));
+        CHECK(string_eq(attached(&a, local, "type:"), to_context));
+        CHECK(!contains(text, string_cstr(&a, string_printf(&a, "\"context\", scope: " STR_FMT ",", STR_ARG(cb)))));
+        CHECK(!contains(text, string_cstr(&a, string_printf(&a, "\"context\", arg: 1, scope: " STR_FMT ",", STR_ARG(cb)))));
+
+        CHECK(!contains(text, "!DISubprogram(name: \"__runtime_init\""));
+        String call = line_with(text, "call void @__runtime_init()");
+        CHECK(call.count > 0 && !contains(call, "!dbg"));
+
+        String expected = string_printf(&a, "!{" STR_FMT ", " STR_FMT ", " STR_FMT "}", STR_ARG(integer),
+                                        STR_ARG(to_context), STR_ARG(integer));
+        String subprogram = line_with(text, "!DISubprogram(name: \"twice\"");
+        String subroutine = node_line(&a, text, attached(&a, subprogram, "type:"));
+        String types = node_line(&a, text, attached(&a, subroutine, "types:"));
+        s64 at = index_of(types, "!{");
+        CHECK(at >= 0 && string_eq(string_slice(types, at, types.count - at), expected));
+        CHECK(string_eq(pointed_signature(&a, text, "f"), expected));
+    }
+    arena_free(&a);
+}

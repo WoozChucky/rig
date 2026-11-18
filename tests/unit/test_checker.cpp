@@ -5691,6 +5691,7 @@ static bool reaches_clean(Arena *a, Checked *c, const char *name) {
     Checker checker = {};
     checker.arena = a;
     checker.diag = &c->list->diag;
+    checker.file = c->file;  // the walk reaches the tree's __runtime_init, when it has one
     return reach_run(&checker, (Ast_Run *)run, run->type);
 }
 
@@ -8520,5 +8521,39 @@ TEST(a_c_call_body_calls_main_and_late_defaults_with_their_own_needs) {
               "until it pushes one, as in push_context default_context { ... }\n");
     CHECK(((Ast_Proc *)top_level_named(tree, "late"))->params[0]->default_needs_context);
     CHECK(!((Ast_Proc *)top_level_named(tree, "after"))->params[0]->default_needs_context);
+    arena_free(&a);
+}
+
+TEST(a_run_has_the_worlds_default_context) {
+    // Every #run starts with the compile-time world's default_context, set
+    // up by __runtime_init, which each run calls first: the walk reaches it,
+    // so its body is checked even for these constants, run in the
+    // declarations pass before any body is. A callee shares the run's
+    // context, and a #run in a body has its own, the world's too.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "STORAGE :: #run context.temporary_storage.size;\n"
+                                 "HEAP :: #run (context.allocator.proc == heap_allocator_proc);\n"
+                                 "DEFAULT :: #run is_default(*context);\n"
+                                 "is_default :: (c: *Context) -> bool { return c == *default_context && c == *context; }\n"
+                                 "in_a_body :: () -> bool { return #run (*context == *default_context); }\n"
+                                 "G := #run (context.allocator.data == null);\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    const char *names[] = {"STORAGE", "HEAP", "DEFAULT"};
+    s64 values[] = {32768, 1, 1};
+    for (s64 i = 0; i < 3; i++) {
+        Ast *k = top_level_named(tree, names[i]);
+        CHECK_EQ(k->kind, AST_CONST);
+        CHECK(k->is_constant);
+        CHECK_EQ(k->constant, values[i]);
+    }
+    Ast *g = top_level_named(tree, "G");
+    CHECK_EQ(g->kind, AST_VAR);
+    Ast *value = ((Ast_Var *)g)->value;
+    CHECK(value && value->is_constant);
+    if (value) CHECK_EQ(value->constant, 1);
     arena_free(&a);
 }
