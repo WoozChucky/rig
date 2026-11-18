@@ -316,7 +316,7 @@ How each value is written:
 - **Arrays and views:** `[1, 2, 3]`; empty, or a view with a count of 0 or less, `[]`. A view with null data and a count above 0 stops the program with `null pointer dereference` before any of it is written, as indexing it would (spec 8.4). A string with null data and a count above 0 stops where its first byte is read, after its opening `"` when it is nested.
 - **`Any`**, as a field or an element: the value it holds, written as that field or element would be. A zeroed `Any`, whose type is null, as a zeroed struct's `Any` field is, writes `null`.
 - **`void`:** a description of `void`, which only an `Any` made by hand can hold, writes `void`; a tag that isn't one of the nine writes nothing.
-- **Cycles:** every nesting is by value, so it is finite, but for one: an `Any` that holds the struct it is a field of (`h.a = h;`) is written by recursing until the stack runs out, as recursion that never ends does: interpreted, `stack overflow`; compiled, the program crashes, and what C still buffers of its output is lost. It is the program's mistake, and isn't caught.
+- **Cycles:** every nesting is by value, so it is finite, but for an `Any` that holds a value it is itself part of: the struct it is a field of (`h.a = h;`), the array it is an element of (`arr[0] = arr;`), or anything that contains it deeper down. That one is written by recursing until the stack runs out, as recursion that never ends does: interpreted, `stack overflow`; compiled, the program crashes, and what C still buffers of its output is lost. It is the program's mistake, and isn't caught.
 
 ## Waiting on the language
 

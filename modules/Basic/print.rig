@@ -167,9 +167,11 @@ print_quoted :: (builder: *String_Builder, s: string) {
 // description of void, which only an Any made by hand can hold, writes
 // void; and a tag that isn't one of the nine writes nothing.
 //
-// Values nest by value, so every nesting is finite, but one: an Any can
-// hold the struct it is a field of (h.a = h;), and writing that one
-// recurses until the stack runs out, as recursion that never ends does.
+// Values nest by value, so every nesting is finite, but for an Any that
+// holds a value it is itself part of: the struct it is a field of
+// (h.a = h;), the array it is an element of (arr[0] = arr;), or anything
+// that contains it deeper down. Writing that one recurses until the stack
+// runs out, as recursion that never ends does.
 print_item :: (builder: *String_Builder, item: Any, nested: bool) {
     t := item.type;
     p := item.value_pointer;

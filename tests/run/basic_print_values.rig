@@ -3,8 +3,9 @@
 // view, where a string is quoted and escaped: every integer type at its
 // extremes, floats as float32 and float64, bools, strings with each escape
 // and a UTF-8 character, null and other pointers and procedure values,
-// structs and arrays nested a few levels, an Any field, a zeroed Any, a
-// description of void, and a string builder in place of standard output.
+// structs and arrays nested a few levels, an Any field, a zeroed Any, an Any
+// of an Any, a description of void, a tag that isn't one of the nine, and a
+// string builder in place of standard output.
 // The same compiled and interpreted.
 #import "Basic";
 
@@ -138,11 +139,19 @@ main :: () {
     // An Any converts as itself, so this one's string is at the top.
     a : Any = "top";
     show(a);
+    // A hand-made Any of an Any, written at the top, so its string is
+    // unquoted.
+    show(Any.{type_info(Any), *a});
     show(Any.[1, "x", 2.5]);
 
-    // A description of void, which only an Any made by hand can hold.
+    // A description of void, which only an Any made by hand can hold, and a
+    // tag that isn't one of the nine, which writes nothing.
     t := Type_Info.{TYPE_INFO_VOID, 0, 1};
     show(Any.{*t, null});
+    bad := Type_Info.{99, 0, 1};
+    print_string("[");
+    print_item(null, Any.{*bad, null}, false);
+    print_line("]");
 
     // The same procedures append to a string builder when they're given one.
     b : String_Builder;
