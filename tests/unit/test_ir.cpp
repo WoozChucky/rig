@@ -3793,7 +3793,9 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
             // and a store per scalar parameter, the context's included; then,
             // in main, which starts with the default context, the call of
             // __runtime_init, the context's slot, default_context's address
-            // and the store (issue #156).
+            // and the store (issue #156): its variable is the artificial one
+            // in the body's scope 0 that isn't a parameter, where a
+            // push_context block's is in the block's own scope.
             Ir_Op ops[64];
             s64 prologue = 0;
             for (s64 v = 0; v < p->vars.count && prologue + 2 <= 64; v++) {
@@ -3803,7 +3805,7 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
                 }
             }
             for (s64 v = 0; v < p->vars.count && prologue + 4 <= 64; v++) {
-                if (p->vars[v].artificial && p->vars[v].arg == 0) {
+                if (p->vars[v].artificial && p->vars[v].arg == 0 && p->vars[v].scope == 0) {
                     ops[prologue++] = IR_CALL;
                     ops[prologue++] = IR_LOCAL;
                     ops[prologue++] = IR_ADDR;

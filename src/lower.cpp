@@ -3852,9 +3852,9 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     l.string_equal = -1;
     l.module = m;
     l.block = -1;
-    // Preload's context, which every procedure but a #c_call one takes
-    // (null without Preload: none does); no slot yet, as a zeroed one would
-    // say %0.
+    // Preload's context, which every procedure with a body but main and a
+    // #c_call one takes (takes_context; null without Preload: none does); no
+    // slot yet, as a zeroed one would say %0.
     l.context_type = f->context_type;
     l.default_context = f->default_context;
     l.runtime_init = f->runtime_init;

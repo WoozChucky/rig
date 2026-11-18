@@ -32,9 +32,9 @@ same :: (c: *Context) -> bool { return c == *context; }
 HEAP_WHILE_COMPILING :: #run (context.allocator.proc == heap_allocator_proc);
 ITS_OWN :: #run same(*default_context);
 STORAGE :: #run context.temporary_storage.size;
-// A string made from the run's context's allocator, baked.
-made :: () -> string {
-    a := context.allocator;
+// A string made from the run's context's allocator, baked: the run leaves
+// out the default, which reads the context there.
+made :: (a: Allocator = context.allocator) -> string {
     bytes := cast(*u8) a.proc(ALLOCATE, 3, 0, null, a.data);
     bytes[0] = 114;
     bytes[1] = 117;
