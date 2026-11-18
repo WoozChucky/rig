@@ -1,10 +1,10 @@
 l+t
 l+s
 l+l
-bp `constants.rig:20`
-bp `constants.rig:28`
+bp `constants.rig:21`
 bp `constants.rig:30`
 bp `constants.rig:33`
+bp `constants.rig:36`
 g
 ?? LIMIT
 ?? RATIO
@@ -16,6 +16,7 @@ dx PRIMES
 ?? GREETING
 ?? STEP
 ?? HALF
+?? RATE
 ?? DONE
 ?? LABEL
 ?? CORNER
@@ -23,9 +24,12 @@ dx PRIMES
 ?? HEAP_ALLOCATOR
 g
 ?? LIMIT
+?? NAME
 g
 ?? LIMIT
+?? NAME
 dv /t
 g
 ?? LIMIT
+?? NAME
 q

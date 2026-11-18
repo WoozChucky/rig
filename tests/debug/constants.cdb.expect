@@ -1,4 +1,4 @@
-20:     i := 1;
+21:     i := 1;
 int64 0n12
 double 0.10000000000000000555
 char 0n-5
@@ -17,6 +17,7 @@ unsigned char * 0x
 "hi"
 int64 0n7
 float 1.5
+double 2.5
 bool false
 struct string
 +0x000 count            : 0n4
@@ -28,17 +29,25 @@ int64 0n20
 struct Allocator
 heap_allocator_proc
 +0x008 data             : (null)
-28:         y := x + STEP;
+30:         y := x + STEP;
 int64 0n12
-30:         z := LIMIT + y;
++0x000 count            : 0n3
+"rig"
+33:         z := LIMIT + y;
 int64 0n99
++0x000 count            : 0n5
+"inner"
+struct string NAME
 int64 LIMIT = 0n99
 int64 STEP = 0n7
 float HALF = 1.5
+double RATE = 2.5
 bool DONE = false
 struct string LABEL
 struct Point CORNER
-33:     print_line(NAME);
+36:     print_line(NAME);
 int64 0n12
++0x000 count            : 0n3
+"rig"
 !Couldn't resolve error
 !value unavailable

@@ -1,7 +1,7 @@
-break constants.rig:20
-break constants.rig:28
+break constants.rig:21
 break constants.rig:30
 break constants.rig:33
+break constants.rig:36
 run
 print LIMIT
 print RATIO
@@ -15,6 +15,8 @@ print GREETING
 print STEP
 print HALF
 ptype HALF
+print RATE
+ptype RATE
 print DONE
 print LABEL
 print CORNER
@@ -22,8 +24,11 @@ print TIME_TEXT_MAX
 print HEAP_ALLOCATOR
 continue
 print LIMIT
+print NAME
 continue
 print LIMIT
+print NAME
 info locals
 continue
 print LIMIT
+print NAME

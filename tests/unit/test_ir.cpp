@@ -3208,25 +3208,29 @@ TEST(a_constant_after_a_return_is_recorded) {
     // A block's statements after it has returned aren't lowered, but its
     // constants need no code: they're recorded all the same, a taken #if
     // branch's too, since a debugger shows the block's names wherever its
-    // scope has code (at x := 1;, here). A nested block's aren't: its scope
-    // has no code, and it makes none (main's two scopes are the if's).
+    // scope has code (at x := 1;, here). One that hides a name starts its
+    // scope all the same, so a debugger shows the name it hides before it
+    // (LIMIT is 12 at x := 1;). A nested block's aren't: its scope has no
+    // code, and it makes none (main's other two scopes are the if's).
     Arena a = arena_make();
     String main = proc_ir(ir_print_debug(&a, lower_source(&a,
-                                                          "main :: () {\n"                                            // 1
-                                                          "    x := 1;\n"                                             // 2
-                                                          "    if x > 0 { return; } else { return; }\n"               // 3
-                                                          "    LIMIT :: 3;\n"                                         // 4
-                                                          "    NAME :: \"late\";\n"                                   // 5
-                                                          "    #if OS == OS_WINDOWS { W :: 1; } else { W :: 1; }\n"  // 6
-                                                          "    { INNER :: 5; }\n"                                    // 7
+                                                          "LIMIT :: 12;\n"                                            // 1
+                                                          "main :: () {\n"                                            // 2
+                                                          "    x := 1;\n"                                             // 3
+                                                          "    if x > 0 { return; } else { return; }\n"               // 4
+                                                          "    LIMIT :: 3;\n"                                         // 5
+                                                          "    NAME :: \"late\";\n"                                   // 6
+                                                          "    #if OS == OS_WINDOWS { W :: 1; } else { W :: 1; }\n"  // 7
+                                                          "    { INNER :: 5; }\n"                                    // 8
                                                           "}\n")),
                           "main");
-    CHECK(contains(main, "  ; var LIMIT int constant 3 in 0 at 4:5\n"));
+    CHECK(contains(main, "  ; scope 3 in 0 at 5:5\n"));
+    CHECK(contains(main, "  ; var LIMIT int constant 3 in 3 at 5:5\n"));
     CHECK(contains(main, "  ; var NAME string global @const."));
-    CHECK(contains(main, " in 0 at 5:5\n"));
-    CHECK(contains(main, "  ; var W int constant 1 in 0 at 6:"));
+    CHECK(contains(main, " in 3 at 6:5\n"));
+    CHECK(contains(main, "  ; var W int constant 1 in 3 at 7:"));
     CHECK(!contains(main, "; var INNER "));
-    CHECK_EQ(count_of(main, "  ; scope "), 2);
+    CHECK_EQ(count_of(main, "  ; scope "), 3);
     arena_free(&a);
 }
 
@@ -4477,23 +4481,48 @@ TEST(an_unread_run_constant_is_recorded) {
 }
 
 TEST(an_unread_constant_needs_no_foreign_procedure) {
-    // A const.N made for a debugger alone holds no foreign procedure's
-    // address, but null: a relocation would make the program need a C
-    // function no code calls, which the linker, or the interpreter, may not
-    // find. A Rig procedure's address stays, its body always compiled, and
-    // a constant that code reads keeps both.
+    // A const.N made for a debugger alone holds no address of a foreign
+    // procedure nothing else uses, but null: a relocation would make the
+    // program need a C function no code calls, which the linker, or the
+    // interpreter, may not find. A Rig procedure's address stays, its body
+    // always compiled, and a constant that code reads keeps both.
     Arena a = arena_make();
     String ir = ir_print_debug(&a, lower_source(&a,
                                                 "nowhere :: () #foreign libc \"rig_no_such_function\";\n"  // 1
-                                                "tick :: () { }\n"                                          // 2
-                                                "Ops :: struct { run: () #c_call; step: (); }\n"           // 3
-                                                "TABLE :: Ops.{nowhere, tick};\n"                           // 4
-                                                "USED :: Ops.{nowhere, tick};\n"                            // 5
+                                                "elsewhere :: () #foreign libc \"rig_other_function\";\n"  // 2
+                                                "tick :: () { }\n"                                          // 3
+                                                "Ops :: struct { run: () #c_call; step: (); }\n"           // 4
+                                                "TABLE :: Ops.{nowhere, tick};\n"                           // 5
+                                                "USED :: Ops.{elsewhere, tick};\n"                          // 6
                                                 "main :: () { ops := USED; }\n"));
-    CHECK(contains(ir, "; const TABLE Ops global @const.1 at 4:1\n"));
-    CHECK(contains(ir, "; const USED Ops global @const.0 at 5:1\n"));
+    CHECK(contains(ir, "; const TABLE Ops global @const.1 at 5:1\n"));
+    CHECK(contains(ir, "; const USED Ops global @const.0 at 6:1\n"));
     CHECK(contains(ir, "const @const.1: 16 align 8 = zero reloc 8 @tick\n"));
-    CHECK(contains(ir, "const @const.0: 16 align 8 = zero reloc 0 @nowhere reloc 8 @tick\n"));
+    CHECK(contains(ir, "const @const.0: 16 align 8 = zero reloc 0 @elsewhere reloc 8 @tick\n"));
+    arena_free(&a);
+}
+
+TEST(an_unread_constant_keeps_a_foreign_procedure_the_program_uses) {
+    // A C function the program needs anyway, one its code calls or takes
+    // the address of, keeps its address in a const.N made for a debugger
+    // alone: the relocation costs nothing, and the debugger shows the
+    // constant's own value. One nothing else uses is still null.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "putchar :: (c: s32) -> s32 #foreign libc;\n"           // 1
+                                                "abs :: (n: s32) -> s32 #foreign libc;\n"               // 2
+                                                "labs :: (n: s32) -> s32 #foreign libc;\n"              // 3
+                                                "Ops :: struct { run: (c: s32) -> s32 #c_call; }\n"     // 4
+                                                "CALLED :: Ops.{putchar};\n"                            // 5
+                                                "TAKEN :: Ops.{abs};\n"                                 // 6
+                                                "UNUSED :: Ops.{labs};\n"                               // 7
+                                                "main :: () { putchar(65); f := abs; }\n"));
+    CHECK(contains(ir, "; const CALLED Ops global @const.0 at 5:1\n"));
+    CHECK(contains(ir, "; const TAKEN Ops global @const.1 at 6:1\n"));
+    CHECK(contains(ir, "; const UNUSED Ops global @const.2 at 7:1\n"));
+    CHECK(contains(ir, "const @const.0: 8 align 8 = zero reloc 0 @putchar\n"));
+    CHECK(contains(ir, "const @const.1: 8 align 8 = zero reloc 0 @abs\n"));
+    CHECK(contains(ir, "const @const.2: 8 align 8 = zero\n"));
     arena_free(&a);
 }
 

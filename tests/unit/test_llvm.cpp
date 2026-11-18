@@ -2046,8 +2046,9 @@ TEST(llvm_constants_have_debug_info) {
                                 "main :: () {\n"                             // 13
                                 "    STEP :: 7;\n"
                                 "    SCALE :: cast(float32) 0.25;\n"
+                                "    RATE :: 0.25;\n"
                                 "    NO_CALL :: cast((int) -> int) null;\n"
-                                "    { CORNER :: Point.{7, 8}; INNER :: 5; i := 1; }\n"  // 17
+                                "    { CORNER :: Point.{7, 8}; INNER :: 5; i := 1; }\n"  // 18
                                 "}\n");
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);
@@ -2077,8 +2078,10 @@ TEST(llvm_constants_have_debug_info) {
         CHECK(limit.count > 0 && global_attached_to(&a, text, limit).count == 0);
         String unit_globals = attached(&a, line_with(text, "!DICompileUnit("), "globals:");
         CHECK(unit_globals.count > 0 && tuple_lists(&a, text, unit_globals, limit));
-        // STEP and SCALE: local variables of main, their values by
-        // #dbg_value, SCALE's as a float32's bits in an i64.
+        // STEP, SCALE and RATE: local variables of main, their values by
+        // #dbg_value, SCALE's as a float32's bits in an i64 and RATE's, an
+        // untyped float, as a float64's (LLVM's CodeView writer drops a
+        // double).
         String main_line = line_with(text, "!DISubprogram(name: \"main\"");
         String main = defined_node(main_line);
         String step_line = line_with(text, "!DILocalVariable(name: \"STEP\"");
@@ -2092,6 +2095,12 @@ TEST(llvm_constants_have_debug_info) {
         CHECK(scale.count > 0 &&
               contains(text, string_cstr(&a, string_printf(&a, "#dbg_value(i64 1048576000, " STR_FMT ", ",
                                                            STR_ARG(scale)))));
+        String rate_line = line_with(text, "!DILocalVariable(name: \"RATE\"");
+        CHECK(contains(node_line(&a, text, attached(&a, rate_line, "type:")), "name: \"float64\""));
+        String rate = defined_node(rate_line);
+        CHECK(rate.count > 0 &&
+              contains(text, string_cstr(&a, string_printf(&a, "#dbg_value(i64 4598175219545276416, " STR_FMT ", ",
+                                                           STR_ARG(rate)))));
         CHECK(!contains(text, "!DIGlobalVariable(name: \"STEP\""));
         // NO_CALL: a pointer to its subroutine type, its value null.
         String no_call_line = line_with(text, "!DILocalVariable(name: \"NO_CALL\"");
@@ -2107,7 +2116,7 @@ TEST(llvm_constants_have_debug_info) {
         String block = attached(&a, corner_line, "scope:");
         CHECK(contains(node_line(&a, text, block),
                        string_cstr(&a, string_printf(&a, "!DILexicalBlock(scope: " STR_FMT ",", STR_ARG(main)))));
-        CHECK(contains(corner_line, "line: 17, "));
+        CHECK(contains(corner_line, "line: 18, "));
         // INNER, a number beside it: a local variable of that block, not of
         // main.
         String inner_line = line_with(text, "!DILocalVariable(name: \"INNER\"");

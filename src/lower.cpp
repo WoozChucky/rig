@@ -317,7 +317,12 @@ struct Lowering {
     Table<s32> constant_index;
     Array<Pending_Constant> pending_constants;
     bool for_debugger;        // the const.N being made is for a debugger alone, which no code
-                              // reads: a foreign procedure's address in it is null (constant_bytes)
+                              // reads: a foreign procedure's address in it is null, unless
+                              // the program uses that procedure anyway (constant_bytes)
+    // The foreign procedures the program uses, by name: those a body calls
+    // or takes the address of, or a global or a used const.N holds the
+    // address of (proc_index_of, outside for_debugger).
+    Table<bool> used_foreign;
     Ir_Proc *proc;            // the procedure whose body is being lowered
     s32 block;                // the block instructions go into
     Array<Local> locals;      // the current procedure's variables and parameters so far
@@ -684,8 +689,10 @@ static s32 address_of(Lowering *l, Ast *decl) {
 // the program, from any of its files: its name's (the checker allowed no
 // other top-level declaration of it, in any file). ir_lower numbered every
 // procedure first; on demand, one nothing named before is declared now,
-// its body lowered later (declare_proc).
+// its body lowered later (declare_proc). A foreign one named outside a
+// const.N for a debugger alone is one the program uses (used_foreign).
 static s32 proc_index_of(Lowering *l, Ast_Proc *proc) {
+    if (proc->is_foreign && !l->for_debugger) table_put(&l->used_foreign, proc->name, true);
     s32 *index = table_get(&l->proc_index, proc->name);
     if (index) return *index;
     RIG_ASSERT(l->on_demand);
@@ -2589,12 +2596,14 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
     }
     // A procedure's address (a procedure value, or a *void cast from one).
     // In a const.N for a debugger alone (Lowering.for_debugger), a foreign
-    // one's is null, zeros: a relocation would make the program need a C
-    // function no code calls, which the linker, or the interpreter, may not
-    // find (a portable table naming one a host lacks).
+    // one's is null, zeros, when nothing else uses it: a relocation would
+    // make the program need a C function no code calls, which the linker,
+    // or the interpreter, may not find (a portable table naming one a host
+    // lacks). One the program uses anyway (Lowering.used_foreign) costs
+    // nothing, and keeps the address the constant holds.
     Ast_Proc *proc = procedure_address(value);
     if (proc) {
-        if (proc->is_foreign && l->for_debugger) return;
+        if (proc->is_foreign && l->for_debugger && !table_get(&l->used_foreign, proc->name)) return;
         array_add(relocs, Ir_Reloc{offset, proc_index_of(l, proc), true});
         return;
     }
@@ -2757,8 +2766,9 @@ static s32 constant_global(Lowering *l, Ast_Const *constant) {
 // the constant, one made now, in the order the constants were recorded, so
 // the numbers a use gives are those it would give with no debugger. Each
 // copy of deferred code recorded the same constant again, and finds the
-// same const.N. One made here holds no foreign procedure's address
-// (Lowering.for_debugger), so the program needs no symbol it didn't.
+// same const.N. One made here holds no address of a foreign procedure
+// nothing else uses (Lowering.for_debugger), so the program needs no
+// symbol it didn't.
 static void resolve_constant_globals(Lowering *l) {
     l->for_debugger = true;
     for (s64 i = 0; i < l->pending_constants.count; i++) {
@@ -3210,6 +3220,7 @@ static void release_lowering(Lowering *l) {
     table_free(&l->literal_globals);
     table_free(&l->constant_globals);
     table_free(&l->constant_index);
+    table_free(&l->used_foreign);
     array_free(&l->pending_constants);
     array_free(&l->locals);
     array_free(&l->loops);

@@ -1,8 +1,9 @@
 // A debugger's view of named constants (bin/run-tests runs it under gdb
 // with constants.gdb and under cdb with constants.cdb): a number, a float,
 // a bool, a string, a struct, an array and a pointer, at the top level and
-// in main's body, read by the code or not, Basic's, and a body constant
-// that hides a top-level one from its declaration on.
+// in main's body (an untyped float there a float64), read by the code or
+// not, Basic's, and a block's number and string that hide top-level ones
+// from their declarations to the block's end.
 #import "Basic";
 
 Point :: struct { x: int; y: int; }
@@ -20,6 +21,7 @@ main :: () {
     i := 1;
     STEP :: 7;
     HALF :: cast(float32) 1.5;
+    RATE :: 2.5;
     DONE :: false;
     LABEL :: "here";
     CORNER :: Point.{7, 8};
@@ -27,6 +29,7 @@ main :: () {
     {
         y := x + STEP;
         LIMIT :: 99;
+        NAME :: "inner";
         z := LIMIT + y;
         print_line(LABEL);
     }

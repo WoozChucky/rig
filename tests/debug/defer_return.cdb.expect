@@ -1,5 +1,9 @@
-18:     putchar(10);
+20:     putchar(10);
 int64 0n99
+struct string
++0x000 count            : 0n5
+"inner"
 int64 a = 0n1
 int64 y = <value unavailable>
 int64 LIMIT = 0n99
+struct string LABEL
