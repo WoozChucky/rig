@@ -16,6 +16,8 @@ Empty :: struct { }
 Holder :: struct { a: Any; n: s8; }
 Text :: struct { s: string; }
 Procs :: struct { f: (int) -> int; p: *int; }
+Fields :: struct { v: []int; arr: [2]s16; f: float32; }
+Pad :: struct { a: int; b: u8; }
 
 // Writes value as an argument of print is written, then ends the line.
 show :: (value: Any) {
@@ -127,6 +129,10 @@ main :: () {
     show(grid);
     show(string.["a", "b"]);
     show(Vec2.[.{1, 2}, .{3, 4}]);
+    // A view, an array and a float32 as fields, each read at its offset,
+    // and elements whose size takes in the padding after their last field.
+    show(Fields.{view, .[-1, 2], 0.25});
+    show(Pad.[.{1, 2}, .{3, 4}]);
 
     // An Any as a field or an element is the value it holds, written as
     // that field or element would be; a zeroed one, as a zeroed struct's

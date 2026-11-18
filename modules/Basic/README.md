@@ -292,7 +292,7 @@ A variable of the environment the program was started with, through C's `getenv`
 
 ## Print (`print.rig`)
 
-What is written to standard output goes through C's `putchar`, so it comes out in order with what a program writes with C's `printf`, compiled and interpreted. Bytes are written as they are, so UTF-8 text prints as UTF-8. A value of any type is written through its type info (`Any`, spec 3.16). The procedures that take a `builder` append to it instead, or write to standard output when it is null: Rig has no closures or generics, so a pointer that may be null lets one walk write to either. Written to standard output, nothing is allocated.
+What is written to standard output goes through C's `putchar`, so it comes out in order with what a program writes with C's `printf`, compiled and interpreted. Bytes are written as they are, so UTF-8 text prints as UTF-8. A value of any type is written through its type info (`Any`, spec 3.16). `print_or_append`, `print_quoted`, `print_item` and `print_formatted` take a `builder` and append to it instead, or write to standard output when it is null: Rig has no closures or generics, so a pointer that may be null lets one walk write to either. `print_to_builder` stops on a null one. Written to standard output, nothing is allocated.
 
 - `print_string(s: string)`: writes the bytes of `s`; an empty or zeroed string writes nothing.
 - `print_byte(byte: u8)`: writes the byte itself, not its number.

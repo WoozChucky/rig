@@ -8,8 +8,8 @@
 // checked or changed, so UTF-8 text prints as UTF-8. There's no portable
 // way to reach standard error from Rig yet (its C FILE * is a call,
 // __acrt_iob_func(2), on Windows but a data symbol, stderr, in glibc,
-// which Rig can't declare, and there's no #if to choose between them),
-// so Basic prints only to standard output.
+// which Rig can't declare: #if can choose the system, but not reach
+// glibc's), so Basic prints only to standard output.
 //
 // Numbers are written into a buffer on the stack by numbers.rig and then
 // printed, so printing to standard output never allocates.
@@ -78,8 +78,9 @@ print_line :: (s: string) {
 }
 
 // Writes the bytes of s to builder, or to standard output, through
-// print_string, when builder is null. Every procedure below writes through
-// it, so each writes to either.
+// print_string, when builder is null. The helpers below, print_quoted,
+// print_item and print_formatted, write through it, so each writes to
+// either; print and print_to_builder each pick one.
 print_or_append :: (builder: *String_Builder, s: string) {
     if builder == null {
         print_string(s);
@@ -104,6 +105,7 @@ print_quoted :: (builder: *String_Builder, s: string) {
     HEX :: "0123456789abcdef";
     print_or_append(builder, "\"");
     start := 0; // where the run not yet written begins
+    // tests/run/basic_print_null_string.err names this line.
     for s {
         escape := "";
         if it == 10 { // line feed
