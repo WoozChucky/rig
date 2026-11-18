@@ -1,13 +1,15 @@
 // ast.h: the syntax tree, what the parser makes of the tokens.
 //
-// Procedures (with a body, or #foreign), their parameters and types, and
-// global variables and constants; in a body, blocks of statements: local
-// variables and constants (several variables at once, from a call's
-// results), assignments, returns, if, while, for, break, continue, defer
-// and expressions; expressions made of calls, names, strings, integers,
+// Procedures (with a body, or #foreign), their parameters (the last may be
+// '..T', taking any number of arguments) and types, and global variables
+// and constants; in a body, blocks of statements: local variables and
+// constants (several variables at once, from a call's results),
+// assignments, returns, if, while, for, break, continue, defer and
+// expressions; expressions made of calls, names, strings, integers,
 // floats, bools, null, operators, casts, addresses and dereferences,
 // size_of, fields (e.x), struct literals (Vec2.{1, 2}), elements (a[i])
-// and array literals (int.[1, 2]), and code run while compiling (#run e).
+// and array literals (int.[1, 2]), spreads (..xs, a view passed as a
+// '..T' parameter's arguments), and code run while compiling (#run e).
 // And structs, declared at the top level, the files a program loads
 // (#load "PATH";), named there too, and the code it runs while compiling
 // for its effect (#run e; and #run { ... }), there too. And code compiled

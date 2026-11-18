@@ -885,6 +885,16 @@ TEST(recovery_stops_at_a_global) {
     dump = parse_src(&a, "counter : int = f(..xs\nstart := 1;\n", &errors);
     CHECK_STR(errors, "2:1: expected ')', found identifier 'start'\n");
     CHECK_STR(dump, "(broken counter)\n(var start _ (int 1))\n");
+    dump = parse_src(&a, "greet (..,\nn: s32) { }\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:7: expected '::', found '('\n");
+    CHECK_STR(dump, "(broken greet)\n(proc main (params) (block))\n");
+    // Right after '::' or ':', where no spread can be, any '..' opens one.
+    dump = parse_src(&a, "f :: (..int,\nn: int) { }\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:7: '..' needs a parameter before it, as in (format: *u8, ..)\n");
+    CHECK_STR(dump, "(broken f)\n(proc main (params) (block))\n");
+    dump = parse_src(&a, "t : (..int,\nn: int);\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:6: '..' must be the last parameter\n");
+    CHECK_STR(dump, "(broken t)\n(proc main (params) (block))\n");
     dump = parse_src(&a, "N :: (1 + 2\nstart := 1;\n", &errors);
     CHECK_STR(errors, "2:1: expected ')', found identifier 'start'\n");
     CHECK_STR(dump, "(broken N)\n(var start _ (int 1))\n");
@@ -3654,6 +3664,10 @@ TEST(parses_variadic_procedure_types) {
     CHECK_STR(errors, "1:19: a procedure type can't take '..': a procedure that takes C's '..' can't be a value\n");
     parse_src(&a, "d : (..);\nmain :: () { }\n", &errors);
     CHECK_STR(errors, "1:6: a procedure type can't take '..': a procedure that takes C's '..' can't be a value\n");
+    parse_src(&a, "e : (.., int);\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:6: a procedure type can't take '..': a procedure that takes C's '..' can't be a value\n");
+    parse_src(&a, "q : (rest: ..);\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:12: a procedure type can't take '..': a procedure that takes C's '..' can't be a value\n");
     arena_free(&a);
 }
 

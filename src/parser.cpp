@@ -1954,13 +1954,16 @@ static bool starts_global(Parser *p) {
 // list holds a name followed by ':' (`n: s32`), which a line can start
 // with: a call's or a value's parentheses never do, so a global after one
 // whose ')' is missing is still the next declaration. A list starts at a
-// '(' followed by ')', IDENT ':', or C's bare '..' (one followed by ')' or
-// ','), as parse_declaration tells a procedure from a constant (`greet (s:
-// *u8,` too, a C habit), or by IDENT IDENT, a first parameter missing its
-// ':' (`f :: (a int,`): two names in a row never begin an expression. A
-// '..' followed by anything else is a spread, a call's argument (`f(..xs`).
-// Inside a list every '(' and ')' counts. A list holds no braces, so a '{'
-// or '}' ends it, closed or not: a body has begun or ended.
+// '(' followed by ')' or IDENT ':', as parse_declaration tells a procedure
+// from a constant (`greet (s: *u8,` too, a C habit), or by IDENT IDENT, a
+// first parameter missing its ':' (`f :: (a int,`): two names in a row
+// never begin an expression. A '(' followed by '..' starts one right after
+// '::', as parse_declaration has it too, or after ':', where a type is (or
+// a for's sequence, `for v: (`, which a spread can't be either): a spread
+// is only ever a call's argument. Elsewhere only C's bare '..' does, one
+// followed by ')' or ','; any other is a spread (`f(..xs`). Inside a list
+// every '(' and ')' counts. A list holds no braces, so a '{' or '}' ends
+// it, closed or not: a body has begun or ended.
 static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
     Token_Kind kind = p->tokens[i].kind;
     if (kind == TOKEN_LBRACE || kind == TOKEN_RBRACE) {
@@ -1969,10 +1972,12 @@ static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
     } else if (kind == TOKEN_LPAREN) {
         // A token follows a '(': the last one is TOKEN_EOF, and none follows
         // it, so tokens[i + 2] is read only after an IDENT or a '..'.
+        Token_Kind before = i > 0 ? p->tokens[i - 1].kind : TOKEN_EOF;
         Token_Kind next = p->tokens[i + 1].kind;
         Token_Kind after = next == TOKEN_IDENT || next == TOKEN_DOT_DOT ? p->tokens[i + 2].kind : TOKEN_EOF;
+        bool no_spread = before == TOKEN_COLON_COLON || before == TOKEN_COLON;
         bool list = next == TOKEN_RPAREN ||
-                    (next == TOKEN_DOT_DOT && (after == TOKEN_RPAREN || after == TOKEN_COMMA)) ||
+                    (next == TOKEN_DOT_DOT && (no_spread || after == TOKEN_RPAREN || after == TOKEN_COMMA)) ||
                     (next == TOKEN_IDENT && (after == TOKEN_COLON || after == TOKEN_IDENT));
         if (*parens > 0 || list) *parens += 1;
     } else if (kind == TOKEN_RPAREN && *parens > 0) {
