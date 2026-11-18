@@ -78,7 +78,8 @@ Ast *check_lookup(Checker *c, String name);
 Type *resolve_type(Checker *c, Ast_Type *written);
 
 // resolve_type, but void itself is a type too: for size_of, which says
-// what's wrong with it.
+// what's wrong with it, and type_info, which describes it (what a *void
+// points at).
 Type *resolve_type_or_void(Checker *c, Ast_Type *written);
 
 // Makes sure the type of field `index` of struct t is known: a late field's

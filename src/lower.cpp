@@ -336,7 +336,7 @@ struct Lowering {
     Ir_Module *module;
     Table<s32> proc_index;    // a Rig or foreign procedure's index in module->procs, by name
     Table<s32> global_index;  // a global variable's index in module->globals, by name
-    s32 string_count;         // the str.N globals made so far: string literals and panic messages
+    s32 string_count;         // the str.N globals made so far: string literals, panic messages and the names in types' descriptions
     // Each string literal node's str.N, by pointer_key: one per literal,
     // however many uses and constants reach it (literal_global).
     Table<s32> literal_globals;
@@ -628,7 +628,9 @@ static s32 emit_select(Lowering *l, Ir_Type t, s32 condition, s32 if_true, s32 i
 
 // A constant global holding `bytes` and a zero after them; its index. A
 // string literal's (a string's count leaves the zero out; C reads it through
-// a *u8, up to the zero) or a panic's message (written without the zero).
+// a *u8, up to the zero), a panic's message (written without the zero), or
+// a name in a type's description (describe_type, describe_members: a
+// string's, without the zero).
 static s32 add_bytes(Lowering *l, String bytes) {
     Ir_Global g = {};
     g.name = string_printf(l->arena, "str.%d", l->string_count++);

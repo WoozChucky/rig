@@ -17,6 +17,8 @@ int 7
 int 6
 string two
 Vec2 1 7
+int 1
+int 2
 u8 9
 float32 2.50
 int 10
@@ -33,3 +35,4 @@ Vec2 1 7
 *int 8
 a procedure
 Vec2 5 7
+int 9

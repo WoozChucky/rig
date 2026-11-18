@@ -867,7 +867,7 @@ A local variable is declared after its value is worked out, so `x := x + 1;` in 
 - a type's description's address, `type_info(T)` (section 5.19), as it is, through casts to other pointer types (`cast(*Type_Info_Struct) type_info(Node)`), or as a field or element of a literal, a cast of such a literal or a field of one included: the linker writes the description's address, as for a string literal. One cast to an integer is not allowed;
 - a `#run` (section 7.8), or a constant holding one's value, or either as a field or element of a literal (`numbers : []int = #run make();`, `copy := NAME;` for `NAME :: #run name();`). The global gets its own copy of the value, writable, and unlike a literal's, its strings' bytes are copied too, as its views' elements are: into data of the global's own, which the program may change (`copy[0] = 82;`).
 
-A value converted to `Any` (section 3.16) is not allowed, for now, alone or in a literal, whatever the value: `any : Any = 7;` and `held := Holder.{a = 5};`, for an `Any` field `a`, are `a global's value must be known while compiling, for now`, at the value converted.
+A value converted to `Any` (section 3.16) is not allowed, for now, alone or in a literal, whatever the value: `any : Any = 7;` and `held := Holder.{a = 5};`, for an `Any` field `a`, are `a global's value must be known while compiling, for now`, at the value converted, or at the global's whole value when that is a cast to `Any` (`any := cast(Any) 7;`), or a cast or a field of a literal holding one (`held := cast(Holder) Holder.{a = 5};`).
 
 A global with no value, or with `---`, starts at zero.
 

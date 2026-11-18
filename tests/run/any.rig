@@ -10,6 +10,8 @@ Vec2 :: struct { x: int; y: int; }
 Holder :: struct { a: Any; n: int; }
 
 LIMIT :: 10;
+// A global is a place too: an Any holds its address.
+counter := 1;
 
 // What a holds, by its type.
 show :: (a: Any) {
@@ -82,6 +84,9 @@ main :: () {
     show(r);
     show(n + 1);
     show_all(n, "two", v);
+    // Each copy has its own temporary, two of one type in one statement
+    // too.
+    show_all(1, 2);
     forward(cast(u8) 9, 2.5);
     for xs { show(it); }
     show(Holder.{a = n}.a);
@@ -100,4 +105,7 @@ main :: () {
     a = v;
     v.x = 5;
     show(a);
+    g : Any = counter;
+    counter = 9;
+    show(g);
 }

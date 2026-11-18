@@ -7591,11 +7591,13 @@ TEST(a_literal_holding_an_any_is_no_constant_data) {
                                      "held := Holder.{a = 5};\n"
                                      "any : Any = 7;\n"
                                      "CAST :: cast(Any) 5;\n"
+                                     "cast_any := cast(Any) 5;\n"
                                      "main :: () { }\n"),
               "2:21: a constant's pointer can only be null or a string literal's address\n"
               "3:21: a global's value must be known while compiling, for now\n"
               "4:13: a global's value must be known while compiling, for now\n"
-              "5:9: a constant's pointer can only be null or a string literal's address\n");
+              "5:9: a constant's pointer can only be null or a string literal's address\n"
+              "6:13: a global's value must be known while compiling, for now\n");
     // In a literal cast to its own type, which a constant takes when its
     // values are known, the value converted is the one said so, as it is
     // without the cast.
@@ -7638,6 +7640,7 @@ TEST(a_literal_holding_an_any_is_no_constant_data) {
                                      "CAST :: cast(Any) #run fail();\n"
                                      "failed := Holder.{a = #run fail()};\n"
                                      "any : Any = #run fail();\n"
+                                     "cast_failed := cast(Any) #run fail();\n"
                                      "main :: () { }\n"),
               "4:21: a constant's pointer can only be null or a string literal's address\n"
               "5:21: a global's value must be known while compiling, for now\n"
@@ -7652,7 +7655,10 @@ TEST(a_literal_holding_an_any_is_no_constant_data) {
               "    in #run (test.rig:8:23)\n"
               "9:13: #run failed: runtime error: index 2 is out of bounds (count 2)\n"
               "    in fail (test.rig:1:49)\n"
-              "    in #run (test.rig:9:13)\n");
+              "    in #run (test.rig:9:13)\n"
+              "10:26: #run failed: runtime error: index 2 is out of bounds (count 2)\n"
+              "    in fail (test.rig:1:49)\n"
+              "    in #run (test.rig:10:26)\n");
     arena_free(&a);
 }
 
