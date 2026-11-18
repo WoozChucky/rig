@@ -2017,8 +2017,17 @@ static void check_c_name(Checker *c, Ast_Proc *proc) {
 // in a default are the signature's (Ast_Proc.had_errors), so a #run that
 // reaches the procedure doesn't run.
 //
-// proc->defaults_depth is its deepest default's levels: how deep lowering
-// goes in a call that leaves every one out.
+// proc->defaults_depth is how deep lowering goes in a call that leaves every
+// default out: it lowers each default there, and a direct call in one that
+// leaves defaults out lowers those in turn (check_call raises
+// c->filled_depth to its callee's defaults_depth). So a default's depth is
+// its own levels and the deepest of those, and the procedure's is its
+// deepest default's. Nothing else bounds it: a chain of procedures declared
+// in the order their defaults need them is checked one signature at a time,
+// at level 0 (spec 9.4). A default past MAX_DEPTH is "this default value is
+// nested too deeply with the default values its calls fill in (more than
+// 1000 levels)", at it, and the procedure then counts no depth, so a longer
+// chain says so once per 1000 levels, as a chain of declarations does.
 static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
     Array<Ast_Param *> &params = proc->params;
     s64 first = 0;
@@ -2042,18 +2051,30 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
     for (s64 i = 0; i < params.count; i++) table_put(scope, params[i]->name, (Ast *)params[i]);
     c->default_of = proc;
     s32 depth = 0;
+    bool too_deep = false;
     for (s64 i = first; i < params.count; i++) {
         Ast_Param *param = params[i];
         Ast *value = param->default_value;
         if (!value) continue;
         c->levels = base + param->default_levels + 1;
+        c->filled_depth = 0;
         check_value(c, value);
         if (!check_convert(c, value, param->type)) report_no_conversion(c, value, param->type);
-        if (param->default_levels > depth) depth = param->default_levels;
+        s32 own = param->default_levels + c->filled_depth;
+        if (own > MAX_DEPTH) {
+            diag_error(c->diag, value->start,
+                       "this default value is nested too deeply with the default values its calls fill in (more "
+                       "than %d levels)",
+                       MAX_DEPTH);
+            too_deep = true;
+        } else if (own > depth) {
+            depth = own;
+        }
     }
     c->default_of = nullptr;
+    c->filled_depth = 0;
     pop_scope(c);
-    proc->defaults_depth = depth;
+    proc->defaults_depth = too_deep ? 0 : depth;
 }
 
 // A procedure's signature: its parameters' types and its results' types,

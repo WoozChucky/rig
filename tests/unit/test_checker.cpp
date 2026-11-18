@@ -8020,3 +8020,84 @@ TEST(a_default_names_what_is_declared_later) {
     token_list_free(c.list);
     arena_free(&a);
 }
+
+TEST(calls_leave_out_parameters_with_default_values) {
+    // A direct call gives at least the parameters without a default and at
+    // most all of them, a constant naming the procedure included. Each
+    // given argument converts to its parameter's type as any argument does:
+    // a typed one keeps its own type, which lowering converts.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "repeat :: (s: string, times: int = 2, separator: string = \" \") { }\n"
+                              "R :: repeat;\n"
+                              "main :: () {\n"
+                              "    repeat(\"ho\");\n"
+                              "    repeat(\"ho\", 3);\n"
+                              "    repeat(\"ho\", 3, \"-\");\n"
+                              "    R(\"hi\");\n"
+                              "    b : u8 = 4;\n"
+                              "    repeat(\"ho\", b);\n"
+                              "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Call *call = (Ast_Call *)c.file->procs[1]->body->statements[5];
+    CHECK_STR(type_name(&a, call->args[1]->type), "u8");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(the_count_of_a_call_with_default_values) {
+    // Too few or too many is a range, "1 or 2" when the ends differ by one,
+    // and always "arguments". A refused gap leaves only the trailing run of
+    // defaults to leave out.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "pair :: (a: int, b: int = 0) { }\n"
+                               "maybe :: (n: int = 0) { }\n"
+                               "later :: (a: int = 1, b: int, c: int = 3) { }\n"
+                               "main :: () {\n"
+                               "    pair();\n"
+                               "    maybe(1, 2);\n"
+                               "    later(1);\n"
+                               "    later(1, 2, 3, 4);\n"
+                               "}\n"),
+              "3:23: 'b' needs a default value, since a parameter before it has one\n"
+              "5:5: 'pair' takes 1 or 2 arguments, but 0 were given\n"
+              "6:5: 'maybe' takes 0 or 1 arguments, but 2 were given\n"
+              "7:5: 'later' takes 2 or 3 arguments, but 1 was given\n"
+              "8:5: 'later' takes 2 or 3 arguments, but 4 were given\n");
+    arena_free(&a);
+}
+
+// The procedures p0 to p<last>, each pK's default value a call of p(K-1)
+// that fills in p(K-1)'s default: so lowering pK() goes K levels deep.
+static const char *default_chain(Arena *a, s64 last) {
+    return joined(a, "p0 :: (x: int = 0) -> int { return x; }\n",
+                  chain_of(a, "p%lld :: (x: int = p%lld()) -> int { return x; }\n", 1, last, -1));
+}
+
+TEST(default_values_nested_too_deeply) {
+    // A default's depth is its own levels and the depth of the defaults its
+    // direct calls fill in: a call of a name is a level, so b's is 1, and
+    // c's, which gives a's argument, 1 too; d's parentheses make 2, and b's
+    // 1 more. e's default is a name, no level, and the call through the
+    // value e() returns fills in nothing: g's 2 is its own two calls.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "a :: (x: int = 0) -> int { return x; }\n"
+                              "b :: (x: int = a()) -> int { return x; }\n"
+                              "c :: (x: int = a(1)) -> int { return x; }\n"
+                              "d :: (x: int = (b()), y: int = 1) -> int { return x; }\n"
+                              "e :: (f: (int, int) -> int = d) -> (int, int) -> int { return f; }\n"
+                              "g :: (x: int = e()(1, 2)) -> int { return x; }\n"
+                              "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    s32 depths[] = {0, 1, 1, 3, 0, 2};
+    for (s64 i = 0; i < 6; i++) CHECK_EQ(c.file->procs[i]->defaults_depth, depths[i]);
+    token_list_free(c.list);
+    // A chain to the limit checks. One more is said once, at the default
+    // past it, whose procedure then counts no depth: the next one fits.
+    const char *main_proc = "main :: () { }\n";
+    CHECK_STR(check_source(&a, joined(&a, default_chain(&a, 1000), main_proc)), "");
+    const char *too_deep = "1002:20: this default value is nested too deeply with the default values its calls fill "
+                           "in (more than 1000 levels)\n";
+    CHECK_STR(check_source(&a, joined(&a, default_chain(&a, 1001), main_proc)), too_deep);
+    CHECK_STR(check_source(&a, joined(&a, default_chain(&a, 1002), main_proc)), too_deep);
+    arena_free(&a);
+}

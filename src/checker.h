@@ -560,6 +560,24 @@
 //   f(1))) or through another's default that does, is "'f' is defined in
 //   terms of itself", at the procedure, once. A default's errors are its
 //   signature's: a #run reaching the procedure doesn't run.
+// - A direct call, of the procedure's name or a constant naming it, gives
+//   at least the parameters without a default and at most all of them:
+//   "'repeat' takes 1 to 3 arguments, but 4 were given", "'pair' takes 1 or
+//   2 arguments, but 3 were given" when they differ by one, at the callee.
+//   With no defaults the count is exact, as before. After a refused gap only
+//   the trailing defaults can be left out. Each given argument converts to
+//   its parameter's type, as any argument does; the ones left out pass their
+//   defaults, converted with the signature, which lowering works out at the
+//   call, in the caller, after the given ones.
+// - A procedure type keeps no defaults, so a call through a value gives
+//   every argument: with f := repeat, f("ho") is "'f' takes 3 arguments, but
+//   1 was given".
+// - Lowering a call puts the defaults it leaves out in place, and a direct
+//   call in one of them that leaves defaults out puts those in turn. So a
+//   default's depth is its levels and the deepest depth of the defaults its
+//   calls fill in, and past MAX_DEPTH it is "this default value is nested
+//   too deeply with the default values its calls fill in (more than 1000
+//   levels)", at it, said once per 1000 levels of a chain.
 //
 // Code run while compiling (issue #115, spec 7.8).
 // - #run e is an expression, of e's type: an untyped constant's default

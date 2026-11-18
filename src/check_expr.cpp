@@ -923,6 +923,19 @@ static bool check_callee(Checker *c, Ast_Call *call) {
     return t != nullptr;  // an unknown type was reported with its own mistake
 }
 
+// How many arguments a direct call of proc must give at least (spec 5.10):
+// its parameters up to and including the last one without a default value.
+// After a gap, refused with the signature (check_defaults), only the
+// trailing run of defaults can be left out: (a: int = 1, b: int, c: int =
+// 3) takes 2 or 3 arguments. A #compiler procedure's defaults count the
+// same, so their refusal is the one message; a procedure with a '..T'
+// parameter or C's '..' is counted without them (check_call).
+static s64 required_arguments(Ast_Proc *proc) {
+    s64 required = proc->params.count;
+    while (required > 0 && proc->params[required - 1]->default_value) required--;
+    return required;
+}
+
 // A call: the callee (check_callee), then the arguments, whose own mistakes
 // are reported even when the callee is wrong, after its: in source order (a
 // spread argument's operand by check_spread_argument). Then the arguments
@@ -930,7 +943,16 @@ static bool check_callee(Checker *c, Ast_Call *call) {
 // procedure type, named in the messages by callee_name: as many as there are
 // ("'f' takes 2 arguments, but 1 was given", at the callee; a foreign
 // procedure taking C's '..' "at least" its fixed ones), each converting to
-// its parameter's type. A callee with a '..T' parameter takes at least the
+// its parameter's type. A direct call of a procedure with default values
+// (spec 5.10, 7.2) gives at least the parameters without one
+// (required_arguments) and at most all of them: "'repeat' takes 1 to 3
+// arguments, but 4 were given" ("1 or 2" when they differ by one). Only the
+// arguments it gives convert; lowering passes the defaults of the others.
+// A call through a value gives every argument, since a procedure type keeps
+// no defaults. In a default value being checked (Checker.default_of), a
+// direct call that leaves some out raises Checker.filled_depth to its
+// callee's defaults_depth, which check_defaults counts in the default's
+// depth. A callee with a '..T' parameter takes at least the
 // others, its fixed ones, and then any number more, or one spread
 // (check_variadic_arguments). A spread is only that: the last argument of
 // such a call. Anywhere else among the arguments it's refused
@@ -973,10 +995,19 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     bool spreads = gathers && given && call->args[given - 1]->kind == AST_SPREAD;
     bool more = gathers || (proc && proc->is_c_variadic);
     s64 fixed = gathers ? n - 1 : n, before = spreads ? given - 1 : given;
-    if (more ? before < fixed : given != n) {
-        diag_error(c->diag, call->callee->start, "'" STR_FMT "' takes %s%lld argument%s, but %lld %s given",
-                   STR_ARG(name), more ? "at least " : "", (long long)fixed, fixed == 1 ? "" : "s",
-                   (long long)before, before == 1 ? "was" : "were");
+    // A direct call may leave out the parameters with default values (spec
+    // 5.10); a call through a value, whose type keeps none, gives them all.
+    s64 required = proc && !more ? required_arguments(proc) : n;
+    if (more ? before < fixed : (given < required || given > n)) {
+        if (required < n) {
+            diag_error(c->diag, call->callee->start, "'" STR_FMT "' takes %lld %s %lld arguments, but %lld %s given",
+                       STR_ARG(name), (long long)required, n - required == 1 ? "or" : "to", (long long)n,
+                       (long long)given, given == 1 ? "was" : "were");
+        } else {
+            diag_error(c->diag, call->callee->start, "'" STR_FMT "' takes %s%lld argument%s, but %lld %s given",
+                       STR_ARG(name), more ? "at least " : "", (long long)fixed, fixed == 1 ? "" : "s",
+                       (long long)before, before == 1 ? "was" : "were");
+        }
         if (spreads) call->args[given - 1]->type = nullptr;  // not taken: nothing more to say of it
     } else if (spreads && before > fixed) {
         Ast *spread = call->args[given - 1];
@@ -985,8 +1016,16 @@ static Type *check_call(Checker *c, Ast_Call *call) {
                    STR_ARG(name));
         spread->type = nullptr;
     } else {
-        for (s64 i = 0; i < fixed; i++) {
+        // Only the arguments given convert: the default values were
+        // converted with the signature.
+        s64 converted = more ? fixed : given;
+        for (s64 i = 0; i < converted; i++) {
             check_argument(c, call->args[i], proc ? proc->params[i]->type : callee->params[i], i, name);
+        }
+        // Lowering puts the defaults left out here, and theirs in turn: a
+        // default being checked goes as deep as they do (check_defaults).
+        if (c->default_of && proc && !more && given < n && proc->defaults_depth > c->filled_depth) {
+            c->filled_depth = proc->defaults_depth;
         }
         if (gathers) {
             check_variadic_arguments(c, call, fixed, call_variadic_type(call), name);
