@@ -7660,7 +7660,8 @@ TEST(a_cast_to_any_is_no_constant) {
     // cast(Any) e is e's conversion to Any (spec 3.14), for any value: a
     // constant, a pointer and a procedure value too, which casts to other
     // types refuse. The cast is an Any, never a constant, though its value
-    // may be one.
+    // may be one. An untyped float takes its default type, a float32, not
+    // the float64 a cast first makes of it (spec 3.12).
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a,
@@ -7668,14 +7669,15 @@ TEST(a_cast_to_any_is_no_constant) {
                                  "    a := cast(Any) 5;\n"
                                  "    p := cast(Any) *a;\n"
                                  "    f := cast(Any) helper;\n"
+                                 "    x := cast(Any) 1.5;\n"
                                  "}\n"
                                  "helper :: () { }\n",
                                  &tree),
               "");
     Array<Ast *> body = body_of(tree, "main");
-    const char *types[] = {"int", "*Any", "()"};
-    CHECK_EQ(body.count, 3);
-    for (s64 i = 0; i < body.count && i < 3; i++) {
+    const char *types[] = {"int", "*Any", "()", "float32"};
+    CHECK_EQ(body.count, 4);
+    for (s64 i = 0; i < body.count && i < 4; i++) {
         CHECK_EQ(body[i]->kind, AST_VAR);
         Ast *cast = ((Ast_Var *)body[i])->value;
         CHECK_EQ(cast->kind, AST_CAST);
