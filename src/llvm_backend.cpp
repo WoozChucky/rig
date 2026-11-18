@@ -1410,8 +1410,10 @@ static u64 debug_constant_bits(Type *t, u64 bits) {
 // holds, for the whole of its scope. At -O0 every variable stays in its
 // slot, at a fixed offset from the frame pointer, so that one fact is true
 // wherever the program stops, and the debugger reads and writes it there.
-// The records go at the end of the entry block, before any of its code:
-// the builder is there, after the hoisted allocas (build_body).
+// A body's constants, which p->vars holds too, have no slot and are
+// described otherwise (the last two kinds below). The records go at the
+// end of the entry block, before any of its code: the builder is there,
+// after the hoisted allocas (build_body).
 //
 // - A local, an iterator, it_index or a scalar parameter (IR_VAR_SLOT)
 //   lives in its own slot: lowering stores a parameter there on entry and
@@ -1957,7 +1959,8 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, bool optimize, Are
     // array.N, const.N) has no Rig type, and none of its own: a const.N
     // gets its constant's variable instead, from the constants
     // (describe_constants, and declare_variables for a body's), one per
-    // declaration of it.
+    // declaration of it lowered: each copy of deferred code declares it
+    // again (declare_variables).
     for (s64 i = 0; b->debug && i < m->globals.count; i++) {
         Ir_Global *g = &m->globals[i];
         if (!g->rig_type) continue;

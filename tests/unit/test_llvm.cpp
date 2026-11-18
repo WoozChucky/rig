@@ -2025,8 +2025,10 @@ TEST(llvm_constants_have_debug_info) {
     // expression of its value, attached to nothing (CodeView's S_CONSTANT,
     // DWARF's DW_AT_const_value); data is one attached to its const.N. A
     // body's number is a local variable whose value a #dbg_value gives, as
-    // an i64 (a float's bits); a body's data a global variable scoped to
-    // its block, in its subprogram's retained nodes.
+    // an i64 (a float's bits), in its block; a body's data a global
+    // variable scoped to its block, in its subprogram's retained nodes. A
+    // procedure-typed null is a pointer to its subroutine type, as a
+    // procedure-typed variable is.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "Point :: struct { x: int; y: int; }\n"     // 1
@@ -2035,14 +2037,17 @@ TEST(llvm_constants_have_debug_info) {
                                 "HALF :: cast(float32) 1.5;\n"
                                 "SMALL :: cast(s8) -5;\n"
                                 "READY :: true;\n"
+                                "DONE :: false;\n"
                                 "NOTHING :: null;\n"
-                                "NAME :: \"rig\";\n"                         // 8
+                                "NO_PROC :: cast((int) -> int) null;\n"
+                                "NAME :: \"rig\";\n"                         // 10
                                 "add :: (a: int, b: int) -> int { return a + b; }\n"
                                 "OP :: add;\n"
-                                "main :: () {\n"                             // 11
+                                "main :: () {\n"                             // 13
                                 "    STEP :: 7;\n"
                                 "    SCALE :: cast(float32) 0.25;\n"
-                                "    { CORNER :: Point.{7, 8}; i := 1; }\n"  // 14
+                                "    NO_CALL :: cast((int) -> int) null;\n"
+                                "    { CORNER :: Point.{7, 8}; INNER :: 5; i := 1; }\n"  // 17
                                 "}\n");
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);
@@ -2054,7 +2059,14 @@ TEST(llvm_constants_have_debug_info) {
         CHECK(contains(constant_expression(&a, text, "HALF"), "DW_OP_constu, 1069547520, "));
         CHECK(contains(constant_expression(&a, text, "SMALL"), "DW_OP_constu, 18446744073709551611, "));
         CHECK(contains(constant_expression(&a, text, "READY"), "DW_OP_constu, 1, "));
+        CHECK(string_eq(constant_expression(&a, text, "DONE"),
+                        str("!DIExpression(DW_OP_constu, 0, DW_OP_stack_value)")));
         CHECK(contains(constant_expression(&a, text, "NOTHING"), "DW_OP_constu, 0, "));
+        CHECK(string_eq(constant_expression(&a, text, "NO_PROC"),
+                        str("!DIExpression(DW_OP_constu, 0, DW_OP_stack_value)")));
+        String no_proc = node_line(&a, text, attached(&a, line_with(text, "!DIGlobalVariable(name: \"NO_PROC\""), "type:"));
+        CHECK(contains(no_proc, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: "));
+        CHECK(contains(node_line(&a, text, attached(&a, no_proc, "baseType:")), "!DISubroutineType("));
         CHECK(string_eq(constant_expression(&a, text, "NAME"), str("!DIExpression()")));
         CHECK(!contains(text, "!DIGlobalVariable(name: \"OP\""));
         // NAME's is attached to its const.N; LIMIT's to nothing, the unit
@@ -2071,7 +2083,7 @@ TEST(llvm_constants_have_debug_info) {
         String main = defined_node(main_line);
         String step_line = line_with(text, "!DILocalVariable(name: \"STEP\"");
         CHECK(contains(step_line, string_cstr(&a, string_printf(&a, "scope: " STR_FMT ",", STR_ARG(main)))));
-        CHECK(contains(step_line, "line: 12, "));
+        CHECK(contains(step_line, "line: 14, "));
         String step = defined_node(step_line);
         CHECK(step.count > 0 &&
               contains(text, string_cstr(&a, string_printf(&a, "#dbg_value(i64 7, " STR_FMT ", !DIExpression(), ",
@@ -2081,6 +2093,13 @@ TEST(llvm_constants_have_debug_info) {
               contains(text, string_cstr(&a, string_printf(&a, "#dbg_value(i64 1048576000, " STR_FMT ", ",
                                                            STR_ARG(scale)))));
         CHECK(!contains(text, "!DIGlobalVariable(name: \"STEP\""));
+        // NO_CALL: a pointer to its subroutine type, its value null.
+        String no_call_line = line_with(text, "!DILocalVariable(name: \"NO_CALL\"");
+        CHECK(contains(node_line(&a, text, attached(&a, no_call_line, "type:")),
+                       "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: "));
+        String no_call = defined_node(no_call_line);
+        CHECK(no_call.count > 0 &&
+              contains(text, string_cstr(&a, string_printf(&a, "#dbg_value(i64 0, " STR_FMT ", ", STR_ARG(no_call)))));
         // CORNER: a global variable whose scope is the block's lexical
         // block, inside main, attached to its const.N, in main's retained
         // nodes (not the unit's globals, which LLVM's verifier refuses).
@@ -2088,7 +2107,15 @@ TEST(llvm_constants_have_debug_info) {
         String block = attached(&a, corner_line, "scope:");
         CHECK(contains(node_line(&a, text, block),
                        string_cstr(&a, string_printf(&a, "!DILexicalBlock(scope: " STR_FMT ",", STR_ARG(main)))));
-        CHECK(contains(corner_line, "line: 14, "));
+        CHECK(contains(corner_line, "line: 17, "));
+        // INNER, a number beside it: a local variable of that block, not of
+        // main.
+        String inner_line = line_with(text, "!DILocalVariable(name: \"INNER\"");
+        CHECK(block.count > 0 &&
+              contains(inner_line, string_cstr(&a, string_printf(&a, "scope: " STR_FMT ",", STR_ARG(block)))));
+        String inner = defined_node(inner_line);
+        CHECK(inner.count > 0 &&
+              contains(text, string_cstr(&a, string_printf(&a, "#dbg_value(i64 5, " STR_FMT ", ", STR_ARG(inner)))));
         String corner = global_variable_expression(&a, text, "CORNER");
         CHECK(corner.count > 0 && starts_with(global_attached_to(&a, text, corner), "@const."));
         CHECK(tuple_lists(&a, text, attached(&a, main_line, "retainedNodes:"), corner));
@@ -2116,6 +2143,14 @@ TEST(llvm_constants_in_deferred_code) {
         String text = llvm_text(&a, m, (Target)t);
         CHECK_EQ(count_of(line_with(text, "@const.0 = "), "!dbg"), 2);
         CHECK_EQ(count_of(text, "!DIGlobalVariable(name: \"D\""), 2);
+        // Each copy's D in that copy's block.
+        const char *d = "!DIGlobalVariable(name: \"D\"";
+        s64 after = index_of(text, d) + 1;
+        String first = attached(&a, line_with(text, d), "scope:");
+        String second = attached(&a, line_with(string_slice(text, after, text.count - after), d), "scope:");
+        CHECK(first.count > 0 && second.count > 0 && !string_eq(first, second));
+        CHECK(contains(node_line(&a, text, first), "!DILexicalBlock("));
+        CHECK(contains(node_line(&a, text, second), "!DILexicalBlock("));
         // seven's K, and main's two copies.
         CHECK_EQ(count_of(text, "!DILocalVariable(name: \"K\""), 3);
         CHECK(contains(text, "#dbg_value(i64 3, "));
@@ -2124,19 +2159,40 @@ TEST(llvm_constants_in_deferred_code) {
     arena_free(&a);
 }
 
+static String object_from(Arena *a, Ir_Module *m, Target t, bool optimize, bool lowest);
+
 TEST(llvm_unread_constant_data_survives_optimisation) {
-    // Review Focus 5: a data constant no code reads, optimised: LLVM's O2
-    // may drop its const.N, and the module still verifies.
+    // Review Focus 5: data constants no code reads, optimised: LLVM's O2
+    // may drop their const.N, and inline and drop pick, whose constants
+    // are in its subprogram's retained nodes. The optimised module still
+    // verifies (run_passes doesn't check it), and the CodeView or DWARF
+    // writer still writes an object of it.
     Arena a = arena_make();
-    Ir_Module *m = lower_source(&a, "ORIGIN :: int.[3, 4];\nmain :: () { }\n");
+    Ir_Module *m = lower_source(&a,
+                                "Point :: struct { x: int; y: int; }\n"
+                                "ORIGIN :: int.[3, 4];\n"
+                                "pick :: (i: int) -> int { T :: int.[1, 2, 3]; U :: Point.{5, 6}; return T[i]; }\n"
+                                "main :: () { { CORNER :: int.[7, 8]; i := 1; } n := pick(1); }\n");
     for (int t = 0; t < 2; t++) {
-        String plain = {}, optimised = {}, error = {};
+        String plain = {}, error = {};
         CHECK(llvm_ir_text(&a, m, (Target)t, &plain, &error, false));
         CHECK(contains(line_with(plain, "@const.0 = "), "!dbg"));
-        CHECK(contains(plain, "!DIGlobalVariable(name: \"ORIGIN\""));
-        bool ok = llvm_ir_text(&a, m, (Target)t, &optimised, &error, true);
+        const char *names[] = {"ORIGIN", "T", "U", "CORNER"};
+        for (const char *name : names) {
+            CHECK(contains(plain, string_cstr(&a, string_printf(&a, "!DIGlobalVariable(name: \"%s\"", name))));
+        }
+        Backend b = {};
+        bool ok = backend_prepare(&b, m, (Target)t, true, &a, &error);
         CHECK(ok);
         if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+        char *message = nullptr;
+        if (ok && LLVMVerifyModule(b.module, LLVMReturnStatusAction, &message)) {
+            fprintf(stderr, "  %s\n", message);
+            CHECK(false);
+        }
+        LLVMDisposeMessage(message);
+        backend_free(&b);
+        CHECK(object_from(&a, m, (Target)t, true, false).count > 0);
     }
     arena_free(&a);
 }
@@ -2146,11 +2202,12 @@ TEST(llvm_unread_constant_data_survives_optimisation) {
 // file names the one its declaration is in: a procedure's subprogram, its
 // lexical blocks and its variables (result$ too) the procedure's; a struct
 // type, its members and its stand-in below DEBUG_TYPE_LEVELS the struct's;
-// a global its own. A subprogram and a struct type name it twice, as their
-// file and as their scope. The compile unit names the main file, and so do
-// a view type and its members, which no line declares, though only the
-// loaded file uses it. Each file has a struct, a global and a procedure
-// with a block, so a node that named the wrong one, either way, would show.
+// a global and a constant (issue #172) its own. A subprogram and a struct
+// type name it twice, as their file and as their scope. The compile unit
+// names the main file, and so do a view type and its members, which no
+// line declares, though only the loaded file uses it. Each file has a
+// struct, a global, a constant and a procedure with a block, so a node
+// that named the wrong one, either way, would show.
 TEST(debug_info_names_each_procedures_file) {
     Arena a = arena_make();
     String dir = load_test_directory(&a, "debug_info_names_each_procedures_file");
@@ -2160,6 +2217,7 @@ TEST(debug_info_names_each_procedures_file) {
                                       "#load \"helper.rig\";\n"
                                       "Point :: struct { x: int; }\n"
                                       "count := 0;\n"
+                                      "LIMIT :: 9;\n"
                                       "main :: () {\n"
                                       "    p := Pair.{1, 2};\n"
                                       "    q := Point.{3};\n"
@@ -2176,6 +2234,8 @@ TEST(debug_info_names_each_procedures_file) {
         joined(&a,
                "Pair :: struct { a: int; b: int; }\n"
                "total := 0;\n"
+               "STRIDE :: 4;\n"
+               "STEPS :: int.[1, 2];\n"
                "helper :: (n: int) -> int {\n"
                "    doubled := n * 2;\n"
                "    pairs : []Pair;\n"
@@ -2252,6 +2312,7 @@ TEST(debug_info_names_each_procedures_file) {
             {"!DICompositeType(tag: DW_TAG_structure_type, name: \"[]Pair\"", 0, true},
             {"!DIDerivedType(tag: DW_TAG_member, name: \"count\"", 0, false},
             {"!DIGlobalVariable(name: \"count\"", 0, false},
+            {"!DIGlobalVariable(name: \"LIMIT\"", 0, false},
             {"!DISubprogram(name: \"helper\"", 1, true},
             {"!DILocalVariable(name: \"n\"", 1, false},
             {"!DILocalVariable(name: \"doubled\"", 1, false},
@@ -2261,6 +2322,8 @@ TEST(debug_info_names_each_procedures_file) {
             {"!DICompositeType(tag: DW_TAG_structure_type, name: \"Pair\"", 1, true},
             {"!DIDerivedType(tag: DW_TAG_member, name: \"a\"", 1, false},
             {"!DIGlobalVariable(name: \"total\"", 1, false},
+            {"!DIGlobalVariable(name: \"STRIDE\"", 1, false},
+            {"!DIGlobalVariable(name: \"STEPS\"", 1, false},
             {"!DICompositeType(tag: DW_TAG_structure_type, name: \"D1\"", 1, true},
         };
         const char *labels[] = {"file:", "scope:"};
