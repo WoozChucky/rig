@@ -6,8 +6,8 @@
 #   rig        the compiler, an optimised build (./build.sh release)
 #   ld.lld     LLVM's linker, which rig runs from its own directory (spec
 #              10.6): without it rig can't link a program
-#   modules/   the modules that ship with rig (Basic, Compiler), which
-#              #import finds in modules/ beside rig (spec 2.14)
+#   modules/   the modules that ship with rig (Preload, Basic, Compiler),
+#              which rig finds in modules/ beside rig (spec 2.14)
 #   LICENSE, README.md
 #   LICENSE-LLVM.txt, LICENSE-LLD.txt
 #              the licences of LLVM, which rig links statically, and of
@@ -22,7 +22,9 @@
 #     the game it makes and compares what it prints with game.out;
 #   - builds tests/run/basic_string.rig, which imports Basic, runs it and
 #     compares what it prints with basic_string.out.
-# Both imports find the archive's modules/, beside its rig.
+# Every program imports Preload without asking, hello too, so all three
+# builds find the archive's modules/, beside its rig: Preload in each,
+# Compiler and Basic in theirs.
 
 set -e
 cd "$(dirname "$0")/.."
