@@ -64,8 +64,18 @@ bool llvm_ir_text(Arena *a, Ir_Module *m, Target t, String *text, String *error,
 void llvm_debug_file_names(Arena *a, String source_path, String directory, Target t, String *file,
                            String *file_directory);
 
+// The time of llvm_emit_object's parts, in nanoseconds, for rig build's
+// report (spec 10.1), each read once around it on the monotonic clock.
+struct Llvm_Times {
+    s64 module;      // the IR into LLVM's module, verified (backend_build)
+    s64 optimising;  // default<O2> (run_passes); 0 without optimize
+    s64 object;      // the object file's code made and written
+};
+
 // Writes an object file (COFF on Windows, ELF on Linux) for the CPU x86-64,
 // optimised when `optimize` is set. False with `error` set when the module
 // doesn't verify, when LLVM refuses the optimisation pipeline (with
-// optimize), or when LLVM can't write the file.
-bool llvm_emit_object(Ir_Module *m, Target t, String path, bool optimize, Arena *a, String *error);
+// optimize), or when LLVM can't write the file. When `times` is given, it
+// gets the time each part took, a part that wasn't reached 0.
+bool llvm_emit_object(Ir_Module *m, Target t, String path, bool optimize, Arena *a, String *error,
+                      Llvm_Times *times = nullptr);
