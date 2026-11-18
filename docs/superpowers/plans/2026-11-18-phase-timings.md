@@ -564,7 +564,7 @@ git commit -m "Say what rig build's report holds, and --quiet"
 2. **`--quiet` with a build program:** accepted, not refused as `-o` is; twice is the usage. Tests: every `tests/build` case runs with `--quiet` through `build_copy`, and `--quiet twice` (Task 4).
 3. **A file loaded twice, by two spellings:** its lines counted once. Test: `program_lines_counts_every_file_once_preload_included` (Task 2).
 4. **A Windows machine up for days:** the tick conversion doesn't overflow. Test: `ticks_to_nanoseconds_after_a_month_of_uptime` (Task 1).
-5. **Expression `#run`s inside checking:** counted once, in `#run`, never in `checking` too, so a block's phases add up to no more than its total. Test: `report_read`'s `why` in all three report tests (Task 4), and `world_counts_its_runs_time` (Task 3).
+5. **Expression `#run`s inside checking:** counted once, in `#run`, never in `checking` too, so a block's phases add up to no more than its total. Test: `slow_run_report_test`, whose program's constant `#run` spins for tens of milliseconds, so counted twice its phases would add up to more than its total by far (`report_read`'s `why`, Task 4), and `world_counts_its_runs_time` (Task 3).
 
 ## What else reads rig build's output (checked, no change)
 

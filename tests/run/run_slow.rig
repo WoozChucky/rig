@@ -1,0 +1,18 @@
+// A constant's #run that takes a while, tens of milliseconds, while the
+// program is checked (spec 7.8): rig build's report counts that time once,
+// in #run, never in checking too, so its phases still add up to no more
+// than its total (tests/runner.cpp's slow_run_report_test).
+puts :: (s: *u8) -> s32 #foreign libc;
+
+// Adds up the remainders of 0 to n - 1 by 7, slowly, one at a time.
+spin :: (n: int) -> int {
+    total := 0;
+    for 0..n - 1 { total += it % 7; }
+    return total;
+}
+
+SPUN :: #run spin(200000);
+
+main :: () {
+    if SPUN == 599994 { puts("spun"); }
+}

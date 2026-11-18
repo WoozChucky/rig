@@ -578,7 +578,8 @@ static int build_steps(Compilation *c, String path, String output, bool bounds_c
 // rig build's work; returns the exit code. `output` may be {}: the default.
 // A build that succeeds ends with its report (build_report.h) on stdout,
 // unless `quiet`: after everything the #runs printed, every workspace's
-// included, and with the whole build's time last, from here to its end.
+// included, and, for a build program, with the whole build's time last
+// (the all line), from here to its end.
 static int build(Arena *a, String path, String output, bool bounds_checks, bool quiet) {
     s64 start = os_nanoseconds();
     Compilation c = {};
