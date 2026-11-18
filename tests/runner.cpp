@@ -113,15 +113,16 @@
 // before its diagnostics, in one pipe (check_run_output_test), a .build/
 // or an object file rig can't write, a workspace's .build/ that it can't
 // make, said after what the workspace's #run printed when both are in one
-// pipe (workspace_unwritable_test), rig check (alone, and with --stdin-for
-// a file it doesn't load), rig build and bin/unit-tests --interpret of
+// pipe (workspace_unwritable_test), rig check (alone, and with --stdin-for a
+// file it doesn't load), rig build and bin/unit-tests --interpret of
 // tests/run/hello.rig by copies of rig and bin/unit-tests in
 // .build/tests/no-preload/bin, with no modules/ beside them or above: each
 // says there's no module 'Preload', alone on stderr (not that the program
-// doesn't load the --stdin-for file), exit 1, and the build makes nothing
-// (no_preload_test), the command line's mistakes, and rig
-// version's output, by its shape (version_test: it names the commit rig
-// was built from).
+// doesn't load the --stdin-for file), exit 1, and the build makes nothing,
+// and rig check by such a copy of a main file that isn't there says that
+// file can't be read instead (no_preload_test), the command line's mistakes,
+// and rig version's output, by its shape (version_test: it names the commit
+// rig was built from).
 //
 // Then rig check on every program of tests/run and tests/errors (not
 // tests/build's), from a file and from stdin under the file's name, a loaded
@@ -1534,17 +1535,17 @@ static String workspace_unwritable_test(Arena *a, String rig) {
     return {};
 }
 
-// `command` ("check", "stdin-for", "build" or "interpret") of
-// tests/run/hello.rig by copies of rig and bin/unit-tests in
-// .build/tests/no-preload/bin, with no modules/ beside them or above: the
-// error, alone, status 1, nothing on stdout, and for build no .build/ nor
-// program made. A broken installation, rig without its modules: every
-// program imports Preload (spec 2.13), so rig says it can't find it, in the
-// words of an #import's (with the copy's two places, made placeholders as
-// for any program's), before anything is checked, built or run, and before
-// what --stdin-for's file is to the program. Only the program the command
-// runs is copied: rig for check, stdin-for and build, bin/unit-tests for
-// interpret.
+// `command` ("check", "stdin-for", "build" or "interpret" of
+// tests/run/hello.rig, or "missing", below) by copies of rig and
+// bin/unit-tests in .build/tests/no-preload/bin, with no modules/ beside
+// them or above: the error, alone, status 1, nothing on stdout, and for
+// build no .build/ nor program made. A broken installation, rig without its
+// modules: every program imports Preload (spec 2.14), so rig says it can't
+// find it, in the words of an #import's (with the copy's two places, made
+// placeholders as for any program's), before anything is checked, built or
+// run, and before what --stdin-for's file is to the program. Only the
+// program the command runs is copied: rig for check, stdin-for and build,
+// bin/unit-tests for interpret.
 //
 // "missing" is rig check of a main file that isn't there: Preload is looked
 // for once the main file is read (spec 10.1), so the main file that can't
@@ -2403,7 +2404,7 @@ static String check_stdin_for_reads_the_main_file_first_test(Arena *a, String ri
 }
 
 // rig check tests/run/hello.rig --stdin-for modules/Preload/module.rig: the
-// editor's text for Preload, which every program reaches (spec 2.13), so
+// editor's text for Preload, which every program reaches (spec 2.14), so
 // editing Preload itself is checked within any program. Its own text checks
 // clean; a text with a syntax error is told at Preload's line, named by its
 // absolute path as any module's file is (@MODULES@ here).

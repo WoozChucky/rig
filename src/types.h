@@ -125,6 +125,10 @@ Type *type_view_of(Type *element);
 Type *type_proc_of(Type **params, s64 param_count, Type **results, s64 result_count, bool is_c_call,
                    bool is_variadic);
 
+// Whether procedure types a and b have the same parameters and results, and
+// both or neither a ..T: whether they differ in #c_call alone, if at all.
+bool type_proc_same_but_c_call(Type *a, Type *b);
+
 // How a message names t: "s32", "*u8", "string", "[3]int", "[]*u8", and a
 // procedure type as its signature is written: "(int, int) -> int",
 // "(int) -> (int, int)", "(*void, *void) -> s32 #c_call", "(int, ..int)", "()".

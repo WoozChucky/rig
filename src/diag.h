@@ -42,10 +42,11 @@ struct Source_File {
                            // of a module that ships with rig, which may declare #compiler
                            // procedures; set by the loader
     s32 order;  // the file's place in load order (spec 2.13), which diagnostics sort by: its index,
-                // as diag_add_file sets it, until the loader sets every file's (load.h): it
-                // differs from the index from Preload on, file 1 but first in load order with
-                // every file it reaches, ahead of the main file and the files after it (spec
-                // 2.13), and where a #load in a taken #if branch read a file out of order
+                // as diag_add_file sets it, until the loader sets every file's (load.h). It
+                // differs from the index in Preload's place: Preload, file 1, is placed first
+                // in load order with every file it reaches, so the main file, file 0, and the
+                // files after it move down (spec 2.13); and where a #load in a taken #if
+                // branch read a file out of order
 };
 
 struct Diagnostic {

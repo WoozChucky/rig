@@ -1,8 +1,8 @@
 // Basic's allocators: where memory comes from. An allocator is passed to
 // whatever needs memory, rather than everything taking it from one global
-// heap, so the caller decides where it comes from and how it goes back: one
-// call to C's heap at a time, a run of blocks given back all at once (an
-// arena), or slots of one size (a pool).
+// heap, so the caller decides where it comes from and how it goes back:
+// Basic's are a run of blocks given back all at once (an arena) and slots
+// of one size (a pool).
 //
 // An allocator's shape (Allocator), its modes (ALLOCATE, RESIZE, FREE and
 // FREE_ALL) and the heap (heap_allocator_proc and HEAP_ALLOCATOR) are

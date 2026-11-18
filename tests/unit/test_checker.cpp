@@ -7055,6 +7055,28 @@ TEST(variadic_procedure_types_are_their_own) {
     arena_free(&a);
 }
 
+TEST(c_call_hint_compares_the_parts_of_procedure_types) {
+    // The hint to mark a procedure #c_call is for two procedure types that
+    // differ in #c_call alone, which conversion_hint finds by comparing
+    // their parameters, results and '..T'. A variadic procedure's type and
+    // the #c_call type of the same []T signature differ in the '..T' too, so
+    // they get no hint; the same parameters and results without one do.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                           "one :: (first: int) -> int { return first; }\n"
+                           "main :: () {\n"
+                           "    x : (int, []int) -> int #c_call = sum;\n"
+                           "    y : (int) -> int #c_call = one;\n"
+                           "}\n"),
+              "4:15: a #c_call procedure can't take a '[]int'; pass its .data\n"
+              "4:39: a value of type '(int, ..int) -> int' doesn't convert to '(int, []int) -> int #c_call' "
+              "implicitly\n"
+              "5:32: a value of type '(int) -> int' doesn't convert to '(int) -> int #c_call' implicitly; "
+              "mark 'one' #c_call for C to call it\n");
+    arena_free(&a);
+}
+
 TEST(where_a_variadic_parameter_cant_be) {
     // C passes no view: a foreign procedure, a #c_call one and a #c_call
     // procedure type take no '..T', each said once, at its '..', and C
