@@ -2027,7 +2027,9 @@ TEST(debug_info_names_each_procedures_file) {
     };
     for (int i = 0; i < 2; i++) write_source(&a, dir, names[i], texts[i]);
     Ast_File *tree = nullptr;
-    Ir_Module *m = lower_program(&a, str(in_directory(&a, dir, "main.rig")), &tree);
+    // Without Preload, which every program imports as file 1, so the
+    // program is these two files, with a node each.
+    Ir_Module *m = lower_program(&a, str(in_directory(&a, dir, "main.rig")), &tree, false);
     CHECK(m != nullptr);
     if (!m) {
         arena_free(&a);

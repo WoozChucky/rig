@@ -43,8 +43,9 @@ struct Source_File {
                            // procedures; set by the loader
     s32 order;  // the file's place in load order (spec 2.13), which diagnostics sort by: its index,
                 // as diag_add_file sets it, until the loader sets every file's (load.h): it
-                // differs from the index only where a #load in a taken #if branch read a file
-                // out of order
+                // differs from the index for Preload, file 1 but first in load order, and the
+                // main file, after it (spec 2.14), and where a #load in a taken #if branch read
+                // a file out of order
 };
 
 struct Diagnostic {

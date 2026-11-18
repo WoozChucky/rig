@@ -1,0 +1,19 @@
+// Preload: what the language itself refers to, written in Rig. Every
+// program imports it without an #import (spec 2.14): an ordinary program,
+// a build program and each of its workspaces, rig check, and the world of
+// #run while compiling. rig finds it where it finds every module that ships
+// with it, and reads this file right after the program's main file. In
+// load order it comes first, before the main file (spec 2.13), so its
+// declarations come first: a program that declares a name Preload declares
+// is told so at its own declaration. Writing
+//
+//     #import "Preload";
+//
+// is allowed and reads nothing more, as a #load of this file by its path
+// doesn't: a file is read once.
+//
+// What Preload declares joins the program's one top level, so a program
+// can't declare those names. README.md lists the ones that are for
+// programs. Every name Preload declares for its own use starts with two
+// underscores (__malloc, say), which leaves the plain names to programs:
+// a convention, which the compiler doesn't enforce.
