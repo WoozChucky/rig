@@ -8403,6 +8403,13 @@ TEST(no_context_without_preload) {
                                "}\n"),
               "2:5: push_context needs Preload's 'Context', which the program doesn't have\n"
               "2:31: a value of type 'bool' doesn't convert to 'int' implicitly\n");
+    // Nor does any procedure take a context, so a #c_call body may call any
+    // of them, directly or through a value.
+    CHECK_STR(check_source(&a, "twice :: (n: int) -> int { return n * 2; }\n"
+                               "d : (int) -> int = twice;\n"
+                               "cb :: () #c_call { n := twice(1); m := d(2); }\n"
+                               "main :: () { }\n"),
+              "");
     arena_free(&a);
 }
 
@@ -8490,5 +8497,28 @@ TEST(a_c_call_body_has_no_context_until_it_pushes_one) {
     Ast_Proc *two = (Ast_Proc *)top_level_named(tree, "two");
     CHECK(two->params[0]->default_needs_context);
     CHECK(!two->params[1]->default_needs_context);
+    arena_free(&a);
+}
+
+TEST(a_c_call_body_calls_main_and_late_defaults_with_their_own_needs) {
+    // main takes no context, so a #c_call body may call it outside every
+    // push. late's default reads context and then calls after, declared
+    // later still: checking after's signature, defaults and all, on demand
+    // must not lose what late's default already needs.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "cb :: () #c_call {\n"
+                                 "    main();\n"
+                                 "    x := late();\n"
+                                 "}\n"
+                                 "main :: () { }\n"
+                                 "late :: (n: int = context.temporary_storage.size + after()) -> int #c_call { return n; }\n"
+                                 "after :: (k: int = 1) -> int #c_call { return k; }\n",
+                                 &tree),
+              "3:10: 'late' leaves out 'n', whose default value needs a context; a #c_call procedure has none "
+              "until it pushes one, as in push_context default_context { ... }\n");
+    CHECK(((Ast_Proc *)top_level_named(tree, "late"))->params[0]->default_needs_context);
+    CHECK(!((Ast_Proc *)top_level_named(tree, "after"))->params[0]->default_needs_context);
     arena_free(&a);
 }

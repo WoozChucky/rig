@@ -160,11 +160,12 @@ ARRAY_VIEW :: 1;
 Any :: struct { type: *Type_Info; value_pointer: *void; }
 
 // The context (spec 7.10): what code deep in a call chain needs without
-// every caller handing it down, Jai's way. Every Rig procedure but a
-// #c_call one is given the caller's context, a *Context it isn't given in
-// the source, and context names it. push_context runs a block with another
-// (spec 6.13). It holds the allocator code takes its memory from when it's
-// handed none, and the temporary storage.
+// every caller handing it down, Jai's way. Every Rig procedure but main and
+// a #c_call one is given the caller's context, a *Context it isn't given in
+// the source, and context names it; main starts with default_context.
+// push_context runs a block with another (spec 6.13). It holds the
+// allocator code takes its memory from when it's handed none, and the
+// temporary storage.
 
 // A page of temporary storage, asked of the storage's overflow_allocator
 // once its first block is full: this header, then size bytes. start is

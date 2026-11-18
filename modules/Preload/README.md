@@ -120,7 +120,7 @@ Vec2 with 2 fields
 
 ### The context
 
-The context is what code deep in a call chain needs without every caller handing it down, as in Jai (issue #156, spec 7.10): the allocator code takes its memory from when it's handed none, and the temporary storage. Every Rig procedure but a `#c_call` one is given its caller's context, a `*Context` it isn't given in the source, and `context` names it; `push_context` runs a block with another (spec 6.13).
+The context is what code deep in a call chain needs without every caller handing it down, as in Jai (issue #156, spec 7.10): the allocator code takes its memory from when it's handed none, and the temporary storage. Every Rig procedure but `main` and a `#c_call` one is given its caller's context, a `*Context` it isn't given in the source, and `context` names it (`main` starts with `default_context`); `push_context` runs a block with another (spec 6.13).
 
 - `Context`:
   - `allocator: Allocator`: where code takes its memory from when it's handed no allocator.
