@@ -222,7 +222,7 @@ rig build hello.rig
 ./hello
 ```
 
-Both print `Hello, World!`. `rig build` writes the program in the current folder (`hello.exe` with its debug information, `hello.pdb`, on Windows; `hello` on Linux) and its object file in `.build`. When the linker fails, or something it needs is missing, `rig` prints the reason, then `rig: error: linking failed`.
+Both print `Hello, World!`. From the release after 0.3.0 on, `rig build` also says how long each of its steps took (`--quiet` leaves that out). `rig build` writes the program in the current folder (`hello.exe` with its debug information, `hello.pdb`, on Windows; `hello` on Linux) and its object file in `.build`. When the linker fails, or something it needs is missing, `rig` prints the reason, then `rig: error: linking failed`.
 
 ## VS Code extension
 

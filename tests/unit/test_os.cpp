@@ -250,7 +250,10 @@ TEST(os_current_directory_is_named_as_it_was_reached) {
 #endif
 
 // os_run_for on unit-tests with a helper flag and a minute to sleep, given
-// one second: it must give up and say so well before the minute is up.
+// one second: it must give up and say so well before the minute is up. The
+// second it waits also checks os_nanoseconds' unit: a clock counting in
+// microseconds, or in the performance counter's raw ticks, would see a
+// thousandth or a hundredth of 10^9 go by.
 static void check_times_out(const char *flag) {
     Arena a = arena_make();
     Array<String> argv = {};
@@ -259,9 +262,13 @@ static void check_times_out(const char *flag) {
     array_add(&argv, str("60"));
     Process_Result result = {};
     time_t start = time(nullptr);
+    s64 start_ns = os_nanoseconds();
     CHECK(os_run_for(&a, argv, {}, 1, &result));
+    s64 elapsed_ns = os_nanoseconds() - start_ns;
     CHECK(result.timed_out);
     CHECK(time(nullptr) - start < 30);
+    CHECK(elapsed_ns >= 900000000);
+    CHECK(elapsed_ns < 30000000000LL);
     array_free(&argv);
     arena_free(&a);
 }
@@ -683,3 +690,31 @@ TEST(touching_reserved_addresses_faults) {
     array_free(&argv);
     arena_free(&a);
 }
+
+TEST(os_nanoseconds_goes_forward_finer_than_a_millisecond) {
+    // GetTickCount64, which the timeouts use, moves in steps of 10-16 ms:
+    // too coarse for a phase that takes 0.05 ms. The smallest of ten steps
+    // is checked, so that the thread losing the processor between two
+    // readings, which makes that one step long, can't fail the test.
+    s64 smallest = 0;
+    for (int step = 0; step < 10; step++) {
+        s64 first = os_nanoseconds();
+        s64 next = first;
+        for (s64 i = 0; i < 100000000 && next == first; i++) next = os_nanoseconds();
+        CHECK(next > first);
+        CHECK(os_nanoseconds() >= next);
+        if (step == 0 || next - first < smallest) smallest = next - first;
+    }
+    CHECK(smallest < 1000000);
+}
+
+#ifdef _WIN32
+TEST(ticks_to_nanoseconds_after_a_month_of_uptime) {
+    // ticks * 1000000000 overflows an s64 after 15 minutes at 10 MHz.
+    s64 frequency = 10000000;
+    s64 month = 30LL * 24 * 3600;
+    CHECK_EQ(ticks_to_nanoseconds(month * frequency, frequency), month * 1000000000);
+    CHECK_EQ(ticks_to_nanoseconds(month * frequency + 3, frequency), month * 1000000000 + 300);
+    CHECK_EQ(ticks_to_nanoseconds(1, 3), 333333333);
+}
+#endif

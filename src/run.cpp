@@ -72,6 +72,8 @@ struct Compile_Time {
     Lowering *lowering;  // lowering into it, as long as the world
     Interp *interp;      // running it: the compile-time globals, every run's
     Arena arena;         // the module's nodes, and what lowering puts in them
+    s64 run_time;        // nanoseconds, the outermost runs' (compile_time_nanoseconds)
+    s32 running;         // how many runs are under way, one inside another
 };
 
 Compile_Time *compile_time_new(Diagnostics *d) {
@@ -379,12 +381,19 @@ static void report_failure(Compile_Time *ct, Ast_Run *run, Interp_Result *result
 //    its result in *result: its strings in `scratch`, its arrays (results,
 //    frames) on the heap, for the caller to free.
 // 4. A failure is said, with its frames.
+// All of it is the run's time (compile_time_nanoseconds), read on the
+// monotonic clock first and last; only the outermost run adds it, so a run
+// inside another isn't counted twice.
 static void run_procedure(Compile_Time *ct, Ast_Run *run, Array<u64> args, Arena *scratch, Interp_Result *result) {
+    s64 start = os_nanoseconds();
+    ct->running++;
     if (!ct->module) make_parts(ct);
     s32 proc = ir_lower_run(ct->lowering, run);
     fflush(nullptr);
     interp_run(ct->interp, proc, args, scratch, result);
     if (!result->ok) report_failure(ct, run, result, scratch);
+    ct->running--;
+    if (ct->running == 0) ct->run_time += os_nanoseconds() - start;
 }
 
 // In order:
@@ -446,4 +455,8 @@ void compile_time_run_top_level(Compile_Time *ct, Ast_File *file) {
         array_free(&result.frames);
         arena_free(&scratch);
     }
+}
+
+s64 compile_time_nanoseconds(Compile_Time *ct) {
+    return ct->run_time;
 }

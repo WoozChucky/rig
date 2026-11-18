@@ -39,3 +39,10 @@ bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run);
 // thrown away. A failure is reported at its #run, with its frames, as an
 // expression run's is; the runs after it still run.
 void compile_time_run_top_level(Compile_Time *ct, Ast_File *file);
+
+// The time the world's #runs have taken so far, in nanoseconds, for rig
+// build's report (spec 10.1): expression and top-level runs alike, each from
+// making the world's parts (the first time) and lowering what it reaches to
+// its end on the interpreter. A run inside another counts only as part of
+// the outer one's. 0 for a world that ran nothing.
+s64 compile_time_nanoseconds(Compile_Time *ct);

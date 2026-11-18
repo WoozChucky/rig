@@ -119,7 +119,7 @@ rig build hello.rig
 ./hello
 ```
 
-It prints `Hello, World!`.
+It prints `Hello, World!`. With a compiler built from this repository (below), or a release after 0.3.0, `rig build` ends by saying how long each of its steps took, and how many lines it compiled; `--quiet` leaves that out, and section 10.1 of [the specification](docs/rig-spec.md#101-the-rig-command) says what each line means.
 
 ### Building with build.rig
 

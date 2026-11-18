@@ -2,13 +2,13 @@
 // expression #run runs when the checker first needs its value, in the one
 // compile-time world of the compilation, and its result is baked into the
 // tree as a constant (#113's constant data); the top-level #runs run later,
-// in the same world, once the program has checked; and, last, a #compiler
+// in the same world, once the program has checked; then a #compiler
 // procedure's call in a world with no compiler to do it, and in one with a
-// hook of the test's own (issue #116). Uses
-// test_checker.cpp's helpers (check_src, global_named, local_named,
-// value_of, sorted_messages, joined, check_module_source) and helpers.cpp's
-// (src, messages, check_source, lower_source, contains, index_of,
-// token_list_free).
+// hook of the test's own (issue #116); and, last, the time a world's runs
+// take (issue #173). Uses test_checker.cpp's helpers (check_src,
+// global_named, local_named, value_of, sorted_messages, joined,
+// check_module_source) and helpers.cpp's (src, messages, check_source,
+// lower_source, contains, index_of, token_list_free).
 
 #include "test.h"
 
@@ -909,5 +909,36 @@ TEST(compiler_procedures_give_the_hooks_results) {
     CHECK(n->is_constant);
     CHECK_EQ(n->constant, 42);
     token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(world_counts_its_runs_time) {
+    // A world adds up the time its #runs take, for rig build's report (spec
+    // 10.1): the expression run while the program checks, then the top-level
+    // run after it. A world that ran nothing has taken none.
+    Arena a = arena_make();
+    Token_List *list = src("f :: () -> int { n := 0; for 1..1000 { n += it; } return n; }\n"
+                           "N :: #run f();\n"
+                           "#run { x := f(); }\n"
+                           "main :: () { }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    Compile_Time *world = compile_time_new(&list->diag);
+    check(file, &a, &list->diag, world);
+    CHECK_EQ(list->diag.error_count, 0);
+    s64 checked = compile_time_nanoseconds(world);
+    CHECK(checked > 0);
+    compile_time_run_top_level(world, file);
+    CHECK(compile_time_nanoseconds(world) > checked);
+    compile_time_free(world);
+    token_list_free(list);
+
+    Token_List *other_list = src("main :: () { }\n");
+    Ast_File *other_file = parse(other_list->tokens, &a, &other_list->diag);
+    Compile_Time *other = compile_time_new(&other_list->diag);
+    check(other_file, &a, &other_list->diag, other);
+    CHECK_EQ(other_list->diag.error_count, 0);
+    CHECK_EQ(compile_time_nanoseconds(other), 0);
+    compile_time_free(other);
+    token_list_free(other_list);
     arena_free(&a);
 }
