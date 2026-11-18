@@ -26,12 +26,18 @@ struct Point
 +0x008 y                : 0n8
 int64 0n20
 struct Allocator
+heap_allocator_proc
++0x008 data             : (null)
 28:         y := x + STEP;
 int64 0n12
 30:         z := LIMIT + y;
 int64 0n99
 int64 LIMIT = 0n99
 int64 STEP = 0n7
+float HALF = 1.5
+bool DONE = false
+struct string LABEL
+struct Point CORNER
 33:     print_line(NAME);
 int64 0n12
 !Couldn't resolve error

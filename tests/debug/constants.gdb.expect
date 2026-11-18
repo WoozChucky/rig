@@ -30,6 +30,11 @@ z := LIMIT + y;
 $17 = 99
 LIMIT = 99
 STEP = 7
+HALF = 1.5
+DONE = false
+LABEL = {count = 4, data = 0x
+"here"}
+CORNER = {x = 7, y = 8}
 constants.rig:33
 print_line(NAME);
 $18 = 12

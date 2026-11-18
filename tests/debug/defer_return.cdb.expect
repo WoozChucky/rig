@@ -1,3 +1,5 @@
-13:     putchar(10);
+18:     putchar(10);
+int64 0n99
 int64 a = 0n1
 int64 y = <value unavailable>
+int64 LIMIT = 0n99

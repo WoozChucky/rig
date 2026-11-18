@@ -5,7 +5,12 @@
 // code is then in pieces around it. gdb shows y in its own block only,
 // not in the copy; cdb, as CodeView describes no block in pieces, in
 // main's block too, as <value unavailable> before its own (spec 10.7).
+// The block's LIMIT, a number with no storage, has no range to be
+// unavailable outside, so cdb shows it as 99 over main's block, where it
+// hides the top-level LIMIT gdb shows as 12.
 putchar :: (c: s32) -> s32 #foreign libc;
+
+LIMIT :: 12;
 
 main :: () {
     a := 1;
@@ -13,6 +18,7 @@ main :: () {
     putchar(10);
     {
         y := 5;
+        LIMIT :: 99;
         if y == 5 { return; }
         putchar(98);
     }
