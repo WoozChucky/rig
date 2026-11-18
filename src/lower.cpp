@@ -25,7 +25,9 @@
 //   with no line (gdb's `next` then stepped past an `else if` testing it);
 //   and a copy kept for the debugger alone wouldn't be what the program
 //   reads. An aggregate parameter is the pointer to the caller's copy, used
-//   as it is (the backend keeps the pointer in a slot for the debugger).
+//   as it is (the backend keeps the pointer in a slot for the debugger). A
+//   '..T' parameter (spec 7.2) is a []T one, to the callee and to a
+//   debugger alike: only the caller does anything more (lower_call_results).
 // - A global variable is an Ir_Global of its type, whose first value (the
 //   constant the checker made sure it has, or zero) is in the program's
 //   file. It's read and written as a slot is, through its address, an
@@ -133,9 +135,17 @@
 //   copied into it once it's worked out (lower_view_of, view_of_copy). A
 //   literal is built element by element in a temporary of its own, and a
 //   view never sees that temporary, nor a call's result's: running the same
-//   place again in a loop can't rebuild what an old view still reads. for
-//   over an array, a view or a string takes its data and count once, then
-//   counts an index up to the count (lower_for_sequence). A global view of a
+//   place again in a loop can't rebuild what an old view still reads. A
+//   call's '..' arguments one by one (spec 5.10) are built the same way,
+//   into a [N]T temporary of their own, but the callee's view sees it: it
+//   is filled before the call and read by it alone. The language promises it
+//   only until the end of the statement holding the call (here it is a slot
+//   of the caller's frame, filled again each time the call runs), so a view
+//   kept longer may see it rebuilt or dangle, as one of any temporary does.
+//   A spread, ..e, is an array or a view argument as any other
+//   (lower_variadic_argument). for over an array, a view or a string takes
+//   its data and count once, then counts an index up to the count
+//   (lower_for_sequence). A global view of a
 //   literal, or of an array constant, points at a global array of its own
 //   (constant_bytes).
 // - A string (spec 3.8) is a view of bytes, laid out as one: s[i], .count,
@@ -1546,11 +1556,11 @@ static s32 lower_expr(Lowering *l, Ast *e) {
     }
 }
 
-// The type an argument after a variadic procedure's fixed parameters is
-// passed as: a string literal, or constant data holding one (NAME for
-// `NAME :: "rig";`, is_literal_string, the checker's rule), as a C string,
-// a *u8 (lower_value then gives the literal's bytes' address), anything
-// else as C's default argument promotions make its type.
+// The type an argument after the fixed parameters of a procedure that
+// takes C's '..' is passed as: a string literal, or constant data holding
+// one (NAME for `NAME :: "rig";`, is_literal_string, the checker's rule),
+// as a C string, a *u8 (lower_value then gives the literal's bytes'
+// address), anything else as C's default argument promotions make its type.
 static Type *extra_argument_type(Ast *arg) {
     if (is_literal_string(arg)) return type_pointer_to(type_from_name(str("u8")));
     return type_c_promoted(arg->type);
@@ -1575,6 +1585,49 @@ static Ir_Proc *signature_of(Lowering *l, Type *t) {
     return p;
 }
 
+// The argument `arg` of a call, passed as a parameter of type t: its value
+// converted to t (lower_value), and an aggregate copied into a temporary of
+// its own as soon as it's worked out, whose address is passed.
+static s32 lower_argument(Lowering *l, Ast *arg, Type *t) {
+    s32 value = lower_value(l, arg, t);
+    if (!type_is_aggregate(t)) return value;
+    s32 copy = emit_slot(l, t);
+    emit_put(l, t, value, copy);
+    return copy;
+}
+
+// The value passed for the ..T parameter of `call` (spec 5.10, 10.4), whose
+// fixed arguments end before argument `fixed`; `view` is the parameter's
+// []T:
+// - A spread, ..e: passed as any []T argument is (lower_argument), an array
+//   e seen as a view (lower_view_of: a place's own elements, a constant's
+//   read-only data, a temporary copy otherwise), and the view's 16 bytes
+//   copied into a slot of their own, its elements never.
+// - The arguments one by one: built into a temporary of the checker's
+//   [N]T (Ast_Call.gathered), element by element at i * SIZE, each
+//   converted to T, as an array literal is (lower_literal); then the view
+//   of it, in a temporary of its own, passed as it is: the caller's fresh
+//   copy already, which nothing else sees. Both are slots of the caller's
+//   frame, one per call in the source, filled again each time the call
+//   runs (emit_slot).
+// - None, a [0]T: a view zeroed, its count 0 and its data null.
+static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type *view) {
+    Ast *last = call->args.count > fixed ? call->args[call->args.count - 1] : nullptr;
+    if (last && last->kind == AST_SPREAD) return lower_argument(l, ((Ast_Spread *)last)->operand, view);
+    Type *array = call->gathered, *t = view->element;
+    if (array->count == 0) {
+        s32 empty = emit_slot(l, view);
+        emit_zero(l, view, empty);
+        return empty;
+    }
+    s32 temporary = emit_slot(l, array);
+    for (s64 i = fixed; i < call->args.count; i++) {
+        s32 address = emit_field_address(l, temporary, (i - fixed) * t->size);
+        emit_put(l, t, lower_value(l, call->args[i], t), address);
+    }
+    return emit_view(l, view, array->count, temporary);
+}
+
 // A call; `results` gets one value per result of the callee, in order: a
 // scalar's IR value, or an aggregate's address.
 // - A call through a procedure value works the value out first, the
@@ -1589,6 +1642,11 @@ static Ir_Proc *signature_of(Lowering *l, Type *t) {
 //   and the temporary's address passed. So the callee's parameter is the
 //   value as it was then, whatever happens to the variable it came from (the
 //   callee may change the global it was given).
+// - A '..T' parameter (spec 5.10) is a []T one, passed last, after the
+//   fixed arguments: a spread's view, copied as any view argument is, or
+//   the view of a [N]T temporary the other arguments are built into, which
+//   is the caller's fresh copy already, or a zeroed view for none
+//   (lower_variadic_argument). The same through a procedure value.
 // - Through a procedure value, right before the call, a null value is a
 //   runtime error at the call's '(' (spec 8.4: "null procedure call"); then
 //   the call of the value, as the procedure it holds expects to be called
@@ -1614,6 +1672,18 @@ static Ir_Proc *signature_of(Lowering *l, Type *t) {
 //                                call @make(%1, %2)
 //                                copy %0, %1, 8
 //
+//     sum(1, 2, 3);              %0 = const i64 1          (sum :: (first: int, rest: ..int))
+//                                %1 = local 16 align 8     (the [2]int)
+//                                %2 = const i64 2
+//                                store i64 %2, %1
+//                                %3 = const i64 8
+//                                %4 = ptradd %1, %3
+//                                %5 = const i64 3
+//                                store i64 %5, %4
+//                                %6 = local 16 align 8     (its view, emit_view)
+//                                ...
+//                                %10 = call @sum(%0, %6)
+//
 //     printf("%d", b);           %1 = addr @str.0          (b, a u8, in the slot %0)
 //                                %2 = load i8 %0
 //                                %3 = zext i8 %2 to i32
@@ -1637,18 +1707,17 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
         if (type_is_aggregate(t)) array_add(&args, emit_slot(l, t));
     }
     s32 hidden = (s32)args.count;
-    for (s64 i = 0; i < call->args.count; i++) {
+    // A '..T' parameter's []T, the last parameter; the arguments before it
+    // are the fixed ones (without one, all of them: C's extra ones too).
+    Type *view = call_variadic_type(call);
+    s64 fixed = view ? params - 1 : call->args.count;
+    for (s64 i = 0; i < fixed; i++) {
         Type *t = i >= params ? extra_argument_type(call->args[i])
                   : proc      ? proc->params[i]->type
                               : callee->params[i];
-        s32 value = lower_value(l, call->args[i], t);
-        if (type_is_aggregate(t)) {
-            s32 copy = emit_slot(l, t);
-            emit_put(l, t, value, copy);
-            value = copy;
-        }
-        array_add(&args, value);
+        array_add(&args, lower_argument(l, call->args[i], t));
     }
+    if (view) array_add(&args, lower_variadic_argument(l, call, fixed, view));
     s32 next;
     if (proc && proc->is_compiler) {
         // A #compiler procedure (spec 7.9), which the compiler does: the
@@ -2923,7 +2992,7 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
     // (load.cpp), but a caller may lex into one it frees once the module is
     // made, as the unit tests' token lists do.
     if (source->has_c_name) p->c_name = string_copy(l->arena, source->c_name);
-    p->is_variadic = source->is_variadic;  // a foreign one: the checker made sure
+    p->is_variadic = source->is_c_variadic;  // C's '..', a foreign one: the checker made sure
     // An aggregate result is a hidden ptr parameter, before the visible
     // ones; an aggregate parameter a ptr to the caller's copy. The IR's
     // results are the scalar results only. (A foreign procedure has

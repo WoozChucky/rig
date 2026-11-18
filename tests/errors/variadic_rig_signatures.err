@@ -1,0 +1,21 @@
+tests/errors/variadic_rig_signatures.rig:5:31: error: a foreign procedure can't take '..int': C's other arguments are written '..' alone, as in (format: *u8, ..)
+    c_sum :: (count: int, values: ..int) -> int #foreign libc;
+                                  ^
+tests/errors/variadic_rig_signatures.rig:6:22: error: a #c_call procedure can't take '..int'
+    callback :: (values: ..int) #c_call { }
+                         ^
+tests/errors/variadic_rig_signatures.rig:7:27: error: a #c_call procedure can't take '..int'
+    Handler :: struct { run: (..int) #c_call; }
+                              ^
+tests/errors/variadic_rig_signatures.rig:8:24: error: only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as in (values: ..int)
+    c_like :: (count: int, ..) -> int { return count; }
+                           ^
+tests/errors/variadic_rig_signatures.rig:9:22: error: a #compiler procedure can't take '..int', for now
+    compiled :: (values: ..int) #compiler;
+                         ^
+tests/errors/variadic_rig_signatures.rig:9:29: error: #compiler is only for the modules that ship with rig
+    compiled :: (values: ..int) #compiler;
+                                ^
+tests/errors/variadic_rig_signatures.rig:11:22: error: '..' must be the last parameter
+    not_last :: (values: ..int, count: int) { }
+                         ^

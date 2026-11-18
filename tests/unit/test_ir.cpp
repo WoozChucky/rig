@@ -4808,3 +4808,163 @@ TEST(defer_before_an_else_if_chain_of_10000_returns) {
     CHECK_EQ(count_of(proc_ir(ir_print(&a, lower_source(&a, text)), "pick"), "add i64"), 10001);
     arena_free(&a);
 }
+
+// Issue #150: variadic Rig procedures (spec 5.10, 10.4).
+
+TEST(variadic_arguments_are_gathered_into_a_temporary) {
+    // A '..T' parameter is a []T one, passed as any aggregate argument is:
+    // the arguments after the fixed ones are built element by element into
+    // a [N]T temporary, as an array literal is, and a view of it, in a
+    // temporary of its own, is passed with no second copy: it is the
+    // caller's fresh copy already. With none, the view is zeroed.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                                          "main :: () {\n"
+                                          "    a := sum(1);\n"
+                                          "    b := sum(1, 2, 3);\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "main"),
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  %0 = local i64\n"
+              "  %1 = const i64 1\n"
+              "  %2 = local 16 align 8\n"
+              "  zero %2, 16\n"
+              "  %3 = call @sum(%1, %2)\n"
+              "  store i64 %3, %0\n"
+              "  %4 = local i64\n"
+              "  %5 = const i64 1\n"
+              "  %6 = local 16 align 8\n"
+              "  %7 = const i64 2\n"
+              "  store i64 %7, %6\n"
+              "  %8 = const i64 8\n"
+              "  %9 = ptradd %6, %8\n"
+              "  %10 = const i64 3\n"
+              "  store i64 %10, %9\n"
+              "  %11 = local 16 align 8\n"
+              "  %12 = const i64 2\n"
+              "  store i64 %12, %11\n"
+              "  %13 = const i64 8\n"
+              "  %14 = ptradd %11, %13\n"
+              "  store ptr %6, %14\n"
+              "  %15 = call @sum(%5, %11)\n"
+              "  store i64 %15, %4\n"
+              "  %16 = const i32 0\n"
+              "  ret %16\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(a_spread_passes_the_view_not_the_elements) {
+    // ..more passes a view of more itself, a place, copied as any view
+    // argument is (16 bytes): the one 24-byte slot is more's own, so the
+    // callee sees and can change the caller's elements.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                                          "g :: () {\n"
+                                          "    more : [3]int;\n"
+                                          "    n := sum(0, ..more);\n"
+                                          "}\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "g"),
+              "proc @g() {\n"
+              "b0:\n"
+              "  %0 = local 24 align 8\n"
+              "  zero %0, 24\n"
+              "  %1 = local i64\n"
+              "  %2 = const i64 0\n"
+              "  %3 = local 16 align 8\n"
+              "  %4 = const i64 3\n"
+              "  store i64 %4, %3\n"
+              "  %5 = const i64 8\n"
+              "  %6 = ptradd %3, %5\n"
+              "  store ptr %0, %6\n"
+              "  %7 = local 16 align 8\n"
+              "  copy %7, %3, 16\n"
+              "  %8 = call @sum(%2, %7)\n"
+              "  store i64 %8, %1\n"
+              "  ret\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(a_variadic_parameter_is_a_view_to_a_debugger) {
+    // In the callee a '..T' parameter is a []T one (spec 10.7): the address
+    // it's passed as, with its place among the parameters.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                                                "main :: () {\n"
+                                                "    a := sum(1);\n"
+                                                "    b := sum(1, 2, 3);\n"
+                                                "}\n"));
+    CHECK(contains(proc_ir(ir, "sum"), "  ; var rest []int address %1 arg 2 in 0 at 1:21\n"));
+    arena_free(&a);
+}
+
+TEST(a_call_through_a_variadic_value_gathers) {
+    // A call through a value of a variadic procedure type gathers as a
+    // direct call does: a [1]int temporary and its view, then the value's
+    // null check and the one indirect call, the view its last argument.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print(&a, lower_source(&a,
+                                                    "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                                                    "main :: () {\n"
+                                                    "    s := sum;\n"
+                                                    "    n := s(1, 2);\n"
+                                                    "}\n")),
+                          "main");
+    CHECK_STR(main,
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  %0 = local ptr\n"
+              "  %1 = procaddr @sum\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local i64\n"
+              "  %3 = load ptr %0\n"
+              "  %4 = const i64 1\n"
+              "  %5 = local 8 align 8\n"
+              "  %6 = const i64 2\n"
+              "  store i64 %6, %5\n"
+              "  %7 = local 16 align 8\n"
+              "  %8 = const i64 1\n"
+              "  store i64 %8, %7\n"
+              "  %9 = const i64 8\n"
+              "  %10 = ptradd %7, %9\n"
+              "  store ptr %5, %10\n"
+              "  %11 = const ptr 0\n"
+              "  %12 = cmp eq ptr %3, %11\n"
+              "  branch %12, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  %13 = call %3(%4, %7)\n"
+              "  store i64 %13, %2\n"
+              "  %14 = const i32 0\n"
+              "  ret %14\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(a_variadic_struct_declared_later_builds) {
+    // The parameter's []Late needs no layout, but the gathered [3]Late
+    // does, and gets it where it's made. The #run checks g's body during
+    // the declarations, before Late's turn, and its arguments (p.*) don't
+    // lay Late out; a [3]Late made then without the layout would be a
+    // 0-byte temporary, not 48 bytes.
+    Arena a = arena_make();
+    String g = proc_ir(ir_print(&a, lower_source(&a,
+                                                 "N :: #run g(null);\n"
+                                                 "g :: (p: *Late) -> int {\n"
+                                                 "    if p == null { return 0; }\n"
+                                                 "    return f(p.*, p.*, p.*);\n"
+                                                 "}\n"
+                                                 "f :: (points: ..Late) -> int { return points.count; }\n"
+                                                 "Late :: struct { x: int; y: int; }\n"
+                                                 "main :: () { }\n")),
+                       "g");
+    CHECK(contains(g, "local 48 align 8\n"));
+    arena_free(&a);
+}

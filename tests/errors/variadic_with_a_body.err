@@ -1,3 +1,3 @@
-tests/errors/variadic_with_a_body.rig:4:21: error: only a foreign procedure can take more arguments with '..'; a Rig procedure can take a view, as in (values: []int)
+tests/errors/variadic_with_a_body.rig:5:21: error: only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as in (values: ..int)
     sum :: (count: int, ..) -> int { return count; }
                         ^
