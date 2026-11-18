@@ -1,5 +1,10 @@
 main () at
-defer_return.rig:12
+defer_return.rig:19
 defer putchar(97);
 a = 1
+$1 = 12
+$2 = {count = 5, data = 0x
+"outer"}
 !y =
+!LIMIT =
+!LABEL =

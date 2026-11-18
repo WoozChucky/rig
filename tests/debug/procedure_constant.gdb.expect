@@ -1,0 +1,19 @@
+main () at
+procedure_constant.rig:13
+y := x + 1;
+$1 = 5
+procedure_constant.rig:15
+z := OP(y, 2);
+$2 = (int (*)(int, int)) 0x
+<add>
+type = int (*)(int, int)
+OP = 0x
+<add>
+y = 6
+x = 5
+$3 = 3
+procedure_constant.rig:18
+x += OP;
+$4 = 5
+!optimized out
+!.debug_names not created by gdb

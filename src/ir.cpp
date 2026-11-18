@@ -462,14 +462,29 @@ static const char *ir_var_kind_name(Ir_Var_Kind k) {
     switch (k) {
     case IR_VAR_SLOT: return "slot";
     case IR_VAR_ADDRESS: return "address";
+    case IR_VAR_CONSTANT: return "constant";
+    case IR_VAR_GLOBAL: return "global";
     }
     return "?";
 }
 
+// Where variable or constant v is, after its kind's name: a slot's or an
+// address's value (%N), a constant's bits in decimal, a global's name
+// (@const.N).
+static void out_var_place(Printer *p, Ir_Module *m, Ir_Var *v) {
+    out(p, " %s ", ir_var_kind_name(v->kind));
+    switch (v->kind) {
+    case IR_VAR_CONSTANT: out(p, "%llu", (unsigned long long)v->constant); break;
+    case IR_VAR_GLOBAL: out(p, "@" STR_FMT, STR_ARG(m->globals[v->value].name)); break;
+    default: out(p, "%%%d", v->value); break;
+    }
+}
+
 // What ir_print_debug adds after a procedure's line: where it is in the
 // source, its scopes from 1 (0 is the body, whose '{' is on the first line)
-// and its variables. Nothing for a procedure the compiler made.
-static void out_proc_debug(Printer *p, Arena *a, Ir_Proc *proc) {
+// and its variables and constants. Nothing for a procedure the compiler
+// made.
+static void out_proc_debug(Printer *p, Arena *a, Ir_Module *m, Ir_Proc *proc) {
     if (!proc->source_name.count) return;
     out(p, "  ; source " STR_FMT " at ", STR_ARG(proc->source_name));
     out_pos(p, proc->pos);
@@ -484,8 +499,8 @@ static void out_proc_debug(Printer *p, Arena *a, Ir_Proc *proc) {
     }
     for (s64 i = 0; i < proc->vars.count; i++) {
         Ir_Var *v = &proc->vars[i];
-        out(p, "  ; var " STR_FMT " " STR_FMT " %s %%%d", STR_ARG(v->name), STR_ARG(type_name(a, v->type)),
-            ir_var_kind_name(v->kind), v->value);
+        out(p, "  ; var " STR_FMT " " STR_FMT, STR_ARG(v->name), STR_ARG(type_name(a, v->type)));
+        out_var_place(p, m, v);
         if (v->arg) out(p, " arg %d", v->arg);
         out(p, " in %d at ", v->scope);
         out_pos(p, v->pos);
@@ -501,6 +516,16 @@ static String print_module(Arena *a, Ir_Module *m, bool debug) {
         Ir_Source *s = &m->sources[i];
         out(&p, "; source " STR_FMT " md5 ", STR_ARG(s->path));
         for (int k = 0; k < 16; k++) out(&p, "%02x", s->md5[k]);
+        out(&p, "\n");
+    }
+    // The top-level constants, for a debugger: a number's bits, or the
+    // const.N holding its data.
+    for (s64 i = 0; debug && i < m->constants.count; i++) {
+        Ir_Var *v = &m->constants[i];
+        out(&p, "; const " STR_FMT " " STR_FMT, STR_ARG(v->name), STR_ARG(type_name(a, v->type)));
+        out_var_place(&p, m, v);
+        out(&p, " at ");
+        out_pos(&p, v->pos);
         out(&p, "\n");
     }
     for (s64 i = 0; i < m->globals.count; i++) {
@@ -555,7 +580,7 @@ static String print_module(Arena *a, Ir_Module *m, bool debug) {
             continue;
         }
         out(&p, " {\n");
-        if (debug) out_proc_debug(&p, a, proc);
+        if (debug) out_proc_debug(&p, a, m, proc);
         for (s64 k = 0; k < proc->blocks.count; k++) {
             out(&p, "b%lld:\n", (long long)k);
             Ir_Block *block = proc->blocks[k];

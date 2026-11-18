@@ -1,0 +1,43 @@
+// A debugger's view of named constants (bin/run-tests runs it under gdb
+// with constants.gdb and under cdb with constants.cdb): a number, a float,
+// a bool, a string, a struct, an array and a pointer, at the top level and
+// in main's body (an untyped float there a float64), read or not, Basic's
+// and Preload's, a block's that hide top-level ones to the block's end, and
+// a block's after one that hides a name where no code follows it.
+#import "Basic";
+
+Point :: struct { x: int; y: int; }
+
+LIMIT :: 12;
+RATIO :: 0.1;
+SMALL :: cast(s8) -5;
+READY :: true;
+NAME :: "rig";
+ORIGIN :: Point.{3, 4};
+PRIMES :: int.[2, 3, 5];
+GREETING :: cast(*u8) "hi";
+
+main :: () {
+    i := 1;
+    STEP :: 7;
+    HALF :: cast(float32) 1.5;
+    RATE :: 2.5;
+    DONE :: false;
+    LABEL :: "here";
+    CORNER :: Point.{7, 8};
+    x := PRIMES[i] + LIMIT;
+    {
+        y := x + STEP;
+        LIMIT :: 99;
+        NAME :: "inner";
+        z := LIMIT + y;
+        print_line(LABEL);
+    }
+    print_line(NAME);
+    {
+        print_line(LABEL);
+        LIMIT :: 3;
+        TAIL :: "tail";
+        DROP :: -7;
+    }
+}

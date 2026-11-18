@@ -1,0 +1,19 @@
+// A debugger's view of a body's constant naming a procedure that hides a
+// name (bin/run-tests runs it under gdb with procedure_constant.gdb and
+// under cdb with procedure_constant.cdb): under the top-level OP :: 5, a
+// block's OP :: add is add's address (a debugger calls add through it)
+// from its own line to the block's end, and 5 before it and after the block.
+OP :: 5;
+
+add :: (a: int, b: int) -> int { return a + b; }
+
+main :: () {
+    x := OP;
+    {
+        y := x + 1;
+        OP :: add;
+        z := OP(y, 2);
+        x = z;
+    }
+    x += OP;
+}

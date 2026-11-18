@@ -1495,8 +1495,9 @@ TEST(ir_of_globals) {
     // A global variable is an internal global of its type, its first value
     // known while compiling (zero without one, or with ---), read and
     // written through its address. A constant used only folded, as these
-    // are, never reaches the IR: its uses are constants already. String
-    // literals keep their own count.
+    // are, has no code in the IR: its uses are constants already (ir_print
+    // leaves out its debugger record). String literals keep their own
+    // count.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_source(&a,
                                           "puts :: (s: *u8) -> s32 #foreign libc;\n"
@@ -1522,6 +1523,7 @@ TEST(ir_of_globals) {
                    "global @str.0 = \"hi\\00\"\n"));
     CHECK(!contains(ir, "@N"));
     CHECK(!contains(ir, "@STOPPED"));
+    CHECK(!contains(ir, "; const "));
     CHECK_STR(proc_ir(ir, "bump"),
               "proc @bump() {\n"
               "b0:\n"
@@ -3040,6 +3042,314 @@ TEST(a_declaration_that_hides_a_name_starts_a_scope) {
     arena_free(&a);
 }
 
+TEST(ir_records_every_constant) {
+    // Issue #172: every constant but one naming a procedure, for a debugger.
+    // A number, a bool or null is its bits; data, or a pointer to a literal,
+    // its read-only const.N: PRIMES's, made by main's use, keeps const.0, and
+    // the ones no code reads are made after every body, in order.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "Point :: struct { x: int; y: int; }\n"  // 1
+                                                "LIMIT :: 12;\n"                          // 2
+                                                "RATIO :: 0.1;\n"                         // 3
+                                                "HALF :: cast(float32) 1.5;\n"            // 4
+                                                "SMALL :: cast(s8) -5;\n"                 // 5
+                                                "READY :: false;\n"                       // 6
+                                                "NOTHING :: null;\n"                      // 7
+                                                "NAME :: \"rig\";\n"                      // 8
+                                                "ORIGIN :: Point.{3, 4};\n"               // 9
+                                                "PRIMES :: int.[2, 3, 5];\n"              // 10
+                                                "GREETING :: cast(*u8) \"hi\";\n"         // 11
+                                                "add :: (a: int, b: int) -> int { return a + b; }\n"
+                                                "OP :: add;\n"                            // 13
+                                                "NO_PROC :: cast((int) -> int) null;\n"   // 14
+                                                "main :: () {\n"                          // 15
+                                                "    i := 1;\n"
+                                                "    x := PRIMES[i];\n"
+                                                "    STEP :: 7;\n"                        // 18
+                                                "    CORNER :: Point.{7, 8};\n"           // 19
+                                                "}\n"));
+    CHECK(contains(ir, "; const LIMIT int constant 12 at 2:1\n"));
+    CHECK(contains(ir, "; const RATIO float64 constant 4591870180066957722 at 3:1\n"));
+    CHECK(contains(ir, "; const HALF float32 constant 4609434218613702656 at 4:1\n"));
+    CHECK(contains(ir, "; const SMALL s8 constant 18446744073709551611 at 5:1\n"));
+    CHECK(contains(ir, "; const READY bool constant 0 at 6:1\n"));
+    CHECK(contains(ir, "; const NOTHING *void constant 0 at 7:1\n"));
+    CHECK(contains(ir, "; const NAME string global @const.1 at 8:1\n"));
+    CHECK(contains(ir, "; const ORIGIN Point global @const.2 at 9:1\n"));
+    CHECK(contains(ir, "; const PRIMES [3]int global @const.0 at 10:1\n"));
+    CHECK(contains(ir, "; const GREETING *u8 global @const.3 at 11:1\n"));
+    CHECK(!contains(ir, "; const OP "));
+    CHECK(contains(ir, "; const NO_PROC "));
+    String main = proc_ir(ir, "main");
+    CHECK(contains(main, "  ; var STEP int constant 7 in 0 at 18:5\n"));
+    CHECK(contains(main, "  ; var CORNER Point global @const.4 in 0 at 19:5\n"));
+    // What no code reads is in read-only data all the same, and no code
+    // reads it: main addresses PRIMES's only.
+    CHECK(contains(ir, "const @const.2: 16 align 8 = \"\\03\\00\\00\\00\\00\\00\\00\\00\\04"));
+    CHECK(contains(ir, "const @const.3: 8 align 8 = zero reloc 0 @str.2\n"));
+    CHECK(contains(ir, "global @str.2 = \"hi\\00\"\n"));
+    CHECK_EQ(count_of(main, "addr @const."), 1);
+    arena_free(&a);
+}
+
+TEST(a_constant_that_hides_a_name_starts_a_scope) {
+    // A constant is a name a debugger shows now: one that hides a
+    // constant or a variable starts a scope at its declaration, as a
+    // variable that hides does, and so does a variable that hides a
+    // constant. One hiding nothing stays in its block's scope, even after
+    // a declaration that started one inside it (STEP, after b).
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "LIMIT :: 12;\n"             // 1
+                                                "RATIO :: 0.5;\n"            // 2
+                                                "f :: () { RATIO := 1; }\n"  // 3
+                                                "main :: () {\n"             // 4
+                                                "    a := LIMIT;\n"          // 5
+                                                "    LIMIT :: 99;\n"         // 6: hides the top-level LIMIT
+                                                "    b := LIMIT;\n"          // 7
+                                                "    {\n"                    // 8
+                                                "        b := 1;\n"          // 9: hides main's b
+                                                "        STEP :: 2;\n"       // 10: hides nothing
+                                                "    }\n"
+                                                "    {\n"                    // 12
+                                                "        LIMIT := 5;\n"      // 13: a variable hiding main's LIMIT
+                                                "    }\n"
+                                                "    {\n"                    // 15
+                                                "        b :: 4;\n"          // 16: a constant hiding main's b
+                                                "    }\n"
+                                                "}\n"));
+    String f = proc_ir(ir, "f");
+    CHECK(contains(f, "  ; scope 1 in 0 at 3:11\n"));
+    CHECK(contains(f, "  ; var RATIO int slot %0 in 1 at 3:11\n"));
+    String main = proc_ir(ir, "main");
+    CHECK(contains(main, "  ; scope 1 in 0 at 6:5\n"
+                         "  ; scope 2 in 1 at 8:5\n"
+                         "  ; scope 3 in 2 at 9:9\n"
+                         "  ; scope 4 in 1 at 12:5\n"
+                         "  ; scope 5 in 4 at 13:9\n"
+                         "  ; scope 6 in 1 at 15:5\n"
+                         "  ; scope 7 in 6 at 16:9\n"));
+    CHECK(contains(main, "  ; var LIMIT int constant 99 in 1 at 6:5\n"));
+    CHECK(contains(main, "  ; var STEP int constant 2 in 2 at 10:9\n"));
+    CHECK(contains(main, "  ; var LIMIT int slot %6 in 5 at 13:9\n"));
+    CHECK(contains(main, "  ; var b int constant 4 in 7 at 16:9\n"));
+    arena_free(&a);
+}
+
+TEST(a_procedure_constant_that_hides_a_name_starts_a_scope) {
+    // A constant naming a procedure isn't recorded where it hides nothing
+    // (TWICE: a debugger knows the procedure by its own name), but one that
+    // hides a name a debugger shows starts a scope, as any hiding
+    // declaration does, and is recorded in it as the procedure's address,
+    // in a const.N: else a debugger would show the top-level OP, 5, where
+    // OP is add. A procedure is a name a debugger shows too: the constant
+    // add, which hides it, starts a scope.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                          "OP :: 5;\n"                                           // 1
+                                                          "add :: (a: int, b: int) -> int { return a + b; }\n"  // 2
+                                                          "main :: () {\n"                                       // 3
+                                                          "    x := 1;\n"                                        // 4
+                                                          "    TWICE :: add;\n"                                  // 5
+                                                          "    OP :: add;\n"                                     // 6
+                                                          "    y := OP(x, 2);\n"                                 // 7
+                                                          "    {\n"                                              // 8
+                                                          "        add :: 5;\n"                                  // 9
+                                                          "        z := add + y;\n"                              // 10
+                                                          "    }\n"
+                                                          "}\n")),
+                          "main");
+    CHECK(!contains(main, "; var TWICE "));
+    CHECK(contains(main, "  ; scope 1 in 0 at 6:5\n"
+                         "  ; scope 2 in 1 at 8:5\n"
+                         "  ; scope 3 in 2 at 9:9\n"));
+    CHECK(contains(main, "  ; var OP (int, int) -> int global @const.0 in 1 at 6:5\n"));
+    CHECK(contains(main, "  ; var add int constant 5 in 3 at 9:9\n"));
+    arena_free(&a);
+}
+
+TEST(a_variable_that_hides_a_procedure_starts_a_scope) {
+    // A procedure is a name a debugger shows: a variable that hides one
+    // starts a scope at its declaration, as one hiding a variable does, and
+    // so does a declaration of several names, one of which hides one.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                          "add :: (a: int, b: int) -> int { return a + b; }\n"  // 1
+                                                          "two :: () -> int, int { return 1, 2; }\n"             // 2
+                                                          "main :: () {\n"                                       // 3
+                                                          "    x := 1;\n"                                        // 4
+                                                          "    {\n"                                              // 5
+                                                          "        add := 3;\n"                                  // 6
+                                                          "        x += add;\n"                                  // 7
+                                                          "    }\n"
+                                                          "    {\n"                                              // 9
+                                                          "        k, add := two();\n"                           // 10
+                                                          "        x += k + add;\n"                              // 11
+                                                          "    }\n"
+                                                          "}\n")),
+                          "main");
+    CHECK(contains(main, "  ; scope 1 in 0 at 5:5\n"
+                         "  ; scope 2 in 1 at 6:9\n"
+                         "  ; scope 3 in 0 at 9:5\n"
+                         "  ; scope 4 in 3 at 10:9\n"));
+    CHECK(contains(main, "  ; var add int slot %2 in 2 at 6:9\n"));
+    CHECK(contains(main, "  ; var k int slot %7 in 4 at 10:9\n"));
+    CHECK(contains(main, "  ; var add int slot %8 in 4 at 10:12\n"));
+    arena_free(&a);
+}
+
+TEST(constants_in_deferred_code_and_an_if_directive) {
+    // Review Focus 1 and 3: each copy of deferred code declares its own
+    // constants, in its copy's scope, the data ones sharing one const.N; a
+    // taken #if branch's constant is in the block around it (spec 4.9); and
+    // the program's own lowering of a #run's procedure records its
+    // constants as any body's (on demand it records none:
+    // lowering_on_demand_records_no_constant), while the constant the #run
+    // gives is a typed int.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "seven :: () -> int { K :: 7; return K; }\n"              // 1
+                                                "C :: #run seven();\n"                                    // 2
+                                                "main :: () {\n"                                          // 3
+                                                "    i := 0;\n"                                           // 4
+                                                "    defer { K :: 3; D :: int.[1, 2]; i = K + D[i]; }\n"  // 5
+                                                "    if i == 0 { return; }\n"                             // 6
+                                                "    #if OS == OS_WINDOWS { W :: 1; } else { W :: 1; }\n"  // 7
+                                                "}\n"));
+    CHECK(contains(ir, "; const C int constant 7 at 2:1\n"));
+    String main = proc_ir(ir, "main");
+    CHECK_EQ(count_of(main, "  ; var K int constant 3 in "), 2);
+    CHECK_EQ(count_of(main, "  ; var D [2]int global @const.0 in "), 2);
+    // The two copies' K are in different scopes: the scope after the
+    // first line's "in " isn't the second's.
+    const char *k = "  ; var K int constant 3 in ";
+    s64 k_length = (s64)strlen(k);
+    s64 first = index_of(main, k);
+    if (first >= 0) {
+        String after = string_slice(main, first + k_length, main.count - first - k_length);
+        s64 second = index_of(after, k);
+        CHECK(second >= 0);
+        if (second >= 0) {
+            String rest = string_slice(after, second + k_length, after.count - second - k_length);
+            CHECK(!string_eq(string_slice(after, 0, index_of(after, " ")), string_slice(rest, 0, index_of(rest, " "))));
+        }
+    }
+    CHECK(contains(main, "  ; var W int constant 1 in 0 at 7:"));
+    CHECK(contains(proc_ir(ir, "seven"), "  ; var K int constant 7 in 0 at 1:22\n"));
+    arena_free(&a);
+}
+
+TEST(lowering_on_demand_records_no_constant) {
+    // Review Focus 3: a #run's procedure, lowered on demand, records none
+    // of its constants, nor any top-level one: a compile-time module is
+    // never compiled, so nothing describes it, and its data constants'
+    // const.N would never be found (resolve_constant_globals).
+    Arena a = arena_make();
+    Lowered_Runs r = lower_runs_of(&a,
+                                   "seven :: () -> int { K :: 7; D :: int.[1, 2]; return K + D[0]; }\n"
+                                   "C :: #run seven();\n"
+                                   "main :: () { }\n");
+    ir_lower_run(r.lowering, constant_run(r.file, "C"));
+    CHECK_EQ(r.module->constants.count, 0);
+    Ir_Proc *seven = nullptr;
+    for (s64 i = 0; i < r.module->procs.count; i++) {
+        if (string_eq(r.module->procs[i]->name, str("seven"))) seven = r.module->procs[i];
+    }
+    CHECK(seven != nullptr);
+    if (seven) {
+        for (s64 i = 0; i < seven->vars.count; i++) {
+            CHECK(seven->vars[i].kind != IR_VAR_CONSTANT && seven->vars[i].kind != IR_VAR_GLOBAL);
+        }
+    }
+    lowered_runs_free(&r);
+    arena_free(&a);
+}
+
+TEST(a_constant_after_a_return_is_recorded) {
+    // A block's statements after it has returned aren't lowered, but its
+    // constants need no code: they're recorded all the same, a taken #if
+    // branch's too, in the block's scope, since a debugger shows the block's
+    // names wherever its scope has code (at x := 1;, here). One that hides a
+    // name isn't: it would hide it only from its declaration on, where
+    // there's no code, so it starts no scope, and a debugger shows the name
+    // it hides (LIMIT is 12 at x := 1;). Nor is a nested block's: its scope
+    // has no code, and it makes none (main's two scopes are the if's).
+    Arena a = arena_make();
+    String main = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                          "LIMIT :: 12;\n"                                            // 1
+                                                          "main :: () {\n"                                            // 2
+                                                          "    x := 1;\n"                                             // 3
+                                                          "    if x > 0 { return; } else { return; }\n"               // 4
+                                                          "    LIMIT :: 3;\n"                                         // 5
+                                                          "    NAME :: \"late\";\n"                                   // 6
+                                                          "    #if OS == OS_WINDOWS { W :: 1; } else { W :: 1; }\n"  // 7
+                                                          "    { INNER :: 5; }\n"                                    // 8
+                                                          "}\n")),
+                          "main");
+    CHECK(!contains(main, "; var LIMIT "));
+    CHECK(contains(main, "  ; var NAME string global @const.0 in 0 at 6:5\n"));
+    CHECK(contains(main, "  ; var W int constant 1 in 0 at 7:"));
+    CHECK(!contains(main, "; var INNER "));
+    CHECK_EQ(count_of(main, "  ; scope "), 2);
+    arena_free(&a);
+}
+
+TEST(a_constant_after_a_block_that_returns_is_recorded) {
+    // A standalone block is lowered into the IR block around it, so after
+    // one that returns, the code around can't go on either: the constants
+    // after it are recorded in the body's scope, but one that hides a name
+    // isn't, a procedure's (OP) included, and starts no scope (main's one
+    // scope is the block's).
+    Arena a = arena_make();
+    String main = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                          "LIMIT :: 12;\n"                                       // 1
+                                                          "OP :: 5;\n"                                           // 2
+                                                          "add :: (a: int, b: int) -> int { return a + b; }\n"  // 3
+                                                          "main :: () {\n"                                       // 4
+                                                          "    x := 1;\n"                                        // 5
+                                                          "    { x += 1; return; }\n"                            // 6
+                                                          "    LIMIT :: 3;\n"                                    // 7
+                                                          "    OP :: add;\n"                                     // 8
+                                                          "    STEP :: 2;\n"                                     // 9
+                                                          "}\n")),
+                          "main");
+    CHECK(!contains(main, "; var LIMIT "));
+    CHECK(!contains(main, "; var OP "));
+    CHECK(contains(main, "  ; var STEP int constant 2 in 0 at 9:5\n"));
+    CHECK_EQ(count_of(main, "  ; scope "), 1);
+    arena_free(&a);
+}
+
+TEST(a_constant_after_a_hiding_one_is_in_its_blocks_scope) {
+    // A constant that hides nothing is in its block's own scope, even after
+    // a declaration that hides a name started one inside it: it needs no
+    // code where it's declared, and a debugger shows it wherever the block
+    // has code. In the scope the hiding LIMIT starts, which has no code
+    // after it, no debugger would show STEP, NAME and W (at x += 1;, here).
+    Arena a = arena_make();
+    String main = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                          "LIMIT :: 12;\n"                                                // 1
+                                                          "main :: () {\n"                                                // 2
+                                                          "    x := 1;\n"                                                 // 3
+                                                          "    {\n"                                                       // 4
+                                                          "        x += 1;\n"                                             // 5
+                                                          "        LIMIT :: 99;\n"                                        // 6
+                                                          "        STEP :: 2;\n"                                          // 7
+                                                          "        NAME :: \"tail\";\n"                                   // 8
+                                                          "        #if OS == OS_WINDOWS { W :: 1; } else { W :: 1; }\n"  // 9
+                                                          "    }\n"
+                                                          "}\n")),
+                          "main");
+    CHECK(contains(main, "  ; scope 1 in 0 at 4:5\n"));
+    CHECK(contains(main, "  ; scope 2 in 1 at 6:9\n"));
+    CHECK(contains(main, "  ; var LIMIT int constant 99 in 2 at 6:9\n"));
+    CHECK(contains(main, "  ; var STEP int constant 2 in 1 at 7:9\n"));
+    CHECK(contains(main, "  ; var NAME string global @const.0 in 1 at 8:9\n"));
+    CHECK(contains(main, "  ; var W int constant 1 in 1 at 9:"));
+    arena_free(&a);
+}
+
 TEST(hiding_declarations_nest_and_a_loop_body_has_them_too) {
     // Several declarations that hide a variable in one block: each starts a
     // scope inside the one before, from its own declaration to the block's
@@ -3752,15 +4062,18 @@ TEST(bounds_panic_knows_its_prefix) {
 
 // Issue #113: constants holding data. A string, struct or array constant
 // whose bytes a use reads at run time is one read-only global of bytes,
-// const.N, made where such a use first needs it; one used only folded never
+// const.N, made where such a use first needs it; a use that folds never
 // reaches the IR, and a pointer constant, or a string met as a *u8, is only
-// its literal's str.N address.
+// its literal's str.N address. Since #172 every data constant has its
+// const.N all the same, for a debugger, which no code reads when no use
+// needs it (spec 4.2).
 
-TEST(data_constant_used_only_folded_takes_no_storage) {
+TEST(data_constant_used_only_folded_is_read_by_no_code) {
     // Every use here folds: an element at a constant index, an array's and
-    // a string's .count, a string's byte. So neither the constants, top-level
-    // or local, nor the string literal have a global, and the sizes and the
-    // sums are numbers.
+    // a string's .count, a string's byte. So no code reads the constants,
+    // top-level or local, nor the string literal, and the sizes and the sums
+    // are numbers; but each constant is in read-only data once all the same,
+    // for a debugger (spec 4.2), NAME's pointing at its literal's bytes.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_source(&a,
                                           "PRIMES :: int.[2, 3, 5, 7, 11];\n"
@@ -3769,9 +4082,14 @@ TEST(data_constant_used_only_folded_takes_no_storage) {
                                           "main :: () { grid : [N]int; sized : [PRIMES.count]u8; "
                                           "x := PRIMES[4] + NAME.count; c := NAME[0]; "
                                           "L :: int.[1, 2, 3]; y := L[1] + L.count; }\n"));
-    CHECK(!contains(ir, "@const."));
-    CHECK(!contains(ir, "@str."));
+    CHECK_EQ(count_of(ir, "const @const."), 3);
+    CHECK(contains(ir, "const @const.0: 40 align 8 = \"\\02"));
+    CHECK(contains(ir, "global @str.0 = \"rig\\00\"\n"));
+    CHECK(contains(ir, "const @const.1: 16 align 8 = \"\\03"));
+    CHECK(contains(ir, " reloc 8 @str.0\n"));
+    CHECK(contains(ir, "const @const.2: 24 align 8 = \"\\01"));
     String main = proc_ir(ir, "main");
+    CHECK(!contains(main, "addr @"));
     CHECK(contains(main, "local 40 align 8"));
     CHECK(contains(main, "local 5 align 1"));
     CHECK(contains(main, "const i64 14"));
@@ -3835,20 +4153,34 @@ TEST(same_named_local_constants_have_globals_of_their_own) {
 
 TEST(pointer_constant_is_its_literal_bytes) {
     // A *u8 constant, given a literal or a table's *u8 field, holds no data
-    // of its own: a use is the address of the literal's bytes, str.N, and
-    // so is a string constant cast to *u8. None of them makes a const.N.
+    // a use reads: a use is the address of the literal's bytes, str.N, and
+    // so is a string constant cast to *u8. Each has its const.N for a
+    // debugger (spec 4.2), a pointer constant's 8 bytes its literal's
+    // address, but no code reads one: GREETING's points at "hi", the
+    // str.N main's puts(GREETING) addresses, and SYMBOL's at OPS[1]'s "-",
+    // the one puts(SYMBOL) addresses.
     Arena a = arena_make();
-    String ir = ir_print(&a, lower_source(&a,
-                                          "puts :: (s: *u8) -> s32 #foreign libc;\n"
-                                          "Op :: struct { symbol: *u8; n: int; }\n"
-                                          "OPS :: Op.[.{\"+\", 1}, .{\"-\", 2}];\n"
-                                          "GREETING :: cast(*u8) \"hi\";\n"
-                                          "SYMBOL :: OPS[1].symbol;\n"
-                                          "NAME :: \"rig\";\n"
-                                          "main :: () { puts(GREETING); puts(SYMBOL); puts(cast(*u8) NAME); }\n"));
-    CHECK(!contains(ir, "@const."));
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "puts :: (s: *u8) -> s32 #foreign libc;\n"  // 1
+                                                "Op :: struct { symbol: *u8; n: int; }\n"   // 2
+                                                "OPS :: Op.[.{\"+\", 1}, .{\"-\", 2}];\n"   // 3
+                                                "GREETING :: cast(*u8) \"hi\";\n"           // 4
+                                                "SYMBOL :: OPS[1].symbol;\n"                // 5
+                                                "NAME :: \"rig\";\n"                        // 6
+                                                "main :: () { puts(GREETING); puts(SYMBOL); puts(cast(*u8) NAME); }\n"));
+    CHECK_EQ(count_of(ir, "const @const."), 4);
+    CHECK_EQ(count_of(ir, ": 8 align 8 = zero reloc 0 @str."), 2);
+    CHECK(contains(ir, "; const GREETING *u8 global @const.1 at 4:1\n"));
+    CHECK(contains(ir, "; const SYMBOL *u8 global @const.2 at 5:1\n"));
+    CHECK(contains(ir, "global @str.0 = \"hi\\00\"\n"));
+    CHECK(contains(ir, "global @str.1 = \"-\\00\"\n"));
+    CHECK(contains(ir, "const @const.1: 8 align 8 = zero reloc 0 @str.0\n"));
+    CHECK(contains(ir, "const @const.2: 8 align 8 = zero reloc 0 @str.1\n"));
     String main = proc_ir(ir, "main");
     CHECK_EQ(count_of(main, "addr @str."), 3);
+    CHECK(contains(main, "addr @str.0"));
+    CHECK(contains(main, "addr @str.1"));
+    CHECK(!contains(main, "addr @const."));
     arena_free(&a);
 }
 
@@ -3906,9 +4238,11 @@ TEST(table_constant_holds_relocations) {
 
 TEST(global_copies_constant_data) {
     // A global whose value is constant data, or holds some, gets the bytes
-    // themselves, writable, as for a literal: no const.N. A view global of
-    // an array constant gets an array.N of its own, and a pointer or a
-    // procedure from a constant the same relocation a literal gives.
+    // themselves, writable, as for a literal: it reads no const.N. A view
+    // global of an array constant gets an array.N of its own, and a pointer
+    // or a procedure from a constant the same relocation a literal gives.
+    // Each data constant has its const.N for a debugger (spec 4.2), but no
+    // code reads one: every @const. is a const.N's own line.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_source(&a,
                                           "Vec2 :: struct { x: int; y: int; }\n"
@@ -3936,7 +4270,8 @@ TEST(global_copies_constant_data) {
                                           "second := OPS[1];\n"
                                           "op : (int, int) -> int = OPS[0].run;\n"
                                           "main :: () { }\n"));
-    CHECK(!contains(ir, "@const."));
+    CHECK_EQ(count_of(ir, "const @const."), 11);
+    CHECK_EQ(count_of(ir, "@const."), count_of(ir, "const @const."));
     CHECK(contains(ir, "global @origin: 16 align 8 = \""
                        "\\03\\00\\00\\00\\00\\00\\00\\00"
                        "\\04\\00\\00\\00\\00\\00\\00\\00\""));
@@ -4003,7 +4338,8 @@ TEST(global_view_from_constant_data_is_its_array) {
     // sees the array holding it: a view field a constant's literal leaves
     // out, or a string field cast to []u8, is the empty view, all zeros
     // with no array.N, and a struct literal's view field is that field's
-    // array literal, in an array.N of its own.
+    // array literal, in an array.N of its own. NO_VIEW and UNNAMED have
+    // their const.N for a debugger (spec 4.2), but no code reads one.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_source(&a,
                                           "Holder :: struct { v: []int; n: int; }\n"
@@ -4027,7 +4363,8 @@ TEST(global_view_from_constant_data_is_its_array) {
                        "\\06\\00\\00\\00\\00\\00\\00\\00\"\n"));
     CHECK(contains(ir, "global @pair: 16 align 8 = \"\\02\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @array.0\n"));
-    CHECK(!contains(ir, "@const."));
+    CHECK_EQ(count_of(ir, "const @const."), 2);
+    CHECK_EQ(count_of(ir, "@const."), count_of(ir, "const @const."));
     arena_free(&a);
 }
 
@@ -4035,8 +4372,9 @@ TEST(constant_naming_other_data_has_its_bytes) {
     // A constant whose value is a part another constant's literal leaves
     // out, or names another constant, used at run time, is a const.N of its
     // own with the bytes its value stands for: ITEMS's zeros, none of which
-    // the compiler holds, COPY's PRIMES's five ints. PRIMES itself, never
-    // used, has none.
+    // the compiler holds, COPY's PRIMES's five ints. EMPTY and PRIMES
+    // themselves, which no code reads, get theirs after every body, for a
+    // debugger (spec 4.2), after the used ones, whose numbers stay.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "Box :: struct { n: int; items: [3]int; }\n"
@@ -4047,7 +4385,9 @@ TEST(constant_naming_other_data_has_its_bytes) {
                                 "main :: () { i := 1; x := ITEMS[i]; y := COPY[i]; }\n");
     CHECK_EQ(bytes_held(m, "const.0"), 0);
     String ir = ir_print(&a, m);
-    CHECK_EQ(count_of(ir, "const @const."), 2);
+    CHECK_EQ(count_of(ir, "const @const."), 4);
+    CHECK(contains(ir, "const @const.2: 32 align 8 = \"\\01"));
+    CHECK(contains(ir, "const @const.3: 40 align 8 = \"\\02"));
     CHECK(contains(ir, "const @const.0: 24 align 8 = zero\n"));
     CHECK(contains(ir, "const @const.1: 40 align 8 = \""
                        "\\02\\00\\00\\00\\00\\00\\00\\00"
@@ -4058,6 +4398,8 @@ TEST(constant_naming_other_data_has_its_bytes) {
     String main = proc_ir(ir, "main");
     CHECK(contains(main, "addr @const.0"));
     CHECK(contains(main, "addr @const.1"));
+    CHECK(!contains(main, "addr @const.2"));
+    CHECK(!contains(main, "addr @const.3"));
     arena_free(&a);
 }
 
@@ -4228,6 +4570,85 @@ TEST(baked_views_and_strings_in_constants_and_globals) {
     CHECK(contains(ir, string_cstr(&a, string_printf(&a, "const @const.4: 32 align 8 = \"%s%s\" reloc 8 @str.",
                                                      count, count))));
     CHECK(contains(ir, " reloc 24 @const.5\n"));
+    arena_free(&a);
+}
+
+TEST(an_unread_run_constant_is_recorded) {
+    // Issue #172: a data constant a #run gave, which no code reads, gets
+    // its const.N after every body, as a written one does (ir.h's
+    // "Constants"): a baked view's is 16 bytes whose data is a relocation
+    // to its elements, another const.N.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "store : [3]int;\n"                                                                  // 1
+                                                "make :: () -> []int { store[0] = 7; store[1] = 8; store[2] = 9; return store; }\n"  // 2
+                                                "VIEW :: #run make();\n"                                                             // 3
+                                                "main :: () { }\n"));
+    CHECK(contains(ir, "; const VIEW []int global @const.0 at 3:1\n"));
+    CHECK(contains(ir, "const @const.1: 24 align 8 = \""
+                       "\\07\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\09\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    CHECK(contains(ir, "const @const.0: 16 align 8 = \""
+                       "\\03\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @const.1\n"));
+    CHECK(!contains(proc_ir(ir, "main"), "addr @const."));
+    arena_free(&a);
+}
+
+TEST(an_unread_constant_needs_no_foreign_procedure) {
+    // A const.N made for a debugger alone holds no address of a foreign
+    // procedure nothing else uses, but null: a relocation would make the
+    // program need a C function no code calls, which the linker, or the
+    // interpreter, may not find. A Rig procedure's address stays, its body
+    // always compiled, and a constant that code reads keeps both; so does
+    // one no code reads, ALSO, for the procedure such a constant holds.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "nowhere :: () #foreign libc \"rig_no_such_function\";\n"  // 1
+                                                "elsewhere :: () #foreign libc \"rig_other_function\";\n"  // 2
+                                                "tick :: () { }\n"                                          // 3
+                                                "Ops :: struct { run: () #c_call; step: (); }\n"           // 4
+                                                "TABLE :: Ops.{nowhere, tick};\n"                           // 5
+                                                "USED :: Ops.{elsewhere, tick};\n"                          // 6
+                                                "ALSO :: Ops.{elsewhere, tick};\n"                          // 7
+                                                "main :: () { ops := USED; }\n"));
+    CHECK(contains(ir, "; const TABLE Ops global @const.1 at 5:1\n"));
+    CHECK(contains(ir, "; const USED Ops global @const.0 at 6:1\n"));
+    CHECK(contains(ir, "; const ALSO Ops global @const.2 at 7:1\n"));
+    CHECK(contains(ir, "const @const.1: 16 align 8 = zero reloc 8 @tick\n"));
+    CHECK(contains(ir, "const @const.0: 16 align 8 = zero reloc 0 @elsewhere reloc 8 @tick\n"));
+    CHECK(contains(ir, "const @const.2: 16 align 8 = zero reloc 0 @elsewhere reloc 8 @tick\n"));
+    arena_free(&a);
+}
+
+TEST(an_unread_constant_keeps_a_foreign_procedure_the_program_uses) {
+    // A C function the program needs anyway, one its code calls or takes
+    // the address of, or a global variable holds, keeps its address in a
+    // const.N made for a debugger alone: the relocation costs nothing, and
+    // the debugger shows the constant's own value. One nothing else uses is
+    // still null.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "putchar :: (c: s32) -> s32 #foreign libc;\n"           // 1
+                                                "abs :: (n: s32) -> s32 #foreign libc;\n"               // 2
+                                                "labs :: (n: s32) -> s32 #foreign libc;\n"              // 3
+                                                "toupper :: (c: s32) -> s32 #foreign libc;\n"           // 4
+                                                "Ops :: struct { run: (c: s32) -> s32 #c_call; }\n"     // 5
+                                                "CALLED :: Ops.{putchar};\n"                            // 6
+                                                "TAKEN :: Ops.{abs};\n"                                 // 7
+                                                "UNUSED :: Ops.{labs};\n"                               // 8
+                                                "HELD :: Ops.{toupper};\n"                              // 9
+                                                "g : (c: s32) -> s32 #c_call = toupper;\n"
+                                                "main :: () { putchar(65); f := abs; }\n"));
+    CHECK(contains(ir, "; const CALLED Ops global @const.0 at 6:1\n"));
+    CHECK(contains(ir, "; const TAKEN Ops global @const.1 at 7:1\n"));
+    CHECK(contains(ir, "; const UNUSED Ops global @const.2 at 8:1\n"));
+    CHECK(contains(ir, "; const HELD Ops global @const.3 at 9:1\n"));
+    CHECK(contains(ir, "const @const.0: 8 align 8 = zero reloc 0 @putchar\n"));
+    CHECK(contains(ir, "const @const.1: 8 align 8 = zero reloc 0 @abs\n"));
+    CHECK(contains(ir, "const @const.2: 8 align 8 = zero\n"));
+    CHECK(contains(ir, "const @const.3: 8 align 8 = zero reloc 0 @toupper\n"));
     arena_free(&a);
 }
 
@@ -4714,10 +5135,11 @@ TEST(a_deferred_statement_that_is_not_a_block_is_a_block_for_defer) {
     CHECK_EQ(count_of(f, "call @h()"), 1);
     CHECK(index_of(f, "call @g()") < index_of(f, "call @h()"));
     // A deferred #if whose branch declares m, copied at the return and at
-    // the '}': each copy's m is a variable of its own, in that copy's scope.
+    // the '}': each copy's m is a variable of its own, in that copy's scope,
+    // and so is each copy's M, a constant (the copy's scope is its block's).
     String k = proc_ir(ir_print_debug(&a, lower_source(&a,
                                                        "k :: (early: bool) {\n"
-                                                       "    defer #if true { m := 1; }\n"
+                                                       "    defer #if true { m := 1; M :: 2; }\n"
                                                        "    if early { return; }\n"
                                                        "}\n"
                                                        "main :: () {}\n")),
@@ -4727,6 +5149,8 @@ TEST(a_deferred_statement_that_is_not_a_block_is_a_block_for_defer) {
     CHECK_EQ(count_of(k, "; var m int "), 2);
     CHECK_EQ(count_of(k, " in 2 at 2:22\n"), 1);
     CHECK_EQ(count_of(k, " in 3 at 2:22\n"), 1);
+    CHECK(contains(k, "  ; var M int constant 2 in 2 at 2:30\n"));
+    CHECK(contains(k, "  ; var M int constant 2 in 3 at 2:30\n"));
     arena_free(&a);
 }
 

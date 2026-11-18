@@ -1,0 +1,17 @@
+l+t
+l+s
+l+l
+bp `procedure_constant.rig:13`
+bp `procedure_constant.rig:15`
+bp `procedure_constant.rig:18`
+g
+?? OP
+g
+?? OP
+dx OP
+dv /t
+.call @@c++(OP)(1, 2)
+g
+g
+?? OP
+q
