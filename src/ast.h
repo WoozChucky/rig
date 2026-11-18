@@ -138,6 +138,9 @@ struct Ast_Param : Ast {
                          // to the parameter's type (checker.cpp's check_defaults)
     Position equals;     // where that '=' is written
     s32 default_levels;  // the deepest levels of default_value (MAX_DEPTH), as Ast_Const.levels
+    bool default_needs_context;  // its default value uses context, calls a procedure that takes it, or
+                                 // leaves out a default that needs it (checker.cpp's check_defaults): a
+                                 // #c_call body outside a push_context can't leave it out (spec 7.6)
 };
 
 struct Ast_Proc;
@@ -622,6 +625,12 @@ struct Ast_File {
     Array<s32> order;       // order[f]: file f's place in load order, as Source_File.order; empty: each file's index
     String load_failure;    // why the program couldn't be loaded at all (above): Preload not found or not read;
                             // empty when it was
+    // Preload's, found by the checker (checker.cpp's declare_top_level), spec
+    // 7.10; all null without Preload, whose programs have no context:
+    Type *context_type;        // Preload's Context struct: what context is, and push_context takes
+    Ast_Var *default_context;  // Preload's global default_context: main's and a #run's, and the one a
+                               // #c_call procedure pushes for itself
+    Ast_Proc *runtime_init;    // Preload's __runtime_init, which sets it up: main and each #run call it first
 };
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler

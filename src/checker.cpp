@@ -274,6 +274,9 @@ struct Outer_Scopes {
     bool lost_a_local;           // Checker.lost_a_local
     Ast_Proc *default_of;        // Checker.default_of
     s32 filled_depth;            // Checker.filled_depth
+    bool needs_context;          // Checker.needs_context
+    bool in_code;                // Checker.in_code
+    bool contextless;            // Checker.contextless
 };
 
 // A declaration worked out where it's first needed (a global, a constant, a
@@ -284,22 +287,33 @@ struct Outer_Scopes {
 // checker goes on with none. So is lost_a_local, which is about those
 // scopes: a failed #if in the body that needed it may hide a local's name,
 // never a top-level one, so the declaration's unknown names are reported.
-// So are default_of and filled_depth, which are about the default value
-// being checked (check_defaults): a declaration worked out inside one is
-// no default's, so a body's parameters aren't refused in it, and the
-// defaults its own calls fill in are lowered with it, not with that
-// default's calls, so they don't count in its depth.
+// So are default_of, filled_depth and needs_context, which are about the
+// default value being checked (check_defaults): a declaration worked out
+// inside one is no default's, so a body's parameters aren't refused in it,
+// and the defaults its own calls fill in are lowered with it, not with that
+// default's calls, so they don't count in its depth, nor does what they
+// need count as the default's need of a context. And so are in_code and
+// contextless, which are about the code being checked (spec 7.10): a
+// global, a constant, a type or a signature worked out inside a body is
+// none of the body's code. The first three run none, so they have no
+// context; a signature's default values run in each caller that leaves
+// them out, with the caller's (check_call says when a #c_call body can't).
 static Outer_Scopes leave_scopes(Checker *c) {
-    Outer_Scopes outer = {c->scopes, c->lost_a_local, c->default_of, c->filled_depth};
+    Outer_Scopes outer = {c->scopes,        c->lost_a_local, c->default_of, c->filled_depth,
+                          c->needs_context, c->in_code,      c->contextless};
     c->scopes = {};
     c->lost_a_local = false;
     c->default_of = nullptr;
     c->filled_depth = 0;
+    c->needs_context = false;
+    c->in_code = false;
+    c->contextless = false;
     return outer;
 }
 
 // Back to the scopes leave_scopes set aside, every scope opened since
-// closed, and to their lost_a_local, default_of and filled_depth.
+// closed, and to their lost_a_local, default_of, filled_depth,
+// needs_context, in_code and contextless.
 static void return_to_scopes(Checker *c, Outer_Scopes outer) {
     RIG_ASSERT(c->scopes.count == 0);
     array_free(&c->scopes);
@@ -307,6 +321,9 @@ static void return_to_scopes(Checker *c, Outer_Scopes outer) {
     c->lost_a_local = outer.lost_a_local;
     c->default_of = outer.default_of;
     c->filled_depth = outer.filled_depth;
+    c->needs_context = outer.needs_context;
+    c->in_code = outer.in_code;
+    c->contextless = outer.contextless;
 }
 
 static void resolve_global(Checker *c, Ast *decl);
@@ -1633,6 +1650,34 @@ static void check_defer(Checker *c, Ast_Defer *d) {
     c->defer_loops = outer_loops;
 }
 
+// push_context e { ... } (spec 6.13): the block runs with e as its context.
+// e is checked where the push is, outside the block, so a #c_call body's
+// push_context context { } has no context to push. It's a Context: a value
+// that converts to one as a typed variable's value does (a .{...} takes the
+// type), and anything else is "push_context needs a 'Context', not
+// 'Allocator'", at it, a *Context too (p.* is the Context). A place's own
+// address is pushed (is_place), anything else a copy. Without Preload there
+// is no Context: "push_context needs Preload's 'Context', which the program
+// doesn't have", at the keyword. Either way the block is checked, as a
+// block statement, and inside it a #c_call body has the pushed context.
+static void check_push_context(Checker *c, Ast_Push_Context *push) {
+    Ast *e = push->context;
+    Type *t = check_value(c, e);
+    Type *context = c->file->context_type;
+    if (!context) {
+        diag_error(c->diag, push->pos, "push_context needs Preload's 'Context', which the program doesn't have");
+    } else if (t && !check_convert(c, e, context)) {
+        diag_error(c->diag, e->start, "push_context needs a 'Context', not '" STR_FMT "'",
+                   STR_ARG(type_name(c->arena, e->type)));
+    } else if (e->type) {
+        push->is_place = expr_is_place(e);
+    }
+    bool outer_contextless = c->contextless;
+    c->contextless = false;
+    check_scoped_block(c, push->block);
+    c->contextless = outer_contextless;
+}
+
 static void check_statement(Checker *c, Ast *statement) {
     switch (statement->kind) {
     case AST_VAR: check_var(c, (Ast_Var *)statement); break;
@@ -1648,6 +1693,7 @@ static void check_statement(Checker *c, Ast *statement) {
     case AST_BREAK:
     case AST_CONTINUE: check_jump(c, (Ast_Jump *)statement); break;
     case AST_DEFER: check_defer(c, (Ast_Defer *)statement); break;
+    case AST_PUSH_CONTEXT: check_push_context(c, (Ast_Push_Context *)statement); break;
     case AST_RUN:
         // A #run gives a value while compiling (spec 7.8), to be put where a
         // value goes; code run for its effect is a top-level #run. Not
@@ -1700,6 +1746,8 @@ static bool breaks_out_of(Ast *s, Ast *loop) {
     }
     case AST_WHILE: return breaks_out_of(((Ast_While *)s)->body, loop);
     case AST_FOR: return breaks_out_of(((Ast_For *)s)->body, loop);
+    // A push is its block (spec 6.13): a break in it leaves the loop around.
+    case AST_PUSH_CONTEXT: return breaks_out_of(((Ast_Push_Context *)s)->block, loop);
     // A defer too: a break in deferred code is of a loop inside it, or
     // refused (check_jump), so it can't break out of `loop`.
     default: return false;
@@ -1709,8 +1757,8 @@ static bool breaks_out_of(Ast *s, Ast *loop) {
 static bool reaches_end(Ast_Block *block);
 
 // Whether control can go on past statement s, to what follows it. Not past
-// a return; nor past a block, an if with an else, an #if or a loop that
-// can't reach its own end:
+// a return; nor past a block, an if with an else, an #if, a push_context or
+// a loop that can't reach its own end:
 // - an if with an else, when neither branch reaches its end (else if: the
 //   if that's the else part can't be got past either). Without an else,
 //   the condition may be false, so it always may.
@@ -1720,9 +1768,9 @@ static bool reaches_end(Ast_Block *block);
 // - an #if (spec 4.9), when its taken branch can't: the #if is only that
 //   branch's code. One that took none goes past, as an empty block does.
 // A break or continue leaves the block too, but goes on elsewhere in its
-// loop; the rule is only asked about statements outside any loop body
-// (a procedure's body, and the blocks, ifs and #ifs that end it) or about
-// whole loops, so it never sees one.
+// loop; the rule is only asked about statements outside any loop body (a
+// procedure's body, and the blocks, ifs, #ifs and pushes that end it) or
+// about whole loops, so it never sees one.
 // An if or a while whose condition was an error (its type unknown, or not
 // bool), which check_condition reported, is taken not to go past, whatever
 // its branches do; so is an #if any of whose chain's conditions failed
@@ -1761,6 +1809,9 @@ static bool goes_past(Ast *s) {
         bool forever = condition->is_constant && condition->constant == 1;
         return !forever || breaks_out_of(loop->body, loop);
     }
+    // A push_context is its block (spec 6.13): it goes past when the block
+    // reaches its end.
+    case AST_PUSH_CONTEXT: return reaches_end(((Ast_Push_Context *)s)->block);
     // A defer too: it only registers its statement, which runs when the
     // block is left and can't leave itself but by its end (check_return,
     // check_jump), so control always goes past it (spec 6.11).
@@ -1807,12 +1858,18 @@ static void check_body(Checker *c, Ast_Proc *proc) {
     s64 errors = c->diag->error_count;
 
     c->proc = proc;
+    // A body is code that runs, so context is in it (spec 7.10); but C
+    // calls a #c_call procedure with no context, so outside its pushes its
+    // body has none (spec 7.6). main starts with Preload's
+    // default_context, whatever it's marked.
+    bool is_main = string_eq(proc->name, str("main"));
+    c->in_code = true;
+    c->contextless = proc->is_c_call && !is_main;
     push_scope(c);
     for (s64 i = 0; i < proc->params.count; i++) declare(c, proc->params[i]->name, proc->params[i]);
     check_block(c, proc->body);
     pop_scope(c);
     // main's results are reported by check() already: main returns nothing.
-    bool is_main = string_eq(proc->name, str("main"));
     if (proc->results.count && !is_main && reaches_end(proc->body)) {
         // "a value" for one result, "its values" for several: every path
         // returns all of them.
@@ -2028,6 +2085,13 @@ static void check_c_name(Checker *c, Ast_Proc *proc) {
 // nested too deeply with the default values its calls fill in (more than
 // 1000 levels)", at it, and the procedure then counts no depth, so a longer
 // chain says so once per 1000 levels, as a chain of declarations does.
+//
+// A default may read context (spec 7.10): it's worked out in the caller,
+// with the caller's context. Whether it needs one is kept on its parameter
+// (Ast_Param.default_needs_context): it reads context, calls a procedure
+// that takes one, or leaves out a default that needs one (check_context and
+// check_call raise c->needs_context while it's checked). A #c_call body,
+// which has no context outside its pushes, can't leave it out (check_call).
 static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
     Array<Ast_Param *> &params = proc->params;
     s64 first = 0;
@@ -2058,8 +2122,10 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
         if (!value) continue;
         c->levels = base + param->default_levels + 1;
         c->filled_depth = 0;
+        c->needs_context = false;
         check_value(c, value);
         if (!check_convert(c, value, param->type)) report_no_conversion(c, value, param->type);
+        param->default_needs_context = c->needs_context;
         s32 own = param->default_levels + c->filled_depth;
         if (own > MAX_DEPTH) {
             diag_error(c->diag, value->start,
@@ -2073,6 +2139,7 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
     }
     c->default_of = nullptr;
     c->filled_depth = 0;
+    c->needs_context = false;
     pop_scope(c);
     proc->defaults_depth = too_deep ? 0 : depth;
 }
@@ -2357,6 +2424,22 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
         if (decl->kind == AST_STRUCT && c->diag->files[decl->pos.file].in_module) {
             if (string_eq(name, str("Type_Info"))) c->type_info_type = ((Ast_Struct *)decl)->declared;
             if (string_eq(name, str("Any"))) c->any_type = ((Ast_Struct *)decl)->declared;
+        }
+        // And the context's three (spec 7.10), found the same way and kept
+        // on the tree, which lowering and the walk of a #run read too: the
+        // struct Context, the global default_context and the procedure
+        // __runtime_init. Without Preload they stay null, and the program
+        // has no context.
+        if (c->diag->files[decl->pos.file].in_module) {
+            if (decl->kind == AST_STRUCT && string_eq(name, str("Context"))) {
+                c->file->context_type = ((Ast_Struct *)decl)->declared;
+            }
+            if (decl->kind == AST_VAR && string_eq(name, str("default_context"))) {
+                c->file->default_context = (Ast_Var *)decl;
+            }
+            if (decl->kind == AST_PROC && string_eq(name, str("__runtime_init"))) {
+                c->file->runtime_init = (Ast_Proc *)decl;
+            }
         }
     }
     // Then the broken ones (parser.h), the names of declarations the parser

@@ -579,6 +579,61 @@
 //   too deeply with the default values its calls fill in (more than 1000
 //   levels)", at it, said once per 1000 levels of a chain.
 //
+// The context (issue #156, spec 7.10, 6.13).
+// - The checker finds Preload's Context struct, its global default_context
+//   and its procedure __runtime_init by name at the top level, in a
+//   module's file, as Type_Info and Any, and keeps them on the tree
+//   (Ast_File.context_type, default_context, runtime_init).
+// - context is a keyword: the current context, a place of type Context.
+//   Its fields are read and assigned, it's assigned and copied, *context
+//   is a *Context, and converted to an Any it gives its own address.
+// - It's in code that runs: a body, and a #run's operand, where it's the
+//   run's own context. And in a default value, which is worked out in the
+//   caller, with the caller's context. Anywhere else, a global's or a
+//   top-level constant's value, an array's count outside a body, a
+//   top-level #if's condition, it's "'context' is only in a body, where a
+//   procedure runs", at it. A local constant's value is in the body, but
+//   context is no constant: "the value of constant 'C' isn't known while
+//   compiling".
+// - push_context e { ... } runs the block with e as its context. e is a
+//   value that converts to Context as a typed variable's value does (a
+//   .{...} takes the type); anything else is "push_context needs a
+//   'Context', not 'Allocator'", at it, a *Context too (p.* is the
+//   Context). A place's own address is pushed (Ast_Push_Context.is_place,
+//   expr_is_place), anything else a copy. The block is checked as a block
+//   statement. A push is its block: it reaches its end when the block
+//   does, and a break in it breaks out of the loop around. At the top
+//   level it's the parser's "push_context can only be in a body".
+// - Without Preload (a test's single file, or Load_Options.no_preload)
+//   there's no Context, and so no context: "'context' needs Preload's
+//   'Context', which the program doesn't have", at it, and "push_context
+//   needs Preload's 'Context', which the program doesn't have", at the
+//   keyword, the push's block checked all the same.
+// - C calls a #c_call procedure with no context, so its body (main's
+//   aside, which has default_context) has none outside its pushes, Jai's
+//   way. There three things need one, each refused, each ending in the push
+//   to write, "...; a #c_call procedure has none until it pushes one, as in
+//   push_context default_context { ... }":
+//   - context itself: "a #c_call procedure has no context until it pushes
+//     one, as in push_context default_context { ... }", at it;
+//   - a call of a procedure that takes the context, directly (one with a
+//     body, neither #c_call nor main) or through a value of a procedure
+//     type that isn't #c_call: "'twice' needs a context; ...", at the
+//     callee, named as the count messages name it;
+//   - a direct call that leaves out a parameter whose default value needs
+//     a context (it reads context, calls a procedure that takes one, or
+//     leaves out a default that needs one): "'sized' leaves out 'n', whose
+//     default value needs a context; ...", at the callee, naming the first
+//     such parameter. A call whose callee needs a context says only the
+//     message before.
+// - What needs none: a call of a #c_call or foreign procedure that leaves
+//   out no such default, a procedure's value (f := twice;), and a #run,
+//   whose operand runs with its own context (a default that is a #run
+//   needs none of the caller's). A push's own value is checked outside its
+//   block, so push_context context { } is refused there and push_context
+//   default_context { } is fine; inside the block all three are fine,
+//   deferred code included.
+//
 // Code run while compiling (issue #115, spec 7.8).
 // - #run e is an expression, of e's type: an untyped constant's default
 //   type, so `C :: #run 7;` is a typed int. e is a value (a call that
@@ -834,9 +889,9 @@ void check_decide(Checker *c, Ast_If_Directive *first);
 void check_decider_free(Checker *c);
 
 // Whether e, checked with no errors, is a place in memory: a variable, but
-// not a loop's iterator or index; p.*; a field of a place, or of a struct
-// reached through a pointer; an element of a place's array, or of a view's,
-// a pointer's or a string's, unless that string is part of a constant
+// not a loop's iterator or index; p.*; context; a field of a place, or of a
+// struct reached through a pointer; an element of a place's array, or of a
+// view's, a pointer's or a string's, unless that string is part of a constant
 // (constant_root). An array's .count and .data never are. The one statement
 // of the rule: the checker asks it before taking an address or assigning
 // (and says why not), and lowering asks it what an array converted to a

@@ -118,6 +118,28 @@ an int: 42
 Vec2 with 2 fields
 ```
 
+### The context
+
+The context is what code deep in a call chain needs without every caller handing it down, as in Jai (issue #156, spec 7.10): the allocator code takes its memory from when it's handed none, and the temporary storage. Every Rig procedure but a `#c_call` one is given its caller's context, a `*Context` it isn't given in the source, and `context` names it; `push_context` runs a block with another (spec 6.13).
+
+- `Context`:
+  - `allocator: Allocator`: where code takes its memory from when it's handed no allocator.
+  - `temporary_storage: *Temporary_Storage`: the temporary storage.
+- `default_context: Context`: the context `main` and each `#run` start with, and the one a `#c_call` procedure, which C calls with none, pushes for itself when it has no other (`push_context default_context { ... }`). Its allocator is the heap, and its temporary storage Preload's one.
+- `Temporary_Storage`, memory given out from one end and given back all at once:
+  - `data: *u8`, `size: int`: its first block, `TEMPORARY_STORAGE_SIZE` bytes of Preload's.
+  - `occupied: int`: how many bytes are given out, counted from the first block's start, through the pages after it.
+  - `high_water_mark: int`: the most bytes ever occupied.
+  - `overflow_allocator: Allocator`: where its pages come from once the first block is full; the heap.
+  - `overflow_pages: *Temporary_Storage_Page`: those pages, newest first.
+- `Temporary_Storage_Page`, a page's header, before its bytes:
+  - `previous: *Temporary_Storage_Page`: the page before it, or null.
+  - `size: int`: its bytes after the header.
+  - `start: int`: where they start in the storage's count (`occupied`).
+- `TEMPORARY_STORAGE_SIZE`: 32768, the first block's bytes.
+
+`__runtime_init` sets `default_context` up: its allocator, and the pointers to Preload's storage and its first block (`__temporary_storage`, `__temporary_storage_data`), which a global's value can't hold, since it can't hold another global's address (spec 4.3). It runs before `main`'s first line and before each `#run`'s code, and only the first call does anything. It's `#c_call`, so it uses no context itself. It and the two globals are Preload's own, not for programs.
+
 ## Waiting on the language
 
 - No type aliases, so the allocator's procedure type is written out, in `Allocator` and in each allocator procedure.

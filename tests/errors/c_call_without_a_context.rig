@@ -1,0 +1,18 @@
+// A #c_call procedure has no context until it pushes one (issue #156,
+// spec 7.6, 7.10): C calls it with none. So outside a push_context its
+// body can't use context, call a procedure that takes one (directly or
+// through a value), or leave out a default value that needs one.
+twice :: (n: int) -> int { return n * 2; }
+sized :: (n: int = context.temporary_storage.size) -> int #c_call { return n; }
+doubling : (int) -> int = twice;
+uses :: () #c_call {
+    a := context.allocator;
+}
+calls :: () #c_call {
+    n := twice(1);
+    m := doubling(2);
+}
+leaves_out :: () #c_call {
+    n := sized();
+}
+main :: () { }

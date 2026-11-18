@@ -158,3 +158,63 @@ ARRAY_VIEW :: 1;
 // a description of its own, a struct named Any. The program reads the value
 // by casting value_pointer once type says what it is.
 Any :: struct { type: *Type_Info; value_pointer: *void; }
+
+// The context (spec 7.10): what code deep in a call chain needs without
+// every caller handing it down, Jai's way. Every Rig procedure but a
+// #c_call one is given the caller's context, a *Context it isn't given in
+// the source, and context names it. push_context runs a block with another
+// (spec 6.13). It holds the allocator code takes its memory from when it's
+// handed none, and the temporary storage.
+
+// A page of temporary storage, asked of the storage's overflow_allocator
+// once its first block is full: this header, then size bytes. start is
+// where its bytes start in the storage's count (Temporary_Storage.occupied,
+// which counts from the first block's start), so the current page's own
+// offset is occupied - start, found without walking the pages.
+Temporary_Storage_Page :: struct { previous: *Temporary_Storage_Page; size: int; start: int; }
+
+// Memory that is given out from one end and given back all at once:
+// allocations from its first block, data's size bytes, then from pages
+// asked of overflow_allocator, the newest first in overflow_pages. occupied
+// is how many bytes are given out, counted from the first block's start;
+// high_water_mark the most there ever were.
+Temporary_Storage :: struct {
+    data: *u8;
+    size: int;
+    occupied: int;
+    high_water_mark: int;
+    overflow_allocator: Allocator;
+    overflow_pages: *Temporary_Storage_Page;  // newest first
+}
+
+// The context: the allocator code takes its memory from when it's handed
+// none, and the temporary storage.
+Context :: struct { allocator: Allocator; temporary_storage: *Temporary_Storage; }
+
+// The bytes of the temporary storage's first block.
+TEMPORARY_STORAGE_SIZE :: 32768;
+
+// The context main and each #run start with, and the one a #c_call
+// procedure, which C calls with none, pushes for itself when it has no
+// other: the heap, and Preload's temporary storage. __runtime_init sets it
+// up.
+default_context : Context;
+
+// Preload's one temporary storage, which default_context holds, and its
+// first block, as u64s so its allocations are 8-aligned.
+__temporary_storage : Temporary_Storage;
+__temporary_storage_data : [TEMPORARY_STORAGE_SIZE / 8]u64;
+
+// Sets default_context up, before main's first line and each #run's code:
+// its allocator the heap, its temporary storage Preload's, whose first
+// block is __temporary_storage_data. The pointers are set here, since a
+// global's value can't hold another global's address (spec 4.3). Once: a
+// second call does nothing. #c_call, so it uses no context itself.
+__runtime_init :: () #c_call {
+    if default_context.temporary_storage != null { return; }
+    __temporary_storage.data = cast(*u8) *__temporary_storage_data[0];
+    __temporary_storage.size = TEMPORARY_STORAGE_SIZE;
+    __temporary_storage.overflow_allocator = HEAP_ALLOCATOR;
+    default_context.allocator = HEAP_ALLOCATOR;
+    default_context.temporary_storage = *__temporary_storage;
+}

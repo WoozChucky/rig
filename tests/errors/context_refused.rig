@@ -1,0 +1,10 @@
+// Where the context isn't (issue #156, spec 7.10, 6.13): context is in a
+// body, a default value and a #run's code, not in a global's or a
+// constant's value; push_context takes a Context, and only in a body.
+limit := context.allocator;
+LIMIT :: context;
+push_context context { }
+take :: (a: Allocator) {
+    push_context a { }
+}
+main :: () { }

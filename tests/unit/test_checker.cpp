@@ -8200,3 +8200,203 @@ TEST(a_run_that_fails_in_a_default_value_names_its_place) {
               "    in #run (test.rig:8:6)\n");
     arena_free(&a);
 }
+
+// Issue #156: the context (spec 7.10, 6.13).
+
+TEST(preload_declares_the_context) {
+    // The checker finds Preload's Context, default_context and
+    // __runtime_init as it finds Type_Info and Any, and keeps them on the
+    // tree, for lowering. The structs are laid out as any struct: Context is
+    // an Allocator and a pointer, and the storage's header and page hold
+    // what the temporary allocator counts.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
+    CHECK(tree->context_type != nullptr);
+    CHECK(tree->default_context != nullptr);
+    CHECK(tree->runtime_init != nullptr);
+    if (!tree->context_type || !tree->default_context || !tree->runtime_init) {
+        arena_free(&a);
+        return;
+    }
+    CHECK_STR(tree->context_type->decl->name, "Context");
+    CHECK_STR(tree->default_context->name, "default_context");
+    CHECK(tree->default_context->type == tree->context_type);
+    CHECK_STR(tree->runtime_init->name, "__runtime_init");
+    CHECK(tree->runtime_init->is_c_call);
+    Type *context = tree->context_type;
+    CHECK_EQ(context->size, 24);
+    CHECK_EQ(context->fields[type_field_index(context, str("allocator"))].offset, 0);
+    CHECK_EQ(context->fields[type_field_index(context, str("temporary_storage"))].offset, 16);
+    Type *storage = ((Ast_Struct *)top_level_named(tree, "Temporary_Storage"))->declared;
+    CHECK_EQ(storage->size, 56);
+    CHECK_EQ(storage->fields[type_field_index(storage, str("overflow_allocator"))].offset, 32);
+    CHECK_EQ(storage->fields[type_field_index(storage, str("overflow_pages"))].offset, 48);
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Temporary_Storage_Page"))->declared->size, 24);
+    arena_free(&a);
+}
+
+TEST(context_is_a_place) {
+    // context is the current context, a place of type Context: read, copied,
+    // its address taken, its fields read and assigned, and itself assigned.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "main :: () {\n"
+                                 "    c := context;\n"
+                                 "    p := *context;\n"
+                                 "    context.allocator = HEAP_ALLOCATOR;\n"
+                                 "    q := *context.allocator;\n"
+                                 "    context = c;\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
+    CHECK_STR(type_name(&a, body->statements[0]->type), "Context");
+    CHECK_STR(type_name(&a, body->statements[1]->type), "*Context");
+    arena_free(&a);
+}
+
+TEST(context_is_only_in_code) {
+    // A global's value, a constant's and an array's count outside a body
+    // run no code, so they have no context. A local constant's value is in
+    // a body, so context is there, but isn't known while compiling.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "limit := context.allocator;\n"
+                                     "LIMIT :: context;\n"
+                                     "Box :: struct { a: [context.temporary_storage.size]u8; }\n"
+                                     "main :: () {\n"
+                                     "    C :: context;\n"
+                                     "}\n"),
+              "1:10: 'context' is only in a body, where a procedure runs\n"
+              "2:10: 'context' is only in a body, where a procedure runs\n"
+              "3:21: 'context' is only in a body, where a procedure runs\n"
+              "5:10: the value of constant 'C' isn't known while compiling\n");
+    arena_free(&a);
+}
+
+TEST(context_in_a_default_and_a_runs_block) {
+    // A default value is worked out in the caller, so it may read the
+    // caller's context; a top-level #run's block is a body that runs (check
+    // never runs it).
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "take :: (size: int, a: Allocator = context.allocator) -> int { return size; }\n"
+                                     "#run { c := context; }\n"
+                                     "main :: () { n := take(1); }\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(push_context_takes_a_context) {
+    // A Context, a place or not, or a literal that takes the type; anything
+    // else is refused, naming its type, a pointer to one too. A place's own
+    // address is pushed (is_place), anything else a copy.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "main :: () {\n"
+                                 "    c := context;\n"
+                                 "    p := *context;\n"
+                                 "    push_context c { }\n"
+                                 "    push_context context { }\n"
+                                 "    push_context .{allocator = HEAP_ALLOCATOR} { }\n"
+                                 "    push_context HEAP_ALLOCATOR { }\n"
+                                 "    push_context p { }\n"
+                                 "}\n",
+                                 &tree),
+              "7:18: push_context needs a 'Context', not 'Allocator'\n"
+              "8:18: push_context needs a 'Context', not '*Context'\n");
+    Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
+    bool places[] = {true, true, false};
+    for (s64 i = 0; i < 3; i++) {
+        Ast *s = body->statements[2 + i];
+        CHECK_EQ(s->kind, AST_PUSH_CONTEXT);
+        if (s->kind == AST_PUSH_CONTEXT) CHECK_EQ(((Ast_Push_Context *)s)->is_place, places[i]);
+    }
+    arena_free(&a);
+}
+
+TEST(push_context_and_the_end_of_a_body) {
+    // A push is its block: one that returns doesn't reach the body's end,
+    // and a break in one breaks out of its loop, so the while ends.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "f :: () -> int {\n"
+                                     "    push_context context { return 1; }\n"
+                                     "}\n"
+                                     "g :: () -> int {\n"
+                                     "    while true { push_context context { break; } }\n"
+                                     "}\n"
+                                     "main :: () { }\n"),
+              "6:1: 'g' must return a value on every path, and this one reaches its end\n");
+    arena_free(&a);
+}
+
+TEST(no_context_without_preload) {
+    // A test's single file has no Preload, so no Context: neither context
+    // nor push_context has anything to work with. The push's block is
+    // checked all the same.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "main :: () {\n"
+                               "    c := context;\n"
+                               "    push_context c { }\n"
+                               "}\n"),
+              "2:10: 'context' needs Preload's 'Context', which the program doesn't have\n"
+              "3:5: push_context needs Preload's 'Context', which the program doesn't have\n");
+    CHECK_STR(check_source(&a, "main :: () {\n"
+                               "    push_context 1 { x: int = true; }\n"
+                               "}\n"),
+              "2:5: push_context needs Preload's 'Context', which the program doesn't have\n"
+              "2:31: a value of type 'bool' doesn't convert to 'int' implicitly\n");
+    arena_free(&a);
+}
+
+TEST(a_c_call_body_has_no_context_until_it_pushes_one) {
+    // C calls a #c_call procedure with no context, so outside its pushes its
+    // body can't use context, call a procedure that takes one, or leave out
+    // a default value that needs one: sized's reads context, inner's calls
+    // twice, outer's leaves out inner's. A #c_call or foreign callee that
+    // leaves out no such default needs none, nor does a procedure's value,
+    // nor a #run, which runs with its own context while compiling (ran's
+    // default too). Inside a push all three are fine, deferred code too.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    const char *source = "twice :: (n: int) -> int { return n * 2; }\n"
+                         "sized :: (n: int = context.temporary_storage.size) -> int #c_call { return n; }\n"
+                         "inner :: (k: int = twice(1)) -> int #c_call { return k; }\n"
+                         "outer :: (k: int = inner()) -> int #c_call { return k; }\n"
+                         "plain :: (k: int = 1) -> int #c_call { return k; }\n"
+                         "puts :: (s: *u8) -> s32 #foreign libc;\n"
+                         "cb :: () #c_call {\n"
+                         "    a := sized();\n"
+                         "    b := inner();\n"
+                         "    c := outer();\n"
+                         "    d := plain() + sized(4) + inner(5) + outer(6) + ran();\n"
+                         "    puts(\"no push needed\");\n"
+                         "    f := twice;\n"
+                         "    e := #run twice(3);\n"
+                         "    push_context context { }\n"
+                         "    push_context default_context {\n"
+                         "        g := twice(1) + sized() + outer() + f(2);\n"
+                         "        h := context.allocator;\n"
+                         "        defer twice(7);\n"
+                         "    }\n"
+                         "}\n"
+                         "main :: () { }\n"
+                         "ran :: (k: int = #run twice(2)) -> int #c_call { return k; }\n";
+    CHECK_STR(check_with_preload(&a, source, &tree),
+              "8:10: 'sized' leaves out 'n', whose default value needs a context; a #c_call procedure has none "
+              "until it pushes one, as in push_context default_context { ... }\n"
+              "9:10: 'inner' leaves out 'k', whose default value needs a context; a #c_call procedure has none "
+              "until it pushes one, as in push_context default_context { ... }\n"
+              "10:10: 'outer' leaves out 'k', whose default value needs a context; a #c_call procedure has none "
+              "until it pushes one, as in push_context default_context { ... }\n"
+              "15:18: a #c_call procedure has no context until it pushes one, as in push_context default_context "
+              "{ ... }\n");
+    const char *needing[] = {"sized", "inner", "outer"};
+    for (s64 i = 0; i < 3; i++) {
+        CHECK(((Ast_Proc *)top_level_named(tree, needing[i]))->params[0]->default_needs_context);
+    }
+    CHECK(!((Ast_Proc *)top_level_named(tree, "plain"))->params[0]->default_needs_context);
+    CHECK(!((Ast_Proc *)top_level_named(tree, "ran"))->params[0]->default_needs_context);
+    arena_free(&a);
+}
