@@ -7440,11 +7440,14 @@ TEST(type_info_needs_preload) {
     // Without Preload (a test's single file) there is no Type_Info for
     // type_info to point at. A program's own struct called Type_Info isn't
     // Preload's: only a module's file declares the one type_info points at.
+    // The argument is a type first, with its own messages: an unknown one
+    // says only that.
     Arena a = arena_make();
     CHECK_STR(check_source(&a, "main :: () {\n    t := type_info(int);\n}\n"),
               "2:10: 'type_info' needs Preload's 'Type_Info', which the program doesn't have\n");
     CHECK_STR(check_source(&a, "Type_Info :: struct { tag: s64; }\nmain :: () {\n    t := type_info(int);\n}\n"),
               "3:10: 'type_info' needs Preload's 'Type_Info', which the program doesn't have\n");
+    CHECK_STR(check_source(&a, "main :: () {\n    t := type_info(Nope);\n}\n"), "2:20: unknown type 'Nope'\n");
     arena_free(&a);
 }
 
@@ -7478,5 +7481,13 @@ TEST(a_global_may_hold_a_description_a_constant_cant) {
               "12:6: a global's value must be known while compiling, for now\n"
               "13:14: a constant's pointer can only be null or a string literal's address\n"
               "14:6: a constant's pointer can only be null or a string literal's address\n");
+    // A description is known while compiling, though no constant may hold
+    // it: in a cast literal a constant can't take, the value that isn't
+    // known is the global after it, not the description (is_known).
+    CHECK_STR(check_with_preload(&a, "Pair :: struct { t: *Type_Info; n: int; }\n"
+                                     "count := 3;\n"
+                                     "K :: cast(Pair) Pair.{type_info(int), count};\n"
+                                     "main :: () { }\n"),
+              "3:39: the value of constant 'K' isn't known while compiling\n");
     arena_free(&a);
 }
