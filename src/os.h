@@ -121,10 +121,10 @@ String os_error_message(Arena *a);
 // system's start, say), for timing what the compiler does: one reading
 // means nothing alone, only the difference of two. Fine enough for a phase
 // that takes microseconds. Windows: QueryPerformanceCounter, not the
-// timeouts' GetTickCount64, whose steps are 10-16 ms. Linux:
-// clock_gettime's CLOCK_MONOTONIC, the timeouts' clock, read to the
-// nanosecond instead of the millisecond. Neither follows the time of day,
-// which jumps when it's set.
+// timeouts' GetTickCount64, whose steps are 10-16 ms. Linux: clock_gettime's
+// CLOCK_MONOTONIC, the timeouts' clock, read to the nanosecond instead of
+// the millisecond. Neither follows the time of day, which jumps when it's
+// set.
 s64 os_nanoseconds();
 
 // The stack the compiler works on, on every system (issue #77): the parser,

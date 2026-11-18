@@ -178,9 +178,10 @@
 //   "the value of constant 'N' isn't known while compiling", at the first
 //   value inside e that isn't. A pointer, in data or alone, is null or a
 //   string literal's address: any cast (from a number, a procedure or a
-//   pointer variable), a procedure, a type's description (type_info(T)) or
-//   a value converted to Any is "a constant's pointer can only be null or a
-//   string literal's address". No part of a constant written in the source
+//   pointer variable), a procedure or a type's description (type_info(T))
+//   is "a constant's pointer can only be null or a string literal's
+//   address". A value converted to Any, or cast to one, is the same error:
+//   the Any holds its address. No part of a constant written in the source
 //   is a view, which would see memory of its own: "a constant can't hold a
 //   view; only a string or an array can be one" (a #run's baked view is the
 //   exception, below).

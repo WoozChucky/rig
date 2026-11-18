@@ -2942,10 +2942,10 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
         array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, global, false});
         return;
     }
-    // A type's description's address, made the first time
-    // (type_info_global): type_info(T), a cast of it to another pointer, or
-    // a field or an element of constant data holding one
-    // (type_info_address), as in Holder.{type_info(bool)}.t.
+    // A type's description's address, made the first time (type_info_global):
+    // type_info(T), a cast of it to another pointer, or a field or an element
+    // of constant data holding one (type_info_address), as in
+    // Holder.{type_info(bool)}.t.
     Ast_Type_Info *info = type_info_address(value);
     if (info) {
         array_add(relocs, Ir_Reloc{offset, type_info_global(l, info->described), false});
