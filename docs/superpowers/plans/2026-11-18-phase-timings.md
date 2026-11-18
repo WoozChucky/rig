@@ -14,7 +14,7 @@
 
 - C-style C++: plain structs and functions, no STL, no exceptions, no RTTI (src/common.h). So no `std::chrono`: the clock is the OS layer's (os.h, os_windows.cpp, os_linux.cpp).
 - No new dependency, library or file format.
-- Both hosts: every task's tests pass on Windows (`build.bat`, `bin\unit-tests.exe`, `bin\run-tests.exe`) and on Linux (WSL `~/rig`, the branch checked out: `./build.sh`, `bin/unit-tests`, `bin/run-tests`).
+- Both hosts: every task's tests pass on Windows (`build.bat`, `bin\unit-tests.exe`, `bin\run-tests.exe`) and on Linux (WSL `~/rig-wt/173`, which tracks this branch, LLVM at `~/rig/deps/llvm-linux`: `RIG_LLVM_DIR=$HOME/rig/deps/llvm-linux ./build.sh`, `bin/unit-tests`, `bin/run-tests`). The debugger tests must pass on both (cdb, gdb), not be skipped.
 - The specification moves with the compiler, in the same pull request (CONTRIBUTING.md, "Rules for a change").
 - The report is on by default. A failed build prints no report. `rig check` prints nothing new (the editor reads its output). `bin/unit-tests --interpret` prints nothing new.
 - Spelling as the code has it: "optimising", "optimised".
@@ -34,7 +34,7 @@
 
 ### The format
 
-Two spaces, the phase's name left-aligned in 11 columns, a space, the time right-aligned in 9, ` ms`; the total line adds two spaces, `L lines, R lines/s`. `all` is unindented, its name in 13 columns, so its time lines up. Exact `printf` shapes: `"  %-11s %9s ms\n"`, `"  %-11s %9s ms  %lld lines, %lld lines/s\n"`, `"%-13s %9s ms  %lld lines, %lld lines/s\n"`, the time as `milliseconds_text` gives it. The title is the main file's path as given (`build.rig` with no file), or `workspace 'NAME'` (`load_shown_name`, as the build program's messages show a name).
+Two spaces, the phase's name left-aligned in 11 columns, a space, the time right-aligned in 9, ` ms`; the total line adds two spaces, `L lines, R lines/s`. `all` is unindented, its name in 13 columns, so its time lines up. Exact `printf` shapes: `"  %-11s %9s ms\n"`, `"  %-11s %9s ms  %lld lines, %lld lines/s\n"`, `"%-13s %9s ms  %lld lines, %lld lines/s\n"`, the time as `milliseconds_text` gives it. `s64` is `int64_t` (src/common.h), `long` on Linux, so each `%lld` takes a `(long long)` cast, as the codebase's other `%lld`s do (-Wall's format warning otherwise). The title is the main file's path as given (`build.rig` with no file), or `workspace 'NAME'` (`load_shown_name`, as the build program's messages show a name).
 
 A plain program (`rig build hello.rig`, Windows, measured on main's code instrumented, Evidence):
 
@@ -303,7 +303,7 @@ TEST(program_lines_counts_every_file_once_preload_included) {
 }
 ```
 
-Written out: `main.rig` is `#load "b.rig";\n#load "./b.rig";\nmain :: () { }\n` (3 lines), `b.rig` is `x :: 1;\ny :: 2;` (2 lines); load it with `load_program(&a, &d, path, text, nullptr)`; find Preload's file in `d.files` by its path ending in `Preload/module.rig`; `CHECK_EQ(d.files.count, 3)` and `CHECK_EQ(program_lines(&d), 5 + source_lines(preload_text))`.
+Written out: `main.rig` is `#load "b.rig";\n#load "./b.rig";\nmain :: () { }\n` (3 lines), `b.rig` is `x :: 1;\ny :: 2;` (2 lines); load it with `load_program(&a, &d, path, text, nullptr)`; Preload's file is `d.files[1]` (the loader reads it right after the main file, as test_load.cpp's `import_finds_basic_with_rigs_own_places` checks; its path has the host's separators, `\` on Windows, so don't look for it by a `/`-path suffix), its text `d.files[1].text`; `CHECK_EQ(d.files.count, 3)` and `CHECK_EQ(program_lines(&d), 5 + source_lines(preload_text))`.
 
 - [ ] **Step 2: Run them to see them fail**
 
@@ -365,7 +365,7 @@ TEST(world_counts_its_runs_time) {
 }
 ```
 
-In `tests/unit/test_llvm.cpp`, with `lower_tokens(&a, HELLO)` as `llvm_writes_an_object_file` has it:
+In `tests/unit/test_llvm.cpp`, with `lower_tokens(&a, HELLO)` as `objects_for_both_targets` has it (HELLO is test_ir.cpp's, included before):
 
 ```cpp
 TEST(llvm_emit_object_gives_its_parts_times) {
@@ -377,7 +377,7 @@ TEST(llvm_emit_object_gives_its_parts_times) {
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `build.bat` then `bin\unit-tests.exe times`
+Run: `build.bat` then `bin\unit-tests.exe _time` (the filter is a substring of a test's name or file: `_time` picks both new tests, and a few others; `times` would miss `world_counts_its_runs_time`)
 Expected: the build fails: `compile_time_nanoseconds` and `Llvm_Times` aren't declared.
 
 - [ ] **Step 3: Implement**
@@ -489,7 +489,7 @@ report("a build program with a failed workspace prints no report", failed_worksp
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `build.bat` then `bin\run-tests.exe`
-Expected: the tests passing `--quiet` fail (`rig build exited with 2`, the usage on stderr: rig doesn't know the word yet), the report tests fail (no report on stdout), and the usage cases fail on ` [--quiet]`.
+Expected: the tests passing `--quiet` fail, since rig doesn't know the word yet and takes it as a file's name (spec 10.1): beside a file (`run_test`, `build_elsewhere`) it is a second file, `rig build exited with 2` and the usage; alone (`build_copy`, no file) it is the main file, `rig: error: '--quiet' isn't a .rig file`, exit 1, so every `tests/build` case fails on its exit code or stderr. The report tests fail (no report on stdout), and the usage cases fail on ` [--quiet]`. The new cases `--quiet twice` and `rig check with --quiet` already pass (a second file is the usage), so they don't show the change; they guard it.
 
 - [ ] **Step 3: Implement the timing, the report and `--quiet` in driver.cpp and main.cpp**
 
@@ -504,8 +504,8 @@ Say that tests/run's programs and tests/build's cases are built with `--quiet`, 
 
 - [ ] **Step 5: Run every test on both hosts**
 
-Run: `build.bat`, `bin\unit-tests.exe`, `bin\run-tests.exe` (Windows); in WSL, the branch checked out in `~/rig`: `./build.sh && bin/unit-tests && bin/run-tests`
-Expected: `N passed, 0 failed` from each (the debugger tests may be `skipped` where there's no debugger).
+Run: `build.bat`, `bin\unit-tests.exe`, `bin\run-tests.exe` (Windows); in WSL, in `~/rig-wt/173` (pulled): `RIG_LLVM_DIR=$HOME/rig/deps/llvm-linux ./build.sh && bin/unit-tests && bin/run-tests`
+Expected: `N passed, 0 failed` from each, with nothing skipped: the debugger tests must pass (cdb on Windows, gdb in WSL).
 
 - [ ] **Step 6: Try it by hand**
 
@@ -568,7 +568,7 @@ git commit -m "Say what rig build's report holds, and --quiet"
 
 ## What else reads rig build's output (checked, no change)
 
-- The VS Code extension's build and run tasks (`editors/vscode/extension.js`, `TaskTerminal.run`) copy stdout and stderr to the task's terminal; the problem matchers (`package.json`, `^(.+?):(\d+):(\d+): (?:runtime )?(error|warning): (.*)$`) match no line of the report. The debug flow only needs the exit status. `test/check.js` stands Node in for rig and is unaffected; its old-rig usage text is an old rig's on purpose.
+- The VS Code extension's build and run tasks (`editors/vscode/extension.js`, `RigTerminal.run`) copy stdout and stderr to the task's terminal; the problem matchers (`package.json`, `^(.+?):(\d+):(\d+): (?:runtime )?(error|warning): (.*)$`) match no line of the report. The debug flow only needs the exit status. `test/check.js` stands Node in for rig and is unaffected; its old-rig usage text is an old rig's on purpose.
 - `scripts/package_linux.sh`, `scripts/package_windows.bat`: build and run programs, compare the programs' output only; the report shows in their log.
 - `site/public/install.sh`, `install.ps1`: build hello world and show rig's output only when the build fails; `scripts/test_install.sh` sends it to `/dev/null`.
 - `.github/workflows/ci.yml`, `release.yml`: run `bin/run-tests`, which Task 4 keeps stable.
