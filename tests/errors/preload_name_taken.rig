@@ -1,0 +1,12 @@
+// Every program imports Preload (spec 2.14), whose declarations join the
+// program's one top level (4.6), so a program can't declare a name it
+// declares. Preload comes first in load order (2.13): the error is here,
+// naming Preload's Allocator, which every use of the name then finds,
+// this program's and Preload's own, so HEAP_ALLOCATOR still works.
+Allocator :: struct { size: int; }
+
+main :: () {
+    a : Allocator = HEAP_ALLOCATOR;
+    p := a.proc(ALLOCATE, 8, 0, null, a.data);
+    a.proc(FREE, 0, 0, p, a.data);
+}

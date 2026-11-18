@@ -7,8 +7,9 @@ rem The archive holds, at its top level (no folder around them):
 rem   rig.exe        the compiler, an optimised build (build.bat release)
 rem   lld-link.exe   LLVM's linker, which rig uses when Visual Studio has no
 rem                  link.exe (spec 10.6)
-rem   modules\       the modules that ship with rig (Basic, Compiler), which
-rem                  #import finds in modules\ beside rig.exe (spec 2.14)
+rem   modules\       the modules that ship with rig (Preload, Basic,
+rem                  Compiler), which rig finds in modules\ beside rig.exe
+rem                  (spec 2.14)
 rem   LICENSE, README.md
 rem   LICENSE-LLVM.txt, LICENSE-LLD.txt
 rem                  the licences of LLVM, which rig.exe links statically,
@@ -24,7 +25,9 @@ rem     which imports the Compiler module, as rig build try\build.rig, runs
 rem     the game it makes and compares what it prints with game.out;
 rem   - builds tests\run\basic_string.rig, which imports Basic, runs it and
 rem     compares what it prints with basic_string.out.
-rem Both imports find the archive's modules\, beside its rig.exe.
+rem Every program imports Preload without asking, hello too, so all three
+rem builds find the archive's modules\, beside its rig.exe: Preload in each,
+rem Compiler and Basic in theirs.
 rem
 rem The zip is written and read with the tar.exe that ships with Windows 10
 rem and later, by its full path (Git's GNU tar, which may come first on the

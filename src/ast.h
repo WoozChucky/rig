@@ -540,9 +540,13 @@ System host_system();
 // as Source_File.order is. Empty, as parse() and parse_into leave it, each
 // file is at its index: the order the files were read in. The loader sets
 // it for every program it loads (walk_in_load_order), and puts every list
-// in it (ast_sort_declarations): it differs from the reading order only
+// in it (ast_sort_declarations): it differs from the reading order in
+// Preload's place, and that of the files it reaches: Preload, file 1, read
+// right after the main file, is placed first in load order with every file
+// it reaches, before the main file and the files after it (spec 2.13); and
 // when a #load in a taken #if branch (spec 4.9) read a file after one that
-// comes later. before() follows it, in ast_declarations and ast_dump too.
+// comes later. before() follows it, in
+// ast_declarations and ast_dump too.
 //
 // lost_a_file is set when a #load or an #import failed (load.h's errors),
 // had no string to name a file by, wasn't at the top level, or was passed
@@ -575,6 +579,8 @@ struct Ast_File {
                             // further file (load.h)
     System system;          // what OS is (spec 2.5): SYSTEM_NONE means the host's (host_system)
     Array<s32> order;       // order[f]: file f's place in load order, as Source_File.order; empty: each file's index
+    String load_failure;    // the loader's: why the program couldn't be loaded at all, said as "rig: error: MESSAGE"
+                            // (load.h): Preload not found or not read; empty when it was. In the arena.
 };
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler

@@ -4,7 +4,20 @@
 // compilations in one rig share nothing, neither names nor globals nor
 // #runs. The greeter's executable is named hello by its build options; the
 // counter's takes its file's name, as rig build of that file would give it.
+// The build program and the greeter's each use Preload's heap, which every
+// program has without an #import (spec 2.14).
 #import "Compiler";
+
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+// The build program's Preload: its heap, while compiling.
+#run {
+    text := "the build program";
+    copy := cast(*u8) HEAP_ALLOCATOR.proc(ALLOCATE, text.count, 0, null, HEAP_ALLOCATOR.data);
+    for i: 0..text.count - 1 { copy[i] = text.data[i]; }
+    printf("%.*s, from the heap\n", cast(s32) text.count, copy);
+    HEAP_ALLOCATOR.proc(FREE, 0, 0, copy, HEAP_ALLOCATOR.data);
+}
 
 #run {
     greeter := create_workspace("greeter");

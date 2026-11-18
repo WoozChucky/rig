@@ -207,6 +207,14 @@ static s32 add_file(Loading *l, String path, String text, File_Key key, const Po
     return added;
 }
 
+// "there's no module 'NAME' (looked in DIR1 and DIR2)", the places as
+// Module_Places has them, in the arena: an #import's words (load_target),
+// and Preload's when the places have none (add_preload).
+static String no_module_message(Arena *a, const Module_Places *places, String name) {
+    return string_printf(a, "there's no module '" STR_FMT "' (looked in " STR_FMT " and " STR_FMT ")", STR_ARG(name),
+                         STR_ARG(places->places[0]), STR_ARG(places->places[1]));
+}
+
 // The path of the file `load` names: an #import's module's module.rig, a
 // #load's path from the directory of `holder`, the file the load is in;
 // {} when it names none, with *why the message saying so, in the loading
@@ -225,10 +233,7 @@ static String load_target(Loading *l, Ast_Load *load, s32 holder, String *why) {
             return {};
         }
         String module = module_lookup(arena, l->places, load->path);
-        if (!module.count) {
-            *why = string_printf(arena, "there's no module '" STR_FMT "' (looked in " STR_FMT " and " STR_FMT ")",
-                                 STR_ARG(load->path), STR_ARG(l->places->places[0]), STR_ARG(l->places->places[1]));
-        }
+        if (!module.count) *why = no_module_message(arena, l->places, load->path);
         return module;
     }
     // A string can hold a zero byte (\0), but the system takes a path as
@@ -291,6 +296,39 @@ static s32 follow_load(Loading *l, Ast_Load *load, s32 holder) {
     // Added once, at the #import or #load that first named it.
     load->file = add_file(l, loaded, loaded_text, key, &load->pos);
     return load->file;
+}
+
+// Preload's module.rig, which every program imports (load.h), added as
+// follow_load adds a file: found in the places (module_lookup), named by
+// its absolute path, known by its key, so nothing is added when it's the
+// main file, seen already; its text the stdin-for text when it's that file,
+// else read. No load names it, so it's added at no load (named_at null).
+// *preload is its index, the main file's when it's the main file. False
+// when the places have none or it can't be read: no #import's string can
+// say so, so l->tree->load_failure says why, in l->a, the tree's arena,
+// for the driver to say.
+static bool add_preload(Loading *l, s32 *preload) {
+    String module = module_lookup(&l->arena, l->places, str("Preload"));
+    if (!module.count) {
+        l->tree->load_failure = no_module_message(l->a, l->places, str("Preload"));
+        return false;
+    }
+    File_Key key = file_key(&l->arena, l->directory, module);
+    if (s32 *known = table_get(seen_table(&l->seen, key), key.bytes)) {
+        *preload = *known;
+        return true;
+    }
+    String text = {};
+    if (l->substitute && same_key(key, l->stdin_key)) {
+        text = l->stdin_text;
+        l->reached = true;
+    } else if (!os_read_file(l->a, module, &text)) {
+        l->tree->load_failure = string_printf(l->a, "cannot read '" STR_FMT "': " STR_FMT, STR_ARG(module),
+                                              STR_ARG(os_error_message(&l->arena)));
+        return false;
+    }
+    *preload = add_file(l, module, text, key, nullptr);
+    return true;
 }
 
 // Lexes and parses each file added and not parsed yet, in order, following
@@ -420,35 +458,48 @@ static bool earlier_in_file(Position a, Position b) {
     return a.line != b.line ? a.line < b.line : a.col < b.col;
 }
 
-// The walk of load.h: from the main file and the `further_files` after it,
-// each file placed is walked in turn, its own top-level #loads, #imports
-// and #ifs in source order (merged by position from its File_Items): a load
-// places its file, and an #if is decided (decide_in_load_order). A queue,
-// as the reading is, so a chain of loads of any length takes no more stack
-// than one file. Every file read is placed: the main file and the further
-// files first, each other one at its first #load in load order, at the
-// latest at the #load that read it, which is in a file placed before it.
-// Each file's place is then its order (Source_File.order, Ast_File.order),
-// and the tree's lists are put in it.
-static void walk_in_load_order(Loading *l, s32 main_file, s32 further_files) {
+// Walks the files placed from the walk's `from`th on, in turn, until none
+// is left: each file's own top-level #loads, #imports and #ifs in source
+// order (merged by position from its File_Items), a load placing its file,
+// and an #if decided (decide_in_load_order). A queue, as the reading is,
+// so a chain of loads of any length takes no more stack than one file.
+static void walk_placed(Loading *l, Walk *walk, s64 from) {
     Ast_File *tree = l->tree;
-    Diagnostics *d = l->d;
-    Walk walk = {};
-    for (s32 f = main_file; f <= main_file + further_files; f++) place_in_load_order(&walk, f);
-    for (s64 w = 0; w < walk.files.count; w++) {
-        s32 file = walk.files[w];
+    for (s64 w = from; w < walk->files.count; w++) {
+        s32 file = walk->files[w];
         File_Items items = l->items[file];
         s64 k = items.first_load, i = items.first_if;
         while (k < items.end_load || i < items.end_if) {
             bool load_first = i == items.end_if ||
                               (k < items.end_load && earlier_in_file(tree->loads[k]->pos, tree->ifs[i]->pos));
             if (load_first) {
-                place_in_load_order(&walk, tree->loads[k++]->file);
+                place_in_load_order(walk, tree->loads[k++]->file);
             } else {
-                decide_in_load_order(l, &walk, tree->ifs[i++], file);
+                decide_in_load_order(l, walk, tree->ifs[i++], file);
             }
         }
     }
+}
+
+// The walk of load.h: from `preload`, Preload's index (-1 when the program
+// doesn't import it, Load_Options.no_preload), walked to its end first
+// (walk_placed), so Preload and every file it reaches come before the main
+// file, and their declarations first (load.h); then the main file and the
+// `further_files` after it, among whose indexes Preload's is (it's skipped
+// there, placed already), walked from where Preload's walk ended. Every
+// file read is placed: those named here where said, each other one at its
+// first #load in load order, at the latest at the #load that read it,
+// which is in a file placed before it. Each file's place is then its order
+// (Source_File.order, Ast_File.order), and the tree's lists are put in it.
+static void walk_in_load_order(Loading *l, s32 preload, s32 main_file, s32 further_files) {
+    Ast_File *tree = l->tree;
+    Diagnostics *d = l->d;
+    Walk walk = {};
+    place_in_load_order(&walk, preload);
+    walk_placed(l, &walk, 0);
+    s64 program = walk.files.count;
+    for (s32 f = main_file; f <= main_file + further_files; f++) place_in_load_order(&walk, f);
+    walk_placed(l, &walk, program);
     RIG_ASSERT(walk.files.count == d->files.count - main_file);
     // The files before the main file, none unless the caller's d had some,
     // are no part of the program, and keep their indexes.
@@ -509,26 +560,35 @@ Ast_File *load_program(Arena *a, Diagnostics *d, String path, String text, const
     }
     s32 main_file = add_file(&l, path, text, main_key, nullptr);
 
-    // A workspace's further files (spec 7.9), with the texts the caller
-    // read, added right after the main file, so they're walked before the
-    // files its #loads add, as if it #loaded each first. Each is known by
-    // its key as any file is: one named twice, or the main file again, is
-    // added once, and a file one of them #loads that was added already
-    // loads nothing. The Compiler module's file among them is reached at
-    // its own 1:1, as the main file is.
-    Array<String> more_files = options->more_files, more_texts = options->more_texts;
-    for (s64 k = 0; k < more_files.count; k++) {
-        File_Key key = file_key(&l.arena, l.directory, more_files[k]);
-        if (table_get(seen_table(&l.seen, key), key.bytes)) continue;
-        add_file(&l, more_files[k], more_texts[k], key, nullptr);
-    }
-    s32 further_files = (s32)(d->files.count - main_file - 1);
+    // Preload right after the main file (load.h), so it's file 1, read
+    // before the further files and the main file's #loads, and placed
+    // first in load order by the walk. When it can't be found or read,
+    // nothing more is read and nothing parsed: no error of the program's
+    // means anything without it, and the tree's load_failure says why.
+    s32 preload = -1;
+    if (options->no_preload || add_preload(&l, &preload)) {
+        // A workspace's further files (spec 7.9), with the texts the caller
+        // read, added right after the main file and Preload, so they're
+        // walked before the files the main file's #loads add, as if it
+        // #loaded each first. Each is known by its key as any file is: one
+        // named twice, the main file or Preload's module.rig again, is added
+        // once, and a file one of them #loads that was added already loads
+        // nothing. The Compiler module's file among them is reached at its
+        // own 1:1, as the main file is. further_files counts Preload too.
+        Array<String> more_files = options->more_files, more_texts = options->more_texts;
+        for (s64 k = 0; k < more_files.count; k++) {
+            File_Key key = file_key(&l.arena, l.directory, more_files[k]);
+            if (table_get(seen_table(&l.seen, key), key.bytes)) continue;
+            add_file(&l, more_files[k], more_texts[k], key, nullptr);
+        }
+        s32 further_files = (s32)(d->files.count - main_file - 1);
 
-    // Every file outside every #if first, then the #ifs, decided in load
-    // order, which may read more (load.h).
-    l.next = main_file;
-    read_queued(&l);
-    walk_in_load_order(&l, main_file, further_files);
+        // Every file outside every #if first, then the #ifs, decided in
+        // load order, which may read more (load.h).
+        l.next = main_file;
+        read_queued(&l);
+        walk_in_load_order(&l, preload, main_file, further_files);
+    }
 
     table_free(&l.seen.ids);
     table_free(&l.seen.paths);

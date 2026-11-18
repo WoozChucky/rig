@@ -3349,12 +3349,15 @@ TEST(module_knows_its_source) {
 
 // The program at `path`, with the files it #loads, lowered as rig build
 // lowers it, or null when it doesn't check; its tree in *tree. Both live in
-// the arena.
-static Ir_Module *lower_program(Arena *a, String path, Ast_File **tree) {
+// the arena. With `preload` false, the program doesn't import Preload
+// (Load_Options.no_preload), for a test that counts its files.
+static Ir_Module *lower_program(Arena *a, String path, Ast_File **tree, bool preload = true) {
     String text = {};
     if (!os_read_file(a, path, &text)) return nullptr;
     Diagnostics d = {};
-    *tree = load_program(a, &d, path, text);
+    Load_Options options = {};
+    options.no_preload = !preload;
+    *tree = load_program(a, &d, path, text, &options);
     Ir_Module *m = nullptr;
     if (d.error_count == 0 && check(*tree, a, &d)) m = ir_lower(*tree, &d, a, true);
     diag_free(&d);
@@ -3383,7 +3386,9 @@ TEST(lower_records_every_source) {
     const char *names[] = {"main.rig", "helper.rig"};
     for (int i = 0; i < 2; i++) write_source(&a, dir, names[i], texts[i]);
     Ast_File *tree = nullptr;
-    Ir_Module *m = lower_program(&a, str(in_directory(&a, dir, "main.rig")), &tree);
+    // Without Preload, which every program imports as file 1, so the
+    // program is these two files.
+    Ir_Module *m = lower_program(&a, str(in_directory(&a, dir, "main.rig")), &tree, false);
     CHECK(m != nullptr);
     if (!m) {
         arena_free(&a);
@@ -3468,7 +3473,9 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
             if (from_source) {
                 CHECK_EQ(p->pos.file, tree->procs[k]->pos.file);
                 CHECK_EQ(p->pos.line, tree->procs[k]->pos.line);
-                if (p->pos.file > 0) in_loaded_files++;
+                // File 1 is Preload's, in every program: past it, the
+                // files the program itself loads.
+                if (p->pos.file > 1) in_loaded_files++;
             }
             s32 first_line = p->pos.line;
             s32 last_line = from_source ? tree->procs[k]->body->end.line : 0;

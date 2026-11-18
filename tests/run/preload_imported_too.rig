@@ -1,0 +1,17 @@
+// Every program imports Preload (spec 2.14), so importing it again, and
+// loading its module.rig by its path, reads nothing more: a file is read
+// once (spec 2.13), and HEAP_ALLOCATOR is declared once.
+#import "Preload";
+#load "../../modules/Preload/module.rig";
+#import "Preload";
+
+puts :: (s: *u8) -> s32 #foreign libc;
+
+main :: () {
+    a := HEAP_ALLOCATOR;
+    p := a.proc(ALLOCATE, 1, 0, null, a.data);
+    if p != null {
+        puts("one Preload, read once");
+        a.proc(FREE, 0, 0, p, a.data);
+    }
+}

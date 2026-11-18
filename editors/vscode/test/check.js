@@ -1041,8 +1041,9 @@ check('the grammar colours the types in every program of tests/run and tests/bui
     assert.ok(files.length > 50, `only ${files.length} programs`);
 
     const sources = new Map(files.map((f) => [f, fs.readFileSync(f, 'utf8')]));
-    // The structs a program may name: its own, and those of the modules a
-    // program #imports or #loads (modules/Basic's Allocator, say).
+    // The structs a program may name: its own, Preload's, which every
+    // program imports (modules/Preload's Allocator, say), and those of the
+    // modules a program #imports or #loads.
     const modules = [];
     const walkModules = (dir) => {
         if (!fs.existsSync(dir)) return;

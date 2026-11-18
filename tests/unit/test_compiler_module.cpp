@@ -39,9 +39,11 @@ static String replaced(Arena *a, String text, String what, const char *with) {
 
 // Runs `text` as the build program .build/tests/compiler/NAME/build.rig,
 // as rig build runs one: written there (and state->program_path set to its
-// path), loaded with `places` (null: rig's own), checked in a compile-time
-// world whose #compiler calls `state` answers (compiler_module_call), and,
-// when it checks with no errors, its top-level #runs run there. Returns the
+// path), loaded with `places` (null: rig's own, with Preload, which every
+// program imports; a test's own have none, so the program leaves it out,
+// Load_Options.no_preload), checked in a compile-time world whose
+// #compiler calls `state` answers (compiler_module_call), and, when it
+// checks with no errors, its top-level #runs run there. Returns the
 // messages, sorted, with the path written PATH, and the tree, in the arena,
 // through `tree` when given. Whether the program counts as a build program
 // is the state's is_build_program, the test's to set: so every program here
@@ -55,6 +57,7 @@ static String run_build_program(Arena *a, const char *name, const char *text, Bu
     Diagnostics d = {};
     Load_Options options = {};
     options.modules = places;
+    options.no_preload = places != nullptr;  // a test's own places have no Preload
     Ast_File *file = load_program(a, &d, path, str(text), &options);
     Compile_Time *world = compile_time_new(&d);
     compile_time_set_compiler(world, compiler_module_call, state);
