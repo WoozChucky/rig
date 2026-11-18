@@ -7026,7 +7026,9 @@ TEST(variadic_parameters_are_views) {
 TEST(variadic_procedure_types_are_their_own) {
     // A written (int, ..int) -> int is a variadic procedure's type, whatever
     // its parameters are named; neither it nor (int, []int) -> int converts
-    // to the other. Its T is a view's element: never void.
+    // to the other. Its T is a view's element: never void. Nor does the
+    // variadic one convert to the #c_call type of the same []T signature,
+    // with no hint to mark it #c_call, which can't take a '..T'.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "sum :: (first: int, rest: ..int) -> int { return first; }\n"
@@ -7038,32 +7040,59 @@ TEST(variadic_procedure_types_are_their_own) {
                            "    c : (int, []int) -> int = sum;\n"
                            "    d : (int, ..int) -> int = plain;\n"
                            "    e : (..void);\n"
+                           "    x : (int, []int) -> int #c_call = sum;\n"
                            "}\n"),
               "7:31: a value of type '(int, ..int) -> int' doesn't convert to '(int, []int) -> int' implicitly\n"
               "8:31: a value of type '(int, []int) -> int' doesn't convert to '(int, ..int) -> int' implicitly\n"
-              "9:12: 'void' is only a pointer's target, as in *void\n");
+              "9:12: 'void' is only a pointer's target, as in *void\n"
+              "10:15: a #c_call procedure can't take a '[]int'; pass its .data\n"
+              "10:39: a value of type '(int, ..int) -> int' doesn't convert to '(int, []int) -> int #c_call' "
+              "implicitly\n");
     arena_free(&a);
 }
 
 TEST(where_a_variadic_parameter_cant_be) {
     // C passes no view: a foreign procedure, a #c_call one and a #c_call
     // procedure type take no '..T', each said once, at its '..', and C
-    // can't be given a procedure value that takes one. A #compiler
-    // procedure doesn't, for now.
+    // can't be given, nor give it, a procedure value that takes one. A
+    // #compiler procedure doesn't, for now. What is refused has no type, so
+    // using it as a value says nothing more; nor is a '..T' whose T is
+    // itself an error refused: T's own message is the one said.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "c_sum :: (count: int, values: ..int) -> int #foreign libc;\n"
                            "callback :: (values: ..int) #c_call { }\n"
                            "cb : (..int) #c_call;\n"
                            "takes :: (f: (..int) -> int) #foreign libc;\n"
-                           "main :: () { }\n"),
+                           "gives :: () -> (..int) -> int #foreign libc;\n"
+                           "calls :: (f: (int, ..int) -> int) #c_call { }\n"
+                           "main :: () { a : int = c_sum; b : int = callback; c : int = cb; }\n"),
               "1:31: a foreign procedure can't take '..int': C's other arguments are written '..' alone, "
               "as in (format: *u8, ..)\n"
               "2:22: a #c_call procedure can't take '..int'\n"
               "3:7: a #c_call procedure can't take '..int'\n"
               "4:14: a foreign procedure can't take a '(..int) -> int': C can't pass the view a '..' parameter "
-              "takes\n");
-    CHECK_STR(check_module_source(&a, "f :: (values: ..int) #compiler;\nmain :: () { }\n"),
-              "1:15: a #compiler procedure can't take '..int', for now\n");
+              "takes\n"
+              "5:16: a foreign procedure can't return a '(..int) -> int': C can't pass the view a '..' parameter "
+              "takes\n"
+              "6:14: a #c_call procedure can't take a '(int, ..int) -> int': C can't pass the view a '..' "
+              "parameter takes\n");
+    CHECK_STR(check_source(&a,
+                           "c_sum :: (count: int, values: ..void) -> int #foreign libc;\n"
+                           "callback :: (values: ..void) #c_call { }\n"
+                           "cb : (..void) #c_call;\n"
+                           "k :: (v: ..Nope) #c_call { }\n"
+                           "main :: () { }\n"),
+              "1:33: 'void' is only a pointer's target, as in *void\n"
+              "2:24: 'void' is only a pointer's target, as in *void\n"
+              "3:9: 'void' is only a pointer's target, as in *void\n"
+              "4:12: unknown type 'Nope'\n");
+    CHECK_STR(check_module_source(&a,
+                                  "f :: (values: ..int) #compiler;\n"
+                                  "g :: (values: ..void) #compiler;\n"
+                                  "main :: () { a : int = f; }\n"),
+              "1:15: a #compiler procedure can't take '..int', for now\n"
+              "2:17: 'void' is only a pointer's target, as in *void\n"
+              "3:24: 'f' can't be a value: the compiler does it\n");
     arena_free(&a);
 }

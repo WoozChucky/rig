@@ -485,7 +485,8 @@
 //   procedure can't take '..int'"; and a #compiler one can't for now, "a
 //   #compiler procedure can't take '..int', for now". Each at the '..',
 //   once (what C can't take isn't said of the []T too), and the procedure
-//   then has no type, so using it as a value says nothing more.
+//   then has no type, so using a foreign or #c_call one as a value says
+//   nothing more (a #compiler one is never a value anyway).
 // - Its procedure's type says ..T: (first: int, rest: ..int) -> int has
 //   type (int, ..int) -> int, a type of its own (Type.is_variadic), which
 //   neither converts to nor from (int, []int) -> int. A procedure type

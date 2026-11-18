@@ -92,8 +92,9 @@ static Type *resolve_variadic(Checker *c, Ast_Type *element) {
 
 // A '..T' parameter, of type `view` (its []T), that `who` ("a foreign
 // procedure", "a #c_call procedure", "a #compiler procedure") can't take,
-// refused at its '..' with T named as written and `why` after it: "a
-// #c_call procedure can't take '..int'" (issue #150).
+// refused at its '..' with T named in its ..T form (the type_name of the
+// view's element) and `why` after it: "a #c_call procedure can't take
+// '..int'" (issue #150).
 static void report_variadic_refused(Checker *c, Type *view, Position dots, const char *who, const char *why) {
     diag_error(c->diag, dots, "%s can't take '.." STR_FMT "'%s", who, STR_ARG(type_name(c->arena, view->element)),
                why);
