@@ -1,0 +1,31 @@
+l+t
+l+s
+l+l
+bp `constants.rig:20`
+bp `constants.rig:28`
+bp `constants.rig:30`
+bp `constants.rig:33`
+g
+?? LIMIT
+?? RATIO
+?? SMALL
+?? READY
+?? NAME
+?? ORIGIN
+dx PRIMES
+?? GREETING
+?? STEP
+?? HALF
+?? DONE
+?? LABEL
+?? CORNER
+?? TIME_TEXT_MAX
+?? HEAP_ALLOCATOR
+g
+?? LIMIT
+g
+?? LIMIT
+dv /t
+g
+?? LIMIT
+q

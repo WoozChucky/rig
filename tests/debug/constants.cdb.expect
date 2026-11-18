@@ -1,0 +1,38 @@
+20:     i := 1;
+int64 0n12
+double 0.10000000000000000555
+char 0n-5
+bool true
+struct string
++0x000 count            : 0n3
+"rig"
+struct Point
++0x000 x                : 0n3
++0x008 y                : 0n4
+PRIMES           [Type: __int64 [3]]
+[0]              : 2 [Type: __int64]
+[1]              : 3 [Type: __int64]
+[2]              : 5 [Type: __int64]
+unsigned char * 0x
+"hi"
+int64 0n7
+float 1.5
+bool false
+struct string
++0x000 count            : 0n4
+"here"
+struct Point
++0x000 x                : 0n7
++0x008 y                : 0n8
+int64 0n20
+struct Allocator
+28:         y := x + STEP;
+int64 0n12
+30:         z := LIMIT + y;
+int64 0n99
+int64 LIMIT = 0n99
+int64 STEP = 0n7
+33:     print_line(NAME);
+int64 0n12
+!Couldn't resolve error
+!value unavailable

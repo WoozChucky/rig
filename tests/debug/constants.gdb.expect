@@ -1,0 +1,37 @@
+main () at
+constants.rig:20
+i := 1;
+$1 = 12
+$2 = 0.10000000000000001
+type = float64
+$3 = -5 '\373'
+$4 = true
+$5 = {count = 3, data = 0x
+"rig"}
+$6 = {x = 3, y = 4}
+$7 = {2, 3, 5}
+$8 = (u8 *) 0x
+"hi"
+$9 = 7
+$10 = 1.5
+type = float32
+$11 = false
+$12 = {count = 4, data = 0x
+"here"}
+$13 = {x = 7, y = 8}
+$14 = 20
+$15 = {proc = 0x
+<heap_allocator_proc>, data = 0x0}
+constants.rig:28
+y := x + STEP;
+$16 = 12
+constants.rig:30
+z := LIMIT + y;
+$17 = 99
+LIMIT = 99
+STEP = 7
+constants.rig:33
+print_line(NAME);
+$18 = 12
+!optimized out
+!.debug_names not created by gdb
