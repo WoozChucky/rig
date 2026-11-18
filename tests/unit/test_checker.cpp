@@ -4353,7 +4353,8 @@ TEST(only_a_foreign_procedure_is_variadic) {
     // A Rig procedure has no way to reach arguments it doesn't name: '..'
     // stands for C's '...'. The procedure is still variadic for its calls,
     // whose extra arguments no C function receives, so the one mistake
-    // gives one message, whatever they are.
+    // gives one message, whatever they are. A spread into it is refused as
+    // one into C's '..' is, since there's no '..T' parameter to take it.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "f :: (a: int, ..) { }\n"
@@ -4361,10 +4362,13 @@ TEST(only_a_foreign_procedure_is_variadic) {
                            "main :: () {\n"
                            "    v : Vec2;\n"
                            "    s := \"hi\";\n"
+                           "    xs := int.[1, 2];\n"
                            "    f(1, 2, 2.5, null, v, s, .{1, 2}, .[3]);\n"
+                           "    f(1, ..xs);\n"
                            "}\n"),
               "1:15: only a foreign procedure can take C's '..'; "
-              "a Rig procedure takes more arguments as '..T', as in (values: ..int)\n");
+              "a Rig procedure takes more arguments as '..T', as in (values: ..int)\n"
+              "8:10: only the arguments of a '..' parameter can be spread, as in f(..values)\n");
     arena_free(&a);
 }
 
@@ -7101,11 +7105,13 @@ TEST(variadic_arguments_convert_to_the_element_type) {
     // The arguments after the fixed ones each convert to T, as an argument
     // to a T parameter does (an untyped constant and a .{...} take T), and
     // go into a [N]T of the caller's, N from 0: the same through a value.
+    // A '..u8' shows the constant takes T itself, not its default type, int.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "sum :: (first: int, rest: ..int) -> int { return first; }\n"
                           "Vec2 :: struct { x: float; y: float; }\n"
                           "points :: (all: ..Vec2) { }\n"
+                          "bytes :: (rest: ..u8) { }\n"
                           "main :: () {\n"
                           "    b : u8 = 7;\n"
                           "    sum(1, b, 7);\n"
@@ -7113,9 +7119,10 @@ TEST(variadic_arguments_convert_to_the_element_type) {
                           "    points(.{1, 2}, Vec2.{3, 4});\n"
                           "    s := sum;\n"
                           "    s(1, 2);\n"
+                          "    bytes(1, 255);\n"
                           "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
-    Array<Ast *> &body = c.file->procs[2]->body->statements;
+    Array<Ast *> &body = c.file->procs[3]->body->statements;
     Ast_Call *gathers = (Ast_Call *)body[1];
     CHECK_STR(type_name(&a, gathers->args[0]->type), "int");
     CHECK_STR(type_name(&a, gathers->args[1]->type), "u8");
@@ -7133,7 +7140,16 @@ TEST(variadic_arguments_convert_to_the_element_type) {
     Ast_Call *through = (Ast_Call *)body[5];
     CHECK(through->gathered);
     CHECK_STR(type_name(&a, through->gathered), "[1]int");
+    Ast_Call *u8s = (Ast_Call *)body[6];
+    CHECK_STR(type_name(&a, u8s->args[0]->type), "u8");
+    CHECK_STR(type_name(&a, u8s->args[1]->type), "u8");
+    CHECK(u8s->gathered);
+    CHECK_STR(type_name(&a, u8s->gathered), "[2]u8");
     token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "bytes :: (rest: ..u8) { }\n"
+                           "main :: () { bytes(1, 300); }\n"),
+              "2:23: 300 doesn't fit in 'u8'\n");
     arena_free(&a);
 }
 
