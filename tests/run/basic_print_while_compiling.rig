@@ -1,0 +1,26 @@
+// Basic's print (issue #154) while compiling (spec 7.8, 10.8): a top-level
+// #run's print writes to the compiler's standard output, so its line is
+// the build's output, not the program's; and print_to_builder runs in a
+// #run expression, whose builder's count becomes a constant. The same
+// compiled and interpreted.
+#import "Basic";
+
+Vec2 :: struct { x: int; y: int; }
+
+#run print("while compiling: {} {} {}\n", "Ada", 36, Vec2.{1, 2});
+
+LENGTH :: #run length_of_text();
+
+// The number of bytes print_to_builder appends for "x = 1.5".
+length_of_text :: () -> int {
+    b : String_Builder;
+    builder_init(*b, HEAP_ALLOCATOR);
+    print_to_builder(*b, "{} = {}", "x", 1.5);
+    count := b.count;
+    builder_free(*b);
+    return count;
+}
+
+main :: () {
+    print("{} {}\n", LENGTH, Vec2.{3, 4});
+}

@@ -277,4 +277,20 @@ main :: () {
     print_line(numbers);
     free(numbers.data, HEAP_ALLOCATOR);
     builder_free(*f);
+
+    // u64s (issue #154): u64's largest in bases 10 and 2, 255 in base 16,
+    // and a base outside 2 to 36, which appends nothing.
+    w : String_Builder;
+    builder_init(*w, HEAP_ALLOCATOR);
+    append_u64(*w, 18446744073709551615, 10);
+    append_byte(*w, 32);
+    append_u64(*w, 255, 16);
+    append_string(*w, " [");
+    append_u64(*w, 7, 99);
+    append_string(*w, "] ");
+    append_u64(*w, 18446744073709551615, 2);
+    unsigned := builder_to_string(*w, HEAP_ALLOCATOR);
+    print_line(unsigned);
+    free(unsigned.data, HEAP_ALLOCATOR);
+    builder_free(*w);
 }

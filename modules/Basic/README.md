@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, π and C's math functions (roots, trigonometry, exponentials and logarithms, powers, rounding), copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (an arena and a pool, over Preload's heap), a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and printing to standard output (issues #134, #145 and #148).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, π and C's math functions (roots, trigonometry, exponentials and logarithms, powers, rounding), copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (an arena and a pool, over Preload's heap), a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and formatted printing to standard output and to a string builder (issues #134, #145, #148 and #154).
 
 ## Importing it
 
@@ -93,11 +93,12 @@ C's `memmove`, `memset` and `memcmp`, written as byte loops in Rig rather than c
 
 Numbers are written into a buffer the caller gives, and the text comes back as a string viewing the buffer's first bytes, so nothing allocates. A buffer of `INT_TEXT_MAX` or `FLOAT_TEXT_MAX` bytes is always enough; one too short stops at the language's bounds check (unless built with `--no-bounds-checks`). Parsing takes the whole string or nothing: no spaces, prefixes or `_`.
 
-- `INT_TEXT_MAX`: 65, the most bytes `format_int` writes (64 binary digits and a sign).
+- `INT_TEXT_MAX`: 65, the most bytes `format_int` writes (64 binary digits and a sign); `format_u64` writes 64 at most.
 - `FLOAT_TEXT_MAX`: 320, the most bytes `format_float` writes (a sign, 309 digits, a point and 9 decimals).
 - `FLOAT64_LARGEST`: `1.7976931348623157e308`, `float64`'s largest finite value.
 - `digit_value(c: u8) -> int`: 0-9 for `0`-`9`, 10-35 for `a`-`z` and `A`-`Z`, -1 for any other byte.
 - `format_int(buffer: []u8, value: int, base: int) -> string`: writes `value` in a base from 2 to 36, lowercase, with `-` before a negative value; another base writes nothing and gives `""`.
+- `format_u64(buffer: []u8, value: u64, base: int) -> string`: writes `value` as `format_int` does, for a `u64`, which may be above `int`'s largest; another base writes nothing and gives `""`.
 - `parse_int(s: string, base: int) -> int, bool`: reads an optional `+` or `-` and one digit or more of the base, either case; `0, false` for anything else, a value outside `int` or a base outside 2 to 36.
 - `format_float(buffer: []u8, value: float64, decimals: int) -> string`: writes `value` with 0 to 9 decimals (others are clamped), the last rounded half away from zero on the `float64`'s own value, though a value within about a unit in the last place of a tie can round the other way (`1.805` with 2 decimals is `1.81`); `nan`, `inf`, `-inf`, and `-` before any negative value, `-0.0` included. From 1e18 up, 18 leading digits are written, of which only about the first 15 or 16 are the value's, and the rest are zeros.
 - `format_float_word(buffer: []u8, count: int, word: string) -> string`: writes `word` after the `count` bytes already in `buffer` and gives the text written; `format_float`'s `nan` and `inf`.
@@ -155,13 +156,14 @@ An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` h
 
 ## String builder (`builder.rig`)
 
-Text put together a piece at a time, in memory of the builder's own from the allocator it is given, and copied out as one string. When an append doesn't fit, the capacity becomes the larger of 64 and twice the old one, doubled again until it fits, and the memory moves with `resize`. Numbers are written on the stack first, so nothing but the builder's memory is allocated. An allocator that has no memory to give stops the program at the next write, with the language's `null pointer dereference`.
+Text put together a piece at a time, in memory of the builder's own from the allocator it is given, and copied out as one string. `print_to_builder` (`print.rig`) appends formatted text to one. When an append doesn't fit, the capacity becomes the larger of 64 and twice the old one, doubled again until it fits, and the memory moves with `resize`. Numbers are written on the stack first, so the appends allocate nothing but the builder's memory (`print_to_builder` also takes some of the heap's for a moment). An allocator that has no memory to give stops the program at the next write, with the language's `null pointer dereference`.
 
 - `String_Builder`: `allocator: Allocator`, `data: *u8`, `count: int` (the bytes built) and `capacity: int` (the bytes `data` has room for).
 - `builder_init(builder: *String_Builder, allocator: Allocator)`: an empty builder whose memory comes from `allocator`, taken at the first append that needs it.
 - `append_string(builder: *String_Builder, s: string)`: appends the bytes of `s`; an empty or zeroed string appends nothing and takes no memory. `s` may be a view of the builder's own text: when the append grows the builder, the bytes are copied from where they moved to.
 - `append_byte(builder: *String_Builder, byte: u8)`: appends the byte itself, not its number.
 - `append_int(builder: *String_Builder, value: int, base: int)`: appends `value` as `format_int` writes it.
+- `append_u64(builder: *String_Builder, value: u64, base: int)`: appends `value` as `format_u64` writes it.
 - `append_float(builder: *String_Builder, value: float64, decimals: int)`: appends `value` as `format_float` writes it.
 - `append_bool(builder: *String_Builder, value: bool)`: appends `true` or `false`.
 - `builder_to_string(builder: *String_Builder, allocator: Allocator) -> string`: a copy of the text in memory from `allocator`, which the caller gives back with `free(s.data, allocator)`; an empty builder gives the zeroed string (count 0, data null) and allocates nothing.
@@ -290,7 +292,7 @@ A variable of the environment the program was started with, through C's `getenv`
 
 ## Print (`print.rig`)
 
-Everything goes to standard output through C's `putchar`, so it comes out in order with what a program writes with C's `printf`, compiled and interpreted. Bytes are written as they are, so UTF-8 text prints as UTF-8.
+What is written to standard output goes through C's `putchar`, so it comes out in order with what a program writes with C's `printf`, compiled and interpreted. Bytes are written as they are, so UTF-8 text prints as UTF-8. A value of any type is written through its type info (`Any`, spec 3.16). `print_or_append`, `print_quoted`, `print_item` and `print_formatted` take a `builder` and append to it instead, or write to standard output when it is null: Rig has no closures or generics, so a pointer that may be null lets one walk write to either. `print_to_builder` stops on a null one. Written to standard output, nothing is allocated.
 
 - `print_string(s: string)`: writes the bytes of `s`; an empty or zeroed string writes nothing.
 - `print_byte(byte: u8)`: writes the byte itself, not its number.
@@ -298,6 +300,36 @@ Everything goes to standard output through C's `putchar`, so it comes out in ord
 - `print_int(value: int)`: writes `value` in base 10.
 - `print_float(value: float64, decimals: int)`: writes `value` with `decimals` digits after the point, as `format_float` does.
 - `print_line(s: string)`: writes `s` and a line feed.
+- `print_or_append(builder: *String_Builder, s: string)`: writes the bytes of `s` to `builder`, or to standard output when it is null.
+- `print_quoted(builder: *String_Builder, s: string)`: writes `s` in double quotes, with the escapes below.
+- `print_item(builder: *String_Builder, item: Any, nested: bool)`: writes the value `item` holds, as below; `nested` says it is inside a struct, an array, a view or `{!EXTRA: ...}`, where a string is quoted.
+- `print_formatted(builder: *String_Builder, format: string, args: []Any)`: writes `format` with each `{}` replaced by the next of `args`, as below; `print` and `print_to_builder` are it.
+- `print(format: string, args: ..Any)`: writes `format` to standard output with its `{}`s replaced by the arguments, in order: `print("{} is {}\n", name, age)`. A `[]Any` already made is forwarded with `..`, as in `print(format, ..args)`; passed without it, it is one argument, a view.
+- `print_to_builder(builder: *String_Builder, format: string, args: ..Any)`: appends what `print` would write to `builder`, and writes nothing to standard output. A null `builder` stops the program with `null pointer dereference`, whatever the format. The format and the arguments may view the builder's own text, as `append_string`'s `s` may: the text is written into a builder of its own first, on the heap whatever `builder`'s allocator, and then appended at once, and the heap's memory is freed before it returns. So an arena's builder keeps nothing more, and a pool's needs no second slot.
+
+The format, read left to right:
+
+- `{}` takes the next argument and writes it; a string argument is its bytes, braces included, which are no format.
+- `{{` writes `{`, and `}}` writes `}`. A `}` on its own is written as it is, so `}}}` is `}}`, and `{{}` is `{` and then a lone `}`.
+- Any other `{` begins a placeholder this version doesn't know, as `{x}` or `{:x}`: the bytes from it to the next `}`, or to the end of the format when there's none, are written as `{!BAD}` and take no argument. So `{a{b}` is one `{!BAD}`, and format options are free to mean something later.
+- A `{}` with no argument left writes `{!MISSING}`.
+- Arguments left over are written after the text as ` {!EXTRA: 4, "x"}`, each as inside a struct, so a string is quoted, separated by `, `.
+
+The format is a value the compiler doesn't read, as C's isn't (spec 7.6), so a count that doesn't match writes a marker and never stops the program. What can't convert to `Any` (spec 3.16) can't be an argument: `print("{}\n", .["a", "b"])` is refused, since the literal's type isn't known. `print` works in a `#run` too, its output the compiler's (spec 7.8, 10.8).
+
+How each value is written:
+
+- **Integers:** in base 10, by their type's sign, `u64` across its whole range; a `u8` is a number, not a byte.
+- **Floats:** a `float32` is widened to `float64`; then 6 decimals, as `format_float` writes them, with the trailing zeros removed down to one: `1.5`, `0.1`, `3.0`, `-0.0`, `100.0`; `nan`, `inf`, `-inf`. So a value below 0.0000005 in magnitude is `0.0` (or `-0.0`), and from 1e18 up only about the first 15 or 16 digits are the value's (`format_float`).
+- **`bool`:** `true` or `false`.
+- **Strings:** at the top, their bytes, as `print_string` writes them. Nested, in double quotes with Rig's escapes (spec 2.10: `\n`, `\t`, `\r`, `\0`, `\\`, `\"`), any other byte below 32, and 127, as `\x` and two lowercase hex digits, as Rig's messages write C names (spec 7.6), and bytes from 128 as they are, so UTF-8 stays readable: `{name = "Ada\n"}`.
+- **Pointers:** `null`, or the address in lowercase hexadecimal after `0x`, unpadded. A pointer isn't followed, and a `*u8` is a pointer, not a C string.
+- **Procedure values:** as pointers. Interpreted, a Rig procedure's address is the interpreter's stand-in (spec 10.8), so its text differs from the compiled program's, as every address does from run to run.
+- **Structs:** `{x = 1, y = 2}`, fields in order, named; nested, `{from = {x = 1, y = 2}, to = {x = 3, y = 4}}`; a struct with no fields `{}`.
+- **Arrays and views:** `[1, 2, 3]`; empty, or a view with a count of 0 or less, `[]`. A view with null data and a count above 0 stops the program with `null pointer dereference` before any of it is written, as indexing it would (spec 8.4). A string with null data and a count above 0 stops where its first byte is read, after its opening `"` when it is nested.
+- **`Any`**, as a field or an element: the value it holds, written as that field or element would be. A zeroed `Any`, whose type is null, as a zeroed struct's `Any` field is, writes `null`.
+- **`void`:** a description of `void`, which only an `Any` made by hand can hold, writes `void`; a tag that isn't one of the nine writes nothing.
+- **Cycles:** a pointer isn't followed, but a view's data and an `Any`'s `value_pointer` are, so a view or an `Any` that reaches a value it is part of makes a cycle: a struct whose view field views an array holding it (`nodes[0].kids = nodes;`), the struct an `Any` is a field of (`h.a = h;`), the array it is an element of (`arr[0] = arr;`), or anything that contains it deeper down. That one is written by recursing until the stack runs out, as recursion that never ends does: interpreted, `stack overflow`; compiled, the program crashes, and what C still buffers of its output is lost. It is the program's mistake, and isn't caught.
 
 ## Waiting on the language
 
@@ -308,5 +340,4 @@ What Basic would do differently once Rig has it:
 - No way for a struct to take in another's fields, as Jai's `using` does, so both kinds of table entry repeat the fields of `Table_Entry_Header`, and the code they share reads an entry's start through it.
 - No enums, so a table entry's states and a file's modes are constants.
 - No command-line arguments: a program's start doesn't keep them for Rig code to read (#152).
-- No formatted `print` yet (#154): a line is printed a piece at a time, with `print_string`, `print_int` and the rest.
 - No context (#156), so a procedure that allocates takes its allocator as an argument, and the file procedures copy a path for C into memory from the heap, since most of their signatures take no allocator (`read_entire_file`'s is for the file's contents).

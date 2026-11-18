@@ -1,0 +1,23 @@
+Ada is 36
+1.5 true {x = 1, y = 2}
+{} { } }
+{}
+}}
+{!BAD} {!BAD} 7
+{!BAD} 1
+1 {!MISSING}
+1| {!EXTRA: 4, "x", {x = 1, y = 2}}
+tail {!BAD} {!EXTRA: 9}
+a {!BAD}
+{!BAD}
+123
+[]
+{}
+["a", "b"]
+forwarded and 2
+[1, "x"] {!MISSING}
+printf, in order
+5 and 6
+built: 1 + 2 = 3 ! x {!MISSING}
+own text: 178 bytes
+01234567890123456789012345678901234567890123456789abcdefgh{}01234567890123456789012345678901234567890123456789abcdefgh01234567890123456789012345678901234567890123456789abcdefgh{}

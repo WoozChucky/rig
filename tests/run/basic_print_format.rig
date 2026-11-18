@@ -1,0 +1,116 @@
+// Basic's print (issue #154): the format's placeholders, {} and the
+// escaped braces {{ and }}, a lone }, and the markers for what doesn't
+// match, {!BAD}, {!MISSING} and {!EXTRA: ...}, at the format's edges too;
+// an argument's braces, which are no format; arguments forwarded with ..,
+// and a []Any passed whole, as one argument; output in order with C's
+// printf; and print_to_builder, which appends the same text to a string
+// builder. The same compiled and interpreted.
+#import "Basic";
+
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Vec2 :: struct { x: int; y: int; }
+
+// Forwards its arguments to print, spread with .., so each is one of
+// print's.
+log :: (format: string, args: ..Any) {
+    print(format, ..args);
+}
+
+// Passes its arguments to print as they came, a []Any, so they are one
+// argument of print's, written as a view.
+whole :: (format: string, args: ..Any) {
+    print(format, args);
+}
+
+main :: () {
+    name := "Ada";
+    age := 36;
+    print("{} is {}\n", name, age);
+    print("{} {} {}\n", 1.5, true, Vec2.{1, 2});
+
+    // Braces: escaped, a lone }, and {{} as { and then a lone }.
+    print("{{}} {{ }} }\n");
+    print("{{}\n");
+    print("}}}\n");
+
+    // A placeholder this version doesn't know takes no argument, and runs
+    // to the next }, or to the format's end.
+    print("{x} {:x} {}\n", 7);
+    print("{a{b} {}\n", 1);
+
+    // Counts that don't match.
+    print("{} {}\n", 1);
+    print("{}|", 1, 4, "x", Vec2.{1, 2});
+    print("\n");
+    print("tail {", 9);
+    print("\n");
+    print("a {b");
+    print("\n");
+    print("{");
+    print("\n");
+
+    // An empty format, a format of placeholders alone, an empty argument,
+    // and an argument whose braces are its bytes, not a format.
+    print("");
+    print("{}{}{}", 1, 2, 3);
+    print("\n");
+    print("[{}]\n", "");
+    print("{}\n", "{}");
+    print("{}\n", string.["a", "b"]);
+
+    log("{} and {}\n", "forwarded", 2);
+    whole("{} {}\n", 1, "x");
+
+    // Basic and C write through the same stdout buffer.
+    printf("printf, in order\n");
+    print("{}", 5);
+    print_string(" and ");
+    printf("%d", cast(s32) 6);
+    print("\n");
+
+    // print_to_builder appends, and writes nothing to standard output: the
+    // builder's text comes after "built: ", which is printed once the
+    // appends are done.
+    b : String_Builder;
+    builder_init(*b, HEAP_ALLOCATOR);
+    print_to_builder(*b, "{} + {} = {}", 1, 2, 3);
+    print_to_builder(*b, " {}", "!");
+    print_to_builder(*b, " {} {}", "x");
+    built := builder_to_string(*b, HEAP_ALLOCATOR);
+    print_string("built: ");
+    print_line(built);
+    free(built.data, HEAP_ALLOCATOR);
+
+    // The format and an argument may both view the builder's own text, 60
+    // bytes that end in a slot. Writing 118 more grows the builder past its
+    // 64 bytes. Its memory comes from poison_allocator_proc, which fills
+    // memory with # as it moves it, so text read from where it was shows.
+    poisoned : String_Builder;
+    builder_init(*poisoned, Allocator.{poison_allocator_proc, null});
+    for 1..5 { append_string(*poisoned, "0123456789"); }
+    append_string(*poisoned, "abcdefgh{}");
+    own : string;
+    own.data = poisoned.data;
+    own.count = poisoned.count;
+    print_to_builder(*poisoned, own, own);
+    all : string;
+    all.data = poisoned.data;
+    all.count = poisoned.count;
+    print("own text: {} bytes\n{}\n", all.count, all);
+    builder_free(*poisoned);
+    builder_free(*b);
+}
+
+// The heap, but a resize copies to new memory and fills the old with #
+// before it frees it, so nothing can read moved text and find it intact.
+poison_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode != RESIZE {
+        return heap_allocator_proc(mode, size, old_size, old_memory, data);
+    }
+    memory := alloc(size, HEAP_ALLOCATOR);
+    copy_memory(memory, old_memory, min_int(old_size, size));
+    set_memory(old_memory, 35, old_size); // '#'
+    free(old_memory, HEAP_ALLOCATOR);
+    return memory;
+}

@@ -1,0 +1,18 @@
+// Basic's print (issue #154) given a string, nested in a struct, whose
+// count says it has bytes but whose data is null: print_quoted stops with
+// the language's null pointer dereference (spec 8.4) where its first byte
+// is read, after the opening quote is written, at the line of print.rig
+// that basic_print_null_string.err names. Edit one, edit the other. At
+// the top, not nested, the same string stops in print_string's for,
+// before any of it is written.
+#import "Basic";
+
+Text :: struct { s: string; }
+
+main :: () {
+    s : string;
+    s.count = 2;
+    print("before\n");
+    print("{}\n", Text.{s});
+    print("not reached\n");
+}
