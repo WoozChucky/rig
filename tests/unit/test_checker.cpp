@@ -7491,3 +7491,166 @@ TEST(a_global_may_hold_a_description_a_constant_cant) {
               "3:39: the value of constant 'K' isn't known while compiling\n");
     arena_free(&a);
 }
+
+// The value a statement `show(v);` passes, its one argument; the statement
+// must be such a call.
+static Ast *shown_value(Ast *statement) {
+    RIG_ASSERT(statement->kind == AST_CALL && ((Ast_Call *)statement)->args.count == 1);
+    return ((Ast_Call *)statement)->args[0];
+}
+
+// The procedure `name`'s body, in a tree that has it.
+static Array<Ast *> body_of(Ast_File *tree, const char *name) {
+    Ast *proc = top_level_named(tree, name);
+    RIG_ASSERT(proc->kind == AST_PROC);
+    return ((Ast_Proc *)proc)->body->statements;
+}
+
+TEST(converting_to_any_takes_a_place_or_makes_a_copy) {
+    // A value going where an Any goes keeps its own type, and is marked
+    // with how the Any will hold it: a place (a variable, a field through a
+    // pointer, a view's element) gives its own address; anything else, a
+    // parameter and a loop's iterator included, is copied. An untyped
+    // constant takes its default type first (int, float32), null is a
+    // *void, and a value of type Any converts as itself.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Vec2 :: struct { x: int; y: int; }\n"
+                                 "show :: (a: Any) { }\n"
+                                 "make :: () -> int { return 1; }\n"
+                                 "twice :: (k: int) { show(k); }\n"
+                                 "main :: () {\n"
+                                 "    n := 42;\n"
+                                 "    v := Vec2.{1, 2};\n"
+                                 "    p := *v;\n"
+                                 "    xs : []int = .[1, 2];\n"
+                                 "    a : Any = n;\n"
+                                 "    show(n);\n"
+                                 "    show(p.x);\n"
+                                 "    show(xs[1]);\n"
+                                 "    show(5);\n"
+                                 "    show(1.5);\n"
+                                 "    show(null);\n"
+                                 "    show(make());\n"
+                                 "    show(Vec2.{3, 4});\n"
+                                 "    show(make);\n"
+                                 "    show(a);\n"
+                                 "    for xs { show(it); }\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    Array<Ast *> body = body_of(tree, "main");
+    CHECK_EQ(body.count, 16);
+    if (body.count != 16) {
+        arena_free(&a);
+        return;
+    }
+    CHECK_EQ(body[4]->kind, AST_VAR);
+    Ast *declared = ((Ast_Var *)body[4])->value;
+    CHECK_EQ(declared->to_any, ANY_PLACE);
+    CHECK_STR(type_name(&a, declared->type), "int");
+    struct {
+        Ast_Any to_any;
+        const char *type;
+    } shown[] = {
+        {ANY_PLACE, "int"},        // show(n);
+        {ANY_PLACE, "int"},        // show(p.x);
+        {ANY_PLACE, "int"},        // show(xs[1]);
+        {ANY_COPY, "int"},         // show(5);
+        {ANY_COPY, "float32"},     // show(1.5);
+        {ANY_COPY, "*void"},       // show(null);
+        {ANY_COPY, "int"},         // show(make());
+        {ANY_COPY, "Vec2"},        // show(Vec2.{3, 4});
+        {ANY_COPY, "() -> int"},   // show(make);
+        {ANY_NONE, "Any"},         // show(a);
+    };
+    for (s64 i = 0; i < (s64)(sizeof shown / sizeof shown[0]); i++) {
+        Ast *value = shown_value(body[5 + i]);
+        CHECK_EQ(value->to_any, shown[i].to_any);
+        CHECK_STR(type_name(&a, value->type), shown[i].type);
+    }
+    CHECK_EQ(body[15]->kind, AST_FOR);
+    Ast *it = shown_value(((Ast_For *)body[15])->body->statements[0]);
+    CHECK_EQ(it->to_any, ANY_COPY);
+    CHECK_STR(type_name(&a, it->type), "int");
+    Ast *k = shown_value(body_of(tree, "twice")[0]);
+    CHECK_EQ(k->to_any, ANY_COPY);
+    CHECK_STR(type_name(&a, k->type), "int");
+    arena_free(&a);
+}
+
+TEST(a_literal_holding_an_any_is_no_constant_data) {
+    // 5 converted to an Any is still the constant 5, but the Any holds its
+    // address, a copy's in the procedure's frame: no constant can hold it
+    // (spec 4.2), and a global's value can't be one, for now (spec 4.3),
+    // whether in a literal's field or alone, or cast to Any.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "Holder :: struct { a: Any; }\n"
+                                     "HELD :: Holder.{a = 5};\n"
+                                     "held := Holder.{a = 5};\n"
+                                     "any : Any = 7;\n"
+                                     "CAST :: cast(Any) 5;\n"
+                                     "main :: () { }\n"),
+              "2:21: a constant's pointer can only be null or a string literal's address\n"
+              "3:21: a global's value must be known while compiling, for now\n"
+              "4:13: a global's value must be known while compiling, for now\n"
+              "5:9: a constant's pointer can only be null or a string literal's address\n");
+    // In a literal cast to its own type, which a constant takes when its
+    // values are known, the value converted is the one said so, as it is
+    // without the cast.
+    CHECK_STR(check_with_preload(&a, "Holder :: struct { a: Any; }\n"
+                                     "C :: cast(Holder) Holder.{a = 5};\n"
+                                     "D :: cast(Holder) Holder.{a = cast(Any) 5};\n"
+                                     "main :: () { }\n"),
+              "2:31: a constant's pointer can only be null or a string literal's address\n"
+              "3:31: a constant's pointer can only be null or a string literal's address\n");
+    arena_free(&a);
+}
+
+TEST(a_cast_to_any_is_no_constant) {
+    // cast(Any) e is e's conversion to Any (spec 3.14), for any value: a
+    // constant, a pointer and a procedure value too, which casts to other
+    // types refuse. The cast is an Any, never a constant, though its value
+    // may be one.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "main :: () {\n"
+                                 "    a := cast(Any) 5;\n"
+                                 "    p := cast(Any) *a;\n"
+                                 "    f := cast(Any) helper;\n"
+                                 "}\n"
+                                 "helper :: () { }\n",
+                                 &tree),
+              "");
+    Array<Ast *> body = body_of(tree, "main");
+    const char *types[] = {"int", "*Any", "()"};
+    CHECK_EQ(body.count, 3);
+    for (s64 i = 0; i < body.count && i < 3; i++) {
+        CHECK_EQ(body[i]->kind, AST_VAR);
+        Ast *cast = ((Ast_Var *)body[i])->value;
+        CHECK_EQ(cast->kind, AST_CAST);
+        if (cast->kind != AST_CAST) continue;
+        CHECK_STR(type_name(&a, cast->type), "Any");
+        CHECK(!cast->is_constant);
+        Ast *value = ((Ast_Cast *)cast)->value;
+        CHECK_EQ(value->to_any, ANY_COPY);
+        CHECK_STR(type_name(&a, value->type), types[i]);
+    }
+    arena_free(&a);
+}
+
+TEST(several_results_dont_convert_to_any) {
+    // a, b = f(); converts no result to an Any, for now (the maintainer's
+    // choice; a later issue may add it): the result is no node to mark.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "f :: () -> int, int { return 1, 2; }\n"
+                                     "main :: () {\n"
+                                     "    a : Any;\n"
+                                     "    b : int;\n"
+                                     "    a, b = f();\n"
+                                     "}\n"),
+              "5:5: a value of type 'int' doesn't convert to 'Any' implicitly\n");
+    arena_free(&a);
+}

@@ -174,8 +174,12 @@ Type *check_operand(Checker *c, Ast *e);
 // doesn't report it again. .{...} takes the struct type `to`, its values
 // checked against its fields here ("a '.{' literal needs a struct type, not
 // 'int'" for any other, also counted as converting); .[...] an array type,
-// or a view type, becoming then an array of its own count. True also when
-// either type is unknown (null): the error was reported already.
+// or a view type, becoming then an array of its own count. Any value
+// converts to Preload's Any (spec 3.16), keeping its own type: Ast.to_any
+// says whether the Any holds the value's own address or a copy's, and a
+// literal without its type is reported, as check_default_type reports it.
+// True also when either type is unknown (null): the error was reported
+// already.
 bool check_convert(Checker *c, Ast *e, Type *to);
 
 // "a value of type 'A' doesn't convert to 'B' implicitly", at the value.

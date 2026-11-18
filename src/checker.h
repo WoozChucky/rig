@@ -667,6 +667,35 @@
 //   integer), or in a literal or a view's array, a cast of such a literal
 //   or a field of one included: the linker writes its address there, as a
 //   string literal's (type_info_address).
+// - Every value converts to Preload's Any, wherever a value goes into
+//   something of a known type (check_convert): a declaration with a type,
+//   an assignment, an argument, a '..Any' one included, a return, a field
+//   or an element of a literal. The value keeps its own type, and
+//   Ast.to_any says how the Any holds it: a place's own address
+//   (expr_is_place: a variable, p.x, xs[1]), or else a copy's, in a
+//   temporary of the procedure's (a constant, a call's result, a
+//   parameter, a loop's iterator). A value of type Any goes as itself.
+// - A value whose type comes from where it goes takes its default one
+//   first: an untyped constant an int or a float32, null a *void. A literal
+//   without its type has none: "this literal's type isn't known; write it
+//   before the '.', as in Vec2.{1, 2}" (int.[1, 2] for .[...]). What isn't
+//   a value keeps its own message ("'Vec2' is a type, not a value",
+//   "'greet' returns nothing, so it has no value").
+// - Only Any itself: a [2]int doesn't convert to a []Any, nor a *int to a
+//   *Any, and nothing converts from an Any but to Any ("a value of type
+//   'Any' doesn't convert to 'int' implicitly"): the program reads one
+//   through its fields, as (cast(*int) a.value_pointer).* when a.type ==
+//   type_info(int). cast(Any) e is e's conversion, for any value, a
+//   pointer and a procedure value included, never a constant.
+// - A constant can't hold a converted Any, though its value may be a
+//   constant: the Any holds the value's address, "a constant's pointer can
+//   only be null or a string literal's address", at the value (or its
+//   cast to Any). Nor can a global's value, for now: "a global's value
+//   must be known while compiling, for now". A literal holding one is no
+//   constant data (constant_data).
+// - a, b = f(); converts no result to an Any, for now: "a value of type
+//   'int' doesn't convert to 'Any' implicitly", at the target, as for any
+//   other type a result doesn't convert to.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

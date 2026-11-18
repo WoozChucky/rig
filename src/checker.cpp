@@ -408,9 +408,22 @@ static void check_var(Checker *c, Ast_Var *var) {
 // string's bytes are the global's own copy as well (lower.cpp's
 // string_copy_global), where a written literal's stay read-only.
 //
+// A value converted to an Any (Ast.to_any, spec 3.16) isn't known, for
+// now, though it may be a constant: the Any holds the value's address, a
+// place's or a copy's, which only the code doing the conversion gives it
+// for now, and a global's value runs none. "a global's value must be known
+// while compiling, for now", at the value, in a literal too (any : Any =
+// 7;, Holder.{a = 5}).
+//
 // A value that needs a #run with no value says nothing more: the #run's
 // failure, or the errors in what it reaches, were said (has_failed_run).
 static bool check_global_value(Checker *c, Ast *value) {
+    if (value->to_any != ANY_NONE) {
+        if (!has_failed_run(value)) {
+            diag_error(c->diag, value->start, "a global's value must be known while compiling, for now");
+        }
+        return false;
+    }
     if (value->is_constant) return true;
     if (!value->type) return false;  // a value inside a literal whose own error was reported
     if (value->kind == AST_LITERAL && type_is_aggregate(value->type)) {
@@ -433,9 +446,11 @@ static void check_global_var(Checker *c, Ast_Var *var) {
 }
 
 // Whether e is known while compiling, as a literal's value of constant
-// data must be (constant_data).
+// data must be (constant_data). A value converted to an Any isn't, though
+// it may be a constant: the Any holds its copy's address.
 static bool is_known(Ast *e) {
     Ast *data;
+    if (e->to_any != ANY_NONE) return false;
     return e->is_constant || procedure_address(e) || literal_address(e) || type_info_address(e) ||
            constant_data(e, &data);
 }
@@ -455,17 +470,27 @@ static bool part_of_mistyped(Ast *e) {
     return whole->kind != AST_LITERAL || whole->type != t;
 }
 
+// Whether e is a value converted to an Any (Ast.to_any), or a cast of one
+// to Any (cast(Any) 5): an Any, holding an address only the code doing the
+// conversion gives it (spec 3.16), which no constant can hold.
+static bool holds_converted_any(Ast *e) {
+    return e->to_any != ANY_NONE || (e->kind == AST_CAST && ((Ast_Cast *)e)->value->to_any != ANY_NONE);
+}
+
 // The first value inside e, which isn't known while compiling, that isn't
 // either: through a cast, a field's struct, an element's array or string,
 // and a literal's values, to the first that isn't (spec 4.2), so in
 // cast(Holder) Holder.{n = count} or int.[1, count][0] it's count. e
-// itself when none of them is: what it's made of is known, but not it.
-// Null for a value with no type, whose own error was reported, and for a
-// field or an element of a part a literal gave the wrong type, reported
-// too (part_of_mistyped).
+// itself when none of them is: what it's made of is known, but not it,
+// and when it's converted to an Any (holds_converted_any): the 5 in
+// cast(Holder) Holder.{a = 5}, cast(Any) 5 as a whole. Null for a value
+// with no type, whose own error was reported, and for a field or an
+// element of a part a literal gave the wrong type, reported too
+// (part_of_mistyped).
 static Ast *unknown_part(Ast *e) {
     for (;;) {
         if (!e->type || part_of_mistyped(e)) return nullptr;
+        if (holds_converted_any(e)) return e;
         Ast *inner = nullptr;
         if (e->kind == AST_CAST) inner = ((Ast_Cast *)e)->value;
         if (e->kind == AST_MEMBER) inner = ((Ast_Member *)e)->operand;
@@ -483,12 +508,18 @@ static Ast *unknown_part(Ast *e) {
 
 // "the value of constant 'N' isn't known while compiling", at `value`, the
 // constant's own value or a value inside it, or at the first value inside
-// that isn't (unknown_part). Nothing when it needs a #run with no value,
-// whose failure was said (has_failed_run).
+// that isn't (unknown_part). A value converted to an Any is "a constant's
+// pointer can only be null or a string literal's address" instead, as it
+// is where check_constant_value meets it. Nothing when it needs a #run
+// with no value, whose failure was said (has_failed_run).
 static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value) {
     if (has_failed_run(value)) return;
     Ast *part = unknown_part(value);
     if (!part) return;
+    if (holds_converted_any(part)) {
+        diag_error(c->diag, part->start, "a constant's pointer can only be null or a string literal's address");
+        return;
+    }
     diag_error(c->diag, part->start, "the value of constant '" STR_FMT "' isn't known while compiling",
                STR_ARG(constant->name));
 }
@@ -521,6 +552,10 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 //   anything else isn't known.
 // - A procedure value is a procedure (procedure_address) or null.
 // - A number or a bool is is_constant.
+// - A value converted to an Any, or cast to one (holds_converted_any, spec
+//   3.16), is first of all "a constant's pointer can only be null or a
+//   string literal's address": the Any holds its address, though the
+//   value may be a constant, or a #run's.
 // A value with no type had its own error, reported: nothing more is said.
 // Nor about a value that didn't convert to its slot's type, or a literal
 // whose values didn't all meet a field or an element (too many, a field
@@ -531,6 +566,12 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 // failure was said. A baked array literal gives all its elements, but of
 // no size: none (run.cpp's bake_elements).
 static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Type *t) {
+    if (holds_converted_any(value)) {
+        if (!has_failed_run(value)) {
+            diag_error(c->diag, value->start, "a constant's pointer can only be null or a string literal's address");
+        }
+        return false;
+    }
     if (value->kind == AST_RUN && (t->kind != TYPE_VIEW || !((Ast_Run *)value)->value)) {
         return ((Ast_Run *)value)->value != nullptr;
     }

@@ -80,6 +80,13 @@ enum Ast_Kind : u8 {
     AST_TYPE_INFO,     // Ast_Type_Info: type_info(T)
 };
 
+// How a value becomes an Any where the checker converts it (spec 3.16).
+enum Ast_Any : u8 {
+    ANY_NONE,   // it doesn't: its own type is where it goes (an Any included)
+    ANY_PLACE,  // a place (expr_is_place): the Any holds its own address
+    ANY_COPY,   // anything else: the Any holds the address of a copy in a temporary
+};
+
 struct Ast {
     Ast_Kind kind;
     Position pos;      // where messages about the node point: its first token, but an
@@ -89,6 +96,7 @@ struct Ast {
                        // value points here (ast_new sets it to pos, the parser
                        // moves it left for operators, calls and parentheses)
     Type *type;        // filled in by the checker; null until then, or after an error
+    Ast_Any to_any;    // set by check_convert; the value keeps its own type
     bool is_constant;  // the checker knows the value while compiling, one scalar (spec 5.9); never
                        // set for data (a string, a struct, an array: Ast_Const.is_data)
     u64 constant;      // that value's bits: an integer's sign-extended to 64 bits when its

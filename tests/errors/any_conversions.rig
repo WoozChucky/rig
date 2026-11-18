@@ -1,0 +1,28 @@
+// What can't become an Any, and what an Any doesn't become (issue #153,
+// spec 3.16): a literal without its type, what isn't a value, an array
+// or a pointer of other elements, and anything from an Any without a
+// cast. A constant can't hold a converted Any, nor can a global's value.
+#import "Compiler";
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+Vec2 :: struct { x: int; y: int; }
+Holder :: struct { a: Any; }
+show :: (a: Any) { }
+greet :: () { }
+HELD :: Holder.{a = 5};
+held := Holder.{a = 5};
+any : Any = 7;
+
+main :: () {
+    show(.{1, 2});
+    show(.[1, 2]);
+    show(main);
+    show(Vec2);
+    show(greet());
+    show(printf);
+    show(create_workspace);
+    ints := int.[1, 2];
+    view : []Any = ints;
+    p : *Any = *ints[0];
+    a : Any = 5;
+    n : int = a;
+}

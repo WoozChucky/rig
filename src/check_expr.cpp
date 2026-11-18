@@ -327,10 +327,14 @@ bool constant_data(Ast *e, Ast **value) {
         if (!literal->is_data) {
             bool known = true;
             for (s64 i = 0; i < literal->values.count && known; i++) {
+                // A value converted to an Any is none, though it may be a
+                // constant: the Any holds an address in the procedure's
+                // frame (spec 3.16).
                 Ast *part = literal->values[i];
                 Ast *ignored;
-                known = part->is_constant || procedure_address(part) || literal_address(part) ||
-                        type_info_address(part) || constant_data(part, &ignored);
+                known = part->to_any == ANY_NONE &&
+                        (part->is_constant || procedure_address(part) || literal_address(part) ||
+                         type_info_address(part) || constant_data(part, &ignored));
             }
             literal->is_data = known ? 1 : -1;
         }
@@ -447,9 +451,31 @@ static void convert_array_literal(Checker *c, Ast_Literal *literal, Type *to) {
     check_element_values(c, literal, to->element);
 }
 
+// e, of a type other than Any, going where an Any goes (check_convert,
+// spec 3.16). Every value converts, keeping its own type; e->to_any says
+// how the Any will hold it, for lowering and for the checks of constants
+// and globals: a place's own address (expr_is_place), or a copy's, in a
+// temporary of the procedure's. A value whose type comes from where it
+// goes takes its default one first: an untyped constant an int or a
+// float32, null a *void. A literal without its type has none to take
+// ("this literal's type isn't known; write it before the '.', as in
+// Vec2.{1, 2}", check_default_type), and is left with no type.
+static void convert_to_any(Checker *c, Ast *e) {
+    if (e->type == &type_null) e->type = type_pointer_to(&type_void);
+    check_default_type(c, e);
+    if (!e->type) return;
+    e->to_any = expr_is_place(e) ? ANY_PLACE : ANY_COPY;
+}
+
 bool check_convert(Checker *c, Ast *e, Type *to) {
     Type *from = e->type;
     if (!from || !to) return true;
+    // Any value converts to Preload's Any (spec 3.16), which only Any
+    // itself does: nothing converts from it, nor to a []Any or a *Any.
+    if (to == c->any_type && from != to) {
+        convert_to_any(c, e);
+        return true;
+    }
     // .{...} takes the struct type it meets, and its values are checked
     // against that struct's fields now, nested .{...} included. Any other
     // type has no fields to give it: reported here, as a constant that
@@ -1661,6 +1687,8 @@ static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to
 // - A procedure value to or from *void: check_proc_cast.
 // - A string to a []u8 and a []u8 to a string: the same view, retyped
 //   (spec 3.14), the same bytes (is_bytes_retyped).
+// - Any value to Preload's Any: its conversion (check_convert, spec 3.16),
+//   never a constant.
 // - Anything else casts only where it converts implicitly: to its own
 //   type, null to a pointer, an array to a view of it, or a string literal,
 //   or constant data holding one (is_literal_string, spec 3.8), to *u8.
@@ -1677,6 +1705,14 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
     if (cast->is_trunc && !integers) {
         diag_error(c->diag, cast->pos, "cast,trunc only takes integers");
         return nullptr;
+    }
+    if (to == c->any_type && from != to) {
+        // Any value's conversion to Any (spec 3.16), a pointer's and a
+        // procedure value's too, which the cases below would refuse. The
+        // Any holds an address, so it's no constant, its value's constant
+        // or not.
+        check_convert(c, value, to);
+        return value->type ? to : nullptr;
     }
     if (from->kind == TYPE_PROC || to->kind == TYPE_PROC) return check_proc_cast(c, cast, from, to);
     if (type_is_number(from) && type_is_number(to) && !integers) return check_float_cast(c, cast, to);
