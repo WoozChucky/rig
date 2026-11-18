@@ -613,14 +613,14 @@ static bool source_named_rig(String path) {
 // report (build), and a build program may be given it, as it isn't a build
 // option. Returns the exit code; 2 with the usage for a malformed line (two
 // files, -o with no name or an empty one, -o twice, --no-bounds-checks
-// twice, --quiet twice, or rig check's --stdin-for anywhere,
-// -o's name included: a build is of the files on disk, and the word is a
-// mistake for rig check, not a file's name). With no file, it builds
-// build.rig in the current directory, the build program's usual name (spec
-// 7.9), and says when there's none (exit 1). A source not ending in .rig is
-// refused (source_named_rig), and so is an output ending in .rig: it's a
-// mistake for the source's name, and the linker would overwrite the source
-// with the program.
+// twice, --quiet twice, or rig check's --stdin-for anywhere, -o's name
+// included: a build is of the files on disk, and the word is a mistake for
+// rig check, not a file's name). With no file, it builds build.rig in the
+// current directory, the build program's usual name (spec 7.9), and says
+// when there's none (exit 1). A source not ending in .rig is refused
+// (source_named_rig), and so is an output ending in .rig: it's a mistake
+// for the source's name, and the linker would overwrite the source with the
+// program.
 int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
     for (s64 i = 0; i < words.count; i++) {
         if (string_eq(words[i], str("--stdin-for"))) {
@@ -679,14 +679,14 @@ int command_build(Arena *a, Array<String> words, void (*print_usage)()) {
 // doesn't load the --stdin-for file or loads it only in an #if branch not
 // taken, or a file isn't named .rig (as rig build refuses it,
 // source_named_rig: the main file's name first, then the --stdin-for
-// one's), else 0; 2 for a malformed line (no file, two files,
-// --stdin twice, --stdin-for with no name or an empty one, twice, or with
-// --stdin, or -o: check writes nothing, so there is no output to name, nor
+// one's), else 0; 2 for a malformed line (no file, two files, --stdin
+// twice, --stdin-for with no name or an empty one, twice, or with --stdin,
+// or -o: check writes nothing, so there is no output to name, nor
 // --no-bounds-checks: it is the program's, which is never lowered, not a
-// #run's code's, nor --quiet: check prints no report to leave out), with the
-// usage. The word after --stdin-for is its
-// file whatever it is, as -o's is its output: in --stdin-for --stdin, the
-// file is named --stdin, which isn't a .rig file.
+// #run's code's, nor --quiet: check prints no report to leave out), with
+// the usage. The word after --stdin-for is its file whatever it is, as -o's
+// is its output: in --stdin-for --stdin, the file is named --stdin, which
+// isn't a .rig file.
 //
 // It runs rig build's first steps, loading and checking (Compilation), and
 // stops: the program isn't lowered, LLVM and the linker aren't involved,

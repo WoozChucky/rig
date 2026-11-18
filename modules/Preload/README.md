@@ -49,7 +49,7 @@ main :: () {
 
 There is one description per type, so `a.type == type_info(int)` tells types apart by address. `int` and `s64` are two types with two descriptions, the same in all but their addresses; `float` is `float32`. The compiler writes the descriptions in the program's read-only data, only for the types the program uses and those they reach, and in the interpreter's memory for `#run`. Writing one is a memory error no check catches (spec 8.6).
 
-The tags, a `Type_Info`'s `tag`, numbered as Jai's are:
+A `Type_Info`'s `tag` is one of these tags, which are numbered as Jai's are:
 
 - `TYPE_INFO_INTEGER` 0, `TYPE_INFO_FLOAT` 1, `TYPE_INFO_BOOL` 2, `TYPE_INFO_STRING` 3, `TYPE_INFO_POINTER` 4, `TYPE_INFO_PROCEDURE` 5, `TYPE_INFO_VOID` 6, `TYPE_INFO_STRUCT` 7, `TYPE_INFO_ARRAY` 8.
 

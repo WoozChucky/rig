@@ -1968,8 +1968,8 @@ static void fold_constant_part(Ast *part, Type *t) {
 // literal gives (zero when it leaves it out, constant_data), and a string's,
 // its byte, a u8. So it folds, as a constant's name does: N :: PRIMES[2];
 // can size an array. An aggregate element, or a pointer to a string
-// literal's bytes or a procedure, stays a part of the data, read where it's
-// used.
+// literal's bytes, a procedure or a type's description, stays a part of the
+// data, read where it's used.
 static Type *check_index(Checker *c, Ast_Index *ix) {
     Type *t = check_operand(c, ix->operand);
     Type *index = check_operand(c, ix->index);
@@ -2130,8 +2130,8 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
 // number, a bool or null: the value its literal gives, or zero when it
 // leaves it out, or leaves out the struct holding it (constant_data). So it
 // folds, as a constant's name does: ORIGIN.y, LINE.b.y, Vec2.{5, 6}.y. An
-// aggregate field, or a pointer to a string literal's bytes or a procedure,
-// stays a part of the data, read where it's used.
+// aggregate field, or a pointer to a string literal's bytes, a procedure or
+// a type's description, stays a part of the data, read where it's used.
 static Type *check_member(Checker *c, Ast_Member *m) {
     Type *t = check_operand(c, m->operand);
     if (!t) return nullptr;
