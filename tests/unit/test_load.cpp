@@ -1159,11 +1159,12 @@ static const char *module_file(Arena *a, String place, const char *module, const
 }
 
 // load_program on dir/main.rig, holding `text`, with `places` as the
-// places #import looks in.
+// places #import looks in. Preload is left out, unless `preload`: then
+// it's imported as rig imports it, from those places.
 static Ast_File *load_main_importing(Arena *a, Diagnostics *d, String dir, const char *text,
-                                     const Module_Places *places) {
+                                     const Module_Places *places, bool preload = false) {
     write_source(a, dir, "main.rig", text);
-    Load_Options options = no_preload_options();
+    Load_Options options = preload ? Load_Options{} : no_preload_options();
     options.modules = places;
     return load_program(a, d, str(in_directory(a, dir, "main.rig")), str(text), &options);
 }
@@ -2310,30 +2311,20 @@ static Module_Places preload_places(Arena *a, String dir, const char *text) {
     return places;
 }
 
-// load_program on dir/main.rig, holding `text`, with `places`, Preload
-// imported as rig imports it.
-static Ast_File *load_main_with_preload(Arena *a, Diagnostics *d, String dir, const char *text,
-                                        const Module_Places *places) {
-    write_source(a, dir, "main.rig", text);
-    Load_Options options = {};
-    options.modules = places;
-    return load_program(a, d, str(in_directory(a, dir, "main.rig")), str(text), &options);
-}
-
 TEST(preload_comes_first_in_load_order) {
     // The main file is file 0, Preload file 1, then the files the main file
     // loads and imports, in the order they're met: the reading order. In
     // load order Preload comes first, then the main file and the rest, so
-    // its global is the first, and its top-level #run runs before the main
-    // file's.
+    // its global comes before the main file's, and its top-level #run runs
+    // before the main file's.
     Arena a = arena_make();
     Diagnostics d = {};
     String dir = load_test_directory(&a, "preload_comes_first_in_load_order");
     Module_Places places = preload_places(&a, dir, "preloaded :: 1;\n#run {}\n");
     write_source(&a, dir, "b.rig", "b :: () {}\n");
     write_module(&a, places.places[0], "Alpha", "alpha :: () {}\n");
-    Ast_File *tree =
-        load_main_with_preload(&a, &d, dir, "#run {}\n#load \"b.rig\";\n#import \"Alpha\";\nmain :: () {}\n", &places);
+    Ast_File *tree = load_main_importing(
+        &a, &d, dir, "mained :: 0;\n#run {}\n#load \"b.rig\";\n#import \"Alpha\";\nmain :: () {}\n", &places, true);
     CHECK_STR(messages(&a, &d), "");
     CHECK_EQ(tree->load_failure.count, 0);
     const char *read[4] = {
@@ -2353,10 +2344,12 @@ TEST(preload_comes_first_in_load_order) {
         }
         CHECK(d.files[1].in_module);
     }
-    CHECK_EQ(tree->globals.count, 1);
-    if (tree->globals.count == 1) {
+    CHECK_EQ(tree->globals.count, 2);
+    if (tree->globals.count == 2) {
         CHECK_STR(((Ast_Const *)tree->globals[0])->name, "preloaded");
         CHECK_EQ(tree->globals[0]->pos.file, 1);
+        CHECK_STR(((Ast_Const *)tree->globals[1])->name, "mained");
+        CHECK_EQ(tree->globals[1]->pos.file, 0);
     }
     CHECK_EQ(tree->runs.count, 2);
     if (tree->runs.count == 2) {
@@ -2375,7 +2368,7 @@ TEST(preload_wins_a_clash) {
     Diagnostics d = {};
     String dir = load_test_directory(&a, "preload_wins_a_clash");
     Module_Places places = preload_places(&a, dir, "preloaded :: 1;\n");
-    Ast_File *tree = load_main_with_preload(&a, &d, dir, "preloaded :: 2;\nmain :: () {}\n", &places);
+    Ast_File *tree = load_main_importing(&a, &d, dir, "preloaded :: 2;\nmain :: () {}\n", &places, true);
     CHECK_STR(messages(&a, &d), "");
     CHECK(!check(tree, &a, &d));
     String expected = string_printf(&a, "1:1: 'preloaded' is already declared at %s:1:1\n",
@@ -2403,7 +2396,7 @@ TEST(preload_wins_a_clash_with_the_files_it_loads) {
     String branch = str(module_file(&a, places.places[0], "Preload", "branch.rig"));
     CHECK(os_write_file(more, str("loaded :: 1;\n")));
     CHECK(os_write_file(branch, str("branched :: 1;\n")));
-    Ast_File *tree = load_main_with_preload(&a, &d, dir, "loaded :: 2;\nbranched :: 2;\nmain :: () {}\n", &places);
+    Ast_File *tree = load_main_importing(&a, &d, dir, "loaded :: 2;\nbranched :: 2;\nmain :: () {}\n", &places, true);
     CHECK_STR(messages(&a, &d), "");
     const s32 order[4] = {3, 0, 1, 2};
     CHECK_EQ(d.files.count, 4);
@@ -2437,7 +2430,7 @@ TEST(preload_and_the_main_file_load_an_unreadable_file) {
     CHECK(os_make_directory(x));
     String text = string_printf(&a, "#load \"%s\";\nmain :: () {}\n",
                                 absolute_in_a_string(&a, dir, "first/Preload/x.rig"));
-    load_main_with_preload(&a, &d, dir, string_cstr(&a, text), &places);
+    load_main_importing(&a, &d, dir, string_cstr(&a, text), &places, true);
     CHECK_EQ(d.files.count, 2);
     CHECK_EQ(d.messages.count, 1);
     if (d.messages.count == 1) check_cannot_read(&a, &d.messages[0], 0, 1, 7, x);
@@ -2454,7 +2447,7 @@ TEST(preload_imported_or_loaded_again_reads_nothing_more) {
     Module_Places places = preload_places(&a, dir, "preloaded :: 1;\n");
     String text = string_printf(&a, "#import \"Preload\";\n#load \"%s\";\nmain :: () {}\n",
                                 absolute_in_a_string(&a, dir, "first/Preload/module.rig"));
-    Ast_File *tree = load_main_with_preload(&a, &d, dir, string_cstr(&a, text), &places);
+    Ast_File *tree = load_main_importing(&a, &d, dir, string_cstr(&a, text), &places, true);
     CHECK_STR(messages(&a, &d), "");
     CHECK_EQ(d.files.count, 2);
     CHECK_EQ(tree->loads.count, 2);
@@ -2609,7 +2602,7 @@ TEST(unreadable_preload_stops_the_loading) {
     Module_Places places = preload_places(&a, dir, nullptr);
     CHECK(os_make_directory(str(in_directory(&a, dir, "first/Preload"))));
     CHECK(os_make_directory(str(in_directory(&a, dir, "first/Preload/module.rig"))));
-    Ast_File *tree = load_main_with_preload(&a, &d, dir, "main :: () {}\n", &places);
+    Ast_File *tree = load_main_importing(&a, &d, dir, "main :: () {}\n", &places, true);
     String start = string_printf(&a, "cannot read '%s': ", module_file(&a, places.places[0], "Preload", "module.rig"));
     CHECK(tree->load_failure.count > start.count);
     if (tree->load_failure.count > start.count) {

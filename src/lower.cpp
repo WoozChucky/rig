@@ -128,26 +128,27 @@
 //   (lower_index_address, lower_bounds_failed). #no_abc and rig build
 //   --no-bounds-checks leave the check out; a pointer's index is never
 //   checked (C's p[i]), only its null.
-// - An array becomes a view where the checker said it converts (spec
-//   5.17): a view of the array itself when it's a place, so a procedure
-//   given it changes it, or when it's a constant or a part of one, its
-//   read-only global; otherwise of a temporary of the view's own, the array
-//   copied into it once it's worked out (lower_view_of, view_of_copy). A
-//   literal is built element by element in a temporary of its own, and a
-//   view never sees that temporary, nor a call's result's: running the same
-//   place again in a loop can't rebuild what an old view still reads. A
-//   call's '..' arguments one by one (spec 5.10) are built the same way,
-//   into a [N]T temporary of their own, but the callee's view sees it: it
-//   is filled before the call and read by it alone. The language promises it
-//   only until the end of the statement holding the call (here it is a slot
-//   of the caller's frame, filled again each time the call runs), so a view
-//   kept longer may see it rebuilt or dangle, as one of any temporary does.
-//   A spread, ..e, is an array or a view argument as any other
+// - An array becomes a view where the checker said it converts (spec 5.17):
+//   a view of the array itself when it's a place, so a procedure given it
+//   changes it, or when it's a constant or a part of one, its read-only
+//   global; otherwise of a temporary of the view's own, the array copied
+//   into it once it's worked out (lower_view_of, view_of_copy). A literal is
+//   built element by element in a temporary of its own, and a view never
+//   sees that temporary, nor a call's result's: running the same place again
+//   in a loop can't rebuild what an old view still reads. A call's '..'
+//   arguments one by one (spec 5.10) are built the same way, into a [N]T
+//   temporary of their own, but the callee's view sees it: it is filled
+//   before the call and read by it alone. It is a slot of the caller's
+//   frame, one per call lowered (a call in deferred code is lowered at each
+//   way out, and gets one each time), filled again each time the call runs
+//   (lower_variadic_argument), so a view kept past the call may see it
+//   rebuilt, or dangle once the caller returns; the language promises it
+//   only until the end of the statement holding the call (spec 5.10). A
+//   spread, ..e, is an array or a view argument as any other
 //   (lower_variadic_argument). for over an array, a view or a string takes
 //   its data and count once, then counts an index up to the count
-//   (lower_for_sequence). A global view of a
-//   literal, or of an array constant, points at a global array of its own
-//   (constant_bytes).
+//   (lower_for_sequence). A global view of a literal, or of an array
+//   constant, points at a global array of its own (constant_bytes).
 // - A string (spec 3.8) is a view of bytes, laid out as one: s[i], .count,
 //   .data and for are a view's. A literal's bytes are a constant global of
 //   their own, str.N, one per literal however often it's reached

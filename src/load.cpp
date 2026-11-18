@@ -159,15 +159,15 @@ struct Loading {
     Ast_File *tree;
     // What the loading alone needs is in an arena of its own, freed at its
     // end: the directory rig runs in, each #load's path and key (the tables
-    // keep the keys of the files first seen), the places #import looks in
-    // and what it finds there, and the system's reasons for failing. d
-    // keeps copies of what it needs of them (diag_add_file,
-    // diag_locate_file, diag_error).
+    // keep the keys of the files first seen), the places #import and
+    // add_preload look in and what they find there, and the system's
+    // reasons for failing. d keeps copies of what it needs of them
+    // (diag_add_file, diag_locate_file, diag_error).
     Arena arena;
     String directory;
     Seen_Files seen;
-    // The places #import looks in, which also say which files are a
-    // module's (in_a_place): the main file's too.
+    // The places #import and add_preload look in, which also say which
+    // files are a module's (in_a_place): the main file's too.
     const Module_Places *places;
     // The file given with its text (rig check --stdin-for), when there's
     // one (substitute), known by its key as any file is, so it's found
@@ -193,7 +193,7 @@ struct Loading {
 // seen, with its index, which it returns. When it's the Compiler module's
 // module.rig, the program reaches the module there: at `named_at`, the
 // #import or #load that first named it, or at the file's own 1:1 when
-// that's null (the main file, a further file).
+// that's null (the main file, Preload's module.rig, a further file).
 static s32 add_file(Loading *l, String path, String text, File_Key key, const Position *named_at) {
     Diagnostics *d = l->d;
     s32 added = diag_add_file(d, path, text);

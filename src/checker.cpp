@@ -130,7 +130,7 @@ static void check_c_part(Checker *c, Type *t, Position at, const char *who, bool
         return;
     }
     if (t->kind == TYPE_PROC && !t->is_c_call) {
-        Type *marked = type_proc_of(t->params, t->param_count, t->results, t->result_count, true, t->is_variadic);
+        Type *marked = type_proc_of(t->params, t->param_count, t->results, t->result_count, true, false);
         diag_error(c->diag, at, "%s can't %s a '" STR_FMT "', which isn't #c_call; C can call a '" STR_FMT "'", who,
                    verb, STR_ARG(type_name(c->arena, t)), STR_ARG(type_name(c->arena, marked)));
         return;
