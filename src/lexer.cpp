@@ -134,7 +134,7 @@ static const Keyword KEYWORDS[] = {
     {"return", TOKEN_RETURN}, {"struct", TOKEN_STRUCT}, {"enum", TOKEN_ENUM},
     {"union", TOKEN_UNION},   {"cast", TOKEN_CAST},     {"defer", TOKEN_DEFER},
     {"using", TOKEN_USING},   {"true", TOKEN_TRUE},     {"false", TOKEN_FALSE},
-    {"null", TOKEN_NULL},
+    {"null", TOKEN_NULL},     {"context", TOKEN_CONTEXT}, {"push_context", TOKEN_PUSH_CONTEXT},
 };
 
 // A name with bytes from 0x80 up in it: UTF-8 letters, as in função, which

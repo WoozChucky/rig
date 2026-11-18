@@ -51,6 +51,7 @@ enum Keyword_Group : u8 {
     KEYWORDS_CAST,      // keyword.other.cast.rig
     KEYWORDS_OTHER,     // keyword.other.rig: the rest
     KEYWORDS_CONSTANT,  // constant.language.rig: the keywords that are values
+    KEYWORDS_VARIABLE,  // variable.language.rig: a keyword that names a variable, the context
     KEYWORD_GROUP_COUNT
 };
 
@@ -58,7 +59,7 @@ enum Keyword_Group : u8 {
 // enum without its name here gets a null one, which check_grammar_groups
 // reports.
 static const char *const KEYWORD_GROUP_NAMES[KEYWORD_GROUP_COUNT] = {
-    "KEYWORDS_CONTROL", "KEYWORDS_STORAGE", "KEYWORDS_CAST", "KEYWORDS_OTHER", "KEYWORDS_CONSTANT",
+    "KEYWORDS_CONTROL", "KEYWORDS_STORAGE", "KEYWORDS_CAST", "KEYWORDS_OTHER", "KEYWORDS_CONSTANT", "KEYWORDS_VARIABLE",
 };
 
 struct Keyword_Scope {
@@ -75,7 +76,7 @@ static const Keyword_Scope KEYWORD_SCOPES[] = {
     {"return", KEYWORDS_CONTROL}, {"defer", KEYWORDS_CONTROL},    {"struct", KEYWORDS_STORAGE},
     {"enum", KEYWORDS_STORAGE},   {"union", KEYWORDS_STORAGE},    {"cast", KEYWORDS_CAST},
     {"using", KEYWORDS_OTHER},    {"true", KEYWORDS_CONSTANT},    {"false", KEYWORDS_CONSTANT},
-    {"null", KEYWORDS_CONSTANT},
+    {"null", KEYWORDS_CONSTANT},  {"context", KEYWORDS_VARIABLE}, {"push_context", KEYWORDS_CONTROL},
 };
 
 // ---------------------------------------------------------------------------

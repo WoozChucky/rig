@@ -3790,3 +3790,60 @@ TEST(misplaced_default_values) {
     CHECK_STR(errors, "1:16: expected an expression, found ')'\n");
     arena_free(&a);
 }
+
+// Issue #156: the context (spec 7.10, 6.13).
+
+TEST(parses_context_and_push_context) {
+    // context is a primary expression, as null is: its fields read and
+    // assigned, its address taken. push_context is a statement, an
+    // expression and a block; what the expression may be is the checker's
+    // to say.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a,
+                        "a := context.allocator; p := *context; context.allocator = b; push_context other { f(); } "
+                        "push_context make() { } push_context .{allocator = b} { }",
+                        &errors),
+              "(block (var a _ (member (context) allocator)) (var p _ (unary * (context))) "
+              "(assign = (member (context) allocator) (name b)) (push_context (name other) (block (call f))) "
+              "(push_context (call make) (block)) (push_context (literal _ (allocator (name b))) (block)))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(push_context_is_only_in_a_body) {
+    // As defer: only a body has a block to run with another context, so at
+    // the top level it's refused at the keyword, a broken entry with no
+    // name, and the parser goes on with the next declaration.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "push_context c { }\nmain :: () { }\n", &errors),
+              "(broken)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:1: push_context can only be in a body\n");
+    arena_free(&a);
+}
+
+TEST(context_is_no_name) {
+    // context and push_context are keywords: no constant, field, parameter
+    // or variable takes either name, and no field is reached by it. Each is
+    // the parser's message for a keyword where a name goes.
+    Arena a = arena_make();
+    struct Case {
+        const char *source;
+        const char *errors;
+    };
+    const Case cases[] = {
+        {"context :: 1;", "1:1: expected identifier, found 'context'\n"},
+        {"S :: struct { context: int; }", "1:15: expected a field's name, found 'context'\n"},
+        {"f :: (context: int) { }", "1:14: expected ')', found ':'\n"},
+        {"g :: () { context := 1; }", "1:19: expected ';', found ':='\n"},
+        {"h :: () { push_context := 1; }", "1:24: expected an expression, found ':='\n"},
+        {"k :: (s: S) { n := s.context; }", "1:22: expected a field's name, found 'context'\n"},
+    };
+    for (const Case &c : cases) {
+        String errors;
+        parse_src(&a, string_cstr(&a, string_printf(&a, "%s\nmain :: () { }\n", c.source)), &errors);
+        CHECK_STR(errors, c.errors);
+    }
+    arena_free(&a);
+}

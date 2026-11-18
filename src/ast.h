@@ -78,6 +78,8 @@ enum Ast_Kind : u8 {
     AST_DEFER,         // Ast_Defer: defer statement;  defer { ... }
     AST_SPREAD,        // Ast_Spread: ..e, a view spread into a '..T' parameter
     AST_TYPE_INFO,     // Ast_Type_Info: type_info(T)
+    AST_CONTEXT,       // a plain Ast: context
+    AST_PUSH_CONTEXT,  // Ast_Push_Context: push_context e { ... }
 };
 
 // How a value becomes an Any where the checker converts it (spec 3.16).
@@ -541,6 +543,14 @@ struct Ast_If_Directive : Ast {
 // is left, by any way out (spec 6.12). pos is the 'defer'.
 struct Ast_Defer : Ast {
     Ast *statement;  // any statement but a declaration; an Ast_Block for defer { ... }
+};
+
+// push_context e { ... }: the block runs with e as its context (spec 6.13).
+// pos is the 'push_context'.
+struct Ast_Push_Context : Ast {
+    Ast *context;      // a Context: a place's own address is pushed, anything else a copy
+    Ast_Block *block;
+    bool is_place;     // context is a place (checker.cpp's check_push_context, expr_is_place)
 };
 
 // The systems a program can be built for (spec 2.5, 4.9), numbered as the

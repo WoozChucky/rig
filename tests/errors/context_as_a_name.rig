@@ -1,0 +1,10 @@
+// context and push_context are keywords (issue #156, spec 2.6): no
+// constant, field, parameter or variable takes either name, and no field
+// can be reached by it.
+context :: 1;
+S :: struct { context: int; }
+f :: (context: int) { }
+g :: () { context := 1; }
+h :: () { push_context := 1; }
+k :: (s: S) { n := s.context; }
+main :: () { }

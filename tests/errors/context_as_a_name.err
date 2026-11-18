@@ -1,0 +1,18 @@
+tests/errors/context_as_a_name.rig:4:1: error: expected identifier, found 'context'
+    context :: 1;
+    ^
+tests/errors/context_as_a_name.rig:5:15: error: expected a field's name, found 'context'
+    S :: struct { context: int; }
+                  ^
+tests/errors/context_as_a_name.rig:6:14: error: expected ')', found ':'
+    f :: (context: int) { }
+                 ^
+tests/errors/context_as_a_name.rig:7:19: error: expected ';', found ':='
+    g :: () { context := 1; }
+                      ^
+tests/errors/context_as_a_name.rig:8:24: error: expected an expression, found ':='
+    h :: () { push_context := 1; }
+                           ^
+tests/errors/context_as_a_name.rig:9:22: error: expected a field's name, found 'context'
+    k :: (s: S) { n := s.context; }
+                         ^

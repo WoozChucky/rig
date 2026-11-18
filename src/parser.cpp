@@ -369,6 +369,11 @@ static Ast *parse_primary(Parser *p) {
     case TOKEN_NULL:
         advance(p);
         return ast_new<Ast>(p->arena, AST_NULL, t->pos);
+    case TOKEN_CONTEXT:
+        // The current context (spec 7.10): a keyword, so no declaration takes
+        // the name. Where it may be is the checker's to say.
+        advance(p);
+        return ast_new<Ast>(p->arena, AST_CONTEXT, t->pos);
     case TOKEN_DOT:
         if (peek(p, 1)->kind == TOKEN_LBRACE || peek(p, 1)->kind == TOKEN_LBRACKET) {
             Token *dot = advance(p);
@@ -1145,8 +1150,26 @@ static Ast *parse_defer(Parser *p) {
     return d;
 }
 
+// push_context = 'push_context' expression block
+//
+// The block runs with the expression as its context (spec 6.13), and
+// leaving it, by any way out, goes back to the one before. The expression is
+// a whole one, which the block's '{' ends, as a while's condition is; that
+// it's a Context is the checker's to say. Only a body has a block to run, so
+// it's a statement of a body: at the top level parse_declaration refuses it,
+// as it refuses defer.
+static Ast *parse_push_context(Parser *p) {
+    Token *keyword = advance(p);
+    Ast_Push_Context *push = ast_new<Ast_Push_Context>(p->arena, AST_PUSH_CONTEXT, keyword->pos);
+    push->context = parse_expression(p, 1);
+    if (!push->context) return nullptr;
+    push->block = parse_block(p);
+    return push->block ? push : nullptr;
+}
+
 // statement = declaration | multi_var | assignment | return | block
-//           | if | if_directive | while | for | 'break' ';' | 'continue' ';' | defer | expression ';'
+//           | if | if_directive | while | for | 'break' ';' | 'continue' ';' | defer | push_context
+//           | expression ';'
 //
 // A keyword starts most of them, and #if an if_directive
 // (parse_if_directive), whose branches are blocks of statements here. A
@@ -1168,6 +1191,7 @@ static Ast *parse_statement(Parser *p) {
     case TOKEN_BREAK:
     case TOKEN_CONTINUE: return parse_jump(p);
     case TOKEN_DEFER: return parse_defer(p);
+    case TOKEN_PUSH_CONTEXT: return parse_push_context(p);
     default: break;
     }
     if (is_directive(t, "if")) return parse_if_directive(p, false);
@@ -1955,7 +1979,10 @@ static Ast *parse_run(Parser *p) {
 // body", at the keyword, rather than "expected identifier". The recovery
 // then gives it a broken entry with no name, as any failed declaration,
 // unless a declaration comes later on the same line (`defer f :: () {}`):
-// defer is then a stray token, and f is read.
+// defer is then a stray token, and f is read. A push_context is a
+// statement too, whose block runs with another context: at the top level
+// it's "push_context can only be in a body", at the keyword, with the same
+// recovery.
 static bool variable_follows(Parser *p, s64 open);
 
 static Ast *parse_declaration(Parser *p) {
@@ -1964,6 +1991,10 @@ static Ast *parse_declaration(Parser *p) {
     if (is_load_or_import(peek(p))) return parse_load(p);
     if (peek(p)->kind == TOKEN_DEFER) {
         diag_error(p->diag, peek(p)->pos, "defer can only be in a body");
+        return nullptr;
+    }
+    if (peek(p)->kind == TOKEN_PUSH_CONTEXT) {
+        diag_error(p->diag, peek(p)->pos, "push_context can only be in a body");
         return nullptr;
     }
     Token *name = expect(p, TOKEN_IDENT);

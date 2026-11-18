@@ -155,6 +155,14 @@ TEST(keywords_are_not_identifiers) {
     lexed_free(l);
 }
 
+TEST(context_and_push_context_are_keywords) {
+    // Issue #156: the context's two keywords (spec 2.6). A longer name
+    // that starts with one is a name.
+    Lexed *l = lex_text("context push_context contexts push_contexts");
+    CHECK_KINDS(l, TOKEN_CONTEXT, TOKEN_PUSH_CONTEXT, TOKEN_IDENT, TOKEN_IDENT, TOKEN_EOF);
+    lexed_free(l);
+}
+
 TEST(integer_literals) {
     Lexed *l = lex_text("0 42 0xFF 0b101 1_000_000 18446744073709551615");
     CHECK_KINDS(l, TOKEN_INT, TOKEN_INT, TOKEN_INT, TOKEN_INT, TOKEN_INT, TOKEN_INT, TOKEN_EOF);
