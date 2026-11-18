@@ -24,7 +24,7 @@
 - **Both hosts for every commit:** Windows before it is pushed, Linux right after. The debugger tests must PASS, not SKIP.
   - **Windows** (PowerShell, cwd `C:\dev\rig-wt\172`): `$env:RIG_LLVM_DIR = 'C:\dev\rig\deps\llvm-windows'; cmd /c "C:\dev\rig-wt\172\build.bat"`, then `.\bin\unit-tests.exe` and `.\bin\run-tests.exe`.
   - **Linux** (WSL, `~/rig-wt/172`): if missing, `git -C ~/rig fetch origin && git -C ~/rig worktree add ~/rig-wt/172 issue/172-debug-constants`. Each step is a bash script in the scratchpad run with `wsl -e bash -lc "tr -d '\r' < /mnt/c/.../NAME.sh | bash"`. Push first, then `git pull -q --ff-only`, then `RIG_LLVM_DIR=$HOME/rig/deps/llvm-linux ./build.sh && bin/unit-tests && bin/run-tests`.
-  - Whenever `tests/` changes: `node editors/vscode/test/check.js` (Linux: `$(ls -d ~/.vscode-server/bin/*/node | head -1) editors/vscode/test/check.js`); it reads `tests/run` and `tests/build` only, but runs anyway.
+  - Whenever `tests/` changes: `node editors/vscode/test/check.js` (Linux: `$(ls -d ~/.vscode-server/bin/*/node | head -1) editors/vscode/test/check.js`); it reads `tests/run`, `tests/build` and `tests/errors` (not `tests/debug`), but runs anyway.
   - Before the final review, the `release` builds too (`build.bat release`, `./build.sh release`), each followed by both test programs.
 - **Work flow:**
   - Branch `issue/172-debug-constants`, worktree `C:\dev\rig-wt\172`. This plan is its first commit (`docs/superpowers/plans/2026-11-18-debug-constants.md`). Push it and open a draft PR at once: `Fixes #172`, labels `compiler` and `enhancement`, milestone `7: Tools`. Push after each commit.
@@ -34,11 +34,11 @@
 
 ## Facts (verified at 04203d9, the same tree as 3cec8fe after the history rewrite)
 
-1. **Constants in the tree** (`ast.h:206-223`): `Ast_Const` has `name`, `value`, `proc` (names a procedure), `is_data` (string, struct, array, a pointer to a string literal, a `#run`'s view), `data`; a number, `bool` or `null` sets the node's own `is_constant` and `constant` (`ast.h:87-92`: an integer's bits sign- or zero-extended to 64, a bool's 0 or 1, a float's as a double's bits, a `float32`'s too). Its `type` is `type_untyped_int` or `type_untyped_float` (`types.h:194`, `207`) when untyped, and, for `N :: null;` (which checks today), presumably `type_null`: Task 1's first test pins what it is shown as, `*void`. Top-level ones are in `Ast_File.globals` with the global variables (`ast.h:544`).
-2. **Lowering** (`lower.cpp`): `Lowering` (`270-330`, `global_index` at `276`, `on_demand` at `323`); `new_scope` (`409`), `add_local_var` (`416`), `hides_a_variable` (`426`, a global variable, a parameter, an outer local); `lower_statement` (`2220`): `AST_VAR` starts a scope when it hides (`2226-2250`), `case AST_CONST: break;` (`2254`); `lower_multi_var` (`2143`); `read_only_global` (`2564`), `constant_global` (`2589`, keyed by the constant's node, made at a use's first need); `ir_lower` (`3040`): global variables (`3073`), procedures, bodies, then the helpers (`3093`); `release_lowering` (`3028`). `constant_bytes` writes a pointer to a literal as a relocation (`literal_address`, `check_expr.cpp:259`, follows casts and `.data`).
-3. **IR** (`ir.h`): the debug comment (`89-156`); `Ir_Var_Kind` (`352`: `IR_VAR_SLOT`, `IR_VAR_ADDRESS`), `Ir_Var` (`361`), `Ir_Module` (`410`). `ir.cpp`: `ir_var_kind_name` (`461`), `out_proc_debug` (`472`, the `; var` lines), `print_module` (`498`).
-4. **Backend** (`llvm_backend.cpp`): the debug comment (`585-635`); `debug_type` (`1020` on); `declare_variables` (`1433`, a storage loop assuming `IR_VAR_SLOT` or `IR_VAR_ADDRESS` at `1443-1452`, the records at the end of the entry block); `build_body` (`1512`, calls `declare_variables` at `1572`, has `globals`); each Rig global's `DIGlobalVariable` (`1860-1875`); `LLVMDIBuilderFinalize` (`1917`), which finalises every subprogram.
-5. **Tests:** `lower_source` (`helpers.cpp:172`); `ir_print_debug`, `proc_ir`, `count_of` in `test_ir.cpp`; `llvm_text` (`test_llvm.cpp:170`), `line_with` (`1182`), `attached` (`1194`), `node_line` (`1203`), `defined_node` (`1470`). Debugger tests: `tests/debug/NAME.rig` with `NAME.gdb`, `NAME.cdb` and their `.expect` (runner header `tests/runner.cpp:170-200`; pieces in order, `!` for text never printed). `bin/unit-tests NAME` runs the tests whose name holds NAME; `bin/run-tests` runs all and prints `PASS tests/debug/NAME`.
+1. **Constants in the tree** (`ast.h:206-223`): `Ast_Const` has `name`, `value`, `proc` (names a procedure), `is_data` (string, struct, array, a pointer to a string literal, a `#run`'s view), `data`; a number, `bool` or `null` sets the node's own `is_constant` and `constant` (`ast.h:87-92`: an integer's bits sign- or zero-extended to 64, a bool's 0 or 1, a float's as a double's bits, a `float32`'s too). Its `type` is `type_untyped_int` or `type_untyped_float` (`types.h:194`, `207`) when untyped, and, for `N :: null;` (which checks today), `type_null` (`check_expr.cpp:2088`): Task 1's first test pins what it is shown as, `*void`. Top-level ones are in `Ast_File.globals` with the global variables (`ast.h:544`).
+2. **Lowering** (`lower.cpp`): `Lowering` (`270-330`, `global_index` at `276`, `on_demand` at `323`); `new_scope` (`409`), `add_local_var` (`416`), `hides_a_variable` (`426`, a global variable, a parameter, an outer local); `lower_statement` (`2220`): `AST_VAR` starts a scope when it hides (`2223-2247`), `case AST_CONST: break;` (`2254`); `lower_multi_var` (`2143`); `read_only_global` (`2564`), `constant_global` (`2589`, keyed by the constant's node, made at a use's first need); `ir_lower` (`3040`): global variables (`3073`), procedures, bodies, then the helpers (`3093`); `release_lowering` (`3028`). The three `Ir_Var{...}` initializers (`417`, `2991`, `3002`) list every field: a new last field needs a trailing `0` in each, or `-Wextra`'s `-Wmissing-field-initializers` warns (checked with the pinned clang). `constant_bytes` writes a pointer to a literal as a relocation (`literal_address`, `check_expr.cpp:259`, follows casts and `.data`).
+3. **IR** (`ir.h`): the debug comment (`89-156`); `Ir_Var_Kind` (`352`: `IR_VAR_SLOT`, `IR_VAR_ADDRESS`), `Ir_Var` (`361`), `Ir_Module` (`410`). `ir.cpp`: `ir_var_kind_name` (`461`), `out_proc_debug` (`472`, the `; var` lines; it takes no module today), `print_module` (`498`), `ir_print_debug` (`573`).
+4. **Backend** (`llvm_backend.cpp`): the debug comment (`585-635`); `debug_type` (`1082`, over `debug_type_at` at `1019`, which asserts on a type no variable has: `type_null` and the untyped types must be mapped first); `declare_variables` (`1433`, a storage loop assuming `IR_VAR_SLOT` or `IR_VAR_ADDRESS` at `1441-1452`, the records at the end of the entry block, the record loop at `1482`); `build_body` (`1512`, sets `body.globals`, read by `llvm_global(body, n)`, before it calls `declare_variables` at `1572`); each Rig global's `DIGlobalVariable` (`1860-1875`, its comment saying a `const.N` gets none); `LLVMDIBuilderFinalize` (`1917`), which finalises every subprogram (nothing calls `LLVMDIBuilderFinalizeSubprogram` earlier).
+5. **Tests:** `lower_source` (`helpers.cpp:172`, no loader: a unit test's program imports nothing, Preload included); `ir_print_debug` (`src/ir.cpp`), `proc_ir` (`test_ir.cpp:126`), `count_of` (`helpers.cpp:247`); `llvm_text` (`test_llvm.cpp:170`), `line_with` (`1182`), `attached` (`1194`), `node_line` (`1203`), `defined_node` (`1470`). Debugger tests: `tests/debug/NAME.rig` with `NAME.gdb`, `NAME.cdb` and their `.expect` (runner header `tests/runner.cpp:170-200`; pieces in order, `!` for text never printed). `bin/unit-tests NAME` runs the tests whose name holds NAME; `bin/run-tests` runs all and prints `PASS tests/debug/NAME`.
 6. **Today:** spec 10.7 ends the Variables bullet "Constants are not variables: a debugger doesn't see them"; `CONTRIBUTING.md:73` says the same; `README.md:99` and `editors/vscode/README.md:128` list what a debugger shows.
 
 ## Evidence (what the plan settles, and how)
@@ -85,7 +85,7 @@ The maintainer settled all three questions as below (Q1: every constant; Q2: `fl
 - Modify: `src/ir.h` (debug comment `89-156`, `Ir_Var_Kind` `352`, `Ir_Var` `361`, `Ir_Module` `410`)
 - Modify: `src/ir.cpp` (`ir_var_kind_name` `461`, `out_proc_debug` `472`, `print_module` `498`)
 - Modify: `src/lower.cpp` (header comment's constants bullet `33-47`, `Lowering`, `hides_a_variable`, `lower_statement`, `ir_lower`, `release_lowering`)
-- Modify: `src/llvm_backend.cpp:1443-1452` (skip the new kinds until Task 2)
+- Modify: `src/llvm_backend.cpp` (`declare_variables`' storage loop `1441-1452` and record loop `1482`: skip the new kinds until Task 2)
 - Modify: `docs/rig-spec.md` sections 4.2 (the storage paragraph) and 10.3 (the "String literals and constants' data" bullet)
 - Test: `tests/unit/test_ir.cpp`
 
@@ -93,7 +93,7 @@ The maintainer settled all three questions as below (Q1: every constant; Q2: `fl
 - Produces (`ir.h`):
   - `IR_VAR_CONSTANT`: a number, `bool` or `null` constant, no storage; `Ir_Var.constant` holds its bits as `Ast.constant` keeps them.
   - `IR_VAR_GLOBAL`: a constant in read-only data; `Ir_Var.value` is its `const.N`'s index in `Ir_Module.globals`.
-  - `Ir_Var.constant: u64`, a new last field (zero for the other kinds).
+  - `Ir_Var.constant: u64`, a new last field (zero for the other kinds; the existing `Ir_Var{...}` initializers in `lower.cpp` gain a trailing `0`).
   - `Ir_Module.constants: Array<Ir_Var>`: the top-level constants, in source order, `scope` -1, `arg` 0.
   - A body's constants are in `Ir_Proc.vars`, in declaration order with the variables, `arg` 0.
   - `Ir_Var.type` is the type to show: an untyped integer's `&type_int`, an untyped float's `&type_float64` [Q2], `type_null`'s `type_pointer_to(&type_void)`.
@@ -154,7 +154,7 @@ TEST(ir_records_every_constant) {
 }
 ```
 
-  `NO_PROC`'s line is checked by its start only: its type's printed name is whatever `type_name` gives. The `@const.3` line's exact form is what `out_byte_global` prints for 8 bytes that are one relocation; run once, compare with `llvm_read_only_global`'s and `ir_of_globals`'s relocation lines, and keep the prefix that pins "8 bytes, a relocation at 0 to a `str.N`".
+  `NO_PROC`'s line is checked by its start only: its type's printed name is whatever `type_name` gives. The `@const.3` line's form is `out_byte_global`'s for 8 bytes all zero with one relocation (`zero reloc 0 @str.N`, as `global_copies_constant_data`'s `@name` line); the prefix pins "8 bytes, a relocation at 0 to a `str.N`".
 
 ```cpp
 TEST(a_constant_that_hides_a_name_starts_a_scope) {
@@ -239,18 +239,20 @@ TEST(constants_in_deferred_code_and_an_if_directive) {
     - `resolve_constant_globals(l)`: for each pending one, in order, `value = constant_global(l, decl)` (a pointer constant included: `read_only_global` of its pointer type writes 8 bytes and the relocation).
     - `lower_statement`'s `AST_CONST`: when `hides_a_name(l, name)`, `place(l, l->pos, new_scope(l, l->pos))` as `AST_VAR` does, then `add_constant(l, c, l->scope)`. The comment at `2249-2253` says what's recorded now.
     - `hides_a_name`: `hides_a_variable` plus `table_get(&l->constant_index, name)`; the loop over `proc->vars` already finds a body's constants. Rename its callers (`AST_VAR`, `lower_multi_var`) and its comment ("a name a debugger shows").
-    - `ir_lower`: after the global variables, `add_constant(&l, c, -1)` for each top-level `AST_CONST` of `f->globals`; after the bodies, before the helpers, `resolve_constant_globals(&l)`. Rewrite the comment at `3066-3071`.
+    - `ir_lower`: after the global variables, `add_constant(&l, c, -1)` for each top-level `AST_CONST` of `f->globals`; after the bodies, before the helpers, `resolve_constant_globals(&l)`. Rewrite the comment at `3064-3070`.
     - `release_lowering`: free `constant_index` and `pending_constants`.
-    - The header comment's constants bullet (`33-47`): a constant's data is also made after every body for the debugger.
-  - `ir.cpp`: `ir_var_kind_name` gains `"constant"` and `"global"`; `out_proc_debug` prints `constant BITS` or `global @NAME` in place of `%VALUE`; `print_module`, when `debug`, prints the `; const` lines after the `; source` lines.
-  - `llvm_backend.cpp:1443-1452`: `declare_variables`'s storage loop and its record loop skip `IR_VAR_CONSTANT` and `IR_VAR_GLOBAL` (a comment: Task 2 describes them), so the build and every test keep working.
+    - `add_local_var` (`417`) and the parameters' `Ir_Var{...}` (`2991`, `3002`): a trailing `0` for `constant`.
+    - The header comment's constants bullet (`33-46`): a constant's data is also made after every body for the debugger, and a pointer constant, whose uses are still its literal's `str.N`, gets 8 read-only bytes holding that address (today it "holds no bytes of its own"). `constant_global`'s comment (`2582-2588`: "So a constant used only folded ... has none") says the same.
+  - `ir.cpp`: `ir_var_kind_name` gains `"constant"` and `"global"`; `out_proc_debug` takes the module too (`print_module` passes it), to name a global's `const.N`, and prints `constant BITS` or `global @NAME` in place of `%VALUE`; `print_module`, when `debug`, prints the `; const` lines after the `; source` lines.
+  - `llvm_backend.cpp:1441-1452` and `1482`: `declare_variables`'s storage loop and its record loop skip `IR_VAR_CONSTANT` and `IR_VAR_GLOBAL` (a comment: Task 2 describes them), so the build and every test keep working.
 
 - [ ] **Step 4: Update the tests whose programs hold data no code reads**
 
   Run: `.\bin\unit-tests.exe`. Expected: the three new tests pass; these fail and are updated, their comments citing spec 4.2's new sentence:
   - `data_constant_used_only_folded_takes_no_storage` → rename `data_constant_used_only_folded_is_read_by_no_code`: the `const.N`s of `PRIMES`, `NAME` and `L` are there, and `NAME`'s literal's `str.N`; `main` has no `addr @`; the sizes and sums are still numbers.
   - `constant_naming_other_data_has_its_bytes`: `EMPTY` and `PRIMES` get `@const.2` and `@const.3` after the used `ITEMS` and `COPY`: `CHECK_EQ(count_of(ir, "const @const."), 4)`, and the comment's "PRIMES itself, never used, has none" goes.
-  - Any other test that counts `const @const.` or `@str.` in a program with a data constant no code reads, the same way. A test whose numbering changes otherwise is a bug in Step 3: the used ones keep their numbers.
+  - `pointer_constant_is_its_literal_bytes` (`OPS`, `GREETING`, `SYMBOL`, `NAME`), `global_copies_constant_data` (every constant there) and `global_view_from_constant_data_is_its_array` (`NO_VIEW`, `UNNAMED`): each checks `!contains(ir, "@const.")`, and each now has a `const.N` per data constant, none of them addressed by any code. Each keeps its point (the uses are still the literal's `str.N`, or the global's own bytes; no code addresses a `const.N`: check `main` or the procedures for no `addr @const.`) and its comment's "no const.N" changes to "no code reads one".
+  - Any other test that counts or forbids `const @const.` or `@str.` in a program with a data constant no code reads, the same way. A test whose numbering changes otherwise is a bug in Step 3: the used ones keep their numbers.
 
 - [ ] **Step 5: Update spec 4.2 and 10.3**
   - 4.2, the paragraph "A constant that is a number, a `bool`, a pointer or a procedure occupies no storage of its own...": the uses stay as they are; add that the constant's data, and a pointer constant's address, are in the program's read-only data once all the same, for a debugger (section 10.7), where no code reads them.
@@ -271,12 +273,12 @@ git commit -m "Record every constant for the debugger in the IR"
 ### Task 2: The LLVM backend describes the constants
 
 **Files:**
-- Modify: `src/llvm_backend.cpp` (debug comment `585-635`, `declare_variables` `1380-1508`, `build_body` `1572`, the globals' debug loop `1860-1875`)
+- Modify: `src/llvm_backend.cpp` (debug comment `585-635`, `declare_variables` `1379-1506`, the globals' debug loop `1860-1875` and its comment)
 - Test: `tests/unit/test_llvm.cpp`
 
 **Interfaces:**
 - Consumes: Task 1's `IR_VAR_CONSTANT`, `IR_VAR_GLOBAL`, `Ir_Var.constant`, `Ir_Module.constants`.
-- Produces (static): `u64 debug_constant_bits(Type *t, u64 bits)` (a `float32`'s double bits to its 32 bits, zero-extended; any other unchanged); `void describe_constants(Backend *b, Ir_Module *m, LLVMValueRef *globals)` (the top-level ones); `declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body, LLVMValueRef *globals)` (a new last parameter).
+- Produces (static): `u64 debug_constant_bits(Type *t, u64 bits)` (a `float32`'s double bits to its 32 bits, zero-extended; any other unchanged); `void describe_constants(Backend *b, Ir_Module *m, LLVMValueRef *globals)` (the top-level ones); `declare_variables` keeps its signature: a body's `const.N` is `llvm_global(body, v->value)`, from the `body->globals` `build_body` set before calling it.
 
 - [ ] **Step 1: Write the failing tests** in `tests/unit/test_llvm.cpp`, after `llvm_data_constant_is_private_constant`. A helper first:
 
@@ -348,7 +350,10 @@ TEST(llvm_unread_constant_data_survives_optimisation) {
     // Review Focus 5: a data constant no code reads, optimised: LLVM's O2
     // may drop its const.N, and the module still verifies.
     // Program: "ORIGIN :: int.[3, 4];\nmain :: () { }\n".
-    // Checks: llvm_ir_text(&a, m, t, &text, &error, true) is true, both targets.
+    // Checks, both targets: unoptimised (llvm_ir_text(..., false)), the
+    // @const.0 line holds !dbg and there is a !DIGlobalVariable(name:
+    // "ORIGIN" (so the test fails before Step 3); optimised
+    // (llvm_ir_text(&a, m, t, &text, &error, true)) is true.
 }
 ```
 
@@ -361,9 +366,9 @@ TEST(llvm_unread_constant_data_survives_optimisation) {
 
 - [ ] **Step 3: Implement**
   - `debug_constant_bits`: `f64_from_bits`, then the `float`'s bits by `memcpy`, for a `TYPE_FLOAT` of size 4.
-  - `describe_constants`, called after the globals' debug loop (`1875`): for each of `m->constants`, `LLVMDIBuilderCreateGlobalVariableExpression(b->debug, b->unit, name, ..., "", 0, debug_file(b, v->pos), line, debug_type(b, v->type), 1, expression, nullptr, 0)`, local to the unit as a Rig global's. `IR_VAR_CONSTANT`: the expression is `LLVMDIBuilderCreateConstantValueExpression(b->debug, debug_constant_bits(v->type, v->constant))`, attached to nothing (the DIBuilder lists it in the unit's globals). `IR_VAR_GLOBAL`: the empty expression, `LLVMGlobalAddDebugInfo(globals[v->value], gve)`.
-  - `declare_variables` (new `globals` parameter, `build_body` passes its own): in the record loop, `IR_VAR_CONSTANT` makes `LLVMDIBuilderCreateAutoVariable(..., scope, ..., type, 1, LLVMDIFlagZero, 0)` and `LLVMDIBuilderInsertDbgValueRecordAtEnd(b->debug, LLVMConstInt(i64, debug_constant_bits(...), 0), variable, plain, location, body->blocks[0])`, the location as the other records'; `IR_VAR_GLOBAL` makes the global variable expression with `scope` (the block or the subprogram) and attaches it (the DIBuilder puts it in the subprogram's `retainedNodes`, since LLVM's verifier refuses a function's in the unit's globals). Neither has storage: the storage loop skips them (Task 1).
-  - The comments: a "Constants" bullet in the debug comment (`585-635`), and in `declare_variables`'s header, each with the reason from Evidence 1: why a body's number is a `#dbg_value` and not a scoped constant expression (CodeView would put it at the top level, DWARF give it no location), why an `i64` (LLVM's CodeView writer drops a float immediate), why the Variables view leaves it out.
+  - `describe_constants`, called after the globals' debug loop (`1875`), only when `b->debug` (as that loop): for each of `m->constants`, `LLVMDIBuilderCreateGlobalVariableExpression(b->debug, b->unit, name, ..., "", 0, debug_file(b, v->pos), line, debug_type(b, v->type), 1, expression, nullptr, 0)`, local to the unit as a Rig global's. `IR_VAR_CONSTANT`: the expression is `LLVMDIBuilderCreateConstantValueExpression(b->debug, debug_constant_bits(v->type, v->constant))`, attached to nothing (the DIBuilder lists it in the unit's globals). `IR_VAR_GLOBAL`: the empty expression, `LLVMGlobalAddDebugInfo(globals[v->value], gve)`.
+  - `declare_variables` (same signature; the `const.N` from `llvm_global(body, v->value)`): in the record loop, `IR_VAR_CONSTANT` makes `LLVMDIBuilderCreateAutoVariable(..., scope, ..., type, 1, LLVMDIFlagZero, 0)` and `LLVMDIBuilderInsertDbgValueRecordAtEnd(b->debug, LLVMConstInt(i64, debug_constant_bits(...), 0), variable, plain, location, body->blocks[0])`, the location as the other records'; `IR_VAR_GLOBAL` makes the global variable expression with `scope` (the block or the subprogram) and attaches it (the DIBuilder puts it in the subprogram's `retainedNodes`, since LLVM's verifier refuses a function's in the unit's globals). Neither has storage: the storage loop skips them (Task 1).
+  - The comments: the globals' debug loop's (`1860-1866`) "What the compiler makes (str.N, array.N, const.N) has no Rig type, and none" changes (a `const.N` gets its constant's variables, `describe_constants` and `declare_variables`); a "Constants" bullet in the debug comment (`585-635`), and in `declare_variables`'s header, each with the reason from Evidence 1: why a body's number is a `#dbg_value` and not a scoped constant expression (CodeView would put it at the top level, DWARF give it no location), why an `i64` (LLVM's CodeView writer drops a float immediate), why the Variables view leaves it out.
 
 - [ ] **Step 4: Run the tests to see them pass**
 
@@ -508,7 +513,7 @@ int64 STEP = 0n7
 33:     print_line(NAME);
 int64 0n12
 !Couldn't resolve error
-!Value unavailable
+!value unavailable
 ```
 
   `constants.gdb`:
@@ -587,7 +592,7 @@ $18 = 12
 !.debug_names not created by gdb
 ```
 
-  The value pieces were measured with the same debug information by hand (Evidence 1). If a debugger spells a piece differently once Rig writes it (a padding width, a field's address form), take its spelling and keep the value; never weaken a value to `0x` or drop it. `HEAP_ALLOCATOR` is Basic's today and Preload's once #171 merges; the test doesn't care which.
+  The value pieces were measured with the same debug information by hand (Evidence 1). If a debugger spells a piece differently once Rig writes it (a padding width, a field's address form), take its spelling and keep the value; never weaken a value to `0x` or drop it. `HEAP_ALLOCATOR` is Basic's today and Preload's once #171 merges; the test doesn't care which. The runner matches pieces case-sensitively (`first_unmet`), and cdb writes a dropped value as `<value unavailable>` (measured: a body's double immediate), so the forbidden piece is lower-case.
 
 - [ ] **Step 3: Run it on both hosts**
 
