@@ -109,7 +109,9 @@
 // adding up and its lines counted: of tests/run/hello.rig, its lines and
 // Preload's (hello_report_test), of tests/run/run_slow.rig, whose slow
 // constant's #run is counted once, in #run and not in checking too
-// (slow_run_report_test), of tests/build/two_workspaces, after what its
+// (slow_run_report_test), of tests/run/basic_string.rig, whose Basic makes
+// checking and lowering take measurable time (basic_report_test), of
+// tests/build/two_workspaces, after what its
 // #runs print, the build program's block, each workspace's, then all
 // (build_program_report_test), and of tests/build/options, whose optimised
 // workspaces have an optimising line (optimised_report_test); and none
@@ -1470,7 +1472,8 @@ static String run_output_order_test(Arena *a, String rig, bool exits) {
 
 // rig build where .build/ is a file, so rig can't create the directory, or
 // where the object file's name is a directory, so it can't write it: rig
-// must say which path, and exit with 1.
+// must say which path, exit with 1, and print nothing on stdout, no report
+// of the phases it did finish.
 static String unwritable_test(Arena *a, String rig, bool object_blocked) {
     String dir = object_blocked ? str(".build/tests/object-is-a-directory") : str(".build/tests/build-is-a-file");
     os_make_directory(dir);
@@ -1499,6 +1502,7 @@ static String unwritable_test(Arena *a, String rig, bool object_blocked) {
     if (!starts_with(built.err, expected)) {
         return string_printf(a, "stderr: expected \"%s...\", got \"" STR_FMT "\"", expected, STR_ARG(built.err));
     }
+    if (built.out.count) return first_difference(a, "rig build's stdout", {}, built.out);
     return {};
 }
 
@@ -1507,7 +1511,7 @@ static String unwritable_test(Arena *a, String rig, bool object_blocked) {
 // top-level #run prints a line, can't have its object written, since its
 // .build is relative to the build program's directory (spec 7.9). Its
 // stdout and stderr in one pipe must be that line, then rig's error naming
-// sub/.build, and rig must exit 1. stdout is a pipe, so C buffers it, and
+// sub/.build, and nothing after it (no report), and rig must exit 1. stdout is a pipe, so C buffers it, and
 // rig flushes it before saying the error. The files are written here, as a
 // case of tests/build has no .build file and its stderr has no reason in
 // it, which is the system's.
@@ -1548,8 +1552,10 @@ static String workspace_unwritable_test(Arena *a, String rig) {
     if (!started) return string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(rig), STR_ARG(os_error_message(a)));
     if (built.timed_out) return string_printf(a, "rig build took longer than %d seconds", TIMEOUT);
     built.out = normalise_newlines(a, built.out);
-    if (!starts_with(built.out, expected)) {
-        return string_printf(a, "stdout and stderr: expected \"%s...\", got \"" STR_FMT "\"", expected,
+    bool third_line = false;
+    line_of(built.out, 2, &third_line);
+    if (!starts_with(built.out, expected) || third_line) {
+        return string_printf(a, "stdout and stderr: expected \"%s...\" and no line after it, got \"" STR_FMT "\"", expected,
                              STR_ARG(built.out));
     }
     if (built.exit_code != 1) {
@@ -1922,8 +1928,9 @@ static String version_test(Arena *a, String rig, bool verbose) {
 // next, so it's checked by its shape, every time, line count and rate made
 // a letter, and the times are held mostly to each other: a block's phases
 // add up to no more than its total, and all's time is no less than its
-// blocks' totals. A phase that always does real work, and every total,
-// mustn't be 0.00 ms either. The line counts are known, and checked.
+// blocks' totals. A phase that always does real work, checking and lowering
+// too in a program large enough, and every total, mustn't be 0.00 ms
+// either. The line counts are known, and checked, block by block.
 
 // The lines of `text` as rig counts a file's: one for each '\n', and one
 // more when text follows the last.
@@ -1934,6 +1941,30 @@ static s64 text_lines(String text) {
     }
     if (text.count && text.data[text.count - 1] != '\n') lines++;
     return lines;
+}
+
+// The lines of the file at `path`, added to *lines. False when it can't be
+// read.
+static bool file_lines(Arena *a, String path, s64 *lines) {
+    String text = {};
+    if (!os_read_file(a, path, &text)) return false;
+    *lines += text_lines(text);
+    return true;
+}
+
+// The lines of modules/NAME's .rig files, every one of which its module.rig
+// is or #loads, so a program that imports it loads them all (spec 2.14),
+// added to *lines. False when one can't be listed or read.
+static bool module_lines(Arena *a, const char *name, s64 *lines) {
+    String dir = string_printf(a, "modules/%s", name);
+    Array<String> names = {};
+    bool ok = os_list_directory(a, dir, &names);
+    for (s64 i = 0; ok && i < names.count; i++) {
+        if (!ends_with(names[i], ".rig")) continue;
+        ok = file_lines(a, string_printf(a, STR_FMT "/" STR_FMT, STR_ARG(dir), STR_ARG(names[i])), lines);
+    }
+    array_free(&names);
+    return ok;
 }
 
 // The number `digits` (all digits) is.
@@ -1964,8 +1995,10 @@ static s64 take_time(Cursor *c) {
 // more than its total, give or take 0.01 ms a phase (the rounding), all's
 // time is no less than the blocks' totals, give or take 0.01 ms a block,
 // and no total, nor any loading, llvm module, object file or linking time,
-// is 0.00 ms (each reads files, or has LLVM or the linker do real work,
-// taking far longer than the clock's step), else why not.
+// nor, for a large program (report_read's `large`), any checking or
+// lowering time, is 0.00 ms (each reads files, or has LLVM or the linker,
+// or the checker and lowerer over thousands of lines, do real work, taking
+// far longer than the clock's step), else why not.
 struct Read_Report {
     String shape;
     Array<s64> lines;  // the caller's to free
@@ -1973,8 +2006,10 @@ struct Read_Report {
     String why;
 };
 
-// Whether `phase` always takes measurable time (Read_Report's why).
-static bool phase_takes_time(String phase) {
+// Whether `phase` always takes measurable time (Read_Report's why): in a
+// `large` program, checking and lowering do too.
+static bool phase_takes_time(String phase, bool large) {
+    if (large && (string_eq(phase, str("checking")) || string_eq(phase, str("lowering")))) return true;
     return string_eq(phase, str("loading")) || string_eq(phase, str("llvm module")) ||
            string_eq(phase, str("object file")) || string_eq(phase, str("linking"));
 }
@@ -1982,7 +2017,8 @@ static bool phase_takes_time(String phase) {
 // A line with a time is a phase's when it's indented and has nothing after
 // " ms", a total's when it's indented and has its lines and rate after, and
 // all's when it isn't indented; a line with no time is a block's title.
-static Read_Report report_read(Arena *a, String text) {
+// `large`: the report's program is thousands of lines.
+static Read_Report report_read(Arena *a, String text, bool large) {
     Read_Report r = {};
     r.shape = string_printf(a, "");
     String title = {};
@@ -2028,7 +2064,7 @@ static Read_Report report_read(Arena *a, String text) {
             phases_sum += time;
             phases++;
             if (string_eq(name, str("#run"))) array_add(&r.runs, time);
-            if (time == 0 && phase_takes_time(name) && !r.why.count) {
+            if (time == 0 && phase_takes_time(name, large) && !r.why.count) {
                 r.why = string_printf(a, "'" STR_FMT "' of '" STR_FMT "' took 0.00 ms", STR_ARG(name), STR_ARG(title));
             }
         } else if (indented) {
@@ -2076,13 +2112,14 @@ static const char *BUILD_PROGRAM_BLOCK_SHAPE = "build.rig\n"
 static const char *ALL_SHAPE = "all T ms  L lines, R lines/s\n";
 
 // rig build tests/run/NAME.rig -o .build/tests/report-NAME, NAME a program
-// that imports nothing: exit 0, nothing on stderr, and stdout the report
-// alone: one block, every phase but optimising (rig build of a file is
-// never optimised), adding up, its #run time at least `least_run`
-// hundredths of a millisecond, and its lines NAME.rig's and Preload's,
-// which every program imports (spec 2.14). {} when it is, otherwise why
-// not.
-static String report_test(Arena *a, String rig, const char *name, s64 least_run) {
+// that imports nothing, or, when `basic`, Basic alone: exit 0, nothing on
+// stderr, and stdout the report alone: one block, every phase but
+// optimising (rig build of a file is never optimised), adding up, its #run
+// time at least `least_run` hundredths of a millisecond, and its lines
+// NAME.rig's and Preload's, which every program imports (spec 2.14), and
+// Basic's when it imports it. Basic's thousands of lines make the program
+// large (report_read's `large`). {} when it is, otherwise why not.
+static String report_test(Arena *a, String rig, const char *name, s64 least_run, bool basic) {
     String source = string_printf(a, "tests/run/%s.rig", name);
     String output = string_printf(a, ".build/tests/report-%s", name);
     String program = string_printf(a, STR_FMT "%s", STR_ARG(output), EXE);
@@ -2104,13 +2141,13 @@ static String report_test(Arena *a, String rig, const char *name, s64 least_run)
     }
     if (built.err.count) return with_stderr(a, str("rig build wrote to stderr"), built.err);
     if (!os_file_exists(program)) return string_printf(a, "rig build wrote no " STR_FMT, STR_ARG(program));
-    String text = {}, preload = {};
-    if (!os_read_file(a, source, &text) || !os_read_file(a, str("modules/Preload/module.rig"), &preload)) {
-        return string_printf(a, "can't read " STR_FMT " or modules/Preload/module.rig", STR_ARG(source));
+    s64 lines = 0;
+    if (!file_lines(a, source, &lines) || !module_lines(a, "Preload", &lines) ||
+        (basic && !module_lines(a, "Basic", &lines))) {
+        return string_printf(a, "can't read " STR_FMT " or a module's files", STR_ARG(source));
     }
-    Read_Report r = report_read(a, built.out);
+    Read_Report r = report_read(a, built.out, basic);
     String expected = program_block_shape(a, source, false);
-    s64 lines = text_lines(text) + text_lines(preload);
     if (!string_eq(r.shape, expected)) {
         why = first_difference(a, "the report's shape", expected, r.shape);
     } else if (r.why.count) {
@@ -2119,8 +2156,8 @@ static String report_test(Arena *a, String rig, const char *name, s64 least_run)
         why = string_printf(a, "#run took %lld.%02lld ms, less than %lld.%02lld ms",(long long)(r.runs[0] / 100),
                             (long long)(r.runs[0] % 100), (long long)(least_run / 100), (long long)(least_run % 100));
     } else if (r.lines[0] != lines) {
-        why = string_printf(a, "the report counts %lld lines, not %s.rig's and Preload's %lld", (long long)r.lines[0],
-                            name, (long long)lines);
+        why = string_printf(a, "the report counts %lld lines, not %s.rig's and its modules' %lld",
+                            (long long)r.lines[0], name, (long long)lines);
     }
     array_free(&r.lines);
     array_free(&r.runs);
@@ -2129,31 +2166,58 @@ static String report_test(Arena *a, String rig, const char *name, s64 least_run)
 
 // tests/run/hello.rig's report: its #run took no time to speak of.
 static String hello_report_test(Arena *a, String rig) {
-    return report_test(a, rig, "hello", 0);
+    return report_test(a, rig, "hello", 0, false);
 }
 
 // tests/run/run_slow.rig's report: its constant's #run, run while checking,
-// spins for tens of milliseconds, far longer than the phases' rounding or
-// what the total has besides them. Its time is #run's, at least 1 ms, and
-// not checking's too: counted twice, the phases would add up to more than
-// the total by about the run's time.
+// spins for a few milliseconds (more in a debug build), far longer than the
+// phases' rounding or what the total has besides them. Its time is #run's,
+// at least 1 ms, and not checking's too: counted twice, the phases would
+// add up to more than the total by about the run's time.
 static String slow_run_report_test(Arena *a, String rig) {
-    return report_test(a, rig, "run_slow", 100);
+    return report_test(a, rig, "run_slow", 100, false);
+}
+
+// tests/run/basic_string.rig's report: it imports Basic, thousands of
+// lines, which checking and lowering take a fraction of a millisecond or
+// more over, so neither can be 0.00 ms: a phase whose time is never
+// recorded would be.
+static String basic_report_test(Arena *a, String rig) {
+    return report_test(a, rig, "basic_string", 0, true);
 }
 
 // A workspace a build program's report has a block for, in order.
 struct Report_Workspace {
     const char *name;
     bool optimised;
+    const char *files[2];  // its build file and what that #loads, if anything
 };
+
+// The lines block `i` of tests/build/NAME's report counts, its own
+// compilation's, added to *lines: block 0's, the build program's, are
+// build.rig's and Compiler's, which it imports, and block i's after it
+// workspace i - 1's files'; each has Preload's too, which every compilation
+// imports (spec 2.14). False when a file can't be read.
+static bool block_lines(Arena *a, const char *name, const Report_Workspace *workspaces, s64 i, s64 *lines) {
+    if (!module_lines(a, "Preload", lines)) return false;
+    if (i == 0) {
+        return file_lines(a, string_printf(a, "tests/build/%s/build.rig", name), lines) &&
+               module_lines(a, "Compiler", lines);
+    }
+    for (s64 f = 0; f < 2 && workspaces[i - 1].files[f]; f++) {
+        String path = string_printf(a, "tests/build/%s/%s", name, workspaces[i - 1].files[f]);
+        if (!file_lines(a, path, lines)) return false;
+    }
+    return true;
+}
 
 // tests/build/NAME built in .build/tests/report-NAME (build_copy, without
 // --quiet): exit 0, nothing on stderr, and stdout NAME's expected.build.out
 // (nothing when there's none), then the report: the build program's block,
 // each workspace's, `workspaces` in order, then all's line; its phases
 // adding up, the build program's #run time not 0.00 ms (its top-level #runs
-// make the workspaces), and all's lines the blocks' summed. {} when it is,
-// otherwise why not.
+// make the workspaces), each block's lines its own files' (block_lines),
+// and all's lines the blocks' summed. {} when it is, otherwise why not.
 static String build_program_report(Arena *a, String rig, const char *name, const Report_Workspace *workspaces,
                                    s64 count) {
     String expected_out = {};
@@ -2178,7 +2242,7 @@ static String build_program_report(Arena *a, String rig, const char *name, const
                                  STR_ARG(program_block_shape(a, title, workspaces[i].optimised)));
     }
     expected = string_printf(a, STR_FMT "%s", STR_ARG(expected), ALL_SHAPE);
-    Read_Report r = report_read(a, string_slice(built.out, before.count, built.out.count - before.count));
+    Read_Report r = report_read(a, string_slice(built.out, before.count, built.out.count - before.count), false);
     if (!string_eq(r.shape, expected)) {
         why = first_difference(a, "the report's shape", expected, r.shape);
     } else if (r.why.count) {
@@ -2187,8 +2251,18 @@ static String build_program_report(Arena *a, String rig, const char *name, const
         why = str("the build program's #run took 0.00 ms");
     } else {
         s64 sum = 0;
-        for (s64 i = 0; i + 1 < r.lines.count; i++) sum += r.lines[i];
-        if (r.lines[r.lines.count - 1] != sum) {
+        for (s64 i = 0; i + 1 < r.lines.count && !why.count; i++) {
+            s64 lines = 0;
+            String title = i ? string_printf(a, "workspace '%s'", workspaces[i - 1].name) : str("build.rig");
+            if (!block_lines(a, name, workspaces, i, &lines)) {
+                why = string_printf(a, "can't read the files of " STR_FMT, STR_ARG(title));
+            } else if (r.lines[i] != lines) {
+                why = string_printf(a, STR_FMT " counts %lld lines, not its files' %lld", STR_ARG(title),
+                                    (long long)r.lines[i], (long long)lines);
+            }
+            sum += r.lines[i];
+        }
+        if (!why.count && r.lines[r.lines.count - 1] != sum) {
             why = string_printf(a, "all counts %lld lines, but its blocks %lld", (long long)r.lines[r.lines.count - 1],
                                 (long long)sum);
         }
@@ -2202,7 +2276,10 @@ static String build_program_report(Arena *a, String rig, const char *name, const
 // to #run, then greeter's and counter's, every phase but optimising, then
 // all, after what the #runs printed.
 static String build_program_report_test(Arena *a, String rig) {
-    const Report_Workspace workspaces[] = {{"greeter", false}, {"counter", false}};
+    const Report_Workspace workspaces[] = {
+        {"greeter", false, {"greeter.rig"}},
+        {"counter", false, {"src/counter.rig"}},
+    };
     return build_program_report(a, rig, "two_workspaces", workspaces, 2);
 }
 
@@ -2210,7 +2287,11 @@ static String build_program_report_test(Arena *a, String rig) {
 // and checked_fast, have their optimising line, and the others none.
 static String optimised_report_test(Arena *a, String rig) {
     const Report_Workspace workspaces[] = {
-        {"plain", false}, {"fast", true}, {"unchecked", false}, {"checked", false}, {"checked_fast", true},
+        {"plain", false, {"sums.rig"}},
+        {"fast", true, {"fast.rig", "sums.rig"}},
+        {"unchecked", false, {"past_the_end.rig"}},
+        {"checked", false, {"checked.rig"}},
+        {"checked_fast", true, {"checked_fast.rig", "checked.rig"}},
     };
     return build_program_report(a, rig, "options", workspaces, 5);
 }
@@ -3579,6 +3660,8 @@ int main(int argc, char **argv) {
     report("rig build's report: every phase, hello.rig's and Preload's lines", hello_report_test(&a, rig), &passed,
            &failed);
     report("rig build's report: a slow constant's #run counted once, in #run", slow_run_report_test(&a, rig),
+           &passed, &failed);
+    report("rig build's report: checking and lowering a program with Basic take time", basic_report_test(&a, rig),
            &passed, &failed);
     report("a build program's report: its own phases, each workspace's, then all", build_program_report_test(&a, rig),
            &passed, &failed);

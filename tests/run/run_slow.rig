@@ -1,4 +1,4 @@
-// A constant's #run that takes a while, tens of milliseconds, while the
+// A constant's #run that takes a while, a few milliseconds, while the
 // program is checked (spec 7.8): rig build's report counts that time once,
 // in #run, never in checking too, so its phases still add up to no more
 // than its total (tests/runner.cpp's slow_run_report_test).
