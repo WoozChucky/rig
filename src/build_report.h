@@ -16,7 +16,7 @@
 //     llvm module      0.90 ms
 //     object file      2.47 ms
 //     linking         38.66 ms
-//     total           42.81 ms  83 lines, 1939 lines/s
+//     total           42.81 ms  84 lines, 1962 lines/s
 //
 // The driver measures the times (driver.cpp); here they're only numbers,
 // nanoseconds, so the text is the same on both hosts for the same numbers,

@@ -31,7 +31,7 @@ TEST(milliseconds_text_has_two_decimals_rounded_half_up) {
 
 TEST(lines_per_second_rounds_and_takes_no_time_as_a_nanosecond) {
     CHECK_EQ(lines_per_second(1000, 47500000), 21053);
-    CHECK_EQ(lines_per_second(83, 42810000), 1939);
+    CHECK_EQ(lines_per_second(84, 42810000), 1962);
     CHECK_EQ(lines_per_second(5, 0), 5000000000);
 }
 

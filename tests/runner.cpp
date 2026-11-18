@@ -2867,7 +2867,7 @@ static const Command_Case CHECK_CASES[] = {
      "       rig check FILE.rig [--stdin | --stdin-for FILE.rig]\n"},
     {"rig check with two files", {"check", "tests/run/hello.rig", "tests/run/hello.rig"}, 2, "usage: "},
     {"rig check with -o", {"check", "tests/run/hello.rig", "-o", ".build/tests/output.RIG"}, 2, "usage: "},
-    {"rig check with --quiet", {"check", "--quiet"}, 2, "usage: "},
+    {"rig check with --quiet", {"check", "tests/run/hello.rig", "--quiet"}, 2, "usage: "},
     {"rig check with --stdin twice", {"check", "--stdin", "tests/run/hello.rig", "--stdin"}, 2, "usage: "},
     {"rig check of a file not ending in .rig",
      {"check", "tests/run/hello.out"},
