@@ -5770,6 +5770,78 @@ TEST(a_default_values_code_is_at_the_call) {
     arena_free(&a);
 }
 
+TEST(a_nested_default_values_code_is_at_the_call_too) {
+    // b's default calls g, leaving g's own default out, and then checks its
+    // division: once g's default is done, b's code is still at the
+    // statement holding f's call, the check's failure too.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, "d := 0;\n"
+                                    "g :: (x: int = 1) -> int { return x; }\n"
+                                    "f :: (a: int, b: int = g() / d) -> int { return a + b; }\n"
+                                    "main :: () {\n"
+                                    "    n := f(1);\n"
+                                    "}\n");
+    String main = proc_ir(ir_print_debug(&a, m), "main");
+    CHECK(!contains(main, "; 2:"));
+    CHECK(!contains(main, "; 3:"));
+    s64 panic = index_of(main, "panic @str.");
+    CHECK(panic >= 0);
+    if (panic >= 0) {
+        String rest = string_slice(main, panic, main.count - panic);
+        CHECK(contains(string_slice(rest, 0, index_of(rest, "\n")), "; 5:5 s0"));
+    }
+    s64 found = 0;
+    for (s64 i = 0; i < m->globals.count; i++) {
+        if (string_eq(message_of(m, i), str("test.rig:3:28: runtime error: division by zero\n"))) found++;
+    }
+    CHECK_EQ(found, 1);
+    arena_free(&a);
+}
+
+TEST(a_default_values_bounds_checks_follow_its_procedure) {
+    // A default is written in its procedure's declaration, so its bounds
+    // checks are that procedure's, as its #no_abc says, whoever calls it:
+    // unchecked's default isn't checked in main, checked's is in caller,
+    // though caller is #no_abc.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a, "items := int.[1, 2, 3];\n"
+                                              "i := 1;\n"
+                                              "unchecked :: (k: int = items[i]) -> int #no_abc { return k; }\n"
+                                              "checked :: (k: int = items[i]) -> int { return k; }\n"
+                                              "caller :: () -> int #no_abc { return checked(); }\n"
+                                              "main :: () {\n"
+                                              "    n := unchecked();\n"
+                                              "}\n"));
+    CHECK(!contains(proc_ir(ir, "main"), "__rig_bounds_failed"));
+    CHECK(contains(proc_ir(ir, "caller"), "call @__rig_bounds_failed("));
+    arena_free(&a);
+}
+
+TEST(a_default_values_failure_while_compiling_is_at_its_place) {
+    // On demand, for the interpreter, a check's failure in a default value
+    // is at the check, the '[' in pick's signature: a #run's failure names
+    // its place only by the frames the interpreter makes from it. The rest
+    // of the default is at the #run, as it would be at a statement.
+    Arena a = arena_make();
+    Lowered_Runs r = lower_runs_of(&a,
+                                   "items := int.[1, 2, 3];\n"
+                                   "slot := 1;\n"
+                                   "pick :: (k: int = items[slot]) -> int { return k; }\n"
+                                   "N :: #run pick();\n"
+                                   "main :: () { }\n");
+    ir_lower_run(r.lowering, constant_run(r.file, "N"));
+    String run = proc_ir(ir_print_debug(&a, r.module), "run.0");
+    s64 call = index_of(run, "call @__rig_bounds_failed(");
+    CHECK(call >= 0);
+    if (call >= 0) {
+        String rest = string_slice(run, call, run.count - call);
+        CHECK(contains(string_slice(rest, 0, index_of(rest, "\n")), "; 3:24 "));
+    }
+    CHECK(contains(run, "; 4:6 "));
+    lowered_runs_free(&r);
+    arena_free(&a);
+}
+
 TEST(a_compiler_call_in_a_default_value_is_refused_at_each_call) {
     // Each call that leaves w out is a call of create_workspace the
     // executable would make, refused at the statement holding it; one that

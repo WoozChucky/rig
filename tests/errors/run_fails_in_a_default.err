@@ -1,0 +1,5 @@
+tests/errors/run_fails_in_a_default.rig:11:6: error: #run failed: runtime error: division by zero
+    N :: #run use();
+         ^
+    in use (tests/errors/load/run_default.rig:6:28)
+    in #run (tests/errors/run_fails_in_a_default.rig:11:6)

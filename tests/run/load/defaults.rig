@@ -7,3 +7,7 @@ slot := 1;
 divisor := 2;
 pick :: (i: int, scale: int = SCALES[slot]) -> int { return i * scale; }
 split :: (n: int, by: int = 100 / divisor) -> int { return n * by; }
+// A default that calls a procedure leaving its own default out, then
+// checks its division: still the caller's code, at the call.
+unit :: (n: int = 1) -> int { return n; }
+shared :: (n: int, by: int = unit() * 100 / divisor) -> int { return n * by; }

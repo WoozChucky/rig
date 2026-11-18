@@ -171,8 +171,10 @@
 9. **Messages the issue doesn't give**, worded as its are: the `#compiler` and C's `..` refusals and the depth message (Global Constraints). **Q1, settled by the maintainer:** a foreign procedure with C's `..` takes no defaults, for now. A follow-up issue may allow them.
 10. **Lowering a call that leaves parameters out:**
     - **What is passed.** In `lower_call_results`, for a direct call with no `..T`, after the given arguments, each missing parameter `i` passes `lower_argument(l, proc->params[i]->default_value, proc->params[i]->type)`, in parameter order (the issue's Decision 4). An aggregate gets its own temporary, `Any` its own, as any argument does.
-    - **Where its instructions are.** While the defaults of the outermost such call are lowered, `l->filling` is set and `l->filled_at = l->pos`, the statement's position. `emit_in`, `emit_call` and `emit_call_indirect` give every instruction `l->filled_at` then, nested defaults included. So the line table, a debugger's stepping, the interpreter's frames and the backend's file assertion (Fact 8) all see the call's statement: the issue's "nothing new".
+    - **Where its instructions are.** While the defaults of the outermost such call are lowered, `l->filling` is set and `l->filled_at = l->pos`, the statement's position. `emit_in`, `emit_call` and `emit_call_indirect` give every instruction `l->filled_at` then, nested defaults included. So the line table, a debugger's stepping, the interpreter's frames and the backend's file assertion (Fact 8) all see the call's statement: the issue's "nothing new". (But a failure while compiling: below.)
     - **Where its runtime errors point.** The message of a runtime check in a default is still made from the check's own position (`runtime_error_prefix(l, at)`): the operation that failed, in the file that declares the default (spec 8.1's rule). That's the one place a debugger, stopped at the statement, and the message differ, and spec 8.1 and 10.7 say so.
+    - **While compiling** (lowering on demand, for a `#run`), a failure's instructions in a default stay at their own place (`fail_in_place`): a failing check's panic or `__rig_bounds_failed` call at the check, a `#compiler` call at its callee's name. A `#run`'s report drops the message's `PATH:L:C` prefix (spec 7.8) and names places only by the interpreter's frames, which are made from the instructions' positions, and the interpreter has no line table to keep in one file. So a `#run` failing in a default has its innermost frame at the operation that failed, in the file that declares the default (spec 7.9's rule for a `#compiler` call too).
+    - **Bounds checks** in a default follow the `#no_abc` of the procedure that declares it, not the caller's (`l->checking_bounds` set from `proc->no_bounds_checks` around the defaults, and put back), as the message's place does.
     - **A `#compiler` call in a default** is reported at `l->filled_at`, the statement whose call leaves the default out. Each such call is a call the executable would make there. At the default's own position, the message would repeat once per call.
 11. **`#run`'s walk:** `walk_proc` adds each parameter's default value to the worklist. It is code lowered with any call of the procedure, so a procedure that only a default calls has its body checked before the `#run` runs. The walk stays a worklist, with no recursion.
 12. **The recovery's `count_open`:** a default's `.{...}` literal has braces, which still end a list's count (the comment changes from "A list holds no braces" to say so). The recovery is approximate. After a broken signature, a parameter that starts a line in column 1 after such a default may be taken for a global, which only adds messages after an error.
@@ -183,7 +185,7 @@
 
 ## Review Focus
 
-1. **A default declared in another file than the call, with a runtime check in it.** This is #156's Basic `alloc(size)` called from a program. The backend asserts every instruction is in its procedure's file (Fact 8). Expected: it builds with debug information, runs, and a runtime error in it names the default's operation in its own file, compiled and interpreted. Tests: Task 4's `tests/run/default_parameters` (`pick` and `split` from `load/defaults.rig`), `default_runtime_error`, and `a_default_values_code_is_at_the_call`.
+1. **A default declared in another file than the call, with a runtime check in it.** This is #156's Basic `alloc(size)` called from a program. The backend asserts every instruction is in its procedure's file (Fact 8). Expected: it builds with debug information, runs, and a runtime error in it names the default's operation in its own file, compiled and interpreted. Tests: Task 4's `tests/run/default_parameters` (`pick`, `split` and `shared` from `load/defaults.rig`), `default_runtime_error`, `a_default_values_code_is_at_the_call`, `a_nested_default_values_code_is_at_the_call_too`, and, for a `#run`, `tests/errors/run_fails_in_a_default` and `a_run_that_fails_in_a_default_value_names_its_place`.
 2. **A `#run` whose call fills in a default that calls a procedure nothing else reaches.** Without the walk's change, that body would be lowered unchecked. Expected: it's checked, and the `#run` gives its value. Tests: Task 4's `default_values_run_while_compiling` and `FIVE` in `tests/run/default_parameters`.
 3. **A long chain of defaults, each calling the next procedure, declared in order.** Expected: a chain to depth 1000 builds, and one past it is one message, not a stack overflow. Tests: Task 3's `default_values_nested_too_deeply` and Task 4's `a_chain_of_default_values_at_the_limit_builds`.
 4. **A default naming a struct or a constant declared after the procedure.** The signature is checked in the declarations pass, before their turn. Expected: it checks, the literal laid out, the constant folded. Tests: Task 2's `a_default_names_what_is_declared_later` and `place` and `from` in Task 4's run test.
@@ -460,6 +462,10 @@ Position filled_at;  // every instruction is at filled_at, the statement holding
     divisor := 2;
     pick :: (i: int, scale: int = SCALES[slot]) -> int { return i * scale; }
     split :: (n: int, by: int = 100 / divisor) -> int { return n * by; }
+    // A default that calls a procedure leaving its own default out, then
+    // checks its division: still the caller's code, at the call.
+    unit :: (n: int = 1) -> int { return n; }
+    shared :: (n: int, by: int = unit() * 100 / divisor) -> int { return n * by; }
     ```
   - `tests/run/default_parameters.rig`. Its `.out` has the 21 lines below, in order, compiled and interpreted:
     ```rig
@@ -548,10 +554,10 @@ Position filled_at;  // every instruction is at filled_at, the statement holding
         printf("%d\n", scaled(4));
         printf("%lld %lld\n", answer(), answer(1));
         printf("%lld %lld\n", PLACED, FIVE);
-        printf("%lld %lld\n", pick(2), split(3));
+        printf("%lld %lld %lld\n", pick(2), split(3), shared(3));
         slot = 2;
         divisor = 4;
-        printf("%lld %lld\n", pick(2), split(3));
+        printf("%lld %lld %lld\n", pick(2), split(3), shared(3));
     }
     ```
     ```text
@@ -574,8 +580,8 @@ Position filled_at;  // every instruction is at filled_at, the statement holding
     40
     42 1
     12 5
-    40 150
-    60 75
+    40 150 150
+    60 75 75
     ```
   - `tests/run/default_runtime_error.rig`. Its `.out` is `before\n`, its `.exit` `101`, and its `.err` `tests/run/load/defaults.rig:8:37: runtime error: index 5 is out of bounds (count 3)\n`, compiled and interpreted:
     ```rig
@@ -652,10 +658,12 @@ Position filled_at;  // every instruction is at filled_at, the statement holding
   - 7.6:
     - A foreign procedure, and a `#c_call` one, may have default values. A Rig call that leaves them out passes them, so C sees a full call, and C's own calls give every argument.
     - One with C's `..` can't, for now (the message; Q1).
+  - 7.7: a default value's bounds checks are its procedure's: `#no_abc` on the procedure that declares it turns them off, wherever it's called from, and a caller's `#no_abc` doesn't (Decision 10).
+  - 7.8: a `#run` that fails in a default value a call leaves out has its innermost frame at the operation that failed, in the file that declares the default, though the default's code is the caller's (Decision 10).
   - 7.9, the `#compiler` bullets:
     - It takes no default values, for now (the message).
-    - A call of one in a default value is reported at the statement whose call leaves the default out.
-  - 8.1: a runtime error in a default value names its operation, in the file that declares the default, though its code is the caller's (10.7).
+    - A call of one in a default value is reported at the statement whose call leaves the default out. While compiling, a failure of such a call is at its name, as the innermost frame rule says.
+  - 8.1: a runtime error in a default value names its operation, in the file that declares the default, though its code is the caller's (10.7), compiled, interpreted and in a `#run`'s frames (7.8).
   - 9.3, rows for:
     - `'repeat' takes 1 to 3 arguments, but 4 were given` (5.10)
     - `'separator' needs a default value, since a parameter before it has one` (7.2)

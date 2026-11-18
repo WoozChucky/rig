@@ -8158,3 +8158,27 @@ TEST(default_values_run_while_compiling) {
     token_list_free(c.list);
     arena_free(&a);
 }
+
+TEST(a_run_that_fails_in_a_default_value_names_its_place) {
+    // A #run's failure names its place only by its frames (the message
+    // leaves the default's PATH:L:C out), so a check failing in a default
+    // value is at the check, the '[' in bad's signature, in the innermost
+    // frame: the run's own when the #run's call leaves k out, use's when
+    // use's does.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "items := int.[1, 2, 3];\n"
+                               "k_index := 7;\n"
+                               "bad :: (k: int = items[k_index]) -> int { return k; }\n"
+                               "use :: () -> int {\n"
+                               "    return bad();\n"
+                               "}\n"
+                               "X :: #run bad();\n"
+                               "Y :: #run use();\n"
+                               "main :: () { }\n"),
+              "7:6: #run failed: runtime error: index 7 is out of bounds (count 3)\n"
+              "    in #run (test.rig:3:23)\n"
+              "8:6: #run failed: runtime error: index 7 is out of bounds (count 3)\n"
+              "    in use (test.rig:3:23)\n"
+              "    in #run (test.rig:8:6)\n");
+    arena_free(&a);
+}

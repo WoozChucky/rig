@@ -83,8 +83,8 @@ main :: () {
     printf("%d\n", scaled(4));
     printf("%lld %lld\n", answer(), answer(1));
     printf("%lld %lld\n", PLACED, FIVE);
-    printf("%lld %lld\n", pick(2), split(3));
+    printf("%lld %lld %lld\n", pick(2), split(3), shared(3));
     slot = 2;
     divisor = 4;
-    printf("%lld %lld\n", pick(2), split(3));
+    printf("%lld %lld %lld\n", pick(2), split(3), shared(3));
 }
