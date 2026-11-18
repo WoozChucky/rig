@@ -28,3 +28,8 @@ int 10
 int 6
 string three
 int 10
+int 8
+Vec2 1 7
+*int 8
+a procedure
+Vec2 5 7

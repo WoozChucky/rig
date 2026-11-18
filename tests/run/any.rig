@@ -25,6 +25,8 @@ show :: (a: Any) {
         printf("string %.*s\n", cast(s32) s.count, s.data);
     } else if t == type_info(*void) {
         printf("*void %d\n", (cast(**void) a.value_pointer).* == null);
+    } else if t == type_info(*int) {
+        printf("*int %lld\n", (cast(**int) a.value_pointer).*.*);
     } else if t == type_info(Vec2) {
         v := (cast(*Vec2) a.value_pointer).*;
         printf("Vec2 %lld %lld\n", v.x, v.y);
@@ -86,4 +88,16 @@ main :: () {
     show(cast(Any) LIMIT);
     show(xs[note(2)]);
     show_all(..Any.[n, "three", LIMIT]);
+    // cast(Any) converts a value of any type as a declaration does: d
+    // holds n's own address.
+    d := cast(Any) n;
+    n = 8;
+    show(d);
+    show(cast(Any) v);
+    show(cast(Any) *n);
+    show(cast(Any) make);
+    // So does an assignment: a holds v's address after it.
+    a = v;
+    v.x = 5;
+    show(a);
 }

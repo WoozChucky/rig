@@ -941,8 +941,8 @@ static s32 lower_value(Lowering *l, Ast *e, Type *to) {
 
 // The address of e's value: when `place` (expr_is_place, asked by the
 // caller), its own (lower_address, its checks included); otherwise a copy
-// in a temporary of its own, a slot of e's type, one per place in the
-// source, the value put there as it's worked out (a constant made at e's
+// in a temporary of its own, a slot of e's type, one per conversion
+// lowered, the value put there as it's worked out (a constant made at e's
 // type). The rule converting to Any follows (spec 3.16), and #156's
 // push_context will.
 //
