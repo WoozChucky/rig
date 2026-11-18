@@ -113,11 +113,13 @@
 // before its diagnostics, in one pipe (check_run_output_test), a .build/
 // or an object file rig can't write, a workspace's .build/ that it can't
 // make, said after what the workspace's #run printed when both are in one
-// pipe (workspace_unwritable_test), rig check, rig build and bin/unit-tests
-// --interpret of tests/run/hello.rig by copies of rig and bin/unit-tests in
+// pipe (workspace_unwritable_test), rig check (alone, and with --stdin-for
+// a file it doesn't load), rig build and bin/unit-tests --interpret of
+// tests/run/hello.rig by copies of rig and bin/unit-tests in
 // .build/tests/no-preload/bin, with no modules/ beside them or above: each
-// says there's no module 'Preload', alone on stderr, exit 1, and the build
-// makes nothing (no_preload_test), the command line's mistakes, and rig
+// says there's no module 'Preload', alone on stderr (not that the program
+// doesn't load the --stdin-for file), exit 1, and the build makes nothing
+// (no_preload_test), the command line's mistakes, and rig
 // version's output, by its shape (version_test: it names the commit rig
 // was built from).
 //
@@ -457,6 +459,23 @@ static bool run(Arena *a, Array<String> argv, String directory, Process_Result *
     return run_within(a, argv, directory, TIMEOUT, result, why);
 }
 
+// run(), with `input` on the program's stdin.
+static bool run_with_input(Arena *a, Array<String> argv, String directory, String input, Process_Result *result,
+                           String *why) {
+    if (!os_run_with_input(a, argv, directory, TIMEOUT, input, result)) {
+        *why = string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(argv[0]), STR_ARG(os_error_message(a)));
+        return false;
+    }
+    result->out = normalise_newlines(a, result->out);
+    result->err = normalise_newlines(a, result->err);
+    if (result->timed_out) {
+        *why = with_stderr(a, string_printf(a, STR_FMT " took longer than %d seconds", STR_ARG(argv[0]), TIMEOUT),
+                           result->err);
+        return false;
+    }
+    return true;
+}
+
 // rig build DIR/NAME.rig -o .build/tests/NAME[.exe]
 static Array<String> build_command(Arena *a, String rig, const char *dir, String name, String program) {
     Array<String> argv = {};
@@ -713,10 +732,12 @@ static bool copy_tree(Arena *a, String from, String to) {
 
 // Copies the program at `from` to `to`, byte for byte, and on Linux makes
 // it executable (chmod 0755), as os_write_file's files aren't: a copy of
-// bin/rig or bin/unit-tests that runs from another directory, finding its
-// places from there (they're linked statically, so nothing else need be
-// beside it). The bytes, tens of megabytes, go in an arena of their own,
-// freed here, not in `a`. False when it can't be read or written
+// bin/rig or bin/unit-tests that runs from another directory (LLVM is
+// linked in statically, so the copy starts with nothing beside it; it
+// finds its modules, and rig its linker, from its own directory, which
+// no_preload_test leaves without them). The bytes, tens of megabytes, go
+// in an arena of their own, freed here, not in `a`. False when it can't be
+// read or written
 // (os_error_message says why; chmod's error is kept as the os layer keeps
 // its own, by os_fail).
 static bool copy_program(Arena *a, String from, String to) {
@@ -1513,15 +1534,17 @@ static String workspace_unwritable_test(Arena *a, String rig) {
     return {};
 }
 
-// `command` ("check", "build" or "interpret") of tests/run/hello.rig by
-// copies of rig and bin/unit-tests in .build/tests/no-preload/bin, with no
-// modules/ beside them or above: the error, alone, status 1, nothing on
-// stdout, and for build no .build/ nor program made. A broken installation,
-// rig without its modules: every program imports Preload (spec 2.13), so
-// rig says it can't find it, in the words of an #import's (with the copy's
-// two places, made placeholders as for any program's), before anything is
-// checked, built or run. Only the program the command runs is copied: rig
-// for check and build, bin/unit-tests for interpret.
+// `command` ("check", "stdin-for", "build" or "interpret") of
+// tests/run/hello.rig by copies of rig and bin/unit-tests in
+// .build/tests/no-preload/bin, with no modules/ beside them or above: the
+// error, alone, status 1, nothing on stdout, and for build no .build/ nor
+// program made. A broken installation, rig without its modules: every
+// program imports Preload (spec 2.13), so rig says it can't find it, in the
+// words of an #import's (with the copy's two places, made placeholders as
+// for any program's), before anything is checked, built or run, and before
+// what --stdin-for's file is to the program. Only the program the command
+// runs is copied: rig for check, stdin-for and build, bin/unit-tests for
+// interpret.
 static String no_preload_test(Arena *a, String rig, String unit_tests, const char *command) {
     bool interpreted = strcmp(command, "interpret") == 0;
     const char *name = interpreted ? "unit-tests" : "rig";
@@ -1546,13 +1569,25 @@ static String no_preload_test(Arena *a, String rig, String unit_tests, const cha
     }
     if (!remove_nested_build(a, dir)) return str("couldn't remove the last run's .build/");
 
+    // "stdin-for" is rig check hello.rig --stdin-for nope.rig, nothing on
+    // stdin: a file the program doesn't load, which the loader, stopping at
+    // the missing Preload, never got as far as looking for. The missing
+    // Preload is said, not that the program doesn't load the file.
+    bool stdin_for = strcmp(command, "stdin-for") == 0;
     Array<String> argv = {};
     array_add(&argv, copy);
-    array_add(&argv, interpreted ? str("--interpret") : str(command));
+    array_add(&argv, interpreted ? str("--interpret") : stdin_for ? str("check") : str(command));
     array_add(&argv, str("../../../tests/run/hello.rig"));
     Process_Result r = {};
     String why = {};
-    bool started = run(a, argv, dir, &r, &why);
+    bool started;
+    if (stdin_for) {
+        array_add(&argv, str("--stdin-for"));
+        array_add(&argv, str("../../../tests/run/nope.rig"));
+        started = run_with_input(a, argv, dir, {}, &r, &why);
+    } else {
+        started = run(a, argv, dir, &r, &why);
+    }
     array_free(&argv);
     if (!started) return why;
     String modules = {}, bin_modules = {};
@@ -1560,7 +1595,9 @@ static String no_preload_test(Arena *a, String rig, String unit_tests, const cha
     r.err = with_module_placeholders(a, r.err, modules, bin_modules);
     String expected = string_printf(
         a, "%s: error: there's no module 'Preload' (looked in @BIN_MODULES@ and @MODULES@)\n", name);
-    String what = interpreted ? str("unit-tests --interpret") : string_printf(a, "rig %s", command);
+    String what = interpreted ? str("unit-tests --interpret")
+                  : stdin_for ? str("rig check --stdin-for")
+                              : string_printf(a, "rig %s", command);
     if (r.exit_code != 1) {
         return with_stderr(a,
                            string_printf(a, STR_FMT " exited with " STR_FMT ", expected 1", STR_ARG(what),
@@ -1905,23 +1942,6 @@ static void build_directory_tests(Arena *a, String rig, s64 *passed, s64 *failed
 // The directory where rig check is shown to write nothing, not even a
 // .build (check_writes_nothing_test).
 static const char *CHECK_DIR = ".build/tests/check";
-
-// run(), with `input` on the program's stdin.
-static bool run_with_input(Arena *a, Array<String> argv, String directory, String input, Process_Result *result,
-                           String *why) {
-    if (!os_run_with_input(a, argv, directory, TIMEOUT, input, result)) {
-        *why = string_printf(a, "couldn't run " STR_FMT ": " STR_FMT, STR_ARG(argv[0]), STR_ARG(os_error_message(a)));
-        return false;
-    }
-    result->out = normalise_newlines(a, result->out);
-    result->err = normalise_newlines(a, result->err);
-    if (result->timed_out) {
-        *why = with_stderr(a, string_printf(a, STR_FMT " took longer than %d seconds", STR_ARG(argv[0]), TIMEOUT),
-                           result->err);
-        return false;
-    }
-    return true;
-}
 
 // rig check FILE, or rig check FILE --stdin with `input` on stdin, in
 // `directory` ({}: this one); false with `why` when it couldn't run.
@@ -3222,6 +3242,8 @@ int main(int argc, char **argv) {
            workspace_unwritable_test(&a, rig), &passed, &failed);
     report("rig check without modules/Preload beside it: said, nothing checked",
            no_preload_test(&a, rig, unit_tests, "check"), &passed, &failed);
+    report("rig check --stdin-for without modules/Preload beside it: said, not 'doesn't load'",
+           no_preload_test(&a, rig, unit_tests, "stdin-for"), &passed, &failed);
     report("rig build without modules/Preload beside it: said, nothing built",
            no_preload_test(&a, rig, unit_tests, "build"), &passed, &failed);
     report("interpreted without modules/Preload beside it: said, nothing run",
