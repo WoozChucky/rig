@@ -605,8 +605,8 @@ static LLVMValueRef llvm_global(Body *body, s32 n) {
 // - Lexical blocks (DILexicalBlock): the parts of a procedure where some
 //   names are visible, nested inside its subprogram as the IR's scopes are:
 //   the source's blocks, and inside them the one each declaration that
-//   hides a variable starts (ir.h's "Scopes"); a variable belongs to the
-//   one that declares it.
+//   hides a name a debugger shows starts (ir.h's "Scopes"); a variable
+//   belongs to the one that declares it.
 // - The line table: every instruction of the body carries a location
 //   (DILocation, attached as !dbg): a line, a column and a scope, a
 //   subprogram or a block, whose file is the location's (a location names
@@ -1438,9 +1438,12 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
     // pointers first, every alloca together at the top, then the stores into
     // them. The result pointers are the IR's first parameters, %0 on (spec
     // 10.4).
+    // A body's constants (IR_VAR_CONSTANT, IR_VAR_GLOBAL) have no storage
+    // here, and aren't described yet.
     LLVMValueRef *storage = arena_new_array<LLVMValueRef>(a, p->vars.count ? p->vars.count : 1);
     for (s64 i = 0; i < p->vars.count; i++) {
         Ir_Var *v = &p->vars[i];
+        if (v->kind == IR_VAR_CONSTANT || v->kind == IR_VAR_GLOBAL) continue;
         if (v->kind == IR_VAR_SLOT) {
             storage[i] = value(body, v->value);
         } else {
@@ -1481,6 +1484,7 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
     }
     for (s64 i = 0; i < p->vars.count; i++) {
         Ir_Var *v = &p->vars[i];
+        if (v->kind == IR_VAR_CONSTANT || v->kind == IR_VAR_GLOBAL) continue;
         RIG_ASSERT(v->scope >= 0 && v->scope < body->scope_count);
         RIG_ASSERT(v->pos.file == body->file);
         LLVMMetadataRef scope = body->scopes[v->scope];
