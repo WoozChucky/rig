@@ -7872,14 +7872,16 @@ TEST(where_default_values_cant_be) {
     // A parameter without a default after one with is said at its name, each
     // one. A '..T' parameter, C's '..' and #compiler refuse defaults for now,
     // once, at the first default's '=', and then say no gap and check none
-    // of the defaults: the second one's string goes unsaid.
+    // of the defaults: the second one's string goes unsaid. A gap, unlike
+    // them, is said and the defaults are still checked: gap's string is.
     Arena a = arena_make();
-    CHECK_STR(check_source(&a, "gap :: (a: int = 1, b: int, c: int = 3) { }\n"
+    CHECK_STR(check_source(&a, "gap :: (a: int = 1, b: int, c: int = \"x\") { }\n"
                                "later :: (a: int = 1, b: int, c: int) { }\n"
                                "gathers :: (first: int = 0, second: int = \"x\", rest: ..int) { }\n"
                                "c_like :: (format: *u8 = \"%d\", n: int = \"y\", ..) -> s32 #foreign libc \"printf\";\n"
                                "main :: () { }\n"),
               "1:21: 'b' needs a default value, since a parameter before it has one\n"
+              "1:38: a value of type 'string' doesn't convert to 'int' implicitly\n"
               "2:23: 'b' needs a default value, since a parameter before it has one\n"
               "2:31: 'c' needs a default value, since a parameter before it has one\n"
               "3:24: a procedure with a '..' parameter can't have default values, for now\n"
@@ -7891,22 +7893,37 @@ TEST(where_default_values_cant_be) {
 
 TEST(a_default_value_uses_no_parameter) {
     // A default's names are the top level's, but the procedure's parameters
-    // hide them there, as in the body, and using one is refused: a global
+    // hide them there, as in the body, and using one is refused: a constant
     // times doesn't stand in for the parameter. A parameter after the
     // default, one called through, one whose address is taken and the
-    // default's own are refused too.
+    // default's own are refused too, and so is one used after a call that
+    // works out a later signature: the rule comes back when that's done.
     Arena a = arena_make();
-    CHECK_STR(check_source(&a, "times := 5;\n"
+    CHECK_STR(check_source(&a, "times :: 5;\n"
                                "f :: (times: int, n: int = times, m: int = k, k: int = 0) { }\n"
                                "g :: (cb: () -> int, n: int = cb()) { }\n"
                                "h :: (n: int = n + 1) { }\n"
                                "p :: (times: int, at: *int = *times) { }\n"
+                               "q :: (n: int, m: int = later(1) + n) { }\n"
+                               "later :: (k: int) -> int { return k; }\n"
                                "main :: () { }\n"),
               "2:28: a default value can't use the parameter 'times'\n"
               "2:44: a default value can't use the parameter 'k'\n"
               "3:31: a default value can't use the parameter 'cb'\n"
               "4:16: a default value can't use the parameter 'n'\n"
-              "5:31: a default value can't use the parameter 'times'\n");
+              "5:31: a default value can't use the parameter 'times'\n"
+              "6:35: a default value can't use the parameter 'n'\n");
+    arena_free(&a);
+}
+
+TEST(a_body_run_in_a_default_uses_its_own_parameters) {
+    // A #run in a default checks the body it calls there, and a body is no
+    // default's: g's use of its own k is no default's use of a parameter.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "g :: (k: int) -> int { return k; }\n"
+                               "f :: (n: int = #run g(2)) { }\n"
+                               "main :: () { }\n"),
+              "");
     arena_free(&a);
 }
 
@@ -7952,7 +7969,8 @@ TEST(a_defaults_levels_count_toward_those_it_needs) {
     // parentheses around N put N at 1000, and 1000 at 1001. And a
     // signature's levels count its deepest default's: x's value, a name, is
     // no level, so f's signature, which it needs, is at 1, and its default
-    // fits with 999 parentheses and not with 1000.
+    // fits with 999 parentheses and not with 1000. A name in that default
+    // starts from f's 1: N fits inside 998 parentheses, and not inside 999.
     Arena a = arena_make();
     const char *after = ") { }\nN :: 1;\nmain :: () { }\n";
     CHECK(builds(&a, nested_source(&a, "f :: (n: int = ", "(", 999, "N", ")", after)));
@@ -7962,6 +7980,10 @@ TEST(a_defaults_levels_count_toward_those_it_needs) {
     const char *body = ") -> int { return n; }\nmain :: () { }\n";
     CHECK(builds(&a, nested_source(&a, before, "(", 999, "1", ")", body)));
     CHECK_STR(check_source(&a, nested_source(&a, before, "(", 1000, "1", ")", body)), needed_too_deeply(&a, 2, "f"));
+    const char *body_then_n = ") -> int { return n; }\nN :: 1;\nmain :: () { }\n";
+    CHECK(builds(&a, nested_source(&a, before, "(", 998, "N", ")", body_then_n)));
+    CHECK_STR(check_source(&a, nested_source(&a, before, "(", 999, "N", ")", body_then_n)),
+              needed_too_deeply(&a, 3, "N"));
     arena_free(&a);
 }
 
