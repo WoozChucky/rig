@@ -129,10 +129,11 @@
 //   own positions (none at the '#if'). Each copy of a deferred statement is a
 //   scope of its own, at the statement, inside the scope the defer was
 //   reached in, so what each copy declares is a variable of its own. And a
-//   declaration of a local that hides a variable (a global, a parameter, an
-//   outer local) starts a scope of its own, inside its block's, from the
-//   declaration to the block's end, and the local is declared in it: a name
-//   is hidden only from the end of its declaration (spec 4.7), but a
+//   declaration of a local or a constant that hides a name a debugger
+//   shows (a global, a parameter, an outer local, a constant: "Constants"
+//   below, a procedure) starts a scope of its own, inside its block's, from
+//   the declaration to the block's end, and the name is declared in it: a
+//   name is hidden only from the end of its declaration (spec 4.7), but a
 //   debugger shows a scope's variables over the whole scope. Its initializer
 //   is in the scope around, its store in the new one. So where an inner
 //   block declares x again, a debugger shows the outer x until the
@@ -149,6 +150,44 @@
 //   result pointer to a debugger, from Ir_Proc.source_results, as an
 //   artificial parameter named result$: llvm_backend.cpp's
 //   declare_variables.)
+// - Constants (spec 4.2, issue #172): every one the program declares, used
+//   or not, so a debugger shows each by its name, as C's debuggers show an
+//   enum's values. A constant naming a procedure isn't one (the debugger
+//   knows the procedure by its own name) unless it hides a name a debugger
+//   shows, and neither are the predeclared OS, OS_WINDOWS and OS_LINUX,
+//   which the program doesn't declare, nor one in a nested block once the
+//   code around it can't go on (its IR block has ended, as after a return,
+//   a break or a continue, or a block or an if that always ends in one),
+//   whose scope has no code for a debugger to stop in (lower.cpp's
+//   lower_statements), nor one that hides a name, after such code in its
+//   own block, which would hide it only where there's no code. Each is an
+//   Ir_Var: a top-level one in Ir_Module.constants, a body's in its
+//   procedure's vars, with its variables, in the scope of the block that
+//   declares it. A number, a bool or null is IR_VAR_CONSTANT, its bits, no
+//   storage: a debugger knows its value, and nothing in memory holds it. A
+//   constant holding data (a string, a struct, an array, a #run's view), a
+//   pointer to a string literal, or a procedure (a hiding one) is
+//   IR_VAR_GLOBAL, its read-only const.N, which a debugger reads as it
+//   reads a global: the one its uses read at run time, or, when no code
+//   reads it, one made for the debugger alone, after every body (a
+//   pointer's or a procedure's is 8 bytes holding its literal's or the
+//   procedure's address, since CodeView can't give an address as a
+//   constant's value; a foreign procedure's address is null there when the
+//   program doesn't otherwise use that procedure, call it or take its
+//   address: lower.cpp's used_foreign, so the program needs no C function
+//   it didn't already). Its type is the one a debugger shows: an untyped
+//   integer's int (spec 3.12's default, which every untyped integer
+//   constant fits), an untyped float's float64 (its value is a double's: as
+//   a float32, 0.1 would show 0.100000001), null's *void. Now that
+//   constants are shown, a body's constant that hides a name a debugger
+//   shows starts a scope of its own, as a variable that hides one does
+//   (above), and so does a variable that hides a constant or a procedure;
+//   one that hides nothing stays in its block's scope, even after such a
+//   declaration, since it needs no code where it's declared, and the scope
+//   a hiding declaration starts may have none (so a constant that hides a
+//   name, with no code after it in its block, is in a scope no debugger
+//   stops in). A compile-time module (lower.cpp's "Lowering on demand")
+//   records none: it is never compiled.
 // - Globals keep their Rig type (Ir_Global.rig_type) and position; the
 //   module, each source file's absolute path and MD5 (Ir_Module.sources,
 //   indexed by Position.file) and the directory rig ran in, so a debugger
@@ -344,29 +383,40 @@ struct Ir_Param {
 struct Ir_Scope {
     s32 parent;    // the scope it's inside; -1 for scope 0
     Position pos;  // where it starts: its '{', a loop's `for` or `while`, the
-                   // declaration that hides a variable, or, for a copy of
+                   // declaration that hides a name, or, for a copy of
                    // deferred code, the deferred statement (its first token)
 };
 
 // Where a variable lives, which says what Ir_Var.value is.
 enum Ir_Var_Kind : u8 {
-    IR_VAR_SLOT,     // in memory, a stack slot: value is the IR_LOCAL's result, its address
-                     // (a local's, or a scalar parameter's)
-    IR_VAR_ADDRESS,  // an aggregate parameter: value is the ptr parameter holding its address
-                     // (the caller's copy)
+    IR_VAR_SLOT,      // in memory, a stack slot: value is the IR_LOCAL's result, its address
+                      // (a local's, or a scalar parameter's)
+    IR_VAR_ADDRESS,   // an aggregate parameter: value is the ptr parameter holding its address
+                      // (the caller's copy)
+    IR_VAR_CONSTANT,  // a constant that is a number, a bool or null: no storage, its value is
+                      // Ir_Var.constant; value is unused (-1)
+    IR_VAR_GLOBAL,    // a constant in read-only data (data, or a pointer to a literal): value
+                      // is its const.N's index in Ir_Module.globals
 };
 
 // A variable a debugger shows: a parameter, a local, a for's iterator or
-// it_index.
+// it_index; or a constant (see "Constants" above), a body's in its
+// procedure's vars, a top-level one in Ir_Module.constants.
 struct Ir_Var {
     String name;       // as in the source: "x", "it", "it_index"
-    Type *type;        // its Rig type
+    Type *type;        // its Rig type; a constant's, the type a debugger shows it as (an
+                       // untyped integer's int, an untyped float's float64, null's *void)
     Position pos;      // where it's declared: its name (it and it_index: the `for`)
-    s32 scope;         // the Ir_Scope that declares it
+    s32 scope;         // the Ir_Scope that declares it; -1 for a top-level constant
     Ir_Var_Kind kind;
-    s32 value;         // a value's number: what, Ir_Var_Kind says
+    s32 value;         // a value's number, or a global's index: what, Ir_Var_Kind says
     s32 arg;           // a parameter's place among the visible ones, from 1 (the hidden
                        // result pointers before them don't count); 0 for any other
+    u64 constant;      // IR_VAR_CONSTANT: its bits, as Ast.constant keeps them (an integer's
+                       // sign-extended to 64 when signed or untyped, zero-extended when
+                       // unsigned; a bool's 0 or 1; a float's a double's, a float32's too,
+                       // whose value it holds exactly, and which the backend narrows to its
+                       // 32 bits: debug_constant_bits); 0 for the other kinds
 };
 
 struct Ir_Proc {
@@ -419,6 +469,8 @@ struct Ir_Module {
     // and gets no debug information.
     Array<Ir_Source> sources;  // indexed by Position.file
     String directory;          // the directory rig ran in
+    Array<Ir_Var> constants;   // the top-level constants, for a debugger, in source order: scope -1,
+                               // arg 0 (see "Constants" above); none in a compile-time module
 };
 
 // Whether t is f32 or f64.
@@ -535,24 +587,28 @@ void ir_lowering_free(Lowering *l);
 String ir_print(Arena *a, Ir_Module *m);
 
 // ir_print's text with the debug information as comments: first a line for
-// each source file, in order (none for a module built by hand), then a
-// global's Rig type after its line, a procedure's source, scopes and
-// variables after its own (none for a procedure the compiler makes), and
-// each instruction's position and scope at the end of its line (none at
-// line 0). A position in the first file is L:C, its line and column, and
-// one in any other F:L:C, F the file's index (1:3:5 is line 3, column 5 of
-// the second source):
+// each source file, in order (none for a module built by hand), then one
+// for each top-level constant, a global's Rig type after its line, a
+// procedure's source, scopes and variables (its constants among them) after
+// its own (none for a procedure the compiler makes), and each instruction's
+// position and scope at the end of its line (none at line 0). A position in
+// the first file is L:C, its line and column, and one in any other F:L:C, F
+// the file's index (1:3:5 is line 3, column 5 of the second source). A
+// constant's place is its bits, in decimal, or its const.N:
 //
 //   ; source C:\dev\rig\test.rig md5 0123456789abcdef0123456789abcdef
 //   ; source C:\dev\rig\sums.rig md5 fedcba9876543210fedcba9876543210
+//   ; const LIMIT int constant 12 at 2:1           (a number, a bool or null: its bits)
+//   ; const NAME string global @const.0 at 3:1     (data: its read-only global)
 //   global @counter: i64 = 0
 //     ; type int at 1:1                            (in test.rig, the first source: L:C)
 //   proc @sum(i64, ptr) -> i64 {
 //     ; source sum at 1:2:1, body 1:2:34           (in sums.rig, the second: F:L:C)
 //     ; scope 1 in 0 at 1:4:5                      (a scope from 1, in its parent)
-//     ; var n int slot %2 arg 1 in 0 at 1:2:9      (KIND: slot or address)
+//     ; var n int slot %2 arg 1 in 0 at 1:2:9      (KIND: slot, address, constant or global)
 //     ; var a []int address %1 arg 2 in 0 at 1:2:17
 //     ; var x int slot %3 in 0 at 1:3:5
+//     ; var STEP int constant 2 in 1 at 1:5:9
 //   b0:
 //     %2 = local i64                               (no position: none printed)
 //     store i64 %0, %2

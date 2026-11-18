@@ -1,3 +1,3 @@
-tests/errors/preload_name_taken.rig:6:1: error: 'Allocator' is already declared at @MODULES@/Preload/module.rig:52:1
+tests/errors/preload_name_taken.rig:6:1: error: 'Allocator' is already declared at @MODULES@/Preload/module.rig:53:1
     Allocator :: struct { size: int; }
     ^

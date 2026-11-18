@@ -1,7 +1,9 @@
 l+t
 l+s
 l+l
-bp `defer_return.rig:13`
+bp `defer_return.rig:20`
 g
+?? LIMIT
+?? LABEL
 dv /t
 q
