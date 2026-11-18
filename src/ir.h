@@ -116,7 +116,13 @@
 //   instruction with a line, once they're done).
 //   Every position in a procedure, its scopes' and its variables' too, is
 //   in the procedure's own file (Ir_Proc.pos's): a backend names that file
-//   once, in the procedure's debug scope, and each line in it.
+//   once, in the procedure's debug scope, and each line in it. So a call's
+//   default values (spec 7.2), the caller's code though they may be written
+//   in another file, are at the statement holding the call, every
+//   instruction of them, a runtime check's failure too; the check's message
+//   still names its own place, in the default. (Lowered on demand, for the
+//   interpreter, which has no line table, a failure in them is at its own
+//   place: below, ir_lower_run.)
 // - Scopes. A lexical block is a part of a procedure where some names are
 //   visible: each Ir_Scope is one, the body scope 0, and each instruction
 //   with a position says which it runs in (Ir_Instr.scope; one without, in
@@ -548,8 +554,9 @@ bool ir_block_has_ended(Ir_Proc *p, s32 block);
 // procedure marked #no_abc (spec 7.7). Lowering finds one error the checker
 // can't, reported to `d`: a call of a #compiler procedure, which only the
 // compiler can make, while compiling, is "'create_workspace' can only be
-// called while compiling", at the callee's name (spec 7.9). The module is
-// whole even then, but no executable may be made of it.
+// called while compiling", at the callee's name (spec 7.9), or, in a call's
+// default value, at the statement holding the call that leaves it out. The
+// module is whole even then, but no executable may be made of it.
 Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks);
 
 // Lowering on demand (#115): what the code #run runs while compiling needs,
@@ -577,9 +584,10 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a);
 // at all when e is a constant); a top-level #run { } is its block lowered
 // as a body. Its source_name is "#run", so a failure's outer frame is
 // named #run. An expression run's instructions are at the #run, but for a
-// failing check, at the check as everywhere; a block run's statements are
-// each at their own place. The checker made sure everything it reaches
-// checked cleanly (check_run.cpp's walk).
+// failing check, at the check, one in a default value of a call too (on
+// demand, a failure is at its own place: lower.cpp's fail_in_place); a
+// block run's statements are each at their own place. The checker made
+// sure everything it reaches checked cleanly (check_run.cpp's walk).
 s32 ir_lower_run(Lowering *l, Ast_Run *run);
 
 // The procedure of the source that l's module's procedure `proc` lowers;

@@ -1,0 +1,6 @@
+// A procedure whose default value fails, for run_fails_in_a_default (issue
+// #155): b's default calls g, leaving g's own default out, then divides by
+// d, which is 0.
+d := 0;
+g :: (x: int = 1) -> int { return x; }
+f :: (a: int, b: int = g() / d) -> int { return a + b; }

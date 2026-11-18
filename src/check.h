@@ -50,6 +50,12 @@ struct Checker {
                                  // declared nowhere may be one of them, and isn't reported as
                                  // unknown (checker.cpp's check_if_directive); set aside with the
                                  // scopes (leave_scopes)
+    Ast_Proc *default_of;        // the procedure whose default values are being checked (spec 7.2): its
+                                 // parameters are refused there; null elsewhere. Set aside with the
+                                 // scopes (checker.cpp's check_defaults, leave_scopes)
+    s32 filled_depth;            // the deepest defaults_depth of the procedures whose default values the
+                                 // calls in the default being checked fill in (check_call); set aside
+                                 // too
     Ast_File *file;              // the program being checked
     bool deciding;               // a decider (check_decider_new): it checks the top-level #ifs'
                                  // conditions only, knowing the base's names alone, and refuses any

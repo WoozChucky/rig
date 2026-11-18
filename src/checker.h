@@ -528,6 +528,57 @@
 //   spread, as in f(..values)", at its '..'. It has no type: nothing more is
 //   said about it, and it counts as an argument of its own position.
 //
+// Default parameter values (issue #155, spec 7.2, 5.10).
+// - A parameter written `name: T = e` has a default value, e (the parser
+//   reads it; a procedure type has none, and a parameter with one needs its
+//   type). It's checked with the signature, once every parameter's type is
+//   known (checker.cpp's check_defaults).
+// - Calls leave out the last parameters, so once a parameter has a
+//   default, every one after it has one: "'separator' needs a default
+//   value, since a parameter before it has one", at each one's name that
+//   doesn't.
+// - A procedure with a body, a #c_call one included, and a foreign one may
+//   have defaults: a default is the caller's, so C sees a full call. One
+//   with a '..T' parameter, one that takes C's '..' and a #compiler one
+//   can't, for now: "a procedure with a '..' parameter can't have default
+//   values, for now" ("a procedure that takes C's '..' ...", "a #compiler
+//   procedure ..."), once, at the first default's '='. Its defaults are
+//   then unchecked, and no gap is said.
+// - A default's names are the top level's, Preload's and the predeclared
+//   ones included, whichever body's call leaves it out. The procedure's
+//   parameters don't exist where it's worked out, but they hide the top
+//   level's names there as in the body: using one is "a default value
+//   can't use the parameter 'times'", at the name, even with a global
+//   times.
+// - It converts to its parameter's type as a typed variable's value does:
+//   an untyped constant takes the type ("300 doesn't fit in 'u8'"), .{...}
+//   a struct, null a pointer; otherwise "a value of type 'string' doesn't
+//   convert to 'int' implicitly", at it. The procedure's type carries no
+//   default.
+// - The signature is under way while its defaults are checked, so a
+//   default that needs it, calling its own procedure (f :: (n: int =
+//   f(1))) or through another's default that does, is "'f' is defined in
+//   terms of itself", at the procedure, once. A default's errors are its
+//   signature's: a #run reaching the procedure doesn't run.
+// - A direct call, of the procedure's name or a constant naming it, gives
+//   at least the parameters without a default and at most all of them:
+//   "'repeat' takes 1 to 3 arguments, but 4 were given", "'pair' takes 1 or
+//   2 arguments, but 3 were given" when they differ by one, at the callee.
+//   With no defaults the count is exact, as before. After a refused gap only
+//   the trailing defaults can be left out. Each given argument converts to
+//   its parameter's type, as any argument does; the ones left out pass their
+//   defaults, converted with the signature, which lowering works out at the
+//   call, in the caller, after the given ones.
+// - A procedure type keeps no defaults, so a call through a value gives
+//   every argument: with f := repeat, f("ho") is "'f' takes 3 arguments, but
+//   1 was given".
+// - Lowering a call puts the defaults it leaves out in place, and a direct
+//   call in one of them that leaves defaults out puts those in turn. So a
+//   default's depth is its levels and the deepest depth of the defaults its
+//   calls fill in, and past MAX_DEPTH it is "this default value is nested
+//   too deeply with the default values its calls fill in (more than 1000
+//   levels)", at it, said once per 1000 levels of a chain.
+//
 // Code run while compiling (issue #115, spec 7.8).
 // - #run e is an expression, of e's type: an untyped constant's default
 //   type, so `C :: #run 7;` is a typed int. e is a value (a call that

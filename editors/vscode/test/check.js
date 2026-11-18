@@ -867,6 +867,29 @@ check('the grammar colours a \'..T\' parameter and a spread', () => {
     assertScopes('x := sum(1, ..f(a), ..b[0]);', { '..': [RANGE, RANGE], b: null });
 });
 
+// A default parameter value (issue #155) is an expression after the
+// parameter's type and its '=': the names in it are no types, a call in it
+// is a call, and `f :: (n := 0)` is a procedure, if a wrong one, as the
+// parser reads it. A procedure type's '=' takes nothing from the type.
+check('the grammar colours default parameter values', () => {
+    const ASSIGNMENT = 'keyword.operator.assignment.rig';
+    assertScopes('repeat :: (s: string, times: int = 2, separator: string = " ") {', {
+        repeat: 'entity.name.function.rig',
+        times: null,
+        '=': [ASSIGNMENT, ASSIGNMENT],
+        2: 'constant.numeric.integer.rig',
+    });
+    assertScopes('place :: (p: Vec2 = .{1, 2}, q: Vec2 = Vec2.{3, 4}) -> int {', { Vec2: [TYPE, TYPE, TYPE], p: null, q: null });
+    assertScopes('g :: (x: int = h(1, 2), cb: (int) -> int = twice) #foreign libc;', {
+        h: 'entity.name.function.call.rig',
+        twice: null,
+        cb: null,
+    });
+    assertScopes('t : (a: int = 1) -> int;', { int: [PRIMITIVE, PRIMITIVE] });
+    assertScopes('f :: (n := 0) { }', { f: 'entity.name.function.rig' });
+    assertScopes('N :: (1 + 2);', { N: 'variable.other.constant.rig' });
+});
+
 check('the grammar colours the type of a literal, a cast and size_of', () => {
     assertScopes('v := Vec2.{1, 2};', { v: null, Vec2: TYPE, '.': 'punctuation.accessor.rig' });
     assertScopes('ps := Vec2.[.{1, 2}, .{3, 4}];', { Vec2: TYPE, ps: null });

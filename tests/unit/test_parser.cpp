@@ -3726,3 +3726,67 @@ TEST(parses_type_info) {
     CHECK_STR(errors, "2:23: expected ')', found ';'\n");
     arena_free(&a);
 }
+
+// Issue #155: default parameter values (spec 7.2).
+
+TEST(parses_default_values) {
+    // `= value` after a parameter's type, any expression, kept with its
+    // '=' and its levels. A gap and a '..T' parameter with one parse: the
+    // checker refuses them, and keeps the procedure.
+    Arena a = arena_make();
+    String errors;
+    const char *text = "repeat :: (s: string, times: int = 2, separator: string = \" \") { }\n"
+                       "alloc :: (size: int, allocator: Allocator = heap.allocator) -> *void #foreign libc;\n"
+                       "place :: (p: Vec2 = .{1, 2}, n: int = f(1) + 2) { }\n"
+                       "gap :: (a: int = 1, b: int) { }\n"
+                       "rest :: (first: int, more: ..int = 1) { }\n";
+    CHECK_STR(parse_src(&a, text, &errors),
+              "(proc repeat (params (s string) (times int (default (int 2))) (separator string (default (string \" \")))) (block))\n"
+              "(proc alloc (params (size int) (allocator Allocator (default (member (name heap) allocator)))) (returns (ptr void)) (foreign libc))\n"
+              "(proc place (params (p Vec2 (default (literal _ (int 1) (int 2)))) (n int (default (binary + (call f (int 1)) (int 2))))) (block))\n"
+              "(proc gap (params (a int (default (int 1))) (b int)) (block))\n"
+              "(proc rest (params (first int) (more (.. int) (default (int 1)))) (block))\n");
+    CHECK_STR(errors, "");
+    Token_List *list = src(text);
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(file->procs.count, 5);
+    if (file->procs.count == 5) {
+        Ast_Proc *repeat = file->procs[0];
+        CHECK_EQ(repeat->params[1]->equals.line, 1);
+        CHECK_EQ(repeat->params[1]->equals.col, 34);
+        CHECK(repeat->params[0]->default_value == nullptr);
+        CHECK_EQ(repeat->params[1]->default_levels, 0);
+        // A call and a binary operator: two levels.
+        CHECK_EQ(file->procs[2]->params[1]->default_levels, 2);
+    }
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(misplaced_default_values) {
+    // A procedure type keeps no defaults, nested in a signature too; and a
+    // parameter with one still needs its type. Both are the parser's to
+    // refuse, at the '=' and at the ':=', and the declaration is given up.
+    Arena a = arena_make();
+    String errors;
+    parse_src(&a, "t : (a: int = 1) -> int;\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:13: a procedure type can't have default values\n");
+    CHECK_STR(parse_src(&a, "apply :: (f: (n: int = 1) -> int) { }\nmain :: () { }\n", &errors),
+              "(broken apply)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:22: a procedure type can't have default values\n");
+    // `(n :=` is a parameter list, as `(n :` is: no expression has ':='.
+    CHECK_STR(parse_src(&a, "f :: (n := 0) { }\nmain :: () { }\n", &errors), "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:9: a parameter needs its type, as in n: int = 0\n");
+    parse_src(&a, "g :: (a: int, n := 0) { }\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:17: a parameter needs its type, as in n: int = 0\n");
+    // So a first parameter written `n :=` opens a list for the recovery
+    // too, and the list's next line isn't a global.
+    CHECK_STR(parse_src(&a, "f :: (n := 0,\nm: int) { }\nmain :: () { }\n", &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:9: a parameter needs its type, as in n: int = 0\n");
+    // A default value that fails gives the declaration up, as a type does.
+    CHECK_STR(parse_src(&a, "f :: (n: int = ) { }\nmain :: () { }\n", &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:16: expected an expression, found ')'\n");
+    arena_free(&a);
+}

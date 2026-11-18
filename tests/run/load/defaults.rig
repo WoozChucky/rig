@@ -1,0 +1,13 @@
+// Procedures whose default values hold runtime checks, for
+// default_parameters and default_runtime_error (issue #155): a default's
+// code is the caller's, lowered at the call in another file, while a
+// runtime error in it names the operation that failed, here.
+SCALES :: int.[10, 20, 30];
+slot := 1;
+divisor := 2;
+pick :: (i: int, scale: int = SCALES[slot]) -> int { return i * scale; }
+split :: (n: int, by: int = 100 / divisor) -> int { return n * by; }
+// A default that calls a procedure leaving its own default out, then
+// checks its division: still the caller's code, at the call.
+unit :: (n: int = 1) -> int { return n; }
+shared :: (n: int, by: int = unit() * 100 / divisor) -> int { return n * by; }

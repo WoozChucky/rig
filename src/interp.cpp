@@ -504,7 +504,8 @@ static void interp_fail_not_in_c(Interp *in, Interp_Record *frame, s32 block, s3
 // The IR_CALL at instruction `index` of block `block` in `frame`, of a
 // #compiler procedure: the hook (interp_set_compiler) is given the
 // arguments' values as they are, and the call's place, its instruction's
-// position, which lowering makes the callee's name. The results it gives
+// position, which lowering makes the callee's name, one in a call's default
+// value's too (lower.cpp's fail_in_place). The results it gives
 // are the call's. False when the run stopped there, as interp_fail stops
 // it: there is no hook, or the hook failed, its message already in `a`.
 static bool interp_call_compiler(Interp *in, Interp_Record *frame, s32 block, s32 index, Arena *a,

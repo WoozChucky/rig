@@ -1,0 +1,17 @@
+// Calls of procedures with default values (issue #155, spec 5.10): at least
+// the parameters without one, at most all of them, each given argument
+// converting to its parameter's type. A call through a procedure value
+// gives every argument: a procedure type keeps no default values.
+repeat :: (s: string, times: int = 2, separator: string = " ") { }
+pair :: (a: int, b: int = 0) { }
+maybe :: (n: int = 0) { }
+main :: () {
+    repeat();
+    repeat("ho", 3, "-", "!");
+    repeat("ho", "3");
+    pair();
+    pair(1, 2, 3);
+    maybe(1, 2);
+    f := repeat;
+    f("ho");
+}

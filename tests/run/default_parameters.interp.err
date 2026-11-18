@@ -1,0 +1,1 @@
+tests/run/default_parameters.rig:107:5: runtime error: a Rig procedure can't be passed to C at compile time, for now

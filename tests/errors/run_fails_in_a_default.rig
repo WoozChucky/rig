@@ -1,0 +1,13 @@
+// A #run whose code fails in a default value (issue #155, spec 7.8): the
+// innermost frame is at the operation that failed, in the file that
+// declares the default, though the default's code is the caller's, use's;
+// the frames out from there are at their calls.
+#load "load/run_default.rig";
+
+use :: () -> int {
+    return f(1);
+}
+
+N :: #run use();
+
+main :: () { }

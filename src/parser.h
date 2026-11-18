@@ -20,7 +20,8 @@
 //                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
 //                                                                  (the STRING: the C function's name)
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
-//   param       = IDENT ':' ['..'] type                           '..': a '..T' parameter, the last
+//   param       = IDENT ':' ['..'] type ['=' expression]          '..': a '..T' parameter, the last;
+//                                                                  the expression: a default value
 //   type        = '*' type | '[' expression ']' type | '[' ']' type | proc_type | IDENT
 //                                                                  (*void: a pointer to anything)
 //   proc_type   = '(' [proc_param {',' proc_param}] ')'
@@ -160,8 +161,10 @@
 // when that's one written without parentheses. Its last parameter may be
 // a '..T' one, as a signature's may (below): `(int, ..int) -> int`. C's
 // bare '..' has no place in one: "a procedure type can't take '..': a
-// procedure that takes C's '..' can't be a value". Its '(' is a type
-// level, as a '*' is.
+// procedure that takes C's '..' can't be a value". Nor has a default value
+// (below): `(a: int = 1) -> int` is "a procedure type can't have default
+// values", at the '=', since a call through a value gives every argument.
+// Its '(' is a type level, as a '*' is.
 //
 // A variadic Rig procedure (spec 7.2) takes the arguments after its others
 // in a '..T' parameter, its last: `sum :: (first: int, rest: ..int) -> int`
@@ -172,6 +175,17 @@
 // arguments are written as C's bare '..' instead, the list's last element
 // (`printf :: (format: *u8, ..) -> s32 #foreign libc;`).
 //
+// A parameter's default value (spec 7.2), Jai's, is an expression after its
+// type and a '=': `repeat :: (s: string, times: int = 2) { ... }`, which a
+// call that leaves the parameter out passes (Ast_Param.default_value). Its
+// levels are counted as a constant's value's, not the body's. Where a
+// default may be is the checker's business: every parameter after one with
+// a default needs one too, and a procedure with a '..' parameter, C's '..'
+// or #compiler takes none, for now; the checker refuses those and keeps
+// the procedure. A parameter needs its type still: `(n := 0)` is "a
+// parameter needs its type, as in n: int = 0", at the ':=', and the
+// declaration is given up.
+//
 // A spread, ..e (spec 5.10), passes a view's or an array's elements as a
 // call's '..' arguments: `sum(0, ..values)`. It's a prefix operator, as -
 // is, so ..a + b is (..a) + b; the parser takes it wherever an operand
@@ -180,15 +194,15 @@
 // is no operator: a range's '..' ends the expression before it.
 //
 // At the top level, after '::', a procedure's parameter list starts with
-// '(' ')', '(' IDENT ':' or '(' '..'; any other '(' begins a constant's
-// value, so `N :: (1 + 2);` is a constant. A name followed by ':' or ':='
-// and then a signature with a body or a directive other than #load, #run
-// and #if after it (`greet : () {`) is a procedure with its '::' mistyped:
-// "expected '::', found ':'"; a name, ':' and a procedure type followed by
-// '=' or ';', or by a #load, a #run or an #if (which begins the next
-// declaration, so the variable is then missing its ';'), is a variable of
-// that type: `op : (int) -> int = add;`. Anything else after a top-level
-// name is "expected '::', found ...".
+// '(' ')', '(' IDENT ':', '(' IDENT ':=' or '(' '..'; any other '(' begins
+// a constant's value, so `N :: (1 + 2);` is a constant. A name followed by
+// ':' or ':=' and then a signature with a body or a directive other than
+// #load, #run and #if after it (`greet : () {`) is a procedure with its
+// '::' mistyped: "expected '::', found ':'"; a name, ':' and a procedure
+// type followed by '=' or ';', or by a #load, a #run or an #if (which
+// begins the next declaration, so the variable is then missing its ';'), is
+// a variable of that type: `op : (int) -> int = add;`. Anything else after
+// a top-level name is "expected '::', found ...".
 //
 // The bodies of if, else, while and for are always blocks in braces (spec
 // 6.1), and a condition needs no parentheses: the body's '{' ends it. A for

@@ -7846,3 +7846,357 @@ TEST(a_description_reaching_a_field_with_no_type_doesnt_run) {
         arena_free(&a);
     }
 }
+
+// Issue #155: default parameter values (spec 7.2, 5.10).
+
+TEST(default_values_take_their_parameters_types) {
+    // Each default converts to its parameter's type as a typed variable's
+    // value does: an untyped constant takes it, .{...} takes the struct, and
+    // null the pointer. A string literal passed as a *u8 keeps its type, as
+    // check_convert keeps it. The procedure's type carries no default.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "Vec2 :: struct { x: float; y: float; }\n"
+                              "f :: (a: int, b: u8 = 200, c: float32 = 1, p: Vec2 = .{1, 2}, s: *u8 = \"x\", "
+                              "q: *int = null) { }\n"
+                              "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Proc *f = c.file->procs[0];
+    const char *types[] = {"u8", "float32", "Vec2", "string", "*int"};
+    for (s64 i = 1; i <= 5; i++) CHECK_STR(type_name(&a, f->params[i]->default_value->type), types[i - 1]);
+    CHECK_STR(type_name(&a, f->type), "(int, u8, float32, Vec2, *u8, *int)");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(where_default_values_cant_be) {
+    // A parameter without a default after one with is said at its name, each
+    // one. A '..T' parameter, C's '..' and #compiler refuse defaults for now,
+    // once, at the first default's '=', and then say no gap and check none
+    // of the defaults: the second one's string goes unsaid. A gap, unlike
+    // them, is said and the defaults are still checked: gap's string is.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "gap :: (a: int = 1, b: int, c: int = \"x\") { }\n"
+                               "later :: (a: int = 1, b: int, c: int) { }\n"
+                               "gathers :: (first: int = 0, second: int = \"x\", rest: ..int) { }\n"
+                               "c_like :: (format: *u8 = \"%d\", n: int = \"y\", ..) -> s32 #foreign libc \"printf\";\n"
+                               "main :: () { }\n"),
+              "1:21: 'b' needs a default value, since a parameter before it has one\n"
+              "1:38: a value of type 'string' doesn't convert to 'int' implicitly\n"
+              "2:23: 'b' needs a default value, since a parameter before it has one\n"
+              "2:31: 'c' needs a default value, since a parameter before it has one\n"
+              "3:24: a procedure with a '..' parameter can't have default values, for now\n"
+              "4:24: a procedure that takes C's '..' can't have default values, for now\n");
+    CHECK_STR(check_module_source(&a, "compiled :: (n: int = 1, m: int = \"z\") #compiler;\nmain :: () { }\n"),
+              "1:21: a #compiler procedure can't have default values, for now\n");
+    // Their calls count the parameters as with no defaults, a '..T' or C's
+    // '..' taking at least the fixed ones: a call that leaves those out says
+    // so. A #compiler procedure's defaults count, so a call that leaves them
+    // out says nothing beyond the refusal.
+    CHECK_STR(check_source(&a, "gathers :: (first: int, rest: ..int = 1) { }\n"
+                               "c_like :: (format: *u8 = \"%d\", ..) -> s32 #foreign libc \"printf\";\n"
+                               "main :: () { gathers(); c_like(); }\n"),
+              "1:37: a procedure with a '..' parameter can't have default values, for now\n"
+              "2:24: a procedure that takes C's '..' can't have default values, for now\n"
+              "3:14: 'gathers' takes at least 1 argument, but 0 were given\n"
+              "3:25: 'c_like' takes at least 1 argument, but 0 were given\n");
+    CHECK_STR(check_module_source(&a, "compiled :: (n: int = 1) #compiler;\nmain :: () { compiled(); }\n"),
+              "1:21: a #compiler procedure can't have default values, for now\n");
+    // main takes no parameters, so it has no defaults: one with a default is
+    // said as any parameter is, by main's own message. The default is still
+    // checked, as any procedure's is, so a wrong one says so too.
+    CHECK_STR(check_source(&a, "main :: (n: int = 0) { }\n"),
+              "1:1: 'main' must take no arguments and return nothing\n");
+    CHECK_STR(check_source(&a, "main :: (n: int = \"x\") { }\n"),
+              "1:1: 'main' must take no arguments and return nothing\n"
+              "1:19: a value of type 'string' doesn't convert to 'int' implicitly\n");
+    arena_free(&a);
+}
+
+TEST(a_default_value_uses_no_parameter) {
+    // A default's names are the top level's, but the procedure's parameters
+    // hide them there, as in the body, and using one is refused: a constant
+    // times doesn't stand in for the parameter. A parameter after the
+    // default, one called through, one whose address is taken and the
+    // default's own are refused too, and so is one used after a call that
+    // works out a later signature: the rule comes back when that's done.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "times :: 5;\n"
+                               "f :: (times: int, n: int = times, m: int = k, k: int = 0) { }\n"
+                               "g :: (cb: () -> int, n: int = cb()) { }\n"
+                               "h :: (n: int = n + 1) { }\n"
+                               "p :: (times: int, at: *int = *times) { }\n"
+                               "q :: (n: int, m: int = later(1) + n) { }\n"
+                               "later :: (k: int) -> int { return k; }\n"
+                               "main :: () { }\n"),
+              "2:28: a default value can't use the parameter 'times'\n"
+              "2:44: a default value can't use the parameter 'k'\n"
+              "3:31: a default value can't use the parameter 'cb'\n"
+              "4:16: a default value can't use the parameter 'n'\n"
+              "5:31: a default value can't use the parameter 'times'\n"
+              "6:35: a default value can't use the parameter 'n'\n");
+    // One in a #run in a default is refused once, as a default's, not again
+    // as the #run's.
+    CHECK_STR(check_source(&a, "g :: (k: int) -> int { return k; }\n"
+                               "f :: (n: int, m: int = #run g(n)) { }\n"
+                               "main :: () { }\n"),
+              "2:31: a default value can't use the parameter 'n'\n");
+    arena_free(&a);
+}
+
+TEST(a_body_run_in_a_default_uses_its_own_parameters) {
+    // A #run in a default checks the body it calls there, and a body is no
+    // default's: g's use of its own k is no default's use of a parameter.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "g :: (k: int) -> int { return k; }\n"
+                               "f :: (n: int = #run g(2)) { }\n"
+                               "main :: () { }\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(a_default_under_a_broken_parameter) {
+    // The parameters are put in the default's scope as they are, not
+    // declared again, so a name declared twice is said once, by the body. A
+    // default whose parameter's type is an error says its own mistakes,
+    // and no conversion to the missing type.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "f :: (a: int, a: int = 1) { }\nmain :: () { }\n"),
+              "1:15: 'a' is already declared at test.rig:1:7\n");
+    CHECK_STR(check_source(&a, "f :: (n: Nope = 1 + \"x\") { }\nmain :: () { }\n"),
+              "1:10: unknown type 'Nope'\n"
+              "1:19: '+' needs numbers, not 'string'\n");
+    CHECK_STR(check_source(&a, "h :: (x: Nope = \"a\") { }\nmain :: () { }\n"), "1:10: unknown type 'Nope'\n");
+    arena_free(&a);
+}
+
+TEST(an_error_in_a_default_stops_a_run_reaching_it) {
+    // A default's errors are its signature's, so a #run that calls the
+    // procedure doesn't run, whether the #run's turn comes first or the
+    // procedure's, and the constant is left with no value.
+    Arena a = arena_make();
+    const char *sources[] = {
+        "X :: #run f(1);\nf :: (n: int = \"two\") -> int { return n; }\nmain :: () { }\n",
+        "f :: (n: int = \"two\") -> int { return n; }\nX :: #run f(1);\nmain :: () { }\n",
+    };
+    const char *expected[] = {
+        "2:16: a value of type 'string' doesn't convert to 'int' implicitly\n",
+        "1:16: a value of type 'string' doesn't convert to 'int' implicitly\n",
+    };
+    for (s64 i = 0; i < 2; i++) {
+        Checked c = check_src(&a, sources[i]);
+        CHECK_STR(messages(&a, &c.list->diag), expected[i]);
+        CHECK(!global_named(&c, "X")->is_constant);
+        token_list_free(c.list);
+    }
+    arena_free(&a);
+}
+
+TEST(a_defaults_levels_count_toward_those_it_needs) {
+    // A default's levels start from its signature's, as a type's do: 999
+    // parentheses around N put N at 1000, and 1000 at 1001. And a
+    // signature's levels count its deepest default's: x's value, a name, is
+    // no level, so f's signature, which it needs, is at 1, and its default
+    // fits with 999 parentheses and not with 1000. A name in that default
+    // starts from f's 1: N fits inside 998 parentheses, and not inside 999.
+    Arena a = arena_make();
+    const char *after = ") { }\nN :: 1;\nmain :: () { }\n";
+    CHECK(builds(&a, nested_source(&a, "f :: (n: int = ", "(", 999, "N", ")", after)));
+    CHECK_STR(check_source(&a, nested_source(&a, "f :: (n: int = ", "(", 1000, "N", ")", after)),
+              needed_too_deeply(&a, 2, "N"));
+    const char *before = "x := f;\nf :: (n: int = ";
+    const char *body = ") -> int { return n; }\nmain :: () { }\n";
+    CHECK(builds(&a, nested_source(&a, before, "(", 999, "1", ")", body)));
+    CHECK_STR(check_source(&a, nested_source(&a, before, "(", 1000, "1", ")", body)), needed_too_deeply(&a, 2, "f"));
+    const char *body_then_n = ") -> int { return n; }\nN :: 1;\nmain :: () { }\n";
+    CHECK(builds(&a, nested_source(&a, before, "(", 998, "N", ")", body_then_n)));
+    CHECK_STR(check_source(&a, nested_source(&a, before, "(", 999, "N", ")", body_then_n)),
+              needed_too_deeply(&a, 3, "N"));
+    arena_free(&a);
+}
+
+TEST(a_default_that_needs_its_own_signature) {
+    // A default is checked while its signature is under way, so one that
+    // calls its own procedure, directly or through another's default, is the
+    // circle a global's value makes: said once, at the procedure.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "f :: (n: int = f(1)) -> int { return n; }\n"
+                               "g :: (n: int = h()) -> int { return n; }\n"
+                               "h :: (m: int = g(1)) -> int { return m; }\n"
+                               "main :: () { }\n"),
+              "1:1: 'f' is defined in terms of itself\n"
+              "2:1: 'g' is defined in terms of itself\n");
+    arena_free(&a);
+}
+
+TEST(a_default_names_what_is_declared_later) {
+    // The signature is checked in the declarations pass, before Late's and
+    // LIMIT's turn: each is worked out where the default needs it, the
+    // literal laid out as a Late and the constant folded.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "f :: (p: Late = .{1, 2}, n: int = LIMIT) -> int { return p.x + n; }\n"
+                              "LIMIT :: 10;\n"
+                              "Late :: struct { x: int; y: int; }\n"
+                              "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Proc *f = c.file->procs[0];
+    CHECK_STR(type_name(&a, f->params[0]->default_value->type), "Late");
+    Ast *limit = f->params[1]->default_value;
+    CHECK(limit->is_constant);
+    CHECK_EQ(limit->constant, 10);
+    CHECK_STR(type_name(&a, limit->type), "int");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(calls_leave_out_parameters_with_default_values) {
+    // A direct call gives at least the parameters without a default and at
+    // most all of them, a constant naming the procedure included. Each
+    // given argument converts to its parameter's type as any argument does:
+    // a typed one keeps its own type, which lowering converts.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "repeat :: (s: string, times: int = 2, separator: string = \" \") { }\n"
+                              "R :: repeat;\n"
+                              "main :: () {\n"
+                              "    repeat(\"ho\");\n"
+                              "    repeat(\"ho\", 3);\n"
+                              "    repeat(\"ho\", 3, \"-\");\n"
+                              "    R(\"hi\");\n"
+                              "    b : u8 = 4;\n"
+                              "    repeat(\"ho\", b);\n"
+                              "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Call *call = (Ast_Call *)c.file->procs[1]->body->statements[5];
+    CHECK_STR(type_name(&a, call->args[1]->type), "u8");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(the_count_of_a_call_with_default_values) {
+    // Too few or too many is a range, "1 or 2" when the ends differ by one,
+    // and always "arguments". A refused gap leaves only the trailing run of
+    // defaults to leave out.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "pair :: (a: int, b: int = 0) { }\n"
+                               "maybe :: (n: int = 0) { }\n"
+                               "later :: (a: int = 1, b: int, c: int = 3) { }\n"
+                               "main :: () {\n"
+                               "    pair();\n"
+                               "    maybe(1, 2);\n"
+                               "    later(1);\n"
+                               "    later(1, 2, 3, 4);\n"
+                               "}\n"),
+              "3:23: 'b' needs a default value, since a parameter before it has one\n"
+              "5:5: 'pair' takes 1 or 2 arguments, but 0 were given\n"
+              "6:5: 'maybe' takes 0 or 1 arguments, but 2 were given\n"
+              "7:5: 'later' takes 2 or 3 arguments, but 1 was given\n"
+              "8:5: 'later' takes 2 or 3 arguments, but 4 were given\n");
+    arena_free(&a);
+}
+
+// The procedures p0 to p<last>, each pK's default value a call of p(K-1)
+// that fills in p(K-1)'s default: so lowering pK() goes K levels deep.
+static const char *default_chain(Arena *a, s64 last) {
+    return joined(a, "p0 :: (x: int = 0) -> int { return x; }\n",
+                  chain_of(a, "p%lld :: (x: int = p%lld()) -> int { return x; }\n", 1, last, -1));
+}
+
+TEST(default_values_nested_too_deeply) {
+    // A default's depth is its own levels and the depth of the defaults its
+    // direct calls fill in: a call of a name is a level, so b's is 1, and
+    // c's, which gives b's argument and so fills in none of b's defaults, 1
+    // too; d's parentheses make 2, and b's 1 more. e's default is a name, no
+    // level, and the call through the value e() returns fills in nothing:
+    // g's 2 is its own two calls. h's default works out later's signature
+    // after b() has counted b's 1, and b's 1 is still counted when that's
+    // done: 2 levels and b's 1. k's d(1) leaves out only y, whose default
+    // is no level, and still counts all of d's 3, x's included: a call that
+    // leaves parameters out counts how deep its callee's defaults go, so
+    // k's is 4.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "a :: (x: int = 0) -> int { return x; }\n"
+                              "b :: (x: int = a()) -> int { return x; }\n"
+                              "c :: (x: int = b(1)) -> int { return x; }\n"
+                              "d :: (x: int = (b()), y: int = 1) -> int { return x; }\n"
+                              "e :: (f: (int, int) -> int = d) -> (int, int) -> int { return f; }\n"
+                              "g :: (x: int = e()(1, 2)) -> int { return x; }\n"
+                              "h :: (x: int = b() + later()) -> int { return x; }\n"
+                              "later :: (y: int = 0) -> int { return y; }\n"
+                              "k :: (x: int = d(1)) -> int { return x; }\n"
+                              "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    s32 depths[] = {0, 1, 1, 3, 0, 2, 3, 0, 4};
+    for (s64 i = 0; i < 9; i++) CHECK_EQ(c.file->procs[i]->defaults_depth, depths[i]);
+    token_list_free(c.list);
+    // A chain to the limit checks. One more is said once, at the default
+    // past it, whose procedure then counts no depth: the next one fits.
+    const char *main_proc = "main :: () { }\n";
+    CHECK_STR(check_source(&a, joined(&a, default_chain(&a, 1000), main_proc)), "");
+    const char *too_deep = "1002:20: this default value is nested too deeply with the default values its calls fill "
+                           "in (more than 1000 levels)\n";
+    CHECK_STR(check_source(&a, joined(&a, default_chain(&a, 1001), main_proc)), too_deep);
+    CHECK_STR(check_source(&a, joined(&a, default_chain(&a, 1002), main_proc)), too_deep);
+    // A default that works out a later signature still counts what its calls
+    // filled in before it, and after: p999's 999 and q's 2 levels are past
+    // the limit, whichever argument works out later's signature.
+    const char *f = "f :: (a: int, b: int) -> int { return a; }\n";
+    const char *later = "later :: (y: int = 0) -> int { return y; }\n";
+    const char *past_later = "1002:16: this default value is nested too deeply with the default values its calls "
+                             "fill in (more than 1000 levels)\n";
+    const char *calls[] = {"q :: (x: int = f(p999(), later())) -> int { return x; }\n",
+                           "q :: (x: int = f(later(), p999())) -> int { return x; }\n"};
+    for (s64 i = 0; i < 2; i++) {
+        const char *source = joined(&a, joined(&a, default_chain(&a, 999), f), joined(&a, calls[i], later));
+        CHECK_STR(check_source(&a, joined(&a, source, main_proc)), past_later);
+    }
+    arena_free(&a);
+}
+
+TEST(default_values_run_while_compiling) {
+    // A #run whose call leaves a parameter out runs the default with it, so
+    // the walk goes into a reached procedure's defaults: g, which only f's
+    // default calls, has its body checked before the #run runs. A #run in a
+    // default ran once, while checking the signature.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "N :: #run f();\n"
+                              "M :: #run f(5);\n"
+                              "A :: #run answer();\n"
+                              "f :: (n: int = g()) -> int { return n * 2; }\n"
+                              "g :: () -> int { return 21; }\n"
+                              "twice :: (n: int) -> int { return n * 2; }\n"
+                              "answer :: (n: int = #run twice(21)) -> int { return n; }\n"
+                              "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    const char *names[] = {"N", "M", "A"};
+    u64 values[] = {42, 10, 42};
+    for (s64 i = 0; i < 3; i++) {
+        Ast *constant = global_named(&c, names[i]);
+        CHECK(constant->is_constant);
+        CHECK_EQ(constant->constant, values[i]);
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(a_run_that_fails_in_a_default_value_names_its_place) {
+    // A #run's failure names its place only by its frames (the message
+    // leaves the default's PATH:L:C out), so a check failing in a default
+    // value is at the check, the '[' in bad's signature, in the innermost
+    // frame: the run's own when the #run's call leaves k out, use's when
+    // use's does.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "items := int.[1, 2, 3];\n"
+                               "k_index := 7;\n"
+                               "bad :: (k: int = items[k_index]) -> int { return k; }\n"
+                               "use :: () -> int {\n"
+                               "    return bad();\n"
+                               "}\n"
+                               "X :: #run bad();\n"
+                               "Y :: #run use();\n"
+                               "main :: () { }\n"),
+              "7:6: #run failed: runtime error: index 7 is out of bounds (count 3)\n"
+              "    in #run (test.rig:3:23)\n"
+              "8:6: #run failed: runtime error: index 7 is out of bounds (count 3)\n"
+              "    in use (test.rig:3:23)\n"
+              "    in #run (test.rig:8:6)\n");
+    arena_free(&a);
+}

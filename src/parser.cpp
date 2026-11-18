@@ -698,16 +698,19 @@ static Ast *parse_expression(Parser *p, int min_precedence) {
 }
 
 // Whether a procedure's parameter list starts `ahead` tokens on: '(' ')',
-// '(' IDENT ':' or '(' '..'. Any other '(' after '::' begins a constant's
-// value in parentheses (N :: (1 + 2);). A spread starts with '..' too, but
-// a constant's value can't be one (only a call's argument can), so (..) is
-// a signature, if a wrong one: parse_procedure says what's wrong with it,
-// rather than refusing a spread.
+// '(' IDENT ':', '(' IDENT ':=' or '(' '..'. Any other '(' after '::'
+// begins a constant's value in parentheses (N :: (1 + 2);). A spread starts
+// with '..' too, but a constant's value can't be one (only a call's
+// argument can), so (..) is a signature, if a wrong one: parse_procedure
+// says what's wrong with it, rather than refusing a spread. No expression
+// has a ':=' either, so (n := 0) is a signature too, whose parameter
+// parse_param says is missing its type.
 static bool procedure_follows(Parser *p, s64 ahead) {
     Token_Kind next = peek(p, ahead + 1)->kind;
+    Token_Kind after = peek(p, ahead + 2)->kind;
     return peek(p, ahead)->kind == TOKEN_LPAREN &&
            (next == TOKEN_RPAREN || next == TOKEN_DOT_DOT ||
-            (next == TOKEN_IDENT && peek(p, ahead + 2)->kind == TOKEN_COLON));
+            (next == TOKEN_IDENT && (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL)));
 }
 
 // Whether the next tokens are a procedure's or a struct's declaration with
@@ -1452,9 +1455,12 @@ static bool parse_results(Parser *p, Array<Ast_Type *> *results, bool whole, boo
 // params and the type marked (Ast_Type.is_variadic); before another
 // parameter it's "'..' must be the last parameter", at the '..'. C's bare
 // '..' (one followed by ')' or ',') has no place in one, since a procedure
-// that takes it can't be a value (spec 7.6). A '#c_call' after it is this
-// type's, unless the result is a procedure type written without
-// parentheses, which took it first: the innermost type with room for it.
+// that takes it can't be a value (spec 7.6). Nor has a default value, `=
+// value` after a parameter's type: a call through a value gives every
+// argument (spec 7.2), so it's "a procedure type can't have default
+// values", at the '='. A '#c_call' after it is this type's, unless the
+// result is a procedure type written without parentheses, which took it
+// first: the innermost type with room for it.
 static Ast_Type *parse_proc_type(Parser *p) {
     Token *open = advance(p);
     Ast_Type *type = ast_new<Ast_Type>(p->arena, AST_TYPE_PROC, open->pos);
@@ -1473,6 +1479,10 @@ static Ast_Type *parse_proc_type(Parser *p) {
             }
             Ast_Type *param = parse_type(p);
             if (!param) return nullptr;
+            if (peek(p)->kind == TOKEN_EQUAL) {
+                diag_error(p->diag, peek(p)->pos, "a procedure type can't have default values");
+                return nullptr;
+            }
             array_add(&type->params, param);
             if (peek(p)->kind != TOKEN_COMMA) break;
             if (type->is_variadic) {
@@ -1552,15 +1562,29 @@ static Ast_Type *parse_whole_type(Parser *p) {
     return type;
 }
 
-// param = IDENT ':' ['..'] type
+// param = IDENT ':' ['..'] type ['=' expression]
 //
 // A '..' before the type makes the parameter a '..T' one (spec 7.2), which
 // takes the call's other arguments: its type as written is T, and the
 // checker gives it the type []T. Whether it's last is parse_procedure's to
 // say.
+//
+// An expression after the type and a '=' is the parameter's default value
+// (spec 7.2), which a call that leaves the parameter out passes: kept with
+// its '=' and its levels, counted as a constant's are (parse_constant),
+// since the checker works it out with the signature, at the top level.
+// Where a default may be (trailing, not with a '..' parameter, not on a
+// #compiler procedure) is the checker's to say, so a misplaced one gives
+// nothing up. A parameter written `n := 0`, its type left to its value, is
+// "a parameter needs its type, as in n: int = 0", at the ':=', for now.
 static Ast_Param *parse_param(Parser *p) {
     Token *name = expect(p, TOKEN_IDENT);
-    if (!name || !expect(p, TOKEN_COLON)) return nullptr;
+    if (!name) return nullptr;
+    if (peek(p)->kind == TOKEN_COLON_EQUAL) {
+        diag_error(p->diag, peek(p)->pos, "a parameter needs its type, as in n: int = 0");
+        return nullptr;
+    }
+    if (!expect(p, TOKEN_COLON)) return nullptr;
     Ast_Param *param = ast_new<Ast_Param>(p->arena, AST_PARAM, name->pos);
     param->name = name->text;
     if (peek(p)->kind == TOKEN_DOT_DOT) {
@@ -1568,7 +1592,15 @@ static Ast_Param *parse_param(Parser *p) {
         param->dots = advance(p)->pos;
     }
     param->type_expr = parse_whole_type(p);
-    return param->type_expr ? param : nullptr;
+    if (!param->type_expr) return nullptr;
+    if (peek(p)->kind == TOKEN_EQUAL) {
+        param->equals = advance(p)->pos;
+        take_deepest(p);
+        param->default_value = parse_expression(p, 1);
+        param->default_levels = take_deepest(p);
+        if (!param->default_value) return nullptr;
+    }
+    return param;
 }
 
 // C's bare '..' that ends a variadic C function's parameter list, the
@@ -1626,7 +1658,10 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // and a type), and '..' is the end. A '..T' parameter (`rest: ..int`, spec
 // 7.2) takes every argument after the others, so it's the last too: one
 // followed by a ',' is "'..' must be the last parameter", at its '..', as
-// C's is, and the declaration is given up.
+// C's is, and the declaration is given up. A parameter may have a default
+// value (`times: int = 2`, spec 7.2), read with it (parse_param) before the
+// body, so its levels aren't the body's; which parameters may have one is
+// the checker's to say.
 static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     Ast_Proc *proc = ast_new<Ast_Proc>(p->arena, AST_PROC, name->pos);
     proc->name = name->text;
@@ -1900,10 +1935,11 @@ static Ast *parse_run(Parser *p) {
 //           | run
 //           | if_directive                                    its branches holding top_level*
 //
-// After '::', a procedure's parameters start with '(' ')', '(' IDENT ':' or
-// '(' '..'. Any other '(' begins a constant's value in parentheses:
-// N :: (1 + 2); is a constant. A global variable is written as a local one;
-// whether its value is known while compiling is the checker's to say.
+// After '::', a procedure's parameters start with '(' ')', '(' IDENT ':',
+// '(' IDENT ':=' or '(' '..'. Any other '(' begins a constant's value in
+// parentheses: N :: (1 + 2); is a constant. A global variable is written as
+// a local one; whether its value is known while compiling is the checker's
+// to say.
 //
 // ':' or ':=' followed by a signature (`greet : () {`, `greet := () {`) is
 // a procedure's declaration with its '::' mistyped, so it's reported as
@@ -1967,16 +2003,19 @@ static bool starts_global(Parser *p) {
 // list holds a name followed by ':' (`n: s32`), which a line can start
 // with: a call's or a value's parentheses never do, so a global after one
 // whose ')' is missing is still the next declaration. A list starts at a
-// '(' followed by ')' or IDENT ':', as parse_declaration tells a procedure
-// from a constant (`greet (s: *u8,` too, a C habit), or by IDENT IDENT, a
-// first parameter missing its ':' (`f :: (a int,`): two names in a row
-// never begin an expression. A '(' followed by '..' starts one right after
-// '::', as parse_declaration has it too, or after ':', where a type is (or
-// a for's sequence, `for v: (`, which a spread can't be either): a spread
-// is only ever a call's argument. Elsewhere only C's bare '..' does, one
-// followed by ')' or ','; any other is a spread (`f(..xs`). Inside a list
-// every '(' and ')' counts. A list holds no braces, so a '{' or '}' ends
-// it, closed or not: a body has begun or ended.
+// '(' followed by ')', IDENT ':' or IDENT ':=', as parse_declaration tells
+// a procedure from a constant (`greet (s: *u8,` too, a C habit), or by
+// IDENT IDENT, a first parameter missing its ':' (`f :: (a int,`): two
+// names in a row never begin an expression, nor does a name and ':='. A
+// '(' followed by '..' starts one right after '::', as parse_declaration
+// has it too, or after ':', where a type is (or a for's sequence, `for v:
+// (`, which a spread can't be either): a spread is only ever a call's
+// argument. Elsewhere only C's bare '..' does, one followed by ')' or ',';
+// any other is a spread (`f(..xs`). Inside a list every '(' and ')' counts.
+// A '{' or '}' ends a list, closed or not: a body has begun or ended, or a
+// default value's literal (`p: Vec2 = .{1, 2}`, spec 7.2) has braces, and
+// the count is then approximate, which only the recovery after an error
+// reads.
 static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
     Token_Kind kind = p->tokens[i].kind;
     if (kind == TOKEN_LBRACE || kind == TOKEN_RBRACE) {
@@ -1991,7 +2030,8 @@ static void count_open(Parser *p, s64 i, s64 *depth, s64 *parens) {
         bool no_spread = before == TOKEN_COLON_COLON || before == TOKEN_COLON;
         bool list = next == TOKEN_RPAREN ||
                     (next == TOKEN_DOT_DOT && (no_spread || after == TOKEN_RPAREN || after == TOKEN_COMMA)) ||
-                    (next == TOKEN_IDENT && (after == TOKEN_COLON || after == TOKEN_IDENT));
+                    (next == TOKEN_IDENT &&
+                     (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL || after == TOKEN_IDENT));
         if (*parens > 0 || list) *parens += 1;
     } else if (kind == TOKEN_RPAREN && *parens > 0) {
         *parens -= 1;

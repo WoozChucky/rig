@@ -375,6 +375,18 @@ TEST(compiler_procedures_fail_like_runtime_errors) {
               "3:1: #run failed: runtime error: there's already a workspace 'a'\n"
               "    in make (PATH:2:37)\n"
               "    in #run (PATH:3:1)\n");
+    // In a default value a call leaves out (issue #155): at the #compiler
+    // call's name still, in open's signature, not at the statement whose
+    // call of open fills the default in.
+    CHECK_STR(build_failure(&a, "#import \"Compiler\";\n"
+                                "open :: (w: Workspace = create_workspace(\"a\")) -> s64 { return w.id; }\n"
+                                "#run {\n"
+                                "    open();\n"
+                                "    open();\n"
+                                "}\n"
+                                "main :: () {}\n"),
+              "3:1: #run failed: runtime error: there's already a workspace 'a'\n"
+              "    in #run (PATH:2:25)\n");
     arena_free(&a);
 }
 

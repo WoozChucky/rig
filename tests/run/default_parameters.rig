@@ -1,0 +1,109 @@
+// Default parameter values (issue #155, spec 7.2, 5.10): a call that leaves
+// a parameter out passes its default value, worked out at that call, in
+// the caller, after the arguments given and in parameter order.
+#load "load/defaults.rig";
+
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+putchar :: (c: s32) -> s32 #foreign libc;
+// A foreign procedure's defaults are its callers' business: C sees a
+// full call.
+strtoll :: (s: *u8, end: **u8 = null, base: s32 = 10) -> s64 #foreign libc;
+say :: (s: *u8 = "said") -> s32 #foreign libc "puts";
+
+repeat :: (s: *u8, times: int = 2, separator: *u8 = " ") {
+    for 1..times {
+        if it > 1 { printf("%s", separator); }
+        printf("%s", s);
+    }
+    printf("\n");
+}
+// A constant naming a procedure stands for it, calls included.
+R :: repeat;
+
+// An untyped constant takes the parameter's type.
+byte :: (b: u8 = 200) -> int { return b; }
+half :: (f: float32 = 1) -> float64 { return f; }
+
+// Worked out at each call that leaves it out, a default's own defaults
+// too.
+counter := 0;
+next_id :: () -> int { counter += 1; return counter; }
+make :: (id: int = next_id()) -> int { return id; }
+fresh :: (id: int = make()) -> int { return id; }
+
+// After the arguments given, in parameter order: note prints n's digit.
+note :: (n: int) -> int {
+    putchar(cast(s32) n + 48);
+    return n;
+}
+three :: (a: int, b: int = note(2), c: int = note(3)) -> int { return a * 100 + b * 10 + c; }
+
+// A struct declared after the procedure whose default it is, and a
+// constant one.
+place :: (p: Vec2 = .{1, 2}, scale: int = 10) -> int { return p.x * scale + p.y; }
+Vec2 :: struct { x: int; y: int; }
+ORIGIN :: Vec2.{7, 8};
+from :: (p: Vec2 = ORIGIN) -> int { return p.x * 10 + p.y; }
+
+// An Any of a global holds its address, taken at each call.
+current :: (a: Any = counter) -> int { return (cast(*int) a.value_pointer).*; }
+
+// C calls a #c_call procedure with every argument, here libc's qsort
+// calling order; Rig's calls may leave some out. Given no b, order
+// compares a with 0.
+scaled :: (n: s32, by: s32 = 10) -> s32 #c_call { return n * by; }
+qsort :: (base: *void, count: u64, size: u64, compare: (a: *void, b: *void) -> s32 #c_call) #foreign libc;
+order :: (a: *void, b: *void = null) -> s32 #c_call {
+    x := (cast(*int) a).*;
+    y := 0;
+    if b != null { y = (cast(*int) b).*; }
+    if x < y { return -1; }
+    if x > y { return 1; }
+    return 0;
+}
+
+// A #run in a default runs once, while compiling.
+twice :: (n: int) -> int { return n * 2; }
+answer :: (n: int = #run twice(21)) -> int { return n; }
+
+// While compiling too: five is reached only through fives' default.
+PLACED :: #run place();
+FIVE :: #run fives();
+fives :: (n: int = five()) -> int { return n; }
+five :: () -> int { return 5; }
+
+main :: () {
+    repeat("ho");
+    repeat("ho", 3);
+    repeat("ho", 3, "-");
+    R("hi");
+    printf("%lld %.1f\n", byte(), half());
+    printf("%lld %lld %lld %lld\n", make(), make(), make(10), make());
+    total := three(note(1));
+    printf("\n%lld\n", total);
+    total = three(note(1), note(5));
+    printf("\n%lld\n", total);
+    printf("%lld %lld %lld\n", place(), place(.{3, 4}), place(.{3, 4}, 100));
+    printf("%lld\n", from());
+    counter = 41;
+    // A default's names are the top level's, whichever body's call leaves
+    // it out: this local isn't the counter current and fresh read.
+    counter := 1000;
+    printf("%lld %lld %lld\n", current(), fresh(), counter);
+    printf("%lld %lld %lld\n", strtoll("42"), strtoll("ff", null, 16), strtoll("-17"));
+    say();
+    say("told");
+    printf("%d\n", scaled(4));
+    printf("%lld %lld\n", answer(), answer(1));
+    printf("%lld %lld\n", PLACED, FIVE);
+    printf("%lld %lld %lld\n", pick(2), split(3), shared(3));
+    slot = 2;
+    divisor = 4;
+    printf("%lld %lld %lld\n", pick(2), split(3), shared(3));
+    numbers := int.[3, -1, 2];
+    printf("%d %d\n", order(numbers.data), order(*numbers[1]));
+    // Last: the interpreter can't hand C a Rig procedure
+    // (default_parameters.interp.err).
+    qsort(numbers.data, cast(u64) numbers.count, size_of(int), order);
+    printf("%lld %lld %lld\n", numbers[0], numbers[1], numbers[2]);
+}

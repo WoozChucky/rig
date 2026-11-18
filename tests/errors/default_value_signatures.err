@@ -1,0 +1,24 @@
+tests/errors/default_value_signatures.rig:7:21: error: 'b' needs a default value, since a parameter before it has one
+    gap :: (a: int = 1, b: int, c: int = 3) { }
+                        ^
+tests/errors/default_value_signatures.rig:8:31: error: a value of type 'string' doesn't convert to 'int' implicitly
+    wrong :: (s: string, n: int = "two") { }
+                                  ^
+tests/errors/default_value_signatures.rig:9:58: error: a default value can't use the parameter 'times'
+    own :: (times: int, separator: string = "", count: int = times) { }
+                                                             ^
+tests/errors/default_value_signatures.rig:10:19: error: 300 doesn't fit in 'u8'
+    small :: (b: u8 = 300) { }
+                      ^
+tests/errors/default_value_signatures.rig:11:24: error: a procedure with a '..' parameter can't have default values, for now
+    gathers :: (first: int = 0, rest: ..int) { }
+                           ^
+tests/errors/default_value_signatures.rig:12:24: error: a procedure that takes C's '..' can't have default values, for now
+    c_like :: (format: *u8 = "%d", ..) -> s32 #foreign libc "printf";
+                           ^
+tests/errors/default_value_signatures.rig:13:21: error: a #compiler procedure can't have default values, for now
+    compiled :: (n: int = 1) #compiler;
+                        ^
+tests/errors/default_value_signatures.rig:13:26: error: #compiler is only for the modules that ship with rig
+    compiled :: (n: int = 1) #compiler;
+                             ^

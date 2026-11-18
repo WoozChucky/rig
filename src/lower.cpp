@@ -28,6 +28,9 @@
 //   as it is (the backend keeps the pointer in a slot for the debugger). A
 //   '..T' parameter (spec 7.2) is a []T one, to the callee and to a
 //   debugger alike: only the caller does anything more (lower_call_results).
+//   A parameter's default value (spec 7.2) is the caller's code too: a call
+//   that leaves the parameter out works the value out and passes it, as if
+//   it were written there, so the callee never knows (lower_call_results).
 // - A global variable is an Ir_Global of its type, whose first value (the
 //   constant the checker made sure it has, or zero) is in the program's
 //   file. It's read and written as a slot is, through its address, an
@@ -213,16 +216,21 @@
 //   struct and string parameters and results passed as a Rig procedure's
 //   are (above), but with no body: the compiler does it, while compiling,
 //   reading and writing them where the interpreter keeps them. A call of
-//   one is at the callee's name. The program's own lowering (ir_lower)
-//   refuses each call, the one error lowering reports: "'create_workspace'
-//   can only be called while compiling" (lower_call_results), once for a
-//   call in deferred code, however many copies of it there are.
+//   one is at the callee's name (in a call's default value lowered whole, at
+//   the statement holding the call that leaves it out: lower_call_results).
+//   The program's own lowering (ir_lower) refuses each call, the one error
+//   lowering reports: "'create_workspace' can only be called while
+//   compiling" (lower_call_results), once for a call in deferred code,
+//   however many copies of it there are.
 // - What a debugger needs (ir.h's "Debug information") is kept as the code
 //   is lowered: each instruction is stamped with the position and scope of
 //   the statement being lowered (Lowering.pos and scope, emit_in);
 //   lower_statement moves to each statement's first token, a loop or an if
 //   back to its keyword for its own code (but the jumps out of an if's
-//   blocks, at their '}'), a failing check to the check.
+//   blocks, at their '}'), a failing check to the check. A call's default
+//   values are all at the statement holding the call, their failing checks
+//   too (emitted_at): a default may be written in another file. While
+//   compiling, a failure in them is at its own place still (fail_in_place).
 //   Each block that's a scope adds an Ir_Scope (lower_scoped_block, and the
 //   loops, which are one), and so does a declaration that hides a name a
 //   debugger shows, for the rest of its block (lower_statement); each
@@ -395,8 +403,12 @@ struct Lowering {
     // scope while its statements are lowered, and a declaration that hides
     // a name a debugger shows (lower_statement's AST_VAR and AST_CONST,
     // lower_multi_var) sets it to the scope it starts, until the end of its
-    // block.
+    // block. While a call's default values are lowered, filled_at stands in
+    // for pos (emitted_at), but for a failure on demand (fail_in_place).
     Position pos;             // line 0 in the procedures the compiler makes
+    bool filling;             // a call's default values are being lowered (lower_call_results, spec 7.2):
+    Position filled_at;       // every instruction is at filled_at, the statement holding the outermost such
+                              // call, the caller's, since a default may be written in another file
     s32 scope;                // an index in proc->scopes; -1 in the procedures the compiler makes
     s32 block_scope;          // the scope of the block whose statements are being lowered (lower_block),
                               // which a hiding declaration's doesn't replace: where a constant that
@@ -461,12 +473,36 @@ static Ir_Ext ir_ext_of(Type *t) {
     return t->is_signed ? IR_EXT_SIGN : IR_EXT_ZERO;
 }
 
+// The position the next instruction gets: the current one, l->pos, except
+// in a call's default values, where it's the statement holding the call
+// (Lowering.filling): a default's code is the caller's, though it's written
+// where the procedure is declared, maybe in another file, and a procedure's
+// instructions are all in its own file (the backend's line table, ir.h).
+static Position emitted_at(Lowering *l) {
+    return l->filling ? l->filled_at : l->pos;
+}
+
+// Lets a failure's instructions be at l->pos, a failing check's place or a
+// #compiler call's name, in a call's default value too, while compiling:
+// on demand, a #run's failure names its place by the interpreter's
+// frames alone, made from the instructions' positions (the interpreter
+// leaves a message's "PATH:L:C: runtime error: " out, ir.h), and the
+// interpreter has no line table to keep in a procedure's file. Lowered
+// whole, they stay at the statement holding the call (emitted_at). Gives
+// back what Lowering.filling was, which the caller puts back once the
+// failure's instructions are emitted.
+static bool fail_in_place(Lowering *l) {
+    bool filling = l->filling;
+    if (l->on_demand) l->filling = false;
+    return filling;
+}
+
 // An instruction appended to `block`, at the current position and scope:
 // every instruction lowering makes comes through here or emit_call, so none
 // is left without them.
 static Ir_Instr *emit_in(Lowering *l, s32 block, Ir_Op op, Ir_Type type) {
     Ir_Instr *instr = ir_emit(l->proc, block, op, type);
-    instr->pos = l->pos;
+    instr->pos = emitted_at(l);
     instr->scope = l->scope;
     return instr;
 }
@@ -477,7 +513,7 @@ static Ir_Instr *emit(Lowering *l, Ir_Op op, Ir_Type type) { return emit_in(l, l
 // the current position and scope.
 static Ir_Instr *emit_call(Lowering *l, s32 callee, Array<s32> args) {
     Ir_Instr *call = ir_emit_call(l->module, l->proc, l->block, callee, args);
-    call->pos = l->pos;
+    call->pos = emitted_at(l);
     call->scope = l->scope;
     return call;
 }
@@ -486,7 +522,7 @@ static Ir_Instr *emit_call(Lowering *l, s32 callee, Array<s32> args) {
 // same way.
 static Ir_Instr *emit_call_indirect(Lowering *l, s32 callee, Ir_Proc *signature, Array<s32> args) {
     Ir_Instr *call = ir_emit_call_indirect(l->proc, l->block, callee, signature, args);
-    call->pos = l->pos;
+    call->pos = emitted_at(l);
     call->scope = l->scope;
     return call;
 }
@@ -1048,9 +1084,12 @@ static String runtime_error_prefix(Lowering *l, Position at) {
 // runtime_error_prefix's. Each check has a message of its own, since each
 // names its own position. The branch is the statement's code, at its
 // position; the panic is at `at`, the place the message names, so a
-// debugger stopped there shows the same place. The panic's `constant` is
-// the prefix's length, all of the text before MESSAGE, which the
-// interpreter leaves out (ir.h).
+// debugger stopped there shows the same place. But in a call's default
+// value, lowered whole, every instruction is at the statement holding the
+// call, the panic too (emitted_at), and only the message names `at`; while
+// compiling, the panic is at `at` there too (fail_in_place). The panic's
+// `constant` is the prefix's length, all of the text before MESSAGE, which
+// the interpreter leaves out (ir.h).
 static void emit_runtime_check(Lowering *l, s32 fails, Position at, String message) {
     String prefix = runtime_error_prefix(l, at);
     String text = string_printf(l->arena, STR_FMT STR_FMT "\n", STR_ARG(prefix), STR_ARG(message));
@@ -1059,9 +1098,11 @@ static void emit_runtime_check(Lowering *l, s32 fails, Position at, String messa
     emit_branch(l, fails, fail, ok);
     Position statement = l->pos;
     l->pos = at;
+    bool filling = fail_in_place(l);
     Ir_Instr *panic = emit_in(l, fail, IR_PANIC, IR_VOID);
     panic->target = add_bytes(l, text);
     panic->constant = (u64)prefix.count;
+    l->filling = filling;
     l->pos = statement;
     l->block = ok;
 }
@@ -1471,7 +1512,8 @@ static s32 bounds_failed_proc(Lowering *l);
 // rest, with its two numbers, is only known at run time, so
 // __rig_bounds_failed writes it. Its buffer must hold the longest start
 // any check passes it, which is kept here. The fail block is at `at`, as a
-// runtime check's panic is (emit_runtime_check).
+// runtime check's panic is, but at the statement holding the call in a
+// call's default value lowered whole (emit_runtime_check).
 static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s32 count, bool is_signed) {
     String where = runtime_error_prefix(l, at);
     // On demand, __rig_bounds_failed was made first, its buffer sized for
@@ -1483,6 +1525,7 @@ static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s3
     emit_branch(l, fails, fail, ok);
     Position statement = l->pos;
     l->pos = at;
+    bool filling = fail_in_place(l);
     l->block = fail;
     Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
     addr->target = add_bytes(l, where);
@@ -1494,6 +1537,7 @@ static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s3
     array_add(&args, emit_constant(l, IR_I1, is_signed ? 1 : 0));
     emit_call(l, bounds_failed_proc(l), args);
     emit(l, IR_UNREACHABLE, IR_VOID);
+    l->filling = filling;
     l->pos = statement;
     l->block = ok;
 }
@@ -1841,6 +1885,15 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //   the view of a [N]T temporary the other arguments are built into, which
 //   is the caller's fresh copy already, or a zeroed view for none
 //   (lower_variadic_argument). The same through a procedure value.
+// - Then, in a direct call that leaves parameters out (spec 5.10, 7.2),
+//   each one's default value, in parameter order, passed as an argument
+//   is: its code is the caller's, worked out again at each call, after the
+//   arguments given. All of it, the defaults its own calls fill in too, is
+//   at the statement holding the outermost such call (Lowering.filling,
+//   emitted_at), whatever file the default is written in; a runtime check
+//   in it still names its own place in its message (runtime_error_prefix),
+//   and while compiling its failure is there too (fail_in_place). Its
+//   bounds checks follow the #no_abc of the procedure declaring it.
 // - Through a procedure value, right before the call, a null value is a
 //   runtime error at the call's '(' (spec 8.4: "null procedure call"); then
 //   the call of the value, as the procedure it holds expects to be called
@@ -1850,7 +1903,9 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //   compiler do it (interp.h). Lowered whole, for the program's
 //   executable, it's an error there, "'create_workspace' can only be
 //   called while compiling": only lowering sees every call the executable
-//   would make, one in a procedure nothing calls too.
+//   would make, one in a procedure nothing calls too. In a call's default
+//   value, lowered whole, the call and the error are at the statement
+//   holding the call that leaves the default out (emitted_at).
 // - A variadic foreign procedure's arguments after its fixed parameters
 //   have none to convert to: each is passed as C's default argument
 //   promotions make its own type (extra_argument_type): an s8 or s16
@@ -1877,6 +1932,12 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //                                %6 = local 16 align 8     (its view, emit_view)
 //                                ...
 //                                %10 = call @sum(%0, %6)
+//
+//     n := f(1);                 %0 = local i64            (n; f :: (a: int, b: int = 7) -> int)
+//                                %1 = const i64 1
+//                                %2 = const i64 7          (b's default value)
+//                                %3 = call @f(%1, %2)
+//                                store i64 %3, %0
 //
 //     printf("%d", b);           %1 = addr @str.0          (b, a u8, in the slot %0)
 //                                %2 = load i8 %0
@@ -1912,6 +1973,26 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
         array_add(&args, lower_argument(l, call->args[i], t));
     }
     if (view) array_add(&args, lower_variadic_argument(l, call, fixed, view));
+    if (proc && !view && fixed < params) {
+        // The parameters left out, each passed its default value, worked
+        // out here, in parameter order, and converted as an argument is.
+        // The outermost such call's statement is where all of their code
+        // is, a default's own calls' defaults included. Their bounds checks
+        // are the procedure's that declares them, as its #no_abc says
+        // (spec 7.7), not the caller's: a default is written in its
+        // procedure's declaration, as its messages' places say.
+        bool outer = l->filling, checking = l->checking_bounds;
+        if (!outer) {
+            l->filling = true;
+            l->filled_at = l->pos;
+        }
+        l->checking_bounds = l->bounds_checks && !proc->no_bounds_checks;
+        for (s64 i = fixed; i < params; i++) {
+            array_add(&args, lower_argument(l, proc->params[i]->default_value, proc->params[i]->type));
+        }
+        l->filling = outer;
+        l->checking_bounds = checking;
+    }
     s32 next;
     if (proc && proc->is_compiler) {
         // A #compiler procedure (spec 7.9), which the compiler does: the
@@ -1920,12 +2001,19 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
         // compiler is told of, are the name. The program's own executable
         // can't make it: lowered whole, as rig build lowers a program, the
         // call is refused there, and still emitted, so the IR stays whole.
+        // In a call's default value, the call and the message are at the
+        // statement holding that call (emitted_at): each call that leaves
+        // the default out is one the executable would make there. While
+        // compiling, the call stays at the name (fail_in_place).
         Position outer = l->pos;
         l->pos = call->callee->pos;
         if (!l->on_demand && !l->repeating) {
-            diag_error(l->diag, l->pos, "'" STR_FMT "' can only be called while compiling", STR_ARG(proc->name));
+            diag_error(l->diag, emitted_at(l), "'" STR_FMT "' can only be called while compiling",
+                       STR_ARG(proc->name));
         }
+        bool filling = fail_in_place(l);
         next = emit_call(l, proc_index_of(l, proc), args)->result;
+        l->filling = filling;
         l->pos = outer;
     } else if (proc) {
         next = emit_call(l, proc_index_of(l, proc), args)->result;
@@ -2487,7 +2575,9 @@ static void emit_entry_return(Lowering *l) {
 
 // A statement, every instruction of it at its position (statement_position)
 // but where the statement itself says otherwise: a loop's and an if's own
-// code is at its keyword, and a failing check at the check.
+// code is at its keyword, and a failing check at the check, but in a call's
+// default value lowered whole, all of whose code is at the statement
+// (emitted_at).
 static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     l->pos = statement_position(s);
     switch (s->kind) {
@@ -3714,8 +3804,8 @@ s32 ir_lower_run(Lowering *l, Ast_Run *run) {
         // procedure returning it gives it (declare_proc); a top-level
         // one's is thrown away. Its instructions are at the #run, so a
         // failure in what it calls has the run's place in its outer frame;
-        // a failing check is at the check, as everywhere (emit_bounds_check,
-        // emit_runtime_check).
+        // a failing check is at the check, one in a default value its calls
+        // fill in too (emit_bounds_check, emit_runtime_check, fail_in_place).
         Type *t = run->is_top_level ? nullptr : run->type;
         bool aggregate = t && type_is_aggregate(t);
         if (aggregate) ir_add_param(p, IR_PTR, IR_EXT_NONE);

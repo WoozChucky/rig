@@ -131,6 +131,11 @@ struct Ast_Param : Ast {
     Ast_Type *type_expr;
     bool is_variadic;  // name: ..T, the last parameter (spec 7.2): type_expr is T, and its type []T
     Position dots;     // where that '..' is written
+    Ast *default_value;  // = e: what a call that leaves the parameter out passes, worked out at that
+                         // call (spec 7.2); null without one. Checked with the signature, converted
+                         // to the parameter's type (checker.cpp's check_defaults)
+    Position equals;     // where that '=' is written
+    s32 default_levels;  // the deepest levels of default_value (MAX_DEPTH), as Ast_Const.levels
 };
 
 struct Ast_Proc;
@@ -201,6 +206,10 @@ struct Ast_Proc : Ast {
                                 // types in them together (MAX_DEPTH, counted as that at most): checked
                                 // where a #run reaches it, what it needs starts a level below
                                 // (checker.cpp's check_reached_body)
+    s32 defaults_depth;         // how deep lowering goes in a call that leaves every parameter with a
+                                // default value out: its deepest default's levels and those of the
+                                // defaults its calls fill in (checker.cpp's check_defaults, MAX_DEPTH);
+                                // 0 without defaults
 };
 
 // A variable: `x : T = e;`, `x := e;` (its type is e's), `x : T;` (zeroed)
@@ -377,7 +386,9 @@ struct Ast_Call : Ast {
     Ast *callee;
     Array<Ast *> args;
     Ast_Proc *proc;     // the procedure called, found by the checker: a procedure's name, or a
-                        // constant naming one (OP :: add;), is a call of the procedure itself
+                        // constant naming one (OP :: add;), is a call of the procedure itself;
+                        // one without a '..T' parameter that gives fewer arguments than `proc`
+                        // has parameters passes the rest's default values (spec 5.10)
     Type *callee_type;  // a call through a procedure value (a variable, a field, an element, a
                         // call's result): the value's procedure type, found by the checker;
                         // null when `proc` is the procedure called
