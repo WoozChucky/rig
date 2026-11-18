@@ -128,6 +128,7 @@
 
 **Files:**
 - Modify: `modules/Preload/module.rig` (after `HEAP_ALLOCATOR`), `modules/Preload/README.md`
+- Modify: `README.md` (the Modules bullet: Preload also holds type information and `Any`)
 - Modify: `src/types.h` (the layout constants)
 - Modify: `tests/unit/helpers.cpp` (`check_with_preload`, `lower_with_preload`, `top_level_named`)
 - Test: `tests/unit/test_checker.cpp`
@@ -780,13 +781,13 @@ static bool walk_described(Reach *r, Type *t);
 ### Task 7: The spec and the READMEs
 
 **Files:**
-- Modify: `docs/rig-spec.md`, `modules/Basic/README.md`
+- Modify: `docs/rig-spec.md`, `modules/Basic/README.md`, `modules/Preload/README.md` (only if its example's output is wrong)
 
 - [ ] **Step 1: Write the new sections.**
   - **3.16 Type information and `Any`** (after 3.15): the structs and tags as Preload declares them (a `text` block, the issue's), each field's meaning, `info` first, the sizes (Fact 2); one description per type (identity, `int`/`s64`, `float`); where they live, read-only (10.3, 8.6); `Any`, its layout, and the conversion: where it happens (3.13's places, `..Any` and `cast(Any)` included), place or copy, the temporary's lifetime (5.18, 8.6), the defaults (`int`, `float32`, `*void`), what's refused and its messages, only to `Any` itself, nothing from it, constants and globals, several results not converted (Decision 9). The issue's example, with `#import "Basic";`, its output `an int: 42` and `Vec2 with 2 fields`.
   - **5.19 type_info** (after 5.18, worded as 5.16 is): predeclared, not a keyword; its argument a type, `void` included; a `*Type_Info`, no constant; `'n' is not a type`; a constant can't hold it, a global can (4.2, 4.3).
 - [ ] **Step 2: Update the other sections.**
-  - 2.5: `type_info` (section 5.19) among the predeclared names. 2.14's Preload bullet: it also holds type information and `Any` (section 3.16).
+  - 2.5: `type_info` (section 5.19) among the predeclared names. 2.14's Preload bullet, both of its lists: what it holds for now (the allocator's shape...) also holds type information and `Any` (section 3.16), and the plain names for programs add `Any`, the `Type_Info` structs, the `TYPE_INFO_*` tags and `ARRAY_FIXED`/`ARRAY_VIEW`.
   - 3.1: `Any`, Preload's struct, in the list's prose; 3.13: the conversion to `Any` as its own bullet (section 3.16), and the closing sentence's "nothing else" keeps true.
   - 4.2: a constant can't hold `type_info(T)` nor a value converted to `Any` (the pointer message). 4.3: a global may hold `type_info(T)`, alone, through pointer casts, or in a literal, the linker writing its address; a value converted to `Any` is refused, for now.
   - 5.1: `type_info(T)` among the operands. 5.18: a value converted to `Any` is worked out where it is, and a copy made then; the temporary lives until the end of the statement.
@@ -794,7 +795,7 @@ static bool walk_described(Reach *r, Type *t);
   - 9.3: rows for `a constant's pointer can only be null or a string literal's address` (4.2, 3.16) and `a global's value must be known while compiling, for now` (4.3, 3.16), if not there.
   - 10.3: a bullet: type descriptions, read-only constant data, once per type the program uses, with relocations to each other, their names and arrays. 10.8: the interpreter makes them in its memory, on demand, laid out the same, once per type for the compile-time world.
   - A.4: `Primary` gains `| "type_info" "(" Type ")"`; the prose says `type_info` is an identifier followed by `(`, as `size_of` is. Appendix B: `type_info`, "a type's description", 5.19, 3.16.
-- [ ] **Step 3: Basic's README:** the bullet at line 311 becomes `No formatted \`print\` yet (#154): ...`, the rest of it unchanged. Preload's README (Task 1) points at 3.16 and 5.19, which now exist: check its links.
+- [ ] **Step 3: Basic's README:** the bullet at line 311 becomes `No formatted \`print\` yet (#154): ...`, the rest of it unchanged. Preload's README (Task 1) points at 3.16 and 5.19, which now exist: check its links. No test runs a module README's examples, so build and run Preload README's example (`describe`) with the worktree's rig on both hosts, and check it prints exactly the two lines the README says (`an int: 42`, `Vec2 with 2 fields`); fix the README if it doesn't.
 - [ ] **Step 4: Run all tests** on both hosts: every spec example passes.
 - [ ] **Step 5: Commit** `Specify type information and Any`. Then the `release` builds and tests on both hosts, the independent review, and its findings fixed as the work flow says. The PR stays a draft: marking it ready isn't this plan's.
 

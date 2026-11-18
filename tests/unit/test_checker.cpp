@@ -7282,10 +7282,14 @@ TEST(variadic_calls_run_while_compiling) {
 
 // Issue #153: type info and Any (spec 3.16, 5.19).
 
-// One field of a Preload struct and where types.h says it is.
+// One field of a Preload struct, where types.h says it is, and its type:
+// lowering writes each field in that type's shape (a bool is one byte, a
+// view's items are where its data points), so a type that kept the offset
+// but changed the shape would be read wrong.
 struct Preload_Field {
     const char *name;
     s64 offset;
+    const char *type;
 };
 
 // One struct Preload declares for type information, and its layout as
@@ -7300,8 +7304,8 @@ struct Preload_Struct {
 TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
     // Lowering writes each description from types.h's constants; the
     // program reads it through Preload's structs, which the checker lays
-    // out as any struct. The two must agree: each struct's size, alignment
-    // and field offsets, and each tag's value. Each kind's struct starts
+    // out as any struct. The two must agree: each struct's size, alignment,
+    // field offsets and field types, and each tag's value. Each kind's struct starts
     // with its Type_Info, info, so a *Type_Info casts to it.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
@@ -7309,38 +7313,47 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
     Preload_Struct structs[] = {
         {"Type_Info",
          TYPE_INFO_SIZE,
-         {{"tag", TYPE_INFO_TAG_OFFSET}, {"size", TYPE_INFO_SIZE_OFFSET}, {"alignment", TYPE_INFO_ALIGNMENT_OFFSET}},
+         {{"tag", TYPE_INFO_TAG_OFFSET, "int"},
+          {"size", TYPE_INFO_SIZE_OFFSET, "int"},
+          {"alignment", TYPE_INFO_ALIGNMENT_OFFSET, "int"}},
          3},
-        {"Type_Info_Integer", TYPE_INFO_INTEGER_SIZE, {{"info", 0}, {"signed", TYPE_INFO_SIGNED_OFFSET}}, 2},
-        {"Type_Info_Pointer", TYPE_INFO_POINTER_SIZE, {{"info", 0}, {"pointer_to", TYPE_INFO_POINTER_TO_OFFSET}}, 2},
+        {"Type_Info_Integer",
+         TYPE_INFO_INTEGER_SIZE,
+         {{"info", 0, "Type_Info"}, {"signed", TYPE_INFO_SIGNED_OFFSET, "bool"}},
+         2},
+        {"Type_Info_Pointer",
+         TYPE_INFO_POINTER_SIZE,
+         {{"info", 0, "Type_Info"}, {"pointer_to", TYPE_INFO_POINTER_TO_OFFSET, "*Type_Info"}},
+         2},
         {"Type_Info_Procedure",
          TYPE_INFO_PROCEDURE_SIZE,
-         {{"info", 0},
-          {"parameter_types", TYPE_INFO_PARAMETERS_OFFSET},
-          {"result_types", TYPE_INFO_RESULTS_OFFSET},
-          {"is_c_call", TYPE_INFO_IS_C_CALL_OFFSET},
-          {"is_variadic", TYPE_INFO_IS_VARIADIC_OFFSET}},
+         {{"info", 0, "Type_Info"},
+          {"parameter_types", TYPE_INFO_PARAMETERS_OFFSET, "[]*Type_Info"},
+          {"result_types", TYPE_INFO_RESULTS_OFFSET, "[]*Type_Info"},
+          {"is_c_call", TYPE_INFO_IS_C_CALL_OFFSET, "bool"},
+          {"is_variadic", TYPE_INFO_IS_VARIADIC_OFFSET, "bool"}},
          5},
         {"Type_Info_Struct",
          TYPE_INFO_STRUCT_SIZE,
-         {{"info", 0}, {"name", TYPE_INFO_NAME_OFFSET}, {"members", TYPE_INFO_MEMBERS_OFFSET}},
+         {{"info", 0, "Type_Info"},
+          {"name", TYPE_INFO_NAME_OFFSET, "string"},
+          {"members", TYPE_INFO_MEMBERS_OFFSET, "[]Type_Info_Struct_Member"}},
          3},
         {"Type_Info_Struct_Member",
          TYPE_INFO_MEMBER_SIZE,
-         {{"name", TYPE_INFO_MEMBER_NAME_OFFSET},
-          {"type", TYPE_INFO_MEMBER_TYPE_OFFSET},
-          {"offset", TYPE_INFO_MEMBER_OFFSET_OFFSET}},
+         {{"name", TYPE_INFO_MEMBER_NAME_OFFSET, "string"},
+          {"type", TYPE_INFO_MEMBER_TYPE_OFFSET, "*Type_Info"},
+          {"offset", TYPE_INFO_MEMBER_OFFSET_OFFSET, "int"}},
          3},
         {"Type_Info_Array",
          TYPE_INFO_ARRAY_SIZE,
-         {{"info", 0},
-          {"element_type", TYPE_INFO_ELEMENT_OFFSET},
-          {"array_kind", TYPE_INFO_ARRAY_KIND_OFFSET},
-          {"count", TYPE_INFO_COUNT_OFFSET}},
+         {{"info", 0, "Type_Info"},
+          {"element_type", TYPE_INFO_ELEMENT_OFFSET, "*Type_Info"},
+          {"array_kind", TYPE_INFO_ARRAY_KIND_OFFSET, "int"},
+          {"count", TYPE_INFO_COUNT_OFFSET, "int"}},
          4},
-        {"Any", ANY_SIZE, {{"type", ANY_TYPE_OFFSET}, {"value_pointer", ANY_VALUE_OFFSET}}, 2},
+        {"Any", ANY_SIZE, {{"type", ANY_TYPE_OFFSET, "*Type_Info"}, {"value_pointer", ANY_VALUE_OFFSET, "*void"}}, 2},
     };
-    Type *type_info = ((Ast_Struct *)top_level_named(tree, "Type_Info"))->declared;
     for (s64 i = 0; i < (s64)(sizeof structs / sizeof structs[0]); i++) {
         Preload_Struct *s = &structs[i];
         Ast *decl = top_level_named(tree, s->name);
@@ -7355,7 +7368,7 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
             CHECK_EQ(index, f);  // in the issue's order
             if (index < 0) continue;
             CHECK_EQ(t->fields[index].offset, s->fields[f].offset);
-            if (strcmp(s->fields[f].name, "info") == 0) CHECK(t->fields[index].type == type_info);
+            CHECK_STR(type_name(&a, t->fields[index].type), s->fields[f].type);
         }
     }
     // The tags, numbered as Jai's, and the array kinds: constants until
