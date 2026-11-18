@@ -72,8 +72,8 @@ struct Compile_Time {
     Lowering *lowering;  // lowering into it, as long as the world
     Interp *interp;      // running it: the compile-time globals, every run's
     Arena arena;         // the module's nodes, and what lowering puts in them
-    s64 run_time;        // nanoseconds, the outermost runs' (compile_time_nanoseconds)
-    s32 running;         // how many runs are under way, one inside another
+    s64 run_time;        // nanoseconds, the runs' (compile_time_nanoseconds)
+    s32 running;         // how many runs are under way: a guard, as none nests today
 };
 
 Compile_Time *compile_time_new(Diagnostics *d) {
@@ -382,8 +382,10 @@ static void report_failure(Compile_Time *ct, Ast_Run *run, Interp_Result *result
 //    frames) on the heap, for the caller to free.
 // 4. A failure is said, with its frames.
 // All of it is the run's time (compile_time_nanoseconds), read on the
-// monotonic clock first and last; only the outermost run adds it, so a run
-// inside another isn't counted twice.
+// monotonic clock first and last. No run happens inside another today: a
+// #run in a run's code has already run, and its value is baked. The depth
+// count is a guard: only a run that starts with none under way adds its
+// time, so if one ever ran inside another, it wouldn't be counted twice.
 static void run_procedure(Compile_Time *ct, Ast_Run *run, Array<u64> args, Arena *scratch, Interp_Result *result) {
     s64 start = os_nanoseconds();
     ct->running++;

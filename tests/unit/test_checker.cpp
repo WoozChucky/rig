@@ -1643,18 +1643,9 @@ TEST(foreign_c_names) {
     arena_free(&a);
 }
 
-// The global variable or top-level constant called `name`, which must exist.
-static Ast *global_named(Checked *c, const char *name) {
-    for (s64 i = 0; i < c->file->globals.count; i++) {
-        Ast *g = c->file->globals[i];
-        String n = g->kind == AST_VAR     ? ((Ast_Var *)g)->name
-                   : g->kind == AST_STRUCT ? ((Ast_Struct *)g)->name
-                                           : ((Ast_Const *)g)->name;
-        if (string_eq(n, str(name))) return g;
-    }
-    RIG_ASSERT(!"no such global");
-    return nullptr;
-}
+// The checked file's top-level declaration called `name`, which must exist
+// (helpers.cpp's top_level_named).
+static Ast *global_named(Checked *c, const char *name) { return top_level_named(c->file, name); }
 
 TEST(globals_are_visible_everywhere) {
     // As procedures are: in every body, used above their declaration.

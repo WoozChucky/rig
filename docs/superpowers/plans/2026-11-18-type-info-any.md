@@ -719,20 +719,33 @@ static bool walk_described(Reach *r, Type *t);
   - `test_checker.cpp`, under Task 1's heading:
     - `a_run_describes_types_declared_after_it` (Review Focus 2): `check_with_preload` of `LATER :: #run pointee_size(type_info(Late));\nTAG :: #run fields(Late.{});\npointee_size :: (t: *Type_Info) -> int {\n    s := cast(*Type_Info_Struct) t;\n    return (cast(*Type_Info_Pointer) s.members[0].type).pointer_to.size;\n}\nfields :: (a: Any) -> int { return (cast(*Type_Info_Struct) a.type).members.count; }\nLate :: struct { next: *Later; }\nLater :: struct { a: u8; b: int; }\nmain :: () { }\n` is `""`; `LATER`'s constant is 16 and `TAG`'s 1 (`top_level_named`).
     - `describing_a_struct_being_laid_out_is_a_circle`: `check_with_preload` of `S :: struct { a: [#run one(type_info(*S))]u8; }\none :: (t: *Type_Info) -> int { return 1; }\nmain :: () { }\n` is `1:1: 'S' is defined in terms of itself\n`.
-  - `tests/run/type_info_while_compiling.rig`, its `.build.out` `while compiling: 2 16 1 0 7\n` and its `.out` `2 16 1 0 7\n2 16 1 0 7\n`, compiled and interpreted:
+  - `tests/run/type_info_while_compiling.rig`, its `.build.out` `while compiling: 16 2 16 1 0 7\n` and its `.out` `16 2 16 1 0 7 1\n16 2 16 1 0 7\n`, compiled and interpreted:
     ```rig
     // Type info and Any while compiling (issue #153, spec 7.8, 10.8): the
-    // interpreter makes the descriptions in its own memory, laid out as the
-    // program's, once per type, so code reading them runs in a #run as it
-    // runs compiled. Late and Later are declared after the #runs that
-    // describe them, Later reached only through Late's pointer.
+    // #runs' lowering writes the descriptions as globals of the compile-time
+    // module, laid out as the program's, once per type, and the interpreter
+    // copies them into its own memory, so code reading them runs in a #run as
+    // it runs compiled. Late and Later are declared after the #runs that
+    // describe them, Later reached only through Late's pointer. The first
+    // #run describes them by converting Late.{} to Any, before any type_info.
+    // ACROSS checks a description saved by one #run (FIRST) is the one a
+    // later #run gets.
     printf :: (format: *u8, ..) -> s32 #foreign libc;
 
+    ANY_LATER_SIZE :: #run any_pointee_size(Late.{}, 1);
     FIELDS :: #run field_count(type_info(Late));
     LATER_SIZE :: #run pointee_size(type_info(Late), 1);
     SAME :: #run (type_info(Late) == type_info(Late));
     DIFFERENT :: #run (type_info(int) == type_info(s64));
     TAG :: #run tag_of(Late.{});
+    FIRST :: #run save();
+    ACROSS :: #run (saved != null && saved == type_info(Late));
+
+    saved: *Type_Info;
+    save :: () -> bool {
+        saved = type_info(Late);
+        return true;
+    }
 
     field_count :: (t: *Type_Info) -> int { return (cast(*Type_Info_Struct) t).members.count; }
 
@@ -742,21 +755,26 @@ static bool walk_described(Reach *r, Type *t);
         return (cast(*Type_Info_Pointer) member.type).pointer_to.size;
     }
 
+    // The same, of the struct an Any holds.
+    any_pointee_size :: (a: Any, index: int) -> int { return pointee_size(a.type, index); }
+
     tag_of :: (a: Any) -> int { return a.type.tag; }
 
     // The same, worked out in a run of its own and printed while compiling.
     #run {
-        printf("while compiling: %lld %lld %d %d %lld\n", field_count(type_info(Late)), pointee_size(type_info(Late), 1),
-               type_info(Late) == type_info(Late), type_info(int) == type_info(s64), tag_of(Late.{}));
+        printf("while compiling: %lld %lld %lld %d %d %lld\n", any_pointee_size(Late.{}, 1), field_count(type_info(Late)),
+               pointee_size(type_info(Late), 1), type_info(Late) == type_info(Late), type_info(int) == type_info(s64),
+               tag_of(Late.{}));
     }
 
     Late :: struct { a: int; next: *Later; }
     Later :: struct { b: u8; back: *Late; }
 
     main :: () {
-        printf("%lld %lld %d %d %lld\n", FIELDS, LATER_SIZE, SAME, DIFFERENT, TAG);
-        printf("%lld %lld %d %d %lld\n", field_count(type_info(Late)), pointee_size(type_info(Late), 1),
-               type_info(Late) == type_info(Late), type_info(int) == type_info(s64), tag_of(Late.{}));
+        printf("%lld %lld %lld %d %d %lld %d\n", ANY_LATER_SIZE, FIELDS, LATER_SIZE, SAME, DIFFERENT, TAG, ACROSS);
+        printf("%lld %lld %lld %d %d %lld\n", any_pointee_size(Late.{}, 1), field_count(type_info(Late)),
+               pointee_size(type_info(Late), 1), type_info(Late) == type_info(Late), type_info(int) == type_info(s64),
+               tag_of(Late.{}));
     }
     ```
   - `tests/errors/run_type_info.rig`, its `.err` the three messages at 4:9, 5:9 and 7:13 (`#run's result holds a pointer, which can't be baked, for now`), each with its line and caret:
