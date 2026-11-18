@@ -394,7 +394,9 @@ static void check_var(Checker *c, Ast_Var *var) {
 // would need the linker to write a number, nor a string that holds no
 // literal's bytes (a variable's). A procedure's address is the same (procedure_address): a
 // global, a field or an element may hold a procedure, or a constant naming
-// one, as it is or cast to *void.
+// one, as it is or cast to *void. So is a type's description's
+// (type_info_address, spec 5.19): type_info(T), as it is or cast to another
+// pointer.
 //
 // Constant data is known while compiling too (constant_data, spec 4.3): a
 // constant holding a string, a struct or an array (`origin := ORIGIN;`), a
@@ -418,7 +420,8 @@ static bool check_global_value(Checker *c, Ast *value) {
         return true;
     }
     Ast *data;
-    if (literal_address(value) || procedure_address(value) || constant_data(value, &data)) return true;
+    if (literal_address(value) || procedure_address(value) || type_info_address(value)) return true;
+    if (constant_data(value, &data)) return true;
     if (has_failed_run(value)) return false;
     diag_error(c->diag, value->start, "a global's value must be known while compiling, for now");
     return false;
@@ -510,9 +513,10 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 //   the value is a constant's name, checked already: a cast of a literal,
 //   cast(Holder) Holder.{v = int.[1]}, isn't.
 // - A pointer is null or a string literal's address: any cast (from a
-//   number, a procedure's address or a pointer variable) or a procedure's
-//   address is "a constant's pointer can only be null or a string literal's
-//   address"; anything else isn't known.
+//   number, a procedure's address or a pointer variable), a procedure's
+//   address or a type's description's (type_info(T), spec 5.19) is "a
+//   constant's pointer can only be null or a string literal's address";
+//   anything else isn't known.
 // - A procedure value is a procedure (procedure_address) or null.
 // - A number or a bool is is_constant.
 // A value with no type had its own error, reported: nothing more is said.
@@ -574,7 +578,7 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
     if (!type_converts(value->type, t) && !(type_is_pointer(t) && literal_address(value))) return false;
     if (type_is_pointer(t) || t == &type_null) {
         if (value->is_constant || literal_address(value)) return true;
-        if (value->kind == AST_CAST || procedure_address(value)) {
+        if (value->kind == AST_CAST || procedure_address(value) || type_info_address(value)) {
             diag_error(c->diag, value->start, "a constant's pointer can only be null or a string literal's address");
         } else {
             report_unknown_constant(c, constant, value);
@@ -2177,6 +2181,15 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
             continue;
         }
         table_put(&c->top_level, name, decl);
+        // Preload's Type_Info and Any (spec 3.16), which type_info(T) and
+        // the conversion to Any need: a struct of that name in a module's
+        // file. A program can't declare either, Preload having them, so
+        // these are Preload's; without Preload (a test's single file, or
+        // Load_Options.no_preload) they stay null.
+        if (decl->kind == AST_STRUCT && c->diag->files[decl->pos.file].in_module) {
+            if (string_eq(name, str("Type_Info"))) c->type_info_type = ((Ast_Struct *)decl)->declared;
+            if (string_eq(name, str("Any"))) c->any_type = ((Ast_Struct *)decl)->declared;
+        }
     }
     // Then the broken ones (parser.h), the names of declarations the parser
     // gave up on. Each is declared, with an unknown type, so its uses are

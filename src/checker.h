@@ -646,6 +646,26 @@
 //   missing. check() itself decides no top-level #if: one the loader didn't
 //   decide (a tree from parse()) is as if no branch were taken.
 //
+// Type information and Any (issue #153, spec 3.16, 5.19).
+// - type_info(T) is the address of T's description, a *Type_Info: Preload
+//   declares Type_Info and the structs each kind of type is described by
+//   (spec 3.16). It's predeclared, not a keyword: the name followed by '('
+//   (parser.h). Its argument is a type, any type, void included (what a
+//   *void points at), with a type's own messages ("'n' is not a type",
+//   "unknown type 'Nope'").
+// - The checker finds Preload's Type_Info and Any by name at the top level,
+//   structs declared in a module's file (Source_File.in_module, load.h):
+//   a program can't declare either, Preload having them. Without Preload
+//   (a test's single file, or Load_Options.no_preload) type_info(T) is
+//   "'type_info' needs Preload's 'Type_Info', which the program doesn't
+//   have", at the name.
+// - Its value is an address the linker writes, so it's no constant: a
+//   constant can't hold it, as it holds no pointer but null or a string
+//   literal's address, "a constant's pointer can only be null or a string
+//   literal's address" (a cast of it too). A global may hold it, as it is,
+//   cast to another pointer, or in a literal or a view's array: the linker
+//   writes its address there, as a string literal's (type_info_address).
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - A string after the library is the C function's name (issue #135),
@@ -812,3 +832,9 @@ Type *call_variadic_type(Ast_Call *call);
 // written there by the linker, as a string literal's is: the checker asks
 // this to allow it, and lowering to write it (constant_bytes).
 Ast_Proc *procedure_address(Ast *e);
+
+// The type_info(T) whose description's address e, checked, is: the node
+// itself, or a cast of it between pointer types; null otherwise. A global
+// may hold one, its address written by the linker (spec 4.3): the checker
+// asks this to allow it, and lowering to write it.
+Ast_Type_Info *type_info_address(Ast *e);

@@ -58,18 +58,18 @@ struct Parser {
 // An expression's levels are its tree's height: each parenthesis, prefix
 // operator, cast, call, dereference (.*), field (.x), element (a[i]),
 // literal and binary operator is one level above what it holds, and a
-// name, a number, a string, null or size_of(T) is none. So ((x)) is 2,
-// - - x is 2, f(g(x)) is 2, and x + x + x is 2 too: the Pratt loop builds
-// it as (x + x) + x, a left-leaning tree whose height grows with each
-// operator, though the parser itself doesn't recurse to build it (the
-// checker does, to check it).
+// name, a number, a string, null, size_of(T) or type_info(T) is none. So
+// ((x)) is 2, - - x is 2, f(g(x)) is 2, and x + x + x is 2 too: the Pratt
+// loop builds it as (x + x) + x, a left-leaning tree whose height grows
+// with each operator, though the parser itself doesn't recurse to build it
+// (the checker does, to check it).
 //
 // A type's levels are each '*', '[]', '[N]' and procedure type's '(' in it
 // (parse_type): ***int is 3, [][4]*u8 is 3, (*int) -> int 2, a name none.
 //
 // Types and expressions nest inside each other: an array's count is an
-// expression inside its '[N]' level, and size_of(T) and cast(T) read their
-// type a level down, as a cast reads its value. The stages recurse through
+// expression inside its '[N]' level, and size_of(T), type_info(T) and
+// cast(T) read their type a level down, as a cast reads its value. The stages recurse through
 // both alike, so both count against the one limit: from the outermost
 // expression or type to the innermost, expression levels and type levels
 // together are at most MAX_DEPTH. So [size_of([size_of(u8)]u8)]u8 is 4
@@ -220,7 +220,7 @@ static s32 body_blocks(Parser *p) {
 
 // The text read reaches `levels` levels: kept in p->deepest if it's the most
 // so far, and in p->body_deepest with the body's blocks open around it
-// (body_blocks). A name read a level down by size_of or a cast
+// (body_blocks). A name read a level down by size_of, type_info or a cast
 // (parse_type_below) is at that level, which the limit doesn't check, so
 // it's counted as MAX_DEPTH at most: a struct it names is then too deep to
 // work out there, and that's the checker's to say.
@@ -273,12 +273,13 @@ static bool set_height(Parser *p, s32 height) {
     return true;
 }
 
-// Reads the type of a size_of or a cast a level down (MAX_DEPTH): every
-// stage goes from the expression into its type, so that's one more level
-// on the way to whatever the type holds. The level opens unchecked: a type
-// that's a name opens nothing and reaches no deeper, so size_of(int) and
-// cast(int) x are fine at any depth an expression may have; parse_type
-// checks the levels before each '*' or '[' it opens.
+// Reads the type of a size_of, a type_info or a cast a level down
+// (MAX_DEPTH): every stage goes from the expression into its type, so
+// that's one more level on the way to whatever the type holds. The level
+// opens unchecked: a type that's a name opens nothing and reaches no
+// deeper, so size_of(int) and cast(int) x are fine at any depth an
+// expression may have; parse_type checks the levels before each '*' or '['
+// it opens.
 static Ast_Type *parse_type_below(Parser *p) {
     p->levels++;
     reach(p, open_levels(p) < MAX_DEPTH ? open_levels(p) : MAX_DEPTH);
@@ -300,17 +301,29 @@ static Ast *parse_size_of(Parser *p) {
     return size_of;
 }
 
+// type_info '(' type ')': the built-in that gives the address of a type's
+// description (spec 5.19), read as size_of is (parse_size_of): the caller
+// saw the name type_info and a '(' after it, and its type is a level down.
+static Ast *parse_type_info(Parser *p) {
+    Token *name = advance(p);
+    advance(p);  // the '('
+    Ast_Type_Info *info = ast_new<Ast_Type_Info>(p->arena, AST_TYPE_INFO, name->pos);
+    info->type_expr = parse_type_below(p);
+    if (!info->type_expr || !expect(p, TOKEN_RPAREN)) return nullptr;
+    return info;
+}
+
 // primary = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null'
-//         | 'size_of' '(' type ')' | '(' expression ')' | '.' '{' fields '}'
-//         | '.' '[' values ']'
+//         | 'size_of' '(' type ')' | 'type_info' '(' type ')'
+//         | '(' expression ')' | '.' '{' fields '}' | '.' '[' values ']'
 //
 // A '.' starting an expression is a literal without its type, .{1, 2} or
 // .[1, 2], which takes the type it meets (parse_literal).
 //
-// size_of isn't a keyword: it's the name size_of followed by '(', whose
-// argument is a type, not a value, so it can't be parsed as a call (a type
-// such as *int isn't an expression). Without a '(' it's a name like any
-// other.
+// size_of and type_info aren't keywords: each is the name followed by '(',
+// whose argument is a type, not a value, so it can't be parsed as a call (a
+// type such as *int isn't an expression). Without a '(' it's a name like
+// any other.
 //
 // A #load where an expression starts (`x := #load "a.rig";`) is "#load can
 // only be at the top level" rather than "expected an expression", unless
@@ -321,6 +334,7 @@ static Ast *parse_primary(Parser *p) {
     switch (t->kind) {
     case TOKEN_IDENT: {
         if (string_eq(t->text, str("size_of")) && peek(p, 1)->kind == TOKEN_LPAREN) return parse_size_of(p);
+        if (string_eq(t->text, str("type_info")) && peek(p, 1)->kind == TOKEN_LPAREN) return parse_type_info(p);
         advance(p);
         Ast_Name *name = ast_new<Ast_Name>(p->arena, AST_NAME, t->pos);
         name->name = t->text;
@@ -1361,8 +1375,8 @@ static Ast_Block *parse_block(Parser *p) {
 // (MAX_DEPTH), counted with the levels of the types and expressions the
 // type is inside: the one level too many is "types are nested too deeply
 // (more than 1000 levels)", at its '*' or '['. That
-// needs >= below, not ==: parse_type_below opens size_of's and a cast's
-// level unchecked, so the levels may already be one over when a type is
+// needs >= below, not ==: parse_type_below opens size_of's, type_info's and
+// a cast's level unchecked, so the levels may already be one over when a type is
 // read there; a name is fine, a '*' isn't. A count is read inside its
 // '[N]' level, so [1][1]...int is a level per [1], however many, and a type
 // inside a count ([size_of(**int)]u8) adds its levels to the type around

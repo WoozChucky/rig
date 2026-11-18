@@ -57,6 +57,10 @@ struct Checker {
                                  // declares (check_in_a_branch)
     s64 base_procs;              // a decider's: file->procs.count and file->globals.count when it was
     s64 base_globals;            // made, the base; what's added after them joined through a branch
+    Type *type_info_type;        // Preload's Type_Info (spec 3.16): what type_info(T) points at; null
+                                 // without Preload (checker.cpp's declare_top_level finds both)
+    Type *any_type;              // Preload's Any (spec 3.16): what every value converts to; null
+                                 // without Preload
 };
 
 // checker.cpp

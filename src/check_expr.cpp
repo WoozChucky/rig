@@ -2005,6 +2005,28 @@ static Type *check_size_of(Checker *c, Ast_Size_Of *size_of) {
     return &type_untyped_int;
 }
 
+// type_info(T): the address of T's description (spec 5.19), a pointer to
+// Preload's Type_Info, which lowering writes into the program's read-only
+// data. T is any type, void included (what a *void points at). The address
+// is the linker's to write, so it's no constant. Without Preload there is
+// no Type_Info to point at: "'type_info' needs Preload's 'Type_Info', which
+// the program doesn't have", at the name.
+static Type *check_type_info(Checker *c, Ast_Type_Info *info) {
+    Type *t = resolve_type_or_void(c, info->type_expr);
+    if (!t) return nullptr;
+    if (!c->type_info_type) {
+        diag_error(c->diag, info->pos, "'type_info' needs Preload's 'Type_Info', which the program doesn't have");
+        return nullptr;
+    }
+    info->described = t;
+    return type_pointer_to(c->type_info_type);
+}
+
+Ast_Type_Info *type_info_address(Ast *e) {
+    while (e->kind == AST_CAST && e->type && type_is_pointer(e->type)) e = ((Ast_Cast *)e)->value;
+    return e->kind == AST_TYPE_INFO && e->type ? (Ast_Type_Info *)e : nullptr;
+}
+
 // a.count and a.data of an array, a view or a string a (spec 5.12), the only
 // two names they have ("'[3]int' has no field 'size'", at the name);
 // m->index stays -1, lowering knowing them by name. A view's are its fields:
@@ -2217,6 +2239,7 @@ Type *check_expression(Checker *c, Ast *e) {
         break;
     case AST_DEREF: t = check_deref(c, (Ast_Deref *)e); break;
     case AST_SIZE_OF: t = check_size_of(c, (Ast_Size_Of *)e); break;
+    case AST_TYPE_INFO: t = check_type_info(c, (Ast_Type_Info *)e); break;
     case AST_MEMBER: t = check_member(c, (Ast_Member *)e); break;
     case AST_LITERAL: t = check_literal(c, (Ast_Literal *)e); break;
     case AST_INDEX: t = check_index(c, (Ast_Index *)e); break;

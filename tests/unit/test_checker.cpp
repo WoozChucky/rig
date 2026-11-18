@@ -7400,3 +7400,68 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
     CHECK(!contains(ir_print(&a, lower_with_preload(&a, "main :: () { }\n")), "type_info"));
     arena_free(&a);
 }
+
+TEST(type_info_points_at_a_description) {
+    // type_info(T) is a *Type_Info, Preload's, whatever T is: a struct,
+    // void (what a *void points at), an alias (float is float32) or a
+    // procedure type, a '..T' parameter's included. It's an address the
+    // linker writes, so no constant.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Vec2 :: struct { x: int; y: int; }\n"
+                                 "main :: () {\n"
+                                 "    t := type_info(Vec2);\n"
+                                 "    v := type_info(void);\n"
+                                 "    f := type_info(float);\n"
+                                 "    p := type_info((int, ..u8) -> bool);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    Ast *main = top_level_named(tree, "main");
+    CHECK_EQ(main->kind, AST_PROC);
+    Array<Ast *> statements = ((Ast_Proc *)main)->body->statements;
+    const char *described[] = {"Vec2", "void", "float32", "(int, ..u8) -> bool"};
+    CHECK_EQ(statements.count, 4);
+    for (s64 i = 0; i < statements.count && i < 4; i++) {
+        CHECK_EQ(statements[i]->kind, AST_VAR);
+        Ast_Var *var = (Ast_Var *)statements[i];
+        CHECK_STR(type_name(&a, var->type), "*Type_Info");
+        CHECK_EQ(var->value->kind, AST_TYPE_INFO);
+        if (var->value->kind != AST_TYPE_INFO) continue;
+        Ast_Type_Info *info = (Ast_Type_Info *)var->value;
+        CHECK(!info->is_constant);
+        CHECK_STR(type_name(&a, info->described), described[i]);
+    }
+    arena_free(&a);
+}
+
+TEST(type_info_needs_preload) {
+    // Without Preload (a test's single file) there is no Type_Info for
+    // type_info to point at.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "main :: () {\n    t := type_info(int);\n}\n"),
+              "2:10: 'type_info' needs Preload's 'Type_Info', which the program doesn't have\n");
+    arena_free(&a);
+}
+
+TEST(a_global_may_hold_a_description_a_constant_cant) {
+    // A global's value may be a description's address, alone, cast between
+    // pointers, or in a literal or a view's array: the linker writes it, as
+    // it does a string literal's (spec 4.3). A constant holds no pointer but
+    // null or a string literal's address (spec 4.2), so neither of the
+    // constants is one.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "Vec2 :: struct { x: int; }\n"
+                                     "info := type_info(int);\n"
+                                     "kinds : []*Type_Info = .[type_info(u8), type_info(string)];\n"
+                                     "vec2 : *Type_Info_Struct = cast(*Type_Info_Struct) type_info(Vec2);\n"
+                                     "holder := Holder.{type_info(bool)};\n"
+                                     "Holder :: struct { t: *Type_Info; }\n"
+                                     "INFO :: type_info(int);\n"
+                                     "KIND :: cast(*Type_Info_Struct) type_info(Vec2);\n"
+                                     "main :: () { }\n"),
+              "7:9: a constant's pointer can only be null or a string literal's address\n"
+              "8:9: a constant's pointer can only be null or a string literal's address\n");
+    arena_free(&a);
+}

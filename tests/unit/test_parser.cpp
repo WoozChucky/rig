@@ -3694,3 +3694,27 @@ TEST(parses_spreads) {
     CHECK_STR(errors, "2:9: expected an expression, found ')'\n");
     arena_free(&a);
 }
+
+// Issue #153: type_info(T) (spec 5.19).
+
+TEST(parses_type_info) {
+    // type_info is read as size_of is: the name type_info followed by '('
+    // takes a type, not a value, and is a leaf of the expression around it;
+    // without a '(' it's a name like any other.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "t := type_info(*Vec2) == type_info([]u8);", &errors),
+              "(block (var t _ (binary == (type_info (ptr Vec2)) (type_info (view u8)))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "type_info := 1;\n    n := type_info;", &errors),
+              "(block (var type_info _ (int 1)) (var n _ (name type_info)))");
+    CHECK_STR(errors, "");
+    CHECK_STR(parse_src(&a, "INFO :: type_info(void);\n", &errors), "(const INFO (type_info void))\n");
+    CHECK_STR(errors, "");
+    // Its argument is a type, not an expression.
+    body_dump(&a, "n := type_info(1);", &errors);
+    CHECK_STR(errors, "2:20: expected a type, found integer literal\n");
+    body_dump(&a, "n := type_info(int;", &errors);
+    CHECK_STR(errors, "2:23: expected ')', found ';'\n");
+    arena_free(&a);
+}

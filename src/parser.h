@@ -50,7 +50,8 @@
 //                           | '.' '*' | '.' IDENT
 //                           | '.' '{' fields '}' | '.' '[' values ']' }   (after a name: the literal's type)
 //   primary     = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null'
-//               | 'size_of' '(' type ')' | '(' expression ')' | '.' '{' fields '}' | '.' '[' values ']'
+//               | 'size_of' '(' type ')' | 'type_info' '(' type ')'
+//               | '(' expression ')' | '.' '{' fields '}' | '.' '[' values ']'
 //   fields      = [field {',' field} [',']]
 //   field       = [IDENT '='] expression
 //   values      = [expression {',' expression} [',']]
@@ -93,7 +94,9 @@
 // lexer reads a '*' right after a '.' alone, so p.*=5 is p.* = 5 and
 // p.*==q compares (lexer.h). size_of isn't a keyword: the name size_of
 // followed by '(' is the built-in, whose argument is a type; anywhere
-// else it's a name.
+// else it's a name. Nor is type_info (spec 5.19), the address of a type's
+// description, predeclared as size_of is: type_info(*Vec2) takes a type,
+// and `type_info := 1;` declares a variable.
 //
 // A statement is a declaration when it starts with IDENT and then ':',
 // ':=' or '::', and a multi_var when it starts with names separated by
@@ -125,9 +128,9 @@
 // message. Types nest at most 1000 levels too, each '*', '[]', '[N]' and
 // procedure type's '(' one, and the levels of types and expressions inside
 // each other count together: an array's count is read inside its '[N]'
-// level, size_of's and a cast's type a level down. The level one too many,
-// when it's a '*' or '[', is "types are nested too deeply (more than 1000
-// levels)", there.
+// level, size_of's, type_info's and a cast's type a level down. The level
+// one too many, when it's a '*' or '[', is "types are nested too deeply
+// (more than 1000 levels)", there.
 //
 // Several results (spec 6.7) are a list of types after '->', with or
 // without parentheses: `divmod :: (a: int, b: int) -> int, int { ... }` or

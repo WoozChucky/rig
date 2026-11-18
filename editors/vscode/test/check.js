@@ -903,6 +903,16 @@ check('the grammar colours the type of a literal, a cast and size_of', () => {
     assertScopes('h := cast((a: int,\n          b: Vec2) -> Vec2) p;', { Vec2: [TYPE, TYPE], b: null, p: null });
 });
 
+// type_info(T) is read as size_of(T) is: the name followed by '(' takes a
+// type; without the '(' it's a name like any other.
+check('the grammar colours type_info as it does size_of', () => {
+    assertScopes('t := type_info(Vec2);', { type_info: 'entity.name.function.call.rig', Vec2: TYPE, t: null });
+    assertScopes('n := type_info(*Vec2) == type_info([]u8);', { Vec2: TYPE, u8: PRIMITIVE });
+    assertScopes('p := type_info((int, ..u8) -> bool);', { int: PRIMITIVE, u8: PRIMITIVE, bool: PRIMITIVE });
+    assertScopes('t := type_info(\ny := foo(1);', { y: null, foo: 'entity.name.function.call.rig' });
+    assertScopes('type_info := 1;', { type_info: null });
+});
+
 check('the grammar colours no type where none is written', () => {
     // A for loop's named iterator: what follows its ':' is an expression.
     assertScopes('for n: numbers { total += n; }', { for: 'keyword.control.rig', n: null, numbers: null, ':': 'punctuation.separator.colon.rig' });
