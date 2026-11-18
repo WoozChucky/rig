@@ -42,12 +42,17 @@
 //   parameter's is: the hidden parameter stored there; or, in main and in
 //   each #run's procedure, which nothing gives one, default_context's
 //   address, once Preload's __runtime_init has set it up (lower_body's
-//   Context_Source, emit_startup_context). A #c_call procedure has no slot.
-//   `context` is a load of the slot, its value and its address alike, and
-//   every call of a procedure that takes the context loads it and passes
-//   it right after the result temporaries; a default value's context is
-//   the caller's, as all of its code is. Without Preload (a unit test's
-//   single file) there is no context, and no procedure takes one.
+//   Context_Source, emit_startup_context). A #c_call procedure has no slot
+//   of its own. `context` is a load of the current slot, its value and its
+//   address alike, and every call of a procedure that takes the context
+//   loads it and passes it right after the result temporaries; a default
+//   value's context is the caller's, as all of its code is. push_context
+//   (spec 6.13) makes a scope of its own at its block's '{', and a slot
+//   there holding its context's address (a place's own, or a temporary
+//   copy's), the current one while the block is lowered, then the one
+//   around again (lower_push_context): in a #c_call procedure the only
+//   slots. Without Preload (a unit test's single file) there is no
+//   context, and no procedure takes one.
 // - A global variable is an Ir_Global of its type, whose first value (the
 //   constant the checker made sure it has, or zero) is in the program's
 //   file. It's read and written as a slot is, through its address, an
@@ -227,6 +232,10 @@
 //   the body's mark. Then the block drops its registrations. So the code
 //   grows by a copy per way out, with no flag tested at run time, and the
 //   interpreter, which runs the same IR, runs a #run's defers as compiled.
+//   Each copy runs with the context where its defer was reached
+//   (Deferred.context, spec 6.13): a defer in a push_context's block with
+//   the block's, one outside it, run by a return, break or continue in the
+//   block, with its own (lower_deferred).
 // - Rig's main is C's main (ir.h): exported, its every return a ret of C's
 //   int 0, so the program needs no wrapper around it. Its prologue calls
 //   Preload's __runtime_init, then keeps default_context's address as its
@@ -257,7 +266,8 @@
 //   parameters in lower_body), a top-level constant one in the module's
 //   constants (ir_lower), and so does the context, an artificial one: the
 //   hidden parameter, arg 1, or main's and a run's slot, a local
-//   (lower_body). __runtime_init has no debug information at all
+//   (lower_body), or a push_context's slot, a local of its block's scope
+//   at its keyword (lower_push_context). __runtime_init has no debug information at all
 //   (Ir_Proc.no_debug_info), and main's call of it no position, so `break
 //   main` stops at main's first line with the context set up. Each copy of
 //   deferred code is a scope of its own too, at the deferred statement,
@@ -331,6 +341,7 @@ struct Local {
 struct Deferred {
     Ast_Defer *defer;
     s32 scope;    // l->scope where the defer was reached: each copy's scope is inside it
+    s32 context;  // l->context where the defer was reached: each copy runs with it (spec 6.12, 6.13)
     bool copied;  // a copy has been lowered: the later ones are lowered as repeats, which don't report
                   // lowering's errors again (Lowering.repeating)
 };
@@ -1052,8 +1063,8 @@ static s32 lower_value(Lowering *l, Ast *e, Type *to) {
 // caller), its own (lower_address, its checks included); otherwise a copy
 // in a temporary of its own, a slot of e's type, one per conversion
 // lowered, the value put there as it's worked out (a constant made at e's
-// type). The rule converting to Any follows (spec 3.16), and #156's
-// push_context will.
+// type). The rule converting to Any follows (spec 3.16), and so does
+// push_context's (spec 6.13, lower_push_context).
 //
 //     %t = local i64             (a copy of 7)
 //     %7 = const i64 7
@@ -2161,12 +2172,17 @@ static void leave_block(Lowering *l, s64 mark, Ast_Proc *source);
 // is then in pieces around the copy, which CodeView can't describe, and
 // cdb shows their variables in the block around them (spec 10.7). A copy
 // after the first is `repeating`, and doesn't report lowering's error again,
-// nor do the copies of the defers it reaches.
+// nor do the copies of the defers it reaches. The copy runs with the context
+// current where the defer was reached (spec 6.13): a push_context is
+// lexical, so a defer written inside its block runs with the block's, and
+// one written outside it, run by a return, break or continue inside the
+// block, with its own.
 static void lower_deferred(Lowering *l, Deferred d, Ast_Proc *source) {
     Ast *statement = d.defer->statement;
     Position at = statement_position(statement);
     place(l, at, d.scope);
     l->scope = new_scope(l, at);
+    l->context = d.context;
     bool repeating = l->repeating;
     l->repeating = repeating || d.copied;
     s64 mark = l->defers.count;
@@ -2196,10 +2212,13 @@ static void lower_deferred(Lowering *l, Deferred d, Ast_Proc *source) {
 // lines; after them l->pos and l->scope are as they were, so the
 // instruction that leaves (a ret, a jump) is where it is with no defer: at
 // its return, break or continue, an if's block's '}', the loop's keyword,
-// the body's '}' ("What a debugger needs").
+// the body's '}' ("What a debugger needs"). Each copy runs with its own
+// defer's context (lower_deferred); after them l->context is as it was
+// too, the context of the code the way out is in.
 static void lower_defers(Lowering *l, s64 down_to, Ast_Proc *source) {
     Position pos = l->pos;
     s32 scope = l->scope;
+    s32 context = l->context;
     for (s64 i = l->defers.count - 1; i >= down_to; i--) {
         // Passed by value: a copy registers defers of its own, which may
         // move the list (they're gone again when the copy ends).
@@ -2207,6 +2226,7 @@ static void lower_defers(Lowering *l, s64 down_to, Ast_Proc *source) {
         l->defers[i].copied = true;
     }
     place(l, pos, scope);
+    l->context = context;
 }
 
 // The end of a block whose defers began at `mark`. When control gets there
@@ -2230,6 +2250,42 @@ static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) 
     l->scope = new_scope(l, block->pos);
     lower_block(l, block, source);
     leave_block(l, mark, source);
+    l->scope = outer;
+}
+
+// push_context e { ... } (spec 6.13): the block runs with e as its
+// context. e's address is worked out first, at the keyword, in the scope
+// around: a place's own, so the block's changes to its context are the
+// place's, or a copy's, a temporary of the procedure's frame filled each
+// time the push runs (lower_value_address, as converting to Any does).
+// Then the block is a scope of its own (lower_scoped_block), starting at
+// its '{', and a new slot there holds that address, the current context
+// (Lowering.context) while the block is lowered: for a debugger, a
+// variable context of the block's scope, artificial, at the keyword. A
+// #c_call procedure's only context is such a slot. The block's defers run
+// at its end with the block's context (leave_block, lower_deferred). Then
+// the context is the one around again, however the block is left: the
+// push is lexical, so nothing is undone at run time.
+//
+//     push_context c { use(); }      (c a local, its slot %2; main's context %0)
+//     %4 = local ptr
+//     store ptr %2, %4
+//     %5 = load ptr %4
+//     call @use(%5)
+static void lower_push_context(Lowering *l, Ast_Push_Context *push, Ast_Proc *source) {
+    RIG_ASSERT(l->context_type);  // the checker refused a push without Preload's Context
+    s32 address = lower_value_address(l, push->context, push->is_place);
+    s32 outer = l->scope, outer_context = l->context;
+    s64 mark = l->defers.count;
+    place(l, push->pos, new_scope(l, push->block->pos));
+    s32 slot = emit(l, IR_LOCAL, IR_PTR)->result;
+    emit_store(l, IR_PTR, address, slot);
+    array_add(&l->proc->vars, Ir_Var{str("context"), type_pointer_to(l->context_type), push->pos, l->scope,
+                                     IR_VAR_SLOT, slot, 0, 0, true});
+    l->context = slot;
+    lower_block(l, push->block, source);
+    leave_block(l, mark, source);
+    l->context = outer_context;
     l->scope = outer;
 }
 
@@ -2659,7 +2715,8 @@ static Position statement_position(Ast *s) {
     case AST_FOR:
     case AST_BREAK:
     case AST_CONTINUE:
-    case AST_DEFER: return s->pos;
+    case AST_DEFER:
+    case AST_PUSH_CONTEXT: return s->pos;
     default: return s->start;  // an expression
     }
 }
@@ -2809,7 +2866,8 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     // Registered, and nothing emitted (spec 6.12): its statement is lowered
     // at each way out of its block instead (lower_defers), so its line has
     // code only where its copies are.
-    case AST_DEFER: array_add(&l->defers, Deferred{(Ast_Defer *)s, l->scope, false}); break;
+    case AST_DEFER: array_add(&l->defers, Deferred{(Ast_Defer *)s, l->scope, l->context, false}); break;
+    case AST_PUSH_CONTEXT: lower_push_context(l, (Ast_Push_Context *)s, source); break;
     default: lower_expr(l, s); break;  // a call, its value ignored
     }
 }

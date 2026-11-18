@@ -1,0 +1,72 @@
+// push_context (issue #156, spec 6.13): a block run with another context
+// as context, by its address when it's a place and a copy of it when it
+// isn't. However the block is left (its end, return, break, continue),
+// the context is the one before it again: push_context is lexical, so
+// nothing is undone at run time. A defer runs with the context where
+// it's written.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+// The heap under another name: its data names it.
+named_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+// A copy of the current context, its allocator named.
+named :: (name: *u8) -> Context {
+    c := context;
+    c.allocator = Allocator.{named_proc, name};
+    return c;
+}
+
+// The name of the allocator in the context a callee is given.
+say :: (where: *u8) {
+    name : *u8 = "heap";
+    if context.allocator.data != null { name = context.allocator.data; }
+    printf("%s: %s\n", where, name);
+}
+
+returns :: () -> int {
+    defer say("outer defer");
+    push_context named("returning") {
+        defer say("inner defer");
+        say("in the block");
+        return 7;
+    }
+    return 0;
+}
+
+main :: () {
+    // A place: the block runs with c itself, and what it sets is c's.
+    c := named("place");
+    push_context c {
+        say("place");
+        changed : *u8 = "changed";
+        context.allocator.data = changed;
+        say("set");
+    }
+    printf("c: %s\n", c.allocator.data);
+    say("after the place");
+
+    // Anything else is copied: here a call's result.
+    push_context named("temporary") { say("temporary"); }
+    say("after the temporary");
+
+    printf("%lld\n", returns());
+    say("after return");
+
+    for 1..3 {
+        say("iteration");
+        push_context named("loop") {
+            if it == 2 { continue; }
+            say("loop");
+            if it == 3 { break; }
+        }
+        say("after the block");
+    }
+    say("after break");
+
+    push_context named("outer") {
+        push_context named("inner") { say("nested"); }
+        say("back out");
+    }
+}

@@ -1,0 +1,1 @@
+tests/run/context_callback.rig:72:5: runtime error: a Rig procedure can't be passed to C at compile time, for now

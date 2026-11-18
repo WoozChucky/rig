@@ -6121,3 +6121,158 @@ TEST(the_context_is_an_artificial_variable) {
     CHECK(init.count >= 15 && string_eq(string_slice(init, init.count - 15, 15), str(", no debug info")));
     arena_free(&a);
 }
+
+TEST(push_context_pushes_an_address) {
+    // A place's own address is pushed: the block's slot, %4, holds c's
+    // slot, %2, and use is given a load of it, with no copy of c. Anything
+    // else is copied into a temporary of its own, %6, from make's result,
+    // and the block's slot, %9, holds the temporary's address. After the
+    // blocks, the context is main's own again, %0. Each block's slot is a
+    // variable context, artificial, at its push_context, in the block's
+    // scope, which starts at its '{'.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a, "use :: () { }\n"
+                                          "main :: () {\n"
+                                          "    c := context;\n"
+                                          "    push_context c { use(); }\n"
+                                          "    push_context make() { use(); }\n"
+                                          "    use();\n"
+                                          "}\n"
+                                          "make :: () -> Context { return context; }\n");
+    CHECK_STR(proc_ir(ir_print(&a, m), "main"),
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  call @__runtime_init()\n"
+              "  %0 = local ptr\n"
+              "  %1 = addr @default_context\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local 24 align 8\n"
+              "  %3 = load ptr %0\n"
+              "  copy %2, %3, 24\n"
+              "  %4 = local ptr\n"
+              "  store ptr %2, %4\n"
+              "  %5 = load ptr %4\n"
+              "  call @use(%5)\n"
+              "  %6 = local 24 align 8\n"
+              "  %7 = local 24 align 8\n"
+              "  %8 = load ptr %0\n"
+              "  call @make(%7, %8)\n"
+              "  copy %6, %7, 24\n"
+              "  %9 = local ptr\n"
+              "  store ptr %6, %9\n"
+              "  %10 = load ptr %9\n"
+              "  call @use(%10)\n"
+              "  %11 = load ptr %0\n"
+              "  call @use(%11)\n"
+              "  %12 = const i32 0\n"
+              "  ret %12\n"
+              "}\n");
+    String main = proc_ir(ir_print_debug(&a, m), "main");
+    CHECK_EQ(count_of(main, "; var context *Context slot"), 3);
+    CHECK(contains(main, "; scope 1 in 0 at 4:20\n"));
+    CHECK(contains(main, "; scope 2 in 0 at 5:25\n"));
+    CHECK(contains(main, "; var context *Context slot %4 artificial in 1 at 4:5\n"));
+    CHECK(contains(main, "; var context *Context slot %9 artificial in 2 at 5:5\n"));
+    arena_free(&a);
+}
+
+TEST(a_defer_runs_with_the_context_where_it_is_written) {
+    // The return leaves the push's block and the body: the inner defer runs
+    // first, with the push's context (a load of its slot, %3), then the
+    // outer one with f's own (a load of the hidden parameter's slot, %1).
+    Arena a = arena_make();
+    String f = proc_ir(ir_print(&a, lower_with_preload(&a, "say :: () { }\n"
+                                                           "f :: () -> int {\n"
+                                                           "    defer say();\n"
+                                                           "    push_context context {\n"
+                                                           "        defer say();\n"
+                                                           "        return 1;\n"
+                                                           "    }\n"
+                                                           "    return 0;\n"
+                                                           "}\n"
+                                                           "main :: () { }\n")),
+                       "f");
+    CHECK_STR(f,
+              "proc @f(ptr) -> i64 {\n"
+              "b0:\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = load ptr %1\n"
+              "  %3 = local ptr\n"
+              "  store ptr %2, %3\n"
+              "  %4 = const i64 1\n"
+              "  %5 = load ptr %3\n"
+              "  call @say(%5)\n"
+              "  %6 = load ptr %1\n"
+              "  call @say(%6)\n"
+              "  ret %4\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(push_context_in_deferred_code_builds) {
+    // The deferred push is copied at the return, inside the loop's push,
+    // and at the body's end (the continue leaves only the loop's body), and
+    // each copy makes a slot of its own: with the hidden parameter's and
+    // the loop's push's, f has four. The module is valid LLVM IR for both
+    // systems.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a, "use :: () { }\n"
+                                          "f :: (n: int) {\n"
+                                          "    defer push_context context { use(); }\n"
+                                          "    for 1..n {\n"
+                                          "        push_context context {\n"
+                                          "            if it == 2 { continue; }\n"
+                                          "            if it == 3 { return; }\n"
+                                          "            use();\n"
+                                          "        }\n"
+                                          "    }\n"
+                                          "}\n"
+                                          "main :: () { f(4); }\n");
+    CHECK_EQ(count_of(proc_ir(ir_print(&a, m), "f"), "local ptr"), 4);
+    Target targets[] = {TARGET_WINDOWS_X64, TARGET_LINUX_X64};
+    for (s64 i = 0; i < 2; i++) {
+        String text = {}, error = {};
+        CHECK(llvm_ir_text(&a, m, targets[i], &text, &error));
+        CHECK_STR(error, "");
+    }
+    arena_free(&a);
+}
+
+TEST(a_c_call_procedure_pushes_its_own) {
+    // cb has no context until it pushes one: its one slot, %1, holds
+    // default_context's own address (a global is a place), stored at the
+    // push. get's call passes a load of it first, and the default's copy
+    // of the allocator is made from a load of it too. For a debugger, the
+    // slot is cb's one context, in the push's scope, at its keyword.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a, "get :: (n: int, a: Allocator = context.allocator) -> int { return n; }\n"
+                                          "cb :: () #c_call {\n"
+                                          "    push_context default_context {\n"
+                                          "        n := get(1);\n"
+                                          "    }\n"
+                                          "}\n"
+                                          "main :: () { }\n");
+    String cb = proc_ir(ir_print(&a, m), "cb");
+    CHECK_STR(cb,
+              "proc @cb() {\n"
+              "b0:\n"
+              "  %0 = addr @default_context\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = local i64\n"
+              "  %3 = load ptr %1\n"
+              "  %4 = const i64 1\n"
+              "  %5 = load ptr %1\n"
+              "  %6 = local 16 align 8\n"
+              "  copy %6, %5, 16\n"
+              "  %7 = call @get(%3, %4, %6)\n"
+              "  store i64 %7, %2\n"
+              "  ret\n"
+              "}\n");
+    CHECK_EQ(count_of(cb, "local ptr"), 1);
+    String debug = proc_ir(ir_print_debug(&a, m), "cb");
+    CHECK_EQ(count_of(debug, "; var context *Context slot"), 1);
+    CHECK(contains(debug, "; var context *Context slot %1 artificial in 1 at 3:5\n"));
+    arena_free(&a);
+}

@@ -1,0 +1,20 @@
+place: place
+set: changed
+c: changed
+after the place: heap
+temporary: temporary
+after the temporary: heap
+in the block: returning
+inner defer: returning
+outer defer: heap
+7
+after return: heap
+iteration: heap
+loop: loop
+after the block: heap
+iteration: heap
+iteration: heap
+loop: loop
+after break: heap
+nested: inner
+back out: outer

@@ -8562,3 +8562,28 @@ TEST(a_run_has_the_worlds_default_context) {
     CHECK_EQ(run->constant, 1);
     arena_free(&a);
 }
+
+TEST(a_run_reaches_through_a_push) {
+    // X's run calls f, whose push_context runs g in a block and make for
+    // its context: the walk reaches both (check_run.cpp's walk_node), so
+    // their bodies are checked before the run is lowered, in the
+    // declarations pass, and the run gives 5.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "X :: #run f();\n"
+                                 "f :: () -> int {\n"
+                                 "    push_context make() { return g(); }\n"
+                                 "    return 0;\n"
+                                 "}\n"
+                                 "make :: () -> Context { return context; }\n"
+                                 "g :: () -> int { return 5; }\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    Ast *x = top_level_named(tree, "X");
+    CHECK_EQ(x->kind, AST_CONST);
+    CHECK(x->is_constant);
+    CHECK_EQ(x->constant, 5);
+    arena_free(&a);
+}
