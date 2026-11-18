@@ -131,7 +131,7 @@
 //   reached in, so what each copy declares is a variable of its own. And a
 //   declaration of a local or a constant that hides a name a debugger
 //   shows (a global, a parameter, an outer local, a constant: "Constants"
-//   below) starts a scope of its own, inside its block's, from the
+//   below, a procedure) starts a scope of its own, inside its block's, from the
 //   declaration to the block's end, and the name is declared in it: a name
 //   is hidden only from the end of its declaration (spec 4.7), but a
 //   debugger shows a scope's variables over the whole scope. Its initializer
@@ -153,22 +153,25 @@
 // - Constants (spec 4.2, issue #172): every one the program declares, used
 //   or not, so a debugger shows each by its name, as C's debuggers show an
 //   enum's values. A constant naming a procedure isn't one (the debugger
-//   knows the procedure by its own name), and neither are the predeclared
-//   OS, OS_WINDOWS and OS_LINUX, which the program doesn't declare, nor one
-//   in a block nested in code that can't run (after a return, a break or a
-//   continue), whose scope has no code for a debugger to stop in
-//   (lower.cpp's lower_statements), nor one after a return that hides a
-//   name, which it would hide only where there's no code. Each is an
-//   Ir_Var: a top-level one in Ir_Module.constants, a body's in its
-//   procedure's vars, with its variables, in the scope of the block that
-//   declares it. A number, a bool or null is IR_VAR_CONSTANT, its bits, no
-//   storage: a debugger knows its value, and nothing in memory holds it. A
-//   constant holding data (a string, a struct, an array, a #run's view), or
-//   a pointer to a string literal, is IR_VAR_GLOBAL, its read-only const.N,
-//   which a debugger reads as it reads a global: the one its uses read at
-//   run time, or, when no code reads it, one made for the debugger alone,
-//   after every body (a pointer's is 8 bytes holding its literal's
-//   address, since CodeView can't give an address as a constant's value; a
+//   knows the procedure by its own name) unless it hides a name a debugger
+//   shows, and neither are the predeclared OS, OS_WINDOWS and OS_LINUX,
+//   which the program doesn't declare, nor one in a nested block after code
+//   that can't go on (a return, a break or a continue, or an if whose every
+//   branch ends in one), whose scope has no code for a debugger to stop in
+//   (lower.cpp's lower_statements), nor one after such code in its own
+//   block that hides a name, which it would hide only where there's no
+//   code. Each is an Ir_Var: a top-level one in Ir_Module.constants, a
+//   body's in its procedure's vars, with its variables, in the scope of the
+//   block that declares it. A number, a bool or null is IR_VAR_CONSTANT,
+//   its bits, no storage: a debugger knows its value, and nothing in memory
+//   holds it. A constant holding data (a string, a struct, an array, a
+//   #run's view), a pointer to a string literal, or a procedure (a hiding
+//   one) is IR_VAR_GLOBAL, its read-only const.N, which a debugger reads as
+//   it reads a global: the one its uses read at run time, or, when no code
+//   reads it, one made for the debugger alone, after every body (a
+//   pointer's or a procedure's is 8 bytes holding its literal's or the
+//   procedure's address, since CodeView can't give an address as a
+//   constant's value; a
 //   foreign procedure's address is null there when the program doesn't
 //   otherwise use that procedure, call it or take its address: lower.cpp's
 //   used_foreign, so the program needs no C function it didn't already).
@@ -178,7 +181,7 @@
 //   0.100000001), null's *void. Now that constants are shown, a body's
 //   constant that hides a name a debugger shows starts a scope of its own,
 //   as a variable that hides one does (above), and so does a variable that
-//   hides a constant; one that hides nothing stays in its block's scope,
+//   hides a constant or a procedure; one that hides nothing stays in its block's scope,
 //   even after such a declaration, since it needs no code where it's
 //   declared, and the scope a hiding declaration starts may have none (so a
 //   constant that hides a name, with no code after it in its block, is in

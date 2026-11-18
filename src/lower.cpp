@@ -475,21 +475,23 @@ static Type *debug_constant_type(Type *t) {
 
 // Whether a debugger shows constant `c` (ir.h's "Constants"): a number, a
 // bool, null or data, but not one naming a procedure, which a debugger
-// knows by the procedure's own name.
+// knows by the procedure's own name (unless it hides a name a debugger
+// shows: lower_statement).
 static bool is_shown_constant(Ast_Const *c) { return !c->proc && (c->is_constant || c->is_data); }
 
 // Records constant `c` for a debugger (ir.h's "Constants"), declared in
 // `scope` of the procedure being lowered, or at the top level when scope is
-// -1: a number, a bool or null as its bits; data, or a pointer to a
-// literal, as its read-only const.N, which resolve_constant_globals finds
-// once every body is lowered (a use later in the body may make it, and it
-// then keeps the number such a use gives it). Nothing for a constant a
-// debugger doesn't show (is_shown_constant), nor on demand: a compile-time
-// module is never compiled, so nothing describes it.
+// -1: a number, a bool or null as its bits; data, a pointer to a literal,
+// or a procedure (one that hides a name: lower_statement), as its read-only
+// const.N, which resolve_constant_globals finds once every body is lowered
+// (a use later in the body may make it, and it then keeps the number such a
+// use gives it). Nothing on demand: a compile-time module is never
+// compiled, so nothing describes it.
 static void add_constant(Lowering *l, Ast_Const *c, s32 scope) {
-    if (!is_shown_constant(c) || l->on_demand) return;
+    if (l->on_demand) return;
+    bool in_memory = c->is_data || c->proc;
     Ir_Var v = {c->name, debug_constant_type(c->type), c->pos, scope, IR_VAR_CONSTANT, -1, 0, c->constant};
-    if (c->is_data) {
+    if (in_memory) {
         v.kind = IR_VAR_GLOBAL;
         v.constant = 0;
     }
@@ -497,20 +499,22 @@ static void add_constant(Lowering *l, Ast_Const *c, s32 scope) {
     array_add(vars, v);
     s64 index = vars->count - 1;
     if (scope < 0) table_put(&l->constant_index, c->name, (s32)index);
-    if (c->is_data) array_add(&l->pending_constants, Pending_Constant{scope < 0 ? nullptr : l->proc, index, c});
+    if (in_memory) array_add(&l->pending_constants, Pending_Constant{scope < 0 ? nullptr : l->proc, index, c});
 }
 
 // Whether a local or a constant named `name`, declared here, hides a name
 // a debugger shows here: a global variable, a top-level constant, a
-// parameter, or a local or a constant of the current scope or of one
-// around it (one of a block that has ended is visible no more). Such a
-// declaration starts a scope of its own (lower_statement says why). On
-// demand, a global no body has used yet isn't seen, nor any constant, which
-// that lowering doesn't record; that changes only the scopes, which a
-// compile-time module, never compiled, gives no debugger.
+// procedure (a debugger knows it by its name), a parameter, or a local or a
+// constant of the current scope or of one around it (one of a block that
+// has ended is visible no more). Such a declaration starts a scope of its
+// own (lower_statement says why). On demand, a global or a procedure no
+// body has used yet isn't seen, nor any constant, which that lowering
+// doesn't record; that changes only the scopes, which a compile-time
+// module, never compiled, gives no debugger.
 static bool hides_a_name(Lowering *l, String name) {
     if (table_get(&l->global_index, name)) return true;
     if (table_get(&l->constant_index, name)) return true;
+    if (table_get(&l->proc_index, name)) return true;
     for (s64 i = 0; i < l->proc->vars.count; i++) {
         Ir_Var *v = &l->proc->vars[i];
         if (!string_eq(v->name, name)) continue;
@@ -2377,16 +2381,16 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     switch (s->kind) {
     case AST_VAR: {
         // A declaration that hides a name a debugger shows (a global, a
-        // parameter, an outer local, a constant: hides_a_name) hides it only
-        // from its own end (spec 4.7), but a debugger shows a scope's
-        // variables wherever the scope is, all of it. So such a declaration
-        // starts a scope of its own inside the current one (rustc starts one
-        // at every let), made current until the end of the block (whose
-        // lowering then puts the scope around it back), and the variable is
-        // declared in it. Its initializer is lowered first, in the scope
-        // around: it may read the name it hides (x := x + 1), and before the
-        // store, a debugger shows the outer variable. A declaration hiding
-        // nothing is in the block's scope, as in C.
+        // parameter, an outer local, a constant, a procedure: hides_a_name)
+        // hides it only from its own end (spec 4.7), but a debugger shows a
+        // scope's variables wherever the scope is, all of it. So such a
+        // declaration starts a scope of its own inside the current one
+        // (rustc starts one at every let), made current until the end of the
+        // block (whose lowering then puts the scope around it back), and the
+        // variable is declared in it. Its initializer is lowered first, in
+        // the scope around: it may read the name it hides (x := x + 1), and
+        // before the store, a debugger shows the outer variable. A
+        // declaration hiding nothing is in the block's scope, as in C.
         Ast_Var *var = (Ast_Var *)s;
         Position at = l->pos;
         bool hides = hides_a_name(l, var->name);
@@ -2410,16 +2414,19 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     // (add_constant) in its block's scope (Lowering.block_scope), even after
     // a hiding declaration began one inside it: it needs no code here, and a
     // debugger shows it wherever the block has code, where the hiding
-    // scope may have none (when nothing but constants follows). One that
-    // hides a name a debugger shows is in a scope of its own from here to
-    // the block's end, as a variable that hides one is (above); after a
-    // return, where nothing follows that has code, it would never be shown,
-    // so it's neither recorded nor given a scope.
+    // scope may have none (when nothing but constants follows). One naming a
+    // procedure isn't recorded (is_shown_constant). One that hides a name a
+    // debugger shows is in a scope of its own from here to the block's end,
+    // as a variable that hides one is (above), one naming a procedure too,
+    // as its address (add_constant): else a debugger would show the name it
+    // hides. Once the block's code can't go on (after a return, a break or
+    // a continue, or an if whose every branch ends in one), nothing follows
+    // that has code, so it would never be shown: it's neither recorded nor
+    // given a scope.
     case AST_CONST: {
         Ast_Const *constant = (Ast_Const *)s;
-        if (!is_shown_constant(constant)) break;
         if (!hides_a_name(l, constant->name)) {
-            add_constant(l, constant, l->block_scope);
+            if (is_shown_constant(constant)) add_constant(l, constant, l->block_scope);
         } else if (!has_ended(l, l->block)) {
             place(l, l->pos, new_scope(l, l->pos));
             add_constant(l, constant, l->scope);
@@ -2509,7 +2516,8 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
 }
 
 // The block's statements in order. Once the IR block has ended (after a
-// return), the rest can't run: they aren't lowered, and couldn't be, since
+// return, a break or a continue, or an if whose every branch ends in one),
+// the rest can't run: they aren't lowered, and couldn't be, since
 // nothing may follow a terminator. Only their constants are, a taken #if
 // branch's too, since they need no code: the block's scope has code before
 // them, where a debugger shows them as it shows any of the block's names
@@ -3296,7 +3304,8 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
         if (f->globals[i]->kind == AST_VAR) lower_global(&l, (Ast_Var *)f->globals[i]);
     }
     for (s64 i = 0; i < f->globals.count; i++) {
-        if (f->globals[i]->kind == AST_CONST) add_constant(&l, (Ast_Const *)f->globals[i], -1);
+        Ast *g = f->globals[i];
+        if (g->kind == AST_CONST && is_shown_constant((Ast_Const *)g)) add_constant(&l, (Ast_Const *)g, -1);
     }
 
     // Every procedure first, so a call can name one declared later, each

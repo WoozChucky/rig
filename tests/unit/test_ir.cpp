@@ -1523,6 +1523,7 @@ TEST(ir_of_globals) {
                    "global @str.0 = \"hi\\00\"\n"));
     CHECK(!contains(ir, "@N"));
     CHECK(!contains(ir, "@STOPPED"));
+    CHECK(!contains(ir, "; const "));
     CHECK_STR(proc_ir(ir, "bump"),
               "proc @bump() {\n"
               "b0:\n"
@@ -3135,6 +3136,39 @@ TEST(a_constant_that_hides_a_name_starts_a_scope) {
     CHECK(contains(main, "  ; var LIMIT int slot %"));
     CHECK(contains(main, " in 5 at 13:9\n"));
     CHECK(contains(main, "  ; var b int constant 4 in 7 at 16:9\n"));
+    arena_free(&a);
+}
+
+TEST(a_procedure_constant_that_hides_a_name_starts_a_scope) {
+    // A constant naming a procedure isn't recorded where it hides nothing
+    // (TWICE: a debugger knows the procedure by its own name), but one that
+    // hides a name a debugger shows starts a scope, as any hiding
+    // declaration does, and is recorded in it as the procedure's address,
+    // in a const.N: else a debugger would show the top-level OP, 5, where
+    // OP is add. A procedure is a name a debugger shows too: the constant
+    // add, which hides it, starts a scope.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                          "OP :: 5;\n"                                           // 1
+                                                          "add :: (a: int, b: int) -> int { return a + b; }\n"  // 2
+                                                          "main :: () {\n"                                       // 3
+                                                          "    x := 1;\n"                                        // 4
+                                                          "    TWICE :: add;\n"                                  // 5
+                                                          "    OP :: add;\n"                                     // 6
+                                                          "    y := OP(x, 2);\n"                                 // 7
+                                                          "    {\n"                                              // 8
+                                                          "        add :: 5;\n"                                  // 9
+                                                          "        z := add + y;\n"                              // 10
+                                                          "    }\n"
+                                                          "}\n")),
+                          "main");
+    CHECK(!contains(main, "; var TWICE "));
+    CHECK(contains(main, "  ; scope 1 in 0 at 6:5\n"
+                         "  ; scope 2 in 1 at 8:5\n"
+                         "  ; scope 3 in 2 at 9:9\n"));
+    CHECK(contains(main, "  ; var OP (int, int) -> int global @const."));
+    CHECK(contains(main, " in 1 at 6:5\n"));
+    CHECK(contains(main, "  ; var add int constant 5 in 3 at 9:9\n"));
     arena_free(&a);
 }
 
