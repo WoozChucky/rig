@@ -1446,10 +1446,11 @@ static u64 debug_constant_bits(Type *t, u64 bits) {
 //   typed as the pointer it holds, a pointer to the aggregate (`[]int *`):
 //   what the procedure takes, as its type says
 //   (begin_procedure_debug_info), so a debugger calls it with an address
-//   (gdb's `print sum(&q)`). gdb shows the address and takes `p->a`, `*p` and `p.a`
-//   (it reads `.` through a pointer too); cdb takes `p->a`; Visual
-//   Studio's debugger, VS Code's on Windows, shows the fields and takes
-//   `a.count`, as it does for any pointer to a struct. (The variable could
+//   (gdb's `print sum(context, &q)`, the context first: below). gdb shows
+//   the address and takes `p->a`, `*p` and `p.a` (it reads `.` through a
+//   pointer too); cdb takes `p->a`; Visual Studio's debugger, VS Code's on
+//   Windows, shows the fields and takes `a.count`, as it does for any
+//   pointer to a struct. (The variable could
 //   be the value at the address the slot holds instead, the declare's
 //   expression DW_OP_deref, as clang declares an argument passed by its
 //   address: gdb would show the struct, but call the procedure with it by
@@ -1462,18 +1463,22 @@ static u64 debug_constant_bits(Type *t, u64 bits) {
 //   32-bit pointer.)
 // - Each hidden result pointer (one per aggregate result, the IR's first
 //   parameters) is a parameter variable too, the first ones, so a debugger
-//   shows it and calls the procedure with it: gdb's `print make(&q, 7)`,
-//   cdb's `.call make(&q, 7)`. It's stored into a slot of its own like an
-//   aggregate parameter's address, and the variable is the slot: a
-//   pointer to the result's type. It's named result$ (result$1, result$2,
-//   ... for several), which can't be a Rig name (Rig's names are C's:
-//   letters, digits and '_'), but which both debuggers take in an
-//   expression (gdb's `print result$`, cdb's `?? result$`), where gdb
-//   would take $result for one of its own convenience variables. (What it
-//   points at, the caller's temporary, holds the result once `return` has
-//   copied it there.) It's
-//   artificial (DW_AT_artificial): made by the compiler, not declared in
-//   the source.
+//   shows it and calls the procedure with it, before the context: gdb's
+//   `print make(&q, context, 7)`, cdb's `.call make(&q, context, 7)`. It's
+//   stored into a slot of its own like an aggregate parameter's address,
+//   and the variable is the slot: a pointer to the result's type. It's
+//   named result$ (result$1, result$2, ... for several), which can't be a
+//   Rig name (Rig's names are C's: letters, digits and '_'), but which both
+//   debuggers take in an expression (gdb's `print result$`, cdb's `??
+//   result$`), where gdb would take $result for one of its own convenience
+//   variables. (What it points at, the caller's temporary, holds the result
+//   once `return` has copied it there.) It's artificial (DW_AT_artificial):
+//   made by the compiler, not declared in the source.
+// - The context (spec 7.10) is a variable in a slot (IR_VAR_SLOT) named
+//   context, artificial too (Ir_Var.artificial): in a procedure that takes
+//   it, the hidden parameter after the result pointers, its ArgNo the one
+//   after theirs (arg 1 in lowering's count, which leaves them out); in
+//   main and a run's procedure, a local holding default_context's address.
 // - A constant that is a number, a bool or null (IR_VAR_CONSTANT) has no
 //   storage: it's a DILocalVariable whose value a value record
 //   (#dbg_value) at the same place gives, for the whole of its scope, so
@@ -1530,9 +1535,9 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
     LLVMMetadataRef plain = LLVMDIBuilderCreateExpression(b->debug, nullptr, 0);
     // Each variable is in the procedure's file, as its scopes are.
     LLVMMetadataRef file = debug_file(b, p->pos);
-    // The result pointers, parameters 1 to `pointers` (the visible ones
-    // come after them), at the procedure's own line: the i-th points at the
-    // i-th aggregate result.
+    // The result pointers, parameters 1 to `pointers` (the context and the
+    // visible ones come after them), at the procedure's own line: the i-th
+    // points at the i-th aggregate result.
     s64 aggregate = 0;
     for (s64 i = 0; i < pointers; i++) {
         while (!type_is_aggregate(p->source_results[aggregate])) aggregate++;
@@ -1564,7 +1569,8 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
             continue;
         }
         // An aggregate parameter: a pointer in its slot (see above). A
-        // visible parameter's ArgNo counts the result pointers before it.
+        // visible parameter's ArgNo counts the result pointers before it,
+        // and its v->arg the context before it too.
         if (v->kind == IR_VAR_ADDRESS) type = debug_pointer(b, type);
         // AlwaysPreserve: kept even if LLVM finds no use of it (an optimiser
         // could drop a variable that's never read; a debugger still shows

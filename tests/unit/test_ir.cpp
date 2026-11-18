@@ -6018,6 +6018,33 @@ TEST(c_procedures_take_no_context) {
     arena_free(&a);
 }
 
+TEST(a_c_call_main_starts_with_the_default_context) {
+    // main marked #c_call is still main: no parameter, but it calls
+    // __runtime_init and keeps default_context's address in its slot, as
+    // any main does, and passes it to twice.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "twice :: (n: int) -> int { return n; }\n"
+                                                    "main :: () #c_call {\n"
+                                                    "    n := twice(1);\n"
+                                                    "}\n"));
+    CHECK_STR(proc_ir(ir, "main"),
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  call @__runtime_init()\n"
+              "  %0 = local ptr\n"
+              "  %1 = addr @default_context\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local i64\n"
+              "  %3 = load ptr %0\n"
+              "  %4 = const i64 1\n"
+              "  %5 = call @twice(%3, %4)\n"
+              "  store i64 %5, %2\n"
+              "  %6 = const i32 0\n"
+              "  ret %6\n"
+              "}\n");
+    arena_free(&a);
+}
+
 TEST(a_call_through_a_value_passes_the_context) {
     // f's type isn't #c_call, so the procedure it holds takes the context,
     // loaded from main's slot after f's value is; g's is #c_call, and its

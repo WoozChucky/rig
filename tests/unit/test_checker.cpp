@@ -8555,5 +8555,10 @@ TEST(a_run_has_the_worlds_default_context) {
     Ast *value = ((Ast_Var *)g)->value;
     CHECK(value && value->is_constant);
     if (value) CHECK_EQ(value->constant, 1);
+    Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "in_a_body"))->body;
+    Ast *run = ((Ast_Return *)body->statements[0])->values[0];
+    CHECK_EQ(run->kind, AST_RUN);
+    CHECK(run->is_constant);
+    CHECK_EQ(run->constant, 1);
     arena_free(&a);
 }

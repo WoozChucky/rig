@@ -1,0 +1,16 @@
+// The context (issue #156, spec 7.10) in a program whose only #run is a
+// top-level one: no constant or global runs while checking, so this run
+// is the compile-time world's first, and it makes the world, the world's
+// default context with it. The run starts with that context and passes it
+// to what it calls, as main does with the program's own.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+storage :: () -> int { return context.temporary_storage.size; }
+
+#run {
+    printf("%lld %d\n", storage(), context.allocator.proc == heap_allocator_proc);
+}
+
+main :: () {
+    printf("%lld %d\n", storage(), *context == *default_context);
+}

@@ -118,11 +118,12 @@
 //   breakpoint on the procedure stops at the first instruction with a
 //   line, once they're done). __runtime_init itself has no debug
 //   information (Ir_Proc.no_debug_info), as the procedures the compiler
-//   makes have none: LLVM would move a call located at line 0 to the start
-//   of main's first line, before the call, and refuses a call with no
-//   location of a procedure that has debug information, so `break main`
-//   stops at main's first line with the context set up, and a debugger
-//   steps over the call.
+//   makes have none: located at line 0, the call would be given main's own
+//   line, and `break main` would stop there before the call ran; with no
+//   location, LLVM refuses a call of a procedure that has debug
+//   information. So __runtime_init has none, the call has no location, and
+//   `break main` stops at main's first line with the context set up, and a
+//   debugger steps over the call.
 //   Every position in a procedure, its scopes' and its variables' too, is
 //   in the procedure's own file (Ir_Proc.pos's): a backend names that file
 //   once, in the procedure's debug scope, and each line in it. So a call's

@@ -13,19 +13,20 @@
 //   variables start zeroed), or nothing at all for ---. Reading it is an
 //   IR_LOAD, assigning it an IR_STORE.
 // - Parameters. A scalar parameter arrives as a value, %0 to %(count-1)
-//   (after the hidden ones for struct results, below). Parameters are
-//   read-only, so the value could be used as it is; but a debugger couldn't
-//   follow it. So, as clang does at -O0, each is stored on entry into a
-//   slot of its own, before the body's first line, and every use loads it
-//   from there, at the statement using it. The slot is then the one place
-//   the parameter lives: a debugger shows it there, and a value it writes
-//   there (gdb's `set var`) is the one the program goes on with. Used as a
-//   value instead, the parameter would be in a register LLVM spills and
-//   reloads where it likes, at -O0 at the start of each block that uses it,
-//   with no line (gdb's `next` then stepped past an `else if` testing it);
-//   and a copy kept for the debugger alone wouldn't be what the program
-//   reads. An aggregate parameter is the pointer to the caller's copy, used
-//   as it is (the backend keeps the pointer in a slot for the debugger). A
+//   (after the hidden ones for struct results and the context's, below).
+//   Parameters are read-only, so the value could be used as it is; but a
+//   debugger couldn't follow it. So, as clang does at -O0, each is stored
+//   on entry into a slot of its own, before the body's first line, and
+//   every use loads it from there, at the statement using it. The slot is
+//   then the one place the parameter lives: a debugger shows it there, and
+//   a value it writes there (gdb's `set var`) is the one the program goes
+//   on with. Used as a value instead, the parameter would be in a register
+//   LLVM spills and reloads where it likes, at -O0 at the start of each
+//   block that uses it, with no line (gdb's `next` then stepped past an
+//   `else if` testing it); and a copy kept for the debugger alone wouldn't
+//   be what the program reads. An aggregate parameter is the pointer to the
+//   caller's copy, used as it is (the backend keeps the pointer in a slot
+//   for the debugger). A
 //   '..T' parameter (spec 7.2) is a []T one, to the callee and to a
 //   debugger alike: only the caller does anything more (lower_call_results).
 //   A parameter's default value (spec 7.2) is the caller's code too: a call
@@ -894,8 +895,9 @@ static s32 emit_field_address(Lowering *l, s32 base, s64 offset) {
 }
 
 // How many of the procedure's results are aggregates: each is a hidden ptr
-// parameter, before the visible ones, so its visible parameters are numbered
-// from this count.
+// parameter, before the context and the visible ones, so those are numbered
+// from this count: the context, when the procedure takes it (takes_context),
+// first, and the visible ones after it (lower_body).
 static s32 aggregate_results(Ast_Proc *proc) {
     s32 count = 0;
     for (s64 i = 0; i < proc->results.count; i++) {

@@ -45,6 +45,12 @@ made :: () -> string {
     return s;
 }
 MADE :: #run made();
+// A block's run starts with the world's default context too, and passes
+// it to what it calls. What it prints is rig build's (context.build.out).
+#run {
+    give_back(first());
+    printf("%d %lld\n", context.allocator.proc == heap_allocator_proc, context.temporary_storage.size);
+}
 
 main :: () {
     count := 0;
