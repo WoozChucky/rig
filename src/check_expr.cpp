@@ -206,7 +206,8 @@ static String conversion_hint(Checker *c, Ast *value, Type *from, Type *to) {
         return string_printf(c->arena, "; cast it with cast(" STR_FMT ")", STR_ARG(type_name(c->arena, to)));
     }
     if (!from || !to || from->kind != TYPE_PROC || to->kind != TYPE_PROC || from->is_c_call == to->is_c_call ||
-        type_proc_of(from->params, from->param_count, from->results, from->result_count, to->is_c_call) != to) {
+        type_proc_of(from->params, from->param_count, from->results, from->result_count, to->is_c_call,
+                     from->is_variadic) != to) {
         return {};
     }
     if (from->is_c_call) {
@@ -616,11 +617,12 @@ static void report_undeclared(Checker *c, Ast_Name *name, bool called) {
 
 // A name used as a value: a variable's or parameter's value, or a
 // constant's, which is known while compiling, or a procedure, of its
-// procedure type (a constant naming one too). A variadic procedure has no
-// procedure type: "'printf' can't be a value: it takes more arguments
-// with '..', which no procedure type can say". Nor is main a value: "'main'
-// can't be a value: it's where the program starts"; nor a #compiler one:
-// "'create_workspace' can't be a value: the compiler does it".
+// procedure type (a constant naming one too); one taking a '..T' too, its
+// type saying so (spec 3.15). One that takes C's bare '..' has no
+// procedure type: "'printf' can't be a value: it takes C's '..', which no
+// procedure type can say". Nor is main a value: "'main' can't be a value:
+// it's where the program starts"; nor a #compiler one: "'create_workspace'
+// can't be a value: the compiler does it".
 static Type *check_name(Checker *c, Ast_Name *name) {
     Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
@@ -657,8 +659,7 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         }
         if (proc->is_c_variadic) {
             diag_error(c->diag, name->pos,
-                       "'" STR_FMT "' can't be a value: it takes more arguments with '..', which no procedure type "
-                       "can say",
+                       "'" STR_FMT "' can't be a value: it takes C's '..', which no procedure type can say",
                        STR_ARG(proc->name));
         }
         return proc->type;  // null when a part of its signature was an error, reported

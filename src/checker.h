@@ -450,11 +450,13 @@
 //   value calls it is a circle, "'f' is defined in terms of itself".
 //
 // Variadic foreign procedures (issue #82, spec 7.6).
-// - A parameter list ending with '..' (the parser makes sure it's last,
-//   after a parameter) takes more arguments, as a C function declared with
-//   '...' does. Only a foreign procedure may: "only a foreign procedure can
-//   take more arguments with '..'; a Rig procedure can take a view, as in
-//   (values: []int)", at the '..'.
+// - A parameter list ending with C's bare '..' (the parser makes sure it's
+//   last, after a parameter) takes more arguments, as a C function declared
+//   with '...' does. Only a foreign procedure may: "only a foreign procedure
+//   can take C's '..'; a Rig procedure takes more arguments as '..T', as in
+//   (values: ..int)", at the '..'. Such a procedure has no procedure type,
+//   so it can't be a value: "'printf' can't be a value: it takes C's '..',
+//   which no procedure type can say".
 // - A call gives at least the fixed parameters ("'printf' takes at least 1
 //   argument, but 0 were given"), each converted as any argument is. Each
 //   argument after them keeps its own type: a number, a bool or a pointer,
@@ -469,6 +471,30 @@
 //   '...' can't take; pass a pointer to it" (an array's or a view's: "pass
 //   its .data"; a string's: "pass its .data, which may not end with a zero,
 //   or a literal").
+//
+// Variadic Rig procedures (issue #150, spec 7.2, 5.10).
+// - A procedure's last parameter written `name: ..T` (the parser makes sure
+//   it's last) takes the rest of a call's arguments, any number of them. In
+//   the body it is a []T, read-only as every parameter. T is resolved as a
+//   view's element is, behind a pointer: a struct named there needs no
+//   layout yet, and void is "'void' is only a pointer's target, as in
+//   *void", at T.
+// - C passes no view, so a foreign procedure can't take one: "a foreign
+//   procedure can't take '..int': C's other arguments are written '..'
+//   alone, as in (format: *u8, ..)"; nor can a #c_call one, "a #c_call
+//   procedure can't take '..int'"; and a #compiler one can't for now, "a
+//   #compiler procedure can't take '..int', for now". Each at the '..',
+//   once (what C can't take isn't said of the []T too), and the procedure
+//   then has no type, so using it as a value says nothing more.
+// - Its procedure's type says ..T: (first: int, rest: ..int) -> int has
+//   type (int, ..int) -> int, a type of its own (Type.is_variadic), which
+//   neither converts to nor from (int, []int) -> int. A procedure type
+//   written with a last parameter ..T is that type; a #c_call one can't
+//   be, "a #c_call procedure can't take '..int'", at the '..', and has no
+//   type. Nor can C take or return a procedure value of one: "a foreign
+//   procedure can't take a '(..int) -> int': C can't pass the view a '..'
+//   parameter takes" ("a #c_call procedure ...", "... can't return ..."),
+//   at the type.
 //
 // Code run while compiling (issue #115, spec 7.8).
 // - #run e is an expression, of e's type: an untyped constant's default

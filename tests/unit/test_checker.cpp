@@ -4363,8 +4363,8 @@ TEST(only_a_foreign_procedure_is_variadic) {
                            "    s := \"hi\";\n"
                            "    f(1, 2, 2.5, null, v, s, .{1, 2}, .[3]);\n"
                            "}\n"),
-              "1:15: only a foreign procedure can take more arguments with '..'; "
-              "a Rig procedure can take a view, as in (values: []int)\n");
+              "1:15: only a foreign procedure can take C's '..'; "
+              "a Rig procedure takes more arguments as '..T', as in (values: ..int)\n");
     arena_free(&a);
 }
 
@@ -4533,8 +4533,7 @@ TEST(a_procedures_name_is_a_value) {
                            "    X :: x;\n"
                            "}\n"),
               "3:20: a value of type '(int, int) -> int' doesn't convert to '(int) -> int' implicitly\n"
-              "5:10: 'printf' can't be a value: it takes more arguments with '..', which no procedure type can "
-              "say\n"
+              "5:10: 'printf' can't be a value: it takes C's '..', which no procedure type can say\n"
               "6:29: a value of type '(int, int) -> int' doesn't convert to '(int, int) -> s64' implicitly\n"
               "7:29: a value of type 'int' doesn't convert to '(int, int) -> int' implicitly\n"
               "9:10: the value of constant 'X' isn't known while compiling\n");
@@ -7001,5 +7000,70 @@ TEST(a_run_looks_into_a_spread) {
                            "main :: () { }\n"),
               "3:15: a value of type 'string' doesn't convert to 'int' implicitly\n"
               "6:8: only the arguments of a '..' parameter can be spread, as in f(..values)\n");
+    arena_free(&a);
+}
+
+TEST(variadic_parameters_are_views) {
+    // In the body a '..T' parameter is a []T, so rest.count is a view's. The
+    // procedure's type says '..int', and is not the type of the same
+    // signature taking a []int: the mark is part of it.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "sum :: (first: int, rest: ..int) -> int { return first + rest.count; }\n"
+                          "plain :: (first: int, rest: []int) -> int { return first; }\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Proc *sum = c.file->procs[0], *plain = c.file->procs[1];
+    CHECK_STR(type_name(&a, sum->params[1]->type), "[]int");
+    CHECK_STR(type_name(&a, sum->type), "(int, ..int) -> int");
+    CHECK(sum->type->is_variadic);
+    CHECK(sum->type != plain->type);
+    CHECK_STR(type_name(&a, plain->type), "(int, []int) -> int");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(variadic_procedure_types_are_their_own) {
+    // A written (int, ..int) -> int is a variadic procedure's type, whatever
+    // its parameters are named; neither it nor (int, []int) -> int converts
+    // to the other. Its T is a view's element: never void.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                           "plain :: (first: int, rest: []int) -> int { return first; }\n"
+                           "a : (int, ..int) -> int = sum;\n"
+                           "b : (x: int, y: ..int) -> int;\n"
+                           "main :: () {\n"
+                           "    a = b;\n"
+                           "    c : (int, []int) -> int = sum;\n"
+                           "    d : (int, ..int) -> int = plain;\n"
+                           "    e : (..void);\n"
+                           "}\n"),
+              "7:31: a value of type '(int, ..int) -> int' doesn't convert to '(int, []int) -> int' implicitly\n"
+              "8:31: a value of type '(int, []int) -> int' doesn't convert to '(int, ..int) -> int' implicitly\n"
+              "9:12: 'void' is only a pointer's target, as in *void\n");
+    arena_free(&a);
+}
+
+TEST(where_a_variadic_parameter_cant_be) {
+    // C passes no view: a foreign procedure, a #c_call one and a #c_call
+    // procedure type take no '..T', each said once, at its '..', and C
+    // can't be given a procedure value that takes one. A #compiler
+    // procedure doesn't, for now.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "c_sum :: (count: int, values: ..int) -> int #foreign libc;\n"
+                           "callback :: (values: ..int) #c_call { }\n"
+                           "cb : (..int) #c_call;\n"
+                           "takes :: (f: (..int) -> int) #foreign libc;\n"
+                           "main :: () { }\n"),
+              "1:31: a foreign procedure can't take '..int': C's other arguments are written '..' alone, "
+              "as in (format: *u8, ..)\n"
+              "2:22: a #c_call procedure can't take '..int'\n"
+              "3:7: a #c_call procedure can't take '..int'\n"
+              "4:14: a foreign procedure can't take a '(..int) -> int': C can't pass the view a '..' parameter "
+              "takes\n");
+    CHECK_STR(check_module_source(&a, "f :: (values: ..int) #compiler;\nmain :: () { }\n"),
+              "1:15: a #compiler procedure can't take '..int', for now\n");
     arena_free(&a);
 }

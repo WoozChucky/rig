@@ -1,0 +1,12 @@
+// Where a '..T' parameter can't be (issue #150, spec 7.2, 7.6): C passes
+// no view, so neither a foreign procedure nor a #c_call one takes it, nor
+// a #c_call procedure type; a #compiler one doesn't, for now; and C's
+// bare '..' is a foreign procedure's alone.
+c_sum :: (count: int, values: ..int) -> int #foreign libc;
+callback :: (values: ..int) #c_call { }
+Handler :: struct { run: (..int) #c_call; }
+c_like :: (count: int, ..) -> int { return count; }
+compiled :: (values: ..int) #compiler;
+// Last: the parser gives this declaration up and skips to the next.
+not_last :: (values: ..int, count: int) { }
+main :: () { }

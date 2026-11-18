@@ -80,6 +80,25 @@ static Type *resolve_element(Checker *c, Ast_Type *written, bool behind_pointer)
     return t;
 }
 
+// The type of a '..T' parameter whose T is written `element` (spec 7.2):
+// []T, T resolved as a view's element is (behind a pointer, so a struct
+// named there needs no layout yet, and never void); null when T is an
+// error, reported.
+static Type *resolve_variadic(Checker *c, Ast_Type *element) {
+    if (!element) return nullptr;
+    Type *t = resolve_element(c, element, true);
+    return t ? type_view_of(t) : nullptr;
+}
+
+// A '..T' parameter, of type `view` (its []T), that `who` ("a foreign
+// procedure", "a #c_call procedure", "a #compiler procedure") can't take,
+// refused at its '..' with T named as written and `why` after it: "a
+// #c_call procedure can't take '..int'" (issue #150).
+static void report_variadic_refused(Checker *c, Type *view, Position dots, const char *who, const char *why) {
+    diag_error(c->diag, dots, "%s can't take '.." STR_FMT "'%s", who, STR_ARG(type_name(c->arena, view->element)),
+               why);
+}
+
 // A parameter's or, with `result`, a result's type t, at `at`, of `who`, "a
 // foreign procedure" or "a #c_call procedure", which C calls or is called by
 // (spec 7.6): what C can't take is reported.
@@ -97,12 +116,20 @@ static Type *resolve_element(Checker *c, Ast_Type *written, bool behind_pointer)
 // - A procedure value that isn't #c_call: a Rig procedure, which C would
 //   call as it calls its own, but which may come to expect more (#84's
 //   context): "a foreign procedure can't take a '(int) -> int', which isn't
-//   #c_call; C can call a '(int) -> int #c_call'".
+//   #c_call; C can call a '(int) -> int #c_call'". One whose last parameter
+//   is a '..T' (issue #150) has no #c_call kind to suggest, a #c_call
+//   procedure taking none: "a foreign procedure can't take a '(int, ..int)
+//   -> int': C can't pass the view a '..' parameter takes".
 static void check_c_part(Checker *c, Type *t, Position at, const char *who, bool result) {
     if (!t) return;  // its own mistake, reported
     const char *verb = result ? "return" : "take";
+    if (t->kind == TYPE_PROC && t->is_variadic) {
+        diag_error(c->diag, at, "%s can't %s a '" STR_FMT "': C can't pass the view a '..' parameter takes", who, verb,
+                   STR_ARG(type_name(c->arena, t)));
+        return;
+    }
     if (t->kind == TYPE_PROC && !t->is_c_call) {
-        Type *marked = type_proc_of(t->params, t->param_count, t->results, t->result_count, true);
+        Type *marked = type_proc_of(t->params, t->param_count, t->results, t->result_count, true, t->is_variadic);
         diag_error(c->diag, at, "%s can't %s a '" STR_FMT "', which isn't #c_call; C can call a '" STR_FMT "'", who,
                    verb, STR_ARG(type_name(c->arena, t)), STR_ARG(type_name(c->arena, marked)));
         return;
@@ -118,30 +145,41 @@ static void check_c_part(Checker *c, Type *t, Position at, const char *who, bool
 // A written procedure type, (params) -> results, its parts resolved in
 // order: each is one a value can have, void none. A procedure value is an
 // address, so they lie behind it, as a pointer's target does: a struct
-// among them is named before its layout is known (behind_pointer). Null when
-// any part is an error, reported. A #c_call type's parts are what C takes
-// (check_c_part), one result at most, as a #c_call procedure's are
-// (check_signature).
+// among them is named before its layout is known (behind_pointer). A last
+// parameter written ..T is a []T (resolve_variadic), and the type is
+// marked variadic (spec 3.15). Null when any part is an error, reported. A
+// #c_call type's parts are what C takes (check_c_part), one result at most,
+// as a #c_call procedure's are (check_signature); and, as a #c_call
+// procedure, it takes no ..T, C passing no view: "a #c_call procedure
+// can't take '..int'", at the '..', the type then having none.
 static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
     Array<Type *> parts = {};
     bool fine = true;
-    for (s64 i = 0; i < written->params.count + written->results.count; i++) {
-        Ast_Type *part = i < written->params.count ? written->params[i] : written->results[i - written->params.count];
-        Type *t = resolve_element(c, part, true);
+    s64 n = written->params.count;
+    for (s64 i = 0; i < n + written->results.count; i++) {
+        Ast_Type *part = i < n ? written->params[i] : written->results[i - n];
+        bool dots = written->is_variadic && i == n - 1;
+        Type *t = dots ? resolve_variadic(c, part) : resolve_element(c, part, true);
         fine = fine && t;
         array_add(&parts, t);
     }
-    s64 n = written->params.count;
     if (written->is_c_call) {
         for (s64 i = 0; i < parts.count; i++) {
             Ast_Type *part = i < n ? written->params[i] : written->results[i - n];
-            check_c_part(c, parts[i], part->pos, "a #c_call procedure", i >= n);
+            if (written->is_variadic && i == n - 1) {
+                if (parts[i]) report_variadic_refused(c, parts[i], written->dots, "a #c_call procedure", "");
+                fine = false;
+            } else {
+                check_c_part(c, parts[i], part->pos, "a #c_call procedure", i >= n);
+            }
         }
         if (written->results.count > 1) {
             diag_error(c->diag, written->results[1]->pos, "a #c_call procedure can return at most one value");
         }
     }
-    Type *t = fine ? type_proc_of(parts.data, n, parts.data + n, written->results.count, written->is_c_call) : nullptr;
+    Type *t = fine ? type_proc_of(parts.data, n, parts.data + n, written->results.count, written->is_c_call,
+                                  written->is_variadic)
+                   : nullptr;
     array_free(&parts);
     return t;
 }
@@ -1085,7 +1123,7 @@ static Type *proc_made_again(Type *t) {
         array_add(&parts, part);
     }
     Type *again = fine ? type_proc_of(parts.data, t->param_count, parts.data + t->param_count, t->result_count,
-                                      t->is_c_call)
+                                      t->is_c_call, t->is_variadic)
                        : nullptr;
     array_free(&parts);
     return again;
@@ -1780,7 +1818,8 @@ bool check_reached_body(Checker *c, Ast_Proc *proc, Position at) {
 }
 
 // The procedure type of proc's checked signature (check_signature says
-// which); null when it has none.
+// which), variadic when its last parameter is a '..T'; null when it has
+// none.
 static Type *proc_type_of_signature(Ast_Proc *proc) {
     if (proc->is_c_variadic) return nullptr;
     Array<Type *> parts = {};
@@ -1794,8 +1833,9 @@ static Type *proc_type_of_signature(Ast_Proc *proc) {
         array_add(&parts, proc->results[i]->type);
     }
     s64 n = proc->params.count;
+    bool variadic = n > 0 && proc->params[n - 1]->is_variadic;
     Type *t = fine ? type_proc_of(parts.data, n, parts.data + n, proc->results.count,
-                                  proc->is_c_call || proc->is_foreign)
+                                  proc->is_c_call || proc->is_foreign, variadic)
                    : nullptr;
     array_free(&parts);
     return t;
@@ -1883,9 +1923,14 @@ static void check_c_name(Checker *c, Ast_Proc *proc) {
 // call, take and return only what C does (check_c_part), and one result at
 // most.
 //
-// Only a foreign procedure may end its parameters with '..': a Rig
-// procedure would have no way to reach the arguments it doesn't name (Rig
-// has no va_list), and takes a view of them instead.
+// Only a foreign procedure may end its parameters with C's bare '..': a
+// Rig procedure would have no way to reach the arguments it doesn't name
+// (Rig has no va_list), and takes them as a '..T' parameter instead.
+//
+// A '..T' parameter (issue #150, spec 7.2) is a []T, T resolved as a
+// view's element (resolve_variadic). C passes no view, so a foreign
+// procedure and a #c_call one can't take it, and a #compiler one can't for
+// now: each is said once, at the '..', and the procedure has no type then.
 //
 // A #compiler procedure, which the compiler does itself (spec 7.9), is no
 // C function: it takes and returns Rig's own structs and strings, which the
@@ -1900,16 +1945,32 @@ static void check_c_name(Checker *c, Ast_Proc *proc) {
 // open_declaration).
 //
 // The procedure's type (Ast.type) is its signature's procedure type: #c_call
-// when it's marked so, or foreign (C's own). A variadic one has none: no
-// procedure type takes '..', so it can only be called (check_name).
+// when it's marked so, or foreign (C's own), and variadic with a '..T'. One
+// that takes C's bare '..' has none: no procedure type takes it, so it can
+// only be called (check_name).
 static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
     bool c_side = proc->is_foreign || proc->is_c_call;
     const char *who = proc->is_foreign ? "a foreign procedure" : "a #c_call procedure";
+    bool refused = false;  // a '..T' parameter it can't take
     for (s64 i = 0; i < proc->params.count; i++) {
         Ast_Param *param = proc->params[i];
         c->levels = base + param->type_expr->levels + 1;
-        param->type = resolve_type(c, param->type_expr);
-        if (c_side) check_c_part(c, param->type, param->type_expr->pos, who, false);
+        if (!param->is_variadic) {
+            param->type = resolve_type(c, param->type_expr);
+            if (c_side) check_c_part(c, param->type, param->type_expr->pos, who, false);
+            continue;
+        }
+        param->type = resolve_variadic(c, param->type_expr);
+        refused = c_side || proc->is_compiler;
+        if (!param->type) continue;  // T's own mistake, reported
+        if (proc->is_foreign) {
+            report_variadic_refused(c, param->type, param->dots, who,
+                                    ": C's other arguments are written '..' alone, as in (format: *u8, ..)");
+        } else if (proc->is_c_call) {
+            report_variadic_refused(c, param->type, param->dots, who, "");
+        } else if (proc->is_compiler) {
+            report_variadic_refused(c, param->type, param->dots, "a #compiler procedure", ", for now");
+        }
     }
     for (s64 i = 0; i < proc->results.count; i++) {
         c->levels = base + proc->results[i]->levels + 1;
@@ -1924,8 +1985,8 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
     }
     if (proc->is_c_variadic && !proc->is_foreign) {
         diag_error(c->diag, proc->c_dots_pos,
-                   "only a foreign procedure can take more arguments with '..'; a Rig procedure can take a view, "
-                   "as in (values: []int)");
+                   "only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as in "
+                   "(values: ..int)");
     }
     if (proc->is_foreign && !string_eq(proc->foreign_library, str("libc"))) {
         diag_error(c->diag, proc->library_pos, "unknown library '" STR_FMT "'; the only one so far is 'libc'",
@@ -1935,7 +1996,7 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
     if (proc->is_compiler && !c->diag->files[proc->compiler_pos.file].in_module) {
         diag_error(c->diag, proc->compiler_pos, "#compiler is only for the modules that ship with rig");
     }
-    proc->type = proc_type_of_signature(proc);
+    proc->type = refused ? nullptr : proc_type_of_signature(proc);
 }
 
 // A procedure's signature, checked the first time it's needed: in its turn
