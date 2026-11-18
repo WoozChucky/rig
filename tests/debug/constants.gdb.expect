@@ -49,5 +49,11 @@ print_line(NAME);
 $21 = 12
 $22 = {count = 3, data = 0x
 "rig"}
+constants.rig:38
+print_line(LABEL);
+$23 = 12
+$24 = {count = 4, data = 0x
+"tail"}
+$25 = -7
 !optimized out
 !.debug_names not created by gdb

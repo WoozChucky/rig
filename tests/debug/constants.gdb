@@ -2,6 +2,7 @@ break constants.rig:21
 break constants.rig:30
 break constants.rig:33
 break constants.rig:36
+break constants.rig:38
 run
 print LIMIT
 print RATIO
@@ -32,3 +33,7 @@ info locals
 continue
 print LIMIT
 print NAME
+continue
+print LIMIT
+print TAIL
+print DROP

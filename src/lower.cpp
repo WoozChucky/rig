@@ -353,7 +353,10 @@ struct Lowering {
     // block.
     Position pos;             // line 0 in the procedures the compiler makes
     s32 scope;                // an index in proc->scopes; -1 in the procedures the compiler makes
-    bool is_entry;            // the procedure being lowered is Rig's main, C's main: its returns
+    s32 block_scope;          // the scope of the block whose statements are being lowered (lower_block),
+                              // which a hiding declaration's doesn't replace: where a constant that
+                              // hides nothing is recorded (lower_statement's AST_CONST)
+    bool is_entry;           // the procedure being lowered is Rig's main, C's main: its returns
                               // give C's int, 0
     Array<Ast_Proc *> sources;  // by index in module->procs, whole or on demand: the procedure of the
                                 // source each lowers; null, or past its end, for the compiler's own
@@ -1839,6 +1842,7 @@ static s32 lower_call(Lowering *l, Ast_Call *call) {
 }
 
 static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source);
+static void lower_statements(Lowering *l, Ast_Block *block, Ast_Proc *source);
 static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source);
 static Position statement_position(Ast *s);
 static void leave_block(Lowering *l, s64 mark, Ast_Proc *source);
@@ -1868,7 +1872,12 @@ static void lower_deferred(Lowering *l, Deferred d, Ast_Proc *source) {
     if (statement->kind == AST_BLOCK) {
         lower_block(l, (Ast_Block *)statement, source);
     } else {
+        // The copy's scope is its statement's block: a deferred #if's
+        // constants are the copy's.
+        s32 block_scope = l->block_scope;
+        l->block_scope = l->scope;
         lower_statement(l, statement, source);
+        l->block_scope = block_scope;
     }
     // The checker refused every way out of deferred code but its end (a
     // return, a break or continue whose loop is outside it), so no copy ends
@@ -1936,7 +1945,7 @@ static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) 
 // A branch that doesn't reach its end (it returns) doesn't jump; when
 // neither does, there's no `after` at all, and no code that follows is
 // lowered: the current block has ended. Only the constants after it are
-// recorded (lower_block).
+// recorded (lower_statements).
 //
 // else if is an if inside the else part, so a chain of them is ifs inside
 // ifs, but it's lowered in a loop rather than by lower_if calling itself
@@ -2398,14 +2407,23 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     // that literal's str.N (literal_global), and so are a string's uses met
     // as a *u8; data's const.N is made where a use first reads its bytes
     // (constant_global). The constant is recorded for a debugger
-    // (add_constant) in the current scope, or, when it hides a name a
-    // debugger shows, in a scope of its own from here to the block's end, as
-    // a variable that hides one is (above).
+    // (add_constant) in its block's scope (Lowering.block_scope), even after
+    // a hiding declaration began one inside it: it needs no code here, and a
+    // debugger shows it wherever the block has code, where the hiding
+    // scope may have none (when nothing but constants follows). One that
+    // hides a name a debugger shows is in a scope of its own from here to
+    // the block's end, as a variable that hides one is (above); after a
+    // return, where nothing follows that has code, it would never be shown,
+    // so it's neither recorded nor given a scope.
     case AST_CONST: {
         Ast_Const *constant = (Ast_Const *)s;
         if (!is_shown_constant(constant)) break;
-        if (hides_a_name(l, constant->name)) place(l, l->pos, new_scope(l, l->pos));
-        add_constant(l, constant, l->scope);
+        if (!hides_a_name(l, constant->name)) {
+            add_constant(l, constant, l->block_scope);
+        } else if (!has_ended(l, l->block)) {
+            place(l, l->pos, new_scope(l, l->pos));
+            add_constant(l, constant, l->scope);
+        }
         break;
     }
     case AST_MULTI_VAR: lower_multi_var(l, (Ast_Multi_Var *)s); break;
@@ -2475,7 +2493,7 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
         // too, run when that block is left (spec 6.12: the branch takes no
         // mark of its own, leave_block).
         Ast_Block *taken = ((Ast_If_Directive *)s)->taken;
-        if (taken) lower_block(l, taken, source);
+        if (taken) lower_statements(l, taken, source);
         break;
     }
     case AST_WHILE: lower_while(l, (Ast_While *)s, source); break;
@@ -2495,15 +2513,26 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
 // nothing may follow a terminator. Only their constants are, a taken #if
 // branch's too, since they need no code: the block's scope has code before
 // them, where a debugger shows them as it shows any of the block's names
-// (ir.h's "Constants"). A nested block's constants aren't: that block's
-// scope has no code for a debugger to stop in.
-static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source) {
+// (ir.h's "Constants"), but for one that hides a name (lower_statement). A
+// nested block's constants aren't: that block's scope has no code for a
+// debugger to stop in. A taken #if branch's statements are lowered this way
+// alone, in the block around it (lower_statement).
+static void lower_statements(Lowering *l, Ast_Block *block, Ast_Proc *source) {
     for (s64 i = 0; i < block->statements.count; i++) {
         Ast *s = block->statements[i];
         bool may_hold_constants = s->kind == AST_CONST || s->kind == AST_IF_DIRECTIVE;
         if (ir_block_has_ended(l->proc, l->block) && !may_hold_constants) continue;
         lower_statement(l, s, source);
     }
+}
+
+// A block's statements (lower_statements), in its scope, the current one,
+// which is Lowering.block_scope while they're lowered.
+static void lower_block(Lowering *l, Ast_Block *block, Ast_Proc *source) {
+    s32 outer = l->block_scope;
+    l->block_scope = l->scope;
+    lower_statements(l, block, source);
+    l->block_scope = outer;
 }
 
 // `size` bytes of `bits` at `at`, as they lie in memory: little-endian, as

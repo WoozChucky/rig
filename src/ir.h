@@ -157,26 +157,33 @@
 //   OS, OS_WINDOWS and OS_LINUX, which the program doesn't declare, nor one
 //   in a block nested in code that can't run (after a return, a break or a
 //   continue), whose scope has no code for a debugger to stop in
-//   (lower.cpp's lower_block). Each is an Ir_Var: a top-level one in
-//   Ir_Module.constants, a body's in its procedure's vars, with its
-//   variables, in the scope current at its declaration. A number, a bool or
-//   null is IR_VAR_CONSTANT, its bits, no storage: a debugger knows its
-//   value, and nothing in memory holds it. A constant holding data (a
-//   string, a struct, an array, a #run's view), or a pointer to a string
-//   literal, is IR_VAR_GLOBAL, its read-only const.N, which a debugger
-//   reads as it reads a global: the one its uses read at run time, or,
-//   when no code reads it, one made for the debugger alone, after every
-//   body (a pointer's is 8 bytes holding its literal's address, since
-//   CodeView can't give an address as a constant's value; a foreign
-//   procedure's address is null there, so the program needs no C function
-//   it doesn't call). Its type is the one a debugger shows: an untyped integer's int (spec
+//   (lower.cpp's lower_statements), nor one after a return that hides a
+//   name, which it would hide only where there's no code. Each is an
+//   Ir_Var: a top-level one in Ir_Module.constants, a body's in its
+//   procedure's vars, with its variables, in the scope of the block that
+//   declares it. A number, a bool or null is IR_VAR_CONSTANT, its bits, no
+//   storage: a debugger knows its value, and nothing in memory holds it. A
+//   constant holding data (a string, a struct, an array, a #run's view), or
+//   a pointer to a string literal, is IR_VAR_GLOBAL, its read-only const.N,
+//   which a debugger reads as it reads a global: the one its uses read at
+//   run time, or, when no code reads it, one made for the debugger alone,
+//   after every body (a pointer's is 8 bytes holding its literal's
+//   address, since CodeView can't give an address as a constant's value; a
+//   foreign procedure's address is null there when the program doesn't
+//   otherwise use that procedure, call it or take its address: lower.cpp's
+//   used_foreign, so the program needs no C function it didn't already).
+//   Its type is the one a debugger shows: an untyped integer's int (spec
 //   3.12's default, which every untyped integer constant fits), an untyped
 //   float's float64 (its value is a double's: as a float32, 0.1 would show
 //   0.100000001), null's *void. Now that constants are shown, a body's
 //   constant that hides a name a debugger shows starts a scope of its own,
 //   as a variable that hides one does (above), and so does a variable that
-//   hides a constant. A compile-time module (lower.cpp's "Lowering on
-//   demand") records none: it is never compiled.
+//   hides a constant; one that hides nothing stays in its block's scope,
+//   even after such a declaration, since it needs no code where it's
+//   declared, and the scope a hiding declaration starts may have none (so a
+//   constant that hides a name, with no code after it in its block, is in
+//   a scope no debugger stops in). A compile-time module (lower.cpp's
+//   "Lowering on demand") records none: it is never compiled.
 // - Globals keep their Rig type (Ir_Global.rig_type) and position; the
 //   module, each source file's absolute path and MD5 (Ir_Module.sources,
 //   indexed by Position.file) and the directory rig ran in, so a debugger
@@ -402,8 +409,10 @@ struct Ir_Var {
     s32 arg;           // a parameter's place among the visible ones, from 1 (the hidden
                        // result pointers before them don't count); 0 for any other
     u64 constant;      // IR_VAR_CONSTANT: its bits, as Ast.constant keeps them (an integer's
-                       // extended to 64 by its sign, a bool's 0 or 1, a float's a double's,
-                       // a float32's too, which the backend rounds); 0 for the other kinds
+                       // sign-extended to 64 when signed or untyped, zero-extended when
+                       // unsigned; a bool's 0 or 1; a float's a double's, a float32's too,
+                       // whose value it holds exactly, and which the backend narrows to its
+                       // 32 bits: debug_constant_bits); 0 for the other kinds
 };
 
 struct Ir_Proc {

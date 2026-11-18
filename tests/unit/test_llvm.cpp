@@ -2049,6 +2049,8 @@ TEST(llvm_constants_have_debug_info) {
                                 "    RATE :: 0.25;\n"
                                 "    NO_CALL :: cast((int) -> int) null;\n"
                                 "    { CORNER :: Point.{7, 8}; INNER :: 5; i := 1; }\n"  // 18
+                                "    NEG :: cast(s8) -5;\n"
+                                "    NF :: cast(float32) -1.5;\n"
                                 "}\n");
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);
@@ -2101,6 +2103,16 @@ TEST(llvm_constants_have_debug_info) {
         CHECK(rate.count > 0 &&
               contains(text, string_cstr(&a, string_printf(&a, "#dbg_value(i64 4598175219545276416, " STR_FMT ", ",
                                                            STR_ARG(rate)))));
+        // NEG: an s8's bits extended by its sign, which LLVM prints as a
+        // signed i64; NF: a negative float32's 32 bits (0xBFC00000),
+        // zero-extended.
+        String neg = defined_node(line_with(text, "!DILocalVariable(name: \"NEG\""));
+        CHECK(neg.count > 0 &&
+              contains(text, string_cstr(&a, string_printf(&a, "#dbg_value(i64 -5, " STR_FMT ", ", STR_ARG(neg)))));
+        String nf = defined_node(line_with(text, "!DILocalVariable(name: \"NF\""));
+        CHECK(nf.count > 0 &&
+              contains(text, string_cstr(&a, string_printf(&a, "#dbg_value(i64 3217031168, " STR_FMT ", ",
+                                                           STR_ARG(nf)))));
         CHECK(!contains(text, "!DIGlobalVariable(name: \"STEP\""));
         // NO_CALL: a pointer to its subroutine type, its value null.
         String no_call_line = line_with(text, "!DILocalVariable(name: \"NO_CALL\"");

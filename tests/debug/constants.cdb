@@ -5,6 +5,7 @@ bp `constants.rig:21`
 bp `constants.rig:30`
 bp `constants.rig:33`
 bp `constants.rig:36`
+bp `constants.rig:38`
 g
 ?? LIMIT
 ?? RATIO
@@ -32,4 +33,8 @@ dv /t
 g
 ?? LIMIT
 ?? NAME
+g
+?? LIMIT
+?? TAIL
+?? DROP
 q

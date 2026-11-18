@@ -49,5 +49,10 @@ struct Point CORNER
 int64 0n12
 +0x000 count            : 0n3
 "rig"
+38:         print_line(LABEL);
+int64 0n12
++0x000 count            : 0n4
+"tail"
+int64 0n-7
 !Couldn't resolve error
 !value unavailable
