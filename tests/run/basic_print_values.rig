@@ -1,0 +1,157 @@
+// Basic's print (issue #154): each kind of value as print_item writes it,
+// through its type info, at the top and nested in a struct, an array or a
+// view, where a string is quoted and escaped: every integer type at its
+// extremes, floats as float32 and float64, bools, strings with each escape
+// and a UTF-8 character, null and other pointers and procedure values,
+// structs and arrays nested a few levels, an Any field, a zeroed Any, a
+// description of void, and a string builder in place of standard output.
+// The same compiled and interpreted.
+#import "Basic";
+
+Vec2 :: struct { x: int; y: int; }
+Line :: struct { from: Vec2; to: Vec2; }
+Box :: struct { line: Line; tag: string; }
+Empty :: struct { }
+Holder :: struct { a: Any; n: s8; }
+Text :: struct { s: string; }
+Procs :: struct { f: (int) -> int; p: *int; }
+
+// Writes value as an argument of print is written, then ends the line.
+show :: (value: Any) {
+    print_item(null, value, false);
+    print_byte(10); // line feed
+}
+
+// Writes value as a field or an element is written, so a string quoted,
+// then ends the line.
+nested :: (value: Any) {
+    print_item(null, value, true);
+    print_byte(10); // line feed
+}
+
+main :: () {
+    // Every integer type at its extremes: a u8 is a number, not a byte, and
+    // int and s64 are two types written alike.
+    show(cast(s8) -128);
+    show(cast(s8) 127);
+    show(cast(u8) 0);
+    show(cast(u8) 255);
+    show(cast(s16) -32768);
+    show(cast(s16) 32767);
+    show(cast(u16) 0);
+    show(cast(u16) 65535);
+    show(cast(s32) -2147483648);
+    show(cast(s32) 2147483647);
+    show(cast(u32) 0);
+    show(cast(u32) 4294967295);
+    show(-9223372036854775808);
+    show(9223372036854775807);
+    show(cast(s64) -9223372036854775808);
+    show(cast(s64) 9223372036854775807);
+    show(cast(u64) 0);
+    show(18446744073709551615);
+
+    // Floats: 6 decimals with the trailing zeros cut down to one, a float32
+    // widened first, so its 0.1 and 1e20 are the float32's own values.
+    zero32 : float32 = 0;
+    zero64 : float64 = 0;
+    show(cast(float32) 0.1);
+    show(cast(float64) 0.1);
+    show(cast(float32) -0.0);
+    show(cast(float64) -0.0);
+    show(cast(float32) 1e-7);
+    show(cast(float64) 1e-7);
+    show(cast(float32) -1e-7);
+    show(cast(float64) -1e-7);
+    show(cast(float32) 1e20);
+    show(cast(float64) 1e20);
+    show(zero32 / zero32);
+    show(1.0 / zero32);
+    show(-1.0 / zero32);
+    show(zero64 / zero64);
+    show(1.0 / zero64);
+    show(-1.0 / zero64);
+    show(1.5);
+    show(3.0);
+    show(100.0);
+    show(cast(float64) 123.456);
+    show(cast(float64) 0.000001);
+
+    show(true);
+    show(false);
+
+    // A string at the top is its bytes; nested, it is quoted, with Rig's
+    // escapes, \x and two hex digits for the other control bytes, and the
+    // bytes from 128 as they are.
+    show("Ada\n");
+    nested("Ada");
+    nested("\n\t\r\0\\\"");
+    control := u8.[1, 27, 31, 127, 32, 126];
+    control_view : []u8 = control;
+    nested(cast(string) control_view);
+    nested("Olá");
+    show(Text.{"Ada\n"});
+
+    // Pointers and procedure values: null, or the address in hex. Only
+    // addresses made from integers, the same in every run.
+    no_int : *int = null;
+    no_void : *void = null;
+    show(no_int);
+    show(no_void);
+    show(cast(*u8) 0xdeadbeef);
+    show(cast(*u8) cast(u64) 18446744073709551615);
+    show(Procs.{null, null});
+    show(cast((int) -> int) cast(*void) 0x1234);
+
+    // Structs, field by field, nested a few levels.
+    show(Vec2.{1, 2});
+    show(Line.{.{1, 2}, .{3, 4}});
+    show(Box.{.{.{1, 2}, .{3, 4}}, "b"});
+    show(Empty.{});
+
+    // Arrays and views, element by element: an empty one, a zeroed view and
+    // a view with a negative count are all [].
+    show(int.[1, 2, 3]);
+    none : [0]int;
+    show(none);
+    three := int.[4, 5, 6];
+    view : []int = three;
+    show(view);
+    zeroed : []int;
+    show(zeroed);
+    negative : []int;
+    negative.count = -2;
+    show(negative);
+    grid : [2][2]u8 = .[.[1, 2], .[3, 4]];
+    show(grid);
+    show(string.["a", "b"]);
+    show(Vec2.[.{1, 2}, .{3, 4}]);
+
+    // An Any as a field or an element is the value it holds, written as
+    // that field or element would be; a zeroed one, as a zeroed struct's
+    // Any field is, holds nothing and is null.
+    age := 36;
+    show(Holder.{age, -3});
+    show(Holder.{"x", 0});
+    held : Holder;
+    show(held);
+    // An Any converts as itself, so this one's string is at the top.
+    a : Any = "top";
+    show(a);
+    show(Any.[1, "x", 2.5]);
+
+    // A description of void, which only an Any made by hand can hold.
+    t := Type_Info.{TYPE_INFO_VOID, 0, 1};
+    show(Any.{*t, null});
+
+    // The same procedures append to a string builder when they're given one.
+    b : String_Builder;
+    builder_init(*b, HEAP_ALLOCATOR);
+    print_item(*b, Line.{.{1, 2}, .{3, 4}}, false);
+    print_or_append(*b, " and ");
+    print_quoted(*b, "q\n");
+    built := builder_to_string(*b, HEAP_ALLOCATOR);
+    print_line(built);
+    free(built.data, HEAP_ALLOCATOR);
+    builder_free(*b);
+}

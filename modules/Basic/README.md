@@ -292,7 +292,7 @@ A variable of the environment the program was started with, through C's `getenv`
 
 ## Print (`print.rig`)
 
-Everything goes to standard output through C's `putchar`, so it comes out in order with what a program writes with C's `printf`, compiled and interpreted. Bytes are written as they are, so UTF-8 text prints as UTF-8.
+Everything goes to standard output through C's `putchar`, so it comes out in order with what a program writes with C's `printf`, compiled and interpreted. Bytes are written as they are, so UTF-8 text prints as UTF-8. A value of any type is written through its type info (`Any`, spec 3.16). The procedures that take a `builder` append to it instead, or write to standard output when it is null: Rig has no closures or generics, so a pointer that may be null lets one walk write to either. Written to standard output, nothing is allocated.
 
 - `print_string(s: string)`: writes the bytes of `s`; an empty or zeroed string writes nothing.
 - `print_byte(byte: u8)`: writes the byte itself, not its number.
@@ -300,6 +300,23 @@ Everything goes to standard output through C's `putchar`, so it comes out in ord
 - `print_int(value: int)`: writes `value` in base 10.
 - `print_float(value: float64, decimals: int)`: writes `value` with `decimals` digits after the point, as `format_float` does.
 - `print_line(s: string)`: writes `s` and a line feed.
+- `print_or_append(builder: *String_Builder, s: string)`: writes the bytes of `s` to `builder`, or to standard output when it is null.
+- `print_quoted(builder: *String_Builder, s: string)`: writes `s` in double quotes, with the escapes below.
+- `print_item(builder: *String_Builder, item: Any, nested: bool)`: writes the value `item` holds, as below; `nested` says it is inside a struct, an array, a view or `{!EXTRA: ...}`, where a string is quoted.
+
+How each value is written:
+
+- **Integers:** in base 10, by their type's sign, `u64` across its whole range; a `u8` is a number, not a byte.
+- **Floats:** a `float32` is widened to `float64`; then 6 decimals, as `format_float` writes them, with the trailing zeros removed down to one: `1.5`, `0.1`, `3.0`, `-0.0`, `100.0`; `nan`, `inf`, `-inf`. So a value below 0.0000005 in magnitude is `0.0` (or `-0.0`), and from 1e18 up only about the first 15 or 16 digits are the value's (`format_float`).
+- **`bool`:** `true` or `false`.
+- **Strings:** at the top, their bytes, as `print_string` writes them. Nested, in double quotes with Rig's escapes (spec 2.10: `\n`, `\t`, `\r`, `\0`, `\\`, `\"`), any other byte below 32, and 127, as `\x` and two lowercase hex digits, as Rig's messages write C names (spec 7.6), and bytes from 128 as they are, so UTF-8 stays readable: `{name = "Ada\n"}`.
+- **Pointers:** `null`, or the address in lowercase hexadecimal after `0x`, unpadded. A pointer isn't followed, and a `*u8` is a pointer, not a C string.
+- **Procedure values:** as pointers. Interpreted, a Rig procedure's address is the interpreter's stand-in (spec 10.8), so its text differs from the compiled program's, as every address does from run to run.
+- **Structs:** `{x = 1, y = 2}`, fields in order, named; nested, `{from = {x = 1, y = 2}, to = {x = 3, y = 4}}`; a struct with no fields `{}`.
+- **Arrays and views:** `[1, 2, 3]`; empty, or a view with a count of 0 or less, `[]`. A view with null data and a count above 0 stops the program with `null pointer dereference` before any of it is written, as indexing it would (spec 8.4). A string with null data and a count above 0 stops where its first byte is read, after its opening `"` when it is nested.
+- **`Any`**, as a field or an element: the value it holds, written as that field or element would be. A zeroed `Any`, whose type is null, as a zeroed struct's `Any` field is, writes `null`.
+- **`void`:** a description of `void`, which only an `Any` made by hand can hold, writes `void`; a tag that isn't one of the nine writes nothing.
+- **Cycles:** every nesting is by value, so it is finite, but for one: an `Any` that holds the struct it is a field of (`h.a = h;`) is written by recursing until the stack runs out, as recursion that never ends does: interpreted, `stack overflow`; compiled, the program crashes, and what C still buffers of its output is lost. It is the program's mistake, and isn't caught.
 
 ## Waiting on the language
 

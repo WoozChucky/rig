@@ -1,0 +1,14 @@
+// Basic's print (issue #154) given a view whose count says it has elements
+// but whose data is null: print_item stops with the language's null
+// pointer dereference, as indexing the view would (spec 8.4), before any
+// of the view is written, at the line of print.rig that
+// basic_print_null_view.err names. Edit one, edit the other.
+#import "Basic";
+
+main :: () {
+    v : []int;
+    v.count = 3;
+    print_line("before");
+    print_item(null, v, false);
+    print_line("not reached");
+}
