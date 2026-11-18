@@ -5398,8 +5398,9 @@ TEST(a_variadic_struct_declared_later_builds) {
 // Each description is a read-only global, type_info.N, laid out as
 // Preload's struct for its kind (types.h's TYPE_INFO_* constants), its
 // pointers relocations. The bytes below are ir_print's, eight to a line:
-// each line one int, or one pointer, whose address is a relocation and so
-// zeros in the bytes.
+// each line one int, one pointer (its address is a relocation, and so
+// zeros in the bytes), or a bool or two and their padding (an integer's
+// signed; a procedure type's is_c_call and is_variadic).
 
 TEST(type_info_describes_an_int) {
     // A Type_Info_Integer: the tag TYPE_INFO_INTEGER (0), int's size and
@@ -5418,7 +5419,7 @@ TEST(type_info_describes_an_int) {
 TEST(one_description_per_type) {
     // A type described twice is described once: int's two uses share
     // type_info.0, and float is float32, which shares type_info.2. s64 is a
-    // type of its own (spec 6.4), with a description of its own, the same
+    // type of its own (spec 3.1), with a description of its own, the same
     // bytes as int's. A float's is a plain Type_Info, 24 bytes.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_with_preload(&a, "main :: () {\n"
@@ -5522,6 +5523,38 @@ TEST(a_procedure_types_description) {
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\01\\00\\00\\00\\00\\00\\00\\00"
                        "\\FF\\FF\\FF\\FF\\FF\\FF\\FF\\FF\" reloc 24 @type_info.5\n"));
+    arena_free(&a);
+}
+
+TEST(an_empty_view_makes_no_array) {
+    // An empty view is zeros, and no array is made for it: Empty's
+    // description holds only its name's relocation, no members', and
+    // () -> int's only its results', no parameters'.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "Empty :: struct { }\n"
+                                                    "main :: () {\n"
+                                                    "    e := type_info(Empty);\n"
+                                                    "    p := type_info(() -> int);\n"
+                                                    "}\n"));
+    CHECK(contains(ir, "const @type_info.0: 56 align 8 = \""
+                       "\\07\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
+    CHECK(contains(ir, "const @type_info.1: 64 align 8 = \""
+                       "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 48 @type_info.1.results\n"));
+    CHECK(!contains(ir, ".members"));
+    CHECK(!contains(ir, ".parameters"));
     arena_free(&a);
 }
 
