@@ -2923,7 +2923,7 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
     // (load.cpp), but a caller may lex into one it frees once the module is
     // made, as the unit tests' token lists do.
     if (source->has_c_name) p->c_name = string_copy(l->arena, source->c_name);
-    p->is_variadic = source->is_variadic;  // a foreign one: the checker made sure
+    p->is_variadic = source->is_c_variadic;  // C's '..', a foreign one: the checker made sure
     // An aggregate result is a hidden ptr parameter, before the visible
     // ones; an aggregate parameter a ptr to the caller's copy. The IR's
     // results are the scalar results only. (A foreign procedure has

@@ -1782,7 +1782,7 @@ bool check_reached_body(Checker *c, Ast_Proc *proc, Position at) {
 // The procedure type of proc's checked signature (check_signature says
 // which); null when it has none.
 static Type *proc_type_of_signature(Ast_Proc *proc) {
-    if (proc->is_variadic) return nullptr;
+    if (proc->is_c_variadic) return nullptr;
     Array<Type *> parts = {};
     bool fine = true;
     for (s64 i = 0; i < proc->params.count; i++) {
@@ -1922,8 +1922,8 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
     if (c_side && proc->results.count > 1) {
         diag_error(c->diag, proc->results[1]->pos, "%s can return at most one value", who);
     }
-    if (proc->is_variadic && !proc->is_foreign) {
-        diag_error(c->diag, proc->variadic_pos,
+    if (proc->is_c_variadic && !proc->is_foreign) {
+        diag_error(c->diag, proc->c_dots_pos,
                    "only a foreign procedure can take more arguments with '..'; a Rig procedure can take a view, "
                    "as in (values: []int)");
     }

@@ -73,6 +73,7 @@ enum Ast_Kind : u8 {
     AST_RUN,           // Ast_Run: #run e (an expression), or a top-level #run e; or #run { ... }
     AST_IF_DIRECTIVE,  // Ast_If_Directive: #if c { ... } else ...
     AST_DEFER,         // Ast_Defer: defer statement;  defer { ... }
+    AST_SPREAD,        // Ast_Spread: ..e, a view spread into a '..T' parameter
 };
 
 struct Ast {
@@ -109,11 +110,16 @@ struct Ast_Type : Ast {
                                 // written, aren't part of the type, and aren't kept)
     Array<Ast_Type *> results;  // AST_TYPE_PROC: the results' types: none, one or several
     bool is_c_call;             // AST_TYPE_PROC: marked #c_call, C's calling convention (spec 7.6)
+    bool is_variadic;           // AST_TYPE_PROC: its last parameter is written ..T: params' last is T
+                                // (spec 3.15)
+    Position dots;              // where that '..' is written
 };
 
 struct Ast_Param : Ast {
     String name;
     Ast_Type *type_expr;
+    bool is_variadic;  // name: ..T, the last parameter (spec 7.2): type_expr is T, and its type []T
+    Position dots;     // where that '..' is written
 };
 
 struct Ast_Proc;
@@ -146,14 +152,15 @@ enum Ast_Resolve : u8 {
 // parser.cpp's broken_entry), and empty otherwise.
 //
 // Ast.type is the procedure's type, a TYPE_PROC, once its signature is
-// checked: null for a variadic one, which no procedure type can say, and
-// when a parameter's or a result's type was an error.
+// checked: null for one that takes C's '..', which no procedure type can
+// say, and when a parameter's or a result's type was an error.
 struct Ast_Proc : Ast {
     String name;
-    Array<Ast_Param *> params;  // the named parameters (a variadic one's fixed parameters)
-    bool is_variadic;           // its list ends with '..': it takes more arguments after
-                                // params, as a C function declared with '...' does (spec 7.6)
-    Position variadic_pos;      // where that '..' is written
+    Array<Ast_Param *> params;  // the named parameters (with C's '..', its fixed parameters)
+    bool is_c_variadic;         // its list ends with C's bare '..': it takes more arguments after
+                                // params, as a C function declared with '...' does (spec 7.6); a
+                                // '..T' parameter is Ast_Param.is_variadic
+    Position c_dots_pos;        // where that '..' is written
     Array<Ast_Type *> results;  // what it returns: none, one or several (-> int, int)
     Ast_Block *body;            // null for a foreign procedure and a #compiler one
     bool is_foreign;
@@ -263,6 +270,13 @@ struct Ast_Return : Ast {
 // (Jai's way of writing C's &e).
 struct Ast_Unary : Ast {
     Token_Kind op;  // TOKEN_MINUS, TOKEN_TILDE, TOKEN_BANG, TOKEN_STAR
+    Ast *operand;
+};
+
+// ..e: e's elements passed as a call's '..' arguments (spec 5.10), only as
+// the last argument of a call whose callee takes a '..T' parameter: the
+// checker refuses it anywhere else. A prefix operator; pos is the '..'.
+struct Ast_Spread : Ast {
     Ast *operand;
 };
 

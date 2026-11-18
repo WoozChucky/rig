@@ -53,9 +53,10 @@ static void reach_type(Reach *r, Type *t) {
 
 // What expression e holds, onto `list`, the last first, so a worklist pops
 // them in source order: a call's callee and arguments, an operator's
-// operands, a cast's value, a field's struct, an element's array and index,
-// a literal's values. Nothing for a name, a number, a string, a bool, null,
-// size_of or a #run, whose operand was checked as it was.
+// operands (a spread's too), a cast's value, a field's struct, an element's
+// array and index, a literal's values. Nothing for a name, a number, a
+// string, a bool, null, size_of or a #run, whose operand was checked as it
+// was.
 static void push_operands(Array<Ast *> *list, Ast *e) {
     switch (e->kind) {
     case AST_CALL: {
@@ -65,6 +66,7 @@ static void push_operands(Array<Ast *> *list, Ast *e) {
         break;
     }
     case AST_UNARY: array_add(list, ((Ast_Unary *)e)->operand); break;
+    case AST_SPREAD: array_add(list, ((Ast_Spread *)e)->operand); break;
     case AST_BINARY:
         array_add(list, ((Ast_Binary *)e)->right);
         array_add(list, ((Ast_Binary *)e)->left);
@@ -429,6 +431,7 @@ bool has_failed_run(Ast *e) {
     switch (e->kind) {
     case AST_RUN: return ((Ast_Run *)e)->checked && !((Ast_Run *)e)->value;
     case AST_UNARY: return has_failed_run(((Ast_Unary *)e)->operand);
+    case AST_SPREAD: return has_failed_run(((Ast_Spread *)e)->operand);
     case AST_BINARY: return has_failed_run(((Ast_Binary *)e)->left) || has_failed_run(((Ast_Binary *)e)->right);
     case AST_CAST: return has_failed_run(((Ast_Cast *)e)->value);
     case AST_DEREF: return has_failed_run(((Ast_Deref *)e)->operand);

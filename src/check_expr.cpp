@@ -655,7 +655,7 @@ static Type *check_name(Checker *c, Ast_Name *name) {
             diag_error(c->diag, name->pos, "'" STR_FMT "' can't be a value: the compiler does it", STR_ARG(proc->name));
             return nullptr;
         }
-        if (proc->is_variadic) {
+        if (proc->is_c_variadic) {
             diag_error(c->diag, name->pos,
                        "'" STR_FMT "' can't be a value: it takes more arguments with '..', which no procedure type "
                        "can say",
@@ -815,8 +815,8 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     }
     String name = callee_name(c, call);
     Type *callee = call->callee_type;
-    // A variadic procedure takes its fixed parameters and any number more.
-    bool variadic = proc && proc->is_variadic;
+    // A procedure that takes C's '..' takes its fixed parameters and any number more.
+    bool variadic = proc && proc->is_c_variadic;
     s64 n = proc ? proc->params.count : callee->param_count, given = call->args.count;
     if (variadic ? given < n : given != n) {
         diag_error(c->diag, call->callee->start, "'" STR_FMT "' takes %s%lld argument%s, but %lld %s given",
@@ -2065,6 +2065,17 @@ static Type *check_literal(Checker *c, Ast_Literal *literal) {
     return t;
 }
 
+// A spread, ..e, where nothing takes it (spec 5.10): only a call's last
+// argument can be one, for a '..T' parameter, and anywhere else it's
+// refused, at its '..': a variable's value, an operand, a view parameter's
+// argument. Its operand is still checked, for mistakes of its own. It has
+// no type, so nothing more is said about it.
+static Type *check_spread(Checker *c, Ast_Spread *spread) {
+    diag_error(c->diag, spread->pos, "only the arguments of a '..' parameter can be spread, as in f(..values)");
+    check_value(c, spread->operand);
+    return nullptr;
+}
+
 Type *check_expression(Checker *c, Ast *e) {
     Type *t = nullptr;
     switch (e->kind) {
@@ -2093,6 +2104,7 @@ Type *check_expression(Checker *c, Ast *e) {
     case AST_LITERAL: t = check_literal(c, (Ast_Literal *)e); break;
     case AST_INDEX: t = check_index(c, (Ast_Index *)e); break;
     case AST_RUN: t = check_run(c, (Ast_Run *)e); break;
+    case AST_SPREAD: t = check_spread(c, (Ast_Spread *)e); break;
     default: RIG_ASSERT(!"not an expression");
     }
     e->type = t;

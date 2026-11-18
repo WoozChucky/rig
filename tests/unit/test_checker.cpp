@@ -6951,3 +6951,25 @@ TEST(a_run_reaches_what_only_deferred_code_calls) {
               "7:15: a value of type 'string' doesn't convert to 'int' implicitly\n");
     arena_free(&a);
 }
+
+// Issue #150: variadic Rig procedures, '..T' parameters and spreads (spec 5.10, 7.2).
+
+TEST(a_spread_is_refused_where_nothing_takes_it) {
+    // A spread is only a call's last argument, for a '..T' parameter: a
+    // variable's value and a view parameter's argument are refused, at the
+    // '..'. Its operand is still checked, for mistakes of its own.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: (v: []int) { }\n"
+                           "main :: () {\n"
+                           "    xs := int.[1, 2];\n"
+                           "    x := ..xs;\n"
+                           "    y := ..nope;\n"
+                           "    f(..xs);\n"
+                           "}\n"),
+              "4:10: only the arguments of a '..' parameter can be spread, as in f(..values)\n"
+              "5:10: only the arguments of a '..' parameter can be spread, as in f(..values)\n"
+              "5:12: unknown identifier 'nope'\n"
+              "6:7: only the arguments of a '..' parameter can be spread, as in f(..values)\n");
+    arena_free(&a);
+}
