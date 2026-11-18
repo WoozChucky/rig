@@ -156,7 +156,7 @@ An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` h
 
 ## String builder (`builder.rig`)
 
-Text put together a piece at a time, in memory of the builder's own from the allocator it is given, and copied out as one string. `print_to_builder` (`print.rig`) appends formatted text to one. When an append doesn't fit, the capacity becomes the larger of 64 and twice the old one, doubled again until it fits, and the memory moves with `resize`. Numbers are written on the stack first, so nothing but the builder's memory is allocated. An allocator that has no memory to give stops the program at the next write, with the language's `null pointer dereference`.
+Text put together a piece at a time, in memory of the builder's own from the allocator it is given, and copied out as one string. `print_to_builder` (`print.rig`) appends formatted text to one. When an append doesn't fit, the capacity becomes the larger of 64 and twice the old one, doubled again until it fits, and the memory moves with `resize`. Numbers are written on the stack first, so the appends allocate nothing but the builder's memory (`print_to_builder` also takes some of the heap's for a moment). An allocator that has no memory to give stops the program at the next write, with the language's `null pointer dereference`.
 
 - `String_Builder`: `allocator: Allocator`, `data: *u8`, `count: int` (the bytes built) and `capacity: int` (the bytes `data` has room for).
 - `builder_init(builder: *String_Builder, allocator: Allocator)`: an empty builder whose memory comes from `allocator`, taken at the first append that needs it.
@@ -305,7 +305,7 @@ What is written to standard output goes through C's `putchar`, so it comes out i
 - `print_item(builder: *String_Builder, item: Any, nested: bool)`: writes the value `item` holds, as below; `nested` says it is inside a struct, an array, a view or `{!EXTRA: ...}`, where a string is quoted.
 - `print_formatted(builder: *String_Builder, format: string, args: []Any)`: writes `format` with each `{}` replaced by the next of `args`, as below; `print` and `print_to_builder` are it.
 - `print(format: string, args: ..Any)`: writes `format` to standard output with its `{}`s replaced by the arguments, in order: `print("{} is {}\n", name, age)`. A `[]Any` already made is forwarded with `..`, as in `print(format, ..args)`; passed without it, it is one argument, a view.
-- `print_to_builder(builder: *String_Builder, format: string, args: ..Any)`: appends what `print` would write to `builder`, and writes nothing to standard output. A null `builder` stops the program with `null pointer dereference`, whatever the format. The format and the arguments may view the builder's own text, as `append_string`'s `s` may: the text is written into a builder of its own first, from the same allocator, and then appended at once.
+- `print_to_builder(builder: *String_Builder, format: string, args: ..Any)`: appends what `print` would write to `builder`, and writes nothing to standard output. A null `builder` stops the program with `null pointer dereference`, whatever the format. The format and the arguments may view the builder's own text, as `append_string`'s `s` may: the text is written into a builder of its own first, on the heap whatever `builder`'s allocator, and then appended at once, and the heap's memory is freed before it returns. So an arena's builder keeps nothing more, and a pool's needs no second slot.
 
 The format, read left to right:
 

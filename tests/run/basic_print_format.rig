@@ -84,18 +84,33 @@ main :: () {
 
     // The format and an argument may both view the builder's own text, 60
     // bytes that end in a slot. Writing 118 more grows the builder past its
-    // 64 bytes, so its memory moves, and the text is still read whole: the
-    // format's 58 bytes, then the argument's 60.
-    builder_reset(*b);
-    for 1..5 { append_string(*b, "0123456789"); }
-    append_string(*b, "abcdefgh{}");
+    // 64 bytes. Its memory comes from poison_allocator_proc, which fills
+    // memory with # as it moves it, so text read from where it was shows.
+    poisoned : String_Builder;
+    builder_init(*poisoned, Allocator.{poison_allocator_proc, null});
+    for 1..5 { append_string(*poisoned, "0123456789"); }
+    append_string(*poisoned, "abcdefgh{}");
     own : string;
-    own.data = b.data;
-    own.count = b.count;
-    print_to_builder(*b, own, own);
+    own.data = poisoned.data;
+    own.count = poisoned.count;
+    print_to_builder(*poisoned, own, own);
     all : string;
-    all.data = b.data;
-    all.count = b.count;
-    print("own text: {} bytes, {}\n", all.count, slice(all, 110, 12));
+    all.data = poisoned.data;
+    all.count = poisoned.count;
+    print("own text: {} bytes\n{}\n", all.count, all);
+    builder_free(*poisoned);
     builder_free(*b);
+}
+
+// The heap, but a resize copies to new memory and fills the old with #
+// before it frees it, so nothing can read moved text and find it intact.
+poison_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode != RESIZE {
+        return heap_allocator_proc(mode, size, old_size, old_memory, data);
+    }
+    memory := alloc(size, HEAP_ALLOCATOR);
+    copy_memory(memory, old_memory, min_int(old_size, size));
+    set_memory(old_memory, 35, old_size); // '#'
+    free(old_memory, HEAP_ALLOCATOR);
+    return memory;
 }
