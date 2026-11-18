@@ -2,14 +2,13 @@
 // expression #run runs when the checker first needs its value, in the one
 // compile-time world of the compilation, and its result is baked into the
 // tree as a constant (#113's constant data); the top-level #runs run later,
-// in the same world, once the program has checked; and, last, a #compiler
+// in the same world, once the program has checked; then a #compiler
 // procedure's call in a world with no compiler to do it, and in one with a
-// hook of the test's own (issue #116); last, the time a world's runs take
-// (issue #173). Uses
-// test_checker.cpp's helpers (check_src, global_named, local_named,
-// value_of, sorted_messages, joined, check_module_source) and helpers.cpp's
-// (src, messages, check_source, lower_source, contains, index_of,
-// token_list_free).
+// hook of the test's own (issue #116); and, last, the time a world's runs
+// take (issue #173). Uses test_checker.cpp's helpers (check_src,
+// global_named, local_named, value_of, sorted_messages, joined,
+// check_module_source) and helpers.cpp's (src, messages, check_source,
+// lower_source, contains, index_of, token_list_free).
 
 #include "test.h"
 

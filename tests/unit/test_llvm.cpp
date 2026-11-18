@@ -148,7 +148,10 @@ TEST(llvm_emit_object_gives_its_parts_times) {
 
 TEST(llvm_reports_a_module_that_doesnt_verify) {
     // An IR the lowering never makes: a procedure returning i32 whose ret
-    // gives nothing. Both entry points refuse it with LLVM's reason.
+    // gives nothing. Both entry points refuse it with LLVM's reason. The
+    // object file's times then have the module's, and 0 for the parts never
+    // reached (optimising and the object file), whatever the caller's
+    // struct held.
     Arena a = arena_make();
     Ir_Module *m = arena_new<Ir_Module>(&a);
     Ir_Proc *p = new_proc_returning(m, &a, "main", IR_I32);
@@ -157,9 +160,15 @@ TEST(llvm_reports_a_module_that_doesnt_verify) {
     String text = {}, error = {};
     CHECK(!llvm_ir_text(&a, m, target_host(), &text, &error));
     CHECK(contains(error, "return"));
-    error = {};
-    CHECK(!llvm_emit_object(m, target_host(), str(".build/never.o"), false, &a, &error));
-    CHECK(contains(error, "return"));
+    for (int optimize = 0; optimize < 2; optimize++) {
+        error = {};
+        Llvm_Times times = {-1, -1, -1};
+        CHECK(!llvm_emit_object(m, target_host(), str(".build/never.o"), optimize, &a, &error, &times));
+        CHECK(contains(error, "return"));
+        CHECK(times.module > 0);
+        CHECK_EQ(times.optimising, 0);
+        CHECK_EQ(times.object, 0);
+    }
     arena_free(&a);
 }
 
