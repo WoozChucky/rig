@@ -1,0 +1,81 @@
+// Variadic Rig procedures (issue #150, spec 5.10, 7.2): a '..T' parameter,
+// the last, gathers a call's other arguments into a view, []T, of a
+// temporary array of the caller's, each converted to T as an argument is;
+// '..e' spreads a view or an array into it instead, its elements not
+// copied.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+putchar :: (c: s32) -> s32 #foreign libc;
+
+sum :: (first: int, rest: ..int) -> int {
+    total := first;
+    for rest { total += it; }
+    return total;
+}
+
+// Its only parameter: the view is all the arguments.
+count :: (values: ..float64) -> int { return values.count; }
+
+// With no arguments the view is zeroed: count 0, data null.
+empty :: (values: ..int) -> bool { return values.count == 0 && values.data == null; }
+
+// Each argument converts to T, an array to a view of it (spec 5.17).
+lengths :: (lists: ..[]int) -> int {
+    n := 0;
+    for lists { n += it.count; }
+    return n;
+}
+
+// Struct elements: each argument is copied into the temporary whole.
+Vec2 :: struct { x: int; y: int; }
+total_x :: (points: ..Vec2) -> int {
+    t := 0;
+    for points { t += it.x; }
+    return t;
+}
+
+// A spread passes the caller's elements: the callee sees and changes them.
+double_all :: (values: ..int) {
+    for * values { it.* *= 2; }
+}
+
+// Forwarding is spreading.
+sum_all :: (rest: ..int) -> int { return sum(0, ..rest); }
+
+PRIMES :: int.[2, 3, 5, 7];
+SUM :: sum;
+
+three :: () -> [3]int { return .[1, 1, 1]; }
+primes :: () -> []int { return PRIMES; }
+
+// Prints n's digit as it's evaluated.
+note :: (n: int) -> int {
+    putchar(cast(s32) n + 48);
+    return n;
+}
+
+main :: () {
+    printf("%lld %lld %lld\n", sum(1), sum(1, 2), sum(1, 2, 3, 4));
+    b : u8 = 200;
+    printf("%lld\n", sum(b, b, 1000));
+    printf("%lld %lld\n", count(), count(1, 2.5, cast(float32) 0.5));
+    printf("%d\n", empty());
+    more := int.[10, 20, 30];
+    printf("%lld\n", lengths(more, PRIMES, int.[1]));
+    printf("%lld\n", total_x(.{1, 2}, Vec2.{10, 20}, .{x = 100}));
+    printf("%lld\n", sum(0, ..more));
+    double_all(..more);
+    printf("%lld %lld %lld\n", more[0], more[1], more[2]);
+    view : []int = more;
+    printf("%lld\n", sum(0, ..view));
+    printf("%lld\n", sum(0, ..PRIMES));
+    printf("%lld %lld\n", sum(0, ..three()), sum(0, ..primes()));
+    printf("%lld\n", sum_all(1, 2, 3));
+    printf("%lld\n", sum(1, sum(2, 3), 4));
+    looped := 0;
+    for 1..3 { looped += sum(it, it, it); }
+    printf("%lld\n", looped);
+    f := sum;
+    printf("%lld %lld %lld\n", f(1, 2, 3), f(0, ..more), SUM(4, 5, 6));
+    total := sum(note(1), note(2), note(3));
+    printf("\n%lld\n", total);
+}

@@ -366,8 +366,9 @@ struct Ast_Call : Ast {
                         // call's result): the value's procedure type, found by the checker;
                         // null when `proc` is the procedure called
     Type *gathered;     // the [N]T a call's one-by-one '..' arguments go into (N from 0), set by
-                        // the checker; null when the callee takes no ..T or the call spreads
-                        // (spec 5.10)
+                        // the checker, laid out; lowering builds it in a temporary of the
+                        // caller's (none for N = 0: the view is zeroed); null when the
+                        // callee takes no ..T or the call spreads (spec 5.10, 10.4)
 };
 
 struct Ast_Name : Ast {

@@ -7231,3 +7231,29 @@ TEST(a_call_of_a_broken_variadic_says_nothing_more) {
               "7:5: 'f' takes at least 1 argument, but 0 were given\n");
     arena_free(&a);
 }
+
+TEST(variadic_calls_run_while_compiling) {
+    // #run runs the IR compiled code runs: a gathered temporary, a zeroed
+    // view, and a spread of a constant's read-only data.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "PRIMES :: int.[2, 3, 5, 7];\n"
+                          "N :: #run sum(1, 2, 3);\n"
+                          "M :: #run sum(0, ..PRIMES);\n"
+                          "E :: #run sum(4);\n"
+                          "sum :: (first: int, rest: ..int) -> int {\n"
+                          "    total := first;\n"
+                          "    for rest { total += it; }\n"
+                          "    return total;\n"
+                          "}\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(global_named(&c, "N")->is_constant);
+    CHECK_EQ(global_named(&c, "N")->constant, 6u);
+    CHECK(global_named(&c, "M")->is_constant);
+    CHECK_EQ(global_named(&c, "M")->constant, 17u);
+    CHECK(global_named(&c, "E")->is_constant);
+    CHECK_EQ(global_named(&c, "E")->constant, 4u);
+    token_list_free(c.list);
+    arena_free(&a);
+}
