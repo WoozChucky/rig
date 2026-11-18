@@ -1535,17 +1535,17 @@ static String workspace_unwritable_test(Arena *a, String rig) {
     return {};
 }
 
-// `command` ("check", "stdin-for", "build", "interpret", or "missing",
-// below) of tests/run/hello.rig by copies of rig and bin/unit-tests in
-// .build/tests/no-preload/bin, with no modules/ beside them or above: the
-// error, alone, status 1, nothing on stdout, and for build no .build/ nor
-// program made. A broken installation, rig without its modules: every
-// program imports Preload (spec 2.14), so rig says it can't find it, in the
-// words of an #import's (with the copy's two places, made placeholders as
-// for any program's), before anything is checked, built or run, and before
-// what --stdin-for's file is to the program. Only the program the command
-// runs is copied: rig for check, stdin-for and build, bin/unit-tests for
-// interpret.
+// `command` ("check", "stdin-for", "build" or "interpret" of
+// tests/run/hello.rig, or "missing", below) by copies of rig and
+// bin/unit-tests in .build/tests/no-preload/bin, with no modules/ beside
+// them or above: the error, alone, status 1, nothing on stdout, and for
+// build no .build/ nor program made. A broken installation, rig without its
+// modules: every program imports Preload (spec 2.14), so rig says it can't
+// find it, in the words of an #import's (with the copy's two places, made
+// placeholders as for any program's), before anything is checked, built or
+// run, and before what --stdin-for's file is to the program. Only the
+// program the command runs is copied: rig for check, stdin-for and build,
+// bin/unit-tests for interpret.
 //
 // "missing" is rig check of a main file that isn't there: Preload is looked
 // for once the main file is read (spec 10.1), so the main file that can't

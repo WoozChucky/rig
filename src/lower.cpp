@@ -139,7 +139,8 @@
 //   arguments one by one (spec 5.10) are built the same way, into a [N]T
 //   temporary of their own, but the callee's view sees it: it is filled
 //   before the call and read by it alone. It is a slot of the caller's
-//   frame, one per call in the source, filled again each time the call runs
+//   frame, one per call lowered (a call in deferred code is lowered at each
+//   way out, and gets one each time), filled again each time the call runs
 //   (lower_variadic_argument), so a view kept past the call may see it
 //   rebuilt, or dangle once the caller returns; the language promises it
 //   only until the end of the statement holding the call (spec 5.10). A
