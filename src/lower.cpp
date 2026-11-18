@@ -138,12 +138,14 @@
 //   place again in a loop can't rebuild what an old view still reads. A
 //   call's '..' arguments one by one (spec 5.10) are built the same way,
 //   into a [N]T temporary of their own, but the callee's view sees it: it
-//   is filled before the call and read by it alone, and it lives only until
-//   the end of the statement holding the call, so a view kept longer
-//   dangles, as one of any temporary does. A spread, ..e, is an array or a
-//   view argument as any other (lower_variadic_argument). for over an
-//   array, a view or a string takes its data and count once, then
-//   counts an index up to the count (lower_for_sequence). A global view of a
+//   is filled before the call and read by it alone. The language promises it
+//   only until the end of the statement holding the call (here it is a slot
+//   of the caller's frame, filled again each time the call runs), so a view
+//   kept longer may see it rebuilt or dangle, as one of any temporary does.
+//   A spread, ..e, is an array or a view argument as any other
+//   (lower_variadic_argument). for over an array, a view or a string takes
+//   its data and count once, then counts an index up to the count
+//   (lower_for_sequence). A global view of a
 //   literal, or of an array constant, points at a global array of its own
 //   (constant_bytes).
 // - A string (spec 3.8) is a view of bytes, laid out as one: s[i], .count,

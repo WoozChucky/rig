@@ -4899,8 +4899,8 @@ TEST(a_variadic_parameter_is_a_view_to_a_debugger) {
 
 TEST(a_call_through_a_variadic_value_gathers) {
     // A call through a value of a variadic procedure type gathers as a
-    // direct call does: a [1]int temporary and its view, then the one
-    // indirect call.
+    // direct call does: a [1]int temporary and its view, then the value's
+    // null check and the one indirect call, the view its last argument.
     Arena a = arena_make();
     String main = proc_ir(ir_print(&a, lower_source(&a,
                                                     "sum :: (first: int, rest: ..int) -> int { return first; }\n"
@@ -4909,9 +4909,35 @@ TEST(a_call_through_a_variadic_value_gathers) {
                                                     "    n := s(1, 2);\n"
                                                     "}\n")),
                           "main");
-    CHECK(contains(main, "local 8 align 8\n"));
-    CHECK(contains(main, "store ptr "));
-    CHECK_EQ(count_of(main, " = call %"), 1);
+    CHECK_STR(main,
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  %0 = local ptr\n"
+              "  %1 = procaddr @sum\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local i64\n"
+              "  %3 = load ptr %0\n"
+              "  %4 = const i64 1\n"
+              "  %5 = local 8 align 8\n"
+              "  %6 = const i64 2\n"
+              "  store i64 %6, %5\n"
+              "  %7 = local 16 align 8\n"
+              "  %8 = const i64 1\n"
+              "  store i64 %8, %7\n"
+              "  %9 = const i64 8\n"
+              "  %10 = ptradd %7, %9\n"
+              "  store ptr %5, %10\n"
+              "  %11 = const ptr 0\n"
+              "  %12 = cmp eq ptr %3, %11\n"
+              "  branch %12, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  %13 = call %3(%4, %7)\n"
+              "  store i64 %13, %2\n"
+              "  %14 = const i32 0\n"
+              "  ret %14\n"
+              "}\n");
     arena_free(&a);
 }
 

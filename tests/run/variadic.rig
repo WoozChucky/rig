@@ -15,6 +15,14 @@ sum :: (first: int, rest: ..int) -> int {
 // Its only parameter: the view is all the arguments.
 count :: (values: ..float64) -> int { return values.count; }
 
+// Each argument is converted to float64 as it's stored: an integer constant
+// and a float32 alike.
+add_up :: (values: ..float64) -> float64 {
+    t : float64 = 0;
+    for values { t += it; }
+    return t;
+}
+
 // With no arguments the view is zeroed: count 0, data null.
 empty :: (values: ..int) -> bool { return values.count == 0 && values.data == null; }
 
@@ -58,6 +66,7 @@ main :: () {
     b : u8 = 200;
     printf("%lld\n", sum(b, b, 1000));
     printf("%lld %lld\n", count(), count(1, 2.5, cast(float32) 0.5));
+    printf("%g\n", add_up(1, 2.5, cast(float32) 0.5));
     printf("%d\n", empty());
     more := int.[10, 20, 30];
     printf("%lld\n", lengths(more, PRIMES, int.[1]));
