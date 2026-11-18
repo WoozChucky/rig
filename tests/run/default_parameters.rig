@@ -48,9 +48,19 @@ from :: (p: Vec2 = ORIGIN) -> int { return p.x * 10 + p.y; }
 // An Any of a global holds its address, taken at each call.
 current :: (a: Any = counter) -> int { return (cast(*int) a.value_pointer).*; }
 
-// C calls a #c_call procedure with every argument; Rig's calls may leave
-// some out.
+// C calls a #c_call procedure with every argument, here libc's qsort
+// calling order; Rig's calls may leave some out. Given no b, order
+// compares a with 0.
 scaled :: (n: s32, by: s32 = 10) -> s32 #c_call { return n * by; }
+qsort :: (base: *void, count: u64, size: u64, compare: (a: *void, b: *void) -> s32 #c_call) #foreign libc;
+order :: (a: *void, b: *void = null) -> s32 #c_call {
+    x := (cast(*int) a).*;
+    y := 0;
+    if b != null { y = (cast(*int) b).*; }
+    if x < y { return -1; }
+    if x > y { return 1; }
+    return 0;
+}
 
 // A #run in a default runs once, while compiling.
 twice :: (n: int) -> int { return n * 2; }
@@ -87,4 +97,10 @@ main :: () {
     slot = 2;
     divisor = 4;
     printf("%lld %lld %lld\n", pick(2), split(3), shared(3));
+    numbers := int.[3, -1, 2];
+    printf("%d %d\n", order(numbers.data), order(*numbers[1]));
+    // Last: the interpreter can't hand C a Rig procedure
+    // (default_parameters.interp.err).
+    qsort(numbers.data, cast(u64) numbers.count, size_of(int), order);
+    printf("%lld %lld %lld\n", numbers[0], numbers[1], numbers[2]);
 }

@@ -8094,7 +8094,10 @@ TEST(default_values_nested_too_deeply) {
     // level, and the call through the value e() returns fills in nothing:
     // g's 2 is its own two calls. h's default works out later's signature
     // after b() has counted b's 1, and b's 1 is still counted when that's
-    // done: 2 levels and b's 1.
+    // done: 2 levels and b's 1. k's d(1) leaves out only y, whose default
+    // is no level, and still counts all of d's 3, x's included: a call that
+    // leaves parameters out counts how deep its callee's defaults go, so
+    // k's is 4.
     Arena a = arena_make();
     Checked c = check_src(&a, "a :: (x: int = 0) -> int { return x; }\n"
                               "b :: (x: int = a()) -> int { return x; }\n"
@@ -8104,10 +8107,11 @@ TEST(default_values_nested_too_deeply) {
                               "g :: (x: int = e()(1, 2)) -> int { return x; }\n"
                               "h :: (x: int = b() + later()) -> int { return x; }\n"
                               "later :: (y: int = 0) -> int { return y; }\n"
+                              "k :: (x: int = d(1)) -> int { return x; }\n"
                               "main :: () { }\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
-    s32 depths[] = {0, 1, 1, 3, 0, 2, 3, 0};
-    for (s64 i = 0; i < 8; i++) CHECK_EQ(c.file->procs[i]->defaults_depth, depths[i]);
+    s32 depths[] = {0, 1, 1, 3, 0, 2, 3, 0, 4};
+    for (s64 i = 0; i < 9; i++) CHECK_EQ(c.file->procs[i]->defaults_depth, depths[i]);
     token_list_free(c.list);
     // A chain to the limit checks. One more is said once, at the default
     // past it, whose procedure then counts no depth: the next one fits.
