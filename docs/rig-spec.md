@@ -353,7 +353,7 @@ Type = "*" Type | "[" Expression "]" Type | "[" "]" Type | ProcType | identifier
 
 A type name is a built-in type's name or a struct's. A name declared as something else, written where a type goes, is `'foo' is not a type`; a name declared nowhere is `unknown type 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error (section 4.9). The built-in type names always mean the built-in types: a struct cannot be called `u8` (`'u8' is a built-in type`). Other declarations may use those names, hiding nothing of the types: a variable may be called `int`, and `int` is still the type wherever a type is written.
 
-**Type identity.** Two types are the same type when they are the same built-in type, the same struct declaration, or are made the same way from the same types: `*T` and `*U` when `T` and `U` are the same, `[N]T` and `[M]U` when `N` equals `M` and `T` and `U` are the same, `[]T` and `[]U` when `T` and `U` are the same, and two procedure types when their parameter types, their result types and their `#c_call` marks are (section 3.15). `float` is the same type as `float32`. `int` and `s64` are different types with the same size and representation; each converts implicitly to the other (section 3.13).
+**Type identity.** Two types are the same type when they are the same built-in type, the same struct declaration, or are made the same way from the same types: `*T` and `*U` when `T` and `U` are the same, `[N]T` and `[M]U` when `N` equals `M` and `T` and `U` are the same, `[]T` and `[]U` when `T` and `U` are the same, and two procedure types when their parameter types, their result types and their `#c_call` marks are, and both take a `..T` last or neither does (section 3.15). `float` is the same type as `float32`. `int` and `s64` are different types with the same size and representation; each converts implicitly to the other (section 3.13).
 
 ### 3.2 Integer types
 
@@ -493,7 +493,7 @@ A value converts implicitly to another type only in these cases:
 - `float32` to `float64`.
 - `null` to any pointer type and any procedure type.
 - `*void` to any pointer type, and any pointer type to `*void`.
-- A procedure value to its own procedure type only: the same parameter types, result types and `#c_call` mark (section 3.15).
+- A procedure value to its own procedure type only: the same parameter types, result types, `#c_call` mark and `..T` last parameter or none (section 3.15).
 - `[N]T` to `[]T`, a view of the array's `N` elements (section 5.17 says which memory the view points at).
 - A string literal, or a string that is constant data holding one (a string constant, a string field or element of constant data, or a `#run`'s string), to `*u8` (section 3.8).
 - `.{...}` to a struct type, and `.[...]` to an array or view type (section 5.17).
