@@ -38,4 +38,5 @@
 #else
 #include "link_linux.cpp"
 #endif
+#include "build_report.cpp"
 #include "driver.cpp"
