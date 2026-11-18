@@ -1,6 +1,7 @@
 heap resize keeps the bytes: true
 heap alloc of 0: true, resize to 0: true
 the program's own malloc: true
+Basic's c_malloc, c_realloc and c_free: true
 free of null asks nothing: true, alloc of -1: true
 resize of null allocates: true, to 0 frees: true, to -1 frees: true
 arena: p2 - p1 = 16, parent allocations 1 of 80

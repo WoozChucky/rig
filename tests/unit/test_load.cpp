@@ -2424,6 +2424,27 @@ TEST(preload_wins_a_clash_with_the_files_it_loads) {
     arena_free(&a);
 }
 
+TEST(preload_and_the_main_file_load_an_unreadable_file) {
+    // A file that both Preload and the main file load, there but unreadable
+    // (a directory), is reported once, at its first #load in reading order,
+    // not load order: Preload comes first in load order, but its module.rig
+    // is read after the main file, whose #load is met first.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    String dir = load_test_directory(&a, "preload_and_the_main_file_load_an_unreadable_file");
+    Module_Places places = preload_places(&a, dir, "#load \"x.rig\";\npreloaded :: 1;\n");
+    String x = str(module_file(&a, places.places[0], "Preload", "x.rig"));
+    CHECK(os_make_directory(x));
+    String text = string_printf(&a, "#load \"%s\";\nmain :: () {}\n",
+                                absolute_in_a_string(&a, dir, "first/Preload/x.rig"));
+    load_main_with_preload(&a, &d, dir, string_cstr(&a, text), &places);
+    CHECK_EQ(d.files.count, 2);
+    CHECK_EQ(d.messages.count, 1);
+    if (d.messages.count == 1) check_cannot_read(&a, &d.messages[0], 0, 1, 7, x);
+    diag_free(&d);
+    arena_free(&a);
+}
+
 TEST(preload_imported_or_loaded_again_reads_nothing_more) {
     // Preload is a module as any other: an #import of it, or a #load of its
     // module.rig by its path, finds the file read already.

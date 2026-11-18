@@ -5,7 +5,8 @@
 //
 // The program also declares C's malloc itself, under C's own name, which
 // Basic and Preload leave free to declare: Basic's own is c_malloc (issue
-// #135) and Preload's, which the heap calls, is __malloc.
+// #135), which this program calls too, and Preload's, which the heap
+// calls, is __malloc.
 #import "Basic";
 
 malloc :: (size: u64) -> *void #foreign libc;
@@ -62,6 +63,19 @@ main :: () {
     print_bool(own != null);
     print_byte(10);
     free(own, HEAP_ALLOCATOR);
+
+    // Basic's own names for C's heap, which nothing in Basic calls:
+    // c_realloc grows a block c_malloc gave, keeping its bytes, and c_free
+    // takes it back.
+    c := cast(*u8) c_malloc(16);
+    c[0] = 7;
+    c[15] = 9;
+    c = cast(*u8) c_realloc(c, 64);
+    c[63] = 1;
+    print_string("Basic's c_malloc, c_realloc and c_free: ");
+    print_bool(c != null && c[0] == 7 && c[15] == 9);
+    print_byte(10);
+    c_free(c);
 
     // The helpers settle the edges without asking the allocator: freeing
     // null and allocating less than 1 byte ask it nothing.
