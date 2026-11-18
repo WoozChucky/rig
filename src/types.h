@@ -77,6 +77,8 @@ struct Type {
     Type **results;      // TYPE_PROC: the results' types, result_count of them, in order
     s64 result_count;
     bool is_c_call;      // TYPE_PROC: #c_call, called as C calls (spec 7.6): a type of its own
+    bool is_variadic;    // TYPE_PROC: its last parameter is a ..T, params[param_count - 1] its []T
+                         // (spec 3.15): a type of its own, written "(int, ..int) -> int"
     Type *procs;         // the procedure types this type anchors (type_proc_of), linked through
                          // next_proc: each signature made once
     Type *next_proc;
@@ -114,16 +116,18 @@ Type *type_array_of(Type *element, s64 count);
 // []element, the same Type every time, made as type_pointer_to makes *T.
 Type *type_view_of(Type *element);
 
-// The procedure type of these parameters and results, #c_call or not: the
-// same Type every time for the same ones (each array's types are copied, so
-// the caller keeps its own). Its size and alignment are a pointer's: a
-// value of it is the address of a procedure's code. Its name is its
-// signature as a program writes it (type_name).
-Type *type_proc_of(Type **params, s64 param_count, Type **results, s64 result_count, bool is_c_call);
+// The procedure type of these parameters and results, #c_call or not, its
+// last parameter a ..T or not (then param_count >= 1 and that parameter a
+// view, the []T): the same Type every time for the same ones (each array's
+// types are copied, so the caller keeps its own). Its size and alignment are
+// a pointer's: a value of it is the address of a procedure's code. Its name
+// is its signature as a program writes it (type_name).
+Type *type_proc_of(Type **params, s64 param_count, Type **results, s64 result_count, bool is_c_call,
+                   bool is_variadic);
 
 // How a message names t: "s32", "*u8", "string", "[3]int", "[]*u8", and a
 // procedure type as its signature is written: "(int, int) -> int",
-// "(int) -> (int, int)", "(*void, *void) -> s32 #c_call", "()".
+// "(int) -> (int, int)", "(*void, *void) -> s32 #c_call", "(int, ..int)", "()".
 String type_name(Arena *a, Type *t);
 
 // t's alignment, in bytes: where in memory a value of type t may start.

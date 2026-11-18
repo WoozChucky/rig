@@ -72,14 +72,17 @@ static void dump_results(Array<u8> *buffer, Array<Ast_Type *> results) {
 }
 
 // (ptr int), (array (int 3) int) with the count as written, (view int),
-// (proc-type (params int) (returns int) (c_call)), or a name.
+// (proc-type (params int) (returns int) (c_call)), or a name. A procedure
+// type whose last parameter is ..T has it as (.. T): (params int (.. int)).
 static void dump_type(Array<u8> *buffer, Ast_Type *type) {
     switch (type->kind) {
     case AST_TYPE_PROC:
         out(buffer, "(proc-type (params");
         for (s64 i = 0; i < type->params.count; i++) {
-            out(buffer, " ");
+            bool dots = type->is_variadic && i == type->params.count - 1;
+            out(buffer, dots ? " (.. " : " ");
             dump_type(buffer, type->params[i]);
+            if (dots) out(buffer, ")");
         }
         out(buffer, ")");
         dump_results(buffer, type->results);
@@ -127,7 +130,7 @@ static void dump(Array<u8> *buffer, Ast *node) {
             out(buffer, " ");
             dump(buffer, proc->params[i]);
         }
-        if (proc->is_variadic) out(buffer, " ..");
+        if (proc->is_c_variadic) out(buffer, " ..");
         out(buffer, ")");
         dump_results(buffer, proc->results);
         if (proc->is_c_call) out(buffer, " (c_call)");
@@ -150,12 +153,13 @@ static void dump(Array<u8> *buffer, Ast *node) {
         break;
     }
     case AST_PARAM: {
+        // (rest int), or (rest (.. int)) for rest: ..int.
         Ast_Param *param = (Ast_Param *)node;
         out(buffer, "(");
         out(buffer, param->name);
-        out(buffer, " ");
+        out(buffer, param->is_variadic ? " (.. " : " ");
         dump_type(buffer, param->type_expr);
-        out(buffer, ")");
+        out(buffer, param->is_variadic ? "))" : ")");
         break;
     }
     case AST_TYPE_NAME:
@@ -475,6 +479,12 @@ static void dump(Array<u8> *buffer, Ast *node) {
         // (defer S); defer { ... } is (defer (block ...)).
         out(buffer, "(defer ");
         dump(buffer, ((Ast_Defer *)node)->statement);
+        out(buffer, ")");
+        break;
+    case AST_SPREAD:
+        // (spread E) for ..e.
+        out(buffer, "(spread ");
+        dump(buffer, ((Ast_Spread *)node)->operand);
         out(buffer, ")");
         break;
     }

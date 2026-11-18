@@ -9,7 +9,7 @@
     {kind,    size,    align,   is_signed, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr, \
      nullptr, {},      nullptr, nullptr,   nullptr, 0,                                    nullptr, \
      nullptr, nullptr, nullptr, 0,         nullptr, 0,                                    false,   \
-     nullptr, nullptr}
+     false,   nullptr, nullptr}
 // The numbers' alignment is their size, as in C on x86-64.
 #define INTEGER(name, size, is_signed) BUILT_IN(TYPE_INTEGER, name, size, size, is_signed)
 #define FLOAT(name, size) BUILT_IN(TYPE_FLOAT, name, size, size, false)
@@ -27,7 +27,7 @@ static Type integer_types[] = {
 // other.
 Type type_string = {
     TYPE_STRING, 16, 8, false, nullptr, {(const u8 *)"string", 6}, nullptr, nullptr, {}, nullptr, nullptr,
-    &integer_types[4], 0, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, nullptr, nullptr,
+    &integer_types[4], 0, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, false, nullptr, nullptr,
 };
 
 // void's size is 0 (size_of says it has none) and its alignment 1, so a
@@ -53,7 +53,7 @@ Type type_untyped_literal = BUILT_IN(TYPE_UNTYPED_LITERAL, ".{...}", 0, 1, false
 // name.
 static Type float_name = {
     TYPE_FLOAT, 4, 4,       false,   nullptr, {(const u8 *)"float", 5}, nullptr, &type_float32, {}, nullptr, nullptr,
-    nullptr,    0, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, nullptr, nullptr,
+    nullptr,    0, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, false, nullptr, nullptr,
 };
 
 // Every type a program can name, by its built-in name: the one list
@@ -174,10 +174,13 @@ Type *type_view_of(Type *element) {
 // () and () #c_call (type_proc_of). Never a type of its own.
 static Type no_components = BUILT_IN(TYPE_VOID, "", 0, 1, false);
 
-// Whether procedure type t has these parameters, results and marker.
+// Whether procedure type t has these parameters, results and marks.
 static bool proc_type_is(Type *t, Type **params, s64 param_count, Type **results, s64 result_count,
-                         bool is_c_call) {
-    if (t->param_count != param_count || t->result_count != result_count || t->is_c_call != is_c_call) return false;
+                         bool is_c_call, bool is_variadic) {
+    if (t->param_count != param_count || t->result_count != result_count || t->is_c_call != is_c_call ||
+        t->is_variadic != is_variadic) {
+        return false;
+    }
     for (s64 i = 0; i < param_count; i++) {
         if (t->params[i] != params[i]) return false;
     }
@@ -196,7 +199,9 @@ static String proc_type_name(Arena *a, Type *t);
 // them, which lasts the whole run, as the procedure type then does. With
 // none, () and () #c_call hang off no_components. A list per anchor is
 // enough: a program writes few signatures.
-Type *type_proc_of(Type **params, s64 param_count, Type **results, s64 result_count, bool is_c_call) {
+Type *type_proc_of(Type **params, s64 param_count, Type **results, s64 result_count, bool is_c_call,
+                   bool is_variadic) {
+    RIG_ASSERT(!is_variadic || (param_count > 0 && params[param_count - 1]->kind == TYPE_VIEW));
     Type *anchor = nullptr;
     for (s64 i = 0; i < param_count + result_count; i++) {
         Type *component = i < param_count ? params[i] : results[i - param_count];
@@ -204,7 +209,7 @@ Type *type_proc_of(Type **params, s64 param_count, Type **results, s64 result_co
     }
     if (!anchor) anchor = &no_components;
     for (Type *t = anchor->procs; t; t = t->next_proc) {
-        if (proc_type_is(t, params, param_count, results, result_count, is_c_call)) return t;
+        if (proc_type_is(t, params, param_count, results, result_count, is_c_call, is_variadic)) return t;
     }
     Type *t = derived_from(anchor, TYPE_PROC);
     Arena *arena = anchor->arena ? anchor->arena : &derived_types;
@@ -217,6 +222,7 @@ Type *type_proc_of(Type **params, s64 param_count, Type **results, s64 result_co
     t->result_count = result_count;
     for (s64 i = 0; i < result_count; i++) t->results[i] = results[i];
     t->is_c_call = is_c_call;
+    t->is_variadic = is_variadic;
     t->name = proc_type_name(arena, t);
     t->next_proc = anchor->procs;
     anchor->procs = t;
@@ -289,10 +295,12 @@ static bool ends_with_proc_type(Type *t) {
 
 // A procedure type's name, its signature as the parser reads it back
 // (parser.cpp's parse_proc_type): "(int, int) -> int", "(int) -> (int, int)",
-// "(*void) -> s32 #c_call", "()". A result that's a procedure type is
-// written in parentheses where it would otherwise read differently: when it
-// returns nothing (`() -> ((int))`; `() -> (int)` returns an int), and when
-// this type is #c_call and the result's name ends with a signature
+// "(*void) -> s32 #c_call", "()". A variadic one's last parameter, its []T,
+// is written as the program writes it, ..T: "(int, ..int) -> int",
+// "(..[]int)". A result that's a procedure type is written in parentheses
+// where it would otherwise read differently: when it returns nothing
+// (`() -> ((int))`; `() -> (int)` returns an int), and when this type is
+// #c_call and the result's name ends with a signature
 // (`() -> ((int) -> int) #c_call`; without them the #c_call would be the
 // result's). Made once, when the type is (type_proc_of), from its parts'
 // names, which are known by then. A procedure type nests only as deep as a
@@ -302,7 +310,12 @@ static String proc_type_name(Arena *a, Type *t) {
     array_add(&name, (u8)'(');
     for (s64 i = 0; i < t->param_count; i++) {
         if (i > 0) add_text(&name, str(", "));
-        add_text(&name, type_name(a, t->params[i]));
+        if (t->is_variadic && i == t->param_count - 1) {
+            add_text(&name, str(".."));
+            add_text(&name, type_name(a, t->params[i]->element));
+        } else {
+            add_text(&name, type_name(a, t->params[i]));
+        }
     }
     array_add(&name, (u8)')');
     if (t->result_count > 0) {

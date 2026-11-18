@@ -4353,7 +4353,8 @@ TEST(only_a_foreign_procedure_is_variadic) {
     // A Rig procedure has no way to reach arguments it doesn't name: '..'
     // stands for C's '...'. The procedure is still variadic for its calls,
     // whose extra arguments no C function receives, so the one mistake
-    // gives one message, whatever they are.
+    // gives one message, whatever they are. A spread into it is refused as
+    // one into C's '..' is, since there's no '..T' parameter to take it.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "f :: (a: int, ..) { }\n"
@@ -4361,10 +4362,13 @@ TEST(only_a_foreign_procedure_is_variadic) {
                            "main :: () {\n"
                            "    v : Vec2;\n"
                            "    s := \"hi\";\n"
+                           "    xs := int.[1, 2];\n"
                            "    f(1, 2, 2.5, null, v, s, .{1, 2}, .[3]);\n"
+                           "    f(1, ..xs);\n"
                            "}\n"),
-              "1:15: only a foreign procedure can take more arguments with '..'; "
-              "a Rig procedure can take a view, as in (values: []int)\n");
+              "1:15: only a foreign procedure can take C's '..'; "
+              "a Rig procedure takes more arguments as '..T', as in (values: ..int)\n"
+              "8:10: only the arguments of a '..' parameter can be spread, as in f(..values)\n");
     arena_free(&a);
 }
 
@@ -4533,8 +4537,7 @@ TEST(a_procedures_name_is_a_value) {
                            "    X :: x;\n"
                            "}\n"),
               "3:20: a value of type '(int, int) -> int' doesn't convert to '(int) -> int' implicitly\n"
-              "5:10: 'printf' can't be a value: it takes more arguments with '..', which no procedure type can "
-              "say\n"
+              "5:10: 'printf' can't be a value: it takes C's '..', which no procedure type can say\n"
               "6:29: a value of type '(int, int) -> int' doesn't convert to '(int, int) -> s64' implicitly\n"
               "7:29: a value of type 'int' doesn't convert to '(int, int) -> int' implicitly\n"
               "9:10: the value of constant 'X' isn't known while compiling\n");
@@ -6949,5 +6952,308 @@ TEST(a_run_reaches_what_only_deferred_code_calls) {
                            "}\n"
                            "main :: () {}\n"),
               "7:15: a value of type 'string' doesn't convert to 'int' implicitly\n");
+    arena_free(&a);
+}
+
+// Issue #150: variadic Rig procedures, '..T' parameters and spreads (spec 5.10, 7.2).
+
+TEST(a_spread_is_refused_where_nothing_takes_it) {
+    // A spread is only a call's last argument, for a '..T' parameter: a
+    // variable's value and a view parameter's argument are refused, at the
+    // '..'. Its operand is still checked, for mistakes of its own. With no
+    // type, it causes nothing more: n's value doesn't fail to convert.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: (v: []int) { }\n"
+                           "main :: () {\n"
+                           "    xs := int.[1, 2];\n"
+                           "    x := ..xs;\n"
+                           "    y := ..nope;\n"
+                           "    f(..xs);\n"
+                           "    n : int = ..xs;\n"
+                           "}\n"),
+              "4:10: only the arguments of a '..' parameter can be spread, as in f(..values)\n"
+              "5:10: only the arguments of a '..' parameter can be spread, as in f(..values)\n"
+              "5:12: unknown identifier 'nope'\n"
+              "6:7: only the arguments of a '..' parameter can be spread, as in f(..values)\n"
+              "7:15: only the arguments of a '..' parameter can be spread, as in f(..values)\n");
+    arena_free(&a);
+}
+
+TEST(a_run_looks_into_a_spread) {
+    // A #run's operand is walked into a spread, refused or not: a local it
+    // spreads is refused too, since it doesn't exist while compiling, and a
+    // failed #run it spreads leaves the constant that needs it with nothing
+    // more said (has_failed_run).
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "g :: (v: []int) -> int { return 0; }\n"
+                           "main :: () {\n"
+                           "    xs := int.[1, 2];\n"
+                           "    z := #run g(..xs);\n"
+                           "}\n"),
+              "4:17: only the arguments of a '..' parameter can be spread, as in f(..values)\n"
+              "4:19: #run can't use 'xs': it's a local, which doesn't exist while compiling\n");
+    CHECK_STR(check_source(&a,
+                           "g :: (v: []int) -> int { return 0; }\n"
+                           "k :: () -> []int {\n"
+                           "    x : int = \"s\";\n"
+                           "    return int.[1];\n"
+                           "}\n"
+                           "M :: g(..#run k());\n"
+                           "main :: () { }\n"),
+              "3:15: a value of type 'string' doesn't convert to 'int' implicitly\n"
+              "6:8: only the arguments of a '..' parameter can be spread, as in f(..values)\n");
+    arena_free(&a);
+}
+
+TEST(variadic_parameters_are_views) {
+    // In the body a '..T' parameter is a []T, so rest.count is a view's. The
+    // procedure's type says '..int', and is not the type of the same
+    // signature taking a []int: the mark is part of it.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "sum :: (first: int, rest: ..int) -> int { return first + rest.count; }\n"
+                          "plain :: (first: int, rest: []int) -> int { return first; }\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Proc *sum = c.file->procs[0], *plain = c.file->procs[1];
+    CHECK_STR(type_name(&a, sum->params[1]->type), "[]int");
+    CHECK_STR(type_name(&a, sum->type), "(int, ..int) -> int");
+    CHECK(sum->type->is_variadic);
+    CHECK(sum->type != plain->type);
+    CHECK_STR(type_name(&a, plain->type), "(int, []int) -> int");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(variadic_procedure_types_are_their_own) {
+    // A written (int, ..int) -> int is a variadic procedure's type, whatever
+    // its parameters are named; neither it nor (int, []int) -> int converts
+    // to the other. Its T is a view's element: never void. Nor does the
+    // variadic one convert to the #c_call type of the same []T signature,
+    // with no hint to mark it #c_call, which can't take a '..T'.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                           "plain :: (first: int, rest: []int) -> int { return first; }\n"
+                           "a : (int, ..int) -> int = sum;\n"
+                           "b : (x: int, y: ..int) -> int;\n"
+                           "main :: () {\n"
+                           "    a = b;\n"
+                           "    c : (int, []int) -> int = sum;\n"
+                           "    d : (int, ..int) -> int = plain;\n"
+                           "    e : (..void);\n"
+                           "    x : (int, []int) -> int #c_call = sum;\n"
+                           "}\n"),
+              "7:31: a value of type '(int, ..int) -> int' doesn't convert to '(int, []int) -> int' implicitly\n"
+              "8:31: a value of type '(int, []int) -> int' doesn't convert to '(int, ..int) -> int' implicitly\n"
+              "9:12: 'void' is only a pointer's target, as in *void\n"
+              "10:15: a #c_call procedure can't take a '[]int'; pass its .data\n"
+              "10:39: a value of type '(int, ..int) -> int' doesn't convert to '(int, []int) -> int #c_call' "
+              "implicitly\n");
+    arena_free(&a);
+}
+
+TEST(where_a_variadic_parameter_cant_be) {
+    // C passes no view: a foreign procedure, a #c_call one and a #c_call
+    // procedure type take no '..T', each said once, at its '..', and C
+    // can't be given, nor give it, a procedure value that takes one. A
+    // #compiler procedure doesn't, for now. What is refused has no type, so
+    // using it as a value says nothing more; nor is a '..T' whose T is
+    // itself an error refused: T's own message is the one said.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "c_sum :: (count: int, values: ..int) -> int #foreign libc;\n"
+                           "callback :: (values: ..int) #c_call { }\n"
+                           "cb : (..int) #c_call;\n"
+                           "takes :: (f: (..int) -> int) #foreign libc;\n"
+                           "gives :: () -> (..int) -> int #foreign libc;\n"
+                           "calls :: (f: (int, ..int) -> int) #c_call { }\n"
+                           "main :: () { a : int = c_sum; b : int = callback; c : int = cb; }\n"),
+              "1:31: a foreign procedure can't take '..int': C's other arguments are written '..' alone, "
+              "as in (format: *u8, ..)\n"
+              "2:22: a #c_call procedure can't take '..int'\n"
+              "3:7: a #c_call procedure can't take '..int'\n"
+              "4:14: a foreign procedure can't take a '(..int) -> int': C can't pass the view a '..' parameter "
+              "takes\n"
+              "5:16: a foreign procedure can't return a '(..int) -> int': C can't pass the view a '..' parameter "
+              "takes\n"
+              "6:14: a #c_call procedure can't take a '(int, ..int) -> int': C can't pass the view a '..' "
+              "parameter takes\n");
+    CHECK_STR(check_source(&a,
+                           "c_sum :: (count: int, values: ..void) -> int #foreign libc;\n"
+                           "callback :: (values: ..void) #c_call { }\n"
+                           "cb : (..void) #c_call;\n"
+                           "k :: (v: ..Nope) #c_call { }\n"
+                           "main :: () { }\n"),
+              "1:33: 'void' is only a pointer's target, as in *void\n"
+              "2:24: 'void' is only a pointer's target, as in *void\n"
+              "3:9: 'void' is only a pointer's target, as in *void\n"
+              "4:12: unknown type 'Nope'\n");
+    CHECK_STR(check_module_source(&a,
+                                  "f :: (values: ..int) #compiler;\n"
+                                  "g :: (values: ..void) #compiler;\n"
+                                  "main :: () { a : int = f; }\n"),
+              "1:15: a #compiler procedure can't take '..int', for now\n"
+              "2:17: 'void' is only a pointer's target, as in *void\n"
+              "3:24: 'f' can't be a value: the compiler does it\n");
+    arena_free(&a);
+}
+
+TEST(variadic_arguments_convert_to_the_element_type) {
+    // The arguments after the fixed ones each convert to T, as an argument
+    // to a T parameter does (an untyped constant and a .{...} take T), and
+    // go into a [N]T of the caller's, N from 0: the same through a value.
+    // A '..u8' shows the constant takes T itself, not its default type, int.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                          "Vec2 :: struct { x: float; y: float; }\n"
+                          "points :: (all: ..Vec2) { }\n"
+                          "bytes :: (rest: ..u8) { }\n"
+                          "main :: () {\n"
+                          "    b : u8 = 7;\n"
+                          "    sum(1, b, 7);\n"
+                          "    sum(1);\n"
+                          "    points(.{1, 2}, Vec2.{3, 4});\n"
+                          "    s := sum;\n"
+                          "    s(1, 2);\n"
+                          "    bytes(1, 255);\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Array<Ast *> &body = c.file->procs[3]->body->statements;
+    Ast_Call *gathers = (Ast_Call *)body[1];
+    CHECK_STR(type_name(&a, gathers->args[0]->type), "int");
+    CHECK_STR(type_name(&a, gathers->args[1]->type), "u8");
+    CHECK_STR(type_name(&a, gathers->args[2]->type), "int");
+    CHECK(gathers->gathered);
+    CHECK_STR(type_name(&a, gathers->gathered), "[2]int");
+    Ast_Call *none = (Ast_Call *)body[2];
+    CHECK(none->gathered);
+    CHECK_STR(type_name(&a, none->gathered), "[0]int");
+    Ast_Call *structs = (Ast_Call *)body[3];
+    CHECK_STR(type_name(&a, structs->args[0]->type), "Vec2");
+    CHECK_STR(type_name(&a, structs->args[1]->type), "Vec2");
+    CHECK(structs->gathered);
+    CHECK_STR(type_name(&a, structs->gathered), "[2]Vec2");
+    Ast_Call *through = (Ast_Call *)body[5];
+    CHECK(through->gathered);
+    CHECK_STR(type_name(&a, through->gathered), "[1]int");
+    Ast_Call *u8s = (Ast_Call *)body[6];
+    CHECK_STR(type_name(&a, u8s->args[0]->type), "u8");
+    CHECK_STR(type_name(&a, u8s->args[1]->type), "u8");
+    CHECK(u8s->gathered);
+    CHECK_STR(type_name(&a, u8s->gathered), "[2]u8");
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "bytes :: (rest: ..u8) { }\n"
+                           "main :: () { bytes(1, 300); }\n"),
+              "2:23: 300 doesn't fit in 'u8'\n");
+    arena_free(&a);
+}
+
+TEST(variadic_spreads) {
+    // ..e as the last argument passes e as the '..T' parameter's view: a
+    // [N]T or a []T, exactly, its elements never converted. The spread
+    // stands for all the '..' arguments, so the fixed ones come before it,
+    // all of them, and nothing is gathered. Its operand has its own type.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                          "main :: () {\n"
+                          "    ints := int.[1, 2];\n"
+                          "    view : []int = ints;\n"
+                          "    sum(1, ..ints);\n"
+                          "    sum(1, ..view);\n"
+                          "    sum(1, ..int.[3]);\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Array<Ast *> &body = c.file->procs[1]->body->statements;
+    const char *types[] = {"[2]int", "[]int", "[1]int"};
+    for (s64 i = 0; i < 3; i++) {
+        Ast_Call *call = (Ast_Call *)body[2 + i];
+        CHECK(!call->gathered);
+        Ast *last = call->args[call->args.count - 1];
+        CHECK_EQ(last->kind, AST_SPREAD);
+        CHECK_STR(type_name(&a, last->type), types[i]);
+    }
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                           "main :: () {\n"
+                           "    s32s : []s32;\n"
+                           "    sum(1, ..s32s);\n"
+                           "    sum(..s32s);\n"
+                           "    sum(1, .. .[1, 2]);\n"
+                           "}\n"),
+              "4:12: '..' spreads a '[]s32' into 'rest', which needs a '[]int'\n"
+              "5:5: 'sum' takes at least 1 argument, but 0 were given\n"
+              "6:15: this literal's type isn't known; write it before the '.', as in int.[1, 2]\n");
+    arena_free(&a);
+}
+
+TEST(variadic_temporary_too_big) {
+    // The gathered [N]T is a type like any array's: past the largest size
+    // it's too big, at the first '..' argument, as a literal's would be.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Big :: struct { bytes: [549755813888]u8; }\n"
+                           "f :: (rest: ..Big) { }\n"
+                           "main :: () {\n"
+                           "    b : *Big = null;\n"
+                           "    f(b.*, b.*);\n"
+                           "    f(b.*, b.*, b.*);\n"
+                           "}\n"),
+              "6:7: '[3]Big' is too big\n");
+    arena_free(&a);
+}
+
+TEST(a_call_of_a_broken_variadic_says_nothing_more) {
+    // A '..T' whose T is an error has no type: its calls take any number of
+    // arguments and any spread, and say nothing about them, but still need
+    // the fixed ones. A refused '..T', a foreign procedure's, is still one
+    // its calls gather into, with nothing more said.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "f :: (first: int, rest: ..Nope) { }\n"
+                           "c_sum :: (count: int, values: ..int) -> int #foreign libc;\n"
+                           "main :: () {\n"
+                           "    xs := u8.[1, 2];\n"
+                           "    f(1, \"x\", 2.5);\n"
+                           "    f(1, ..xs);\n"
+                           "    f();\n"
+                           "    c_sum(1, 2, 3);\n"
+                           "}\n"),
+              "1:27: unknown type 'Nope'\n"
+              "2:31: a foreign procedure can't take '..int': C's other arguments are written '..' alone, "
+              "as in (format: *u8, ..)\n"
+              "7:5: 'f' takes at least 1 argument, but 0 were given\n");
+    arena_free(&a);
+}
+
+TEST(variadic_calls_run_while_compiling) {
+    // #run runs the IR compiled code runs: a gathered temporary, a zeroed
+    // view, and a spread of a constant's read-only data.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "PRIMES :: int.[2, 3, 5, 7];\n"
+                          "N :: #run sum(1, 2, 3);\n"
+                          "M :: #run sum(0, ..PRIMES);\n"
+                          "E :: #run sum(4);\n"
+                          "sum :: (first: int, rest: ..int) -> int {\n"
+                          "    total := first;\n"
+                          "    for rest { total += it; }\n"
+                          "    return total;\n"
+                          "}\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(global_named(&c, "N")->is_constant);
+    CHECK_EQ(global_named(&c, "N")->constant, 6u);
+    CHECK(global_named(&c, "M")->is_constant);
+    CHECK_EQ(global_named(&c, "M")->constant, 17u);
+    CHECK(global_named(&c, "E")->is_constant);
+    CHECK_EQ(global_named(&c, "E")->constant, 4u);
+    token_list_free(c.list);
     arena_free(&a);
 }

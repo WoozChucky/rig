@@ -1,0 +1,23 @@
+// A call of a procedure with a '..T' parameter (issue #150, spec 5.10):
+// its fixed arguments, then its '..' arguments one by one, each
+// converting to T, or one view spread with '..', exactly a []T or a [N]T.
+// Nothing else is spread.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+sum :: (first: int, rest: ..int) -> int { return first; }
+apply :: (values: []int) { }
+
+main :: () {
+    bytes := u8.[1, 2];
+    ints := int.[1, 2];
+    sum();
+    sum(..ints);
+    sum(1, 2, "three");
+    sum(1, ..bytes);
+    sum(1, 2, ..ints);
+    sum(..ints, 1);
+    apply(..ints);
+    printf("%d\n", ..ints);
+    x := ..ints;
+    s := sum;
+    s(1, ..bytes);
+}

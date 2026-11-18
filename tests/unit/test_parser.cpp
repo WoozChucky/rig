@@ -880,6 +880,21 @@ TEST(recovery_stops_at_a_global) {
     dump = parse_src(&a, "counter : int = f(1\nstart := 1;\n", &errors);
     CHECK_STR(errors, "2:1: expected ')', found identifier 'start'\n");
     CHECK_STR(dump, "(broken counter)\n(var start _ (int 1))\n");
+    // A call's first argument may be a spread: a '(' then a '..' opens a
+    // list only when the '..' is C's bare one, followed by ')' or ','.
+    dump = parse_src(&a, "counter : int = f(..xs\nstart := 1;\n", &errors);
+    CHECK_STR(errors, "2:1: expected ')', found identifier 'start'\n");
+    CHECK_STR(dump, "(broken counter)\n(var start _ (int 1))\n");
+    dump = parse_src(&a, "greet (..,\nn: s32) { }\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:7: expected '::', found '('\n");
+    CHECK_STR(dump, "(broken greet)\n(proc main (params) (block))\n");
+    // Right after '::' or ':', where no spread can be, any '..' opens one.
+    dump = parse_src(&a, "f :: (..int,\nn: int) { }\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:7: '..' needs a parameter before it, as in (format: *u8, ..)\n");
+    CHECK_STR(dump, "(broken f)\n(proc main (params) (block))\n");
+    dump = parse_src(&a, "t : (..int,\nn: int);\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:6: '..' must be the last parameter\n");
+    CHECK_STR(dump, "(broken t)\n(proc main (params) (block))\n");
     dump = parse_src(&a, "N :: (1 + 2\nstart := 1;\n", &errors);
     CHECK_STR(errors, "2:1: expected ')', found identifier 'start'\n");
     CHECK_STR(dump, "(broken N)\n(var start _ (int 1))\n");
@@ -1878,10 +1893,10 @@ TEST(parses_a_variadic_signature) {
     CHECK_STR(errors, "");
     Token_List *list = src("printf :: (format: *u8, ..) -> s32 #foreign libc;\nputs :: (s: *u8) #foreign libc;\n");
     Ast_File *file = parse(list->tokens, &a, &list->diag);
-    CHECK(file->procs[0]->is_variadic);
+    CHECK(file->procs[0]->is_c_variadic);
     CHECK_EQ(file->procs[0]->params.count, 1);
-    CHECK_EQ(file->procs[0]->variadic_pos.col, 25);
-    CHECK(!file->procs[1]->is_variadic);
+    CHECK_EQ(file->procs[0]->c_dots_pos.col, 25);
+    CHECK(!file->procs[1]->is_c_variadic);
     token_list_free(list);
     // With a body it parses too: only a foreign procedure may have one,
     // which is the checker's to say, so the body is still checked.
@@ -2025,11 +2040,10 @@ TEST(misplaced_c_call_and_dots) {
     CHECK_STR(errors, "1:17: '#no_abc' is written twice\n");
     parse_src(&a, "t : () #c_call #c_call;\n", &errors);
     CHECK_STR(errors, "1:16: '#c_call' is written twice\n");
-    // A procedure taking more arguments with '..' can't be a value, so no
-    // procedure type has them.
+    // A procedure that takes C's '..' can't be a value, so no procedure
+    // type takes C's bare '..' (a Rig procedure's type says '..T').
     parse_src(&a, "t : (*u8, ..) -> s32;\n", &errors);
-    CHECK_STR(errors, "1:11: a procedure type can't take '..': a procedure that takes more arguments can't be a "
-                      "value\n");
+    CHECK_STR(errors, "1:11: a procedure type can't take '..': a procedure that takes C's '..' can't be a value\n");
     // A type ends at a ',': several results take parentheses.
     parse_src(&a, "t : (int) -> int, int;\n", &errors);
     CHECK_STR(errors, "1:17: expected ';', found ','\n");
@@ -3575,5 +3589,108 @@ TEST(parse_defers_nested_too_deeply) {
         CHECK(!"the file has f and h");
     }
     token_list_free(list);
+    arena_free(&a);
+}
+
+// Issue #150: variadic Rig procedures, '..T' parameters and spreads (spec 5.10, 7.2).
+
+TEST(parses_variadic_parameters) {
+    // name: ..T, the last parameter: its type as written is T, marked. A
+    // foreign procedure's parses too: refusing it is the checker's.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                        "all :: (lists: ..[]int) { }\n"
+                        "c_sum :: (count: int, values: ..int) -> int #foreign libc;\n",
+                        &errors),
+              "(proc sum (params (first int) (rest (.. int))) (returns int) (block (return (name first))))\n"
+              "(proc all (params (lists (.. (view int)))) (block))\n"
+              "(proc c_sum (params (count int) (values (.. int))) (returns int) (foreign libc))\n");
+    CHECK_STR(errors, "");
+    Token_List *list = src("sum :: (first: int, rest: ..int) -> int { return first; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    if (file->procs.count == 1 && file->procs[0]->params.count == 2) {
+        CHECK(file->procs[0]->params[1]->is_variadic);
+        CHECK_EQ(file->procs[0]->params[1]->dots.col, 27);
+        CHECK(!file->procs[0]->params[0]->is_variadic);
+        CHECK(!file->procs[0]->is_c_variadic);
+    } else {
+        CHECK(!"the file has sum, with two parameters");
+    }
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(misplaced_variadic_parameters) {
+    // A '..T' parameter takes every argument after the others, so it's
+    // the last: before another parameter, or before C's '..', the
+    // declaration is given up, the error at its '..'.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "f :: (rest: ..int, n: int) { }\n"
+                        "main :: () { }\n",
+                        &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:13: '..' must be the last parameter\n");
+    parse_src(&a,
+              "f :: (a: int, rest: ..int, ..) #foreign libc;\n"
+              "main :: () { }\n",
+              &errors);
+    CHECK_STR(errors, "1:21: '..' must be the last parameter\n");
+    arena_free(&a);
+}
+
+TEST(parses_variadic_procedure_types) {
+    // A procedure type's last parameter may be '..T', named or not: T is
+    // the last of its parameters, and the type is marked. Anywhere else
+    // it's misplaced, and C's bare '..' has no place in one at all.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "op : (int, ..int) -> int;\n"
+                        "named : (first: int, rest: ..int);\n"
+                        "main :: () { }\n",
+                        &errors),
+              "(var op (proc-type (params int (.. int)) (returns int)))\n"
+              "(var named (proc-type (params int (.. int))))\n"
+              "(proc main (params) (block))\n");
+    CHECK_STR(errors, "");
+    parse_src(&a, "bad : (..int, int);\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:8: '..' must be the last parameter\n");
+    parse_src(&a, "c : (format: *u8, ..) -> s32;\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:19: a procedure type can't take '..': a procedure that takes C's '..' can't be a value\n");
+    parse_src(&a, "d : (..);\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:6: a procedure type can't take '..': a procedure that takes C's '..' can't be a value\n");
+    parse_src(&a, "e : (.., int);\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:6: a procedure type can't take '..': a procedure that takes C's '..' can't be a value\n");
+    parse_src(&a, "q : (rest: ..);\nmain :: () { }\n", &errors);
+    CHECK_STR(errors, "1:12: a procedure type can't take '..': a procedure that takes C's '..' can't be a value\n");
+    arena_free(&a);
+}
+
+TEST(parses_spreads) {
+    // ..e is a prefix operator, as - is, wherever an operand starts: the
+    // parser takes it anywhere, and the checker says where it may be (a
+    // call's last argument, for a '..T' parameter). It binds as - does,
+    // so ..a + b spreads only a.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "f(..xs);", &errors), "(block (call f (spread (name xs))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "f(1, ..g(), ..a[0]);", &errors),
+              "(block (call f (int 1) (spread (call g)) (spread (index (name a) (int 0)))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "x := ..xs;", &errors), "(block (var x _ (spread (name xs))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "f(..a + b);", &errors), "(block (call f (binary + (spread (name a)) (name b))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "f(-..a);", &errors), "(block (call f (unary - (spread (name a)))))");
+    CHECK_STR(errors, "");
+    // A spread needs its operand.
+    body_dump(&a, "f(..);", &errors);
+    CHECK_STR(errors, "2:9: expected an expression, found ')'\n");
     arena_free(&a);
 }

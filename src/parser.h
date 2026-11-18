@@ -20,11 +20,12 @@
 //                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
 //                                                                  (the STRING: the C function's name)
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
-//   param       = IDENT ':' type
+//   param       = IDENT ':' ['..'] type                           '..': a '..T' parameter, the last
 //   type        = '*' type | '[' expression ']' type | '[' ']' type | proc_type | IDENT
 //                                                                  (*void: a pointer to anything)
-//   proc_type   = '(' [[IDENT ':'] type {',' [IDENT ':'] type}] ')'
+//   proc_type   = '(' [proc_param {',' proc_param}] ')'
 //                   ['->' (type | '(' type {',' type} ')')] ['#c_call']
+//   proc_param  = [IDENT ':'] ['..'] type                         '..': a '..T' parameter, the last
 //   block       = '{' statement* '}'
 //   statement   = declaration | multi_var | assignment | return | block
 //               | if | if_directive | while | for | 'break' ';' | 'continue' ';' | defer | expression ';'
@@ -42,7 +43,8 @@
 //   defer       = 'defer' statement                                (any statement but a declaration)
 //   expression  = unary { BINARY_OPERATOR unary }, binary operators left-associative, tightest last:
 //                   1: ||   2: &&   3: == != < <= > >=   4: + - | ^   5: * / % << >> &
-//   unary       = ('-' | '~' | '!' | '*' | '#run') unary | cast | postfix
+//   unary       = ('-' | '~' | '!' | '*' | '..' | '#run') unary | cast | postfix
+//                                                                  ('..': a spread)
 //   cast        = 'cast' [',' IDENT] '(' type ')' unary       (the IDENT: trunc)
 //   postfix     = primary { '(' [expression {',' expression}] ')' | '[' expression ']'
 //                           | '.' '*' | '.' IDENT
@@ -152,9 +154,27 @@
 // result (`() -> (int) -> int`), while any others hold the results
 // (`() -> (int)` returns an int, `() -> ((int))` an (int)). A #c_call goes
 // with the innermost procedure type that has room for it, the result's
-// when that's one written without parentheses. No procedure type takes
-// '..': "a procedure type can't take '..': a procedure that takes more
-// arguments can't be a value". Its '(' is a type level, as a '*' is.
+// when that's one written without parentheses. Its last parameter may be
+// a '..T' one, as a signature's may (below): `(int, ..int) -> int`. C's
+// bare '..' has no place in one: "a procedure type can't take '..': a
+// procedure that takes C's '..' can't be a value". Its '(' is a type
+// level, as a '*' is.
+//
+// A variadic Rig procedure (spec 7.2) takes the arguments after its others
+// in a '..T' parameter, its last: `sum :: (first: int, rest: ..int) -> int`
+// (Ast_Param.is_variadic; its type as written is T). Before another
+// parameter, in a signature or a procedure type, it's "'..' must be the
+// last parameter", at its '..', and the declaration is given up. Which
+// procedures may have one is the checker's business. A C function's other
+// arguments are written as C's bare '..' instead, the list's last element
+// (`printf :: (format: *u8, ..) -> s32 #foreign libc;`).
+//
+// A spread, ..e (spec 5.10), passes a view's or an array's elements as a
+// call's '..' arguments: `sum(0, ..values)`. It's a prefix operator, as -
+// is, so ..a + b is (..a) + b; the parser takes it wherever an operand
+// starts (`x := ..xs;` parses), and the checker says where it may be: a
+// call's last argument, for a '..T' parameter. Between two operands, '..'
+// is no operator: a range's '..' ends the expression before it.
 //
 // At the top level, after '::', a procedure's parameter list starts with
 // '(' ')', '(' IDENT ':' or '(' '..'; any other '(' begins a constant's

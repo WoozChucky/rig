@@ -206,7 +206,8 @@ static String conversion_hint(Checker *c, Ast *value, Type *from, Type *to) {
         return string_printf(c->arena, "; cast it with cast(" STR_FMT ")", STR_ARG(type_name(c->arena, to)));
     }
     if (!from || !to || from->kind != TYPE_PROC || to->kind != TYPE_PROC || from->is_c_call == to->is_c_call ||
-        type_proc_of(from->params, from->param_count, from->results, from->result_count, to->is_c_call) != to) {
+        type_proc_of(from->params, from->param_count, from->results, from->result_count, to->is_c_call,
+                     from->is_variadic) != to) {
         return {};
     }
     if (from->is_c_call) {
@@ -616,11 +617,12 @@ static void report_undeclared(Checker *c, Ast_Name *name, bool called) {
 
 // A name used as a value: a variable's or parameter's value, or a
 // constant's, which is known while compiling, or a procedure, of its
-// procedure type (a constant naming one too). A variadic procedure has no
-// procedure type: "'printf' can't be a value: it takes more arguments
-// with '..', which no procedure type can say". Nor is main a value: "'main'
-// can't be a value: it's where the program starts"; nor a #compiler one:
-// "'create_workspace' can't be a value: the compiler does it".
+// procedure type (a constant naming one too); one taking a '..T' too, its
+// type saying so (spec 3.15). One that takes C's bare '..' has no
+// procedure type: "'printf' can't be a value: it takes C's '..', which no
+// procedure type can say". Nor is main a value: "'main' can't be a value:
+// it's where the program starts"; nor a #compiler one: "'create_workspace'
+// can't be a value: the compiler does it".
 static Type *check_name(Checker *c, Ast_Name *name) {
     Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
@@ -655,10 +657,9 @@ static Type *check_name(Checker *c, Ast_Name *name) {
             diag_error(c->diag, name->pos, "'" STR_FMT "' can't be a value: the compiler does it", STR_ARG(proc->name));
             return nullptr;
         }
-        if (proc->is_variadic) {
+        if (proc->is_c_variadic) {
             diag_error(c->diag, name->pos,
-                       "'" STR_FMT "' can't be a value: it takes more arguments with '..', which no procedure type "
-                       "can say",
+                       "'" STR_FMT "' can't be a value: it takes C's '..', which no procedure type can say",
                        STR_ARG(proc->name));
         }
         return proc->type;  // null when a part of its signature was an error, reported
@@ -668,12 +669,12 @@ static Type *check_name(Checker *c, Ast_Name *name) {
     }
 }
 
-// An extra argument (one after a variadic procedure's fixed parameters)
-// that has no type of its own yet takes Rig's default, as where it meets
-// no type: an untyped integer an int; an untyped float a float64, though a
-// float32 is the default elsewhere, since C receives a double either way
-// and rounding it to a float32 first would only lose digits; null a *void,
-// C's NULL. Anything else keeps its type.
+// An extra argument (one after the fixed parameters of a procedure that
+// takes C's '..') that has no type of its own yet takes Rig's default, as
+// where it meets no type: an untyped integer an int; an untyped float a
+// float64, though a float32 is the default elsewhere, since C receives a
+// double either way and rounding it to a float32 first would only lose
+// digits; null a *void, C's NULL. Anything else keeps its type.
 static void give_extra_argument_a_type(Checker *c, Ast *arg) {
     Type *t = arg->type;
     if (t == &type_untyped_int) {
@@ -737,6 +738,91 @@ Type *call_result_type(Ast_Call *call, s64 i) {
     return call->proc ? call->proc->results[i]->type : call->callee_type->results[i];
 }
 
+// Whether the procedure `call` calls takes a '..T' parameter, directly or
+// through a value: even one whose T is an error, which has no type, or one
+// refused on a foreign procedure, whose type is still its []T.
+static bool takes_variadic(Ast_Call *call) {
+    if (!call->proc) return call->callee_type->is_variadic;
+    Array<Ast_Param *> &params = call->proc->params;
+    return params.count && params[params.count - 1]->is_variadic;
+}
+
+Type *call_variadic_type(Ast_Call *call) {
+    if (!takes_variadic(call)) return nullptr;
+    if (call->proc) return call->proc->params[call->proc->params.count - 1]->type;
+    return call->callee_type->params[call->callee_type->param_count - 1];
+}
+
+// A spread that is one of a call's arguments, ..e: e is checked as an
+// operand, so it keeps a type of its own, which a parameter never gives it
+// (.. .[1, 2] is a literal whose type isn't known), and the spread has that
+// type, for check_call to take or refuse. Any other spread, an argument's
+// part or none, is check_spread's.
+static void check_spread_argument(Checker *c, Ast_Spread *spread) {
+    spread->type = check_operand(c, spread->operand);
+}
+
+// "only the arguments of a '..' parameter can be spread, as in
+// f(..values)", at a call's spread argument that no '..T' parameter takes,
+// or that isn't the last argument. It then has no type: it counts as an
+// argument of its own position, and nothing more is said about it.
+static void refuse_spread(Checker *c, Ast *spread) {
+    diag_error(c->diag, spread->pos, "only the arguments of a '..' parameter can be spread, as in f(..values)");
+    spread->type = nullptr;
+}
+
+// Argument `index` (from 0) of a call of `name`, checked already
+// (check_value), converted to `to`, its parameter's type: "argument 2 of
+// 'f' has type 'string', which can't be converted to 'int'", at it, with a
+// hint where one helps (conversion_hint).
+static void check_argument(Checker *c, Ast *arg, Type *to, s64 index, String name) {
+    Type *from = arg->type;
+    if (check_convert(c, arg, to)) return;
+    diag_error(c->diag, arg->start,
+               "argument %lld of '" STR_FMT "' has type '" STR_FMT "', which can't be converted to '" STR_FMT
+               "'" STR_FMT,
+               (long long)(index + 1), STR_ARG(name), STR_ARG(type_name(c->arena, from)),
+               STR_ARG(type_name(c->arena, to)), STR_ARG(conversion_hint(c, arg, from, to)));
+}
+
+// The '..' arguments of `call`, whose callee takes a '..T' parameter of
+// type `view` (null when T is an error), the arguments from `fixed` on
+// (spec 5.10):
+// - a spread, ..e, the last of them and the only one (check_call made sure),
+//   passes e as the parameter's view: e's type must be exactly a []T or a
+//   [N]T, its elements never converted, or "'..' spreads a '[]int' into
+//   'rest', which needs a '[]Any'", at the '..'. Through a procedure value,
+//   whose type names no parameter, the parameter is its type written ..T:
+//   "'..' spreads a '[2]u8' into '..int', which needs a '[]int'";
+// - otherwise each converts to T, as an argument to a T parameter does
+//   ("argument 3 of 'sum' has type 'string', which can't be converted to
+//   'int'", counted over all the arguments), and they go, in order, into a
+//   [N]T of the caller's, call->gathered: made as any array type is, so too
+//   many large T's are "'[3]Big' is too big", at the first of them.
+static void check_variadic_arguments(Checker *c, Ast_Call *call, s64 fixed, Type *view, String name) {
+    s64 given = call->args.count;
+    Ast *last = given ? call->args[given - 1] : nullptr;
+    if (last && last->kind == AST_SPREAD) {
+        Type *from = last->type;
+        if (!view || !from) return;  // T's mistake or the operand's, reported
+        bool exact = from == view || (from->kind == TYPE_ARRAY && from->element == view->element);
+        if (!exact) {
+            String into = call->proc ? call->proc->params[fixed]->name
+                                     : string_printf(c->arena, ".." STR_FMT,
+                                                     STR_ARG(type_name(c->arena, view->element)));
+            diag_error(c->diag, last->pos, "'..' spreads a '" STR_FMT "' into '" STR_FMT "', which needs a '" STR_FMT "'",
+                       STR_ARG(type_name(c->arena, from)), STR_ARG(into), STR_ARG(type_name(c->arena, view)));
+            last->type = nullptr;
+        }
+        return;
+    }
+    if (!view) return;
+    Type *t = view->element;
+    for (s64 i = fixed; i < given; i++) check_argument(c, call->args[i], t, i, name);
+    Position at = fixed < given ? call->args[fixed]->start : call->pos;
+    call->gathered = check_array_type(c, t, (u64)(given - fixed), at);
+}
+
 // What a call's callee is (spec 5.10), filling in call->proc or
 // call->callee_type; false when it's unknown or no procedure (reported):
 // - a procedure's name, or a constant's that names one (OP :: add;): a call
@@ -793,16 +879,31 @@ static bool check_callee(Checker *c, Ast_Call *call) {
 }
 
 // A call: the callee (check_callee), then the arguments, whose own mistakes
-// are reported even when the callee is wrong, after its: in source order.
-// Then the arguments against the parameters, the same for a procedure and
-// for a value of a procedure type, named in the messages by callee_name: as
-// many as there are ("'f' takes 2 arguments, but 1 was given", at the
-// callee; a variadic foreign procedure "at least" its fixed ones), each
-// converting to its parameter's type. The call's type is its first
-// result's, void when there's none.
+// are reported even when the callee is wrong, after its: in source order (a
+// spread argument's operand by check_spread_argument). Then the arguments
+// against the parameters, the same for a procedure and for a value of a
+// procedure type, named in the messages by callee_name: as many as there
+// are ("'f' takes 2 arguments, but 1 was given", at the callee; a variadic
+// foreign procedure "at least" its fixed ones), each converting to its
+// parameter's type. A callee with a '..T' parameter takes at least the
+// others, its fixed ones, and then any number more, or one spread
+// (check_variadic_arguments). A spread is only that: the last argument of
+// such a call. Anywhere else among the arguments it's refused
+// (refuse_spread), C's '..' included. With a spread kept, the arguments
+// before it are exactly the fixed ones: fewer is the "at least" message,
+// which doesn't count the spread; more is "'sum' takes its '..' arguments
+// one by one or as one spread view, not both", at the spread's '..'. The
+// call's type is its first result's, void when there's none.
 static Type *check_call(Checker *c, Ast_Call *call) {
     bool known = check_callee(c, call);
-    for (s64 i = 0; i < call->args.count; i++) check_value(c, call->args[i]);
+    for (s64 i = 0; i < call->args.count; i++) {
+        Ast *arg = call->args[i];
+        if (arg->kind == AST_SPREAD) {
+            check_spread_argument(c, (Ast_Spread *)arg);
+        } else {
+            check_value(c, arg);
+        }
+    }
     if (!known) return nullptr;
     Ast_Proc *proc = call->proc;
     // A broken callee's parameters and return type are unknown: any
@@ -815,37 +916,50 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     }
     String name = callee_name(c, call);
     Type *callee = call->callee_type;
-    // A variadic procedure takes its fixed parameters and any number more.
-    bool variadic = proc && proc->is_variadic;
     s64 n = proc ? proc->params.count : callee->param_count, given = call->args.count;
-    if (variadic ? given < n : given != n) {
+    bool gathers = takes_variadic(call);
+    for (s64 i = 0; i < given; i++) {
+        Ast *arg = call->args[i];
+        if (arg->kind == AST_SPREAD && (!gathers || i != given - 1)) refuse_spread(c, arg);
+    }
+    // A procedure that takes C's '..' or a '..T' takes its fixed parameters
+    // and any number more; a spread kept stands for all of the '..T' ones,
+    // so it isn't counted.
+    bool spreads = gathers && given && call->args[given - 1]->kind == AST_SPREAD;
+    bool more = gathers || (proc && proc->is_c_variadic);
+    s64 fixed = gathers ? n - 1 : n, before = spreads ? given - 1 : given;
+    if (more ? before < fixed : given != n) {
         diag_error(c->diag, call->callee->start, "'" STR_FMT "' takes %s%lld argument%s, but %lld %s given",
-                   STR_ARG(name), variadic ? "at least " : "", (long long)n, n == 1 ? "" : "s", (long long)given,
-                   given == 1 ? "was" : "were");
+                   STR_ARG(name), more ? "at least " : "", (long long)fixed, fixed == 1 ? "" : "s",
+                   (long long)before, before == 1 ? "was" : "were");
+        if (spreads) call->args[given - 1]->type = nullptr;  // not taken: nothing more to say of it
+    } else if (spreads && before > fixed) {
+        Ast *spread = call->args[given - 1];
+        diag_error(c->diag, spread->pos,
+                   "'" STR_FMT "' takes its '..' arguments one by one or as one spread view, not both",
+                   STR_ARG(name));
+        spread->type = nullptr;
     } else {
-        for (s64 i = 0; i < n; i++) {
-            Ast *arg = call->args[i];
-            Type *from = arg->type, *to = proc ? proc->params[i]->type : callee->params[i];
-            if (!check_convert(c, arg, to)) {
-                diag_error(c->diag, arg->start,
-                           "argument %lld of '" STR_FMT "' has type '" STR_FMT "', which can't be converted to '" STR_FMT
-                           "'" STR_FMT,
-                           (long long)(i + 1), STR_ARG(name), STR_ARG(type_name(c->arena, from)),
-                           STR_ARG(type_name(c->arena, to)), STR_ARG(conversion_hint(c, arg, from, to)));
-            }
+        for (s64 i = 0; i < fixed; i++) {
+            check_argument(c, call->args[i], proc ? proc->params[i]->type : callee->params[i], i, name);
         }
-        // A Rig procedure with '..' was reported, and is variadic only so
-        // its calls say nothing more: what C would refuse is no mistake of
-        // theirs, since no C function receives it. Its extra arguments just
-        // take their default types, and a literal without one stays unknown.
-        for (s64 i = n; i < given; i++) {
-            Ast *arg = call->args[i];
-            if (proc->is_foreign) {
-                check_extra_argument(c, proc, arg, i);
-            } else if (arg->type == &type_untyped_literal) {
-                arg->type = nullptr;
-            } else {
-                give_extra_argument_a_type(c, arg);
+        if (gathers) {
+            check_variadic_arguments(c, call, fixed, call_variadic_type(call), name);
+        } else {
+            // A Rig procedure with C's bare '..' was reported, and takes C's
+            // '..' only so its calls say nothing more: what C would refuse is
+            // no mistake of theirs, since no C function receives it. Its
+            // extra arguments just take their default types, and a literal
+            // without one stays unknown.
+            for (s64 i = n; i < given; i++) {
+                Ast *arg = call->args[i];
+                if (proc->is_foreign) {
+                    check_extra_argument(c, proc, arg, i);
+                } else if (arg->type == &type_untyped_literal) {
+                    arg->type = nullptr;
+                } else {
+                    give_extra_argument_a_type(c, arg);
+                }
             }
         }
     }
@@ -2065,6 +2179,19 @@ static Type *check_literal(Checker *c, Ast_Literal *literal) {
     return t;
 }
 
+// A spread, ..e, where nothing takes it (spec 5.10): only a call's last
+// argument can be one, for a '..T' parameter, and a call's arguments are
+// check_call's, which takes or refuses each spread among them itself. So
+// this is a spread anywhere else, refused at its '..': a variable's value,
+// an operand, a part of an argument (f(-..xs)). Its operand is still
+// checked, for mistakes of its own. It has no type, so nothing more is said
+// about it.
+static Type *check_spread(Checker *c, Ast_Spread *spread) {
+    diag_error(c->diag, spread->pos, "only the arguments of a '..' parameter can be spread, as in f(..values)");
+    check_value(c, spread->operand);
+    return nullptr;
+}
+
 Type *check_expression(Checker *c, Ast *e) {
     Type *t = nullptr;
     switch (e->kind) {
@@ -2093,6 +2220,7 @@ Type *check_expression(Checker *c, Ast *e) {
     case AST_LITERAL: t = check_literal(c, (Ast_Literal *)e); break;
     case AST_INDEX: t = check_index(c, (Ast_Index *)e); break;
     case AST_RUN: t = check_run(c, (Ast_Run *)e); break;
+    case AST_SPREAD: t = check_spread(c, (Ast_Spread *)e); break;
     default: RIG_ASSERT(!"not an expression");
     }
     e->type = t;
