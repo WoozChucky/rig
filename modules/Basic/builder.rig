@@ -103,6 +103,13 @@ append_int :: (builder: *String_Builder, value: int, base: int) {
     append_string(builder, format_int(buffer, value, base));
 }
 
+// Appends value in a base from 2 to 36, as format_u64 writes it, so a u64
+// above int's largest too; another base appends nothing.
+append_u64 :: (builder: *String_Builder, value: u64, base: int) {
+    buffer : [INT_TEXT_MAX]u8;
+    append_string(builder, format_u64(buffer, value, base));
+}
+
 // Appends value with decimals digits after the point, from 0 to 9, as
 // format_float writes it: "nan", "inf" and "-inf" included.
 append_float :: (builder: *String_Builder, value: float64, decimals: int) {

@@ -1,0 +1,21 @@
+// Calls of Basic's print the checker refuses (issue #154): a literal
+// without its type, which can't become an Any (spec 3.16), a call that
+// gives no value, a first argument that isn't a string, no arguments, a
+// builder that isn't a pointer, and an array spread into ..Any, whose
+// elements aren't Anys (spec 5.10).
+#import "Basic";
+
+Vec2 :: struct { x: int; y: int; }
+greet :: () { }
+
+main :: () {
+    print("{}\n", .["a", "b"]);
+    print("{}\n", .{1, 2});
+    print("{}\n", greet());
+    print(5);
+    print();
+    b : String_Builder;
+    print_to_builder(b, "{}", 1);
+    v := int.[1, 2];
+    print("{}", ..v);
+}

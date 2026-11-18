@@ -8,6 +8,11 @@ show_int :: (value: int, base: int) {
     print_line(format_int(buffer, value, base));
 }
 
+show_u64 :: (value: u64, base: int) {
+    buffer : [INT_TEXT_MAX]u8;
+    print_line(format_u64(buffer, value, base));
+}
+
 show_parse_int :: (s: string, base: int) {
     value, ok := parse_int(s, base);
     print_byte("["[0]);
@@ -237,4 +242,16 @@ main :: () {
     print_string("largest: ");
     print_bool(largest > 1e308);
     print_byte(10);
+
+    // u64s (issue #154), past int's largest too, up to u64's largest in
+    // bases 10, 16 and 2, and a base outside 2 to 36 on either side, which
+    // writes nothing.
+    show_u64(0, 10);
+    show_u64(9223372036854775808, 10);
+    show_u64(18446744073709551615, 10);
+    show_u64(18446744073709551615, 16);
+    show_u64(18446744073709551615, 2);
+    show_u64(35, 36);
+    show_u64(5, 1);
+    show_u64(5, 37);
 }

@@ -7,7 +7,8 @@
 // pool, over Preload's heap), a string builder, a growable array, hash
 // tables, sorting and searching, paths, files, the clock and the calendar,
 // random numbers, the environment's variables and commands run by the
-// system's shell, and printing to standard output.
+// system's shell, and formatted printing to standard output and to a string
+// builder.
 //
 // Basic ships with rig, so a program imports all of it through this file
 // by the module's name (spec 2.14):
@@ -23,8 +24,9 @@
 //
 // Each part loads the parts it uses itself, and a file is read once however
 // often it is named, so the order here is only the reading order. It is
-// README.md's, so the two can be read side by side: print.rig, which uses
-// only libc.rig and numbers.rig, comes last there, after the collections.
+// README.md's, so the two can be read side by side: print.rig, which loads
+// libc.rig, numbers.rig, string.rig and builder.rig, comes last there,
+// after the collections.
 #load "libc.rig";
 #load "char.rig";
 #load "math.rig";

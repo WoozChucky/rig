@@ -757,6 +757,23 @@ main :: () {
 2 3
 ```
 
+Basic's `print` takes its arguments as `..Any` (section 5.10) and writes each through its description, so it writes a value of any type (Basic's README says how):
+
+```rig
+#import "Basic";
+
+Vec2 :: struct { x: int; y: int; }
+
+main :: () {
+    name := "Ada";
+    print("{} is {}, at {}\n", name, 36, Vec2.{1, 2});
+}
+```
+
+```text
+Ada is 36, at {x = 1, y = 2}
+```
+
 ## 4. Declarations and scope
 
 ### 4.1 Declarations

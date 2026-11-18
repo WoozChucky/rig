@@ -1,19 +1,38 @@
-// Basic's print: writing to standard output. Every byte goes out through
-// c_putchar, C's putchar (libc.rig), so it passes through C's own stdout
-// buffer, and what a program prints with Basic and with C's printf comes
-// out in the order it was printed, compiled and interpreted.
+// Basic's print: writing to standard output, or to a string builder. Every
+// byte written to standard output goes out through c_putchar, C's putchar
+// (libc.rig), so it passes through C's own stdout buffer, and what a
+// program prints with Basic and with C's printf comes out in the order it
+// was printed, compiled and interpreted.
 //
 // A string is bytes, and they're written as they are: no encoding is
 // checked or changed, so UTF-8 text prints as UTF-8. There's no portable
 // way to reach standard error from Rig yet (its C FILE * is a call,
 // __acrt_iob_func(2), on Windows but a data symbol, stderr, in glibc,
-// which Rig can't declare, and there's no #if to choose between them),
-// so Basic prints only to standard output.
+// which Rig can't declare: #if can choose the system, but not reach
+// glibc's), so Basic prints only to standard output.
 //
 // Numbers are written into a buffer on the stack by numbers.rig and then
-// printed, so printing never allocates.
+// printed, so printing to standard output never allocates.
+//
+// print_item writes a value of any type, through its type info (spec
+// 3.16): it reads an Any by its description, as the type's kind says, and
+// writes a struct's fields and an array's or a view's elements each as an
+// Any of its own.
+//
+// print and print_to_builder write a format whose {} placeholders take
+// ..Any arguments, each written by print_item, through print_formatted,
+// the one format walk. The helpers under them, print_or_append,
+// print_quoted, print_item and print_formatted, take a string builder
+// (builder.rig) first, and a null one means standard output: Rig has no
+// closures or generics, so a builder that may be null is the simplest way
+// for one walk to write to either. print passes null; print_to_builder
+// takes a builder and stops the program on a null one. Written to
+// standard output, nothing is allocated; print_to_builder writes into a
+// builder of its own on the heap, then appends it to the one it is given.
 #load "libc.rig";
 #load "numbers.rig";
+#load "string.rig";
+#load "builder.rig";
 
 // Writes the bytes of s, and nothing else. An empty string, or a zeroed
 // one whose data is null, writes nothing: its count is 0, so no byte is
@@ -56,4 +75,331 @@ print_float :: (value: float64, decimals: int) {
 print_line :: (s: string) {
     print_string(s);
     print_byte(10); // line feed
+}
+
+// Writes the bytes of s to builder, or to standard output, through
+// print_string, when builder is null. The helpers below, print_quoted,
+// print_item and print_formatted, write through it, so each writes to
+// either; print and print_to_builder each pick one.
+print_or_append :: (builder: *String_Builder, s: string) {
+    if builder == null {
+        print_string(s);
+    } else {
+        append_string(builder, s);
+    }
+}
+
+// Writes s in double quotes, as a string literal would hold it (spec
+// 2.10): a line feed, a tab, a carriage return, a zero byte, a backslash
+// and a double quote as their escapes, \n, \t, \r, \0, \\ and \", and any
+// other byte below 32, and 127, as \x and two lowercase hex digits, as
+// Rig's messages write a C name (spec 7.6), so no control byte reaches the
+// terminal. Rig has no \x escape, but C does. The bytes from 128 are
+// written as they are, so UTF-8 text stays readable.
+//
+// The bytes between two escapes are written as one run, so a builder takes
+// one append for them rather than one for each byte. A string with null data and
+// a count above 0 stops the program at the for, with the language's null
+// pointer dereference (spec 8.4), after the opening quote is written.
+print_quoted :: (builder: *String_Builder, s: string) {
+    HEX :: "0123456789abcdef";
+    print_or_append(builder, "\"");
+    start := 0; // where the run not yet written begins
+    // tests/run/basic_print_null_string.err names this line.
+    for s {
+        escape := "";
+        if it == 10 { // line feed
+            escape = "\\n";
+        } else if it == 9 { // tab
+            escape = "\\t";
+        } else if it == 13 { // carriage return
+            escape = "\\r";
+        } else if it == 0 {
+            escape = "\\0";
+        } else if it == "\\"[0] {
+            escape = "\\\\";
+        } else if it == "\""[0] {
+            escape = "\\\"";
+        }
+        hex : [4]u8;
+        if escape.count == 0 && (it < 32 || it == 127) { // 127 is delete
+            hex[0] = "\\"[0];
+            hex[1] = "x"[0];
+            hex[2] = HEX[it / 16];
+            hex[3] = HEX[it % 16];
+            view : []u8 = hex;
+            escape = cast(string) view;
+        }
+        if escape.count > 0 {
+            print_or_append(builder, slice(s, start, it_index - start));
+            print_or_append(builder, escape);
+            start = it_index + 1;
+        }
+    }
+    print_or_append(builder, slice(s, start, s.count - start));
+    print_or_append(builder, "\"");
+}
+
+// Writes the value item holds, to builder, or to standard output when
+// builder is null, by its type's description (spec 3.16), whose tag says
+// how to read the bytes at item.value_pointer:
+//
+//   - An integer, by its size and sign, in base 10: a signed one is read
+//     into an int for format_int, an unsigned one into a u64 for
+//     format_u64, since a u64 above int's largest has no int. A u8 is a
+//     number, not a byte.
+//   - A float, a float32 widened to a float64, with 6 decimals as
+//     format_float writes them, and then its trailing zeros cut down to
+//     one: 1.5, 3.0, -0.0, nan, inf. So a magnitude below 0.0000005 is 0.0
+//     or -0.0.
+//   - A bool, true or false.
+//   - A string, its bytes; when nested, in quotes, through print_quoted.
+//   - A pointer or a procedure value, null or its address in lowercase hex
+//     after 0x. A pointer isn't followed, so no cycle of pointers is met,
+//     and a *u8 is a pointer, not a C string. Interpreted, a Rig
+//     procedure's address is the interpreter's stand-in (spec 10.8).
+//   - A struct, {name = value, ...}, its fields in order, and {} for one
+//     with none. An Any field is the value it holds, written as the field
+//     would be.
+//   - An array or a view, [value, ...], and [] for one with no elements,
+//     or a view with a count of 0 or less.
+//
+// nested says the value is inside a struct, an array or a view, or among
+// the arguments a format leaves over, {!EXTRA: ...}, where a string is
+// quoted so that its bytes can't be mistaken for the punctuation around
+// it. Fields and elements are written by calling
+// print_item again, nested, each made into an Any of its own: its type's
+// description and its address, the value's address and its offset.
+//
+// What no conversion to Any makes: a zeroed Any, whose type is null, as a
+// zeroed struct's Any field is, writes null, as a zeroed pointer does; a
+// description of void, which only an Any made by hand can hold, writes
+// void; and a tag that isn't one of the nine writes nothing.
+//
+// A pointer isn't followed, but a view's data and an Any's value_pointer
+// are, so a view or an Any that reaches a value it is part of makes a
+// cycle: a struct whose view field views an array holding it
+// (nodes[0].kids = nodes;), the struct an Any is a field of (h.a = h;),
+// the array it is an element of (arr[0] = arr;), or anything that
+// contains it deeper down. Writing that one recurses until the stack runs
+// out, as recursion that never ends does.
+print_item :: (builder: *String_Builder, item: Any, nested: bool) {
+    t := item.type;
+    p := item.value_pointer;
+    if t == null {
+        print_or_append(builder, "null");
+    } else if t.tag == TYPE_INFO_INTEGER {
+        buffer : [INT_TEXT_MAX]u8;
+        if (cast(*Type_Info_Integer) t).signed {
+            value : int = 0;
+            if t.size == 1 {
+                value = (cast(*s8) p).*;
+            } else if t.size == 2 {
+                value = (cast(*s16) p).*;
+            } else if t.size == 4 {
+                value = (cast(*s32) p).*;
+            } else {
+                value = (cast(*int) p).*;
+            }
+            print_or_append(builder, format_int(buffer, value, 10));
+        } else {
+            value : u64 = 0;
+            if t.size == 1 {
+                value = (cast(*u8) p).*;
+            } else if t.size == 2 {
+                value = (cast(*u16) p).*;
+            } else if t.size == 4 {
+                value = (cast(*u32) p).*;
+            } else {
+                value = (cast(*u64) p).*;
+            }
+            print_or_append(builder, format_u64(buffer, value, 10));
+        }
+    } else if t.tag == TYPE_INFO_FLOAT {
+        value : float64 = 0;
+        if t.size == 4 {
+            value = (cast(*float32) p).*;
+        } else {
+            value = (cast(*float64) p).*;
+        }
+        buffer : [FLOAT_TEXT_MAX]u8;
+        text := format_float(buffer, value, 6);
+        // nan, inf and -inf have no point, and so no decimals to cut. A
+        // number has a digit on each side of its point, so the last of
+        // the zeros cut is the one right after the point, which stays.
+        if find_byte(text, "."[0]) >= 0 {
+            while text[text.count - 1] == "0"[0] && text[text.count - 2] != "."[0] {
+                text.count -= 1;
+            }
+        }
+        print_or_append(builder, text);
+    } else if t.tag == TYPE_INFO_BOOL {
+        if (cast(*bool) p).* {
+            print_or_append(builder, "true");
+        } else {
+            print_or_append(builder, "false");
+        }
+    } else if t.tag == TYPE_INFO_STRING {
+        s := (cast(*string) p).*;
+        if nested {
+            print_quoted(builder, s);
+        } else {
+            print_or_append(builder, s);
+        }
+    } else if t.tag == TYPE_INFO_POINTER || t.tag == TYPE_INFO_PROCEDURE {
+        // Both are an address, 8 bytes, read as a u64 to be written.
+        address := (cast(*u64) p).*;
+        if address == 0 {
+            print_or_append(builder, "null");
+        } else {
+            buffer : [INT_TEXT_MAX]u8;
+            print_or_append(builder, "0x");
+            print_or_append(builder, format_u64(buffer, address, 16));
+        }
+    } else if t.tag == TYPE_INFO_VOID {
+        print_or_append(builder, "void");
+    } else if t.tag == TYPE_INFO_STRUCT {
+        // An Any is a struct too, but it's written as the value it holds:
+        // one description per type, so its description's address says
+        // it's an Any.
+        if t == type_info(Any) {
+            print_item(builder, (cast(*Any) p).*, nested);
+            return;
+        }
+        s := cast(*Type_Info_Struct) t;
+        print_or_append(builder, "{");
+        for s.members {
+            if it_index > 0 { print_or_append(builder, ", "); }
+            print_or_append(builder, it.name);
+            print_or_append(builder, " = ");
+            print_item(builder, Any.{it.type, cast(*u8) p + it.offset}, true);
+        }
+        print_or_append(builder, "}");
+    } else if t.tag == TYPE_INFO_ARRAY {
+        a := cast(*Type_Info_Array) t;
+        data := cast(*u8) p;
+        count := a.count;
+        if a.array_kind == ARRAY_VIEW {
+            // Every view is a count and a data pointer, whatever its
+            // elements, so it's read as a []u8. When its count says it has
+            // elements, its first is reached before any of it is written,
+            // so a view with null data stops the program here, with the
+            // language's null pointer dereference (spec 8.4), as indexing
+            // it would, rather than after its "[".
+            view := (cast(*[]u8) p).*;
+            count = view.count;
+            // tests/run/basic_print_null_view.err names this line.
+            if count > 0 { first := *view[0]; }
+            data = view.data;
+        }
+        print_or_append(builder, "[");
+        for 0..count - 1 {
+            if it > 0 { print_or_append(builder, ", "); }
+            print_item(builder, Any.{a.element_type, data + it * a.element_type.size}, true);
+        }
+        print_or_append(builder, "]");
+    }
+}
+
+// Writes format to builder, or to standard output when builder is null,
+// with each {} in it replaced by the next of args, written as print_item
+// writes it at the top, so a string is its bytes. The format is read left
+// to right:
+//
+//   - {} takes the next argument, or writes {!MISSING} when none is left.
+//   - {{ writes {, and }} writes }.
+//   - Any other { begins a placeholder this version doesn't know, {x} or
+//     {:x}: the bytes from it to the next }, or to the format's end when
+//     there's none, are written as {!BAD}, and take no argument. So
+//     {a{b} is one {!BAD}, and a { at the format's very end is {!BAD} too.
+//   - A } on its own is written as it is, so }}} is }}, and {{} is { and
+//     then a lone }.
+//   - Every other byte is written as it is, a run of them, up to the next
+//     brace, at once.
+//
+// The arguments left over once the format ends are written after it, a
+// space and then {!EXTRA: 4, "x"}: each nested, as inside a struct, so a
+// string is quoted, with a comma and a space between them. The format is a value the compiler
+// doesn't read, as C's isn't (spec 7.6), so a count that doesn't match
+// writes a marker rather than stopping the program. An argument's own
+// braces are its bytes, not a format: they're written as they are.
+print_formatted :: (builder: *String_Builder, format: string, args: []Any) {
+    OPEN :: "{";
+    CLOSE :: "}";
+    next := 0; // the argument the next {} takes
+    i := 0;
+    while i < format.count {
+        // The byte after this one, or 0 at the format's last byte, which
+        // no brace is.
+        after : u8 = 0;
+        if i + 1 < format.count { after = format[i + 1]; }
+        if format[i] == OPEN[0] && after == OPEN[0] {
+            print_or_append(builder, OPEN);
+            i += 2;
+        } else if format[i] == OPEN[0] && after == CLOSE[0] {
+            if next < args.count {
+                print_item(builder, args[next], false);
+                next += 1;
+            } else {
+                print_or_append(builder, "{!MISSING}");
+            }
+            i += 2;
+        } else if format[i] == OPEN[0] {
+            print_or_append(builder, "{!BAD}");
+            i += 1;
+            while i < format.count && format[i] != CLOSE[0] { i += 1; }
+            i += 1; // past the }, or past the end, which ends the loop
+        } else if format[i] == CLOSE[0] && after == CLOSE[0] {
+            print_or_append(builder, CLOSE);
+            i += 2;
+        } else if format[i] == CLOSE[0] {
+            print_or_append(builder, CLOSE);
+            i += 1;
+        } else {
+            start := i;
+            while i < format.count && format[i] != OPEN[0] && format[i] != CLOSE[0] { i += 1; }
+            print_or_append(builder, slice(format, start, i - start));
+        }
+    }
+    if next < args.count {
+        print_or_append(builder, " {!EXTRA: ");
+        for next..args.count - 1 {
+            if it > next { print_or_append(builder, ", "); }
+            print_item(builder, args[it], true);
+        }
+        print_or_append(builder, "}");
+    }
+}
+
+// Writes format to standard output with its {}s replaced by args, as
+// print_formatted says: print("{} is {}\n", name, age). Each argument is
+// any value, gathered as an Any (spec 5.10, 3.16), and a []Any already
+// made is forwarded with .., as in print(format, ..args); passed without
+// it, it is one argument, a view. Like all this file writes to standard
+// output, it writes as it goes, through c_putchar, and allocates nothing.
+print :: (format: string, args: ..Any) {
+    print_formatted(null, format, args);
+}
+
+// Appends what print would write to builder (builder.rig), whose memory
+// grows as append_string's does, and writes nothing to standard output.
+//
+// The format and the arguments may view the builder's own text, as
+// append_string's s may: all is written into a builder of its own first,
+// on the heap, and then appended at once, so nothing of builder moves
+// while it is read. The heap's memory is freed before it returns.
+print_to_builder :: (builder: *String_Builder, format: string, args: ..Any) {
+    // A null builder is standard output to print_formatted, so it's read
+    // here first, to stop the program with the language's null pointer
+    // dereference (spec 8.4), whatever the format, rather than print.
+    // tests/run/basic_print_null_builder.err names this line.
+    count := builder.count;
+    scratch : String_Builder;
+    builder_init(*scratch, HEAP_ALLOCATOR);
+    print_formatted(*scratch, format, args);
+    text : string;
+    text.data = scratch.data;
+    text.count = scratch.count;
+    append_string(builder, text);
+    builder_free(*scratch);
 }

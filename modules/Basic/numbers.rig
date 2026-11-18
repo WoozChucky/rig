@@ -13,7 +13,8 @@
 // it, spaces included, isn't one, and the bool result says which it was.
 #load "char.rig";
 
-// The most bytes format_int writes: 64 binary digits and a sign.
+// The most bytes format_int writes: 64 binary digits and a sign. format_u64
+// writes the digits only, so 64 at most.
 INT_TEXT_MAX :: 65;
 
 // The most bytes format_float writes: a sign, 309 digits (float64's
@@ -74,6 +75,38 @@ format_int :: (buffer: []u8, value: int, base: int) -> string {
 
     text := cast(string) buffer;
     text.count = count;
+    return text;
+}
+
+// Writes value in base into buffer, with lowercase digits, and returns the
+// text written, at the buffer's start. A base outside 2 to 36 writes
+// nothing and returns "".
+//
+// format_int takes an int, and a u64 above int's largest,
+// 9223372036854775807, has no int of the same value: cast to one, it fails
+// the cast's check, and through cast,trunc it wraps to a negative number
+// (spec 3.14, 8.3). So a u64, as print writes one, comes here instead.
+format_u64 :: (buffer: []u8, value: u64, base: int) -> string {
+    DIGITS :: "0123456789abcdefghijklmnopqrstuvwxyz";
+    if base < 2 || base > 36 { return ""; }
+    radix := cast(u64) base;
+
+    // Counted first and then written from the last place back, as
+    // format_int's digits are: 0 is one digit.
+    digits := 1;
+    rest := value / radix;
+    while rest != 0 {
+        digits += 1;
+        rest /= radix;
+    }
+    left := value;
+    for 1..digits {
+        buffer[digits - it] = DIGITS[left % radix];
+        left /= radix;
+    }
+
+    text := cast(string) buffer;
+    text.count = digits;
     return text;
 }
 
