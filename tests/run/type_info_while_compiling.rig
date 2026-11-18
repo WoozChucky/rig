@@ -1,7 +1,8 @@
 // Type info and Any while compiling (issue #153, spec 7.8, 10.8): the
-// interpreter makes the descriptions in its own memory, laid out as the
-// program's, once per type, so code reading them runs in a #run as it
-// runs compiled. Late and Later are declared after the #runs that
+// #runs' lowering writes the descriptions as globals of the compile-time
+// module, laid out as the program's, once per type, and the interpreter
+// copies them into its own memory, so code reading them runs in a #run as
+// it runs compiled. Late and Later are declared after the #runs that
 // describe them, Later reached only through Late's pointer. The first
 // #run describes them by converting Late.{} to Any, before any type_info.
 // ACROSS checks a description saved by one #run (FIRST) is the one a

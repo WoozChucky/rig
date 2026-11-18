@@ -1697,11 +1697,11 @@ TEST(types_nest_at_most_max_depth) {
 
 TEST(types_and_expressions_share_max_depth) {
     // A type holds an expression (an array's count) and an expression a
-    // type (size_of's, a cast's), so the two nest inside each other, and
-    // every stage recurses through both: their levels count together,
-    // against one MAX_DEPTH. Counted apart, a thousand of each alternating
-    // ([size_of([size_of(...u8)]u8)]u8) overflowed Windows' stack, under
-    // both limits.
+    // type (size_of's, a cast's, type_info's), so the two nest inside each
+    // other, and every stage recurses through both: their levels count
+    // together, against one MAX_DEPTH. Counted apart, a thousand of each
+    // alternating ([size_of([size_of(...u8)]u8)]u8) overflowed Windows'
+    // stack, under both limits.
     Arena a = arena_make();
     const char *local = "main :: () {\n    x : ";
     s64 x_col = (s64)strlen("    x : ") + 1;  // where the type starts

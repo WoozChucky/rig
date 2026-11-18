@@ -69,16 +69,16 @@ struct Parser {
 //
 // Types and expressions nest inside each other: an array's count is an
 // expression inside its '[N]' level, and size_of(T), type_info(T) and
-// cast(T) read their type a level down, as a cast reads its value. The stages recurse through
-// both alike, so both count against the one limit: from the outermost
-// expression or type to the innermost, expression levels and type levels
-// together are at most MAX_DEPTH. So [size_of([size_of(u8)]u8)]u8 is 4
-// levels, and in ***...[N]u8 with 999 '*', N can only be a name or a
-// number. Counted apart, a thousand of each alternating overflowed the
-// stack, every stage paying for both at each step. p->levels and
-// p->type_levels are the two kinds open around the next token, and
-// open_levels(p) their sum. (MAX_DEPTH itself is in ast.h: the checker
-// counts against it too.)
+// cast(T) read their type a level down, as a cast reads its value. The
+// stages recurse through both alike, so both count against the one limit:
+// from the outermost expression or type to the innermost, expression levels
+// and type levels together are at most MAX_DEPTH. So
+// [size_of([size_of(u8)]u8)]u8 is 4 levels, and in ***...[N]u8 with 999
+// '*', N can only be a name or a number. Counted apart, a thousand of each
+// alternating overflowed the stack, every stage paying for both at each
+// step. p->levels and p->type_levels are the two kinds open around the next
+// token, and open_levels(p) their sum. (MAX_DEPTH itself is in ast.h: the
+// checker counts against it too.)
 //
 // A declaration's levels are the most its type or value reaches
 // (p->deepest, take_deepest), kept for the checker: a declaration it needs
@@ -1374,13 +1374,13 @@ static Ast_Block *parse_block(Parser *p) {
 // height kept for the expression around a type, if any, stays as it was: a
 // count's isn't part of it.
 //
-// A type's '*', '[]', '[N]' and a procedure type's '(' are a level each of the compiler's limit
-// (MAX_DEPTH), counted with the levels of the types and expressions the
-// type is inside: the one level too many is "types are nested too deeply
-// (more than 1000 levels)", at its '*' or '['. That
-// needs >= below, not ==: parse_type_below opens size_of's, type_info's and
-// a cast's level unchecked, so the levels may already be one over when a type is
-// read there; a name is fine, a '*' isn't. A count is read inside its
+// A type's '*', '[]', '[N]' and a procedure type's '(' are a level each of
+// the compiler's limit (MAX_DEPTH), counted with the levels of the types
+// and expressions the type is inside: the one level too many is "types are
+// nested too deeply (more than 1000 levels)", at its '*' or '['. That needs
+// >= below, not ==: parse_type_below opens size_of's, type_info's and a
+// cast's level unchecked, so the levels may already be one over when a type
+// is read there; a name is fine, a '*' isn't. A count is read inside its
 // '[N]' level, so [1][1]...int is a level per [1], however many, and a type
 // inside a count ([size_of(**int)]u8) adds its levels to the type around
 // it. The checker resolves a written type, and lays it out, by recursing
@@ -1389,9 +1389,8 @@ static Ast_Block *parse_block(Parser *p) {
 // means none of them ever sees a deeper one. The limit is on the types a
 // program writes. One the checker infers has none (each `p2 := *p1;` is a
 // pointer a level deeper than the last), and nothing recurses through it:
-// the checker builds it a level at a time, and the one stage that walks
-// all of its levels, naming it in a message, does so in a loop
-// (type_name).
+// the checker builds it a level at a time, and the one stage that walks all
+// of its levels, naming it in a message, does so in a loop (type_name).
 static Ast_Type *parse_type_level(Parser *p);
 
 static Ast_Type *parse_type(Parser *p) {

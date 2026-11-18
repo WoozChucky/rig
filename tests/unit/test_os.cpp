@@ -692,10 +692,12 @@ TEST(touching_reserved_addresses_faults) {
 }
 
 TEST(os_nanoseconds_goes_forward_finer_than_a_millisecond) {
-    // GetTickCount64, which the timeouts use, moves in steps of 10-16 ms:
-    // too coarse for a phase that takes 0.05 ms. The smallest of ten steps
-    // is checked, so that the thread losing the processor between two
-    // readings, which makes that one step long, can't fail the test.
+    // A phase can take 0.05 ms, so the clock must step by less than a
+    // millisecond. On Windows the timeouts' GetTickCount64 moves in steps
+    // of 10-16 ms; on Linux the timeouts read CLOCK_MONOTONIC to the
+    // millisecond. The smallest of ten steps is checked, so that the
+    // thread losing the processor between two readings, which makes that
+    // one step long, can't fail the test.
     s64 smallest = 0;
     for (int step = 0; step < 10; step++) {
         s64 first = os_nanoseconds();
