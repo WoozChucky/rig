@@ -93,11 +93,12 @@ C's `memmove`, `memset` and `memcmp`, written as byte loops in Rig rather than c
 
 Numbers are written into a buffer the caller gives, and the text comes back as a string viewing the buffer's first bytes, so nothing allocates. A buffer of `INT_TEXT_MAX` or `FLOAT_TEXT_MAX` bytes is always enough; one too short stops at the language's bounds check (unless built with `--no-bounds-checks`). Parsing takes the whole string or nothing: no spaces, prefixes or `_`.
 
-- `INT_TEXT_MAX`: 65, the most bytes `format_int` writes (64 binary digits and a sign).
+- `INT_TEXT_MAX`: 65, the most bytes `format_int` writes (64 binary digits and a sign); `format_u64` writes 64 at most.
 - `FLOAT_TEXT_MAX`: 320, the most bytes `format_float` writes (a sign, 309 digits, a point and 9 decimals).
 - `FLOAT64_LARGEST`: `1.7976931348623157e308`, `float64`'s largest finite value.
 - `digit_value(c: u8) -> int`: 0-9 for `0`-`9`, 10-35 for `a`-`z` and `A`-`Z`, -1 for any other byte.
 - `format_int(buffer: []u8, value: int, base: int) -> string`: writes `value` in a base from 2 to 36, lowercase, with `-` before a negative value; another base writes nothing and gives `""`.
+- `format_u64(buffer: []u8, value: u64, base: int) -> string`: writes `value` as `format_int` does, for a `u64`, which may be above `int`'s largest; another base writes nothing and gives `""`.
 - `parse_int(s: string, base: int) -> int, bool`: reads an optional `+` or `-` and one digit or more of the base, either case; `0, false` for anything else, a value outside `int` or a base outside 2 to 36.
 - `format_float(buffer: []u8, value: float64, decimals: int) -> string`: writes `value` with 0 to 9 decimals (others are clamped), the last rounded half away from zero on the `float64`'s own value, though a value within about a unit in the last place of a tie can round the other way (`1.805` with 2 decimals is `1.81`); `nan`, `inf`, `-inf`, and `-` before any negative value, `-0.0` included. From 1e18 up, 18 leading digits are written, of which only about the first 15 or 16 are the value's, and the rest are zeros.
 - `format_float_word(buffer: []u8, count: int, word: string) -> string`: writes `word` after the `count` bytes already in `buffer` and gives the text written; `format_float`'s `nan` and `inf`.
@@ -162,6 +163,7 @@ Text put together a piece at a time, in memory of the builder's own from the all
 - `append_string(builder: *String_Builder, s: string)`: appends the bytes of `s`; an empty or zeroed string appends nothing and takes no memory. `s` may be a view of the builder's own text: when the append grows the builder, the bytes are copied from where they moved to.
 - `append_byte(builder: *String_Builder, byte: u8)`: appends the byte itself, not its number.
 - `append_int(builder: *String_Builder, value: int, base: int)`: appends `value` as `format_int` writes it.
+- `append_u64(builder: *String_Builder, value: u64, base: int)`: appends `value` as `format_u64` writes it.
 - `append_float(builder: *String_Builder, value: float64, decimals: int)`: appends `value` as `format_float` writes it.
 - `append_bool(builder: *String_Builder, value: bool)`: appends `true` or `false`.
 - `builder_to_string(builder: *String_Builder, allocator: Allocator) -> string`: a copy of the text in memory from `allocator`, which the caller gives back with `free(s.data, allocator)`; an empty builder gives the zeroed string (count 0, data null) and allocates nothing.
