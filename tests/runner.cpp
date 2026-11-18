@@ -116,7 +116,9 @@
 // (build_program_report_test), and of tests/build/options, whose optimised
 // workspaces have an optimising line (optimised_report_test); and none
 // from tests/build/workspace_failures, which fails though a workspace of it
-// built (failed_workspace_report_test), bin/unit-tests --interpret of two
+// built (failed_workspace_report_test), nor from tests/build/exit_fails and
+// tests/build/workspace_exit, whose #runs end rig with exit()
+// (exit_report_test), bin/unit-tests --interpret of two
 // programs that call a #compiler procedure, at run time and in a
 // constant's #run (each refused as rig
 // build refuses it, with nothing run), of a build program with errors
@@ -1994,11 +1996,11 @@ static s64 take_time(Cursor *c) {
 // in order; `why`, {} when in every block the phases' times add up to no
 // more than its total, give or take 0.01 ms a phase (the rounding), all's
 // time is no less than the blocks' totals, give or take 0.01 ms a block,
-// and no total, nor any loading, llvm module, object file or linking time,
-// nor, for a large program (report_read's `large`), any checking or
-// lowering time, is 0.00 ms (each reads files, or has LLVM or the linker,
-// or the checker and lowerer over thousands of lines, do real work, taking
-// far longer than the clock's step), else why not.
+// and no total, nor any loading, llvm module, optimising, object file or
+// linking time, nor, for a large program (report_read's `large`), any
+// checking or lowering time, is 0.00 ms (each reads files, or has LLVM or
+// the linker, or the checker and lowerer over thousands of lines, do real
+// work, taking far longer than the clock's step), else why not.
 struct Read_Report {
     String shape;
     Array<s64> lines;  // the caller's to free
@@ -2011,7 +2013,8 @@ struct Read_Report {
 static bool phase_takes_time(String phase, bool large) {
     if (large && (string_eq(phase, str("checking")) || string_eq(phase, str("lowering")))) return true;
     return string_eq(phase, str("loading")) || string_eq(phase, str("llvm module")) ||
-           string_eq(phase, str("object file")) || string_eq(phase, str("linking"));
+           string_eq(phase, str("optimising")) || string_eq(phase, str("object file")) ||
+           string_eq(phase, str("linking"));
 }
 
 // A line with a time is a phase's when it's indented and has nothing after
@@ -2313,6 +2316,34 @@ static String failed_workspace_report_test(Arena *a, String rig) {
     String fine = string_printf(a, STR_FMT "/fine%s", STR_ARG(dir), EXE);
     if (!os_file_exists(fine)) return string_printf(a, "rig build wrote no " STR_FMT, STR_ARG(fine));
     if (built.out.count) return first_difference(a, "rig build's stdout", {}, built.out);
+    return {};
+}
+
+// tests/build/exit_fails and tests/build/workspace_exit built in
+// .build/tests/report-NAME (build_copy, without --quiet): a #run, the build
+// program's and a workspace's, ends rig with exit(), and rig exits with the
+// status it gave, its stdout what the runs printed (NAME's
+// expected.build.out) and no report after it: the process ends inside the
+// run. {} when it does, otherwise why not.
+static String exit_report_test(Arena *a, String rig) {
+    const char *names[] = {"exit_fails", "workspace_exit"};
+    for (const char *name : names) {
+        s32 expected_exit = 0;
+        String why = read_exit_file(a, string_printf(a, "tests/build/%s/expected.exit", name), &expected_exit);
+        if (why.count) return why;
+        String expected_out = {};
+        os_read_file(a, string_printf(a, "tests/build/%s/expected.build.out", name), &expected_out);
+        Process_Result built = {};
+        String dir = string_printf(a, ".build/tests/report-%s", name);
+        if (!build_copy(a, rig, str(name), dir, false, &built, &why, false)) return why;
+        if (built.exit_code != expected_exit) {
+            return string_printf(a, "rig build of %s exited with " STR_FMT ", expected %d", name,
+                                 STR_ARG(exit_code_text(a, built.exit_code)), expected_exit);
+        }
+        if (!string_eq(built.out, expected_out)) {
+            return first_difference(a, string_cstr(a, string_printf(a, "%s's stdout", name)), expected_out, built.out);
+        }
+    }
     return {};
 }
 
@@ -2867,7 +2898,11 @@ static const Command_Case CHECK_CASES[] = {
      "       rig check FILE.rig [--stdin | --stdin-for FILE.rig]\n"},
     {"rig check with two files", {"check", "tests/run/hello.rig", "tests/run/hello.rig"}, 2, "usage: "},
     {"rig check with -o", {"check", "tests/run/hello.rig", "-o", ".build/tests/output.RIG"}, 2, "usage: "},
+    // Each --quiet case notices what the other misses: were --quiet skipped,
+    // the first would check hello.rig and exit 0; were it taken for the
+    // file, the second would say '--quiet' isn't a .rig file and exit 1.
     {"rig check with --quiet", {"check", "tests/run/hello.rig", "--quiet"}, 2, "usage: "},
+    {"rig check with only --quiet", {"check", "--quiet"}, 2, "usage: "},
     {"rig check with --stdin twice", {"check", "--stdin", "tests/run/hello.rig", "--stdin"}, 2, "usage: "},
     {"rig check of a file not ending in .rig",
      {"check", "tests/run/hello.out"},
@@ -3669,6 +3704,7 @@ int main(int argc, char **argv) {
            &failed);
     report("a build program with a failed workspace prints no report", failed_workspace_report_test(&a, rig), &passed,
            &failed);
+    report("a build a #run ends with exit() prints no report", exit_report_test(&a, rig), &passed, &failed);
     report("interpreted: a #compiler call refused when lowering, nothing run",
            interpreted_error_test(&a, unit_tests, "compiler_called_at_run_time"), &passed, &failed);
     report("interpreted: a constant's #run calling the Compiler module, refused as rig build refuses it",
