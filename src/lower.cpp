@@ -165,6 +165,20 @@
 //   that compares strings (lower_string_equal), and != negates it. A global
 //   holding a literal points at its bytes through a relocation
 //   (constant_bytes).
+// - Types' descriptions (issue #153, spec 3.16, 5.19). type_info(T) is the
+//   address of T's description, a read-only global, type_info.N, laid out
+//   as Preload's struct for T's kind (types.h's TYPE_INFO_* constants).
+//   Only the types the program describes get one, and those their
+//   descriptions point at; each gets one, made the first time anything
+//   needs it and the same after (type_info_global), so two type_info(T)'s
+//   of one type are the same address. What a description points at is a
+//   relocation: another description, a name's str.N, or a read-only array
+//   of its own (a struct's members, a procedure type's parameters and
+//   results). Descriptions point at each other in cycles (a struct holding
+//   a pointer to itself), so each is made empty, then filled from a
+//   worklist, first in, first out, not by recursion (describe_type). A
+//   global holding a description's address, alone or in a literal, holds a
+//   relocation to it (constant_bytes).
 // - defer (spec 6.12) is registered when it's reached, and emits nothing
 //   there: Lowering.defers lists the defers reached in the blocks being
 //   lowered, and each block that can be left (a block statement, an if's or
@@ -284,6 +298,13 @@ struct Pending_Constant {
     Ast_Const *decl;
 };
 
+// A description made and not yet filled: its type and its global's index
+// (type_info_global, describe_type).
+struct Pending_Description {
+    Type *type;
+    s32 global;
+};
+
 // A loop being lowered, and the jumps out of its body whose targets aren't
 // made yet: each block listed ends in an IR_JUMP still to be pointed at the
 // loop's exit (a break) or at its next iteration (a continue: a while's
@@ -347,6 +368,13 @@ struct Lowering {
                               // a baked string gets (string_copy_global)
     s32 string_equal;         // __rig_string_equal's index in module->procs, once == on strings
                               // needs it; -1 (on demand, 1 from the start)
+    // Types' descriptions (spec 3.16), type_info.N, each made the first time
+    // something needs it (type_info_global) and filled by a worklist
+    // (describe_type), so a chain or a cycle of types needs no recursion.
+    Table<s32> type_infos;                  // each type's description's index, by pointer_key of its Type
+    Array<Pending_Description> describing;  // made, waiting to be filled, first in first out
+    s64 described;                          // describing's next to fill
+    s32 type_info_count;                    // the type_info.N made so far
     // Where the instructions being emitted come from (ir.h's "Debug
     // information"): every one emitted gets them. lower_statement sets pos
     // to each statement's; a loop, an if and a failing check set it to the
@@ -676,6 +704,7 @@ static Local *local_of(Lowering *l, Ast *decl) {
 
 static s32 declare_proc(Lowering *l, Ast_Proc *source);
 static s32 lower_global(Lowering *l, Ast_Var *var);
+static s32 type_info_global(Lowering *l, Type *t);
 
 // The address of variable `decl` (an Ast_Var), where it's loaded from and
 // stored to: a local's slot, or a global's address, emitted here. A
@@ -1640,6 +1669,14 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         addr->target = run_global(l, (Ast_Run *)e);
         return addr->result;
     }
+    case AST_TYPE_INFO: {
+        // type_info(T): the address of T's description, a read-only
+        // global made the first time anything needs it (type_info_global).
+        s32 global = type_info_global(l, ((Ast_Type_Info *)e)->described);
+        Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
+        addr->target = global;
+        return addr->result;
+    }
     default: RIG_ASSERT(!"not a value"); return -1;
     }
 }
@@ -2556,6 +2593,202 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
     for (s64 k = 0; k < size; k++) at[k] = (u8)(bits >> (8 * k));
 }
 
+// Types' descriptions (spec 3.16). Each type the program describes, by
+// type_info(T) (and, converted to Any, by a value's type), has one
+// description, laid out as the Preload struct its kind is described by
+// (types.h's TYPE_INFO_* constants): a read-only global, type_info.N,
+// numbered in the order they're made, of that struct's size, aligned to 8,
+// with no rig_type (the compiler makes it). What a description points at
+// is a relocation: another type's description, a name's bytes (a str.N of
+// its own, add_bytes), or a read-only array of its own, type_info.N.members
+// for a struct, type_info.N.parameters and .results for a procedure type,
+// made only when not empty (an empty view is zeros). Names with a '.' are
+// no Rig global's.
+//
+// Descriptions point at each other, in cycles too (a struct holding a
+// pointer to itself), so a description is made empty first, cached by its
+// type, and queued; filling it asks for the descriptions it points at,
+// which are made and queued in turn, never described there. The first
+// call fills the queue, first in, first out, so a chain of any length
+// takes no recursion in C++, and every description is whole when it
+// returns.
+
+// The tag of the description of a type of t's kind: integers, floats,
+// bool, string, pointers, procedure types, void, structs, and arrays and
+// views, which share one. The checker gave every value a type of its own
+// before lowering, so the untyped types, null's and a literal's without its
+// type never get here.
+static Type_Info_Tag type_info_tag(Type *t) {
+    RIG_ASSERT(!type_is_untyped(t));
+    switch (t->kind) {
+    case TYPE_INTEGER: return TYPE_INFO_INTEGER;
+    case TYPE_FLOAT: return TYPE_INFO_FLOAT;
+    case TYPE_BOOL: return TYPE_INFO_BOOL;
+    case TYPE_STRING: return TYPE_INFO_STRING;
+    case TYPE_POINTER: return TYPE_INFO_POINTER;
+    case TYPE_PROC: return TYPE_INFO_PROCEDURE;
+    case TYPE_VOID: return TYPE_INFO_VOID;
+    case TYPE_STRUCT: return TYPE_INFO_STRUCT;
+    case TYPE_ARRAY:
+    case TYPE_VIEW: return TYPE_INFO_ARRAY;
+    default: RIG_ASSERT(!"a type with no description"); return TYPE_INFO_VOID;
+    }
+}
+
+// The size of the struct describing a type of tag `tag`: a Type_Info_Integer,
+// a Type_Info_Pointer, ..., or a plain Type_Info for a float, bool, string
+// or void.
+static s64 type_info_size(Type_Info_Tag tag) {
+    switch (tag) {
+    case TYPE_INFO_INTEGER: return TYPE_INFO_INTEGER_SIZE;
+    case TYPE_INFO_POINTER: return TYPE_INFO_POINTER_SIZE;
+    case TYPE_INFO_PROCEDURE: return TYPE_INFO_PROCEDURE_SIZE;
+    case TYPE_INFO_STRUCT: return TYPE_INFO_STRUCT_SIZE;
+    case TYPE_INFO_ARRAY: return TYPE_INFO_ARRAY_SIZE;
+    default: return TYPE_INFO_SIZE;
+    }
+}
+
+// A read-only global named `name`, of `size` bytes aligned to 8, laid out
+// as a description is: `bytes` (all `size` of them, or none yet) and
+// `relocs`, by increasing offset; its index.
+static s32 add_type_info_global(Lowering *l, String name, s64 size, String bytes, Array<Ir_Reloc> relocs) {
+    Ir_Global g = {};
+    g.name = name;
+    g.type = IR_VOID;
+    g.has_layout = true;
+    g.is_read_only = true;
+    g.size = size;
+    g.align = TYPE_INFO_ALIGN;
+    g.bytes = bytes;
+    g.relocs = relocs;
+    array_add(&l->module->globals, g);
+    return (s32)(l->module->globals.count - 1);
+}
+
+static void describe_type(Lowering *l, s32 global, Type *t);
+
+// The read-only description of type t (spec 3.16), type_info.N: made empty
+// and queued the first time, the same after (by pointer_key of t, in
+// type_infos); its index. The outermost call fills the queue, first in,
+// first out (describe_type), so every description it reaches is whole when
+// it returns; a call while it's being filled (from describe_type) only
+// makes and queues. A finished queue starts again empty.
+static s32 type_info_global(Lowering *l, Type *t) {
+    const void *node = t;
+    String key = pointer_key(&node);
+    s32 *found = table_get(&l->type_infos, key);
+    if (found) return *found;
+    String name = string_printf(l->arena, "type_info.%d", l->type_info_count++);
+    s32 global = add_type_info_global(l, name, type_info_size(type_info_tag(t)), {}, {});
+    table_put(&l->type_infos, string_copy(l->arena, key), global);
+    // The one filling it is the call that found the queue empty: describing
+    // counts the one being filled until it's done.
+    bool outermost = l->described == l->describing.count;
+    array_add(&l->describing, Pending_Description{t, global});
+    if (outermost) {
+        while (l->described < l->describing.count) {
+            Pending_Description next = l->describing[l->described];
+            describe_type(l, next.global, next.type);
+            l->described++;
+        }
+        l->describing.count = 0;
+        l->described = 0;
+    }
+    return global;
+}
+
+// A view of descriptions' addresses, written at `offset` in a description's
+// `bytes`: its count, and a relocation to the read-only array of them, the
+// global `name` (a procedure type's parameters or results), made here. The
+// descriptions are asked for in order (type_info_global), which only
+// queues the new ones. No types: the empty view, zeros, and no array.
+static void describe_types(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, s64 offset, String name,
+                           Type **types, s64 count) {
+    if (count == 0) return;
+    Array<Ir_Reloc> addresses = {};
+    for (s64 i = 0; i < count; i++) array_add(&addresses, Ir_Reloc{i * 8, type_info_global(l, types[i]), false});
+    u8 *zeros = (u8 *)arena_alloc(l->arena, (u64)count * 8, 1);  // zeroed: every byte an address
+    s32 array = add_type_info_global(l, name, count * 8, {zeros, count * 8}, addresses);
+    write_bits(bytes + offset + VIEW_COUNT_OFFSET, (u64)count, 8);
+    array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, array, false});
+}
+
+// A struct's members, written at TYPE_INFO_MEMBERS_OFFSET in its
+// description's `bytes`: a view of a read-only array of its own,
+// type_info.N.members (`name`), a Type_Info_Struct_Member per field, in
+// order: the field's name (its bytes a str.N of their own), its type's
+// description and its offset. No fields: the empty view, zeros.
+static void describe_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, String name, Type *t) {
+    s64 count = t->fields.count;
+    if (count == 0) return;
+    s64 size = count * TYPE_INFO_MEMBER_SIZE;
+    u8 *members = (u8 *)arena_alloc(l->arena, (u64)size, 1);  // zeroed
+    Array<Ir_Reloc> member_relocs = {};
+    for (s64 i = 0; i < count; i++) {
+        Type_Field *field = &t->fields[i];
+        s64 at = i * TYPE_INFO_MEMBER_SIZE;
+        s32 field_name = add_bytes(l, field->name);
+        write_bits(members + at + TYPE_INFO_MEMBER_NAME_OFFSET + VIEW_COUNT_OFFSET, (u64)field->name.count, 8);
+        array_add(&member_relocs, Ir_Reloc{at + TYPE_INFO_MEMBER_NAME_OFFSET + VIEW_DATA_OFFSET, field_name, false});
+        array_add(&member_relocs, Ir_Reloc{at + TYPE_INFO_MEMBER_TYPE_OFFSET, type_info_global(l, field->type), false});
+        write_bits(members + at + TYPE_INFO_MEMBER_OFFSET_OFFSET, (u64)field->offset, 8);
+    }
+    s32 array = add_type_info_global(l, name, size, {members, size}, member_relocs);
+    write_bits(bytes + TYPE_INFO_MEMBERS_OFFSET + VIEW_COUNT_OFFSET, (u64)count, 8);
+    array_add(relocs, Ir_Reloc{TYPE_INFO_MEMBERS_OFFSET + VIEW_DATA_OFFSET, array, false});
+}
+
+// Writes the description `global` of type t: its kind's tag, t's size and
+// alignment (void's 0 and 1), and what its kind adds: an integer's sign; a
+// pointer's pointee's description (a *void's, void's); an array's or a
+// view's element's description, its kind and its count (-1 for a view); a
+// struct's name and members; a procedure type's parameters' and results'
+// descriptions (a ..T parameter's []T), #c_call and whether its last
+// parameter is a ..T. Its names' str.N and its arrays' globals are made
+// first; the descriptions it points at are asked for through
+// type_info_global, which only queues them. The relocations go in
+// increasing offset, as the backend wants. The bytes are put in the global
+// last, through its index: the globals array may move while they're made.
+static void describe_type(Lowering *l, s32 global, Type *t) {
+    String name = l->module->globals[global].name;
+    s64 size = l->module->globals[global].size;
+    u8 *bytes = (u8 *)arena_alloc(l->arena, (u64)size, 1);  // zeroed
+    Array<Ir_Reloc> relocs = {};
+    write_bits(bytes + TYPE_INFO_TAG_OFFSET, (u64)type_info_tag(t), 8);
+    write_bits(bytes + TYPE_INFO_SIZE_OFFSET, (u64)t->size, 8);
+    write_bits(bytes + TYPE_INFO_ALIGNMENT_OFFSET, (u64)t->align, 8);
+    switch (t->kind) {
+    case TYPE_INTEGER: bytes[TYPE_INFO_SIGNED_OFFSET] = t->is_signed; break;
+    case TYPE_POINTER:
+        array_add(&relocs, Ir_Reloc{TYPE_INFO_POINTER_TO_OFFSET, type_info_global(l, t->pointee), false});
+        break;
+    case TYPE_ARRAY:
+    case TYPE_VIEW:
+        array_add(&relocs, Ir_Reloc{TYPE_INFO_ELEMENT_OFFSET, type_info_global(l, t->element), false});
+        write_bits(bytes + TYPE_INFO_ARRAY_KIND_OFFSET, (u64)(t->kind == TYPE_ARRAY ? ARRAY_FIXED : ARRAY_VIEW), 8);
+        write_bits(bytes + TYPE_INFO_COUNT_OFFSET, (u64)(t->kind == TYPE_ARRAY ? t->count : -1), 8);
+        break;
+    case TYPE_STRUCT:
+        write_bits(bytes + TYPE_INFO_NAME_OFFSET + VIEW_COUNT_OFFSET, (u64)t->name.count, 8);
+        array_add(&relocs, Ir_Reloc{TYPE_INFO_NAME_OFFSET + VIEW_DATA_OFFSET, add_bytes(l, t->name), false});
+        describe_members(l, bytes, &relocs, string_printf(l->arena, STR_FMT ".members", STR_ARG(name)), t);
+        break;
+    case TYPE_PROC:
+        describe_types(l, bytes, &relocs, TYPE_INFO_PARAMETERS_OFFSET,
+                       string_printf(l->arena, STR_FMT ".parameters", STR_ARG(name)), t->params, t->param_count);
+        describe_types(l, bytes, &relocs, TYPE_INFO_RESULTS_OFFSET,
+                       string_printf(l->arena, STR_FMT ".results", STR_ARG(name)), t->results, t->result_count);
+        bytes[TYPE_INFO_IS_C_CALL_OFFSET] = t->is_c_call;
+        bytes[TYPE_INFO_IS_VARIADIC_OFFSET] = t->is_variadic;
+        break;
+    default: break;  // a plain Type_Info: a float, bool, string or void
+    }
+    Ir_Global *g = &l->module->globals[global];
+    g->bytes = {bytes, size};
+    g->relocs = relocs;
+}
+
 static s32 add_global_array(Lowering *l, Type *array, Ast *value, bool writable);
 
 // The struct or array literal holding the value of `value`, an aggregate's
@@ -2612,9 +2845,11 @@ static s32 string_copy_global(Lowering *l, Ast_String *literal) {
 // increasing order of offset, so the values are written in that order: an
 // array's in turn, and a struct's by its fields, in the order they are laid
 // out, not the order a literal with names gives them. A procedure's address
-// (procedure_address) is a relocation too, to the procedure. The checker
-// made sure every value is a constant, a string literal, a procedure,
-// constant data, a literal of them (check_global_value), or a #run's baked
+// (procedure_address) is a relocation too, to the procedure, and so is a
+// type's description's (type_info_address, spec 5.19), to its type_info.N
+// (type_info_global). The checker made sure every value is a constant, a
+// string literal, a procedure, a description's address, constant data, a
+// literal of them (check_global_value), or a #run's baked
 // value (run.cpp), which is made of the same: a view's is the array literal
 // of its elements, read here as a view's array value is.
 //
@@ -2636,6 +2871,13 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
         }
         write_bits(bytes + offset + VIEW_COUNT_OFFSET, (u64)literal->value.count, 8);
         array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, global, false});
+        return;
+    }
+    // A type's description's address (type_info(T), or a cast of it to
+    // another pointer), made the first time (type_info_global).
+    Ast_Type_Info *info = type_info_address(value);
+    if (info) {
+        array_add(relocs, Ir_Reloc{offset, type_info_global(l, info->described), false});
         return;
     }
     // A procedure's address (a procedure value, or a *void cast from one).
@@ -3104,18 +3346,20 @@ static void set_source(Lowering *l, s32 index, Ast_Proc *source) {
 // its own, and a string. A pointer holding a string literal's address is a
 // global of bytes too, 8 of them: an address the linker writes is a
 // relocation, which only a global of bytes has; and so is one holding a
-// procedure's address, a procedure value or a *void. A value that is
+// procedure's address, a procedure value or a *void, or a type's
+// description's (type_info(T), spec 5.19). A value that is
 // constant data, or holds some, is copied into the global's bytes:
 // `origin := ORIGIN;` is a variable of its own, and so is a #run's baked
 // value, its view's elements and its strings' bytes too (constant_bytes,
-// writable). The globals its value needs (str.N, array.N, string.N) come
-// before it.
+// writable). The globals its value needs (str.N, array.N, string.N,
+// type_info.N) come before it.
 static s32 lower_global(Lowering *l, Ast_Var *var) {
     Ir_Global g = {};
     g.name = var->name;
     g.rig_type = var->type;
     g.pos = var->pos;
-    bool address = var->value && (literal_address(var->value) || procedure_address(var->value));
+    bool address = var->value && (literal_address(var->value) || procedure_address(var->value) ||
+                                  type_info_address(var->value));
     if (type_is_aggregate(var->type) || address) {
         g.type = IR_VOID;
         g.has_layout = true;
@@ -3269,6 +3513,8 @@ static void release_lowering(Lowering *l) {
     table_free(&l->constant_globals);
     table_free(&l->constant_index);
     table_free(&l->used_foreign);
+    table_free(&l->type_infos);
+    array_free(&l->describing);
     array_free(&l->pending_constants);
     array_free(&l->locals);
     array_free(&l->loops);

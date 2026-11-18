@@ -5392,3 +5392,184 @@ TEST(a_variadic_struct_declared_later_builds) {
     CHECK(contains(g, "local 48 align 8\n"));
     arena_free(&a);
 }
+
+// Issue #153: type information (spec 3.16, 10.3).
+//
+// Each description is a read-only global, type_info.N, laid out as
+// Preload's struct for its kind (types.h's TYPE_INFO_* constants), its
+// pointers relocations. The bytes below are ir_print's, eight to a line:
+// each line one int, or one pointer, whose address is a relocation and so
+// zeros in the bytes.
+
+TEST(type_info_describes_an_int) {
+    // A Type_Info_Integer: the tag TYPE_INFO_INTEGER (0), int's size and
+    // alignment, then signed, true. type_info(int) is its address.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "main :: () {\n    t := type_info(int);\n}\n"));
+    CHECK(contains(ir, "const @type_info.0: 32 align 8 = \""
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    CHECK(contains(proc_ir(ir, "main"), "addr @type_info.0\n"));
+    arena_free(&a);
+}
+
+TEST(one_description_per_type) {
+    // A type described twice is described once: int's two uses share
+    // type_info.0, and float is float32, which shares type_info.2. s64 is a
+    // type of its own (spec 6.4), with a description of its own, the same
+    // bytes as int's. A float's is a plain Type_Info, 24 bytes.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "main :: () {\n"
+                                                    "    a := type_info(int);\n"
+                                                    "    b := type_info(int);\n"
+                                                    "    c := type_info(s64);\n"
+                                                    "    d := type_info(float);\n"
+                                                    "    e := type_info(float32);\n"
+                                                    "}\n"));
+    CHECK(contains(ir, "const @type_info.1: 32 align 8 = \""
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    CHECK(contains(ir, "const @type_info.2: 24 align 8 = \""
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\04\\00\\00\\00\\00\\00\\00\\00"
+                       "\\04\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    CHECK(!contains(ir, "@type_info.3"));
+    String main = proc_ir(ir, "main");
+    CHECK_EQ(count_of(main, "addr @type_info.0\n"), 2);
+    CHECK_EQ(count_of(main, "addr @type_info.2\n"), 2);
+    arena_free(&a);
+}
+
+TEST(only_used_types_are_described) {
+    // Only the types the program names get a description, and those their
+    // descriptions reach: Used, whose member next is a *Used, whose
+    // description points back at Used's (Review Focus 3). Unused, and
+    // Preload's own structs, get none. A struct's name and each member's are
+    // str.N globals of their own; its members are a read-only array of its
+    // own, type_info.0.members: each member's name, its type's description
+    // and its offset.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "Unused :: struct { a: u8; }\n"
+                                                    "Used :: struct { next: *Used; }\n"
+                                                    "main :: () {\n"
+                                                    "    t := type_info(Used);\n"
+                                                    "}\n"));
+    CHECK(contains(ir, "const @type_info.0: 56 align 8 = \""
+                       "\\07\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\04\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
+    CHECK(contains(ir, " reloc 48 @type_info.0.members\n"));
+    CHECK(contains(ir, "const @type_info.0.members: 32 align 8 = \"\\04"));
+    CHECK(contains(ir, " reloc 16 @type_info.1\n"));
+    CHECK(contains(ir, "const @type_info.1: 32 align 8 = \""
+                       "\\04\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 24 @type_info.0\n"));
+    CHECK(contains(ir, "= \"Used\\00\"\n"));
+    CHECK(contains(ir, "= \"next\\00\"\n"));
+    CHECK(!contains(ir, "Unused"));
+    CHECK(!contains(ir, "@type_info.2"));
+    arena_free(&a);
+}
+
+TEST(a_procedure_types_description) {
+    // A procedure type's parameters and results are read-only arrays of
+    // descriptions' addresses, type_info.N.parameters and .results, a type
+    // met twice pointing at one description (Review Focus 3). A ..u8
+    // parameter is its []u8, with is_variadic set (the byte at 57); the
+    // view's description is made after the procedure type's, and u8's after
+    // it, in the order the queue fills them (first in, first out).
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "main :: () {\n"
+                                                    "    t := type_info((int, int) -> int);\n"
+                                                    "    u := type_info((rest: ..u8) -> bool);\n"
+                                                    "}\n"));
+    CHECK(contains(ir, "const @type_info.0: 64 align 8 = \""
+                       "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\02\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\""
+                       " reloc 32 @type_info.0.parameters reloc 48 @type_info.0.results\n"));
+    CHECK(contains(ir, "const @type_info.0.parameters: 16 align 8 = zero reloc 0 @type_info.1 reloc 8 @type_info.1\n"));
+    CHECK(contains(ir, "const @type_info.0.results: 8 align 8 = zero reloc 0 @type_info.1\n"));
+    CHECK(contains(ir, "const @type_info.2: 64 align 8 = \""
+                       "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\01\\00\\00\\00\\00\\00\\00\""
+                       " reloc 32 @type_info.2.parameters reloc 48 @type_info.2.results\n"));
+    CHECK(contains(ir, "const @type_info.3: 48 align 8 = \""
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\10\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\FF\\FF\\FF\\FF\\FF\\FF\\FF\\FF\" reloc 24 @type_info.5\n"));
+    arena_free(&a);
+}
+
+TEST(arrays_and_views_are_described) {
+    // An array and a view share Type_Info_Array: its element's
+    // description, then array_kind (ARRAY_FIXED, 0, or ARRAY_VIEW, 1) and
+    // count, N for an array and -1 for a view. [3]u16 is 6 bytes aligned to
+    // 2; []u16 is 16 aligned to 8, as any view.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "main :: () {\n"
+                                                    "    a := type_info([3]u16);\n"
+                                                    "    v := type_info([]u16);\n"
+                                                    "}\n"));
+    CHECK(contains(ir, "const @type_info.0: 48 align 8 = \""
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\06\\00\\00\\00\\00\\00\\00\\00"
+                       "\\02\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\03\\00\\00\\00\\00\\00\\00\\00\" reloc 24 @type_info.1\n"));
+    CHECK(contains(ir, "const @type_info.1: 32 align 8 = \""
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\02\\00\\00\\00\\00\\00\\00\\00"
+                       "\\02\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    CHECK(contains(ir, "const @type_info.2: 48 align 8 = \""
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\10\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\FF\\FF\\FF\\FF\\FF\\FF\\FF\\FF\" reloc 24 @type_info.1\n"));
+    arena_free(&a);
+}
+
+TEST(a_global_holds_a_descriptions_address) {
+    // A global holding a description's address is 8 bytes of its own, the
+    // address a relocation the linker writes, as a string literal's is: as
+    // it is, in a cast literal's field (literal_of finds the literal) and
+    // as a field read of a literal (type_info_address finds the node).
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "info := type_info(int);\nmain :: () { }\n"));
+    CHECK(contains(ir, "global @info: 8 align 8 = zero reloc 0 @type_info.0\n"));
+    ir = ir_print(&a, lower_with_preload(&a, "Holder :: struct { t: *Type_Info; }\n"
+                                             "h1 := cast(Holder) Holder.{type_info(bool)};\n"
+                                             "h2 := Holder.{type_info(bool)}.t;\n"
+                                             "main :: () { }\n"));
+    CHECK(contains(ir, "global @h1: 8 align 8 = zero reloc 0 @type_info."));
+    CHECK(contains(ir, "global @h2: 8 align 8 = zero reloc 0 @type_info."));
+    arena_free(&a);
+}
