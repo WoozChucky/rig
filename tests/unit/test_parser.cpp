@@ -3779,5 +3779,14 @@ TEST(misplaced_default_values) {
     CHECK_STR(errors, "1:9: a parameter needs its type, as in n: int = 0\n");
     parse_src(&a, "g :: (a: int, n := 0) { }\nmain :: () { }\n", &errors);
     CHECK_STR(errors, "1:17: a parameter needs its type, as in n: int = 0\n");
+    // So a first parameter written `n :=` opens a list for the recovery
+    // too, and the list's next line isn't a global.
+    CHECK_STR(parse_src(&a, "f :: (n := 0,\nm: int) { }\nmain :: () { }\n", &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:9: a parameter needs its type, as in n: int = 0\n");
+    // A default value that fails gives the declaration up, as a type does.
+    CHECK_STR(parse_src(&a, "f :: (n: int = ) { }\nmain :: () { }\n", &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:16: expected an expression, found ')'\n");
     arena_free(&a);
 }
