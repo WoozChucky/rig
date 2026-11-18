@@ -547,9 +547,10 @@
 //   globals and constants it names, and the struct types of what it
 //   reaches. A type it describes (type_info(T), a value converted to Any)
 //   has every struct its description reaches laid out, behind pointers
-//   too, and their late fields made: the interpreter makes the
-//   descriptions as it runs, so a #run describes a struct declared after
-//   it as compiled code does (spec 3.16, 10.8). An error anywhere there
+//   too, and their late fields made: the #run's lowering writes the
+//   descriptions, which the interpreter then holds in its own memory, so a
+//   #run describes a struct declared after it as compiled code does (spec
+//   3.16, 10.8). An error anywhere there
 //   stops it, saying nothing new: the error was said where it is. The
 //   #run keeps its type but has no value, and what needs that value (an
 //   array's count, a constant, a global) says nothing more either. Each

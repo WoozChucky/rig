@@ -7734,12 +7734,69 @@ TEST(a_run_describes_types_declared_after_it) {
     arena_free(&a);
 }
 
+TEST(each_path_of_a_description_lays_out_what_it_reaches) {
+    // Each #run here is the first to describe the structs it reaches, all
+    // declared after it, so only its own walk lays them out: an Any of a
+    // struct reaching another through a pointer (ANY), an Any of a pointer
+    // (POINTER), an Any of a procedure taking a pointer (PROC), and
+    // descriptions reaching a struct only through a procedure type's
+    // parameter (PARAM) or a view's element (VIEW). Each reads that
+    // struct's size through the description.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "ANY :: #run pointee_size(Late.{});\n"
+                                 "POINTER :: #run pointer_size(cast(*Third) null);\n"
+                                 "PROC :: #run param_pointee_size(takes);\n"
+                                 "PARAM :: #run param_size(type_info((P) -> int));\n"
+                                 "VIEW :: #run element_size(type_info([]Q));\n"
+                                 "pointee_size :: (a: Any) -> int {\n"
+                                 "    s := cast(*Type_Info_Struct) a.type;\n"
+                                 "    return (cast(*Type_Info_Pointer) s.members[0].type).pointer_to.size;\n"
+                                 "}\n"
+                                 "pointer_size :: (a: Any) -> int { return (cast(*Type_Info_Pointer) a.type).pointer_to.size; }\n"
+                                 "param_pointee_size :: (a: Any) -> int {\n"
+                                 "    p := cast(*Type_Info_Procedure) a.type;\n"
+                                 "    return (cast(*Type_Info_Pointer) p.parameter_types[0]).pointer_to.size;\n"
+                                 "}\n"
+                                 "param_size :: (t: *Type_Info) -> int {\n"
+                                 "    return (cast(*Type_Info_Procedure) t).parameter_types[0].size;\n"
+                                 "}\n"
+                                 "element_size :: (t: *Type_Info) -> int { return (cast(*Type_Info_Array) t).element_type.size; }\n"
+                                 "takes :: (x: *Other) -> int { return 0; }\n"
+                                 "Late :: struct { next: *Later; }\n"
+                                 "Later :: struct { a: u8; b: int; }\n"
+                                 "Third :: struct { a: int; b: int; c: int; }\n"
+                                 "Other :: struct { a: int; }\n"
+                                 "P :: struct { a: int; b: int; }\n"
+                                 "Q :: struct { a: int; b: int; c: int; }\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    const char *names[] = {"ANY", "POINTER", "PROC", "PARAM", "VIEW"};
+    s64 values[] = {16, 24, 8, 16, 24};
+    for (s64 i = 0; i < 5; i++) {
+        Ast *k = top_level_named(tree, names[i]);
+        CHECK_EQ(k->kind, AST_CONST);
+        CHECK(k->is_constant);
+        CHECK_EQ(k->constant, values[i]);
+    }
+    arena_free(&a);
+}
+
 TEST(describing_a_struct_being_laid_out_is_a_circle) {
     // Describing *S describes S, which needs S's layout: in one of S's own
-    // counts that's a circle, said at the struct, as reaching S by value is.
+    // counts that's a circle, said at the struct, as reaching S by value is,
+    // whether type_info describes it or a conversion to Any does.
     Arena a = arena_make();
     CHECK_STR(check_with_preload(&a, "S :: struct { a: [#run one(type_info(*S))]u8; }\n"
                                      "one :: (t: *Type_Info) -> int { return 1; }\n"
+                                     "main :: () { }\n"),
+              "1:1: 'S' is defined in terms of itself\n");
+    arena_free(&a);
+    a = arena_make();
+    CHECK_STR(check_with_preload(&a, "S :: struct { a: [#run one(cast(*S) null)]u8; }\n"
+                                     "one :: (a: Any) -> int { return 1; }\n"
                                      "main :: () { }\n"),
               "1:1: 'S' is defined in terms of itself\n");
     arena_free(&a);

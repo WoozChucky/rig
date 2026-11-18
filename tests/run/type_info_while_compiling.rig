@@ -2,9 +2,11 @@
 // interpreter makes the descriptions in its own memory, laid out as the
 // program's, once per type, so code reading them runs in a #run as it
 // runs compiled. Late and Later are declared after the #runs that
-// describe them, Later reached only through Late's pointer.
+// describe them, Later reached only through Late's pointer. The first
+// #run describes them by converting Late.{} to Any, before any type_info.
 printf :: (format: *u8, ..) -> s32 #foreign libc;
 
+ANY_LATER_SIZE :: #run any_pointee_size(Late.{}, 1);
 FIELDS :: #run field_count(type_info(Late));
 LATER_SIZE :: #run pointee_size(type_info(Late), 1);
 SAME :: #run (type_info(Late) == type_info(Late));
@@ -19,19 +21,24 @@ pointee_size :: (t: *Type_Info, index: int) -> int {
     return (cast(*Type_Info_Pointer) member.type).pointer_to.size;
 }
 
+// The same, of the struct an Any holds.
+any_pointee_size :: (a: Any, index: int) -> int { return pointee_size(a.type, index); }
+
 tag_of :: (a: Any) -> int { return a.type.tag; }
 
 // The same, worked out in a run of its own and printed while compiling.
 #run {
-    printf("while compiling: %lld %lld %d %d %lld\n", field_count(type_info(Late)), pointee_size(type_info(Late), 1),
-           type_info(Late) == type_info(Late), type_info(int) == type_info(s64), tag_of(Late.{}));
+    printf("while compiling: %lld %lld %lld %d %d %lld\n", any_pointee_size(Late.{}, 1), field_count(type_info(Late)),
+           pointee_size(type_info(Late), 1), type_info(Late) == type_info(Late), type_info(int) == type_info(s64),
+           tag_of(Late.{}));
 }
 
 Late :: struct { a: int; next: *Later; }
 Later :: struct { b: u8; back: *Late; }
 
 main :: () {
-    printf("%lld %lld %d %d %lld\n", FIELDS, LATER_SIZE, SAME, DIFFERENT, TAG);
-    printf("%lld %lld %d %d %lld\n", field_count(type_info(Late)), pointee_size(type_info(Late), 1),
-           type_info(Late) == type_info(Late), type_info(int) == type_info(s64), tag_of(Late.{}));
+    printf("%lld %lld %lld %d %d %lld\n", ANY_LATER_SIZE, FIELDS, LATER_SIZE, SAME, DIFFERENT, TAG);
+    printf("%lld %lld %lld %d %d %lld\n", any_pointee_size(Late.{}, 1), field_count(type_info(Late)),
+           pointee_size(type_info(Late), 1), type_info(Late) == type_info(Late), type_info(int) == type_info(s64),
+           tag_of(Late.{}));
 }

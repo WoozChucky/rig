@@ -173,7 +173,8 @@ static bool walk_proc(Reach *r, Ast_Proc *proc) {
 // program starts; #run can't call it", at the #run. A #run is walked
 // through its value: one with none failed, or reached errors, said already.
 // type_info(T) needs T's description, and a value converted to Any its
-// type's (Ast.to_any): the interpreter makes them as it runs, so what they
+// type's (Ast.to_any): lowering the #run's code writes those descriptions
+// (lower.cpp's describe_type), from every type they reach, so what they
 // reach is walked for them (reach_described).
 static bool walk_expression(Reach *r, Ast *e) {
     if (!e->type) return false;
@@ -349,17 +350,17 @@ static bool walk_type(Reach *r, Type *t) {
 
 // A type described (spec 3.16): its description holds its size and
 // alignment, a struct's its members' names, types and offsets, and points
-// at the descriptions of the types it's made of, which the interpreter
-// makes too (lower.cpp's describe_type). So every struct it reaches, behind
-// a pointer too, and through arrays, views and procedure types' parameters
-// and results, is laid out (check_finished_layout) and has its late fields
-// made (check_late_field), as walk_type does for a struct held by value: a
-// #run may describe a struct declared after it, reached only through
-// another's pointer, before resolve_late_fields. Each type is walked once,
-// so a struct that points at itself ends. False when a struct has no
-// layout, or is still being laid out (describing *S in one of S's counts
-// is a circle, as reaching S by value is), or a field has no type: errors,
-// said.
+// at the descriptions of the types it's made of, which lowering makes too
+// (lower.cpp's describe_type), before the interpreter maps them into its
+// own memory. So every struct it reaches, behind a pointer too, and
+// through arrays, views and procedure types' parameters and results, is
+// laid out (check_finished_layout) and has its late fields made
+// (check_late_field), as walk_type does for a struct held by value: a #run
+// may describe a struct declared after it, reached only through another's
+// pointer, before resolve_late_fields. Each type is walked once, so a
+// struct that points at itself ends. False when a struct has no layout, or
+// is still being laid out (describing *S in one of S's counts is a circle,
+// as reaching S by value is), or a field has no type: errors, said.
 static bool walk_described(Reach *r, Type *t) {
     switch (t->kind) {
     case TYPE_POINTER: reach_described(r, t->pointee); return true;
