@@ -335,12 +335,12 @@
 //   A field that holds a struct with no type (one in a circle, or too
 //   big), in any way, in a view or an array of pointers too, has none
 //   either, so its uses say nothing more.
-// - a[i] is an element of an array, a view or a string (below), or of what
-//   a pointer points at (C's p[i], unchecked); i is any integer, read by its
-//   sign, an untyped one an int. Otherwise: "'[]' needs an array, a view, a
-//   string or a pointer, not 'int'", "can't index a '*void'; cast it to a
-//   pointer to something first", at the '['; "an index must be an integer,
-//   not 'bool'", at i. A constant i of an array is checked here: "index 3 is
+// - a[i] is an element of an array, a view, a string or a resizable array
+//   (below), or of what a pointer points at (C's p[i], unchecked); i is any
+//   integer, read by its sign, an untyped one an int. Otherwise: "'[]' needs
+//   an array, a view, a string or a pointer, not 'int'", "can't index a
+//   '*void'; cast it to a pointer to something first", at the '['; "an
+//   index must be an integer, not 'bool'", at i. A constant i of an array is checked here: "index 3 is
 //   out of bounds for '[3]int'", at i; so is one of a string that is
 //   constant data (below), against its bytes, none when a literal leaves it
 //   out: "index 5 is out of bounds for a string of 3 bytes". Every other
@@ -369,9 +369,9 @@
 //   address stays data, read where it's used.
 // - [N]T converts implicitly to []T, a view of its N elements, wherever a
 //   value converts (a declaration, an assignment, an argument, a return, a
-//   cast); nothing else converts to or from either but its own type, and
-//   either converts to Any (Type information and Any, below). No
-//   operator takes them ("'==' needs numbers, bools, pointers, procedure
+//   cast); nothing else converts to or from either but its own type (and a
+//   [..]T to []T: Resizable arrays, below), and either converts to Any
+//   (Type information and Any, below). No operator takes them ("'==' needs numbers, bools, pointers, procedure
 //   values or strings, not '[3]int'").
 // - T.[a, b] is a [2]T, each value converting to T; .[a, b] takes its type
 //   where it's used, as .{...} does: an array type, whose count it must
@@ -380,11 +380,11 @@
 //   Anything else: "a '.[' literal needs an array or a view type, not
 //   'int'"; with no type: "this literal's type isn't known; write it before
 //   the '.', as in int.[1, 2]".
-// - for a goes over an array, a view or a string a, worked out once: it is
-//   each element, a copy, it_index its index. for * a makes it a pointer to
-//   each, which needs a's elements to have an address, as *a[i] does:
-//   "can't take the address of 'a': it's a parameter", "only a variable, a
-//   field or an element has an address". On anything else: "'for' needs a
+// - for a goes over an array, a view, a string or a resizable array a
+//   (below), worked out once: it is each element, a copy, it_index its
+//   index. for * a makes it a pointer to each, which needs a's elements to
+//   have an address, as *a[i] does: "can't take the address of 'a': it's a
+//   parameter", "only a variable, a field or an element has an address". On anything else: "'for' needs a
 //   range, an array, a view or a string, not 'int'"; a range's numbers have
 //   none: "'for *' needs an array, a view or a string, not a range".
 // - A foreign procedure takes no array or view: "a foreign procedure can't
@@ -847,9 +847,9 @@
 //   would. Nothing converts to a [..]T but a [..]T: "a value of type
 //   '[]int' doesn't convert to '[..]int' implicitly", "can't cast '[]int'
 //   to '[..]int'", and a '.[' literal makes none ("a '.[' literal needs an
-//   array or a view type, not '[..]int'"). A *[..]T is no *[]T. Being an
-//   aggregate, == doesn't compare one, and C takes none ("a foreign
-//   procedure can't take a '[..]int'; pass its .data").
+//   array or a view type, not '[..]int'"). A *[..]T is no *[]T. == doesn't
+//   compare one (it compares no aggregate but a string), and C takes none
+//   ("a foreign procedure can't take a '[..]int'; pass its .data").
 // - Its members are .count (an int) and .data (a *T), a view's, then
 //   .allocated (an int) and .allocator (Preload's Allocator, the type of
 //   Resizable_Array's last field): each a place when the array is one, so

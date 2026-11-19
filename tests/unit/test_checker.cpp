@@ -8841,17 +8841,43 @@ TEST(resizable_array_converts_to_its_view) {
 TEST(resizable_array_parameter) {
     // A parameter is read-only, as a view parameter is: its members can't
     // be assigned, nor its address taken, but its elements can, lying
-    // elsewhere.
+    // elsewhere, so 'for *' goes over them too.
     Arena a = arena_make();
     CHECK_STR(check_with_preload(&a,
                                  "f :: (a: [..]int) {\n"
                                  "    a[0] = 1;\n"
+                                 "    for * a { it.* = 1; }\n"
+                                 "    q := *a[0];\n"
+                                 "    d := a.data;\n"
                                  "    a.count = 2;\n"
                                  "    p := *a;\n"
                                  "}\n"
                                  "main :: () { }\n"),
-              "3:5: can't assign to 'a': it's a parameter\n"
-              "4:11: can't take the address of 'a': it's a parameter\n");
+              "6:5: can't assign to 'a': it's a parameter\n"
+              "7:11: can't take the address of 'a': it's a parameter\n");
+    arena_free(&a);
+}
+
+TEST(resizable_array_members_are_its_own) {
+    // Only a [..]T has .allocated and .allocator: a view, a string and an
+    // array don't, and a pointer to a view gives a pointer's message, not
+    // the one that says to write .* first.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "main :: () {\n"
+                                 "    v : []int;\n"
+                                 "    p := *v;\n"
+                                 "    s := \"hi\";\n"
+                                 "    x : [3]int;\n"
+                                 "    b := v.allocated;\n"
+                                 "    c := p.allocated;\n"
+                                 "    d := s.allocator;\n"
+                                 "    e := x.allocated;\n"
+                                 "}\n"),
+              "6:12: '[]int' has no field 'allocated'\n"
+              "7:12: '.allocated' needs a struct or a pointer to one, not '*[]int'\n"
+              "8:12: 'string' has no field 'allocator'\n"
+              "9:12: '[3]int' has no field 'allocated'\n");
     arena_free(&a);
 }
 

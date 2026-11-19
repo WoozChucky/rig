@@ -19,12 +19,15 @@ tests/errors/resizable_array_refused.rig:14:19: error: a '.[' literal needs an a
 tests/errors/resizable_array_refused.rig:16:9: error: a value of type '[]int' doesn't convert to '[..]int' implicitly
         a = v;
             ^
-tests/errors/resizable_array_refused.rig:17:10: error: can't cast '[]int' to '[..]int'
+tests/errors/resizable_array_refused.rig:18:9: error: a value of type '[3]int' doesn't convert to '[..]int' implicitly
+        a = y;
+            ^
+tests/errors/resizable_array_refused.rig:19:10: error: can't cast '[]int' to '[..]int'
         w := cast([..]int) v;
              ^
-tests/errors/resizable_array_refused.rig:18:15: error: '==' needs numbers, bools, pointers, procedure values or strings, not '[..]int'
+tests/errors/resizable_array_refused.rig:20:15: error: '==' needs numbers, bools, pointers, procedure values or strings, not '[..]int'
         same := a == a;
                   ^
-tests/errors/resizable_array_refused.rig:20:9: error: '..' spreads a '[..]u8' into 'values', which needs a '[]int'
+tests/errors/resizable_array_refused.rig:22:9: error: '..' spreads a '[..]u8' into 'values', which needs a '[]int'
         all(..bytes);
             ^

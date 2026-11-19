@@ -1,6 +1,6 @@
 // What a resizable array isn't (issue #158, spec 3.17): its members are
 // count, data, allocated and allocator, not reached through a pointer; a
-// literal, a view or a cast doesn't make one; == doesn't compare one; a
+// literal, a view, an array or a cast doesn't make one; == doesn't compare one; a
 // spread of one passes a view of its own elements; C takes none.
 takes :: (a: [..]int) #foreign libc "puts";
 all :: (values: ..int) { }
@@ -14,6 +14,8 @@ main :: () {
     b : [..]int = .[1, 2];
     v : []int;
     a = v;
+    y : [3]int;
+    a = y;
     w := cast([..]int) v;
     same := a == a;
     bytes : [..]u8;

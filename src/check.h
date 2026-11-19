@@ -205,8 +205,9 @@ void report_no_conversion(Checker *c, Ast *value, Type *to);
 
 // Whether a value of type `from`, not an untyped constant, converts
 // implicitly to `to`: the same type, an integer that widens, a float32 to a
-// float64 (spec 6.4), a *void to or from any pointer, or [N]T to []T (spec
-// 6.5). True when either is unknown (null): the error was reported already.
+// float64 (spec 6.4), a *void to or from any pointer, or [N]T or [..]T to
+// []T (spec 6.5, 3.17). True when either is unknown (null): the error was
+// reported already.
 bool type_converts(Type *from, Type *to);
 
 // An untyped constant that meets no type becomes an int (x := 5;), or a
