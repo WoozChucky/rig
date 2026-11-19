@@ -2882,3 +2882,33 @@ TEST(a_resizable_arrays_debug_type) {
     }
     arena_free(&a);
 }
+
+TEST(a_resizable_array_of_its_own_struct_debug_type) {
+    // A struct holding a resizable array of itself is made once, as one
+    // holding a view of itself is (debug_struct): the array's data member
+    // points at the struct's own node.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a,
+                                      "Tree :: struct { value: int; children: [..]Tree; }\n"
+                                      "main :: () { t : Tree; }\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(count_of(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Tree\"") == 1);
+        String tree = defined_node(struct_line(&a, text, "Tree"));
+        String array = defined_node(struct_line(&a, text, "[..]Tree"));
+        String to_tree = pointer_node(&a, text, tree);
+        CHECK(tree.count > 0 && array.count > 0 && to_tree.count > 0);
+        String data = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                    "!DIDerivedType(tag: DW_TAG_member, name: "
+                                                                    "\"data\", scope: " STR_FMT ",",
+                                                                    STR_ARG(array))));
+        CHECK(string_eq(attached(&a, data, "baseType:"), to_tree));
+        String children = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                        "!DIDerivedType(tag: DW_TAG_member, name: "
+                                                                        "\"children\", scope: " STR_FMT ",",
+                                                                        STR_ARG(tree))));
+        CHECK(string_eq(attached(&a, children, "baseType:"), array));
+        CHECK(contains(children, "size: 320, offset: 64)"));
+    }
+    arena_free(&a);
+}

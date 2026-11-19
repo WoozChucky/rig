@@ -28,6 +28,8 @@
 //   int: an s32 item and index are widened, an untyped 2 becomes a
 //   float64, a [2]int and a [..]int become []int views, and an int and a
 //   string become Anys.
+// - tree: a struct holding a resizable array of its own type, its
+//   children's arrays grown through its own, summed and printed whole.
 // - free, again: array_free gives the memory back and empties the array,
 //   which grows again from the allocator it kept.
 // - constant, globals: a constant whose struct leaves its [..]int field
@@ -37,6 +39,21 @@
 #import "Basic";
 
 Point :: struct { x: int; y: int; }
+
+Node :: struct { v: int; kids: [..]Node; }
+
+// The sum of n's value and its descendants'.
+tree_sum :: (n: *Node) -> int {
+    sum := n.v;
+    for * n.kids { sum += tree_sum(it); }
+    return sum;
+}
+
+// Frees the arrays of n and its descendants.
+free_tree :: (n: *Node) {
+    for * n.kids { free_tree(it); }
+    array_free(*n.kids);
+}
 
 Holder :: struct { items: [..]int; n: int; }
 H :: Holder.{n = 2};
@@ -166,15 +183,28 @@ main :: () {
     views : [..][]int;
     array_add(*views, fixed);
     array_add(*views, nine);
+    // Each Any points at a variable, which lives past the print: one of a
+    // value that isn't a place points at a temporary that ends with its
+    // statement (spec 3.16).
+    five := 5;
+    text := "x";
     anys : [..]Any;
-    array_add(*anys, 5);
-    array_add(*anys, "x");
+    array_add(*anys, five);
+    array_add(*anys, text);
     print("converts {} {} {} {} {}\n", c, f, views, anys[0], anys[1]);
     array_free(*c);
     array_free(*f);
     array_free(*nine);
     array_free(*views);
     array_free(*anys);
+
+    root := Node.{v = 1};
+    array_add(*root.kids, Node.{v = 10});
+    array_add(*root.kids, Node.{v = 20});
+    array_add(*root.kids[1].kids, Node.{v = 100});
+    array_add(*root.kids, Node.{v = 30});
+    print("tree {} {}\n", tree_sum(*root), root);
+    free_tree(*root);
 
     array_free(*n);
     print("free {} {} {}\n", n.count, n.allocated, n.data == null);

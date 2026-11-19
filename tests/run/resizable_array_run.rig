@@ -42,9 +42,10 @@ counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: 
 
 // The bytes array_reserve asks for room for two Nodes, 32. The array is a
 // zeroed [..]Node reached only through pointers to its bytes, so nothing
-// in the run holds a Node by value.
+// in the run holds a Node by value; they are ints, so the pointers are
+// aligned to 8, as the array's are.
 reserved :: () -> int {
-    bytes : [40]u8;
+    bytes : [5]int;
     nodes := cast(*[..]Node) *bytes[0];
     array := cast(*Resizable_Array) *bytes[0];
     array.allocator = Allocator.{counting_proc, null};

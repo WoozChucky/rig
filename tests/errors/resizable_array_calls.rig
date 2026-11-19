@@ -1,10 +1,13 @@
 // A built-in procedure of the resizable arrays, called wrong (issue #158,
-// spec 3.17): its count, its array, its item, its result, a spread, a
+// spec 3.17): its count (too few, too many), its array (typed, untyped),
+// its item, its result, a spread, a
 // parameter's array, a #c_call body, a top-level declaration of its name.
 main :: () {
     a : [..]int;
     array_add(*a);
     array_add(a, 1);
+    array_free(*a, 1);
+    array_add(5, 1);
     v : []int;
     array_free(*v);
     array_add(*a, "one");
