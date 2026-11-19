@@ -1,0 +1,5 @@
+// A resizable array's type (issue #158, spec 3.17): [..]T, any T a view's
+// elements may be, so not void.
+a : [..]void;
+b : [..]Nope;
+main :: () { }

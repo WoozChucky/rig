@@ -820,6 +820,23 @@
 //   'int' doesn't convert to 'Any' implicitly", at the target, as for any
 //   other type a result doesn't convert to.
 //
+// Resizable arrays (issue #158, spec 3.17).
+// - [..]T is a type of its own, made once per T (type_resizable_of), so two
+//   are the same type when their T's are: a view's count and data, then
+//   allocated, an int, and the allocator its memory came from. 40 bytes,
+//   aligned to 8, an aggregate.
+// - Its T is any type a view's elements may be, so not void ("'void' is
+//   only a pointer's target, as in *void", at it). The elements lie
+//   elsewhere, so a struct may hold a [..]T of itself (Node :: struct {
+//   kids: [..]Node; }): such a field is a late field, as a view's is, 40
+//   bytes at the next multiple of 8.
+// - The checker finds Preload's struct Resizable_Array by name at the top
+//   level, in a module's file, as Context, and keeps it on the tree
+//   (Ast_File.resizable_array_type): the layout, untyped, whose last field
+//   is the allocator's type. Without Preload, [..]T is "a resizable array
+//   needs Preload's 'Resizable_Array', which the program doesn't have", at
+//   its '['.
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - A string after the library is the C function's name (issue #135),

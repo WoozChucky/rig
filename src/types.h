@@ -1,13 +1,13 @@
 // types.h: Rig's types, as the checker sees them.
 //
 // The integer types, the float types, bool, pointers, structs, arrays,
-// views, procedure types, string and void, and the types of untyped integer
-// and float constants, of null and of a literal without its type written
-// (.{1, 2}, .[1, 2]). Each type exists once, so two types are the same
-// exactly when their pointers are equal (type_pointer_to keeps one *T per T,
-// type_array_of and type_view_of one [N]T and one []T, and type_proc_of one
-// procedure type per signature; a struct's type is its declaration's,
-// Ast_Struct.declared).
+// views, resizable arrays, procedure types, string and void, and the types
+// of untyped integer and float constants, of null and of a literal without
+// its type written (.{1, 2}, .[1, 2]). Each type exists once, so two types
+// are the same exactly when their pointers are equal (type_pointer_to keeps
+// one *T per T, type_array_of, type_view_of and type_resizable_of one [N]T,
+// one []T and one [..]T, and type_proc_of one procedure type per signature;
+// a struct's type is its declaration's, Ast_Struct.declared).
 //
 // Every type has a size and an alignment, C's (spec 5): s8 u8 bool 1, s16
 // u16 2, s32 u32 float32 4, s64 u64 int float64, pointers and procedure
@@ -21,6 +21,8 @@
 // another: N times T's size, aligned as a T. A view, []T, is a struct of
 // its own, { count: int; data: *T; } (spec 6.5: Jai's order, count first):
 // 16 bytes, aligned to 8. A string is a view of bytes, laid out as []u8.
+// A resizable array, [..]T, starts as a view, then has allocated, an int,
+// and its allocator, Preload's Allocator (spec 3.17): 40 bytes, aligned to 8.
 
 #pragma once
 
@@ -39,6 +41,7 @@ enum Type_Kind : u8 {
                            // (type_untyped_literal)
     TYPE_ARRAY,    // [N]T: N T's one after another, N known while compiling
     TYPE_VIEW,     // []T: a count and a pointer to that many T's that lie somewhere else
+    TYPE_RESIZABLE,  // [..]T: a view's count and data, then allocated and allocator (spec 3.17)
     TYPE_PROC,     // (params) -> results: a procedure's type; a value of it is the address of a
                    // procedure's code, or null (spec 3's "Procedure types")
 };
@@ -63,12 +66,13 @@ struct Type {
     Type *alias_of;  // a second name for another type (float for float32): the type it names
     Array<Type_Field> fields;  // TYPE_STRUCT: in order, which is their order in memory
     Ast_Struct *decl;          // TYPE_STRUCT: its declaration
-    Arena *arena;    // where this type lives, and the pointer, array and view types made from it: a
+    Arena *arena;    // where this type lives, and the types made from it (pointers, arrays, ...): a
                      // struct's is the compilation's arena (and so theirs), freed with it; a
                      // built-in type's, null: it and the types made from it last the whole run
-    Type *element;   // TYPE_ARRAY, TYPE_VIEW: T in [N]T and []T; TYPE_STRING: u8
+    Type *element;   // TYPE_ARRAY, TYPE_VIEW, TYPE_RESIZABLE: T in [N]T, []T and [..]T; TYPE_STRING: u8
     s64 count;       // TYPE_ARRAY: N
     Type *view;      // the type []this, once asked for
+    Type *resizable;  // the type [..]this, once asked for
     Type *arrays;    // the array types of this element asked for so far ([N]this), linked
                      // through next_array: each N made once
     Type *next_array;
@@ -95,6 +99,16 @@ const s64 TYPE_MAX_SIZE = (s64)1 << 40;
 // int, then the pointer to the elements. A string's too.
 const s64 VIEW_COUNT_OFFSET = 0;
 const s64 VIEW_DATA_OFFSET = 8;
+
+// A resizable array's layout (spec 3.17, Jai's Resizable_Array): a view's
+// count and data where a view has them, then allocated, an int, how many
+// elements data's memory holds (the array owns that memory when it's above
+// 0), then the allocator it came from, Preload's Allocator: 40 bytes,
+// aligned to 8. Preload declares it, untyped, as Resizable_Array
+// (modules/Preload/module.rig), and the checker needs that struct for the
+// type; tests/unit/test_checker.cpp's
+// preloads_type_info_is_laid_out_as_rig_writes_it holds the two together.
+const s64 RESIZABLE_ALLOCATED_OFFSET = 16, RESIZABLE_ALLOCATOR_OFFSET = 24, RESIZABLE_SIZE = 40;
 
 // Preload's type information (spec 3.16), mirrored here as a view's layout
 // is: the structs a description is made of, where their fields are, and the
@@ -161,6 +175,13 @@ Type *type_array_of(Type *element, s64 count);
 // []element, the same Type every time, made as type_pointer_to makes *T.
 Type *type_view_of(Type *element);
 
+// [..]element, the same Type every time, made as type_view_of makes []T:
+// RESIZABLE_SIZE bytes, aligned to 8. It holds no pointer but to its
+// element, which may outlive a compilation (a built-in type's [..]T lasts
+// the whole run), so the allocator field's type, Preload's, is the
+// checker's to find (Ast_File.resizable_array_type), not the Type's.
+Type *type_resizable_of(Type *element);
+
 // The procedure type of these parameters and results, #c_call or not, its
 // last parameter a ..T or not (then param_count >= 1 and that parameter a
 // view, the []T): the same Type every time for the same ones (each array's
@@ -174,9 +195,10 @@ Type *type_proc_of(Type **params, s64 param_count, Type **results, s64 result_co
 // both or neither a ..T: whether they differ in #c_call alone, if at all.
 bool type_proc_same_but_c_call(Type *a, Type *b);
 
-// How a message names t: "s32", "*u8", "string", "[3]int", "[]*u8", and a
-// procedure type as its signature is written: "(int, int) -> int",
-// "(int) -> (int, int)", "(*void, *void) -> s32 #c_call", "(int, ..int)", "()".
+// How a message names t: "s32", "*u8", "string", "[3]int", "[]*u8",
+// "[..]int", and a procedure type as its signature is written: "(int, int)
+// -> int", "(int) -> (int, int)", "(*void, *void) -> s32 #c_call",
+// "(int, ..int)", "()".
 String type_name(Arena *a, Type *t);
 
 // t's alignment, in bytes: where in memory a value of type t may start.
@@ -188,7 +210,7 @@ bool type_is_pointer(Type *t);
 
 // Whether a value of type t is an aggregate: bytes in memory, copied whole,
 // never a value in a register (spec 6.5's "How it's compiled"). Structs,
-// arrays, views and strings are.
+// arrays, views, resizable arrays and strings are.
 bool type_is_aggregate(Type *t);
 
 // Whether t is laid out as a view, { count: int; data: *T; }, its elements
@@ -196,6 +218,12 @@ bool type_is_aggregate(Type *t);
 // type u8). What reads a view's count and data, indexes it or goes over it
 // with for does the same with a string.
 bool type_is_view_or_string(Type *t);
+
+// Whether t starts as a view does, its count and data at VIEW_COUNT_OFFSET
+// and VIEW_DATA_OFFSET, its elements elsewhere: a view, a string or a
+// resizable array (spec 3.17), whose allocated and allocator come after
+// them. What reads a view's count and data reads a resizable array's.
+bool type_has_view_fields(Type *t);
 
 // The type a value of type t is passed as through a variadic C function's
 // '...', after C's default argument promotions (C17 6.5.2.2): C gives such

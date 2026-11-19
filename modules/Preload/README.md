@@ -177,6 +177,17 @@ It prints:
 
 `__memmove` is C's `memmove` under Preload's own name, which the temporary allocator's `RESIZE` copies with; it's not for programs.
 
+### Resizable arrays
+
+A resizable array, `[..]T` (issue #158, spec 3.17), is laid out as Preload's `Resizable_Array`, Jai's layout, and the compiler needs that struct for the type: a program without Preload has no `[..]T`.
+
+- `Resizable_Array`:
+  - `count: int`, `data: *void`: a view's count and data, where a view has them, so whatever reads a view's reads a resizable array's.
+  - `allocated: int`: how many elements `data`'s memory holds. The array owns that memory when `allocated` is above 0; at 0 it owns none, though a program may have set `data` and `count` by hand.
+  - `allocator: Allocator`: where that memory came from, and where it goes back.
+
+It's the untyped form, `data` a `*void`, which every `[..]T` has whatever its `T`.
+
 ## Waiting on the language
 
 - No type aliases, so the allocator's procedure type is written out, in `Allocator` and in each allocator procedure.

@@ -202,12 +202,13 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // entry's name may have been anything, so nothing is said about it. A
 // struct found to contain itself has no type: its uses say nothing more.
 //
-// behind_pointer: the type is what a pointer points at, or a view's
-// elements, which lie elsewhere: a struct named right there needs only its
-// Type, not its layout, which isn't worked out here. An array's Type holds
-// its size, so it needs its elements' layout, behind a pointer too: *[2]Node
-// lays Node out. (A struct's own fields never need that while it's laid
-// out: one holding a pointer or a view has its type made later, lay_out.)
+// behind_pointer: the type is what a pointer points at, or a view's or a
+// resizable array's elements, which lie elsewhere: a struct named right
+// there needs only its Type, not its layout, which isn't worked out here.
+// An array's Type holds its size, so it needs its elements' layout, behind
+// a pointer too: *[2]Node lays Node out. (A struct's own fields never need
+// that while it's laid out: one holding a pointer or a view has its type
+// made later, lay_out.)
 static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer) {
     switch (written->kind) {
     case AST_TYPE_POINTER: {
@@ -218,6 +219,19 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
     case AST_TYPE_VIEW: {
         Type *element = resolve_element(c, written->element, true);
         return element ? type_view_of(element) : nullptr;
+    }
+    case AST_TYPE_RESIZABLE: {
+        // A resizable array's elements lie elsewhere, as a view's do (spec
+        // 3.17). Its allocator field is Preload's Allocator, which the
+        // program has only with Preload's Resizable_Array (declare_top_level).
+        Type *element = resolve_element(c, written->element, true);
+        if (!element) return nullptr;
+        if (!c->file->resizable_array_type) {
+            diag_error(c->diag, written->pos,
+                       "a resizable array needs Preload's 'Resizable_Array', which the program doesn't have");
+            return nullptr;
+        }
+        return type_resizable_of(element);
     }
     case AST_TYPE_ARRAY: {
         // The count's mistakes first, then the element type's: source order.
@@ -962,29 +976,35 @@ static s64 align_up(s64 offset, s32 align) {
     return (offset + align - 1) & ~(s64)(align - 1);
 }
 
-// Whether a written type holds a pointer or a view: is one, or a procedure
-// type (its value, the address of code, is a pointer), or is an array of
-// what holds one. Such a field is a late field.
+// Whether a written type holds a pointer or a view: is one, or a resizable
+// array (a view and more, spec 3.17), or a procedure type (its value, the
+// address of code, is a pointer), or is an array of what holds one. Such a
+// field is a late field.
 static bool holds_pointer_or_view(Ast_Type *written) {
     Ast_Kind kind = written->kind;
-    if (kind == AST_TYPE_POINTER || kind == AST_TYPE_VIEW || kind == AST_TYPE_PROC) return true;
+    if (kind == AST_TYPE_POINTER || kind == AST_TYPE_VIEW || kind == AST_TYPE_RESIZABLE || kind == AST_TYPE_PROC) {
+        return true;
+    }
     if (written->kind == AST_TYPE_ARRAY) return holds_pointer_or_view(written->element);
     return false;
 }
 
 // The size and alignment of a type that holds a pointer or a view
 // (holds_pointer_or_view), from what's written, before the type is made: a
-// pointer or a procedure value is 8 bytes, a view 16 (all aligned to 8), and an array N times
-// its element's, at its element's alignment. Nothing behind a pointer or in
-// a view is looked at, so no struct is laid out here. An array's count is
-// checked (array_count), and kept for the type; one that's wrong, or makes
-// the array too big, takes no room (the type, made later, says it's too
-// big).
+// pointer or a procedure value is 8 bytes, a view 16, a resizable array
+// RESIZABLE_SIZE (all aligned to 8), and an array N times its element's, at
+// its element's alignment. Nothing behind a pointer, in a view or in a
+// resizable array is looked at, so no struct is laid out here. An array's
+// count is checked (array_count), and kept for the type; one that's wrong,
+// or makes the array too big, takes no room (the type, made later, says
+// it's too big).
 static void late_layout(Checker *c, Ast_Type *written, s64 *size, s32 *align) {
     if (written->kind != AST_TYPE_ARRAY) {
         RIG_ASSERT(written->kind == AST_TYPE_POINTER || written->kind == AST_TYPE_VIEW ||
-                   written->kind == AST_TYPE_PROC);
-        *size = written->kind == AST_TYPE_VIEW ? 16 : 8;
+                   written->kind == AST_TYPE_RESIZABLE || written->kind == AST_TYPE_PROC);
+        *size = written->kind == AST_TYPE_VIEW        ? 16
+                : written->kind == AST_TYPE_RESIZABLE ? RESIZABLE_SIZE
+                                                      : 8;
         *align = 8;
         return;
     }
@@ -1219,17 +1239,18 @@ static Type *proc_made_again(Type *t) {
 }
 
 // Type t, made before every struct was laid out, made again now that they
-// are: the same pointers, views, arrays (the same counts: nothing is
-// checked or said twice) and procedure types of what the structs in it
-// have become, so null if one of those has no type now. A struct taken
-// behind a pointer or in a view before its layout (resolve_written's
-// behind_pointer) may since have been found in a circle, or too big.
-// Nothing else changes. In a loop: a type the checker infers has no limit
-// to its levels (6.1).
+// are: the same pointers, views, resizable arrays, arrays (the same
+// counts: nothing is checked or said twice) and procedure types of what the
+// structs in it have become, so null if one of those has no type now. A
+// struct taken behind a pointer, in a view or in a resizable array before
+// its layout (resolve_written's behind_pointer) may since have been found
+// in a circle, or too big. Nothing else changes. In a loop: a type the
+// checker infers has no limit to its levels (6.1).
 static Type *made_again(Type *t) {
-    Array<Type *> levels = {};  // t's pointers, views and arrays, outermost first
+    Array<Type *> levels = {};  // t's pointers, views, resizable arrays and arrays, outermost first
     Type *inner = t;
-    while (inner && (inner->kind == TYPE_POINTER || inner->kind == TYPE_VIEW || inner->kind == TYPE_ARRAY)) {
+    while (inner && (inner->kind == TYPE_POINTER || inner->kind == TYPE_VIEW || inner->kind == TYPE_RESIZABLE ||
+                     inner->kind == TYPE_ARRAY)) {
         array_add(&levels, inner);
         inner = inner->kind == TYPE_POINTER ? inner->pointee : inner->element;
     }
@@ -1241,6 +1262,8 @@ static Type *made_again(Type *t) {
             inner = type_pointer_to(inner);
         } else if (level->kind == TYPE_VIEW) {
             inner = type_view_of(inner);
+        } else if (level->kind == TYPE_RESIZABLE) {
+            inner = type_resizable_of(inner);
         } else {
             inner = type_array_of(inner, level->count);
         }
@@ -2456,6 +2479,11 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
             }
             if (decl->kind == AST_PROC && string_eq(name, str("__runtime_init"))) {
                 c->file->runtime_init = (Ast_Proc *)decl;
+            }
+            // And the resizable arrays' layout (spec 3.17), whose last field
+            // is the allocator a [..]T holds: without it, no [..]T.
+            if (decl->kind == AST_STRUCT && string_eq(name, str("Resizable_Array"))) {
+                c->file->resizable_array_type = ((Ast_Struct *)decl)->declared;
             }
         }
     }

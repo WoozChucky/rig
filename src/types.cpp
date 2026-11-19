@@ -8,8 +8,8 @@
 #define BUILT_IN(kind, name, size, align, is_signed)                                       \
     {kind,    size,    align,   is_signed, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr, \
      nullptr, {},      nullptr, nullptr,   nullptr, 0,                                    nullptr, \
-     nullptr, nullptr, nullptr, 0,         nullptr, 0,                                    false,   \
-     false,   nullptr, nullptr}
+     nullptr, nullptr, nullptr, nullptr,   0,       nullptr,                              0,       \
+     false,   false,   nullptr, nullptr}
 // The numbers' alignment is their size, as in C on x86-64.
 #define INTEGER(name, size, is_signed) BUILT_IN(TYPE_INTEGER, name, size, size, is_signed)
 #define FLOAT(name, size) BUILT_IN(TYPE_FLOAT, name, size, size, false)
@@ -27,7 +27,7 @@ static Type integer_types[] = {
 // other.
 Type type_string = {
     TYPE_STRING, 16, 8, false, nullptr, {(const u8 *)"string", 6}, nullptr, nullptr, {}, nullptr, nullptr,
-    &integer_types[4], 0, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, false, nullptr, nullptr,
+    &integer_types[4], 0, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, false, nullptr, nullptr,
 };
 
 // void's size is 0 (size_of says it has none) and its alignment 1, so a
@@ -53,7 +53,7 @@ Type type_untyped_literal = BUILT_IN(TYPE_UNTYPED_LITERAL, ".{...}", 0, 1, false
 // name.
 static Type float_name = {
     TYPE_FLOAT, 4, 4,       false,   nullptr, {(const u8 *)"float", 5}, nullptr, &type_float32, {}, nullptr, nullptr,
-    nullptr,    0, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, false, nullptr, nullptr,
+    nullptr,    0, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, false, nullptr, nullptr,
 };
 
 // Every type a program can name, by its built-in name: the one list
@@ -87,11 +87,16 @@ bool type_is_pointer(Type *t) {
 }
 
 bool type_is_aggregate(Type *t) {
-    return t->kind == TYPE_STRUCT || t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW || t->kind == TYPE_STRING;
+    return t->kind == TYPE_STRUCT || t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW || t->kind == TYPE_STRING ||
+           t->kind == TYPE_RESIZABLE;
 }
 
 bool type_is_view_or_string(Type *t) {
     return t->kind == TYPE_VIEW || t->kind == TYPE_STRING;
+}
+
+bool type_has_view_fields(Type *t) {
+    return type_is_view_or_string(t) || t->kind == TYPE_RESIZABLE;
 }
 
 Type *type_c_promoted(Type *t) {
@@ -113,13 +118,13 @@ s32 type_align(Type *t) {
     return t->align;
 }
 
-// A pointer, array or view type is cached in the type it's made from
-// (Type.pointer, Type.arrays, Type.view), so it must last as long as that
-// type does, and no longer: one made from a struct, which lives in its
-// compilation's arena, comes from that arena too, and is freed with the
-// struct (and so is a pointer to that pointer, an array of it, ...). A
-// built-in type lasts the whole run, so the types made from it come from
-// this arena, never freed.
+// A pointer, array, view or resizable array type is cached in the type it's
+// made from (Type.pointer, Type.arrays, Type.view, Type.resizable), so it
+// must last as long as that type does, and no longer: one made from a
+// struct, which lives in its compilation's arena, comes from that arena
+// too, and is freed with the struct (and so is a pointer to that pointer,
+// an array of it, ...). A built-in type lasts the whole run, so the types
+// made from it come from this arena, never freed.
 static Arena derived_types;
 
 // A new type of this kind, made from `from` (what it points at, or its
@@ -168,6 +173,17 @@ Type *type_view_of(Type *element) {
         element->view = t;
     }
     return element->view;
+}
+
+Type *type_resizable_of(Type *element) {
+    if (!element->resizable) {
+        Type *t = derived_from(element, TYPE_RESIZABLE);
+        t->size = RESIZABLE_SIZE;
+        t->align = 8;
+        t->element = element;
+        element->resizable = t;
+    }
+    return element->resizable;
 }
 
 // The procedure types that have no parameters or results to anchor them,
@@ -233,26 +249,28 @@ bool type_proc_same_but_c_call(Type *a, Type *b) {
     return proc_type_is(b, a->params, a->param_count, a->results, a->result_count, b->is_c_call, a->is_variadic);
 }
 
-// What a message names t after: a pointer's target, an array's or a view's
-// elements; null for any other type, named by its own name alone (a string
-// has u8 elements, but is "string").
+// What a message names t after: a pointer's target, an array's, a view's
+// or a resizable array's elements; null for any other type, named by its
+// own name alone (a string has u8 elements, but is "string").
 static Type *named_after(Type *t) {
     switch (t->kind) {
     case TYPE_POINTER: return t->pointee;
     case TYPE_ARRAY:
-    case TYPE_VIEW: return t->element;
+    case TYPE_VIEW:
+    case TYPE_RESIZABLE: return t->element;
     default: return nullptr;
     }
 }
 
 // What t, named after another type, puts in front of that one's name: "*",
-// "[3]" or "[]". Written at `to`, which has room for it and the zero
+// "[3]", "[]" or "[..]". Written at `to`, which has room for it and the zero
 // snprintf adds, or only measured, with `to` null and no room; its length
 // either way.
 static s64 name_prefix(Type *t, char *to, u64 room) {
     switch (t->kind) {
     case TYPE_POINTER: return snprintf(to, room, "*");
     case TYPE_ARRAY: return snprintf(to, room, "[%lld]", (long long)t->count);
+    case TYPE_RESIZABLE: return snprintf(to, room, "[..]");
     default: return snprintf(to, room, "[]");
     }
 }

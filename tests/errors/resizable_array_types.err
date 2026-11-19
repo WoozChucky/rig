@@ -1,0 +1,6 @@
+tests/errors/resizable_array_types.rig:3:9: error: 'void' is only a pointer's target, as in *void
+    a : [..]void;
+            ^
+tests/errors/resizable_array_types.rig:4:9: error: unknown type 'Nope'
+    b : [..]Nope;
+            ^

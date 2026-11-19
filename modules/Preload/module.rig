@@ -13,8 +13,8 @@
 // is allowed and reads nothing more, just as a #load of this file by its
 // path reads nothing more: a file is read once.
 //
-// It holds the allocator's shape and the heap, type information and Any,
-// and the context, with the temporary storage and its allocator.
+// It holds the allocator's shape and the heap, type information, Any, the
+// context with the temporary storage and its allocator, and [..]T's layout.
 //
 // What Preload declares joins the program's one top level, so a program
 // can't declare those names. README.md lists the ones that are for
@@ -349,3 +349,21 @@ temporary_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *v
 // The temporary storage as an Allocator. Its procedure finds the storage
 // through the context, so it needs no data.
 TEMPORARY_ALLOCATOR :: Allocator.{temporary_allocator_proc, null};
+
+// Resizable arrays (spec 3.17): [..]T, Jai's Resizable_Array. Its layout,
+// which the compiler mirrors (src/types.h's RESIZABLE_ALLOCATED_OFFSET,
+// RESIZABLE_ALLOCATOR_OFFSET and RESIZABLE_SIZE): a view's count and data,
+// where a view has them, so whatever reads a view's reads a resizable
+// array's, then allocated, how many elements data's memory holds, and the
+// allocator that memory came from and goes back to. The array owns that
+// memory when allocated is above 0; at 0 it owns none, though a program may
+// have set data and count by hand. This is the untyped form, data a *void,
+// which every [..]T has whatever its T, so code that works on any of them
+// takes one; the compiler needs it for a [..]T at all, its allocator field
+// being this one's.
+Resizable_Array :: struct {
+    count: int;
+    data: *void;
+    allocated: int;
+    allocator: Allocator;
+}

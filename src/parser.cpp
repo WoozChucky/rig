@@ -1389,29 +1389,30 @@ static Ast_Block *parse_block(Parser *p) {
     return block;
 }
 
-// type = '*' type | '[' expression ']' type | '[' ']' type | proc_type | IDENT
+// type = '*' type | '[' expression ']' type | '[' ']' type | '[' '..' ']' type
+//        | proc_type | IDENT
 //
 // [N]T is an array of N T's, N any expression (the checker needs it to be
-// a constant); []T a view of T's. [..]T, a growable array, needs the
-// context's allocator, so it comes with the Basic module: "growable arrays
-// ([..]T) come with the Basic module, in milestone 4", at the '['. The
-// height kept for the expression around a type, if any, stays as it was: a
-// count's isn't part of it.
+// a constant); []T a view of T's; [..]T a resizable array of T's (spec
+// 3.17), a view's count and data, then how many elements its memory holds
+// and the allocator it came from: the allocator is Preload's, so the
+// checker needs Preload for it. The height kept for the expression around a
+// type, if any, stays as it was: a count's isn't part of it.
 //
-// A type's '*', '[]', '[N]' and a procedure type's '(' are a level each of
-// the compiler's limit (MAX_DEPTH), counted with the levels of the types
-// and expressions the type is inside: the one level too many is "types are
-// nested too deeply (more than 1000 levels)", at its '*' or '['. That needs
-// >= below, not ==: parse_type_below opens size_of's, type_info's and a
-// cast's level unchecked, so the levels may already be one over when a type
-// is read there; a name is fine, a '*' isn't. A count is read inside its
-// '[N]' level, so [1][1]...int is a level per [1], however many, and a type
-// inside a count ([size_of(**int)]u8) adds its levels to the type around
-// it. The checker resolves a written type, and lays it out, by recursing
-// into what it's made of, and the stages after it walk written types the
-// same way, so ten thousand '*' would overflow the stack; counting here
-// means none of them ever sees a deeper one. The limit is on the types a
-// program writes. One the checker infers has none (each `p2 := *p1;` is a
+// A type's '*', '[]', '[N]', '[..]' and a procedure type's '(' are a level
+// each of the compiler's limit (MAX_DEPTH), counted with the levels of the
+// types and expressions the type is inside: the one level too many is "types
+// are nested too deeply (more than 1000 levels)", at its '*' or '['. That
+// needs >= below, not ==: parse_type_below opens size_of's, type_info's and
+// a cast's level unchecked, so the levels may already be one over when a
+// type is read there; a name is fine, a '*' isn't. A count is read inside
+// its '[N]' level, so [1][1]...int is a level per [1], however many, and a
+// type inside a count ([size_of(**int)]u8) adds its levels to the type
+// around it. The checker resolves a written type, and lays it out, by
+// recursing into what it's made of, and the stages after it walk written
+// types the same way, so ten thousand '*' would overflow the stack; counting
+// here means none of them ever sees a deeper one. The limit is on the types
+// a program writes. One the checker infers has none (each `p2 := *p1;` is a
 // pointer a level deeper than the last), and nothing recurses through it:
 // the checker builds it a level at a time, and the one stage that walks all
 // of its levels, naming it in a message, does so in a loop (type_name).
@@ -1533,11 +1534,11 @@ static Ast_Type *parse_proc_type(Parser *p) {
     return type;
 }
 
-// The type rule's alternatives: '*' type, '[' [expression] ']' type, a
-// procedure type (a level each, which parse_type counted) or a name. The type after a '*' or
-// ']' goes back through parse_type, so its levels are counted too; a
-// count is read inside the level its '[N]' opened, and no other, so its
-// expression levels are counted from there.
+// The type rule's alternatives: '*' type, '[' [expression | '..'] ']'
+// type, a procedure type (a level each, which parse_type counted) or a
+// name. The type after a '*' or ']' goes back through parse_type, so its
+// levels are counted too; a count is read inside the level its '[N]'
+// opened, and no other, so its expression levels are counted from there.
 static Ast_Type *parse_type_level(Parser *p) {
     Token *t = peek(p);
     if (t->kind == TOKEN_STAR) {
@@ -1548,13 +1549,17 @@ static Ast_Type *parse_type_level(Parser *p) {
     }
     if (t->kind == TOKEN_LBRACKET) {
         advance(p);
+        // '[..]' is a resizable array's, '[]' a view's, anything else an
+        // array's count.
+        Ast_Kind kind = AST_TYPE_ARRAY;
         if (peek(p)->kind == TOKEN_DOT_DOT) {
-            diag_error(p->diag, t->pos, "growable arrays ([..]T) come with the Basic module, in milestone 4");
-            return nullptr;
+            advance(p);
+            kind = AST_TYPE_RESIZABLE;
+        } else if (peek(p)->kind == TOKEN_RBRACKET) {
+            kind = AST_TYPE_VIEW;
         }
-        bool view = peek(p)->kind == TOKEN_RBRACKET;
-        Ast_Type *type = ast_new<Ast_Type>(p->arena, view ? AST_TYPE_VIEW : AST_TYPE_ARRAY, t->pos);
-        if (!view) {
+        Ast_Type *type = ast_new<Ast_Type>(p->arena, kind, t->pos);
+        if (kind == AST_TYPE_ARRAY) {
             s32 height = p->height;
             type->count = parse_expression(p, 1);
             p->height = height;

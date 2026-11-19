@@ -7284,8 +7284,9 @@ struct Preload_Field {
     const char *type;
 };
 
-// One struct Preload declares for type information, and its layout as
-// types.h mirrors it: its size and its fields, in order.
+// One struct Preload declares for type information (or for a resizable
+// array's layout, issue #158), and its layout as types.h mirrors it: its
+// size and its fields, in order.
 struct Preload_Struct {
     const char *name;
     s64 size;
@@ -7298,7 +7299,9 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
     // program reads it through Preload's structs, which the checker lays
     // out as any struct. The two must agree: each struct's size, alignment,
     // field offsets and field types, and each tag's value. Each kind's struct starts
-    // with its Type_Info, info, so a *Type_Info casts to it.
+    // with its Type_Info, info, so a *Type_Info casts to it. Resizable_Array
+    // is a [..]T's layout (spec 3.17), which lowering and Preload's helpers
+    // read alike.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
@@ -7345,6 +7348,13 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
           {"count", TYPE_INFO_COUNT_OFFSET, "int"}},
          4},
         {"Any", ANY_SIZE, {{"type", ANY_TYPE_OFFSET, "*Type_Info"}, {"value_pointer", ANY_VALUE_OFFSET, "*void"}}, 2},
+        {"Resizable_Array",
+         RESIZABLE_SIZE,
+         {{"count", VIEW_COUNT_OFFSET, "int"},
+          {"data", VIEW_DATA_OFFSET, "*void"},
+          {"allocated", RESIZABLE_ALLOCATED_OFFSET, "int"},
+          {"allocator", RESIZABLE_ALLOCATOR_OFFSET, "Allocator"}},
+         4},
     };
     for (s64 i = 0; i < (s64)(sizeof structs / sizeof structs[0]); i++) {
         Preload_Struct *s = &structs[i];
@@ -8670,5 +8680,65 @@ TEST(the_temporary_allocator_while_compiling) {
     Ast *shared = top_level_named(tree, "SHARED");
     CHECK(first->is_constant && shared->is_constant);
     CHECK(shared->constant > first->constant);
+    arena_free(&a);
+}
+
+// Issue #158: resizable arrays (spec 3.17).
+
+TEST(resizable_array_type_is_made_once) {
+    // [..]T is made once per T, as []T is, so two are the same type when
+    // their T's are. It's a view's count and data, then allocated and the
+    // allocator: 40 bytes, aligned to 8, an aggregate, laid out as a view
+    // where a view's fields are.
+    Arena a = arena_make();
+    Type *ints = type_resizable_of(&type_int);
+    CHECK(ints == type_resizable_of(&type_int));
+    CHECK_EQ(ints->kind, TYPE_RESIZABLE);
+    CHECK(ints->element == &type_int);
+    CHECK_EQ(ints->size, RESIZABLE_SIZE);
+    CHECK_EQ(ints->size, 40);
+    CHECK_EQ(ints->align, 8);
+    CHECK(type_is_aggregate(ints));
+    CHECK(type_has_view_fields(ints));
+    CHECK(!type_is_view_or_string(ints));
+    // Named as written, inside other types and around them.
+    Type *u8 = type_from_name(str("u8"));
+    CHECK_STR(type_name(&a, ints), "[..]int");
+    CHECK_STR(type_name(&a, type_pointer_to(ints)), "*[..]int");
+    CHECK_STR(type_name(&a, type_resizable_of(type_array_of(type_pointer_to(u8), 3))), "[..][3]*u8");
+    CHECK_STR(type_name(&a, type_view_of(ints)), "[][..]int");
+    arena_free(&a);
+}
+
+TEST(a_resizable_array_type) {
+    // A struct may hold one, of its own type's elements too: they lie
+    // elsewhere, so it's a late field, 40 bytes at the next multiple of 8.
+    // A global may be one. The checker keeps Preload's Resizable_Array on
+    // the tree, as it keeps Context.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Node :: struct { name: string; kids: [..]Node; }\n"
+                                 "g : [..]int;\n"
+                                 "main :: () { n : Node; }\n",
+                                 &tree),
+              "");
+    Type *node = ((Ast_Struct *)top_level_named(tree, "Node"))->declared;
+    CHECK_EQ(node->size, 56);
+    CHECK_EQ(node->align, 8);
+    CHECK_EQ(node->fields.count, 2);
+    CHECK_EQ(node->fields[1].offset, 16);
+    CHECK(node->fields[1].type == type_resizable_of(node));
+    CHECK_STR(type_name(&a, ((Ast_Var *)top_level_named(tree, "g"))->type), "[..]int");
+    CHECK(tree->resizable_array_type == ((Ast_Struct *)top_level_named(tree, "Resizable_Array"))->declared);
+    arena_free(&a);
+}
+
+TEST(a_resizable_array_needs_preload) {
+    // Its allocator is Preload's: without Preload (a test's single file),
+    // the type is refused, at its '['.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "main :: () {\n    a : [..]int;\n}\n"),
+              "2:9: a resizable array needs Preload's 'Resizable_Array', which the program doesn't have\n");
     arena_free(&a);
 }

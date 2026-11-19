@@ -867,6 +867,21 @@ check('the grammar colours a \'..T\' parameter and a spread', () => {
     assertScopes('x := sum(1, ..f(a), ..b[0]);', { '..': [RANGE, RANGE], b: null });
 });
 
+// A resizable array's type (issue #158), [..]T, is a type through its
+// prefix as []T is, the '..' in it the range's operator; a call of a
+// built-in that grows one is a call, as any procedure's.
+check('the grammar colours resizable array types', () => {
+    const RANGE = 'keyword.operator.range.rig';
+    assertScopes('numbers : [..]int;', { numbers: null, '..': RANGE, int: PRIMITIVE });
+    assertScopes('f :: (a: *[..]Vec2) -> [..]int { }', {
+        Vec2: TYPE,
+        int: PRIMITIVE,
+        '..': [RANGE, RANGE],
+        a: null,
+    });
+    assertScopes('array_add(*numbers, 3);', { array_add: 'entity.name.function.call.rig', numbers: null });
+});
+
 // A default parameter value (issue #155) is an expression after the
 // parameter's type and its '=': a value's name in it isn't coloured, a
 // literal's type is a type, a call in it is a call, and `f :: (n := 0)` is

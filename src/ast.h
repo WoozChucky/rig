@@ -43,6 +43,7 @@ enum Ast_Kind : u8 {
     AST_TYPE_POINTER,  // Ast_Type: *pointee
     AST_TYPE_ARRAY,    // Ast_Type: [count]element
     AST_TYPE_VIEW,     // Ast_Type: []element
+    AST_TYPE_RESIZABLE,  // Ast_Type: [..]element
     AST_TYPE_PROC,     // Ast_Type: (params) -> results #c_call, a procedure's type
     AST_BLOCK,         // Ast_Block: { statement; ... }
     AST_CALL,          // Ast_Call: callee(args)
@@ -108,12 +109,12 @@ struct Ast {
 };
 
 // A type as written. Its node is at its first token: the name, the '*', an
-// array's or a view's '[', or a procedure type's '('.
+// array's, a view's or a resizable array's '[', or a procedure type's '('.
 struct Ast_Type : Ast {
     String name;        // AST_TYPE_NAME
     Ast_Type *pointee;  // AST_TYPE_POINTER
     Ast *count;         // AST_TYPE_ARRAY: N in [N]T, an expression the checker needs to be a constant
-    Ast_Type *element;  // AST_TYPE_ARRAY and AST_TYPE_VIEW: T in [N]T and []T
+    Ast_Type *element;  // AST_TYPE_ARRAY, AST_TYPE_VIEW and AST_TYPE_RESIZABLE: T in [N]T, []T and [..]T
     bool count_checked; // AST_TYPE_ARRAY: N has been checked, once (a struct's layout may need
                         // it before the field's type is made: checker.cpp's array_count)
     bool count_fine;    // ... and is a count, count_value
@@ -629,11 +630,14 @@ struct Ast_File {
     String load_failure;    // why the program couldn't be loaded at all (above): Preload not found or not read;
                             // empty when it was
     // Preload's, found by the checker (checker.cpp's declare_top_level), spec
-    // 7.10; all null without Preload, whose programs have no context:
+    // 7.10 and 3.17; all null without Preload, whose programs have no context
+    // and no resizable arrays:
     Type *context_type;        // Preload's Context struct: what context is, and push_context takes
     Ast_Var *default_context;  // Preload's global default_context: main's and a #run's, and the one a
                                // #c_call procedure pushes for itself
     Ast_Proc *runtime_init;    // Preload's __runtime_init, which sets it up: main and each #run call it first
+    Type *resizable_array_type;  // Preload's Resizable_Array (spec 3.17): a [..]T's layout, untyped, and
+                                 // its allocator field's type; null without Preload
 };
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler
@@ -700,6 +704,7 @@ Token_Kind compound_operator(Token_Kind op);
 //   (member (name p) x)   p.x;    (literal Vec2 (int 1) (int 2))   Vec2.{1, 2}
 //   (literal _ (x (int 1)) (y (int 2)))   .{x = 1, y = 2}
 //   (array (int 3) int)  [3]int    (view int)  []int    (index (name a) (int 1))  a[1]
+//   (resizable int)  [..]int
 //   (literal-array int (int 1) (int 2))   int.[1, 2]    (literal-array _ (int 1))   .[1]
 //   (for it (name a) (block ...))      for a { ... }      (for x (name a) ...)  for x: a { ... }
 //   (for * it (name a) (block ...))    for * a { ... }
