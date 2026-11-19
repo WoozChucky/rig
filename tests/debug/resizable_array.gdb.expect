@@ -1,0 +1,13 @@
+resizable_array.rig:14
+= 3
+= 8
+= {3, 5, 8}
+<heap_allocator_proc>
+type = struct [..]int {
+int count;
+int *data;
+int allocated;
+struct Allocator allocator;
+= {x = 1, y = 2}
+!The program being debugged
+!.debug_names not created by gdb

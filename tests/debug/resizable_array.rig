@@ -1,0 +1,17 @@
+// A debugger's view of a resizable array (bin/run-tests runs it under gdb
+// with resizable_array.gdb and under cdb with resizable_array.cdb; issue
+// #158, spec 10.7): a struct [..]T of its count, data, allocated and
+// allocator, its elements reached through data.
+Point :: struct { x: int; y: int; }
+
+main :: () {
+    numbers : [..]int;
+    array_add(*numbers, 3);
+    array_add(*numbers, 5);
+    array_add(*numbers, 8);
+    points : [..]Point;
+    array_add(*points, Point.{1, 2});
+    count := numbers.count;
+    array_free(*numbers);
+    array_free(*points);
+}

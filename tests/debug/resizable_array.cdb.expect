@@ -1,0 +1,8 @@
+14:     count := numbers.count;
+struct [..]int numbers = struct [..]int
+struct [..]Point points = struct [..]Point
+int64 0n3
+int64 0n8
+int64 0n8
+resizable_array!heap_allocator_proc
+int64 0n2

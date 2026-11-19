@@ -1,0 +1,12 @@
+l+t
+l+s
+l+l
+bp `resizable_array.rig:14`
+g
+dv /t
+?? numbers.count
+?? numbers.data[2]
+?? numbers.allocated
+dx numbers.allocator.proc
+?? points.data[0].y
+q
