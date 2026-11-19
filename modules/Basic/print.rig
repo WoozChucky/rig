@@ -101,9 +101,9 @@ print_or_append :: (builder: *String_Builder, s: string) {
 // written as they are, so UTF-8 text stays readable.
 //
 // The bytes between two escapes are written as one run, so a builder takes
-// one append for them rather than one for each byte. A string with null data and
-// a count above 0 stops the program at the for, with the language's null
-// pointer dereference (spec 8.4), after the opening quote is written.
+// one append for them rather than one for each byte. A string with null
+// data and a count above 0 stops the program at the for, after the opening
+// quote is written, with the language's null pointer dereference (spec 8.4).
 print_quoted :: (builder: *String_Builder, s: string) {
     HEX :: "0123456789abcdef";
     print_or_append(builder, "\"");
@@ -117,7 +117,7 @@ print_quoted :: (builder: *String_Builder, s: string) {
             escape = "\\t";
         } else if it == 13 { // carriage return
             escape = "\\r";
-        } else if it == 0 {
+        } else if it == 0 { // zero byte
             escape = "\\0";
         } else if it == "\\"[0] {
             escape = "\\\\";
@@ -170,9 +170,9 @@ print_quoted :: (builder: *String_Builder, s: string) {
 // nested says the value is inside a struct, an array or a view, or among
 // the arguments a format leaves over, {!EXTRA: ...}, where a string is
 // quoted so that its bytes can't be mistaken for the punctuation around
-// it. Fields and elements are written by calling
-// print_item again, nested, each made into an Any of its own: its type's
-// description and its address, the value's address and its offset.
+// it. Fields and elements are written by calling print_item again, nested,
+// each made into an Any of its own: a field's type at the struct's address
+// plus the field's offset, an element's type at its place in the data.
 //
 // What no conversion to Any makes: a zeroed Any, whose type is null, as a
 // zeroed struct's Any field is, writes null, as a zeroed pointer does; a
@@ -322,10 +322,10 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
 //
 // The arguments left over once the format ends are written after it, a
 // space and then {!EXTRA: 4, "x"}: each nested, as inside a struct, so a
-// string is quoted, with a comma and a space between them. The format is a value the compiler
-// doesn't read, as C's isn't (spec 7.6), so a count that doesn't match
-// writes a marker rather than stopping the program. An argument's own
-// braces are its bytes, not a format: they're written as they are.
+// string is quoted, with a comma and a space between them. The format is a
+// value the compiler doesn't read, as C's isn't (spec 7.6), so a count that
+// doesn't match writes a marker rather than stopping the program. An
+// argument's own braces are its bytes, not a format, written as they are.
 print_formatted :: (builder: *String_Builder, format: string, args: []Any) {
     OPEN :: "{";
     CLOSE :: "}";
@@ -393,8 +393,8 @@ print :: (format: string, args: ..Any) {
 // while it is read. The heap's memory is freed before it returns.
 print_to_builder :: (builder: *String_Builder, format: string, args: ..Any) {
     // A null builder is standard output to print_formatted, so it's read
-    // here first, to stop the program with the language's null pointer
-    // dereference (spec 8.4), whatever the format, rather than print.
+    // here first, whatever the format, to stop the program with a null
+    // pointer dereference (spec 8.4) rather than print to standard output.
     // tests/run/basic_print_null_builder.err names this line.
     count := builder.count;
     scratch : String_Builder;
@@ -425,11 +425,12 @@ sprint :: (format: string, args: ..Any) -> string {
 
 // What print would write, as a string in the context's temporary storage
 // (TEMPORARY_ALLOCATOR), which goes back with the rest of it at the next
-// reset (allocators.rig): print_line(tprint("{} + {} = {}", 1, 2, 3)). It
-// is written into a builder on the temporary storage, whose text is
-// returned as it is, with no copy: while the builder's memory is the
-// storage's last allocation, it grows in place. Nothing written gives the
-// zeroed string, count 0 and data null, and allocates nothing.
+// reset, or when the storage goes back to a mark taken before it
+// (allocators.rig): print_line(tprint("{} + {} = {}", 1, 2, 3)). It is
+// written into a builder on the temporary storage, whose text is returned as
+// it is, with no copy: while the builder's memory is the storage's last
+// allocation, it grows in place. Nothing written gives the zeroed string,
+// count 0 and data null, and allocates nothing.
 tprint :: (format: string, args: ..Any) -> string {
     builder : String_Builder;
     builder_init(*builder, TEMPORARY_ALLOCATOR);

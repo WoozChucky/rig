@@ -54,7 +54,9 @@ from_c_call :: () #c_call {
 main :: () {
     counting := context;
     counting.allocator = Allocator.{counting_proc, null};
-    // Written before the push, so writing it counts nothing.
+    // The file read_entire_file reads below. Writing it counts nothing,
+    // pushed or not: write_entire_file takes no allocator, and copies its
+    // path for C from the heap whatever the context is.
     write_entire_file(PATH, "data");
     push_context counting {
         before := count;

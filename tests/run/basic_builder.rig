@@ -2,7 +2,7 @@
 // grows, copies out that the builder's later changes don't touch, a builder
 // with nothing in it, which allocates nothing, the builder's own text
 // appended to itself, and memory that comes from the builder's allocator
-// and goes back to it.
+// and goes back to it; and u64s appended (issue #154).
 #import "Basic";
 
 // int's most negative value.

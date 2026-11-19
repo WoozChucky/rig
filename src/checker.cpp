@@ -297,13 +297,13 @@ struct Outer_Scopes {
 // default value being checked (check_defaults): a declaration worked out
 // inside one is no default's, so a body's parameters aren't refused in it,
 // and the defaults its own calls fill in are lowered with it, not with that
-// default's calls, so they don't count in its depth, nor does what they
-// need count as the default's need of a context. And so are in_code and
-// contextless, which are about the code being checked (spec 7.10): a
-// global, a constant, a type or a signature worked out inside a body is
-// none of the body's code. The first three run none, so they have no
-// context; a signature's default values run in each caller that leaves
-// them out, with the caller's (check_call says when a #c_call body can't).
+// default's calls, so they don't count in its depth, nor does what they need
+// count as the default's need of a context. And so are in_code and
+// contextless, which are about the code being checked (spec 7.10): a global,
+// a constant, a type or a signature worked out inside a body is none of the
+// body's code. The first three run none, so they have no context; a
+// signature's default values run in each caller that leaves them out, with
+// the caller's (check_call_context says when a #c_call body can't).
 static Outer_Scopes leave_scopes(Checker *c) {
     Outer_Scopes outer = {c->scopes,        c->lost_a_local, c->default_of, c->filled_depth,
                           c->needs_context, c->in_code,      c->contextless};
@@ -2102,12 +2102,13 @@ static void check_c_name(Checker *c, Ast_Proc *proc) {
 // 1000 levels)", at it, and the procedure then counts no depth, so a longer
 // chain says so once per 1000 levels, as a chain of declarations does.
 //
-// A default may read context (spec 7.10): it's worked out in the caller,
-// with the caller's context. Whether it needs one is kept on its parameter
-// (Ast_Param.default_needs_context): it reads context, calls a procedure
-// that takes one, or leaves out a default that needs one (check_context and
-// check_call raise c->needs_context while it's checked). A #c_call body,
-// which has no context outside its pushes, can't leave it out (check_call).
+// A default may read context (spec 7.10): it's worked out in the caller, with
+// the caller's context. Whether it needs one is kept on its parameter
+// (Ast_Param.default_needs_context): it reads context, calls a procedure that
+// takes one, or leaves out a default that needs one (check_context and
+// check_call_context raise c->needs_context while it's checked). A #c_call
+// body, which has no context outside its pushes, can't leave it out
+// (check_call_context).
 static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
     Array<Ast_Param *> &params = proc->params;
     s64 first = 0;
@@ -2248,20 +2249,20 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
     proc->type = refused ? nullptr : proc_type_of_signature(proc);
 }
 
-// A procedure's signature, checked the first time it's needed: in its turn
-// in source order (check()), or earlier, by a call in a global's value,
-// which is checked against it (check_proc_signature), or in a default value
+// A procedure's signature, checked the first time it's needed: in its turn in
+// source order (check()), or earlier, by a call in a global's value, which is
+// checked against it (check_proc_signature), or in a default value
 // (check_defaults). Its levels are its deepest type's or default's
-// (open_declaration). A signature that needs itself, its array's count
-// naming a global whose value calls it (`f :: (a: [g]int) ...; g :=
-// f(1);`), or a default calling it (`f :: (n: int = f(1))`, or through
-// another's default: `g :: (n: int = h())` with `h :: (m: int = g(1))`),
-// is a circle, found as a global's is (resolve_global): "'f' is defined in
-// terms of itself", once. In a type's circle every declaration in it has no
-// type, so nothing more is said; in a default's, the calls along the circle
-// have none, but each procedure keeps its type, which doesn't depend on its
-// defaults, so its other uses are checked. Unreported, g had no type and
-// said nothing, [g] neither, and rig build crashed.
+// (open_declaration). A signature that needs itself, its array's count naming
+// a global whose value calls it (`f :: (a: [g]int) ...; g := f(1);`), or a
+// default calling it (`f :: (n: int = f(1))`, or through another's default:
+// `p :: (n: int = h())` with `h :: (m: int = p(1))`), is a circle, found as a
+// global's is (resolve_global): "'f' is defined in terms of itself", once. In
+// a type's circle every declaration in it has no type, so nothing more is
+// said; in a default's, the calls along the circle have none, but each
+// procedure keeps its type, which doesn't depend on its defaults, so its
+// other uses are checked. Unreported, the first example's global g had no
+// type and said nothing, [g] neither, and rig build crashed.
 //
 // Whether the signature is known now: false in a circle, under way or
 // found in one, and when it's nested too deeply to check here (said), so a

@@ -109,6 +109,7 @@ poison_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void
         return heap_allocator_proc(mode, size, old_size, old_memory, data);
     }
     memory := alloc(size, HEAP_ALLOCATOR);
+    if memory == null { return null; }
     copy_memory(memory, old_memory, min_int(old_size, size));
     set_memory(old_memory, 35, old_size); // '#'
     free(old_memory, HEAP_ALLOCATOR);

@@ -221,16 +221,16 @@ void report_null_without_a_type(Checker *c, Ast *e);
 
 // Whether e is a place in memory, which has an address (*e) and can be
 // assigned to (e = v): a local or global variable, p.*, context, or a field
-// of a place (v.x, b.pos.x) or of a struct a pointer points at (p.x,
-// whatever p is). Checks e, filling in its type, and returns true when it's such a
-// place and its type is known; otherwise false, after saying why not,
-// unless e's own error was reported already. for_writing says which
-// message: "can't assign to 'a': it's a parameter" or "can't take the
-// address of 'a': it's a parameter" (v.x for a parameter v too); "only a
-// variable, a field or an element can be assigned to" or "... has an
-// address". An element is a place when its array is, or always when it's a
-// view's or a pointer's (its elements lie elsewhere); an array's .count and
-// .data never are ("can't assign to an array's 'count'").
+// of a place (v.x, b.pos.x) or of a struct a pointer points at (p.x, whatever
+// p is). Checks e, filling in its type, and returns true when it's such a
+// place and its type is known; otherwise false, after saying why not, unless
+// e's own error was reported already. for_writing says which message: "can't
+// assign to 'a': it's a parameter" or "can't take the address of 'a': it's a
+// parameter" (v.x for a parameter v too); "only a variable, a field or an
+// element can be assigned to" or "... has an address". An element is a place
+// when its array is, or always when it's a view's or a pointer's (its
+// elements lie elsewhere); an array's .count and .data never are ("can't
+// assign to an array's 'count'").
 bool check_addressable(Checker *c, Ast *e, bool for_writing);
 
 // check_addressable for an e already checked, its type known: whether

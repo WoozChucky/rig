@@ -44,38 +44,17 @@ digit_value :: (c: u8) -> int {
 // The digits come from the magnitude as a u64: int's most negative value,
 // -9223372036854775808, has no positive int, but its magnitude is a u64,
 // and 0 - m on a u64 wraps to exactly it. So no value needs a case of its
-// own.
+// own. format_u64_after writes them, after the "-" when there's one.
 format_int :: (buffer: []u8, value: int, base: int) -> string {
-    DIGITS :: "0123456789abcdefghijklmnopqrstuvwxyz";
     if base < 2 || base > 36 { return ""; }
-    radix := cast(u64) base;
     magnitude := cast,trunc(u64) value;
-    if value < 0 { magnitude = 0 - magnitude; }
-
     count := 0;
     if value < 0 {
+        magnitude = 0 - magnitude;
         buffer[0] = "-"[0];
         count = 1;
     }
-
-    // The digits come from the least significant, by % and /, so they're
-    // counted first and then written from the last place back, each where
-    // it belongs: 0 is one digit.
-    digits := 1;
-    rest := magnitude / radix;
-    while rest != 0 {
-        digits += 1;
-        rest /= radix;
-    }
-    for 1..digits {
-        buffer[count + digits - it] = DIGITS[magnitude % radix];
-        magnitude /= radix;
-    }
-    count += digits;
-
-    text := cast(string) buffer;
-    text.count = count;
-    return text;
+    return format_u64_after(buffer, count, magnitude, base);
 }
 
 // Writes value in base into buffer, with lowercase digits, and returns the
@@ -87,12 +66,21 @@ format_int :: (buffer: []u8, value: int, base: int) -> string {
 // the cast's check, and through cast,trunc it wraps to a negative number
 // (spec 3.14, 8.3). So a u64, as print writes one, comes here instead.
 format_u64 :: (buffer: []u8, value: u64, base: int) -> string {
+    return format_u64_after(buffer, 0, value, base);
+}
+
+// Writes value in base into buffer after the count bytes already there,
+// with lowercase digits, and returns the text written, at the buffer's
+// start: format_int's digits, after its "-" or not, and format_u64's. A
+// base outside 2 to 36 writes nothing and returns "".
+format_u64_after :: (buffer: []u8, count: int, value: u64, base: int) -> string {
     DIGITS :: "0123456789abcdefghijklmnopqrstuvwxyz";
     if base < 2 || base > 36 { return ""; }
     radix := cast(u64) base;
 
-    // Counted first and then written from the last place back, as
-    // format_int's digits are: 0 is one digit.
+    // The digits come from the least significant, by % and /, so they're
+    // counted first and then written from the last place back, each where
+    // it belongs: 0 is one digit.
     digits := 1;
     rest := value / radix;
     while rest != 0 {
@@ -101,12 +89,14 @@ format_u64 :: (buffer: []u8, value: u64, base: int) -> string {
     }
     left := value;
     for 1..digits {
-        buffer[digits - it] = DIGITS[left % radix];
+        buffer[count + digits - it] = DIGITS[left % radix];
         left /= radix;
     }
+    // A buffer too small stops at the write above, which
+    // tests/run/basic_format_int_too_small.err names: keep it on its line.
 
     text := cast(string) buffer;
-    text.count = digits;
+    text.count = count + digits;
     return text;
 }
 

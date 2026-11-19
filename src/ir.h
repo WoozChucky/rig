@@ -158,24 +158,23 @@
 //   one after.
 // - Variables (Ir_Var): every parameter, local, iterator and it_index, by
 //   name, with its Rig type, its scope, and where it lives: a local or a
-//   scalar parameter in its stack slot (an IR_LOCAL; a parameter's is
-//   stored on entry, and every use reads it, so a debugger that changes it
-//   changes what the program reads), an aggregate parameter as the
-//   pointer it's passed as. And the context (spec 7.10), which the source
-//   doesn't declare, so it's artificial (Ir_Var.artificial): the hidden
-//   parameter, the first parameter after the result pointers (arg 1, the
-//   visible ones from 2), in its slot, at the procedure's name; in main and
-//   a run's procedure, the slot holding default_context's address, a local
-//   of the body's scope; and in a push_context's block, the slot holding
-//   the pushed context's address, a local of the block's scope at the
-//   keyword (lower.cpp's lower_push_context). A #c_call procedure has one
-//   only inside its pushes. Each is a *Context, and named context, so a debugger shows it and passes it to a
-//   procedure it calls (gdb's `print twice(context, 4)`).
-//   Temporaries and hidden result pointers aren't variables here: the
-//   source has no name for them. (The backend still describes each hidden
-//   result pointer to a debugger, from Ir_Proc.source_results, as an
-//   artificial parameter named result$: llvm_backend.cpp's
-//   declare_variables.)
+//   scalar parameter in its stack slot (an IR_LOCAL; a parameter's is stored
+//   on entry, and every use reads it, so a debugger that changes it changes
+//   what the program reads), an aggregate parameter as the pointer it's
+//   passed as. And the context (spec 7.10), which the source doesn't declare,
+//   so it's artificial (Ir_Var.artificial): the hidden parameter, the first
+//   parameter after the result pointers (arg 1, the visible ones from 2), in
+//   its slot, at the procedure's name; in main and a run's procedure, the
+//   slot holding default_context's address, a local of the body's scope; and
+//   in a push_context's block, the slot holding the pushed context's address,
+//   a local of the block's scope at the keyword (lower.cpp's
+//   lower_push_context). A #c_call procedure has one only inside its pushes.
+//   Each is a *Context, and named context, so a debugger shows it and passes
+//   it to a procedure it calls (gdb's `print twice(context, 4)`). Temporaries
+//   and hidden result pointers aren't variables here: the source has no name
+//   for them. (The backend still describes each hidden result pointer to a
+//   debugger, from Ir_Proc.source_results, as an artificial parameter named
+//   result$: llvm_backend.cpp's declare_variables.)
 // - Constants (spec 4.2, issue #172): every one the program declares, used
 //   or not, so a debugger shows each by its name, as C's debuggers show an
 //   enum's values. A constant naming a procedure isn't one (the debugger
@@ -437,7 +436,8 @@ struct Ir_Var {
     String name;       // as in the source: "x", "it", "it_index"
     Type *type;        // its Rig type; a constant's, the type a debugger shows it as (an
                        // untyped integer's int, an untyped float's float64, null's *void)
-    Position pos;      // where it's declared: its name (it and it_index: the `for`)
+    Position pos;      // where it's declared: its name (it and it_index: the `for`; the
+                       // context, the procedure's name, a run's #run, or the push_context)
     s32 scope;         // the Ir_Scope that declares it; -1 for a top-level constant
     Ir_Var_Kind kind;
     s32 value;         // a value's number, or a global's index: what, Ir_Var_Kind says
@@ -508,8 +508,8 @@ struct Ir_Module {
     String directory;          // the directory rig ran in
     Array<Ir_Var> constants;   // the top-level constants, for a debugger, in source order: scope -1,
                                // arg 0 (see "Constants" above); none in a compile-time module
-    Type *context_type;        // Preload's Context, for the debug types of procedure types, which
-                               // take a *Context (spec 10.7); null without Preload
+    Type *context_type;        // Preload's Context, for the debug types of procedure types: one that
+                               // isn't #c_call takes a *Context (spec 10.7); null without Preload
 };
 
 // Whether t is f32 or f64.
@@ -639,10 +639,11 @@ String ir_print(Arena *a, Ir_Module *m);
 // the first file is L:C, its line and column, and one in any other F:L:C, F
 // the file's index (1:3:5 is line 3, column 5 of the second source). A
 // constant's place is its bits, in decimal, or its const.N. A variable the
-// compiler made, the context, says `artificial` after its arg (`; var
-// context *Context slot %2 arg 1 artificial in 0 at 1:1`), and the source
-// line of a procedure with no debug information, __runtime_init, ends in
-// `, no debug info`:
+// compiler made, the context, says `artificial` after its place and its
+// arg, when it has one (`; var context *Context slot %2 arg 1 artificial in
+// 0 at 1:1`; main's and a push's have none: `; var context *Context slot %0
+// artificial in 0 at 3:1`), and the source line of a procedure with no
+// debug information, __runtime_init, ends in `, no debug info`:
 //
 //   ; source C:\dev\rig\test.rig md5 0123456789abcdef0123456789abcdef
 //   ; source C:\dev\rig\sums.rig md5 fedcba9876543210fedcba9876543210

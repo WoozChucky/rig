@@ -12,14 +12,14 @@
 // separator is doubled, as //server/share would be.
 //
 // Every part is a view into the path given, cut out of it by slice and
-// advance, so it copies nothing, lives as long as the path's bytes, and
-// can't reach outside the path: a zeroed path gives four zeroed parts, and
-// a view of part of a string is read only as far as the view goes. A part
-// that isn't there still points into the path: a missing extension, as in
-// "file", and the name of a path that ends with a separator, as in "a/b/",
-// are empty views at the path's end, and the missing directory of a name
-// alone, as in "file", is one at its start. path_join is the one that
-// copies, into memory from the allocator it is given.
+// advance, so it copies nothing, lives as long as the path's bytes, and can't
+// reach outside the path: a zeroed path gives four zeroed parts, and a view
+// of part of a string is read only as far as the view goes. A part that isn't
+// there still points into the path: a missing extension, as in "file", and
+// the name of a path that ends with a separator, as in "a/b/", are empty
+// views at the path's end, and the missing directory of a name alone, as in
+// "file", is one at its start. path_join is the one that copies, into memory
+// from the allocator it is given, the context's unless another is.
 #load "string.rig";
 #load "allocators.rig";
 #load "memory.rig";

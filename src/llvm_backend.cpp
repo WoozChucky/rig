@@ -106,7 +106,8 @@ struct Backend {
     Table<Debug_Type> debug_types;
     Arena *arena;             // where the build allocates: the table's keys, types' names
     Type *context_type;       // Preload's Context (Ir_Module.context_type), for the debug types of
-                              // procedure types, which take a *Context (spec 10.7); null without
+                              // procedure types: one that isn't #c_call takes a *Context
+                              // (spec 10.7); null without Preload
 };
 
 static LLVMTypeRef llvm_type(LLVMContextRef c, Ir_Type t) {
@@ -1141,16 +1142,15 @@ static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMVal
     // stopped) and q's address, and gdb's `print make(&q, context, 7)` and
     // cdb's `.call make(&q, context, 7)` the address make writes its Pair
     // to first, and a `finish` out of make shows no value. Described as C
-    // would pass the types, a debugger would pass a struct by value where
-    // sum expects its address,
-    // leave make's result pointer out (crashing the program), and read a
-    // returned struct from rax and rdx, as C returns 16 bytes, showing
-    // whatever those registers held (measured with gdb). DWARF can mark
-    // a struct type as passed by reference (DW_CC_pass_by_reference), but
-    // gdb honours that only in a C++ unit (measured: in a C unit, sum(q)
-    // still passed q by value), and C++'s expressions take C++'s keywords,
-    // so a Rig variable named `new` or `class` couldn't be printed; nor can
-    // the mark be put on an array.
+    // would pass the types, a debugger would pass a struct by value where sum
+    // expects its address, leave make's result pointer out (crashing the
+    // program), and read a returned struct from rax and rdx, as C returns 16
+    // bytes, showing whatever those registers held (measured with gdb). DWARF
+    // can mark a struct type as passed by reference
+    // (DW_CC_pass_by_reference), but gdb honours that only in a C++ unit
+    // (measured: in a C unit, sum(q) still passed q by value), and C++'s
+    // expressions take C++'s keywords, so a Rig variable named `new` or
+    // `class` couldn't be printed; nor can the mark be put on an array.
     //
     // gdb takes only the result from this type: DWARF describes a defined
     // function's parameters by its parameter variables, and cdb counts
@@ -1449,17 +1449,16 @@ static u64 debug_constant_bits(Type *t, u64 bits) {
 //   (gdb's `print sum(context, &q)`, the context first: below). gdb shows
 //   the address and takes `p->a`, `*p` and `p.a` (it reads `.` through a
 //   pointer too); cdb takes `p->a`; Visual Studio's debugger, VS Code's on
-//   Windows, shows the fields and takes `a.count`, as it does for any
-//   pointer to a struct. (The variable could
-//   be the value at the address the slot holds instead, the declare's
-//   expression DW_OP_deref, as clang declares an argument passed by its
-//   address: gdb would show the struct, but call the procedure with it by
-//   value. And on Windows LLVM writes a deref'd slot as CodeView's
-//   S_DEFRANGE_REGISTER_REL_INDIR, "at the address held at this offset
-//   from the frame pointer", which cdb reads but Visual Studio's debugger
-//   doesn't: the parameter would be missing from its Variables view. A C++
-//   reference, `[]int &`, would be closer to a parameter, but LLVM-C makes
-//   a reference type without a size, and CodeView would then call it a
+//   Windows, shows the fields and takes `a.count`, as it does for any pointer
+//   to a struct. (The variable could be the value at the address the slot
+//   holds instead, the declare's expression DW_OP_deref, as clang declares an
+//   argument passed by its address: gdb would show the struct, but call the
+//   procedure with it by value. And on Windows LLVM writes a deref'd slot as
+//   CodeView's S_DEFRANGE_REGISTER_REL_INDIR, "at the address held at this
+//   offset from the frame pointer", which cdb reads but Visual Studio's
+//   debugger doesn't: the parameter would be missing from its Variables view.
+//   A C++ reference, `[]int &`, would be closer to a parameter, but LLVM-C
+//   makes a reference type without a size, and CodeView would then call it a
 //   32-bit pointer.)
 // - Each hidden result pointer (one per aggregate result, the IR's first
 //   parameters) is a parameter variable too, the first ones, so a debugger

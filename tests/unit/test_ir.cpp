@@ -5909,17 +5909,6 @@ TEST(a_chain_of_default_values_at_the_limit_builds) {
 
 // Issue #156: the context (spec 7.10, 10.4).
 
-// The first line of `text` holding `needle`, without its "\n"; {} when
-// there's none.
-static String line_holding(String text, const char *needle) {
-    s64 at = index_of(text, needle);
-    if (at < 0) return {};
-    s64 start = at, end = at;
-    while (start > 0 && text.data[start - 1] != '\n') start--;
-    while (end < text.count && text.data[end] != '\n') end++;
-    return string_slice(text, start, end - start);
-}
-
 TEST(rig_procedures_take_the_context) {
     // twice takes its caller's context, a ptr after its result pointers
     // (none here), stored into a slot of its own before the body, as a
@@ -6009,8 +5998,8 @@ TEST(c_procedures_take_no_context) {
               "  ret %5\n"
               "}\n");
     String main = proc_ir(ir, "main");
-    String puts = line_holding(main, "call @puts(");
-    String cb = line_holding(main, "call @cb(");
+    String puts = line_with(main, "call @puts(");
+    String cb = line_with(main, "call @cb(");
     CHECK(puts.count > 0 && !contains(puts, ","));
     CHECK(cb.count > 0 && !contains(cb, ","));
     String init = proc_ir(ir, "__runtime_init");
@@ -6068,7 +6057,7 @@ TEST(a_call_through_a_value_passes_the_context) {
     CHECK_EQ(count_of(main, "load ptr %0"), 1);
     s64 f = index_of(main, "= call %5(");
     String after = f < 0 ? String{} : string_slice(main, f + 1, main.count - f - 1);
-    String g = line_holding(after, "= call %");
+    String g = line_with(after, "= call %");
     CHECK(g.count > 0);
     CHECK_EQ(count_of(g, ", "), 1);
     arena_free(&a);
@@ -6116,7 +6105,7 @@ TEST(the_context_is_an_artificial_variable) {
     String cb = proc_ir(ir, "cb");
     CHECK(cb.count > 0 && !contains(cb, "; var context"));
     CHECK(contains(proc_ir(ir, "main"), "; var context *Context slot %0 artificial in 0 at 3:1\n"));
-    String init = line_holding(ir, "; source __runtime_init at ");
+    String init = line_with(ir, "; source __runtime_init at ");
     CHECK(init.count > 0);
     CHECK(init.count >= 15 && string_eq(string_slice(init, init.count - 15, 15), str(", no debug info")));
     arena_free(&a);

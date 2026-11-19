@@ -1595,12 +1595,13 @@ static Ast_Type *parse_whole_type(Parser *p) {
 //
 // An expression after the type and a '=' is the parameter's default value
 // (spec 7.2), which a call that leaves the parameter out passes: kept with
-// its '=' and its levels, counted as a constant's are (parse_constant),
-// since the checker works it out with the signature, at the top level.
-// Where a default may be (trailing, not with a '..' parameter, not on a
-// #compiler procedure) is the checker's to say, so a misplaced one gives
-// nothing up. A parameter written `n := 0`, its type left to its value, is
-// "a parameter needs its type, as in n: int = 0", at the ':=', for now.
+// its '=' and its levels, counted as a constant's are (parse_constant), since
+// the checker works it out with the signature, at the top level. Where a
+// default may be (trailing, not with a '..' parameter, not on a procedure
+// that takes C's '..' nor on a #compiler one) is the checker's to say, so a
+// misplaced one gives nothing up. A parameter written `n := 0`, its type left
+// to its value, is "a parameter needs its type, as in n: int = 0", at the
+// ':=', for now.
 static Ast_Param *parse_param(Parser *p) {
     Token *name = expect(p, TOKEN_IDENT);
     if (!name) return nullptr;

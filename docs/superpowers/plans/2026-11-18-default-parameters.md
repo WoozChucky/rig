@@ -181,7 +181,7 @@
 13. **Editor:** the declaration rule's lookahead becomes `:(?!:)` (Fact 11), so `f :: (n := 0)` colours as the procedure the parser now reads. `check.js` gains assertions pinning the colours of defaults.
 14. **Test names:**
     - Run tests: `tests/run/default_parameters` (`.rig`/`.out`), `tests/run/load/defaults.rig`, and `tests/run/default_runtime_error` (`.rig`/`.out`/`.err`/`.exit`).
-    - Error tests: `tests/errors/default_value_syntax`, `default_value_signatures` and `default_value_calls`.
+    - Error tests: `tests/errors/default_value_syntax`, `default_value_signatures`, `default_value_calls` and `run_fails_in_a_default`.
 
 ## Review Focus
 
@@ -417,9 +417,9 @@ static s64 required_arguments(Ast_Proc *proc);
 ### Task 4: Lower calls that leave parameters out
 
 **Files:**
-- Modify: `src/lower.cpp` (`Lowering.filling`, `filled_at`; `emit_in`, `emit_call`, `emit_call_indirect`; `lower_call_results` and its comment; the `#compiler` call's message; the header comment's parameters bullet), `src/ir.h` (the Positions bullet), `src/check_run.cpp` (`walk_proc` and the file's header)
-- Create: `tests/run/default_parameters.rig`/`.out`, `tests/run/load/defaults.rig`, `tests/run/default_runtime_error.rig`/`.out`/`.err`/`.exit`
-- Test: `tests/unit/test_ir.cpp`, `tests/unit/test_checker.cpp`
+- Modify: `src/lower.cpp` (`Lowering.filling`, `filled_at`; `emit_in`, `emit_call`, `emit_call_indirect`; `fail_in_place`; `lower_call_results` and its comment; the `#compiler` call's message; the header comment's parameters bullet), `src/ir.h` (the Positions bullet), `src/check_run.cpp` (`walk_proc` and the file's header), `src/interp.cpp` (`interp_call_compiler`'s comment: a `#compiler` call in a default value is at its name too)
+- Create: `tests/run/default_parameters.rig`/`.out`, `tests/run/load/defaults.rig`, `tests/run/default_runtime_error.rig`/`.out`/`.err`/`.exit`, `tests/errors/run_fails_in_a_default.rig`/`.err`, `tests/errors/load/run_default.rig`
+- Test: `tests/unit/test_ir.cpp`, `tests/unit/test_checker.cpp`, `tests/unit/test_compiler_module.cpp`
 
 **Interfaces:**
 ```cpp
@@ -450,6 +450,13 @@ Position filled_at;  // every instruction is at filled_at, the statement holding
       - Its `panic` line contains `; 4:5 s0`.
       - A global's bytes (`message_of`, any index) are `test.rig:2:28: runtime error: division by zero\n`, the operation's own place (Decision 10).
     - `a_chain_of_default_values_at_the_limit_builds` (Review Focus 3): Task 3's chain up to `p1000`, then `main :: () {\n    n := p1000();\n}\n`. `builds` is true, and `count_of(proc_ir(ir_print(...), "main"), "call @p") == 1001`.
+    - `a_nested_default_values_code_is_at_the_call_too` (Review Focus 1): `f :: (a: int, b: int = g() / d)`, where `g :: (x: int = 1)`, called as `n := f(1);` on line 5. main's IR has nothing at lines 2 or 3, its `panic` is at `5:5`, and one global's bytes are `test.rig:3:28: runtime error: division by zero\n`.
+    - `a_default_values_bounds_checks_follow_its_procedure`: a default's bounds checks follow its own procedure's `#no_abc`, not the caller's (Decision 10): one `__rig_bounds_failed` call in main, for its own indexing, and one in a `#no_abc` caller, for `checked`'s default. Lowered without bounds checks, none.
+    - `a_default_values_failure_while_compiling_is_at_its_place`: on demand, for `N :: #run pick();`, the `__rig_bounds_failed` call is at the check in `pick`'s signature, `3:24`, and the rest of the default at the `#run`, `4:6` (`fail_in_place`).
+    - `a_compiler_call_in_a_default_value_is_refused_at_each_call`: `open :: (w: Workspace = create_workspace("default"))`, called as `open();`, `open(.{1});` and `open();`. The message is at lines 5 and 7, the calls that leave `w` out, and not at the default.
+  - `test_checker.cpp`, `a_run_that_fails_in_a_default_value_names_its_place` (Review Focus 1): a `#run` failing in `bad :: (k: int = items[k_index])` has its innermost frame at the check, `test.rig:3:23`: the run's own frame when its call leaves `k` out, `use`'s when `use`'s does.
+  - `test_compiler_module.cpp`, `compiler_procedures_fail_like_runtime_errors`: a `#run` calling `open();` twice, whose default is `create_workspace("a")`, fails at the `#compiler` call's name in `open`'s signature, `PATH:2:25`, not at the statement.
+  - `tests/errors/run_fails_in_a_default.rig`/`.err` and `tests/errors/load/run_default.rig` (Review Focus 1): a `#run` failing in a default declared in a loaded file has its innermost frame, `use`'s, at the division there, `load/run_default.rig:6:28`, then the `#run`'s.
   - `test_checker.cpp`, `default_values_run_while_compiling` (Review Focus 2): `check_src` of `N :: #run f();\nM :: #run f(5);\nA :: #run answer();\nf :: (n: int = g()) -> int { return n * 2; }\ng :: () -> int { return 21; }\ntwice :: (n: int) -> int { return n * 2; }\nanswer :: (n: int = #run twice(21)) -> int { return n; }\nmain :: () { }\n`. No messages. `global_named` `N`, `M` and `A` are the constants 42, 10 and 42. `g` is reached only through `f`'s default.
   - `tests/run/load/defaults.rig`:
     ```rig

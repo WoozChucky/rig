@@ -25,13 +25,13 @@
 //   block that uses it, with no line (gdb's `next` then stepped past an
 //   `else if` testing it); and a copy kept for the debugger alone wouldn't
 //   be what the program reads. An aggregate parameter is the pointer to the
-//   caller's copy, used as it is (the backend keeps the pointer in a slot
-//   for the debugger). A
-//   '..T' parameter (spec 7.2) is a []T one, to the callee and to a
-//   debugger alike: only the caller does anything more (lower_call_results).
-//   A parameter's default value (spec 7.2) is the caller's code too: a call
-//   that leaves the parameter out works the value out and passes it, as if
-//   it were written there, so the callee never knows (lower_call_results).
+//   caller's copy, used as it is (the backend keeps the pointer in a slot for
+//   the debugger). A '..T' parameter (spec 7.2) is a []T one, to the callee
+//   and to a debugger alike: only the caller does anything more
+//   (lower_call_results). A parameter's default value (spec 7.2) is the
+//   caller's code too: a call that leaves the parameter out works the value
+//   out and passes it, as if it were written there, so the callee never
+//   knows (lower_call_results).
 // - The context (spec 7.10, 10.4). Every procedure with a body but a
 //   #c_call one and main takes a *Context, a hidden ptr parameter after
 //   the result pointers and before the visible ones (takes_context), and a
@@ -270,19 +270,18 @@
 //   main's and a run's slot, a local (lower_body), or a push_context's
 //   slot, a local of its block's scope at its keyword (lower_push_context).
 //   __runtime_init has no debug information at all (Ir_Proc.no_debug_info),
-//   and main's call of it no position, so `break main` stops at main's
-//   first line with the context set up. Each copy of
-//   deferred code is a scope of its own too, at the deferred statement,
-//   inside the scope the defer was reached in, its instructions at their
-//   own lines (lower_deferred); the ret or jump that leaves after the copies
-//   is where it is without them (a return's, break's or continue's at its
-//   keyword, an if's block's at its '}', a loop body's at the loop's
-//   keyword, the body's ret at its '}'), so a debugger steps through the
-//   deferred lines in the order they run, then to that place, when it has
-//   an instruction there (a jump to the block laid out right after it has
-//   none, so a break at the end of a while body goes straight on after
-//   the loop); a block statement has no jump of its own, and goes on to
-//   the next statement.
+//   and main's call of it no position, so `break main` stops at main's first
+//   line with the context set up. Each copy of deferred code is a scope of
+//   its own too, at the deferred statement, inside the scope the defer was
+//   reached in, its instructions at their own lines (lower_deferred); the ret
+//   or jump that leaves after the copies is where it is without them (a
+//   return's, break's or continue's at its keyword, an if's block's at its
+//   '}', a loop body's at the loop's keyword, the body's ret at its '}'), so
+//   a debugger steps through the deferred lines in the order they run, then
+//   to that place, when it has an instruction there (a jump to the block laid
+//   out right after it has none, so a break at the end of a while body goes
+//   straight on after the loop); a block statement has no jump of its own,
+//   and goes on to the next statement.
 //
 // Blocks are numbered in the order they're made, and made in the order
 // their code comes in the source (deferred code's where each copy is
@@ -445,9 +444,11 @@ struct Lowering {
     // block. While a call's default values are lowered, filled_at stands in
     // for pos (emitted_at), but for a failure on demand (fail_in_place).
     Position pos;             // line 0 in the procedures the compiler makes
-    bool filling;             // a call's default values are being lowered (lower_call_results, spec 7.2):
-    Position filled_at;       // every instruction is at filled_at, the statement holding the outermost such
-                              // call, the caller's, since a default may be written in another file
+    bool filling;             // a call's default values are being lowered (lower_call_results, spec 7.2)
+    Position filled_at;       // while filling, the statement holding the outermost such call, the
+                              // caller's, where their instructions are (emitted_at), since a default may
+                              // be written in another file; but on demand a failure's are at its own
+                              // place (fail_in_place)
     s32 scope;                // an index in proc->scopes; -1 in the procedures the compiler makes
     s32 block_scope;          // the scope of the block whose statements are being lowered (lower_block),
                               // which a hiding declaration's doesn't replace: where a constant that
@@ -546,9 +547,9 @@ static bool fail_in_place(Lowering *l) {
     return filling;
 }
 
-// An instruction appended to `block`, at the current position and scope:
-// every instruction lowering makes comes through here or emit_call, so none
-// is left without them.
+// An instruction appended to `block`, at emitted_at's position and the
+// current scope: every instruction lowering makes comes through here,
+// emit_call or emit_call_indirect, so none is left without them.
 static Ir_Instr *emit_in(Lowering *l, s32 block, Ir_Op op, Ir_Type type) {
     Ir_Instr *instr = ir_emit(l->proc, block, op, type);
     instr->pos = emitted_at(l);
@@ -559,7 +560,7 @@ static Ir_Instr *emit_in(Lowering *l, s32 block, Ir_Op op, Ir_Type type) {
 static Ir_Instr *emit(Lowering *l, Ir_Op op, Ir_Type type) { return emit_in(l, l->block, op, type); }
 
 // A call of module->procs[callee] in the current block (ir_emit_call), at
-// the current position and scope.
+// emitted_at's position and the current scope.
 static Ir_Instr *emit_call(Lowering *l, s32 callee, Array<s32> args) {
     Ir_Instr *call = ir_emit_call(l->module, l->proc, l->block, callee, args);
     call->pos = emitted_at(l);
@@ -589,6 +590,14 @@ static s32 new_scope(Lowering *l, Position pos) {
 // living in the stack slot %slot, declared in `scope`.
 static void add_local_var(Lowering *l, Ast_Var *decl, s32 slot, s32 scope) {
     array_add(&l->proc->vars, Ir_Var{decl->name, decl->type, decl->pos, scope, IR_VAR_SLOT, slot, 0, 0, false});
+}
+
+// Records the variable context (spec 7.10), a *Context the compiler made,
+// so artificial, living in the stack slot %slot, at `pos` in `scope`: the
+// hidden parameter, arg 1, or a local, arg 0 (ir.h's "Variables").
+static void add_context_var(Lowering *l, Position pos, s32 scope, s32 slot, s32 arg) {
+    array_add(&l->proc->vars,
+              Ir_Var{str("context"), type_pointer_to(l->context_type), pos, scope, IR_VAR_SLOT, slot, arg, 0, true});
 }
 
 // The type a debugger shows constant type t as (ir.h's "Constants"): an
@@ -1988,11 +1997,11 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //   is: its code is the caller's, worked out again at each call, after the
 //   arguments given, its context the caller's current one. All of it, the
 //   defaults its own calls fill in too, is at the statement holding the
-//   outermost such call (Lowering.filling,
-//   emitted_at), whatever file the default is written in; a runtime check
-//   in it still names its own place in its message (runtime_error_prefix),
-//   and while compiling its failure is there too (fail_in_place). Its
-//   bounds checks follow the #no_abc of the procedure declaring it.
+//   outermost such call (Lowering.filling, emitted_at), whatever file the
+//   default is written in; a runtime check in it still names its own place
+//   in its message (runtime_error_prefix), and while compiling its failure
+//   is there too (fail_in_place). Its bounds checks follow the #no_abc of
+//   the procedure declaring it.
 // - Through a procedure value, right before the call, a null value is a
 //   runtime error at the call's '(' (spec 8.4: "null procedure call"); then
 //   the call of the value, as the procedure it holds expects to be called
@@ -2284,8 +2293,7 @@ static void lower_push_context(Lowering *l, Ast_Push_Context *push, Ast_Proc *so
     place(l, push->pos, new_scope(l, push->block->pos));
     s32 slot = emit(l, IR_LOCAL, IR_PTR)->result;
     emit_store(l, IR_PTR, address, slot);
-    array_add(&l->proc->vars, Ir_Var{str("context"), type_pointer_to(l->context_type), push->pos, l->scope,
-                                     IR_VAR_SLOT, slot, 0, 0, true});
+    add_context_var(l, push->pos, l->scope, slot, 0);
     l->context = slot;
     lower_block(l, push->block, source);
     leave_block(l, mark, source);
@@ -2733,9 +2741,10 @@ static void emit_entry_return(Lowering *l) {
 
 // A statement, every instruction of it at its position (statement_position)
 // but where the statement itself says otherwise: a loop's and an if's own
-// code is at its keyword, and a failing check at the check, but in a call's
-// default value lowered whole, all of whose code is at the statement
-// (emitted_at).
+// code is at its keyword, and a failing check at the check. A call's
+// default values have all their code at the statement holding the call
+// (emitted_at), a failing check's too when the program is lowered whole; on
+// demand a failure's code stays at its own place (fail_in_place).
 static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     l->pos = statement_position(s);
     switch (s->kind) {
@@ -2877,16 +2886,17 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
 }
 
 // The block's statements in order. Once the IR block has ended (as after a
-// return, a break or a continue, or after a block or an if that always
-// ends in one: lower_scoped_block and lower_if leave the IR block they end
-// in current), the rest can't run: they aren't lowered, and couldn't be,
-// since nothing may follow a terminator. Only their constants are, a taken
-// #if branch's too, since they need no code: the block's scope has code
-// before them, where a debugger shows them as it shows any of the block's
-// names (ir.h's "Constants"), but for one that hides a name
-// (lower_statement). A nested block's constants aren't: that block's scope
-// has no code for a debugger to stop in. A taken #if branch's statements
-// are lowered this way alone, in the block around it (lower_statement).
+// return, a break or a continue, or after a block, an if or a push_context
+// that always ends in one: lower_scoped_block, lower_if and
+// lower_push_context leave the IR block they end in current), the rest can't
+// run: they aren't lowered, and couldn't be, since nothing may follow a
+// terminator. Only their constants are, a taken #if branch's too, since they
+// need no code: the block's scope has code before them, where a debugger
+// shows them as it shows any of the block's names (ir.h's "Constants"), but
+// for one that hides a name (lower_statement). A nested block's constants
+// aren't: that block's scope has no code for a debugger to stop in. A taken
+// #if branch's statements are lowered this way alone, in the block around it
+// (lower_statement).
 static void lower_statements(Lowering *l, Ast_Block *block, Ast_Proc *source) {
     for (s64 i = 0; i < block->statements.count; i++) {
         Ast *s = block->statements[i];
@@ -3791,8 +3801,7 @@ static void emit_startup_context(Lowering *l, Position pos) {
     s32 slot = emit(l, IR_LOCAL, IR_PTR)->result;
     emit_store(l, IR_PTR, address_of(l, l->default_context), slot);
     l->context = slot;
-    array_add(&l->proc->vars,
-              Ir_Var{str("context"), type_pointer_to(l->context_type), pos, 0, IR_VAR_SLOT, slot, 0, 0, true});
+    add_context_var(l, pos, 0, slot, 0);
 }
 
 // The body of procedure `source` (not a foreign or #compiler one), lowered
@@ -3840,8 +3849,7 @@ static void lower_body(Lowering *l, Ast_Proc *source, s32 index, bool is_run) {
         s32 slot = emit(l, IR_LOCAL, IR_PTR)->result;
         emit_store(l, IR_PTR, hidden, slot);
         l->context = slot;
-        array_add(&l->proc->vars, Ir_Var{str("context"), type_pointer_to(l->context_type), source->pos, 0,
-                                         IR_VAR_SLOT, slot, 1, 0, true});
+        add_context_var(l, source->pos, 0, slot, 1);
         first++;
     }
     for (s64 k = 0; k < source->params.count; k++) {

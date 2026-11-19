@@ -1,6 +1,7 @@
 // Basic's numbers (issue #134): integers to text in any base and back,
 // with int's extremes and overflow; floats to text with a number of
-// decimals, their rounding, -0, infinities and NaN, and back.
+// decimals, their rounding, -0, infinities and NaN, and back; and u64s to
+// text (issue #154), past int's largest too.
 #import "Basic";
 
 show_int :: (value: int, base: int) {
