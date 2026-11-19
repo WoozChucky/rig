@@ -140,6 +140,43 @@ The context is what code deep in a call chain needs without every caller handing
 
 `__runtime_init` sets `default_context` up: its allocator, and the pointers to Preload's storage and its first block (`__temporary_storage`, `__temporary_storage_data`), which a global's value can't hold, since it can't hold another global's address (spec 4.3). It runs before `main`'s first line and before each `#run`'s code, and only the first call does anything. It's `#c_call`, so it uses no context itself. It and the two globals are Preload's own, not for programs.
 
+#### The temporary allocator
+
+- `temporary_allocator_proc`, `TEMPORARY_ALLOCATOR`: memory from the current context's temporary storage, `context.temporary_storage`, handed out one allocation after another and given back all at once. The procedure finds the storage through the context, so the allocator's `data` is unused, and a `push_context` with another storage makes it allocate from that one.
+
+It hands out the current region: the newest page's bytes after its header, or, with no page, the first block. A page starts in the storage's count where the region before it ended, so `occupied` keeps counting through the pages and the newest page's own offset is `occupied - start`, found without walking the pages.
+
+- `ALLOCATE` starts at the first multiple of 8 at or past the region's offset, so every allocation is aligned to 8. When the rest of the region can't hold `size` bytes, a page is asked of `overflow_allocator`: `TEMPORARY_STORAGE_SIZE` bytes, or `size` with the 24-byte header when that is larger. The rest of the region before it goes unused but counts as occupied. When `overflow_allocator` has none to give, the result is null and the storage is as it was.
+- `RESIZE` grows or shrinks the last allocation in place when the region holds `size` bytes from its start. Otherwise it allocates anew and copies the old bytes that fit, or gives null with the memory as it was.
+- `FREE` does nothing: the memory goes back with everything else at the next reset.
+- `FREE_ALL` is a reset: every page goes back to `overflow_allocator`, newest first, `overflow_pages` is null and `occupied` 0, so the first block is handed out again from its start. `high_water_mark` stays: the most bytes ever occupied, counting the unused tails of regions a page replaced, so it's at least the size of a first block that would have held everything.
+
+Memory the temporary allocator gave, used after a reset, is a memory error no check catches (spec 8.6): the bytes are handed out again, or their page is back with `overflow_allocator`. A program's own `Temporary_Storage` needs `data`, `size` and `overflow_allocator` set, and its `data` aligned to 8 for its allocations to be.
+
+While compiling, every `#run` starts with the compile-time world's `default_context`, so the runs share the world's temporary storage, which nothing resets but their own code.
+
+```rig
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+main :: () {
+    t := TEMPORARY_ALLOCATOR;
+    a := t.proc(ALLOCATE, 10, 0, null, t.data);
+    b := t.proc(ALLOCATE, 100, 0, null, t.data);
+    printf("%lld bytes occupied\n", context.temporary_storage.occupied);
+    t.proc(FREE_ALL, 0, 0, null, t.data);
+    printf("%lld after the reset, at most %lld\n", context.temporary_storage.occupied, context.temporary_storage.high_water_mark);
+}
+```
+
+It prints:
+
+```text
+116 bytes occupied
+0 after the reset, at most 116
+```
+
+`__memmove` is C's `memmove` under Preload's own name, which the temporary allocator's `RESIZE` copies with; it's not for programs.
+
 ## Waiting on the language
 
 - No type aliases, so the allocator's procedure type is written out, in `Allocator` and in each allocator procedure.

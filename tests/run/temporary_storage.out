@@ -1,0 +1,14 @@
+start: occupied 0, pages 0, most 0
+16
+two: occupied 17, pages 0, most 17
+1
+0
+grown: occupied 140, pages 0, most 140
+reset: occupied 0, pages 0, most 140
+full: occupied 32768, pages 0, most 32768
+a page: occupied 32776, pages 1, most 32776
+1 0
+moved: occupied 65544, pages 1, most 65544
+large: occupied 105544, pages 2, most 105544
+reset again: occupied 0, pages 0, most 105544
+100 204

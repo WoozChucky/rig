@@ -1,0 +1,70 @@
+// Temporary storage (issue #156, spec 7.10): TEMPORARY_ALLOCATOR hands
+// out context.temporary_storage's memory one allocation after another,
+// each at a multiple of 8, from its first 32 KB, which lie in the
+// program, then from pages its overflow_allocator gives, of 32 KB or the
+// request with its header, whichever is larger. A resize of the last
+// allocation stays in place when it fits. Nothing is given back until a
+// reset, FREE_ALL. occupied counts from the first byte, a page from
+// where the region before it ended, and high_water_mark is the most it
+// has been.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+T :: TEMPORARY_ALLOCATOR;
+
+take :: (size: int) -> *u8 { return T.proc(ALLOCATE, size, 0, null, T.data); }
+grow :: (p: *u8, old_size: int, size: int) -> *u8 { return T.proc(RESIZE, size, old_size, p, T.data); }
+reset :: () { T.proc(FREE_ALL, 0, 0, null, T.data); }
+
+pages :: () -> int {
+    n := 0;
+    page := context.temporary_storage.overflow_pages;
+    while page != null {
+        n += 1;
+        page = page.previous;
+    }
+    return n;
+}
+
+show :: (what: *u8) {
+    s := context.temporary_storage;
+    printf("%s: occupied %lld, pages %lld, most %lld\n", what, s.occupied, pages(), s.high_water_mark);
+}
+
+// While compiling, the runs share the compile-time world's storage,
+// which nothing resets but their own code.
+left :: () -> int {
+    take(100);
+    return context.temporary_storage.occupied;
+}
+FIRST :: #run left();
+SECOND :: #run left();
+
+main :: () {
+    show("start");
+    a := take(10);
+    b := take(1);
+    printf("%lld\n", b - a);
+    show("two");
+    c := grow(b, 1, 100);      // the last allocation: in place
+    printf("%d\n", c == b);
+    d := grow(a, 10, 20);      // not the last: anew, copied
+    printf("%d\n", d == a);
+    show("grown");
+    reset();
+    show("reset");
+    e := take(32768);          // the first 32 KB, exactly
+    show("full");
+    f := take(8);              // a page of 32 KB
+    show("a page");
+    reset();
+    g := take(32760);
+    h := grow(g, 32760, 32768);   // in place, to the end exactly
+    k := grow(h, 32768, 32776);   // past it: a page of its own
+    printf("%d %d\n", h == g, k == h);
+    show("moved");
+    m := take(40000);          // the page is full: one of 40000 bytes
+    show("large");
+    reset();
+    show("reset again");
+    printf("%lld %lld\n", FIRST, SECOND);
+}

@@ -8587,3 +8587,65 @@ TEST(a_run_reaches_through_a_push) {
     CHECK_EQ(x->constant, 5);
     arena_free(&a);
 }
+
+TEST(the_temporary_allocator_while_compiling) {
+    // Preload's temporary allocator, run by the compile-time world's #runs,
+    // which share its storage, in declaration order: a resize of the last
+    // allocation in place, one of an earlier allocation moved and copied, a
+    // request larger than a page given a page of its own, and FREE_ALL,
+    // which gives the pages back and keeps the high water mark.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "T :: TEMPORARY_ALLOCATOR;\n"
+                                 "in_place :: () -> bool {\n"
+                                 "    T.proc(FREE_ALL, 0, 0, null, T.data);\n"
+                                 "    p := T.proc(ALLOCATE, 10, 0, null, T.data);\n"
+                                 "    q := T.proc(RESIZE, 100, 10, p, T.data);\n"
+                                 "    return q == p && context.temporary_storage.occupied == 100;\n"
+                                 "}\n"
+                                 "moved :: () -> bool {\n"
+                                 "    p := cast(*u8) T.proc(ALLOCATE, 10, 0, null, T.data);\n"
+                                 "    p.* = 42;\n"
+                                 "    T.proc(ALLOCATE, 1, 0, null, T.data);\n"
+                                 "    q := cast(*u8) T.proc(RESIZE, 20, 10, p, T.data);\n"
+                                 "    return q != p && q.* == 42;\n"
+                                 "}\n"
+                                 "page :: () -> int {\n"
+                                 "    T.proc(FREE_ALL, 0, 0, null, T.data);\n"
+                                 "    T.proc(ALLOCATE, 10, 0, null, T.data);\n"
+                                 "    T.proc(ALLOCATE, 40000, 0, null, T.data);\n"
+                                 "    return context.temporary_storage.occupied;\n"
+                                 "}\n"
+                                 "after_reset :: () -> bool {\n"
+                                 "    T.proc(FREE_ALL, 0, 0, null, T.data);\n"
+                                 "    s := context.temporary_storage;\n"
+                                 "    return s.occupied == 0 && s.overflow_pages == null && s.high_water_mark >= 72768;\n"
+                                 "}\n"
+                                 "left :: () -> int {\n"
+                                 "    T.proc(ALLOCATE, 100, 0, null, T.data);\n"
+                                 "    return context.temporary_storage.occupied;\n"
+                                 "}\n"
+                                 "IN_PLACE :: #run in_place();\n"
+                                 "MOVED :: #run moved();\n"
+                                 "PAGE :: #run page();\n"
+                                 "RESET :: #run after_reset();\n"
+                                 "FIRST :: #run left();\n"
+                                 "SHARED :: #run left();\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    const char *names[] = {"IN_PLACE", "MOVED", "PAGE", "RESET"};
+    s64 values[] = {1, 1, 72768, 1};
+    for (s64 i = 0; i < 4; i++) {
+        Ast *k = top_level_named(tree, names[i]);
+        CHECK_EQ(k->kind, AST_CONST);
+        CHECK(k->is_constant);
+        CHECK_EQ(k->constant, values[i]);
+    }
+    Ast *first = top_level_named(tree, "FIRST");
+    Ast *shared = top_level_named(tree, "SHARED");
+    CHECK(first->is_constant && shared->is_constant);
+    CHECK(shared->constant > first->constant);
+    arena_free(&a);
+}
