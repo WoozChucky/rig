@@ -190,7 +190,7 @@ TEST(a_constant_that_hides_a_name_starts_a_scope) {
                          "  ; scope 4 in 1 at 12:5\n"
                          "  ; scope 5 in 4 at 13:9\n"));
     CHECK(contains(main, "  ; var LIMIT int constant 99 in 1 at 6:5\n"));
-    CHECK(contains(main, "  ; var STEP int constant 2 in 3 at 10:9\n"));
+    CHECK(contains(main, "  ; var STEP int constant 2 in 2 at 10:9\n"));
     CHECK(contains(main, "  ; var LIMIT int slot %"));
     CHECK(contains(main, " in 5 at 13:9\n"));
     arena_free(&a);
