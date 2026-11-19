@@ -173,8 +173,8 @@ Any :: struct { type: *Type_Info; value_pointer: *void; }
 // A page of temporary storage, asked of the storage's overflow_allocator
 // when the region before it, the first block or the newest page, can't
 // hold an allocation: this header, then size bytes. The header is 24
-// bytes, a multiple of 8, so the bytes after it start as aligned as the
-// page. start is where its bytes start in the storage's count
+// bytes, a multiple of 8, so the bytes after it are aligned to 8 when the
+// page is. start is where its bytes start in the storage's count
 // (Temporary_Storage.occupied, which counts from the first block's start),
 // so the current page's own offset is occupied - start, found without
 // walking the pages.
@@ -183,8 +183,10 @@ Temporary_Storage_Page :: struct { previous: *Temporary_Storage_Page; size: int;
 // Memory that is given out from one end and given back all at once:
 // allocations from its first block, data's size bytes, then from pages
 // asked of overflow_allocator, the newest first in overflow_pages. occupied
-// is how many bytes are given out, counted from the first block's start;
-// high_water_mark the most there ever were.
+// is how far into the storage's count allocations reach, from the first
+// block's start, counting the padding that aligns them and the unused
+// tails of regions a page replaced; high_water_mark is the largest it has
+// been.
 Temporary_Storage :: struct {
     data: *u8;
     size: int;
@@ -240,9 +242,12 @@ __memmove :: (destination: *void, source: *void, count: u64) -> *void #foreign l
 // It allocates from the current region, the newest page's bytes after its
 // header or, with no page, the first block. The region's own offset is
 // occupied - start (0 for the first block), since a page starts in the
-// storage's count where the region before it ended: so occupied keeps
-// counting through the pages, high_water_mark is its largest value, and
-// the newest page's offset is found without walking the pages.
+// storage's count where the region before it ended, rounded up to a
+// multiple of 8: so occupied keeps counting through the pages,
+// high_water_mark is its largest value, and the newest page's offset is
+// found without walking the pages. The rounding keeps a page's offsets as
+// aligned as the count's, so the high water mark is at least the size of a
+// first block that would have held everything.
 //
 // - ALLOCATE starts at the first multiple of 8 at or past the offset, so
 //   every allocation is aligned to 8, as any Rig type needs (spec 3.11),
@@ -295,7 +300,10 @@ temporary_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *v
         if fresh == null { return null; }
         fresh.previous = page;
         fresh.size = bytes - size_of(Temporary_Storage_Page);
-        fresh.start = start + region_size;
+        // A region whose size isn't a multiple of 8, a large page's, would
+        // otherwise start the page at a count that isn't one. The gap
+        // counts as occupied, as the tail does.
+        fresh.start = (start + region_size + 7) & ~7;
         storage.overflow_pages = fresh;
         storage.occupied = fresh.start + size;
         if storage.occupied > storage.high_water_mark { storage.high_water_mark = storage.occupied; }

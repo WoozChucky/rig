@@ -4,9 +4,9 @@
 // program, then from pages its overflow_allocator gives, of 32 KB or the
 // request with its header, whichever is larger. A resize of the last
 // allocation stays in place when it fits. Nothing is given back until a
-// reset, FREE_ALL. occupied counts from the first byte, a page from
-// where the region before it ended, and high_water_mark is the most it
-// has been. A push_context with a program's own storage makes it allocate
+// reset, FREE_ALL. occupied counts from the first byte, a page from the
+// first multiple of 8 at or past where the region before it ended, and
+// high_water_mark is the most it has been. A push_context with a program's own storage makes it allocate
 // from that one, its pages from its own overflow_allocator, which a reset
 // gives them back to; that allocator's null gives null, the storage as it
 // was.
@@ -134,6 +134,38 @@ main :: () {
     show("large");
     reset();
     show("reset again");
+    take(1);
+    take(32760);               // from 8: the first 32 KB, exactly
+    show("padded, full");
+    reset();
+    take(1);
+    take(32761);               // from 8, the padding leaves 32760: a page
+    show("padded, a page");
+    reset();
+    take(32765);
+    take(1);                   // from 32768, past the first 32 KB: a page
+    show("past the end");
+    reset();
+    take(32768);
+    take(32745);               // a page of 32745 bytes, an odd count
+    take(8);                   // the next page from a multiple of 8
+    show("odd page");
+    reset();
+    z := take(40);
+    for i: 0..39 { z[i] = 0; }
+    reset();
+    p := take(16);
+    for i: 0..15 { p[i] = cast(u8) (i + 1); }
+    q := take(8);              // so p isn't the last
+    r := grow(p, 16, 4);       // shrunk, not the last: anew, 4 bytes copied
+    s := take(8);              // right after r, on z's zeros
+    sum = 0;
+    for i: 0..3 { sum += cast(int) r[i]; }
+    zeros := 0;
+    for i: 0..7 { if s[i] == 0 { zeros += 1; } }
+    printf("%d %lld %lld %lld\n", r == p, s - r, sum, zeros);
+    show("shrunk anew");
+    reset();
     printf("%lld %lld\n", FIRST, SECOND);
     own();
 }

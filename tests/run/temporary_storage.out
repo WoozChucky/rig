@@ -17,6 +17,12 @@ a page: occupied 32776, pages 1, most 32776
 moved: occupied 65544, pages 1, most 65544
 large: occupied 105544, pages 2, most 105544
 reset again: occupied 0, pages 0, most 105544
+padded, full: occupied 32768, pages 0, most 105544
+padded, a page: occupied 65529, pages 1, most 105544
+past the end: occupied 32769, pages 1, most 105544
+odd page: occupied 65528, pages 2, most 105544
+0 8 10 8
+shrunk anew: occupied 40, pages 0, most 105544
 100 204
 own: at 0
 own page: occupied 104, pages 1, most 104

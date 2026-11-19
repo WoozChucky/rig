@@ -128,8 +128,8 @@ The context is what code deep in a call chain needs without every caller handing
 - `default_context: Context`: the context `main` and each `#run` start with, and the one a `#c_call` procedure, which C calls with none, pushes for itself when it has no other (`push_context default_context { ... }`). Its allocator is the heap, and its temporary storage Preload's one.
 - `Temporary_Storage`, memory given out from one end and given back all at once:
   - `data: *u8`, `size: int`: its first block, `TEMPORARY_STORAGE_SIZE` bytes of Preload's.
-  - `occupied: int`: how many bytes are given out, counted from the first block's start, through the pages after it.
-  - `high_water_mark: int`: the most bytes ever occupied.
+  - `occupied: int`: how far into the storage's count allocations reach, from the first block's start through the pages after it, counting the padding that aligns them and the unused tails of regions a page replaced.
+  - `high_water_mark: int`: the largest `occupied` has been.
   - `overflow_allocator: Allocator`: where its pages come from when the current region, the first block or the newest page, can't hold an allocation; the heap.
   - `overflow_pages: *Temporary_Storage_Page`: those pages, newest first.
 - `Temporary_Storage_Page`, a page's header, before its bytes:
@@ -144,12 +144,12 @@ The context is what code deep in a call chain needs without every caller handing
 
 - `temporary_allocator_proc`, `TEMPORARY_ALLOCATOR`: memory from the current context's temporary storage, `context.temporary_storage`, handed out one allocation after another and given back all at once. The procedure finds the storage through the context, so the allocator's `data` is unused, and a `push_context` with another storage makes it allocate from that one.
 
-It hands out the current region: the newest page's bytes after its header, or, with no page, the first block. A page starts in the storage's count where the region before it ended, so `occupied` keeps counting through the pages and the newest page's own offset is `occupied - start`, found without walking the pages.
+It hands out the current region: the newest page's bytes after its header, or, with no page, the first block. A page starts in the storage's count where the region before it ended, rounded up to a multiple of 8, so `occupied` keeps counting through the pages and the newest page's own offset is `occupied - start`, found without walking the pages.
 
 - `ALLOCATE` starts at the first multiple of 8 at or past the region's offset, so every allocation is aligned to 8 when the first block and `overflow_allocator`'s memory are, as the heap's is: a page's 24-byte header is a multiple of 8. When the rest of the region can't hold `size` bytes, a page is asked of `overflow_allocator`: `TEMPORARY_STORAGE_SIZE` bytes, or `size` with the 24-byte header when that is larger. The rest of the region before it goes unused but counts as occupied. When `overflow_allocator` has none to give, the result is null and the storage is as it was.
 - `RESIZE` grows or shrinks the last allocation in place when the region holds `size` bytes from its start. Otherwise it allocates anew and copies the old bytes that fit, or gives null with the memory as it was.
 - `FREE` does nothing: the memory goes back with everything else at the next reset.
-- `FREE_ALL` is a reset: every page goes back to `overflow_allocator`, newest first, `overflow_pages` is null and `occupied` 0, so the first block is handed out again from its start. `high_water_mark` stays: the most bytes ever occupied, counting the unused tails of regions a page replaced, so it's at least the size of a first block that would have held everything.
+- `FREE_ALL` is a reset: every page goes back to `overflow_allocator`, newest first, `overflow_pages` is null and `occupied` 0, so the first block is handed out again from its start. `high_water_mark` stays: the largest `occupied` has been, counting the unused tails of regions a page replaced. A page's start, rounded up, keeps its offsets as aligned as the count's, so the mark is at least the size of a first block that would have held everything.
 
 Memory the temporary allocator gave, used after a reset, is a memory error no check catches (spec 8.6): the bytes are handed out again, or their page is back with `overflow_allocator`. A program's own `Temporary_Storage` needs `data`, `size` and `overflow_allocator` set, and its `data` and `overflow_allocator`'s memory aligned to 8 for its allocations to be.
 
